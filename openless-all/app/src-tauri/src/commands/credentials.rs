@@ -37,7 +37,9 @@ impl openless_core::credentials::CredentialMetadataStore for SystemCredentialMet
         'static,
         Result<openless_core::CredentialMetadata, openless_core::BackendError>,
     > {
-        run_credential_task(|| Ok(CredentialsVault::load_metadata()))
+        run_credential_task(|| {
+            CredentialsVault::load_metadata().map_err(credential_persistence_error)
+        })
     }
 
     fn save_metadata(
@@ -54,7 +56,10 @@ impl openless_core::credentials::CredentialMetadataStore for SystemCredentialMet
         kind: openless_core::ChannelKind,
         channel_id: String,
     ) -> futures_util::future::BoxFuture<'static, Result<bool, openless_core::BackendError>> {
-        run_credential_task(move || Ok(CredentialsVault::channel_has_secrets(kind, &channel_id)))
+        run_credential_task(move || {
+            CredentialsVault::channel_has_secrets(kind, &channel_id)
+                .map_err(credential_persistence_error)
+        })
     }
 }
 
@@ -110,7 +115,7 @@ impl openless_core::CredentialStore for SystemCredentialStore {
         Result<CredentialsStatus, openless_core::BackendError>,
     > {
         let model_store = self.model_store.clone();
-        run_credential_task(move || Ok(credentials_status(preferences, model_store.as_deref())))
+        run_credential_task(move || credentials_status(preferences, model_store.as_deref()))
     }
 
     fn read(
@@ -198,16 +203,18 @@ fn run_credential_task<T: Send + 'static>(
 fn credentials_status(
     preferences: UserPreferences,
     model_store: Option<&openless_core::ModelStore>,
-) -> CredentialsStatus {
+) -> Result<CredentialsStatus, openless_core::BackendError> {
     let pipeline_mode = openless_core::shared_types::effective_pipeline_mode(
         preferences.multimodal_pipeline_enabled,
         preferences.pipeline_mode,
     );
-    let snap = CredentialsVault::snapshot_for_pipeline(
+    let snapshot = CredentialsVault::configuration_snapshot(
         pipeline_mode == openless_core::shared_types::PipelineMode::Multimodal,
-    );
-    let active_asr_provider = CredentialsVault::get_active_asr();
-    let active_llm_provider = CredentialsVault::get_active_llm();
+    )
+    .map_err(credential_persistence_error)?;
+    let snap = snapshot.credentials;
+    let active_asr_provider = snapshot.active_asr_provider;
+    let active_llm_provider = snapshot.active_llm_provider;
     let configuration = credential_configuration(
         &snap,
         &active_llm_provider,
@@ -227,7 +234,7 @@ fn credentials_status(
             &snap.active_omni_provider,
             &configuration,
         );
-    CredentialsStatus {
+    Ok(CredentialsStatus {
         active_asr_provider,
         active_llm_provider,
         pipeline_mode,
@@ -236,13 +243,18 @@ fn credentials_status(
         omni_configured,
         volcengine_configured,
         ark_configured: llm_configured,
-    }
+    })
 }
 
 fn read_vault_credential(
     key: &openless_core::CredentialKey,
 ) -> Result<Option<String>, openless_core::BackendError> {
     let result = match (key.namespace, key.account.as_str()) {
+        (openless_core::CredentialNamespace::Llm, account)
+            if openless_core::llm_protocol::CONFIG_ACCOUNTS.contains(&account) =>
+        {
+            CredentialsVault::get_llm_protocol_option(key.provider_id.as_deref(), account)
+        }
         (openless_core::CredentialNamespace::Llm, LLM_EXTRA_HEADERS_ACCOUNT) => {
             match key.provider_id.as_deref() {
                 Some(provider) => serde_json::to_string(
@@ -309,6 +321,11 @@ fn write_vault_credential(
     value: &str,
 ) -> Result<(), openless_core::BackendError> {
     let result = match (key.namespace, key.account.as_str()) {
+        (openless_core::CredentialNamespace::Llm, account)
+            if openless_core::llm_protocol::CONFIG_ACCOUNTS.contains(&account) =>
+        {
+            CredentialsVault::set_llm_protocol_option(key.provider_id.as_deref(), account, value)
+        }
         (openless_core::CredentialNamespace::Llm, LLM_EXTRA_HEADERS_ACCOUNT) => {
             match key.provider_id.as_deref() {
                 Some(provider) => {
@@ -525,6 +542,9 @@ fn credential_configuration(
         volcengine_resource_id: configured(&snap.volcengine_resource_id),
         xfyun_app_id: configured(&snap.xfyun_app_id),
         xfyun_api_key: configured(&snap.xfyun_api_key),
+        tencent_cloud_app_id: configured(&snap.tencent_cloud_app_id),
+        tencent_cloud_secret_id: configured(&snap.tencent_cloud_secret_id),
+        tencent_cloud_secret_key: configured(&snap.tencent_cloud_secret_key),
         llm_api_key: configured(&snap.ark_api_key),
         llm_endpoint: llm_endpoint.is_some(),
         llm_endpoint_matches_default: llm_endpoint.is_some_and(|endpoint| {
@@ -738,6 +758,9 @@ fn credential_key(
     provider: Option<String>,
 ) -> Result<openless_core::CredentialKey, String> {
     let namespace = match account {
+        account if openless_core::llm_protocol::CONFIG_ACCOUNTS.contains(&account) => {
+            openless_core::CredentialNamespace::Llm
+        }
         LLM_EXTRA_HEADERS_ACCOUNT | LLM_TEMPERATURE_ACCOUNT => {
             openless_core::CredentialNamespace::Llm
         }
@@ -786,7 +809,10 @@ fn account_provider_kind(account: CredentialAccount) -> CredentialProviderKind {
         | CredentialAccount::AsrVocabularyId
         | CredentialAccount::AsrAdvancedConfig
         | CredentialAccount::XfyunAppId
-        | CredentialAccount::XfyunApiKey => CredentialProviderKind::Asr,
+        | CredentialAccount::XfyunApiKey
+        | CredentialAccount::TencentCloudAppId
+        | CredentialAccount::TencentCloudSecretId
+        | CredentialAccount::TencentCloudSecretKey => CredentialProviderKind::Asr,
         CredentialAccount::OmniApiKey
         | CredentialAccount::OmniEndpoint
         | CredentialAccount::OmniModel => CredentialProviderKind::Omni,
@@ -818,6 +844,9 @@ fn parse_account(s: &str) -> Result<CredentialAccount, String> {
         "asr.advanced_config" => Ok(CredentialAccount::AsrAdvancedConfig),
         "xfyun.app_id" => Ok(CredentialAccount::XfyunAppId),
         "xfyun.api_key" => Ok(CredentialAccount::XfyunApiKey),
+        "tencent_cloud.app_id" => Ok(CredentialAccount::TencentCloudAppId),
+        "tencent_cloud.secret_id" => Ok(CredentialAccount::TencentCloudSecretId),
+        "tencent_cloud.secret_key" => Ok(CredentialAccount::TencentCloudSecretKey),
         "omni.api_key" => Ok(CredentialAccount::OmniApiKey),
         "omni.endpoint" => Ok(CredentialAccount::OmniEndpoint),
         "omni.model" => Ok(CredentialAccount::OmniModel),
@@ -853,6 +882,11 @@ mod tests {
 
     #[test]
     fn core_llm_accounts_are_supported_by_the_tauri_vault_adapter() {
+        for account in openless_core::llm_protocol::CONFIG_ACCOUNTS {
+            let key = credential_key(account, Some("channel-b".into())).unwrap();
+            assert_eq!(key.namespace, openless_core::CredentialNamespace::Llm);
+            assert_eq!(key.provider_id.as_deref(), Some("channel-b"));
+        }
         for account in [
             openless_core::credentials::LLM_API_KEY_ACCOUNT,
             openless_core::credentials::LLM_MODEL_ACCOUNT,

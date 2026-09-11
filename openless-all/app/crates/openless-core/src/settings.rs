@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::errors::BackendError;
-use crate::shared_types::{HotkeyMode, ShortcutBinding, StylePackHotkey, UserPreferences};
+use crate::shared_types::{
+    HotkeyMode, ShortcutBinding, StylePackHotkey, UserPreferences, WindowsInsertionMode,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -73,15 +75,17 @@ impl From<&UserPreferences> for HotkeyRuntimeTarget {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowsKeyboardRuntimeTarget {
-    pub send_input_insertion_only: bool,
-    pub show_openless_in_keyboard_list: bool,
+    pub openless_language_profile_enabled: bool,
 }
 
 impl From<&UserPreferences> for WindowsKeyboardRuntimeTarget {
     fn from(preferences: &UserPreferences) -> Self {
         Self {
-            send_input_insertion_only: preferences.windows_sendinput_insertion_only,
-            show_openless_in_keyboard_list: preferences.windows_show_openless_in_keyboard_list,
+            openless_language_profile_enabled: !matches!(
+                preferences.windows_insertion_mode,
+                WindowsInsertionMode::SendInput | WindowsInsertionMode::Paste
+            ) || preferences
+                .windows_show_openless_in_keyboard_list,
         }
     }
 }
@@ -97,8 +101,6 @@ pub struct SettingsValueChange<T> {
 #[serde(rename_all = "camelCase")]
 pub struct SettingsEffectPlan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub launch_at_login: Option<SettingsValueChange<bool>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hotkeys: Option<SettingsValueChange<HotkeyRuntimeTarget>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_asr_provider: Option<SettingsValueChange<String>>,
@@ -113,7 +115,6 @@ impl SettingsEffectPlan {
         }
 
         Self {
-            launch_at_login: changed(previous.launch_at_login, next.launch_at_login),
             hotkeys: changed(previous.into(), next.into()),
             active_asr_provider: changed(
                 previous.active_asr_provider.clone(),
@@ -124,8 +125,7 @@ impl SettingsEffectPlan {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.launch_at_login.is_none()
-            && self.hotkeys.is_none()
+        self.hotkeys.is_none()
             && self.active_asr_provider.is_none()
             && self.windows_keyboard.is_none()
     }
@@ -134,7 +134,6 @@ impl SettingsEffectPlan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SettingsEffectKind {
-    LaunchAtLogin,
     WindowsKeyboard,
     ActiveAsrProvider,
     Hotkeys,
@@ -219,26 +218,47 @@ pub struct StylePackRemovalOutcome {
 mod tests {
     use super::*;
 
+    fn preferences(mode: WindowsInsertionMode, show: bool) -> UserPreferences {
+        UserPreferences {
+            windows_insertion_mode: mode,
+            windows_sendinput_insertion_only: mode == WindowsInsertionMode::SendInput,
+            windows_show_openless_in_keyboard_list: show,
+            ..UserPreferences::default()
+        }
+    }
+
     #[test]
-    fn effect_plan_tracks_launch_at_login_as_a_reversible_change() {
-        let previous = UserPreferences::default();
-        let mut next = previous.clone();
-        next.launch_at_login = !previous.launch_at_login;
+    fn windows_keyboard_effect_tracks_the_effective_profile_state() {
+        for (mode, show, enabled) in [
+            (WindowsInsertionMode::Tsf, true, true),
+            (WindowsInsertionMode::Tsf, false, true),
+            (WindowsInsertionMode::SendInput, true, true),
+            (WindowsInsertionMode::SendInput, false, false),
+            (WindowsInsertionMode::Paste, true, true),
+            (WindowsInsertionMode::Paste, false, false),
+        ] {
+            assert_eq!(
+                WindowsKeyboardRuntimeTarget::from(&preferences(mode, show))
+                    .openless_language_profile_enabled,
+                enabled,
+                "mode={mode:?} show={show}"
+            );
+        }
 
-        let plan = SettingsEffectPlan::between(&previous, &next);
+        let send_input_hidden = preferences(WindowsInsertionMode::SendInput, false);
+        let paste_hidden = preferences(WindowsInsertionMode::Paste, false);
+        assert!(
+            SettingsEffectPlan::between(&send_input_hidden, &paste_hidden)
+                .windows_keyboard
+                .is_none()
+        );
 
-        assert_eq!(
-            plan.launch_at_login,
-            Some(SettingsValueChange {
-                previous: previous.launch_at_login,
-                next: next.launch_at_login,
-            })
-        );
-        assert!(!plan.is_empty());
-        let wire = serde_json::to_value(&plan).unwrap();
-        assert_eq!(
-            wire["launchAtLogin"],
-            serde_json::json!({ "previous": previous.launch_at_login, "next": next.launch_at_login })
-        );
+        let tsf_with_hidden_pref = preferences(WindowsInsertionMode::Tsf, false);
+        let change = SettingsEffectPlan::between(&paste_hidden, &tsf_with_hidden_pref)
+            .windows_keyboard
+            .expect("returning to TSF must re-enable its language profile");
+        assert!(!change.previous.openless_language_profile_enabled);
+        assert!(change.next.openless_language_profile_enabled);
+        assert!(!tsf_with_hidden_pref.windows_show_openless_in_keyboard_list);
     }
 }

@@ -131,8 +131,8 @@ function updateLastTurn(turns: Turn[], fn: (t: Turn) => Turn): Turn[] {
 
 /** 把流里还在扫光的工具行停下来（下一个事件到达 = 上一个工具已结束）。 */
 function settleRunningTools(segments: Segment[]): Segment[] {
-  if (!segments.some(s => s.kind === 'tool' && s.running)) return segments;
-  return segments.map(s => (s.kind === 'tool' && s.running ? { ...s, running: false } : s));
+  if (!segments.some((s) => s.kind === 'tool' && s.running)) return segments;
+  return segments.map((s) => (s.kind === 'tool' && s.running ? { ...s, running: false } : s));
 }
 
 // 浏览器预览（vite dev，非 Tauri）：?window=less-computer&demo=1 注入两轮演示对话
@@ -222,7 +222,7 @@ export function LessComputerPanel() {
     (async () => {
       try {
         const { listen } = await import('@tauri-apps/api/event');
-        const handle = await listen<LessComputerEvent>('less-computer:event', event => {
+        const handle = await listen<LessComputerEvent>('less-computer:event', (event) => {
           if (synced) applyDeduped(event.payload);
           else pending.push(event.payload);
         });
@@ -231,7 +231,7 @@ export function LessComputerPanel() {
           return;
         }
         unlisten = handle;
-        const replay = await lessComputerSync(lcAppliedSeq).catch(error => {
+        const replay = await lessComputerSync(lcAppliedSeq).catch((error) => {
           console.error('[LessComputer] sync failed', error);
           return {
             events: [] as LessComputerEvent[],
@@ -249,7 +249,7 @@ export function LessComputerPanel() {
         // 投影有自己的原始seq，不推进聊天流水位；读取投影期间到达的普通事件仍需应用。
         if (replay.voiceState) {
           const snapshot = replay.voiceState;
-          setVoice(previous => reduceLessComputerVoice(previous, snapshot, true));
+          setVoice((previous) => reduceLessComputerVoice(previous, snapshot, true));
         }
         for (const ev of reconciled.events) applyEvent(ev);
         lcAppliedSeq = reconciled.latestAppliedSequence;
@@ -268,30 +268,27 @@ export function LessComputerPanel() {
   const applyEvent = (ev: LessComputerEvent) => {
     switch (ev.kind) {
       case 'voice_state':
-        setVoice(previous => reduceLessComputerVoice(previous, ev));
+        setVoice((previous) => reduceLessComputerVoice(previous, ev));
         break;
       case 'user': {
         // 一轮新对话。fresh=true（后端无可续会话→新会话）则清空历史重开；否则追加为后续轮次。
-        setTurns(prev => (ev.fresh ? [emptyTurn(ev.text)] : [...prev, emptyTurn(ev.text)]));
-        if (ev.fresh) setSessionSeq(seq => seq + 1);
+        setTurns((prev) => (ev.fresh ? [emptyTurn(ev.text)] : [...prev, emptyTurn(ev.text)]));
+        if (ev.fresh) setSessionSeq((seq) => seq + 1);
         break;
       }
       case 'started':
-        setTurns(prev => updateLastTurn(prev, tn => ({ ...tn, status: 'working' })));
+        setTurns((prev) => updateLastTurn(prev, (tn) => ({ ...tn, status: 'working' })));
         break;
       case 'delta':
-        setTurns(prev =>
-          updateLastTurn(prev, tn => {
+        setTurns((prev) =>
+          updateLastTurn(prev, (tn) => {
             const segments = settleRunningTools(tn.segments);
             const last = segments[segments.length - 1];
             if (last?.kind === 'text') {
               return {
                 ...tn,
                 status: 'working',
-                segments: [
-                  ...segments.slice(0, -1),
-                  { ...last, content: last.content + ev.text },
-                ],
+                segments: [...segments.slice(0, -1), { ...last, content: last.content + ev.text }],
               };
             }
             return {
@@ -303,8 +300,8 @@ export function LessComputerPanel() {
         );
         break;
       case 'tool':
-        setTurns(prev =>
-          updateLastTurn(prev, tn => ({
+        setTurns((prev) =>
+          updateLastTurn(prev, (tn) => ({
             ...tn,
             status: 'working',
             segments: [
@@ -315,16 +312,16 @@ export function LessComputerPanel() {
         );
         break;
       case 'compaction':
-        setTurns(prev =>
-          updateLastTurn(prev, tn => ({
+        setTurns((prev) =>
+          updateLastTurn(prev, (tn) => ({
             ...tn,
             segments: [...settleRunningTools(tn.segments), { kind: 'compaction' }],
           })),
         );
         break;
       case 'approval':
-        setTurns(prev =>
-          updateLastTurn(prev, tn => ({
+        setTurns((prev) =>
+          updateLastTurn(prev, (tn) => ({
             ...tn,
             status: 'working',
             segments: [
@@ -335,12 +332,12 @@ export function LessComputerPanel() {
         );
         break;
       case 'completed':
-        setTurns(prev =>
-          updateLastTurn(prev, tn => {
+        setTurns((prev) =>
+          updateLastTurn(prev, (tn) => {
             let segments = settleRunningTools(tn.segments);
             // 正常情况最终文本已通过 delta 流出；只有整轮没有任何文本时才用
             // completed 的成品兜底（否则会把穿插的工具行冲掉）。
-            if (ev.text && !segments.some(s => s.kind === 'text')) {
+            if (ev.text && !segments.some((s) => s.kind === 'text')) {
               segments = [...segments, { kind: 'text', content: ev.text }];
             }
             return { ...tn, segments, costUsd: ev.costUsd ?? null, status: 'done' };
@@ -348,8 +345,8 @@ export function LessComputerPanel() {
         );
         break;
       case 'error':
-        setTurns(prev =>
-          updateLastTurn(prev, tn => ({
+        setTurns((prev) =>
+          updateLastTurn(prev, (tn) => ({
             ...tn,
             segments: settleRunningTools(tn.segments),
             errorMsg: ev.message,
@@ -358,8 +355,8 @@ export function LessComputerPanel() {
         );
         break;
       case 'cancelled':
-        setTurns(prev =>
-          updateLastTurn(prev, tn => ({
+        setTurns((prev) =>
+          updateLastTurn(prev, (tn) => ({
             ...tn,
             segments: settleRunningTools(tn.segments),
             status: 'cancelled',
@@ -370,10 +367,10 @@ export function LessComputerPanel() {
   };
 
   const onApproval = (token: string, approved: boolean) => {
-    setTurns(prev =>
-      prev.map(tn => ({
+    setTurns((prev) =>
+      prev.map((tn) => ({
         ...tn,
-        segments: tn.segments.map(s =>
+        segments: tn.segments.map((s) =>
           s.kind === 'approval' && s.token === token
             ? { ...s, decision: approved ? 'approved' : ('denied' as const) }
             : s,
@@ -397,7 +394,7 @@ export function LessComputerPanel() {
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
 
-  const working = turns.some(tn => tn.status === 'working');
+  const working = turns.some((tn) => tn.status === 'working');
 
   // ── 官方 message-scroller-demo 同款骨架 ─────────────────────────────
   return (
@@ -429,7 +426,7 @@ export function LessComputerPanel() {
               variant="ghost"
               size="icon-sm"
               onClick={onClose}
-              onMouseDown={event => {
+              onMouseDown={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
               }}
@@ -521,7 +518,7 @@ function Composer({
 
   return (
     <form
-      onSubmit={event => {
+      onSubmit={(event) => {
         event.preventDefault();
         send();
       }}
@@ -531,7 +528,7 @@ function Composer({
         <InputGroupInput
           value={text}
           placeholder={t('lessComputer.inputPlaceholder')}
-          onChange={event => setText(event.currentTarget.value)}
+          onChange={(event) => setText(event.currentTarget.value)}
           onKeyDown={onKeyDown}
           onCompositionStart={() => {
             composingRef.current = true;
@@ -544,12 +541,23 @@ function Composer({
         />
         <InputGroupAddon align="block-end" className="pt-1">
           {voice && voice.phase !== 'idle' && (
-            <span className="mr-auto flex items-center gap-2 text-xs text-muted-foreground" role="status">
+            <span
+              className="mr-auto flex items-center gap-2 text-xs text-muted-foreground"
+              role="status"
+            >
               {voice.phase === 'recording'
                 ? t('overview.inAppDictation.recording')
-                : voice.phase === 'starting' ? t('common.loading') : t('overview.inAppDictation.processing')}
+                : voice.phase === 'starting'
+                  ? t('common.loading')
+                  : t('overview.inAppDictation.processing')}
               {voice.phase === 'recording' && (
-                <meter className="w-16" min={0} max={1} value={voice.level} aria-label={t('overview.inAppDictation.recording')} />
+                <meter
+                  className="w-16"
+                  min={0}
+                  max={1}
+                  value={voice.level}
+                  aria-label={t('overview.inAppDictation.recording')}
+                />
               )}
             </span>
           )}
@@ -614,8 +622,7 @@ function TurnView({
           <div className="flex min-w-0 flex-col gap-3">
             {turn.segments.map((segment, i) => {
               if (segment.kind === 'text') {
-                const streaming =
-                  turn.status === 'working' && i === turn.segments.length - 1;
+                const streaming = turn.status === 'working' && i === turn.segments.length - 1;
                 return (
                   <div key={`s${i}`} className="olchat-enter">
                     <AssistantMarkdown markdown={segment.content} streaming={streaming} />
@@ -723,9 +730,7 @@ function ApprovalCard({
       )}
       {decided ? (
         <div className="text-[11.5px] font-semibold text-muted-foreground">
-          {card.decision === 'approved'
-            ? t('lessComputer.approved')
-            : t('lessComputer.denied')}
+          {card.decision === 'approved' ? t('lessComputer.approved') : t('lessComputer.denied')}
         </div>
       ) : (
         <div className="flex gap-2">
@@ -733,7 +738,7 @@ function ApprovalCard({
             variant="outline"
             size="sm"
             className="flex-1"
-            onMouseDown={event => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
             onClick={() => onDecide(card.token, false)}
           >
             {t('lessComputer.deny')}
@@ -741,7 +746,7 @@ function ApprovalCard({
           <Button
             size="sm"
             className="flex-1"
-            onMouseDown={event => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
             onClick={() => onDecide(card.token, true)}
           >
             {t('lessComputer.approve')}

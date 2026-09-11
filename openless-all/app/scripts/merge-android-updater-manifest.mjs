@@ -13,9 +13,7 @@ const resXmlPath = fileURLToPath(
   new URL('../src-tauri/gen/android/app/src/main/res/xml/openless_file_paths.xml', import.meta.url),
 );
 
-const PERMISSIONS = [
-  'android.permission.REQUEST_INSTALL_PACKAGES',
-];
+const PERMISSIONS = ['android.permission.REQUEST_INSTALL_PACKAGES'];
 
 const PROVIDER_SNIPPET = `
         <provider

@@ -6,18 +6,12 @@ const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const paths = {
   cipher: new URL('../android/kotlin/OpenLessCredentialCipher.kt', import.meta.url),
   vault: new URL('../android/kotlin/OpenLessCredentialVault.kt', import.meta.url),
-  unitTest: new URL(
-    '../android/kotlin/test/OpenLessCredentialCipherTest.kt',
-    import.meta.url,
-  ),
+  unitTest: new URL('../android/kotlin/test/OpenLessCredentialCipherTest.kt', import.meta.url),
   instrumentedTest: new URL(
     '../android/kotlin/androidTest/OpenLessCredentialVaultInstrumentedTest.kt',
     import.meta.url,
   ),
-  rustStore: new URL(
-    '../src-tauri/src/persistence/android_credentials.rs',
-    import.meta.url,
-  ),
+  rustStore: new URL('../src-tauri/src/persistence/android_credentials.rs', import.meta.url),
   credentials: new URL('../src-tauri/src/persistence/credentials.rs', import.meta.url),
   jni: new URL('../src-tauri/src/android/jni.rs', import.meta.url),
   copyScript: new URL('./copy-android-scaffolding.mjs', import.meta.url),
@@ -151,7 +145,7 @@ requirePattern(
 requirePattern(
   jni,
   /fn\s+with_tao_android_env[\s\S]*?main_android_context/,
-  'startup persistence must use Tao\'s non-panicking Android context registry',
+  "startup persistence must use Tao's non-panicking Android context registry",
 );
 const androidCredentialPath = credentials.match(
   /fn\s+android_credentials_path\s*\([^)]*\)\s*->\s*Result<PathBuf>[\s\S]*?\r?\n}\r?\n/,
@@ -165,7 +159,9 @@ requirePattern(
   'Android credentials must use the app-private files directory',
 );
 if (/TAURI_ANDROID_APP_DATA_DIR|temp_dir/.test(androidCredentialPath[0])) {
-  throw new Error('Android credential storage must not fall back to environment or temporary storage');
+  throw new Error(
+    'Android credential storage must not fall back to environment or temporary storage',
+  );
 }
 for (const pattern of [
   /android_legacy_credentials_paths/,
@@ -227,11 +223,7 @@ requirePattern(
   /connectedX86_64DebugAndroidTest/,
   'PR CI must execute x86_64 Android Keystore instrumentation tests on a device',
 );
-if (
-  /:app:(?:testDebugUnitTest|assembleDebugAndroidTest|connectedDebugAndroidTest)\b/.test(
-    ci,
-  )
-) {
+if (/:app:(?:testDebugUnitTest|assembleDebugAndroidTest|connectedDebugAndroidTest)\b/.test(ci)) {
   throw new Error('PR CI must not use Android tasks without the required ABI flavor');
 }
 requirePattern(

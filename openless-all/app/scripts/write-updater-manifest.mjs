@@ -7,10 +7,13 @@ import { fileURLToPath } from 'node:url';
 const target = process.env.OPENLESS_UPDATE_TARGET;
 const arch = process.env.OPENLESS_UPDATE_ARCH;
 const repo = process.env.OPENLESS_UPDATE_REPO || 'Open-Less/openless';
-const mirrorBaseUrl = process.env.OPENLESS_UPDATE_MIRROR_BASE_URL || 'https://fastgit.cc/https://github.com';
+const mirrorBaseUrl =
+  process.env.OPENLESS_UPDATE_MIRROR_BASE_URL || 'https://fastgit.cc/https://github.com';
 const rawChannel = (process.env.OPENLESS_RELEASE_CHANNEL || 'stable').toLowerCase();
 if (rawChannel !== 'stable' && rawChannel !== 'beta') {
-  throw new Error(`Invalid OPENLESS_RELEASE_CHANNEL: "${rawChannel}" (expected "stable" or "beta")`);
+  throw new Error(
+    `Invalid OPENLESS_RELEASE_CHANNEL: "${rawChannel}" (expected "stable" or "beta")`,
+  );
 }
 const channelSuffix = rawChannel === 'beta' ? '-beta' : '';
 const releaseTag = process.env.OPENLESS_RELEASE_TAG || '';
@@ -46,10 +49,7 @@ function resolveBundleDir() {
 const bundleDir = resolveBundleDir();
 
 const candidatesByTarget = {
-  darwin: [
-    `macos/OpenLess_${arch}.app.tar.gz`,
-    'macos/OpenLess.app.tar.gz',
-  ],
+  darwin: [`macos/OpenLess_${arch}.app.tar.gz`, 'macos/OpenLess.app.tar.gz'],
   windows: ['nsis/OpenLess_*_x64-setup.exe', 'nsis/OpenLess*_x64-setup.exe'],
   linux: ['appimage/OpenLess_*.AppImage', 'appimage/OpenLess*.AppImage'],
   android: [],
@@ -57,7 +57,9 @@ const candidatesByTarget = {
 
 function findAndroidApk() {
   const version = packageJson.version;
-  const abiEntry = Object.entries(ANDROID_ABI_TO_ARCH).find(([, manifestArch]) => manifestArch === arch);
+  const abiEntry = Object.entries(ANDROID_ABI_TO_ARCH).find(
+    ([, manifestArch]) => manifestArch === arch,
+  );
   if (!abiEntry) {
     throw new Error(`Unknown android updater arch: ${arch}`);
   }
@@ -89,13 +91,14 @@ function findFirst(patterns) {
     const prefix = namePattern.split('*')[0];
     const suffix = namePattern.split('*').at(-1);
     const match = readdirSync(dirPath)
-      .filter(name => name.startsWith(prefix) && name.endsWith(suffix))
+      .filter((name) => name.startsWith(prefix) && name.endsWith(suffix))
       .sort()[0];
     if (match) return join(dirPath, match);
   }
 }
 
-const artifact = target === 'android' ? findAndroidApk() : findFirst(candidatesByTarget[target] || []);
+const artifact =
+  target === 'android' ? findAndroidApk() : findFirst(candidatesByTarget[target] || []);
 if (!artifact) {
   throw new Error(`No updater artifact found for ${target} in ${bundleDir}`);
 }
@@ -108,9 +111,10 @@ if (!existsSync(signaturePath)) {
 const assetName = basename(artifact);
 const manifestName = `latest-${target}-${arch}${channelSuffix}.json`;
 const mirrorManifestName = `latest-${target}-${arch}${channelSuffix}-mirror.json`;
-const downloadPath = rawChannel === 'beta'
-  ? `releases/download/${releaseTag}/${assetName}`
-  : `releases/latest/download/${assetName}`;
+const downloadPath =
+  rawChannel === 'beta'
+    ? `releases/download/${releaseTag}/${assetName}`
+    : `releases/latest/download/${assetName}`;
 const githubAssetUrl = `https://github.com/${repo}/${downloadPath}`;
 const mirrorAssetUrl = `${mirrorBaseUrl.replace(/\/$/, '')}/${repo}/${downloadPath}`;
 const manifest = {

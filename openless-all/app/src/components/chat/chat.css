@@ -339,3 +339,13 @@
   border-top: 1px solid var(--color-border);
   margin: 8px 0;
 }
+
+/* Opaque backing prevents desktop text from bleeding through the floating panel. */
+.olchat-shell {
+  background-color: #fbfbfc;
+  background-image:
+    linear-gradient(rgba(251, 251, 252, 0.985), rgba(248, 248, 250, 0.985)), var(--ol-frost-grain);
+  color: #18181b;
+  isolation: isolate;
+  border-radius: 18px;
+}

@@ -11,10 +11,7 @@
 
 import { readFile } from 'node:fs/promises';
 
-const historyTsx = await readFile(
-  new URL('../src/pages/History.tsx', import.meta.url),
-  'utf-8',
-);
+const historyTsx = await readFile(new URL('../src/pages/History.tsx', import.meta.url), 'utf-8');
 
 /** 从 `key={` 之后开始按花括号配对取出完整表达式（模板串里的 `${}` 不会截断）。 */
 function readKeyExpressions(source) {
@@ -86,10 +83,10 @@ for (const itemId of ['history-key-contract-a', 'history-key-contract-b']) {
     const key = evaluateKey(expression, itemId);
     if (seen.has(key)) {
       throw new Error(
-        `历史详情面板出现重复的运行时 key：\`${key}\`（表达式 \`${expression}\` 与 `
-          + `\`${seen.get(key)}\` 冲突）。重复 key 会让 React 无法正确删除旧节点，`
-          + '切换条目时残留重复的「播放录音」按钮，请给每个组件加上各自的前缀（如 '
-          + '`audio-${item.id}` / `repolish-${item.id}`）。',
+        `历史详情面板出现重复的运行时 key：\`${key}\`（表达式 \`${expression}\` 与 ` +
+          `\`${seen.get(key)}\` 冲突）。重复 key 会让 React 无法正确删除旧节点，` +
+          '切换条目时残留重复的「播放录音」按钮，请给每个组件加上各自的前缀（如 ' +
+          '`audio-${item.id}` / `repolish-${item.id}`）。',
       );
     }
     seen.set(key, expression);

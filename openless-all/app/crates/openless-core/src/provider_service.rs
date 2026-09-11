@@ -23,6 +23,7 @@ use crate::domains::{
     ProviderApi, ProviderCheckResult, ProviderKind, ProviderModelsResult, ProviderRequest,
 };
 use crate::errors::{BackendError, BackendErrorCode};
+use crate::llm_protocol::{LlmProtocolConfig, LlmRequestFormat};
 use crate::ports::{TextPolisher, TextStreamChunk, TextStreamSink, TranscriptionEngine};
 use crate::provider_rules::{
     api_key_required, default_asr_endpoint, default_asr_model, default_llm_endpoint,
@@ -46,6 +47,9 @@ pub struct ProviderService {
     credentials: Arc<dyn CredentialStore>,
     task_spawner: Arc<dyn TaskSpawner>,
     transport: Arc<dyn ProviderTransport>,
+    /// Host-owned native engines (e.g. Apple Speech). Only consulted by the
+    /// [`ValidationProbe::AsrNativeSilence`] probe; cloud probes ignore it.
+    native_transcription: Option<Arc<dyn TranscriptionEngine>>,
 }
 
 impl ProviderService {
@@ -71,7 +75,20 @@ impl ProviderService {
             credentials,
             task_spawner,
             transport,
+            native_transcription: None,
         }
+    }
+
+    /// Inject the host's native transcription engine so local providers whose
+    /// descriptor probes [`ValidationProbe::AsrNativeSilence`] (Apple Speech)
+    /// validate through the real engine — exercising authorization and
+    /// recognizer availability — instead of reporting unavailable.
+    pub fn with_native_transcription(
+        mut self,
+        native_transcription: Arc<dyn TranscriptionEngine>,
+    ) -> Self {
+        self.native_transcription = Some(native_transcription);
+        self
     }
 
     async fn resolve(&self, request: ProviderRequest) -> Result<ResolvedProvider, BackendError> {
@@ -158,6 +175,13 @@ impl ProviderService {
         };
 
         Ok(ResolvedProvider {
+            thinking_enabled: request.thinking_enabled,
+            protocol: if request.kind == ProviderKind::Llm {
+                LlmProtocolConfig::load(self.credentials.as_ref(), &provider_id, &provider_type)
+                    .await?
+            } else {
+                LlmProtocolConfig::default()
+            },
             kind: request.kind,
             provider_id,
             provider_type,
@@ -219,10 +243,24 @@ impl ProviderService {
         let session_id = SessionId::new();
         match resolved.kind {
             ProviderKind::Asr => {
-                let engine = SharedCloudTranscriptionEngine::with_task_spawner(
-                    Arc::clone(&self.credentials),
-                    Arc::clone(&self.task_spawner),
-                );
+                // Native probes run through the host-registered engine so the
+                // check exercises the same engine dictation uses (Apple Speech
+                // authorization + recognizer availability); silence probes for
+                // cloud providers keep using the shared cloud engine.
+                let engine: Arc<dyn TranscriptionEngine> = match probe {
+                    ValidationProbe::AsrNativeSilence => {
+                        self.native_transcription.clone().ok_or_else(|| {
+                            BackendError::new(
+                                BackendErrorCode::Unsupported,
+                                "host native transcription engine is not configured",
+                            )
+                        })?
+                    }
+                    _ => Arc::new(SharedCloudTranscriptionEngine::with_task_spawner(
+                        Arc::clone(&self.credentials),
+                        Arc::clone(&self.task_spawner),
+                    )),
+                };
                 let session = tokio::select! {
                     _ = wait_for_cancellation(cancellation.clone()) => return Err(cancelled_request()),
                     result = engine.start(session_id, context, Arc::new(DiscardTextStream)) => {
@@ -350,6 +388,8 @@ impl ProviderApi for ProviderService {
 
 #[derive(Debug, Clone)]
 struct ResolvedProvider {
+    thinking_enabled: bool,
+    protocol: LlmProtocolConfig,
     kind: ProviderKind,
     provider_id: String,
     provider_type: String,
@@ -362,6 +402,7 @@ struct ResolvedProvider {
 impl ResolvedProvider {
     fn context(&self) -> DictationContext {
         let mut context = DictationContext::default();
+        context.polish.llm_thinking_enabled = self.thinking_enabled;
         let invocation = ProviderInvocation {
             provider_id: self.provider_id.clone(),
             provider_type: self.provider_type.clone(),
@@ -407,7 +448,7 @@ fn validate_configuration(resolved: &ResolvedProvider) -> Result<(), BackendErro
     ) && api_key.trim().is_empty()
         && !matches!(
             descriptor.auth_requirement,
-            AuthRequirement::Volcengine | AuthRequirement::Xfyun
+            AuthRequirement::Volcengine | AuthRequirement::Xfyun | AuthRequirement::TencentCloud
         )
     {
         let label = match resolved.kind {
@@ -425,7 +466,10 @@ fn validate_configuration(resolved: &ResolvedProvider) -> Result<(), BackendErro
     if model.is_none()
         && !matches!(
             descriptor.auth_requirement,
-            AuthRequirement::None | AuthRequirement::Volcengine | AuthRequirement::Xfyun
+            AuthRequirement::None
+                | AuthRequirement::Volcengine
+                | AuthRequirement::Xfyun
+                | AuthRequirement::TencentCloud
         )
     {
         return Err(invalid_request("provider model is not configured"));
@@ -439,7 +483,10 @@ fn validate_configuration(resolved: &ResolvedProvider) -> Result<(), BackendErro
         if endpoint.is_none()
             && !matches!(
                 descriptor.auth_requirement,
-                AuthRequirement::None | AuthRequirement::Volcengine | AuthRequirement::Xfyun
+                AuthRequirement::None
+                    | AuthRequirement::Volcengine
+                    | AuthRequirement::Xfyun
+                    | AuthRequirement::TencentCloud
             )
         {
             return Err(provider_error("provider endpoint is not configured"));
@@ -448,7 +495,9 @@ fn validate_configuration(resolved: &ResolvedProvider) -> Result<(), BackendErro
             validate_provider_endpoint(endpoint, resolved.kind == ProviderKind::Asr)?;
         }
         if let Some(headers) = resolved.extra_headers.as_deref() {
-            parse_extra_headers(headers)?;
+            resolved
+                .protocol
+                .validate_headers(&parse_extra_headers(headers)?)?;
         }
     }
     Ok(())
@@ -585,6 +634,19 @@ fn sanitize_validation_error(error: BackendError) -> BackendError {
         return error;
     }
     let message = error.message.as_str();
+    for code in [
+        "llmResponseIncomplete",
+        "llmStreamError",
+        "llmRequestFormatInvalid",
+        "llmThinkingModeInvalid",
+        "llmTokenLimitInvalid",
+        "llmThinkingBudgetInvalid",
+        "llmProtocolHeaderConflict",
+    ] {
+        if message == code || message == format!("parse error: {code}") {
+            return provider_error(code);
+        }
+    }
     if message.ends_with("is not configured") {
         return error;
     }
@@ -616,12 +678,26 @@ async fn fetch_models(
         .endpoint
         .as_deref()
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| default_llm_endpoint(&resolved.provider_type))
-        .or_else(|| default_omni_endpoint(&resolved.provider_type))
+        .or_else(|| match resolved.kind {
+            ProviderKind::Asr => default_asr_endpoint(&resolved.provider_type),
+            ProviderKind::Llm => default_llm_endpoint(&resolved.provider_type),
+            ProviderKind::Omni => default_omni_endpoint(&resolved.provider_type),
+        })
         .ok_or_else(|| provider_error("provider endpoint is not configured"))?;
     let url = models_url(endpoint)?;
-    let is_gemini =
-        crate::net::sanitized_url_for_logs(&url).contains("generativelanguage.googleapis.com");
+    let is_gemini = resolved.provider_type == "gemini";
+    let tokenhub_chat_only = resolved.provider_type == "tencentTokenHub";
+    let orcarouter_filter = (resolved.provider_type == "orcarouter").then(|| {
+        let endpoint_type = match (resolved.kind, resolved.protocol.format) {
+            (ProviderKind::Llm, LlmRequestFormat::Responses) => "openai-response",
+            (ProviderKind::Llm, LlmRequestFormat::Messages) => "anthropic",
+            _ => "openai",
+        };
+        OrcaRouterCatalogFilter {
+            endpoint_type,
+            kind: resolved.kind,
+        }
+    });
     let mut request_headers = Vec::new();
     if let Some(api_key) = resolved
         .api_key
@@ -630,9 +706,19 @@ async fn fetch_models(
     {
         if is_gemini {
             request_headers.push(("x-goog-api-key".to_string(), api_key.to_string()));
-        } else {
+        } else if orcarouter_filter.is_some() {
             request_headers.push(("Authorization".to_string(), format!("Bearer {api_key}")));
+        } else {
+            request_headers.extend(resolved.protocol.format.headers(api_key));
         }
+    }
+    if orcarouter_filter.is_none()
+        && resolved.protocol.format == LlmRequestFormat::Messages
+        && !request_headers
+            .iter()
+            .any(|(name, _)| name == "anthropic-version")
+    {
+        request_headers.extend(resolved.protocol.format.headers(""));
     }
     if let Some(extra_headers) = resolved.extra_headers.as_deref() {
         for (name, value) in parse_extra_headers(extra_headers)? {
@@ -660,10 +746,26 @@ async fn fetch_models(
     if response.body.len() > MODEL_LIST_MAX_BYTES {
         return Err(provider_error("provider model response is too large"));
     }
-    parse_model_list(&response.body, is_gemini)
+    parse_model_list(
+        &response.body,
+        is_gemini,
+        orcarouter_filter,
+        tokenhub_chat_only,
+    )
 }
 
-fn parse_model_list(body: &[u8], is_gemini: bool) -> Result<Vec<String>, BackendError> {
+#[derive(Clone, Copy)]
+struct OrcaRouterCatalogFilter {
+    endpoint_type: &'static str,
+    kind: ProviderKind,
+}
+
+fn parse_model_list(
+    body: &[u8],
+    is_gemini: bool,
+    orcarouter_filter: Option<OrcaRouterCatalogFilter>,
+    tokenhub_chat_only: bool,
+) -> Result<Vec<String>, BackendError> {
     let value: serde_json::Value = serde_json::from_slice(body)
         .map_err(|_| provider_error("provider model response is invalid JSON"))?;
     let models = if is_gemini {
@@ -697,9 +799,45 @@ fn parse_model_list(body: &[u8], is_gemini: bool) -> Result<Vec<String>, Backend
             .and_then(serde_json::Value::as_array)
             .ok_or_else(|| provider_error("provider model response is missing data"))?
             .iter()
+            .filter(|item| {
+                !tokenhub_chat_only
+                    || item.get("status").and_then(serde_json::Value::as_str) == Some("online")
+            })
+            .filter(|item| {
+                orcarouter_filter.is_none_or(|filter| {
+                    let supports_endpoint = item
+                        .get("supported_endpoint_types")
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|types| {
+                            types
+                                .iter()
+                                .any(|value| value.as_str() == Some(filter.endpoint_type))
+                        });
+                    let supports_audio = filter.kind != ProviderKind::Asr
+                        || item
+                            .pointer("/architecture/input_modalities")
+                            .and_then(serde_json::Value::as_array)
+                            .is_some_and(|modalities| {
+                                modalities
+                                    .iter()
+                                    .any(|value| value.as_str() == Some("audio"))
+                            });
+                    supports_endpoint && supports_audio
+                })
+            })
             .filter_map(|item| item.get("id").and_then(serde_json::Value::as_str))
             .map(str::trim)
             .filter(|name| !name.is_empty())
+            .filter(|name| {
+                !tokenhub_chat_only
+                    || crate::provider_rules::tokenhub_chat_model_policy(name).is_some()
+            })
+            .filter(|name| {
+                if !orcarouter_filter.is_some_and(|filter| filter.kind == ProviderKind::Asr) {
+                    return true;
+                }
+                name.to_ascii_lowercase().starts_with("google/gemini")
+            })
             .map(str::to_string)
             .collect::<Vec<_>>()
     };
@@ -710,18 +848,8 @@ fn parse_model_list(body: &[u8], is_gemini: bool) -> Result<Vec<String>, Backend
 }
 
 fn models_url(endpoint: &str) -> Result<String, BackendError> {
-    let mut url = url::Url::parse(endpoint.trim())
-        .map_err(|_| invalid_request("provider endpoint is invalid"))?;
-    let path = url.path().trim_end_matches('/');
-    let next_path = if path.ends_with("/models") {
-        path.to_string()
-    } else if let Some(prefix) = path.strip_suffix("/chat/completions") {
-        format!("{prefix}/models")
-    } else {
-        format!("{path}/models")
-    };
-    url.set_path(&next_path);
-    Ok(url.to_string())
+    crate::llm_protocol::endpoint_url(endpoint, "/models")
+        .map_err(|_| invalid_request("provider endpoint is invalid"))
 }
 
 fn map_transport_error(error: ProviderTransportError) -> BackendError {
@@ -867,6 +995,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn validation_and_model_lists_use_channel_protocol_and_thinking() {
+        use crate::llm_protocol::*;
+        for (format, preset, sse, path) in [
+            ("chat_completions", "opencode", "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n", "/v1/chat/completions"),
+            ("responses", "opencode", "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\ndata: {\"type\":\"response.completed\"}\n\n", "/v1/responses"),
+            ("messages", "opencode", "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n", "/v1/messages"),
+            ("responses", "custom_responses", "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\ndata: {\"type\":\"response.completed\"}\n\n", "/v1/responses"),
+            ("messages", "custom_messages", "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n", "/v1/messages"),
+        ] {
+            for enabled in [false, true] {
+                let (endpoint, request) = spawn_http_response("200 OK", "text/event-stream", sse);
+                let credentials = Arc::new(InMemoryCredentialStore::default());
+                let channel = create_channel_with_values(&credentials, ChannelKind::Llm, preset, &[
+                    (LLM_ENDPOINT_ACCOUNT, &endpoint), (LLM_MODEL_ACCOUNT, "test"), (LLM_API_KEY_ACCOUNT, "fixture-key"),
+                    (REQUEST_FORMAT_ACCOUNT, format),
+                ]).await;
+                let service = ProviderService::new(credentials, Arc::new(crate::TokioTaskSpawner));
+                service.validate(ProviderRequest { kind: ProviderKind::Llm, channel_id: Some(channel), thinking_enabled: enabled }).await.unwrap();
+                let request = request.recv_timeout(Duration::from_secs(2)).unwrap();
+                let request = String::from_utf8(request).unwrap();
+                assert!(request.starts_with(&format!("POST {path} ")));
+                let body: serde_json::Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+                if format == "responses" { assert_eq!(body["reasoning"]["effort"], if enabled { "medium" } else { "low" }); }
+                else if format == "messages" && enabled { assert_eq!(body["thinking"]["type"], "adaptive"); }
+                else { assert!(body.get("thinking").is_none()); }
+            }
+            let (endpoint, request) = spawn_http_response("200 OK", "application/json", r#"{"data":[{"id":"model"}]}"#);
+            let credentials = Arc::new(InMemoryCredentialStore::default());
+            let channel = create_channel_with_values(&credentials, ChannelKind::Llm, preset, &[
+                (LLM_ENDPOINT_ACCOUNT, &format!("{endpoint}/{}", if format == "chat_completions" { "chat/completions" } else { format })), (LLM_MODEL_ACCOUNT, "test"),
+                (LLM_API_KEY_ACCOUNT, "fixture-key"), (REQUEST_FORMAT_ACCOUNT, format),
+            ]).await;
+            let service = ProviderService::new(credentials, Arc::new(crate::TokioTaskSpawner));
+            assert_eq!(service.list_models(ProviderRequest { kind: ProviderKind::Llm, channel_id: Some(channel), thinking_enabled: false }).await.unwrap().models, vec!["model"]);
+            let request = String::from_utf8(request.recv_timeout(Duration::from_secs(2)).unwrap()).unwrap().to_ascii_lowercase();
+            assert!(request.starts_with("get /v1/models "));
+            if format == "messages" { assert!(request.contains("x-api-key: fixture-key")); }
+            else { assert!(request.contains("authorization: bearer fixture-key")); }
+        }
+    }
+
+    #[tokio::test]
     async fn openai_compatible_asr_without_key_reaches_the_configured_endpoint() {
         let (endpoint, request) =
             spawn_http_response("200 OK", "application/json", r#"{"text":"ok"}"#);
@@ -885,6 +1055,7 @@ mod tests {
 
         service
             .validate(ProviderRequest {
+                thinking_enabled: false,
                 kind: ProviderKind::Asr,
                 channel_id: Some(channel),
             })
@@ -894,6 +1065,70 @@ mod tests {
         let request = String::from_utf8_lossy(&request.recv().unwrap()).to_ascii_lowercase();
         assert!(request.starts_with("post /v1/audio/transcriptions "));
         assert!(!request.contains("authorization:"));
+    }
+
+    /// Minimal host-engine fixture: accepts any PCM and finishes successfully,
+    /// mirroring what the Apple Speech engine returns for a silence probe.
+    struct FixtureNativeEngine;
+
+    struct FixtureNativeSession;
+
+    impl crate::ports::AudioConsumer for FixtureNativeSession {
+        fn consume_pcm_chunk(&self, _pcm: &[u8]) {}
+    }
+
+    impl crate::ports::TranscriptionSession for FixtureNativeSession {
+        fn finish(
+            &self,
+        ) -> BoxFuture<'static, Result<crate::ports::TranscriptOutput, BackendError>> {
+            Box::pin(async {
+                Ok(crate::ports::TranscriptOutput {
+                    text: String::new(),
+                    duration_ms: 500,
+                })
+            })
+        }
+
+        fn cancel(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    impl TranscriptionEngine for FixtureNativeEngine {
+        fn start(
+            &self,
+            _session_id: SessionId,
+            context: Arc<DictationContext>,
+            _partials: Arc<dyn TextStreamSink>,
+        ) -> BoxFuture<'static, Result<Arc<dyn crate::ports::TranscriptionSession>, BackendError>>
+        {
+            assert_eq!(context.asr.provider_type, "apple-speech");
+            Box::pin(async {
+                Ok(Arc::new(FixtureNativeSession) as Arc<dyn crate::ports::TranscriptionSession>)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn apple_speech_validates_through_the_injected_native_engine() {
+        let credentials = Arc::new(InMemoryCredentialStore::default());
+        let channel =
+            create_channel_with_values(&credentials, ChannelKind::Asr, "apple-speech", &[]).await;
+        let request = ProviderRequest {
+            thinking_enabled: false,
+            kind: ProviderKind::Asr,
+            channel_id: Some(channel),
+        };
+
+        // Without the host engine the native probe stays explicitly unsupported.
+        let without = ProviderService::new(credentials.clone(), Arc::new(crate::TokioTaskSpawner));
+        let error = without.validate(request.clone()).await.unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::Unsupported);
+
+        // With the engine injected the probe runs against the real engine port.
+        let with = ProviderService::new(credentials, Arc::new(crate::TokioTaskSpawner))
+            .with_native_transcription(Arc::new(FixtureNativeEngine));
+        with.validate(request).await.unwrap();
     }
 
     #[tokio::test]
@@ -918,6 +1153,7 @@ mod tests {
 
         service
             .validate(ProviderRequest {
+                thinking_enabled: false,
                 kind: ProviderKind::Llm,
                 channel_id: Some(channel),
             })
@@ -951,6 +1187,7 @@ mod tests {
 
         let error = service
             .validate(ProviderRequest {
+                thinking_enabled: false,
                 kind: ProviderKind::Llm,
                 channel_id: Some(channel),
             })
@@ -981,6 +1218,7 @@ mod tests {
 
         let result = service
             .list_models(ProviderRequest {
+                thinking_enabled: false,
                 kind: ProviderKind::Asr,
                 channel_id: Some(channel),
             })
@@ -1024,6 +1262,7 @@ mod tests {
 
         service
             .validate(ProviderRequest {
+                thinking_enabled: false,
                 kind: ProviderKind::Asr,
                 channel_id: Some(channel),
             })
@@ -1092,6 +1331,7 @@ mod tests {
         let (service, credentials) = service_with_channel().await;
         let error = service
             .list_models(ProviderRequest {
+                thinking_enabled: false,
                 kind: ProviderKind::Llm,
                 channel_id: Some("missing".to_string()),
             })
@@ -1108,6 +1348,7 @@ mod tests {
         let service = ProviderService::new(credentials, Arc::new(crate::TokioTaskSpawner));
         let error = service
             .validate(ProviderRequest {
+                thinking_enabled: false,
                 kind: ProviderKind::Omni,
                 channel_id: Some("channel".to_string()),
             })
@@ -1166,6 +1407,7 @@ mod tests {
 
         let first_resolved = service
             .resolve(ProviderRequest {
+                thinking_enabled: false,
                 kind: ProviderKind::Llm,
                 channel_id: Some(first_id.clone()),
             })
@@ -1173,6 +1415,7 @@ mod tests {
             .unwrap();
         let second_resolved = service
             .resolve(ProviderRequest {
+                thinking_enabled: false,
                 kind: ProviderKind::Llm,
                 channel_id: Some(second_id.clone()),
             })
@@ -1180,6 +1423,7 @@ mod tests {
             .unwrap();
         let active_resolved = service
             .resolve(ProviderRequest {
+                thinking_enabled: false,
                 kind: ProviderKind::Llm,
                 channel_id: None,
             })
@@ -1208,6 +1452,8 @@ mod tests {
         let models = parse_model_list(
             br#"{"data":[{"id":"gpt-z"},{"id":""},{"id":"gpt-a"},{"id":"gpt-z"}]}"#,
             false,
+            None,
+            false,
         )
         .unwrap();
         assert_eq!(models, vec!["gpt-a", "gpt-z"]);
@@ -1218,6 +1464,8 @@ mod tests {
         let models = parse_model_list(
             br#"{"models":[{"name":"models/gemini-z","supportedGenerationMethods":["generateContent"]},{"name":"models/embedding","supportedGenerationMethods":["embedContent"]},{"name":"gemini-a"}]}"#,
             true,
+            None,
+            false,
         )
         .unwrap();
         assert_eq!(models, vec!["gemini-a", "gemini-z"]);
@@ -1225,9 +1473,233 @@ mod tests {
 
     #[test]
     fn invalid_model_response_is_a_provider_error_without_body() {
-        let error = parse_model_list(br#"{"error":"secret-key"}"#, false).unwrap_err();
+        let error = parse_model_list(br#"{"error":"secret-key"}"#, false, None, false).unwrap_err();
         assert_eq!(error.code, BackendErrorCode::Provider);
         assert!(!format!("{error:?}").contains("secret-key"));
+    }
+
+    #[tokio::test]
+    async fn tokenhub_catalog_lists_only_online_language_models() {
+        let credentials = Arc::new(InMemoryCredentialStore::default());
+        let channel = create_channel_with_values(
+            &credentials,
+            ChannelKind::Llm,
+            "tencentTokenHub",
+            &[(LLM_API_KEY_ACCOUNT, "fixture-key")],
+        )
+        .await;
+        let transport = Arc::new(FakeProviderTransport::default());
+        transport.push_response(
+            200,
+            br#"{"object":"list","data":[
+                {"id":"hy3","status":"online"},
+                {"id":"hy4-preview","status":"online"},
+                {"id":"hy-mt2-pro","status":"online"},
+                {"id":"hy-role","status":"online"},
+                {"id":"hunyuan-role-latest","status":"online"},
+                {"id":"deepseek/deepseek-v4-flash","status":"online"},
+                {"id":"glm-5.3","status":"online"},
+                {"id":"kimi-k3","status":"online"},
+                {"id":"minimax-m3","status":"online"},
+                {"id":"qwen3.5-flash","status":"online"},
+                {"id":"mimo-v2.5-pro","status":"online"},
+                {"id":"deepseek-v4-pro","status":"pre-offline"},
+                {"id":"glm-future"},
+                {"id":"hy-image-v3","status":"online"},
+                {"id":"hy-video-v1.5","status":"online"},
+                {"id":"HY-3D-3.1","status":"online"},
+                {"id":"hy-asr-3.0-preview","status":"online"},
+                {"id":"minimax-speech-2.8-hd","status":"online"},
+                {"id":"kinfra-text-embedding-4b","status":"online"}
+            ]}"#
+            .to_vec(),
+        );
+        let service = ProviderService::new_with_transport(
+            credentials,
+            Arc::new(crate::TokioTaskSpawner),
+            transport.clone(),
+        );
+
+        let result = service
+            .list_models(ProviderRequest {
+                kind: ProviderKind::Llm,
+                channel_id: Some(channel),
+                thinking_enabled: false,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.models,
+            vec![
+                "deepseek/deepseek-v4-flash",
+                "glm-5.3",
+                "hunyuan-role-latest",
+                "hy-mt2-pro",
+                "hy-role",
+                "hy3",
+                "hy4-preview",
+                "kimi-k3",
+                "mimo-v2.5-pro",
+                "minimax-m3",
+                "qwen3.5-flash",
+            ]
+        );
+        assert_eq!(
+            transport.requests()[0].headers,
+            vec![(
+                "Authorization".to_string(),
+                "Bearer fixture-key".to_string()
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn orcarouter_catalog_uses_core_channel_defaults_and_filters_capabilities() {
+        let catalog = r#"{"data":[
+            {"id":"orcarouter/fusion-flash","supported_endpoint_types":["openai","anthropic"]},
+            {"id":"google/gemini-2.5-flash","supported_endpoint_types":["openai"],"architecture":{"input_modalities":["text","audio"]}},
+            {"id":"google/gemini-2.5-flash","supported_endpoint_types":["openai"],"architecture":{"input_modalities":["text","audio"]}},
+            {"id":"google/gemini-image","supported_endpoint_types":["openai-image"]},
+            {"id":"google/gemini-tts","supported_endpoint_types":["openai"],"architecture":{"input_modalities":["text"]}},
+            {"id":"google/gemini-unknown","supported_endpoint_types":["openai"]},
+            {"id":"openai/embedding","supported_endpoint_types":["embeddings"]},
+            {"id":"legacy/chat"}
+        ]}"#;
+        for (kind, channel_kind, key_account, expected) in [
+            (ProviderKind::Llm, ChannelKind::Llm, LLM_API_KEY_ACCOUNT,
+                vec!["google/gemini-2.5-flash", "google/gemini-tts", "google/gemini-unknown", "orcarouter/fusion-flash"]),
+            (ProviderKind::Asr, ChannelKind::Asr, ASR_API_KEY_ACCOUNT,
+                vec!["google/gemini-2.5-flash"]),
+        ] {
+            let credentials = Arc::new(InMemoryCredentialStore::default());
+            let channel = create_channel_with_values(&credentials, channel_kind, "orcarouter", &[]).await;
+            let transport = Arc::new(FakeProviderTransport::default());
+            transport.push_response(200, catalog.as_bytes().to_vec());
+            let service = ProviderService::new_with_transport(credentials.clone(), Arc::new(crate::TokioTaskSpawner), transport.clone());
+            let request = ProviderRequest { kind, channel_id: Some(channel.clone()), thinking_enabled: false };
+            assert!(service.list_models(request.clone()).await.is_err());
+            let namespace = if kind == ProviderKind::Llm { CredentialNamespace::Llm } else { CredentialNamespace::Asr };
+            credentials.write(CredentialKey::new(namespace, Some(channel), key_account).unwrap(), SecretValue::new("fixture-key")).await.unwrap();
+            let result = service.list_models(request).await.unwrap();
+            assert_eq!(result.models, expected);
+            let requests = transport.requests();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].url, "https://api.orcarouter.ai/v1/models");
+        }
+    }
+
+    #[tokio::test]
+    async fn orcarouter_catalog_matches_the_selected_llm_protocol() {
+        let catalog = br#"{"data":[
+            {"id":"model/chat","supported_endpoint_types":["openai"]},
+            {"id":"model/responses","supported_endpoint_types":["openai-response"]},
+            {"id":"model/messages","supported_endpoint_types":["anthropic"]},
+            {"id":"model/all","supported_endpoint_types":["openai","openai-response","anthropic"]},
+            {"id":"model/unknown"}
+        ]}"#;
+        for (format, expected) in [
+            ("chat_completions", vec!["model/all", "model/chat"]),
+            ("responses", vec!["model/all", "model/responses"]),
+            ("messages", vec!["model/all", "model/messages"]),
+        ] {
+            let credentials = Arc::new(InMemoryCredentialStore::default());
+            let channel = create_channel_with_values(
+                &credentials,
+                ChannelKind::Llm,
+                "orcarouter",
+                &[
+                    (LLM_API_KEY_ACCOUNT, "fixture-key"),
+                    (crate::llm_protocol::REQUEST_FORMAT_ACCOUNT, format),
+                ],
+            )
+            .await;
+            let transport = Arc::new(FakeProviderTransport::default());
+            transport.push_response(200, catalog.to_vec());
+            let service = ProviderService::new_with_transport(
+                credentials,
+                Arc::new(crate::TokioTaskSpawner),
+                transport.clone(),
+            );
+
+            let result = service
+                .list_models(ProviderRequest {
+                    kind: ProviderKind::Llm,
+                    channel_id: Some(channel),
+                    thinking_enabled: false,
+                })
+                .await
+                .unwrap();
+
+            assert_eq!(result.models, expected, "request format: {format}");
+            assert_eq!(
+                transport.requests()[0].headers,
+                vec![(
+                    "Authorization".to_string(),
+                    "Bearer fixture-key".to_string()
+                )],
+                "OrcaRouter /models always uses bearer authentication"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn custom_asr_endpoint_does_not_enable_orcarouter_catalog_rules() {
+        let credentials = Arc::new(InMemoryCredentialStore::default());
+        let channel = create_channel_with_values(
+            &credentials,
+            ChannelKind::Asr,
+            "openai-compatible",
+            &[
+                (ASR_ENDPOINT_ACCOUNT, "https://api.orcarouter.ai/v1"),
+                (ASR_MODEL_ACCOUNT, "whisper-1"),
+            ],
+        )
+        .await;
+        let transport = Arc::new(FakeProviderTransport::default());
+        transport.push_response(
+            200,
+            br#"{"data":[{"id":"google/gemini-audio"},{"id":"openai/whisper-1"}]}"#.to_vec(),
+        );
+        let service = ProviderService::new_with_transport(
+            credentials,
+            Arc::new(crate::TokioTaskSpawner),
+            transport,
+        );
+
+        let result = service
+            .list_models(ProviderRequest {
+                kind: ProviderKind::Asr,
+                channel_id: Some(channel),
+                thinking_enabled: false,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.models,
+            vec!["google/gemini-audio", "openai/whisper-1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn orcarouter_validation_uses_shared_audio_chat_transcription() {
+        let (endpoint, request) = spawn_http_response("200 OK", "application/json",
+            r#"{"choices":[{"message":{"content":"transcript"}}]}"#);
+        let credentials = Arc::new(InMemoryCredentialStore::default());
+        let channel = create_channel_with_values(&credentials, ChannelKind::Asr, "orcarouter", &[
+            (ASR_ENDPOINT_ACCOUNT, &endpoint), (ASR_API_KEY_ACCOUNT, "fixture-key"),
+        ]).await;
+        let service = ProviderService::new(credentials, Arc::new(crate::TokioTaskSpawner));
+        service.validate(ProviderRequest { kind: ProviderKind::Asr, channel_id: Some(channel), thinking_enabled: false }).await.unwrap();
+        let request = String::from_utf8(request.recv_timeout(Duration::from_secs(2)).unwrap()).unwrap();
+        assert!(request.starts_with("POST /v1/chat/completions "));
+        let body: serde_json::Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(body["model"], crate::asr::mimo::ORCAROUTER_DEFAULT_MODEL);
+        let content = &body["messages"][0]["content"];
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[1]["input_audio"]["format"], "wav");
+        assert!(!content[1]["input_audio"]["data"].as_str().unwrap().starts_with("data:"));
     }
 
     async fn service_with_fake_transport() -> (ProviderService, Arc<FakeProviderTransport>, String)
@@ -1286,6 +1758,7 @@ mod tests {
 
         let result = service
             .list_models(ProviderRequest {
+                thinking_enabled: false,
                 kind: ProviderKind::Llm,
                 channel_id: Some(channel),
             })
@@ -1327,6 +1800,7 @@ mod tests {
             transport.push_response(status, br#"{"data":[]}"#);
             let error = service
                 .list_models(ProviderRequest {
+                    thinking_enabled: false,
                     kind: ProviderKind::Llm,
                     channel_id: Some(channel.clone()),
                 })
@@ -1340,6 +1814,7 @@ mod tests {
         transport.push_response(200, br#"not-json secret-body"#);
         let error = service
             .list_models(ProviderRequest {
+                thinking_enabled: false,
                 kind: ProviderKind::Llm,
                 channel_id: Some(channel.clone()),
             })
@@ -1351,6 +1826,7 @@ mod tests {
         transport.push_response(200, vec![b'x'; MODEL_LIST_MAX_BYTES + 1]);
         let error = service
             .list_models(ProviderRequest {
+                thinking_enabled: false,
                 kind: ProviderKind::Llm,
                 channel_id: Some(channel.clone()),
             })
@@ -1389,6 +1865,7 @@ mod tests {
             transport.push_error(transport_error);
             let error = service
                 .list_models(ProviderRequest {
+                    thinking_enabled: false,
                     kind: ProviderKind::Llm,
                     channel_id: Some(channel.clone()),
                 })
@@ -1409,6 +1886,7 @@ mod tests {
         let error = service
             .list_models_with_cancellation(
                 ProviderRequest {
+                    thinking_enabled: false,
                     kind: ProviderKind::Llm,
                     channel_id: Some(channel),
                 },
@@ -1441,6 +1919,7 @@ mod tests {
         let error = service
             .list_models_with_cancellation(
                 ProviderRequest {
+                    thinking_enabled: false,
                     kind: ProviderKind::Asr,
                     channel_id: Some(channel),
                 },
@@ -1490,6 +1969,8 @@ mod tests {
         ];
         for (provider_type, expected_models) in expected {
             let resolved = ResolvedProvider {
+                thinking_enabled: false,
+                protocol: LlmProtocolConfig::default(),
                 kind: ProviderKind::Asr,
                 provider_id: provider_type.to_string(),
                 provider_type: provider_type.to_string(),

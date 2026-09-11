@@ -1,12 +1,8 @@
 #![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
-//! Tauri command surface — every IPC entry the React UI invokes lives here.
+//! Tauri IPC 命令入口，按设置、凭据、历史等领域拆分子模块。
 //!
-//! issue: 历史上整个 IPC 表（127 个 `#[tauri::command]` + 跨域 helper）挤在单个
-//! 4800 行的 `commands.rs` 里。按单一职责拆成 `commands/` 下的域模块（settings /
-//! credentials / providers / history / …），每个文件聚焦一个领域。对外路径保持不变：
-//! 本模块用 `pub use <domain>::*` glob 重导出每个子模块，`commands::<name>` 仍然解析，
-//! `lib.rs` 的 `generate_handler!` 清单与类型引用零改动。`#[tauri::command]` 生成的
-//! `__cmd__<name>` 伴生项也随 glob 一并重导出——这是 Tauri 拆分命令文件的标准做法。
+//! 子模块的命令及宏生成的伴生项通过 glob 重导出，供 `lib.rs` 的
+//! `generate_handler!` 以 `commands::<name>` 注册。平台条件须与注册清单保持一致。
 
 use std::sync::Arc;
 
@@ -16,8 +12,7 @@ use parking_lot::Mutex;
 use tauri::Manager;
 use tauri::State;
 
-// 跨域共享的 crate 级导入：以 `pub(crate) use` 重导出，子模块用 `use super::*;`
-// 即可拿到，避免在 16 个文件里重复同一组 import。
+// 子模块通过 use super::* 使用共享的 Host 状态、DTO 和依赖类型。
 pub(crate) use serde::Serialize;
 pub(crate) use serde_json::Value;
 pub(crate) use tauri::{AppHandle, Emitter, Window};
@@ -53,6 +48,7 @@ pub(crate) use crate::types::{
 };
 
 mod channels;
+mod cloud_sync;
 mod credentials;
 mod dictation;
 mod dictionary;
@@ -82,6 +78,7 @@ mod sherpa_asr;
 mod style_packs;
 
 pub use channels::*;
+pub use cloud_sync::*;
 pub use credentials::*;
 pub use dictation::*;
 pub use dictionary::*;
@@ -99,17 +96,15 @@ pub use providers::*;
 pub use qa::*;
 #[cfg(not(mobile))]
 pub use remote_input::*;
-pub use settings::*;
-// sherpa_onnx_asr_* 命令整组 `#[cfg(target_os = "windows")]`（见 lib.rs 的
-// generate_handler! 清单）。非 Windows 平台这组 glob 重导出无人引用，会触发
-// unused_imports；这是平台 cfg 的正常结果，不是真正的死代码。
 #[cfg(all(not(mobile), debug_assertions))]
 pub use selection_polish::*;
 #[cfg(not(mobile))]
 pub use selection_polish_preview::*;
 #[cfg(all(not(mobile), target_os = "windows"))]
 pub use selection_voice::*;
+pub use settings::*;
 #[cfg(not(mobile))]
+// Sherpa 命令只在 Windows 注册；其他桌面目标保留空重导出。
 #[allow(unused_imports)]
 pub use sherpa_asr::*;
 pub use style_packs::*;

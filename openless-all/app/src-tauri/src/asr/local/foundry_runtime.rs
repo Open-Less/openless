@@ -108,9 +108,7 @@ pub(crate) const FOUNDRY_FALLBACK_TERMINAL_USER_MESSAGE: &str =
     "本地识别失败: GPU 识别异常，且 CPU 回退未能完成（详情见日志）";
 
 #[cfg(target_os = "windows")]
-// PR #945 review P2-1：transcribe_audio_file 死代码已删除；此 allow 仍需保留，
-// 覆盖 ensure_loaded 等其他 pre-existing 死代码（删除它们涉及公共 API 形状变更，
-// 留作后续跟进）。
+// Windows 原生运行时模块同时暴露预加载与转写接口，调用入口按目标配置选择。
 #[allow(dead_code)]
 mod imp {
     use super::{FoundryPrimaryRecoveryToken, FoundryRouteEpoch};

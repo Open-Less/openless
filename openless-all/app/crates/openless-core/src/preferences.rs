@@ -141,6 +141,16 @@ impl PreferencesStore {
             .clone()
     }
 
+    /// Keep the live value locked until a coordinated restore has committed all of its files.
+    pub(crate) fn cloud_sync_access(&self) -> (std::sync::MutexGuard<'_, UserPreferences>, &Path) {
+        (
+            self.state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            &self.path,
+        )
+    }
+
     pub fn set(&self, preferences: UserPreferences) -> Result<(), BackendError> {
         let json = serde_json::to_vec_pretty(&preferences)
             .map_err(|_| persistence_error("encode preferences"))?;

@@ -12,7 +12,8 @@ for (const snapshot of [
   } catch {
     failed = true;
   }
-  if (!failed) throw new Error(`invalid startup snapshot was accepted: ${JSON.stringify(snapshot)}`);
+  if (!failed)
+    throw new Error(`invalid startup snapshot was accepted: ${JSON.stringify(snapshot)}`);
 }
 
 console.log('backendContract.test.ts passed');

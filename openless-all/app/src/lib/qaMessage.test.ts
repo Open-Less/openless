@@ -3,7 +3,9 @@ import type { QaChatMessage } from './types';
 
 function assertEqual<T>(actual: T, expected: T, message: string) {
   if (actual !== expected) {
-    throw new Error(`${message}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+    throw new Error(
+      `${message}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
+    );
   }
 }
 
@@ -17,7 +19,11 @@ const canonical = splitQaUserMessage(
     '原始 <tag> & 文本',
   ),
 );
-assertEqual(canonical.selection, '原始 <tag> & 文本', 'canonical messages use original display text');
+assertEqual(
+  canonical.selection,
+  '原始 <tag> & 文本',
+  'canonical messages use original display text',
+);
 assertEqual(canonical.question, '解释一下', 'canonical messages extract the question');
 
 const escapedLiteral = splitQaUserMessage(
@@ -32,9 +38,7 @@ assertEqual(
   'display text is not ambiguously decoded',
 );
 
-const legacy = splitQaUserMessage(
-  userMessage('# 选区原文\n旧选区\n\n# 我的问题\n旧问题'),
-);
+const legacy = splitQaUserMessage(userMessage('# 选区原文\n旧选区\n\n# 我的问题\n旧问题'));
 assertEqual(legacy.selection, '旧选区', 'legacy messages still expose their selection');
 assertEqual(legacy.question, '旧问题', 'legacy messages still expose their question');
 

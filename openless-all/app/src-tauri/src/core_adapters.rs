@@ -184,6 +184,9 @@ pub(crate) fn backend_dependencies(
     }
     let polisher: Arc<dyn TextPolisher> = polisher;
     let auxiliary_transcription: Arc<dyn TranscriptionEngine> = transcription.clone();
+    // Provider validation for local engines (Apple Speech) probes through the
+    // same router dictation uses, so the check exercises the real engine.
+    let provider_native_transcription: Arc<dyn TranscriptionEngine> = transcription.clone();
     let auxiliary_polisher: Arc<dyn TextPolisher> =
         Arc::new(openless_core::SharedAuxiliaryTextPolisher::new(
             Arc::clone(&credential_store),
@@ -193,16 +196,27 @@ pub(crate) fn backend_dependencies(
         app: Arc::clone(&app),
         backend: Arc::clone(&backend),
     });
-    let recorder =
-        AudioRecorderRouter::new(Arc::clone(&host_recorder), ExternalAudioRecorder::default());
+    let external = match crate::persistence::data_dir() {
+        Ok(directory) => {
+            ExternalAudioRecorder::with_recordings_directory(directory.join("recordings"))
+        }
+        Err(error) => {
+            log::warn!("[remote-input] 无法定位录音目录：{error}");
+            ExternalAudioRecorder::default()
+        }
+    };
+    let recorder: Arc<dyn AudioRecorder> = Arc::new(AudioRecorderRouter::new(
+        Arc::clone(&host_recorder),
+        external,
+    ));
     let traditional = Arc::new(openless_core::PipelineDictationEngine::new(
-        Arc::new(recorder),
+        Arc::clone(&recorder),
         transcription,
         Arc::clone(&polisher),
     ));
     let dictation = Arc::new(openless_core::DictationEngineRouter::new(traditional));
     let production_omni: Arc<dyn DictationEngine> = Arc::new(
-        openless_core::SharedOmniDictationEngine::new(Arc::clone(&credential_store), host_recorder),
+        openless_core::SharedOmniDictationEngine::new(Arc::clone(&credential_store), recorder),
     );
     for provider_type in openless_core::SHARED_OMNI_PROVIDER_TYPES {
         dictation
@@ -216,10 +230,13 @@ pub(crate) fn backend_dependencies(
     dependencies
         .services
         .configure_auxiliary_runtime(auxiliary_polisher, auxiliary_transcription);
-    dependencies.services.provider = Arc::new(openless_core::ProviderService::new(
-        Arc::clone(&credential_store),
-        Arc::clone(&task_spawner),
-    ));
+    dependencies.services.provider = Arc::new(
+        openless_core::ProviderService::new(
+            Arc::clone(&credential_store),
+            Arc::clone(&task_spawner),
+        )
+        .with_native_transcription(provider_native_transcription),
+    );
     dependencies
         .services
         .configure_coding_agent_process(Arc::new(
@@ -1280,6 +1297,7 @@ impl openless_core::RemoteInputRuntimeAdapter for TauriRemoteInputRuntimeAdapter
                 port: handle.bound_port,
                 urls: crate::remote_server::access_urls(handle.bound_port),
                 urls_stale: false,
+                ca_fingerprint_sha256: Some(handle.ca_fingerprint_sha256.clone()),
             };
             *server.lock().await = Some(handle);
             Ok(binding)
@@ -1352,6 +1370,19 @@ impl openless_core::RemoteInputRuntimeAdapter for TauriRemoteInputRuntimeAdapter
     ) -> BoxFuture<'static, Result<(), BackendError>> {
         let backend = self.backend();
         Box::pin(async move { backend?.cancel_dictation(Some(session_id)).await })
+    }
+
+    fn read_audio_history(
+        &self,
+        session_id: SessionId,
+    ) -> BoxFuture<'static, Result<Option<openless_core::DictationSession>, BackendError>> {
+        let backend = self.backend();
+        Box::pin(async move {
+            Ok(backend?
+                .list_history()?
+                .into_iter()
+                .find(|entry| entry.id == session_id.to_string()))
+        })
     }
 }
 
@@ -1823,10 +1854,11 @@ impl TranscriptionEngine for TauriNativeTranscriptionEngine {
                             Some(model_id),
                         )
                     } else if crate::asr::local::is_apple_speech(provider_type) {
-                        let locale =
-                            context.polish.working_languages.first().and_then(|name| {
-                                crate::asr::local::native_name_to_apple_locale(name)
-                            });
+                        let locale = context.polish.working_languages.first().map(|name| {
+                            crate::asr::local::native_name_to_apple_locale(name).ok_or_else(|| {
+                                BackendError::new(BackendErrorCode::Unsupported, "Apple Speech 无法识别所选工作语言，请选择其他语言或语音识别服务。")
+                            })
+                        }).transpose()?;
                         (
                             TauriNativeTranscriptionSessionKind::AppleSpeech(Arc::new(
                                 crate::asr::local::AppleSpeechAsr::new(locale),

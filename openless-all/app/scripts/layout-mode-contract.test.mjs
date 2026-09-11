@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const appRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const read = relativePath => readFileSync(join(appRoot, relativePath), 'utf8');
+const read = (relativePath) => readFileSync(join(appRoot, relativePath), 'utf8');
 
 const css = read('src/styles/global.css');
 const stackedLayout = read('src/lib/stackedLayout.ts');
@@ -26,7 +26,10 @@ assert.match(css, /\.ol-conservative-stack/);
 
 assert.match(stackedLayout, /stackedRowLayout\?: boolean/);
 assert.doesNotMatch(stackedLayout, /mobile\s*\|\|/);
-assert.match(shared, /flex:\s*"0 0 36px"/);
+// Toggle 尺寸契约：宽 36 由 width/minWidth/maxWidth 锁定，flex 只声明不伸缩。
+// flex-basis 必须为 auto，避免在列方向容器中把开关高度扩成 36px。
+assert.match(shared, /flex:\s*['"]0 0 auto['"]/);
+assert.match(shared, /width:\s*36/);
 assert.match(shared, /minWidth:\s*36/);
 assert.match(shared, /maxWidth:\s*36/);
 assert.match(pageAtoms, /preferenceStack\s*\?/);

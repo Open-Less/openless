@@ -4,7 +4,12 @@
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getPlatformCapabilities, getUpdateChannel, setUpdateChannel, type UpdateChannel } from '../../lib/ipc';
+import {
+  getPlatformCapabilities,
+  getUpdateChannel,
+  setUpdateChannel,
+  type UpdateChannel,
+} from '../../lib/ipc';
 import type { PlatformCapabilities } from '../../lib/types';
 import { Card } from '../_atoms';
 import { SectionTitle, SettingRow, Toggle } from './shared';
@@ -13,6 +18,7 @@ import { CheckUpdateButton } from './CheckUpdateButton';
 export function BetaChannelSection() {
   const { t } = useTranslation();
   const [channel, setChannel] = useState<UpdateChannel>('stable');
+  const [autoCheckChannel, setAutoCheckChannel] = useState<UpdateChannel | null>(null);
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
 
   useEffect(() => {
@@ -22,9 +28,15 @@ export function BetaChannelSection() {
   useEffect(() => {
     let cancelled = false;
     void getUpdateChannel()
-      .then(c => { if (!cancelled) setChannel(c); })
-      .catch(() => { /* fall back to stable already in initial state */ });
-    return () => { cancelled = true; };
+      .then((c) => {
+        if (!cancelled) setChannel(c);
+      })
+      .catch(() => {
+        /* fall back to stable already in initial state */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const onToggle = async (next: boolean) => {
@@ -34,7 +46,9 @@ export function BetaChannelSection() {
       await setUpdateChannel(target);
     } catch {
       setChannel(target === 'beta' ? 'stable' : 'beta');
+      return;
     }
+    setAutoCheckChannel(target);
   };
 
   if (platformCaps?.supportsAutoUpdate !== true) return null;
@@ -49,7 +63,7 @@ export function BetaChannelSection() {
         <Toggle on={channel === 'beta'} onToggle={onToggle} />
       </SettingRow>
       <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: 4 }}>
-        <CheckUpdateButton channel="beta" />
+        <CheckUpdateButton channel="beta" autoCheckChannel={autoCheckChannel} />
       </div>
     </Card>
   );

@@ -215,16 +215,8 @@ export type QaHotkeyBinding = ShortcutBinding;
 /** 自定义录音组合键绑定。当 hotkey.trigger == 'custom' 时使用。 */
 export type ComboBinding = ShortcutBinding;
 
-export type CodingAgentProviderId =
-  | "claude-code-cli"
-  | "opencode-cli"
-  | "codex-cli"
-  | "dsh-cli";
-export type CodingAgentPermissionMode =
-  | "plan"
-  | "default"
-  | "acceptEdits"
-  | "bypassPermissions";
+export type CodingAgentProviderId = 'claude-code-cli' | 'opencode-cli' | 'codex-cli' | 'dsh-cli';
+export type CodingAgentPermissionMode = 'plan' | 'default' | 'acceptEdits' | 'bypassPermissions';
 
 /** 模拟粘贴时按下的快捷键。仅 Windows/Linux 生效；macOS 走 AX 直写。
  *  - ctrlV       : 标准粘贴（默认；大多数编辑器、浏览器、IDE）
@@ -244,10 +236,7 @@ export type WindowsSendInputNewlineMode = 'enter' | 'shiftEnter' | 'crlf';
 export type MacosNewlineMode = 'auto' | 'shiftReturn' | 'lineFeed' | 'return';
 
 export type WindowsImeInstallState =
-  | 'installed'
-  | 'notInstalled'
-  | 'registrationBroken'
-  | 'notWindows';
+  'installed' | 'notInstalled' | 'registrationBroken' | 'notWindows';
 
 export interface WindowsImeStatus {
   state: WindowsImeInstallState;
@@ -256,8 +245,7 @@ export interface WindowsImeStatus {
   dllPath: string | null;
 }
 
-/** 后台自动更新渠道。stable = 查正式版 manifest（默认）；beta = 查
- *  latest-android-{arch}-beta.json。手动「检查正式版/Beta 更新」按钮不受此字段影响。 */
+/** 后台自动更新渠道。未明确选择时跟随构建类型；手动检查按钮不受此字段影响。 */
 export type UpdateChannel = 'stable' | 'beta';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
@@ -349,7 +337,7 @@ export interface UserPreferences {
   customStylePrompts: CustomStylePrompts;
   launchAtLogin: boolean;
   showCapsule: boolean;
-  /** 录音胶囊样式（'siri' | 'classic'）。见 CapsulePayload.capsuleStyle 的运行时下发。 */
+  /** 录音胶囊外观；保存后同步到胶囊窗口。 */
   capsuleStyle: CapsuleStyle;
   /** 录音期间临时静音系统输出，停止/取消/出错后恢复原静音状态。 */
   muteDuringRecording: boolean;
@@ -390,7 +378,7 @@ export interface UserPreferences {
   macosNewlineMode: MacosNewlineMode;
   /** 旧版兼容：`true` 等价于 `windowsInsertionMode === 'sendInput'`。 */
   windowsSendInputInsertionOnly: boolean;
-  /** Windows：SendInput 模式下是否在系统键盘列表（Win+Space）中显示 OpenLess。 */
+  /** Windows：非 TSF 插入方式下是否在系统键盘列表（Win+Space）中显示 OpenLess。 */
   windowsShowOpenlessInKeyboardList: boolean;
   /** 用户的工作语言（多选，原生名）；作为前提注入 LLM polish/translate prompt 头部。 */
   workingLanguages: string[];
@@ -482,9 +470,11 @@ export interface UserPreferences {
   startMinimized: boolean;
   /** UI theme preference: follow OS, light, or dark. */
   themeMode: ThemeMode;
-  /** 后台自动更新渠道。stable（默认）= AutoUpdateGate 查正式版 manifest；
-   *  beta = 查 Beta manifest。About / Advanced 的手动检查按钮各自固定 stable/beta。 */
+  /** 后台自动更新渠道。用户未明确选择时跟随当前构建类型；
+   * About / Advanced 的手动检查按钮各自固定 stable/beta。 */
   updateChannel: UpdateChannel;
+  /** 是否由用户明确选择过更新渠道；缺失时由当前构建类型决定默认渠道。 */
+  updateChannelExplicit?: boolean;
   /** 流式输入：润色 SSE 一边到达一边逐字模拟键盘事件输出到当前焦点。开启后用户感知到
    *  的处理时延显著降低。v1 限定 macOS + OpenAI-compatible provider，其他配置自动回落
    *  到原一次性插入。默认 true。 */
@@ -542,6 +532,9 @@ export interface UserPreferences {
   androidOverlayCancelSwipeDirection: AndroidOverlayCancelSwipeDirection;
   /** Android: floating overlay control diameter in dp. */
   androidOverlaySizeDp: number;
+  /** 开屏 PV 的主版本世代标记（如 '2'）。空 = 从未播过；由 Rust 侧
+   *  take_splash_playback 独家推进，设置保存链路会原样保留，前端只读不写。 */
+  splashSeenVersion?: string;
 }
 
 export interface MarketplaceListItem {
@@ -623,32 +616,39 @@ export interface QaStatePayload {
  * Less Computer 语音 Agent 浮窗事件（窗口 label = "less-computer"，事件名
  * `less-computer:event`）。后端按 `kind` 标记，前端据此把交互渲染成聊天结构。
  */
-export type LessComputerEvent = (
+export type LessComputerEvent =
   /** Core语音生命周期快照；seq去重、sessionId防止旧会话的终态/电平覆盖新录音。 */
-  | { kind: 'voice_state'; sessionId: string; phase: 'starting' | 'recording' | 'transcribing' | 'idle'; level: number; elapsedMs: number }
-  /** 一轮用户气泡（语音指令转写）。fresh=true 表示新会话（清空历史）；否则追加为后续轮次。 */
-  | { kind: 'user'; text: string; fresh?: boolean }
-  /** Agent 启动，进入运行态。 */
-  | { kind: 'started' }
-  /** 流式回复增量（来自 CodingAgentEvent::Delta）。 */
-  | { kind: 'delta'; text: string }
-  /** 工具调用提示（来自 CodingAgentEvent::ToolUse，如 "Bash"）。 */
-  | { kind: 'tool'; name: string }
-  /** 会话上下文被压缩（来自 CodingAgentEvent::Compaction），输出流对应位置内嵌提示。 */
-  | { kind: 'compaction' }
-  /** 内联审批卡：高风险动作被护栏拦下，等用户 Approve / Deny。 */
-  | { kind: 'approval'; token: string; command: string; reason: string }
-  /** 运行完成：最终结果 + 成本（美元）。 */
-  | { kind: 'completed'; text: string; costUsd?: number | null }
-  /** 用户从胶囊取消正在运行的 Agent。 */
-  | { kind: 'cancelled' }
-  /** 运行出错。 */
-  | { kind: 'error'; message: string }
-) & {
-  /** 单调事件序号（后端 emit 时编）。用于 less_computer_sync 重放与实时流去重；
-   *  缓冲锁异常时后端可能省略，无 seq 的事件前端无条件应用。 */
-  seq?: number;
-};
+  (
+    | {
+        kind: 'voice_state';
+        sessionId: string;
+        phase: 'starting' | 'recording' | 'transcribing' | 'idle';
+        level: number;
+        elapsedMs: number;
+      }
+    /** 一轮用户气泡（语音指令转写）。fresh=true 表示新会话（清空历史）；否则追加为后续轮次。 */
+    | { kind: 'user'; text: string; fresh?: boolean }
+    /** Agent 启动，进入运行态。 */
+    | { kind: 'started' }
+    /** 流式回复增量（来自 CodingAgentEvent::Delta）。 */
+    | { kind: 'delta'; text: string }
+    /** 工具调用提示（来自 CodingAgentEvent::ToolUse，如 "Bash"）。 */
+    | { kind: 'tool'; name: string }
+    /** 会话上下文被压缩（来自 CodingAgentEvent::Compaction），输出流对应位置内嵌提示。 */
+    | { kind: 'compaction' }
+    /** 内联审批卡：高风险动作被护栏拦下，等用户 Approve / Deny。 */
+    | { kind: 'approval'; token: string; command: string; reason: string }
+    /** 运行完成：最终结果 + 成本（美元）。 */
+    | { kind: 'completed'; text: string; costUsd?: number | null }
+    /** 用户从胶囊取消正在运行的 Agent。 */
+    | { kind: 'cancelled' }
+    /** 运行出错。 */
+    | { kind: 'error'; message: string }
+  ) & {
+    /** 单调事件序号（后端 emit 时编）。用于 less_computer_sync 重放与实时流去重；
+     *  缓冲锁异常时后端可能省略，无 seq 的事件前端无条件应用。 */
+    seq?: number;
+  };
 
 export type LessComputerVoiceEvent = Extract<LessComputerEvent, { kind: 'voice_state' }>;
 
@@ -663,37 +663,13 @@ export interface LessComputerSyncResult {
   voiceState?: LessComputerVoiceEvent;
 }
 
-/** 内置语言列表 — 前端 Settings UI 用，后端只接收原生名字符串拼 prompt。
- *  添加新语言时直接在这里加一项（原生名），无需修改后端。 */
-export const SUPPORTED_LANGUAGES: readonly string[] = [
-  '简体中文',
-  '繁体中文',
-  'English',
-  '日本語',
-  '한국어',
-  'Français',
-  'Deutsch',
-  'Español',
-  'Italiano',
-  'Português',
-  'Русский',
-  'العربية',
-  'Tiếng Việt',
-  'ไทย',
-  'हिन्दी',
-] as const;
+export { SUPPORTED_LANGUAGES } from './languageCatalog';
 
 export type CapsuleState =
-  | 'idle'
-  | 'recording'
-  | 'transcribing'
-  | 'polishing'
-  | 'done'
-  | 'cancelled'
-  | 'error';
+  'idle' | 'recording' | 'transcribing' | 'polishing' | 'done' | 'cancelled' | 'error';
 
 /** 录音胶囊样式：'siri' = 流光 Siri 光效版（默认）；'classic' = Openless 经典药丸版。 */
-export type CapsuleStyle = 'siri' | 'classic';
+export type CapsuleStyle = 'siri' | 'classic' | 'typeless';
 
 export interface CapsulePayload {
   state: CapsuleState;
@@ -745,12 +721,7 @@ export interface TodayMetrics {
 }
 
 export type PermissionStatus =
-  | 'granted'
-  | 'denied'
-  | 'notDetermined'
-  | 'restricted'
-  | 'notApplicable'
-  | 'noDevice';
+  'granted' | 'denied' | 'notDetermined' | 'restricted' | 'notApplicable' | 'noDevice';
 
 /** Runtime platform kind returned by `get_platform_capabilities`. */
 export type PlatformKind = 'desktop' | 'android' | 'mobile';

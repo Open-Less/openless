@@ -25,12 +25,12 @@ function assertEqual<T>(actual: T, expected: T, name: string) {
   const tones = recordStartCueTones();
   assertEqual(tones.length, 2, 'start cue is a two-tone chime');
   assert(
-    tones.every(t => t.freq > 0 && t.durationMs > 0),
+    tones.every((t) => t.freq > 0 && t.durationMs > 0),
     'every tone has positive frequency and duration',
   );
   // 指数包络 ramp 不能到 0，峰值必须严格为正，否则 exponentialRampToValueAtTime 抛错。
   assert(
-    tones.every(t => t.peakGain > 0 && t.peakGain <= 1),
+    tones.every((t) => t.peakGain > 0 && t.peakGain <= 1),
     'every tone peak gain is within (0, 1]',
   );
   // 第二个音上升（小三度），听感是「叮咚」而非平铺两声。
@@ -112,11 +112,7 @@ function assertEqual<T>(actual: T, expected: T, name: string) {
 
 {
   // 「用久了没声音」的回归钉子：closed 的 ctx 必须重建，否则提示音/试听永久静默。
-  assertEqual(
-    audioContextActionForState('closed'),
-    'recreate',
-    'closed context must be recreated',
-  );
+  assertEqual(audioContextActionForState('closed'), 'recreate', 'closed context must be recreated');
   // running 可直接排期。
   assertEqual(
     audioContextActionForState('running'),
@@ -124,11 +120,7 @@ function assertEqual<T>(actual: T, expected: T, name: string) {
     'running context is ready to schedule',
   );
   // suspended 先 resume 再排期（WKWebView/WebView2 常态）。
-  assertEqual(
-    audioContextActionForState('suspended'),
-    'resume',
-    'suspended context needs resume',
-  );
+  assertEqual(audioContextActionForState('suspended'), 'resume', 'suspended context needs resume');
   // WebKit 非标准 interrupted（音频会话被抢占）同样需要 resume，不能当 running 直接排期。
   assertEqual(
     audioContextActionForState('interrupted'),

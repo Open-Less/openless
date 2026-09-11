@@ -115,3 +115,6 @@ CapsWriter
 
 .reasonix
 /.codex
+
+# Mimosa 安全钩子运行状态（不属版本库）
+.mimosa/

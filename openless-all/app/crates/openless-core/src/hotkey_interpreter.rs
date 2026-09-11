@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use crate::shared_types::HotkeyMode;
+use crate::shared_types::{HotkeyMode, HotkeyTrigger};
 use crate::types::DictationPhase;
 
 /// Auto mode treats a shorter press as a latched Toggle press and a longer
@@ -20,6 +20,17 @@ const MODIFIER_ARBITRATION_GRACE: Duration = Duration::from_millis(150);
 /// Native events may overtake the serialized Pressed bridge while session start
 /// awaits microphone/ASR setup. Keep a bounded set of those early Combined ids.
 const MAX_PENDING_COMBINED: usize = 64;
+
+/// macOS emits Fn Auto/Toggle edges only after native release arbitration.
+pub(crate) fn modifier_arbitration_required(
+    trigger: Option<HotkeyTrigger>,
+    mode: HotkeyMode,
+) -> bool {
+    trigger.is_some()
+        && !(cfg!(target_os = "macos")
+            && trigger == Some(HotkeyTrigger::Fn)
+            && matches!(mode, HotkeyMode::Auto | HotkeyMode::Toggle))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HotkeyIntent {
@@ -265,6 +276,27 @@ impl HotkeyInterpreter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mac_fn_tap_arrives_pre_arbitrated_but_hold_and_other_modifiers_do_not() {
+        let fn_tap_needs_grace = !cfg!(target_os = "macos");
+        assert_eq!(
+            modifier_arbitration_required(Some(HotkeyTrigger::Fn), HotkeyMode::Auto),
+            fn_tap_needs_grace
+        );
+        assert_eq!(
+            modifier_arbitration_required(Some(HotkeyTrigger::Fn), HotkeyMode::Toggle),
+            fn_tap_needs_grace
+        );
+        assert!(modifier_arbitration_required(
+            Some(HotkeyTrigger::Fn),
+            HotkeyMode::Hold
+        ));
+        assert!(modifier_arbitration_required(
+            Some(HotkeyTrigger::LeftOption),
+            HotkeyMode::Auto
+        ));
+    }
 
     #[test]
     fn combined_before_pressed_cancels_only_that_generation() {

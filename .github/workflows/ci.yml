@@ -3,7 +3,8 @@ name: CI
 # 多平台跨语言质量门禁。release-tauri.yml 是发版流水线（仅打包构建），这里负责
 # 在合并前快速验证两件事：
 #   1. 全部前端/契约测试与 vite bundle 通过（捕获行为、合同及跨 locale 类型 drift）
-#   2. Tauri 后端在 macOS / Windows、移动端在 Android 编译；Linux 只编译共享 core 与 egui host。
+#   2. Tauri 后端在 macOS / Windows、移动端在 Android 编译；Linux 同时验证共享 Core
+#      与独立 egui host，且不拉取本地 Qwen ASR 或 Tauri/WebKit 依赖。
 # 跑 build-mac.sh / windows-package-msvc.ps1 / Tauri bundle 太重；只跑轻量 cargo check + vite build。
 
 on:
@@ -12,12 +13,6 @@ on:
   pull_request:
     branches: [main, beta]
   workflow_dispatch:
-    inputs:
-      upload_linux_validation_artifact:
-        description: Build and upload the Linux egui validation packages (never a release)
-        required: false
-        default: false
-        type: boolean
 
 # 同一 PR 快速重复推送时取消旧运行；workflow_dispatch 用 run_id 隔离。
 concurrency:
@@ -172,7 +167,7 @@ jobs:
             --no-daemon
 
   linux-core-contract:
-    name: Linux core and egui host
+    name: Linux core and egui host tests
     runs-on: ubuntu-22.04
     defaults:
       run:
@@ -183,14 +178,12 @@ jobs:
           submodules: false
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
 
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: 'openless-all/app -> target'
 
-      - name: Install Linux native dependencies without WebKitGTK
+      - name: Install Linux egui build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -201,40 +194,32 @@ jobs:
             libwayland-dev \
             libx11-dev \
             libxkbcommon-dev \
-            ripgrep \
             pkg-config
 
-      - name: Test and lint shared backend
+      - name: Test Core
         run: |
           cargo test --locked -p openless-core
           cargo clippy --locked -p openless-core --all-targets -- -D warnings
 
-      - name: Test Linux host and UI contract
+      - name: Test Linux egui host without local Qwen ASR
         run: |
           cargo test --locked -p openless-linux-egui --all-targets
           cargo check --locked -p openless-linux-egui --all-targets
+          node scripts/linux-egui-tauri-free-contract.test.mjs
+          node scripts/linux-egui-release-contract.test.mjs
 
-      - name: Verify dependency direction, compatibility baseline, and secret surfaces
+      - name: Enforce Linux dependency boundaries
         shell: pwsh
         run: |
           ./scripts/check-core-deps.ps1
           ./scripts/check-core-deps.ps1 openless-linux-egui
-          ./scripts/check-command-event-baseline.ps1
           ./scripts/check-core-secret-surface.ps1
           ./scripts/check-core-test-isolation.ps1
           ./scripts/check-core-runtime-seam.ps1
           ./scripts/check-linux-public-surface.ps1
 
-  linux-egui-validation-artifact:
-    name: Linux egui validation artifact
-    if: github.event_name == 'workflow_dispatch' && inputs.upload_linux_validation_artifact
-    needs: linux-core-contract
-    permissions:
-      contents: write
-    uses: ./.github/workflows/release-linux-egui.yml
-    with:
-      release_tag: ''
-    secrets: inherit
+      - name: Test remote input TLS identity and Unix key permissions
+        run: cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --test remote_tls
 
   cross-platform:
     name: ${{ matrix.label }} checks

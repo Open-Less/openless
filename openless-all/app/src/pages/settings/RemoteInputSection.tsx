@@ -101,6 +101,12 @@ export function RemoteInputSection() {
   const enabled = prefs.remoteInputEnabled;
   const mode = prefs.remoteInputDefaultMode ?? 'toggle';
   const viewState = getRemoteInputViewState(enabled, status, startError);
+  // 只有本地监听器返回的完整指纹才能作为手机核验的依据。
+  const fingerprint = status?.caFingerprintSha256;
+  const canVerifyCertificate = typeof fingerprint === 'string' && /^[a-f0-9]{64}$/i.test(fingerprint);
+  const formattedFingerprint = canVerifyCertificate
+    ? fingerprint.toUpperCase().match(/.{2}/g)!.join(' ')
+    : '';
 
   // 提交端口草稿：非法（非有限数/越界离谱）则丢弃还原显示，合法则取整并 clamp 到 [1024, 65535]。
   const commitPort = () => {
@@ -140,10 +146,7 @@ export function RemoteInputSection() {
         label={t('settings.remoteInput.enableLabel')}
         desc={t('settings.remoteInput.enableDesc')}
       >
-        <Toggle
-          on={enabled}
-          onToggle={(v) => updatePrefs({ ...prefs, remoteInputEnabled: v })}
-        />
+        <Toggle on={enabled} onToggle={(v) => updatePrefs({ ...prefs, remoteInputEnabled: v })} />
       </SettingRow>
 
       <SettingRow label={t('settings.remoteInput.portLabel')}>
@@ -166,17 +169,14 @@ export function RemoteInputSection() {
           {(['toggle', 'hold'] as const).map((m) => (
             <button
               key={m}
-              onClick={() =>
-                updatePrefs({ ...prefs, remoteInputDefaultMode: m })
-              }
+              onClick={() => updatePrefs({ ...prefs, remoteInputDefaultMode: m })}
               style={{
                 padding: '5px 12px',
                 borderRadius: 8,
                 fontSize: 12.5,
                 cursor: 'pointer',
                 border: '0.5px solid var(--ol-line-strong)',
-                background:
-                  mode === m ? 'var(--ol-blue)' : 'var(--ol-surface-2)',
+                background: mode === m ? 'var(--ol-blue)' : 'var(--ol-surface-2)',
                 color: mode === m ? '#fff' : 'var(--ol-ink)',
               }}
             >
@@ -192,6 +192,43 @@ export function RemoteInputSection() {
 
       {enabled && (viewState === 'running' || viewState === 'stale') && status && (
         <>
+          <SettingRow label={t('settings.remoteInput.certFingerprintLabel')}>
+            <div style={{ minWidth: 0, width: '100%' }}>
+              {canVerifyCertificate ? (
+                <>
+                  <code
+                    aria-label={t('settings.remoteInput.certFingerprintLabel')}
+                    style={{ display: 'block', fontSize: 12, lineHeight: 1.8, overflowWrap: 'anywhere', userSelect: 'text' }}
+                  >
+                    {formattedFingerprint}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await copyText(formattedFingerprint);
+                      setCopied('ca-fingerprint');
+                      window.setTimeout(() => setCopied((c) => c === 'ca-fingerprint' ? null : c), 1500);
+                    }}
+                    style={{ ...smallBtn, marginTop: 6 }}
+                  >
+                    {copied === 'ca-fingerprint'
+                      ? t('settings.remoteInput.certFingerprintCopied')
+                      : t('settings.remoteInput.certFingerprintCopy')}
+                  </button>
+                </>
+              ) : (
+                <p role="alert" style={{ color: 'var(--ol-red)', margin: 0 }}>
+                  {t('settings.remoteInput.certFingerprintUnavailable')}
+                </p>
+              )}
+              <p style={{ fontSize: 12, lineHeight: 1.6, margin: '8px 0 0' }}>
+                {t('settings.remoteInput.certVerifyHint')}
+              </p>
+              <p style={{ fontSize: 12, lineHeight: 1.6, margin: '6px 0 0' }}>
+                {t('settings.remoteInput.certProfileHint')}
+              </p>
+            </div>
+          </SettingRow>
           {status.urls.length > 0 && (
             <SettingRow label={t('settings.remoteInput.urlLabel')}>
               <div
@@ -205,7 +242,7 @@ export function RemoteInputSection() {
                 {status.urls.map((u) => (
                   <div
                     key={u}
-                    style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+                    style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}
                   >
                     <span
                       style={{
@@ -224,6 +261,20 @@ export function RemoteInputSection() {
                     >
                       {copied === u ? '✓' : '⧉'}
                     </button>
+                    <button
+                      disabled={!canVerifyCertificate}
+                      onClick={async () => {
+                        const link = `${u}/cert.mobileconfig`;
+                        await copyText(link);
+                        setCopied(link);
+                        window.setTimeout(() => setCopied((c) => (c === link ? null : c)), 1500);
+                      }}
+                      style={smallBtn}
+                    >
+                      {copied === `${u}/cert.mobileconfig`
+                        ? '✓'
+                        : t('settings.remoteInput.certSetupLink')}
+                    </button>
                   </div>
                 ))}
               </div>
@@ -232,11 +283,7 @@ export function RemoteInputSection() {
 
           <SettingRow label={t('settings.remoteInput.pinLabel')}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <code
-                style={{ fontSize: 15, letterSpacing: 2, fontWeight: 600 }}
-              >
-                {status.pin}
-              </code>
+              <code style={{ fontSize: 15, letterSpacing: 2, fontWeight: 600 }}>{status.pin}</code>
               <button
                 onClick={async () => {
                   try {

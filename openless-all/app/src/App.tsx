@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { Capsule } from './components/Capsule';
+import { CoreStartupScreen } from './components/CoreStartupScreen';
 import { GlobalDownloadProgress } from './components/GlobalDownloadProgress';
 import { detectOS, type OS } from './components/WindowChrome';
 import {
@@ -14,42 +15,41 @@ import {
   qaWindowDismiss,
 } from './lib/ipc';
 import type { PlatformCapabilities } from './lib/types';
-import {
-  isWindowHotkeyKeyboardCandidate,
-  windowMouseHotkeyCode,
-} from './lib/windowHotkeyFallback';
+import { isWindowHotkeyKeyboardCandidate, windowMouseHotkeyCode } from './lib/windowHotkeyFallback';
 import { HotkeySettingsProvider } from './state/HotkeySettingsContext';
 
-// 各窗口/重页面懒加载,让每个 webview 只下载并解析自己用到的那部分代码。原本所有窗口
-// (主设置 / 胶囊 / QA / Less Computer / glow)共用一个打包产物,导致 5 个常驻 WebKit
-// 进程都把整套设置 UI(FloatingShell + Style/Marketplace/LocalAsr…)和聊天面板加载进来,
-// 常驻内存离谱。拆开后胶囊/glow 这类轻窗口不再加载设置/聊天代码。胶囊保持 eager:
-// 它是听写实时反馈、对首帧延迟敏感,且体积很小。
+// 各 WebView 按窗口用途懒加载页面，减少常驻内存。
+// 胶囊承担录音的即时反馈，体积较小且对首帧延迟敏感，因此保持直接导入。
 const AutoUpdateGate = lazy(() =>
-  import('./components/AutoUpdateGate').then(m => ({ default: m.AutoUpdateGate })),
+  import('./components/AutoUpdateGate').then((m) => ({ default: m.AutoUpdateGate })),
 );
 const FloatingShell = lazy(() =>
-  import('./components/FloatingShell').then(m => ({ default: m.FloatingShell })),
+  import('./components/FloatingShell').then((m) => ({ default: m.FloatingShell })),
 );
 const Onboarding = lazy(() =>
-  import('./components/Onboarding').then(m => ({ default: m.Onboarding })),
+  import('./components/Onboarding').then((m) => ({ default: m.Onboarding })),
 );
-const QaPanel = lazy(() => import('./pages/QaPanel').then(m => ({ default: m.QaPanel })));
-const SelectionPolishPreview = lazy(() => import('./pages/SelectionPolishPreview').then(m => ({ default: m.SelectionPolishPreview })));
-const SelectionVoiceIntentPicker = lazy(() => import('./pages/SelectionVoiceIntentPicker').then(m => ({ default: m.SelectionVoiceIntentPicker })));
+const QaPanel = lazy(() => import('./pages/QaPanel').then((m) => ({ default: m.QaPanel })));
+const SelectionPolishPreview = lazy(() =>
+  import('./pages/SelectionPolishPreview').then((m) => ({ default: m.SelectionPolishPreview })),
+);
+const SelectionVoiceIntentPicker = lazy(() =>
+  import('./pages/SelectionVoiceIntentPicker').then((m) => ({
+    default: m.SelectionVoiceIntentPicker,
+  })),
+);
 // Tauri 的 Less Computer 面板同时面向 macOS 和 Windows；Linux 由原生 egui 提供。
 // TAURI_ENV_PLATFORM 是编译期字面量，不支持该 WebView 的平台可裁掉对应 import，
 // 避免把不能显示的面板 chunk 带入移动端构建。
 // 纯浏览器 vite 环境（预览/调样式）没有该变量 → 保持可加载。
 const TAURI_BUILD_PLATFORM: string | undefined = import.meta.env.TAURI_ENV_PLATFORM;
-const LESS_COMPUTER_BUNDLED = !TAURI_BUILD_PLATFORM
-  || TAURI_BUILD_PLATFORM === 'darwin'
-  || TAURI_BUILD_PLATFORM === 'windows';
+const LESS_COMPUTER_BUNDLED =
+  !TAURI_BUILD_PLATFORM || TAURI_BUILD_PLATFORM === 'darwin' || TAURI_BUILD_PLATFORM === 'windows';
 const LessComputerPanel = LESS_COMPUTER_BUNDLED
-  ? lazy(() => import('./pages/LessComputerPanel').then(m => ({ default: m.LessComputerPanel })))
+  ? lazy(() => import('./pages/LessComputerPanel').then((m) => ({ default: m.LessComputerPanel })))
   : null;
 const LessComputerGlow = LESS_COMPUTER_BUNDLED
-  ? lazy(() => import('./pages/LessComputerGlow').then(m => ({ default: m.LessComputerGlow })))
+  ? lazy(() => import('./pages/LessComputerGlow').then((m) => ({ default: m.LessComputerGlow })))
   : null;
 
 interface AppProps {
@@ -78,7 +78,7 @@ export function App(props: AppProps) {
     if (!isTauri) return;
     void getStartupSnapshot()
       .then(() => setReady(true))
-      .catch(reason => {
+      .catch((reason) => {
         const detail = reason instanceof Error ? reason.message : String(reason);
         console.error('[startup] backend contract handshake failed', reason);
         setError(detail);
@@ -86,15 +86,25 @@ export function App(props: AppProps) {
   }, []);
 
   if (error) {
-    return <div role="alert">OpenLess Core 无法启动或版本不兼容。 {error}</div>;
+    return (
+      <CoreStartupScreen error={error} compact={props.isCapsule || props.isLessComputerGlow} />
+    );
   }
   if (!ready) {
-    return <div role="status">正在检查 OpenLess Core 兼容性…</div>;
+    return <CoreStartupScreen compact={props.isCapsule || props.isLessComputerGlow} />;
   }
   return <ReadyApp {...props} />;
 }
 
-function ReadyApp({ isCapsule, isQa, isSelectionPolishPreview, isSelectionVoiceIntent, isLessComputer, isLessComputerGlow, forcedOs }: AppProps) {
+function ReadyApp({
+  isCapsule,
+  isQa,
+  isSelectionPolishPreview,
+  isSelectionVoiceIntent,
+  isLessComputer,
+  isLessComputerGlow,
+  forcedOs,
+}: AppProps) {
   if (isCapsule) {
     return <Capsule os={forcedOs} />;
   }
@@ -106,10 +116,18 @@ function ReadyApp({ isCapsule, isQa, isSelectionPolishPreview, isSelectionVoiceI
     );
   }
   if (isSelectionPolishPreview) {
-    return <Suspense fallback={null}><SelectionPolishPreview /></Suspense>;
+    return (
+      <Suspense fallback={null}>
+        <SelectionPolishPreview />
+      </Suspense>
+    );
   }
   if (isSelectionVoiceIntent) {
-    return <Suspense fallback={null}><SelectionVoiceIntentPicker /></Suspense>;
+    return (
+      <Suspense fallback={null}>
+        <SelectionVoiceIntentPicker />
+      </Suspense>
+    );
   }
   if (isLessComputer) {
     return LessComputerPanel ? (
@@ -143,7 +161,7 @@ function ReadyApp({ isCapsule, isQa, isSelectionPolishPreview, isSelectionVoiceI
     void getStartupSnapshot()
       .then(() => getPlatformCapabilities())
       .then(setPlatformCaps)
-      .catch(error => {
+      .catch((error) => {
         const detail = error instanceof Error ? error.message : String(error);
         console.error('[startup] backend contract handshake failed', error);
         setStartupError(detail);
@@ -190,7 +208,9 @@ function ReadyApp({ isCapsule, isQa, isSelectionPolishPreview, isSelectionVoiceI
     window.history.pushState({ openlessQa: true }, '', window.location.href);
     const onPopState = () => {
       setMobileQaOpen(false);
-      void qaWindowDismiss().catch(error => console.warn('[qa] mobile back dismiss failed', error));
+      void qaWindowDismiss().catch((error) =>
+        console.warn('[qa] mobile back dismiss failed', error),
+      );
     };
     window.addEventListener('popstate', onPopState);
     return () => {
@@ -223,7 +243,11 @@ function ReadyApp({ isCapsule, isQa, isSelectionPolishPreview, isSelectionVoiceI
           // / 透明主窗口。首次安装的"prefs 不存在"场景不走这里 —— Rust 端会返回
           // 默认 UserPreferences。
           const detail = err instanceof Error ? err.message : String(err);
-          console.warn('[startup] read startMinimized failed; staying hidden to avoid #468:', detail, err);
+          console.warn(
+            '[startup] read startMinimized failed; staying hidden to avoid #468:',
+            detail,
+            err,
+          );
           return;
         }
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
@@ -232,7 +256,7 @@ function ReadyApp({ isCapsule, isQa, isSelectionPolishPreview, isSelectionVoiceI
         if (!(await currentWindow.isVisible())) {
           await currentWindow.show();
         }
-      })().catch(error => console.warn('[startup] show main window failed', error));
+      })().catch((error) => console.warn('[startup] show main window failed', error));
     });
     return () => {
       cancelled = true;
@@ -275,11 +299,11 @@ function ReadyApp({ isCapsule, isQa, isSelectionPolishPreview, isSelectionVoiceI
             setGate('ready');
             return;
           }
-          await new Promise(resolve => window.setTimeout(resolve, POLL_INTERVAL_MS));
+          await new Promise((resolve) => window.setTimeout(resolve, POLL_INTERVAL_MS));
         }
         if (!cancelled) {
           console.warn(
-            `[startup] hotkey gate timed out after ${POLL_MAX_ATTEMPTS * POLL_INTERVAL_MS}ms; forcing ready so user can reach Permissions page`
+            `[startup] hotkey gate timed out after ${POLL_MAX_ATTEMPTS * POLL_INTERVAL_MS}ms; forcing ready so user can reach Permissions page`,
           );
           setGate('ready');
         }
@@ -296,7 +320,7 @@ function ReadyApp({ isCapsule, isQa, isSelectionPolishPreview, isSelectionVoiceI
       // 让用户进应用后在权限页看到“未检测到麦克风”的明确提示。见 issue #779。
       const mOk = m === 'granted' || m === 'notApplicable' || m === 'noDevice';
       setGate(aOk && mOk ? 'ready' : 'onboarding');
-    })().catch(error => {
+    })().catch((error) => {
       console.warn('[startup] permission gate failed', error);
       if (!cancelled) {
         setGate('ready');
@@ -317,7 +341,7 @@ function ReadyApp({ isCapsule, isQa, isSelectionPolishPreview, isSelectionVoiceI
         event.key,
         event.code,
         event.repeat,
-      ).catch(error => console.warn('[window-hotkey] forward failed', error));
+      ).catch((error) => console.warn('[window-hotkey] forward failed', error));
     };
     const forwardMouse = (event: MouseEvent) => {
       const code = windowMouseHotkeyCode(event.button);
@@ -327,7 +351,7 @@ function ReadyApp({ isCapsule, isQa, isSelectionPolishPreview, isSelectionVoiceI
         code,
         code,
         false,
-      ).catch(error => console.warn('[window-hotkey] mouse forward failed', error));
+      ).catch((error) => console.warn('[window-hotkey] mouse forward failed', error));
     };
     window.addEventListener('keydown', forwardKey, true);
     window.addEventListener('keyup', forwardKey, true);
@@ -342,14 +366,10 @@ function ReadyApp({ isCapsule, isQa, isSelectionPolishPreview, isSelectionVoiceI
   }, [os]);
 
   if (gate === 'checking') {
-    return <div role="status">正在检查 OpenLess Core 兼容性…</div>;
+    return <CoreStartupScreen />;
   }
   if (gate === 'incompatible') {
-    return (
-      <div role="alert">
-        OpenLess Core 无法启动或版本不兼容。{startupError ? ` ${startupError}` : ''}
-      </div>
-    );
+    return <CoreStartupScreen error={startupError ?? 'Core startup failed'} />;
   }
 
   return (
@@ -370,11 +390,12 @@ function ReadyApp({ isCapsule, isQa, isSelectionPolishPreview, isSelectionVoiceI
             />
           </div>
         )}
-        {!mobileQaOpen && (gate === 'onboarding' ? (
-          <Onboarding onComplete={completeOnboarding} />
-        ) : (
-          <FloatingShell os={os} />
-        ))}
+        {!mobileQaOpen &&
+          (gate === 'onboarding' ? (
+            <Onboarding onComplete={completeOnboarding} />
+          ) : (
+            <FloatingShell os={os} />
+          ))}
         {gate === 'ready' && platformCaps?.supportsAutoUpdate === true && <AutoUpdateGate />}
       </HotkeySettingsProvider>
     </Suspense>

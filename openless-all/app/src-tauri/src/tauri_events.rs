@@ -464,6 +464,11 @@ fn map_dictation_state(
 
 fn emit_preferences(app: &AppHandle, backend: &OpenLessBackend) {
     let preferences = backend.get_preferences();
+    // Cloud restore also changes preferences directly through Core. Keep native
+    // capsule geometry and hit testing current for every source of a preference change.
+    if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
+        coordinator.sync_capsule_style_from_preferences();
+    }
     let _ = app.emit("prefs:changed", &preferences);
 }
 
@@ -1432,6 +1437,7 @@ mod tests {
                 port: 9443,
                 urls: vec!["https://192.168.1.2:9443".into()],
                 urls_stale: false,
+                ca_fingerprint_sha256: None,
                 locale: "zh-CN".into(),
                 connection_count: 1,
                 active_session_id: None,

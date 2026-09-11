@@ -46,52 +46,51 @@ const [
   credentialCore,
   mobileHotkey,
   mobileSelection,
-] =
-  await Promise.all([
-    read('src/lib/types.ts'),
-    read('src/pages/QaPanel.tsx'),
-    read('src/lib/ipc/remote-server.ts'),
-    read('src/pages/settings/RemoteInputSection.tsx'),
-    read('src/lib/ipc/selection-voice-preview.ts'),
-    read('src-tauri/src/commands/remote_input.rs'),
-    read('src-tauri/src/tauri_events.rs'),
-    read('src/lib/ipc/less-computer.ts'),
-    read('src/pages/LessComputerPanel.tsx'),
-    read('src-tauri/src/commands/qa.rs'),
-    read('src-tauri/src/remote_server/mod.rs'),
-    read('crates/openless-core/src/remote_input_service.rs'),
-    read('src-tauri/src/coordinator.rs'),
-    read('src-tauri/src/coordinator/dictation_core.rs'),
-    read('src-tauri/src/coordinator/capsule_focus.rs'),
-    read('src-tauri/src/coordinator/hotkey_loops.rs'),
-    read('src-tauri/src/tauri_coordinator_host.rs'),
-    read('src-tauri/src/core_adapters.rs'),
-    read('src-tauri/src/commands/providers.rs'),
-    read('crates/openless-core/src/qa_service.rs'),
-    read('crates/openless-core/src/selection_voice_service.rs'),
-    read('crates/openless-core/src/api.rs'),
-    read('src-tauri/src/qa_adapter.rs'),
-    read('src-tauri/src/coordinator/selection_voice_session.rs'),
-    read('src-tauri/src/commands/dictionary.rs'),
-    read('src-tauri/src/commands/style_packs.rs'),
-    read('src-tauri/src/android/native_bridge.rs'),
-    read('android/kotlin/OpenLessNative.kt'),
-    read('android/kotlin/OpenLessOverlayService.kt'),
-    read('src/App.tsx'),
-    read('src/pages/settings/ProvidersSection.tsx'),
-    read('src/pages/settings/ChannelList.tsx'),
-    read('src/pages/settings/shared.tsx'),
-    read('src-tauri/src/commands/history.rs'),
-    read('src-tauri/src/commands/credentials.rs'),
-    read('src-tauri/src/persistence/credentials.rs'),
-    read('src-tauri/src/host_document/macos.rs'),
-    read('linux-egui/src/fcitx5.rs'),
-    read('src/pages/LocalAsr/index.tsx'),
-    read('crates/openless-core/src/local_asr_service.rs'),
-    read('crates/openless-core/src/credentials.rs'),
-    read('src-tauri/src/mobile_stubs/hotkey.rs'),
-    read('src-tauri/src/mobile_stubs/selection.rs'),
-  ]);
+] = await Promise.all([
+  read('src/lib/types.ts'),
+  read('src/pages/QaPanel.tsx'),
+  read('src/lib/ipc/remote-server.ts'),
+  read('src/pages/settings/RemoteInputSection.tsx'),
+  read('src/lib/ipc/selection-voice-preview.ts'),
+  read('src-tauri/src/commands/remote_input.rs'),
+  read('src-tauri/src/tauri_events.rs'),
+  read('src/lib/ipc/less-computer.ts'),
+  read('src/pages/LessComputerPanel.tsx'),
+  read('src-tauri/src/commands/qa.rs'),
+  read('src-tauri/src/remote_server/mod.rs'),
+  read('crates/openless-core/src/remote_input_service.rs'),
+  read('src-tauri/src/coordinator.rs'),
+  read('src-tauri/src/coordinator/dictation_core.rs'),
+  read('src-tauri/src/coordinator/capsule_focus.rs'),
+  read('src-tauri/src/coordinator/hotkey_loops.rs'),
+  read('src-tauri/src/tauri_coordinator_host.rs'),
+  read('src-tauri/src/core_adapters.rs'),
+  read('src-tauri/src/commands/providers.rs'),
+  read('crates/openless-core/src/qa_service.rs'),
+  read('crates/openless-core/src/selection_voice_service.rs'),
+  read('crates/openless-core/src/api.rs'),
+  read('src-tauri/src/qa_adapter.rs'),
+  read('src-tauri/src/coordinator/selection_voice_session.rs'),
+  read('src-tauri/src/commands/dictionary.rs'),
+  read('src-tauri/src/commands/style_packs.rs'),
+  read('src-tauri/src/android/native_bridge.rs'),
+  read('android/kotlin/OpenLessNative.kt'),
+  read('android/kotlin/OpenLessOverlayService.kt'),
+  read('src/App.tsx'),
+  read('src/pages/settings/ProvidersSection.tsx'),
+  read('src/pages/settings/ChannelList.tsx'),
+  read('src/pages/settings/shared.tsx'),
+  read('src-tauri/src/commands/history.rs'),
+  read('src-tauri/src/commands/credentials.rs'),
+  read('src-tauri/src/persistence/credentials.rs'),
+  read('src-tauri/src/host_document/macos.rs'),
+  read('linux-egui/src/fcitx5.rs'),
+  read('src/pages/LocalAsr/index.tsx'),
+  read('crates/openless-core/src/local_asr_service.rs'),
+  read('crates/openless-core/src/credentials.rs'),
+  read('src-tauri/src/mobile_stubs/hotkey.rs'),
+  read('src-tauri/src/mobile_stubs/selection.rs'),
+]);
 
 for (const kind of ['awaiting_approval', 'cancelled', 'error']) {
   assert.match(types, new RegExp(`\\| '${kind}'`), `QaStateKind must retain ${kind}`);
@@ -110,7 +109,11 @@ for (const field of [
 ]) {
   assert.match(types, new RegExp(`\\b${field}\\?`), `QaStatePayload is missing ${field}`);
 }
-assert.match(qaPanel, /listen<QaStatePayload>\('qa:state'/, 'QA must consume the typed state event');
+assert.match(
+  qaPanel,
+  /listen<QaStatePayload>\('qa:state'/,
+  'QA must consume the typed state event',
+);
 
 const remoteStatus = remoteIpc.match(/export interface RemoteInputStatus \{([\s\S]*?)\n\}/)?.[1];
 assert.ok(remoteStatus, 'RemoteInputStatus interface must exist');
@@ -120,8 +123,16 @@ assert.deepEqual(
   ['running', 'starting', 'port', 'pin', 'urls', 'urlsStale'],
   'the explicit remote status command must preserve the beta secret wire shape',
 );
-assert.match(remoteIpc, /invokeOrMock\("get_remote_input_status"/, 'remote status command name drifted');
-assert.match(remoteSection, /listen\('remote-input:running'/, 'remote running event must refresh status');
+assert.match(
+  remoteIpc,
+  /invokeOrMock\(\s*['"]get_remote_input_status['"]/,
+  'remote status command name drifted',
+);
+assert.match(
+  remoteSection,
+  /listen\('remote-input:running'/,
+  'remote running event must refresh status',
+);
 assert.match(remoteSection, /listen\('remote-input:error'/, 'remote errors must remain visible');
 assert.match(
   remoteCommand,
@@ -144,10 +155,7 @@ for (const [command, args] of [
   ['confirm_selection_voice_preview', '{ text, qaSessionId }'],
   ['revert_selection_voice_preview', '{ qaSessionId }'],
 ]) {
-  assert(
-    selectionVoiceIpc.includes(`'${command}', ${args}`),
-    `${command} wire drifted`,
-  );
+  assert(selectionVoiceIpc.includes(`'${command}', ${args}`), `${command} wire drifted`);
 }
 
 for (const field of ['events', 'oldestSequence', 'latestSequence', 'truncated']) {
@@ -194,9 +202,7 @@ assert.match(
   /apply_remote_control\([^]*?state\.backend\.services\(\)\.remote_input\.as_ref\(\)/,
   'Remote Input WebSocket control must use the Core lifecycle',
 );
-const remoteFrameParser = remoteServer.match(
-  /fn parse_audio_frame\([^]*?\n\}/,
-)?.[0];
+const remoteFrameParser = remoteServer.match(/fn parse_audio_frame\([^]*?\n\}/)?.[0];
 assert.ok(remoteFrameParser, 'the Remote Input WebSocket frame adapter must remain present');
 assert.match(
   remoteFrameParser,
@@ -256,7 +262,10 @@ assert.doesNotMatch(
   'translation intent must not survive in Host state or depend on one stop entry for cleanup',
 );
 const coordinatorInner = coordinator.match(/struct Inner \{([^]*?)\n\}/)?.[1];
-assert.ok(coordinatorInner, 'Coordinator Inner must remain inspectable by the architecture contract');
+assert.ok(
+  coordinatorInner,
+  'Coordinator Inner must remain inspectable by the architecture contract',
+);
 assert.doesNotMatch(
   coordinatorInner,
   /AppHandle|AppHandleSlot|\bapp\s*:/,
@@ -570,9 +579,9 @@ assert.doesNotMatch(
   'the model page must not mutate channels before Core activation commits',
 );
 for (const activation of [
-  /activateLocalAsr\("generic", modelId, provider\)/,
-  /activateLocalAsr\("foundry", alias, "foundry-local-whisper"\)/,
-  /activateLocalAsr\("sherpa_onnx", modelAlias, "sherpa-onnx-local"\)/,
+  /activateLocalAsr\(\s*['"]generic['"],\s*modelId,\s*provider\s*\)/,
+  /activateLocalAsr\(\s*['"]foundry['"],\s*alias,\s*['"]foundry-local-whisper['"]\s*\)/,
+  /activateLocalAsr\(\s*['"]sherpa_onnx['"],\s*modelAlias,\s*['"]sherpa-onnx-local['"]\s*\)/,
 ]) {
   assert.match(localAsrPage, activation, 'every local runtime must use the single Core activation');
 }
@@ -604,18 +613,36 @@ for (const cache of await Promise.all([
 ])) {
   const release = cache.match(/pub\(crate\) fn release_lease\([^]*?(?=\r?\n    (?:pub|\/\/))/)?.[0];
   assert.ok(release, 'each native cache must implement model-scoped activation cleanup');
-  assert.match(release, /inner\.lock\(\)[^]*?cached\.model_id == model_id\s*&&\s*cached\.activation_generation == Some\(generation\)[^]*?slot\.take\(\)/,
-    'model and generation checks must happen under the same lock as cache eviction');
-  assert.doesNotMatch(release, /\.cancel\(/, 'retiring a cache lease must preserve an in-flight transcription Arc');
-  assert.match(cache, /get_or_load_for_lease\([^\n]*None\)/,
-    'ordinary preload or transcription must revoke the previous activation owner');
-  assert.match(cache, /if self\.load_generation\.load\(Ordering::Acquire\) != load_generation\s*\{\s*if activation_generation\.is_some\(\)\s*\{\s*anyhow::bail!\([^]*?\);\s*\}\s*return Ok\(engine\);\s*\}\s*(?:\*slot = Some|slot\.replace)/,
-    'a superseded activation must fail, while ordinary ASR keeps its uncached Arc without replacing the current cache');
+  assert.match(
+    release,
+    /inner\.lock\(\)[^]*?cached\.model_id == model_id\s*&&\s*cached\.activation_generation == Some\(generation\)[^]*?slot\.take\(\)/,
+    'model and generation checks must happen under the same lock as cache eviction',
+  );
+  assert.doesNotMatch(
+    release,
+    /\.cancel\(/,
+    'retiring a cache lease must preserve an in-flight transcription Arc',
+  );
+  assert.match(
+    cache,
+    /get_or_load_for_lease\([^\n]*None\)/,
+    'ordinary preload or transcription must revoke the previous activation owner',
+  );
+  assert.match(
+    cache,
+    /if self\.load_generation\.load\(Ordering::Acquire\) != load_generation\s*\{\s*if activation_generation\.is_some\(\)\s*\{\s*anyhow::bail!\([^]*?\);\s*\}\s*return Ok\(engine\);\s*\}\s*(?:\*slot = Some|slot\.replace)/,
+    'a superseded activation must fail, while ordinary ASR keeps its uncached Arc without replacing the current cache',
+  );
   for (const method of ['finish_use', 'release_current_if_idle', 'release_if_idle']) {
-    const cleanup = cache.match(new RegExp(`pub fn ${method}\\([^]*?(?=\\r?\\n    (?:pub|//))`))?.[0];
+    const cleanup = cache.match(
+      new RegExp(`pub fn ${method}\\([^]*?(?=\\r?\\n    (?:pub|//))`),
+    )?.[0];
     assert.ok(cleanup, `${method} must remain an explicit native cache cleanup path`);
-    assert.match(cleanup, /inner\.lock\(\)[^]*?activation_generation\.is_none\(\)[^]*?slot\.take\(\)/,
-      `${method} must preserve a newer activation owner even when it reuses the same Arc`);
+    assert.match(
+      cleanup,
+      /inner\.lock\(\)[^]*?activation_generation\.is_none\(\)[^]*?slot\.take\(\)/,
+      `${method} must preserve a newer activation owner even when it reuses the same Arc`,
+    );
   }
 }
 assert.equal(

@@ -27,14 +27,20 @@ const repositoryReferences = [
 
 for (const relativePath of repositoryReferences) {
   const content = await readFile(join(repoRoot, relativePath), 'utf8');
-  assert(!content.includes(legacyRepo), `${relativePath} still references the pre-transfer repository`);
+  assert(
+    !content.includes(legacyRepo),
+    `${relativePath} still references the pre-transfer repository`,
+  );
 }
 
 const tauriConfig = JSON.parse(
   await readFile(join(repoRoot, 'openless-all/app/src-tauri/tauri.conf.json'), 'utf8'),
 );
 const updaterEndpoints = tauriConfig?.plugins?.updater?.endpoints;
-assert(Array.isArray(updaterEndpoints) && updaterEndpoints.length > 0, 'desktop updater endpoints are missing');
+assert(
+  Array.isArray(updaterEndpoints) && updaterEndpoints.length > 0,
+  'desktop updater endpoints are missing',
+);
 assert(
   updaterEndpoints.every((endpoint) => endpoint.includes(currentRepo)),
   'desktop updater endpoints must use the current GitHub repository',

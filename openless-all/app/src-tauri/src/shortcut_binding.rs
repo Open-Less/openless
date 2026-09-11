@@ -14,6 +14,10 @@ pub use openless_core::{
 
 pub fn validate_binding(binding: &ShortcutBinding) -> Result<(), ShortcutBindingError> {
     openless_core::validate_shortcut_binding(binding)?;
+    #[cfg(target_os = "macos")]
+    if binding.primary == crate::macos_dictation_key::PRIMARY {
+        return Ok(());
+    }
     if legacy_modifier_trigger(binding).is_some()
         || (binding.modifiers.is_empty() && binding.primary.eq_ignore_ascii_case("shift"))
         || binding_requires_side_aware_hook(binding)
@@ -95,6 +99,14 @@ pub fn parse_primary(raw: &str) -> Result<Code, ShortcutBindingError> {
         "F10" => Code::F10,
         "F11" => Code::F11,
         "F12" => Code::F12,
+        "F13" => Code::F13,
+        "F14" => Code::F14,
+        "F15" => Code::F15,
+        "F16" => Code::F16,
+        "F17" => Code::F17,
+        "F18" => Code::F18,
+        "F19" => Code::F19,
+        "F20" => Code::F20,
         _ => return Err(ShortcutBindingError::UnsupportedKey(trimmed.to_string())),
     };
     Ok(named)
@@ -159,6 +171,49 @@ fn char_to_code(ch: char) -> Option<Code> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extended_function_keys_parse_without_modifiers() {
+        for (name, code) in [
+            ("F13", Code::F13),
+            ("F14", Code::F14),
+            ("F15", Code::F15),
+            ("F16", Code::F16),
+            ("F17", Code::F17),
+            ("F18", Code::F18),
+            ("F19", Code::F19),
+            ("F20", Code::F20),
+        ] {
+            let binding = ShortcutBinding {
+                primary: name.into(),
+                modifiers: vec![],
+            };
+            assert!(validate_binding(&binding).is_ok());
+            let parsed = parse_global_hotkey(&binding).unwrap();
+            assert_eq!(parsed.key, code);
+            assert!(parsed.mods.is_empty());
+            assert!(legacy_modifier_trigger(&binding).is_none());
+        }
+        assert_eq!(parse_primary(" f20 ").unwrap(), Code::F20);
+        assert!(parse_primary("F21").is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_dictation_key_is_bare_and_dictation_only() {
+        let native = ShortcutBinding {
+            primary: crate::macos_dictation_key::PRIMARY.into(),
+            modifiers: vec![],
+        };
+        assert!(validate_binding(&native).is_ok());
+        assert!(parse_global_hotkey(&native).is_err());
+        assert!(reject_side_specific_non_dictation(&native).is_err());
+        let modified = ShortcutBinding {
+            modifiers: vec!["shift".into()],
+            ..native
+        };
+        assert!(validate_binding(&modified).is_err());
+    }
 
     #[test]
     fn parses_combo_and_single_key() {

@@ -35,7 +35,17 @@ export RUSTC_WRAPPER="$PWD/scripts/rustc-macos-proc-macro-wrapper.sh"
 echo "▶ Cargo release strip: ${CARGO_PROFILE_RELEASE_STRIP} (macOS only)"
 echo "▶ Rust proc-macro host wrapper: ${RUSTC_WRAPPER}"
 
+# 只保留最新一份 qwen3-asr-rs 构建目录：本地混跑 cargo check/test/build 会按不同
+# feature 上下文生成多份，各自带一份 metallib，会让暂存脚本拒绝猜测。
+KEEP_QWEN_DIR="$(ls -dt src-tauri/target/release/build/qwen3-asr-rs-* 2>/dev/null | head -1 || true)"
+if [ -n "$KEEP_QWEN_DIR" ]; then
+  for d in src-tauri/target/release/build/qwen3-asr-rs-*; do
+    [ "$d" = "$KEEP_QWEN_DIR" ] || rm -rf "$d"
+  done
+fi
+
 echo "▶ tauri build"
+BUILD_START_TS="$(date +%s)"
 TAURI_BUILD_ARGS=(build --ci)
 case "$(uname -m)" in
   arm64)
@@ -53,15 +63,30 @@ esac
 if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || [ -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]; then
   TAURI_BUILD_ARGS+=(--config '{"bundle":{"createUpdaterArtifacts":true}}')
 fi
-npm run tauri -- "${TAURI_BUILD_ARGS[@]}"
+# bundle_dmg（AppleScript）在 Xcode beta 上可能退出非零；.app 与 DMG 是否真实
+# 产出交给下方的新鲜度/存在性校验判定，不在这一步盲 abort。
+npm run tauri -- "${TAURI_BUILD_ARGS[@]}" || echo "⚠ tauri build 退出码非零，继续校验产物"
 
 APP_VERSION="$(node -p "require('./package.json').version")"
 DMG_PATH="$DMG_DIR/OpenLess_${APP_VERSION}_${MAC_BUNDLE_ARCH}.dmg"
 
+# bundle 必须是本次构建产出的（与构建开始时间比；打包后原始二进制还会被签名
+# 触碰，不能拿它当基准）。
+if [ ! -d "$APP" ] || [ "$(stat -f %m "$APP/Contents/MacOS/openless")" -lt "$BUILD_START_TS" ]; then
+  echo "✗ $APP 缺失或不是本次构建的产物（打包未完成），中止"
+  exit 1
+fi
+# DMG 一律由 Tauri 生成（带签名/公证链路）；手搓 hdiutil DMG 会绕过这些步骤，
+# bundle contract 测试显式禁止。缺失即失败，不兜底。
+if [ ! -f "$DMG_PATH" ]; then
+  echo "✗ 未找到本次构建的 DMG：$DMG_PATH（tauri build 未完成打包）"
+  exit 1
+fi
+
 echo "▶ 校验 Info.plist / 签名"
-/usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$INFO" >/dev/null
+/usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$INFO" > /dev/null
 bash scripts/check-macos-speech-usage-description.sh "$INFO"
-codesign -d --entitlements :- "$APP" 2>/dev/null | grep -q "com.apple.security.device.audio-input"
+codesign -d --entitlements :- "$APP" 2> /dev/null | grep -q "com.apple.security.device.audio-input"
 codesign --verify --deep --strict --verbose=2 "$APP" 2>&1 | tail -2
 
 if [ "$MAC_BUNDLE_ARCH" = "aarch64" ]; then
@@ -69,6 +94,11 @@ if [ "$MAC_BUNDLE_ARCH" = "aarch64" ]; then
   APP_METALLIB="$APP/Contents/Resources/mlx.metallib"
   if [ ! -s "$APP_METALLIB" ]; then
     echo "✗ Apple Silicon app 缺少 Contents/Resources/mlx.metallib"
+    exit 1
+  fi
+  # Contents/MacOS 里的非 Mach-O 会被 codesign 当成 nested code。
+  if [ -e "$APP/Contents/MacOS/mlx.metallib" ]; then
+    echo "✗ mlx.metallib 不能放在 Contents/MacOS（ad-hoc codesign 会失败）"
     exit 1
   fi
   APP_METALLIB_SHA="$(shasum -a 256 "$APP_METALLIB" | awk '{print $1}')"
@@ -79,14 +109,18 @@ if [ "$MAC_BUNDLE_ARCH" = "aarch64" ]; then
   fi
   DMG_MOUNT="$(mktemp -d "${TMPDIR:-/tmp}/openless-dmg-verify.XXXXXX")"
   cleanup_dmg_mount() {
-    hdiutil detach "$DMG_MOUNT" >/dev/null 2>&1 || true
-    rmdir "$DMG_MOUNT" >/dev/null 2>&1 || true
+    hdiutil detach "$DMG_MOUNT" > /dev/null 2>&1 || true
+    rmdir "$DMG_MOUNT" > /dev/null 2>&1 || true
   }
   trap cleanup_dmg_mount EXIT
-  hdiutil attach "$DMG_PATH" -readonly -nobrowse -mountpoint "$DMG_MOUNT" >/dev/null
+  hdiutil attach "$DMG_PATH" -readonly -nobrowse -mountpoint "$DMG_MOUNT" > /dev/null
   DMG_METALLIB="$DMG_MOUNT/OpenLess.app/Contents/Resources/mlx.metallib"
   if [ ! -s "$DMG_METALLIB" ]; then
     echo "✗ DMG 中缺少 OpenLess.app/Contents/Resources/mlx.metallib"
+    exit 1
+  fi
+  if [ -e "$DMG_MOUNT/OpenLess.app/Contents/MacOS/mlx.metallib" ]; then
+    echo "✗ DMG 中的 mlx.metallib 不能放在 Contents/MacOS"
     exit 1
   fi
   DMG_METALLIB_SHA="$(shasum -a 256 "$DMG_METALLIB" | awk '{print $1}')"
@@ -111,7 +145,7 @@ if [ "$MAC_BUNDLE_ARCH" = "aarch64" ]; then
     fi
   fi
   echo "✓ MLX metallib sha256=$APP_METALLIB_SHA"
-elif [ -e "$APP/Contents/Resources/mlx.metallib" ]; then
+elif [ -e "$APP/Contents/MacOS/mlx.metallib" ] || [ -e "$APP/Contents/Resources/mlx.metallib" ]; then
   echo "✗ Intel app 不应包含 Apple Silicon MLX metallib"
   exit 1
 fi
@@ -123,8 +157,8 @@ if [ -n "${APPLE_CERTIFICATE:-}" ] \
 fi
 HAS_NOTARIZATION_CREDENTIALS=0
 if { [ -n "${APPLE_ID:-}" ] \
-    && [ -n "${APPLE_PASSWORD:-}" ] \
-    && [ -n "${APPLE_TEAM_ID:-}" ]; } \
+  && [ -n "${APPLE_PASSWORD:-}" ] \
+  && [ -n "${APPLE_TEAM_ID:-}" ]; } \
   || { [ -n "${APPLE_API_KEY:-}" ] && [ -n "${APPLE_API_ISSUER:-}" ]; }; then
   HAS_NOTARIZATION_CREDENTIALS=1
 fi
@@ -138,16 +172,16 @@ fi
 echo "▶ 清理发布产物扩展属性"
 # 这只能保证 CI/本机构建产物本身干净；浏览器下载仍可能重新加 quarantine。
 # 用户免手工 xattr 的根本方案是 Developer ID 签名 + Apple notarization。
-xattr -cr "$APP" 2>/dev/null || true
-find "$DMG_DIR" -maxdepth 1 -name '*.dmg' -exec xattr -c {} \; 2>/dev/null || true
+xattr -cr "$APP" 2> /dev/null || true
+find "$DMG_DIR" -maxdepth 1 -name '*.dmg' -exec xattr -c {} \; 2> /dev/null || true
 
 echo "▶ 校验 quarantine 属性"
-if xattr -pr com.apple.quarantine "$APP" >/dev/null 2>&1; then
+if xattr -pr com.apple.quarantine "$APP" > /dev/null 2>&1; then
   echo "✗ $APP 仍包含 com.apple.quarantine"
   exit 1
 fi
 while IFS= read -r dmg; do
-  if xattr -p com.apple.quarantine "$dmg" >/dev/null 2>&1; then
+  if xattr -p com.apple.quarantine "$dmg" > /dev/null 2>&1; then
     echo "✗ $dmg 仍包含 com.apple.quarantine"
     exit 1
   fi
@@ -155,15 +189,15 @@ done < <(find "$DMG_DIR" -maxdepth 1 -name '*.dmg' -print)
 
 if [ "$INSTALL" = "1" ]; then
   echo "▶ 装到 /Applications"
-  pkill -f "OpenLess.app/Contents/MacOS/openless" 2>/dev/null || true
+  pkill -f "OpenLess.app/Contents/MacOS/openless" 2> /dev/null || true
   sleep 1
   # 每次重装前重置 TCC：ad-hoc 签名 hash 每次构建都会变，旧授权立即失效，
   # 不重置就会出现"系统设置里看着已勾选实际不生效"。
-  tccutil reset Accessibility com.openless.app 2>/dev/null || true
-  tccutil reset Microphone com.openless.app 2>/dev/null || true
+  tccutil reset Accessibility com.openless.app 2> /dev/null || true
+  tccutil reset Microphone com.openless.app 2> /dev/null || true
   rm -rf /Applications/OpenLess.app
   cp -R "$APP" /Applications/
-  xattr -dr com.apple.quarantine /Applications/OpenLess.app 2>/dev/null || true
+  xattr -dr com.apple.quarantine /Applications/OpenLess.app 2> /dev/null || true
   echo "✓ 装好了：/Applications/OpenLess.app"
   echo "  打开方式：open /Applications/OpenLess.app"
 fi

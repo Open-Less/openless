@@ -13,7 +13,13 @@ const serviceSource = readFileSync(servicePath, 'utf8');
 const receiverSource = readFileSync(receiverPath, 'utf8');
 
 function kotlinFunctionBody(source, functionSignature) {
-  const signatureIndex = source.indexOf(functionSignature);
+  // Formatting may wrap parameters; keep the function name and signature checks.
+  const pattern = functionSignature
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    .replace(/\s+/g, '\\s+')
+    .replaceAll('\\(', '\\(\\s*')
+    .replaceAll('\\)', '\\s*\\)');
+  const signatureIndex = source.search(new RegExp(pattern));
   assert.notEqual(signatureIndex, -1, `missing Kotlin function: ${functionSignature}`);
   const openBrace = source.indexOf('{', signatureIndex);
   assert.notEqual(openBrace, -1, `missing opening brace: ${functionSignature}`);
@@ -41,7 +47,7 @@ assert.match(
 
 assert.match(
   receiverSource,
-  /const val ACTION_CAPTURE_SELECTED_TEXT = "com\.openless\.app\.accessibility\.CAPTURE_SELECTED_TEXT"/,
+  /const val ACTION_CAPTURE_SELECTED_TEXT\s*=\s*"com\.openless\.app\.accessibility\.CAPTURE_SELECTED_TEXT"/,
   'receiver must expose a dedicated selection action',
 );
 assert.match(
@@ -50,10 +56,7 @@ assert.match(
   'receiver must expose a stable selected-text Bundle key',
 );
 
-const receiverActionBody = kotlinFunctionBody(
-  receiverSource,
-  'ACTION_CAPTURE_SELECTED_TEXT ->',
-);
+const receiverActionBody = kotlinFunctionBody(receiverSource, 'ACTION_CAPTURE_SELECTED_TEXT ->');
 assert.match(
   receiverActionBody,
   /OpenLessAccessibilityService\.captureSelectedTextFromCommand\(\)/,
@@ -81,7 +84,7 @@ assert.match(
 );
 assert.match(
   ipcBody,
-  /getString\(OpenLessAccessibilityCommandReceiver\.EXTRA_SELECTED_TEXT\)/,
+  /getString\(\s*OpenLessAccessibilityCommandReceiver\.EXTRA_SELECTED_TEXT\s*\)/,
   'selection IPC sender must read the receiver Bundle key',
 );
 assert.match(

@@ -1,9 +1,9 @@
 #![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
 //! Volcengine SAUC bigmodel streaming ASR client.
 //!
-//! Direct port of the Swift `VolcengineStreamingASR`. Battle-tested protocol
-//! quirks are preserved verbatim — see comments tagged with `[asr]` for the
-//! original learnings (especially the "definite=true is NOT stream end" bug).
+//! Sends PCM frames, combines recognition updates and waits for the protocol's
+//! final response. A `definite=true` utterance commits that segment only; it does
+//! not end the stream or prevent later audio from being sent.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;

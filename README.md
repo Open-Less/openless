@@ -82,7 +82,7 @@
     <td align="center" width="170">
       <img src="https://github.com/HKLHaoBin.png" width="80" height="80" alt="HKLHaoBin" /><br/>
       <strong><a href="https://github.com/HKLHaoBin" target="_blank" rel="noopener">HKLHaoBin</a></strong><br/>
-      <sub>Android author</sub>
+      <sub>Android author / Android Maintainer</sub>
     </td>
     <td align="center" width="170">
       <img src="assets/people/cooper.png" width="80" height="80" alt="Cooper" /><br/>
@@ -92,7 +92,14 @@
     <td align="center" width="170">
       <img src="https://github.com/aeoform.png" width="80" height="80" alt="aeoform" /><br/>
       <strong><a href="https://github.com/aeoform" target="_blank" rel="noopener">aeoform</a></strong><br/>
-      <sub>Contributor</sub>
+      <sub>Contributor / Linux Maintainer</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="170">
+      <img src="assets/people/jimmy54.png" width="80" height="80" alt="jimmy54" /><br/>
+      <strong><a href="https://github.com/jimmy54" target="_blank" rel="noopener">jimmy54</a></strong><br/>
+      <sub>macOS packaging &amp; developer account</sub>
     </td>
   </tr>
 </table>
@@ -198,9 +205,9 @@ Every item below is one more layer sedimented into a default — a capability yo
 - 🎨 **Style Pack Marketplace** — browse, install, and like community **style packs** from the in-app Marketplace, and publish your own (custom system prompt per pack, switchable by hotkey). Backed by a moderated marketplace backend; uploads are reviewed before they go public.
 - ⚡ **Streaming insertion** — polished text is written to the cursor character by character to reduce perceived latency, with an automatic one-shot-paste fallback. Toggle in Settings → Recording.
 - **Toggle and push-to-talk** recording modes, plus a **MediaPlayPause trigger** so wired-earbud inline controls can start and stop recording. `Esc` cancels at any phase, including polish and insertion.
-- **Cloud ASR**: Volcengine streaming ASR (bigasr), iFlytek realtime ASR (RTASR), Alibaba Cloud Bailian (classic realtime / Qwen3 realtime / Fun-ASR-Flash file transcription), StepFun StepAudio (batch + realtime), Zhipu GLM-ASR, Xiaomi MiMo ASR, ElevenLabs Scribe, OpenAI-compatible batch transcription (OpenAI Whisper / Groq / SiliconFlow SenseVoice / OpenRouter / ZenMux), and Apple Speech (macOS).
+- **Cloud ASR**: Volcengine streaming ASR (bigasr), Tencent Cloud Hunyuan realtime ASR (Hy-ASR), iFlytek realtime ASR (RTASR), Alibaba Cloud Bailian (classic realtime / Qwen3 realtime / Fun-ASR-Flash file transcription), StepFun StepAudio (batch + realtime), Zhipu GLM-ASR, Xiaomi MiMo ASR, OrcaRouter audio-input Gemini, ElevenLabs Scribe, OpenAI-compatible batch transcription (OpenAI Whisper / Groq / SiliconFlow SenseVoice / OpenRouter / ZenMux), and Apple Speech (macOS).
 - **Local ASR**: bundled Qwen3-ASR (0.6B / 1.7B) via vendored `Open-Less/qwen-asr` (macOS); Windows Foundry Local Whisper and sherpa-onnx (experimental) variants.
-- **Polish providers**: Ark (Volcengine), DeepSeek, OpenAI, Google Gemini, Codex OAuth, SiliconFlow, Atlas Cloud, Xiaomi MiMo, CometAPI, OpenRouter, Alibaba Cloud Coding Plan, CodingPlanX, MiniMax, and StepFun — plus any OpenAI-compatible endpoint you bring.
+- **Polish providers**: Ark (Volcengine), DeepSeek, OpenAI, Google Gemini, Codex OAuth, SiliconFlow, Atlas Cloud, Xiaomi MiMo, Tencent Cloud TokenHub, CometAPI, OpenRouter, OrcaRouter, Alibaba Cloud Coding Plan, CodingPlanX, MiniMax, StepFun, and OpenCode Zen — plus any OpenAI-compatible endpoint you bring.
 - **Four output modes**: raw, light polish, structured (**AI-prompt mode**), and formal. Plus a **translation hotkey** that converts speech directly into the configured target language ([#43](../../issues/43)).
 - **Selection-ask QA panel** — a separate hotkey opens a floating panel that runs voice Q&A against the highlighted text in any app ([#118](../../issues/118)).
 - **Main window**: Overview / History / Vocab / Style / Marketplace / Settings. Persistent tray icon, plus a mini status capsule that floats on screen and follows the display you are typing on (multi-monitor).
@@ -258,7 +265,7 @@ For the full end-user walkthrough, see [USAGE.md](USAGE.md).
 
 ## Build from source (developers)
 
-The active workspace lives in `openless-all/app/`. `crates/openless-core` is the framework-independent backend, `src-tauri` hosts macOS/Windows/Android, and `linux-egui` contains the native Linux UI and its platform adapters. The macOS Tauri build links a vendored C ASR engine ([`Open-Less/qwen-asr`](https://github.com/Open-Less/qwen-asr), forked from `antirez/qwen-asr`) under `src-tauri/vendor/qwen-asr/`; initialize submodules for macOS Tauri development. The root core/Linux workspace deliberately excludes `src-tauri`, so Linux core and host checks neither initialize that submodule nor parse the Tauri manifest.
+The active workspace lives in `openless-all/app/`. `crates/openless-core` is the framework-independent backend, `src-tauri` hosts macOS/Windows/Android, and `linux-egui` contains the native Linux UI and its platform adapters. Initialize submodules before a Tauri source build: its manifest resolves local path dependencies even when their target-specific code is not compiled. These include macOS ASR engines such as [`Open-Less/qwen-asr`](https://github.com/Open-Less/qwen-asr) under `src-tauri/vendor/`. The root Core/Linux workspace excludes `src-tauri`, so its independent checks do not parse the Tauri manifest or require those submodules. Start with the [documentation index](docs/index.md), [architecture](docs/architecture.md), and [source structure](docs/structure.md).
 
 Rust 1.88 is the minimum supported toolchain for source builds; the latest stable Rust is recommended. CI verifies both Rust 1.88 and stable on macOS, Windows, and Linux.
 
@@ -269,7 +276,7 @@ cd "openless-all/app"
 npm ci
 
 # macOS/Windows/Android: Vite at :1420 + Tauri host
-# Initialize submodules first when building the macOS local-ASR target.
+# Initialize submodules before resolving the Tauri manifest.
 git submodule update --init --recursive
 npm run tauri dev
 
@@ -277,7 +284,7 @@ npm run tauri dev
 ./scripts/build-mac.sh
 INSTALL=0 ./scripts/build-mac.sh   # build only, skip install
 
-# Shared backend and Linux non-UI host (no Tauri/WebKitGTK)
+# Shared backend and Linux Host/UI (no Tauri/WebKitGTK)
 cargo check -p openless-core
 cargo check -p openless-linux-egui --all-targets
 
@@ -357,7 +364,7 @@ What features does this app still need?
 
 …not a list of missing features.
 
-Long-term reference rewrites are stored as `raw → polished → rule` triples and will be retrieved as similar-example references (never as conversation context) once a vector store is wired in. See [docs/polish-reference-corpus.md](docs/polish-reference-corpus.md) and [Examples/polish-reference-examples.sample.jsonl](Examples/polish-reference-examples.sample.jsonl).
+Long-term reference rewrites are represented as `raw → polished → rule` triples in [Examples/polish-reference-examples.sample.jsonl](Examples/polish-reference-examples.sample.jsonl). The sample format describes reference data; current module responsibilities are documented in [Architecture](docs/architecture.md).
 
 ## Dictionary
 
@@ -389,13 +396,13 @@ React UI ── Tauri Adapter (macOS/Windows/Android) ──┐
 egui UI  ── Linux Adapter (no Tauri/WebKitGTK) ────┘
 ```
 
-`openless-core` owns the stable DTOs, errors, semantic events, repositories, credentials contract, and host-facing use-case Interface. Host-only concerns—IPC, windows, tray, permissions, updater, keyring, fcitx5, and package resource paths—are implemented by Adapters. Legacy React command/event names stay in the Tauri compatibility Adapter; Linux calls the typed Rust Interface in process. See [`docs/linux-egui-backend-contract.md`](docs/linux-egui-backend-contract.md) and the [full migration plan](docs/linux-egui-shared-backend-plan.md).
+`openless-core` owns the stable DTOs, errors, semantic events, repositories, credentials contract, and host-facing use-case Interface. Host-only concerns—IPC, windows, tray, permissions, updater, keyring, fcitx5, and package resource paths—are implemented by Adapters. Legacy React command/event names stay in the Tauri compatibility Adapter; Linux calls the typed Rust Interface in process. See [`docs/linux-egui-backend-contract.md`](docs/linux-egui-backend-contract.md).
 
 The `v<version>-tauri` / `v<version>-Beta.N-tauri` workflows publish the macOS, Windows, and Android hosts. Linux deb/rpm/AppImage assets are built by `release-linux-egui.yml` with an independent manifest; automatic release remains gated on successful artifacts and real Ubuntu install/runtime/upgrade/rollback evidence.
 
 The dictation pipeline: `hotkey edge → Recorder.start + ASR.openSession → [audio frames] → hotkey edge → Recorder.stop + ASR.sendLastFrame → Polish → Insert → History.save`.
 
-See [CLAUDE.md](CLAUDE.md) for invariants and module-wiring rules.
+See [AGENTS.md](AGENTS.md) for repository rules and [Architecture](docs/architecture.md) for module responsibilities and wiring.
 
 ## Roadmap
 
@@ -432,7 +439,7 @@ OpenLess ships two release channels. The branch name equals the channel name (se
 
 ### Post-release verification (always run)
 
-Run the 5-step checklist in [`CLAUDE.md` → Branch & release-channel workflow → Channel distribution](CLAUDE.md): page status (pre-release flag), asset-filename channel correctness, Stable user flow, Beta opt-in flow, and raw endpoint sanity.
+Follow [RELEASING.md](RELEASING.md) and verify the release page's pre-release flag, asset-filename channel correctness, Stable user flow, Beta opt-in flow, and raw update endpoints.
 
 ## Acknowledgements
 

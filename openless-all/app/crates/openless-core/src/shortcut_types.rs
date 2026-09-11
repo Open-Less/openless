@@ -51,6 +51,9 @@ pub const SIDE_SPECIFIC_NON_DICTATION_MSG: &str =
     "Side-specific modifier shortcuts are only supported for dictation start/stop.";
 
 pub fn reject_side_specific_non_dictation(binding: &ShortcutBinding) -> Result<(), String> {
+    if binding.primary == "MacDictationKey" {
+        return Err("The Mac Dictation key is only supported for dictation start/stop.".into());
+    }
     if binding_requires_side_aware_hook(binding) {
         return Err(SIDE_SPECIFIC_NON_DICTATION_MSG.to_string());
     }
@@ -193,6 +196,10 @@ pub fn binding_from_legacy_trigger(trigger: HotkeyTrigger) -> ShortcutBinding {
 }
 
 pub fn validate_shortcut_binding(binding: &ShortcutBinding) -> Result<(), ShortcutBindingError> {
+    #[cfg(target_os = "macos")]
+    if binding.primary == "MacDictationKey" && binding.modifiers.is_empty() {
+        return Ok(());
+    }
     if legacy_modifier_trigger(binding).is_some() {
         return Ok(());
     }
@@ -278,6 +285,14 @@ fn validate_primary(raw: &str) -> Result<(), ShortcutBindingError> {
             | "F10"
             | "F11"
             | "F12"
+            | "F13"
+            | "F14"
+            | "F15"
+            | "F16"
+            | "F17"
+            | "F18"
+            | "F19"
+            | "F20"
     ) {
         return Ok(());
     }
@@ -785,7 +800,11 @@ mod tests {
     fn validates_shared_shortcut_grammar_without_a_native_hotkey_crate() {
         assert!(validate_shortcut_binding(&combo("D", &["cmd", "shift"])).is_ok());
         assert!(validate_shortcut_binding(&combo("?", &["shift"])).is_ok());
-        assert!(validate_shortcut_binding(&combo("F12", &[])).is_ok());
+        for number in 1..=20 {
+            assert!(validate_shortcut_binding(&combo(&format!("F{number}"), &[])).is_ok());
+        }
+        assert!(validate_shortcut_binding(&combo(" f20 ", &[])).is_ok());
+        assert!(validate_shortcut_binding(&combo("F21", &[])).is_err());
         assert_eq!(
             validate_shortcut_binding(&combo("D", &["hyper"])),
             Err(ShortcutBindingError::UnsupportedModifier("hyper".into()))

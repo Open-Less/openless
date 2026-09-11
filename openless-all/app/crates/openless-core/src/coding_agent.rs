@@ -2891,13 +2891,19 @@ broken: npx broken - ✗ Failed to connect\n";
         let before = run(&[]);
         let after = run(&hardening);
         let roots = |output: &str| {
-            output
-                .split("writable root")
-                .nth(1)
-                .unwrap_or_default()
-                .chars()
-                .take(400)
-                .collect::<String>()
+            // The debug output also contains app/tool instructions with backticks.
+            // Count paths only in the permissions block, not a fixed-length excerpt.
+            let (_, permissions) = output
+                .split_once("<permissions instructions>")
+                .expect("Codex debug output must include permissions instructions");
+            let (permissions, _) = permissions
+                .split_once("</permissions instructions>")
+                .expect("Codex permissions instructions must be closed");
+            permissions
+                .split_once("writable root")
+                .expect("Codex permissions must declare writable roots")
+                .1
+                .to_string()
         };
         let before = roots(&before);
         let after = roots(&after);

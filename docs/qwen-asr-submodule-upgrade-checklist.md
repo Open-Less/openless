@@ -1,51 +1,26 @@
-# qwen-asr submodule 升级检查清单
+# qwen-asr 子模块升级清单
 
-`openless-all/app/src-tauri/vendor/qwen-asr` 是 macOS 本地 Qwen3-ASR 的 C 引擎来源。OpenLess 只从组织 fork `https://github.com/Open-Less/qwen-asr.git` 拉取 submodule；`antirez/qwen-asr` 只作为上游同步来源，不直接进入主仓构建链路。
+状态：canonical（2026-09-07 以源码为准重写）；更新：2026-09-07。
 
-## 升级原则
+## 1. 子模块（`.gitmodules`，仓库根）
 
-- 不直接把 `.gitmodules` 改回个人上游仓库。
-- 不在未审查 upstream diff 的情况下推进 submodule commit。
-- 每次升级只推进 submodule 指针；除非编译或 FFI 必需，不混入 OpenLess 主项目逻辑改动。
-- 保留当前锁定 commit 的可回滚性，必要时能 `git checkout <old-commit> -- openless-all/app/src-tauri/vendor/qwen-asr` 回退。
+| 子模块 | 路径 | 来源 |
+| --- | --- | --- |
+| qwen-asr | `openless-all/app/src-tauri/vendor/qwen-asr` | <https://github.com/Open-Less/qwen-asr.git>（组织 fork；`antirez/qwen-asr` 只作上游同步来源，不直接进构建） |
+| qwen3-asr-rs | `openless-all/app/src-tauri/vendor/qwen3-asr-rs` | <https://github.com/Open-Less/qwen3_asr_rs.git> |
 
-## 操作步骤
+qwen-asr 是 macOS 本地 Qwen3-ASR 的 **C 引擎**，由 src-tauri 构建链接（vendored）；qwen3-asr-rs 为 Rust 运行时来源。Linux workspace（openless-core + linux-egui）不包含 src-tauri，不依赖这两个子模块。
 
-1. 在 `Open-Less/qwen-asr` fork 中同步 upstream。
-2. 审查 fork 中待引入 commit：
-   - C 源码：`qwen_asr*.c`、`qwen_asr*.h`
-   - 构建脚本 / 模型下载脚本
-   - 新增二进制、大文件、网络下载地址或 shell 命令
-   - FFI API 是否改变：`qwen_load`、`qwen_free`、`qwen_set_token_callback`、`qwen_transcribe_audio`、`qwen_transcribe_stream`
-   - Dictation 行为是否改变：C 后端必须继续使用 stream、发送 `local-asr-token`，并保留 0.5 秒尾部静音收尾；MLX 后端保持 batch
-3. 在 OpenLess 主仓更新 submodule：
-   ```bash
-   git submodule sync --recursive openless-all/app/src-tauri/vendor/qwen-asr
-   git submodule update --init --recursive openless-all/app/src-tauri/vendor/qwen-asr
-   cd openless-all/app/src-tauri/vendor/qwen-asr
-   git fetch origin
-   git checkout <reviewed-commit>
-   cd -
-   ```
-4. 验证 submodule 来源仍是组织 fork：
-   ```bash
-   git config --file .gitmodules --get submodule.openless-all/app/src-tauri/vendor/qwen-asr.url
-   git -C openless-all/app/src-tauri/vendor/qwen-asr remote get-url origin
-   git submodule status openless-all/app/src-tauri/vendor/qwen-asr
-   git diff --submodule=log -- openless-all/app/src-tauri/vendor/qwen-asr
-   ```
-5. 至少运行：
-   ```bash
-   cd openless-all/app
-   npm run build
-   cargo check --manifest-path src-tauri/Cargo.toml
-   ```
-   macOS 发布前还要用 `INSTALL=0 ./scripts/build-mac.sh` 验证 C 源编译和链接。
+## 2. 升级步骤
 
-## PR / commit 说明必须包含
+1. `git submodule update --init --recursive`（先在干净工作区）。
+2. 在子模块目录 `git fetch && git checkout <目标提交>`（只用 Open-Less fork 的提交；记录提交号）。
+3. 主仓 `git add` 子模块指针并提交（提交信息注明引擎版本/目的）。
+4. macOS 构建验证：`src-tauri` 按平台构建通过；如涉及 Metal/工具链，先跑 `npm run check:macos-metal-toolchain`；相关契约：`scripts/macos-compiler-runtime-contract.test.mjs`、`stage-macos-mlx-metallib.mjs`（MLX 路径）。
+5. CI 注意：`scripts/ci-disable-macos-qwen3.mjs` 控制 macOS CI 中 qwen3 的启用范围，升级后核对其仍符合当前 CI 策略。
+6. 行为验证：本地 ASR 下载/激活/取消与听写回归（见[桌面验收](2.0-desktop-acceptance.md)本地模型域）。
 
-- 旧 submodule commit 和新 submodule commit。
-- 已审查的 upstream commit 范围。
-- 是否有 FFI API、模型文件结构、下载脚本或构建参数变化。
-- 是否改变 stream/batch、token 回调、取消门控或尾部静音语义。
-- 已运行的验证命令和未覆盖的平台。
+## 3. 纪律
+
+- 不修改 vendored 引擎源码本身的问题；修复走 fork 上游，再 bump 指针。
+- 子模块指针升级必须与构建验证同批提交，不留"指针先行"状态。

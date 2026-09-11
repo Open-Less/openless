@@ -7,11 +7,7 @@ function assertEqual(actual: boolean, expected: boolean, name: string) {
 }
 
 for (const os of ['win', 'android'] as const) {
-  assertEqual(
-    isLocalAsrModelSupportedOnOs('qwen3-asr-0.6b', os),
-    false,
-    `Qwen is hidden on ${os}`,
-  );
+  assertEqual(isLocalAsrModelSupportedOnOs('qwen3-asr-0.6b', os), false, `Qwen is hidden on ${os}`);
   assertEqual(
     isLocalAsrModelSupportedOnOs('whisper-large-v3-turbo', os),
     false,

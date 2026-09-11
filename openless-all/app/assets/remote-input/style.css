@@ -35,8 +35,12 @@
 
   /* 阴影 */
   --shadow-sm: 0 1px 2px rgba(15, 17, 22, 0.04), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 1px 2px rgba(15, 17, 22, 0.05), 0 6px 24px -12px rgba(15, 17, 22, 0.10), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
-  --shadow-lg: 0 20px 60px -20px rgba(15, 17, 22, 0.18), 0 8px 32px -16px rgba(15, 17, 22, 0.10), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  --shadow-md:
+    0 1px 2px rgba(15, 17, 22, 0.05), 0 6px 24px -12px rgba(15, 17, 22, 0.1),
+    0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  --shadow-lg:
+    0 20px 60px -20px rgba(15, 17, 22, 0.18), 0 8px 32px -16px rgba(15, 17, 22, 0.1),
+    0 0 0 0.5px rgba(0, 0, 0, 0.06);
 
   /* 圆角 */
   --control-radius: 8px;
@@ -50,7 +54,8 @@
   --r-pill: 999px;
 
   /* 字体 */
-  --font-sans: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
+  --font-sans:
+    system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif;
 
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
@@ -68,7 +73,7 @@
   --blue: #60a5fa;
   --blue-hover: #3b82f6;
   --blue-soft: rgba(96, 165, 250, 0.14);
-  --blue-ring: rgba(96, 165, 250, 0.30);
+  --blue-ring: rgba(96, 165, 250, 0.3);
   --on-accent: #f8fbff;
   --accent-solid-bg: #2563eb;
   --accent-solid-bg-hover: #3b82f6;
@@ -82,9 +87,12 @@
 
 /* 关键:很多元素用 hidden 属性控制显隐,但元素自带 display(flex/inline-flex)会覆盖浏览器
    默认的 [hidden]{display:none},导致空框照常显示。这条强制 hidden 优先(结果框/三点/图标都靠它)。 */
-[hidden] { display: none !important; }
+[hidden] {
+  display: none !important;
+}
 
-html, body {
+html,
+body {
   margin: 0;
   padding: 0;
   height: 100%;
@@ -119,15 +127,21 @@ body {
   flex: 1;
   flex-direction: column;
   padding: 24px 20px;
-  animation: fadeIn .25s ease;
+  animation: fadeIn 0.25s ease;
 }
 .screen.active {
   display: flex;
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* ===== 品牌头 ===== */
@@ -146,7 +160,7 @@ body {
   font-size: 22px;
   font-weight: 700;
   margin: 16px 0 4px;
-  letter-spacing: .2px;
+  letter-spacing: 0.2px;
   color: var(--ink);
 }
 .brand-sub {
@@ -187,7 +201,9 @@ body {
   border-radius: var(--r-lg);
   outline: none;
   font-variant-numeric: tabular-nums;
-  transition: border-color .15s ease, box-shadow .15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 .pin-input::placeholder {
   color: var(--ink-4);
@@ -212,16 +228,26 @@ body {
   border: none;
   border-radius: var(--r-lg);
   cursor: pointer;
-  transition: transform .08s ease, background .15s ease, opacity .15s ease;
+  transition:
+    transform 0.08s ease,
+    background 0.15s ease,
+    opacity 0.15s ease;
 }
-.btn:active { transform: scale(.98); }
-.btn:disabled { opacity: .5; cursor: default; }
+.btn:active {
+  transform: scale(0.98);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 
 .btn-primary {
   background: var(--accent-solid-bg);
   box-shadow: 0 6px 18px -6px var(--blue-ring);
 }
-.btn-primary:active { background: var(--accent-solid-bg-hover); }
+.btn-primary:active {
+  background: var(--accent-solid-bg-hover);
+}
 
 .hint-error {
   color: var(--danger);
@@ -243,7 +269,9 @@ body {
   font-weight: 600;
   color: var(--ink-2);
   margin-bottom: 10px;
+  cursor: pointer;
 }
+.help:not([open]) .help-title { margin-bottom: 0; }
 .help-step {
   font-size: 12.5px;
   color: var(--ink-3);
@@ -255,6 +283,13 @@ body {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 6px;
+}
+.help-verify {
+  color: var(--ink);
+  padding: 10px;
+  border-left: 3px solid var(--blue);
+  background: var(--surface);
+  border-radius: 4px;
 }
 .help-link {
   display: inline-block;
@@ -271,13 +306,17 @@ body {
   -webkit-appearance: none;
   appearance: none;
 }
-.help-link:active { background: var(--accent-solid-bg-hover); }
+.help-link:active {
+  background: var(--accent-solid-bg-hover);
+}
 .help-link-ghost {
   background: var(--surface);
   color: var(--blue);
   border: 1px solid var(--blue);
 }
-.help-link-ghost:active { background: var(--blue-soft); }
+.help-link-ghost:active {
+  background: var(--blue-soft);
+}
 
 /* ===== 录音屏头部 ===== */
 .rec-header {
@@ -296,7 +335,7 @@ body {
 .rec-header-title {
   font-weight: 700;
   font-size: 16px;
-  letter-spacing: .2px;
+  letter-spacing: 0.2px;
   color: var(--ink);
 }
 .mode-switch {
@@ -319,7 +358,9 @@ body {
   padding: 7px 14px;
   border-radius: var(--control-radius);
   cursor: pointer;
-  transition: background .15s ease, color .15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
 .mode-btn.active {
   background: var(--accent-solid-bg);
@@ -347,24 +388,29 @@ body {
   color: var(--accent-solid-ink);
   background: linear-gradient(180deg, var(--accent-solid-bg-hover) 0%, var(--accent-solid-bg) 100%);
   box-shadow:
-    0 16px 36px -10px rgba(37, 99, 235, .5),
-    inset 0 1px 0 rgba(255, 255, 255, .25);
+    0 16px 36px -10px rgba(37, 99, 235, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.25);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  transition: transform .1s ease, box-shadow .2s ease, background .2s ease;
+  transition:
+    transform 0.1s ease,
+    box-shadow 0.2s ease,
+    background 0.2s ease;
   user-select: none;
   -webkit-user-select: none;
 }
-.record-btn:active { transform: scale(.97); }
+.record-btn:active {
+  transform: scale(0.97);
+}
 
 .record-btn-ring {
   position: absolute;
   inset: -6px;
   border-radius: 50%;
-  border: 2px solid rgba(37, 99, 235, .35);
+  border: 2px solid rgba(37, 99, 235, 0.35);
   opacity: 0;
   pointer-events: none;
 }
@@ -373,41 +419,57 @@ body {
   height: 60px;
   object-fit: contain;
   line-height: 1;
-  transition: transform .15s ease;
+  transition: transform 0.15s ease;
 }
 .record-btn-label {
   font-size: 14px;
   font-weight: 600;
-  color: rgba(255, 255, 255, .92);
-  letter-spacing: .3px;
+  color: rgba(255, 255, 255, 0.92);
+  letter-spacing: 0.3px;
 }
 
 /* 录音中:红色 + 呼吸脉冲动画 */
 .record-btn.recording {
   background: linear-gradient(180deg, #f87171 0%, #dc2626 100%);
-  box-shadow: 0 16px 36px -10px rgba(220, 38, 38, .5);
+  box-shadow: 0 16px 36px -10px rgba(220, 38, 38, 0.5);
   animation: breathe 1.6s ease-in-out infinite;
 }
-.record-btn.recording .record-btn-label { color: var(--on-accent); }
+.record-btn.recording .record-btn-label {
+  color: var(--on-accent);
+}
 .record-btn.recording .record-btn-ring {
   opacity: 1;
-  border-color: rgba(220, 38, 38, .4);
+  border-color: rgba(220, 38, 38, 0.4);
   animation: pulseRing 1.6s ease-out infinite;
 }
 
 @keyframes breathe {
-  0%, 100% { transform: scale(1); }
-  50%      { transform: scale(1.04); }
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.04);
+  }
 }
 @keyframes pulseRing {
-  0%   { transform: scale(1);   opacity: .7; }
-  70%  { transform: scale(1.28); opacity: 0; }
-  100% { transform: scale(1.28); opacity: 0; }
+  0% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  70% {
+    transform: scale(1.28);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.28);
+    opacity: 0;
+  }
 }
 
 /* 忙/禁用态 */
 .record-btn.busy {
-  opacity: .5;
+  opacity: 0.5;
   cursor: default;
   animation: none;
 }
@@ -419,11 +481,11 @@ body {
   height: 8px;
   border-radius: var(--r-pill);
   background: #e9ebf0;
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, .07);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.07);
   overflow: hidden;
   /* 平时淡化成一个浅凹槽;录音时才高亮(下方规则),避免像一根无意义的白条 */
-  opacity: .45;
-  transition: opacity .2s ease;
+  opacity: 0.45;
+  transition: opacity 0.2s ease;
 }
 .record-btn.recording ~ .level-wrap {
   opacity: 1;
@@ -433,7 +495,7 @@ body {
   width: 0%;
   border-radius: var(--r-pill);
   background: linear-gradient(90deg, var(--ok), var(--blue));
-  transition: width .08s linear;
+  transition: width 0.08s linear;
 }
 
 /* ===== 状态条 ===== */
@@ -450,9 +512,18 @@ body {
   text-align: center;
   max-width: 90%;
 }
-.status-bar.is-error { color: var(--danger); border-color: rgba(220, 38, 38, .35); }
-.status-bar.is-ok    { color: var(--ok);     border-color: rgba(22, 163, 74, .35); }
-.status-bar.is-work  { color: var(--blue);   border-color: var(--blue-ring); }
+.status-bar.is-error {
+  color: var(--danger);
+  border-color: rgba(220, 38, 38, 0.35);
+}
+.status-bar.is-ok {
+  color: var(--ok);
+  border-color: rgba(22, 163, 74, 0.35);
+}
+.status-bar.is-work {
+  color: var(--blue);
+  border-color: var(--blue-ring);
+}
 
 /* 状态图标(如完成对勾) */
 .status-icon {
@@ -480,11 +551,23 @@ body {
   display: inline-block;
   animation: dotPulse 1.2s infinite ease-in-out both;
 }
-.dots i:nth-child(1) { animation-delay: -.32s; }
-.dots i:nth-child(2) { animation-delay: -.16s; }
+.dots i:nth-child(1) {
+  animation-delay: -0.32s;
+}
+.dots i:nth-child(2) {
+  animation-delay: -0.16s;
+}
 @keyframes dotPulse {
-  0%, 80%, 100% { transform: scale(.5); opacity: .35; }
-  40%           { transform: scale(1);  opacity: 1; }
+  0%,
+  80%,
+  100% {
+    transform: scale(0.5);
+    opacity: 0.35;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 /* ===== 识别结果文字(电脑回传) ===== */
@@ -494,7 +577,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  animation: fadeIn .25s ease;
+  animation: fadeIn 0.25s ease;
 }
 .result-text {
   padding: 12px 16px;
@@ -525,10 +608,19 @@ body {
   padding: 8px 18px;
   border-radius: var(--r-lg);
   cursor: pointer;
-  transition: background .15s ease, color .15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
-.result-copy:active { background: var(--accent-solid-bg); color: var(--accent-solid-ink); }
-.result-copy.copied { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
+.result-copy:active {
+  background: var(--accent-solid-bg);
+  color: var(--accent-solid-ink);
+}
+.result-copy.copied {
+  background: var(--ok-soft);
+  border-color: var(--ok);
+  color: var(--ok);
+}
 
 /* ===== 提示文字 ===== */
 .rec-tip {
@@ -562,7 +654,7 @@ body {
   height: 24px;
   border-radius: 999px;
   background: var(--line-strong);
-  transition: background .2s ease;
+  transition: background 0.2s ease;
   flex: none;
 }
 .insert-track::after {
@@ -574,8 +666,8 @@ body {
   height: 20px;
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, .25);
-  transition: transform .2s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: transform 0.2s ease;
 }
 .insert-switch:checked ~ .insert-track {
   background: var(--blue);
@@ -583,11 +675,33 @@ body {
 .insert-switch:checked ~ .insert-track::after {
   transform: translateX(18px);
 }
+.insert-switch:focus-visible ~ .insert-track {
+  outline: 2px solid var(--blue);
+  outline-offset: 3px;
+}
+.wake-lock-hint {
+  margin: 7px auto 0;
+  max-width: 340px;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
 
 /* ===== 断线屏 ===== */
-.offline-icon { font-size: 48px; }
-.offline-title { font-size: 20px; margin: 12px 0 6px; color: var(--ink); }
-.offline-sub { color: var(--ink-3); font-size: 14px; margin: 0 0 8px; }
+.offline-icon {
+  font-size: 48px;
+}
+.offline-title {
+  font-size: 20px;
+  margin: 12px 0 6px;
+  color: var(--ink);
+}
+.offline-sub {
+  color: var(--ink-3);
+  font-size: 14px;
+  margin: 0 0 8px;
+}
 
 /* ===== 底部证书提示(固定) ===== */
 .cert-tip {
@@ -599,7 +713,7 @@ body {
   font-size: 12px;
   line-height: 1.5;
   color: var(--ink-4);
-  background: rgba(255, 255, 255, .92);
+  background: rgba(255, 255, 255, 0.92);
   backdrop-filter: blur(12px) saturate(160%);
   -webkit-backdrop-filter: blur(12px) saturate(160%);
   border-top: 0.5px solid var(--line);
@@ -608,8 +722,19 @@ body {
 
 /* 小屏微调 */
 @media (max-height: 640px) {
-  .brand { margin: 14px 0; }
-  .brand-logo-img { width: 56px; height: 56px; }
-  .record-btn { width: 148px; height: 148px; }
-  .record-btn-icon { width: 52px; height: 52px; }
+  .brand {
+    margin: 14px 0;
+  }
+  .brand-logo-img {
+    width: 56px;
+    height: 56px;
+  }
+  .record-btn {
+    width: 148px;
+    height: 148px;
+  }
+  .record-btn-icon {
+    width: 52px;
+    height: 52px;
+  }
 }

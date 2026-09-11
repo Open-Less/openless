@@ -39,7 +39,10 @@ export function getAndroidAccessibilityStatus(): Promise<AndroidAccessibilitySta
   }));
 }
 
-export function requestAndroidAccessibilityPermission(): Promise<{ launched: boolean; message: string }> {
+export function requestAndroidAccessibilityPermission(): Promise<{
+  launched: boolean;
+  message: string;
+}> {
   return invokeOrMock('request_android_accessibility_permission', undefined, () => ({
     launched: false,
     message: 'Mock: accessibility settings unavailable in browser preview',
@@ -72,7 +75,9 @@ export function openShizukuApp(): Promise<AndroidShizukuActionResult> {
   }));
 }
 
-export function recoverAndroidAccessibility(confirmed: boolean): Promise<AndroidAccessibilityRecoveryResult> {
+export function recoverAndroidAccessibility(
+  confirmed: boolean,
+): Promise<AndroidAccessibilityRecoveryResult> {
   return invokeOrMock('recover_android_accessibility', { confirmed }, () => ({
     outcome: confirmed ? 'shizukuUnavailable' : 'userNotConfirmed',
     messageKey: confirmed ? 'not_android' : 'user_not_confirmed',

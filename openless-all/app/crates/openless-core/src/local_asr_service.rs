@@ -1254,6 +1254,14 @@ impl LocalAsrApi for LocalAsrService {
         })
     }
 
+    fn cleanup_incomplete(
+        &self,
+        target: LocalAsrTarget,
+    ) -> BoxFuture<'static, Result<(), BackendError>> {
+        let store = Arc::clone(&self.model_store);
+        Box::pin(async move { store.cleanup_incomplete(&target) })
+    }
+
     fn model_dir(
         &self,
         target: LocalAsrTarget,

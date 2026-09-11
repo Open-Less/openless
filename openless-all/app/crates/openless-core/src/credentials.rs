@@ -68,6 +68,9 @@ pub const VOLCENGINE_AUTH_MODE_ACCOUNT: &str = "volcengine.auth_mode";
 pub const VOLCENGINE_API_KEY_ACCOUNT: &str = "volcengine.api_key";
 pub const XFYUN_APP_ID_ACCOUNT: &str = "xfyun.app_id";
 pub const XFYUN_API_KEY_ACCOUNT: &str = "xfyun.api_key";
+pub const TENCENT_CLOUD_APP_ID_ACCOUNT: &str = "tencent_cloud.app_id";
+pub const TENCENT_CLOUD_SECRET_ID_ACCOUNT: &str = "tencent_cloud.secret_id";
+pub const TENCENT_CLOUD_SECRET_KEY_ACCOUNT: &str = "tencent_cloud.secret_key";
 pub const LLM_API_KEY_ACCOUNT: &str = "ark.api_key";
 pub const LLM_MODEL_ACCOUNT: &str = "ark.model_id";
 pub const LLM_ENDPOINT_ACCOUNT: &str = "ark.endpoint";
@@ -129,6 +132,13 @@ pub struct ChannelTestSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChannelMutation {
+    InvalidateTest {
+        kind: ChannelKind,
+        id: String,
+    },
+    InvalidateTests {
+        kind: ChannelKind,
+    },
     /// Commit a prepared local runtime and its channel in one metadata revision.
     ActivateLocalAsr {
         id: Option<String>,
@@ -519,6 +529,8 @@ impl CredentialMetadata {
             ChannelMutation::ActivateLocalAsr { .. } => ChannelKind::Asr,
             ChannelMutation::Create { kind, .. }
             | ChannelMutation::SetProviderType { kind, .. }
+            | ChannelMutation::InvalidateTest { kind, .. }
+            | ChannelMutation::InvalidateTests { kind }
             | ChannelMutation::DeleteIfBlank { kind, .. }
             | ChannelMutation::Rename { kind, .. }
             | ChannelMutation::Delete { kind, .. }
@@ -628,6 +640,16 @@ impl CredentialMetadata {
                 let channel = find_channel_mut(&mut self.channels, kind, &id)?;
                 channel.provider_type = provider_type.to_string();
                 channel.last_test = None;
+                (kind, ChannelMutationResult::Applied)
+            }
+            ChannelMutation::InvalidateTest { kind, id } => {
+                find_channel_mut(&mut self.channels, kind, &id)?.last_test = None;
+                (kind, ChannelMutationResult::Applied)
+            }
+            ChannelMutation::InvalidateTests { kind } => {
+                for channel in self.channels.entry(kind).or_default() {
+                    channel.last_test = None;
+                }
                 (kind, ChannelMutationResult::Applied)
             }
             ChannelMutation::DeleteIfBlank { kind, id } => {

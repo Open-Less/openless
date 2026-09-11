@@ -87,7 +87,7 @@
     <td align="center" width="170">
       <img src="https://github.com/HKLHaoBin.png" width="80" height="80" alt="HKLHaoBin" /><br/>
       <strong><a href="https://github.com/HKLHaoBin" target="_blank" rel="noopener">HKLHaoBin</a></strong><br/>
-      <sub>安卓版作者</sub>
+      <sub>安卓版作者 / 安卓版维护者</sub>
     </td>
     <td align="center" width="170">
       <img src="assets/people/cooper.png" width="80" height="80" alt="Cooper" /><br/>
@@ -97,7 +97,14 @@
     <td align="center" width="170">
       <img src="https://github.com/aeoform.png" width="80" height="80" alt="aeoform" /><br/>
       <strong><a href="https://github.com/aeoform" target="_blank" rel="noopener">aeoform</a></strong><br/>
-      <sub>贡献者</sub>
+      <sub>贡献者 / Linux 维护者</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="170">
+      <img src="assets/people/jimmy54.png" width="80" height="80" alt="jimmy54" /><br/>
+      <strong><a href="https://github.com/jimmy54" target="_blank" rel="noopener">jimmy54</a></strong><br/>
+      <sub>macOS 打包与开发者账号</sub>
     </td>
   </tr>
 </table>
@@ -203,9 +210,9 @@ OpenLess 只做一件事:**把语音变成可用的书面文字(尤其是 AI 提
 - 🎨 **风格包市场**——在应用内的 Marketplace 浏览、安装、点赞社区**风格包**,并发布自己的(每个包一套自定义系统提示词,可用快捷键切换)。由经过审核的市场后端支撑;上传内容公开前会经过审核。
 - ⚡ **流式插入**——润色后的文本逐字符写入光标以降低感知延迟,并带有自动的一次性粘贴回退。可在 设置 → 录音 中切换。
 - **切换式与按住说话(push-to-talk)** 两种录音模式,外加 **MediaPlayPause 触发**,让有线耳机的线控也能开始 / 停止录音。`Esc` 可在任意阶段取消,包括润色与插入。
-- **云端 ASR**:Volcengine 流式 ASR(bigasr)、讯飞实时语音转写(RTASR)、阿里云百炼(经典实时 / Qwen3 实时 / Fun-ASR-Flash 录音文件)、阶跃星辰 StepAudio(批式 + 实时)、智谱 GLM-ASR、小米 MiMo ASR、ElevenLabs Scribe、OpenAI 兼容批量转写(OpenAI Whisper / Groq / 硅基流动 SenseVoice / OpenRouter / ZenMux),以及 Apple Speech(macOS)。
+- **云端 ASR**:Volcengine 流式 ASR(bigasr)、腾讯云混元实时 ASR(Hy-ASR)、讯飞实时语音转写(RTASR)、阿里云百炼(经典实时 / Qwen3 实时 / Fun-ASR-Flash 录音文件)、阶跃星辰 StepAudio(批式 + 实时)、智谱 GLM-ASR、小米 MiMo ASR、OrcaRouter 音频输入 Gemini、ElevenLabs Scribe、OpenAI 兼容批量转写(OpenAI Whisper / Groq / 硅基流动 SenseVoice / OpenRouter / ZenMux),以及 Apple Speech(macOS)。
 - **本地 ASR**:通过 vendored 的 `Open-Less/qwen-asr` 内置 Qwen3-ASR(0.6B / 1.7B)(macOS);Windows 上的 Foundry Local Whisper 与 sherpa-onnx(实验性)变体。
-- **润色提供方**:Ark(火山方舟)、DeepSeek、OpenAI、Google Gemini、Codex OAuth、硅基流动、Atlas Cloud、小米 MiMo、CometAPI、OpenRouter、阿里云 Coding Plan、CodingPlanX、MiniMax、StepFun,以及你自带的任意 OpenAI 兼容端点。
+- **润色提供方**:Ark(火山方舟)、DeepSeek、OpenAI、Google Gemini、Codex OAuth、硅基流动、Atlas Cloud、小米 MiMo、腾讯云 TokenHub、CometAPI、OpenRouter、OrcaRouter、阿里云 Coding Plan、CodingPlanX、MiniMax、StepFun、OpenCode Zen,以及你自带的任意 OpenAI 兼容端点。
 - **四种输出模式**:原文、轻度润色、结构化(**AI 提示词模式**)、正式。另有一个**翻译快捷键**,将语音直接转换为所配置的目标语言([#43](../../issues/43))。
 - **选区问答面板**——一个独立快捷键打开浮动面板,针对任意应用中被高亮选中的文本进行语音问答([#118](../../issues/118))。
 - **主窗口**:概览 / 历史 / 词典 / 风格 / 市场 / 设置。常驻托盘图标,以及一个浮于屏幕、并跟随你正在输入的显示器的迷你状态胶囊(多显示器)。
@@ -263,7 +270,7 @@ OpenLess 只做一件事:**把语音变成可用的书面文字(尤其是 AI 提
 
 ## 从源码构建(开发者)
 
-活跃 workspace 位于 `openless-all/app/`：`crates/openless-core` 是框架无关后端，`src-tauri` 承载 macOS/Windows/Android，`linux-egui` 包含 Linux 原生 UI 与平台 Adapter。macOS Tauri 构建会链接 `src-tauri/vendor/qwen-asr/` 下的 vendored C ASR 引擎([`Open-Less/qwen-asr`](https://github.com/Open-Less/qwen-asr),fork 自 `antirez/qwen-asr`)，因此开发 macOS Tauri 目标时需要初始化子模块。根 core/Linux workspace 显式排除了 `src-tauri`，Linux 的 core/host 检查既不初始化该子模块，也不解析 Tauri manifest。
+活跃 workspace 位于 `openless-all/app/`：`crates/openless-core` 是框架无关后端，`src-tauri` 承载 macOS/Windows/Android，`linux-egui` 包含 Linux 原生 UI 与平台 Adapter。源码构建 Tauri 前需初始化子模块：即使不编译对应平台代码，Cargo 仍会解析 manifest 中的本地 path 依赖，其中包括 `src-tauri/vendor/` 下的 macOS ASR 引擎，如 [`Open-Less/qwen-asr`](https://github.com/Open-Less/qwen-asr)。根 Core/Linux workspace 排除了 `src-tauri`，其独立检查不解析 Tauri manifest，也不要求这些子模块。阅读入口为 [docs/index.md](docs/index.md)、[架构](docs/architecture.md)和[目录结构](docs/structure.md)。
 
 Rust 1.88 是从源码构建所支持的最低工具链版本；建议使用最新 stable Rust。CI 会在 macOS、Windows 和 Linux 上同时验证 Rust 1.88 与 stable。
 
@@ -274,7 +281,7 @@ cd "openless-all/app"
 npm ci
 
 # macOS/Windows/Android:Vite 运行于 :1420 + Tauri 宿主
-# 构建 macOS 本地 ASR 目标前先初始化子模块。
+# 解析 Tauri manifest 前先初始化子模块。
 git submodule update --init --recursive
 npm run tauri dev
 
@@ -282,7 +289,7 @@ npm run tauri dev
 ./scripts/build-mac.sh
 INSTALL=0 ./scripts/build-mac.sh   # 仅构建,跳过安装
 
-# 共享后端与 Linux 非 UI host（不含 Tauri/WebKitGTK）
+# 共享后端与 Linux Host/UI（不含 Tauri/WebKitGTK）
 cargo check -p openless-core
 cargo check -p openless-linux-egui --all-targets
 
@@ -362,7 +369,7 @@ OpenLess 的润色模型只重塑文本。它不回答问题、不执行任务�
 
 ……而不是一份缺失功能的清单。
 
-长期参考改写以 `raw → polished → rule` 三元组存储,待向量库接入后,将作为相似示例参考被检索(绝不作为对话上下文)。见 [docs/polish-reference-corpus.md](docs/polish-reference-corpus.md) 与 [Examples/polish-reference-examples.sample.jsonl](Examples/polish-reference-examples.sample.jsonl)。
+长期参考改写的 `raw → polished → rule` 三元组格式见 [Examples/polish-reference-examples.sample.jsonl](Examples/polish-reference-examples.sample.jsonl)。该文件说明参考数据格式；当前模块职责见[架构文档](docs/architecture.md)。
 
 ## 词典
 
@@ -394,13 +401,13 @@ React UI ── Tauri Adapter（macOS/Windows/Android）──┐
 egui UI  ── Linux Adapter（无 Tauri/WebKitGTK）───┘
 ```
 
-`openless-core` 负责稳定 DTO、错误、语义事件、repository、凭据契约和面向宿主的 use-case Interface。IPC、窗口、托盘、权限、更新、keyring、fcitx5 与打包资源路径等宿主能力由 Adapter 实现。旧 React command/event 名称只保留在 Tauri 兼容 Adapter；Linux 与 core 同进程，通过类型化 Rust Interface 调用。详细契约见 [`docs/linux-egui-backend-contract.md`](docs/linux-egui-backend-contract.md) 与[完整迁移计划](docs/linux-egui-shared-backend-plan.md)。
+`openless-core` 负责稳定 DTO、错误、语义事件、repository、凭据契约和面向宿主的 use-case Interface。IPC、窗口、托盘、权限、更新、keyring、fcitx5 与打包资源路径等宿主能力由 Adapter 实现。旧 React command/event 名称只保留在 Tauri 兼容 Adapter；Linux 与 core 同进程，通过类型化 Rust Interface 调用。详细契约见 [`docs/linux-egui-backend-contract.md`](docs/linux-egui-backend-contract.md)。
 
 `v<version>-tauri` / `v<version>-Beta.N-tauri` 工作流发布 macOS、Windows 与 Android 宿主。Linux deb/rpm/AppImage 由 `release-linux-egui.yml` 使用独立 manifest 构建；自动发布仍以产物成功和 Ubuntu 真实安装、运行、升级、回滚证据为门禁。
 
 听写流水线:`hotkey edge → Recorder.start + ASR.openSession → [audio frames] → hotkey edge → Recorder.stop + ASR.sendLastFrame → Polish → Insert → History.save`。
 
-不变式与模块接线规则见 [CLAUDE.md](CLAUDE.md)。
+仓库规则见 [AGENTS.md](AGENTS.md)，模块职责与接线见[架构文档](docs/architecture.md)。
 
 ## 路线图
 
@@ -438,7 +445,7 @@ OpenLess 提供两个发布频道。分支名即频道名(见[贡献流程](#贡
 
 ### 发布后验证(始终执行)
 
-执行 [`CLAUDE.md` → Branch & release-channel workflow → Channel distribution](CLAUDE.md) 中的 5 步清单,并额外核对 Android:
+按 [RELEASING.md](RELEASING.md) 验证发布页的 pre-release 标记、产物文件名与渠道、Stable 用户流程、Beta 选择流程和更新端点，并额外核对 Android：
 
 1. Release 页面含 `latest-android-aarch64.json`（Stable 无 `-beta` 后缀混用）。
 2. Beta pre-release 含 `latest-android-aarch64-beta.json`,URL 指向具体 tag。

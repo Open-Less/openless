@@ -10,8 +10,11 @@ Object.defineProperty(globalThis, 'window', {
         if (command === 'get_startup_snapshot') {
           return { contractVersion: '2.0.0', backend: { running: true } };
         }
-        if (command !== 'confirm_selection_voice_preview'
-          || args?.text !== 'replacement' || args.qaSessionId !== 'qa-owner') {
+        if (
+          command !== 'confirm_selection_voice_preview' ||
+          args?.text !== 'replacement' ||
+          args.qaSessionId !== 'qa-owner'
+        ) {
           throw new Error('unexpected Selection Voice command or owner');
         }
         if (fail) throw failure;
@@ -22,10 +25,15 @@ Object.defineProperty(globalThis, 'window', {
 });
 try {
   const { confirmSelectionVoicePreview } = await import('./selection-voice-preview');
-  const outcome: SelectionVoiceApplyOutcome = await confirmSelectionVoicePreview('replacement', 'qa-owner');
+  const outcome: SelectionVoiceApplyOutcome = await confirmSelectionVoicePreview(
+    'replacement',
+    'qa-owner',
+  );
   if (outcome !== 'paste_sent') throw new Error('paste dispatch was not preserved');
   fail = true;
-  const error = await confirmSelectionVoicePreview('replacement', 'qa-owner').catch(error => error);
+  const error = await confirmSelectionVoicePreview('replacement', 'qa-owner').catch(
+    (error) => error,
+  );
   if (error !== failure) throw new Error('failed insertion was reported as success');
 } finally {
   Reflect.deleteProperty(globalThis, 'window');

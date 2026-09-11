@@ -1,7 +1,7 @@
 package com.openless.app
 
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -12,7 +12,8 @@ class OpenLessShizukuBridgeTest {
     @Test
     fun mergePreservesThirdPartyServices() {
         val current = "$thirdParty:com.foo/.AnotherService"
-        val merged = OpenLessShizukuBridge.mergeEnabledAccessibilityServices(current, serviceComponent)
+        val merged =
+            OpenLessShizukuBridge.mergeEnabledAccessibilityServices(current, serviceComponent)
         assertTrue(merged.contains(thirdParty))
         assertTrue(merged.contains("com.foo/.AnotherService"))
         assertTrue(merged.contains(serviceComponent))
@@ -27,7 +28,8 @@ class OpenLessShizukuBridgeTest {
     @Test
     fun mergeDoesNotDuplicateOpenLess() {
         val current = serviceComponent
-        val merged = OpenLessShizukuBridge.mergeEnabledAccessibilityServices(current, serviceComponent)
+        val merged =
+            OpenLessShizukuBridge.mergeEnabledAccessibilityServices(current, serviceComponent)
         assertEquals(serviceComponent, merged)
     }
 
@@ -47,14 +49,19 @@ class OpenLessShizukuBridgeTest {
     fun verifyReadbackPreservesOriginalServices() {
         val original = OpenLessShizukuBridge.parseServiceEntries(thirdParty)
         val readback = serviceComponent
-        assertFalse(OpenLessShizukuBridge.verifyReadbackPreserves(readback, serviceComponent, original))
+        assertFalse(
+            OpenLessShizukuBridge.verifyReadbackPreserves(readback, serviceComponent, original)
+        )
     }
 
     @Test
     fun verifyReadbackPreservesWhenAllOriginalServicesRemain() {
-        val original = OpenLessShizukuBridge.parseServiceEntries("$thirdParty:com.foo/.AnotherService")
+        val original =
+            OpenLessShizukuBridge.parseServiceEntries("$thirdParty:com.foo/.AnotherService")
         val readback = "$thirdParty:com.foo/.AnotherService:$serviceComponent"
-        assertTrue(OpenLessShizukuBridge.verifyReadbackPreserves(readback, serviceComponent, original))
+        assertTrue(
+            OpenLessShizukuBridge.verifyReadbackPreserves(readback, serviceComponent, original)
+        )
     }
 
     @Test
@@ -78,28 +85,28 @@ class OpenLessShizukuBridgeTest {
                 OpenLessShizukuBridge.ServicesRollbackResult.Conflict,
                 "1",
                 "0",
-            ),
+            )
         )
         assertFalse(
             OpenLessShizukuBridge.shouldRollbackEnabledAfterServices(
                 OpenLessShizukuBridge.ServicesRollbackResult.Restored,
                 "1",
                 "0",
-            ),
+            )
         )
         assertFalse(
             OpenLessShizukuBridge.shouldRollbackEnabledAfterServices(
                 OpenLessShizukuBridge.ServicesRollbackResult.AlreadyBaseline,
                 "1",
                 "0",
-            ),
+            )
         )
         assertFalse(
             OpenLessShizukuBridge.shouldRollbackEnabledAfterServices(
                 OpenLessShizukuBridge.ServicesRollbackResult.AlreadyBaseline,
                 "1",
                 "1",
-            ),
+            )
         )
     }
 
@@ -119,31 +126,33 @@ class OpenLessShizukuBridgeTest {
 
     @Test
     fun requiresManualRecoveryWhenGlobalDisabledWithThirdPartyServices() {
-        val snapshot = OpenLessShizukuBridge.AccessibilitySettingsSnapshot(
-            "$thirdParty:$serviceComponent",
-            "0",
-        )
+        val snapshot =
+            OpenLessShizukuBridge.AccessibilitySettingsSnapshot(
+                "$thirdParty:$serviceComponent",
+                "0",
+            )
         assertTrue(OpenLessShizukuBridge.requiresManualRecovery(snapshot, serviceComponent))
         assertFalse(
             OpenLessShizukuBridge.requiresManualRecovery(
                 OpenLessShizukuBridge.AccessibilitySettingsSnapshot(serviceComponent, "0"),
                 serviceComponent,
-            ),
+            )
         )
         assertFalse(
             OpenLessShizukuBridge.requiresManualRecovery(
                 OpenLessShizukuBridge.AccessibilitySettingsSnapshot(thirdParty, "1"),
                 serviceComponent,
-            ),
+            )
         )
     }
 
     @Test
     fun recoveryFailureMessageKeyPrefersPartialRollbackWhenEnabledLeftOn() {
-        val rollback = OpenLessShizukuBridge.RecoveryRollbackStatus(
-            OpenLessShizukuBridge.ServicesRollbackResult.Restored,
-            OpenLessShizukuBridge.EnabledRollbackResult.SkippedDueToServicesConflict,
-        )
+        val rollback =
+            OpenLessShizukuBridge.RecoveryRollbackStatus(
+                OpenLessShizukuBridge.ServicesRollbackResult.Restored,
+                OpenLessShizukuBridge.EnabledRollbackResult.SkippedDueToServicesConflict,
+            )
         assertEquals(
             "partial_rollback",
             OpenLessShizukuBridge.recoveryFailureMessageKey(
@@ -189,19 +198,19 @@ class OpenLessShizukuBridgeTest {
             OpenLessShizukuBridge.preWriteSnapshotChanged(
                 baseline,
                 OpenLessShizukuBridge.AccessibilitySettingsSnapshot("a/.A", "0"),
-            ),
+            )
         )
         assertTrue(
             OpenLessShizukuBridge.preWriteSnapshotChanged(
                 baseline,
                 OpenLessShizukuBridge.AccessibilitySettingsSnapshot("a/.A:b/.B", "0"),
-            ),
+            )
         )
         assertTrue(
             OpenLessShizukuBridge.preWriteSnapshotChanged(
                 baseline,
                 OpenLessShizukuBridge.AccessibilitySettingsSnapshot("a/.A", "1"),
-            ),
+            )
         )
     }
 
@@ -235,7 +244,8 @@ class OpenLessShizukuBridgeTest {
     @Test
     fun mergeDoesNotDuplicateOpenLessShortForm() {
         val shortForm = "com.openless.app/.OpenLessAccessibilityService"
-        val merged = OpenLessShizukuBridge.mergeEnabledAccessibilityServices(shortForm, serviceComponent)
+        val merged =
+            OpenLessShizukuBridge.mergeEnabledAccessibilityServices(shortForm, serviceComponent)
         assertEquals(shortForm, merged)
     }
 
@@ -243,7 +253,8 @@ class OpenLessShizukuBridgeTest {
     fun mergeTreatsEquivalentComponentIdsAsSame() {
         val shortForm = "com.openless.app/.OpenLessAccessibilityService"
         val merged = OpenLessShizukuBridge.mergeEnabledAccessibilityServices(null, shortForm)
-        val mergedAgain = OpenLessShizukuBridge.mergeEnabledAccessibilityServices(merged, serviceComponent)
+        val mergedAgain =
+            OpenLessShizukuBridge.mergeEnabledAccessibilityServices(merged, serviceComponent)
         assertTrue(OpenLessShizukuBridge.servicesListsEqual(mergedAgain, shortForm))
         assertEquals(1, OpenLessShizukuBridge.parseServiceEntries(mergedAgain).size)
     }
@@ -264,7 +275,8 @@ class OpenLessShizukuBridgeTest {
 
     @Test
     fun verifyReadbackExactAcceptsExpectedMergedSet() {
-        val merged = OpenLessShizukuBridge.mergeEnabledAccessibilityServices(thirdParty, serviceComponent)
+        val merged =
+            OpenLessShizukuBridge.mergeEnabledAccessibilityServices(thirdParty, serviceComponent)
         assertTrue(OpenLessShizukuBridge.verifyReadbackExact(merged, merged))
         val shortFormReadback = "$thirdParty:com.openless.app/.OpenLessAccessibilityService"
         assertTrue(OpenLessShizukuBridge.verifyReadbackExact(shortFormReadback, merged))
@@ -272,11 +284,12 @@ class OpenLessShizukuBridgeTest {
 
     @Test
     fun resolveStatusMessageKeyUsesUnsupportedBackendForLegacyShizuku() {
-        val accessibility = OpenLessShizukuBridge.AccessibilityDiagnosis(
-            registered = false,
-            operational = false,
-            messageKey = "not_registered",
-        )
+        val accessibility =
+            OpenLessShizukuBridge.AccessibilityDiagnosis(
+                registered = false,
+                operational = false,
+                messageKey = "not_registered",
+            )
         assertEquals(
             "unsupported_backend",
             OpenLessShizukuBridge.resolveStatusMessageKey(

@@ -476,9 +476,17 @@ fn entry_is_complete(entry: &ModelCatalogEntry, directory: &Path) -> bool {
             .all(|file| directory.join(&file.local_path).is_file()),
         ModelFileSelector::Archive { required_paths, .. } => required_paths
             .iter()
-            .all(|path| directory.join(path).is_file()),
+            .all(|path| archive_required_path_is_complete(directory, path)),
         ModelFileSelector::Native => false,
     }
+}
+
+/// Sherpa Qwen archives use either a unified tokenizer or the legacy BPE pair.
+fn archive_required_path_is_complete(directory: &Path, path: &str) -> bool {
+    directory.join(path).is_file()
+        || (path == "tokenizer/tokenizer.json"
+            && directory.join("tokenizer/vocab.json").is_file()
+            && directory.join("tokenizer/merges.txt").is_file())
 }
 
 impl ModelManifest {
@@ -1760,7 +1768,7 @@ fn mark_ready_if_complete(
             .all(|file| destination.join(&file.local_path).is_file()),
         ModelFileSelector::Archive { required_paths, .. } => required_paths
             .iter()
-            .all(|path| destination.join(path).is_file()),
+            .all(|path| archive_required_path_is_complete(destination, path)),
         ModelFileSelector::QwenRepository | ModelFileSelector::Native => false,
     };
     if complete {
@@ -2630,7 +2638,7 @@ fn expand_tar_bz2_archive(
     }
     for required in &spec.required_paths {
         validate_model_path(required)?;
-        if !extraction.join(required).is_file() {
+        if !archive_required_path_is_complete(&extraction, required) {
             return Err(invalid(format!(
                 "model archive is missing required path {required}"
             )));
@@ -3398,6 +3406,40 @@ mod tests {
     }
 
     #[test]
+    fn tar_archive_accepts_legacy_qwen_tokenizer_files() {
+        let staging = std::env::temp_dir().join(format!(
+            "openless-model-tar-tokenizer-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&staging).unwrap();
+        let encoder = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::fast());
+        let mut archive = tar::Builder::new(encoder);
+        for (path, bytes) in [
+            ("fixture/tokenizer/vocab.json", &b"vocab"[..]),
+            ("fixture/tokenizer/merges.txt", &b"merges"[..]),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o600);
+            header.set_cksum();
+            archive.append_data(&mut header, path, bytes).unwrap();
+        }
+        let encoder = archive.into_inner().unwrap();
+        std::fs::write(staging.join("model.tar.bz2"), encoder.finish().unwrap()).unwrap();
+        let spec = ModelArchiveSpec {
+            file_path: "model.tar.bz2".into(),
+            root_dir: "fixture".into(),
+            required_paths: vec!["tokenizer/tokenizer.json".into()],
+        };
+
+        expand_tar_bz2_archive(&staging, &spec, 1024, 2048).unwrap();
+
+        assert!(staging.join("tokenizer/vocab.json").is_file());
+        assert!(staging.join("tokenizer/merges.txt").is_file());
+        let _ = std::fs::remove_dir_all(staging);
+    }
+
+    #[test]
     fn model_directories_are_scoped_by_runtime() {
         let root = std::env::temp_dir().join(format!(
             "openless-model-runtime-scope-{}",
@@ -3471,6 +3513,17 @@ mod tests {
             b"tokens",
         )
         .unwrap();
+        let qwen_sherpa_dir = legacy.join("sherpa-onnx/qwen3-asr-0.6b-int8");
+        std::fs::create_dir_all(qwen_sherpa_dir.join("tokenizer")).unwrap();
+        for path in [
+            "conv_frontend.onnx",
+            "encoder.int8.onnx",
+            "decoder.int8.onnx",
+            "tokenizer/vocab.json",
+            "tokenizer/merges.txt",
+        ] {
+            std::fs::write(qwen_sherpa_dir.join(path), b"model").unwrap();
+        }
         std::fs::create_dir_all(legacy.join("whisper-large-v3-turbo")).unwrap();
         std::fs::write(
             legacy.join("whisper-large-v3-turbo/ggml-large-v3-turbo-q5_0.bin"),
@@ -3478,6 +3531,8 @@ mod tests {
         )
         .unwrap();
         let store = ModelStore::new(ModelStoreConfig::new(current.clone()).unwrap()).unwrap();
+        let qwen_sherpa =
+            LocalAsrTarget::parse(LocalAsrRuntime::SherpaOnnx, "qwen3-asr-0.6b-int8").unwrap();
 
         store.migrate_legacy_root(&legacy).unwrap();
 
@@ -3490,6 +3545,7 @@ mod tests {
         assert!(current
             .join("sherpa-onnx/sense-voice-small-zh/.openless-model-ready")
             .is_file());
+        assert!(store.is_installed(&qwen_sherpa).unwrap());
         assert_eq!(
             std::fs::read(current.join("whisper-large-v3-turbo-q5/ggml-large-v3-turbo-q5_0.bin"))
                 .unwrap(),
@@ -3497,6 +3553,7 @@ mod tests {
         );
         assert!(!legacy.join("qwen3-asr/qwen3-asr-0.6b").exists());
         assert!(!legacy.join("sherpa-onnx/sense-voice-small-zh").exists());
+        assert!(!qwen_sherpa_dir.exists());
         assert!(!legacy
             .join("whisper-large-v3-turbo/ggml-large-v3-turbo-q5_0.bin")
             .exists());

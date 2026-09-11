@@ -2,7 +2,9 @@ import { applyTranscriptEvent, type TranscriptViewState } from './backendEvent';
 
 function assertState(actual: TranscriptViewState, text: string, sequence: number) {
   if (actual.text !== text || actual.sequence !== sequence) {
-    throw new Error(`expected ${JSON.stringify({ text, sequence })}, got ${JSON.stringify(actual)}`);
+    throw new Error(
+      `expected ${JSON.stringify({ text, sequence })}, got ${JSON.stringify(actual)}`,
+    );
   }
 }
 

@@ -9,11 +9,36 @@ const read = (relativePath) => readFile(join(appRoot, relativePath), 'utf8');
 const shortcuts = await read('src/pages/settings/ShortcutsSection.tsx');
 const agentSettings = await read('src/pages/settings/CodingAgentSection.tsx');
 const settingsTabs = await read('src/pages/settings/tabs.tsx');
-assert(!/if \(os === 'win'/.test(agentSettings), 'Windows must expose Less Computer configuration and its text entry point');
-assert(shortcuts.includes("(os === 'mac' || os === 'win') && ("), 'Windows must expose the Less Computer voice shortcut');
-assert(settingsTabs.includes("(os === 'mac' || os === 'win') && <CodingAgentSection />"), 'the settings tab must mount Less Computer on Windows');
+assert(
+  !/if \(os === 'win'/.test(agentSettings),
+  'Windows must expose Less Computer configuration and its text entry point',
+);
+assert(
+  shortcuts.includes("(os === 'mac' || os === 'win') && ("),
+  'Windows must expose the Less Computer voice shortcut',
+);
+// Platform visibility is covered by navigation.test.ts; the detail route must
+// still mount the existing settings consumer.
+assert(
+  settingsTabs.includes("item.id === 'lessComputer' && <CodingAgentSection />"),
+  'the Less Computer subpage must mount its settings consumer',
+);
 
-const [settings, ipc, opencode, dictation, lib, onboarding, lessComputerIpc, qaCommands, credentialCommands, miscCommands, coreAdapters, coordinatorHost, coreApi] = await Promise.all([
+const [
+  settings,
+  ipc,
+  opencode,
+  dictation,
+  lib,
+  onboarding,
+  lessComputerIpc,
+  qaCommands,
+  credentialCommands,
+  miscCommands,
+  coreAdapters,
+  coordinatorHost,
+  coreApi,
+] = await Promise.all([
   read('src/pages/settings/CodingAgentSection.tsx'),
   read('src/lib/ipc/coding-agent.ts'),
   read('crates/openless-core/src/coding_agent.rs'),
@@ -38,11 +63,14 @@ assert(
   'OpenCode settings must expose the localized manual refresh action',
 );
 assert(
-  ipc.includes('"coding_agent_list_opencode_models"'),
+  /['"]coding_agent_list_opencode_models['"]/.test(ipc),
   'frontend IPC must call the OpenCode model-list command',
 );
 assert(opencode.includes('"--refresh"'), 'OpenCode model discovery must refresh its model cache');
-assert(opencode.includes('"--auto"'), 'OpenCode runs must use the current automatic permission flag');
+assert(
+  opencode.includes('"--auto"'),
+  'OpenCode runs must use the current automatic permission flag',
+);
 assert(opencode.includes('"--continue"'), 'OpenCode runs must preserve follow-up session context');
 assert(
   !opencode.includes('--dangerously-skip-permissions'),
@@ -54,7 +82,9 @@ assert(
   'Less Computer must resolve model defaults per provider',
 );
 assert(
-  settings.includes("const SANDBOX_PERMISSION_MODES: CodingAgentPermissionMode[] = ['plan', 'acceptEdits']") &&
+  settings.includes(
+    "const SANDBOX_PERMISSION_MODES: CodingAgentPermissionMode[] = ['plan', 'acceptEdits']",
+  ) &&
     settings.includes("provider === 'codex-cli' || provider === 'dsh-cli'") &&
     settings.includes('normalizePermissionMode'),
   'Codex and dsh settings must expose only read-only/plan and workspace-write permission modes and normalize legacy values',
@@ -94,7 +124,9 @@ assert(
   miscCommands.includes('pub async fn list_microphone_devices(') &&
     miscCommands.includes('.platform') &&
     miscCommands.includes('.microphone_devices()') &&
-    coreAdapters.includes('tauri::async_runtime::spawn_blocking(crate::recorder::list_input_devices'),
+    coreAdapters.includes(
+      'tauri::async_runtime::spawn_blocking(crate::recorder::list_input_devices',
+    ),
   'settings microphone enumeration must not block the AppKit main thread',
 );
 assert(
@@ -103,7 +135,7 @@ assert(
 );
 assert(
   settings.includes('lessComputerWindowOpen()') &&
-    lessComputerIpc.includes('"less_computer_window_open"') &&
+    /['"]less_computer_window_open['"]/.test(lessComputerIpc) &&
     qaCommands.includes('window.label() != "main"'),
   'Advanced settings must expose a main-window-only text entry point for Less Computer',
 );

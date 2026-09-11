@@ -22,25 +22,13 @@ pub fn map_abi_to_arch(abi: &str) -> &'static str {
 }
 
 pub fn version_is_newer(remote: &str, current: &str) -> bool {
-    fn parts(v: &str) -> Vec<u32> {
-        v.split(|c| c == '.' || c == '-')
-            .filter_map(|p| p.parse().ok())
-            .collect()
-    }
-    let remote_parts = parts(remote);
-    let current_parts = parts(current);
-    let max = remote_parts.len().max(current_parts.len());
-    for i in 0..max {
-        let r = remote_parts.get(i).copied().unwrap_or(0);
-        let c = current_parts.get(i).copied().unwrap_or(0);
-        if r > c {
-            return true;
-        }
-        if r < c {
-            return false;
-        }
-    }
-    false
+    let (Ok(remote), Ok(current)) = (
+        semver::Version::parse(remote),
+        semver::Version::parse(current),
+    ) else {
+        return false;
+    };
+    remote > current
 }
 
 pub fn stable_manifest_urls(arch: &str) -> Vec<String> {
@@ -78,9 +66,12 @@ mod tests {
     }
 
     #[test]
-    fn version_is_newer_handles_beta_suffix() {
-        assert!(version_is_newer("1.3.8-1", "1.3.8"));
-        assert!(!version_is_newer("1.3.8", "1.3.8-1"));
+    fn version_is_newer_uses_semver_prerelease_ordering() {
+        assert!(version_is_newer("1.3.18", "1.3.18-Beta.7"));
+        assert!(version_is_newer("1.3.18-Beta.8", "1.3.18-Beta.7"));
+        assert!(!version_is_newer("1.3.18-Beta.7", "1.3.18-Beta.7"));
+        assert!(!version_is_newer("1.3.17", "1.3.18-Beta.7"));
+        assert!(!version_is_newer("not-a-version", "1.3.18-Beta.7"));
     }
 
     #[test]

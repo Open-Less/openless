@@ -1,5 +1,6 @@
 import {
   createHotkeyRecorderState,
+  functionKeyPrimaryFromEvent,
   orderHotkeyCodes,
   updateHotkeyRecorderState,
 } from './hotkeyRecorder';
@@ -18,11 +19,7 @@ function assertDeepEqual(actual: unknown, expected: unknown, name: string) {
   }
 }
 
-function apply(
-  state = createHotkeyRecorderState(),
-  code: string,
-  pressed: boolean,
-) {
+function apply(state = createHotkeyRecorderState(), code: string, pressed: boolean) {
   const next = updateHotkeyRecorderState(state, code, pressed);
   return next;
 }
@@ -47,10 +44,18 @@ function apply(
 
   result = apply(result.state, 'ControlLeft', false);
   assertEqual(result.commitCodes, null, 'keyboard combo waits for final release');
-  assertDeepEqual(result.state.draftCodes, ['ControlLeft', 'KeyK'], 'released combo member stays in draft only');
+  assertDeepEqual(
+    result.state.draftCodes,
+    ['ControlLeft', 'KeyK'],
+    'released combo member stays in draft only',
+  );
 
   result = apply(result.state, 'KeyK', false);
-  assertDeepEqual(result.commitCodes, ['ControlLeft', 'KeyK'], 'keyboard combo commits after all keys release');
+  assertDeepEqual(
+    result.commitCodes,
+    ['ControlLeft', 'KeyK'],
+    'keyboard combo commits after all keys release',
+  );
   assertDeepEqual(result.state, createHotkeyRecorderState(), 'state resets after commit');
 }
 
@@ -60,26 +65,70 @@ function apply(
   assertEqual(result.commitCodes, null, 'mouse button does not commit on mousedown');
 
   result = apply(result.state, 'ControlLeft', true);
-  assertDeepEqual(result.state.draftCodes, ['ControlLeft', 'Mouse4'], 'records keyboard plus mouse combo');
+  assertDeepEqual(
+    result.state.draftCodes,
+    ['ControlLeft', 'Mouse4'],
+    'records keyboard plus mouse combo',
+  );
   assertEqual(result.commitCodes, null, 'combo does not commit while inputs remain pressed');
 
   result = apply(result.state, 'Mouse4', false);
   assertEqual(result.commitCodes, null, 'releasing one combo member does not commit early');
 
   result = apply(result.state, 'ControlLeft', false);
-  assertDeepEqual(result.commitCodes, ['ControlLeft', 'Mouse4'], 'commits combo after final release');
+  assertDeepEqual(
+    result.commitCodes,
+    ['ControlLeft', 'Mouse4'],
+    'commits combo after final release',
+  );
 }
 
 {
   let result = apply(undefined, 'ControlLeft', true);
   result = apply(result.state, 'Mouse5', true);
-  assertDeepEqual(result.state.draftCodes, ['ControlLeft', 'Mouse5'], 'records mouse button pressed after keyboard');
+  assertDeepEqual(
+    result.state.draftCodes,
+    ['ControlLeft', 'Mouse5'],
+    'records mouse button pressed after keyboard',
+  );
 
   result = apply(result.state, 'ControlLeft', false);
   assertEqual(result.commitCodes, null, 'mouse combo keeps waiting while mouse remains pressed');
 
   result = apply(result.state, 'Mouse5', false);
-  assertDeepEqual(result.commitCodes, ['ControlLeft', 'Mouse5'], 'commits mouse-last combo after mouse release');
+  assertDeepEqual(
+    result.commitCodes,
+    ['ControlLeft', 'Mouse5'],
+    'commits mouse-last combo after mouse release',
+  );
 }
 
-assertDeepEqual(orderHotkeyCodes(['Mouse4', 'ControlLeft']), ['ControlLeft', 'Mouse4'], 'orders mouse after modifiers');
+assertDeepEqual(
+  orderHotkeyCodes(['Mouse4', 'ControlLeft']),
+  ['ControlLeft', 'Mouse4'],
+  'orders mouse after modifiers',
+);
+
+for (let i = 1; i <= 20; i++) {
+  assertEqual(
+    functionKeyPrimaryFromEvent({ code: `F${i}`, key: `F${i}` }),
+    `F${i}`,
+    'function key',
+  );
+}
+assertEqual(
+  functionKeyPrimaryFromEvent({ code: 'F20', key: '\uF717' }),
+  'F20',
+  'WebKit private-use key',
+);
+assertEqual(
+  functionKeyPrimaryFromEvent({ code: 'F20', key: 'Unidentified' }),
+  'F20',
+  'physical F20',
+);
+assertEqual(functionKeyPrimaryFromEvent({ code: '', key: 'F20' }), 'F20', 'named F20 fallback');
+assertEqual(
+  functionKeyPrimaryFromEvent({ code: 'KeyA', key: 'a' }),
+  null,
+  'printable key preserved',
+);

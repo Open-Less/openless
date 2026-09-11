@@ -64,7 +64,7 @@ export function OrbAvatar({ size = 32 }: { size?: number }) {
       setUnavailable(true);
       return undefined;
     }
-    const unsubscribe = subscribeOrbFrames(source => {
+    const unsubscribe = subscribeOrbFrames((source) => {
       // 中心裁切放大（源按胶囊构图，光环只占画面 ~1/3；头像里裁掉外圈留白
       // 让转环撑满，动画本体不变）。
       const crop = 0.62;
@@ -105,7 +105,7 @@ export function useGithubLogin(refreshKey?: string | number): string {
     if (!isTauri) return;
     let cancelled = false;
     getSettings()
-      .then(prefs => {
+      .then((prefs) => {
         if (!cancelled) setLogin((prefs.marketplaceDevLogin ?? '').trim());
       })
       .catch(() => {

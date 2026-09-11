@@ -38,6 +38,12 @@ impl CorrectionRuleStore {
         self.read_locked()
     }
 
+    pub(crate) fn cloud_sync_access(
+        &self,
+    ) -> Result<(std::sync::MutexGuard<'_, ()>, &Path), BackendError> {
+        Ok((self.lock_store()?, &self.path))
+    }
+
     pub fn add(
         &self,
         pattern: String,

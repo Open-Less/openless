@@ -50,6 +50,8 @@ pub struct ComboHotkeyMonitor {
 
 struct Inner {
     registered: Mutex<Option<RegisteredHotkey>>,
+    #[cfg(target_os = "macos")]
+    native_dictation: Mutex<Option<crate::macos_dictation_key::Monitor>>,
     tx: Sender<ComboHotkeyEvent>,
 }
 
@@ -67,6 +69,18 @@ impl ComboHotkeyMonitor {
         binding: ShortcutBinding,
         tx: Sender<ComboHotkeyEvent>,
     ) -> Result<Self, ComboHotkeyError> {
+        #[cfg(target_os = "macos")]
+        if is_native_dictation(&binding) {
+            let native = crate::macos_dictation_key::Monitor::start(tx.clone())
+                .map_err(ComboHotkeyError::RegisterFailed)?;
+            return Ok(Self {
+                inner: Arc::new(Inner {
+                    registered: Mutex::new(None),
+                    native_dictation: Mutex::new(Some(native)),
+                    tx,
+                }),
+            });
+        }
         let runtime = GlobalHotkeyRuntime::shared()
             .map_err(|e| ComboHotkeyError::ManagerInitFailed(e.to_string()))?;
 
@@ -87,6 +101,8 @@ impl ComboHotkeyMonitor {
         Ok(Self {
             inner: Arc::new(Inner {
                 registered: Mutex::new(Some(registered)),
+                #[cfg(target_os = "macos")]
+                native_dictation: Mutex::new(None),
                 tx,
             }),
         })
@@ -94,6 +110,17 @@ impl ComboHotkeyMonitor {
 
     /// 替换当前注册的组合键（用户在设置里改了组合键时）。
     pub fn update_binding(&self, binding: ShortcutBinding) -> Result<(), ComboHotkeyError> {
+        #[cfg(target_os = "macos")]
+        if is_native_dictation(&binding) {
+            if self.native_dictation_active() {
+                return Ok(());
+            }
+            let native = crate::macos_dictation_key::Monitor::start(self.inner.tx.clone())
+                .map_err(ComboHotkeyError::RegisterFailed)?;
+            *self.inner.native_dictation.lock() = Some(native);
+            self.inner.registered.lock().take();
+            return Ok(());
+        }
         let next = parse_binding(&binding)?;
         let mut current = self.inner.registered.lock();
         if let Some(prev) = current.as_ref() {
@@ -115,13 +142,31 @@ impl ComboHotkeyMonitor {
             })
             .map_err(|e| ComboHotkeyError::RegisterFailed(format!("spawn forward thread: {e}")))?;
         *current = Some(registered);
+        #[cfg(target_os = "macos")]
+        self.inner.native_dictation.lock().take();
         Ok(())
     }
 }
 
+#[cfg(target_os = "macos")]
+fn is_native_dictation(binding: &ShortcutBinding) -> bool {
+    binding.primary == crate::macos_dictation_key::PRIMARY && binding.modifiers.is_empty()
+}
+#[cfg(target_os = "macos")]
+impl ComboHotkeyMonitor {
+    pub fn native_dictation_active(&self) -> bool {
+        self.inner
+            .native_dictation
+            .lock()
+            .as_ref()
+            .is_some_and(|m| m.active())
+    }
+}
 impl Drop for ComboHotkeyMonitor {
     fn drop(&mut self) {
         self.inner.registered.lock().take();
+        #[cfg(target_os = "macos")]
+        self.inner.native_dictation.lock().take();
     }
 }
 
@@ -145,6 +190,10 @@ fn forward_loop(hotkey_id: u32, rx: Receiver<GlobalHotKeyEvent>, tx: Sender<Comb
 
 /// 测试一个组合键是否可以注册（不实际注册，仅验证格式）。
 pub fn validate_binding(binding: &ShortcutBinding) -> Result<(), ComboHotkeyError> {
+    #[cfg(target_os = "macos")]
+    if is_native_dictation(binding) {
+        return Ok(());
+    }
     parse_binding(binding)?;
     Ok(())
 }

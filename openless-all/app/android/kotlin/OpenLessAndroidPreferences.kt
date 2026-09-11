@@ -5,9 +5,7 @@ import android.util.Log
 import java.io.File
 import org.json.JSONObject
 
-/**
- * Reads Android-visible preferences without depending on the Rust coordinator.
- */
+/** Reads Android-visible preferences without depending on the Rust coordinator. */
 object OpenLessAndroidPreferences {
     private const val TAG = "OpenLessAndroidPrefs"
     private const val APP_DIR = "OpenLess"
@@ -39,27 +37,26 @@ object OpenLessAndroidPreferences {
     }
 
     fun overlayActivationMode(context: Context): String {
-        return readPreferenceString(context, KEY_OVERLAY_ACTIVATION_MODE)
-            ?.takeIf { it in VALID_OVERLAY_ACTIVATION_MODES }
-            ?: "tap"
+        return readPreferenceString(context, KEY_OVERLAY_ACTIVATION_MODE)?.takeIf {
+            it in VALID_OVERLAY_ACTIVATION_MODES
+        } ?: "tap"
     }
 
     fun overlayLeftSwipeAction(context: Context): String {
-        return readPreferenceString(context, KEY_OVERLAY_LEFT_SWIPE_ACTION)
-            ?.takeIf { it in VALID_OVERLAY_LEFT_SWIPE_ACTIONS }
-            ?: "translation"
+        return readPreferenceString(context, KEY_OVERLAY_LEFT_SWIPE_ACTION)?.takeIf {
+            it in VALID_OVERLAY_LEFT_SWIPE_ACTIONS
+        } ?: "translation"
     }
 
     fun overlayCancelSwipeDirection(context: Context): String {
-        return readPreferenceString(context, KEY_OVERLAY_CANCEL_SWIPE_DIRECTION)
-            ?.takeIf { it in VALID_OVERLAY_CANCEL_SWIPE_DIRECTIONS }
-            ?: "up"
+        return readPreferenceString(context, KEY_OVERLAY_CANCEL_SWIPE_DIRECTION)?.takeIf {
+            it in VALID_OVERLAY_CANCEL_SWIPE_DIRECTIONS
+        } ?: "up"
     }
 
     fun overlaySizeDp(context: Context): Int {
         return readPreferenceInt(context, KEY_OVERLAY_SIZE_DP)
-            ?.coerceIn(MIN_OVERLAY_SIZE_DP, MAX_OVERLAY_SIZE_DP)
-            ?: DEFAULT_OVERLAY_SIZE_DP
+            ?.coerceIn(MIN_OVERLAY_SIZE_DP, MAX_OVERLAY_SIZE_DP) ?: DEFAULT_OVERLAY_SIZE_DP
     }
 
     private fun readPreferenceString(context: Context, key: String): String? {
@@ -67,12 +64,13 @@ object OpenLessAndroidPreferences {
             if (!file.isFile) {
                 continue
             }
-            val value = try {
-                JSONObject(file.readText()).optString(key, "")
-            } catch (error: Throwable) {
-                Log.w(TAG, "read ${file.absolutePath} failed", error)
-                ""
-            }
+            val value =
+                try {
+                    JSONObject(file.readText()).optString(key, "")
+                } catch (error: Throwable) {
+                    Log.w(TAG, "read ${file.absolutePath} failed", error)
+                    ""
+                }
             if (value.isNotBlank()) {
                 return value
             }
@@ -85,13 +83,14 @@ object OpenLessAndroidPreferences {
             if (!file.isFile) {
                 continue
             }
-            val value = try {
-                val json = JSONObject(file.readText())
-                if (json.has(key)) json.optInt(key) else null
-            } catch (error: Throwable) {
-                Log.w(TAG, "read ${file.absolutePath} failed", error)
-                null
-            }
+            val value =
+                try {
+                    val json = JSONObject(file.readText())
+                    if (json.has(key)) json.optInt(key) else null
+                } catch (error: Throwable) {
+                    Log.w(TAG, "read ${file.absolutePath} failed", error)
+                    null
+                }
             if (value != null) {
                 return value
             }

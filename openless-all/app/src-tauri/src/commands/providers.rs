@@ -29,7 +29,11 @@ pub async fn validate_provider_credentials(
     let kind = parse_provider_kind(&kind)?;
     core.services()
         .provider
-        .validate(openless_core::ProviderRequest { kind, channel_id })
+        .validate(openless_core::ProviderRequest {
+            kind,
+            channel_id,
+            thinking_enabled: core.get_preferences().llm_thinking_enabled,
+        })
         .await
         .map_err(|error| error.message)
 }
@@ -43,7 +47,11 @@ pub async fn list_provider_models(
     let kind = parse_provider_kind(&kind)?;
     core.services()
         .provider
-        .list_models(openless_core::ProviderRequest { kind, channel_id })
+        .list_models(openless_core::ProviderRequest {
+            kind,
+            channel_id,
+            thinking_enabled: core.get_preferences().llm_thinking_enabled,
+        })
         .await
         .map_err(|error| error.message)
 }

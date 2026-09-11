@@ -12,12 +12,14 @@ use std::time::{Duration, Instant};
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex as ParkingMutex;
 use serde_json::{json, Value};
-use tokio::net::TcpStream;
+use tokio::net::{lookup_host, TcpStream};
 use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex, Notify};
+use tokio_tungstenite::client_async_tls;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::HeaderValue;
+use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use uuid::Uuid;
 
 use crate::config::{TaskSpawner, TokioTaskSpawner};
@@ -38,6 +40,92 @@ const FINAL_RESULT_TIMEOUT: Duration = Duration::from_secs(12);
 /// 等，而 `open_session` 是在串行的 hotkey bridge 线程上 `block_on` 等的 —— 卡住就意味着
 /// 热键彻底失灵（开不了也停不了，只能退出重开）。详见 stepfun_realtime.rs 同名常量。
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// 单个候选地址的 TCP 上限。IPv6 黑洞时不能把整段 5s 耗在第一个 AAAA 上。
+const PER_ADDR_TCP_TIMEOUT: Duration = Duration::from_millis(1500);
+
+fn default_port_for_request(
+    request: &tokio_tungstenite::tungstenite::handshake::client::Request,
+) -> Result<u16, WsError> {
+    let default_port = match request.uri().scheme_str() {
+        Some("ws") => 80,
+        Some("wss") => 443,
+        _ => {
+            return Err(WsError::Url(
+                tokio_tungstenite::tungstenite::error::UrlError::UnsupportedUrlScheme,
+            ))
+        }
+    };
+    Ok(request.uri().port_u16().unwrap_or(default_port))
+}
+
+fn order_connect_addrs(mut addrs: Vec<std::net::SocketAddr>) -> Vec<std::net::SocketAddr> {
+    addrs.sort_by_key(|addr| u8::from(!addr.ip().is_ipv4()));
+    addrs
+}
+
+async fn connect_ws_to_addrs(
+    request: tokio_tungstenite::tungstenite::handshake::client::Request,
+    addrs: Vec<std::net::SocketAddr>,
+) -> Result<
+    (
+        WsStream,
+        tokio_tungstenite::tungstenite::handshake::client::Response,
+    ),
+    WsError,
+> {
+    if addrs.is_empty() {
+        return Err(WsError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no addresses for websocket endpoint",
+        )));
+    }
+
+    let mut last_err = None;
+    for addr in addrs {
+        match tokio::time::timeout(PER_ADDR_TCP_TIMEOUT, TcpStream::connect(addr)).await {
+            Ok(Ok(stream)) => match client_async_tls(request.clone(), stream).await {
+                Ok(connection) => return Ok(connection),
+                Err(error) => last_err = Some(error),
+            },
+            Ok(Err(error)) => last_err = Some(WsError::Io(error)),
+            Err(_) => {
+                last_err = Some(WsError::Io(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!(
+                        "tcp connect timeout ({})",
+                        if addr.ip().is_ipv4() { "v4" } else { "v6" }
+                    ),
+                )))
+            }
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| {
+        WsError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotConnected,
+            "no tcp candidate",
+        ))
+    }))
+}
+
+async fn connect_ws_prefer_ipv4(
+    request: tokio_tungstenite::tungstenite::handshake::client::Request,
+) -> Result<
+    (
+        WsStream,
+        tokio_tungstenite::tungstenite::handshake::client::Response,
+    ),
+    WsError,
+> {
+    let port = default_port_for_request(&request)?;
+    let host = request.uri().host().unwrap_or("").to_string();
+    let addrs = lookup_host((host.as_str(), port))
+        .await
+        .map_err(WsError::Io)?
+        .collect::<Vec<_>>();
+    connect_ws_to_addrs(request, order_connect_addrs(addrs)).await
+}
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsSink = futures_util::stream::SplitSink<WsStream, Message>;
@@ -171,7 +259,7 @@ impl BailianRealtimeASR {
                 .map_err(|e| BailianASRError::ConnectionFailed(e.to_string()))?,
         );
 
-        let (ws, _resp) = tokio::time::timeout(CONNECT_TIMEOUT, connect_async(request))
+        let (ws, _resp) = tokio::time::timeout(CONNECT_TIMEOUT, connect_ws_prefer_ipv4(request))
             .await
             .map_err(|_| {
                 BailianASRError::ConnectionFailed(format!(
@@ -763,6 +851,100 @@ mod tests {
             model: String::new(),
             vocabulary_id: None,
         })
+    }
+
+    #[test]
+    fn websocket_default_ports_match_uri_scheme() {
+        let ws = "ws://localhost/path".into_client_request().unwrap();
+        let wss = "wss://localhost/path".into_client_request().unwrap();
+        let explicit = "ws://localhost:9000/path".into_client_request().unwrap();
+
+        assert_eq!(default_port_for_request(&ws).unwrap(), 80);
+        assert_eq!(default_port_for_request(&wss).unwrap(), 443);
+        assert_eq!(default_port_for_request(&explicit).unwrap(), 9000);
+    }
+
+    #[test]
+    fn websocket_default_port_rejects_non_websocket_scheme() {
+        let request = "https://localhost/path".into_client_request().unwrap();
+        let explicit_port = "https://localhost:443/path".into_client_request().unwrap();
+        assert!(matches!(
+            default_port_for_request(&request),
+            Err(WsError::Url(
+                tokio_tungstenite::tungstenite::error::UrlError::UnsupportedUrlScheme
+            ))
+        ));
+        assert!(matches!(
+            default_port_for_request(&explicit_port),
+            Err(WsError::Url(
+                tokio_tungstenite::tungstenite::error::UrlError::UnsupportedUrlScheme
+            ))
+        ));
+    }
+
+    #[test]
+    fn order_connect_addrs_puts_ipv4_first() {
+        let v6: std::net::SocketAddr = "[2408:400a::1]:443".parse().unwrap();
+        let v4: std::net::SocketAddr = "8.152.159.24:443".parse().unwrap();
+        let ordered = order_connect_addrs(vec![v6, v4]);
+        assert!(ordered[0].ip().is_ipv4());
+        assert!(ordered[1].ip().is_ipv6());
+    }
+
+    #[tokio::test]
+    async fn websocket_handshake_failure_falls_back_to_next_address() {
+        let rejected_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let rejected_addr = rejected_listener.local_addr().unwrap();
+        let rejected_task = tokio::spawn(async move {
+            let (stream, _) = rejected_listener.accept().await.unwrap();
+            drop(stream);
+        });
+
+        let accepted_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let accepted_addr = accepted_listener.local_addr().unwrap();
+        let accepted_task = tokio::spawn(async move {
+            let (stream, _) = accepted_listener.accept().await.unwrap();
+            tokio_tungstenite::accept_async(stream).await.unwrap();
+        });
+
+        let request = format!("ws://localhost:{}/path", accepted_addr.port())
+            .into_client_request()
+            .unwrap();
+        let (stream, _) = connect_ws_to_addrs(request, vec![rejected_addr, accepted_addr])
+            .await
+            .unwrap();
+        drop(stream);
+
+        rejected_task.await.unwrap();
+        accepted_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn websocket_connects_to_ipv6_candidate_when_available() {
+        let Ok(listener) = tokio::net::TcpListener::bind("[::1]:0").await else {
+            return;
+        };
+        let addr = listener.local_addr().unwrap();
+        let server_task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            tokio_tungstenite::accept_async(stream).await.unwrap();
+        });
+
+        let request = format!("ws://[::1]:{}/path", addr.port())
+            .into_client_request()
+            .unwrap();
+        let (stream, _) = connect_ws_to_addrs(request, vec![addr]).await.unwrap();
+        drop(stream);
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn websocket_connect_with_no_candidates_fails_immediately() {
+        let request = "ws://localhost/path".into_client_request().unwrap();
+        let result = connect_ws_to_addrs(request, Vec::new()).await;
+        assert!(
+            matches!(result, Err(WsError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound)
+        );
     }
 
     // ---- merge_segments ----

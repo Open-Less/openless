@@ -108,6 +108,7 @@ impl RemoteInputRuntimeAdapter for LinuxRemoteInputRuntime {
                 port: handle.bound_port,
                 urls: access_urls(handle.bound_port),
                 urls_stale: false,
+                ca_fingerprint_sha256: Some(handle.ca_fingerprint_sha256.clone()),
             };
             *server.lock().await = Some(handle);
             Ok(binding)
@@ -172,6 +173,19 @@ impl RemoteInputRuntimeAdapter for LinuxRemoteInputRuntime {
         let backend = self.backend();
         Box::pin(async move { backend?.cancel_dictation(Some(session_id)).await })
     }
+
+    fn read_audio_history(
+        &self,
+        session_id: SessionId,
+    ) -> BoxFuture<'static, Result<Option<openless_core::DictationSession>, BackendError>> {
+        let backend = self.backend();
+        Box::pin(async move {
+            Ok(backend?
+                .list_history()?
+                .into_iter()
+                .find(|entry| entry.id == session_id.to_string()))
+        })
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -207,6 +221,8 @@ mod assets {
 const KEEPALIVE_PING_SECS: u64 = 30;
 #[cfg(target_os = "linux")]
 const IDLE_TIMEOUT_SECS: u64 = 90;
+#[cfg(target_os = "linux")]
+const AUDIO_IDLE_TIMEOUT_SECS: u64 = 15;
 
 #[cfg(target_os = "linux")]
 struct LinuxRemoteServerHandle {
@@ -216,6 +232,7 @@ struct LinuxRemoteServerHandle {
     connections_shutdown: tokio::sync::watch::Sender<bool>,
     join: tokio::task::JoinHandle<()>,
     bound_port: u16,
+    ca_fingerprint_sha256: String,
 }
 
 #[cfg(target_os = "linux")]
@@ -232,6 +249,7 @@ impl LinuxRemoteServerHandle {
 #[cfg(not(target_os = "linux"))]
 struct LinuxRemoteServerHandle {
     bound_port: u16,
+    ca_fingerprint_sha256: String,
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -288,71 +306,8 @@ fn access_urls(port: u16) -> Vec<String> {
 }
 
 #[cfg(target_os = "linux")]
-fn load_or_generate_certificate(
-    directory: &std::path::Path,
-    sans: &[String],
-) -> Result<(Vec<u8>, rustls::pki_types::PrivateKeyDer<'static>), BackendError> {
-    use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
-
-    let cert_path = directory.join("remote-cert-v4.der");
-    let key_path = directory.join("remote-key-v4.der");
-    let sans_path = directory.join("remote-cert-sans-v4.txt");
-    if let (Ok(cert), Ok(key), Ok(saved)) = (
-        std::fs::read(&cert_path),
-        std::fs::read(&key_path),
-        std::fs::read_to_string(&sans_path),
-    ) {
-        let saved = saved.lines().collect::<std::collections::HashSet<_>>();
-        if sans.iter().all(|value| saved.contains(value.as_str())) {
-            return Ok((cert, PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key))));
-        }
-    }
-    let mut params = rcgen::CertificateParams::new(sans.to_vec())
-        .map_err(|error| remote_platform_error(format!("invalid TLS names: {error}")))?;
-    let mut name = rcgen::DistinguishedName::new();
-    name.push(rcgen::DnType::CommonName, "OpenLess Remote Input");
-    params.distinguished_name = name;
-    params
-        .extended_key_usages
-        .push(rcgen::ExtendedKeyUsagePurpose::ServerAuth);
-    let key = rcgen::KeyPair::generate()
-        .map_err(|error| remote_platform_error(format!("TLS key generation failed: {error}")))?;
-    let cert = params
-        .self_signed(&key)
-        .map_err(|error| remote_platform_error(format!("TLS certificate failed: {error}")))?;
-    let cert_der = cert.der().as_ref().to_vec();
-    let key_der = key.serialize_der();
-    std::fs::create_dir_all(directory)
-        .map_err(|error| remote_platform_error(format!("TLS directory failed: {error}")))?;
-    std::fs::write(&cert_path, &cert_der)
-        .map_err(|error| remote_platform_error(format!("TLS certificate save failed: {error}")))?;
-    std::fs::write(&key_path, &key_der)
-        .map_err(|error| remote_platform_error(format!("TLS key save failed: {error}")))?;
-    std::fs::write(&sans_path, sans.join("\n"))
-        .map_err(|error| remote_platform_error(format!("TLS names save failed: {error}")))?;
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
-        .map_err(|error| remote_platform_error(format!("TLS key permissions failed: {error}")))?;
-    Ok((
-        cert_der,
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_der)),
-    ))
-}
-
-#[cfg(target_os = "linux")]
-fn tls_config(
-    cert: Vec<u8>,
-    key: rustls::pki_types::PrivateKeyDer<'static>,
-) -> Result<Arc<rustls::ServerConfig>, BackendError> {
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
-    rustls::ServerConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
-        .map_err(|error| remote_platform_error(format!("TLS protocol failed: {error}")))?
-        .with_no_client_auth()
-        .with_single_cert(vec![rustls::pki_types::CertificateDer::from(cert)], key)
-        .map(Arc::new)
-        .map_err(|error| remote_platform_error(format!("TLS certificate failed: {error}")))
-}
+#[path = "../../src-tauri/src/remote_server/tls_identity.rs"]
+mod tls_identity;
 
 #[cfg(target_os = "linux")]
 fn router(state: Arc<WebState>) -> Router {
@@ -386,11 +341,29 @@ fn router(state: Arc<WebState>) -> Router {
             "/cert.cer",
             get(|State(state): State<Arc<WebState>>| async move {
                 (
-                    [(
-                        axum::http::header::CONTENT_TYPE,
-                        "application/x-x509-ca-cert",
-                    )],
+                    [
+                        (
+                            axum::http::header::CONTENT_TYPE,
+                            "application/x-x509-ca-cert",
+                        ),
+                        (axum::http::header::CACHE_CONTROL, "no-store"),
+                    ],
                     state.cert_der.clone(),
+                )
+            }),
+        )
+        .route(
+            "/cert.mobileconfig",
+            get(|State(state): State<Arc<WebState>>| async move {
+                (
+                    [
+                        (
+                            axum::http::header::CONTENT_TYPE,
+                            "application/x-apple-aspen-config",
+                        ),
+                        (axum::http::header::CACHE_CONTROL, "no-store"),
+                    ],
+                    tls_identity::mobileconfig(&state.cert_der),
                 )
             }),
         )
@@ -443,8 +416,11 @@ async fn start_server(
 ) -> Result<LinuxRemoteServerHandle, BackendError> {
     let mut sans = vec!["localhost".to_string(), "127.0.0.1".to_string()];
     sans.extend(local_lan_ipv4s());
-    let (cert_der, key) = load_or_generate_certificate(&data_dir.join("remote-input"), &sans)?;
-    let acceptor = TlsAcceptor::from(tls_config(cert_der.clone(), key)?);
+    let identity = tls_identity::load_or_create(&data_dir.join("remote-input"), &sans)
+        .map_err(remote_platform_error)?;
+    let ca_fingerprint_sha256 = identity.ca_fingerprint_sha256;
+    let cert_der = identity.trust_cert;
+    let acceptor = TlsAcceptor::from(identity.server_config);
     let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port)))
         .await
         .map_err(|error| remote_platform_error(format!("remote input bind failed: {error}")))?;
@@ -485,6 +461,7 @@ async fn start_server(
         connections_shutdown,
         join,
         bound_port,
+        ca_fingerprint_sha256,
     })
 }
 
@@ -540,18 +517,27 @@ async fn websocket_session(mut socket: WebSocket, state: Arc<WebState>, peer: Ip
     let mut keepalive = tokio::time::interval(Duration::from_secs(KEEPALIVE_PING_SECS));
     keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut last_received = Instant::now();
+    let mut last_audio = Instant::now();
+    let mut audio_watchdog = tokio::time::interval(Duration::from_secs(2));
+    audio_watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut preserve_audio = true;
+    let mut receiving_audio = false;
     'connection: loop {
         tokio::select! {
             incoming = socket.recv() => {
                 last_received = Instant::now();
                 match incoming {
                     Some(Ok(Message::Binary(frame))) => {
+                        if !receiving_audio { continue; }
                         if let Ok((session_id, sequence, pcm)) = openless_core::RemoteFrameCodec::decode(&frame) {
-                            let _ = state.backend.services().remote_input
-                                .feed_pcm(connection_id, session_id, sequence, pcm).await;
+                            if state.backend.services().remote_input
+                                .feed_pcm(connection_id, session_id, sequence, pcm).await.is_ok() {
+                                last_audio = Instant::now();
+                            }
                         }
                     }
                     Some(Ok(Message::Text(text))) => {
+                        let previous_session = remote_session;
                         if let Some(reply) = apply_control(
                             &text,
                             state.backend.services().remote_input.as_ref(),
@@ -561,6 +547,11 @@ async fn websocket_session(mut socket: WebSocket, state: Arc<WebState>, peer: Ip
                         ).await {
                             if socket.send(json_message(reply)).await.is_err() { break; }
                         }
+                        if remote_session != previous_session {
+                            last_audio = Instant::now();
+                            receiving_audio = remote_session.is_some();
+                        }
+                        if pending_stop.is_some() { receiving_audio = false; }
                     }
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
                     _ => {}
@@ -575,9 +566,7 @@ async fn websocket_session(mut socket: WebSocket, state: Arc<WebState>, peer: Ip
                         phase: openless_core::DictationPhase::Cancelled | openless_core::DictationPhase::Failed, ..
                     }));
                 for reply in remote_event(event.kind) {
-                    // A failed outbound send means this socket no longer owns
-                    // a usable transport. Leave the outer loop immediately so
-                    // Core disconnect cancels any active external-audio lease.
+                    // 下行失败也保留已收到的录音，由外层继续完成识别和持久化。
                     if socket.send(json_message(reply)).await.is_err() {
                         break 'connection;
                     }
@@ -603,10 +592,36 @@ async fn websocket_session(mut socket: WebSocket, state: Arc<WebState>, peer: Ip
                     break;
                 }
             }
+            _ = audio_watchdog.tick(), if receiving_audio && pending_stop.is_none() && remote_session.is_some() => {
+                if last_audio.elapsed() >= Duration::from_secs(AUDIO_IDLE_TIMEOUT_SECS) {
+                    receiving_audio = false;
+                    let session_id = remote_session.unwrap();
+                    pending_stop = Some((session_id, state.backend.services().remote_input.stop_stream(connection_id, session_id)));
+                }
+            }
             changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() { break; }
+                if changed.is_err() || *shutdown.borrow() { preserve_audio = false; break; }
             }
         }
+    }
+    drop(socket);
+    if preserve_audio && !*shutdown.borrow() {
+        let finishing = openless_core::finish_remote_input_connection(
+            state.backend.services().remote_input.as_ref(),
+            connection_id,
+            remote_session,
+            pending_stop.take().map(|(_, future)| future),
+        );
+        tokio::pin!(finishing);
+        tokio::select! {
+            result = &mut finishing => {
+                if let Err(error) = result { log::warn!("[remote-input] 断线录音收尾：{error}"); }
+            }
+            _ = shutdown.changed() => {
+                let _ = state.backend.services().remote_input.disconnect(connection_id).await;
+            }
+        }
+        return;
     }
     let _ = state
         .backend
@@ -652,7 +667,10 @@ async fn apply_control(
         "start" => match remote.start_stream(connection_id).await {
             Ok(session_id) => {
                 *remote_session = Some(session_id);
-                Some(serde_json::json!({"type":"started", "sessionId":session_id.to_string()}))
+                Some(
+                    serde_json::json!({"type":"started", "sessionId":session_id.to_string(),
+                    "recoveryKey":remote.recovery_key(connection_id, session_id).ok().map(|key| key.into_exposed())}),
+                )
             }
             Err(error) => Some(serde_json::json!({"type":"busy", "reason":error.to_string()})),
         },
@@ -677,6 +695,32 @@ async fn apply_control(
                 return Some(serde_json::json!({"type":"status", "kind":"done"}));
             }
             None
+        }
+        "recover" => {
+            let session_id = value
+                .get("sessionId")
+                .and_then(|value| value.as_str())
+                .and_then(|value| uuid::Uuid::parse_str(value).ok())
+                .map(SessionId::from_uuid);
+            let recovery = match session_id {
+                Some(session_id) => remote
+                    .recover_stream(
+                        connection_id,
+                        session_id,
+                        SecretValue::new(
+                            value
+                                .get("recoveryKey")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or_default(),
+                        ),
+                    )
+                    .await
+                    .unwrap_or(openless_core::RemoteInputRecovery::Unavailable),
+                None => openless_core::RemoteInputRecovery::Unavailable,
+            };
+            Some(
+                serde_json::json!({"type":"recovery", "sessionId":session_id, "recovery":recovery}),
+            )
         }
         "set_insert" => {
             let insert = value

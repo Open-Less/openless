@@ -2,8 +2,8 @@
 //! Credentials vault.
 //!
 //! 正常读写走系统凭据库；旧 plaintext JSON 只作为迁移来源。为保持多 provider
-//! schema 与 active provider 状态，凭据库里保存一个 v1 JSON payload；payload 会按平台
-//! 凭据库限制拆成多个条目，避免 Windows 单条凭据 2560 bytes 限制。
+//! schema 与 active provider 状态，凭据库里保存一个 JSON payload。macOS 使用一个稳定
+//! 条目，避免每个分片分别要求授权；Windows 按单条凭据 2560 bytes 的限制拆分。
 //!
 //! v1 schema：
 //!   {
@@ -44,6 +44,7 @@ const LEGACY_CREDS_FILE: &str = "credentials.json";
 
 const KEYRING_CREDENTIALS_ACCOUNT: &str = "credentials.v1";
 const KEYRING_CREDENTIALS_CHUNK_PREFIX: &str = "credentials.v1.chunk.";
+const KEYRING_SINGLE_CREDENTIALS_ACCOUNT: &str = "credentials.v2";
 #[cfg(target_os = "android")]
 const ANDROID_CREDENTIALS_FILE: &str = "credentials.enc.json";
 const RESERVED_EXTRA_HEADER_NAMES: &[&str] = &[
@@ -55,9 +56,18 @@ const RESERVED_EXTRA_HEADER_NAMES: &[&str] = &[
 ];
 // Windows Credential Manager caps one credential blob at 2560 bytes. keyring stores
 // passwords as UTF-16 on Windows, so keep each JSON chunk comfortably below that.
+#[cfg(any(not(any(target_os = "macos", target_os = "android")), test))]
 const KEYRING_CHUNK_MAX_UTF16_UNITS: usize = 1000;
 
 static CREDENTIALS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+// Keychain 访问节流：每进程只补写/扫描一次，避免重复授权弹窗。
+#[cfg(not(target_os = "android"))]
+static SINGLE_ITEM_MIGRATION_ATTEMPTED: AtomicBool = AtomicBool::new(false);
+#[cfg(not(target_os = "android"))]
+static LEGACY_KEYRING_PROBE: OnceLock<Result<Option<CredsRoot>, String>> = OnceLock::new();
+#[cfg(any(not(target_os = "android"), test))]
+static VAULT_SOURCE_LOGGED: AtomicBool = AtomicBool::new(false);
 
 // A rejected Marketplace token must become unusable before best-effort durable
 // deletion starts. Keychain/credential-manager deletion can fail or prompt, so
@@ -85,26 +95,9 @@ fn android_marketplace_legacy_scrubbed() -> &'static Mutex<bool> {
     ANDROID_MARKETPLACE_LEGACY_SCRUBBED.get_or_init(|| Mutex::new(false))
 }
 
-/// Process-wide credentials cache.
-///
-/// Without this cache every `CredentialsVault::get_*` / `snapshot` call hits
-/// `load_credentials()` → `load_keyring_credentials()` which reads the
-/// manifest entry plus every chunk entry from the OS keyring. On macOS each
-/// distinct keychain entry has its own ACL — so an ad-hoc-signed binary (or
-/// any binary whose ACL grants haven't been set up yet) prompts on every read
-/// of every entry. A single dictation cycle reads credentials 5–10 times,
-/// times (1 manifest + N chunks) entries → tens of "OpenLess wants to use
-/// the keychain" prompts per recording.
-///
-/// With this cache the first read populates `Some(CredsRoot)` and every
-/// subsequent read in the same process is silent. `save_credentials` keeps
-/// the cache in sync after writes so Settings → Recording credential edits
-/// take effect immediately.
-///
-/// Cross-process changes (e.g. user edits via `security` CLI, or another
-/// instance of the app — single-instance is enforced but defense in depth)
-/// will be invisible until the next process launch. Acceptable trade-off
-/// per the credential vault contract: the keyring is owned by this app.
+/// Cache successful reads for this process and refresh only after durable writes.
+/// Failed reads remain retryable and must not become a cached empty configuration.
+/// External Keychain edits take effect on the next app launch.
 static CREDENTIALS_CACHE: OnceLock<Mutex<Option<CredsRoot>>> = OnceLock::new();
 
 fn credentials_cache() -> &'static Mutex<Option<CredsRoot>> {
@@ -349,6 +342,15 @@ struct CredsAsrEntry {
     /// 讯飞实时语音转写 APIKey（接口密钥）。
     #[serde(skip_serializing_if = "Option::is_none")]
     xfyunApiKey: Option<String>,
+    /// 腾讯云账号 AppID（实时语音识别 WebSocket 路径参数）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tencentCloudAppId: Option<String>,
+    /// 腾讯云 API 密钥 SecretID。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tencentCloudSecretId: Option<String>,
+    /// 腾讯云 API 密钥 SecretKey。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tencentCloudSecretKey: Option<String>,
 }
 
 impl CredsAsrEntry {
@@ -378,6 +380,17 @@ impl CredsAsrEntry {
             && self.advancedConfig.as_deref().unwrap_or("").is_empty()
             && self.xfyunAppId.as_deref().unwrap_or("").is_empty()
             && self.xfyunApiKey.as_deref().unwrap_or("").is_empty()
+            && self.tencentCloudAppId.as_deref().unwrap_or("").is_empty()
+            && self
+                .tencentCloudSecretId
+                .as_deref()
+                .unwrap_or("")
+                .is_empty()
+            && self
+                .tencentCloudSecretKey
+                .as_deref()
+                .unwrap_or("")
+                .is_empty()
     }
 }
 
@@ -398,9 +411,28 @@ struct CredsLlmEntry {
     temperature: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     extraHeaders: Option<HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requestFormat: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    messagesThinking: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    maxTokens: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinkingBudget: Option<String>,
 }
 
 impl CredsLlmEntry {
+    fn protocol_option(&mut self, account: &str) -> Result<&mut Option<String>> {
+        use openless_core::llm_protocol::*;
+        match account {
+            REQUEST_FORMAT_ACCOUNT => Ok(&mut self.requestFormat),
+            MESSAGES_THINKING_ACCOUNT => Ok(&mut self.messagesThinking),
+            MAX_TOKENS_ACCOUNT => Ok(&mut self.maxTokens),
+            THINKING_BUDGET_ACCOUNT => Ok(&mut self.thinkingBudget),
+            _ => anyhow::bail!("unsupported LLM protocol option"),
+        }
+    }
+
     fn is_empty(&self) -> bool {
         // 同 CredsAsrEntry::is_empty —— 渠道卡片只能由用户显式删除。
         if self.channel.providerType.is_some() {
@@ -416,6 +448,10 @@ impl CredsLlmEntry {
             && self.baseURL.as_deref().unwrap_or("").is_empty()
             && self.model.as_deref().unwrap_or("").is_empty()
             && self.temperature.is_none()
+            && self.requestFormat.is_none()
+            && self.messagesThinking.is_none()
+            && self.maxTokens.is_none()
+            && self.thinkingBudget.is_none()
             && self
                 .extraHeaders
                 .as_ref()
@@ -825,7 +861,7 @@ fn credentials_path() -> Result<PathBuf> {
     }
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "macos")))]
 fn keyring_entry() -> Result<keyring::Entry> {
     keyring_entry_for(KEYRING_CREDENTIALS_ACCOUNT)
 }
@@ -1135,16 +1171,14 @@ fn remove_legacy_credentials_file_best_effort() {
 struct CredsChunkManifest {
     openless_credentials_storage: String,
     version: u32,
-    /// 旧版本（v1 早期）每次 save 都生成新 UUID 作为 chunk account 命名前缀，
-    /// 这让 macOS Keychain 的「始终允许」每次保存后失效 → 反复弹 ACL 弹窗。
-    /// 现在 save 总用稳定 chunk.{index} 名，此字段仅向后兼容旧 manifest 读取。
+    /// Earlier vaults used UUID-prefixed chunks. Keep reading them during migration;
+    /// current chunked writes use stable names so item authorizations can persist.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     generation: Option<String>,
     chunks: usize,
 }
 
-/// 旧版（generation=Some）：`credentials.v1.chunk.<UUID>.{index}`
-/// 新版（generation=None）：`credentials.v1.chunk.{index}` —— 稳定名，ACL 长期有效
+/// Legacy UUID-prefixed and current stable chunk names share one reader.
 fn chunk_account(generation: Option<&str>, index: usize) -> String {
     match generation {
         Some(gen) => format!("{KEYRING_CREDENTIALS_CHUNK_PREFIX}{gen}.{index}"),
@@ -1152,6 +1186,7 @@ fn chunk_account(generation: Option<&str>, index: usize) -> String {
     }
 }
 
+#[cfg(any(not(any(target_os = "macos", target_os = "android")), test))]
 fn chunk_json_payload(json: &str) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut current = String::new();
@@ -1253,34 +1288,100 @@ fn delete_keyring_password(account: &str) {
 
 #[cfg(not(target_os = "android"))]
 fn load_keyring_credentials() -> Result<Option<CredsRoot>> {
-    let Some(json_or_manifest) = get_keyring_password(KEYRING_CREDENTIALS_ACCOUNT)? else {
-        return Ok(None);
-    };
+    load_keyring_credentials_with(
+        get_keyring_password,
+        set_keyring_password_for_migration,
+        cfg!(target_os = "macos"),
+    )
+}
 
-    let manifest = read_chunk_manifest(&json_or_manifest)
-        .ok_or_else(|| anyhow!("invalid system credential vault manifest"))?;
-    let mut json = String::new();
-    for index in 0..manifest.chunks {
-        let account = chunk_account(manifest.generation.as_deref(), index);
-        let chunk = get_keyring_password(&account)?
-            .ok_or_else(|| anyhow!("missing system credential vault chunk {index}"))?;
-        json.push_str(&chunk);
+/// credentials.v2 补写每进程只尝试一次。
+#[cfg(not(target_os = "android"))]
+fn set_keyring_password_for_migration(account: &str, value: &str) -> Result<()> {
+    if SINGLE_ITEM_MIGRATION_ATTEMPTED.swap(true, Ordering::SeqCst) {
+        return Ok(());
     }
+    set_keyring_password(account, value)
+}
 
-    serde_json::from_str::<CredsRoot>(&json)
-        .map(Some)
-        .context("decode system credential vault payload")
+/// 首次成功定位凭据来源时记一条日志，用于诊断「未配置」误报。
+#[cfg(any(not(target_os = "android"), test))]
+fn log_vault_source_once(source: &str) {
+    if !VAULT_SOURCE_LOGGED.swap(true, Ordering::SeqCst) {
+        log::info!("[vault] credential source: {source}");
+    }
 }
 
 #[cfg(not(target_os = "android"))]
-fn load_legacy_keyring_credentials() -> CredsRoot {
-    match load_legacy_keyring_credentials_for_update() {
-        Ok(root) => root,
-        Err(e) => {
-            log::warn!("[vault] read legacy vault credentials failed: {e}");
-            CredsRoot::default()
+fn set_keyring_password(account: &str, value: &str) -> Result<()> {
+    keyring_entry_for(account)?
+        .set_password(value)
+        .with_context(|| format!("write system credential vault {account}"))
+}
+
+#[cfg(any(not(target_os = "android"), test))]
+fn load_keyring_credentials_with(
+    mut read: impl FnMut(&str) -> Result<Option<String>>,
+    mut write: impl FnMut(&str, &str) -> Result<()>,
+    consolidate: bool,
+) -> Result<Option<CredsRoot>> {
+    if consolidate {
+        if let Some(json) = read(KEYRING_SINGLE_CREDENTIALS_ACCOUNT)? {
+            log_vault_source_once("credentials.v2 (single item)");
+            return decode_single_credentials(&json).map(Some);
         }
     }
+    let Some(json_or_manifest) = read(KEYRING_CREDENTIALS_ACCOUNT)? else {
+        log_vault_source_once("empty (no stored credentials)");
+        return Ok(None);
+    };
+
+    let json = if let Some(manifest) = read_chunk_manifest(&json_or_manifest) {
+        log_vault_source_once("credentials.v1 chunks");
+        let mut json = String::new();
+        for index in 0..manifest.chunks {
+            let account = chunk_account(manifest.generation.as_deref(), index);
+            let chunk = read(&account)?
+                .ok_or_else(|| anyhow::anyhow!("missing system credential vault chunk {index}"))?;
+            json.push_str(&chunk);
+        }
+        json
+    } else {
+        json_or_manifest
+    };
+
+    let root = decode_single_credentials(&json)?;
+    if consolidate {
+        // macOS has no Windows blob limit. Create one app-owned item after the
+        // complete old payload was read with the user's authorization. Retain the
+        // old manifest/chunks without changing their ACLs or asking to delete them.
+        // A denied migration does not invalidate the successfully read data.
+        if let Err(error) = write(KEYRING_SINGLE_CREDENTIALS_ACCOUNT, &json) {
+            log::warn!("[vault] single-item credential migration deferred: {error}");
+        }
+    }
+    Ok(Some(root))
+}
+
+#[cfg(any(not(target_os = "android"), test))]
+fn decode_single_credentials(json: &str) -> Result<CredsRoot> {
+    // Serde defaults alone would accept unrelated JSON as an empty configuration.
+    let payload: serde_json::Value =
+        serde_json::from_str(json).context("decode system credential vault payload")?;
+    anyhow::ensure!(
+        payload
+            .get("version")
+            .and_then(serde_json::Value::as_u64)
+            .is_some()
+            && payload
+                .get("active")
+                .is_some_and(serde_json::Value::is_object)
+            && payload
+                .get("providers")
+                .is_some_and(serde_json::Value::is_object),
+        "invalid system credential vault payload"
+    );
+    serde_json::from_value(payload).context("decode system credential vault payload")
 }
 
 #[cfg(not(target_os = "android"))]
@@ -1304,44 +1405,15 @@ fn remove_legacy_keyring_credentials() {
     }
 }
 
-fn load_legacy_credentials() -> Option<CredsRoot> {
-    credentials_path()
-        .ok()
-        .and_then(|p| read_legacy_credentials_file(&p))
-}
-
 fn legacy_vault_has_credentials(root: &CredsRoot) -> bool {
     !root.providers.asr.is_empty() || !root.providers.llm.is_empty()
 }
 
-fn load_legacy_sources_without_migration() -> CredsRoot {
-    if let Some(legacy) = load_legacy_credentials() {
-        return legacy;
-    }
-
-    #[cfg(not(target_os = "android"))]
-    {
-        let legacy_vault = load_legacy_keyring_credentials();
-        if legacy_vault_has_credentials(&legacy_vault) {
-            return legacy_vault;
-        }
-    }
-
-    CredsRoot::default()
-}
-
-fn migrate_legacy_sources() -> CredsRoot {
-    match migrate_legacy_sources_for_update() {
-        Ok(root) => root,
-        Err(e) => {
-            log::warn!("[vault] legacy credential migration failed: {e}");
-            load_legacy_sources_without_migration()
-        }
-    }
-}
-
 fn migrate_legacy_sources_for_update() -> Result<CredsRoot> {
-    if let Some(legacy) = load_legacy_credentials() {
+    if let Some(legacy) = credentials_path()
+        .ok()
+        .and_then(|path| read_legacy_credentials_file(&path))
+    {
         save_credentials(&legacy)?;
         let persisted = credentials_cache()
             .lock()
@@ -1355,24 +1427,39 @@ fn migrate_legacy_sources_for_update() -> Result<CredsRoot> {
 
     #[cfg(not(target_os = "android"))]
     {
-        let legacy_vault = load_legacy_keyring_credentials_for_update()?;
-        if legacy_vault_has_credentials(&legacy_vault) {
-            save_credentials(&legacy_vault)?;
-            let persisted = credentials_cache()
-                .lock()
-                .as_ref()
-                .cloned()
-                .unwrap_or(legacy_vault);
-            remove_legacy_keyring_credentials();
-            return Ok(persisted);
-        }
+        // 旧版逐账户条目扫描每进程只跑一次并缓存；失败时重放同一错误，不重扫。
+        let probe = LEGACY_KEYRING_PROBE.get_or_init(|| {
+            migrate_legacy_keyring_accounts().map_err(|error| format!("{error:#}"))
+        });
+        return match probe {
+            Ok(Some(root)) => Ok(root.clone()),
+            Ok(None) => Ok(CredsRoot::default()),
+            Err(message) => Err(anyhow!(message.clone())),
+        };
     }
 
+    #[cfg(target_os = "android")]
     Ok(CredsRoot::default())
 }
 
-#[cfg(any(target_os = "android", test))]
-fn load_android_credentials_into_cache_with(
+/// 扫描旧版逐账户 Keychain 条目并迁移到当前存储。Some = 找到旧凭据。
+#[cfg(not(target_os = "android"))]
+fn migrate_legacy_keyring_accounts() -> Result<Option<CredsRoot>> {
+    let legacy_vault = load_legacy_keyring_credentials_for_update()?;
+    if !legacy_vault_has_credentials(&legacy_vault) {
+        return Ok(None);
+    }
+    save_credentials(&legacy_vault)?;
+    let persisted = credentials_cache()
+        .lock()
+        .as_ref()
+        .cloned()
+        .unwrap_or(legacy_vault);
+    remove_legacy_keyring_credentials();
+    Ok(Some(persisted))
+}
+
+fn load_credentials_into_cache_with(
     loader: impl FnOnce() -> Result<Option<CredsRoot>>,
 ) -> CredsRoot {
     match loader() {
@@ -1385,17 +1472,14 @@ fn load_android_credentials_into_cache_with(
             // Do not cache the fallback. In particular, a failed legacy-token
             // scrub must be retried by the next startup/getter call rather than
             // hidden for the rest of the process.
-            log::warn!("[vault] android credential read failed: {e}");
+            log::warn!("[vault] credential read failed: {e}");
             CredsRoot::default()
         }
     }
 }
 
-/// 读凭据并就地补成渠道卡片。
-///
-/// 迁移**只在内存里做，不主动落盘**：`migrate_channels` 是幂等的（id 沿用原 preset
-/// id，不生成 uuid），所以每次读的结果都一致；而启动时写 keyring 会在 macOS 上触发
-/// 「OpenLess 想使用钥匙串」的 ACL 弹窗。留给下一次真实写入（用户改配置）顺带固化。
+/// 补齐渠道元数据只改内存；下次保存时一并持久化，不在每次启动重写凭据。
+/// macOS 的旧存储分片由底层读取器在成功授权后单独合并一次。
 fn load_credentials() -> CredsRoot {
     let mut root = load_credentials_raw();
     migrate_channels(&mut root);
@@ -1415,40 +1499,21 @@ fn load_credentials_raw() -> CredsRoot {
 
     #[cfg(target_os = "android")]
     {
-        return load_android_credentials_into_cache_with(load_android_credentials);
+        return load_credentials_into_cache_with(load_android_credentials);
     }
 
     #[cfg(not(target_os = "android"))]
-    match load_keyring_credentials() {
-        Ok(Some(root)) => {
-            // 不在这里调 remove_legacy_keyring_credentials() —— 它内部对每个
-            // 旧 account 各做一次 keyring delete，每次 delete 在 macOS Keychain
-            // 上仍要触发 ACL 检查。第一次成功 load 时 legacy entries 通常已经
-            // 被 migrate_legacy_sources_for_update 清理过了；这里若再无脑跑，
-            // 只会反复弹「OpenLess 想删除 X」十几次。文件 legacy（plaintext
-            // JSON）不需要 ACL，可继续 best-effort 删除。
-            remove_legacy_credentials_file_best_effort();
-            store_credentials_cache(&root);
-            root
+    load_credentials_into_cache_with(|| {
+        // Legacy accounts are probed only after a definitive NoEntry. Retrying
+        // them after an authorization error creates more prompts, not a fallback.
+        match load_keyring_credentials()? {
+            Some(root) => {
+                remove_legacy_credentials_file_best_effort();
+                Ok(Some(root))
+            }
+            None => migrate_legacy_sources_for_update().map(Some),
         }
-        Ok(None) => {
-            // 没有现成 chunked manifest —— 走 migrate（如果有 legacy 则写入并返回写后的 root）。
-            // migrate_legacy_sources 内部 save_credentials 已经会刷 cache，这里再补一次
-            // 是为了「无 legacy 也无 manifest」走默认 root 的路径也能进 cache。
-            let root = migrate_legacy_sources();
-            store_credentials_cache(&root);
-            root
-        }
-        Err(e) => {
-            // **不缓存 keyring 错误路径下的 fallback**。Keychain 可能只是临时不可读
-            // （用户尚未在第一次弹窗里点同意 / DataProtection 错误 / login keychain
-            // 还没 unlock）；如果在这里把 legacy fallback 写进 cache，等用户授权后
-            // 我们就再也不会重读 keyring，整个进程生命周期里都拿 stale 数据。下次
-            // 调用让它再尝试一次 keyring。pr_agent feedback on PR #394。
-            log::warn!("[vault] system credential read failed: {e}");
-            load_legacy_sources_without_migration()
-        }
-    }
+    })
 }
 
 fn load_credentials_for_update_raw() -> Result<CredsRoot> {
@@ -1507,7 +1572,18 @@ fn save_credentials(root: &CredsRoot) -> Result<()> {
         return Ok(());
     }
 
-    #[cfg(not(target_os = "android"))]
+    #[cfg(target_os = "macos")]
+    {
+        let json = serde_json::to_string(&cleaned).context("encode credentials failed")?;
+        // Updating this stable item keeps the user's authorization attached to it.
+        // Do not recreate entries or rewrite/delete legacy chunks on each save.
+        set_keyring_password(KEYRING_SINGLE_CREDENTIALS_ACCOUNT, &json)?;
+        store_credentials_cache(&cleaned);
+        remove_legacy_credentials_file_best_effort();
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "macos")))]
     {
         let json = serde_json::to_string(&cleaned).context("encode credentials failed")?;
         let previous_manifest = get_keyring_password(KEYRING_CREDENTIALS_ACCOUNT)
@@ -1516,10 +1592,8 @@ fn save_credentials(root: &CredsRoot) -> Result<()> {
             .and_then(|value| read_chunk_manifest(&value));
         let chunks = chunk_json_payload(&json);
 
-        // 先写所有 chunks（稳定名），再写 manifest —— 保证 partial-write 不会让
-        // manifest 指向不完整 chunks。stable name 让 macOS Keychain ACL 一次允许后
-        // 长期有效，不再因 UUID 轮换反复弹窗（这是 PR #277 早期 UUID-rotation
-        // 设计的回退）。
+        // Publish the chunk count only after all writes succeed. Existing chunk
+        // names remain stable; this format is retained for bounded platform stores.
         for (index, chunk) in chunks.iter().enumerate() {
             let account = chunk_account(None, index);
             keyring_entry_for(&account)?
@@ -1588,6 +1662,11 @@ fn lookup_account(root: &CredsRoot, account: CredentialAccount) -> Option<String
         CredentialAccount::AsrAdvancedConfig => asr.and_then(|e| pick(&e.advancedConfig)),
         CredentialAccount::XfyunAppId => asr.and_then(|e| pick(&e.xfyunAppId)),
         CredentialAccount::XfyunApiKey => asr.and_then(|e| pick(&e.xfyunApiKey)),
+        CredentialAccount::TencentCloudAppId => asr.and_then(|e| pick(&e.tencentCloudAppId)),
+        CredentialAccount::TencentCloudSecretId => asr.and_then(|e| pick(&e.tencentCloudSecretId)),
+        CredentialAccount::TencentCloudSecretKey => {
+            asr.and_then(|e| pick(&e.tencentCloudSecretKey))
+        }
         CredentialAccount::OmniApiKey => omni.and_then(|e| pick(&e.apiKey)),
         CredentialAccount::OmniEndpoint => omni.and_then(|e| pick(&e.baseURL)),
         CredentialAccount::OmniModel => omni.and_then(|e| pick(&e.model)),
@@ -1697,6 +1776,18 @@ fn write_account(root: &mut CredsRoot, account: CredentialAccount, value: Option
             let entry = root.providers.asr.entry(asr_id).or_default();
             entry.xfyunApiKey = normalized;
         }
+        CredentialAccount::TencentCloudAppId => {
+            let entry = root.providers.asr.entry(asr_id).or_default();
+            entry.tencentCloudAppId = normalized;
+        }
+        CredentialAccount::TencentCloudSecretId => {
+            let entry = root.providers.asr.entry(asr_id).or_default();
+            entry.tencentCloudSecretId = normalized;
+        }
+        CredentialAccount::TencentCloudSecretKey => {
+            let entry = root.providers.asr.entry(asr_id).or_default();
+            entry.tencentCloudSecretKey = normalized;
+        }
         CredentialAccount::OmniApiKey => {
             let entry = root.omni.providers.entry(omni_id).or_default();
             entry.apiKey = normalized;
@@ -1737,6 +1828,12 @@ pub enum CredentialAccount {
     XfyunAppId,
     /// 讯飞实时语音转写 APIKey。
     XfyunApiKey,
+    /// 腾讯云账号 AppID。
+    TencentCloudAppId,
+    /// 腾讯云 API 密钥 SecretID。
+    TencentCloudSecretId,
+    /// 腾讯云 API 密钥 SecretKey。
+    TencentCloudSecretKey,
     /// 多模态（Omni）模型的 API Key。仅多模态管线读取。
     OmniApiKey,
     /// 多模态（Omni）模型的 Base URL。
@@ -1766,6 +1863,9 @@ impl CredentialAccount {
             CredentialAccount::AsrAdvancedConfig => "asr.advanced_config",
             CredentialAccount::XfyunAppId => "xfyun.app_id",
             CredentialAccount::XfyunApiKey => "xfyun.api_key",
+            CredentialAccount::TencentCloudAppId => "tencent_cloud.app_id",
+            CredentialAccount::TencentCloudSecretId => "tencent_cloud.secret_id",
+            CredentialAccount::TencentCloudSecretKey => "tencent_cloud.secret_key",
             CredentialAccount::OmniApiKey => "omni.api_key",
             CredentialAccount::OmniEndpoint => "omni.endpoint",
             CredentialAccount::OmniModel => "omni.model",
@@ -1789,6 +1889,9 @@ impl CredentialAccount {
             CredentialAccount::AsrAdvancedConfig,
             CredentialAccount::XfyunAppId,
             CredentialAccount::XfyunApiKey,
+            CredentialAccount::TencentCloudAppId,
+            CredentialAccount::TencentCloudSecretId,
+            CredentialAccount::TencentCloudSecretKey,
             CredentialAccount::OmniApiKey,
             CredentialAccount::OmniEndpoint,
             CredentialAccount::OmniModel,
@@ -1809,6 +1912,9 @@ pub struct CredentialsSnapshot {
     pub asr_model: Option<String>,
     pub xfyun_app_id: Option<String>,
     pub xfyun_api_key: Option<String>,
+    pub tencent_cloud_app_id: Option<String>,
+    pub tencent_cloud_secret_id: Option<String>,
+    pub tencent_cloud_secret_key: Option<String>,
     pub ark_api_key: Option<String>,
     pub ark_model_id: Option<String>,
     pub ark_endpoint: Option<String>,
@@ -1816,6 +1922,39 @@ pub struct CredentialsSnapshot {
     pub omni_api_key: Option<String>,
     pub omni_endpoint: Option<String>,
     pub omni_model: Option<String>,
+}
+
+/// Provider identities and their fields from the same successful vault read.
+pub(crate) struct CredentialConfigurationSnapshot {
+    pub active_asr_provider: String,
+    pub active_llm_provider: String,
+    pub credentials: CredentialsSnapshot,
+}
+
+fn configuration_snapshot_with(
+    include_omni: bool,
+    load: impl FnOnce() -> Result<CredsRoot>,
+) -> Result<CredentialConfigurationSnapshot> {
+    let root = load()?;
+    let asr_id = &root.active.asr;
+    let llm_id = &root.active.llm;
+    Ok(CredentialConfigurationSnapshot {
+        active_asr_provider: root
+            .providers
+            .asr
+            .get(asr_id)
+            .map(|entry| channel_provider_type(asr_id, entry))
+            .unwrap_or(asr_id)
+            .to_owned(),
+        active_llm_provider: root
+            .providers
+            .llm
+            .get(llm_id)
+            .map(|entry| channel_provider_type(llm_id, entry))
+            .unwrap_or(llm_id)
+            .to_owned(),
+        credentials: credentials_snapshot(&root, include_omni),
+    })
 }
 
 fn credentials_snapshot(root: &CredsRoot, include_omni: bool) -> CredentialsSnapshot {
@@ -1830,6 +1969,9 @@ fn credentials_snapshot(root: &CredsRoot, include_omni: bool) -> CredentialsSnap
         asr_model: lookup_account(root, CredentialAccount::AsrModel),
         xfyun_app_id: lookup_account(root, CredentialAccount::XfyunAppId),
         xfyun_api_key: lookup_account(root, CredentialAccount::XfyunApiKey),
+        tencent_cloud_app_id: lookup_account(root, CredentialAccount::TencentCloudAppId),
+        tencent_cloud_secret_id: lookup_account(root, CredentialAccount::TencentCloudSecretId),
+        tencent_cloud_secret_key: lookup_account(root, CredentialAccount::TencentCloudSecretKey),
         ark_api_key: lookup_account(root, CredentialAccount::ArkApiKey),
         ark_model_id: lookup_account(root, CredentialAccount::ArkModelId),
         ark_endpoint: lookup_account(root, CredentialAccount::ArkEndpoint),
@@ -1979,9 +2121,9 @@ impl CredentialsVault {
     /// 系统凭据库 service name；macOS 下对应 Keychain service。
     pub const SERVICE_NAME: &'static str = "com.openless.app";
 
-    pub fn load_metadata() -> openless_core::CredentialMetadata {
+    pub fn load_metadata() -> Result<openless_core::CredentialMetadata> {
         let _guard = credentials_lock().lock();
-        credential_metadata(&load_credentials())
+        Ok(credential_metadata(&load_credentials_for_update()?))
     }
 
     pub fn save_metadata(metadata: openless_core::CredentialMetadata) -> Result<()> {
@@ -1991,14 +2133,18 @@ impl CredentialsVault {
         save_credentials(&root)
     }
 
-    pub fn channel_has_secrets(kind: ChannelKind, id: &str) -> bool {
+    pub fn channel_has_secrets(kind: ChannelKind, id: &str) -> Result<bool> {
         let _guard = credentials_lock().lock();
-        channel_has_secrets(&load_credentials(), kind, id)
+        Ok(channel_has_secrets(
+            &load_credentials_for_update()?,
+            kind,
+            id,
+        ))
     }
 
     pub fn get(account: CredentialAccount) -> Result<Option<String>> {
         let _guard = credentials_lock().lock();
-        Ok(lookup_account(&load_credentials(), account))
+        Ok(lookup_account(&load_credentials_for_update()?, account))
     }
 
     pub fn set(account: CredentialAccount, value: &str) -> Result<()> {
@@ -2015,7 +2161,7 @@ impl CredentialsVault {
 
     pub fn get_for_asr_provider(id: &str, account: CredentialAccount) -> Result<Option<String>> {
         let _guard = credentials_lock().lock();
-        let mut root = load_credentials();
+        let mut root = load_credentials_for_update()?;
         root.active.asr = id.to_string();
         Ok(lookup_account(&root, account))
     }
@@ -2057,7 +2203,9 @@ impl CredentialsVault {
             );
         }
         #[cfg(not(target_os = "android"))]
-        Ok(lookup_marketplace_github_token(&load_credentials()))
+        Ok(lookup_marketplace_github_token(
+            &load_credentials_for_update()?,
+        ))
     }
 
     pub fn set_marketplace_github_token(value: &str) -> Result<()> {
@@ -2186,7 +2334,7 @@ impl CredentialsVault {
     /// 渠道化后必须能读任意一张卡片。
     pub fn get_for_llm_provider(id: &str, account: CredentialAccount) -> Result<Option<String>> {
         let _guard = credentials_lock().lock();
-        let mut root = load_credentials();
+        let mut root = load_credentials_for_update()?;
         root.active.llm = id.to_string();
         Ok(lookup_account(&root, account))
     }
@@ -2360,6 +2508,29 @@ impl CredentialsVault {
         save_credentials(&root)
     }
 
+    pub fn get_llm_protocol_option(id: Option<&str>, account: &str) -> Result<Option<String>> {
+        let _guard = credentials_lock().lock();
+        let mut root = load_credentials_for_update()?;
+        let id = id.unwrap_or(&root.active.llm).to_string();
+        match root.providers.llm.get_mut(&id) {
+            Some(entry) => Ok(entry.protocol_option(account)?.clone()),
+            None => Ok(None),
+        }
+    }
+
+    pub fn set_llm_protocol_option(id: Option<&str>, account: &str, value: &str) -> Result<()> {
+        let _guard = credentials_lock().lock();
+        let mut config = openless_core::llm_protocol::LlmProtocolConfig::default();
+        config.apply(account, value)?;
+        let mut root = load_credentials_for_update()?;
+        let id = id.unwrap_or(&root.active.llm).to_string();
+        let entry = root.providers.llm.entry(id).or_default();
+        *entry.protocol_option(account)? =
+            (!value.trim().is_empty()).then(|| value.trim().to_string());
+        entry.channel.lastTest = None;
+        save_credentials(&root)
+    }
+
     /// 写入指定 LLM 渠道的采样温度，不改变 active 渠道。
     pub fn set_llm_temperature_for_provider(id: &str, value: &str) -> Result<()> {
         let _guard = credentials_lock().lock();
@@ -2404,6 +2575,13 @@ impl CredentialsVault {
         let root = load_credentials();
         credentials_snapshot(&root, include_omni)
     }
+
+    pub(crate) fn configuration_snapshot(
+        include_omni: bool,
+    ) -> Result<CredentialConfigurationSnapshot> {
+        let _guard = credentials_lock().lock();
+        configuration_snapshot_with(include_omni, load_credentials_for_update)
+    }
 }
 
 #[cfg(test)]
@@ -2413,7 +2591,7 @@ mod tests {
     use super::{
         android_persistable_credentials, chunk_json_payload, credentials_cache,
         get_android_marketplace_token_at, load_android_credentials_from_path,
-        load_android_credentials_from_path_with_crypto, load_android_credentials_into_cache_with,
+        load_android_credentials_from_path_with_crypto, load_credentials_into_cache_with,
         lookup_account, lookup_marketplace_github_token, lookup_omni_account,
         omni_extra_headers_json, omni_temperature_string, parse_extra_headers_json,
         parse_llm_temperature, reset_credentials_cache_for_tests,
@@ -2425,6 +2603,226 @@ mod tests {
     use anyhow::anyhow;
     use parking_lot::Mutex;
     use std::collections::HashMap;
+
+    #[test]
+    fn macos_credentials_read_one_item_after_legacy_chunk_migration() {
+        use std::cell::RefCell;
+
+        let mut root = CredsRoot::default();
+        root.version = 2;
+        write_account(
+            &mut root,
+            CredentialAccount::AsrApiKey,
+            Some("fixture-key".repeat(200)),
+        );
+        let json = serde_json::to_string(&root).unwrap();
+        let chunks = chunk_json_payload(&json);
+        assert!(chunks.len() > 1);
+        let manifest = super::CredsChunkManifest {
+            openless_credentials_storage: "chunked".into(),
+            version: 1,
+            generation: Some("legacy-generation".into()),
+            chunks: chunks.len(),
+        };
+        let mut entries = HashMap::new();
+        entries.insert(
+            super::KEYRING_CREDENTIALS_ACCOUNT.to_owned(),
+            serde_json::to_string(&manifest).unwrap(),
+        );
+        for (index, chunk) in chunks.iter().enumerate() {
+            entries.insert(
+                super::chunk_account(Some("legacy-generation"), index),
+                chunk.clone(),
+            );
+        }
+        let entries = RefCell::new(entries);
+        let reads = RefCell::new(Vec::new());
+        let writes = RefCell::new(Vec::new());
+        let read = |account: &str| {
+            reads.borrow_mut().push(account.to_owned());
+            Ok(entries.borrow().get(account).cloned())
+        };
+        let write = |account: &str, value: &str| {
+            writes.borrow_mut().push(account.to_owned());
+            entries
+                .borrow_mut()
+                .insert(account.to_owned(), value.to_owned());
+            Ok(())
+        };
+
+        let loaded = super::load_keyring_credentials_with(read, write, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            lookup_account(&loaded, CredentialAccount::AsrApiKey),
+            lookup_account(&root, CredentialAccount::AsrApiKey)
+        );
+        assert_eq!(
+            *writes.borrow(),
+            [super::KEYRING_SINGLE_CREDENTIALS_ACCOUNT]
+        );
+        assert!(
+            super::read_chunk_manifest(
+                entries
+                    .borrow()
+                    .get(super::KEYRING_CREDENTIALS_ACCOUNT)
+                    .unwrap()
+            )
+            .is_some(),
+            "the old manifest stays readable by a previous app version"
+        );
+        assert!(
+            entries
+                .borrow()
+                .contains_key(&super::chunk_account(Some("legacy-generation"), 0)),
+            "migration must leave legacy Keychain entries untouched"
+        );
+
+        reads.borrow_mut().clear();
+        writes.borrow_mut().clear();
+        let loaded = super::load_keyring_credentials_with(read, write, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.version, 2);
+        assert_eq!(*reads.borrow(), [super::KEYRING_SINGLE_CREDENTIALS_ACCOUNT]);
+        assert!(
+            writes.borrow().is_empty(),
+            "a migrated vault must not write at startup"
+        );
+    }
+
+    #[test]
+    fn macos_credentials_keep_readable_data_when_consolidation_is_denied() {
+        let root = CredsRoot::default();
+        let json = serde_json::to_string(&root).unwrap();
+        let manifest = serde_json::to_string(&super::CredsChunkManifest {
+            openless_credentials_storage: "chunked".into(),
+            version: 1,
+            generation: None,
+            chunks: 1,
+        })
+        .unwrap();
+        let loaded = super::load_keyring_credentials_with(
+            |account| {
+                if account == super::KEYRING_SINGLE_CREDENTIALS_ACCOUNT {
+                    return Ok(None);
+                }
+                Ok(Some(if account == super::KEYRING_CREDENTIALS_ACCOUNT {
+                    manifest.clone()
+                } else {
+                    json.clone()
+                }))
+            },
+            |_, _| Err(anyhow!("fixture write denied")),
+            true,
+        )
+        .unwrap();
+        assert!(
+            loaded.is_some(),
+            "an optional format migration must not turn readable credentials into an error"
+        );
+    }
+
+    #[test]
+    fn macos_credentials_propagate_read_failures_without_migrating() {
+        let missing = super::load_keyring_credentials_with(
+            |_| Ok(None),
+            |_, _| panic!("missing credentials must not be written"),
+            true,
+        )
+        .unwrap();
+        assert!(missing.is_none());
+        let mut denied_reads = Vec::new();
+        let denied = super::load_keyring_credentials_with(
+            |account| {
+                denied_reads.push(account.to_owned());
+                Err(anyhow!("fixture access denied"))
+            },
+            |_, _| panic!("unreadable credentials must not be overwritten"),
+            true,
+        );
+        assert!(denied.is_err());
+        assert_eq!(
+            denied_reads,
+            [super::KEYRING_SINGLE_CREDENTIALS_ACCOUNT],
+            "an unreadable v2 item must not fall back to stale v1 credentials"
+        );
+        let malformed = super::load_keyring_credentials_with(
+            |_| Ok(Some("{}".into())),
+            |_, _| panic!("malformed credentials must not be overwritten"),
+            true,
+        );
+        assert!(malformed.is_err());
+    }
+
+    #[test]
+    fn macos_credentials_never_migrate_an_incomplete_legacy_payload() {
+        let manifest = serde_json::to_string(&super::CredsChunkManifest {
+            openless_credentials_storage: "chunked".into(),
+            version: 1,
+            generation: None,
+            chunks: 2,
+        })
+        .unwrap();
+        let result = super::load_keyring_credentials_with(
+            |account| match account {
+                super::KEYRING_SINGLE_CREDENTIALS_ACCOUNT => Ok(None),
+                super::KEYRING_CREDENTIALS_ACCOUNT => Ok(Some(manifest.clone())),
+                "credentials.v1.chunk.0" => Ok(Some("{\"version\":1,".into())),
+                _ => Err(anyhow!("fixture chunk access denied")),
+            },
+            |_, _| panic!("incomplete legacy data must not replace a vault"),
+            true,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn credential_configuration_snapshot_is_atomic_and_propagates_load_errors() {
+        let denied =
+            super::configuration_snapshot_with(false, || Err(anyhow!("fixture keychain locked")));
+        assert!(
+            denied.is_err(),
+            "an unreadable vault is not an unconfigured ASR provider"
+        );
+
+        let mut root = CredsRoot::default();
+        root.active.asr = "my-asr-channel".into();
+        write_account(
+            &mut root,
+            CredentialAccount::AsrApiKey,
+            Some("fixture-asr-key".into()),
+        );
+        root.providers
+            .asr
+            .get_mut("my-asr-channel")
+            .unwrap()
+            .channel
+            .providerType = Some("bailian".into());
+        root.active.llm = "my-llm-channel".into();
+        write_account(
+            &mut root,
+            CredentialAccount::ArkApiKey,
+            Some("fixture-llm-key".into()),
+        );
+        root.providers
+            .llm
+            .get_mut("my-llm-channel")
+            .unwrap()
+            .channel
+            .providerType = Some("openai".into());
+        let loaded = super::configuration_snapshot_with(false, || Ok(root)).unwrap();
+        assert_eq!(loaded.active_asr_provider, "bailian");
+        assert_eq!(loaded.active_llm_provider, "openai");
+        assert_eq!(
+            loaded.credentials.asr_api_key.as_deref(),
+            Some("fixture-asr-key")
+        );
+        assert_eq!(
+            loaded.credentials.ark_api_key.as_deref(),
+            Some("fixture-llm-key")
+        );
+    }
 
     #[test]
     fn credential_payload_chunks_stay_under_windows_blob_limit() {
@@ -2440,6 +2838,48 @@ mod tests {
         assert!(chunks
             .iter()
             .all(|chunk| chunk.encode_utf16().count() <= KEYRING_CHUNK_MAX_UTF16_UNITS));
+    }
+
+    #[test]
+    fn llm_protocol_options_survive_vault_reload_and_core_projection() {
+        use openless_core::llm_protocol::*;
+        let mut root = CredsRoot::default();
+        let entry = root.providers.llm.entry("channel-b".into()).or_default();
+        let values = ["messages", "budget", "8192", "2048"];
+        for (account, value) in CONFIG_ACCOUNTS.into_iter().zip(values) {
+            *entry.protocol_option(account).unwrap() = Some(value.into());
+        }
+        assert!(!entry.has_no_content());
+        let serialized = serde_json::to_string(&root).unwrap();
+        let mut restored: CredsRoot = serde_json::from_str(&serialized).unwrap();
+        for (account, value) in CONFIG_ACCOUNTS.into_iter().zip(values) {
+            assert_eq!(
+                restored
+                    .providers
+                    .llm
+                    .get_mut("channel-b")
+                    .unwrap()
+                    .protocol_option(account)
+                    .unwrap()
+                    .as_deref(),
+                Some(value)
+            );
+        }
+        let decoded =
+            openless_core::credentials_legacy::decode_legacy_credentials(&serialized).unwrap();
+        for (account, value) in CONFIG_ACCOUNTS.into_iter().zip(values) {
+            assert!(decoded
+                .secrets
+                .iter()
+                .any(
+                    |(key, secret)| key.provider_id.as_deref() == Some("channel-b")
+                        && key.account == account
+                        && secret.expose_secret() == value
+                ));
+        }
+        let old: CredsLlmEntry = serde_json::from_str(r#"{"apiKey":"old-key"}"#).unwrap();
+        assert!(old.requestFormat.is_none());
+        assert!(!restored.providers.llm.contains_key("channel-a"));
     }
 
     #[test]
@@ -2861,9 +3301,8 @@ mod tests {
     #[test]
     fn android_startup_failure_does_not_cache_default_or_suppress_retry() {
         reset_credentials_cache_for_tests();
-        let first = load_android_credentials_into_cache_with(|| {
-            Err(anyhow!("injected startup scrub failure"))
-        });
+        let first =
+            load_credentials_into_cache_with(|| Err(anyhow!("injected startup scrub failure")));
         assert!(lookup_marketplace_github_token(&first).is_none());
         assert!(credentials_cache().lock().is_none());
 
@@ -2871,8 +3310,7 @@ mod tests {
             std::env::temp_dir().join(format!("openless-android-startup-{}", uuid::Uuid::new_v4()));
         let path = dir.join("credentials.enc.json");
         write_legacy_android_envelope(&path, "gho_legacy_startup_secret");
-        let second =
-            load_android_credentials_into_cache_with(|| load_android_credentials_from_path(&path));
+        let second = load_credentials_into_cache_with(|| load_android_credentials_from_path(&path));
 
         assert!(lookup_marketplace_github_token(&second).is_none());
         assert!(credentials_cache().lock().is_some());

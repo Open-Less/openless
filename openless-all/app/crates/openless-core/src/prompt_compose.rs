@@ -70,6 +70,66 @@ pub fn split_polish_translate_output(raw: &str) -> Option<(Option<String>, Strin
     Some((source, translation))
 }
 
+/// Publishes only the target section of the combined polish/translate response.
+/// Keep incomplete markers and trailing whitespace until the next delta so the
+/// concatenated output matches the final target text after whitespace trimming.
+#[derive(Default)]
+pub(crate) struct PolishTranslationStream {
+    marker_tail: String,
+    in_translation: bool,
+    started: bool,
+    pending_whitespace: String,
+}
+
+impl PolishTranslationStream {
+    pub(crate) fn plain() -> Self {
+        Self {
+            in_translation: true,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn push(&mut self, delta: &str) -> String {
+        let target = if self.in_translation {
+            delta.to_owned()
+        } else {
+            self.marker_tail.push_str(delta);
+            let Some(index) = self.marker_tail.find(POLISH_TRANSLATE_TGT_MARKER) else {
+                // Source text is retained by the provider's final response. This
+                // parser only needs a possible prefix of the target marker.
+                let keep = (1..POLISH_TRANSLATE_TGT_MARKER.len())
+                    .rev()
+                    .find(|length| {
+                        self.marker_tail
+                            .ends_with(&POLISH_TRANSLATE_TGT_MARKER[..*length])
+                    })
+                    .unwrap_or(0);
+                self.marker_tail.drain(..self.marker_tail.len() - keep);
+                return String::new();
+            };
+            self.in_translation = true;
+            let target = self
+                .marker_tail
+                .split_off(index + POLISH_TRANSLATE_TGT_MARKER.len());
+            self.marker_tail.clear();
+            target
+        };
+        let target = if self.started {
+            target.as_str()
+        } else {
+            target.trim_start()
+        };
+        if target.is_empty() {
+            return String::new();
+        }
+        self.started = true;
+        self.pending_whitespace.push_str(target);
+        let ready_length = self.pending_whitespace.trim_end().len();
+        let trailing = self.pending_whitespace.split_off(ready_length);
+        std::mem::replace(&mut self.pending_whitespace, trailing)
+    }
+}
+
 /// 把 working_languages + front_app 拼成 system prompt 头部前提：
 ///     # 上下文
 ///     用户的工作语言：…
@@ -383,4 +443,42 @@ pub fn compose_hotword_block_preview(hotwords: &[String]) -> String {
     // Style Pack 设置页的预览 100% 跟 system prompt 用同一段文本，避免「设置里看到一段、
     // 实际发给 LLM 是另一段」的不一致。空热词时返回纯错别字纠错指南。
     build_hotword_block(hotwords)
+}
+
+#[cfg(test)]
+mod translation_stream_tests {
+    use super::*;
+
+    #[test]
+    fn translation_stream_filters_source_and_split_markers() {
+        let mut stream = PolishTranslationStream::default();
+        assert_eq!(stream.push(POLISH_TRANSLATE_SRC_MARKER), "");
+        assert_eq!(stream.push("\n风格化源文\n[[OPENLESS_TRANS"), "");
+        assert_eq!(stream.push("LATION]]\n \t你好"), "你好");
+        assert_eq!(stream.push(" \n"), "");
+        assert_eq!(stream.push("  world🙂\n"), " \n  world🙂");
+        assert_eq!(stream.push(" \t"), "");
+    }
+
+    #[test]
+    fn translation_stream_matches_final_text_at_every_character_boundary() {
+        let raw = format!("{POLISH_TRANSLATE_SRC_MARKER}\n源文🙂\n{POLISH_TRANSLATE_TGT_MARKER}\n  Hello 🌍\n- 第二行\n\t");
+        let expected = split_polish_translate_output(&raw).unwrap().1;
+        for boundary in raw.char_indices().map(|(index, _)| index) {
+            let mut stream = PolishTranslationStream::default();
+            let mut output = stream.push(&raw[..boundary]);
+            output.push_str(&stream.push(&raw[boundary..]));
+            assert_eq!(output, expected, "split at byte {boundary}");
+        }
+        let mut stream = PolishTranslationStream::default();
+        let output: String = raw.chars().map(|ch| stream.push(&ch.to_string())).collect();
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn translation_stream_without_target_marker_never_publishes_source() {
+        let mut stream = PolishTranslationStream::default();
+        assert!(stream.push("源文正文").is_empty());
+        assert!(stream.push("[[OPENLESS_TRANSLATIO").is_empty());
+    }
 }

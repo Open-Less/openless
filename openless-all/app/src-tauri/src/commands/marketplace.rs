@@ -12,8 +12,7 @@ pub async fn marketplace_list(
     sort: Option<String>,
     limit: Option<u32>,
 ) -> Result<Vec<openless_core::MarketplaceListItem>, String> {
-    core
-        .services()
+    core.services()
         .marketplace
         .list(openless_core::MarketplaceQuery { query, sort, limit })
         .await
@@ -25,8 +24,7 @@ pub async fn marketplace_detail(
     core: CoreState<'_>,
     pack_id: String,
 ) -> Result<openless_core::MarketplaceDetail, String> {
-    core
-        .services()
+    core.services()
         .marketplace
         .detail(pack_id)
         .await
@@ -38,8 +36,7 @@ pub async fn marketplace_install(
     core: CoreState<'_>,
     pack_id: String,
 ) -> Result<StylePack, String> {
-    core
-        .services()
+    core.services()
         .marketplace
         .install(pack_id)
         .await
@@ -70,8 +67,7 @@ pub async fn marketplace_upload(
     pack_id: String,
     origin_pack_id: Option<String>,
 ) -> Result<openless_core::MarketplaceUploadResult, String> {
-    core
-        .services()
+    core.services()
         .marketplace
         .upload(pack_id, origin_pack_id)
         .await
@@ -83,8 +79,7 @@ pub async fn marketplace_like(
     core: CoreState<'_>,
     pack_id: String,
 ) -> Result<openless_core::MarketplaceLikeResult, String> {
-    core
-        .services()
+    core.services()
         .marketplace
         .toggle_like(pack_id)
         .await
@@ -92,12 +87,8 @@ pub async fn marketplace_like(
 }
 
 #[tauri::command]
-pub async fn marketplace_delete(
-    core: CoreState<'_>,
-    pack_id: String,
-) -> Result<(), String> {
-    core
-        .services()
+pub async fn marketplace_delete(core: CoreState<'_>, pack_id: String) -> Result<(), String> {
+    core.services()
         .marketplace
         .delete(pack_id)
         .await
@@ -106,8 +97,7 @@ pub async fn marketplace_delete(
 
 #[tauri::command]
 pub async fn marketplace_my_likes(core: CoreState<'_>) -> Result<Vec<String>, String> {
-    core
-        .services()
+    core.services()
         .marketplace
         .my_likes()
         .await
@@ -118,8 +108,7 @@ pub async fn marketplace_my_likes(core: CoreState<'_>) -> Result<Vec<String>, St
 pub async fn marketplace_my_packs(
     core: CoreState<'_>,
 ) -> Result<Vec<openless_core::MarketplaceMyPackItem>, String> {
-    core
-        .services()
+    core.services()
         .marketplace
         .my_packs()
         .await

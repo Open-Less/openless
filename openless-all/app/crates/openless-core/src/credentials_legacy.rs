@@ -99,8 +99,15 @@ struct LegacyEntry {
     advanced_config: Option<String>,
     xfyun_app_id: Option<String>,
     xfyun_api_key: Option<String>,
+    tencent_cloud_app_id: Option<String>,
+    tencent_cloud_secret_id: Option<String>,
+    tencent_cloud_secret_key: Option<String>,
     temperature: Option<f64>,
     extra_headers: Option<BTreeMap<String, String>>,
+    request_format: Option<String>,
+    messages_thinking: Option<String>,
+    max_tokens: Option<String>,
+    thinking_budget: Option<String>,
 }
 
 impl Default for LegacyEntry {
@@ -123,8 +130,15 @@ impl Default for LegacyEntry {
             advanced_config: None,
             xfyun_app_id: None,
             xfyun_api_key: None,
+            tencent_cloud_app_id: None,
+            tencent_cloud_secret_id: None,
+            tencent_cloud_secret_key: None,
             temperature: None,
             extra_headers: None,
+            request_format: None,
+            messages_thinking: None,
+            max_tokens: None,
+            thinking_budget: None,
         }
     }
 }
@@ -145,6 +159,13 @@ impl LegacyEntry {
             &self.advanced_config,
             &self.xfyun_app_id,
             &self.xfyun_api_key,
+            &self.tencent_cloud_app_id,
+            &self.tencent_cloud_secret_id,
+            &self.tencent_cloud_secret_key,
+            &self.request_format,
+            &self.messages_thinking,
+            &self.max_tokens,
+            &self.thinking_budget,
         ]
         .into_iter()
         .any(|value| value.as_deref().is_some_and(|value| !value.is_empty()))
@@ -347,6 +368,15 @@ fn decode_entry(
         (endpoint, entry.base_url),
         (model, entry.model),
     ];
+    if namespace == CredentialNamespace::Llm {
+        use crate::llm_protocol::*;
+        fields.extend([
+            (REQUEST_FORMAT_ACCOUNT, entry.request_format),
+            (MESSAGES_THINKING_ACCOUNT, entry.messages_thinking),
+            (MAX_TOKENS_ACCOUNT, entry.max_tokens),
+            (THINKING_BUDGET_ACCOUNT, entry.thinking_budget),
+        ]);
+    }
     if namespace == CredentialNamespace::Asr {
         fields.extend([
             (VOLCENGINE_APP_KEY_ACCOUNT, entry.app_key),
@@ -358,6 +388,15 @@ fn decode_entry(
             (ASR_ADVANCED_CONFIG_ACCOUNT, entry.advanced_config),
             (XFYUN_APP_ID_ACCOUNT, entry.xfyun_app_id),
             (XFYUN_API_KEY_ACCOUNT, entry.xfyun_api_key),
+            (TENCENT_CLOUD_APP_ID_ACCOUNT, entry.tencent_cloud_app_id),
+            (
+                TENCENT_CLOUD_SECRET_ID_ACCOUNT,
+                entry.tencent_cloud_secret_id,
+            ),
+            (
+                TENCENT_CLOUD_SECRET_KEY_ACCOUNT,
+                entry.tencent_cloud_secret_key,
+            ),
         ]);
     }
     if let Some(account) = extra_headers {
@@ -411,6 +450,9 @@ pub fn read_legacy_accounts(
                 ASR_ADVANCED_CONFIG_ACCOUNT,
                 XFYUN_APP_ID_ACCOUNT,
                 XFYUN_API_KEY_ACCOUNT,
+                TENCENT_CLOUD_APP_ID_ACCOUNT,
+                TENCENT_CLOUD_SECRET_ID_ACCOUNT,
+                TENCENT_CLOUD_SECRET_KEY_ACCOUNT,
             ][..],
         ),
         (

@@ -12,11 +12,13 @@ use std::time::{Duration, Instant};
 use futures_util::future::BoxFuture;
 use parking_lot::{Mutex, RwLock};
 
+use crate::asr::tencent_cloud::TencentCloudASRError;
 use crate::asr::{
     BailianCredentials, BailianRealtimeASR, DashScopeMultimodalASR, DictionaryHotword,
     ElevenLabsBatchASR, MimoBatchASR, Qwen3RealtimeASR, Qwen3RealtimeCredentials,
-    StepfunRealtimeASR, StepfunRealtimeCredentials, VolcengineCredentials, VolcengineStreamingASR,
-    WhisperBatchASR, XfyunCredentials, XfyunStreamingASR,
+    StepfunRealtimeASR, StepfunRealtimeCredentials, TencentCloudCredentials,
+    TencentCloudStreamingASR, VolcengineCredentials, VolcengineStreamingASR, WhisperBatchASR,
+    XfyunCredentials, XfyunStreamingASR,
 };
 use crate::config::{TaskSpawner, TokioTaskSpawner};
 use crate::credentials::{
@@ -24,7 +26,8 @@ use crate::credentials::{
     ASR_API_KEY_ACCOUNT, ASR_ENDPOINT_ACCOUNT, ASR_MODEL_ACCOUNT, ASR_VOCABULARY_ID_ACCOUNT,
     LLM_API_KEY_ACCOUNT, LLM_ENDPOINT_ACCOUNT, LLM_EXTRA_HEADERS_ACCOUNT, LLM_TEMPERATURE_ACCOUNT,
     OMNI_API_KEY_ACCOUNT, OMNI_ENDPOINT_ACCOUNT, OMNI_EXTRA_HEADERS_ACCOUNT, OMNI_MODEL_ACCOUNT,
-    OMNI_TEMPERATURE_ACCOUNT, VOLCENGINE_ACCESS_KEY_ACCOUNT, VOLCENGINE_API_KEY_ACCOUNT,
+    OMNI_TEMPERATURE_ACCOUNT, TENCENT_CLOUD_APP_ID_ACCOUNT, TENCENT_CLOUD_SECRET_ID_ACCOUNT,
+    TENCENT_CLOUD_SECRET_KEY_ACCOUNT, VOLCENGINE_ACCESS_KEY_ACCOUNT, VOLCENGINE_API_KEY_ACCOUNT,
     VOLCENGINE_APP_KEY_ACCOUNT, VOLCENGINE_AUTH_MODE_ACCOUNT, VOLCENGINE_RESOURCE_ID_ACCOUNT,
     XFYUN_API_KEY_ACCOUNT, XFYUN_APP_ID_ACCOUNT,
 };
@@ -55,10 +58,12 @@ pub const SHARED_CLOUD_ASR_PROVIDER_TYPES: &[&str] = &[
     "groq",
     "whisper",
     "openrouter",
+    "orcarouter",
     "zenmux",
     "openai-compatible",
     "xiaomi-mimo-asr",
     "iflytek",
+    "tencent-cloud",
 ];
 
 pub const SHARED_CLOUD_LLM_PROVIDER_TYPES: &[&str] = &[
@@ -72,11 +77,16 @@ pub const SHARED_CLOUD_LLM_PROVIDER_TYPES: &[&str] = &[
     "mimo",
     "cometapi",
     "openrouterFree",
+    "orcarouter",
     "alibabaCoding",
     "codingPlanX",
     "minimax",
     "stepfun",
+    "opencode",
+    "tencentTokenHub",
     "custom",
+    "custom_responses",
+    "custom_messages",
 ];
 
 pub const SHARED_OMNI_PROVIDER_TYPES: &[&str] = &["openai", "gemini", "dashscope-omni", "custom"];
@@ -114,6 +124,7 @@ enum CloudTranscriptionSessionKind {
     QwenRealtime(Arc<Qwen3RealtimeASR>),
     StepfunRealtime(Arc<StepfunRealtimeASR>),
     Xfyun(Arc<XfyunStreamingASR>),
+    TencentCloud(Arc<TencentCloudStreamingASR>),
 }
 
 struct CloudTranscriptionSession {
@@ -164,6 +175,9 @@ impl AudioConsumer for CloudTranscriptionSession {
                 provider.consume_pcm_chunk(pcm)
             }
             CloudTranscriptionSessionKind::Xfyun(provider) => provider.consume_pcm_chunk(pcm),
+            CloudTranscriptionSessionKind::TencentCloud(provider) => {
+                provider.consume_pcm_chunk(pcm)
+            }
         }
     }
 }
@@ -230,6 +244,16 @@ impl TranscriptionSession for CloudTranscriptionSession {
                     timeout_transcription(Duration::from_secs(120), provider.await_final_result())
                         .await?
                 }
+                CloudTranscriptionSessionKind::TencentCloud(provider) => {
+                    provider
+                        .send_last_frame()
+                        .await
+                        .map_err(map_tencent_asr_error)?;
+                    provider
+                        .await_final_result()
+                        .await
+                        .map_err(map_tencent_asr_error)?
+                }
             };
             Ok(TranscriptOutput {
                 text: transcript.text,
@@ -249,6 +273,7 @@ impl TranscriptionSession for CloudTranscriptionSession {
             CloudTranscriptionSessionKind::QwenRealtime(provider) => provider.cancel(),
             CloudTranscriptionSessionKind::StepfunRealtime(provider) => provider.cancel(),
             CloudTranscriptionSessionKind::Xfyun(provider) => provider.cancel(),
+            CloudTranscriptionSessionKind::TencentCloud(provider) => provider.cancel(),
         }
         Box::pin(async { Ok(()) })
     }
@@ -434,14 +459,16 @@ async fn build_cloud_transcription_session(
         ActiveAsrProviderKind::Mimo => {
             require_configured(&api_key, "ASR API key")?;
             let effective_model = non_blank_owned(model)
-                .unwrap_or_else(|| crate::asr::mimo::DEFAULT_MODEL.to_string());
+                .unwrap_or_else(|| default_asr_model(provider_type).unwrap().to_string());
+            let endpoint = non_blank_owned(endpoint)
+                .unwrap_or_else(|| default_asr_endpoint(provider_type).unwrap().to_string());
+            let provider = if provider_type == crate::asr::mimo::ORCAROUTER_PROVIDER_ID {
+                MimoBatchASR::new_orcarouter(api_key, endpoint, effective_model.clone())
+            } else {
+                MimoBatchASR::new(api_key, endpoint, effective_model.clone())
+            };
             (
-                CloudTranscriptionSessionKind::Mimo(Arc::new(MimoBatchASR::new(
-                    api_key,
-                    non_blank_owned(endpoint)
-                        .unwrap_or_else(|| crate::asr::mimo::DEFAULT_ENDPOINT.to_string()),
-                    effective_model.clone(),
-                ))),
+                CloudTranscriptionSessionKind::Mimo(Arc::new(provider)),
                 Some(effective_model),
             )
         }
@@ -625,6 +652,62 @@ async fn build_cloud_transcription_session(
             provider.open_session().await.map_err(map_asr_error)?;
             (CloudTranscriptionSessionKind::Xfyun(provider), None)
         }
+        ActiveAsrProviderKind::TencentCloud => {
+            let app_id = read_channel_credential(
+                credentials,
+                CredentialNamespace::Asr,
+                channel_id,
+                TENCENT_CLOUD_APP_ID_ACCOUNT,
+            )
+            .await?
+            .unwrap_or_default();
+            let secret_id = read_channel_credential(
+                credentials,
+                CredentialNamespace::Asr,
+                channel_id,
+                TENCENT_CLOUD_SECRET_ID_ACCOUNT,
+            )
+            .await?
+            .unwrap_or_default();
+            let secret_key = read_channel_credential(
+                credentials,
+                CredentialNamespace::Asr,
+                channel_id,
+                TENCENT_CLOUD_SECRET_KEY_ACCOUNT,
+            )
+            .await?
+            .unwrap_or_default();
+            require_configured(&app_id, "Tencent Cloud AppID")?;
+            require_configured(&secret_id, "Tencent Cloud SecretID")?;
+            require_configured(&secret_key, "Tencent Cloud SecretKey")?;
+            let model = read_channel_credential(
+                credentials,
+                CredentialNamespace::Asr,
+                channel_id,
+                ASR_MODEL_ACCOUNT,
+            )
+            .await?
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| crate::asr::tencent_cloud::DEFAULT_MODEL.to_string());
+            let provider = Arc::new(TencentCloudStreamingASR::with_task_spawner(
+                TencentCloudCredentials {
+                    app_id,
+                    secret_id,
+                    secret_key,
+                    model: model.clone(),
+                },
+                Arc::clone(&task_spawner),
+            ));
+            provider.set_partial_sink(Arc::clone(&partials));
+            provider
+                .open_session()
+                .await
+                .map_err(map_tencent_asr_error)?;
+            (
+                CloudTranscriptionSessionKind::TencentCloud(provider),
+                Some(model),
+            )
+        }
     };
     Ok((kind, crate::AsrCallLabel::new(effective, label_model)))
 }
@@ -667,6 +750,22 @@ fn map_asr_error(error: impl std::fmt::Display) -> BackendError {
         BackendErrorCode::Provider,
         format!("ASR provider failed: {error}"),
     )
+}
+
+fn map_tencent_asr_error(error: TencentCloudASRError) -> BackendError {
+    let retryable = matches!(
+        &error,
+        TencentCloudASRError::ConnectionFailed
+            | TencentCloudASRError::RateLimited
+            | TencentCloudASRError::ServiceUnavailable(_)
+            | TencentCloudASRError::NoFinalResult
+            | TencentCloudASRError::FinalResultTimeout
+    );
+    BackendError::new(
+        BackendErrorCode::Provider,
+        format!("Tencent Cloud ASR failed: {error}"),
+    )
+    .retryable(retryable)
 }
 
 pub struct SharedCloudTextPolisher {
@@ -798,6 +897,63 @@ impl TextPolisher for SharedCloudTextPolisher {
     }
 }
 
+struct PolishStreamPublisher {
+    sink: Arc<dyn TextStreamSink>,
+    cancellation: Arc<ProviderCancellation>,
+    state: Mutex<PolishStreamState>,
+}
+
+#[derive(Default)]
+struct PolishStreamState {
+    translation: Option<crate::prompt_compose::PolishTranslationStream>,
+    offset: u64,
+    error: Option<BackendError>,
+}
+
+impl PolishStreamPublisher {
+    fn new(
+        sink: Arc<dyn TextStreamSink>,
+        cancellation: Arc<ProviderCancellation>,
+        translation: Option<crate::prompt_compose::PolishTranslationStream>,
+    ) -> Self {
+        Self {
+            sink,
+            cancellation,
+            state: Mutex::new(PolishStreamState {
+                translation,
+                ..PolishStreamState::default()
+            }),
+        }
+    }
+
+    fn publish(&self, delta: &str) {
+        let mut state = self.state.lock();
+        if self.cancellation.is_cancelled() || state.error.is_some() {
+            return;
+        }
+        let text = match state.translation.as_mut() {
+            Some(translation) => translation.push(delta),
+            None => delta.to_owned(),
+        };
+        if text.is_empty() {
+            return;
+        }
+        let offset = state.offset;
+        state.offset += text.chars().count() as u64;
+        if let Err(error) = self.sink.publish(TextStreamChunk { text, offset }) {
+            state.error = Some(error);
+        }
+    }
+
+    fn should_cancel(&self) -> bool {
+        self.cancellation.is_cancelled() || self.state.lock().error.is_some()
+    }
+
+    fn take_error(&self) -> Option<BackendError> {
+        self.state.lock().error.take()
+    }
+}
+
 async fn run_cloud_polish(
     provider: CloudPolisherProvider,
     context: Arc<DictationContext>,
@@ -835,34 +991,37 @@ async fn run_cloud_polish(
     } else {
         context.polish.style_system_prompt.clone()
     };
-    let polished = match &provider {
-        CloudPolisherProvider::OpenAi(provider)
-            if !context.polish.translation_active && provider.supports_streaming_polish() =>
+    let stream = PolishStreamPublisher::new(
+        Arc::clone(&partials),
+        Arc::clone(&cancellation),
+        context
+            .polish
+            .translation_active
+            .then(crate::prompt_compose::PolishTranslationStream::default),
+    );
+    let on_delta = |delta: &str| stream.publish(delta);
+    let should_cancel = || stream.should_cancel();
+    let result = match &provider {
+        CloudPolisherProvider::OpenAi(provider @ crate::polish::ActiveLLMProvider::Codex(_))
+            if !context.polish.translation_active =>
         {
-            let offset = Arc::new(AtomicU64::new(0));
-            let publish_error: Arc<Mutex<Option<BackendError>>> = Arc::new(Mutex::new(None));
-            let sink = Arc::clone(&partials);
-            let stream_offset = Arc::clone(&offset);
-            let stream_error = Arc::clone(&publish_error);
-            let on_delta = move |delta: &str| {
-                if stream_error.lock().is_some() {
-                    return;
-                }
-                let offset =
-                    stream_offset.fetch_add(delta.chars().count() as u64, Ordering::AcqRel);
-                if let Err(error) = sink.publish(TextStreamChunk {
-                    text: delta.to_string(),
-                    offset,
-                }) {
-                    *stream_error.lock() = Some(error);
-                }
-            };
-            let stream_error_for_cancel = Arc::clone(&publish_error);
-            let cancellation_for_stream = Arc::clone(&cancellation);
-            let should_cancel = move || {
-                cancellation_for_stream.is_cancelled() || stream_error_for_cancel.lock().is_some()
-            };
-            let result = provider
+            provider
+                .polish(
+                    &raw_text,
+                    context.polish.mode,
+                    &context.polish.hotwords,
+                    &style_system_prompt,
+                    &context.polish.working_languages,
+                    context.polish.chinese_script_preference,
+                    context.polish.output_language_preference,
+                    context.polish.front_app.as_deref(),
+                    context.polish.cursor_context.as_deref(),
+                    &prior_turns,
+                )
+                .await
+        }
+        CloudPolisherProvider::OpenAi(provider) => {
+            provider
                 .polish_streaming(
                     &raw_text,
                     context.polish.mode,
@@ -877,43 +1036,47 @@ async fn run_cloud_polish(
                     on_delta,
                     should_cancel,
                 )
-                .await;
-            if let Some(error) = publish_error.lock().take() {
-                return Err(error);
-            }
-            result.map_err(map_llm_error)?
+                .await
         }
-        CloudPolisherProvider::OpenAi(provider) => provider
-            .polish(
-                &raw_text,
-                context.polish.mode,
-                &context.polish.hotwords,
-                &style_system_prompt,
-                &context.polish.working_languages,
-                context.polish.chinese_script_preference,
-                context.polish.output_language_preference,
-                context.polish.front_app.as_deref(),
-                context.polish.cursor_context.as_deref(),
-                &prior_turns,
-            )
-            .await
-            .map_err(map_llm_error)?,
-        CloudPolisherProvider::Gemini(provider) => provider
-            .polish(
-                &raw_text,
-                context.polish.mode,
-                &context.polish.hotwords,
-                &style_system_prompt,
-                &context.polish.working_languages,
-                context.polish.chinese_script_preference,
-                context.polish.output_language_preference,
-                context.polish.front_app.as_deref(),
-                context.polish.cursor_context.as_deref(),
-                &prior_turns,
-            )
-            .await
-            .map_err(map_llm_error)?,
+        CloudPolisherProvider::Gemini(provider) if !context.polish.translation_active => {
+            provider
+                .polish(
+                    &raw_text,
+                    context.polish.mode,
+                    &context.polish.hotwords,
+                    &style_system_prompt,
+                    &context.polish.working_languages,
+                    context.polish.chinese_script_preference,
+                    context.polish.output_language_preference,
+                    context.polish.front_app.as_deref(),
+                    context.polish.cursor_context.as_deref(),
+                    &prior_turns,
+                )
+                .await
+        }
+        CloudPolisherProvider::Gemini(provider) => {
+            provider
+                .polish_streaming(
+                    &raw_text,
+                    context.polish.mode,
+                    &context.polish.hotwords,
+                    &style_system_prompt,
+                    &context.polish.working_languages,
+                    context.polish.chinese_script_preference,
+                    context.polish.output_language_preference,
+                    context.polish.front_app.as_deref(),
+                    context.polish.cursor_context.as_deref(),
+                    &prior_turns,
+                    on_delta,
+                    should_cancel,
+                )
+                .await
+        }
     };
+    if let Some(error) = stream.take_error() {
+        return Err(error);
+    }
+    let polished = result.map_err(map_llm_error)?;
     if cancellation.is_cancelled() {
         return Err(cancelled_provider_error());
     }
@@ -928,36 +1091,57 @@ async fn run_cloud_polish(
                 log::warn!(
                     "[cloud-provider] polish+translate response missing markers; using plain translation"
                 );
-                let text = match &provider {
-                    CloudPolisherProvider::OpenAi(provider) => provider
-                        .translate_to(
-                            &raw_text,
-                            &context.polish.translation_target_language,
-                            &context.polish.working_languages,
-                            context.polish.chinese_script_preference,
-                            context.polish.output_language_preference,
-                            context.polish.front_app.as_deref(),
-                        )
-                        .await
-                        .map_err(map_llm_error)?,
-                    CloudPolisherProvider::Gemini(provider) => provider
-                        .translate_to(
-                            &raw_text,
-                            &context.polish.translation_target_language,
-                            &context.polish.working_languages,
-                            context.polish.chinese_script_preference,
-                            context.polish.output_language_preference,
-                            context.polish.front_app.as_deref(),
-                        )
-                        .await
-                        .map_err(map_llm_error)?,
+                // No target section was published, so fallback starts at offset zero.
+                let stream = PolishStreamPublisher::new(
+                    Arc::clone(&partials),
+                    Arc::clone(&cancellation),
+                    Some(crate::prompt_compose::PolishTranslationStream::plain()),
+                );
+                let on_delta = |delta: &str| stream.publish(delta);
+                let should_cancel = || stream.should_cancel();
+                let result = match &provider {
+                    CloudPolisherProvider::OpenAi(provider) => {
+                        provider
+                            .translate_to_streaming(
+                                &raw_text,
+                                &context.polish.translation_target_language,
+                                &context.polish.working_languages,
+                                context.polish.chinese_script_preference,
+                                context.polish.output_language_preference,
+                                context.polish.front_app.as_deref(),
+                                on_delta,
+                                should_cancel,
+                            )
+                            .await
+                    }
+                    CloudPolisherProvider::Gemini(provider) => {
+                        provider
+                            .translate_to_streaming(
+                                &raw_text,
+                                &context.polish.translation_target_language,
+                                &context.polish.working_languages,
+                                context.polish.chinese_script_preference,
+                                context.polish.output_language_preference,
+                                context.polish.front_app.as_deref(),
+                                on_delta,
+                                should_cancel,
+                            )
+                            .await
+                    }
                 };
-                PolishOutput::text(text)
+                if let Some(error) = stream.take_error() {
+                    return Err(error);
+                }
+                let text = result.map_err(map_llm_error)?;
+                PolishOutput::text(text.trim().to_owned())
             }
         }
     } else {
         PolishOutput::text(polished)
     };
+    if cancellation.is_cancelled() {
+        return Err(cancelled_provider_error());
+    }
     if output.text.trim().is_empty() {
         return Err(BackendError::new(
             BackendErrorCode::Provider,
@@ -1037,12 +1221,9 @@ async fn build_cloud_polisher_provider(
         return Ok(CloudPolisherProvider::Gemini(provider));
     }
 
-    let base_url = endpoint
-        .trim()
-        .trim_end_matches('/')
-        .trim_end_matches("/chat/completions")
-        .trim_end_matches('/')
-        .to_string();
+    let protocol =
+        crate::llm_protocol::LlmProtocolConfig::load(credentials, channel_id, provider_type)
+            .await?;
     let temperature = read_channel_credential(
         credentials,
         CredentialNamespace::Llm,
@@ -1068,10 +1249,11 @@ async fn build_cloud_polisher_provider(
     let config = crate::polish::OpenAICompatibleConfig::new(
         provider_type,
         "OpenLess LLM",
-        base_url,
+        endpoint,
         api_key,
         model,
     )
+    .with_protocol(protocol)
     .with_thinking_enabled(context.polish.llm_thinking_enabled)
     .with_temperature(crate::polish::openai_compatible_temperature_for_provider(
         provider_type,
@@ -1862,6 +2044,404 @@ fn build_omni_prompt(context: &DictationContext) -> String {
 mod tests {
     use super::*;
     use crate::{InMemoryCredentialStore, ProviderInvocation, SecretValue};
+
+    struct ObservedTranslationStream {
+        chunks: Mutex<Vec<TextStreamChunk>>,
+        arrived: tokio::sync::Semaphore,
+    }
+
+    impl ObservedTranslationStream {
+        fn new() -> Self {
+            Self {
+                chunks: Mutex::new(Vec::new()),
+                arrived: tokio::sync::Semaphore::new(0),
+            }
+        }
+    }
+
+    impl TextStreamSink for ObservedTranslationStream {
+        fn publish(&self, chunk: TextStreamChunk) -> Result<(), BackendError> {
+            self.chunks.lock().push(chunk);
+            self.arrived.add_permits(1);
+            Ok(())
+        }
+    }
+
+    async fn assert_translation_streams_for_protocol(
+        gemini: bool,
+        format: crate::llm_protocol::LlmRequestFormat,
+        preset: &str,
+        cancel: bool,
+        fallback: bool,
+    ) {
+        use crate::llm_protocol::LlmRequestFormat;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        async fn check_request(
+            socket: &mut tokio::net::TcpStream,
+            gemini: bool,
+            format: LlmRequestFormat,
+            prefix: &str,
+        ) {
+            let mut request = Vec::new();
+            let mut buf = [0_u8; 4096];
+            loop {
+                let read = socket.read(&mut buf).await.unwrap();
+                assert_ne!(read, 0);
+                request.extend_from_slice(&buf[..read]);
+                if let Some(end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&request[..end]);
+                    let length: usize = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .and_then(|length| length.trim().parse().ok())
+                        })
+                        .unwrap();
+                    if request.len() >= end + 4 + length {
+                        let body: serde_json::Value =
+                            serde_json::from_slice(&request[end + 4..]).unwrap();
+                        if gemini {
+                            assert!(headers.contains(":streamGenerateContent?alt=sse"));
+                        } else {
+                            assert_eq!(body["stream"], true);
+                            let suffix = match format {
+                                LlmRequestFormat::ChatCompletions => "chat/completions",
+                                LlmRequestFormat::Responses => "responses",
+                                LlmRequestFormat::Messages => "messages",
+                            };
+                            assert!(
+                                headers.starts_with(&format!("POST {prefix}/{suffix}?tenant=1 "))
+                            );
+                            let lower = headers.to_ascii_lowercase();
+                            if format == LlmRequestFormat::Messages {
+                                assert!(lower.contains("x-api-key: fixture-key"));
+                                assert!(lower.contains("anthropic-version: 2023-06-01"));
+                                assert!(!lower.contains("authorization:"));
+                                assert!(body["system"]
+                                    .as_str()
+                                    .is_some_and(|text| !text.is_empty()));
+                            } else {
+                                assert!(lower.contains("authorization: bearer fixture-key"));
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let prefix = if preset == "opencode" {
+            "/zen/go/v1"
+        } else {
+            "/gateway/v1"
+        };
+        let endpoint = if gemini {
+            format!("http://{}", listener.local_addr().unwrap())
+        } else {
+            format!(
+                "http://{}{prefix}/chat/completions?tenant=1",
+                listener.local_addr().unwrap()
+            )
+        };
+        let (source_sent, source_ready) = tokio::sync::oneshot::channel();
+        let (advance, next) = tokio::sync::oneshot::channel();
+        let (finish, finishing) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            check_request(&mut socket, gemini, format, prefix).await;
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n").await.unwrap();
+            let event = |text: &str| {
+                let value = if gemini {
+                    serde_json::json!({"candidates":[{"content":{"parts":[{"text":text}]}}]})
+                } else {
+                    match format {
+                        LlmRequestFormat::ChatCompletions => {
+                            serde_json::json!({"choices":[{"delta":{"content":text}}]})
+                        }
+                        LlmRequestFormat::Responses => {
+                            serde_json::json!({"type":"response.output_text.delta","delta":text})
+                        }
+                        LlmRequestFormat::Messages => {
+                            serde_json::json!({"type":"content_block_delta","delta":{"type":"text_delta","text":text}})
+                        }
+                    }
+                };
+                let data = format!("data: {value}\n\n");
+                format!("{:X}\r\n{data}\r\n", data.len())
+            };
+            let end = if gemini {
+                ""
+            } else {
+                match format {
+                    LlmRequestFormat::ChatCompletions => "data: [DONE]\n\n",
+                    LlmRequestFormat::Responses => "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
+                    LlmRequestFormat::Messages => "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n",
+                }
+            };
+            let terminal = if end.is_empty() {
+                String::new()
+            } else {
+                format!("{:X}\r\n{end}\r\n", end.len())
+            };
+            if !gemini {
+                let hidden = "[[OPENLESS_TRANSLATION]]do not expose reasoning";
+                let value = match format {
+                    LlmRequestFormat::ChatCompletions => {
+                        serde_json::json!({"choices":[{"delta":{"reasoning_content":hidden}}]})
+                    }
+                    LlmRequestFormat::Responses => {
+                        serde_json::json!({"type":"response.reasoning_summary_text.delta","delta":hidden})
+                    }
+                    LlmRequestFormat::Messages => {
+                        serde_json::json!({"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":hidden}})
+                    }
+                };
+                let frame = format!("data: {value}\n\n");
+                socket
+                    .write_all(format!("{:X}\r\n{frame}\r\n", frame.len()).as_bytes())
+                    .await
+                    .unwrap();
+            }
+            if fallback {
+                socket
+                    .write_all(event("malformed combined output").as_bytes())
+                    .await
+                    .unwrap();
+                socket.write_all(terminal.as_bytes()).await.unwrap();
+                socket.write_all(b"0\r\n\r\n").await.unwrap();
+                socket.shutdown().await.unwrap();
+                (socket, _) = listener.accept().await.unwrap();
+                check_request(&mut socket, gemini, format, prefix).await;
+                socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n").await.unwrap();
+            } else {
+                socket
+                    .write_all(
+                        event("[[OPENLESS_POLISHED_SOURCE]]\n整理后的源文。\n[[OPENLESS_TRANS")
+                            .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            socket.flush().await.unwrap();
+            source_sent.send(()).unwrap();
+            if next.await.is_err() {
+                return;
+            }
+            socket
+                .write_all(event(if fallback { "Hello" } else { "LATION]]\nHello" }).as_bytes())
+                .await
+                .unwrap();
+            socket.flush().await.unwrap();
+            if finishing.await.is_err() {
+                return;
+            }
+            let _ = socket.write_all(event(" 🌍\n").as_bytes()).await;
+            let _ = socket.write_all(terminal.as_bytes()).await;
+            let _ = socket.write_all(b"0\r\n\r\n").await;
+        });
+
+        let credentials = Arc::new(InMemoryCredentialStore::default());
+        write_channel_secret(
+            credentials.as_ref(),
+            CredentialNamespace::Llm,
+            "translation",
+            LLM_ENDPOINT_ACCOUNT,
+            &endpoint,
+        )
+        .await;
+        write_channel_secret(
+            credentials.as_ref(),
+            CredentialNamespace::Llm,
+            "translation",
+            LLM_API_KEY_ACCOUNT,
+            "fixture-key",
+        )
+        .await;
+        if !gemini {
+            let request_format = match format {
+                LlmRequestFormat::ChatCompletions => "chat_completions",
+                LlmRequestFormat::Responses => "responses",
+                LlmRequestFormat::Messages => "messages",
+            };
+            write_channel_secret(
+                credentials.as_ref(),
+                CredentialNamespace::Llm,
+                "translation",
+                crate::llm_protocol::REQUEST_FORMAT_ACCOUNT,
+                request_format,
+            )
+            .await;
+        }
+        let polisher = Arc::new(SharedCloudTextPolisher::new(credentials));
+        let mut context = DictationContext {
+            llm: ProviderInvocation::new("translation", if gemini { "gemini" } else { preset }),
+            ..DictationContext::default()
+        };
+        context.llm.model = Some("fixture-model".into());
+        context.polish.translation_active = true;
+        context.polish.translation_target_language = "English".into();
+        let sink = Arc::new(ObservedTranslationStream::new());
+        let session_id = SessionId::new();
+        let run = polisher.polish(
+            session_id,
+            Arc::new(context),
+            "原始语音".into(),
+            sink.clone(),
+        );
+        let run = tokio::spawn(run);
+        tokio::time::timeout(Duration::from_secs(3), source_ready)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            sink.chunks.lock().is_empty(),
+            "source and partial markers must stay hidden"
+        );
+        assert!(!run.is_finished());
+        advance.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(3), sink.arrived.acquire())
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+        assert_eq!(
+            *sink.chunks.lock(),
+            [TextStreamChunk {
+                text: "Hello".into(),
+                offset: 0
+            }]
+        );
+        assert!(
+            !run.is_finished(),
+            "the first translation delta must arrive before completion"
+        );
+        if cancel {
+            polisher.cancel(session_id).await.unwrap();
+            let error = tokio::time::timeout(Duration::from_secs(3), run)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(error.code, BackendErrorCode::Cancelled);
+            let _ = finish.send(());
+            server.await.unwrap();
+            assert_eq!(
+                sink.chunks.lock().len(),
+                1,
+                "cancellation must suppress later translation deltas"
+            );
+        } else {
+            finish.send(()).unwrap();
+            let output = tokio::time::timeout(Duration::from_secs(3), run)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            server.await.unwrap();
+            assert_eq!(output.text, "Hello 🌍");
+            assert_eq!(
+                output.source_text.as_deref(),
+                if fallback {
+                    None
+                } else {
+                    Some("整理后的源文。")
+                }
+            );
+            assert_eq!(
+                *sink.chunks.lock(),
+                [
+                    TextStreamChunk {
+                        text: "Hello".into(),
+                        offset: 0
+                    },
+                    TextStreamChunk {
+                        text: " 🌍".into(),
+                        offset: 5
+                    },
+                ]
+            );
+        }
+    }
+
+    async fn assert_translation_streams_before_completion(
+        gemini: bool,
+        cancel: bool,
+        fallback: bool,
+    ) {
+        assert_translation_streams_for_protocol(
+            gemini,
+            crate::llm_protocol::LlmRequestFormat::ChatCompletions,
+            "openai-compatible",
+            cancel,
+            fallback,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn translation_streams_safely_across_channel_protocols_and_zen() {
+        for format in crate::llm_protocol::LlmRequestFormat::ALL {
+            for preset in ["custom", "opencode"] {
+                for fallback in [false, true] {
+                    assert_translation_streams_for_protocol(false, format, preset, false, fallback)
+                        .await;
+                }
+            }
+            assert_translation_streams_for_protocol(false, format, "custom", true, false).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn openai_translation_streams_target_before_completion() {
+        assert_translation_streams_before_completion(false, false, false).await;
+    }
+
+    #[tokio::test]
+    async fn gemini_translation_streams_target_before_completion() {
+        assert_translation_streams_before_completion(true, false, false).await;
+    }
+
+    #[tokio::test]
+    async fn cancelling_translation_stops_the_provider_before_completion() {
+        assert_translation_streams_before_completion(false, true, false).await;
+    }
+
+    #[tokio::test]
+    async fn translation_without_markers_streams_the_plain_translation_fallback() {
+        assert_translation_streams_before_completion(false, false, true).await;
+    }
+
+    #[test]
+    fn tencent_cloud_errors_keep_retryability_and_stable_public_messages() {
+        use crate::asr::tencent_cloud::TencentCloudASRError;
+
+        for error in [
+            TencentCloudASRError::ConnectionFailed,
+            TencentCloudASRError::RateLimited,
+            TencentCloudASRError::NoFinalResult,
+            TencentCloudASRError::FinalResultTimeout,
+            TencentCloudASRError::ServiceUnavailable(5000),
+        ] {
+            let error = map_tencent_asr_error(error);
+            assert_eq!(error.code, BackendErrorCode::Provider);
+            assert!(error.retryable, "{error:?}");
+            assert!(error.details.is_none());
+        }
+        for error in [
+            TencentCloudASRError::CredentialsMissing,
+            TencentCloudASRError::AuthRejected(4002),
+            TencentCloudASRError::AccountUnavailable(4004),
+            TencentCloudASRError::TaskFailed(4001),
+        ] {
+            let error = map_tencent_asr_error(error);
+            assert_eq!(error.code, BackendErrorCode::Provider);
+            assert!(!error.retryable, "{error:?}");
+            assert!(error.details.is_none());
+        }
+    }
 
     struct IgnoreTextStreamSink;
 

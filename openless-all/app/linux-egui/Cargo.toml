@@ -36,6 +36,11 @@ libc = "0.2"
 axum = { version = "0.7", default-features = false, features = ["ws", "http1", "tokio"] }
 hyper-util = { version = "0.1", features = ["tokio", "server-auto", "server", "http1"] }
 local-ip-address = "0.6"
-rcgen = "0.13"
+base64 = "0.22"
+sha2 = "0.10"
+rcgen = { version = "0.13", features = ["x509-parser"] }
+x509-parser = { version = "0.16", features = ["verify"] }
+time = "0.3"
+tempfile = "3"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }

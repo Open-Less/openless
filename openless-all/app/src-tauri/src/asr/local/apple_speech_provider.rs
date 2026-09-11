@@ -820,11 +820,15 @@ fn speech_recognizer_class() -> Result<&'static AnyClass> {
     })
 }
 
-/// 创建 recognizer。有指定 locale 就 `initWithLocale:`（关键 —— 否则落到系统首选语言，
-/// 中文语音会被英文引擎误识别）；无 locale 或 NSLocale 构造失败时回退 `init`（系统默认）。
+/// 指定工作语言时必须使用对应 locale；无法创建时返回错误，避免悄悄识别成系统默认语言。
 fn create_recognizer(locale: Option<&str>) -> Result<*mut AnyObject> {
     let cls = speech_recognizer_class()?;
-    let recognizer: *mut AnyObject = match locale.and_then(ns_locale) {
+    let requested_locale = locale
+        .map(|locale| {
+            ns_locale(locale).ok_or_else(|| anyhow!("Apple Speech 无法使用所选语言 {locale}"))
+        })
+        .transpose()?;
+    let recognizer: *mut AnyObject = match requested_locale {
         Some(ns_loc) => {
             log::info!(
                 "[apple-speech] recognizer locale = {}",
@@ -851,7 +855,7 @@ fn create_recognizer(locale: Option<&str>) -> Result<*mut AnyObject> {
     Ok(recognizer)
 }
 
-/// `[NSLocale localeWithLocaleIdentifier:<id>]`。构造失败返回 None（调用方回退系统默认）。
+/// `[NSLocale localeWithLocaleIdentifier:<id>]`。构造失败返回 None，由调用方报告所选语言不可用。
 fn ns_locale(identifier: &str) -> Option<*mut AnyObject> {
     let ns_id = ns_string_from_str(identifier).ok()?;
     let cls = AnyClass::get("NSLocale")?;
@@ -865,30 +869,10 @@ fn ns_locale(identifier: &str) -> Option<*mut AnyObject> {
     }
 }
 
-/// 用户工作语言（原生名，见前端 `SUPPORTED_LANGUAGES`）→ SFSpeechRecognizer 的 locale
-/// 标识符。取 `working_languages` 主语言映射；未收录的语言返回 None（回退系统默认 locale）。
-/// SFSpeechRecognizer 一个实例只认一种语言，中英混说时以主语言为准 —— 这是 Apple 的固有
-/// 限制，云端 ASR 才能自由多语言混识。
+/// 将首选工作语言映射为 Apple locale；识别器仍须检查当前系统是否可用。
+/// 未收录的语言返回 None，由调用方报告不支持，而不是改用系统默认语言。
 pub fn native_name_to_apple_locale(native_name: &str) -> Option<String> {
-    let locale = match native_name.trim() {
-        "简体中文" => "zh-CN",
-        "繁体中文" | "繁體中文" => "zh-TW",
-        "English" => "en-US",
-        "日本語" => "ja-JP",
-        "한국어" => "ko-KR",
-        "Français" => "fr-FR",
-        "Deutsch" => "de-DE",
-        "Español" => "es-ES",
-        "Italiano" => "it-IT",
-        "Português" => "pt-BR",
-        "Русский" => "ru-RU",
-        "العربية" => "ar-SA",
-        "Tiếng Việt" => "vi-VN",
-        "ไทย" => "th-TH",
-        "हिन्दी" => "hi-IN",
-        _ => return None,
-    };
-    Some(locale.to_string())
+    openless_core::language_catalog::apple_speech_locale(native_name)
 }
 
 /// `[NSURL fileURLWithPath:<path>]`。

@@ -30,6 +30,7 @@ tauri-plugin-shell = "2.3.5"
 tauri-plugin-dialog = "2.7.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+semver = "1"
 # OpenRouter ASR 把音频以标准 base64（带 padding）放进 JSON body（issue #582）。
 base64 = "0.22"
 sha2 = "0.10"
@@ -80,7 +81,10 @@ tauri-plugin-autostart = "2"
 global-hotkey = "0.6"
 enigo = "0.3"
 arboard = { version = "3", features = ["wayland-data-control"] }
-rcgen = "^0.13"
+rcgen = { version = "0.13", features = ["x509-parser"] }
+x509-parser = { version = "0.16", features = ["verify"] }
+time = "0.3"
+tempfile = "3"
 local-ip-address = "^0.6"
 rustls = { version = "^0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio-rustls = { version = "^0.26", default-features = false, features = ["ring", "tls12", "logging"] }
@@ -153,6 +157,7 @@ windows = { version = "0.58", features = [
   "Win32_Security",
   "Win32_Storage_FileSystem",
   "Win32_System_Com",
+  "Win32_System_DataExchange",
   "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_JobObjects",
   "Win32_System_Ole",
@@ -183,6 +188,7 @@ custom-protocol = ["tauri/custom-protocol"]
 opt-level = 3
 lto = "thin"
 codegen-units = 1
+# Xcode 27 beta 的 strip 会损坏 proc-macro dylib；本地构建加 CARGO_PROFILE_RELEASE_STRIP=none。
 strip = "symbols"
 
 # issue #801: wayland-scanner 0.31.10 still pins vulnerable quick-xml 0.39.

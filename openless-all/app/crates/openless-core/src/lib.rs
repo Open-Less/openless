@@ -12,6 +12,10 @@ pub mod audio;
 pub mod auxiliary;
 pub mod cli;
 mod cloud_providers;
+pub mod cloud_sync;
+mod cloud_sync_transaction;
+mod cloud_sync_types;
+mod cloud_sync_validation;
 pub mod coding_agent;
 pub mod coding_agent_guard;
 pub mod config;
@@ -29,8 +33,10 @@ pub mod external_audio;
 pub mod history;
 pub mod host_document;
 mod hotkey_interpreter;
+pub mod language_catalog;
 mod less_computer;
 pub mod llm_gemini;
+pub mod llm_protocol;
 mod marketplace;
 pub mod model_store;
 pub mod net;
@@ -75,6 +81,11 @@ mod shortcut_types;
 /// major component for a breaking host contract change and document the
 /// migration in `docs/linux-egui-backend-contract.md`.
 pub const BACKEND_CONTRACT_VERSION: &str = "2.0.0";
+
+pub use cloud_sync::{
+    CloudSyncCounts, CloudSyncRestoreResult, CloudSyncStatus, CloudSyncUiPreferences,
+    SyncFontScale, SyncLocale,
+};
 
 pub fn require_backend_contract_version(version: &str) -> Result<(), errors::BackendError> {
     if version == BACKEND_CONTRACT_VERSION {
@@ -256,7 +267,9 @@ pub use local_asr_service::{
     LocalAsrRuntimeLease, ModelPrepareProgressSink, ModelRuntimeAdapter, NativeModelState,
     StorageRebind,
 };
-pub use marketplace::{MarketplaceConfig, MARKETPLACE_BASE_URL, MARKETPLACE_GITHUB_TOKEN_ACCOUNT};
+pub use marketplace::{
+    MarketplaceConfig, CLOUD_SYNC_BASE_URL, MARKETPLACE_BASE_URL, MARKETPLACE_GITHUB_TOKEN_ACCOUNT,
+};
 pub use model_store::{
     extract_archive_safely, merge_hf_tree_pages, merge_hf_tree_pages_with_base, model_mirror_base,
     parse_hf_tree_page, validate_model_path, validate_model_url, DownloadProgressSink,
@@ -297,8 +310,9 @@ pub use providers::{
 };
 pub use qa_service::QaService;
 pub use remote_input_service::{
-    constant_time_eq, validate_pairing_pin, RemoteFrameCodec, RemoteInputService,
-    RemoteStreamSequence, REMOTE_INPUT_MAX_PCM_FRAME_BYTES, REMOTE_INPUT_PAIRING_PIN_LEN,
+    constant_time_eq, finish_remote_input_connection, validate_pairing_pin, RemoteFrameCodec,
+    RemoteInputService, RemoteStreamSequence, REMOTE_INPUT_MAX_PCM_FRAME_BYTES,
+    REMOTE_INPUT_PAIRING_PIN_LEN,
 };
 pub use selection_voice_intent::SelectionVoiceIntent;
 pub use settings::*;

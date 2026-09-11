@@ -69,9 +69,9 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
       void reportInsertFallbackCardHeight(report.presentationId, report.height).catch(() => {
         // IPC 短暂失败后允许后续 ResizeObserver 通知重试。
         if (
-          !cancelled
-          && lastHeightReportRef.current?.presentationId === report.presentationId
-          && lastHeightReportRef.current.height === report.height
+          !cancelled &&
+          lastHeightReportRef.current?.presentationId === report.presentationId &&
+          lastHeightReportRef.current.height === report.height
         ) {
           lastHeightReportRef.current = null;
         }
@@ -139,8 +139,7 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
           backdropFilter: 'blur(20px)',
           WebkitBackdropFilter: 'blur(20px)',
           border: '1px solid var(--ol-capsule-pill-border)',
-          boxShadow:
-            'var(--ol-capsule-pill-shadow), var(--ol-capsule-pill-inset)',
+          boxShadow: 'var(--ol-capsule-pill-shadow), var(--ol-capsule-pill-inset)',
           color: 'var(--ol-capsule-btn-ink)',
           fontFamily: 'var(--ol-font-sans)',
           overflow: 'hidden',
@@ -202,7 +201,7 @@ function TextButton({
       onClick={onClick}
       // 卡片浮在别的 app 上面，按下去不能把焦点从用户正在写的地方抢走。
       // 这也正是复制必须走后端的原因（navigator.clipboard 要求文档聚焦）。
-      onMouseDown={event => {
+      onMouseDown={(event) => {
         event.preventDefault();
         event.stopPropagation();
       }}
@@ -213,9 +212,7 @@ function TextButton({
         borderRadius: 999,
         fontSize: 12,
         fontFamily: 'var(--ol-font-sans)',
-        background: primary
-          ? 'var(--ol-capsule-btn-bg-confirm)'
-          : 'var(--ol-capsule-btn-bg)',
+        background: primary ? 'var(--ol-capsule-btn-bg-confirm)' : 'var(--ol-capsule-btn-bg)',
         color: 'var(--ol-capsule-btn-ink)',
         border: '0.8px solid var(--ol-capsule-btn-border)',
         boxShadow: '0 1px 2px rgba(0, 0, 0, 0.06)',

@@ -1830,7 +1830,8 @@ pub struct OpenLessBackend {
     style_pack_revision: Arc<AtomicU64>,
     preferences: Arc<PreferencesStore>,
     preferences_revision: Arc<AtomicU64>,
-    settings_write_gate: Mutex<()>,
+    settings_write_gate: Arc<Mutex<()>>,
+    cloud_sync: Option<crate::cloud_sync::CloudSyncService>,
     pending_corrections: Arc<Mutex<Vec<PendingCorrection>>>,
     edit_observation_generation: Arc<AtomicU64>,
     text_insertions: Arc<Mutex<HashMap<SessionId, TextInsertionPreparation>>>,
@@ -2031,6 +2032,7 @@ impl OpenLessBackend {
         let style_pack_revision = Arc::new(AtomicU64::new(0));
         let history_revision = Arc::new(AtomicU64::new(0));
         let vocabulary_revision = Arc::new(AtomicU64::new(0));
+        let settings_write_gate = Arc::new(Mutex::new(()));
         let voice_sessions = Arc::clone(&deps.services.voice_sessions);
         deps.services.selection_voice =
             Arc::new(crate::selection_voice_service::SelectionVoiceService::new(
@@ -2133,8 +2135,8 @@ impl OpenLessBackend {
                 Arc::clone(&deps.credential_store),
             ));
         }
-        if let Some(marketplace_config) = deps.marketplace_config.take() {
-            deps.services.marketplace = Arc::new(crate::marketplace::MarketplaceService::new(
+        let cloud_sync = if let Some(marketplace_config) = deps.marketplace_config.take() {
+            let marketplace = Arc::new(crate::marketplace::MarketplaceService::new(
                 marketplace_config,
                 Arc::clone(&deps.credential_store),
                 Arc::clone(&repositories.preferences),
@@ -2142,7 +2144,15 @@ impl OpenLessBackend {
                 BackendEventPublisher::new(Arc::clone(&events)),
                 Arc::clone(&style_pack_revision),
             )?);
-        }
+            deps.services.marketplace = marketplace.clone();
+            Some(crate::cloud_sync::CloudSyncService::new(
+                marketplace,
+                repositories.clone(),
+                Arc::clone(&settings_write_gate),
+            ))
+        } else {
+            None
+        };
         match (
             deps.selection_runtime.take(),
             deps.selection_polisher.take(),
@@ -2241,7 +2251,8 @@ impl OpenLessBackend {
             style_pack_revision,
             preferences: repositories.preferences,
             preferences_revision,
-            settings_write_gate: Mutex::new(()),
+            settings_write_gate,
+            cloud_sync,
             pending_corrections: Arc::new(Mutex::new(Vec::new())),
             edit_observation_generation: Arc::new(AtomicU64::new(0)),
             text_insertions: Arc::new(Mutex::new(HashMap::new())),
@@ -2272,6 +2283,43 @@ impl OpenLessBackend {
     /// the concrete implementation.
     pub fn services(&self) -> &crate::domains::BackendServices {
         &self.deps.services
+    }
+
+    fn cloud_sync_service(&self) -> Result<&crate::cloud_sync::CloudSyncService, BackendError> {
+        self.cloud_sync.as_ref().ok_or_else(|| {
+            BackendError::new(BackendErrorCode::Unsupported, "官方云同步服务尚未配置。")
+        })
+    }
+
+    /// Read cloud metadata without returning private snapshot contents or GitHub credentials to a UI.
+    pub async fn cloud_sync_status(&self) -> Result<crate::CloudSyncStatus, BackendError> {
+        self.cloud_sync_service()?.status().await
+    }
+
+    pub async fn cloud_sync_upload(
+        &self,
+        base_revision: u64,
+        ui_preferences: crate::CloudSyncUiPreferences,
+    ) -> Result<crate::CloudSyncStatus, BackendError> {
+        self.cloud_sync_service()?
+            .upload(base_revision, ui_preferences)
+            .await
+    }
+
+    /// The caller must obtain the user's confirmation before replacing local portable data.
+    pub async fn cloud_sync_restore(&self) -> Result<crate::CloudSyncRestoreResult, BackendError> {
+        let restored = self.cloud_sync_service()?.restore().await?;
+        self.publish_preferences_changed();
+        self.publish_vocabulary_changed();
+        self.publish_style_packs_changed();
+        Ok(restored)
+    }
+
+    pub async fn cloud_sync_delete(
+        &self,
+        base_revision: u64,
+    ) -> Result<crate::CloudSyncStatus, BackendError> {
+        self.cloud_sync_service()?.delete(base_revision).await
     }
 
     /// Reserve one Less Computer voice-capture session before a host starts
@@ -3255,8 +3303,10 @@ impl OpenLessBackend {
         };
         let preferences = self.get_preferences();
         let mode = preferences.hotkey.mode;
-        let modifier_only =
-            crate::shortcut_types::legacy_modifier_trigger(&preferences.dictation_hotkey).is_some();
+        let modifier_only = crate::hotkey_interpreter::modifier_arbitration_required(
+            crate::shortcut_types::legacy_modifier_trigger(&preferences.dictation_hotkey),
+            mode,
+        );
         let (intent, reservation) = {
             let mut hotkey = self
                 .hotkey
@@ -3436,7 +3486,40 @@ impl OpenLessBackend {
         key: CredentialKey,
         value: SecretValue,
     ) -> Result<CredentialsStatus, BackendError> {
+        if key.namespace == crate::CredentialNamespace::Llm
+            && crate::llm_protocol::CONFIG_ACCOUNTS.contains(&key.account.as_str())
+        {
+            crate::llm_protocol::LlmProtocolConfig::default()
+                .apply(&key.account, value.expose_secret())?;
+        }
+        let invalidate = if key.namespace == crate::CredentialNamespace::Llm {
+            let id = match &key.provider_id {
+                Some(id) => id.clone(),
+                None => {
+                    self.deps
+                        .credential_store
+                        .active_provider(crate::ProviderSlot::Llm)
+                        .await?
+                }
+            };
+            self.list_channels(ChannelKind::Llm)
+                .await?
+                .into_iter()
+                .find(|channel| channel.id == id)
+                .map(|_| id)
+        } else {
+            None
+        };
         self.deps.credential_store.write(key, value).await?;
+        if let Some(id) = invalidate {
+            self.deps
+                .credential_store
+                .mutate_channel(ChannelMutation::InvalidateTest {
+                    kind: ChannelKind::Llm,
+                    id,
+                })
+                .await?;
+        }
         self.refresh_and_publish_credentials().await
     }
 
@@ -3483,13 +3566,51 @@ impl OpenLessBackend {
         id: String,
         provider_type: String,
     ) -> Result<(), BackendError> {
-        self.apply_channel_mutation(ChannelMutation::SetProviderType {
-            kind,
-            id,
-            provider_type,
-        })
-        .await
-        .map(|_| ())
+        let provider_type = provider_type.trim().to_string();
+        if provider_type.trim().is_empty() {
+            return Err(BackendError::new(
+                BackendErrorCode::InvalidArgument,
+                "provider type must not be blank",
+            ));
+        }
+        let previous = self
+            .list_channels(kind)
+            .await?
+            .into_iter()
+            .find(|channel| channel.id == id)
+            .ok_or_else(|| {
+                BackendError::new(BackendErrorCode::InvalidArgument, "unknown channel")
+            })?;
+        let key = CredentialKey::new(
+            crate::CredentialNamespace::Llm,
+            Some(id.clone()),
+            crate::llm_protocol::REQUEST_FORMAT_ACCOUNT,
+        )?;
+        let reset = kind == ChannelKind::Llm && previous.provider_type != provider_type;
+        let old_format = if reset {
+            let value = self.deps.credential_store.read(key.clone()).await?;
+            self.deps.credential_store.remove(key.clone()).await?;
+            value
+        } else {
+            None
+        };
+        let result = self
+            .deps
+            .credential_store
+            .mutate_channel(ChannelMutation::SetProviderType {
+                kind,
+                id,
+                provider_type,
+            })
+            .await
+            .map(|_| ());
+        if result.is_err() {
+            if let Some(value) = old_format {
+                self.deps.credential_store.write(key, value).await?;
+            }
+        }
+        result?;
+        self.refresh_and_publish_credentials().await.map(|_| ())
     }
 
     pub async fn delete_channel_if_blank(
@@ -3571,6 +3692,12 @@ impl OpenLessBackend {
         .map(|_| ())
     }
 
+    pub async fn invalidate_channel_tests(&self, kind: ChannelKind) -> Result<(), BackendError> {
+        self.apply_channel_mutation(ChannelMutation::InvalidateTests { kind })
+            .await
+            .map(|_| ())
+    }
+
     pub async fn active_provider(&self, slot: ProviderSlot) -> Result<String, BackendError> {
         self.deps.credential_store.active_provider(slot).await
     }
@@ -3628,6 +3755,34 @@ impl OpenLessBackend {
 
     pub fn get_preferences(&self) -> UserPreferences {
         self.preferences.get()
+    }
+
+    /// 消费「本大版本首启」开屏 PV 标记：配置里的 `splash_seen_version` 与传入的
+    /// 当前主版本一致时返回 false（不再播放）；不一致时写回主版本并返回 true，
+    /// 前端据此播放随包发行的开屏动画（同世代 2.x 升级与重启都不重播）。
+    /// 磁盘写入失败时仍返回 true——宁可多播一次，也不静默吞掉首启体验；标记留待
+    /// 下次启动重试。成功写回后走 publish_preferences_changed 递增 revision，
+    /// 让并发中的设置页乐观提交重新对账，不会拿着旧档把标记冲掉。
+    pub fn take_splash_playback(&self, current_major: &str) -> bool {
+        match self.preferences.update(|preferences| {
+            if preferences.splash_seen_version == current_major {
+                false
+            } else {
+                preferences.splash_seen_version = current_major.to_string();
+                true
+            }
+        }) {
+            Ok(should_play) => {
+                if should_play {
+                    self.publish_preferences_changed();
+                }
+                should_play
+            }
+            Err(error) => {
+                log::warn!("[splash] failed to persist splash marker: {error}");
+                true
+            }
+        }
     }
 
     #[cfg(test)]
@@ -3713,6 +3868,10 @@ impl OpenLessBackend {
         let mut previous = self.preferences.get();
         crate::sync_dictation_hotkey_legacy_fields(&mut previous);
         crate::sync_dictation_hotkey_legacy_fields(&mut preferences);
+        // 开屏标记只能由 take_splash_playback 推进：整档提交的客户端（旧前端或
+        // 尚未回读标记的请求）不带此字段时，serde 默认会把空串写回，导致下次
+        // 启动重播开屏 PV。这里永远沿用盘上的当前值。
+        preferences.splash_seen_version = previous.splash_seen_version.clone();
         if options.preserve_current_style {
             preferences.preserve_style_preferences_from(&previous);
         }
@@ -3910,6 +4069,20 @@ impl OpenLessBackend {
         self.sync_preferences_after_style_pack_change()?;
         self.publish_style_packs_changed();
         Ok(pack)
+    }
+
+    pub fn set_style_pack_icon(
+        &self,
+        id: &str,
+        png: Option<&[u8]>,
+    ) -> Result<StylePack, BackendError> {
+        let pack = self.style_packs.update_icon(id, png)?;
+        self.publish_style_packs_changed();
+        Ok(pack)
+    }
+
+    pub fn read_style_pack_icon(&self, id: &str) -> Result<Option<String>, BackendError> {
+        self.style_packs.icon_data_url(id)
     }
 
     pub fn set_style_pack_enabled(
@@ -4348,6 +4521,12 @@ impl OpenLessBackend {
 
     pub fn set_vocabulary_enabled(&self, id: &str, enabled: bool) -> Result<(), BackendError> {
         self.vocabulary.set_enabled(id, enabled)?;
+        self.publish_vocabulary_changed();
+        Ok(())
+    }
+
+    pub fn update_vocabulary_phrase(&self, id: &str, phrase: String) -> Result<(), BackendError> {
+        self.vocabulary.update_phrase(id, phrase)?;
         self.publish_vocabulary_changed();
         Ok(())
     }
@@ -8251,6 +8430,142 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn invalidating_llm_tests_preserves_asr_test_results() {
+        let (backend, _) = backend();
+        for (kind, provider, name) in [
+            (ChannelKind::Llm, "custom", "first"),
+            (ChannelKind::Llm, "custom_messages", "second"),
+            (ChannelKind::Asr, "openai-compatible", "asr"),
+        ] {
+            let id = backend
+                .create_channel(kind, provider.into(), name.into())
+                .await
+                .unwrap();
+            backend
+                .record_channel_test(kind, id, true, Some(1), None)
+                .await
+                .unwrap();
+        }
+
+        backend
+            .invalidate_channel_tests(ChannelKind::Llm)
+            .await
+            .unwrap();
+
+        assert!(backend
+            .list_channels(ChannelKind::Llm)
+            .await
+            .unwrap()
+            .iter()
+            .all(|channel| channel.last_test.is_none()));
+        assert!(backend.list_channels(ChannelKind::Asr).await.unwrap()[0]
+            .last_test
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn llm_protocol_mutations_reset_only_the_format_and_invalidate_tests() {
+        use crate::credentials::{CredentialNamespace, InMemoryCredentialStore, SecretValue};
+        use crate::llm_protocol::*;
+        let backend = OpenLessBackend::new(
+            BackendConfig {
+                data_dir: std::env::temp_dir()
+                    .join(format!("openless-protocol-{}", uuid::Uuid::new_v4())),
+                ..BackendConfig::default()
+            },
+            BackendDependencies {
+                host_actions: Arc::new(FakeHost::default()),
+                text_inserter: Arc::new(FakeInserter),
+                dictation_engine: Arc::new(FakeEngine),
+                task_spawner: Arc::new(TokioTaskSpawner),
+                credential_store: Arc::new(InMemoryCredentialStore::default()),
+                services: crate::domains::BackendServices::unsupported(),
+                local_asr_runtime: None,
+                marketplace_config: None,
+                selection_runtime: None,
+                selection_polisher: None,
+                qa_runtime: None,
+            },
+        )
+        .unwrap();
+        let id = backend
+            .create_channel(ChannelKind::Llm, "custom".into(), "test".into())
+            .await
+            .unwrap();
+        let key = |account: &str| {
+            CredentialKey::new(CredentialNamespace::Llm, Some(id.clone()), account).unwrap()
+        };
+        backend
+            .set_credential(key(REQUEST_FORMAT_ACCOUNT), SecretValue::new("messages"))
+            .await
+            .unwrap();
+        backend
+            .set_credential(
+                key(crate::credentials::LLM_API_KEY_ACCOUNT),
+                SecretValue::new("fixture-key"),
+            )
+            .await
+            .unwrap();
+        backend
+            .record_channel_test(ChannelKind::Llm, id.clone(), true, Some(1), None)
+            .await
+            .unwrap();
+        assert!(backend.list_channels(ChannelKind::Llm).await.unwrap()[0]
+            .last_test
+            .is_some());
+        backend
+            .set_credential(
+                key(crate::credentials::LLM_MODEL_ACCOUNT),
+                SecretValue::new("new-model"),
+            )
+            .await
+            .unwrap();
+        assert!(backend.list_channels(ChannelKind::Llm).await.unwrap()[0]
+            .last_test
+            .is_none());
+        assert_eq!(
+            backend
+                .read_credential(key(REQUEST_FORMAT_ACCOUNT))
+                .await
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            "messages"
+        );
+        assert!(backend
+            .set_credential(key(REQUEST_FORMAT_ACCOUNT), SecretValue::new("invalid"))
+            .await
+            .is_err());
+        backend
+            .set_channel_provider_type(ChannelKind::Llm, id.clone(), "custom_responses".into())
+            .await
+            .unwrap();
+        assert!(backend
+            .read_credential(key(REQUEST_FORMAT_ACCOUNT))
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            backend
+                .read_credential(key(crate::credentials::LLM_API_KEY_ACCOUNT))
+                .await
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            "fixture-key"
+        );
+        assert_eq!(
+            backend
+                .read_credential(key(crate::credentials::LLM_MODEL_ACCOUNT))
+                .await
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            "new-model"
+        );
+    }
+
+    #[tokio::test]
     async fn lifecycle_is_idempotent_and_emits_started_once_per_transition() {
         let (backend, _) = backend();
         let mut events = backend.subscribe();
@@ -9129,6 +9444,58 @@ mod tests {
 
         backend.shutdown().await.unwrap();
         let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn external_audio_saves_failed_recordings_for_history_retry_and_prunes_successful_audio()
+    {
+        for fail in [false, true] {
+            let data_dir = std::env::temp_dir()
+                .join(format!("openless-remote-history-{}", uuid::Uuid::new_v4()));
+            let transcription = if fail {
+                crate::testing::FixtureTranscriptionEngine::failing(BackendError::new(
+                    BackendErrorCode::Provider,
+                    "fixture ASR failure",
+                ))
+            } else {
+                crate::testing::FixtureTranscriptionEngine::successful("received speech", 120_000)
+            };
+            let engine = crate::PipelineDictationEngine::new(
+                Arc::new(crate::ExternalAudioRecorder::with_recordings_directory(
+                    data_dir.join("recordings"),
+                )),
+                Arc::new(transcription.clone()),
+                Arc::new(crate::testing::FixtureTextPolisher::successful(
+                    "complete transcription",
+                )),
+            );
+            let backend = backend_with_dictation_engine(data_dir.clone(), Arc::new(engine));
+            backend.start().await.unwrap();
+            let session = backend.start_external_dictation().await.unwrap();
+            let path = data_dir.join("recordings").join(format!("{session}.wav"));
+            for second in 0..120 {
+                backend
+                    .feed_external_pcm(session, &vec![second; 32_000])
+                    .unwrap();
+            }
+            let expected = transcription.pcm();
+            assert_eq!(&std::fs::read(&path).unwrap()[44..], expected);
+            let result = backend.stop_dictation_session(session).await;
+            assert_eq!(result.is_err(), fail);
+            let history = backend.list_history().unwrap();
+            assert_eq!(history.len(), 1);
+            assert_eq!(history[0].id, session.to_string());
+            assert_eq!(history[0].has_audio_recording, Some(fail));
+            if fail {
+                assert_eq!(history[0].error_code.as_deref(), Some("transcribeFailed"));
+                assert_eq!(&std::fs::read(path).unwrap()[44..], expected);
+            } else {
+                assert_eq!(history[0].final_text, "complete transcription");
+                assert!(!path.exists());
+            }
+            backend.shutdown().await.unwrap();
+            let _ = std::fs::remove_dir_all(data_dir);
+        }
     }
 
     #[tokio::test]
@@ -10153,20 +10520,25 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn streaming_polish_deltas_flush_before_the_final_insert() {
+    async fn assert_streaming_polish_deltas_flush_before_final_insert(translation: bool) {
         use crate::testing::{FixtureDictationEngine, FixtureInsertionAction, FixtureTextInserter};
 
         let data_dir = TestDataDir::new("streaming-insert");
-        let engine = FixtureDictationEngine::successful("raw", "你好").with_polish_deltas(vec![
+        let (first, second) = if translation {
+            ("Hello", " 🌍")
+        } else {
+            ("你", "好")
+        };
+        let output = format!("{first}{second}");
+        let engine = FixtureDictationEngine::successful("raw", &output).with_polish_deltas(vec![
             crate::types::PolishDelta {
-                text: "你".into(),
+                text: first.into(),
                 offset: 0,
                 is_final: false,
             },
             crate::types::PolishDelta {
-                text: "好".into(),
-                offset: 1,
+                text: second.into(),
+                offset: first.chars().count() as u64,
                 is_final: false,
             },
         ]);
@@ -10195,10 +10567,36 @@ mod tests {
         preferences.streaming_insert = true;
         preferences.streaming_insert_save_clipboard = false;
         preferences.windows_insertion_mode = crate::shared_types::WindowsInsertionMode::SendInput;
+        preferences.translation_target_language = "English".into();
+        preferences.working_languages = vec!["简体中文".into()];
         backend.set_preferences(preferences).unwrap();
         backend.start().await.unwrap();
-        let session_id = backend.start_dictation().await.unwrap();
+        let mut events = backend.subscribe();
+        let session_id = backend
+            .start_dictation_with_options(DictationStartOptions {
+                translation_requested: translation,
+                ..DictationStartOptions::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(backend.snapshot().dictation.translation_active, translation);
+        assert!(!std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event.kind, BackendEventKind::PolishDelta(_))));
         backend.stop_dictation().await.unwrap();
+        let deltas: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event.kind {
+                BackendEventKind::PolishDelta(delta) => Some(delta),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(deltas.len(), 3);
+        assert!(!deltas[0].is_final && !deltas[1].is_final);
+        assert_eq!(format!("{}{}", deltas[0].text, deltas[1].text), output);
+        assert!(deltas[2].is_final);
+        assert_eq!(deltas[2].text, output);
+        let history = backend.list_history().unwrap();
+        assert_eq!(history[0].final_text, output);
+        assert_eq!(history[0].translation_active, translation);
 
         assert_eq!(
             inserter.actions(),
@@ -10206,7 +10604,7 @@ mod tests {
                 FixtureInsertionAction::Prepare(session_id),
                 FixtureInsertionAction::Write {
                     session_id,
-                    text: "你好".into(),
+                    text: output.clone(),
                 },
                 FixtureInsertionAction::Insert {
                     session_id,
@@ -10216,7 +10614,21 @@ mod tests {
         );
     }
 
-    async fn assert_cancel_drains_native_insertion(streaming: bool, drop_stop: bool) {
+    #[tokio::test]
+    async fn streaming_polish_deltas_flush_before_the_final_insert() {
+        assert_streaming_polish_deltas_flush_before_final_insert(false).await;
+    }
+
+    #[tokio::test]
+    async fn streaming_translation_deltas_flush_without_duplicate_final_text() {
+        assert_streaming_polish_deltas_flush_before_final_insert(true).await;
+    }
+
+    async fn assert_cancel_drains_native_insertion(
+        streaming: bool,
+        drop_stop: bool,
+        translation: bool,
+    ) {
         struct BlockingInsertion {
             actions: Arc<Mutex<Vec<&'static str>>>,
             started: Arc<tokio::sync::Semaphore>,
@@ -10310,9 +10722,17 @@ mod tests {
         let mut preferences = backend.get_preferences();
         preferences.streaming_insert = streaming;
         preferences.windows_insertion_mode = crate::shared_types::WindowsInsertionMode::SendInput;
+        preferences.translation_target_language = "English".into();
+        preferences.working_languages = vec!["简体中文".into()];
         backend.set_preferences(preferences).unwrap();
         backend.start().await.unwrap();
-        let session_id = backend.start_dictation().await.unwrap();
+        let session_id = backend
+            .start_dictation_with_options(DictationStartOptions {
+                translation_requested: translation,
+                ..DictationStartOptions::default()
+            })
+            .await
+            .unwrap();
         let stopping_backend = Arc::clone(&backend);
         let stop = tokio::spawn(async move { stopping_backend.stop_dictation().await });
         started.acquire().await.unwrap().forget();
@@ -10354,17 +10774,22 @@ mod tests {
 
     #[tokio::test]
     async fn streaming_cancel_drains_native_write_before_restoring_and_releasing_voice() {
-        assert_cancel_drains_native_insertion(true, false).await;
+        assert_cancel_drains_native_insertion(true, false, false).await;
     }
 
     #[tokio::test]
     async fn final_insert_cancel_waits_for_the_committed_native_effect() {
-        assert_cancel_drains_native_insertion(false, false).await;
+        assert_cancel_drains_native_insertion(false, false, false).await;
     }
 
     #[tokio::test]
     async fn final_insert_cancellation_survives_a_dropped_stop_caller() {
-        assert_cancel_drains_native_insertion(false, true).await;
+        assert_cancel_drains_native_insertion(false, true, false).await;
+    }
+
+    #[tokio::test]
+    async fn streaming_translation_cancel_drains_native_write() {
+        assert_cancel_drains_native_insertion(true, false, true).await;
     }
 
     #[tokio::test]
@@ -10606,6 +11031,36 @@ mod tests {
         let error = backend.cancel_dictation(Some(wrong)).await.unwrap_err();
         assert_eq!(error.code, BackendErrorCode::InvalidArgument);
         assert_eq!(backend.snapshot().dictation.session_id, Some(active));
+    }
+
+    #[test]
+    fn take_splash_playback_marks_major_once_and_survives_restart() {
+        let data_dir = TestDataDir::new("splash-playback");
+        let make = || {
+            OpenLessBackend::new(
+                BackendConfig {
+                    data_dir: data_dir.path().to_path_buf(),
+                    ..BackendConfig::default()
+                },
+                BackendDependencies::unsupported(),
+            )
+            .unwrap()
+        };
+
+        let backend = make();
+        // 首启：标记缺失 → 播放一次并写回主版本。
+        assert!(backend.take_splash_playback("2"));
+        assert_eq!(backend.get_preferences().splash_seen_version, "2");
+        // 同一世代内再次启动不再播放。
+        assert!(!backend.take_splash_playback("2"));
+
+        // 模拟进程重启：标记已从 preferences.json 读回。
+        let reopened = make();
+        assert!(!reopened.take_splash_playback("2"));
+        // 新一代大版本：播一次新 PV 后同样收口。
+        assert!(reopened.take_splash_playback("3"));
+        assert!(!reopened.take_splash_playback("3"));
+        assert_eq!(reopened.get_preferences().splash_seen_version, "3");
     }
 
     #[tokio::test]

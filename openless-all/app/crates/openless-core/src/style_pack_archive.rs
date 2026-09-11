@@ -614,7 +614,7 @@ pub(super) fn read_stream_bounded<R: Read>(
     Ok(bytes)
 }
 
-fn validate_icon_content(extension: &str, bytes: &[u8]) -> Result<()> {
+pub(super) fn validate_icon_content(extension: &str, bytes: &[u8]) -> Result<()> {
     let (width, height) = match extension {
         "png" => validate_png(bytes)?,
         "jpg" | "jpeg" => validate_jpeg(bytes)?,

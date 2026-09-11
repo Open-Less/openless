@@ -18,7 +18,6 @@ test -s "$PACKAGING/openless.desktop"
 test -s "$PACKAGING/top.openless.OpenLess.metainfo.xml"
 test -s "$ICON"
 command -v fpm >/dev/null
-command -v appimagetool >/dev/null
 
 mkdir -p "$OUTPUT"
 
@@ -61,19 +60,5 @@ fpm -s dir -t rpm -C "$RPM_ROOT" \
   --url https://github.com/Open-Less/openless \
   -d fcitx5 -d dbus-libs -d alsa-lib \
   -p "$OUTPUT/OpenLess-Linux-egui-${VERSION}-${ARCH}.rpm" .
-
-APPDIR="$TARGET_DIR/OpenLess.AppDir"
-rm -rf "$APPDIR"
-stage_common "$APPDIR"
-install -Dm755 "$PLUGIN_ROOT/libopenless.so" \
-  "$APPDIR/usr/lib/openless/resources/linux-fcitx5-plugin/libopenless.so"
-install -Dm644 "$PLUGIN_ROOT/openless.conf" \
-  "$APPDIR/usr/lib/openless/resources/linux-fcitx5-plugin/openless.conf"
-ln -s usr/bin/openless "$APPDIR/AppRun"
-cp "$PACKAGING/openless.desktop" "$APPDIR/openless.desktop"
-cp "$ICON" "$APPDIR/openless.png"
-ln -s openless.png "$APPDIR/.DirIcon"
-ARCH="$ARCH" appimagetool "$APPDIR" \
-  "$OUTPUT/OpenLess-Linux-egui-${VERSION}-${ARCH}.AppImage"
 
 find "$OUTPUT" -maxdepth 1 -type f -printf '%f\n' | sort

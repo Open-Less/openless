@@ -36,6 +36,7 @@ fn map_remote_input_status(
         pin: pin.into_exposed(),
         urls: status.urls,
         urls_stale: status.urls_stale,
+        ca_fingerprint_sha256: status.ca_fingerprint_sha256,
     }
 }
 
@@ -100,6 +101,7 @@ mod tests {
                 port: 9443,
                 urls: vec!["https://192.168.1.2:9443".into()],
                 urls_stale: false,
+                ca_fingerprint_sha256: Some("ab".repeat(32)),
                 locale: "zh-CN".into(),
                 connection_count: 2,
                 active_session_id: Some(openless_core::SessionId::new()),
@@ -115,7 +117,8 @@ mod tests {
                 "port": 9443,
                 "pin": "123456",
                 "urls": ["https://192.168.1.2:9443"],
-                "urlsStale": false
+                "urlsStale": false,
+                "caFingerprintSha256": "ab".repeat(32)
             })
         );
     }

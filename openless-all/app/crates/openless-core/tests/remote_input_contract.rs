@@ -12,6 +12,7 @@ use openless_core::{
 #[derive(Default)]
 struct FixtureRemoteRuntime {
     persisted_pin: Mutex<Option<String>>,
+    ca_fingerprint_sha256: Mutex<Option<String>>,
     persist_count: AtomicUsize,
     reject_persist: AtomicBool,
     start_count: AtomicUsize,
@@ -20,6 +21,8 @@ struct FixtureRemoteRuntime {
     audio_start_count: AtomicUsize,
     audio_stop_count: AtomicUsize,
     audio_cancel_count: AtomicUsize,
+    history_reads: AtomicUsize,
+    history: Mutex<Vec<openless_core::DictationSession>>,
     frames: Mutex<Vec<(SessionId, Vec<u8>)>>,
     insert_preferences: Mutex<Vec<bool>>,
     stop_started: Option<Arc<tokio::sync::Notify>>,
@@ -72,6 +75,7 @@ impl RemoteInputRuntimeAdapter for FixtureRemoteRuntime {
     ) -> BoxFuture<'static, Result<RemoteInputServerBinding, BackendError>> {
         self.start_count.fetch_add(1, Ordering::AcqRel);
         let fail = self.fail_start.load(Ordering::Acquire);
+        let ca_fingerprint_sha256 = self.ca_fingerprint_sha256.lock().unwrap().clone();
         Box::pin(async move {
             if fail {
                 return Err(BackendError::new(BackendErrorCode::Platform, "port-in-use"));
@@ -80,6 +84,7 @@ impl RemoteInputRuntimeAdapter for FixtureRemoteRuntime {
                 port: config.port,
                 urls: vec![format!("https://192.168.1.2:{}", config.port)],
                 urls_stale: false,
+                ca_fingerprint_sha256,
             })
         })
     }
@@ -135,6 +140,21 @@ impl RemoteInputRuntimeAdapter for FixtureRemoteRuntime {
     ) -> BoxFuture<'static, Result<(), BackendError>> {
         self.audio_cancel_count.fetch_add(1, Ordering::AcqRel);
         Box::pin(async { Ok(()) })
+    }
+
+    fn read_audio_history(
+        &self,
+        session_id: SessionId,
+    ) -> BoxFuture<'static, Result<Option<openless_core::DictationSession>, BackendError>> {
+        self.history_reads.fetch_add(1, Ordering::AcqRel);
+        let entry = self
+            .history
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|entry| entry.id == session_id.to_string())
+            .cloned();
+        Box::pin(async move { Ok(entry) })
     }
 }
 
@@ -278,6 +298,79 @@ fn contract_2_audio_frames_reject_invalid_headers_and_pcm() {
         RemoteFrameCodec::decode(b"OL20").unwrap_err().code,
         BackendErrorCode::InvalidArgument
     );
+}
+
+#[tokio::test]
+async fn ca_fingerprint_tracks_the_running_listener_and_clears_on_stop_or_failure() {
+    let runtime = Arc::new(FixtureRemoteRuntime::default());
+    let first = "ab".repeat(32);
+    let replacement = "cd".repeat(32);
+    *runtime.ca_fingerprint_sha256.lock().unwrap() = Some(first.clone());
+    let (backend, data_dir) = backend(Arc::clone(&runtime));
+    let remote = &backend.services().remote_input;
+    assert_eq!(remote.status().unwrap().ca_fingerprint_sha256, None);
+
+    remote
+        .configure(RemoteInputConfig {
+            enabled: true,
+            port: 8443,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        remote.status().unwrap().ca_fingerprint_sha256,
+        Some(first.clone())
+    );
+    assert_eq!(
+        serde_json::to_value(remote.status().unwrap()).unwrap()["caFingerprintSha256"],
+        first
+    );
+
+    remote
+        .configure(RemoteInputConfig {
+            enabled: false,
+            port: 8443,
+        })
+        .await
+        .unwrap();
+    assert_eq!(remote.status().unwrap().ca_fingerprint_sha256, None);
+    assert!(serde_json::to_value(remote.status().unwrap())
+        .unwrap()
+        .get("caFingerprintSha256")
+        .is_none());
+
+    // 启动失败时不能继续展示上一次监听器的指纹。
+    *runtime.ca_fingerprint_sha256.lock().unwrap() = Some(replacement.clone());
+    runtime.fail_start.store(true, Ordering::Release);
+    assert!(remote
+        .configure(RemoteInputConfig {
+            enabled: true,
+            port: 9443,
+        })
+        .await
+        .is_err());
+    assert_eq!(remote.status().unwrap().ca_fingerprint_sha256, None);
+
+    runtime.fail_start.store(false, Ordering::Release);
+    remote
+        .configure(RemoteInputConfig {
+            enabled: true,
+            port: 9443,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        remote.status().unwrap().ca_fingerprint_sha256,
+        Some(replacement)
+    );
+    remote
+        .configure(RemoteInputConfig {
+            enabled: false,
+            port: 9443,
+        })
+        .await
+        .unwrap();
+    let _ = std::fs::remove_dir_all(data_dir);
 }
 
 #[tokio::test]
@@ -475,6 +568,215 @@ async fn stream_association_validates_frames_and_rejects_duplicates_and_late_pcm
 }
 
 #[tokio::test]
+async fn interrupted_connection_finishes_two_minutes_of_received_pcm_without_cancelling() {
+    let runtime = Arc::new(FixtureRemoteRuntime::default());
+    let (backend, data_dir) = backend(Arc::clone(&runtime));
+    let remote = &backend.services().remote_input;
+    remote
+        .configure(RemoteInputConfig {
+            enabled: true,
+            port: 8443,
+        })
+        .await
+        .unwrap();
+    let connection = SessionId::new();
+    authenticate(remote.as_ref(), connection).await;
+    let session = remote.start_stream(connection).await.unwrap();
+    for second in 0..120 {
+        remote
+            .feed_pcm(connection, session, second, vec![second as u8; 32_000])
+            .await
+            .unwrap();
+    }
+    openless_core::finish_remote_input_connection(remote.as_ref(), connection, Some(session), None)
+        .await
+        .unwrap();
+    assert_eq!(runtime.audio_stop_count.load(Ordering::Acquire), 1);
+    assert_eq!(runtime.audio_cancel_count.load(Ordering::Acquire), 0);
+    assert_eq!(
+        runtime
+            .frames
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, pcm)| pcm.len())
+            .sum::<usize>(),
+        120 * 32_000
+    );
+    assert_eq!(remote.status().unwrap().connection_count, 0);
+    assert!(remote
+        .feed_pcm(connection, session, 120, vec![1, 0])
+        .await
+        .is_err());
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn disconnect_keeps_an_inflight_stop_but_pin_rotation_can_still_revoke_it() {
+    for revoke in [false, true] {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let runtime = Arc::new(FixtureRemoteRuntime {
+            stop_started: Some(started),
+            release_stop: Some(Arc::clone(&release)),
+            ..Default::default()
+        });
+        let (backend, data_dir) = backend(Arc::clone(&runtime));
+        let remote = Arc::clone(&backend.services().remote_input);
+        remote
+            .configure(RemoteInputConfig {
+                enabled: true,
+                port: 8443,
+            })
+            .await
+            .unwrap();
+        let connection = SessionId::new();
+        authenticate(remote.as_ref(), connection).await;
+        let session = remote.start_stream(connection).await.unwrap();
+        let mut stopping = remote.stop_stream(connection, session);
+        assert!(futures_util::poll!(stopping.as_mut()).is_pending());
+        let finishing = {
+            let remote = Arc::clone(&remote);
+            tokio::spawn(async move {
+                openless_core::finish_remote_input_connection(
+                    remote.as_ref(),
+                    connection,
+                    Some(session),
+                    Some(stopping),
+                )
+                .await
+            })
+        };
+        tokio::task::yield_now().await;
+        assert_eq!(runtime.audio_stop_count.load(Ordering::Acquire), 1);
+        assert_eq!(runtime.audio_cancel_count.load(Ordering::Acquire), 0);
+        if revoke {
+            remote.regenerate_pairing_pin().await.unwrap();
+        }
+        release.notify_one();
+        let result = finishing.await.unwrap();
+        if revoke {
+            assert_eq!(result.unwrap_err().code, BackendErrorCode::Cancelled);
+        } else {
+            result.unwrap();
+        }
+        assert_eq!(
+            runtime.audio_cancel_count.load(Ordering::Acquire),
+            usize::from(revoke)
+        );
+        assert_eq!(remote.status().unwrap().connection_count, 0);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+}
+
+#[tokio::test]
+async fn recovery_requires_authentication_and_a_separate_key_and_obeys_revocation() {
+    use openless_core::RemoteInputRecovery;
+    let runtime = Arc::new(FixtureRemoteRuntime::default());
+    let (backend, data_dir) = backend(Arc::clone(&runtime));
+    let remote = &backend.services().remote_input;
+    remote
+        .configure(RemoteInputConfig {
+            enabled: true,
+            port: 8443,
+        })
+        .await
+        .unwrap();
+    let connection = SessionId::new();
+    authenticate(remote.as_ref(), connection).await;
+    let session = remote.start_stream(connection).await.unwrap();
+    let key = remote.recovery_key(connection, session).unwrap();
+    let stranger = SessionId::new();
+    assert_eq!(
+        remote
+            .recover_stream(stranger, session, key.clone())
+            .await
+            .unwrap(),
+        RemoteInputRecovery::Unavailable
+    );
+    authenticate(remote.as_ref(), stranger).await;
+    assert!(remote.recovery_key(stranger, session).is_err());
+    assert_eq!(
+        remote
+            .recover_stream(stranger, session, SecretValue::new(session.to_string()))
+            .await
+            .unwrap(),
+        RemoteInputRecovery::Unavailable
+    );
+    assert_eq!(
+        remote
+            .recover_stream(stranger, SessionId::new(), key.clone())
+            .await
+            .unwrap(),
+        RemoteInputRecovery::Unavailable
+    );
+    assert_eq!(runtime.history_reads.load(Ordering::Acquire), 0);
+    assert_eq!(
+        remote
+            .recover_stream(stranger, session, key.clone())
+            .await
+            .unwrap(),
+        RemoteInputRecovery::Pending
+    );
+    let public = format!(
+        "{} {}",
+        serde_json::to_string(&remote.status().unwrap()).unwrap(),
+        serde_json::to_string(&backend.replay_events_after(0)).unwrap()
+    );
+    assert!(!public.contains(key.expose_secret()));
+    openless_core::finish_remote_input_connection(remote.as_ref(), connection, Some(session), None)
+        .await
+        .unwrap();
+    runtime.history.lock().unwrap().push(serde_json::from_value(serde_json::json!({
+        "id": session.to_string(), "createdAt":"2026-09-10T00:00:00Z", "rawTranscript":"received audio",
+        "finalText":"recovered text", "mode":"raw", "insertStatus":"notRequested", "hasAudioRecording":true,
+        "appName":"private desktop metadata"
+    })).unwrap());
+    assert_eq!(
+        remote
+            .recover_stream(stranger, session, key.clone())
+            .await
+            .unwrap(),
+        RemoteInputRecovery::Completed {
+            text: "recovered text".into()
+        }
+    );
+    {
+        let mut history = runtime.history.lock().unwrap();
+        history[0].raw_transcript.clear();
+        history[0].final_text.clear();
+        history[0].error_code = Some("transcribeFailed".into());
+    }
+    assert_eq!(
+        remote
+            .recover_stream(stranger, session, key.clone())
+            .await
+            .unwrap(),
+        RemoteInputRecovery::Failed {
+            has_audio_recording: true
+        }
+    );
+    remote.regenerate_pairing_pin().await.unwrap();
+    authenticate(remote.as_ref(), stranger).await;
+    assert_eq!(
+        remote.recover_stream(stranger, session, key).await.unwrap(),
+        RemoteInputRecovery::Unavailable
+    );
+    let cancelled = remote.start_stream(stranger).await.unwrap();
+    let cancelled_key = remote.recovery_key(stranger, cancelled).unwrap();
+    remote.cancel_stream(stranger, cancelled).await.unwrap();
+    assert_eq!(
+        remote
+            .recover_stream(stranger, cancelled, cancelled_key)
+            .await
+            .unwrap(),
+        RemoteInputRecovery::Unavailable
+    );
+    remote.disconnect(stranger).await.unwrap();
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
 async fn slow_finalization_remains_cancellable_and_cannot_clear_a_new_stream() {
     for disconnect in [false, true] {
         let started = Arc::new(tokio::sync::Notify::new());
@@ -648,10 +950,16 @@ async fn locale_and_connection_status_are_core_owned() {
     let runtime = Arc::new(FixtureRemoteRuntime::default());
     let (backend, data_dir) = backend(runtime);
     let remote = &backend.services().remote_input;
-    remote.set_locale("en".to_string()).await.unwrap();
-    assert_eq!(remote.status().unwrap().locale, "en");
+    for locale in ["en", "es", "fr", "de"] {
+        remote.set_locale(locale.to_string()).await.unwrap();
+        assert_eq!(remote.status().unwrap().locale, locale);
+    }
     assert_eq!(
-        remote.set_locale("fr".to_string()).await.unwrap_err().code,
+        remote
+            .set_locale("invalid-locale".to_string())
+            .await
+            .unwrap_err()
+            .code,
         BackendErrorCode::InvalidArgument
     );
     assert_eq!(

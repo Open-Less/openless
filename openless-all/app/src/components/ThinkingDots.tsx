@@ -28,7 +28,8 @@ export function ThinkingDots({ size = 20, style }: ThinkingDotsProps) {
         width: size,
         height: size,
         flexShrink: 0,
-        animation: 'ol-thinking-spin 1.7s linear infinite, ol-thinking-breathe 2.8s ease-in-out infinite',
+        animation:
+          'ol-thinking-spin 1.7s linear infinite, ol-thinking-breathe 2.8s ease-in-out infinite',
         willChange: 'transform',
         ...style,
       }}

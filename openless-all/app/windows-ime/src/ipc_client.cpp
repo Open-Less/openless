@@ -45,46 +45,42 @@ std::wstring PipeNameForCurrentThread() {
   return name;
 }
 
-bool AppendUtf8AsWide(const char* data,
-                      int length,
-                      std::wstring* output) {
+bool AppendUtf8AsWide(const char *data, int length, std::wstring *output) {
   if (length == 0) {
     return true;
   }
 
-  const int required = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, data,
-                                           length, nullptr, 0);
+  const int required = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, data, length, nullptr, 0);
   if (required <= 0) {
     return false;
   }
 
   const size_t old_size = output->size();
   output->resize(old_size + static_cast<size_t>(required));
-  return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, data, length,
-                             output->data() + old_size, required) == required;
+  return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, data, length, output->data() + old_size,
+                             required) == required;
 }
 
-bool WideToUtf8(const std::wstring& value, std::string* output) {
+bool WideToUtf8(const std::wstring &value, std::string *output) {
   output->clear();
   if (value.empty()) {
     return true;
   }
 
-  const int required = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
-                                           value.c_str(),
-                                           static_cast<int>(value.size()),
-                                           nullptr, 0, nullptr, nullptr);
+  const int required =
+      WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.c_str(),
+                          static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
   if (required <= 0) {
     return false;
   }
 
   output->resize(static_cast<size_t>(required));
   return WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.c_str(),
-                             static_cast<int>(value.size()), output->data(),
-                             required, nullptr, nullptr) == required;
+                             static_cast<int>(value.size()), output->data(), required, nullptr,
+                             nullptr) == required;
 }
 
-void SkipWhitespace(const std::string& json, size_t* pos) {
+void SkipWhitespace(const std::string &json, size_t *pos) {
   while (*pos < json.size()) {
     const char c = json[*pos];
     if (c != ' ' && c != '\t' && c != '\r' && c != '\n') {
@@ -107,9 +103,7 @@ int HexDigit(char c) {
   return -1;
 }
 
-bool ParseJsonString(const std::string& json,
-                     size_t* pos,
-                     std::wstring* value) {
+bool ParseJsonString(const std::string &json, size_t *pos, std::wstring *value) {
   value->clear();
   if (*pos >= json.size() || json[*pos] != '"') {
     return false;
@@ -124,8 +118,8 @@ bool ParseJsonString(const std::string& json,
     }
 
     if (c == '"') {
-      if (!AppendUtf8AsWide(json.data() + segment_start,
-                            static_cast<int>(*pos - segment_start), value)) {
+      if (!AppendUtf8AsWide(json.data() + segment_start, static_cast<int>(*pos - segment_start),
+                            value)) {
         return false;
       }
       ++(*pos);
@@ -137,8 +131,8 @@ bool ParseJsonString(const std::string& json,
       continue;
     }
 
-    if (!AppendUtf8AsWide(json.data() + segment_start,
-                          static_cast<int>(*pos - segment_start), value)) {
+    if (!AppendUtf8AsWide(json.data() + segment_start, static_cast<int>(*pos - segment_start),
+                          value)) {
       return false;
     }
 
@@ -149,50 +143,50 @@ bool ParseJsonString(const std::string& json,
 
     const char escaped = json[*pos];
     switch (escaped) {
-      case '"':
-      case '\\':
-      case '/':
-        value->push_back(static_cast<wchar_t>(escaped));
-        ++(*pos);
-        break;
-      case 'b':
-        value->push_back(L'\b');
-        ++(*pos);
-        break;
-      case 'f':
-        value->push_back(L'\f');
-        ++(*pos);
-        break;
-      case 'n':
-        value->push_back(L'\n');
-        ++(*pos);
-        break;
-      case 'r':
-        value->push_back(L'\r');
-        ++(*pos);
-        break;
-      case 't':
-        value->push_back(L'\t');
-        ++(*pos);
-        break;
-      case 'u': {
-        if (*pos + 4 >= json.size()) {
+    case '"':
+    case '\\':
+    case '/':
+      value->push_back(static_cast<wchar_t>(escaped));
+      ++(*pos);
+      break;
+    case 'b':
+      value->push_back(L'\b');
+      ++(*pos);
+      break;
+    case 'f':
+      value->push_back(L'\f');
+      ++(*pos);
+      break;
+    case 'n':
+      value->push_back(L'\n');
+      ++(*pos);
+      break;
+    case 'r':
+      value->push_back(L'\r');
+      ++(*pos);
+      break;
+    case 't':
+      value->push_back(L'\t');
+      ++(*pos);
+      break;
+    case 'u': {
+      if (*pos + 4 >= json.size()) {
+        return false;
+      }
+      uint32_t code_unit = 0;
+      for (int i = 1; i <= 4; ++i) {
+        const int digit = HexDigit(json[*pos + static_cast<size_t>(i)]);
+        if (digit < 0) {
           return false;
         }
-        uint32_t code_unit = 0;
-        for (int i = 1; i <= 4; ++i) {
-          const int digit = HexDigit(json[*pos + static_cast<size_t>(i)]);
-          if (digit < 0) {
-            return false;
-          }
-          code_unit = (code_unit << 4) | static_cast<uint32_t>(digit);
-        }
-        value->push_back(static_cast<wchar_t>(code_unit));
-        *pos += 5;
-        break;
+        code_unit = (code_unit << 4) | static_cast<uint32_t>(digit);
       }
-      default:
-        return false;
+      value->push_back(static_cast<wchar_t>(code_unit));
+      *pos += 5;
+      break;
+    }
+    default:
+      return false;
     }
 
     segment_start = *pos;
@@ -201,7 +195,7 @@ bool ParseJsonString(const std::string& json,
   return false;
 }
 
-bool ParseJsonInteger(const std::string& json, size_t* pos, int* value) {
+bool ParseJsonInteger(const std::string &json, size_t *pos, int *value) {
   if (*pos >= json.size() || json[*pos] < '0' || json[*pos] > '9') {
     return false;
   }
@@ -220,7 +214,7 @@ bool ParseJsonInteger(const std::string& json, size_t* pos, int* value) {
   return true;
 }
 
-bool SkipJsonValue(const std::string& json, size_t* pos) {
+bool SkipJsonValue(const std::string &json, size_t *pos) {
   std::wstring ignored;
   if (*pos >= json.size()) {
     return false;
@@ -234,7 +228,7 @@ bool SkipJsonValue(const std::string& json, size_t* pos) {
   return true;
 }
 
-bool ParseSubmitMessage(const std::string& json, SubmitMessage* message) {
+bool ParseSubmitMessage(const std::string &json, SubmitMessage *message) {
   size_t pos = 0;
   SkipWhitespace(json, &pos);
   if (pos >= json.size() || json[pos] != '{') {
@@ -267,8 +261,7 @@ bool ParseSubmitMessage(const std::string& json, SubmitMessage* message) {
         return false;
       }
     } else if (key == L"sessionId") {
-      message->has_session_id =
-          ParseJsonString(json, &pos, &message->session_id);
+      message->has_session_id = ParseJsonString(json, &pos, &message->session_id);
       if (!message->has_session_id) {
         return false;
       }
@@ -278,8 +271,7 @@ bool ParseSubmitMessage(const std::string& json, SubmitMessage* message) {
         return false;
       }
     } else if (key == L"protocolVersion") {
-      message->has_protocol_version =
-          ParseJsonInteger(json, &pos, &message->protocol_version);
+      message->has_protocol_version = ParseJsonInteger(json, &pos, &message->protocol_version);
       if (!message->has_protocol_version) {
         return false;
       }
@@ -303,54 +295,52 @@ bool ParseSubmitMessage(const std::string& json, SubmitMessage* message) {
   return pos == json.size();
 }
 
-std::wstring EscapeJsonString(const std::wstring& value) {
+std::wstring EscapeJsonString(const std::wstring &value) {
   std::wstring escaped;
   for (wchar_t ch : value) {
     switch (ch) {
-      case L'"':
-        escaped += L"\\\"";
-        break;
-      case L'\\':
-        escaped += L"\\\\";
-        break;
-      case L'\b':
-        escaped += L"\\b";
-        break;
-      case L'\f':
-        escaped += L"\\f";
-        break;
-      case L'\n':
-        escaped += L"\\n";
-        break;
-      case L'\r':
-        escaped += L"\\r";
-        break;
-      case L'\t':
-        escaped += L"\\t";
-        break;
-      default:
-        if (ch < 0x20) {
-          wchar_t buffer[7] = {};
-          swprintf_s(buffer, L"\\u%04X", static_cast<unsigned int>(ch));
-          escaped += buffer;
-        } else {
-          escaped.push_back(ch);
-        }
-        break;
+    case L'"':
+      escaped += L"\\\"";
+      break;
+    case L'\\':
+      escaped += L"\\\\";
+      break;
+    case L'\b':
+      escaped += L"\\b";
+      break;
+    case L'\f':
+      escaped += L"\\f";
+      break;
+    case L'\n':
+      escaped += L"\\n";
+      break;
+    case L'\r':
+      escaped += L"\\r";
+      break;
+    case L'\t':
+      escaped += L"\\t";
+      break;
+    default:
+      if (ch < 0x20) {
+        wchar_t buffer[7] = {};
+        swprintf_s(buffer, L"\\u%04X", static_cast<unsigned int>(ch));
+        escaped += buffer;
+      } else {
+        escaped.push_back(ch);
+      }
+      break;
     }
   }
   return escaped;
 }
 
-}  // namespace
+} // namespace
 
 OpenLessPipeServer::OpenLessPipeServer() = default;
 
-OpenLessPipeServer::~OpenLessPipeServer() {
-  Stop();
-}
+OpenLessPipeServer::~OpenLessPipeServer() { Stop(); }
 
-HRESULT OpenLessPipeServer::Start(OpenLessTextService* service) {
+HRESULT OpenLessPipeServer::Start(OpenLessTextService *service) {
   if (service == nullptr) {
     return E_INVALIDARG;
   }
@@ -367,12 +357,10 @@ HRESULT OpenLessPipeServer::Start(OpenLessTextService* service) {
   startup_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   stop_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   io_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-  if (startup_event_ == nullptr || stop_event_ == nullptr ||
-      io_event_ == nullptr) {
+  if (startup_event_ == nullptr || stop_event_ == nullptr || io_event_ == nullptr) {
     const DWORD error = GetLastError();
     ResetServerState();
-    return HRESULT_FROM_WIN32(error != ERROR_SUCCESS ? error
-                                                     : ERROR_NOT_ENOUGH_MEMORY);
+    return HRESULT_FROM_WIN32(error != ERROR_SUCCESS ? error : ERROR_NOT_ENOUGH_MEMORY);
   }
 
   try {
@@ -380,10 +368,10 @@ HRESULT OpenLessPipeServer::Start(OpenLessTextService* service) {
     service_ = service;
     service_->AddRef();
     thread_ = std::thread(&OpenLessPipeServer::Run, this);
-  } catch (const std::bad_alloc&) {
+  } catch (const std::bad_alloc &) {
     ResetServerState();
     return E_OUTOFMEMORY;
-  } catch (const std::system_error&) {
+  } catch (const std::system_error &) {
     ResetServerState();
     return E_FAIL;
   } catch (...) {
@@ -391,14 +379,11 @@ HRESULT OpenLessPipeServer::Start(OpenLessTextService* service) {
     return E_UNEXPECTED;
   }
 
-  const DWORD startup_wait =
-      WaitForSingleObject(startup_event_, kPipeStartupTimeoutMs);
+  const DWORD startup_wait = WaitForSingleObject(startup_event_, kPipeStartupTimeoutMs);
   if (startup_wait != WAIT_OBJECT_0) {
-    const DWORD error = startup_wait == WAIT_TIMEOUT ? ERROR_TIMEOUT
-                                                     : GetLastError();
+    const DWORD error = startup_wait == WAIT_TIMEOUT ? ERROR_TIMEOUT : GetLastError();
     Stop();
-    return HRESULT_FROM_WIN32(error != ERROR_SUCCESS ? error
-                                                     : ERROR_GEN_FAILURE);
+    return HRESULT_FROM_WIN32(error != ERROR_SUCCESS ? error : ERROR_GEN_FAILURE);
   }
 
   const HRESULT startup_result = startup_result_;
@@ -451,11 +436,11 @@ void OpenLessPipeServer::Run() noexcept {
   bool startup_reported = false;
   try {
     RunLoop(&startup_reported);
-  } catch (const std::bad_alloc&) {
+  } catch (const std::bad_alloc &) {
     if (!startup_reported) {
       ReportStartupResult(E_OUTOFMEMORY);
     }
-  } catch (const std::system_error&) {
+  } catch (const std::system_error &) {
     if (!startup_reported) {
       ReportStartupResult(E_FAIL);
     }
@@ -474,19 +459,17 @@ void OpenLessPipeServer::ReportStartupResult(HRESULT result) noexcept {
   }
 }
 
-void OpenLessPipeServer::RunLoop(bool* startup_reported) {
+void OpenLessPipeServer::RunLoop(bool *startup_reported) {
   const std::wstring pipe_name = pipe_name_;
   while (!stop_requested_.load()) {
-    HANDLE pipe = CreateNamedPipeW(
-        pipe_name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-        PIPE_TYPE_MESSAGE | PIPE_READMODE_BYTE | PIPE_WAIT, 1,
-        kPipeBufferSize, kPipeBufferSize, 0, nullptr);
+    HANDLE pipe = CreateNamedPipeW(pipe_name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+                                   PIPE_TYPE_MESSAGE | PIPE_READMODE_BYTE | PIPE_WAIT, 1,
+                                   kPipeBufferSize, kPipeBufferSize, 0, nullptr);
     if (pipe == INVALID_HANDLE_VALUE) {
       if (!*startup_reported) {
         const DWORD error = GetLastError();
         *startup_reported = true;
-        ReportStartupResult(HRESULT_FROM_WIN32(
-            error != ERROR_SUCCESS ? error : ERROR_GEN_FAILURE));
+        ReportStartupResult(HRESULT_FROM_WIN32(error != ERROR_SUCCESS ? error : ERROR_GEN_FAILURE));
       }
       return;
     }
@@ -527,10 +510,10 @@ bool OpenLessPipeServer::WaitForClient(HANDLE pipe) {
 
   const DWORD error = GetLastError();
   if (error == ERROR_PIPE_CONNECTED) {
-    return true;  // A client connected before ConnectNamedPipe was called.
+    return true; // A client connected before ConnectNamedPipe was called.
   }
   if (error != ERROR_IO_PENDING) {
-    return false;  // Genuine failure establishing the connection.
+    return false; // Genuine failure establishing the connection.
   }
 
   const HANDLE wait_handles[2] = {io_event_, stop_event_};
@@ -552,32 +535,27 @@ void OpenLessPipeServer::WaitForClientDisconnect(HANDLE pipe) {
   char buffer[256] = {};
   while (!stop_requested_.load()) {
     DWORD bytes_read = 0;
-    if (!RunOverlapped(pipe, /*is_write=*/false, buffer, sizeof(buffer),
-                       &bytes_read) ||
+    if (!RunOverlapped(pipe, /*is_write=*/false, buffer, sizeof(buffer), &bytes_read) ||
         bytes_read == 0) {
       return;
     }
   }
 }
 
-bool OpenLessPipeServer::RunOverlapped(HANDLE pipe,
-                                       bool is_write,
-                                       void* buffer,
-                                       DWORD length,
-                                       DWORD* bytes) {
+bool OpenLessPipeServer::RunOverlapped(HANDLE pipe, bool is_write, void *buffer, DWORD length,
+                                       DWORD *bytes) {
   *bytes = 0;
 
   OVERLAPPED overlapped = {};
   overlapped.hEvent = io_event_;
   ResetEvent(io_event_);
 
-  const BOOL started =
-      is_write ? WriteFile(pipe, buffer, length, nullptr, &overlapped)
-               : ReadFile(pipe, buffer, length, nullptr, &overlapped);
+  const BOOL started = is_write ? WriteFile(pipe, buffer, length, nullptr, &overlapped)
+                                : ReadFile(pipe, buffer, length, nullptr, &overlapped);
   if (!started) {
     const DWORD error = GetLastError();
     if (error != ERROR_IO_PENDING) {
-      return false;  // e.g. ERROR_BROKEN_PIPE once the client disconnects.
+      return false; // e.g. ERROR_BROKEN_PIPE once the client disconnects.
     }
 
     const HANDLE wait_handles[2] = {io_event_, stop_event_};
@@ -595,14 +573,13 @@ bool OpenLessPipeServer::RunOverlapped(HANDLE pipe,
   return GetOverlappedResult(pipe, &overlapped, bytes, FALSE) != 0;
 }
 
-bool OpenLessPipeServer::ReadJsonLine(HANDLE pipe, std::string* line) {
+bool OpenLessPipeServer::ReadJsonLine(HANDLE pipe, std::string *line) {
   line->clear();
   char buffer[1024] = {};
 
   while (!stop_requested_.load() && line->size() < kMaxJsonLineBytes) {
     DWORD bytes_read = 0;
-    if (!RunOverlapped(pipe, /*is_write=*/false, buffer, sizeof(buffer),
-                       &bytes_read)) {
+    if (!RunOverlapped(pipe, /*is_write=*/false, buffer, sizeof(buffer), &bytes_read)) {
       return !line->empty();
     }
 
@@ -624,11 +601,10 @@ bool OpenLessPipeServer::ReadJsonLine(HANDLE pipe, std::string* line) {
   return !line->empty();
 }
 
-void OpenLessPipeServer::HandleSubmitLine(HANDLE pipe, const std::string& line) {
+void OpenLessPipeServer::HandleSubmitLine(HANDLE pipe, const std::string &line) {
   SubmitMessage message;
-  if (!ParseSubmitMessage(line, &message) || !message.has_type ||
-      !message.has_protocol_version || !message.has_session_id ||
-      !message.has_text || message.protocol_version != 1 ||
+  if (!ParseSubmitMessage(line, &message) || !message.has_type || !message.has_protocol_version ||
+      !message.has_session_id || !message.has_text || message.protocol_version != 1 ||
       message.type != L"submitText") {
     WriteResult(pipe, message.session_id, L"failed", L"protocolError");
     return;
@@ -639,9 +615,7 @@ void OpenLessPipeServer::HandleSubmitLine(HANDLE pipe, const std::string& line) 
     return;
   }
 
-  const HRESULT hr =
-      service_->SubmitTextFromPipe(message.session_id, message.text,
-                                   stop_event_);
+  const HRESULT hr = service_->SubmitTextFromPipe(message.session_id, message.text, stop_event_);
   if (SUCCEEDED(hr)) {
     WriteResult(pipe, message.session_id, L"committed", nullptr);
   } else {
@@ -650,10 +624,8 @@ void OpenLessPipeServer::HandleSubmitLine(HANDLE pipe, const std::string& line) 
   }
 }
 
-bool OpenLessPipeServer::WriteResult(HANDLE pipe,
-                                     const std::wstring& session_id,
-                                     const wchar_t* status,
-                                     const wchar_t* error_code) {
+bool OpenLessPipeServer::WriteResult(HANDLE pipe, const std::wstring &session_id,
+                                     const wchar_t *status, const wchar_t *error_code) {
   std::wstring response = L"{\"type\":\"submitResult\",\"protocolVersion\":1,";
   response += L"\"sessionId\":\"";
   response += EscapeJsonString(session_id);
@@ -676,7 +648,6 @@ bool OpenLessPipeServer::WriteResult(HANDLE pipe,
 
   DWORD bytes_written = 0;
   return RunOverlapped(pipe, /*is_write=*/true, utf8_response.data(),
-                       static_cast<DWORD>(utf8_response.size()),
-                       &bytes_written) &&
+                       static_cast<DWORD>(utf8_response.size()), &bytes_written) &&
          bytes_written == utf8_response.size();
 }

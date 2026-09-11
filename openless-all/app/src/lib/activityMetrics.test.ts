@@ -44,7 +44,10 @@ assert(
 
 // 指标切换读的是不同字段，窗口逻辑不变。
 const weekChars = buildPeriodSeries(activity, 7, 'chars', today);
-assert(weekChars.total === 4000 + 11_800 + 4400 + 3200, `7-day chars total wrong: ${weekChars.total}`);
+assert(
+  weekChars.total === 4000 + 11_800 + 4400 + 3200,
+  `7-day chars total wrong: ${weekChars.total}`,
+);
 const weekDuration = buildPeriodSeries(activity, 7, 'duration', today);
 assert(
   weekDuration.total === 400_000 + 1_180_000 + 440_000 + 320_000,
@@ -53,7 +56,10 @@ assert(
 
 // 30 天窗口把更早的日期也纳进来（这里 07-29 起的都在窗口内），长度恒为 30。
 const month = buildPeriodSeries(activity, 30, 'count', today);
-assert(month.buckets.length === 30, `30-day window should have 30 buckets, got ${month.buckets.length}`);
+assert(
+  month.buckets.length === 30,
+  `30-day window should have 30 buckets, got ${month.buckets.length}`,
+);
 assert(
   month.buckets[29].date === '2026-08-04' && month.buckets[0].date === '2026-07-06',
   `30-day window should span 07-06..08-04, got ${month.buckets[0].date}..${month.buckets[29].date}`,
@@ -65,16 +71,16 @@ assert(month.total === 234, `30-day count total wrong: ${month.total}`);
 const legacy: ActivityDay[] = [{ date: '2026-08-03', count: 156 } as ActivityDay];
 const legacyChars = buildPeriodSeries(legacy, 7, 'chars', today);
 assert(legacyChars.total === 0, `legacy entries should read as 0 chars, got ${legacyChars.total}`);
-assert(
-  Number.isFinite(legacyChars.dailyAverage),
-  'legacy entries must not produce NaN averages',
-);
+assert(Number.isFinite(legacyChars.dailyAverage), 'legacy entries must not produce NaN averages');
 const legacyCount = buildPeriodSeries(legacy, 7, 'count', today);
 assert(legacyCount.total === 156, 'legacy entries should still report their count');
 
 // 空数据集不炸，全 0。
 const empty = buildPeriodSeries([], 7, 'count', today);
-assert(empty.buckets.length === 7 && empty.total === 0 && empty.dailyAverage === 0, 'empty activity should yield a zeroed series');
+assert(
+  empty.buckets.length === 7 && empty.total === 0 && empty.dailyAverage === 0,
+  'empty activity should yield a zeroed series',
+);
 
 // 跨月边界：窗口要正确回退到上个月，不能在 1 号截断。
 const firstOfMonth = new Date(2026, 7, 1, 9, 0, 0); // 2026-08-01

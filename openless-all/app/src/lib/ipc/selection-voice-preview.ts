@@ -26,7 +26,9 @@ export function cancelSelectionVoiceIntentPrompt(): Promise<void> {
   return invokeOrMock('cancel_selection_voice_intent_prompt', undefined, () => undefined);
 }
 
-export function getSelectionVoicePreview(qaSessionId: string): Promise<SelectionVoicePreview | null> {
+export function getSelectionVoicePreview(
+  qaSessionId: string,
+): Promise<SelectionVoicePreview | null> {
   return invokeOrMock('get_selection_voice_preview', { qaSessionId }, () => ({
     text: '这里显示编辑后的文字。',
     sourceText: '这里显示原始选区。',
@@ -36,7 +38,10 @@ export function getSelectionVoicePreview(qaSessionId: string): Promise<Selection
 
 export type SelectionVoiceApplyOutcome = 'inserted' | 'paste_sent' | 'copied_fallback';
 
-export function confirmSelectionVoicePreview(text: string, qaSessionId: string): Promise<SelectionVoiceApplyOutcome> {
+export function confirmSelectionVoicePreview(
+  text: string,
+  qaSessionId: string,
+): Promise<SelectionVoiceApplyOutcome> {
   return invokeOrMock('confirm_selection_voice_preview', { text, qaSessionId }, () => 'paste_sent');
 }
 

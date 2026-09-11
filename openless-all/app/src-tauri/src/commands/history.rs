@@ -208,7 +208,7 @@ fn copy_recording_to_mobile_url(
 /// 流程：读 `recordings/<id>.wav` → 取 PCM（跳过 44 字节 WAV 头）→ 现 provider 重转
 /// → 成功则原地回写该条历史的 rawTranscript / finalText、清除 error_code，返回新文本。
 ///
-/// 仅做 ASR，不自动二次润色（润色依赖 LLM 凭据且 issue 标为待定，留作后续）。失败时
+/// 仅重新转写音频，不调用 LLM 润色。失败时
 /// 不动历史、不删录音，把错误返回给前端提示，用户可重试。返回更新后的整条记录给前端
 /// 局部刷新。
 #[tauri::command]

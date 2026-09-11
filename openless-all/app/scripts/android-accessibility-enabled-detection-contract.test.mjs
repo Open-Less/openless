@@ -1,9 +1,6 @@
 import { readFile } from 'node:fs/promises';
 
-const serviceUrl = new URL(
-  '../android/kotlin/OpenLessAccessibilityService.kt',
-  import.meta.url,
-);
+const serviceUrl = new URL('../android/kotlin/OpenLessAccessibilityService.kt', import.meta.url);
 const jniUrl = new URL('../src-tauri/src/android/jni.rs', import.meta.url);
 const panelUrl = new URL(
   '../android/frontend/components/AndroidPermissionsPanel.tsx',
@@ -60,9 +57,7 @@ if (!/enabled_services_contain/.test(jniSource)) {
   throw new Error('jni.accessibility_enabled must call enabled_services_contain');
 }
 
-if (
-  !/status\.enabled\s*&&\s*status\.operational\s*===\s*false/.test(panelSource)
-) {
+if (!/status\.enabled\s*&&\s*status\.operational\s*===\s*false/.test(panelSource)) {
   throw new Error(
     'AndroidAccessibilityStatusPill must retain enabled=true && operational=false branch',
   );

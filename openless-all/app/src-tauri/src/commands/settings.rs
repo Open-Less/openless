@@ -1,11 +1,10 @@
 use super::*;
 
-#[cfg(not(mobile))]
-use tauri_plugin_autostart::ManagerExt;
-
 #[tauri::command]
 pub fn get_settings(core: CoreState<'_>) -> UserPreferences {
-    core.get_preferences()
+    let mut prefs = core.get_preferences();
+    prefs.update_channel = effective_update_channel(None, &prefs, env!("CARGO_PKG_VERSION"));
+    prefs
 }
 
 #[tauri::command]
@@ -15,25 +14,11 @@ pub fn get_default_style_system_prompts() -> StyleSystemPrompts {
 
 struct TauriSettingsRuntime<'a> {
     coord: &'a Coordinator,
-    #[cfg(not(mobile))]
-    app: Option<&'a AppHandle>,
 }
 
 impl<'a> TauriSettingsRuntime<'a> {
     fn new(coord: &'a Coordinator) -> Self {
-        Self {
-            coord,
-            #[cfg(not(mobile))]
-            app: None,
-        }
-    }
-
-    #[cfg(not(mobile))]
-    fn with_app(coord: &'a Coordinator, app: &'a AppHandle) -> Self {
-        Self {
-            coord,
-            app: Some(app),
-        }
+        Self { coord }
     }
 
     fn platform_error(message: impl Into<String>) -> openless_core::BackendError {
@@ -44,13 +29,10 @@ impl<'a> TauriSettingsRuntime<'a> {
         &self,
         target: &openless_core::WindowsKeyboardRuntimeTarget,
     ) -> Result<(), openless_core::BackendError> {
-        let preferences = UserPreferences {
-            windows_sendinput_insertion_only: target.send_input_insertion_only,
-            windows_show_openless_in_keyboard_list: target.show_openless_in_keyboard_list,
-            ..UserPreferences::default()
-        };
-        crate::windows_ime_profile::apply_windows_openless_keyboard_list_pref(&preferences)
-            .map_err(Self::platform_error)
+        crate::windows_ime_profile::apply_windows_openless_keyboard_list(
+            target.openless_language_profile_enabled,
+        )
+        .map_err(Self::platform_error)
     }
 
     fn apply_hotkeys(
@@ -61,32 +43,6 @@ impl<'a> TauriSettingsRuntime<'a> {
             .apply_hotkey_runtime_change(change)
             .map_err(Self::platform_error)
     }
-
-    fn apply_launch_at_login(&self, enabled: bool) -> Result<(), openless_core::BackendError> {
-        #[cfg(not(mobile))]
-        {
-            let app = self.app.ok_or_else(|| {
-                openless_core::BackendError::new(
-                    openless_core::BackendErrorCode::Unsupported,
-                    "launch-at-login changes require a desktop application handle",
-                )
-            })?;
-            let result = if enabled {
-                app.autolaunch().enable()
-            } else {
-                app.autolaunch().disable()
-            };
-            return result.map_err(|error| Self::platform_error(error.to_string()));
-        }
-        #[cfg(mobile)]
-        {
-            let _ = enabled;
-            Err(openless_core::BackendError::new(
-                openless_core::BackendErrorCode::Unsupported,
-                "launch-at-login is unavailable on mobile",
-            ))
-        }
-    }
 }
 
 impl openless_core::SettingsRuntime for TauriSettingsRuntime<'_> {
@@ -95,16 +51,6 @@ impl openless_core::SettingsRuntime for TauriSettingsRuntime<'_> {
         plan: &openless_core::SettingsEffectPlan,
     ) -> Result<openless_core::SettingsEffectReceipt, openless_core::SettingsEffectFailure> {
         let mut receipt = openless_core::SettingsEffectReceipt::default();
-        if let Some(change) = &plan.launch_at_login {
-            if let Err(error) = self.apply_launch_at_login(change.next) {
-                return Err(openless_core::SettingsEffectFailure::after_side_effect(
-                    error, receipt,
-                ));
-            }
-            receipt
-                .applied
-                .push(openless_core::SettingsEffectKind::LaunchAtLogin);
-        }
         if let Some(change) = &plan.windows_keyboard {
             if let Err(error) = self.apply_windows_keyboard(&change.next) {
                 return Err(openless_core::SettingsEffectFailure::after_side_effect(
@@ -159,11 +105,6 @@ impl openless_core::SettingsRuntime for TauriSettingsRuntime<'_> {
         let mut failures = Vec::new();
         for effect in receipt.applied.iter().rev() {
             let result = match effect {
-                openless_core::SettingsEffectKind::LaunchAtLogin => plan
-                    .launch_at_login
-                    .as_ref()
-                    .map(|change| self.apply_launch_at_login(change.previous))
-                    .unwrap_or(Ok(())),
                 openless_core::SettingsEffectKind::Hotkeys => plan
                     .hotkeys
                     .as_ref()
@@ -204,31 +145,16 @@ impl openless_core::SettingsRuntime for TauriSettingsRuntime<'_> {
     }
 }
 
-pub(crate) fn persist_settings(coord: &Coordinator, prefs: UserPreferences) -> Result<(), String> {
-    persist_settings_with_runtime(coord, prefs, &TauriSettingsRuntime::new(coord))
-}
-
-#[cfg(not(mobile))]
-fn persist_settings_with_app(
-    coord: &Coordinator,
-    app: &AppHandle,
-    prefs: UserPreferences,
-) -> Result<(), String> {
-    persist_settings_with_runtime(coord, prefs, &TauriSettingsRuntime::with_app(coord, app))
-}
-
-fn persist_settings_with_runtime(
+fn persist_settings_with_host_lock_held(
     coord: &Coordinator,
     prefs: UserPreferences,
-    runtime: &dyn openless_core::SettingsRuntime,
 ) -> Result<(), String> {
-    let _host_guard = coord.lock_settings_host();
     coord
         .backend()
         .update_settings(
             prefs,
             openless_core::SettingsUpdateOptions::SETTINGS_DOCUMENT,
-            runtime,
+            &TauriSettingsRuntime::new(coord),
         )
         .map(|outcome| {
             if outcome.reconciled_hotkey_count > 0 {
@@ -241,11 +167,22 @@ fn persist_settings_with_runtime(
         .map_err(|error| error.to_string())
 }
 
-pub(crate) fn persist_strict_settings(
+fn persist_settings_preserving_update_channel(
     coord: &Coordinator,
-    prefs: UserPreferences,
+    mut prefs: UserPreferences,
 ) -> Result<(), String> {
     let _host_guard = coord.lock_settings_host();
+    // 在同一把写锁内读取并回填，避免并发渠道切换被旧设置快照覆盖。
+    preserve_update_channel_preferences(&mut prefs, &coord.backend().get_preferences());
+    persist_settings_with_host_lock_held(coord, prefs)
+}
+
+pub(crate) fn persist_strict_settings(
+    coord: &Coordinator,
+    mut prefs: UserPreferences,
+) -> Result<(), String> {
+    let _host_guard = coord.lock_settings_host();
+    preserve_update_channel_preferences(&mut prefs, &coord.backend().get_preferences());
     coord
         .backend()
         .update_settings(
@@ -257,14 +194,28 @@ pub(crate) fn persist_strict_settings(
         .map_err(|error| error.to_string())
 }
 
+async fn invalidate_llm_tests_if_thinking_changed(
+    coord: &Coordinator,
+    previous: &UserPreferences,
+    next: &UserPreferences,
+) -> Result<(), String> {
+    if previous.llm_thinking_enabled != next.llm_thinking_enabled {
+        coord
+            .backend()
+            .invalidate_channel_tests(openless_core::ChannelKind::Llm)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 #[cfg(not(mobile))]
 #[tauri::command]
 pub async fn set_settings(
     coord: CoordinatorState<'_>,
     app: AppHandle,
-    tray_microphones: State<'_, TrayMicrophoneMenuState>,
     mut prefs: UserPreferences,
-) -> Result<(), String> {
+) -> Result<UserPreferences, String> {
     // 捕获旧值用于远程输入服务的 diff（persist 后端口/开关变化时启停/重启）。
     let remote_prev = coord.backend().get_preferences();
     let packs = coord
@@ -273,10 +224,11 @@ pub async fn set_settings(
         .map_err(|e| e.to_string())?;
     sync_style_pack_preferences(&mut prefs, &packs);
     prefs.android_overlay_trigger = prefs.android_overlay_trigger.normalized();
+    invalidate_llm_tests_if_thinking_changed(&coord, &remote_prev, &prefs).await?;
     // 广播给所有 webview。issue #205：QaPanel 跑在独立 webview，
     // 没有 HotkeySettingsContext，必须靠事件感知录音键变化，否则面板可见时
     // 用户改键会让浮窗里的 "{recordHotkey}" 文案一直停留在旧值。
-    persist_settings_with_app(&*coord, &app, prefs)?;
+    persist_settings_preserving_update_channel(&*coord, prefs)?;
     let prefs = coord.backend().get_preferences();
     // 保存即同步胶囊样式原子：下一次录音的入场帧就携带新样式，不依赖 emit_capsule
     // 主线程闭包的 ~30Hz 同步（Windows 主线程拥塞时闭包延迟 → 整场显示旧样式）。
@@ -304,9 +256,6 @@ pub async fn set_settings(
             );
         }
     });
-    // 抑制 unused 警告：tray_microphones 现在改在闭包里通过 app.state 取，
-    // 但函数签名保留 State 入参，以便 Tauri 在调用前注入。
-    let _ = tray_microphones;
     // 远程输入：开关 / 端口变化时启停或重启服务（PIN 变化走 regenerate_remote_pin 命令）。
     if remote_prev.remote_input_enabled != prefs.remote_input_enabled
         || remote_prev.remote_input_port != prefs.remote_input_port
@@ -322,12 +271,15 @@ pub async fn set_settings(
             .await
             .map_err(|error| error.message)?;
     }
-    Ok(())
+    Ok(prefs)
 }
 
 #[cfg(mobile)]
 #[tauri::command]
-pub fn set_settings(coord: CoordinatorState<'_>, mut prefs: UserPreferences) -> Result<(), String> {
+pub async fn set_settings(
+    coord: CoordinatorState<'_>,
+    mut prefs: UserPreferences,
+) -> Result<(), String> {
     let previous = coord.backend().get_preferences();
     let packs = coord
         .backend()
@@ -335,7 +287,8 @@ pub fn set_settings(coord: CoordinatorState<'_>, mut prefs: UserPreferences) -> 
         .map_err(|e| e.to_string())?;
     sync_style_pack_preferences(&mut prefs, &packs);
     prefs.android_overlay_trigger = prefs.android_overlay_trigger.normalized();
-    persist_settings(&*coord, prefs)?;
+    invalidate_llm_tests_if_thinking_changed(&coord, &previous, &prefs).await?;
+    persist_settings_preserving_update_channel(&*coord, prefs)?;
     let prefs = coord.backend().get_preferences();
     // 保存即同步胶囊样式原子（Android 通知胶囊 payload 同源，见 emit_capsule）。
     coord.sync_capsule_style_from_preferences();
@@ -375,6 +328,63 @@ mod tests {
         );
         assert_eq!(stale_settings_payload.default_mode, PolishMode::Light);
     }
+
+    #[test]
+    fn update_channel_defaults_to_build_channel_until_user_selects_one() {
+        let mut prefs = UserPreferences::default();
+
+        assert_eq!(
+            effective_update_channel(None, &prefs, "2.0.0-Beta.1"),
+            UpdateChannel::Beta
+        );
+        assert_eq!(
+            effective_update_channel(None, &prefs, "2.0.0"),
+            UpdateChannel::Stable
+        );
+        let legacy_beta = UserPreferences {
+            update_channel: UpdateChannel::Beta,
+            update_channel_explicit: true,
+            ..UserPreferences::default()
+        };
+        assert_eq!(
+            effective_update_channel(None, &legacy_beta, "2.0.0"),
+            UpdateChannel::Beta
+        );
+        assert_eq!(
+            effective_update_channel(Some(UpdateChannel::Stable), &prefs, "2.0.0-Beta.1"),
+            UpdateChannel::Stable
+        );
+
+        assert!(select_update_channel(&mut prefs, UpdateChannel::Stable));
+        assert!(prefs.update_channel_explicit);
+        assert_eq!(
+            effective_update_channel(None, &prefs, "2.0.0-Beta.1"),
+            UpdateChannel::Stable
+        );
+        assert!(!select_update_channel(&mut prefs, UpdateChannel::Stable));
+        assert!(select_update_channel(&mut prefs, UpdateChannel::Beta));
+        assert_eq!(prefs.update_channel, UpdateChannel::Beta);
+        assert!(prefs.update_channel_explicit);
+    }
+
+    #[test]
+    fn general_settings_save_preserves_dedicated_update_channel_fields() {
+        let current = UserPreferences {
+            update_channel: UpdateChannel::Stable,
+            update_channel_explicit: true,
+            ..UserPreferences::default()
+        };
+        let mut stale_payload = UserPreferences {
+            update_channel: UpdateChannel::Beta,
+            update_channel_explicit: false,
+            ..UserPreferences::default()
+        };
+
+        preserve_update_channel_preferences(&mut stale_payload, &current);
+
+        assert_eq!(stale_payload.update_channel, UpdateChannel::Stable);
+        assert!(stale_payload.update_channel_explicit);
+    }
 }
 
 // ─────────────────────────── release channel (Beta opt-in) ───────────────────────────
@@ -390,9 +400,38 @@ mod tests {
 // （Beta tag 的 manifest 文件名带 `-beta` 后缀，跟 Stable manifest 在 GitHub
 // Release assets 里物理分离）。
 
+fn effective_update_channel(
+    requested: Option<UpdateChannel>,
+    prefs: &UserPreferences,
+    app_version: &str,
+) -> UpdateChannel {
+    requested.unwrap_or_else(|| {
+        if prefs.update_channel_explicit {
+            prefs.update_channel
+        } else if app_version.contains('-') {
+            UpdateChannel::Beta
+        } else {
+            UpdateChannel::Stable
+        }
+    })
+}
+
+fn select_update_channel(prefs: &mut UserPreferences, channel: UpdateChannel) -> bool {
+    let changed = prefs.update_channel != channel || !prefs.update_channel_explicit;
+    prefs.update_channel = channel;
+    prefs.update_channel_explicit = true;
+    changed
+}
+
+fn preserve_update_channel_preferences(incoming: &mut UserPreferences, current: &UserPreferences) {
+    incoming.update_channel = current.update_channel;
+    incoming.update_channel_explicit = current.update_channel_explicit;
+}
+
 #[tauri::command]
 pub fn get_update_channel(core: CoreState<'_>) -> UpdateChannel {
-    core.get_preferences().update_channel
+    let prefs = core.get_preferences();
+    effective_update_channel(None, &prefs, env!("CARGO_PKG_VERSION"))
 }
 
 #[tauri::command]
@@ -400,12 +439,13 @@ pub fn set_update_channel(
     coord: CoordinatorState<'_>,
     channel: UpdateChannel,
 ) -> Result<(), String> {
+    // 渠道读取和持久化必须同属一个写临界区，避免反向覆盖并发常规设置。
+    let _host_guard = coord.lock_settings_host();
     let mut prefs = coord.backend().get_preferences();
-    if prefs.update_channel == channel {
+    if !select_update_channel(&mut prefs, channel) {
         return Ok(());
     }
-    prefs.update_channel = channel;
-    persist_settings(&*coord, prefs)?;
+    persist_settings_with_host_lock_held(&*coord, prefs)?;
     Ok(())
 }
 
@@ -543,7 +583,7 @@ pub struct AppUpdateMetadata {
 
 /// 决定 manifest 来源后走 plugin-updater 的标准 check 流程。
 /// 渠道：显式传入 `channel` 时用它（关于页固定查 Stable、高级页 Beta 区查 Beta）；
-/// 不传则回落到 `prefs.update_channel`（后台 AutoUpdateGate 自动检查走这条）。
+/// 不传则使用用户明确选择的渠道；尚未选择时跟随当前构建类型。
 /// 返回 None = 当前是最新；Some(metadata) = 有新版可装。
 #[tauri::command]
 #[cfg(not(mobile))]
@@ -555,7 +595,8 @@ pub async fn app_check_update_with_channel<R: tauri::Runtime>(
 ) -> Result<Option<AppUpdateMetadata>, String> {
     use tauri_plugin_updater::UpdaterExt;
 
-    let channel = channel.unwrap_or_else(|| coord.backend().get_preferences().update_channel);
+    let prefs = coord.backend().get_preferences();
+    let channel = effective_update_channel(channel, &prefs, env!("CARGO_PKG_VERSION"));
     let mut builder = webview.updater_builder();
     if let Some(ms) = timeout_ms {
         builder = builder.timeout(std::time::Duration::from_millis(ms));
@@ -619,7 +660,8 @@ pub async fn app_check_update_with_channel(
 ) -> Result<Option<AppUpdateMetadata>, String> {
     #[cfg(target_os = "android")]
     {
-        let channel = channel.unwrap_or_else(|| coord.backend().get_preferences().update_channel);
+        let prefs = coord.backend().get_preferences();
+        let channel = effective_update_channel(channel, &prefs, env!("CARGO_PKG_VERSION"));
         return crate::android::updater::check_update(channel).await;
     }
     #[cfg(not(target_os = "android"))]
@@ -653,4 +695,40 @@ pub async fn app_download_and_install_android_update(
         let _ = (app, url, signature, version);
         Err("应用内更新仅支持 Android".to_string())
     }
+}
+
+/// Replace the single dictation binding under the existing settings transaction.
+pub(crate) fn replace_dictation_hotkey(
+    coord: &Coordinator,
+    binding: ShortcutBinding,
+) -> Result<(), String> {
+    let _host_guard = coord.lock_settings_host();
+    let mut prefs = coord.backend().get_preferences();
+    crate::shortcut_binding::validate_binding(&binding).map_err(|error| error.to_string())?;
+    reject_bare_shift_dictation_shortcut(&binding)?;
+    #[cfg(target_os = "macos")]
+    {
+        let native = crate::macos_dictation_key::PRIMARY;
+        if prefs.dictation_hotkey.primary == native || binding.primary == native {
+            if coord.dictation_shortcut_is_busy() {
+                return Err("macDictationKeyBusy".into());
+            }
+            if binding == prefs.dictation_hotkey {
+                // No settings effect is generated for an unchanged binding.
+                return coord.try_update_native_dictation_binding();
+            }
+        }
+    }
+    prefs.dictation_hotkey = binding;
+    sync_dictation_hotkey_legacy_fields(&mut prefs);
+    reject_hotkey_collisions(&prefs)?;
+    coord
+        .backend()
+        .update_settings(
+            prefs,
+            openless_core::SettingsUpdateOptions::STRICT,
+            &TauriSettingsRuntime::new(coord),
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }

@@ -10,8 +10,7 @@ const sourcePath = fileURLToPath(
   new URL('../android/manifests/AndroidManifest.v1.snippet.xml', import.meta.url),
 );
 
-const PERMISSION_LINE_RE =
-  /<uses-permission[^>]*android:name="([^"]+)"[^>]*\/?>/g;
+const PERMISSION_LINE_RE = /<uses-permission[^>]*android:name="([^"]+)"[^>]*\/?>/g;
 
 function printHelp() {
   console.log(`Usage: node scripts/merge-android-v1-manifest.mjs [options]
@@ -63,12 +62,15 @@ function permissionExists(manifestXml, permissionName) {
 }
 
 function mergePermissionLines(manifestXml, permissionLines) {
-  const missing = permissionLines.filter((permission) => !permissionExists(manifestXml, permission.name));
+  const missing = permissionLines.filter(
+    (permission) => !permissionExists(manifestXml, permission.name),
+  );
   if (missing.length === 0) {
     return { changed: false, content: manifestXml };
   }
 
-  const insertionBlock = (indent) => missing.map((permission) => `${indent}${permission.line}`).join('\n') + '\n';
+  const insertionBlock = (indent) =>
+    missing.map((permission) => `${indent}${permission.line}`).join('\n') + '\n';
 
   const applicationIdx = manifestXml.indexOf('<application');
   if (applicationIdx !== -1) {

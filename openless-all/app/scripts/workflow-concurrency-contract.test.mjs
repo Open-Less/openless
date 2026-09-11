@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const workflows = {
-  android: await readFile(new URL('../../../.github/workflows/android-apk.yml', import.meta.url), 'utf8'),
+  android: await readFile(
+    new URL('../../../.github/workflows/android-apk.yml', import.meta.url),
+    'utf8',
+  ),
   ci: await readFile(new URL('../../../.github/workflows/ci.yml', import.meta.url), 'utf8'),
   tauriRelease: await readFile(
     new URL('../../../.github/workflows/release-tauri.yml', import.meta.url),
@@ -33,9 +36,7 @@ assert.ok(
   'PR CI must isolate manual runs while grouping pull-request and branch runs by ref',
 );
 assert.ok(
-  workflows.ci.includes(
-    "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
-  ),
+  workflows.ci.includes("cancel-in-progress: ${{ github.event_name == 'pull_request' }}"),
   'PR CI must cancel superseded pull-request runs without cancelling branch pushes',
 );
 
