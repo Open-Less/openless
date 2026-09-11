@@ -13,16 +13,24 @@ tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-
 fs2 = "0.4"
 futures-util = "0.3"
 log = "0.4"
+simplelog = "0.12"
+base64 = "0.22"
+minisign-verify = "0.2.5"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+semver = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus = "0.9"
-arboard = { version = "3", features = ["wayland-data-control"] }
 keyring = { version = "3.6.3", default-features = false, features = ["linux-native-sync-persistent", "crypto-rust"] }
-cpal = "0.15"
-eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+cpal = { version = "0.18.2", default-features = false, features = ["pipewire", "pulseaudio"] }
+rfd = { version = "0.16", default-features = false, features = ["xdg-portal", "tokio"] }
+egui = "=0.33.3"
+eframe = { version = "=0.33.3", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 libc = "0.2"
 axum = { version = "0.7", default-features = false, features = ["ws", "http1", "tokio"] }
 hyper-util = { version = "0.1", features = ["tokio", "server-auto", "server", "http1"] }

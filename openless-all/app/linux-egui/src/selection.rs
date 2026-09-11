@@ -117,6 +117,17 @@ impl SelectionRuntimeAdapter for LinuxSelectionRuntime {
                     source_text: text.clone(),
                     replacement_text: None,
                 });
+                // Honest `source_app`: fcitx5 exposes the surrounding text via
+                // DBus but gives the host no reliable foreground-application
+                // identity that holds across both X11 and Wayland clients, and
+                // the PRIMARY/clipboard cannot prove the original control is
+                // still the current focus. There is no IBus/global-hotkey
+                // fallback by design (Linux supports fcitx5 only), so we report
+                // the app as unknown instead of faking an identity. Post-insertion
+                // edit observation for streamed dictation is likewise unsupported
+                // on Linux: Core's Noop HostContextAdapter/EditObservationAdapter
+                // (the factory does not inject real ones) keep those use-cases on
+                // the explicit `Unsupported` path rather than simulating edits.
                 Ok(SelectionCapture {
                     text,
                     source_app: None,

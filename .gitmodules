@@ -1,5 +1,5 @@
-[submodule "openless-all/app/src-tauri/vendor/qwen-asr"]
-	path = openless-all/app/src-tauri/vendor/qwen-asr
+[submodule "openless-all/app/vendor/qwen-asr"]
+	path = openless-all/app/vendor/qwen-asr
 	url = https://github.com/Open-Less/qwen-asr.git
 [submodule "openless-all/app/src-tauri/vendor/qwen3-asr-rs"]
 	path = openless-all/app/src-tauri/vendor/qwen3-asr-rs

@@ -8,7 +8,7 @@ use chrono::Utc;
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::persistence::{atomic_write, persistence_error, read_or_default};
 use crate::shared_types::LEARNED_VOCAB_NOTE;
-use crate::types::{DictionaryEntry, VocabPresetStore};
+use crate::types::{DictionaryEntry, VocabPreset, VocabPresetStore};
 
 /// Number of recently added manual entries that are guaranteed ASR hotword
 /// seats before hit-count ranking is applied.
@@ -266,6 +266,34 @@ pub fn list_vocab_presets(data_dir: &Path) -> Result<VocabPresetStore, BackendEr
     read_or_default(&data_dir.join("vocab-presets.json"))
 }
 
+pub fn builtin_vocab_presets() -> Vec<VocabPreset> {
+    serde_json::from_str(include_str!("../../../assets/vocab-presets.json"))
+        .expect("bundled vocabulary presets must be valid JSON")
+}
+
+pub fn resolve_vocab_presets(store: &VocabPresetStore) -> Vec<VocabPreset> {
+    let mut presets = builtin_vocab_presets()
+        .into_iter()
+        .filter(|preset| !store.disabled_builtin_preset_ids.contains(&preset.id))
+        .collect::<Vec<_>>();
+    for replacement in &store.overrides {
+        if let Some(existing) = presets
+            .iter_mut()
+            .find(|preset| preset.id == replacement.id)
+        {
+            *existing = replacement.clone();
+        }
+    }
+    presets.extend(
+        store
+            .custom
+            .iter()
+            .filter(|preset| !preset.id.is_empty())
+            .cloned(),
+    );
+    presets
+}
+
 pub fn save_vocab_presets(data_dir: &Path, store: &VocabPresetStore) -> Result<(), BackendError> {
     let json = serde_json::to_vec_pretty(store)
         .map_err(|_| persistence_error("encode vocabulary presets"))?;
@@ -353,6 +381,29 @@ mod tests {
         save_vocab_presets(&dir, &store).unwrap();
         assert_eq!(list_vocab_presets(&dir).unwrap(), store);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn bundled_presets_resolve_disables_overrides_and_custom_entries() {
+        let store = VocabPresetStore {
+            custom: vec![VocabPreset {
+                id: "custom".into(),
+                name: "自定义".into(),
+                phrases: vec!["OpenLess".into()],
+            }],
+            overrides: vec![VocabPreset {
+                id: "programmer".into(),
+                name: "工程师".into(),
+                phrases: vec!["Rust".into()],
+            }],
+            disabled_builtin_preset_ids: vec!["chef".into()],
+        };
+        let resolved = resolve_vocab_presets(&store);
+        assert!(resolved.iter().any(|preset| preset.id == "custom"));
+        assert!(resolved
+            .iter()
+            .any(|preset| preset.id == "programmer" && preset.name == "工程师"));
+        assert!(!resolved.iter().any(|preset| preset.id == "chef"));
     }
 
     #[test]

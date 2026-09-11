@@ -513,8 +513,8 @@ fn validate_provider_endpoint(endpoint: &str, allow_websocket: bool) -> Result<(
     let url =
         url::Url::parse(endpoint).map_err(|_| invalid_request("provider endpoint is invalid"))?;
     if url.host_str().is_none()
-        || !matches!(url.scheme(), "http" | "https")
-            && !(allow_websocket && matches!(url.scheme(), "ws" | "wss"))
+        || !(matches!(url.scheme(), "http" | "https")
+            || allow_websocket && matches!(url.scheme(), "ws" | "wss"))
     {
         return Err(invalid_request("provider endpoint is invalid"));
     }
@@ -1567,20 +1567,52 @@ mod tests {
             {"id":"legacy/chat"}
         ]}"#;
         for (kind, channel_kind, key_account, expected) in [
-            (ProviderKind::Llm, ChannelKind::Llm, LLM_API_KEY_ACCOUNT,
-                vec!["google/gemini-2.5-flash", "google/gemini-tts", "google/gemini-unknown", "orcarouter/fusion-flash"]),
-            (ProviderKind::Asr, ChannelKind::Asr, ASR_API_KEY_ACCOUNT,
-                vec!["google/gemini-2.5-flash"]),
+            (
+                ProviderKind::Llm,
+                ChannelKind::Llm,
+                LLM_API_KEY_ACCOUNT,
+                vec![
+                    "google/gemini-2.5-flash",
+                    "google/gemini-tts",
+                    "google/gemini-unknown",
+                    "orcarouter/fusion-flash",
+                ],
+            ),
+            (
+                ProviderKind::Asr,
+                ChannelKind::Asr,
+                ASR_API_KEY_ACCOUNT,
+                vec!["google/gemini-2.5-flash"],
+            ),
         ] {
             let credentials = Arc::new(InMemoryCredentialStore::default());
-            let channel = create_channel_with_values(&credentials, channel_kind, "orcarouter", &[]).await;
+            let channel =
+                create_channel_with_values(&credentials, channel_kind, "orcarouter", &[]).await;
             let transport = Arc::new(FakeProviderTransport::default());
             transport.push_response(200, catalog.as_bytes().to_vec());
-            let service = ProviderService::new_with_transport(credentials.clone(), Arc::new(crate::TokioTaskSpawner), transport.clone());
-            let request = ProviderRequest { kind, channel_id: Some(channel.clone()), thinking_enabled: false };
+            let service = ProviderService::new_with_transport(
+                credentials.clone(),
+                Arc::new(crate::TokioTaskSpawner),
+                transport.clone(),
+            );
+            let request = ProviderRequest {
+                kind,
+                channel_id: Some(channel.clone()),
+                thinking_enabled: false,
+            };
             assert!(service.list_models(request.clone()).await.is_err());
-            let namespace = if kind == ProviderKind::Llm { CredentialNamespace::Llm } else { CredentialNamespace::Asr };
-            credentials.write(CredentialKey::new(namespace, Some(channel), key_account).unwrap(), SecretValue::new("fixture-key")).await.unwrap();
+            let namespace = if kind == ProviderKind::Llm {
+                CredentialNamespace::Llm
+            } else {
+                CredentialNamespace::Asr
+            };
+            credentials
+                .write(
+                    CredentialKey::new(namespace, Some(channel), key_account).unwrap(),
+                    SecretValue::new("fixture-key"),
+                )
+                .await
+                .unwrap();
             let result = service.list_models(request).await.unwrap();
             assert_eq!(result.models, expected);
             let requests = transport.requests();
@@ -1684,22 +1716,44 @@ mod tests {
 
     #[tokio::test]
     async fn orcarouter_validation_uses_shared_audio_chat_transcription() {
-        let (endpoint, request) = spawn_http_response("200 OK", "application/json",
-            r#"{"choices":[{"message":{"content":"transcript"}}]}"#);
+        let (endpoint, request) = spawn_http_response(
+            "200 OK",
+            "application/json",
+            r#"{"choices":[{"message":{"content":"transcript"}}]}"#,
+        );
         let credentials = Arc::new(InMemoryCredentialStore::default());
-        let channel = create_channel_with_values(&credentials, ChannelKind::Asr, "orcarouter", &[
-            (ASR_ENDPOINT_ACCOUNT, &endpoint), (ASR_API_KEY_ACCOUNT, "fixture-key"),
-        ]).await;
+        let channel = create_channel_with_values(
+            &credentials,
+            ChannelKind::Asr,
+            "orcarouter",
+            &[
+                (ASR_ENDPOINT_ACCOUNT, &endpoint),
+                (ASR_API_KEY_ACCOUNT, "fixture-key"),
+            ],
+        )
+        .await;
         let service = ProviderService::new(credentials, Arc::new(crate::TokioTaskSpawner));
-        service.validate(ProviderRequest { kind: ProviderKind::Asr, channel_id: Some(channel), thinking_enabled: false }).await.unwrap();
-        let request = String::from_utf8(request.recv_timeout(Duration::from_secs(2)).unwrap()).unwrap();
+        service
+            .validate(ProviderRequest {
+                kind: ProviderKind::Asr,
+                channel_id: Some(channel),
+                thinking_enabled: false,
+            })
+            .await
+            .unwrap();
+        let request =
+            String::from_utf8(request.recv_timeout(Duration::from_secs(2)).unwrap()).unwrap();
         assert!(request.starts_with("POST /v1/chat/completions "));
-        let body: serde_json::Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+        let body: serde_json::Value =
+            serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
         assert_eq!(body["model"], crate::asr::mimo::ORCAROUTER_DEFAULT_MODEL);
         let content = &body["messages"][0]["content"];
         assert_eq!(content[0]["type"], "text");
         assert_eq!(content[1]["input_audio"]["format"], "wav");
-        assert!(!content[1]["input_audio"]["data"].as_str().unwrap().starts_with("data:"));
+        assert!(!content[1]["input_audio"]["data"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:"));
     }
 
     async fn service_with_fake_transport() -> (ProviderService, Arc<FakeProviderTransport>, String)

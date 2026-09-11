@@ -105,6 +105,8 @@ pub struct SettingsEffectPlan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_asr_provider: Option<SettingsValueChange<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_at_login: Option<SettingsValueChange<bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub windows_keyboard: Option<SettingsValueChange<WindowsKeyboardRuntimeTarget>>,
 }
 
@@ -120,6 +122,7 @@ impl SettingsEffectPlan {
                 previous.active_asr_provider.clone(),
                 next.active_asr_provider.clone(),
             ),
+            launch_at_login: changed(previous.launch_at_login, next.launch_at_login),
             windows_keyboard: changed(previous.into(), next.into()),
         }
     }
@@ -127,6 +130,7 @@ impl SettingsEffectPlan {
     pub fn is_empty(&self) -> bool {
         self.hotkeys.is_none()
             && self.active_asr_provider.is_none()
+            && self.launch_at_login.is_none()
             && self.windows_keyboard.is_none()
     }
 }
@@ -136,6 +140,7 @@ impl SettingsEffectPlan {
 pub enum SettingsEffectKind {
     WindowsKeyboard,
     ActiveAsrProvider,
+    LaunchAtLogin,
     Hotkeys,
 }
 

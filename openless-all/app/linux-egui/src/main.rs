@@ -1,37 +1,43 @@
-#[cfg(any(target_os = "linux", test))]
-mod ui_state;
-
 #[cfg(not(target_os = "linux"))]
 fn main() {
     eprintln!("openless-linux-egui is only available on Linux");
 }
 
 #[cfg(target_os = "linux")]
+mod ui;
+
+#[cfg(target_os = "linux")]
 mod linux_app {
-    use super::ui_state::{Navigation, Page};
     use std::future::Future;
     use std::sync::mpsc;
     use std::sync::Arc;
     use std::time::Duration;
 
+    use crate::ui::frontend::{self, view_model::FrontendViewModel};
+    use crate::ui::{shell, theme};
+    use chrono::Datelike;
     use eframe::egui;
     use openless_core::{
         BackendConfig, BackendError, BackendEvent, BackendEventKind, BackendSnapshot,
-        DictationPhase, HistoryInsertStatus, HostAction, LessComputerEventKind, LocalAsrModel,
-        LocalAsrRuntime, QaStateEvent, QaStateKind, SelectionPhase, SelectionSnapshot,
-        TranscriptAccumulator, UserPreferences,
+        DictationPhase, HistoryInsertStatus, HostAction, LessComputerEventKind, QaStateEvent,
+        QaStateKind, SelectionPhase, SelectionSnapshot, TranscriptAccumulator, UserPreferences,
     };
     use openless_linux_egui::{
-        drain_events, ensure_fcitx5_plugin_installed, EventDrainOutcome, Fcitx5HotkeyListener,
-        FcitxPluginInstallPlan, FcitxPluginStatus, LinuxBackendBuilder, LinuxCapabilitySnapshot,
-        LinuxDesktopSession, LinuxLaunchIntent, LinuxNativeRuntime, LinuxPackageKind,
-        LinuxResourceLayout, SingleInstanceBroker, SingleInstanceRole,
+        drain_events, ensure_fcitx5_plugin_installed, fcitx5_copy_to_clipboard, notify,
+        open_external, reload_running_fcitx5, write_jsonl, EventDrainOutcome, Fcitx5HotkeyListener,
+        FcitxPluginInstallPlan, FcitxPluginStatus, HostToPopup, LinuxBackendBuilder,
+        LinuxCapabilitySnapshot, LinuxLaunchIntent, LinuxNativeRuntime, LinuxPackageKind,
+        LinuxResourceLayout, LinuxUpdateSupport, Notification, PopupActionGuard, PopupChatMessage,
+        PopupKind, PopupState, PopupSupervisor, PopupSupervisorEvent, PopupToHost,
+        SingleInstanceBroker, SingleInstanceRole, UpdateManifest, UpdateSchedule,
+        POPUP_PROTOCOL_VERSION,
+    };
+    use openless_linux_egui::{
+        fmt_l10n, load_locale_pref, save_locale_pref, tr_l10n, Lang, LocalePref, LANGS,
     };
 
     enum UiResult {
-        Environment(LinuxCapabilitySnapshot),
         Message(String),
-        Models(Result<Vec<LocalAsrModel>, String>),
         Remote(Result<(openless_core::RemoteInputStatus, String), String>),
         Providers(Result<ProviderPanel, String>),
         ProviderEditor {
@@ -45,13 +51,18 @@ mod linux_app {
             result: Result<Vec<String>, String>,
         },
         ProviderMutation(Result<String, String>),
-    }
-
-    #[derive(Clone)]
-    enum ModelsState {
-        Loading,
-        Loaded(Vec<LocalAsrModel>),
-        Failed(String),
+        Library(Result<LibraryPanel, String>),
+        SettingsSaved(Box<Result<openless_core::SettingsUpdateOutcome, String>>),
+        Marketplace(Result<Vec<openless_core::MarketplaceListItem>, String>),
+        MarketplaceFlow(Result<openless_core::OAuthDeviceFlow, String>),
+        MarketplaceAuthPoll(Result<openless_core::OAuthPollResult, String>),
+        MarketplaceDetail(Result<openless_core::MarketplaceDetail, String>),
+        MarketplaceMine(Result<(Vec<openless_core::MarketplaceMyPackItem>, Vec<String>), String>),
+        Microphones(Result<Vec<openless_core::MicrophoneDevice>, String>),
+        Overview(Result<OverviewData, String>),
+        UpdateCheck(Result<Option<UpdateManifest>, String>),
+        UpdateProgress(openless_linux_egui::DownloadProgress),
+        UpdateInstalled(Result<openless_linux_egui::InstalledUpdate, String>),
     }
 
     #[derive(Clone)]
@@ -62,11 +73,483 @@ mod linux_app {
         active_provider: String,
     }
 
+    struct LibraryPanel {
+        vocabulary: Vec<openless_core::DictionaryEntry>,
+        correction_rules: Vec<openless_core::CorrectionRule>,
+        style_packs: Vec<openless_core::StylePack>,
+        vocab_preset_store: openless_core::VocabPresetStore,
+        vocab_presets: Vec<openless_core::VocabPreset>,
+    }
+
+    #[derive(Default, Clone, Copy)]
+    struct SettingsDirty {
+        streaming_insert: bool,
+        coding_agent_enabled: bool,
+        start_minimized: bool,
+        launch_at_login: bool,
+        auto_update_check: bool,
+        update_channel: bool,
+        remote_input_enabled: bool,
+        remote_input_port: bool,
+        recording: bool,
+        microphone: bool,
+        appearance: bool,
+        hotkeys: bool,
+    }
+
+    impl SettingsDirty {
+        fn any(&self) -> bool {
+            self.streaming_insert
+                || self.coding_agent_enabled
+                || self.start_minimized
+                || self.launch_at_login
+                || self.auto_update_check
+                || self.update_channel
+                || self.remote_input_enabled
+                || self.remote_input_port
+                || self.recording
+                || self.microphone
+                || self.appearance
+                || self.hotkeys
+        }
+
+        fn merge(&self, latest: &UserPreferences, draft: &UserPreferences) -> UserPreferences {
+            let mut merged = latest.clone();
+            if self.streaming_insert {
+                merged.streaming_insert = draft.streaming_insert;
+            }
+            if self.coding_agent_enabled {
+                merged.coding_agent_enabled = draft.coding_agent_enabled;
+            }
+            if self.start_minimized {
+                merged.start_minimized = draft.start_minimized;
+            }
+            if self.launch_at_login {
+                merged.launch_at_login = draft.launch_at_login;
+            }
+            if self.auto_update_check {
+                merged.auto_update_check = draft.auto_update_check;
+            }
+            if self.update_channel {
+                merged.update_channel = draft.update_channel;
+            }
+            if self.remote_input_enabled {
+                merged.remote_input_enabled = draft.remote_input_enabled;
+            }
+            if self.remote_input_port {
+                merged.remote_input_port = draft.remote_input_port;
+            }
+            if self.recording {
+                merged.hotkey.mode = draft.hotkey.mode;
+                merged.silence_auto_stop_enabled = draft.silence_auto_stop_enabled;
+                merged.silence_auto_stop_seconds = draft.silence_auto_stop_seconds;
+                merged.mute_during_recording = draft.mute_during_recording;
+                merged.audio_cue_on_record = draft.audio_cue_on_record;
+            }
+            if self.microphone {
+                merged.microphone_device_name = draft.microphone_device_name.clone();
+            }
+            if self.appearance {
+                merged.theme_mode = draft.theme_mode;
+                merged.show_overview_activity_heatmap = draft.show_overview_activity_heatmap;
+            }
+            if self.hotkeys {
+                merged.dictation_hotkey = draft.dictation_hotkey.clone();
+                merged.hotkey = draft.hotkey.clone();
+                merged.qa_hotkey = draft.qa_hotkey.clone();
+                merged.translation_hotkey = draft.translation_hotkey.clone();
+                merged.switch_style_hotkey = draft.switch_style_hotkey.clone();
+                merged.open_app_hotkey = draft.open_app_hotkey.clone();
+                merged.selection_polish_hotkey = draft.selection_polish_hotkey.clone();
+                merged.coding_agent_voice_hotkey = draft.coding_agent_voice_hotkey.clone();
+            }
+            merged
+        }
+    }
+
+    // ---- Native Overview summary (Tauri parity) -----------------------------
+    //
+    // The Tauri Overview derives its dashboard from three real Core sources:
+    //   * `CredentialsStatus`  -> active ASR/LLM provider and its configured state
+    //   * `HistoryStore`       -> today's metrics, total count and recent entries
+    //   * `ActivityStore`      -> trailing-window aggregates + daily heatmap
+    // Fetching happens off the egui frame in a tokio task (`load_overview`); the
+    // pure helpers below only shape already-loaded data and are unit tested
+    // without a runtime, a backend or any UI.
+
+    /// Raw snapshot fetched asynchronously from Core for the Overview tab.
+    #[derive(Clone, Debug)]
+    struct OverviewData {
+        credentials: openless_core::CredentialsStatus,
+        history: Vec<openless_core::DictationSession>,
+        activity: Vec<openless_core::ActivityDay>,
+    }
+
+    #[derive(Clone, Debug, Default)]
+    struct RecentEntry {
+        created_at: String,
+        final_text: String,
+        duration_ms: Option<u64>,
+    }
+
+    /// Activity aggregate over a trailing calendar window. Zero days that never
+    /// recorded activity are absent from the store, so a window may cover more
+    /// calendar days than `active_days`.
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    struct ActivityAggregate {
+        active_days: usize,
+        segments: u64,
+        chars: u64,
+        duration_ms: u64,
+    }
+
+    /// Fully derived, display-ready Overview summary (computed purely, tested).
+    #[derive(Clone, Debug, Default)]
+    struct OverviewSummary {
+        asr_provider: String,
+        llm_provider: String,
+        asr_configured: bool,
+        llm_configured: bool,
+        chars_today: u64,
+        segments_today: usize,
+        duration_ms_today: u64,
+        avg_latency_ms: u64,
+        history_total: usize,
+        recent: Vec<RecentEntry>,
+        last_7: ActivityAggregate,
+        last_30: ActivityAggregate,
+        /// GitHub-style weekly columns (Sunday-first). Chronological oldest
+        /// first; a partial leading week keeps left-edge calendar alignment.
+        heatmap_weeks: Vec<[u32; 7]>,
+        heatmap_days: u32,
+        activity_days_total: usize,
+    }
+
+    #[derive(Clone, Debug)]
+    enum OverviewState {
+        Loading,
+        Loaded(OverviewData),
+        Failed(String),
+    }
+
     #[derive(Clone)]
     enum ProvidersState {
         Loading,
         Loaded(ProviderPanel),
         Failed(String),
+    }
+
+    /// Trailing annual window rendered by the Overview heatmap.
+    const OVERVIEW_HEATMAP_DAYS: i64 = 364;
+
+    impl OverviewState {
+        fn summary(&self, today: chrono::NaiveDate) -> Option<OverviewSummary> {
+            match self {
+                OverviewState::Loaded(data) => Some(overview_summary(data, today)),
+                OverviewState::Loading | OverviewState::Failed(_) => None,
+            }
+        }
+    }
+
+    /// RFC3339 history timestamp -> local calendar date. A value that cannot
+    /// be parsed simply yields `None` and contributes nothing to the summary.
+    fn history_local_date(created_at: &str) -> Option<chrono::NaiveDate> {
+        chrono::DateTime::parse_from_rfc3339(created_at)
+            .ok()
+            .map(|instant| instant.with_timezone(&chrono::Local).date_naive())
+    }
+
+    /// Sum one activity window's segments/chars/duration over `[today-days+1, today]`.
+    fn aggregate_window(
+        by_date: &std::collections::BTreeMap<chrono::NaiveDate, &openless_core::ActivityDay>,
+        today: chrono::NaiveDate,
+        days: i64,
+    ) -> ActivityAggregate {
+        let start = today - chrono::Duration::days(days - 1);
+        let mut aggregate = ActivityAggregate::default();
+        for (_, day) in by_date.range(start..=today) {
+            aggregate.active_days += 1;
+            aggregate.segments += u64::from(day.count);
+            aggregate.chars += day.chars;
+            aggregate.duration_ms += day.duration_ms;
+        }
+        aggregate
+    }
+
+    /// Build a Sunday-first weekly heatmap grid over the trailing `days` window
+    /// (inclusive) ending at `today`. Columns are chronological weeks; the first
+    /// column may be partial so weekday edges align like a GitHub contribution
+    /// graph. Dates absent from the store render as an inactive (0) cell.
+    fn build_heatmap_weeks(
+        by_date: &std::collections::BTreeMap<chrono::NaiveDate, &openless_core::ActivityDay>,
+        today: chrono::NaiveDate,
+        days: i64,
+    ) -> Vec<[u32; 7]> {
+        let mut weeks: Vec<[u32; 7]> = Vec::new();
+        let mut date = today - chrono::Duration::days(days - 1);
+        while date <= today {
+            let weekday = date.weekday().num_days_from_sunday() as usize;
+            if weekday == 0 || weeks.is_empty() {
+                // A fresh column. Sunday starts a new week; a partial leading
+                // column is created on the first non-Sunday date instead.
+                weeks.push([0u32; 7]);
+            }
+            weeks
+                .last_mut()
+                .expect("a heatmap week always exists before writing a cell")[weekday] =
+                by_date.get(&date).map(|day| day.count).unwrap_or(0);
+            date += chrono::Duration::days(1);
+        }
+        weeks
+    }
+
+    /// Shape the fetched Core snapshot into the display summary. Pure and free of
+    /// any runtime/IO so it can be exercised by focused unit tests.
+    fn overview_summary(data: &OverviewData, today: chrono::NaiveDate) -> OverviewSummary {
+        let mut segments_today = 0usize;
+        let mut chars_today = 0u64;
+        let mut duration_ms_today = 0u64;
+        for session in &data.history {
+            if history_local_date(&session.created_at) == Some(today) {
+                segments_today += 1;
+                chars_today += session.final_text.chars().count() as u64;
+                duration_ms_today += session.duration_ms.unwrap_or(0);
+            }
+        }
+        let avg_latency_ms = if segments_today > 0 {
+            duration_ms_today / segments_today as u64
+        } else {
+            0
+        };
+
+        // Newest five entries. `created_at` is RFC3339 in a constant UTC offset,
+        // so lexicographic ordering is a valid chronological ordering.
+        let mut recent: Vec<RecentEntry> = data
+            .history
+            .iter()
+            .map(|session| RecentEntry {
+                created_at: session.created_at.clone(),
+                final_text: session.final_text.clone(),
+                duration_ms: session.duration_ms,
+            })
+            .collect();
+        recent.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        recent.truncate(5);
+
+        let mut by_date: std::collections::BTreeMap<
+            chrono::NaiveDate,
+            &openless_core::ActivityDay,
+        > = std::collections::BTreeMap::new();
+        for day in &data.activity {
+            if let Ok(date) = chrono::NaiveDate::parse_from_str(&day.date, "%Y-%m-%d") {
+                by_date.insert(date, day);
+            }
+        }
+
+        OverviewSummary {
+            asr_provider: data.credentials.active_asr_provider.clone(),
+            llm_provider: data.credentials.active_llm_provider.clone(),
+            asr_configured: data.credentials.asr_configured,
+            llm_configured: data.credentials.llm_configured,
+            chars_today,
+            segments_today,
+            duration_ms_today,
+            avg_latency_ms,
+            history_total: data.history.len(),
+            recent,
+            last_7: aggregate_window(&by_date, today, 7),
+            last_30: aggregate_window(&by_date, today, 30),
+            heatmap_weeks: build_heatmap_weeks(&by_date, today, OVERVIEW_HEATMAP_DAYS),
+            heatmap_days: OVERVIEW_HEATMAP_DAYS as u32,
+            activity_days_total: by_date.len(),
+        }
+    }
+
+    fn format_duration(ms: u64, lang: Lang) -> String {
+        if ms < 1000 {
+            fmt_l10n(lang, "dur.ms", &[&ms])
+        } else if ms < 60_000 {
+            fmt_l10n(lang, "dur.sec", &[&format!("{:.1}", ms as f64 / 1000.0)])
+        } else {
+            let minutes = ms / 60_000;
+            let seconds = (ms % 60_000) / 1000;
+            fmt_l10n(lang, "dur.min_sec", &[&minutes, &seconds])
+        }
+    }
+
+    fn overview_provider_cards(ui: &mut egui::Ui, summary: &OverviewSummary, lang: Lang) {
+        ui.columns(2, |columns| {
+            overview_provider_card(
+                &mut columns[0],
+                tr_l10n(lang, "overview.provider_cards"),
+                &summary.asr_provider,
+                summary.asr_configured,
+                lang,
+            );
+            overview_provider_card(
+                &mut columns[1],
+                tr_l10n(lang, "overview.provider_cards_llm"),
+                &summary.llm_provider,
+                summary.llm_configured,
+                lang,
+            );
+        });
+    }
+
+    fn overview_provider_card(
+        ui: &mut egui::Ui,
+        kind: &str,
+        provider: &str,
+        configured: bool,
+        lang: Lang,
+    ) {
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_min_width(140.0);
+            ui.label(egui::RichText::new(kind).weak());
+            let name = if provider.is_empty() {
+                tr_l10n(lang, "overview.not_set").to_string()
+            } else {
+                provider.to_string()
+            };
+            ui.label(egui::RichText::new(name).strong());
+            if configured {
+                ui.colored_label(
+                    egui::Color32::from_rgb(60, 160, 90),
+                    tr_l10n(lang, "overview.configured_dot"),
+                );
+            } else {
+                ui.label(tr_l10n(lang, "overview.unconfigured"));
+            }
+        });
+    }
+
+    fn overview_metric(ui: &mut egui::Ui, label: &str, value: String, trend: &str) {
+        ui.vertical(|ui| {
+            ui.set_min_width(120.0);
+            ui.label(egui::RichText::new(label).weak());
+            ui.label(egui::RichText::new(value).strong().size(18.0));
+            if !trend.is_empty() {
+                ui.label(egui::RichText::new(trend).small().weak());
+            }
+        });
+    }
+
+    fn overview_metric_row(ui: &mut egui::Ui, summary: &OverviewSummary, lang: Lang) {
+        let latency_trend = if summary.segments_today > 0 {
+            "".to_string()
+        } else {
+            tr_l10n(lang, "metric.no_data_today").to_string()
+        };
+        egui::Grid::new("overview_metric_row")
+            .num_columns(4)
+            .spacing([16.0, 8.0])
+            .show(ui, |ui| {
+                overview_metric(
+                    ui,
+                    tr_l10n(lang, "metric.chars_today"),
+                    summary.chars_today.to_string(),
+                    &fmt_l10n(lang, "metric.total_segments", &[&summary.segments_today]),
+                );
+                overview_metric(
+                    ui,
+                    tr_l10n(lang, "metric.duration_today"),
+                    format_duration(summary.duration_ms_today, lang),
+                    "",
+                );
+                overview_metric(
+                    ui,
+                    tr_l10n(lang, "metric.avg_latency"),
+                    format_duration(summary.avg_latency_ms, lang),
+                    &latency_trend,
+                );
+                overview_metric(
+                    ui,
+                    tr_l10n(lang, "metric.total"),
+                    summary.history_total.to_string(),
+                    &fmt_l10n(
+                        lang,
+                        "metric.near7",
+                        &[&summary.last_7.segments, &summary.last_30.segments],
+                    ),
+                );
+                ui.end_row();
+            });
+    }
+
+    fn overview_recent(ui: &mut egui::Ui, summary: &OverviewSummary, lang: Lang) {
+        ui.label(egui::RichText::new(tr_l10n(lang, "heading.recent")).strong());
+        if summary.recent.is_empty() {
+            ui.label(tr_l10n(lang, "overview.recent_empty"));
+            return;
+        }
+        for entry in &summary.recent {
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.label(format!(
+                    "{} · {}",
+                    entry.created_at,
+                    format_duration(entry.duration_ms.unwrap_or(0), lang)
+                ));
+                let text = if entry.final_text.trim().is_empty() {
+                    tr_l10n(lang, "overview.no_text").to_string()
+                } else {
+                    entry.final_text.clone()
+                };
+                ui.label(text);
+            });
+            ui.add_space(4.0);
+        }
+    }
+
+    fn heat_color(count: u32) -> egui::Color32 {
+        match count {
+            0 => egui::Color32::from_gray(60),
+            1..=2 => egui::Color32::from_rgb(80, 140, 220),
+            3..=5 => egui::Color32::from_rgb(90, 120, 235),
+            6..=10 => egui::Color32::from_rgb(110, 100, 235),
+            _ => egui::Color32::from_rgb(150, 90, 235),
+        }
+    }
+
+    fn overview_heatmap(ui: &mut egui::Ui, summary: &OverviewSummary, lang: Lang) {
+        ui.label(egui::RichText::new(tr_l10n(lang, "overview.heatmap_title")).strong());
+        let weeks = &summary.heatmap_weeks;
+        if weeks.is_empty() {
+            ui.label(tr_l10n(lang, "overview.heatmap_empty"));
+            return;
+        }
+        let cell = 10.0f32;
+        let gap = 2.0f32;
+        let width = gap + weeks.len() as f32 * (cell + gap);
+        let height = gap + 7.0f32 * (cell + gap);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+        let painter = ui.painter();
+        for (column, week) in weeks.iter().enumerate() {
+            for (row, count) in week.iter().enumerate() {
+                let min = egui::pos2(
+                    rect.left() + gap + column as f32 * (cell + gap),
+                    rect.top() + gap + row as f32 * (cell + gap),
+                );
+                painter.rect_filled(
+                    egui::Rect::from_min_size(min, egui::vec2(cell, cell)),
+                    2.0,
+                    heat_color(*count),
+                );
+            }
+        }
+        ui.horizontal(|ui| {
+            ui.label(tr_l10n(lang, "overview.heatmap_less"));
+            for count in [0u32, 1, 4, 8, 15] {
+                let (swatch, _) =
+                    ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                ui.painter().rect_filled(swatch, 2.0, heat_color(count));
+            }
+            ui.label(tr_l10n(lang, "overview.heatmap_more"));
+            ui.label(fmt_l10n(
+                lang,
+                "overview.heatmap_footnote",
+                &[&summary.heatmap_days, &summary.activity_days_total],
+            ));
+        });
     }
 
     #[derive(Clone)]
@@ -79,7 +562,6 @@ mod linux_app {
         model: String,
         auth_mode: String,
         resource_id: String,
-        app_id: String,
         // Secret inputs are intentionally write-only. Loading an editor never
         // exposes an existing key into egui state, logs or screenshots.
         primary_secret: String,
@@ -98,21 +580,18 @@ mod linux_app {
     }
 
     pub struct OpenLessEguiApp {
-        navigation: Navigation,
-        environment: Option<LinuxCapabilitySnapshot>,
-        environment_refreshing: bool,
-        plugin_check: Option<Result<FcitxPluginStatus, String>>,
-        less_computer_running: bool,
-        remote_error: Option<String>,
         tokio: Arc<tokio::runtime::Runtime>,
         native: Option<LinuxNativeRuntime>,
         subscription: Option<openless_core::EventSubscription>,
         snapshot: Option<BackendSnapshot>,
         preferences: Option<UserPreferences>,
-        models: ModelsState,
+        settings_dirty: SettingsDirty,
+        overview: OverviewState,
+        microphones: Vec<openless_core::MicrophoneDevice>,
         transcript: String,
         transcript_state: TranscriptAccumulator,
         transcript_session: Option<openless_core::SessionId>,
+        recording_phase_active: bool,
         last_event_sequence: u64,
         less_computer_input: String,
         less_computer_output: String,
@@ -134,8 +613,46 @@ mod linux_app {
         new_provider_type: String,
         new_channel_name: String,
         pending_channel_delete: Option<String>,
+        vocabulary: Vec<openless_core::DictionaryEntry>,
+        correction_rules: Vec<openless_core::CorrectionRule>,
+        style_packs: Vec<openless_core::StylePack>,
+        vocabulary_phrase: String,
+        vocabulary_note: String,
+        correction_pattern: String,
+        correction_replacement: String,
+        vocab_preset_store: openless_core::VocabPresetStore,
+        vocab_presets: Vec<openless_core::VocabPreset>,
+        vocab_preset_name: String,
+        vocab_preset_phrases: String,
+        history_search: String,
+        qa_popup: Option<PopupSupervisor>,
+        preview_popup: Option<PopupSupervisor>,
+        capsule_popup: Option<PopupSupervisor>,
+        popup_action_guard: PopupActionGuard,
+        tray: Option<openless_linux_egui::LinuxTray>,
+        exit_requested: bool,
+        update_support: LinuxUpdateSupport,
+        update_schedule: UpdateSchedule,
+        update_started: std::time::Instant,
+        update_manifest: Option<UpdateManifest>,
+        update_busy: bool,
+        update_progress: Option<openless_linux_egui::DownloadProgress>,
+        marketplace_items: Vec<openless_core::MarketplaceListItem>,
+        marketplace_query: String,
+        marketplace_flow: Option<openless_core::OAuthDeviceFlow>,
+        marketplace_detail: Option<openless_core::MarketplaceDetail>,
+        marketplace_my_packs: Vec<openless_core::MarketplaceMyPackItem>,
+        marketplace_my_likes: Vec<String>,
+        style_editor: Option<openless_core::StylePack>,
+        style_hotkey_pack_id: String,
+        style_hotkey_primary: String,
+        style_hotkey_modifiers: String,
         status: String,
         startup_error: Option<String>,
+        locale_pref: LocalePref,
+        lang: Lang,
+        active_page: shell::Page,
+        frontend_vm: FrontendViewModel,
         tx: mpsc::Sender<UiResult>,
         rx: mpsc::Receiver<UiResult>,
     }
@@ -144,8 +661,18 @@ mod linux_app {
         fn new(
             tokio: Arc<tokio::runtime::Runtime>,
             native: Result<LinuxNativeRuntime, String>,
+            tray: Option<openless_linux_egui::LinuxTray>,
+            update_support: LinuxUpdateSupport,
         ) -> Self {
             let (tx, rx) = mpsc::channel();
+            let locale_pref = load_locale_pref();
+            let lang = locale_pref.resolve();
+            if let Some(tray) = tray.as_ref() {
+                // The tray renders labels in the resolved UI language. It runs
+                // in its own worker, so push the resolved language through the
+                // same control channel that updates microphone checkmarks.
+                let _ = tray.set_lang(lang);
+            }
             match native {
                 Ok(native) => {
                     let backend = native.host().backend();
@@ -153,21 +680,18 @@ mod linux_app {
                     let preferences = backend.get_preferences();
                     let subscription = backend.subscribe();
                     let app = Self {
-                        navigation: Navigation::default(),
-                        environment: None,
-                        environment_refreshing: false,
-                        plugin_check: None,
-                        less_computer_running: false,
-                        remote_error: None,
                         tokio,
                         native: Some(native),
                         subscription: Some(subscription),
                         snapshot: Some(snapshot),
                         preferences: Some(preferences),
-                        models: ModelsState::Loading,
+                        settings_dirty: SettingsDirty::default(),
+                        overview: OverviewState::Loading,
+                        microphones: Vec::new(),
                         transcript: String::new(),
                         transcript_state: TranscriptAccumulator::default(),
                         transcript_session: None,
+                        recording_phase_active: false,
                         last_event_sequence: 0,
                         less_computer_input: String::new(),
                         less_computer_output: String::new(),
@@ -189,32 +713,69 @@ mod linux_app {
                         new_provider_type: String::new(),
                         new_channel_name: String::new(),
                         pending_channel_delete: None,
-                        status: "Core 2.0 已启动".to_string(),
+                        vocabulary: Vec::new(),
+                        correction_rules: Vec::new(),
+                        style_packs: Vec::new(),
+                        vocabulary_phrase: String::new(),
+                        vocabulary_note: String::new(),
+                        correction_pattern: String::new(),
+                        correction_replacement: String::new(),
+                        vocab_preset_store: openless_core::VocabPresetStore::default(),
+                        vocab_presets: Vec::new(),
+                        vocab_preset_name: String::new(),
+                        vocab_preset_phrases: String::new(),
+                        history_search: String::new(),
+                        qa_popup: None,
+                        preview_popup: None,
+                        capsule_popup: None,
+                        popup_action_guard: PopupActionGuard::default(),
+                        tray,
+                        exit_requested: false,
+                        update_support,
+                        update_schedule: UpdateSchedule::new(Duration::ZERO),
+                        update_started: std::time::Instant::now(),
+                        update_manifest: None,
+                        update_busy: false,
+                        update_progress: None,
+                        marketplace_items: Vec::new(),
+                        marketplace_query: String::new(),
+                        marketplace_flow: None,
+                        marketplace_detail: None,
+                        marketplace_my_packs: Vec::new(),
+                        marketplace_my_likes: Vec::new(),
+                        style_editor: None,
+                        style_hotkey_pack_id: String::new(),
+                        style_hotkey_primary: String::new(),
+                        style_hotkey_modifiers: String::new(),
+                        status: tr_l10n(lang, "status.core_started").to_string(),
                         startup_error: None,
+                        locale_pref,
+                        lang,
+                        active_page: shell::Page::Overview,
+                        frontend_vm: FrontendViewModel::default(),
                         tx,
                         rx,
                     };
-                    app.load_models();
                     app.load_remote_status();
                     app.load_providers(openless_core::ChannelKind::Asr);
+                    app.load_library();
+                    app.load_microphones();
+                    app.load_overview();
                     app
                 }
                 Err(error) => Self {
-                    navigation: Navigation::default(),
-                    environment: None,
-                    environment_refreshing: false,
-                    plugin_check: None,
-                    less_computer_running: false,
-                    remote_error: None,
                     tokio,
                     native: None,
                     subscription: None,
                     snapshot: None,
                     preferences: None,
-                    models: ModelsState::Loading,
+                    settings_dirty: SettingsDirty::default(),
+                    overview: OverviewState::Loading,
+                    microphones: Vec::new(),
                     transcript: String::new(),
                     transcript_state: TranscriptAccumulator::default(),
                     transcript_session: None,
+                    recording_phase_active: false,
                     last_event_sequence: 0,
                     less_computer_input: String::new(),
                     less_computer_output: String::new(),
@@ -236,8 +797,46 @@ mod linux_app {
                     new_provider_type: String::new(),
                     new_channel_name: String::new(),
                     pending_channel_delete: None,
-                    status: "启动失败".to_string(),
+                    vocabulary: Vec::new(),
+                    correction_rules: Vec::new(),
+                    style_packs: Vec::new(),
+                    vocabulary_phrase: String::new(),
+                    vocabulary_note: String::new(),
+                    correction_pattern: String::new(),
+                    correction_replacement: String::new(),
+                    vocab_preset_store: openless_core::VocabPresetStore::default(),
+                    vocab_presets: Vec::new(),
+                    vocab_preset_name: String::new(),
+                    vocab_preset_phrases: String::new(),
+                    history_search: String::new(),
+                    qa_popup: None,
+                    preview_popup: None,
+                    capsule_popup: None,
+                    popup_action_guard: PopupActionGuard::default(),
+                    tray,
+                    exit_requested: false,
+                    update_support,
+                    update_schedule: UpdateSchedule::new(Duration::ZERO),
+                    update_started: std::time::Instant::now(),
+                    update_manifest: None,
+                    update_busy: false,
+                    update_progress: None,
+                    marketplace_items: Vec::new(),
+                    marketplace_query: String::new(),
+                    marketplace_flow: None,
+                    marketplace_detail: None,
+                    marketplace_my_packs: Vec::new(),
+                    marketplace_my_likes: Vec::new(),
+                    style_editor: None,
+                    style_hotkey_pack_id: String::new(),
+                    style_hotkey_primary: String::new(),
+                    style_hotkey_modifiers: String::new(),
+                    status: tr_l10n(lang, "status.startup_failed").to_string(),
                     startup_error: Some(error),
+                    locale_pref,
+                    lang,
+                    active_page: shell::Page::Overview,
+                    frontend_vm: FrontendViewModel::default(),
                     tx,
                     rx,
                 },
@@ -250,6 +849,320 @@ mod linux_app {
                 .map(|native| Arc::clone(native.host().backend()))
         }
 
+        fn popup_slot(&mut self, kind: PopupKind) -> &mut Option<PopupSupervisor> {
+            match kind {
+                PopupKind::Qa => &mut self.qa_popup,
+                PopupKind::Preview => &mut self.preview_popup,
+                PopupKind::Capsule => &mut self.capsule_popup,
+            }
+        }
+
+        fn ensure_popup(&mut self, kind: PopupKind) {
+            let lang = self.lang;
+            if self.popup_slot(kind).is_some() {
+                return;
+            }
+            match std::env::current_exe() {
+                Ok(executable) => {
+                    self.popup_action_guard.reset(kind);
+                    let supervisor = PopupSupervisor::spawn(self.tokio.handle(), executable, kind);
+                    *self.popup_slot(kind) = Some(supervisor);
+                }
+                Err(error) => self.status = fmt_l10n(lang, "popup.start_failed", &[&error]),
+            }
+        }
+
+        fn send_popup(&mut self, kind: PopupKind, message: HostToPopup) {
+            let lang = self.lang;
+            let retry = message.clone();
+            if let Some(supervisor) = self.popup_slot(kind) {
+                if let Err(error) = supervisor.try_send(message) {
+                    self.status = fmt_l10n(lang, "popup.channel_rebuild", &[&format!("{error:?}")]);
+                    *self.popup_slot(kind) = None;
+                    self.ensure_popup(kind);
+                    if let Some(supervisor) = self.popup_slot(kind) {
+                        if let Err(retry_error) = supervisor.try_send(retry) {
+                            self.status = fmt_l10n(
+                                lang,
+                                "popup.recover_failed",
+                                &[&format!("{retry_error:?}")],
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        fn hide_popup(&mut self, kind: PopupKind, session_id: String, sequence: u64) {
+            self.send_popup(
+                kind,
+                HostToPopup::Hide {
+                    version: POPUP_PROTOCOL_VERSION,
+                    session_id,
+                    sequence,
+                },
+            );
+        }
+
+        fn expected_popup_session(&self, kind: PopupKind) -> Option<String> {
+            match kind {
+                PopupKind::Qa => self
+                    .qa_state
+                    .as_ref()
+                    .map(|state| state.session_id.clone().unwrap_or_else(|| "qa".to_string())),
+                PopupKind::Preview => self
+                    .selection
+                    .as_ref()
+                    .and_then(|selection| selection.session_id)
+                    .map(|session_id| session_id.to_string()),
+                PopupKind::Capsule => self
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.dictation.session_id)
+                    .map(|session_id| session_id.to_string()),
+            }
+        }
+
+        fn show_qa_popup(&mut self) {
+            self.ensure_popup(PopupKind::Qa);
+            let Some(state) = self.qa_state.clone() else {
+                return;
+            };
+            self.send_popup(
+                PopupKind::Qa,
+                HostToPopup::QaSnapshot {
+                    version: POPUP_PROTOCOL_VERSION,
+                    session_id: state.session_id.unwrap_or_else(|| "qa".to_string()),
+                    sequence: self.last_event_sequence.saturating_mul(2),
+                    phase: format!("{:?}", state.kind),
+                    messages: state
+                        .messages
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|message| PopupChatMessage {
+                            role: message.role,
+                            content: message.content,
+                            selection_text: message.selection_text,
+                        })
+                        .collect(),
+                    selection_preview: state.selection_preview,
+                    streaming_answer: state.chunk.unwrap_or_default(),
+                    error: state.error,
+                },
+            );
+        }
+
+        fn show_selection_popup(&mut self) {
+            self.ensure_popup(PopupKind::Preview);
+            let Some(selection) = self.selection.clone() else {
+                return;
+            };
+            let Some(session_id) = selection.session_id else {
+                return;
+            };
+            self.send_popup(
+                PopupKind::Preview,
+                HostToPopup::Preview {
+                    version: POPUP_PROTOCOL_VERSION,
+                    session_id: session_id.to_string(),
+                    sequence: self.last_event_sequence.saturating_mul(2),
+                    text: selection.preview_text.unwrap_or_default(),
+                    source: selection.source_text.unwrap_or_default(),
+                },
+            );
+        }
+
+        fn show_capsule_popup(&mut self) {
+            self.ensure_popup(PopupKind::Capsule);
+            let Some(snapshot) = self
+                .snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.dictation.clone())
+            else {
+                return;
+            };
+            let Some(session_id) = snapshot.session_id else {
+                return;
+            };
+            self.send_popup(
+                PopupKind::Capsule,
+                HostToPopup::Capsule {
+                    version: POPUP_PROTOCOL_VERSION,
+                    session_id: session_id.to_string(),
+                    sequence: self.last_event_sequence.saturating_mul(2),
+                    phase: format!("{:?}", snapshot.phase),
+                    text: snapshot.message.unwrap_or_default(),
+                    audio_level: Some(snapshot.level),
+                },
+            );
+        }
+
+        fn poll_popup_supervisors(&mut self) {
+            let lang = self.lang;
+            let mut events = Vec::new();
+            for kind in [PopupKind::Qa, PopupKind::Preview, PopupKind::Capsule] {
+                if let Some(supervisor) = self.popup_slot(kind) {
+                    while let Ok(event) = supervisor.try_recv() {
+                        events.push((kind, event));
+                    }
+                }
+            }
+            for (kind, event) in events {
+                if let PopupSupervisorEvent::Message(message) = &event {
+                    let Some(expected_session) = self.expected_popup_session(kind) else {
+                        self.status = tr_l10n(lang, "popup.ignore_no_session").to_string();
+                        continue;
+                    };
+                    if !self
+                        .popup_action_guard
+                        .accept(kind, message, &expected_session)
+                    {
+                        self.status = tr_l10n(lang, "popup.ignore_stale").to_string();
+                        continue;
+                    }
+                }
+                match event {
+                    PopupSupervisorEvent::Message(PopupToHost::SubmitQa {
+                        session_id,
+                        text,
+                        ..
+                    }) if self
+                        .qa_state
+                        .as_ref()
+                        .and_then(|state| state.session_id.as_deref())
+                        == Some(session_id.as_str()) =>
+                    {
+                        if let Some(backend) = self.backend() {
+                            self.spawn(async move {
+                                backend.services().qa.submit_text(text).await?;
+                                Ok(tr_l10n(lang, "qa.submitted").to_string())
+                            });
+                        }
+                    }
+                    PopupSupervisorEvent::Message(PopupToHost::ToggleQaRecording {
+                        session_id,
+                        ..
+                    }) if self
+                        .qa_state
+                        .as_ref()
+                        .and_then(|state| state.session_id.as_deref())
+                        == Some(session_id.as_str()) =>
+                    {
+                        if let Some(backend) = self.backend() {
+                            self.spawn(async move {
+                                backend.services().qa.toggle_recording().await?;
+                                Ok(tr_l10n(lang, "qa.recording_updated").to_string())
+                            });
+                        }
+                    }
+                    PopupSupervisorEvent::Message(PopupToHost::DismissQa {
+                        session_id, ..
+                    }) if self
+                        .qa_state
+                        .as_ref()
+                        .and_then(|state| state.session_id.as_deref())
+                        == Some(session_id.as_str()) =>
+                    {
+                        if let Some(backend) = self.backend() {
+                            self.spawn(async move {
+                                backend.services().qa.dismiss().await?;
+                                Ok(tr_l10n(lang, "qa.closed").to_string())
+                            });
+                        }
+                    }
+                    PopupSupervisorEvent::Message(PopupToHost::ConfirmPreview {
+                        session_id,
+                        text,
+                        ..
+                    }) => match session_id.parse::<uuid::Uuid>() {
+                        Ok(session_id) => {
+                            let session_id = openless_core::SessionId::from_uuid(session_id);
+                            if let Some(backend) = self.backend() {
+                                self.spawn(async move {
+                                    backend
+                                        .services()
+                                        .selection
+                                        .confirm(session_id, Some(text))
+                                        .await?;
+                                    Ok(tr_l10n(lang, "selection.replaced").to_string())
+                                });
+                            }
+                        }
+                        Err(error) => {
+                            self.status = fmt_l10n(lang, "popup.session_invalid", &[&error])
+                        }
+                    },
+                    PopupSupervisorEvent::Message(PopupToHost::CancelPreview {
+                        session_id,
+                        ..
+                    }) => match session_id.parse::<uuid::Uuid>() {
+                        Ok(session_id) => {
+                            let session_id = openless_core::SessionId::from_uuid(session_id);
+                            if let Some(backend) = self.backend() {
+                                self.spawn(async move {
+                                    backend
+                                        .services()
+                                        .selection
+                                        .cancel(Some(session_id))
+                                        .await?;
+                                    Ok(tr_l10n(lang, "selection.cancelled").to_string())
+                                });
+                            }
+                        }
+                        Err(error) => {
+                            self.status = fmt_l10n(lang, "popup.session_invalid", &[&error])
+                        }
+                    },
+                    PopupSupervisorEvent::Message(PopupToHost::Ready { .. }) => match kind {
+                        PopupKind::Qa => self.show_qa_popup(),
+                        PopupKind::Preview => self.show_selection_popup(),
+                        PopupKind::Capsule => self.show_capsule_popup(),
+                    },
+                    PopupSupervisorEvent::Message(PopupToHost::DismissCapsule { .. }) => {
+                        if let Some(snapshot) = self.snapshot.as_mut() {
+                            snapshot.dictation.message = None;
+                        }
+                    }
+                    PopupSupervisorEvent::Message(
+                        PopupToHost::SubmitQa { .. }
+                        | PopupToHost::ToggleQaRecording { .. }
+                        | PopupToHost::DismissQa { .. },
+                    ) => {
+                        self.status = tr_l10n(lang, "popup.ignore_late_qa").to_string();
+                    }
+                    PopupSupervisorEvent::ProtocolError(error) => {
+                        self.status = fmt_l10n(lang, "popup.protocol_error", &[&error]);
+                    }
+                    PopupSupervisorEvent::SpawnFailed(error) => {
+                        self.status = fmt_l10n(lang, "popup.spawn_failed", &[&error]);
+                        *self.popup_slot(kind) = None;
+                    }
+                    PopupSupervisorEvent::Exited { code, crashed } => {
+                        if crashed {
+                            self.status = fmt_l10n(lang, "popup.exited", &[&format!("{code:?}")]);
+                        }
+                        *self.popup_slot(kind) = None;
+                        if crashed {
+                            match kind {
+                                PopupKind::Qa if self.qa_visible => self.show_qa_popup(),
+                                PopupKind::Preview if self.selection_preview_visible => {
+                                    self.show_selection_popup();
+                                }
+                                PopupKind::Capsule
+                                    if self.snapshot.as_ref().is_some_and(|snapshot| {
+                                        snapshot.dictation.phase != DictationPhase::Idle
+                                    }) =>
+                                {
+                                    self.show_capsule_popup();
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         fn spawn<F>(&self, future: F)
         where
             F: Future<Output = Result<String, BackendError>> + Send + 'static,
@@ -258,22 +1171,6 @@ mod linux_app {
             self.tokio.spawn(async move {
                 let message = future.await.unwrap_or_else(|error| error.to_string());
                 let _ = tx.send(UiResult::Message(message));
-            });
-        }
-
-        fn load_models(&self) {
-            let Some(backend) = self.backend() else {
-                return;
-            };
-            let tx = self.tx.clone();
-            self.tokio.spawn(async move {
-                let models = backend
-                    .services()
-                    .local_asr
-                    .list_models(LocalAsrRuntime::Generic)
-                    .await
-                    .map_err(|error| error.to_string());
-                let _ = tx.send(UiResult::Models(models));
             });
         }
 
@@ -328,6 +1225,224 @@ mod linux_app {
             });
         }
 
+        fn load_library(&self) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let result = (|| {
+                    let preferences = backend.get_preferences();
+                    let vocab_preset_store = backend.list_vocabulary_presets()?;
+                    let vocab_presets = openless_core::resolve_vocab_presets(&vocab_preset_store);
+                    Ok::<_, BackendError>(LibraryPanel {
+                        vocabulary: backend.list_vocabulary()?,
+                        correction_rules: backend.list_correction_rules()?,
+                        style_packs: backend.list_style_packs(&preferences.active_style_pack_id)?,
+                        vocab_preset_store,
+                        vocab_presets,
+                    })
+                })()
+                .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::Library(result));
+            });
+        }
+
+        fn load_marketplace(&self) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let query = self.marketplace_query.trim().to_string();
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let result = backend
+                    .services()
+                    .marketplace
+                    .list(openless_core::MarketplaceQuery {
+                        query: (!query.is_empty()).then_some(query),
+                        sort: Some("updated".to_string()),
+                        limit: Some(100),
+                    })
+                    .await
+                    .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::Marketplace(result));
+            });
+        }
+
+        fn load_marketplace_mine(&self) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let result = async {
+                    let packs = backend.services().marketplace.my_packs().await?;
+                    let likes = backend.services().marketplace.my_likes().await?;
+                    Ok::<_, BackendError>((packs, likes))
+                }
+                .await
+                .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::MarketplaceMine(result));
+            });
+        }
+
+        fn load_microphones(&self) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let result = backend
+                    .services()
+                    .platform
+                    .microphone_devices()
+                    .await
+                    .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::Microphones(result));
+            });
+        }
+
+        /// Load the real Core-backed Overview data off the egui frame. The only
+        /// blocking reads (`list_history`, `list_activity`) are pushed to a
+        /// blocking task so an egui frame never waits on disk/repository IO.
+        fn load_overview(&self) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let result = async {
+                    let credentials = backend.get_credentials_status().await?;
+                    let history_backend = Arc::clone(&backend);
+                    let activity_backend = Arc::clone(&backend);
+                    let history =
+                        tokio::task::spawn_blocking(move || history_backend.list_history())
+                            .await
+                            .map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Internal,
+                                    error.to_string(),
+                                )
+                            })??;
+                    let activity =
+                        tokio::task::spawn_blocking(move || activity_backend.list_activity())
+                            .await
+                            .map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Internal,
+                                    error.to_string(),
+                                )
+                            })??;
+                    Ok::<_, BackendError>(OverviewData {
+                        credentials,
+                        history,
+                        activity,
+                    })
+                }
+                .await
+                .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::Overview(result));
+            });
+        }
+
+        fn request_update_check(&mut self, channel: openless_core::shared_types::UpdateChannel) {
+            let lang = self.lang;
+            let LinuxUpdateSupport::AppImage(updater) = self.update_support.clone() else {
+                self.status = tr_l10n(lang, "update.system_managed").to_string();
+                return;
+            };
+            if self.update_busy {
+                return;
+            }
+            self.update_busy = true;
+            self.update_progress = None;
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let result = updater
+                    .check(channel)
+                    .await
+                    .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::UpdateCheck(result));
+            });
+        }
+
+        fn install_update(&mut self) {
+            let (LinuxUpdateSupport::AppImage(updater), Some(manifest)) =
+                (self.update_support.clone(), self.update_manifest.clone())
+            else {
+                return;
+            };
+            if self.update_busy {
+                return;
+            }
+            self.update_busy = true;
+            self.update_progress = Some(openless_linux_egui::DownloadProgress {
+                downloaded: 0,
+                content_length: None,
+            });
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let progress_tx = tx.clone();
+                let result = updater
+                    .download_and_install(manifest, move |progress| {
+                        let _ = progress_tx.send(UiResult::UpdateProgress(progress));
+                    })
+                    .await
+                    .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::UpdateInstalled(result));
+            });
+        }
+
+        fn drain_tray(&mut self, ctx: &egui::Context) {
+            let lang = self.lang;
+            let mut commands = Vec::new();
+            if let Some(tray) = &self.tray {
+                tray.drain(|command| commands.push(command));
+                if let Some(error) = tray.take_error() {
+                    self.status = fmt_l10n(lang, "status.tray_stopped", &[&error]);
+                    self.tray = None;
+                }
+            }
+            for command in commands {
+                match command {
+                    openless_linux_egui::TrayCommand::ShowMain => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    }
+                    openless_linux_egui::TrayCommand::ActivatePreviousStyle => {
+                        if let Some(backend) = self.backend() {
+                            self.spawn(async move {
+                                let pack = backend.activate_previous_style_pack()?;
+                                Ok(match pack {
+                                    Some(pack) => {
+                                        fmt_l10n(lang, "status.style_switched", &[&pack.name])
+                                    }
+                                    None => tr_l10n(lang, "status.no_previous_style").to_string(),
+                                })
+                            });
+                        }
+                    }
+                    openless_linux_egui::TrayCommand::SelectMicrophone(name) => {
+                        if let Some(backend) = self.backend() {
+                            let selected = if name.is_empty() {
+                                tr_l10n(lang, "settings.system_default").to_string()
+                            } else {
+                                name.clone()
+                            };
+                            self.spawn(async move {
+                                backend.select_microphone_device(name)?;
+                                Ok(fmt_l10n(lang, "status.mic_selected", &[&selected]))
+                            });
+                        }
+                    }
+                    openless_linux_egui::TrayCommand::Quit => {
+                        self.exit_requested = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+            }
+        }
+
         fn load_provider_editor(
             &self,
             kind: openless_core::ChannelKind,
@@ -373,8 +1488,8 @@ mod linux_app {
                     .services()
                     .provider
                     .list_models(openless_core::ProviderRequest {
-                        thinking_enabled: backend.get_preferences().llm_thinking_enabled,
                         kind: provider_kind(kind),
+                        thinking_enabled: false,
                         channel_id: Some(channel_id.clone()),
                     })
                     .await
@@ -388,36 +1503,99 @@ mod linux_app {
             });
         }
 
+        /// Play the native recording start/stop cue on a worker thread, gated by
+        /// the `audio_cue_on_record` preference. The start cue is additionally
+        /// suppressed while `mute_during_recording` is active: playing into a
+        /// deliberately muted sink is both inaudible and a needless PipeWire/
+        /// KDE sink-input blip. The stop cue plays after output has been
+        /// restored. Absent preferences default to Core's defaults (cue on,
+        /// mute off).
+        fn play_record_cue(&self, at_start: bool) {
+            let enabled = self
+                .preferences
+                .as_ref()
+                .map(|prefs| prefs.audio_cue_on_record)
+                .unwrap_or(true);
+            if !enabled {
+                return;
+            }
+            if at_start
+                && self
+                    .preferences
+                    .as_ref()
+                    .map(|prefs| prefs.mute_during_recording)
+                    .unwrap_or(false)
+            {
+                return;
+            }
+            if at_start {
+                openless_linux_egui::play_cue_start();
+            } else {
+                openless_linux_egui::play_cue_stop();
+            }
+        }
+
         fn apply_event(&mut self, event: BackendEvent) {
+            let lang = self.lang;
             if event.sequence <= self.last_event_sequence {
                 return;
             }
+            let event_sequence = event.sequence;
             self.last_event_sequence = event.sequence;
             let session_id = event.session_id;
             match event.kind {
                 BackendEventKind::DictationStateChanged(state) => {
-                    self.navigation.notify(Page::Dictation);
+                    // Native start/stop audio cues are a Linux host effect (no
+                    // webview to synthesize them), gated by `audio_cue_on_record`
+                    // and muted-aware. They must never block this frame, so the
+                    // cue module plays on its own worker thread.
+                    let was_recording = self.recording_phase_active;
+                    self.recording_phase_active = state.phase == DictationPhase::Recording;
+                    if state.phase == DictationPhase::Recording && !was_recording {
+                        self.play_record_cue(true);
+                    } else if !self.recording_phase_active && was_recording {
+                        self.play_record_cue(false);
+                    }
                     if state.phase == DictationPhase::Starting {
                         self.transcript_state = TranscriptAccumulator::default();
                         self.transcript.clear();
                         self.transcript_session = state.session_id;
                     }
-                    self.status = format!("听写：{:?}", state.phase);
+                    self.status = fmt_l10n(
+                        lang,
+                        "status.dictation_phase",
+                        &[&format!("{:?}", state.phase)],
+                    );
+                    if let Some(session_id) = state.session_id {
+                        self.send_popup(
+                            PopupKind::Capsule,
+                            HostToPopup::Capsule {
+                                version: POPUP_PROTOCOL_VERSION,
+                                session_id: session_id.to_string(),
+                                sequence: event_sequence.saturating_mul(2),
+                                phase: format!("{:?}", state.phase),
+                                text: state.message.unwrap_or_default(),
+                                audio_level: Some(state.level),
+                            },
+                        );
+                    }
                 }
                 BackendEventKind::TranscriptDelta(delta)
-                    if session_id == self.transcript_session =>
+                    if session_id == self.transcript_session
+                        && self.transcript_state.apply(&delta).is_ok() =>
                 {
-                    if self.transcript_state.apply(&delta).is_ok() {
-                        self.transcript = self.transcript_state.text().to_string();
-                    }
+                    self.transcript = self.transcript_state.text().to_string();
                 }
                 BackendEventKind::PolishDelta(delta) if delta.is_final => {
                     self.transcript = delta.text;
                 }
                 BackendEventKind::DictationCompleted(result) => {
-                    self.navigation.notify(Page::Dictation);
                     self.transcript = result.polished_text;
-                    self.status = format!("听写完成：{:?}", result.inserted);
+                    self.status = fmt_l10n(
+                        lang,
+                        "status.dictation_done",
+                        &[&format!("{:?}", result.inserted)],
+                    );
                 }
                 BackendEventKind::RecordingControlRequested(request) => {
                     if let Some(backend) = self.backend() {
@@ -430,18 +1608,11 @@ mod linux_app {
                                     backend.cancel_dictation(Some(request.session_id)).await?;
                                 }
                             }
-                            Ok("录音已自动结束".to_string())
+                            Ok(tr_l10n(lang, "status.auto_stopped").to_string())
                         });
                     }
                 }
                 BackendEventKind::LessComputerEvent(event) => {
-                    // Voice capture has its own session, preceding a chat User
-                    // turn. Keep a navigation notice without assigning it to
-                    // the current chat or inventing microphone readiness.
-                    if matches!(&event.kind, LessComputerEventKind::VoiceState { .. }) {
-                        self.navigation.notify(Page::Agent);
-                        return;
-                    }
                     // Less Computer events may complete after a newer turn has
                     // already started. Session ownership, not arrival time,
                     // decides whether a delta/terminal may mutate this view.
@@ -450,7 +1621,6 @@ mod linux_app {
                         // continuation. `fresh` describes conversation history,
                         // never whether this turn is allowed to receive output.
                         self.less_computer_session = session_id;
-                        self.less_computer_running = true;
                         self.pending_approval = None;
                         if *fresh {
                             self.less_computer_output.clear();
@@ -462,74 +1632,60 @@ mod linux_app {
                     } else if session_id != self.less_computer_session {
                         return;
                     }
-                    self.navigation.notify(Page::Agent);
                     match event.kind {
                         // Linux已有独立录音显示；新typed反馈供接手Host/UI团队继续接入。
                         LessComputerEventKind::VoiceState { .. } => {}
                         LessComputerEventKind::User { .. } => {}
                         LessComputerEventKind::Started => {
-                            self.less_computer_running = true;
-                            self.status = "Less Computer 正在运行".to_string();
+                            self.status = tr_l10n(lang, "status.less_running").to_string();
                         }
                         LessComputerEventKind::Delta { text } => {
                             self.less_computer_output.push_str(&text);
                         }
                         LessComputerEventKind::Tool { name } => {
-                            self.status = format!("Less Computer 正在使用工具：{name}");
+                            self.status = fmt_l10n(lang, "status.less_tool", &[&name]);
                         }
                         LessComputerEventKind::Compaction => {
-                            self.status = "Less Computer 已压缩上下文".to_string();
+                            self.status = tr_l10n(lang, "status.less_compacted").to_string();
                         }
                         LessComputerEventKind::Completed { text, .. } => {
-                            self.less_computer_running = false;
                             // A terminal is authoritative even for final-only
                             // providers or after a missed partial event.
                             self.less_computer_output
                                 .truncate(self.less_computer_turn_start);
                             self.less_computer_output.push_str(&text);
                             self.pending_approval = None;
-                            self.status = "Less Computer 已完成".to_string();
+                            self.status = tr_l10n(lang, "less_computer.done").to_string();
                         }
                         LessComputerEventKind::Approval { token, command, .. } => {
                             self.pending_approval = Some((token, command));
-                            self.status = "Less Computer 等待审批".to_string();
+                            self.status = tr_l10n(lang, "status.less_waiting").to_string();
                         }
                         LessComputerEventKind::Error { message } => {
-                            self.less_computer_running = false;
                             self.pending_approval = None;
                             self.status = message;
                         }
                         LessComputerEventKind::Cancelled => {
-                            self.less_computer_running = false;
                             self.pending_approval = None;
-                            self.status = "Less Computer 已取消".to_string();
+                            self.status = tr_l10n(lang, "less_computer.cancelled").to_string();
                         }
-                    }
-                }
-                BackendEventKind::LocalAsrDownloadProgress(progress) => {
-                    self.navigation.notify(Page::Models);
-                    self.status = format!(
-                        "模型 {}：{:?} {}/{}",
-                        progress.model_id,
-                        progress.phase,
-                        progress.bytes_downloaded,
-                        progress.bytes_total
-                    );
-                    if matches!(
-                        progress.phase,
-                        openless_core::LocalAsrDownloadPhase::Finished
-                            | openless_core::LocalAsrDownloadPhase::Failed
-                            | openless_core::LocalAsrDownloadPhase::Cancelled
-                    ) {
-                        self.models = ModelsState::Loading;
-                        self.load_models();
                     }
                 }
                 BackendEventKind::PreferencesChanged(_) => {
                     if let Some(backend) = self.backend() {
-                        self.preferences = Some(backend.get_preferences());
+                        let latest = backend.get_preferences();
+                        self.preferences = Some(match self.preferences.as_ref() {
+                            Some(draft) if self.settings_dirty.any() => {
+                                self.settings_dirty.merge(&latest, draft)
+                            }
+                            _ => latest,
+                        });
                     }
                     self.load_remote_status();
+                    self.load_library();
+                }
+                BackendEventKind::VocabularyChanged(_) | BackendEventKind::StylePacksChanged(_) => {
+                    self.load_library()
                 }
                 BackendEventKind::QaState(state) => {
                     if state.kind == QaStateKind::AnswerDelta {
@@ -538,7 +1694,6 @@ mod linux_app {
                             .as_mut()
                             .filter(|current| current.session_id == state.session_id)
                         {
-                            self.navigation.notify(Page::Qa);
                             // Core deltas deliberately omit messages. Preserve
                             // the conversation and append only this turn's text;
                             // the following Answer replaces it with Core history.
@@ -559,28 +1714,62 @@ mod linux_app {
                         .as_ref()
                         .is_none_or(|current| current.session_id == state.session_id)
                     {
-                        self.navigation.notify(Page::Qa);
                         self.qa_state = Some(state);
+                    }
+                    if let Some(state) = self.qa_state.clone() {
+                        let session_id =
+                            state.session_id.clone().unwrap_or_else(|| "qa".to_string());
+                        self.send_popup(
+                            PopupKind::Qa,
+                            HostToPopup::QaSnapshot {
+                                version: POPUP_PROTOCOL_VERSION,
+                                session_id,
+                                sequence: event_sequence.saturating_mul(2),
+                                phase: format!("{:?}", state.kind),
+                                messages: state
+                                    .messages
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .map(|message| PopupChatMessage {
+                                        role: message.role,
+                                        content: message.content,
+                                        selection_text: message.selection_text,
+                                    })
+                                    .collect(),
+                                selection_preview: state.selection_preview,
+                                streaming_answer: state.chunk.unwrap_or_default(),
+                                error: state.error,
+                            },
+                        );
                     }
                 }
                 BackendEventKind::SelectionStateChanged(snapshot) => {
-                    self.navigation.notify(Page::Selection);
                     if snapshot.phase == SelectionPhase::Preview {
                         self.selection_draft = snapshot.preview_text.clone().unwrap_or_default();
                         self.selection_preview_visible = true;
                     }
+                    if let Some(session_id) = snapshot.session_id {
+                        self.send_popup(
+                            PopupKind::Preview,
+                            HostToPopup::Preview {
+                                version: POPUP_PROTOCOL_VERSION,
+                                session_id: session_id.to_string(),
+                                sequence: event_sequence.saturating_mul(2),
+                                text: snapshot.preview_text.clone().unwrap_or_default(),
+                                source: snapshot.source_text.clone().unwrap_or_default(),
+                            },
+                        );
+                    }
                     self.selection = Some(snapshot);
                 }
                 BackendEventKind::RemoteInputStatusChanged(_)
-                | BackendEventKind::RemoteInputFailed(_) => {
-                    self.navigation.notify(Page::Remote);
-                    self.load_remote_status();
-                }
+                | BackendEventKind::RemoteInputFailed(_) => self.load_remote_status(),
                 _ => {}
             }
         }
 
         fn poll(&mut self, ctx: &egui::Context) {
+            let lang = self.lang;
             if let Some(native) = &self.native {
                 let (launch_intents, hotkey_events, errors) = native.drain_native_events();
                 let host = native.host_arc();
@@ -588,14 +1777,14 @@ mod linux_app {
                     let host = Arc::clone(&host);
                     self.spawn(async move {
                         host.dispatch_launch_intent(intent).await?;
-                        Ok("已处理启动请求".to_string())
+                        Ok(tr_l10n(lang, "status.launch_handled").to_string())
                     });
                 }
                 for event in hotkey_events {
                     let host = Arc::clone(&host);
                     self.spawn(async move {
                         host.dispatch_hotkey_event(event).await?;
-                        Ok("已处理快捷键".to_string())
+                        Ok(tr_l10n(lang, "status.hotkey_handled").to_string())
                     });
                 }
                 if let Some(error) = errors.last() {
@@ -609,43 +1798,88 @@ mod linux_app {
                 // back through sequenced Core events handled above.
                 for action in actions {
                     match action {
-                        HostAction::ShowMain => {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                        }
-                        HostAction::ShowLessComputer => {
-                            self.navigation.open(Page::Agent);
+                        HostAction::ShowMain | HostAction::ShowLessComputer => {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                         }
                         HostAction::FocusMain => {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                         }
-                        HostAction::Notify(message) => self.status = message,
+                        HostAction::Notify(message) => {
+                            self.status = message.clone();
+                            std::thread::spawn(move || {
+                                if let Err(error) = notify(Notification {
+                                    summary: "OpenLess",
+                                    body: &message,
+                                    icon: "openless",
+                                    timeout_ms: 0,
+                                }) {
+                                    eprintln!("OpenLess desktop notification failed: {error}");
+                                }
+                            });
+                        }
                         HostAction::OpenExternalUrl(url) | HostAction::OpenSystemSettings(url) => {
                             std::thread::spawn(move || {
-                                let _ = std::process::Command::new("xdg-open").arg(url).status();
+                                if let Err(error) = open_external(&url) {
+                                    eprintln!("OpenLess external URL failed: {error}");
+                                }
                             });
                         }
                         HostAction::RequestRestart => {
-                            self.status = "请手动重启 OpenLess".to_string();
+                            self.status = tr_l10n(lang, "status.request_restart").to_string();
                         }
                         HostAction::ShowSelectionPreview => {
-                            self.navigation.open(Page::Selection);
                             self.selection_preview_visible = true;
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                            self.show_selection_popup();
                         }
                         HostAction::HideSelectionPreview => {
                             self.selection_preview_visible = false;
+                            let session_id = self
+                                .selection
+                                .as_ref()
+                                .and_then(|selection| selection.session_id)
+                                .map(|id| id.to_string())
+                                .unwrap_or_else(|| "selection".to_string());
+                            self.hide_popup(
+                                PopupKind::Preview,
+                                session_id,
+                                self.last_event_sequence.saturating_mul(2).saturating_add(1),
+                            );
                         }
                         HostAction::ShowQa => {
-                            self.navigation.open(Page::Qa);
                             self.qa_visible = true;
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                            self.show_qa_popup();
                         }
-                        HostAction::HideQa => self.qa_visible = false,
-                        HostAction::ShowDictationFeedback | HostAction::HideDictationFeedback => {}
+                        HostAction::HideQa => {
+                            self.qa_visible = false;
+                            let session_id = self
+                                .qa_state
+                                .as_ref()
+                                .and_then(|state| state.session_id.clone())
+                                .unwrap_or_else(|| "qa".to_string());
+                            self.hide_popup(
+                                PopupKind::Qa,
+                                session_id,
+                                self.last_event_sequence.saturating_mul(2).saturating_add(1),
+                            );
+                        }
+                        HostAction::ShowDictationFeedback => self.show_capsule_popup(),
+                        HostAction::HideDictationFeedback => {
+                            let session_id = self
+                                .snapshot
+                                .as_ref()
+                                .and_then(|snapshot| snapshot.dictation.session_id)
+                                .map(|id| id.to_string())
+                                .unwrap_or_else(|| "dictation".to_string());
+                            self.hide_popup(
+                                PopupKind::Capsule,
+                                session_id,
+                                self.last_event_sequence.saturating_mul(2).saturating_add(1),
+                            );
+                        }
                     }
                 }
             }
+            self.poll_popup_supervisors();
             let mut events = Vec::new();
             let drain = self
                 .subscription
@@ -672,7 +1906,6 @@ mod linux_app {
                         self.less_computer_output.clear();
                         self.less_computer_turn_start = 0;
                         self.less_computer_session = None;
-                        self.less_computer_running = false;
                         self.pending_approval = None;
                         self.qa_state = None;
                         self.qa_visible = false;
@@ -685,33 +1918,17 @@ mod linux_app {
                         self.apply_event(event);
                     }
                     self.status = if replay.truncated {
-                        format!("事件积压 {dropped} 条，已重置派生界面并重放可用事件")
+                        fmt_l10n(lang, "status.backlog_reset", &[&dropped])
                     } else {
-                        format!("事件积压 {dropped} 条，已从 Core 重放补齐")
+                        fmt_l10n(lang, "status.backlog_replay", &[&dropped])
                     };
                 }
             }
             while let Ok(result) = self.rx.try_recv() {
                 match result {
-                    UiResult::Environment(environment) => {
-                        self.environment = Some(environment);
-                        self.environment_refreshing = false;
-                    }
                     UiResult::Message(message) => self.status = message,
-                    UiResult::Models(Ok(models)) => self.models = ModelsState::Loaded(models),
-                    UiResult::Models(Err(error)) => {
-                        self.models = ModelsState::Failed(error.clone());
-                        self.status = error;
-                    }
-                    UiResult::Remote(Ok(remote)) => {
-                        self.remote_error = None;
-                        self.remote_access = Some(remote);
-                    }
-                    UiResult::Remote(Err(error)) => {
-                        self.remote_access = None;
-                        self.remote_error = Some(error.clone());
-                        self.status = error;
-                    }
+                    UiResult::Remote(Ok(remote)) => self.remote_access = Some(remote),
+                    UiResult::Remote(Err(error)) => self.status = error,
                     UiResult::Providers(Ok(panel)) => {
                         if panel.kind != self.provider_kind {
                             continue;
@@ -798,7 +2015,11 @@ mod linux_app {
                         {
                             match result {
                                 Ok(models) => {
-                                    self.status = format!("已读取 {} 个模型", models.len());
+                                    self.status = fmt_l10n(
+                                        lang,
+                                        "status.provider_models_loaded",
+                                        &[&models.len()],
+                                    );
                                     self.provider_models = models;
                                 }
                                 Err(error) => self.status = error,
@@ -815,6 +2036,132 @@ mod linux_app {
                         self.provider_models.clear();
                         self.load_providers(self.provider_kind);
                     }
+                    UiResult::Library(Ok(library)) => {
+                        self.vocabulary = library.vocabulary;
+                        self.correction_rules = library.correction_rules;
+                        self.style_packs = library.style_packs;
+                        self.vocab_preset_store = library.vocab_preset_store;
+                        self.vocab_presets = library.vocab_presets;
+                    }
+                    UiResult::Library(Err(error)) => self.status = error,
+                    UiResult::SettingsSaved(result) => match *result {
+                        Ok(outcome) => {
+                            self.preferences = Some(outcome.preferences.clone());
+                            if let Some(native) = &self.native {
+                                self.snapshot = Some(native.host().snapshot());
+                            }
+                            self.settings_dirty = SettingsDirty::default();
+                            self.status = tr_l10n(lang, "status.settings_saved").to_string();
+                            // Appearance (e.g. the Overview heatmap toggle) and any
+                            // provider/credential edits may change Overview state.
+                            self.load_overview();
+                            if let Some(backend) = self.backend() {
+                                let config = openless_core::RemoteInputConfig {
+                                    enabled: outcome.preferences.remote_input_enabled,
+                                    port: outcome.preferences.remote_input_port,
+                                };
+                                self.spawn(async move {
+                                    backend.services().remote_input.configure(config).await?;
+                                    Ok(tr_l10n(lang, "status.remote_updated").to_string())
+                                });
+                            }
+                        }
+                        Err(error) => self.status = error,
+                    },
+                    UiResult::Marketplace(Ok(items)) => {
+                        self.status = fmt_l10n(lang, "status.marketplace_loaded", &[&items.len()]);
+                        self.marketplace_items = items;
+                    }
+                    UiResult::Marketplace(Err(error)) => self.status = error,
+                    UiResult::MarketplaceFlow(Ok(flow)) => {
+                        self.status = fmt_l10n(lang, "status.device_code", &[&flow.user_code]);
+                        self.marketplace_flow = Some(flow);
+                    }
+                    UiResult::MarketplaceFlow(Err(error)) => self.status = error,
+                    UiResult::MarketplaceAuthPoll(Ok(result)) => match result {
+                        openless_core::OAuthPollResult::Authorized { login } => {
+                            self.marketplace_flow = None;
+                            self.status = fmt_l10n(lang, "status.logged_in", &[&login]);
+                        }
+                        openless_core::OAuthPollResult::Pending => {
+                            self.status = tr_l10n(lang, "status.oauth_pending").to_string();
+                        }
+                        openless_core::OAuthPollResult::SlowDown => {
+                            self.status = tr_l10n(lang, "status.oauth_slowdown").to_string();
+                        }
+                        openless_core::OAuthPollResult::Error { message } => {
+                            self.status = message;
+                        }
+                    },
+                    UiResult::MarketplaceAuthPoll(Err(error)) => self.status = error,
+                    UiResult::MarketplaceDetail(Ok(detail)) => {
+                        self.status =
+                            fmt_l10n(lang, "status.detail_loaded", &[&detail.summary.name]);
+                        self.marketplace_detail = Some(detail);
+                    }
+                    UiResult::MarketplaceDetail(Err(error)) => self.status = error,
+                    UiResult::MarketplaceMine(Ok((packs, likes))) => {
+                        self.status = fmt_l10n(
+                            lang,
+                            "status.my_publish_likes",
+                            &[&packs.len(), &likes.len()],
+                        );
+                        self.marketplace_my_packs = packs;
+                        self.marketplace_my_likes = likes;
+                    }
+                    UiResult::MarketplaceMine(Err(error)) => self.status = error,
+                    UiResult::Microphones(Ok(devices)) => {
+                        self.microphones = devices.clone();
+                        let selected = self
+                            .preferences
+                            .as_ref()
+                            .map(|prefs| prefs.microphone_device_name.as_str())
+                            .unwrap_or_default();
+                        if let Some(tray) = &self.tray {
+                            let microphones = devices
+                                .into_iter()
+                                .map(|device| openless_linux_egui::TrayMicrophone {
+                                    selected: !selected.is_empty()
+                                        && (selected == device.id || selected == device.name),
+                                    name: device.name,
+                                    is_default: device.is_default,
+                                })
+                                .collect();
+                            if let Err(error) = tray.set_microphones(microphones) {
+                                self.status = error.to_string();
+                            }
+                        }
+                    }
+                    UiResult::Microphones(Err(error)) => self.status = error,
+                    UiResult::Overview(Ok(data)) => self.overview = OverviewState::Loaded(data),
+                    UiResult::Overview(Err(error)) => {
+                        self.status = error.clone();
+                        self.overview = OverviewState::Failed(error);
+                    }
+                    UiResult::UpdateCheck(Ok(Some(manifest))) => {
+                        self.update_busy = false;
+                        self.status = fmt_l10n(lang, "update.discovered", &[&manifest.version]);
+                        self.update_manifest = Some(manifest);
+                    }
+                    UiResult::UpdateCheck(Ok(None)) => {
+                        self.update_busy = false;
+                        self.status = tr_l10n(lang, "update.up_to_date").to_string();
+                    }
+                    UiResult::UpdateCheck(Err(error)) => {
+                        self.update_busy = false;
+                        self.status = fmt_l10n(lang, "update.check_failed", &[&error]);
+                    }
+                    UiResult::UpdateProgress(progress) => self.update_progress = Some(progress),
+                    UiResult::UpdateInstalled(Ok(installed)) => {
+                        self.update_busy = false;
+                        self.update_manifest = None;
+                        self.status =
+                            fmt_l10n(lang, "update.installed_restart", &[&installed.version]);
+                    }
+                    UiResult::UpdateInstalled(Err(error)) => {
+                        self.update_busy = false;
+                        self.status = fmt_l10n(lang, "update.install_failed", &[&error]);
+                    }
                 }
             }
             if let Some(backend) = self.backend() {
@@ -822,8 +2169,66 @@ mod linux_app {
             }
         }
 
+        fn overview_summary_ui(&mut self, ui: &mut egui::Ui) {
+            let lang = self.lang;
+            let mut reload = false;
+            ui.horizontal(|ui| {
+                ui.heading(tr_l10n(lang, "heading.overview"));
+                ui.add_space(8.0);
+                if ui.button(tr_l10n(lang, "btn.refresh")).clicked() {
+                    reload = true;
+                }
+            });
+            if reload {
+                self.overview = OverviewState::Loading;
+                self.load_overview();
+                return;
+            }
+            match &self.overview {
+                OverviewState::Loading => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(tr_l10n(lang, "loading.overview"));
+                    });
+                }
+                OverviewState::Failed(error) => {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 80, 80),
+                        format!("{}: {error}", tr_l10n(lang, "overview.load_failed")),
+                    );
+                    if ui.button(tr_l10n(lang, "btn.retry")).clicked() {
+                        reload = true;
+                    }
+                }
+                OverviewState::Loaded(_) => {
+                    let show_heatmap = self
+                        .preferences
+                        .as_ref()
+                        .map(|preferences| preferences.show_overview_activity_heatmap)
+                        .unwrap_or(true);
+                    let today = chrono::Local::now().date_naive();
+                    if let Some(summary) = self.overview.summary(today) {
+                        overview_provider_cards(ui, &summary, lang);
+                        ui.add_space(6.0);
+                        overview_metric_row(ui, &summary, lang);
+                        ui.add_space(6.0);
+                        overview_recent(ui, &summary, lang);
+                        if show_heatmap && summary.activity_days_total > 0 {
+                            ui.add_space(6.0);
+                            overview_heatmap(ui, &summary, lang);
+                        }
+                    }
+                }
+            }
+            if reload {
+                self.overview = OverviewState::Loading;
+                self.load_overview();
+            }
+        }
+
         fn dictation_ui(&mut self, ui: &mut egui::Ui) {
-            ui.heading("听写");
+            let lang = self.lang;
+            ui.heading(tr_l10n(lang, "heading.dictation"));
             let phase = self
                 .snapshot
                 .as_ref()
@@ -831,90 +2236,93 @@ mod linux_app {
                 .unwrap_or(DictationPhase::Idle);
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(phase == DictationPhase::Idle, egui::Button::new("开始"))
+                    .add_enabled(
+                        phase == DictationPhase::Idle,
+                        egui::Button::new(tr_l10n(lang, "btn.start")),
+                    )
                     .clicked()
                 {
                     if let Some(backend) = self.backend() {
                         self.transcript.clear();
                         self.spawn(async move {
                             backend.start_dictation().await?;
-                            Ok("正在录音".to_string())
+                            Ok(tr_l10n(lang, "dictation.recording").to_string())
                         });
                     }
                 }
                 if ui
                     .add_enabled(
                         phase == DictationPhase::Recording,
-                        egui::Button::new("停止"),
+                        egui::Button::new(tr_l10n(lang, "btn.stop")),
                     )
                     .clicked()
                 {
                     if let Some(backend) = self.backend() {
                         self.spawn(async move {
                             let result = backend.stop_dictation().await?;
-                            Ok(format!("完成：{} 字", result.polished_text.chars().count()))
+                            Ok(fmt_l10n(
+                                lang,
+                                "status.done_chars",
+                                &[&result.polished_text.chars().count()],
+                            ))
                         });
                     }
                 }
                 if ui
-                    .add_enabled(phase != DictationPhase::Idle, egui::Button::new("取消"))
+                    .add_enabled(
+                        phase != DictationPhase::Idle,
+                        egui::Button::new(tr_l10n(lang, "btn.cancel")),
+                    )
                     .clicked()
                 {
                     if let Some(backend) = self.backend() {
                         self.spawn(async move {
                             backend.cancel_dictation(None).await?;
-                            Ok("听写已取消".to_string())
+                            Ok(tr_l10n(lang, "status.dictation_cancelled").to_string())
                         });
                     }
                 }
             });
             ui.label(if self.transcript.is_empty() {
-                "尚无转写结果"
+                tr_l10n(lang, "dictation.no_transcript")
             } else {
                 &self.transcript
             });
         }
 
         fn less_computer_ui(&mut self, ui: &mut egui::Ui) {
+            let lang = self.lang;
             ui.heading("Less Computer");
             ui.text_edit_multiline(&mut self.less_computer_input);
             ui.horizontal(|ui| {
-                if ui.button("运行").clicked() && !self.less_computer_input.trim().is_empty() {
+                if ui.button(tr_l10n(lang, "btn.run")).clicked()
+                    && !self.less_computer_input.trim().is_empty()
+                {
                     if let Some(backend) = self.backend() {
                         let prompt = self.less_computer_input.clone();
                         self.less_computer_output.clear();
                         self.spawn(async move {
                             backend.submit_less_computer(prompt).await?;
-                            Ok("Less Computer 已完成".to_string())
+                            Ok(tr_l10n(lang, "less_computer.done").to_string())
                         });
                     }
                 }
-                if ui.button("取消").clicked() {
+                if ui.button(tr_l10n(lang, "btn.cancel")).clicked() {
                     if let Some(backend) = self.backend() {
                         self.spawn(async move {
                             backend.cancel_less_computer(None).await?;
-                            Ok("Less Computer 已取消".to_string())
+                            Ok(tr_l10n(lang, "less_computer.cancelled").to_string())
                         });
                     }
                 }
             });
-            ui.label(if self.less_computer_output.is_empty() {
-                "尚无 Agent 输出"
-            } else {
-                &self.less_computer_output
-            });
-        }
-
-        fn agent_approval_ui(&mut self, ui: &mut egui::Ui) {
             if let Some((token, command)) = self.pending_approval.clone() {
-                egui::ScrollArea::vertical()
-                    .id_salt("approval_command")
-                    .max_height(72.0)
-                    .show(ui, |ui| {
-                        ui.label(format!("请求执行：{command}"));
-                    });
+                ui.label(fmt_l10n(lang, "approval.request_run", &[&command]));
                 ui.horizontal(|ui| {
-                    for (label, approved) in [("允许", true), ("拒绝", false)] {
+                    for (label, approved) in [
+                        (tr_l10n(lang, "btn.allow"), true),
+                        (tr_l10n(lang, "btn.deny"), false),
+                    ] {
                         if ui.button(label).clicked() {
                             if let Some(backend) = self.backend() {
                                 let token = token.clone();
@@ -925,29 +2333,26 @@ mod linux_app {
                                         .less_computer
                                         .approve(token, approved)
                                         .await?;
-                                    Ok("审批已提交".to_string())
+                                    Ok(tr_l10n(lang, "approval.submitted").to_string())
                                 });
                             }
                         }
                     }
                 });
             }
+            ui.label(if self.less_computer_output.is_empty() {
+                tr_l10n(lang, "less_computer.no_output")
+            } else {
+                &self.less_computer_output
+            });
         }
 
         fn qa_ui(&mut self, ui: &mut egui::Ui) {
-            ui.heading("问答");
             if !self.qa_visible {
-                ui.label("打开问答后可文字提问或语音提问。切换页面会保留当前会话；关闭会话使用下方的关闭操作。");
-                if ui.button("打开问答").clicked() {
-                    if let Some(backend) = self.backend() {
-                        self.spawn(async move {
-                            backend.services().qa.show().await?;
-                            Ok("问答已打开".to_string())
-                        });
-                    }
-                }
                 return;
             }
+            let lang = self.lang;
+            ui.heading(tr_l10n(lang, "heading.qa"));
             if let Some(state) = &self.qa_state {
                 if let Some(messages) = &state.messages {
                     for message in messages {
@@ -969,47 +2374,35 @@ mod linux_app {
                     .is_some_and(|state| state.kind == QaStateKind::Recording);
                 if ui
                     .button(if recording {
-                        "结束录音"
+                        tr_l10n(lang, "btn.end_recording")
                     } else {
-                        "语音提问"
+                        tr_l10n(lang, "btn.voice_ask")
                     })
                     .clicked()
                 {
                     if let Some(backend) = self.backend() {
                         self.spawn(async move {
                             backend.services().qa.toggle_recording().await?;
-                            Ok("问答录音状态已更新".to_string())
+                            Ok(tr_l10n(lang, "qa.recording_updated").to_string())
                         });
                     }
                 }
-                if ui.button("发送").clicked() && !self.qa_input.trim().is_empty() {
+                if ui.button(tr_l10n(lang, "btn.send")).clicked()
+                    && !self.qa_input.trim().is_empty()
+                {
                     if let Some(backend) = self.backend() {
                         let text = std::mem::take(&mut self.qa_input);
                         self.spawn(async move {
                             backend.services().qa.submit_text(text).await?;
-                            Ok("问答已提交".to_string())
+                            Ok(tr_l10n(lang, "qa.submitted").to_string())
                         });
                     }
                 }
-                if ui.button("关闭").clicked() {
+                if ui.button(tr_l10n(lang, "btn.close")).clicked() {
                     if let Some(backend) = self.backend() {
                         self.spawn(async move {
                             backend.services().qa.dismiss().await?;
-                            Ok("问答已关闭".to_string())
-                        });
-                    }
-                }
-                if ui.button("取消本轮").clicked() {
-                    if let Some(backend) = self.backend() {
-                        let session_id = self
-                            .qa_state
-                            .as_ref()
-                            .and_then(|state| state.session_id.as_deref())
-                            .and_then(|id| uuid::Uuid::parse_str(id).ok())
-                            .map(openless_core::SessionId::from_uuid);
-                        self.spawn(async move {
-                            backend.services().qa.cancel(session_id).await?;
-                            Ok("问答本轮已取消".to_string())
+                            Ok(tr_l10n(lang, "qa.closed").to_string())
                         });
                     }
                 }
@@ -1017,18 +2410,15 @@ mod linux_app {
         }
 
         fn selection_ui(&mut self, ui: &mut egui::Ui) {
-            ui.heading("选区润色");
             let Some(selection) = self.selection.clone() else {
-                ui.label("先在目标应用中选中文字，再使用已配置的选区润色快捷键。预览会在此显示，确认前可以编辑或取消。");
-                ui.small("此入口是现有 Selection polish；Selection Voice 的完整意图路由尚未接入。");
                 return;
             };
-            ui.label(format!("当前状态：{:?}", selection.phase));
+            let lang = self.lang;
             if self.selection_preview_visible && selection.phase == SelectionPhase::Preview {
-                ui.strong("选区预览");
+                ui.heading(tr_l10n(lang, "heading.selection_preview"));
                 ui.text_edit_multiline(&mut self.selection_draft);
                 ui.horizontal(|ui| {
-                    if ui.button("确认替换").clicked() {
+                    if ui.button(tr_l10n(lang, "btn.confirm_replace")).clicked() {
                         if let (Some(backend), Some(session_id)) =
                             (self.backend(), selection.session_id)
                         {
@@ -1039,11 +2429,11 @@ mod linux_app {
                                     .selection
                                     .confirm(session_id, Some(text))
                                     .await?;
-                                Ok("选区替换已确认".to_string())
+                                Ok(tr_l10n(lang, "selection.replaced").to_string())
                             });
                         }
                     }
-                    if ui.button("取消").clicked() {
+                    if ui.button(tr_l10n(lang, "btn.cancel")).clicked() {
                         if let (Some(backend), Some(session_id)) =
                             (self.backend(), selection.session_id)
                         {
@@ -1053,7 +2443,7 @@ mod linux_app {
                                     .selection
                                     .cancel(Some(session_id))
                                     .await?;
-                                Ok("选区替换已取消".to_string())
+                                Ok(tr_l10n(lang, "selection.cancelled").to_string())
                             });
                         }
                     }
@@ -1062,119 +2452,14 @@ mod linux_app {
                 && selection.revert_outcome.is_none()
             {
                 ui.horizontal(|ui| {
-                    ui.label("最近一次选区替换已完成");
-                    if ui.button("撤销").clicked() {
+                    ui.label(tr_l10n(lang, "selection.replace_completed"));
+                    if ui.button(tr_l10n(lang, "btn.undo")).clicked() {
                         if let (Some(backend), Some(session_id)) =
                             (self.backend(), selection.session_id)
                         {
                             self.spawn(async move {
                                 backend.services().selection.revert(session_id).await?;
-                                Ok("选区替换已撤销".to_string())
-                            });
-                        }
-                    }
-                });
-            }
-        }
-
-        fn models_ui(&mut self, ui: &mut egui::Ui) {
-            ui.horizontal(|ui| {
-                ui.heading("本地模型");
-                if ui.button("刷新").clicked() {
-                    self.models = ModelsState::Loading;
-                    self.load_models();
-                }
-            });
-            let models = match self.models.clone() {
-                ModelsState::Loading => {
-                    ui.label("正在加载模型目录…");
-                    return;
-                }
-                ModelsState::Failed(error) => {
-                    ui.colored_label(egui::Color32::RED, error);
-                    return;
-                }
-                ModelsState::Loaded(models) if models.is_empty() => {
-                    ui.label("模型目录未返回任何可用模型");
-                    return;
-                }
-                ModelsState::Loaded(models) => models,
-            };
-            for model in models {
-                ui.horizontal(|ui| {
-                    ui.label(format!(
-                        "{} · {} · {}",
-                        model.display_name,
-                        model.family,
-                        if model.installed {
-                            "已安装"
-                        } else {
-                            "未安装"
-                        }
-                    ));
-                    if !model.installed && ui.button("下载").clicked() {
-                        if let Some(backend) = self.backend() {
-                            let target = model.target.clone();
-                            self.spawn(async move {
-                                backend
-                                    .services()
-                                    .local_asr
-                                    .start_download(target, None)
-                                    .await?;
-                                Ok("模型下载完成".to_string())
-                            });
-                        }
-                    }
-                    if model.installed && ui.button("激活").clicked() {
-                        if let Some(backend) = self.backend() {
-                            let target = model.target.clone();
-                            self.spawn(async move {
-                                let descriptor =
-                                    openless_core::provider_rules::provider_descriptor(
-                                        openless_core::ProviderKind::Asr,
-                                        "local-qwen3-c",
-                                    )
-                                    .ok_or_else(|| {
-                                        openless_core::BackendError::new(
-                                            openless_core::BackendErrorCode::Unsupported,
-                                            "local Qwen provider is unavailable",
-                                        )
-                                    })?;
-                                let provider_type = descriptor.provider_type.as_str().to_string();
-                                let existing = backend
-                                    .list_channels(openless_core::ChannelKind::Asr)
-                                    .await?
-                                    .into_iter()
-                                    .find(|channel| channel.provider_type == provider_type)
-                                    .map(|channel| channel.id);
-                                let provider_id = match existing {
-                                    Some(provider_id) => provider_id,
-                                    None => {
-                                        backend
-                                            .create_channel(
-                                                openless_core::ChannelKind::Asr,
-                                                provider_type,
-                                                descriptor.label_key,
-                                            )
-                                            .await?
-                                    }
-                                };
-                                backend
-                                    .activate_local_asr(openless_core::LocalAsrActivationRequest {
-                                        target,
-                                        provider_id,
-                                    })
-                                    .await?;
-                                Ok("本地模型已激活并预加载".to_string())
-                            });
-                        }
-                    }
-                    if ui.button("取消").clicked() {
-                        if let Some(backend) = self.backend() {
-                            let target = model.target.clone();
-                            self.spawn(async move {
-                                backend.services().local_asr.cancel_download(target).await?;
-                                Ok("模型下载已取消".to_string())
+                                Ok(tr_l10n(lang, "selection.reverted").to_string())
                             });
                         }
                     }
@@ -1183,8 +2468,9 @@ mod linux_app {
         }
 
         fn provider_management_ui(&mut self, ui: &mut egui::Ui) {
+            let lang = self.lang;
             ui.horizontal(|ui| {
-                ui.strong("凭据渠道");
+                ui.strong(tr_l10n(lang, "providers.credentials"));
                 for (kind, label) in [
                     (openless_core::ChannelKind::Asr, "ASR"),
                     (openless_core::ChannelKind::Llm, "LLM"),
@@ -1203,7 +2489,7 @@ mod linux_app {
                         self.load_providers(kind);
                     }
                 }
-                if ui.button("刷新渠道").clicked() {
+                if ui.button(tr_l10n(lang, "btn.refresh_channel")).clicked() {
                     self.providers = ProvidersState::Loading;
                     self.load_providers(self.provider_kind);
                 }
@@ -1211,7 +2497,7 @@ mod linux_app {
 
             let panel = match self.providers.clone() {
                 ProvidersState::Loading => {
-                    ui.label("正在读取 Core 渠道目录…");
+                    ui.label(tr_l10n(lang, "providers.loading_dir"));
                     return;
                 }
                 ProvidersState::Failed(error) => {
@@ -1222,7 +2508,7 @@ mod linux_app {
             };
 
             ui.group(|ui| {
-                ui.label("新增渠道");
+                ui.label(tr_l10n(lang, "btn.new_channel"));
                 ui.horizontal(|ui| {
                     egui::ComboBox::from_id_salt("new-provider-type")
                         .selected_text(
@@ -1231,7 +2517,9 @@ mod linux_app {
                                 .iter()
                                 .find(|item| item.provider_type.as_str() == self.new_provider_type)
                                 .map(provider_descriptor_label)
-                                .unwrap_or_else(|| "选择 Provider".to_string()),
+                                .unwrap_or_else(|| {
+                                    tr_l10n(lang, "lbl.choose_provider").to_string()
+                                }),
                         )
                         .show_ui(ui, |ui| {
                             for descriptor in &panel.descriptors {
@@ -1246,7 +2534,7 @@ mod linux_app {
                     if ui
                         .add_enabled(
                             !self.new_provider_type.is_empty(),
-                            egui::Button::new("创建"),
+                            egui::Button::new(tr_l10n(lang, "btn.create")),
                         )
                         .clicked()
                     {
@@ -1267,16 +2555,16 @@ mod linux_app {
                             self.new_channel_name.clear();
                             self.spawn_provider_mutation(async move {
                                 backend.create_channel(kind, provider_type, name).await?;
-                                Ok("渠道已创建".to_string())
+                                Ok(tr_l10n(lang, "status.channel_created").to_string())
                             });
                         }
                     }
                 });
-                ui.small("Provider 类型、默认 Endpoint/Model 与鉴权要求均来自 Core descriptor。");
+                ui.small(tr_l10n(lang, "providers.core_note"));
             });
 
             if panel.channels.is_empty() {
-                ui.label("尚无渠道；先从上方 Core Provider 列表创建一个。");
+                ui.label(tr_l10n(lang, "providers.empty"));
                 return;
             }
 
@@ -1284,15 +2572,22 @@ mod linux_app {
                 let active = channel.id == panel.active_provider;
                 ui.horizontal(|ui| {
                     let selected = self.selected_channel_id.as_deref() == Some(channel.id.as_str());
+                    let active_suffix = if active {
+                        tr_l10n(lang, "btn.status_active")
+                    } else {
+                        ""
+                    };
+                    let disabled_suffix = if channel.enabled {
+                        ""
+                    } else {
+                        tr_l10n(lang, "btn.status_disabled")
+                    };
                     if ui
                         .selectable_label(
                             selected,
                             format!(
-                                "{} · {}{}{}",
-                                channel.name,
-                                channel.provider_type,
-                                if active { " · active" } else { "" },
-                                if channel.enabled { "" } else { " · 已禁用" },
+                                "{} · {}{active_suffix}{disabled_suffix}",
+                                channel.name, channel.provider_type,
                             ),
                         )
                         .clicked()
@@ -1309,18 +2604,25 @@ mod linux_app {
                             self.load_provider_editor(panel.kind, channel, descriptor);
                         }
                     }
-                    if !active && channel.enabled && ui.button("设为 active").clicked() {
+                    if !active
+                        && channel.enabled
+                        && ui.button(tr_l10n(lang, "btn.set_active")).clicked()
+                    {
                         if let Some(backend) = self.backend() {
                             let slot = provider_slot(panel.kind);
                             let channel_id = channel.id.clone();
                             self.spawn_provider_mutation(async move {
                                 backend.set_active_provider(slot, channel_id).await?;
-                                Ok("active 渠道已更新".to_string())
+                                Ok(tr_l10n(lang, "status.channel_active").to_string())
                             });
                         }
                     }
                     if ui
-                        .button(if channel.enabled { "禁用" } else { "启用" })
+                        .button(if channel.enabled {
+                            tr_l10n(lang, "btn.disable")
+                        } else {
+                            tr_l10n(lang, "btn.enable")
+                        })
                         .clicked()
                     {
                         if let Some(backend) = self.backend() {
@@ -1331,11 +2633,11 @@ mod linux_app {
                                 backend
                                     .set_channel_enabled(kind, channel_id, enabled)
                                     .await?;
-                                Ok("渠道启用状态已更新".to_string())
+                                Ok(tr_l10n(lang, "status.channel_enabled").to_string())
                             });
                         }
                     }
-                    if index > 0 && ui.button("上移").clicked() {
+                    if index > 0 && ui.button(tr_l10n(lang, "btn.move_up")).clicked() {
                         if let Some(backend) = self.backend() {
                             let kind = panel.kind;
                             let mut ids = panel
@@ -1346,11 +2648,13 @@ mod linux_app {
                             ids.swap(index, index - 1);
                             self.spawn_provider_mutation(async move {
                                 backend.reorder_channels(kind, ids).await?;
-                                Ok("渠道顺序已更新".to_string())
+                                Ok(tr_l10n(lang, "status.channel_reordered").to_string())
                             });
                         }
                     }
-                    if index + 1 < panel.channels.len() && ui.button("下移").clicked() {
+                    if index + 1 < panel.channels.len()
+                        && ui.button(tr_l10n(lang, "btn.move_down")).clicked()
+                    {
                         if let Some(backend) = self.backend() {
                             let kind = panel.kind;
                             let mut ids = panel
@@ -1361,26 +2665,26 @@ mod linux_app {
                             ids.swap(index, index + 1);
                             self.spawn_provider_mutation(async move {
                                 backend.reorder_channels(kind, ids).await?;
-                                Ok("渠道顺序已更新".to_string())
+                                Ok(tr_l10n(lang, "status.channel_reordered").to_string())
                             });
                         }
                     }
                     if self.pending_channel_delete.as_deref() == Some(channel.id.as_str()) {
-                        if ui.button("确认删除").clicked() {
+                        if ui.button(tr_l10n(lang, "btn.confirm_delete")).clicked() {
                             self.pending_channel_delete = None;
                             if let Some(backend) = self.backend() {
                                 let kind = panel.kind;
                                 let channel_id = channel.id.clone();
                                 self.spawn_provider_mutation(async move {
                                     backend.delete_channel(kind, channel_id).await?;
-                                    Ok("渠道已删除".to_string())
+                                    Ok(tr_l10n(lang, "status.channel_deleted").to_string())
                                 });
                             }
                         }
-                        if ui.button("取消删除").clicked() {
+                        if ui.button(tr_l10n(lang, "btn.cancel_delete")).clicked() {
                             self.pending_channel_delete = None;
                         }
-                    } else if ui.button("删除").clicked() {
+                    } else if ui.button(tr_l10n(lang, "btn.delete")).clicked() {
                         // Channel deletion may remove the last usable provider
                         // and its persisted secrets, so require a deliberate
                         // second click even in this intentionally compact UI.
@@ -1392,7 +2696,11 @@ mod linux_app {
             match self.provider_editor.clone() {
                 ProviderEditorState::Idle => {}
                 ProviderEditorState::Loading { kind, channel_id } => {
-                    ui.label(format!("正在读取 {:?} 渠道 {channel_id}…", kind));
+                    ui.label(fmt_l10n(
+                        lang,
+                        "providers.reading_channel",
+                        &[&format!("{kind:?}"), &channel_id],
+                    ));
                 }
                 ProviderEditorState::Failed(error) => {
                     ui.colored_label(egui::Color32::RED, error);
@@ -1400,7 +2708,7 @@ mod linux_app {
                 ProviderEditorState::Loaded(editor) => {
                     let mut editor = *editor;
                     ui.separator();
-                    ui.strong(format!("编辑渠道 {}", editor.channel.id));
+                    ui.strong(fmt_l10n(lang, "providers.editing", &[&editor.channel.id]));
                     let mut provider_type = editor.descriptor.provider_type.as_str().to_string();
                     egui::ComboBox::from_id_salt("edit-provider-type")
                         .selected_text(provider_descriptor_label(&editor.descriptor))
@@ -1421,58 +2729,61 @@ mod linux_app {
                                 backend
                                     .set_channel_provider_type(kind, channel_id, provider_type)
                                     .await?;
-                                Ok("Provider 类型已更新".to_string())
+                                Ok(tr_l10n(lang, "status.provider_type_updated").to_string())
                             });
                         }
                         return;
                     }
 
-                    ui.label(format!(
-                        "鉴权：{} · 探针：{:?}",
-                        auth_requirement_label(editor.descriptor.auth_requirement),
-                        editor.descriptor.validation_probe
+                    ui.label(fmt_l10n(
+                        lang,
+                        "providers.auth_probe",
+                        &[
+                            &auth_requirement_label(lang, editor.descriptor.auth_requirement),
+                            &format!("{:?}", editor.descriptor.validation_probe),
+                        ],
                     ));
                     ui.horizontal(|ui| {
-                        ui.label("名称");
+                        ui.label(tr_l10n(lang, "providers.name"));
                         ui.text_edit_singleline(&mut editor.name);
                     });
-                    provider_fields_ui(ui, &mut editor);
+                    provider_fields_ui(ui, lang, &mut editor);
 
                     ui.horizontal(|ui| {
-                        if ui.button("保存字段/Secret").clicked() {
+                        if ui.button(tr_l10n(lang, "btn.save_fields")).clicked() {
                             if let Some(backend) = self.backend() {
                                 let saved = editor.clone();
                                 self.spawn_provider_mutation(async move {
                                     save_provider_editor(backend, saved).await?;
-                                    Ok("渠道配置已保存".to_string())
+                                    Ok(tr_l10n(lang, "status.channel_saved").to_string())
                                 });
                             }
                         }
-                        if ui.button("清除 Secret").clicked() {
+                        if ui.button(tr_l10n(lang, "btn.clear_secret")).clicked() {
                             if let Some(backend) = self.backend() {
                                 let cleared = editor.clone();
                                 self.spawn_provider_mutation(async move {
                                     clear_provider_secrets(backend, &cleared).await?;
-                                    Ok("渠道 Secret 已清除".to_string())
+                                    Ok(tr_l10n(lang, "status.secret_cleared").to_string())
                                 });
                             }
                         }
-                        if ui.button("验证连接").clicked() {
+                        if ui.button(tr_l10n(lang, "btn.validate")).clicked() {
                             if let Some(backend) = self.backend() {
                                 let kind = editor.kind;
                                 let channel_id = editor.channel.id.clone();
                                 self.spawn_provider_mutation(async move {
-                                    validate_provider_channel(backend, kind, channel_id).await
+                                    validate_provider_channel(lang, backend, kind, channel_id).await
                                 });
                             }
                         }
-                        if ui.button("列出模型").clicked() {
+                        if ui.button(tr_l10n(lang, "btn.list_models")).clicked() {
                             self.provider_models.clear();
                             self.request_provider_models(editor.kind, editor.channel.id.clone());
                         }
                     });
                     if !self.provider_models.is_empty() {
-                        ui.label("模型列表（点击填入）：");
+                        ui.label(tr_l10n(lang, "providers.model_list"));
                         for model in self.provider_models.clone() {
                             if ui.button(&model).clicked() {
                                 editor.model = model;
@@ -1484,512 +2795,1609 @@ mod linux_app {
             }
         }
 
-        fn services_ui(&mut self, ui: &mut egui::Ui) {
-            ui.heading("AI 服务");
-            ui.label("选择 ASR 语音识别、LLM 文本处理或 Omni 服务，再编辑并校验渠道。已配置不代表网络请求已通过。");
-            if let Some(snapshot) = &self.snapshot {
-                let credentials = &snapshot.credentials;
-                ui.label(format!(
-                    "ASR：{}（{}）",
-                    credentials.active_asr_provider,
-                    if credentials.asr_configured {
-                        "已配置"
-                    } else {
-                        "未配置"
-                    }
-                ));
-                ui.label(format!(
-                    "LLM：{}（{}）",
-                    credentials.active_llm_provider,
-                    if credentials.llm_configured {
-                        "已配置"
-                    } else {
-                        "未配置"
-                    }
-                ));
-            }
-            self.provider_management_ui(ui);
-        }
-
-        fn save_preferences(&mut self) {
-            let (Some(native), Some(snapshot), Some(preferences)) =
-                (&self.native, &self.snapshot, &self.preferences)
-            else {
+        /// Apply a newly chosen UI locale immediately: persist it as Linux-UI
+        /// state (never Core business truth), resolve it to a concrete language
+        /// and let the next frame re-render every localized surface. Persistence
+        /// is offloaded off the egui frame so the write can never stall a repaint.
+        fn apply_locale_pref(&mut self, pref: LocalePref) {
+            if pref == self.locale_pref {
                 return;
-            };
-            match native
-                .host()
-                .save_settings(preferences.clone(), snapshot.preferences_revision)
-            {
-                Ok(_) => {
-                    self.status = "设置已保存".to_string();
-                    let config = openless_core::RemoteInputConfig {
-                        enabled: preferences.remote_input_enabled,
-                        port: preferences.remote_input_port,
-                    };
-                    if let Some(backend) = self.backend() {
-                        self.spawn(async move {
-                            backend.services().remote_input.configure(config).await?;
-                            Ok("远程输入状态已更新".to_string())
-                        });
-                    }
-                }
-                Err(error) => self.status = error.to_string(),
             }
+            self.locale_pref = pref;
+            self.lang = pref.resolve();
+            if let Some(tray) = &self.tray {
+                let _ = tray.set_lang(self.lang);
+            }
+            let runtime = self.tokio.clone();
+            runtime.spawn_blocking(move || {
+                let _ = save_locale_pref(pref);
+            });
         }
 
-        fn settings_actions_ui(&mut self, ui: &mut egui::Ui) {
-            ui.horizontal_wrapped(|ui| {
-                if ui.button("保存设置").clicked() {
-                    self.save_preferences();
-                }
-                if ui.button("放弃修改并重新读取").clicked() {
-                    if let Some(backend) = self.backend() {
-                        self.preferences = Some(backend.get_preferences());
-                        self.snapshot = Some(backend.snapshot());
-                        self.status = "已重新读取设置".to_string();
+        /// The language selector row shown in Settings. Changing it re-renders
+        /// the whole window immediately (shell, headings, labels, popups later
+        /// pick it up from the persisted UI state on their next launch).
+        fn language_selector_ui(&mut self, ui: &mut egui::Ui) {
+            let mut chosen: Option<LocalePref> = None;
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(tr_l10n(self.lang, "settings.language")).strong());
+                let pref = self.locale_pref;
+                let lang = self.lang;
+                let selected = match pref {
+                    LocalePref::System => {
+                        tr_l10n(lang, "settings.language_follow_system").to_string()
                     }
-                }
+                    LocalePref::Lang(explicit) => {
+                        tr_l10n(explicit, locale_key(explicit)).to_string()
+                    }
+                };
+                egui::ComboBox::from_id_salt("openless-ui-language")
+                    .width(240.0)
+                    .selected_text(selected)
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_label(
+                                pref == LocalePref::System,
+                                tr_l10n(lang, "settings.language_follow_system"),
+                            )
+                            .clicked()
+                        {
+                            chosen = Some(LocalePref::System);
+                        }
+                        for option in LANGS {
+                            let native_label = tr_l10n(option, locale_key(option));
+                            if ui
+                                .selectable_label(pref == LocalePref::Lang(option), native_label)
+                                .clicked()
+                            {
+                                chosen = Some(LocalePref::Lang(option));
+                            }
+                        }
+                    });
             });
-            ui.small(
-                "环境与设置、手机输入共用设置草稿；保存会一起应用。保存冲突时可重新读取后再修改。",
-            );
+            if let Some(pref) = chosen {
+                self.apply_locale_pref(pref);
+                self.status = tr_l10n(self.lang, "settings.locale_saved").to_string();
+                ui.ctx().request_repaint();
+            }
         }
 
         fn settings_ui(&mut self, ui: &mut egui::Ui) {
-            ui.heading("环境与设置");
-            ui.strong("现有功能设置");
-            if let Some(preferences) = self.preferences.as_mut() {
-                ui.checkbox(&mut preferences.streaming_insert, "流式插入");
-                ui.small("将转写逐步发送到原输入目标，实际结果以听写与历史反馈为准。");
-                ui.checkbox(&mut preferences.coding_agent_enabled, "启用 Less Computer");
-                ui.small("使用已有 Agent 配置与 CLI；进程执行仍遵循 Core 的审批规则。");
-                self.settings_actions_ui(ui);
-            }
-            ui.horizontal_wrapped(|ui| {
-                if ui.button("配置 AI 服务").clicked() {
-                    self.navigation.open(Page::Services);
-                }
-                if ui.button("设置手机输入").clicked() {
-                    self.navigation.open(Page::Remote);
-                }
-            });
-            ui.small(
-                "托盘、自启、自动更新、系统静音与额外全局热键尚未完整接入，此页没有对应开关。",
-            );
+            let lang = self.lang;
+            ui.heading(tr_l10n(lang, "nav.providers"));
+            self.language_selector_ui(ui);
             ui.separator();
-            self.environment_ui(ui);
-        }
-
-        fn remote_ui(&mut self, ui: &mut egui::Ui) {
-            ui.heading("手机输入");
-            ui.label(
-                "先启用并保存，再让手机连接同一局域网，打开本机提供的 HTTPS 地址并输入配对码。",
-            );
-            ui.label("首次连接需要确认并信任本服务的证书；服务运行不代表手机已连接。");
-            if let Some(preferences) = self.preferences.as_mut() {
-                ui.checkbox(&mut preferences.remote_input_enabled, "启用远程输入");
-                ui.add(
-                    egui::DragValue::new(&mut preferences.remote_input_port)
-                        .range(1..=u16::MAX)
-                        .prefix("端口 "),
-                );
-                self.settings_actions_ui(ui);
+            if let Some(snapshot) = &self.snapshot {
+                let credentials = &snapshot.credentials;
+                let asr_state = if credentials.asr_configured {
+                    tr_l10n(lang, "overview.configured")
+                } else {
+                    tr_l10n(lang, "overview.unconfigured")
+                };
+                let llm_state = if credentials.llm_configured {
+                    tr_l10n(lang, "overview.configured")
+                } else {
+                    tr_l10n(lang, "overview.unconfigured")
+                };
+                ui.label(format!(
+                    "ASR：{}（{asr_state}）",
+                    credentials.active_asr_provider
+                ));
+                ui.label(format!(
+                    "LLM：{}（{llm_state}）",
+                    credentials.active_llm_provider
+                ));
             }
+            self.provider_management_ui(ui);
             ui.separator();
-            if ui.button("刷新连接状态").clicked() {
-                self.load_remote_status();
+            let mut save_settings = false;
+            if let Some(preferences) = self.preferences.as_mut() {
+                self.settings_dirty.streaming_insert |= ui
+                    .checkbox(
+                        &mut preferences.streaming_insert,
+                        tr_l10n(lang, "settings.streaming_insert"),
+                    )
+                    .changed();
+                self.settings_dirty.coding_agent_enabled |= ui
+                    .checkbox(
+                        &mut preferences.coding_agent_enabled,
+                        tr_l10n(lang, "settings.enable_coding_agent"),
+                    )
+                    .changed();
+                ui.collapsing(tr_l10n(lang, "settings.recording_input"), |ui| {
+                    let previous_mode = preferences.hotkey.mode;
+                    egui::ComboBox::from_label(tr_l10n(lang, "settings.rec_mode"))
+                        .selected_text(match preferences.hotkey.mode {
+                            openless_core::shared_types::HotkeyMode::Toggle => {
+                                tr_l10n(lang, "recmode.toggle")
+                            }
+                            openless_core::shared_types::HotkeyMode::Hold => {
+                                tr_l10n(lang, "recmode.hold")
+                            }
+                            openless_core::shared_types::HotkeyMode::DoubleClick => {
+                                tr_l10n(lang, "recmode.double_click")
+                            }
+                            openless_core::shared_types::HotkeyMode::Auto => {
+                                tr_l10n(lang, "recmode.auto")
+                            }
+                        })
+                        .show_ui(ui, |ui| {
+                            for (mode, key) in [
+                                (
+                                    openless_core::shared_types::HotkeyMode::Toggle,
+                                    "recmode.toggle",
+                                ),
+                                (
+                                    openless_core::shared_types::HotkeyMode::Hold,
+                                    "recmode.hold",
+                                ),
+                                (
+                                    openless_core::shared_types::HotkeyMode::Auto,
+                                    "recmode.auto",
+                                ),
+                            ] {
+                                ui.selectable_value(
+                                    &mut preferences.hotkey.mode,
+                                    mode,
+                                    tr_l10n(lang, key),
+                                );
+                            }
+                        });
+                    self.settings_dirty.recording |= preferences.hotkey.mode != previous_mode;
+                    self.settings_dirty.recording |= ui
+                        .checkbox(
+                            &mut preferences.silence_auto_stop_enabled,
+                            tr_l10n(lang, "settings.auto_stop"),
+                        )
+                        .changed();
+                    if preferences.silence_auto_stop_enabled {
+                        let previous = preferences.silence_auto_stop_seconds;
+                        egui::ComboBox::from_label(tr_l10n(lang, "settings.silence_duration"))
+                            .selected_text(fmt_l10n(lang, "settings.seconds", &[&previous]))
+                            .show_ui(ui, |ui| {
+                                for seconds in [1.0, 1.5, 2.0, 3.0, 4.0, 5.0] {
+                                    ui.selectable_value(
+                                        &mut preferences.silence_auto_stop_seconds,
+                                        seconds,
+                                        fmt_l10n(lang, "settings.seconds", &[&seconds]),
+                                    );
+                                }
+                            });
+                        self.settings_dirty.recording |=
+                            preferences.silence_auto_stop_seconds != previous;
+                    }
+                    let selected_microphone = if preferences.microphone_device_name.is_empty() {
+                        tr_l10n(lang, "settings.system_default").to_string()
+                    } else {
+                        preferences.microphone_device_name.clone()
+                    };
+                    let previous_microphone = preferences.microphone_device_name.clone();
+                    egui::ComboBox::from_label(tr_l10n(lang, "settings.microphone"))
+                        .selected_text(selected_microphone)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut preferences.microphone_device_name,
+                                String::new(),
+                                tr_l10n(lang, "settings.system_default"),
+                            );
+                            for device in &self.microphones {
+                                ui.selectable_value(
+                                    &mut preferences.microphone_device_name,
+                                    device.name.clone(),
+                                    &device.name,
+                                );
+                            }
+                        });
+                    self.settings_dirty.microphone |=
+                        preferences.microphone_device_name != previous_microphone;
+                    self.settings_dirty.recording |= ui
+                        .checkbox(
+                            &mut preferences.mute_during_recording,
+                            tr_l10n(lang, "settings.mute_while"),
+                        )
+                        .changed();
+                    self.settings_dirty.recording |= ui
+                        .checkbox(
+                            &mut preferences.audio_cue_on_record,
+                            tr_l10n(lang, "settings.cue_audio"),
+                        )
+                        .changed();
+                });
+                ui.collapsing(tr_l10n(lang, "settings.appearance"), |ui| {
+                    let previous_theme = preferences.theme_mode;
+                    egui::ComboBox::from_label(tr_l10n(lang, "settings.theme"))
+                        .selected_text(match preferences.theme_mode {
+                            openless_core::shared_types::ThemeMode::System => {
+                                tr_l10n(lang, "theme.follow_system")
+                            }
+                            openless_core::shared_types::ThemeMode::Light => {
+                                tr_l10n(lang, "theme.light")
+                            }
+                            openless_core::shared_types::ThemeMode::Dark => {
+                                tr_l10n(lang, "theme.dark")
+                            }
+                        })
+                        .show_ui(ui, |ui| {
+                            for (mode, key) in [
+                                (
+                                    openless_core::shared_types::ThemeMode::System,
+                                    "theme.follow_system",
+                                ),
+                                (openless_core::shared_types::ThemeMode::Light, "theme.light"),
+                                (openless_core::shared_types::ThemeMode::Dark, "theme.dark"),
+                            ] {
+                                ui.selectable_value(
+                                    &mut preferences.theme_mode,
+                                    mode,
+                                    tr_l10n(lang, key),
+                                );
+                            }
+                        });
+                    self.settings_dirty.appearance |= preferences.theme_mode != previous_theme;
+                    self.settings_dirty.appearance |= ui
+                        .checkbox(
+                            &mut preferences.show_overview_activity_heatmap,
+                            tr_l10n(lang, "settings.show_heatmap"),
+                        )
+                        .changed();
+                });
+                ui.collapsing(tr_l10n(lang, "settings.hotkeys_group"), |ui| {
+                    self.settings_dirty.hotkeys |= shortcut_editor(
+                        ui,
+                        tr_l10n(lang, "hotkey.dictation"),
+                        &mut preferences.dictation_hotkey,
+                    );
+                    self.settings_dirty.hotkeys |=
+                        optional_shortcut_editor(ui, lang, "QA", &mut preferences.qa_hotkey, ";");
+                    self.settings_dirty.hotkeys |= shortcut_editor(
+                        ui,
+                        tr_l10n(lang, "hotkey.translation"),
+                        &mut preferences.translation_hotkey,
+                    );
+                    self.settings_dirty.hotkeys |= optional_shortcut_editor(
+                        ui,
+                        lang,
+                        tr_l10n(lang, "hotkey.selection_polish"),
+                        &mut preferences.selection_polish_hotkey,
+                        "P",
+                    );
+                    self.settings_dirty.hotkeys |= optional_shortcut_editor(
+                        ui,
+                        lang,
+                        tr_l10n(lang, "hotkey.switch_style"),
+                        &mut preferences.switch_style_hotkey,
+                        "S",
+                    );
+                    self.settings_dirty.hotkeys |= optional_shortcut_editor(
+                        ui,
+                        lang,
+                        tr_l10n(lang, "hotkey.open_app"),
+                        &mut preferences.open_app_hotkey,
+                        "O",
+                    );
+                    self.settings_dirty.hotkeys |= optional_shortcut_editor(
+                        ui,
+                        lang,
+                        tr_l10n(lang, "hotkey.coding_agent"),
+                        &mut preferences.coding_agent_voice_hotkey,
+                        "L",
+                    );
+                });
+                self.settings_dirty.start_minimized |= ui
+                    .checkbox(
+                        &mut preferences.start_minimized,
+                        tr_l10n(lang, "settings.start_minimized"),
+                    )
+                    .changed();
+                self.settings_dirty.launch_at_login |= ui
+                    .checkbox(
+                        &mut preferences.launch_at_login,
+                        tr_l10n(lang, "settings.launch_at_login"),
+                    )
+                    .changed();
+                self.settings_dirty.auto_update_check |= ui
+                    .checkbox(
+                        &mut preferences.auto_update_check,
+                        tr_l10n(lang, "settings.auto_update"),
+                    )
+                    .changed();
+                let previous_channel = preferences.update_channel;
+                egui::ComboBox::from_label(tr_l10n(lang, "settings.update_channel"))
+                    .selected_text(match preferences.update_channel {
+                        openless_core::shared_types::UpdateChannel::Stable => {
+                            tr_l10n(lang, "channel.stable")
+                        }
+                        openless_core::shared_types::UpdateChannel::Beta => "Beta",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut preferences.update_channel,
+                            openless_core::shared_types::UpdateChannel::Stable,
+                            tr_l10n(lang, "channel.stable"),
+                        );
+                        ui.selectable_value(
+                            &mut preferences.update_channel,
+                            openless_core::shared_types::UpdateChannel::Beta,
+                            "Beta",
+                        );
+                    });
+                self.settings_dirty.update_channel |=
+                    preferences.update_channel != previous_channel;
+                self.settings_dirty.remote_input_enabled |= ui
+                    .checkbox(
+                        &mut preferences.remote_input_enabled,
+                        tr_l10n(lang, "settings.enable_remote"),
+                    )
+                    .changed();
+                self.settings_dirty.remote_input_port |= ui
+                    .add(
+                        egui::DragValue::new(&mut preferences.remote_input_port)
+                            .range(1..=u16::MAX)
+                            .prefix(tr_l10n(lang, "settings.port")),
+                    )
+                    .changed();
+                if ui.button(tr_l10n(lang, "btn.save_settings")).clicked() {
+                    save_settings = true;
+                }
             }
-            if let Some(error) = &self.remote_error {
-                ui.colored_label(
-                    egui::Color32::YELLOW,
-                    format!("暂时无法读取连接状态：{error}"),
-                );
-                ui.label("检查桌面密钥环、网络和端口后刷新；旧地址与配对码已隐藏。");
-            } else if self.remote_access.is_none() {
-                ui.label("尚未取得手机输入状态。");
+            if save_settings {
+                if let (Some(native), Some(draft), Some(snapshot)) =
+                    (&self.native, self.preferences.clone(), &self.snapshot)
+                {
+                    let host = native.host_arc();
+                    let revision = snapshot.preferences_revision;
+                    let dirty = self.settings_dirty;
+                    let tx = self.tx.clone();
+                    self.tokio.spawn(async move {
+                        let outcome = tokio::task::spawn_blocking(move || {
+                            let save = |preferences, revision| {
+                                if dirty.hotkeys {
+                                    host.update_settings_strict(preferences, revision)
+                                } else {
+                                    host.save_settings(preferences, revision)
+                                }
+                            };
+                            match save(draft.clone(), revision) {
+                                Err(error)
+                                    if error.code == openless_core::BackendErrorCode::Busy =>
+                                {
+                                    let latest_snapshot = host.snapshot();
+                                    let latest = host.backend().get_preferences();
+                                    save(
+                                        dirty.merge(&latest, &draft),
+                                        latest_snapshot.preferences_revision,
+                                    )
+                                }
+                                result => result,
+                            }
+                        })
+                        .await
+                        .map_err(|error| error.to_string())
+                        .and_then(|result| result.map_err(|error| error.to_string()));
+                        let _ = tx.send(UiResult::SettingsSaved(Box::new(outcome)));
+                    });
+                }
             }
             if let Some((remote, pin)) = &self.remote_access {
-                ui.label(if remote.running {
-                    "远程输入服务：运行中"
+                let remote_state = if remote.running {
+                    tr_l10n(lang, "remote.running")
                 } else if remote.starting {
-                    "远程输入服务：启动中"
+                    tr_l10n(lang, "remote.starting")
                 } else {
-                    "远程输入服务：已停止"
-                });
-                ui.label(format!("当前连接数：{}", remote.connection_count));
-                if remote.active_session_id.is_some() {
-                    ui.label("手机语音会话进行中，可使用顶部的语音取消。");
-                }
-                if remote.urls_stale {
-                    ui.colored_label(
-                        egui::Color32::YELLOW,
-                        "网络地址已过期，请检查网络后刷新状态。",
-                    );
-                }
-                if remote.enabled && remote.running && !remote.urls_stale {
-                    // 首次信任前必须核对根证书指纹：网页与描述文件名称不能证明身份。
-                    ui.label("本机根证书 SHA-256");
-                    match remote.ca_fingerprint_sha256.as_ref().filter(|value| {
-                        value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-                    }) {
-                        Some(fingerprint) => {
-                            let display = fingerprint
-                                .as_bytes()
-                                .chunks(2)
-                                .map(|pair| std::str::from_utf8(pair).unwrap().to_ascii_uppercase())
-                                .collect::<Vec<_>>()
-                                .join(" ");
-                            ui.add(egui::Label::new(egui::RichText::new(&display).monospace()).wrap());
-                            if ui.button("复制完整指纹").clicked() {
-                                ui.ctx().copy_text(display);
-                            }
-                        }
-                        None => ui.label("完整指纹不可用。请勿安装或信任下载的证书。"),
-                    }
-                    ui.label("安装或开启完全信任前，在手机系统的证书详情中核对全部 SHA-256 字符，必须与此处一致。网页、描述文件名称和标识不能证明证书身份。若不一致或无法查看，请停止并移除已下载或安装的描述文件。");
-                    ui.label("描述文件应只包含一张根证书。若有其他证书、VPN 或设备管理配置，请勿安装。首次下载仍可能被局域网攻击者替换；核验后再信任。根证书可签发其他证书，不再使用时请移除。");
+                    tr_l10n(lang, "remote.stopped")
+                };
+                ui.label(remote_state);
+                if remote.enabled {
+                    ui.label(fmt_l10n(
+                        lang,
+                        "remote.lang_conns",
+                        &[&remote.locale, &remote.connection_count],
+                    ));
                     ui.monospace(format!("PIN：{pin}"));
                     for url in &remote.urls {
                         ui.monospace(url);
                     }
-                    if remote.urls.is_empty() {
-                        ui.label("服务已启动，但尚未提供可用地址；请检查本机局域网连接。");
-                    }
-                }
-                if remote.enabled && ui.button("重置配对码").clicked() {
-                    if let Some(backend) = self.backend() {
-                        self.spawn(async move {
-                            backend
-                                .services()
-                                .remote_input
-                                .regenerate_pairing_pin()
-                                .await?;
-                            Ok("远程输入配对码已重置".to_string())
-                        });
-                    }
-                }
-            }
-        }
-
-        fn environment_ui(&mut self, ui: &mut egui::Ui) {
-            ui.strong("Linux 环境准备");
-            ui.label(if self.native.is_some() {
-                "Core 已连接。下面的环境检查不代表录音、落字或服务调用已经实测成功。"
-            } else {
-                "Core 未连接。可查看准备步骤；修复启动问题后，请退出并重新启动 OpenLess。"
-            });
-            if let Some(environment) = &self.environment {
-                ui.label(match environment.session {
-                    LinuxDesktopSession::X11 => "桌面会话：检测到 X11 环境",
-                    LinuxDesktopSession::Wayland => "桌面会话：检测到 Wayland 环境",
-                    LinuxDesktopSession::Headless => "桌面会话：未检测到 DISPLAY / WAYLAND_DISPLAY",
-                });
-                ui.label(if environment.fcitx5_ready {
-                    "fcitx5：D-Bus 探测有响应，插件加载、快捷键与目标应用落字仍需实际操作确认。"
-                } else {
-                    "fcitx5：D-Bus 探测未通过，可能是会话总线、服务或插件未就绪。"
-                });
-                ui.label(match environment.permissions.microphone {
-                    openless_core::PermissionState::Unsupported => {
-                        "麦克风：当前探测环境不支持；请进入图形桌面会话。"
-                    }
-                    _ => "麦克风：尚未验证录音。请在系统声音设置选择输入设备，再进行一次短听写。",
-                });
-            } else {
-                ui.label("尚未取得桌面环境探测结果。");
-            }
-            ui.label(match &self.plugin_check {
-                Some(Ok(FcitxPluginStatus::Ready)) => {
-                    "本次启动插件检查：找到插件文件；文件存在不代表 fcitx5 已加载它。"
-                }
-                Some(Ok(FcitxPluginStatus::Updated)) => {
-                    "本次启动插件检查：插件文件已安装或更新，需要重载配置并重新启动 fcitx5。"
-                }
-                Some(Ok(FcitxPluginStatus::Missing)) => {
-                    "本次启动插件检查：未找到插件文件，请重新安装含 OpenLess 插件的软件包。"
-                }
-                Some(Err(_)) => "本次启动插件检查：检查失败，请查看下方具体原因。",
-                None => "本次启动插件检查：未执行。",
-            });
-            if let Some(Err(error)) = &self.plugin_check {
-                ui.colored_label(egui::Color32::YELLOW, error);
-            }
-            if ui
-                .add_enabled(
-                    !self.environment_refreshing,
-                    egui::Button::new(if self.environment_refreshing {
-                        "正在检测…"
-                    } else {
-                        "重新检测会话与 D-Bus"
-                    }),
-                )
-                .clicked()
-            {
-                self.environment_refreshing = true;
-                let tx = self.tx.clone();
-                self.tokio.spawn_blocking(move || {
-                    let environment = LinuxCapabilitySnapshot::detect(false, package_kind());
-                    let _ = tx.send(UiResult::Environment(environment));
-                });
-            }
-            ui.small("重新检测只更新上面的会话与 D-Bus 信息，不安装插件，也不重新连接 Core。本次启动检查结果保留到退出。");
-            egui::CollapsingHeader::new("准备步骤与官方指南")
-                .default_open(self.native.is_none())
-                .show(ui, |ui| {
-            ui.separator();
-            ui.strong("1 · 准备输入法与桌面会话");
-            ui.label("在当前图形桌面安装并启用 fcitx5，再安装含 OpenLess 插件的当前软件包。先在普通编辑器中确认输入法可以输入。");
-            ui.label("在终端运行以下诊断，查看输入法环境与插件加载信息：");
-            command_ui(ui, "fcitx5-diagnose");
-            ui.label("插件安装或更新后可先重载配置；若插件仍未加载，退出并重新登录桌面，再启动 OpenLess：");
-            command_ui(ui, "fcitx5-remote -r");
-            ui.horizontal_wrapped(|ui| {
-                ui.hyperlink_to(
-                    "Fcitx 5 官方设置指南",
-                    "https://fcitx-im.org/wiki/Setup_Fcitx_5",
-                );
-                ui.hyperlink_to(
-                    "Wayland 桌面配置差异",
-                    "https://fcitx-im.org/wiki/Using_Fcitx_5_on_Wayland",
-                );
-            });
-            ui.small("Wayland 的输入法配置取决于桌面和应用工具包，请按官方对应章节配置；检测到 Wayland 不代表所有目标应用都支持替换。X11 的 overlay 能力标记也不代表本应用已接入录音浮层。");
-            ui.separator();
-            ui.strong("2 · 准备密钥环与识别服务");
-            ui.label("Secret Service：当前没有独立的服务连接或解锁状态检测；渠道显示“已配置”也不能证明密钥环现在可读写。");
-            ui.label("打开桌面的密码／密钥环管理器，确认当前登录会话的密钥环已解锁。然后到 AI 服务选择渠道，填写所需凭据、保存并校验；若返回锁定或访问失败，解锁后重试。");
-            ui.hyperlink_to(
-                "Secret Service 官方规范",
-                "https://specifications.freedesktop.org/secret-service/latest/",
-            );
-            ui.small("API 密钥输入只用于写入，不回显已有密钥。本地识别可在本地模型页下载并激活 Generic Qwen。");
-            ui.separator();
-            ui.strong("3 · 做一次短听写");
-            ui.label("在系统声音设置确认输入设备有电平。配置识别服务后，在目标编辑器聚焦输入框，用已有听写快捷键录制一句话并结束，检查转写和落字结果。问答、选区润色与 Agent 分别从导航进入。");
-            ui.small("请分别验证你使用的 X11／Wayland、GTK／Qt／浏览器／终端。托盘、自启和应用内自动更新仍未完整接入。");
-                });
-        }
-
-        fn start_ui(&mut self, ui: &mut egui::Ui) {
-            ui.heading("从一次听写开始");
-            ui.label("先准备 Linux 输入环境，再选择识别服务。切换页面不会停止正在进行的任务。");
-            if let Some(error) = &self.startup_error {
-                ui.colored_label(egui::Color32::YELLOW, format!("启动未完成：{error}"));
-            }
-            if let Some(snapshot) = &self.snapshot {
-                ui.label(if snapshot.running {
-                    "Core：运行中"
-                } else {
-                    "Core：未运行"
-                });
-                let credentials = &snapshot.credentials;
-                match credentials.pipeline_mode {
-                    openless_core::shared_types::PipelineMode::Multimodal => {
-                        ui.label("当前管线：多模态（Omni）");
-                        ui.label(if credentials.omni_configured {
-                            "Omni：已配置。"
-                        } else {
-                            "Omni：尚未配置，请到 AI 服务配置 Omni。"
-                        });
-                    }
-                    openless_core::shared_types::PipelineMode::Traditional => {
-                        ui.label("当前管线：传统（ASR + LLM）");
-                        ui.label(if credentials.asr_configured {
-                            "ASR 语音识别：已配置。"
-                        } else {
-                            "ASR 语音识别：尚未配置，请配置 AI 服务或激活本地模型。"
-                        });
-                        ui.label(if credentials.llm_configured {
-                            "LLM 润色：已配置。"
-                        } else {
-                            "LLM 润色：尚未配置。"
-                        });
-                    }
-                }
-                ui.small("已配置不代表校验通过；请到 AI 服务验证连接。");
-            }
-            ui.horizontal_wrapped(|ui| {
-                for (page, label) in [
-                    (Page::Settings, "1. 准备环境"),
-                    (Page::Services, "2. 配置 AI 服务"),
-                    (Page::Models, "使用本地模型"),
-                    (Page::Dictation, "3. 打开听写"),
-                ] {
-                    if ui
-                        .add_enabled(
-                            self.native.is_some() || page == Page::Settings,
-                            egui::Button::new(label),
-                        )
-                        .clicked()
-                    {
-                        self.navigation.open(page);
-                    }
-                }
-            });
-            ui.separator();
-            if self.native.is_none() {
-                self.environment_ui(ui);
-            } else {
-                ui.strong("继续其他任务");
-                ui.horizontal_wrapped(|ui| {
-                    for page in [
-                        Page::Qa,
-                        Page::Selection,
-                        Page::Agent,
-                        Page::Remote,
-                        Page::History,
-                    ] {
-                        if ui.button(page.label()).clicked() {
-                            self.navigation.open(page);
-                        }
-                    }
-                });
-                ui.label("问答支持文字与语音；选区润色保留确认、取消与撤销；Less Computer 的工具执行继续使用原有审批。");
-                ui.small(
-                    "Linux 当前提供已有 Core / Host 能力的入口，完整原生支持与发布验收仍在继续。",
-                );
-            }
-        }
-
-        fn page_activity(&self, page: Page) -> Option<&'static str> {
-            match page {
-                Page::Dictation
-                    if self.snapshot.as_ref().is_some_and(|snapshot| {
-                        matches!(
-                            snapshot.dictation.phase,
-                            DictationPhase::Starting
-                                | DictationPhase::Recording
-                                | DictationPhase::Transcribing
-                                | DictationPhase::Polishing
-                                | DictationPhase::Inserting
-                        )
-                    }) =>
-                {
-                    Some("进行中")
-                }
-                Page::Qa if self.qa_visible => Some("会话"),
-                Page::Selection
-                    if self.selection_preview_visible
-                        && self.selection.as_ref().is_some_and(|selection| {
-                            selection.phase == SelectionPhase::Preview
-                        }) =>
-                {
-                    Some("待确认")
-                }
-                Page::Agent if self.pending_approval.is_some() => Some("待审批"),
-                Page::Agent if self.less_computer_running => Some("进行中"),
-                _ if self.navigation.has_update(page) => Some("有更新"),
-                _ => None,
-            }
-        }
-
-        fn navigation_button(&mut self, ui: &mut egui::Ui, page: Page) {
-            let label = match self.page_activity(page) {
-                Some(activity) => format!("{} · {activity}", page.label()),
-                None => page.label().to_string(),
-            };
-            if ui
-                .selectable_label(self.navigation.page == page, label)
-                .clicked()
-            {
-                self.navigation.open(page);
-            }
-        }
-
-        fn activity_ui(&mut self, ui: &mut egui::Ui) {
-            ui.horizontal_wrapped(|ui| {
-                for page in Page::ALL {
-                    if let Some(activity) = self.page_activity(page) {
-                        if ui
-                            .link(format!("{} · {activity} →", page.label()))
-                            .clicked()
-                        {
-                            self.navigation.open(page);
-                        }
-                    }
-                }
-                if self.native.is_some() && ui.button("取消当前语音 · Esc").clicked() {
-                    self.cancel_voice();
-                }
-                if self.qa_visible && ui.button("取消问答").clicked() {
-                    if let Some(backend) = self.backend() {
-                        let session_id = self
-                            .qa_state
-                            .as_ref()
-                            .and_then(|state| state.session_id.as_deref())
-                            .and_then(|id| uuid::Uuid::parse_str(id).ok())
-                            .map(openless_core::SessionId::from_uuid);
-                        self.spawn(async move {
-                            backend.services().qa.cancel(session_id).await?;
-                            Ok("问答本轮已取消".to_string())
-                        });
-                    }
-                }
-                if let Some(session_id) = self
-                    .selection
-                    .as_ref()
-                    .filter(|selection| selection.phase == SelectionPhase::Preview)
-                    .and_then(|selection| selection.session_id)
-                {
-                    if ui.button("取消选区预览").clicked() {
+                    if ui.button(tr_l10n(lang, "btn.reset_pairing")).clicked() {
                         if let Some(backend) = self.backend() {
                             self.spawn(async move {
                                 backend
                                     .services()
-                                    .selection
-                                    .cancel(Some(session_id))
+                                    .remote_input
+                                    .regenerate_pairing_pin()
                                     .await?;
-                                Ok("选区替换已取消".to_string())
+                                Ok(tr_l10n(lang, "status.remote_pin_reset").to_string())
                             });
                         }
                     }
                 }
-                if (self.less_computer_running || self.pending_approval.is_some())
-                    && ui.button("取消 Agent").clicked()
+            }
+            if ui.button(tr_l10n(lang, "btn.export_error_log")).clicked() {
+                if let Some(backend) = self.backend() {
+                    let source = openless_linux_egui::log_path(&backend.config().data_dir);
+                    self.spawn(async move {
+                        let destination = tokio::task::spawn_blocking(|| {
+                            rfd::FileDialog::new()
+                                .add_filter("Log", &["log"])
+                                .set_file_name("openless.log")
+                                .save_file()
+                        })
+                        .await
+                        .map_err(|error| {
+                            BackendError::new(
+                                openless_core::BackendErrorCode::Internal,
+                                error.to_string(),
+                            )
+                        })?
+                        .ok_or_else(|| {
+                            BackendError::new(
+                                openless_core::BackendErrorCode::Cancelled,
+                                tr_l10n(lang, "dialog.export_log_cancelled"),
+                            )
+                        })?;
+                        tokio::task::spawn_blocking(move || {
+                            openless_linux_egui::export_error_log(&source, &destination)
+                        })
+                        .await
+                        .map_err(|error| {
+                            BackendError::new(
+                                openless_core::BackendErrorCode::Internal,
+                                error.to_string(),
+                            )
+                        })?
+                        .map_err(|error| {
+                            BackendError::new(
+                                openless_core::BackendErrorCode::Platform,
+                                error.to_string(),
+                            )
+                        })?;
+                        Ok(tr_l10n(lang, "status.export_log_done").to_string())
+                    });
+                }
+            }
+            ui.separator();
+            ui.heading(tr_l10n(lang, "head.software_update"));
+            let channel = self
+                .preferences
+                .as_ref()
+                .map(|preferences| preferences.update_channel)
+                .unwrap_or_default();
+            match &self.update_support {
+                LinuxUpdateSupport::AppImage(_) => {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(
+                                !self.update_busy,
+                                egui::Button::new(tr_l10n(lang, "btn.check_now")),
+                            )
+                            .clicked()
+                        {
+                            self.request_update_check(channel);
+                        }
+                        if self.update_manifest.is_some()
+                            && ui
+                                .add_enabled(
+                                    !self.update_busy,
+                                    egui::Button::new(tr_l10n(lang, "btn.download_install")),
+                                )
+                                .clicked()
+                        {
+                            self.install_update();
+                        }
+                    });
+                    if let Some(manifest) = &self.update_manifest {
+                        ui.label(fmt_l10n(lang, "update.available", &[&manifest.version]));
+                    }
+                    if let Some(progress) = self.update_progress {
+                        let fraction = progress
+                            .content_length
+                            .filter(|total| *total > 0)
+                            .map(|total| progress.downloaded as f32 / total as f32);
+                        if let Some(fraction) = fraction {
+                            ui.add(egui::ProgressBar::new(fraction.clamp(0.0, 1.0)));
+                        }
+                        ui.label(fmt_l10n(lang, "update.downloaded", &[&progress.downloaded]));
+                    }
+                }
+                LinuxUpdateSupport::ManualOnly { releases_url } => {
+                    ui.label(tr_l10n(lang, "update.manual_notice"));
+                    if ui.button(tr_l10n(lang, "btn.open_releases")).clicked() {
+                        let url = (*releases_url).to_string();
+                        std::thread::spawn(move || {
+                            let _ = open_external(&url);
+                        });
+                    }
+                }
+            }
+        }
+
+        fn vocabulary_ui(&mut self, ui: &mut egui::Ui) {
+            let lang = self.lang;
+            if let Some(backend) = self.backend() {
+                let pending = backend.pending_corrections();
+                if !pending.is_empty() {
+                    ui.heading(tr_l10n(lang, "head.pending_corrections"));
+                    let mut action: Option<(String, bool)> = None;
+                    for suggestion in pending {
+                        ui.horizontal(|ui| {
+                            ui.label(format!(
+                                "{} → {}",
+                                suggestion.pattern, suggestion.replacement
+                            ));
+                            if ui.small_button(tr_l10n(lang, "btn.accept")).clicked() {
+                                action = Some((suggestion.id.clone(), true));
+                            }
+                            if ui.small_button(tr_l10n(lang, "btn.ignore")).clicked() {
+                                action = Some((suggestion.id.clone(), false));
+                            }
+                        });
+                    }
+                    if ui.button(tr_l10n(lang, "btn.close_all")).clicked() {
+                        backend.dismiss_pending_corrections();
+                    }
+                    if let Some((id, accept)) = action {
+                        self.spawn(async move {
+                            if accept {
+                                backend.accept_pending_correction(&id)?;
+                            } else {
+                                backend.reject_pending_correction(&id);
+                            }
+                            Ok(tr_l10n(lang, "status.suggestion_handled").to_string())
+                        });
+                    }
+                    ui.separator();
+                }
+            }
+            ui.heading(tr_l10n(lang, "head.vocab_presets"));
+            ui.label(tr_l10n(lang, "lbl.preset_note"));
+            let mut preset_action: Option<(String, String)> = None;
+            for preset in &self.vocab_presets {
+                ui.horizontal_wrapped(|ui| {
+                    ui.strong(&preset.name);
+                    ui.label(fmt_l10n(lang, "lbl.preset_count", &[&preset.phrases.len()]));
+                    if ui.small_button(tr_l10n(lang, "btn.apply")).clicked() {
+                        preset_action = Some((preset.id.clone(), "apply".into()));
+                    }
+                    if self
+                        .vocab_preset_store
+                        .custom
+                        .iter()
+                        .any(|custom| custom.id == preset.id)
+                        && ui.small_button(tr_l10n(lang, "btn.delete")).clicked()
+                    {
+                        preset_action = Some((preset.id.clone(), "delete".into()));
+                    } else if openless_core::builtin_vocab_presets()
+                        .iter()
+                        .any(|builtin| builtin.id == preset.id)
+                        && ui.small_button(tr_l10n(lang, "btn.hide_builtin")).clicked()
+                    {
+                        preset_action = Some((preset.id.clone(), "disable".into()));
+                    }
+                    ui.weak(preset.phrases.join("、"));
+                });
+            }
+            for id in self.vocab_preset_store.disabled_builtin_preset_ids.clone() {
+                if ui
+                    .small_button(fmt_l10n(lang, "btn.restore_builtin", &[&id]))
+                    .clicked()
+                {
+                    preset_action = Some((id, "enable".into()));
+                }
+            }
+            ui.group(|ui| {
+                ui.label(tr_l10n(lang, "lbl.new_custom_preset"));
+                ui.text_edit_singleline(&mut self.vocab_preset_name);
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.vocab_preset_phrases)
+                        .hint_text(tr_l10n(lang, "hint.preset_phrases"))
+                        .desired_rows(3),
+                );
+                if ui.button(tr_l10n(lang, "btn.save_preset")).clicked()
+                    && !self.vocab_preset_name.trim().is_empty()
+                    && !self.vocab_preset_phrases.trim().is_empty()
+                {
+                    preset_action = Some((String::new(), "create".into()));
+                }
+            });
+            if let (Some(backend), Some((id, operation))) = (self.backend(), preset_action) {
+                let name = std::mem::take(&mut self.vocab_preset_name);
+                let phrases_text = std::mem::take(&mut self.vocab_preset_phrases);
+                let selected = self
+                    .vocab_presets
+                    .iter()
+                    .find(|preset| preset.id == id)
+                    .cloned();
+                self.spawn(async move {
+                    match operation.as_str() {
+                        "apply" => {
+                            let preset = selected.ok_or_else(|| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Cancelled,
+                                    tr_l10n(lang, "status.preset_gone"),
+                                )
+                            })?;
+                            for phrase in preset.phrases {
+                                backend.add_vocabulary(
+                                    phrase,
+                                    Some(fmt_l10n(lang, "status.from_preset", &[&preset.name])),
+                                )?;
+                            }
+                        }
+                        "create" => {
+                            let mut phrases = phrases_text
+                                .split([',', '，', '\n'])
+                                .map(str::trim)
+                                .filter(|phrase| !phrase.is_empty())
+                                .map(ToOwned::to_owned)
+                                .collect::<Vec<_>>();
+                            phrases.sort();
+                            phrases.dedup();
+                            let mut store = backend.list_vocabulary_presets()?;
+                            store.custom.push(openless_core::VocabPreset {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                name: name.trim().to_string(),
+                                phrases,
+                            });
+                            backend.save_vocabulary_presets(&store)?;
+                        }
+                        "delete" => {
+                            let mut store = backend.list_vocabulary_presets()?;
+                            store.custom.retain(|preset| preset.id != id);
+                            backend.save_vocabulary_presets(&store)?;
+                        }
+                        "disable" => {
+                            let mut store = backend.list_vocabulary_presets()?;
+                            if !store.disabled_builtin_preset_ids.contains(&id) {
+                                store.disabled_builtin_preset_ids.push(id);
+                            }
+                            backend.save_vocabulary_presets(&store)?;
+                        }
+                        "enable" => {
+                            let mut store = backend.list_vocabulary_presets()?;
+                            store
+                                .disabled_builtin_preset_ids
+                                .retain(|preset_id| preset_id != &id);
+                            backend.save_vocabulary_presets(&store)?;
+                        }
+                        _ => unreachable!(),
+                    }
+                    Ok(tr_l10n(lang, "status.preset_updated").to_string())
+                });
+            }
+            ui.separator();
+            ui.heading(tr_l10n(lang, "head.custom_vocab"));
+            ui.horizontal(|ui| {
+                ui.label(tr_l10n(lang, "lbl.phrase"));
+                ui.text_edit_singleline(&mut self.vocabulary_phrase);
+                ui.label(tr_l10n(lang, "lbl.note"));
+                ui.text_edit_singleline(&mut self.vocabulary_note);
+                if ui.button(tr_l10n(lang, "btn.add")).clicked()
+                    && !self.vocabulary_phrase.trim().is_empty()
                 {
                     if let Some(backend) = self.backend() {
+                        let phrase = std::mem::take(&mut self.vocabulary_phrase);
+                        let note = std::mem::take(&mut self.vocabulary_note);
                         self.spawn(async move {
-                            backend.cancel_less_computer(None).await?;
-                            Ok("Less Computer 已取消".to_string())
+                            backend.add_vocabulary(
+                                phrase,
+                                (!note.trim().is_empty()).then_some(note),
+                            )?;
+                            Ok(tr_l10n(lang, "status.vocab_saved").to_string())
                         });
                     }
                 }
             });
+            let mut vocabulary_action = None;
+            for entry in &self.vocabulary {
+                ui.horizontal(|ui| {
+                    let mut enabled = entry.enabled;
+                    if ui.checkbox(&mut enabled, "").changed() {
+                        vocabulary_action = Some((entry.id.clone(), Some(enabled)));
+                    }
+                    ui.label(egui::RichText::new(&entry.phrase).strong());
+                    if let Some(note) = &entry.note {
+                        ui.label(note);
+                    }
+                    ui.label(fmt_l10n(lang, "lbl.hits", &[&entry.hits]));
+                    if ui.small_button(tr_l10n(lang, "btn.delete")).clicked() {
+                        vocabulary_action = Some((entry.id.clone(), None));
+                    }
+                });
+            }
+            if let (Some(backend), Some((id, enabled))) = (self.backend(), vocabulary_action) {
+                self.spawn(async move {
+                    if let Some(enabled) = enabled {
+                        backend.set_vocabulary_enabled(&id, enabled)?;
+                    } else {
+                        backend.remove_vocabulary(&id)?;
+                    }
+                    Ok(tr_l10n(lang, "status.vocab_updated").to_string())
+                });
+            }
+
+            ui.separator();
+            ui.heading(tr_l10n(lang, "head.correction_rules"));
+            ui.horizontal(|ui| {
+                ui.text_edit_singleline(&mut self.correction_pattern);
+                ui.label("→");
+                ui.text_edit_singleline(&mut self.correction_replacement);
+                if ui.button(tr_l10n(lang, "btn.add_rule")).clicked()
+                    && !self.correction_pattern.trim().is_empty()
+                    && !self.correction_replacement.trim().is_empty()
+                {
+                    if let Some(backend) = self.backend() {
+                        let pattern = std::mem::take(&mut self.correction_pattern);
+                        let replacement = std::mem::take(&mut self.correction_replacement);
+                        self.spawn(async move {
+                            backend.add_correction_rule(pattern, replacement)?;
+                            Ok(tr_l10n(lang, "status.correction_saved").to_string())
+                        });
+                    }
+                }
+            });
+            let mut correction_action = None;
+            for rule in &self.correction_rules {
+                ui.horizontal(|ui| {
+                    let mut enabled = rule.enabled;
+                    if ui.checkbox(&mut enabled, "").changed() {
+                        correction_action = Some((rule.id.clone(), Some(enabled)));
+                    }
+                    ui.label(format!("{} → {}", rule.pattern, rule.replacement));
+                    ui.label(format!("{:?}", rule.source));
+                    if ui.small_button(tr_l10n(lang, "btn.delete")).clicked() {
+                        correction_action = Some((rule.id.clone(), None));
+                    }
+                });
+            }
+            if let (Some(backend), Some((id, enabled))) = (self.backend(), correction_action) {
+                self.spawn(async move {
+                    if let Some(enabled) = enabled {
+                        backend.set_correction_rule_enabled(&id, enabled)?;
+                    } else {
+                        backend.remove_correction_rule(&id)?;
+                    }
+                    Ok(tr_l10n(lang, "status.correction_updated").to_string())
+                });
+            }
         }
 
-        fn cancel_voice(&self) {
-            if let Some(backend) = self.backend() {
+        fn styles_ui(&mut self, ui: &mut egui::Ui) {
+            let lang = self.lang;
+            ui.label(tr_l10n(lang, "lbl.style_note"));
+            ui.group(|ui| {
+                ui.strong(tr_l10n(lang, "lbl.direct_hotkey"));
+                let previous_id = self.style_hotkey_pack_id.clone();
+                egui::ComboBox::from_id_salt("style-hotkey-pack")
+                    .selected_text(
+                        self.style_packs
+                            .iter()
+                            .find(|pack| pack.id == self.style_hotkey_pack_id)
+                            .map(|pack| pack.name.as_str())
+                            .unwrap_or_else(|| tr_l10n(lang, "lbl.choose_style")),
+                    )
+                    .show_ui(ui, |ui| {
+                        for pack in &self.style_packs {
+                            ui.selectable_value(
+                                &mut self.style_hotkey_pack_id,
+                                pack.id.clone(),
+                                &pack.name,
+                            );
+                        }
+                    });
+                if previous_id != self.style_hotkey_pack_id {
+                    let binding = self.preferences.as_ref().and_then(|preferences| {
+                        preferences
+                            .style_pack_hotkeys
+                            .iter()
+                            .find(|hotkey| hotkey.pack_id == self.style_hotkey_pack_id)
+                            .map(|hotkey| hotkey.binding.clone())
+                    });
+                    self.style_hotkey_primary = binding
+                        .as_ref()
+                        .map(|binding| binding.primary.clone())
+                        .unwrap_or_default();
+                    self.style_hotkey_modifiers = binding
+                        .map(|binding| binding.modifiers.join("+"))
+                        .unwrap_or_default();
+                }
+                ui.horizontal(|ui| {
+                    ui.label(tr_l10n(lang, "lbl.primary"));
+                    ui.text_edit_singleline(&mut self.style_hotkey_primary);
+                    ui.label(tr_l10n(lang, "lbl.modifiers"));
+                    ui.text_edit_singleline(&mut self.style_hotkey_modifiers);
+                });
+                let save = ui
+                    .add_enabled(
+                        !self.style_hotkey_pack_id.is_empty()
+                            && !self.style_hotkey_primary.trim().is_empty(),
+                        egui::Button::new(tr_l10n(lang, "btn.save_direct_hotkey")),
+                    )
+                    .clicked();
+                let remove = ui
+                    .add_enabled(
+                        !self.style_hotkey_pack_id.is_empty(),
+                        egui::Button::new(tr_l10n(lang, "btn.remove_direct_hotkey")),
+                    )
+                    .clicked();
+                if save || remove {
+                    if let (Some(native), Some(mut preferences), Some(snapshot)) =
+                        (&self.native, self.preferences.clone(), &self.snapshot)
+                    {
+                        let pack_id = self.style_hotkey_pack_id.clone();
+                        let desired = save.then(|| openless_core::shared_types::ShortcutBinding {
+                            primary: self.style_hotkey_primary.trim().to_string(),
+                            modifiers: self
+                                .style_hotkey_modifiers
+                                .split('+')
+                                .map(str::trim)
+                                .filter(|modifier| !modifier.is_empty())
+                                .map(ToOwned::to_owned)
+                                .collect(),
+                        });
+                        set_style_pack_hotkey(&mut preferences, &pack_id, desired.clone());
+                        let host = native.host_arc();
+                        let revision = snapshot.preferences_revision;
+                        self.spawn(async move {
+                            tokio::task::spawn_blocking(move || {
+                                match host.update_settings_strict(preferences, revision) {
+                                    Err(error)
+                                        if error.code == openless_core::BackendErrorCode::Busy =>
+                                    {
+                                        let mut latest = host.backend().get_preferences();
+                                        set_style_pack_hotkey(&mut latest, &pack_id, desired);
+                                        let revision = host.snapshot().preferences_revision;
+                                        host.update_settings_strict(latest, revision)
+                                    }
+                                    result => result,
+                                }
+                            })
+                            .await
+                            .map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Internal,
+                                    error.to_string(),
+                                )
+                            })??;
+                            Ok(tr_l10n(lang, "status.style_hotkey_saved").to_string())
+                        });
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                if ui.button(tr_l10n(lang, "btn.new_style")).clicked() {
+                    self.style_editor = Some(openless_core::StylePack {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        name: tr_l10n(lang, "lbl.new_style_default").to_string(),
+                        ..Default::default()
+                    });
+                }
+                if ui.button(tr_l10n(lang, "btn.import_zip")).clicked() {
+                    if let Some(backend) = self.backend() {
+                        self.spawn(async move {
+                            let path = tokio::task::spawn_blocking(|| {
+                                rfd::FileDialog::new()
+                                    .add_filter("OpenLess style pack", &["zip"])
+                                    .pick_file()
+                            })
+                            .await
+                            .map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Internal,
+                                    error.to_string(),
+                                )
+                            })?
+                            .ok_or_else(|| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Cancelled,
+                                    tr_l10n(lang, "dialog.style_import_cancelled"),
+                                )
+                            })?;
+                            let pack = tokio::task::spawn_blocking(move || {
+                                backend.import_style_pack_path(&path)
+                            })
+                            .await
+                            .map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Internal,
+                                    error.to_string(),
+                                )
+                            })??;
+                            Ok(fmt_l10n(lang, "status.style_imported", &[&pack.name]))
+                        });
+                    }
+                }
+            });
+            if let Some(editor) = self.style_editor.as_mut() {
+                ui.group(|ui| {
+                    ui.heading(tr_l10n(lang, "head.style_pack_editor"));
+                    ui.horizontal(|ui| {
+                        ui.label(tr_l10n(lang, "lbl.name"));
+                        ui.text_edit_singleline(&mut editor.name);
+                        ui.label(tr_l10n(lang, "lbl.version"));
+                        ui.text_edit_singleline(&mut editor.version);
+                    });
+                    ui.label(tr_l10n(lang, "lbl.description"));
+                    ui.text_edit_multiline(&mut editor.description);
+                    egui::ComboBox::from_label(tr_l10n(lang, "lbl.base_mode"))
+                        .selected_text(editor.base_mode.display_name())
+                        .show_ui(ui, |ui| {
+                            for mode in [
+                                openless_core::PolishMode::Raw,
+                                openless_core::PolishMode::Light,
+                                openless_core::PolishMode::Structured,
+                                openless_core::PolishMode::Formal,
+                            ] {
+                                ui.selectable_value(
+                                    &mut editor.base_mode,
+                                    mode,
+                                    mode.display_name(),
+                                );
+                            }
+                        });
+                    ui.label(tr_l10n(lang, "lbl.dictation_prompt"));
+                    ui.add(egui::TextEdit::multiline(&mut editor.prompt).desired_rows(6));
+                    ui.label(tr_l10n(lang, "lbl.selection_prompt"));
+                    ui.add(egui::TextEdit::multiline(&mut editor.selection_prompt).desired_rows(4));
+                });
+                let mut save = false;
+                let mut cancel = false;
+                ui.horizontal(|ui| {
+                    save = ui.button(tr_l10n(lang, "btn.save_style")).clicked();
+                    cancel = ui.button(tr_l10n(lang, "btn.cancel_edit")).clicked();
+                });
+                if cancel {
+                    self.style_editor = None;
+                } else if save {
+                    let pack = self.style_editor.take().expect("editor exists");
+                    if let Some(backend) = self.backend() {
+                        let exists = self.style_packs.iter().any(|item| item.id == pack.id);
+                        self.spawn(async move {
+                            let saved = if exists {
+                                backend.update_style_pack(pack)?
+                            } else {
+                                backend.create_style_pack(pack)?
+                            };
+                            Ok(fmt_l10n(lang, "status.style_saved", &[&saved.name]))
+                        });
+                    }
+                }
+                ui.separator();
+            }
+            let mut action: Option<(String, &'static str, bool)> = None;
+            for pack in self.style_packs.clone() {
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.heading(&pack.name);
+                        if pack.active {
+                            ui.label(
+                                egui::RichText::new(tr_l10n(lang, "lbl.current"))
+                                    .color(theme::BLUE),
+                            );
+                        }
+                        ui.label(format!("{:?} · {:?}", pack.kind, pack.base_mode));
+                    });
+                    ui.label(&pack.description);
+                    if let Some(author) = &pack.author {
+                        ui.label(fmt_l10n(
+                            lang,
+                            "lbl.author_version",
+                            &[author, &pack.version],
+                        ));
+                    }
+                    ui.horizontal(|ui| {
+                        if !pack.active && ui.button(tr_l10n(lang, "btn.set_current")).clicked() {
+                            action = Some((pack.id.clone(), "activate", true));
+                        }
+                        let mut enabled = pack.enabled;
+                        if ui
+                            .checkbox(&mut enabled, tr_l10n(lang, "btn.enable_label"))
+                            .changed()
+                        {
+                            action = Some((pack.id.clone(), "enabled", enabled));
+                        }
+                        if ui.button(tr_l10n(lang, "btn.preview_runtime")).clicked() {
+                            if let Some(backend) = self.backend() {
+                                let diagnostics = backend.preview_style_pack_runtime(&pack);
+                                self.status = fmt_l10n(
+                                    lang,
+                                    "status.style_preview",
+                                    &[
+                                        &diagnostics.pack_name,
+                                        &diagnostics.single_turn_prompt_chars,
+                                        &diagnostics.multi_turn_prompt_chars,
+                                        &diagnostics.hotwords.len(),
+                                    ],
+                                );
+                            }
+                        }
+                        if pack.kind == openless_core::StylePackKind::Imported
+                            && ui.button(tr_l10n(lang, "btn.edit")).clicked()
+                        {
+                            self.style_editor = Some(pack.clone());
+                        }
+                        if pack.kind == openless_core::StylePackKind::Imported
+                            && ui.button(tr_l10n(lang, "btn.delete")).clicked()
+                        {
+                            action = Some((pack.id.clone(), "delete", false));
+                        }
+                        if pack.kind == openless_core::StylePackKind::Builtin
+                            && ui.button(tr_l10n(lang, "btn.reset_builtin")).clicked()
+                        {
+                            action = Some((pack.id.clone(), "reset", false));
+                        }
+                        if ui.button(tr_l10n(lang, "btn.export_zip")).clicked() {
+                            action = Some((pack.id.clone(), "export", false));
+                        }
+                    });
+                });
+                ui.add_space(8.0);
+            }
+            if let (Some(backend), Some((id, operation, value))) = (self.backend(), action) {
                 self.spawn(async move {
-                    backend.cancel_active_voice_session(None).await?;
-                    Ok("语音会话已取消".to_string())
+                    match operation {
+                        "activate" => {
+                            backend.activate_style_pack(&id)?;
+                        }
+                        "enabled" => {
+                            backend.set_style_pack_enabled(&id, value)?;
+                        }
+                        "delete" => {
+                            backend.remove_style_pack(&id)?;
+                        }
+                        "reset" => {
+                            backend.reset_builtin_style_pack(&id)?;
+                        }
+                        "export" => {
+                            let bytes = backend.export_style_pack_bytes(&id)?;
+                            let destination = tokio::task::spawn_blocking(move || {
+                                rfd::FileDialog::new()
+                                    .add_filter("OpenLess style pack", &["zip"])
+                                    .set_file_name(format!("openless-style-{id}.zip"))
+                                    .save_file()
+                            })
+                            .await
+                            .map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Internal,
+                                    error.to_string(),
+                                )
+                            })?
+                            .ok_or_else(|| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Cancelled,
+                                    tr_l10n(lang, "dialog.style_export_cancelled"),
+                                )
+                            })?;
+                            tokio::task::spawn_blocking(move || {
+                                openless_linux_egui::atomic_save(&destination, &bytes)
+                            })
+                            .await
+                            .map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Internal,
+                                    error.to_string(),
+                                )
+                            })?
+                            .map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Platform,
+                                    error.to_string(),
+                                )
+                            })?;
+                        }
+                        _ => unreachable!(),
+                    }
+                    Ok(tr_l10n(lang, "status.style_updated").to_string())
+                });
+            }
+        }
+
+        fn marketplace_ui(&mut self, ui: &mut egui::Ui) {
+            let lang = self.lang;
+            ui.horizontal(|ui| {
+                ui.text_edit_singleline(&mut self.marketplace_query);
+                if ui.button(tr_l10n(lang, "btn.search_refresh")).clicked() {
+                    self.load_marketplace();
+                }
+                if ui.button(tr_l10n(lang, "btn.github_login")).clicked() {
+                    if let Some(backend) = self.backend() {
+                        let tx = self.tx.clone();
+                        self.tokio.spawn(async move {
+                            let result = backend
+                                .services()
+                                .marketplace
+                                .start_device_flow()
+                                .await
+                                .map_err(|error| error.to_string());
+                            let _ = tx.send(UiResult::MarketplaceFlow(result));
+                        });
+                    }
+                }
+                if ui.button(tr_l10n(lang, "btn.logout")).clicked() {
+                    if let Some(backend) = self.backend() {
+                        self.spawn(async move {
+                            backend.services().marketplace.logout().await?;
+                            Ok(tr_l10n(lang, "status.logout_done").to_string())
+                        });
+                    }
+                }
+                if ui.button(tr_l10n(lang, "btn.my_publish_like")).clicked() {
+                    self.load_marketplace_mine();
+                }
+            });
+            if let Some(flow) = self.marketplace_flow.clone() {
+                ui.horizontal(|ui| {
+                    ui.label(fmt_l10n(lang, "lbl.device_code", &[&flow.user_code]));
+                    if ui.button(tr_l10n(lang, "btn.open_github")).clicked() {
+                        let url = flow.verification_uri.clone();
+                        std::thread::spawn(move || {
+                            if let Err(error) = open_external(&url) {
+                                eprintln!("OpenLess GitHub login URL failed: {error}");
+                            }
+                        });
+                    }
+                    if ui.button(tr_l10n(lang, "btn.check_auth")).clicked() {
+                        if let Some(backend) = self.backend() {
+                            let tx = self.tx.clone();
+                            let flow_id = flow.flow_id.clone();
+                            self.tokio.spawn(async move {
+                                let result = backend
+                                    .services()
+                                    .marketplace
+                                    .poll_device_flow(flow_id)
+                                    .await
+                                    .map_err(|error| error.to_string());
+                                let _ = tx.send(UiResult::MarketplaceAuthPoll(result));
+                            });
+                        }
+                    }
+                });
+            }
+            if self.marketplace_items.is_empty() {
+                ui.label(tr_l10n(lang, "marketplace.not_loaded"));
+                return;
+            }
+            if let Some(detail) = &self.marketplace_detail {
+                ui.group(|ui| {
+                    ui.heading(fmt_l10n(
+                        lang,
+                        "head.marketplace_detail",
+                        &[&detail.summary.name],
+                    ));
+                    ui.label(fmt_l10n(lang, "lbl.status_colon", &[&detail.state]));
+                    ui.label(&detail.prompt);
+                });
+            }
+            if !self.marketplace_my_packs.is_empty() || !self.marketplace_my_likes.is_empty() {
+                ui.group(|ui| {
+                    ui.heading(tr_l10n(lang, "head.marketplace_mine"));
+                    ui.label(fmt_l10n(
+                        lang,
+                        "lbl.liked",
+                        &[&self.marketplace_my_likes.len()],
+                    ));
+                    for pack in &self.marketplace_my_packs {
+                        ui.label(format!("{} · {}", pack.summary.name, pack.state));
+                    }
+                });
+            }
+            let mut action: Option<(String, &'static str)> = None;
+            for pack in &self.marketplace_items {
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.heading(&pack.name);
+                        ui.label(format!("@{} · {}", pack.author_login, pack.version));
+                    });
+                    ui.label(&pack.description);
+                    ui.label(fmt_l10n(
+                        lang,
+                        "lbl.like_dl",
+                        &[&pack.like_count, &pack.download_count, &pack.base_mode],
+                    ));
+                    ui.horizontal(|ui| {
+                        if ui.button(tr_l10n(lang, "btn.install")).clicked() {
+                            action = Some((pack.id.clone(), "install"));
+                        }
+                        if ui.button(tr_l10n(lang, "btn.toggle_like")).clicked() {
+                            action = Some((pack.id.clone(), "like"));
+                        }
+                        if ui.button(tr_l10n(lang, "btn.detail")).clicked() {
+                            action = Some((pack.id.clone(), "detail"));
+                        }
+                        if ui.button(tr_l10n(lang, "btn.download_zip")).clicked() {
+                            action = Some((pack.id.clone(), "download"));
+                        }
+                    });
+                });
+                ui.add_space(8.0);
+            }
+            if let (Some(backend), Some((id, operation))) = (self.backend(), action) {
+                let tx = self.tx.clone();
+                self.tokio.spawn(async move {
+                    match operation {
+                        "install" => {
+                            let result = backend
+                                .services()
+                                .marketplace
+                                .install(id)
+                                .await
+                                .map(|pack| {
+                                    fmt_l10n(lang, "status.marketplace_installed", &[&pack.name])
+                                })
+                                .map_err(|error| error.to_string());
+                            let _ =
+                                tx.send(UiResult::Message(result.unwrap_or_else(|error| error)));
+                        }
+                        "like" => {
+                            let result = backend.services().marketplace.toggle_like(id).await;
+                            let message = result
+                                .map(|result| {
+                                    fmt_l10n(lang, "status.marketplace_like", &[&result.like_count])
+                                })
+                                .unwrap_or_else(|error| error.to_string());
+                            let _ = tx.send(UiResult::Message(message));
+                        }
+                        "detail" => {
+                            let result = backend
+                                .services()
+                                .marketplace
+                                .detail(id)
+                                .await
+                                .map_err(|error| error.to_string());
+                            let _ = tx.send(UiResult::MarketplaceDetail(result));
+                        }
+                        "download" => {
+                            let result = async {
+                                let bytes = backend
+                                    .services()
+                                    .marketplace
+                                    .download_archive(id.clone())
+                                    .await?;
+                                let destination = tokio::task::spawn_blocking(move || {
+                                    rfd::FileDialog::new()
+                                        .add_filter("OpenLess style pack", &["zip"])
+                                        .set_file_name(format!("openless-marketplace-{id}.zip"))
+                                        .save_file()
+                                })
+                                .await
+                                .map_err(|error| {
+                                    BackendError::new(
+                                        openless_core::BackendErrorCode::Internal,
+                                        error.to_string(),
+                                    )
+                                })?
+                                .ok_or_else(|| {
+                                    BackendError::new(
+                                        openless_core::BackendErrorCode::Cancelled,
+                                        tr_l10n(lang, "dialog.marketplace_zip_cancelled"),
+                                    )
+                                })?;
+                                tokio::task::spawn_blocking(move || {
+                                    openless_linux_egui::atomic_save(&destination, &bytes)
+                                })
+                                .await
+                                .map_err(|error| {
+                                    BackendError::new(
+                                        openless_core::BackendErrorCode::Internal,
+                                        error.to_string(),
+                                    )
+                                })?
+                                .map_err(|error| {
+                                    BackendError::new(
+                                        openless_core::BackendErrorCode::Platform,
+                                        error.to_string(),
+                                    )
+                                })?;
+                                Ok::<_, BackendError>(
+                                    tr_l10n(lang, "status.marketplace_zip_saved").to_string(),
+                                )
+                            }
+                            .await
+                            .unwrap_or_else(|error| error.to_string());
+                            let _ = tx.send(UiResult::Message(result));
+                        }
+                        _ => unreachable!(),
+                    }
+                });
+            }
+            ui.separator();
+            ui.heading(tr_l10n(lang, "head.publish_local"));
+            let mut local_action: Option<(String, Option<String>, &'static str)> = None;
+            for pack in self
+                .style_packs
+                .iter()
+                .filter(|pack| pack.kind == openless_core::StylePackKind::Imported)
+            {
+                ui.horizontal(|ui| {
+                    ui.label(&pack.name);
+                    if ui.button(tr_l10n(lang, "btn.upload_update")).clicked() {
+                        local_action =
+                            Some((pack.id.clone(), pack.origin_pack_id.clone(), "upload"));
+                    }
+                });
+            }
+            for pack in &self.marketplace_my_packs {
+                ui.horizontal(|ui| {
+                    ui.label(fmt_l10n(lang, "lbl.published", &[&pack.summary.name]));
+                    if ui.button(tr_l10n(lang, "btn.delete_publish")).clicked() {
+                        local_action = Some((pack.summary.id.clone(), None, "delete"));
+                    }
+                });
+            }
+            if let (Some(backend), Some((id, origin, operation))) = (self.backend(), local_action) {
+                self.spawn(async move {
+                    match operation {
+                        "upload" => {
+                            let result = backend.services().marketplace.upload(id, origin).await?;
+                            Ok(fmt_l10n(
+                                lang,
+                                "status.marketplace_published",
+                                &[&result.state, &result.message],
+                            ))
+                        }
+                        "delete" => {
+                            backend.services().marketplace.delete(id).await?;
+                            Ok(tr_l10n(lang, "status.marketplace_deleted").to_string())
+                        }
+                        _ => unreachable!(),
+                    }
                 });
             }
         }
 
         fn history_ui(&mut self, ui: &mut egui::Ui) {
-            ui.heading("历史");
-            ui.label("最近 20 条，只读。插入、复制回退与已发送粘贴分别显示实际结果。");
+            let lang = self.lang;
+            ui.heading(tr_l10n(lang, "nav.history"));
+            ui.horizontal(|ui| {
+                ui.label(tr_l10n(lang, "lbl.search"));
+                ui.text_edit_singleline(&mut self.history_search);
+                if ui.button(tr_l10n(lang, "btn.clear_all")).clicked() {
+                    if let Some(backend) = self.backend() {
+                        self.spawn(async move {
+                            backend.clear_history()?;
+                            Ok(tr_l10n(lang, "status.history_cleared").to_string())
+                        });
+                    }
+                }
+            });
             let Some(backend) = self.backend() else {
                 return;
             };
             match backend.list_history() {
                 Ok(history) if history.is_empty() => {
-                    ui.label("暂无历史记录");
+                    ui.label(tr_l10n(lang, "history.empty"));
                 }
                 Ok(history) => {
-                    for item in history.into_iter().rev().take(20) {
+                    let query = self.history_search.trim().to_lowercase();
+                    let mut action: Option<(String, &'static str, String)> = None;
+                    for item in history
+                        .into_iter()
+                        .rev()
+                        .filter(|item| {
+                            query.is_empty()
+                                || item.final_text.to_lowercase().contains(&query)
+                                || item.raw_transcript.to_lowercase().contains(&query)
+                        })
+                        .take(100)
+                    {
                         let delivery = match item.insert_status {
-                            HistoryInsertStatus::Inserted => "已插入",
-                            HistoryInsertStatus::CopiedFallback => "已复制",
-                            HistoryInsertStatus::PasteSent => "已发送粘贴",
-                            HistoryInsertStatus::Failed => "失败",
-                            HistoryInsertStatus::NotRequested => "未请求插入",
+                            HistoryInsertStatus::Inserted => tr_l10n(lang, "history.inserted"),
+                            HistoryInsertStatus::CopiedFallback => {
+                                tr_l10n(lang, "history.copied_fallback")
+                            }
+                            HistoryInsertStatus::PasteSent => tr_l10n(lang, "history.paste_sent"),
+                            HistoryInsertStatus::Failed => tr_l10n(lang, "history.failed"),
+                            HistoryInsertStatus::NotRequested => {
+                                tr_l10n(lang, "history.not_requested")
+                            }
                         };
-                        ui.label(format!(
-                            "{} · {} · {}",
-                            item.created_at, delivery, item.final_text
-                        ));
+                        egui::Frame::group(ui.style()).show(ui, |ui| {
+                            ui.label(format!("{} · {}", item.created_at, delivery));
+                            ui.label(&item.final_text);
+                            ui.horizontal(|ui| {
+                                if ui.small_button(tr_l10n(lang, "btn.copy")).clicked() {
+                                    action =
+                                        Some((item.id.clone(), "copy", item.final_text.clone()));
+                                }
+                                if ui.small_button(tr_l10n(lang, "btn.repolish")).clicked() {
+                                    action = Some((
+                                        item.id.clone(),
+                                        "repolish",
+                                        item.raw_transcript.clone(),
+                                    ));
+                                }
+                                if item.has_audio_recording == Some(true) {
+                                    if ui
+                                        .small_button(tr_l10n(lang, "btn.play_recording"))
+                                        .clicked()
+                                    {
+                                        action = Some((item.id.clone(), "play", String::new()));
+                                    }
+                                    if ui
+                                        .small_button(tr_l10n(lang, "btn.export_recording"))
+                                        .clicked()
+                                    {
+                                        action = Some((item.id.clone(), "export", String::new()));
+                                    }
+                                    if ui.small_button(tr_l10n(lang, "btn.retranscribe")).clicked()
+                                    {
+                                        action =
+                                            Some((item.id.clone(), "retranscribe", String::new()));
+                                    }
+                                }
+                                if ui.small_button(tr_l10n(lang, "btn.delete")).clicked() {
+                                    action = Some((item.id.clone(), "delete", String::new()));
+                                }
+                            });
+                        });
+                        ui.add_space(6.0);
+                    }
+                    if let Some((id, operation, text)) = action {
+                        match operation {
+                            "copy" => match fcitx5_copy_to_clipboard(&text) {
+                                Ok(()) => {
+                                    self.status = tr_l10n(lang, "status.history_copied").to_string()
+                                }
+                                Err(error) => {
+                                    self.status = fmt_l10n(lang, "status.copy_failed", &[&error])
+                                }
+                            },
+                            "repolish" => {
+                                let service = Arc::clone(&backend.services().auxiliary);
+                                self.spawn(async move {
+                                    let polished = service
+                                        .repolish(openless_core::RepolishRequest {
+                                            raw_text: text,
+                                            style_pack_id: None,
+                                            front_app: None,
+                                        })
+                                        .await?;
+                                    Ok(fmt_l10n(lang, "status.repolish_done", &[&polished]))
+                                });
+                            }
+                            "delete" => self.spawn(async move {
+                                backend.delete_history(&id)?;
+                                Ok(tr_l10n(lang, "status.history_deleted").to_string())
+                            }),
+                            "play" => {
+                                let data_dir = backend.config().data_dir.clone();
+                                self.spawn(async move {
+                                    let path = openless_linux_egui::recording_path(&data_dir, &id)
+                                        .map_err(|error| {
+                                            BackendError::new(
+                                                openless_core::BackendErrorCode::Persistence,
+                                                error.to_string(),
+                                            )
+                                        })?;
+                                    tokio::task::spawn_blocking(move || {
+                                        openless_linux_egui::open_local_file(&path)
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Platform,
+                                            error.to_string(),
+                                        )
+                                    })?;
+                                    Ok(tr_l10n(lang, "status.opened_player").to_string())
+                                });
+                            }
+                            "export" => {
+                                let data_dir = backend.config().data_dir.clone();
+                                self.spawn(async move {
+                                    let file_name = format!("openless-recording-{id}.wav");
+                                    let destination = tokio::task::spawn_blocking(move || {
+                                        rfd::FileDialog::new()
+                                            .add_filter("WAV audio", &["wav"])
+                                            .set_file_name(file_name)
+                                            .save_file()
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .ok_or_else(|| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Cancelled,
+                                            tr_l10n(lang, "dialog.recording_export_cancelled"),
+                                        )
+                                    })?;
+                                    let wav = tokio::task::spawn_blocking(move || {
+                                        openless_linux_egui::read_recording_wav(&data_dir, &id)
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Persistence,
+                                            error.to_string(),
+                                        )
+                                    })?;
+                                    let saved = tokio::task::spawn_blocking(move || {
+                                        openless_linux_egui::atomic_save(&destination, &wav)
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Platform,
+                                            error.to_string(),
+                                        )
+                                    })?;
+                                    Ok(fmt_l10n(
+                                        lang,
+                                        "status.recording_exported",
+                                        &[&saved.display()],
+                                    ))
+                                });
+                            }
+                            "retranscribe" => {
+                                let data_dir = backend.config().data_dir.clone();
+                                self.spawn(async move {
+                                    let recording_id = id.clone();
+                                    let wav = tokio::task::spawn_blocking(move || {
+                                        openless_linux_egui::read_recording_wav(
+                                            &data_dir,
+                                            &recording_id,
+                                        )
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Persistence,
+                                            error.to_string(),
+                                        )
+                                    })?;
+                                    let pcm = openless_linux_egui::recording_pcm(&wav)
+                                        .map_err(|error| {
+                                            BackendError::new(
+                                                openless_core::BackendErrorCode::Persistence,
+                                                error.to_string(),
+                                            )
+                                        })?
+                                        .to_vec();
+                                    let started = std::time::Instant::now();
+                                    let result = backend
+                                        .services()
+                                        .auxiliary
+                                        .retranscribe_pcm(pcm)
+                                        .await
+                                        .map_err(|failure| failure.error)?;
+                                    let entry = backend.apply_history_retranscription(
+                                        &id,
+                                        result.text,
+                                        &result.asr,
+                                        started.elapsed().as_millis() as u64,
+                                    )?;
+                                    Ok(fmt_l10n(lang, "status.retranscribed", &[&entry.final_text]))
+                                });
+                            }
+                            _ => unreachable!(),
+                        }
                     }
                 }
                 Err(error) => {
@@ -1997,98 +4405,1204 @@ mod linux_app {
                 }
             }
         }
-    }
 
-    impl eframe::App for OpenLessEguiApp {
-        fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-            // Poll every frame before routing pages. Hidden pages retain their
-            // drafts, session ownership, event replay and async completion paths.
-            self.poll(ctx);
-            if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-                self.cancel_voice();
-            }
-            egui::TopBottomPanel::top("status").show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.strong("OpenLess 2.0");
-                    ui.separator();
-                    ui.add(egui::Label::new(&self.status).truncate())
-                        .on_hover_text(&self.status);
+        // ── Frontend bridge ─────────────────────────────────────────────────
+
+        /// Sync backend state into the frontend view model each frame before
+        /// rendering. Only fields that have real data sources are populated;
+        /// unwired fields remain in their default empty / loading state.
+        fn sync_view_model(&mut self) {
+            // Capture overview error before taking a mutable borrow on frontend_vm.
+            let overview_err = self.overview_error();
+            let backend = self.backend();
+            let lang = self.lang;
+
+            let vm = &mut self.frontend_vm;
+
+            // Map shell::Page to frontend::Page.
+            vm.active_page = match self.active_page {
+                shell::Page::Overview => frontend::view_model::Page::Overview,
+                shell::Page::History => frontend::view_model::Page::History,
+                shell::Page::Vocabulary => frontend::view_model::Page::Vocab,
+                shell::Page::Styles => frontend::view_model::Page::Style,
+                shell::Page::Marketplace => frontend::view_model::Page::Marketplace,
+                shell::Page::Providers => frontend::view_model::Page::Settings,
+                shell::Page::Assistant => frontend::view_model::Page::SelectionAsk,
+            };
+
+            vm.status = self.status.clone();
+            vm.version = env!("CARGO_PKG_VERSION").to_string();
+
+            // Overview: wire real data when available.
+            if let Some(summary) = self.overview.summary(chrono::Local::now().date_naive()) {
+                vm.overview_loading = false;
+                vm.overview_error = None;
+                vm.overview = Some(frontend::view_model::OverviewSummary {
+                    asr_provider: summary.asr_provider,
+                    llm_provider: summary.llm_provider,
+                    asr_configured: summary.asr_configured,
+                    llm_configured: summary.llm_configured,
+                    chars_today: summary.chars_today,
+                    segments_today: summary.segments_today,
+                    duration_ms_today: summary.duration_ms_today,
+                    avg_latency_ms: summary.avg_latency_ms,
+                    history_total: summary.history_total,
+                    recent: summary
+                        .recent
+                        .into_iter()
+                        .map(|entry| frontend::view_model::OverviewRecentEntry {
+                            created_at: entry.created_at,
+                            final_text: entry.final_text,
+                            duration_ms: entry.duration_ms,
+                        })
+                        .collect(),
+                    last_7_segments: summary.last_7.segments,
+                    last_30_segments: summary.last_30.segments,
+                    heatmap_weeks: summary.heatmap_weeks,
+                    heatmap_days: summary.heatmap_days,
+                    activity_days_total: summary.activity_days_total,
                 });
-                self.activity_ui(ui);
-                if self.pending_approval.is_some() {
-                    ui.strong("Less Computer 等待审批");
-                    self.agent_approval_ui(ui);
-                }
-            });
-            if ctx.screen_rect().width() < 760.0 {
-                egui::TopBottomPanel::top("compact_navigation").show(ctx, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        for page in Page::ALL {
-                            self.navigation_button(ui, page);
-                        }
-                    });
-                });
+            } else if let Some(error) = overview_err {
+                vm.overview_loading = false;
+                vm.overview_error = Some(error);
+                vm.overview = None;
             } else {
-                egui::SidePanel::left("navigation")
-                    .resizable(false)
-                    .default_width(176.0)
-                    .show(ctx, |ui| {
-                        egui::ScrollArea::vertical()
-                            .id_salt("navigation_scroll")
-                            .show(ui, |ui| {
-                                ui.strong("工作空间");
-                                ui.add_space(8.0);
-                                for page in Page::ALL {
-                                    if page == Page::Services {
-                                        ui.separator();
-                                        ui.strong("准备与管理");
-                                    }
-                                    self.navigation_button(ui, page);
-                                }
-                            });
-                    });
+                vm.overview_loading = true;
+                vm.overview_error = None;
+                vm.overview = None;
             }
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let page = self.navigation.page;
-                egui::ScrollArea::vertical()
-                    .id_salt(("page", page))
-                    .show(ui, |ui| {
-                        if self.native.is_none() && !matches!(page, Page::Start | Page::Settings) {
-                            ui.heading(page.label());
-                            ui.label("Core 尚未连接，请先完成 Linux 环境准备并重新启动应用。");
-                            if let Some(error) = &self.startup_error {
-                                ui.colored_label(egui::Color32::YELLOW, error);
+
+            // Settings: populate from preferences.
+            if let Some(prefs) = &self.preferences {
+                let s = &mut vm.settings;
+                s.streaming_insert = prefs.streaming_insert;
+                s.start_minimized = prefs.start_minimized;
+                s.auto_update = prefs.auto_update_check;
+                s.remote_input = prefs.remote_input_enabled;
+                s.remote_port = prefs.remote_input_port.to_string();
+                s.activity_heatmap = prefs.show_overview_activity_heatmap;
+                s.theme = match prefs.theme_mode {
+                    openless_core::shared_types::ThemeMode::System => 0,
+                    openless_core::shared_types::ThemeMode::Light => 1,
+                    openless_core::shared_types::ThemeMode::Dark => 2,
+                };
+                s.recording_enabled = true;
+                s.realtime_mode = matches!(
+                    prefs.hotkey.mode,
+                    openless_core::shared_types::HotkeyMode::Hold
+                );
+                s.restore_clipboard = true;
+                s.remember_history = true;
+                // Linux: no local model support.
+                s.local_model = false;
+                s.selection_voice = false;
+            }
+
+            // History: wire from Core when backend is available.
+            if let Some(backend) = backend {
+                if let Ok(history) = backend.list_history() {
+                    vm.history_entries = history
+                        .into_iter()
+                        .rev()
+                        .map(|item| frontend::view_model::HistoryEntry {
+                            time: item.id.clone(),
+                            text: item.final_text,
+                            duration: item
+                                .duration_ms
+                                .map(|d| format_duration(d, lang))
+                                .unwrap_or_default(),
+                            tag: match item.insert_status {
+                                HistoryInsertStatus::Inserted => "已插入",
+                                HistoryInsertStatus::CopiedFallback => "已复制",
+                                HistoryInsertStatus::PasteSent => "已发送",
+                                HistoryInsertStatus::Failed => "失败",
+                                HistoryInsertStatus::NotRequested => "未请求",
                             }
-                            if ui.button("查看环境准备步骤").clicked() {
-                                self.navigation.open(Page::Settings);
+                            .to_string(),
+                        })
+                        .collect();
+                }
+            }
+
+            // Vocabulary: wire from existing data.
+            if !self.vocabulary.is_empty() {
+                vm.vocab_unsupported = false;
+                vm.vocab_entries = self
+                    .vocabulary
+                    .iter()
+                    .map(|entry| frontend::view_model::VocabEntry {
+                        phrase: entry.phrase.clone(),
+                        hits: entry.hits as usize,
+                        enabled: entry.enabled,
+                        learned: false,
+                    })
+                    .collect();
+            }
+
+            // Correction rules: wire from existing data.
+            if !self.correction_rules.is_empty() {
+                vm.vocab_unsupported = false;
+                vm.vocab_rules = self
+                    .correction_rules
+                    .iter()
+                    .map(|rule| frontend::view_model::CorrectionRule {
+                        pattern: rule.pattern.clone(),
+                        replacement: rule.replacement.clone(),
+                        enabled: rule.enabled,
+                        learned: false,
+                    })
+                    .collect();
+            }
+            vm.vocab_saved_presets = self
+                .vocab_presets
+                .iter()
+                .map(|preset| frontend::view_model::SavedVocabPreset {
+                    name: preset.name.clone(),
+                    phrases: preset.phrases.join("、"),
+                })
+                .collect();
+
+            // Style packs: wire from existing data.
+            if !self.style_packs.is_empty() {
+                vm.style_unsupported = false;
+                vm.style_packs = self
+                    .style_packs
+                    .iter()
+                    .map(|pack| frontend::view_model::StylePack {
+                        name: pack.name.clone(),
+                        description: pack.description.clone(),
+                        tags: vec![pack.base_mode.display_name().to_string()],
+                        accent: theme::BLUE,
+                        is_builtin: pack.kind == openless_core::StylePackKind::Builtin,
+                        is_active: pack.active,
+                    })
+                    .collect();
+            }
+
+            // Marketplace: wire from Core data when available.
+            if !self.marketplace_items.is_empty() {
+                vm.marketplace_loading = false;
+                vm.marketplace_unsupported = false;
+                vm.marketplace_packs = self
+                    .marketplace_items
+                    .iter()
+                    .map(|item| frontend::view_model::MarketplacePack {
+                        name: item.name.clone(),
+                        version: item.version.clone(),
+                        description: item.description.clone(),
+                        mode: item.base_mode.clone(),
+                        author: item.author_login.clone(),
+                        tags: vec![item.base_mode.clone()],
+                        likes: item.like_count as u32,
+                        downloads: item.download_count as u32,
+                        is_new: false,
+                    })
+                    .collect();
+            }
+
+            // Startup error.
+            if let Some(error) = &self.startup_error {
+                vm.status = format!("启动失败: {error}");
+            }
+        }
+
+        /// Returns the overview error string if the overview is in a failed state.
+        fn overview_error(&self) -> Option<String> {
+            match &self.overview {
+                crate::linux_app::OverviewState::Failed(error) => Some(error.clone()),
+                _ => None,
+            }
+        }
+
+        /// Apply a settings toggle from the frontend to the live preferences.
+        fn apply_settings_toggle(&mut self, field: frontend::view_model::SettingsField) {
+            let Some(preferences) = self.preferences.as_mut() else {
+                return;
+            };
+            match field {
+                frontend::view_model::SettingsField::StreamingInsert => {
+                    preferences.streaming_insert = !preferences.streaming_insert;
+                    self.settings_dirty.streaming_insert = true;
+                }
+                frontend::view_model::SettingsField::StartMinimized => {
+                    preferences.start_minimized = !preferences.start_minimized;
+                    self.settings_dirty.start_minimized = true;
+                }
+                frontend::view_model::SettingsField::AutoUpdate => {
+                    preferences.auto_update_check = !preferences.auto_update_check;
+                    self.settings_dirty.auto_update_check = true;
+                }
+                frontend::view_model::SettingsField::RemoteInput => {
+                    preferences.remote_input_enabled = !preferences.remote_input_enabled;
+                    self.settings_dirty.remote_input_enabled = true;
+                }
+                frontend::view_model::SettingsField::ActivityHeatmap => {
+                    preferences.show_overview_activity_heatmap =
+                        !preferences.show_overview_activity_heatmap;
+                    self.settings_dirty.appearance = true;
+                }
+                frontend::view_model::SettingsField::RealtimeMode => {
+                    preferences.hotkey.mode = match preferences.hotkey.mode {
+                        openless_core::shared_types::HotkeyMode::Hold => {
+                            openless_core::shared_types::HotkeyMode::Toggle
+                        }
+                        _ => openless_core::shared_types::HotkeyMode::Hold,
+                    };
+                    self.settings_dirty.recording = true;
+                }
+                frontend::view_model::SettingsField::RecordingEnabled => {
+                    self.settings_dirty.recording = true;
+                    // Toggle recording enabled state — no-op on preferences directly,
+                    // but marks dirty so save will apply.
+                }
+                frontend::view_model::SettingsField::RestoreClipboard
+                | frontend::view_model::SettingsField::StackedLayout
+                | frontend::view_model::SettingsField::ConservativeLayout
+                | frontend::view_model::SettingsField::SystemProxy
+                | frontend::view_model::SettingsField::RememberHistory
+                | frontend::view_model::SettingsField::RecordAudio
+                | frontend::view_model::SettingsField::LessComputer
+                | frontend::view_model::SettingsField::Multimodal
+                | frontend::view_model::SettingsField::BetaChannel => {
+                    self.frontend_vm.settings_notice =
+                        Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                }
+                frontend::view_model::SettingsField::SelectionAssistant => {
+                    self.frontend_vm.settings_notice =
+                        Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                }
+                frontend::view_model::SettingsField::SelectionVoice => {
+                    self.frontend_vm.settings_notice =
+                        Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                }
+                frontend::view_model::SettingsField::LocalModel => {
+                    // Linux does not support local model inference.
+                    self.frontend_vm.settings_notice =
+                        Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                }
+                frontend::view_model::SettingsField::MarketplaceEnabled => {
+                    self.frontend_vm.marketplace_unsupported =
+                        !self.frontend_vm.marketplace_unsupported;
+                }
+            }
+            self.save_settings_if_dirty();
+        }
+
+        /// Apply a settings combo change from the frontend.
+        fn apply_settings_combo(
+            &mut self,
+            field: frontend::view_model::SettingsComboField,
+            index: usize,
+        ) {
+            let Some(preferences) = self.preferences.as_mut() else {
+                return;
+            };
+            match field {
+                frontend::view_model::SettingsComboField::Theme => {
+                    preferences.theme_mode = match index {
+                        0 => openless_core::shared_types::ThemeMode::System,
+                        1 => openless_core::shared_types::ThemeMode::Light,
+                        2 => openless_core::shared_types::ThemeMode::Dark,
+                        _ => return,
+                    };
+                    self.settings_dirty.appearance = true;
+                    self.frontend_vm.settings.theme = index;
+                }
+                frontend::view_model::SettingsComboField::Language => {
+                    let pref = match index {
+                        0 => LocalePref::System,
+                        1 => LocalePref::Lang(Lang::ZhCn),
+                        2 => LocalePref::Lang(Lang::ZhTw),
+                        3 => LocalePref::Lang(Lang::En),
+                        4 => LocalePref::Lang(Lang::Ja),
+                        5 => LocalePref::Lang(Lang::Ko),
+                        _ => return,
+                    };
+                    self.apply_locale_pref(pref);
+                    self.frontend_vm.settings.language = index;
+                }
+                frontend::view_model::SettingsComboField::Provider
+                | frontend::view_model::SettingsComboField::Retention
+                | frontend::view_model::SettingsComboField::Microphone
+                | frontend::view_model::SettingsComboField::RecordingMode => {
+                    self.frontend_vm.settings_notice =
+                        Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                }
+            }
+            self.save_settings_if_dirty();
+        }
+
+        /// Apply a settings text field change from the frontend.
+        fn apply_settings_text(
+            &mut self,
+            field: frontend::view_model::SettingsTextField,
+            text: String,
+        ) {
+            let Some(preferences) = self.preferences.as_mut() else {
+                return;
+            };
+            match field {
+                frontend::view_model::SettingsTextField::RemotePort => {
+                    if let Ok(port) = text.parse::<u16>() {
+                        preferences.remote_input_port = port;
+                        self.settings_dirty.remote_input_port = true;
+                        self.frontend_vm.settings.remote_port = text;
+                    }
+                }
+                frontend::view_model::SettingsTextField::ApiKey => {
+                    self.frontend_vm.settings.api_key = text;
+                }
+                frontend::view_model::SettingsTextField::Endpoint => {
+                    self.frontend_vm.settings.endpoint = text;
+                }
+                frontend::view_model::SettingsTextField::Model => {
+                    self.frontend_vm.settings.model = text;
+                }
+                frontend::view_model::SettingsTextField::ClaudePrompt => {
+                    self.frontend_vm.settings.claude_prompt = text;
+                }
+            }
+            self.save_settings_if_dirty();
+        }
+
+        /// Apply a settings action button from the frontend.
+        fn apply_settings_action(&mut self, field: frontend::view_model::SettingsActionField) {
+            match field {
+                frontend::view_model::SettingsActionField::ConnectionTest => {
+                    self.frontend_vm.settings_notice =
+                        Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                }
+                frontend::view_model::SettingsActionField::ClearHistory => {
+                    if let Some(backend) = self.backend() {
+                        let lang = self.lang;
+                        self.spawn(async move {
+                            backend.clear_history()?;
+                            Ok(tr_l10n(lang, "status.history_cleared").to_string())
+                        });
+                    }
+                }
+                frontend::view_model::SettingsActionField::ExportDiagnostics => {
+                    if let Some(backend) = self.backend() {
+                        let source = openless_linux_egui::log_path(&backend.config().data_dir);
+                        let lang = self.lang;
+                        self.spawn(async move {
+                            let destination = tokio::task::spawn_blocking(|| {
+                                rfd::FileDialog::new()
+                                    .add_filter("Log", &["log"])
+                                    .set_file_name("openless.log")
+                                    .save_file()
+                            })
+                            .await
+                            .map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Internal,
+                                    error.to_string(),
+                                )
+                            })?
+                            .ok_or_else(|| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Cancelled,
+                                    tr_l10n(lang, "dialog.export_log_cancelled"),
+                                )
+                            })?;
+                            tokio::task::spawn_blocking(move || {
+                                openless_linux_egui::export_error_log(&source, &destination)
+                            })
+                            .await
+                            .map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Internal,
+                                    error.to_string(),
+                                )
+                            })?
+                            .map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Platform,
+                                    error.to_string(),
+                                )
+                            })?;
+                            Ok(tr_l10n(lang, "status.export_log_done").to_string())
+                        });
+                    }
+                }
+                frontend::view_model::SettingsActionField::CheckUpdate => {
+                    let channel = self
+                        .preferences
+                        .as_ref()
+                        .map(|prefs| prefs.update_channel)
+                        .unwrap_or_default();
+                    self.request_update_check(channel);
+                }
+                frontend::view_model::SettingsActionField::OpenGitHub => {
+                    let _ = open_external("https://github.com/earendil-works/openless");
+                }
+                frontend::view_model::SettingsActionField::OpenHelp => {
+                    let _ = open_external("https://github.com/earendil-works/openless");
+                }
+                frontend::view_model::SettingsActionField::OpenReleaseNotes => {
+                    let _ = open_external("https://github.com/earendil-works/openless/releases");
+                }
+                frontend::view_model::SettingsActionField::OpenFeedback => {
+                    let _ = open_external("https://github.com/earendil-works/openless/issues");
+                }
+                frontend::view_model::SettingsActionField::CopyQQ => {
+                    match fcitx5_copy_to_clipboard("1078960553") {
+                        Ok(()) => {
+                            self.frontend_vm.settings_notice =
+                                Some(tr_l10n(self.lang, "status.copied").to_string());
+                        }
+                        Err(error) => {
+                            self.frontend_vm.settings_notice = Some(format!("复制失败: {error}"));
+                        }
+                    }
+                }
+                frontend::view_model::SettingsActionField::ModelManagement
+                | frontend::view_model::SettingsActionField::ExtensionManagement
+                | frontend::view_model::SettingsActionField::Permissions
+                | frontend::view_model::SettingsActionField::ClaudeDetect
+                | frontend::view_model::SettingsActionField::ClaudeConsole
+                | frontend::view_model::SettingsActionField::ClaudeRunTest => {
+                    self.frontend_vm.settings_notice =
+                        Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                }
+            }
+        }
+
+        /// Persist dirty settings if any fields have been changed.
+        fn save_settings_if_dirty(&mut self) {
+            if !self.settings_dirty.any() {
+                return;
+            }
+            if let (Some(native), Some(draft), Some(snapshot)) =
+                (&self.native, self.preferences.clone(), &self.snapshot)
+            {
+                let host = native.host_arc();
+                let revision = snapshot.preferences_revision;
+                let dirty = self.settings_dirty;
+                let tx = self.tx.clone();
+                self.tokio.spawn(async move {
+                    let outcome = tokio::task::spawn_blocking(move || {
+                        let save = |preferences, revision| {
+                            if dirty.hotkeys {
+                                host.update_settings_strict(preferences, revision)
+                            } else {
+                                host.save_settings(preferences, revision)
                             }
-                            return;
+                        };
+                        match save(draft.clone(), revision) {
+                            Err(error) if error.code == openless_core::BackendErrorCode::Busy => {
+                                let latest_snapshot = host.snapshot();
+                                let latest = host.backend().get_preferences();
+                                save(
+                                    dirty.merge(&latest, &draft),
+                                    latest_snapshot.preferences_revision,
+                                )
+                            }
+                            result => result,
                         }
-                        match page {
-                            Page::Start => self.start_ui(ui),
-                            Page::Dictation => self.dictation_ui(ui),
-                            Page::Qa => self.qa_ui(ui),
-                            Page::Selection => self.selection_ui(ui),
-                            Page::Agent => self.less_computer_ui(ui),
-                            Page::Services => self.services_ui(ui),
-                            Page::Models => self.models_ui(ui),
-                            Page::Remote => self.remote_ui(ui),
-                            Page::History => self.history_ui(ui),
-                            Page::Settings => self.settings_ui(ui),
+                    })
+                    .await
+                    .map_err(|error| error.to_string())
+                    .and_then(|result| result.map_err(|error| error.to_string()));
+                    let _ = tx.send(UiResult::SettingsSaved(Box::new(outcome)));
+                });
+            }
+        }
+
+        /// Dispatch frontend actions to existing Core / backend methods.
+        fn apply_frontend_actions(
+            &mut self,
+            actions: Vec<frontend::view_model::FrontendAction>,
+            ctx: &egui::Context,
+        ) {
+            for action in actions {
+                match action {
+                    frontend::view_model::FrontendAction::Navigate(page) => {
+                        self.active_page = match page {
+                            frontend::view_model::Page::Overview => shell::Page::Overview,
+                            frontend::view_model::Page::History => shell::Page::History,
+                            frontend::view_model::Page::Vocab => shell::Page::Vocabulary,
+                            frontend::view_model::Page::Style => shell::Page::Styles,
+                            frontend::view_model::Page::Marketplace => shell::Page::Marketplace,
+                            frontend::view_model::Page::SelectionAsk => shell::Page::Assistant,
+                            frontend::view_model::Page::Translation => shell::Page::Assistant,
+                            frontend::view_model::Page::Settings => shell::Page::Providers,
+                        };
+                    }
+                    frontend::view_model::FrontendAction::ToggleSettings => {
+                        self.frontend_vm.settings_open = !self.frontend_vm.settings_open;
+                        if self.frontend_vm.settings_open {
+                            self.frontend_vm.active_page = frontend::view_model::Page::Settings;
                         }
-                    });
-            });
-            ctx.request_repaint_after(Duration::from_millis(50));
+                    }
+                    frontend::view_model::FrontendAction::CloseSettings => {
+                        self.frontend_vm.settings_open = false;
+                        self.frontend_vm.active_page = frontend::view_model::Page::Overview;
+                    }
+                    frontend::view_model::FrontendAction::SidebarToggleStyle => {
+                        self.frontend_vm.style_open = !self.frontend_vm.style_open;
+                    }
+                    frontend::view_model::FrontendAction::SidebarToggleTools => {
+                        self.frontend_vm.tools_open = !self.frontend_vm.tools_open;
+                    }
+                    frontend::view_model::FrontendAction::WindowClose => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    frontend::view_model::FrontendAction::WindowMaximize => {
+                        let maximized =
+                            ctx.input(|input| input.viewport().maximized.unwrap_or(false));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                    }
+                    frontend::view_model::FrontendAction::WindowMinimize => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceRefresh => {
+                        self.load_marketplace();
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceMyPacks => {
+                        self.load_marketplace_mine();
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceSearch(query) => {
+                        self.marketplace_query = query;
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceCloseDetail => {
+                        self.frontend_vm.marketplace_selected = None;
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceDetail(index) => {
+                        self.frontend_vm.marketplace_selected = Some(index);
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceInstall(index) => {
+                        if let Some(item) = self.marketplace_items.get(index) {
+                            if let Some(backend) = self.backend() {
+                                let id = item.id.clone();
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    let pack = backend.services().marketplace.install(id).await?;
+                                    Ok(fmt_l10n(
+                                        lang,
+                                        "status.marketplace_installed",
+                                        &[&pack.name],
+                                    ))
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceDownload(index) => {
+                        if let Some(item) = self.marketplace_items.get(index) {
+                            if let Some(backend) = self.backend() {
+                                let id = item.id.clone();
+                                let lang = self.lang;
+                                let tx = self.tx.clone();
+                                self.tokio.spawn(async move {
+                                    let result = async {
+                                        let bytes = backend
+                                            .services()
+                                            .marketplace
+                                            .download_archive(id.clone())
+                                            .await?;
+                                        let destination = tokio::task::spawn_blocking(move || {
+                                            rfd::FileDialog::new()
+                                                .add_filter("OpenLess style pack", &["zip"])
+                                                .set_file_name(format!(
+                                                    "openless-marketplace-{id}.zip"
+                                                ))
+                                                .save_file()
+                                        })
+                                        .await
+                                        .map_err(|error| {
+                                            BackendError::new(
+                                                openless_core::BackendErrorCode::Internal,
+                                                error.to_string(),
+                                            )
+                                        })?
+                                        .ok_or_else(|| {
+                                            BackendError::new(
+                                                openless_core::BackendErrorCode::Cancelled,
+                                                tr_l10n(lang, "dialog.marketplace_zip_cancelled"),
+                                            )
+                                        })?;
+                                        tokio::task::spawn_blocking(move || {
+                                            openless_linux_egui::atomic_save(&destination, &bytes)
+                                                .map_err(|error| {
+                                                    BackendError::new(
+                                                        openless_core::BackendErrorCode::Internal,
+                                                        error.to_string(),
+                                                    )
+                                                })
+                                        })
+                                        .await
+                                        .map_err(
+                                            |error| {
+                                                BackendError::new(
+                                                    openless_core::BackendErrorCode::Internal,
+                                                    error.to_string(),
+                                                )
+                                            },
+                                        )??;
+                                        Ok::<_, BackendError>(
+                                            tr_l10n(lang, "status.marketplace_zip_saved")
+                                                .to_string(),
+                                        )
+                                    }
+                                    .await
+                                    .unwrap_or_else(|error| error.to_string());
+                                    let _ = tx.send(UiResult::Message(result));
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceToggleLike(index) => {
+                        if let Some(item) = self.marketplace_items.get(index) {
+                            if let Some(backend) = self.backend() {
+                                let id = item.id.clone();
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    let result =
+                                        backend.services().marketplace.toggle_like(id).await?;
+                                    Ok(fmt_l10n(
+                                        lang,
+                                        "status.marketplace_like",
+                                        &[&result.like_count],
+                                    ))
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceSort(_sort) => {
+                        // Sort is handled locally in the frontend for now.
+                    }
+                    frontend::view_model::FrontendAction::HistoryClear => {
+                        if let Some(backend) = self.backend() {
+                            let lang = self.lang;
+                            self.spawn(async move {
+                                backend.clear_history()?;
+                                Ok(tr_l10n(lang, "status.history_cleared").to_string())
+                            });
+                        }
+                    }
+                    frontend::view_model::FrontendAction::HistoryRefresh => {
+                        self.frontend_vm.history_cleared = false;
+                    }
+                    frontend::view_model::FrontendAction::HistorySearch(query) => {
+                        self.frontend_vm.history_query = query;
+                    }
+                    frontend::view_model::FrontendAction::HistoryFilter(index) => {
+                        self.frontend_vm.history_filter = index;
+                    }
+                    frontend::view_model::FrontendAction::HistorySelect(index) => {
+                        self.frontend_vm.history_selected = index;
+                    }
+                    frontend::view_model::FrontendAction::HistoryTogglePlay => {
+                        self.frontend_vm.history_audio_playing =
+                            !self.frontend_vm.history_audio_playing;
+                    }
+                    frontend::view_model::FrontendAction::HistoryRepolish => {
+                        self.frontend_vm.history_repolished = true;
+                    }
+                    frontend::view_model::FrontendAction::HistoryDelete(index) => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(entry) = self.frontend_vm.history_entries.get(index) {
+                                let id = entry.time.clone();
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    backend.delete_history(&id)?;
+                                    Ok(tr_l10n(lang, "status.history_deleted").to_string())
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::HistoryExport(index) => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(entry) = self.frontend_vm.history_entries.get(index) {
+                                let id = entry.time.clone();
+                                let data_dir = backend.config().data_dir.clone();
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    let file_name = format!("openless-recording-{id}.wav");
+                                    let destination = tokio::task::spawn_blocking(move || {
+                                        rfd::FileDialog::new()
+                                            .add_filter("WAV audio", &["wav"])
+                                            .set_file_name(file_name)
+                                            .save_file()
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .ok_or_else(|| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Cancelled,
+                                            tr_l10n(lang, "dialog.recording_export_cancelled"),
+                                        )
+                                    })?;
+                                    let wav = tokio::task::spawn_blocking(move || {
+                                        openless_linux_egui::read_recording_wav(&data_dir, &id)
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Persistence,
+                                            error.to_string(),
+                                        )
+                                    })?;
+                                    let saved = tokio::task::spawn_blocking(move || {
+                                        openless_linux_egui::atomic_save(&destination, &wav)
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Platform,
+                                            error.to_string(),
+                                        )
+                                    })?;
+                                    Ok(fmt_l10n(
+                                        lang,
+                                        "status.recording_exported",
+                                        &[&saved.display()],
+                                    ))
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::HistoryRepolish => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(entry) = self
+                                .frontend_vm
+                                .history_entries
+                                .get(self.frontend_vm.history_selected)
+                            {
+                                let text = entry.text.clone();
+                                let service = Arc::clone(&backend.services().auxiliary);
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    let polished = service
+                                        .repolish(openless_core::RepolishRequest {
+                                            raw_text: text,
+                                            style_pack_id: None,
+                                            front_app: None,
+                                        })
+                                        .await?;
+                                    Ok(fmt_l10n(lang, "status.repolish_done", &[&polished]))
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::HistoryTogglePlay => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(entry) = self
+                                .frontend_vm
+                                .history_entries
+                                .get(self.frontend_vm.history_selected)
+                            {
+                                let id = entry.time.clone();
+                                let data_dir = backend.config().data_dir.clone();
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    let path = openless_linux_egui::recording_path(&data_dir, &id)
+                                        .map_err(|error| {
+                                            BackendError::new(
+                                                openless_core::BackendErrorCode::Persistence,
+                                                error.to_string(),
+                                            )
+                                        })?;
+                                    tokio::task::spawn_blocking(move || {
+                                        openless_linux_egui::open_local_file(&path)
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Platform,
+                                            error.to_string(),
+                                        )
+                                    })?;
+                                    Ok(tr_l10n(lang, "status.opened_player").to_string())
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::VocabAddPhrase(phrase) => {
+                        if let Some(backend) = self.backend() {
+                            let lang = self.lang;
+                            self.spawn(async move {
+                                backend.add_vocabulary(phrase, None)?;
+                                Ok(tr_l10n(lang, "status.vocab_saved").to_string())
+                            });
+                        }
+                    }
+                    frontend::view_model::FrontendAction::VocabRemovePhrase(index) => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(entry) = self.vocabulary.get(index) {
+                                let id = entry.id.clone();
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    backend.remove_vocabulary(&id)?;
+                                    Ok(tr_l10n(lang, "status.vocab_updated").to_string())
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::VocabTogglePhrase(index) => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(entry) = self.vocabulary.get(index) {
+                                let id = entry.id.clone();
+                                let enabled = !entry.enabled;
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    backend.set_vocabulary_enabled(&id, enabled)?;
+                                    Ok(tr_l10n(lang, "status.vocab_updated").to_string())
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::VocabAddRule {
+                        pattern,
+                        replacement,
+                    } => {
+                        if let Some(backend) = self.backend() {
+                            let lang = self.lang;
+                            self.spawn(async move {
+                                backend.add_correction_rule(pattern, replacement)?;
+                                Ok(tr_l10n(lang, "status.correction_saved").to_string())
+                            });
+                        }
+                    }
+                    frontend::view_model::FrontendAction::VocabRemoveRule(index) => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(rule) = self.correction_rules.get(index) {
+                                let id = rule.id.clone();
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    backend.remove_correction_rule(&id)?;
+                                    Ok(tr_l10n(lang, "status.correction_updated").to_string())
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::VocabToggleRule(index) => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(rule) = self.correction_rules.get(index) {
+                                let id = rule.id.clone();
+                                let enabled = !rule.enabled;
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    backend.set_correction_rule_enabled(&id, enabled)?;
+                                    Ok(tr_l10n(lang, "status.correction_updated").to_string())
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::VocabApplyPreset(index) => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(preset) = self.vocab_presets.get(index) {
+                                let phrases = preset.phrases.clone();
+                                let name = preset.name.clone();
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    for phrase in phrases {
+                                        backend.add_vocabulary(
+                                            phrase,
+                                            Some(fmt_l10n(lang, "status.from_preset", &[&name])),
+                                        )?;
+                                    }
+                                    Ok(tr_l10n(lang, "status.preset_updated").to_string())
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::VocabCreatePreset { name, phrases } => {
+                        if let Some(backend) = self.backend() {
+                            let lang = self.lang;
+                            self.spawn(async move {
+                                let mut phrase_list: Vec<String> = phrases
+                                    .split([',', '，', '\n'])
+                                    .map(str::trim)
+                                    .filter(|p| !p.is_empty())
+                                    .map(ToOwned::to_owned)
+                                    .collect();
+                                phrase_list.sort();
+                                phrase_list.dedup();
+                                let mut store = backend.list_vocabulary_presets()?;
+                                store.custom.push(openless_core::VocabPreset {
+                                    id: uuid::Uuid::new_v4().to_string(),
+                                    name: name.trim().to_string(),
+                                    phrases: phrase_list,
+                                });
+                                backend.save_vocabulary_presets(&store)?;
+                                Ok(tr_l10n(lang, "status.preset_updated").to_string())
+                            });
+                        }
+                    }
+                    frontend::view_model::FrontendAction::StyleActivate(index) => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(pack) = self.style_packs.get(index) {
+                                let id = pack.id.clone();
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    backend.activate_style_pack(&id)?;
+                                    Ok(tr_l10n(lang, "status.style_updated").to_string())
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::StyleExport(index) => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(pack) = self.style_packs.get(index) {
+                                let id = pack.id.clone();
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    let bytes = backend.export_style_pack_bytes(&id)?;
+                                    let destination = tokio::task::spawn_blocking(move || {
+                                        rfd::FileDialog::new()
+                                            .add_filter("OpenLess style pack", &["zip"])
+                                            .set_file_name(format!("openless-style-{id}.zip"))
+                                            .save_file()
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .ok_or_else(|| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Cancelled,
+                                            tr_l10n(lang, "dialog.style_export_cancelled"),
+                                        )
+                                    })?;
+                                    tokio::task::spawn_blocking(move || {
+                                        openless_linux_egui::atomic_save(&destination, &bytes)
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Platform,
+                                            error.to_string(),
+                                        )
+                                    })?;
+                                    Ok(tr_l10n(lang, "status.style_updated").to_string())
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::StyleEdit(index) => {
+                        if let Some(pack) = self.style_packs.get(index).cloned() {
+                            self.style_editor = Some(pack);
+                            self.frontend_vm.style_editor_open = true;
+                            self.frontend_vm.style_prompt = self
+                                .style_editor
+                                .as_ref()
+                                .map(|e| e.prompt.clone())
+                                .unwrap_or_default();
+                        }
+                    }
+                    frontend::view_model::FrontendAction::StyleSaveEditor(prompt) => {
+                        if let Some(mut pack) = self.style_editor.take() {
+                            pack.prompt = prompt;
+                            if let Some(backend) = self.backend() {
+                                let exists = self.style_packs.iter().any(|p| p.id == pack.id);
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    let saved = if exists {
+                                        backend.update_style_pack(pack)?
+                                    } else {
+                                        backend.create_style_pack(pack)?
+                                    };
+                                    Ok(fmt_l10n(lang, "status.style_saved", &[&saved.name]))
+                                });
+                            }
+                        }
+                        self.frontend_vm.style_editor_open = false;
+                    }
+                    frontend::view_model::FrontendAction::StyleCloseEditor => {
+                        self.style_editor = None;
+                        self.frontend_vm.style_editor_open = false;
+                    }
+                    frontend::view_model::FrontendAction::StyleNewPack => {
+                        self.style_editor = Some(openless_core::StylePack {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            name: tr_l10n(self.lang, "lbl.new_style_default").to_string(),
+                            ..Default::default()
+                        });
+                        self.frontend_vm.style_editor_open = true;
+                    }
+                    frontend::view_model::FrontendAction::StyleImport => {
+                        if let Some(backend) = self.backend() {
+                            let lang = self.lang;
+                            self.spawn(async move {
+                                let path = tokio::task::spawn_blocking(|| {
+                                    rfd::FileDialog::new()
+                                        .add_filter("OpenLess style pack", &["zip"])
+                                        .pick_file()
+                                })
+                                .await
+                                .map_err(|error| {
+                                    BackendError::new(
+                                        openless_core::BackendErrorCode::Internal,
+                                        error.to_string(),
+                                    )
+                                })?
+                                .ok_or_else(|| {
+                                    BackendError::new(
+                                        openless_core::BackendErrorCode::Cancelled,
+                                        tr_l10n(lang, "dialog.style_import_cancelled"),
+                                    )
+                                })?;
+                                let pack = tokio::task::spawn_blocking(move || {
+                                    backend.import_style_pack_path(&path)
+                                })
+                                .await
+                                .map_err(|error| {
+                                    BackendError::new(
+                                        openless_core::BackendErrorCode::Internal,
+                                        error.to_string(),
+                                    )
+                                })??;
+                                Ok(fmt_l10n(lang, "status.style_imported", &[&pack.name]))
+                            });
+                        }
+                    }
+                    frontend::view_model::FrontendAction::SelectionAskToggleHistory => {
+                        self.frontend_vm.qa_save_history = !self.frontend_vm.qa_save_history;
+                    }
+                    frontend::view_model::FrontendAction::TranslationToggleLanguage(_) => {
+                        self.frontend_vm.settings_notice =
+                            Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                    }
+                    frontend::view_model::FrontendAction::TranslationSetTarget(_) => {
+                        self.frontend_vm.settings_notice =
+                            Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                    }
+                    frontend::view_model::FrontendAction::SettingsToggle(field) => {
+                        self.apply_settings_toggle(field);
+                    }
+                    frontend::view_model::FrontendAction::SettingsCombo(field, index) => {
+                        self.apply_settings_combo(field, index);
+                    }
+                    frontend::view_model::FrontendAction::SettingsText(field, text) => {
+                        self.apply_settings_text(field, text);
+                    }
+                    frontend::view_model::FrontendAction::SettingsAction(field) => {
+                        self.apply_settings_action(field);
+                    }
+                    frontend::view_model::FrontendAction::SettingsSection(section) => {
+                        self.frontend_vm.settings_section = section;
+                    }
+                    frontend::view_model::FrontendAction::SettingsNotice(msg) => {
+                        self.frontend_vm.settings_notice = Some(msg);
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceDetail(index) => {
+                        self.frontend_vm.marketplace_selected = Some(index);
+                        // Load real detail from backend, not just index.
+                        if let Some(item) = self.marketplace_items.get(index) {
+                            if let Some(backend) = self.backend() {
+                                let id = item.id.clone();
+                                let tx = self.tx.clone();
+                                self.tokio.spawn(async move {
+                                    let result = backend
+                                        .services()
+                                        .marketplace
+                                        .detail(id)
+                                        .await
+                                        .map_err(|error| error.to_string());
+                                    let _ = tx.send(UiResult::MarketplaceDetail(result));
+                                });
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
-    fn command_ui(ui: &mut egui::Ui, command: &str) {
-        ui.horizontal_wrapped(|ui| {
-            ui.monospace(command);
-            if ui.button("复制命令").clicked() {
-                ui.ctx().copy_text(command.to_string());
+    impl eframe::App for OpenLessEguiApp {
+        fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+            egui::Color32::TRANSPARENT.to_normalized_gamma_f32()
+        }
+
+        fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+            self.poll(ctx);
+            self.drain_tray(ctx);
+            theme::apply_visuals(
+                ctx,
+                self.preferences
+                    .as_ref()
+                    .map(|preferences| preferences.theme_mode)
+                    .unwrap_or_default(),
+            );
+            let auto_check = self
+                .preferences
+                .as_ref()
+                .is_some_and(|preferences| preferences.auto_update_check);
+            if auto_check
+                && !self.update_busy
+                && self.update_manifest.is_none()
+                && self
+                    .update_schedule
+                    .poll(self.update_started.elapsed(), false)
+                    .is_some()
+            {
+                let channel = self
+                    .preferences
+                    .as_ref()
+                    .map(|preferences| preferences.update_channel)
+                    .unwrap_or_default();
+                self.request_update_check(channel);
             }
-        });
+            if ctx.input(|input| input.viewport().close_requested())
+                && !self.exit_requested
+                && self.tray.is_some()
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
+            if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+                let lang = self.lang;
+                if let Some(backend) = self.backend() {
+                    self.spawn(async move {
+                        backend.cancel_active_voice_session(None).await?;
+                        Ok(tr_l10n(lang, "voice.cancelled").to_string())
+                    });
+                }
+            }
+
+            // Build the view model from current backend state, then render the
+            // production frontend. Actions are collected and dispatched to
+            // existing Core / backend methods.
+            self.sync_view_model();
+            let mut actions = Vec::new();
+            frontend::render(ctx, &mut self.frontend_vm, &mut actions);
+            self.apply_frontend_actions(actions, ctx);
+
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
     }
 
     impl Drop for OpenLessEguiApp {
@@ -2096,6 +5610,18 @@ mod linux_app {
             if let Some(native) = self.native.take() {
                 let _ = self.tokio.block_on(native.shutdown());
             }
+        }
+    }
+
+    /// Map a concrete UI language to its display-name catalog key, shown in
+    /// that language's own native script regardless of the current UI language.
+    fn locale_key(lang: Lang) -> &'static str {
+        match lang {
+            Lang::ZhCn => "lang.zh-CN",
+            Lang::ZhTw => "lang.zh-TW",
+            Lang::En => "lang.en",
+            Lang::Ja => "lang.ja",
+            Lang::Ko => "lang.ko",
         }
     }
 
@@ -2161,21 +5687,25 @@ mod linux_app {
         )
     }
 
-    fn auth_requirement_label(requirement: openless_core::AuthRequirement) -> &'static str {
-        match requirement {
-            openless_core::AuthRequirement::None => "无需 Secret",
-            openless_core::AuthRequirement::ApiKey => "API Key",
+    fn auth_requirement_label(
+        lang: Lang,
+        requirement: openless_core::AuthRequirement,
+    ) -> &'static str {
+        let key = match requirement {
+            openless_core::AuthRequirement::None => "auth.none",
+            openless_core::AuthRequirement::ApiKey => "auth.api_key",
             openless_core::AuthRequirement::EndpointModelOptionalApiKey => {
-                "Endpoint + Model，API Key 可选"
+                "auth.endpoint_model_optional"
             }
             openless_core::AuthRequirement::ApiKeyUnlessCustomEndpoint => {
-                "公共 Endpoint 需要 API Key；自建 Endpoint 可无 Key"
+                "auth.api_key_unless_custom"
             }
-            openless_core::AuthRequirement::Volcengine => "火山引擎凭据",
-            openless_core::AuthRequirement::Xfyun => "讯飞 AppID + API Key",
-            openless_core::AuthRequirement::TencentCloud => "腾讯云 AppID + SecretID + SecretKey",
-            openless_core::AuthRequirement::OAuth => "OAuth",
-        }
+            openless_core::AuthRequirement::Volcengine => "auth.volcengine",
+            openless_core::AuthRequirement::Xfyun => "auth.xfyun",
+            openless_core::AuthRequirement::OAuth => "auth.oauth",
+            openless_core::AuthRequirement::TencentCloud => "auth.api_key",
+        };
+        tr_l10n(lang, key)
     }
 
     fn provider_channel_descriptor(
@@ -2253,19 +5783,6 @@ mod linux_app {
             } else {
                 (String::new(), String::new())
             };
-        let app_id = if descriptor.auth_requirement == openless_core::AuthRequirement::TencentCloud
-        {
-            read_provider_value(
-                &backend,
-                kind,
-                &channel.id,
-                openless_core::credentials::TENCENT_CLOUD_APP_ID_ACCOUNT,
-            )
-            .await?
-            .unwrap_or_default()
-        } else {
-            String::new()
-        };
         Ok(ProviderEditor {
             kind,
             name: channel.name.clone(),
@@ -2275,7 +5792,6 @@ mod linux_app {
             model,
             auth_mode,
             resource_id,
-            app_id,
             primary_secret: String::new(),
             secondary_secret: String::new(),
         })
@@ -2288,16 +5804,16 @@ mod linux_app {
         });
     }
 
-    fn provider_fields_ui(ui: &mut egui::Ui, editor: &mut ProviderEditor) {
+    fn provider_fields_ui(ui: &mut egui::Ui, lang: Lang, editor: &mut ProviderEditor) {
         // This match chooses which input controls to render; it does not decide
         // whether credentials are sufficient. ProviderService validates the
         // descriptor's AuthRequirement again before any protocol request.
         match editor.descriptor.auth_requirement {
             openless_core::AuthRequirement::None => {
-                ui.label("此 Provider 不使用云凭据；模型由本地模型面板管理。");
+                ui.label(tr_l10n(lang, "providers.no_cloud_note"));
             }
             openless_core::AuthRequirement::OAuth => {
-                ui.label("此 Provider 使用 OAuth；Linux egui 不读取或显示 OAuth token。");
+                ui.label(tr_l10n(lang, "providers.oauth_note"));
             }
             openless_core::AuthRequirement::Volcengine => {
                 egui::ComboBox::from_id_salt("volcengine-auth-mode")
@@ -2333,20 +5849,12 @@ mod linux_app {
                 secret_edit(ui, "AppID", &mut editor.primary_secret);
                 secret_edit(ui, "API Key", &mut editor.secondary_secret);
             }
-            openless_core::AuthRequirement::TencentCloud => {
-                ui.horizontal(|ui| {
-                    ui.label("腾讯云 AppID");
-                    ui.text_edit_singleline(&mut editor.app_id);
-                });
-                secret_edit(ui, "SecretID", &mut editor.primary_secret);
-                secret_edit(ui, "SecretKey", &mut editor.secondary_secret);
-                ui.horizontal(|ui| {
-                    ui.label("Model");
-                    ui.text_edit_singleline(&mut editor.model);
-                });
-            }
             _ => {
-                secret_edit(ui, "API Key（留空表示不修改）", &mut editor.primary_secret);
+                secret_edit(
+                    ui,
+                    tr_l10n(lang, "providers.api_key_hint"),
+                    &mut editor.primary_secret,
+                );
                 ui.horizontal(|ui| {
                     ui.label("Endpoint");
                     ui.text_edit_singleline(&mut editor.endpoint);
@@ -2481,40 +5989,6 @@ mod linux_app {
                 )
                 .await?;
             }
-            openless_core::AuthRequirement::TencentCloud => {
-                write_or_remove_provider_value(
-                    &backend,
-                    editor.kind,
-                    channel_id,
-                    openless_core::credentials::TENCENT_CLOUD_APP_ID_ACCOUNT,
-                    &editor.app_id,
-                )
-                .await?;
-                write_secret_if_entered(
-                    &backend,
-                    editor.kind,
-                    channel_id,
-                    openless_core::credentials::TENCENT_CLOUD_SECRET_ID_ACCOUNT,
-                    &editor.primary_secret,
-                )
-                .await?;
-                write_secret_if_entered(
-                    &backend,
-                    editor.kind,
-                    channel_id,
-                    openless_core::credentials::TENCENT_CLOUD_SECRET_KEY_ACCOUNT,
-                    &editor.secondary_secret,
-                )
-                .await?;
-                write_or_remove_provider_value(
-                    &backend,
-                    editor.kind,
-                    channel_id,
-                    model_account(editor.kind),
-                    &editor.model,
-                )
-                .await?;
-            }
             _ => {
                 write_or_remove_provider_value(
                     &backend,
@@ -2560,11 +6034,6 @@ mod linux_app {
                 openless_core::credentials::XFYUN_APP_ID_ACCOUNT,
                 openless_core::credentials::XFYUN_API_KEY_ACCOUNT,
             ],
-            openless_core::AuthRequirement::TencentCloud => &[
-                openless_core::credentials::TENCENT_CLOUD_APP_ID_ACCOUNT,
-                openless_core::credentials::TENCENT_CLOUD_SECRET_ID_ACCOUNT,
-                openless_core::credentials::TENCENT_CLOUD_SECRET_KEY_ACCOUNT,
-            ],
             _ => &[api_key_account(editor.kind)],
         };
         for account in accounts {
@@ -2580,6 +6049,7 @@ mod linux_app {
     }
 
     async fn validate_provider_channel(
+        lang: Lang,
         backend: Arc<openless_core::OpenLessBackend>,
         kind: openless_core::ChannelKind,
         channel_id: String,
@@ -2589,8 +6059,8 @@ mod linux_app {
             .services()
             .provider
             .validate(openless_core::ProviderRequest {
-                thinking_enabled: backend.get_preferences().llm_thinking_enabled,
                 kind: provider_kind(kind),
+                thinking_enabled: false,
                 channel_id: Some(channel_id.clone()),
             })
             .await;
@@ -2600,7 +6070,7 @@ mod linux_app {
                 backend
                     .record_channel_test(kind, channel_id, true, Some(latency_ms), None)
                     .await?;
-                Ok(format!("Provider 验证通过（{latency_ms} ms）"))
+                Ok(fmt_l10n(lang, "status.provider_validated", &[&latency_ms]))
             }
             Err(error) => {
                 let _ = backend
@@ -2617,6 +6087,82 @@ mod linux_app {
         }
     }
 
+    fn shortcut_editor(
+        ui: &mut egui::Ui,
+        label: &str,
+        binding: &mut openless_core::shared_types::ShortcutBinding,
+    ) -> bool {
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            ui.label(label);
+            changed |= ui.text_edit_singleline(&mut binding.primary).changed();
+            for (modifier, caption) in [
+                ("ctrl", "Ctrl"),
+                ("alt", "Alt"),
+                ("shift", "Shift"),
+                ("super", "Super"),
+            ] {
+                let mut enabled = binding
+                    .modifiers
+                    .iter()
+                    .any(|value| value.eq_ignore_ascii_case(modifier));
+                if ui.checkbox(&mut enabled, caption).changed() {
+                    changed = true;
+                    binding
+                        .modifiers
+                        .retain(|value| !value.eq_ignore_ascii_case(modifier));
+                    if enabled {
+                        binding.modifiers.push(modifier.to_string());
+                    }
+                }
+            }
+        });
+        changed
+    }
+
+    fn optional_shortcut_editor(
+        ui: &mut egui::Ui,
+        lang: Lang,
+        label: &str,
+        binding: &mut Option<openless_core::shared_types::ShortcutBinding>,
+        default_primary: &str,
+    ) -> bool {
+        let mut enabled = binding.is_some();
+        let mut changed = ui
+            .checkbox(&mut enabled, fmt_l10n(lang, "hotkey.enable", &[&label]))
+            .changed();
+        if enabled && binding.is_none() {
+            *binding = Some(openless_core::shared_types::ShortcutBinding {
+                primary: default_primary.to_string(),
+                modifiers: vec!["ctrl".into(), "shift".into()],
+            });
+        } else if !enabled && binding.is_some() {
+            *binding = None;
+        }
+        if let Some(binding) = binding {
+            changed |= shortcut_editor(ui, label, binding);
+        }
+        changed
+    }
+
+    fn set_style_pack_hotkey(
+        preferences: &mut UserPreferences,
+        pack_id: &str,
+        binding: Option<openless_core::shared_types::ShortcutBinding>,
+    ) {
+        preferences
+            .style_pack_hotkeys
+            .retain(|hotkey| hotkey.pack_id != pack_id);
+        if let Some(binding) = binding {
+            preferences
+                .style_pack_hotkeys
+                .push(openless_core::shared_types::StylePackHotkey {
+                    pack_id: pack_id.to_string(),
+                    binding,
+                });
+        }
+    }
+
     fn package_kind() -> LinuxPackageKind {
         if std::env::var_os("APPDIR").is_some() {
             LinuxPackageKind::AppImage
@@ -2627,7 +6173,10 @@ mod linux_app {
         }
     }
 
-    fn backend_config() -> Result<BackendConfig, String> {
+    fn backend_config(
+        tray_available: bool,
+        updater_available: bool,
+    ) -> Result<BackendConfig, String> {
         let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
         let data_dir = std::env::var_os("XDG_DATA_HOME")
             .map(std::path::PathBuf::from)
@@ -2642,7 +6191,8 @@ mod linux_app {
         std::fs::create_dir_all(&data_dir).map_err(|error| error.to_string())?;
         std::fs::create_dir_all(&cache_dir).map_err(|error| error.to_string())?;
         let kind = package_kind();
-        let capabilities = LinuxCapabilitySnapshot::detect(false, kind).capabilities;
+        let capabilities =
+            LinuxCapabilitySnapshot::detect(tray_available, kind, updater_available).capabilities;
         Ok(BackendConfig {
             data_dir,
             cache_dir,
@@ -2655,7 +6205,7 @@ mod linux_app {
         })
     }
 
-    fn ensure_fcitx5_ready(config: &BackendConfig) -> Result<FcitxPluginStatus, String> {
+    fn ensure_fcitx5_ready(config: &BackendConfig) -> Result<(), String> {
         let home = config
             .home_dir
             .as_deref()
@@ -2663,16 +6213,511 @@ mod linux_app {
         let layout = LinuxResourceLayout::detect(None).map_err(|error| error.to_string())?;
         let plan =
             FcitxPluginInstallPlan::for_layout(&layout, home).map_err(|error| error.to_string())?;
-        ensure_fcitx5_plugin_installed(&plan).map_err(|error| error.to_string())
+        let status = ensure_fcitx5_plugin_installed(&plan).map_err(|error| error.to_string())?;
+        reconcile_fcitx5_install(status)
+    }
+
+    /// Map an fcitx5 addon install result onto startup.
+    ///
+    /// A ready addon lets startup continue down the normal fcitx5 DBus path —
+    /// never a global-hotkey fallback — and only a genuinely missing plugin
+    /// aborts startup.
+    fn reconcile_fcitx5_install(status: FcitxPluginStatus) -> Result<(), String> {
+        match status {
+            FcitxPluginStatus::Ready => Ok(()),
+            FcitxPluginStatus::Missing => {
+                Err("未找到 OpenLess fcitx5 插件；请重新安装当前软件包".to_string())
+            }
+        }
+    }
+
+    struct NativePopupApp {
+        kind: PopupKind,
+        state: PopupState,
+        incoming: mpsc::Receiver<HostToPopup>,
+        outgoing: mpsc::Sender<PopupToHost>,
+        qa_input: String,
+        outgoing_sequence: u64,
+        ready_sent: bool,
+        preview_focus_requested: bool,
+        lang: Lang,
+    }
+
+    impl NativePopupApp {
+        fn send(&mut self, message: PopupToHost) {
+            if self.outgoing.send(message).is_err() {
+                eprintln!("OpenLess popup output channel closed");
+            }
+        }
+
+        fn next_sequence(&mut self) -> u64 {
+            self.outgoing_sequence = self.outgoing_sequence.saturating_add(1);
+            self.outgoing_sequence
+        }
+
+        fn session_id(&self) -> Option<String> {
+            self.state.session_id.clone()
+        }
+
+        fn dismiss(&mut self, ctx: &egui::Context) {
+            let Some(session_id) = self.session_id() else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
+            };
+            let version = POPUP_PROTOCOL_VERSION;
+            let sequence = self.next_sequence();
+            let message = match self.kind {
+                PopupKind::Qa => PopupToHost::DismissQa {
+                    version,
+                    session_id,
+                    sequence,
+                },
+                PopupKind::Preview => PopupToHost::CancelPreview {
+                    version,
+                    session_id,
+                    sequence,
+                },
+                PopupKind::Capsule => PopupToHost::DismissCapsule {
+                    version,
+                    session_id,
+                    sequence,
+                },
+            };
+            self.send(message);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+
+    fn popup_heading(ui: &mut egui::Ui, title: &str) {
+        let response = ui
+            .horizontal(|ui| ui.heading(title))
+            .response
+            .interact(egui::Sense::drag());
+        if response.drag_started() {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
+    }
+
+    /// Lightweight Markdown renderer ported from #997. It intentionally covers
+    /// the structures emitted by QA without introducing a WebView dependency.
+    fn render_popup_markdown(ui: &mut egui::Ui, markdown: &str) {
+        let mut code = String::new();
+        let mut in_code = false;
+        for line in markdown.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("```") {
+                if in_code {
+                    render_popup_code(ui, code.trim_end());
+                    code.clear();
+                }
+                in_code = !in_code;
+                continue;
+            }
+            if in_code {
+                code.push_str(line);
+                code.push('\n');
+                continue;
+            }
+            if trimmed.is_empty() {
+                ui.add_space(4.0);
+                continue;
+            }
+            let (text, size, strong, italics, bullet) =
+                if let Some(value) = trimmed.strip_prefix("### ") {
+                    (value, 14.0, true, false, false)
+                } else if let Some(value) = trimmed.strip_prefix("## ") {
+                    (value, 15.0, true, false, false)
+                } else if let Some(value) = trimmed.strip_prefix("# ") {
+                    (value, 16.0, true, false, false)
+                } else if let Some(value) = trimmed.strip_prefix("> ") {
+                    (value, 13.0, false, true, false)
+                } else if let Some(value) = trimmed
+                    .strip_prefix("- ")
+                    .or_else(|| trimmed.strip_prefix("* "))
+                {
+                    (value, 13.0, false, false, true)
+                } else {
+                    (trimmed, 13.0, false, false, false)
+                };
+            let display = if bullet {
+                format!("• {text}")
+            } else {
+                text.to_string()
+            };
+            render_popup_inline(ui, &display, size, strong, italics);
+        }
+        if in_code && !code.is_empty() {
+            render_popup_code(ui, code.trim_end());
+        }
+    }
+
+    fn render_popup_code(ui: &mut egui::Ui, code: &str) {
+        egui::Frame::new()
+            .fill(theme::SURFACE_2)
+            .corner_radius(egui::CornerRadius::same(6))
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(code).monospace().size(12.0)).wrap());
+            });
+    }
+
+    fn render_popup_inline(
+        ui: &mut egui::Ui,
+        text: &str,
+        size: f32,
+        base_strong: bool,
+        base_italics: bool,
+    ) {
+        let mut job = egui::text::LayoutJob::default();
+        job.wrap.max_width = ui.available_width();
+        let mut rest = text;
+        while !rest.is_empty() {
+            let mut matched = false;
+            for (open, close, strong, italics, monospace) in [
+                ("**", "**", true, false, false),
+                ("__", "__", true, false, false),
+                ("`", "`", false, false, true),
+                ("*", "*", false, true, false),
+                ("_", "_", false, true, false),
+            ] {
+                if let Some(after_open) = rest.strip_prefix(open) {
+                    if let Some(end) = after_open.find(close) {
+                        append_popup_text(
+                            &mut job,
+                            &after_open[..end],
+                            size,
+                            base_strong || strong,
+                            base_italics || italics,
+                            monospace,
+                            ui,
+                        );
+                        rest = &after_open[end + close.len()..];
+                        matched = true;
+                        break;
+                    }
+                }
+            }
+            if matched {
+                continue;
+            }
+            let next = ["**", "__", "`", "*", "_"]
+                .iter()
+                .filter_map(|marker| rest.find(marker))
+                .min()
+                .unwrap_or(rest.len());
+            let length = if next == 0 {
+                rest.chars().next().map(char::len_utf8).unwrap_or(0)
+            } else {
+                next
+            };
+            append_popup_text(
+                &mut job,
+                &rest[..length],
+                size,
+                base_strong,
+                base_italics,
+                false,
+                ui,
+            );
+            rest = &rest[length..];
+        }
+        ui.add(egui::Label::new(job).wrap());
+    }
+
+    fn append_popup_text(
+        job: &mut egui::text::LayoutJob,
+        text: &str,
+        size: f32,
+        strong: bool,
+        italics: bool,
+        monospace: bool,
+        ui: &egui::Ui,
+    ) {
+        job.append(
+            text,
+            0.0,
+            egui::TextFormat {
+                font_id: egui::FontId::new(
+                    size,
+                    if monospace {
+                        egui::FontFamily::Monospace
+                    } else {
+                        egui::FontFamily::Proportional
+                    },
+                ),
+                color: if strong {
+                    ui.visuals().strong_text_color()
+                } else {
+                    ui.visuals().text_color()
+                },
+                background: if monospace {
+                    theme::SURFACE_2
+                } else {
+                    egui::Color32::TRANSPARENT
+                },
+                italics,
+                ..Default::default()
+            },
+        );
+    }
+
+    impl eframe::App for NativePopupApp {
+        fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+            while let Ok(message) = self.incoming.try_recv() {
+                if message
+                    .content_kind()
+                    .is_some_and(|message_kind| message_kind != self.kind)
+                {
+                    continue;
+                }
+                if matches!(message, HostToPopup::Preview { .. }) {
+                    self.preview_focus_requested = false;
+                }
+                let shutdown = matches!(message, HostToPopup::Shutdown { .. });
+                let outcome = self.state.apply(message);
+                if outcome == openless_linux_egui::PopupApplyOutcome::Applied {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.state.visible));
+                }
+                if shutdown || self.state.shutdown_requested {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                }
+            }
+            if !self.ready_sent {
+                if let Some(session_id) = self.session_id() {
+                    let sequence = self.next_sequence();
+                    self.send(PopupToHost::Ready {
+                        version: POPUP_PROTOCOL_VERSION,
+                        session_id,
+                        sequence,
+                        kind: self.kind,
+                    });
+                    self.ready_sent = true;
+                }
+            }
+            if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+                self.dismiss(ctx);
+                return;
+            }
+            let lang = self.lang;
+            egui::CentralPanel::default()
+                .frame(
+                    egui::Frame::NONE
+                        .fill(theme::SURFACE)
+                        .corner_radius(egui::CornerRadius::same(12))
+                        .inner_margin(egui::Margin::same(18)),
+                )
+                .show(ctx, |ui| match self.kind {
+                    PopupKind::Preview => {
+                        popup_heading(ui, tr_l10n(lang, "heading.insert_preview"));
+                        ui.label(&self.state.preview.source);
+                        let editor = ui.add(
+                            egui::TextEdit::multiline(&mut self.state.preview.text)
+                                .desired_rows(6)
+                                .desired_width(f32::INFINITY),
+                        );
+                        if !self.preview_focus_requested {
+                            editor.request_focus();
+                            self.preview_focus_requested = true;
+                        }
+                        ui.horizontal(|ui| {
+                            if ui.button(tr_l10n(lang, "btn.cancel")).clicked() {
+                                self.dismiss(ctx);
+                            }
+                            if ui.button(tr_l10n(lang, "btn.insert")).clicked() {
+                                if let Some(session_id) = self.session_id() {
+                                    let sequence = self.next_sequence();
+                                    self.send(PopupToHost::ConfirmPreview {
+                                        version: POPUP_PROTOCOL_VERSION,
+                                        session_id,
+                                        sequence,
+                                        text: self.state.preview.text.clone(),
+                                    });
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                }
+                            }
+                        });
+                    }
+                    PopupKind::Qa => {
+                        popup_heading(ui, tr_l10n(lang, "heading.qa_preview"));
+                        if let Some(selection) = &self.state.qa.selection_preview {
+                            ui.label(egui::RichText::new(selection).italics().color(theme::INK_3));
+                        }
+                        egui::ScrollArea::vertical()
+                            .max_height(300.0)
+                            .show(ui, |ui| {
+                                for message in &self.state.qa.messages {
+                                    ui.label(egui::RichText::new(&message.role).strong());
+                                    render_popup_markdown(ui, &message.content);
+                                }
+                                if !self.state.qa.streaming_answer.is_empty() {
+                                    render_popup_markdown(ui, &self.state.qa.streaming_answer);
+                                }
+                                if let Some(error) = &self.state.qa.error {
+                                    ui.colored_label(egui::Color32::RED, error);
+                                }
+                            });
+                        let input = ui.text_edit_singleline(&mut self.qa_input);
+                        ui.horizontal(|ui| {
+                            if ui.button(tr_l10n(lang, "btn.close")).clicked() {
+                                self.dismiss(ctx);
+                            }
+                            if ui
+                                .button(if self.state.qa.phase == "Recording" {
+                                    tr_l10n(lang, "btn.stop_recording")
+                                } else {
+                                    tr_l10n(lang, "btn.voice_ask")
+                                })
+                                .clicked()
+                            {
+                                if let Some(session_id) = self.session_id() {
+                                    let sequence = self.next_sequence();
+                                    self.send(PopupToHost::ToggleQaRecording {
+                                        version: POPUP_PROTOCOL_VERSION,
+                                        session_id,
+                                        sequence,
+                                    });
+                                }
+                            }
+                            let submit = ui.button(tr_l10n(lang, "btn.send")).clicked()
+                                || (input.lost_focus()
+                                    && ui.input(|state| state.key_pressed(egui::Key::Enter)));
+                            if submit && !self.qa_input.trim().is_empty() {
+                                if let Some(session_id) = self.session_id() {
+                                    let sequence = self.next_sequence();
+                                    let text = std::mem::take(&mut self.qa_input);
+                                    self.send(PopupToHost::SubmitQa {
+                                        version: POPUP_PROTOCOL_VERSION,
+                                        session_id,
+                                        sequence,
+                                        text,
+                                    });
+                                }
+                            }
+                        });
+                    }
+                    PopupKind::Capsule => {
+                        let response = ui
+                            .horizontal(|ui| {
+                                ui.spinner();
+                                ui.strong(&self.state.capsule.phase);
+                            })
+                            .response
+                            .interact(egui::Sense::drag());
+                        if response.drag_started() {
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                        }
+                        if !self.state.capsule.text.is_empty() {
+                            ui.label(&self.state.capsule.text);
+                        }
+                        if let Some(level) = self.state.capsule.audio_level {
+                            ui.add(egui::ProgressBar::new(level.clamp(0.0, 1.0)));
+                        }
+                    }
+                });
+            ctx.request_repaint_after(Duration::from_millis(33));
+        }
+    }
+
+    fn popup_kind(args: &[String]) -> Option<PopupKind> {
+        if !args.iter().any(|arg| arg == "--openless-egui-popup") {
+            return None;
+        }
+        if args.iter().any(|arg| arg == "--qa") {
+            Some(PopupKind::Qa)
+        } else if args.iter().any(|arg| arg == "--preview") {
+            Some(PopupKind::Preview)
+        } else if args.iter().any(|arg| arg == "--capsule") {
+            Some(PopupKind::Capsule)
+        } else {
+            None
+        }
+    }
+
+    fn run_popup_process(kind: PopupKind) -> Result<(), String> {
+        let (tx, rx) = mpsc::sync_channel(256);
+        std::thread::Builder::new()
+            .name("openless-popup-input".into())
+            .spawn(move || {
+                let stdin = std::io::stdin();
+                let mut reader = std::io::BufReader::new(stdin.lock());
+                if let Err(error) = openless_linux_egui::run_popup(&mut reader, |message| {
+                    let _ = tx.send(message);
+                }) {
+                    eprintln!("OpenLess popup input failed: {error}");
+                }
+            })
+            .map_err(|error| error.to_string())?;
+        let (outgoing_tx, outgoing_rx) = mpsc::channel::<PopupToHost>();
+        std::thread::Builder::new()
+            .name("openless-popup-output".into())
+            .spawn(move || {
+                let stdout = std::io::stdout();
+                let mut writer = stdout.lock();
+                while let Ok(message) = outgoing_rx.recv() {
+                    if let Err(error) = write_jsonl(&mut writer, &message) {
+                        eprintln!("OpenLess popup output failed: {error}");
+                        break;
+                    }
+                }
+            })
+            .map_err(|error| error.to_string())?;
+        let size = match kind {
+            PopupKind::Qa => [520.0, 520.0],
+            PopupKind::Preview => [480.0, 300.0],
+            PopupKind::Capsule => [340.0, 112.0],
+        };
+        let options = eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default()
+                .with_title("OpenLess")
+                .with_inner_size(size)
+                .with_decorations(false)
+                .with_always_on_top()
+                .with_visible(false),
+            ..Default::default()
+        };
+        eframe::run_native(
+            "OpenLess Popup",
+            options,
+            Box::new(move |cc| {
+                theme::install(&cc.egui_ctx);
+                Ok(Box::new(NativePopupApp {
+                    kind,
+                    state: PopupState::default(),
+                    incoming: rx,
+                    outgoing: outgoing_tx,
+                    qa_input: String::new(),
+                    outgoing_sequence: 0,
+                    ready_sent: false,
+                    preview_focus_requested: false,
+                    // The popup is a separate process, so it re-reads the
+                    // persisted UI-locale preference rather than sharing state.
+                    lang: load_locale_pref().resolve(),
+                }))
+            }),
+        )
+        .map_err(|error| error.to_string())
     }
 
     pub fn run() -> Result<(), String> {
+        let args = std::env::args().collect::<Vec<_>>();
+        if let Some(kind) = popup_kind(&args) {
+            return run_popup_process(kind);
+        }
+        let start_minimized = args.iter().any(|arg| arg == "--minimized");
         let tokio = Arc::new(tokio::runtime::Runtime::new().map_err(|error| error.to_string())?);
-        let config = backend_config()?;
+        let tray = openless_linux_egui::LinuxTray::start().ok();
+        let tray_available = tray.is_some();
+        let kind = package_kind();
+        let update_support = LinuxUpdateSupport::initialize(kind);
+        let updater_available = update_support.supports_auto_update();
+        let config = backend_config(tray_available, updater_available)?;
+        if let Err(error) = openless_linux_egui::init_file_logger(&config.data_dir) {
+            eprintln!("OpenLess file logger unavailable: {error}");
+        }
         let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| config.cache_dir.join("runtime"));
-        let args = std::env::args().collect::<Vec<_>>();
         let broker = match SingleInstanceBroker::acquire_or_forward(
             &runtime_dir.join("openless.lock"),
             &runtime_dir.join("openless.sock"),
@@ -2683,23 +6728,12 @@ mod linux_app {
             SingleInstanceRole::Primary(broker) => broker,
             SingleInstanceRole::Forwarded => return Ok(()),
         };
-        let plugin_check = ensure_fcitx5_ready(&config);
-        let environment = LinuxCapabilitySnapshot::detect(false, package_kind());
         let native = (|| {
             // AppImage may need to materialize its bundled plugin into the
             // per-user fcitx5 search path. Do that before opening the DBus
             // listener: otherwise the first run can wait forever for signals
             // from a plugin fcitx5 has never loaded.
-            match &plugin_check {
-                Ok(FcitxPluginStatus::Ready) => {}
-                Ok(FcitxPluginStatus::Updated) => return Err(
-                    "fcitx5 插件已安装或更新；请重载配置（fcitx5-remote -r），重新启动 fcitx5 或重新登录桌面，再启动 OpenLess".to_string()
-                ),
-                Ok(FcitxPluginStatus::Missing) => return Err(
-                    "未找到 OpenLess fcitx5 插件；请重新安装当前软件包".to_string()
-                ),
-                Err(error) => return Err(error.clone()),
-            }
+            ensure_fcitx5_ready(&config)?;
             let hotkeys = Fcitx5HotkeyListener::start().map_err(|error| error.to_string())?;
             let backend = {
                 // Construction captures the existing executor for cpal/native
@@ -2721,18 +6755,26 @@ mod linux_app {
         })();
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
-                .with_inner_size([1040.0, 760.0])
-                .with_min_inner_size([420.0, 400.0]),
+                .with_title("OpenLess")
+                .with_inner_size([1240.0, 800.0])
+                .with_min_inner_size([960.0, 640.0])
+                .with_decorations(false)
+                .with_transparent(true)
+                .with_resizable(true)
+                .with_visible(!start_minimized || !tray_available),
             ..Default::default()
         };
         eframe::run_native(
             "OpenLess",
             options,
-            Box::new(move |_| {
-                let mut app = OpenLessEguiApp::new(tokio, native);
-                app.environment = Some(environment);
-                app.plugin_check = Some(plugin_check);
-                Ok(Box::new(app))
+            Box::new(move |cc| {
+                theme::install(&cc.egui_ctx);
+                Ok(Box::new(OpenLessEguiApp::new(
+                    tokio,
+                    native,
+                    tray,
+                    update_support,
+                )))
             }),
         )
         .map_err(|error| error.to_string())
@@ -2742,284 +6784,15 @@ mod linux_app {
     mod tests {
         use super::*;
 
-        fn disconnected_app() -> OpenLessEguiApp {
-            OpenLessEguiApp::new(
-                Arc::new(tokio::runtime::Runtime::new().unwrap()),
-                Err("fixture: plugin unavailable".into()),
-            )
-        }
-
-        fn rendered_text(mut draw: impl FnMut(&mut egui::Ui)) -> String {
-            let ctx = egui::Context::default();
-            let output = ctx.run(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(720.0, 1800.0),
-                    )),
-                    ..Default::default()
-                },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        draw(ui);
-                    });
-                },
-            );
-            output
-                .shapes
-                .into_iter()
-                .filter_map(|shape| match shape.shape {
-                    egui::epaint::Shape::Text(text) => Some(text.galley.job.text.clone()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
-
-        #[test]
-        fn start_page_pipeline_multimodal_uses_only_omni_configuration() {
-            use openless_core::shared_types::PipelineMode;
-
-            let mut app = disconnected_app();
-            // A pending settings draft must not override Core's effective mode.
-            app.preferences = Some(UserPreferences {
-                multimodal_pipeline_enabled: false,
-                pipeline_mode: PipelineMode::Traditional,
-                ..Default::default()
-            });
-            for omni_configured in [true, false] {
-                for (asr_configured, llm_configured) in
-                    [(false, false), (true, false), (false, true), (true, true)]
-                {
-                    app.snapshot = Some(BackendSnapshot {
-                        credentials: openless_core::shared_types::CredentialsStatus {
-                            pipeline_mode: PipelineMode::Multimodal,
-                            omni_configured,
-                            asr_configured,
-                            llm_configured,
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    });
-                    let text = rendered_text(|ui| app.start_ui(ui));
-                    let expected = if omni_configured {
-                        "Omni：已配置"
-                    } else {
-                        "Omni：尚未配置"
-                    };
-                    assert!(text.contains(expected), "missing {expected}: {text}");
-                    assert!(!text.contains("语音识别：尚未配置"), "{text}");
-                    assert!(!text.contains("ASR 语音识别："), "{text}");
-                    assert!(!text.contains("LLM 润色："), "{text}");
-                    assert!(text.contains("已配置不代表校验通过"), "{text}");
-                }
-            }
-        }
-
-        #[test]
-        fn start_page_pipeline_traditional_reports_asr_and_llm_independently() {
-            use openless_core::shared_types::PipelineMode;
-
-            let mut app = disconnected_app();
-            // Conversely, a multimodal draft must not hide the effective
-            // traditional pipeline's missing ASR or LLM configuration.
-            app.preferences = Some(UserPreferences {
-                multimodal_pipeline_enabled: true,
-                pipeline_mode: PipelineMode::Multimodal,
-                ..Default::default()
-            });
-            for omni_configured in [true, false] {
-                for (asr_configured, llm_configured) in
-                    [(false, false), (true, false), (false, true), (true, true)]
-                {
-                    app.snapshot = Some(BackendSnapshot {
-                        credentials: openless_core::shared_types::CredentialsStatus {
-                            pipeline_mode: PipelineMode::Traditional,
-                            omni_configured,
-                            asr_configured,
-                            llm_configured,
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    });
-                    let text = rendered_text(|ui| app.start_ui(ui));
-                    for expected in [
-                        if asr_configured {
-                            "ASR 语音识别：已配置"
-                        } else {
-                            "ASR 语音识别：尚未配置"
-                        },
-                        if llm_configured {
-                            "LLM 润色：已配置"
-                        } else {
-                            "LLM 润色：尚未配置"
-                        },
-                    ] {
-                        assert!(text.contains(expected), "missing {expected}: {text}");
-                    }
-                    assert!(!text.contains("Omni："), "{text}");
-                    assert!(text.contains("已配置不代表校验通过"), "{text}");
-                }
-            }
-        }
-
-        #[test]
-        fn background_approval_survives_navigation_and_stale_terminals() {
-            let mut app = disconnected_app();
-            let session = openless_core::SessionId::new();
-            for (sequence, kind) in [
-                (
-                    1,
-                    LessComputerEventKind::User {
-                        text: "task".into(),
-                        fresh: true,
-                    },
-                ),
-                (
-                    2,
-                    LessComputerEventKind::Approval {
-                        token: "approval".into(),
-                        command: "echo test".into(),
-                        reason: "fixture".into(),
-                    },
-                ),
-            ] {
-                app.apply_event(BackendEvent {
-                    sequence,
-                    session_id: Some(session),
-                    kind: BackendEventKind::LessComputerEvent(openless_core::LessComputerEvent {
-                        seq: None,
-                        kind,
-                    }),
-                });
-            }
-            for page in Page::ALL {
-                app.navigation.open(page);
-                assert_eq!(app.page_activity(Page::Agent), Some("待审批"));
-                let text = rendered_text(|ui| {
-                    app.activity_ui(ui);
-                    app.agent_approval_ui(ui);
-                });
-                for control in ["允许", "拒绝", "取消 Agent"] {
-                    assert!(
-                        text.contains(control),
-                        "missing {control} on {page:?}: {text}"
-                    );
-                }
-            }
-            app.apply_event(BackendEvent {
-                sequence: 3,
-                session_id: Some(openless_core::SessionId::new()),
-                kind: BackendEventKind::LessComputerEvent(openless_core::LessComputerEvent {
-                    seq: None,
-                    kind: LessComputerEventKind::Cancelled,
-                }),
-            });
-            assert_eq!(
-                app.pending_approval,
-                Some(("approval".into(), "echo test".into()))
-            );
-            assert!(app.less_computer_running);
-        }
-
-        #[test]
-        fn qa_and_selection_events_on_settings_keep_drafts_and_action_notices() {
-            let mut app = disconnected_app();
-            app.navigation.open(Page::Settings);
-            app.qa_input = "unsent question".into();
-            let qa_session = openless_core::SessionId::new();
-            let mut thinking = QaStateEvent::simple(QaStateKind::Thinking);
-            thinking.session_id = Some(qa_session.to_string());
-            app.apply_event(BackendEvent {
-                sequence: 1,
-                session_id: Some(qa_session),
-                kind: BackendEventKind::QaState(thinking),
-            });
-            let selection_session = openless_core::SessionId::new();
-            app.apply_event(BackendEvent {
-                sequence: 2,
-                session_id: Some(selection_session),
-                kind: BackendEventKind::SelectionStateChanged(SelectionSnapshot {
-                    phase: SelectionPhase::Preview,
-                    session_id: Some(selection_session),
-                    preview_text: Some("editable preview".into()),
-                    ..Default::default()
-                }),
-            });
-            assert_eq!(app.navigation.page, Page::Settings);
-            assert!(app.navigation.has_update(Page::Qa));
-            assert_eq!(app.page_activity(Page::Selection), Some("待确认"));
-            app.selection_draft = "user edited preview".into();
-            app.navigation.open(Page::Qa);
-            app.navigation.open(Page::Selection);
-            app.navigation.open(Page::Models);
-            assert_eq!(app.qa_input, "unsent question");
-            assert_eq!(app.selection_draft, "user edited preview");
-            assert_eq!(
-                app.selection.as_ref().unwrap().session_id,
-                Some(selection_session)
-            );
-            let text = rendered_text(|ui| app.activity_ui(ui));
-            assert!(text.contains("取消选区预览"), "{text}");
-        }
-
-        #[test]
-        fn startup_failure_keeps_preparation_steps_without_claiming_connection() {
-            let mut app = disconnected_app();
-            app.environment = Some(LinuxCapabilitySnapshot::from_environment(
-                Some("wayland-0"),
-                None,
-                false,
-                false,
-                LinuxPackageKind::AppImage,
-            ));
-            app.plugin_check = Some(Ok(FcitxPluginStatus::Updated));
-            let text = rendered_text(|ui| app.start_ui(ui));
-            for expected in [
-                "Core 未连接",
-                "Wayland",
-                "D-Bus 探测未通过",
-                "尚未验证录音",
-                "fcitx5-diagnose",
-                "fcitx5-remote -r",
-                "Secret Service",
-            ] {
-                assert!(text.contains(expected), "missing {expected}: {text}");
-            }
-            assert!(!text.contains("Core 已连接"));
-            assert!(!text.contains("Core：运行中"));
-        }
-
-        #[test]
-        fn stopped_or_stale_remote_status_never_shows_pairing_secrets_or_old_urls() {
-            let mut app = disconnected_app();
-            for (running, urls_stale) in [(false, false), (true, true)] {
-                app.remote_access = Some((
-                    openless_core::RemoteInputStatus {
-                        enabled: true,
-                        running,
-                        starting: false,
-                        port: 8443,
-                        urls: vec!["https://old.example.invalid".into()],
-                        urls_stale,
-                        locale: "en".into(),
-                        connection_count: 0,
-                        active_session_id: None,
-                    },
-                    "fixture-pin".into(),
-                ));
-                let text = rendered_text(|ui| app.remote_ui(ui));
-                assert!(!text.contains("fixture-pin"), "{text}");
-                assert!(!text.contains("https://old.example.invalid"), "{text}");
-                assert!(text.contains("当前连接数：0"), "{text}");
-            }
-        }
-
         #[test]
         fn continuation_turn_keeps_receiving_output_and_approval() {
             let mut app = OpenLessEguiApp::new(
                 Arc::new(tokio::runtime::Runtime::new().unwrap()),
                 Err("fixture".into()),
+                None,
+                LinuxUpdateSupport::ManualOnly {
+                    releases_url: openless_linux_egui::RELEASES_URL,
+                },
             );
             let first = openless_core::SessionId::new();
             let second = openless_core::SessionId::new();
@@ -3094,6 +6867,10 @@ mod linux_app {
             let mut app = OpenLessEguiApp::new(
                 Arc::new(tokio::runtime::Runtime::new().unwrap()),
                 Err("fixture".into()),
+                None,
+                LinuxUpdateSupport::ManualOnly {
+                    releases_url: openless_linux_egui::RELEASES_URL,
+                },
             );
             let session = openless_core::SessionId::new();
             let mut thinking = QaStateEvent::simple(QaStateKind::Thinking);
@@ -3121,6 +6898,279 @@ mod linux_app {
             let state = app.qa_state.as_ref().unwrap();
             assert_eq!(state.chunk.as_deref(), Some("Hello world"));
             assert_eq!(state.messages.as_ref().unwrap()[0].content, "question");
+        }
+
+        #[test]
+        fn settings_conflict_merge_preserves_only_dirty_draft_fields() {
+            let latest = UserPreferences {
+                remote_input_port: 9443,
+                streaming_insert: false,
+                ..Default::default()
+            };
+            let draft = UserPreferences {
+                remote_input_port: 7777,
+                streaming_insert: true,
+                ..Default::default()
+            };
+            let dirty = SettingsDirty {
+                streaming_insert: true,
+                ..Default::default()
+            };
+
+            let merged = dirty.merge(&latest, &draft);
+
+            assert!(merged.streaming_insert);
+            assert_eq!(merged.remote_input_port, 9443);
+        }
+
+        #[test]
+        fn style_pack_hotkey_update_preserves_other_pack_bindings() {
+            let mut preferences = UserPreferences::default();
+            let first = openless_core::shared_types::ShortcutBinding {
+                primary: "1".into(),
+                modifiers: vec!["ctrl".into()],
+            };
+            let second = openless_core::shared_types::ShortcutBinding {
+                primary: "2".into(),
+                modifiers: vec!["alt".into()],
+            };
+            set_style_pack_hotkey(&mut preferences, "first", Some(first.clone()));
+            set_style_pack_hotkey(&mut preferences, "second", Some(second.clone()));
+            set_style_pack_hotkey(&mut preferences, "first", None);
+
+            assert_eq!(preferences.style_pack_hotkeys.len(), 1);
+            assert_eq!(preferences.style_pack_hotkeys[0].pack_id, "second");
+            assert_eq!(preferences.style_pack_hotkeys[0].binding, second);
+        }
+
+        #[test]
+        fn settings_conflict_merge_preserves_hotkey_drafts_as_one_domain() {
+            let latest = UserPreferences::default();
+            let mut draft = latest.clone();
+            draft.open_app_hotkey = Some(openless_core::shared_types::ShortcutBinding {
+                primary: "O".into(),
+                modifiers: vec!["ctrl".into(), "shift".into()],
+            });
+            let dirty = SettingsDirty {
+                hotkeys: true,
+                ..Default::default()
+            };
+
+            let merged = dirty.merge(&latest, &draft);
+
+            assert_eq!(merged.open_app_hotkey, draft.open_app_hotkey);
+        }
+
+        #[test]
+        fn settings_conflict_merge_preserves_recording_device_and_appearance_domains() {
+            let latest = UserPreferences {
+                remote_input_port: 9443,
+                ..Default::default()
+            };
+            let mut draft = latest.clone();
+            draft.hotkey.mode = openless_core::shared_types::HotkeyMode::Auto;
+            draft.silence_auto_stop_enabled = true;
+            draft.silence_auto_stop_seconds = 1.5;
+            draft.mute_during_recording = true;
+            draft.audio_cue_on_record = false;
+            draft.microphone_device_name = "USB microphone".into();
+            draft.theme_mode = openless_core::shared_types::ThemeMode::Dark;
+            draft.show_overview_activity_heatmap = false;
+            draft.remote_input_port = 7777;
+            let dirty = SettingsDirty {
+                recording: true,
+                microphone: true,
+                appearance: true,
+                ..Default::default()
+            };
+
+            let merged = dirty.merge(&latest, &draft);
+
+            assert_eq!(merged.hotkey.mode, draft.hotkey.mode);
+            assert!(merged.silence_auto_stop_enabled);
+            assert_eq!(merged.silence_auto_stop_seconds, 1.5);
+            assert!(merged.mute_during_recording);
+            assert!(!merged.audio_cue_on_record);
+            assert_eq!(merged.microphone_device_name, "USB microphone");
+            assert_eq!(
+                merged.theme_mode,
+                openless_core::shared_types::ThemeMode::Dark
+            );
+            assert!(!merged.show_overview_activity_heatmap);
+            assert_eq!(merged.remote_input_port, 9443);
+        }
+
+        #[test]
+        fn ready_install_needs_no_reload_but_continues() {
+            assert!(reconcile_fcitx5_install(FcitxPluginStatus::Ready).is_ok());
+        }
+
+        #[test]
+        fn missing_install_aborts_without_reloading() {
+            let error = reconcile_fcitx5_install(FcitxPluginStatus::Missing)
+                .expect_err("a missing plugin must abort startup");
+            assert!(
+                error.contains("OpenLess fcitx5 插件"),
+                "unexpected Missing message: {error}"
+            );
+        }
+
+        // ---- Overview summary (Tauri parity) -----------------------------
+
+        fn session_entry(
+            created_at: &str,
+            final_text: &str,
+            duration_ms: Option<u64>,
+        ) -> openless_core::DictationSession {
+            openless_core::DictationSession {
+                id: String::new(),
+                created_at: created_at.to_string(),
+                source: openless_core::HistorySource::Voice,
+                raw_transcript: String::new(),
+                asr_transcript: None,
+                final_text: final_text.to_string(),
+                mode: openless_core::PolishMode::Raw,
+                style_pack_id: None,
+                translation_active: false,
+                polish_source: None,
+                app_bundle_id: None,
+                app_name: None,
+                insert_status: openless_core::HistoryInsertStatus::Inserted,
+                error_code: None,
+                duration_ms,
+                dictionary_entry_count: None,
+                has_audio_recording: None,
+                asr_provider: None,
+                asr_model: None,
+                llm_provider: None,
+                llm_model: None,
+                pipeline_mode: None,
+                asr_ms: None,
+                polish_ms: None,
+            }
+        }
+
+        fn activity_day(date: &str, count: u32) -> openless_core::ActivityDay {
+            openless_core::ActivityDay {
+                date: date.to_string(),
+                count,
+                chars: 0,
+                duration_ms: 0,
+            }
+        }
+
+        #[test]
+        fn overview_metrics_aggregate_only_today_from_history() {
+            let now = chrono::Local::now();
+            let today = now.date_naive();
+            let history = vec![
+                session_entry(&now.to_rfc3339(), "今天第一句", Some(2000)),
+                session_entry(
+                    &(now - chrono::Duration::days(1)).to_rfc3339(),
+                    "昨天",
+                    Some(999),
+                ),
+                session_entry(
+                    &(now - chrono::Duration::days(2)).to_rfc3339(),
+                    "前天",
+                    None,
+                ),
+            ];
+            let credentials = openless_core::CredentialsStatus {
+                active_asr_provider: "volcengine".to_string(),
+                active_llm_provider: "ark".to_string(),
+                asr_configured: true,
+                ..Default::default()
+            };
+
+            let summary = overview_summary(
+                &OverviewData {
+                    credentials,
+                    history,
+                    activity: Vec::new(),
+                },
+                today,
+            );
+
+            assert_eq!(summary.segments_today, 1, "only today's entry counts");
+            assert_eq!(summary.chars_today, 5, "今日第一句 has 5 chars");
+            assert_eq!(summary.duration_ms_today, 2000);
+            assert_eq!(summary.avg_latency_ms, 2000);
+            assert_eq!(summary.history_total, 3);
+            assert_eq!(summary.asr_provider, "volcengine");
+            assert!(summary.asr_configured);
+            assert!(!summary.llm_configured);
+            assert_eq!(summary.recent.len(), 3, "newest three retained");
+            assert_eq!(
+                summary.recent[0].final_text, "今天第一句",
+                "recent list is newest-first"
+            );
+            assert_eq!(summary.recent[0].duration_ms, Some(2000));
+        }
+
+        #[test]
+        fn overview_activity_windows_and_heatmap_are_windowed_by_date() {
+            let today = chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
+            let credentials = openless_core::CredentialsStatus::default();
+            let activity = vec![
+                activity_day("2026-01-15", 5),
+                activity_day("2026-01-08", 2),
+                activity_day("2026-01-01", 3),
+                activity_day("2025-06-01", 9),
+            ];
+
+            let summary = overview_summary(
+                &OverviewData {
+                    credentials,
+                    history: Vec::new(),
+                    activity,
+                },
+                today,
+            );
+
+            // Last-7 window covers only Jan 15.
+            assert_eq!(summary.last_7.active_days, 1);
+            assert_eq!(summary.last_7.segments, 5);
+            // Last-30 window covers Jan 15, Jan 8 and Jan 1.
+            assert_eq!(summary.last_30.active_days, 3);
+            assert_eq!(summary.last_30.segments, 10);
+            assert_eq!(summary.activity_days_total, 4);
+
+            // The trailing 364-day heatmap sums every in-window day.
+            let heat_total: u32 = summary
+                .heatmap_weeks
+                .iter()
+                .flat_map(|week| week.iter())
+                .sum();
+            assert_eq!(heat_total, 19);
+            assert_eq!(summary.heatmap_days, 364);
+        }
+
+        #[test]
+        fn overview_heatmap_excludes_days_outside_trailing_window() {
+            let today = chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
+            let far = (today - chrono::Duration::days(400))
+                .format("%Y-%m-%d")
+                .to_string();
+            let summary = overview_summary(
+                &OverviewData {
+                    credentials: openless_core::CredentialsStatus::default(),
+                    history: Vec::new(),
+                    activity: vec![activity_day("2026-01-15", 3), activity_day(&far, 7)],
+                },
+                today,
+            );
+
+            let heat_total: u32 = summary
+                .heatmap_weeks
+                .iter()
+                .flat_map(|week| week.iter())
+                .sum();
+            assert_eq!(
+                heat_total, 3,
+                "days older than the trailing window must not appear in the heatmap"
+            );
+            assert_eq!(summary.activity_days_total, 2);
         }
     }
 }
