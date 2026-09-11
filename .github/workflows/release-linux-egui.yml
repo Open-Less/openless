@@ -130,18 +130,19 @@ jobs:
 
       - name: Verify framework-independent Linux contract
         working-directory: openless-all/app
-        shell: pwsh
+        shell: bash
         run: |
+          set -euo pipefail
           cargo test --locked -p openless-core
           cargo clippy --locked -p openless-core --all-targets -- -D warnings
           cargo test --locked -p openless-linux-egui --lib --test host_contract
           cargo check --locked -p openless-linux-egui --all-targets
-          ./scripts/check-core-deps.ps1
-          ./scripts/check-core-deps.ps1 openless-linux-egui
-          ./scripts/check-core-secret-surface.ps1
-          ./scripts/check-core-test-isolation.ps1
-          ./scripts/check-core-runtime-seam.ps1
-          ./scripts/check-linux-public-surface.ps1
+          pwsh -NoProfile -File ./scripts/check-core-deps.ps1
+          pwsh -NoProfile -File ./scripts/check-core-deps.ps1 openless-linux-egui
+          pwsh -NoProfile -File ./scripts/check-core-secret-surface.ps1
+          pwsh -NoProfile -File ./scripts/check-core-test-isolation.ps1
+          pwsh -NoProfile -File ./scripts/check-core-runtime-seam.ps1
+          pwsh -NoProfile -File ./scripts/check-linux-public-surface.ps1
 
       - name: Validate release target and UI gate
         shell: bash
