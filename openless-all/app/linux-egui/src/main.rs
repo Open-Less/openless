@@ -6217,9 +6217,7 @@ mod linux_app {
         let plan =
             FcitxPluginInstallPlan::for_layout(&layout, home).map_err(|error| error.to_string())?;
         let status = ensure_fcitx5_plugin_installed(&plan).map_err(|error| error.to_string())?;
-        reconcile_fcitx5_install(status, || {
-            reload_running_fcitx5();
-        })
+        reconcile_fcitx5_install(status)
     }
 
     /// Map an fcitx5 addon install result onto startup.
@@ -6229,16 +6227,9 @@ mod linux_app {
     /// `reload` right now. Both `Ready` and `Updated` let startup continue down
     /// the normal fcitx5 DBus path — never a global-hotkey fallback — and only a
     /// genuinely missing plugin aborts startup.
-    fn reconcile_fcitx5_install(
-        status: FcitxPluginStatus,
-        mut reload: impl FnMut(),
-    ) -> Result<(), String> {
+    fn reconcile_fcitx5_install(status: FcitxPluginStatus) -> Result<(), String> {
         match status {
             FcitxPluginStatus::Ready => Ok(()),
-            FcitxPluginStatus::Updated => {
-                reload();
-                Ok(())
-            }
             FcitxPluginStatus::Missing => {
                 Err("未找到 OpenLess fcitx5 插件；请重新安装当前软件包".to_string())
             }
@@ -7015,21 +7006,9 @@ mod linux_app {
         }
 
         #[test]
-        fn updated_install_reloads_running_fcitx5_and_continues_startup() {
-            let mut reloads = 0;
-            let reload = || reloads += 1;
-
-            // A freshly written addon must reload a running fcitx5 and then let
-            // startup continue (not hard-error as it used to).
-            assert!(reconcile_fcitx5_install(FcitxPluginStatus::Updated, reload).is_ok());
-            assert_eq!(reloads, 1, "Updated must issue one fcitx5 reload");
-        }
-
         #[test]
         fn ready_install_needs_no_reload_but_continues() {
-            let mut reloads = 0;
-            assert!(reconcile_fcitx5_install(FcitxPluginStatus::Ready, || reloads += 1).is_ok());
-            assert_eq!(reloads, 0, "Ready must not reload fcitx5");
+            assert!(reconcile_fcitx5_install(FcitxPluginStatus::Ready).is_ok());
         }
 
         #[test]

@@ -4,11 +4,11 @@ use std::time::Duration;
 
 use futures_util::future::BoxFuture;
 use openless_core::{
-    BackendError, BackendErrorCode, InsertOutcome, InsertWriteResult, ResourceResolver,
-    TextInserter, TextInsertionSession,
+    BackendError, BackendErrorCode, InsertOutcome, InsertWriteResult, TextInserter,
+    TextInsertionSession,
 };
 
-use crate::{LinuxPackageKind, LinuxResourceLayout, FCITX_PLUGIN_CONFIG, FCITX_PLUGIN_LIBRARY};
+use crate::LinuxResourceLayout;
 
 #[cfg(target_os = "linux")]
 pub(crate) const DESTINATION: &str = "org.fcitx.Fcitx5";
@@ -21,35 +21,19 @@ const TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FcitxPluginInstallPlan {
-    pub source_library: Option<PathBuf>,
-    pub source_config: Option<PathBuf>,
     pub target_library: PathBuf,
     pub target_config: PathBuf,
-    pub copy_required: bool,
 }
 
 impl FcitxPluginInstallPlan {
     pub fn for_layout(layout: &LinuxResourceLayout, home: &Path) -> Result<Self, BackendError> {
         let target_library = home.join(".local/lib/fcitx5/libopenless.so");
         let target_config = home.join(".local/share/fcitx5/addon/openless.conf");
-        if layout.package_kind == LinuxPackageKind::AppImage {
-            let resolver = layout.resolver()?;
-            Ok(Self {
-                source_library: Some(resolver.resolve(Path::new(FCITX_PLUGIN_LIBRARY))?),
-                source_config: Some(resolver.resolve(Path::new(FCITX_PLUGIN_CONFIG))?),
-                target_library,
-                target_config,
-                copy_required: true,
-            })
-        } else {
-            Ok(Self {
-                source_library: None,
-                source_config: None,
-                target_library,
-                target_config,
-                copy_required: false,
-            })
-        }
+        let _ = layout;
+        Ok(Self {
+            target_library,
+            target_config,
+        })
     }
 }
 
@@ -57,137 +41,16 @@ impl FcitxPluginInstallPlan {
 pub enum FcitxPluginStatus {
     Ready,
     Missing,
-    Updated,
 }
 
 pub fn ensure_plugin_installed(
     plan: &FcitxPluginInstallPlan,
 ) -> Result<FcitxPluginStatus, BackendError> {
-    if !plan.copy_required {
-        return if system_plugin_available() || user_plugin_available(plan) {
-            Ok(FcitxPluginStatus::Ready)
-        } else {
-            Ok(FcitxPluginStatus::Missing)
-        };
+    if system_plugin_available() || user_plugin_available(plan) {
+        Ok(FcitxPluginStatus::Ready)
+    } else {
+        Ok(FcitxPluginStatus::Missing)
     }
-    let source_library = plan.source_library.as_ref().ok_or_else(|| {
-        BackendError::new(
-            BackendErrorCode::InvalidArgument,
-            "AppImage plugin plan is missing the bundled library",
-        )
-    })?;
-    let source_config = plan.source_config.as_ref().ok_or_else(|| {
-        BackendError::new(
-            BackendErrorCode::InvalidArgument,
-            "AppImage plugin plan is missing the bundled config",
-        )
-    })?;
-    let library = read_non_empty(source_library)?;
-    let config = read_non_empty(source_config)?;
-    let library_changed = target_differs(&plan.target_library, &library)?;
-    let config_changed = target_differs(&plan.target_config, &config)?;
-    if !library_changed && !config_changed {
-        return Ok(FcitxPluginStatus::Ready);
-    }
-    if library_changed {
-        atomic_write(&plan.target_library, &library, true)?;
-    }
-    if config_changed {
-        atomic_write(&plan.target_config, &config, false)?;
-    }
-    Ok(FcitxPluginStatus::Updated)
-}
-
-fn read_non_empty(path: &Path) -> Result<Vec<u8>, BackendError> {
-    let bytes = std::fs::read(path).map_err(|error| {
-        BackendError::new(
-            BackendErrorCode::Platform,
-            format!("failed to read fcitx5 resource {}: {error}", path.display()),
-        )
-    })?;
-    if bytes.is_empty() {
-        return Err(BackendError::new(
-            BackendErrorCode::Platform,
-            format!("fcitx5 resource {} is empty", path.display()),
-        ));
-    }
-    Ok(bytes)
-}
-
-fn target_differs(path: &Path, expected: &[u8]) -> Result<bool, BackendError> {
-    match std::fs::read(path) {
-        Ok(actual) => Ok(actual != expected),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
-        Err(error) => Err(BackendError::new(
-            BackendErrorCode::Platform,
-            format!(
-                "failed to read existing fcitx5 file {}: {error}",
-                path.display()
-            ),
-        )),
-    }
-}
-
-fn atomic_write(path: &Path, bytes: &[u8], executable: bool) -> Result<(), BackendError> {
-    let parent = path.parent().ok_or_else(|| {
-        BackendError::new(
-            BackendErrorCode::InvalidArgument,
-            "fcitx5 target has no parent directory",
-        )
-    })?;
-    std::fs::create_dir_all(parent).map_err(|error| {
-        BackendError::new(
-            BackendErrorCode::Platform,
-            format!("failed to create fcitx5 target directory: {error}"),
-        )
-    })?;
-    let temporary = parent.join(format!(
-        ".{}.{}.tmp",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("openless"),
-        std::process::id()
-    ));
-    std::fs::write(&temporary, bytes).map_err(|error| {
-        BackendError::new(
-            BackendErrorCode::Platform,
-            format!("failed to stage fcitx5 resource: {error}"),
-        )
-    })?;
-    #[cfg(unix)]
-    if executable {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o755)).map_err(
-            |error| {
-                BackendError::new(
-                    BackendErrorCode::Platform,
-                    format!("failed to set fcitx5 plugin permissions: {error}"),
-                )
-            },
-        )?;
-    }
-    #[cfg(not(unix))]
-    let _ = executable;
-    // POSIX rename replaces an existing file atomically, so the previously
-    // working plugin remains available if staging or commit fails. The
-    // non-Unix branch exists only for portable unit tests/tooling, where the
-    // platform rename API may require explicitly removing the destination.
-    #[cfg(not(unix))]
-    if path.exists() {
-        std::fs::remove_file(path).map_err(|error| {
-            BackendError::new(
-                BackendErrorCode::Platform,
-                format!("failed to replace fcitx5 resource: {error}"),
-            )
-        })?;
-    }
-    std::fs::rename(&temporary, path).map_err(|error| {
-        let _ = std::fs::remove_file(&temporary);
-        BackendError::new(
-            BackendErrorCode::Platform,
-            format!("failed to commit fcitx5 resource: {error}"),
-        )
-    })
 }
 
 fn user_plugin_available(plan: &FcitxPluginInstallPlan) -> bool {
@@ -195,14 +58,31 @@ fn user_plugin_available(plan: &FcitxPluginInstallPlan) -> bool {
 }
 
 fn system_plugin_available() -> bool {
-    let library = [
-        "/usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so",
-        "/usr/lib64/fcitx5/libopenless.so",
-        "/usr/lib/fcitx5/libopenless.so",
-    ]
-    .iter()
-    .any(|path| Path::new(path).is_file());
-    library && Path::new("/usr/share/fcitx5/addon/openless.conf").is_file()
+    let config_dirs = [
+        std::env::var_os("FCITX5_ADDON_DIR").map(PathBuf::from),
+        std::env::var_os("FCITX_ADDON_DIR").map(PathBuf::from),
+        Some(PathBuf::from("/usr/share/fcitx5/addon")),
+        Some(PathBuf::from("/usr/local/share/fcitx5/addon")),
+    ];
+    let config = config_dirs
+        .into_iter()
+        .flatten()
+        .find(|dir| dir.join("openless.conf").is_file());
+    let Some(config) = config else { return false };
+    let mut library_dirs = vec![
+        PathBuf::from("/usr/lib64/fcitx5"),
+        PathBuf::from("/usr/lib/fcitx5"),
+        PathBuf::from("/usr/local/lib/fcitx5"),
+    ];
+    if let Ok(entries) = std::fs::read_dir("/usr/lib") {
+        library_dirs.extend(entries.flatten().map(|entry| entry.path().join("fcitx5")));
+    }
+    if let Some(parent) = config.parent() {
+        library_dirs.push(parent.to_path_buf());
+    }
+    library_dirs
+        .iter()
+        .any(|dir| dir.join("libopenless.so").is_file())
 }
 
 #[derive(Debug, Clone)]
@@ -832,77 +712,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn appimage_plan_copies_only_from_the_versioned_resource_contract() {
+    fn plugin_plan_is_probe_only_for_system_packages() {
         let layout = LinuxResourceLayout {
-            package_kind: LinuxPackageKind::AppImage,
-            resource_root: PathBuf::from("/app/usr/lib/openless/resources"),
+            package_kind: crate::LinuxPackageKind::SystemPackage,
+            resource_root: PathBuf::from("/usr/lib/openless/resources"),
         };
         let plan = FcitxPluginInstallPlan::for_layout(&layout, Path::new("/home/test")).unwrap();
-        assert!(plan.copy_required);
         assert_eq!(
-            plan.source_library.unwrap(),
-            PathBuf::from("/app/usr/lib/openless/resources/linux-fcitx5-plugin/libopenless.so")
+            plan.target_library,
+            PathBuf::from("/home/test/.local/lib/fcitx5/libopenless.so")
         );
         assert_eq!(
             plan.target_config,
             PathBuf::from("/home/test/.local/share/fcitx5/addon/openless.conf")
         );
-    }
-
-    #[test]
-    fn system_packages_never_copy_bundled_plugins_into_home() {
-        let layout = LinuxResourceLayout {
-            package_kind: LinuxPackageKind::SystemPackage,
-            resource_root: PathBuf::from("/usr/lib/openless/resources"),
-        };
-        let plan = FcitxPluginInstallPlan::for_layout(&layout, Path::new("/home/test")).unwrap();
-        assert!(!plan.copy_required);
-        assert!(plan.source_library.is_none());
-        assert!(plan.source_config.is_none());
-    }
-
-    #[test]
-    fn appimage_installer_copies_then_reports_ready() {
-        let root = std::env::temp_dir().join(format!(
-            "openless-fcitx-appimage-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
-        let resources = root.join("resources");
-        let home = root.join("home");
-        std::fs::create_dir_all(resources.join("linux-fcitx5-plugin")).unwrap();
-        std::fs::write(resources.join(FCITX_PLUGIN_LIBRARY), b"plugin").unwrap();
-        std::fs::write(resources.join(FCITX_PLUGIN_CONFIG), b"config").unwrap();
-        let plan = FcitxPluginInstallPlan::for_layout(
-            &LinuxResourceLayout {
-                package_kind: LinuxPackageKind::AppImage,
-                resource_root: resources,
-            },
-            &home,
-        )
-        .unwrap();
-
-        assert_eq!(
-            ensure_plugin_installed(&plan).unwrap(),
-            FcitxPluginStatus::Updated
-        );
-        assert_eq!(std::fs::read(&plan.target_library).unwrap(), b"plugin");
-        assert_eq!(std::fs::read(&plan.target_config).unwrap(), b"config");
-        assert_eq!(
-            ensure_plugin_installed(&plan).unwrap(),
-            FcitxPluginStatus::Ready
-        );
-
-        std::fs::write(plan.source_library.as_ref().unwrap(), b"updated plugin").unwrap();
-        assert_eq!(
-            ensure_plugin_installed(&plan).unwrap(),
-            FcitxPluginStatus::Updated
-        );
-        assert_eq!(
-            std::fs::read(&plan.target_library).unwrap(),
-            b"updated plugin"
-        );
-        assert_eq!(std::fs::read(&plan.target_config).unwrap(), b"config");
-
-        let _ = std::fs::remove_dir_all(root);
     }
 }

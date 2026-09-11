@@ -21,6 +21,29 @@ command -v fpm >/dev/null
 
 mkdir -p "$OUTPUT"
 
+POST_INSTALL="$TARGET_DIR/openless-fcitx5-postinst"
+cat > "$POST_INSTALL" <<'EOF'
+#!/usr/bin/env bash
+set +e
+# Package installation runs as root, while fcitx5 belongs to the logged-in
+# desktop user. Reconnect only to existing user DBus sessions; never start a
+# daemon or fail the package transaction when no graphical session is active.
+for bus in /run/user/[0-9]*/bus; do
+  [ -S "$bus" ] || continue
+  runtime_dir=${bus%/bus}
+  uid=${runtime_dir##*/}
+  [ "$uid" != "0" ] || continue
+  user=$(getent passwd "$uid" | cut -d: -f1)
+  [ -n "$user" ] || continue
+  runuser -u "$user" -- env \
+    XDG_RUNTIME_DIR="$runtime_dir" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" \
+    fcitx5 -r >/dev/null 2>&1 || true
+done
+exit 0
+EOF
+chmod 0755 "$POST_INSTALL"
+
 stage_common() {
   local root=$1
   install -Dm755 "$BINARY" "$root/usr/bin/openless"
@@ -43,6 +66,7 @@ fpm -s dir -t deb -C "$DEB_ROOT" \
   --description "OpenLess Linux egui host" \
   --license AGPL-3.0-only \
   --url https://github.com/Open-Less/openless \
+  --after-install "$POST_INSTALL" \
   -d fcitx5 -d fcitx5-module-dbus -d libdbus-1-3 -d libasound2 \
   -p "$OUTPUT/OpenLess-Linux-egui-${VERSION}-${ARCH}.deb" .
 
@@ -58,6 +82,7 @@ fpm -s dir -t rpm -C "$RPM_ROOT" \
   --description "OpenLess Linux egui host" \
   --license AGPL-3.0-only \
   --url https://github.com/Open-Less/openless \
+  --after-install "$POST_INSTALL" \
   -d fcitx5 -d dbus-libs -d alsa-lib \
   -p "$OUTPUT/OpenLess-Linux-egui-${VERSION}-${ARCH}.rpm" .
 

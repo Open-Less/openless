@@ -49,6 +49,7 @@ jobs:
             libx11-dev \
             libxkbcommon-dev \
             pkg-config \
+            ripgrep \
             rpm \
             ruby-dev
           sudo gem install --no-document fpm -v 1.16.0
