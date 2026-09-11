@@ -24,7 +24,7 @@ internal class StrokeInputRepository(context: Context) {
         "就" to "nhszhspnhpzn",
         "文" to "n", "一" to "h", "二" to "h", "三" to "h", "四" to "p", "五" to "h",
         "六" to "n", "七" to "h", "八" to "p", "九" to "p", "零" to "n",
-    ).distinctBy { it.first }
+    )
 
     private val index = AtomicReference<Map<String, List<Pair<String, String>>>>(emptyMap())
     private val loading = Any()
@@ -44,7 +44,10 @@ internal class StrokeInputRepository(context: Context) {
             "一", "王", "二", "三", "十", "丁", "七", "大", "天", "人", "不", "有", "中", "国", "上", "下",
             "个", "了", "是", "的", "我", "你", "他", "她", "们", "在", "要", "来", "看", "去", "就",
         ).withIndex().associate { it.value to it.index }
-        return table.distinctBy { it.first }.withIndex()
+        // A character may have more than one valid stroke sequence in Rime.
+        // Keep every code here; deduplicate only the rendered character list
+        // after filtering, otherwise valid aliases such as 过/hsnnzn vanish.
+        return table.withIndex()
             .sortedWith(compareBy({ preferred[it.value.first] ?: Int.MAX_VALUE }, { it.index }))
             .map { it.value }
     }
