@@ -17,7 +17,8 @@ test -s "$PLUGIN_ROOT/openless.conf"
 test -s "$PACKAGING/openless.desktop"
 test -s "$PACKAGING/top.openless.OpenLess.metainfo.xml"
 test -s "$ICON"
-command -v fpm >/dev/null
+command -v dpkg-deb >/dev/null
+command -v rpmbuild >/dev/null
 
 mkdir -p "$OUTPUT"
 
@@ -61,15 +62,21 @@ install -Dm755 "$PLUGIN_ROOT/libopenless.so" \
   "$DEB_ROOT/usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so"
 install -Dm644 "$PLUGIN_ROOT/openless.conf" \
   "$DEB_ROOT/usr/share/fcitx5/addon/openless.conf"
-fpm -s dir -t deb -C "$DEB_ROOT" \
-  -n openless -v "$VERSION" -a amd64 \
-  --description "OpenLess Linux egui host" \
-  --license AGPL-3.0-only \
-  --url https://github.com/Open-Less/openless \
-  --after-install "$POST_INSTALL" \
-  -d fcitx5 -d fcitx5-module-dbus -d libdbus-1-3 -d libasound2 \
-  -d libpipewire-0.3-0 -d libpulse0 \
-  -p "$OUTPUT/OpenLess-Linux-egui-${VERSION}-${ARCH}.deb" .
+install -d "$DEB_ROOT/DEBIAN"
+cat > "$DEB_ROOT/DEBIAN/control" <<EOF
+Package: openless
+Version: $VERSION
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: OpenLess Contributors
+Description: OpenLess Linux egui host
+Depends: fcitx5, fcitx5-module-dbus, libdbus-1-3, libasound2, libpipewire-0.3-0, libpulse0
+Homepage: https://github.com/Open-Less/openless
+EOF
+install -m755 "$POST_INSTALL" "$DEB_ROOT/DEBIAN/postinst"
+dpkg-deb --build --root-owner-group "$DEB_ROOT" \
+  "$OUTPUT/OpenLess-Linux-egui-${VERSION}-${ARCH}.deb"
 
 RPM_ROOT="$TARGET_DIR/linux-egui-rpm-root"
 rm -rf "$RPM_ROOT"
@@ -78,14 +85,36 @@ install -Dm755 "$PLUGIN_ROOT/libopenless.so" \
   "$RPM_ROOT/usr/lib64/fcitx5/libopenless.so"
 install -Dm644 "$PLUGIN_ROOT/openless.conf" \
   "$RPM_ROOT/usr/share/fcitx5/addon/openless.conf"
-fpm -s dir -t rpm -C "$RPM_ROOT" \
-  -n openless -v "$VERSION" -a x86_64 \
-  --description "OpenLess Linux egui host" \
-  --license AGPL-3.0-only \
-  --url https://github.com/Open-Less/openless \
-  --after-install "$POST_INSTALL" \
-  -d fcitx5 -d dbus-libs -d alsa-lib \
-  -d pipewire-libs -d pulseaudio-libs \
-  -p "$OUTPUT/OpenLess-Linux-egui-${VERSION}-${ARCH}.rpm" .
+RPM_TOP="$TARGET_DIR/rpmbuild"
+rm -rf "$RPM_TOP"
+mkdir -p "$RPM_TOP"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS,rpmdb,tmp}
+tar -C "$RPM_ROOT" --transform="s,^\./,openless-$VERSION/," \
+  -czf "$RPM_TOP/SOURCES/openless-$VERSION.tar.gz" .
+cat > "$RPM_TOP/SPECS/openless.spec" <<EOF
+Name: openless
+Version: $VERSION
+Release: 1
+Summary: OpenLess Linux egui host
+License: AGPL-3.0-only
+URL: https://github.com/Open-Less/openless
+BuildArch: x86_64
+Source0: openless-$VERSION.tar.gz
+Requires: fcitx5, dbus-libs, alsa-lib, pipewire-libs, pulseaudio-libs
+%description
+OpenLess Linux egui host.
+%prep
+%setup -q -n openless-$VERSION
+%install
+mkdir -p %{buildroot}
+cp -a . %{buildroot}/
+%files
+/
+%post
+"$POST_INSTALL"
+EOF
+rpmbuild --define "_topdir $RPM_TOP" --define "_dbpath $RPM_TOP/rpmdb" \
+  --define "_tmppath $RPM_TOP/tmp" -bb "$RPM_TOP/SPECS/openless.spec"
+mv "$RPM_TOP/RPMS/x86_64/openless-$VERSION-1.x86_64.rpm" \
+  "$OUTPUT/OpenLess-Linux-egui-${VERSION}-${ARCH}.rpm"
 
 find "$OUTPUT" -maxdepth 1 -type f -printf '%f\n' | sort

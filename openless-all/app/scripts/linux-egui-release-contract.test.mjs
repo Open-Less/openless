@@ -43,7 +43,7 @@ assert.ok(/tauri\|wry\|webkit2gtk/.test(dependencyGate),
 
 // 3. Release must build x86_64 deb and rpm only; AppImage is intentionally
 // retired from the Linux distribution channel.
-for (const [format, tool] of [['deb', 'fpm -s dir -t deb'], ['rpm', 'fpm -s dir -t rpm']]) {
+for (const [format, tool] of [['deb', 'dpkg-deb --build'], ['rpm', 'rpmbuild --define']]) {
   assert.ok(packageScript.includes(tool), `package script must build ${format} via ${tool}`);
 }
 assert.ok(releaseWorkflow.includes("test \"$(find \"$OUTPUT\" -maxdepth 1 -name '*.deb' | wc -l)\" -eq 1"),

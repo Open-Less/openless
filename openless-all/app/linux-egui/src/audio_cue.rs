@@ -161,7 +161,7 @@ fn play_cue_blocking(tones: &[CueTone]) -> Result<(), String> {
         .default_output_config()
         .map_err(|error| format!("default output config failed: {error}"))?;
     let sample_format = supported.sample_format();
-    let sample_rate = supported.sample_rate().0;
+    let sample_rate = supported.sample_rate();
     let channels = usize::from(supported.channels()).max(1);
     let config: cpal::StreamConfig = supported.into();
     let mono = Arc::new(render_cue_mono(tones, sample_rate));
@@ -171,7 +171,7 @@ fn play_cue_blocking(tones: &[CueTone]) -> Result<(), String> {
     let idx = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-    let build = |format: cpal::SampleFormat| -> Result<cpal::Stream, cpal::BuildStreamError> {
+    let build = |format: cpal::SampleFormat| -> Result<cpal::Stream, cpal::Error> {
         macro_rules! make {
             ($ty:ty, $convert:expr) => {{
                 let mono = Arc::clone(&mono);
@@ -180,7 +180,7 @@ fn play_cue_blocking(tones: &[CueTone]) -> Result<(), String> {
                 let device = &device;
                 let config = &config;
                 device.build_output_stream::<$ty, _, _>(
-                    config,
+                    *config,
                     move |data: &mut [$ty], _: &cpal::OutputCallbackInfo| {
                         let frames = data.len() / channels;
                         let mut pos = idx.load(std::sync::atomic::Ordering::Acquire);

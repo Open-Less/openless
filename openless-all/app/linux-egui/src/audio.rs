@@ -286,8 +286,6 @@ fn run_audio_thread(
     runtime_error: Arc<std::sync::Mutex<Option<BackendError>>>,
     startup: std::sync::mpsc::SyncSender<Result<(), BackendError>>,
 ) {
-    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-
     let mut result = Err(BackendError::new(
         BackendErrorCode::Platform,
         "no Linux audio backend is available",
@@ -366,7 +364,7 @@ fn try_start_audio_stream(
     stop: &Arc<std::sync::atomic::AtomicBool>,
     runtime_error: &Arc<std::sync::Mutex<Option<BackendError>>>,
 ) -> Result<cpal::Stream, BackendError> {
-    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    use cpal::traits::{DeviceTrait, StreamTrait};
 
     let device = select_input_device(host, preferred_device_name).map_err(|error| {
         BackendError::new(error.code, format!("{backend} backend: {}", error.message))
@@ -375,7 +373,7 @@ fn try_start_audio_stream(
         .default_input_config()
         .map_err(|error| classify_audio_error("default input config", error.to_string()))?;
     let sample_format = supported.sample_format();
-    let input_sample_rate = supported.sample_rate().0;
+    let input_sample_rate = supported.sample_rate();
     let channels = usize::from(supported.channels());
     let config: cpal::StreamConfig = supported.into();
     let stream = build_input_stream(
@@ -401,14 +399,14 @@ fn select_input_device(
     host: &cpal::Host,
     preferred_device_name: Option<&str>,
 ) -> Result<cpal::Device, BackendError> {
-    use cpal::traits::{DeviceTrait, HostTrait};
+    use cpal::traits::HostTrait;
 
     if let Some(preferred) = preferred_device_name.filter(|name| !name.trim().is_empty()) {
         let devices = host
             .input_devices()
             .map_err(|error| classify_audio_error("enumerate input devices", error.to_string()))?;
         for device in devices {
-            if device.name().ok().as_deref() == Some(preferred) {
+            if device.to_string() == preferred {
                 return Ok(device);
             }
         }
@@ -451,7 +449,7 @@ fn build_input_stream(
             let mut normalizer = openless_core::PcmNormalizer::default();
             device
                 .build_input_stream::<$sample, _, _>(
-                    config,
+                    *config,
                     move |data: &[$sample], _| {
                         let samples = data.iter().copied().map($to_f32).collect::<Vec<f32>>();
                         if let Some(chunk) =
