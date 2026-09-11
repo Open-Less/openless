@@ -54,6 +54,7 @@ const KOTLIN_FILES = [
   'OpenLessUpdateInstaller.kt',
   'OpenLessContentReader.kt',
   'OpenLessContentWriter.kt',
+  'OpenLessImeService.kt',
 ];
 
 const KOTLIN_TEST_FILES = [
@@ -69,6 +70,7 @@ const KOTLIN_ANDROID_TEST_FILES = ['OpenLessCredentialVaultInstrumentedTest.kt']
 
 const XML_FILES = [
   ['res/xml/openless_accessibility_config.xml', 'openless_accessibility_config.xml'],
+  ['res/xml/openless_ime_method.xml', 'openless_ime_method.xml'],
 ];
 
 const GENERATED_ACCESSIBILITY_CONFIG = `<?xml version="1.0" encoding="utf-8"?>
@@ -84,6 +86,7 @@ const GENERATED_ACCESSIBILITY_CONFIG = `<?xml version="1.0" encoding="utf-8"?>
 
 const GENERATED_STRINGS_SNIPPET = `
     <string name="openless_accessibility_description">OpenLess uses accessibility to detect the keyboard and paste dictation results without switching your current keyboard.</string>
+    <string name="openless_ime_label">OpenLess Voice</string>
 `;
 
 export const SHIZUKU_STRINGS_BY_LOCALE = {
@@ -204,10 +207,12 @@ function mergeStringsXml(dryRun) {
     console.log(`Created ${stringsPath}`);
   } else {
     let existing = readFileSync(stringsPath, 'utf8');
-    if (!existing.includes('openless_accessibility_description')) {
-      existing = existing.replace('</resources>', `${GENERATED_STRINGS_SNIPPET}\n</resources>`);
-    }
-    const merged = mergeMissingStringResources(existing, SHIZUKU_STRINGS_BY_LOCALE.values);
+    const generatedStrings = mergeMissingStringResources(existing, {
+      openless_accessibility_description:
+        'OpenLess uses accessibility to detect the keyboard and paste dictation results without switching your current keyboard.',
+      openless_ime_label: 'OpenLess Voice',
+    });
+    const merged = mergeMissingStringResources(generatedStrings.content, SHIZUKU_STRINGS_BY_LOCALE.values);
     if (!dryRun) {
       writeFileSync(stringsPath, merged.content, 'utf8');
       console.log(`Merged OpenLess strings into ${stringsPath}`);

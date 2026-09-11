@@ -24,6 +24,17 @@ const SERVICE_SNIPPETS = [
             android:exported="false"
             android:foregroundServiceType="microphone" />`,
   `<service
+            android:name=".OpenLessImeService"
+            android:exported="true"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/openless_ime_method" />
+        </service>`,
+  `<service
             android:name=".OpenLessAccessibilityService"
             android:process=":accessibility"
             android:exported="false"
