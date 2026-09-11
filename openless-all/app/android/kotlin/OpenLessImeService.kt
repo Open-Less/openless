@@ -294,24 +294,32 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             setPadding(dp(4), dp(3), dp(4), dp(3))
             setBackgroundColor(Color.rgb(48, 48, 48))
         }
-        // Stroke mode follows the reference layout: a compact candidate strip,
-        // punctuation column, 3-column stroke grid, and a separate action rail.
+        val header = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
+        val brand = TextView(this).apply {
+            text = "◔  OpenLess"
+            textSize = 18f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            contentDescription = ui("打开 OpenLess 设置", "Open OpenLess settings")
+            setOnClickListener { openSettings() }
+        }
+        header.addView(brand, LinearLayout.LayoutParams(0, dp(38), 1f))
+        header.addView(buildModeToggle(), LinearLayout.LayoutParams(dp(150), dp(38)))
+        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)))
+
+        // Stroke mode follows the reference layout: a compact stroke row,
+        // candidate row, punctuation column, stroke grid, and action rail.
         val top = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
         val strokeRow = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
-        val strokeIndicator = TextView(this).apply {
-            text = "—"
-            textSize = 20f
-            setTextColor(Color.rgb(190, 30, 82))
-            gravity = android.view.Gravity.CENTER
-        }
-        strokeRow.addView(strokeIndicator, LinearLayout.LayoutParams(dp(42), dp(30)))
         strokePreview = TextView(this).apply {
             text = ui("—", "—")
             textSize = 16f
             setTextColor(Color.rgb(210, 210, 210))
             gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(dp(8), 0, 0, 0)
         }
         strokeRow.addView(strokePreview, LinearLayout.LayoutParams(0, dp(30), 1f))
         strokeRow.addView(keyboardKey("⌄", .5f) { clearStrokes() }, LinearLayout.LayoutParams(dp(38), dp(30)))
