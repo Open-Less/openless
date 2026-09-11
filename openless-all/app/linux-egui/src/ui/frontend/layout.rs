@@ -95,10 +95,7 @@ pub fn titlebar(ctx: &egui::Context, actions: &mut Vec<FrontendAction>) {
         .show(ctx, |ui| {
             ui.set_min_size(egui::vec2(window.width(), TITLEBAR_HEIGHT));
             let drag = ui.interact(
-                egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(window.width(), TITLEBAR_HEIGHT),
-                ),
+                titlebar,
                 ui.id().with("titlebar-drag"),
                 egui::Sense::click_and_drag(),
             );
@@ -109,13 +106,13 @@ pub fn titlebar(ctx: &egui::Context, actions: &mut Vec<FrontendAction>) {
             paint_app_icon(
                 ui,
                 egui::Rect::from_center_size(
-                    egui::pos2(16.0, TITLEBAR_HEIGHT / 2.0),
+                    window.min + egui::vec2(16.0, TITLEBAR_HEIGHT / 2.0),
                     egui::vec2(18.0, 18.0),
                 ),
                 &texture,
             );
             ui.painter().text(
-                egui::pos2(34.0, TITLEBAR_HEIGHT / 2.0 + 0.5),
+                window.min + egui::vec2(34.0, TITLEBAR_HEIGHT / 2.0 + 0.5),
                 egui::Align2::LEFT_CENTER,
                 "OpenLess",
                 egui::FontId::proportional(13.0),
@@ -124,7 +121,7 @@ pub fn titlebar(ctx: &egui::Context, actions: &mut Vec<FrontendAction>) {
 
             let button_width = 40.0;
             let close = egui::Rect::from_min_max(
-                egui::pos2(titlebar.right() - button_width, 0.0),
+                egui::pos2(titlebar.right() - button_width, titlebar.top()),
                 titlebar.right_bottom(),
             );
             let maximize = close.translate(egui::vec2(-button_width, 0.0));
@@ -265,14 +262,9 @@ pub fn resize_handles(ctx: &egui::Context) {
         .fixed_pos(window.min)
         .show(ctx, |ui| {
             ui.set_min_size(window.size());
-            let _local = egui::Rect::from_min_size(egui::Pos2::ZERO, window.size());
             for (index, (rect, direction)) in zones.into_iter().enumerate() {
-                let local_rect = rect.translate(-window.min.to_vec2());
-                let response = ui.interact(
-                    local_rect,
-                    ui.id().with(("resize", index)),
-                    egui::Sense::drag(),
-                );
+                let response =
+                    ui.interact(rect, ui.id().with(("resize", index)), egui::Sense::drag());
                 if response.drag_started() {
                     ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
                 }
@@ -290,7 +282,7 @@ pub fn sidebar(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Ve
         .show(ctx, |ui| {
             ui.set_min_size(egui::vec2(SIDEBAR_WIDTH, body.height()));
             ui.set_clip_rect(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
+                body.min,
                 egui::vec2(SIDEBAR_WIDTH, body.height()),
             ));
             ui.painter().rect_filled(ui.max_rect(), 0.0, theme::SURFACE);
