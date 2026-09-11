@@ -3,27 +3,263 @@
 # Every Simplified-Chinese string literal that lives outside src/i18n.rs must be
 # listed here AND be one of the genuinely non-UI / protocol / test literals below.
 # If a string is user-visible UI chrome or a control label, translate it in
-# src/i18n.rs and call tr_l10n/fmt_l10n with the resolved Lang instead of adding
-# it here. Each entry below is justified:
-#   - fcitx5 startup error text and its test-substring match (fcitx5 is out of
-#     scope for this Linux-egui i18n work; it stays a raw Host error string).
-#   - popup.rs / overview-test fixtures exercising unicode & JSONL round-trips.
-#   - audio_mute.rs host parsing of PulseAudio's *localized* mute reply ("是")
-#     plus its unit-test fixtures, and qa.rs's dynamic fallback payload used as
-#     the user's message when a voice question had no transcript.
-# The localization_contract test asserts the size stays tiny and that no other
-# raw CJK literal is introduced anywhere outside the catalog.
+# src/i18n.rs instead of adding it here.
+  自动
+# 角色\n你是 OpenLess 的{}助手。\n\n# 任务\n把输入整理成自然、清晰、可直接使用的文字。\n\n# 输出\n只输出最终文本，不添加解释。\n
+# 角色\n你是 OpenLess 的润色助手。\n\n# 任务\n把输入整理成自然、清晰、可直接使用的文字。\n\n# 输出\n只输出最终文本，不添加解释。\n
+10月
+11月
+12月
+1月
+2月
+3月
+4月
+5月
+6月
+7月
+8月
+9月
+AI 提供商
+ASR 服务
+ASR 语音
+LLM 服务
+LLM 模型
+OpenAI 兼容
 OpenLess fcitx5 插件
 session-一
 session-二
+{} 个风格包
+{} 天 · {} 天活跃
+{} 段
+↻  刷新
+▣  导入 ZIP
+● 已配置
+下载 ZIP
+不启用（Shift 按下不触发翻译）
+主题
+产品与平台
 今天第一句
+今日字数
+今日总时长
+今日概览
 今日第一句 has 5 chars
+从模板开始创建自己的风格
 他说：\"你好\" C:\\\\tmp\\\\文件
+使用方法
+保存
+保存历史
+修改提示词后保存，下一次润色将使用新的规则。双击风格卡即可打开此编辑器。
+停止播放
+全局录音的快捷键与触发方式。
+全部
+全部删除
+共 {} 条记录
+关于
+内置
+内置麦克风
+再次按右 Option 停止录音。
+切换式
+切换风格
+划词追问
+创建预设
+删除
+刷新
 前天
+历史
+历史记录
+历史记录暂未接线
+原文
 原文 \\\\ source
+原文，例如：{num}粒
+原样保留
+发布日志
+发布日志将在 egui 外链桥接完成后打开
+取消
+可继续按 右Ctrl 多轮追问。
+右 Option
+启动
+启动失败: {error}
+启动时最小化
+启用远程输入
+周一
+周三
+周二
+周五
+周六
+周四
+周日
+唤起 OpenLess
+在任意 app 选中文字。
+堆叠设置行
+复制
+复制失败: {error}
+外接麦克风
+外观与概览页显示选项。
+多
+失败
+安装到本地
+导出
+导出录音
+将识别结果中的常见错误自动替换为正确写法。
+少
+工作语言
+工具
+已切换到「{}」
+已切换到「原文」
+已发送
+已启用
+已复制
+已恢复默认提示词（演示）
+已插入
+市场后端桥接将在后续阶段完成
+布局
+帮助中心
+帮助中心将在 egui 外链桥接完成后打开
+平均段落
+年度活动
+应用
+开发工具
+开始/停止、翻译、问答和风格切换。
+当前
+当前提供商
+录音 {}
+录音与输入
+录音快捷键
+录音方式
+录音时静音
+录音过程中按翻译快捷键切换到翻译模式。
+快捷键
+恢复剪贴板
+恢复默认
+我的发布
+我赞过的
+技术术语
+按 Esc 关闭浮窗并清空历史。
+按 ⌘⇧; 打开浮窗。
+按 右Ctrl 录音，再按一次提交。
+按住说话
+按右 Option 开始录音。
+探索社区风格包
+控制 OpenLess 启动时的行为。
+插入
+插入与剪贴板
+搜索转写内容…
+搜索风格包
+播放录音
+数据桥接将在后续阶段完成
+新建风格包
+新预设
+新风格包
+日本語
 昨天
 是
+显示活动热力图
+暂无历史记录
+暂无数据
+暂无纠错规则
+暂无记录
+暂时没有找到风格包
+替换为
+最新
+最近记录
+服务
+服务地址
+未启用
 未找到 OpenLess fcitx5 插件；请重新安装当前软件包
+未请求
+未配置
+本地占位预览\n将原始表达保留在上下文中，优化语气、结构和可读性。\n这段内容会由真实风格包提示词替换。
+本地服务
+本地风格包
+本机保存的识别记录。
+本机存档
+松开按键后，译文会自动插入当前应用。
+概览
+模拟粘贴快捷键
+正在加载概览数据…
+正在加载风格市场…
+正在播放录音…
+正式表达
+此页面暂未接线
+流式插入
+流式结果保存剪贴板
+浅色
+浏览和切换风格包。
+润色
+润色提示词
+润色模式
+润色结果
+深色
+添加
+添加快捷键
+添加需要优先识别的自定义词汇。
+清晰结构
+清空
+激活
+热门
+版本 {}
+界面语言
+百炼
+监听端口
+目标语言与唯一工作语言相同，按翻译快捷键不会触发翻译。
+简体中文
+简短描述这个风格的使用场景
+系统默认
+紧凑布局
+累计记录
+繁体中文
+纠错规则
+编辑
+编辑  {}
+编辑风格包
+翻译
+翻译模式会在胶囊顶部显示状态。
+翻译目标语言
+翻译风格
+自动插入光标位置
+自动收集 ({learned})
+自动继承“风格”页当前激活的风格包。
+自定义热词，提升专有名词识别率
+英文写作
+让浮层和内容更适合你的工作方式。
+设置
+识别
+识别结果如何回到当前光标位置。
+词汇
+词汇表
+词汇，用逗号或换行分隔
+试试其他关键词或筛选条件
+语言
+语音润色
+请选择一条记录
+跟随系统
+轻度润色
+输入词汇，按回车添加
+近 30 天
+近 7 天
+近期活动
+远程输入
+选区润色
+选择 OpenLess 使用的界面语言。
+选择一组常用词汇快速添加。
+选择润色风格，让每次输出都保持一致
+通用
+通过局域网接收来自其他设备的输入。
+配置语音识别、润色与翻译所使用的服务。
+隐私
 静音：否
 静音：是
+预设
+预设名称
+风格
+风格包列表已刷新
+风格市场
+风格市场暂未接线
+风格描述
+风格直达
+高级
+麦克风
+默认模式
+（无文字）
 （语音问题）
+＋ 添加

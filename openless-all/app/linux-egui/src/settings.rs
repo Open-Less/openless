@@ -19,9 +19,11 @@ pub trait LinuxSettingsEffects: Send + Sync {
     fn set_active_asr_provider(&self, provider_id: &str) -> Result<(), BackendError>;
 
     fn set_launch_at_login(&self, _enabled: bool) -> Result<(), BackendError> {
-        Err(BackendError::new(BackendErrorCode::Unsupported, "launch-at-login is unavailable"))
+        Err(BackendError::new(
+            BackendErrorCode::Unsupported,
+            "launch-at-login is unavailable",
+        ))
     }
-
 }
 
 /// Linux implementation of the shared settings transaction runtime.
@@ -34,6 +36,7 @@ impl LinuxSettingsRuntime {
     pub fn new(credentials: LinuxCredentialStore) -> Self {
         Self::with_effects(Arc::new(Fcitx5SettingsEffects {
             credentials: Some(credentials),
+            autostart: production_autostart(),
         }))
     }
 
@@ -45,6 +48,7 @@ impl LinuxSettingsRuntime {
     pub fn hotkeys_only() -> Self {
         Self::with_effects(Arc::new(Fcitx5SettingsEffects {
             credentials: None,
+            autostart: production_autostart(),
         }))
     }
 
@@ -68,6 +72,12 @@ impl SettingsRuntime for LinuxSettingsRuntime {
         }
 
         let mut receipt = SettingsEffectReceipt::default();
+        if let Some(change) = &plan.launch_at_login {
+            if let Err(error) = self.effects.set_launch_at_login(change.next) {
+                return Err(SettingsEffectFailure::after_side_effect(error, receipt));
+            }
+            receipt.applied.push(SettingsEffectKind::LaunchAtLogin);
+        }
         if let Some(change) = &plan.active_asr_provider {
             if let Err(error) = self.effects.set_active_asr_provider(&change.next) {
                 return Err(SettingsEffectFailure::after_side_effect(error, receipt));
@@ -101,6 +111,11 @@ impl SettingsRuntime for LinuxSettingsRuntime {
         let mut failures = Vec::new();
         for effect in receipt.applied.iter().rev() {
             let result = match effect {
+                SettingsEffectKind::LaunchAtLogin => plan
+                    .launch_at_login
+                    .as_ref()
+                    .map(|change| self.effects.set_launch_at_login(change.previous))
+                    .unwrap_or(Ok(())),
                 SettingsEffectKind::Hotkeys => plan
                     .hotkeys
                     .as_ref()
@@ -133,6 +148,16 @@ impl SettingsRuntime for LinuxSettingsRuntime {
 
 struct Fcitx5SettingsEffects {
     credentials: Option<LinuxCredentialStore>,
+    autostart: Result<crate::AutostartManager, String>,
+}
+
+fn production_autostart() -> Result<crate::AutostartManager, String> {
+    std::env::current_exe()
+        .map_err(|error| format!("resolve current executable for autostart: {error}"))
+        .and_then(|executable| {
+            crate::AutostartManager::detect(executable)
+                .map_err(|error| format!("initialize XDG autostart manager: {error}"))
+        })
 }
 
 impl LinuxSettingsEffects for Fcitx5SettingsEffects {
@@ -183,6 +208,18 @@ impl LinuxSettingsEffects for Fcitx5SettingsEffects {
         credentials.set_active_provider_immediate(ProviderSlot::Asr, provider_id)
     }
 
+    fn set_launch_at_login(&self, enabled: bool) -> Result<(), BackendError> {
+        let manager = self
+            .autostart
+            .as_ref()
+            .map_err(|message| BackendError::new(BackendErrorCode::Platform, message.clone()))?;
+        manager.set_enabled(enabled).map_err(|error| {
+            BackendError::new(
+                BackendErrorCode::Platform,
+                format!("update XDG launch-at-login entry: {error}"),
+            )
+        })
+    }
 }
 
 fn tolerate_optional_fcitx_method(result: Result<(), BackendError>) -> Result<(), BackendError> {
