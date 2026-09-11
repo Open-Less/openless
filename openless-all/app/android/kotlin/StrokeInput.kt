@@ -40,16 +40,13 @@ internal class StrokeInputRepository(context: Context) {
                 }.toList()
             }
         }.getOrElse { builtInEntries }
-        // Keep phrases at the front for a useful first-page suggestion after
-        // the first character has been identified. Their code is a prefix of
-        // the concatenated character codes, so normal prefix search remains valid.
-        val phraseEntries = listOf(
-            "就是" to "nhszhspnhpzn" + "hs",
-            "就要" to "nhszhspnhpzn" + "h",
-            "就像" to "nhszhspnhpzn" + "p",
-            "就能" to "nhszhspnhpzn" + "h",
-        )
-        return (phraseEntries + table).distinctBy { it.first }
+        val preferred = listOf(
+            "一", "二", "三", "十", "丁", "七", "大", "天", "人", "不", "有", "中", "国", "上", "下",
+            "个", "了", "是", "的", "我", "你", "他", "她", "们", "在", "要", "来", "看", "去", "就",
+        ).withIndex().associate { it.value to it.index }
+        return table.distinctBy { it.first }.withIndex()
+            .sortedWith(compareBy({ preferred[it.value.first] ?: Int.MAX_VALUE }, { it.index }))
+            .map { it.value }
     }
 
     fun searchAsync(pattern: String, callback: (List<String>) -> Unit) {
