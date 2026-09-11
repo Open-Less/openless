@@ -93,8 +93,8 @@ assert.ok(!/appimagetool|APPIMAGE_|LINUX_EGUI_MINISIGN|latest-linux-egui/i.test(
 assert.ok(releaseWorkflow.includes('VERSION=${RELEASE_TAG#v}'), 'version must strip a leading v');
 assert.ok(releaseWorkflow.includes('VERSION=${VERSION%-tauri}'), 'legacy -tauri tag suffix must be tolerated');
 assert.ok(releaseWorkflow.includes('RELEASE_TAG:-}'), 'flow must run without a release tag');
-assert.ok(/cargo metadata[\s\S]*select\(\.name == "openless-linux-egui"\)/.test(releaseWorkflow),
-  'flow must resolve its version from cargo metadata when no tag is provided');
+assert.ok(releaseWorkflow.includes("require('./package.json').version"),
+  'flow must resolve its version from the main app package when no tag is provided');
 assert.ok(!releaseWorkflow.includes('-tauri required') && !/case "\$RELEASE_TAG"[\s\S]*\*-tauri/.test(releaseWorkflow),
   'flow must not mandate a -tauri release tag');
 

@@ -128,7 +128,7 @@ jobs:
             VERSION=${RELEASE_TAG#v}
             VERSION=${VERSION%-tauri}
           else
-            VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "openless-linux-egui") | .version')
+            VERSION=$(node -p "require('./package.json').version")
           fi
           test -n "$VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"

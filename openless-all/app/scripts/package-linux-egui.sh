@@ -39,7 +39,7 @@ for bus in /run/user/[0-9]*/bus; do
   runuser -u "$user" -- env \
     XDG_RUNTIME_DIR="$runtime_dir" \
     DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" \
-    fcitx5 -r >/dev/null 2>&1 || true
+    timeout 5s fcitx5 -r >/dev/null 2>&1 || true
 done
 exit 0
 EOF
@@ -86,35 +86,45 @@ install -Dm755 "$PLUGIN_ROOT/libopenless.so" \
 install -Dm644 "$PLUGIN_ROOT/openless.conf" \
   "$RPM_ROOT/usr/share/fcitx5/addon/openless.conf"
 RPM_TOP="$TARGET_DIR/rpmbuild"
+RPM_VERSION=${VERSION,,}
+RPM_VERSION=${RPM_VERSION//-/.}
 rm -rf "$RPM_TOP"
 mkdir -p "$RPM_TOP"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS,rpmdb,tmp}
-tar -C "$RPM_ROOT" --transform="s,^\./,openless-$VERSION/," \
-  -czf "$RPM_TOP/SOURCES/openless-$VERSION.tar.gz" .
+tar -C "$RPM_ROOT" --transform="s,^\./,openless-$RPM_VERSION/," \
+  -czf "$RPM_TOP/SOURCES/openless-$RPM_VERSION.tar.gz" .
 cat > "$RPM_TOP/SPECS/openless.spec" <<EOF
 Name: openless
-Version: $VERSION
+Version: $RPM_VERSION
 Release: 1
 Summary: OpenLess Linux egui host
 License: AGPL-3.0-only
 URL: https://github.com/Open-Less/openless
 BuildArch: x86_64
-Source0: openless-$VERSION.tar.gz
+Source0: openless-$RPM_VERSION.tar.gz
 Requires: fcitx5, dbus-libs, alsa-lib, pipewire-libs, pulseaudio-libs
 %description
 OpenLess Linux egui host.
 %prep
-%setup -q -n openless-$VERSION
+%setup -q -n openless-$RPM_VERSION
 %install
 mkdir -p %{buildroot}
 cp -a . %{buildroot}/
 %files
 /
 %post
-"$POST_INSTALL"
+set +e
+for bus in /run/user/[0-9]*/bus; do
+  [ -S "\$bus" ] || continue
+  runtime_dir=\${bus%/bus}; uid=\${runtime_dir##*/}
+  [ "\$uid" != 0 ] || continue
+  user=\$(getent passwd "\$uid" | cut -d: -f1)
+  [ -n "\$user" ] && timeout 5s runuser -u "\$user" -- env XDG_RUNTIME_DIR="\$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=\$bus" fcitx5 -r >/dev/null 2>&1 || true
+done
+exit 0
 EOF
 rpmbuild --define "_topdir $RPM_TOP" --define "_dbpath $RPM_TOP/rpmdb" \
   --define "_tmppath $RPM_TOP/tmp" -bb "$RPM_TOP/SPECS/openless.spec"
-mv "$RPM_TOP/RPMS/x86_64/openless-$VERSION-1.x86_64.rpm" \
+mv "$RPM_TOP/RPMS/x86_64/openless-$RPM_VERSION-1.x86_64.rpm" \
   "$OUTPUT/OpenLess-Linux-egui-${VERSION}-${ARCH}.rpm"
 
 find "$OUTPUT" -maxdepth 1 -type f -printf '%f\n' | sort
