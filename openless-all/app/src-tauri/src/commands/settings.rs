@@ -124,6 +124,9 @@ impl openless_core::SettingsRuntime for TauriSettingsRuntime<'_> {
                             .map_err(Self::platform_error)
                     })
                     .unwrap_or(Ok(())),
+                // Desktop launch-at-login is owned by tauri-plugin-autostart;
+                // Core currently does not stage this preference on Tauri.
+                openless_core::SettingsEffectKind::LaunchAtLogin => Ok(()),
                 openless_core::SettingsEffectKind::WindowsKeyboard => plan
                     .windows_keyboard
                     .as_ref()
