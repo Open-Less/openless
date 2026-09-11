@@ -35,8 +35,11 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var voiceButton: VoiceButton? = null
     private var englishUi = false
     private val strokeRepository by lazy { StrokeInputRepository(this) }
+    private val phraseRepository by lazy { StrokePhraseRepository(this) }
     private var strokeCode = ""
     private var strokeQueryEpoch = 0L
+    private var confirmedText = ""
+    private var phraseQueryEpoch = 0L
     private var strokePreview: TextView? = null
     private var strokeCandidates: LinearLayout? = null
 
@@ -68,6 +71,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }
         stopRuntimeService()
         strokeRepository.shutdown()
+        phraseRepository.shutdown()
         super.onDestroy()
     }
 
@@ -224,6 +228,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         keyboardShift = false
         strokeCode = ""
         strokeQueryEpoch++
+        confirmedText = ""
+        phraseQueryEpoch++
         refreshInputView()
     }
 
@@ -400,6 +406,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     private fun appendStroke(stroke: String) {
         if (strokeCode.length >= 32) return
+        if (strokeCode.isEmpty()) phraseQueryEpoch++
         strokeCode += stroke
         strokePreview?.text = ui("笔画：$strokeCode", "Strokes: $strokeCode")
         val query = ++strokeQueryEpoch
@@ -430,8 +437,35 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     private fun commitStrokeCandidate(candidate: String) {
-        if (!isSensitiveField(currentInputEditorInfo)) currentInputConnection?.commitText(candidate, 1)
+        if (isSensitiveField(currentInputEditorInfo)) return
+        val connection = currentInputConnection ?: return
+        if (!connection.commitText(candidate, 1)) return
+        confirmedText = (confirmedText + candidate).takeLast(MAX_ASSOCIATION_CONTEXT)
         clearStrokes()
+        refreshAssociations()
+    }
+
+    private fun refreshAssociations() {
+        val context = confirmedText.takeLast(MAX_ASSOCIATION_CONTEXT)
+        val query = ++phraseQueryEpoch
+        if (context.isEmpty()) return
+        phraseRepository.searchAsync(context) { result ->
+            if (query != phraseQueryEpoch || inputMode != InputMode.STROKE || confirmedText.takeLast(MAX_ASSOCIATION_CONTEXT) != context) return@searchAsync
+            strokeCandidates?.removeAllViews()
+            result.forEach { phrase ->
+                strokeCandidates?.addView(keyboardKey(phrase, 1f) { commitAssociation(phrase, context) }.apply { textSize = 18f }, LinearLayout.LayoutParams(dp(68), dp(30)))
+            }
+        }
+    }
+
+    private fun commitAssociation(displayText: String, matchedContext: String) {
+        if (isSensitiveField(currentInputEditorInfo) || !displayText.startsWith(matchedContext)) return
+        val suffix = displayText.removePrefix(matchedContext)
+        val connection = currentInputConnection ?: return
+        if (suffix.isNotEmpty() && !connection.commitText(suffix, 1)) return
+        confirmedText = displayText.takeLast(MAX_ASSOCIATION_CONTEXT)
+        clearStrokes()
+        refreshAssociations()
     }
 
     private fun addKeyboardRow(parent: LinearLayout, keys: List<String>) {
@@ -502,6 +536,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         refreshLanguage()
         startRuntimeService()
         sessionEpoch++
+        confirmedText = ""
+        phraseQueryEpoch++
+        strokeCode = ""
         recording = false
         processing = false
         if (isSensitiveField(attribute)) {
@@ -952,6 +989,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     companion object {
         private const val TEST_TEXT = "OpenLess IME 测试上屏"
+        private const val MAX_ASSOCIATION_CONTEXT = 8
 
         @Volatile
         private var activeInstance: java.lang.ref.WeakReference<OpenLessImeService>? = null
