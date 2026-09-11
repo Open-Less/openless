@@ -41,7 +41,7 @@ internal class StrokeInputRepository(context: Context) {
             }
         }.getOrElse { builtInEntries }
         val preferred = listOf(
-            "一", "二", "三", "十", "丁", "七", "大", "天", "人", "不", "有", "中", "国", "上", "下",
+            "一", "王", "二", "三", "十", "丁", "七", "大", "天", "人", "不", "有", "中", "国", "上", "下",
             "个", "了", "是", "的", "我", "你", "他", "她", "们", "在", "要", "来", "看", "去", "就",
         ).withIndex().associate { it.value to it.index }
         return table.distinctBy { it.first }.withIndex()

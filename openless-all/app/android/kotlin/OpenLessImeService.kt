@@ -36,6 +36,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var englishUi = false
     private val strokeRepository by lazy { StrokeInputRepository(this) }
     private val phraseRepository by lazy { StrokePhraseRepository(this) }
+    private val userFrequency by lazy { StrokeUserFrequency(this) }
     private var strokeCode = ""
     private var strokeQueryEpoch = 0L
     private var confirmedText = ""
@@ -328,7 +329,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             setPadding(dp(8), 0, 0, 0)
         }
         strokeRow.addView(strokePreview, LinearLayout.LayoutParams(0, dp(30), 1f))
-        strokeRow.addView(keyboardKey("⌄", .5f) { clearStrokes() }, LinearLayout.LayoutParams(dp(38), dp(30)))
         top.addView(strokeRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)))
 
         val candidateRow = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
@@ -338,9 +338,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             addView(strokeCandidates, ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
         }
         candidateRow.addView(candidatesScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)))
-        listOf("不", "有", "下", "↓", "在", "要").forEach { candidate ->
-            strokeCandidates?.addView(keyboardKey(candidate, 1f) { commitStrokeCandidate(candidate) }.apply { textSize = 18f }, LinearLayout.LayoutParams(dp(36), dp(30)))
-        }
         top.addView(candidateRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)))
         root.addView(top, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(60)))
 
@@ -439,7 +436,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private fun commitStrokeCandidate(candidate: String) {
         if (isSensitiveField(currentInputEditorInfo)) return
         val connection = currentInputConnection ?: return
+        val contextBeforeCommit = confirmedText.takeLast(MAX_ASSOCIATION_CONTEXT)
         if (!connection.commitText(candidate, 1)) return
+        userFrequency.record(currentInputEditorInfo?.packageName.orEmpty(), contextBeforeCommit, candidate)
         confirmedText = (confirmedText + candidate).takeLast(MAX_ASSOCIATION_CONTEXT)
         clearStrokes()
         refreshAssociations()
@@ -449,11 +448,12 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         val context = confirmedText.takeLast(MAX_ASSOCIATION_CONTEXT)
         val query = ++phraseQueryEpoch
         if (context.isEmpty()) return
-        phraseRepository.searchAsync(context) { result ->
+        val packageName = currentInputEditorInfo?.packageName.orEmpty()
+        phraseRepository.searchAsync(context, packageName) { result ->
             if (query != phraseQueryEpoch || inputMode != InputMode.STROKE || confirmedText.takeLast(MAX_ASSOCIATION_CONTEXT) != context) return@searchAsync
             strokeCandidates?.removeAllViews()
-            result.forEach { phrase ->
-                strokeCandidates?.addView(keyboardKey(phrase, 1f) { commitAssociation(phrase, context) }.apply { textSize = 18f }, LinearLayout.LayoutParams(dp(68), dp(30)))
+            result.forEach { candidate ->
+                strokeCandidates?.addView(keyboardKey(candidate.text, 1f) { commitAssociation(candidate.text, context) }.apply { textSize = 18f }, LinearLayout.LayoutParams(dp(68), dp(30)))
             }
         }
     }
@@ -463,6 +463,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         val suffix = displayText.removePrefix(matchedContext)
         val connection = currentInputConnection ?: return
         if (suffix.isNotEmpty() && !connection.commitText(suffix, 1)) return
+        userFrequency.record(currentInputEditorInfo?.packageName.orEmpty(), matchedContext, displayText)
         confirmedText = displayText.takeLast(MAX_ASSOCIATION_CONTEXT)
         clearStrokes()
         refreshAssociations()
