@@ -56,6 +56,7 @@ const KOTLIN_FILES = [
   'OpenLessContentReader.kt',
   'OpenLessContentWriter.kt',
   'OpenLessImeService.kt',
+  'StrokeInput.kt',
   'OpenLessRuntimeService.kt',
   'OpenLessBackendWarmupActivity.kt',
 ];

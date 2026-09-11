@@ -20,10 +20,12 @@ import android.widget.TextView
 
 /** Minimal system IME surface. Voice transport is intentionally added in a later phase. */
 class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlayStateListener {
+    private enum class InputMode { VOICE, STROKE, ENGLISH }
+
     private var sessionEpoch = 0L
     private var recording = false
     private var processing = false
-    private var keyboardMode = false
+    private var inputMode = InputMode.VOICE
     private var symbolMode = false
     private var keyboardShift = false
     private var state = "idle"
@@ -32,6 +34,11 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var status: TextView? = null
     private var voiceButton: VoiceButton? = null
     private var englishUi = false
+    private val strokeRepository = StrokeInputRepository()
+    private var strokeCode = ""
+    private var strokeQueryEpoch = 0L
+    private var strokePreview: TextView? = null
+    private var strokeCandidates: LinearLayout? = null
 
     private fun ui(zh: String, en: String) = if (englishUi) en else zh
 
@@ -60,19 +67,23 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             OpenLessOverlayBridge.imeTextListener = null
         }
         stopRuntimeService()
+        strokeRepository.shutdown()
         super.onDestroy()
     }
 
     override fun onCreateInputView(): View {
         refreshLanguage()
         startRuntimeService()
-        if (keyboardMode) return buildKeyboardView()
+        if (inputMode == InputMode.ENGLISH) return buildKeyboardView()
+        if (inputMode == InputMode.STROKE) return buildStrokeView()
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(300))
             minimumHeight = dp(300)
             setPadding(dp(16), dp(8), dp(16), dp(4))
             setBackgroundColor(Color.rgb(48, 48, 48))
+            clipChildren = false
+            clipToPadding = false
         }
         val header = LinearLayout(this).apply {
             gravity = android.view.Gravity.CENTER_VERTICAL
@@ -89,7 +100,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             }
         }
         header.addView(brand, LinearLayout.LayoutParams(0, dp(38), 1f))
-        header.addView(buildModeToggle(), LinearLayout.LayoutParams(dp(104), dp(38)))
+        header.addView(buildModeToggle(), LinearLayout.LayoutParams(dp(150), dp(38)))
         root.addView(header, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             dp(38),
@@ -113,6 +124,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }
         val buttonHolder = LinearLayout(this).apply {
             gravity = android.view.Gravity.CENTER
+            setBackgroundColor(Color.TRANSPARENT)
+            clipChildren = false
+            clipToPadding = false
         }
         buttonHolder.addView(voiceButton!!, LinearLayout.LayoutParams(dp(176), dp(72)))
         root.addView(buttonHolder, LinearLayout.LayoutParams(
@@ -123,6 +137,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
         val footer = LinearLayout(this).apply {
             gravity = android.view.Gravity.CENTER_VERTICAL
+            clipChildren = false
+            clipToPadding = false
         }
         val inputMethodButton = TextView(this).apply {
             text = "⌨"
@@ -201,15 +217,13 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         setInputView(onCreateInputView())
     }
 
-    private fun buildModeToggle(): View = ModeToggle(this, keyboardMode) { selectKeyboard ->
-        if (selectKeyboard) {
-            keyboardMode = true
-            symbolMode = false
-            keyboardShift = false
-        } else {
-            keyboardMode = false
-            symbolMode = false
-        }
+    private fun buildModeToggle(): View = ModeToggle(this, inputMode, englishUi) { selected ->
+        if (recording || processing) cancelDictation()
+        inputMode = selected
+        symbolMode = false
+        keyboardShift = false
+        strokeCode = ""
+        strokeQueryEpoch++
         refreshInputView()
     }
 
@@ -236,7 +250,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             }
         }
         header.addView(brand, LinearLayout.LayoutParams(0, dp(38), 1f))
-        header.addView(buildModeToggle(), LinearLayout.LayoutParams(dp(104), dp(38)))
+        header.addView(buildModeToggle(), LinearLayout.LayoutParams(dp(150), dp(38)))
         root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)))
 
         // 保持和 Typeless 类似的五排结构：数字、字母三排、底部功能排。
@@ -270,6 +284,96 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         bottom.addView(returnButton)
         root.addView(bottom, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         return root
+    }
+
+    private fun buildStrokeView(): View {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(300))
+            minimumHeight = dp(300)
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            setBackgroundColor(Color.rgb(48, 48, 48))
+        }
+        val header = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
+        val brand = TextView(this).apply {
+            text = "◔  OpenLess"
+            textSize = 18f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            contentDescription = ui("打开 OpenLess 设置", "Open OpenLess settings")
+            setOnClickListener { openSettings() }
+        }
+        header.addView(brand, LinearLayout.LayoutParams(0, dp(38), 1f))
+        header.addView(buildModeToggle(), LinearLayout.LayoutParams(dp(150), dp(38)))
+        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)))
+
+        strokePreview = TextView(this).apply {
+            text = ui("笔画：请选择", "Strokes: choose strokes")
+            textSize = 14f
+            setTextColor(Color.rgb(190, 190, 190))
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(dp(8), 0, dp(8), 0)
+        }
+        root.addView(strokePreview, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)))
+
+        val candidatesScroll = android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            strokeCandidates = LinearLayout(context).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
+            addView(strokeCandidates, ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        root.addView(candidatesScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)))
+
+        val strokeKeys = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
+        listOf("一" to "h", "丨" to "s", "丿" to "p", "丶" to "n", "乛" to "z", "＊" to "*").forEach { (label, code) ->
+            strokeKeys.addView(keyboardKey(label, 1f) { appendStroke(code) })
+        }
+        root.addView(strokeKeys, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        val actions = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
+        actions.addView(keyboardKey("⌫", 1f) { deleteStroke() })
+        actions.addView(keyboardKey(ui("清空", "Clear"), 1.25f) { clearStrokes() })
+        actions.addView(keyboardKey(ui("空格", "Space"), 1.35f) { currentInputConnection?.commitText(" ", 1) })
+        actions.addView(keyboardKey("return", 1.25f) { sendEnterKey() })
+        actions.addView(keyboardKey("⌨", .8f) { (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)?.showInputMethodPicker() })
+        root.addView(actions, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)))
+        return root
+    }
+
+    private fun appendStroke(stroke: String) {
+        if (strokeCode.length >= 8) return
+        strokeCode += stroke
+        strokePreview?.text = ui("笔画：$strokeCode", "Strokes: $strokeCode")
+        val query = ++strokeQueryEpoch
+        strokeRepository.searchAsync(strokeCode) { result ->
+            if (query != strokeQueryEpoch || inputMode != InputMode.STROKE) return@searchAsync
+            strokeCandidates?.removeAllViews()
+            result.forEach { candidate ->
+                strokeCandidates?.addView(keyboardKey(candidate, 1f) { commitStrokeCandidate(candidate) }, LinearLayout.LayoutParams(dp(44), dp(36)))
+            }
+        }
+    }
+
+    private fun deleteStroke() {
+        if (strokeCode.isNotEmpty()) {
+            strokeCode = strokeCode.dropLast(1)
+            strokeQueryEpoch++
+            strokePreview?.text = ui("笔画：$strokeCode", "Strokes: $strokeCode")
+            strokeCandidates?.removeAllViews()
+            if (strokeCode.isNotEmpty()) appendStroke("")
+        } else currentInputConnection?.deleteSurroundingText(1, 0)
+    }
+
+    private fun clearStrokes() {
+        strokeCode = ""
+        strokeQueryEpoch++
+        strokePreview?.text = ui("笔画：请选择", "Strokes: choose strokes")
+        strokeCandidates?.removeAllViews()
+    }
+
+    private fun commitStrokeCandidate(candidate: String) {
+        if (!isSensitiveField(currentInputEditorInfo)) currentInputConnection?.commitText(candidate, 1)
+        clearStrokes()
     }
 
     private fun addKeyboardRow(parent: LinearLayout, keys: List<String>) {
@@ -600,8 +704,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     private class ModeToggle(
         context: android.content.Context,
-        private val keyboardSelected: Boolean,
-        private val onModeSelected: (Boolean) -> Unit,
+        private val selectedMode: InputMode,
+        private val englishUi: Boolean,
+        private val onModeSelected: (InputMode) -> Unit,
     ) : View(context) {
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
@@ -614,15 +719,21 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             paint.color = Color.rgb(28, 28, 28)
             canvas.drawRoundRect(inset, inset, width - inset, height - inset, radius, radius, paint)
 
-            val segmentLeft = if (keyboardSelected) width / 2f else inset
-            val segmentRight = if (keyboardSelected) width - inset else width / 2f + dp(2)
             paint.color = Color.rgb(88, 86, 88)
+            val segmentWidth = width / 3f
+            val selectedIndex = when (selectedMode) {
+                InputMode.VOICE -> 0
+                InputMode.STROKE -> 1
+                InputMode.ENGLISH -> 2
+            }
+            val segmentLeft = selectedIndex * segmentWidth + inset
+            val segmentRight = (selectedIndex + 1) * segmentWidth - inset
             canvas.drawRoundRect(segmentLeft, inset, segmentRight, height - inset, radius, radius, paint)
 
             paint.color = Color.WHITE
             paint.strokeWidth = dp(2.4f.toInt())
             paint.strokeCap = Paint.Cap.ROUND
-            val centerX = width * 0.25f
+            val centerX = segmentWidth * 0.5f
             val centerY = height / 2f
             val bars = floatArrayOf(.28f, .58f, .82f, 1f, .68f, .44f, .28f)
             val gap = dp(5)
@@ -631,15 +742,21 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 val half = height * 0.32f * factor
                 canvas.drawLine(x, centerY - half, x, centerY + half, paint)
             }
-            paint.textSize = dp(17)
+            paint.textSize = dp(if (englishUi) 11 else 15)
             paint.textAlign = Paint.Align.CENTER
             paint.typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
-            canvas.drawText("EN", width * 0.75f, centerY - (paint.ascent() + paint.descent()) / 2f, paint)
+            canvas.drawText(if (englishUi) "Stroke" else "笔", segmentWidth * 1.5f, centerY - (paint.ascent() + paint.descent()) / 2f, paint)
+            canvas.drawText("EN", segmentWidth * 2.5f, centerY - (paint.ascent() + paint.descent()) / 2f, paint)
         }
 
         override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
             if (event.action == android.view.MotionEvent.ACTION_UP) {
-                onModeSelected(event.x >= width / 2f)
+                val index = (event.x / (width / 3f)).toInt().coerceIn(0, 2)
+                onModeSelected(when (index) {
+                    0 -> InputMode.VOICE
+                    1 -> InputMode.STROKE
+                    else -> InputMode.ENGLISH
+                })
             }
             return true
         }
@@ -734,34 +851,29 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 return
             }
             if (isRecording) {
-                val live = 0.35f + audioLevel * 0.65f
-                val heights = floatArrayOf(.25f, .48f, .72f, 1f, .78f, .52f, .30f)
-                    .map { (it * live).coerceAtLeast(0.14f) }
-                    .toFloatArray()
-                paint.shader = LinearGradient(
-                    left, centerY, right, centerY,
-                    intArrayOf(
-                        Color.rgb(91, 141, 239), Color.rgb(139, 111, 242),
-                        Color.rgb(201, 111, 214), Color.rgb(224, 135, 135),
-                        Color.rgb(217, 167, 95), Color.rgb(95, 184, 168),
-                    ), null, Shader.TileMode.CLAMP,
-                )
-                // Larger, more legible waveform; its height remains driven by
-                // the live microphone level rather than by a looping animation.
+                // Monochrome waveform: quiet input stays compact while speech
+                // expands the bars clearly with the live microphone level.
+                val live = (audioLevel * 1.15f).coerceIn(0f, 1f)
+                val heights = floatArrayOf(.12f, .22f, .40f, .68f, .92f, 1f, .78f, .50f, .28f)
                 val gap = width * 0.095f
                 val startX = centerX - gap * (heights.size - 1) / 2f
                 heights.forEachIndexed { index, heightFactor ->
                     val x = startX + index * gap
-                    val halfHeight = minOf(height * 0.95f, dp(66).toFloat()) * heightFactor
+                    val shimmer = 0.82f + 0.18f * kotlin.math.sin(
+                        (phase * 1.8f + index * 1.37f).toDouble(),
+                    ).toFloat()
+                    val halfHeight = minOf(height * 0.95f, dp(66).toFloat()) *
+                        (0.035f + live * 0.965f) * heightFactor * shimmer
+                    paint.color = Color.rgb(222, 222, 222)
+                    paint.strokeWidth = dp(3).toFloat()
                     canvas.drawLine(x, centerY - halfHeight, x, centerY + halfHeight, paint)
                 }
-                paint.shader = null
             } else if (isProcessing) {
-                // 复用 PC 端 ThinkingDots 的六色环形思考动画。
+                // Analysis state uses the same restrained monochrome palette.
                 val colors = intArrayOf(
-                    Color.rgb(91, 141, 239), Color.rgb(139, 111, 242),
-                    Color.rgb(201, 111, 214), Color.rgb(224, 135, 135),
-                    Color.rgb(217, 167, 95), Color.rgb(95, 184, 168),
+                    Color.rgb(245, 245, 245), Color.rgb(205, 205, 205),
+                    Color.rgb(170, 170, 170), Color.rgb(235, 235, 235),
+                    Color.rgb(190, 190, 190), Color.rgb(220, 220, 220),
                 )
                 val orbit = minOf(width * 0.28f, height * 0.52f)
                 val dotRadius = minOf(width * 0.055f, height * 0.15f)
