@@ -403,7 +403,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     private fun appendStroke(stroke: String) {
         if (strokeCode.length >= 32) return
-        if (strokeCode.isEmpty()) phraseQueryEpoch++
+        if (strokeCode.isEmpty()) {
+            phraseQueryEpoch++
+            strokeCandidates?.removeAllViews()
+        }
         strokeCode += stroke
         strokePreview?.text = ui("笔画：$strokeCode", "Strokes: $strokeCode")
         val query = ++strokeQueryEpoch
@@ -423,7 +426,16 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             strokePreview?.text = ui("笔画：$strokeCode", "Strokes: $strokeCode")
             strokeCandidates?.removeAllViews()
             if (strokeCode.isNotEmpty()) appendStroke("")
-        } else currentInputConnection?.deleteSurroundingText(1, 0)
+        } else {
+            currentInputConnection?.deleteSurroundingText(1, 0)
+            if (confirmedText.isNotEmpty()) {
+                confirmedText = confirmedText.dropLast(1)
+                phraseQueryEpoch++
+                refreshAssociations()
+            } else {
+                strokeCandidates?.removeAllViews()
+            }
+        }
     }
 
     private fun clearStrokes() {
@@ -453,7 +465,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             if (query != phraseQueryEpoch || inputMode != InputMode.STROKE || confirmedText.takeLast(MAX_ASSOCIATION_CONTEXT) != context) return@searchAsync
             strokeCandidates?.removeAllViews()
             result.forEach { candidate ->
-                strokeCandidates?.addView(keyboardKey(candidate.text, 1f) { commitAssociation(candidate.text, context) }.apply { textSize = 18f }, LinearLayout.LayoutParams(dp(68), dp(30)))
+                val matchedPrefix = candidate.matchedPrefix.ifEmpty { context }
+                strokeCandidates?.addView(keyboardKey(candidate.text, 1f) { commitAssociation(candidate.text, matchedPrefix) }.apply { textSize = 18f }, LinearLayout.LayoutParams(dp(68), dp(30)))
             }
         }
     }
@@ -464,7 +477,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         val connection = currentInputConnection ?: return
         if (suffix.isNotEmpty() && !connection.commitText(suffix, 1)) return
         userFrequency.record(currentInputEditorInfo?.packageName.orEmpty(), matchedContext, displayText)
-        confirmedText = displayText.takeLast(MAX_ASSOCIATION_CONTEXT)
+        confirmedText = (confirmedText + suffix).takeLast(MAX_ASSOCIATION_CONTEXT)
         clearStrokes()
         refreshAssociations()
     }

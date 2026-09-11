@@ -8,7 +8,7 @@ import java.util.concurrent.Executors
 
 /** Independent confirmed-text -> phrase predictor; it never reads stroke codes. */
 internal class StrokePhraseRepository(context: Context) {
-    data class Candidate(val text: String, val baseWeight: Int)
+    data class Candidate(val text: String, val baseWeight: Int, val matchedPrefix: String)
 
     private class Node {
         val children = HashMap<Char, Node>()
@@ -29,9 +29,11 @@ internal class StrokePhraseRepository(context: Context) {
         if (prefix.isEmpty()) return callback(emptyList())
         executor.execute {
             ensureLoaded()
-            val result = (synchronized(cache) { cache[prefix] } ?: find(prefix).also {
+            val result = (synchronized(cache) { cache[prefix] } ?: findLongestSuffix(prefix).also {
                 synchronized(cache) { cache[prefix] = it }
-            }).sortedWith(compareByDescending<Candidate> { it.baseWeight + userFrequency.score(packageName, prefix, it.text).toInt() })
+            }).sortedWith(compareByDescending<Candidate> {
+                it.baseWeight + userFrequency.score(packageName, it.matchedPrefix.ifEmpty { prefix }, it.text).toInt()
+            })
             Handler(Looper.getMainLooper()).post { callback(result) }
         }
     }
@@ -48,7 +50,7 @@ internal class StrokePhraseRepository(context: Context) {
                         val parts = line.split('\t', limit = 2)
                         val phrase = parts.getOrNull(0) ?: return@forEach
                         val weight = parts.getOrNull(1)?.toIntOrNull() ?: 0
-                        if (phrase.length in 2..8 && weight > 0) insert(Candidate(phrase, weight))
+                        if (phrase.length in 2..8 && weight > 0) insert(Candidate(phrase, weight, ""))
                     }
                 }
             }
@@ -71,7 +73,15 @@ internal class StrokePhraseRepository(context: Context) {
     private fun find(prefix: String): List<Candidate> {
         var node = root
         prefix.forEach { character -> node = node.children[character] ?: return emptyList() }
-        return node.top.toList()
+        return node.top.map { it.copy(matchedPrefix = prefix) }
+    }
+
+    private fun findLongestSuffix(prefix: String): List<Candidate> {
+        for (length in prefix.length downTo 1) {
+            val result = find(prefix.takeLast(length))
+            if (result.isNotEmpty()) return result
+        }
+        return emptyList()
     }
 
     private companion object {
