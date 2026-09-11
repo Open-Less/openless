@@ -22,6 +22,7 @@ const aidlRoot = join(appRoot, 'android/aidl');
 const androidAppRoot = join(appRoot, 'src-tauri/gen/android/app');
 const genRoot = join(appRoot, 'src-tauri/gen/android/app/src/main');
 const kotlinDest = join(genRoot, 'java/com/openless/app');
+const mainActivityPath = join(kotlinDest, 'MainActivity.kt');
 const kotlinTestDest = join(androidAppRoot, 'src/test/java/com/openless/app');
 const kotlinAndroidTestDest = join(androidAppRoot, 'src/androidTest/java/com/openless/app');
 const androidAppGradle = join(androidAppRoot, 'build.gradle.kts');
@@ -55,6 +56,8 @@ const KOTLIN_FILES = [
   'OpenLessContentReader.kt',
   'OpenLessContentWriter.kt',
   'OpenLessImeService.kt',
+  'OpenLessRuntimeService.kt',
+  'OpenLessBackendWarmupActivity.kt',
 ];
 
 const KOTLIN_TEST_FILES = [
@@ -324,6 +327,19 @@ function ensureInstrumentationRunner(dryRun) {
   console.log(`Added Android instrumentation runner to ${androidAppGradle}`);
 }
 
+function ensureMainActivityOpen(dryRun) {
+  if (!existsSync(mainActivityPath)) return;
+  const existing = readFileSync(mainActivityPath, 'utf8');
+  const updated = existing.replace(/(?:open\s+)*class MainActivity\s*:/, 'open class MainActivity:');
+  if (updated === existing) return;
+  if (dryRun) {
+    console.log(`[dry-run] Would make MainActivity inheritable for background warmup`);
+    return;
+  }
+  writeFileSync(mainActivityPath, updated, 'utf8');
+  console.log(`Made MainActivity inheritable for background warmup`);
+}
+
 function main() {
   const { dryRun } = parseArgs(process.argv.slice(2));
 
@@ -342,6 +358,7 @@ function main() {
   }
   copyDirectoryContents(androidIconRoot, resDest, dryRun);
   copyNamedFiles(KOTLIN_FILES, kotlinRoot, kotlinDest, dryRun);
+  ensureMainActivityOpen(dryRun);
   copyNamedFiles(KOTLIN_TEST_FILES, kotlinTestRoot, kotlinTestDest, dryRun);
   copyNamedFiles(KOTLIN_ANDROID_TEST_FILES, kotlinAndroidTestRoot, kotlinAndroidTestDest, dryRun);
   ensureInstrumentationRunner(dryRun);

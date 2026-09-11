@@ -65,7 +65,13 @@ pub fn notify_capsule_state(payload: &CapsulePayload) {
         let state = capsule_state_name(payload.state);
         let message = payload.message.as_deref();
         if let Err(error) = crate::android::jni::android::with_android_env(|env, context| {
-            crate::android::jni::android::notify_overlay_bridge(env, context, state, message)
+            crate::android::jni::android::notify_overlay_bridge(
+                env,
+                context,
+                state,
+                message,
+                payload.level,
+            )
         }) {
             log::warn!("[android-native] notify overlay bridge failed: {error}");
         }
@@ -214,6 +220,18 @@ fn spawn_start_dictation(translation: bool) {
     });
 }
 
+fn spawn_start_dictation_for_ime() {
+    let Some(backend) = CORE_BACKEND.get().cloned() else {
+        log::warn!("[android-native] core backend unavailable");
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = start_core_dictation_for_ime(&backend).await {
+            log::warn!("[android-native] start_dictation_for_ime failed: {error}");
+        }
+    });
+}
+
 fn spawn_stop_dictation() {
     let Some(backend) = CORE_BACKEND.get().cloned() else {
         log::warn!("[android-native] core backend unavailable");
@@ -222,6 +240,24 @@ fn spawn_stop_dictation() {
     tauri::async_runtime::spawn(async move {
         if let Err(error) = stop_core_dictation(&backend, None).await {
             log::warn!("[android-native] stop_dictation failed: {error}");
+        }
+    });
+}
+
+fn spawn_stop_dictation_for_ime() {
+    let Some(backend) = CORE_BACKEND.get().cloned() else {
+        log::warn!("[android-native] core backend unavailable");
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        match stop_core_dictation(&backend, None).await {
+            Ok(result) => {
+                let text = result.polished_text;
+                let _ = crate::android::jni::android::with_android_env(|env, context| {
+                    crate::android::jni::android::notify_ime_text(env, context, &text)
+                });
+            }
+            Err(error) => log::warn!("[android-native] stop_dictation_for_ime failed: {error}"),
         }
     });
 }
@@ -271,17 +307,29 @@ async fn start_core_dictation(
         .map(|_| ())
 }
 
+async fn start_core_dictation_for_ime(
+    backend: &OpenLessBackend,
+) -> Result<(), BackendError> {
+    ensure_core_started(backend).await?;
+    backend
+        .start_dictation_with_options(DictationStartOptions {
+            insert_text: false,
+            ..DictationStartOptions::default()
+        })
+        .await
+        .map(|_| ())
+}
+
 async fn stop_core_dictation(
     backend: &OpenLessBackend,
     translation: Option<bool>,
-) -> Result<(), BackendError> {
+) -> Result<openless_core::DictationResult, BackendError> {
     ensure_core_started(backend).await?;
     backend
         .stop_dictation_with_options(DictationStopOptions {
             translation_requested: translation,
         })
         .await
-        .map(|_| ())
 }
 
 async fn cancel_core_dictation(backend: &OpenLessBackend) -> Result<(), BackendError> {
@@ -363,6 +411,14 @@ mod jni_exports {
     }
 
     #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeStartDictationForIme(
+        _env: *mut JNIEnv,
+        _class: JClass,
+    ) {
+        spawn_start_dictation_for_ime();
+    }
+
+    #[no_mangle]
     pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeStartDictationWithTranslation(
         _env: *mut JNIEnv,
         _class: JClass,
@@ -377,6 +433,14 @@ mod jni_exports {
         _class: JClass,
     ) {
         spawn_stop_dictation();
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeStopDictationForIme(
+        _env: *mut JNIEnv,
+        _class: JClass,
+    ) {
+        spawn_stop_dictation_for_ime();
     }
 
     #[no_mangle]

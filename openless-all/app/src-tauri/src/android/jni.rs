@@ -656,6 +656,7 @@ pub mod android {
         context: &JObject<'local>,
         state: &str,
         message: Option<&str>,
+        level: f32,
     ) -> Result<(), String> {
         let state_obj = jobject_str(env, state)?;
         let message_obj = jobject_str(env, message.unwrap_or(""))?;
@@ -664,8 +665,28 @@ pub mod android {
             context,
             "com.openless.app.OpenLessOverlayBridge",
             "onCapsuleStateChanged",
-            "(Ljava/lang/String;Ljava/lang/String;)V",
-            &[JValue::Object(&state_obj), JValue::Object(&message_obj)],
+            "(Ljava/lang/String;Ljava/lang/String;F)V",
+            &[
+                JValue::Object(&state_obj),
+                JValue::Object(&message_obj),
+                JValue::Float(level),
+            ],
+        )
+    }
+
+    pub fn notify_ime_text<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+        text: &str,
+    ) -> Result<(), String> {
+        let text_obj = jobject_str(env, text)?;
+        call_static_void_with_context_class(
+            env,
+            context,
+            "com.openless.app.OpenLessOverlayBridge",
+            "onImeTextReady",
+            "(Ljava/lang/String;)V",
+            &[JValue::Object(&text_obj)],
         )
     }
 

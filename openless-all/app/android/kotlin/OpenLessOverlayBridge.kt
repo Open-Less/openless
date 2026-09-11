@@ -10,16 +10,27 @@ object OpenLessOverlayBridge {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     @Volatile var listener: OverlayStateListener? = null
+    @Volatile var imeListener: OverlayStateListener? = null
+    @Volatile var imeTextListener: ((String) -> Unit)? = null
 
     interface OverlayStateListener {
-        fun onCapsuleStateChanged(state: String, message: String?)
+        fun onCapsuleStateChanged(state: String, message: String?, level: Float)
     }
 
     @Keep
     @JvmStatic
-    fun onCapsuleStateChanged(state: String, message: String?) {
+    fun onCapsuleStateChanged(state: String, message: String?, level: Float) {
         mainHandler.post {
-            listener?.onCapsuleStateChanged(state, message)
+            listener?.onCapsuleStateChanged(state, message, level)
+            imeListener?.onCapsuleStateChanged(state, message, level)
+        }
+    }
+
+    @Keep
+    @JvmStatic
+    fun onImeTextReady(text: String) {
+        mainHandler.post {
+            imeTextListener?.invoke(text)
         }
     }
 

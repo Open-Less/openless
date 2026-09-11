@@ -66,7 +66,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             "onStartCommand action=${intent?.action} startId=$startId rootAttached=${rootView?.isAttachedToWindow}",
         )
         when (intent?.action) {
-            ACTION_SHOW -> showOverlay()
+            null, ACTION_SHOW -> showOverlay()
             ACTION_START_RECORDING -> {
                 showOverlay()
                 if (!tryPromoteRecordingForeground()) {
@@ -105,7 +105,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         super.onDestroy()
     }
 
-    override fun onCapsuleStateChanged(state: String, message: String?) {
+    override fun onCapsuleStateChanged(state: String, message: String?, level: Float) {
         when (state) {
             "recording" -> {
                 recording = true
