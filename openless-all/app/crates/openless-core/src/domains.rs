@@ -294,6 +294,14 @@ pub trait LocalAsrApi: Send + Sync {
         &self,
         target: LocalAsrTarget,
     ) -> BoxFuture<'static, Result<LocalAsrTestResult, BackendError>>;
+    /// Run the native smoke test for a specific ASR channel without changing
+    /// the globally active channel.
+    fn test_channel(
+        &self,
+        _channel_id: String,
+    ) -> BoxFuture<'static, Result<LocalAsrTestResult, BackendError>> {
+        unsupported("local ASR channel test")
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1602,6 +1610,13 @@ impl LocalAsrApi for UnsupportedDomainServices {
     fn test_model(
         &self,
         _: LocalAsrTarget,
+    ) -> BoxFuture<'static, Result<LocalAsrTestResult, BackendError>> {
+        unsupported("local ASR")
+    }
+
+    fn test_channel(
+        &self,
+        _: String,
     ) -> BoxFuture<'static, Result<LocalAsrTestResult, BackendError>> {
         unsupported("local ASR")
     }

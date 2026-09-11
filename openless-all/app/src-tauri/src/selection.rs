@@ -537,7 +537,7 @@ fn activate_app_by_pid(pid: i32) {
         if app.is_null() {
             return;
         }
-        let _: () = msg_send![app, activateWithOptions: 1u64]; // IgnoringOtherApps
+        let _: bool = msg_send![app, activateWithOptions: 1u64]; // IgnoringOtherApps
     }
 }
 

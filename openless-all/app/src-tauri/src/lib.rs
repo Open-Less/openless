@@ -358,6 +358,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::local_asr_reveal_model_dir,
             commands::local_asr_reveal_models_root,
             commands::local_asr_test_model,
+            commands::local_asr_test_channel,
             commands::local_asr_engine_status,
             commands::local_asr_release_engine,
             commands::local_asr_preload,

@@ -166,6 +166,18 @@ pub trait ModelRuntimeAdapter: Send + Sync {
         unsupported("model test")
     }
 
+    /// Test using an explicit channel/provider backend. The default keeps
+    /// existing host adapters source-compatible; adapters that have multiple
+    /// native backends can override it to avoid consulting global preferences.
+    fn test_model_for_provider(
+        &self,
+        target: LocalAsrTarget,
+        model_dir: PathBuf,
+        _provider_type: String,
+    ) -> BoxFuture<'static, Result<LocalAsrTestResult, BackendError>> {
+        self.test_model(target, model_dir)
+    }
+
     fn invalidate_route(&self, _runtime: LocalAsrRuntime) {}
 }
 
@@ -1282,5 +1294,63 @@ impl LocalAsrApi for LocalAsrService {
             Err(error) => return Box::pin(async move { Err(error) }),
         };
         self.runtime.test_model(target, model_dir)
+    }
+
+    fn test_channel(
+        &self,
+        channel_id: String,
+    ) -> BoxFuture<'static, Result<LocalAsrTestResult, BackendError>> {
+        let credentials = Arc::clone(&self.credentials);
+        let runtime = Arc::clone(&self.runtime);
+        let model_store = Arc::clone(&self.model_store);
+        let preferences = Arc::clone(&self.preferences);
+        Box::pin(async move {
+            let channel = credentials
+                .list_channels(ChannelKind::Asr)
+                .await?
+                .into_iter()
+                .find(|channel| channel.id == channel_id)
+                .ok_or_else(|| {
+                    BackendError::new(
+                        BackendErrorCode::InvalidArgument,
+                        "local ASR channel is not configured",
+                    )
+                })?;
+            let provider_type = channel.provider_type;
+            let model_id = {
+                let preferences = preferences.get();
+                match provider_type.as_str() {
+                    "local-whisper" | "apple-whisper" => {
+                        preferences.local_whisper_active_model.clone()
+                    }
+                    "local-qwen3" | "local-qwen3-mlx" | "local-qwen3-c" => {
+                        preferences.local_asr_active_model.clone()
+                    }
+                    _ => {
+                        return Err(BackendError::new(
+                            BackendErrorCode::Unsupported,
+                            "native local ASR channel verification is not supported",
+                        ));
+                    }
+                }
+            };
+            if model_id.trim().is_empty() {
+                return Err(BackendError::new(
+                    BackendErrorCode::InvalidState,
+                    "local ASR model is not configured",
+                ));
+            }
+            let target = LocalAsrTarget::parse(LocalAsrRuntime::Generic, model_id)?;
+            if !model_store.is_native(&target)? && !model_store.is_installed(&target)? {
+                return Err(BackendError::new(
+                    BackendErrorCode::InvalidState,
+                    "local ASR model is not downloaded",
+                ));
+            }
+            let model_dir = model_store.runtime_model_dir(&target)?;
+            runtime
+                .test_model_for_provider(target, model_dir, provider_type)
+                .await
+        })
     }
 }

@@ -17,6 +17,7 @@ import { Icon } from '../../components/Icon';
 import { Modal } from '../../components/ui/Modal';
 import { SelectLite } from '../../components/ui/SelectLite';
 import { detectOS, type OS } from '../../components/WindowChrome';
+import { testLocalAsrChannel } from '../../lib/localAsr';
 import {
   createChannel,
   deleteChannel,
@@ -282,9 +283,9 @@ export function ChannelList({
   const activeId = channels.find((c) => c.enabled)?.id ?? null;
 
   // ── 卡片上的验证 ──
-  // 只在用户点的时候跑：验证是**真实的 API 调用**（LLM 走一次真的润色请求、ASR 会传
-  // 一段静音音频上去）。做成打开设置就全部自动验一遍的话，等于每次开设置都按卡片数
-  // 烧一遍额度，还容易把自己撞进限流。
+  // 只在用户点的时候跑：验证是**真实的调用**（LLM 走一次真的润色请求、云端 ASR
+  // 传一段静音音频、本地 ASR 加载并转写内置音频）。做成打开设置就全部自动验一遍的话，
+  // 等于每次开设置都按卡片数烧一遍额度，还容易把自己撞进限流。
   const [testingIds, setTestingIds] = useState<Record<string, boolean>>({});
 
   const runTest = async (channel: Channel) => {
@@ -292,7 +293,18 @@ export function ChannelList({
     setTestingIds((prev) => ({ ...prev, [channel.id]: true }));
     const started = performance.now();
     try {
-      const result = await validateProviderCredentials(kind, channel.id);
+      const isGenericLocalAsr =
+        kind === 'asr' &&
+        [
+          'local-qwen3',
+          'local-qwen3-mlx',
+          'local-qwen3-c',
+          'local-whisper',
+          'apple-speech',
+        ].includes(channel.providerType);
+      const result = isGenericLocalAsr
+        ? await testLocalAsrChannel(channel.id).then(() => ({ ok: true }))
+        : await validateProviderCredentials(kind, channel.id);
       const latency = Math.round(performance.now() - started);
       await recordChannelTest(
         kind,

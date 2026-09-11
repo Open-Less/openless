@@ -356,6 +356,19 @@ export function testLocalAsrModel(modelId: string): Promise<LocalAsrTestResult> 
   }));
 }
 
+/** 验证设置页中的本地渠道，不改变全局当前渠道。 */
+export function testLocalAsrChannel(channelId: string): Promise<LocalAsrTestResult> {
+  return invokeOrMock('local_asr_test_channel', { channelId }, () => ({
+    backend: 'mock',
+    modelId: 'mock-local-model',
+    expectedText: 'Hello. This is a test of the Voxtrail speech-to-text system.',
+    transcribedText: '(浏览器 dev mock，实际推理需要在 Tauri 应用内)',
+    audioMs: 3000,
+    loadMs: 0,
+    transcribeMs: 0,
+  }));
+}
+
 export interface LocalAsrEngineStatus {
   loaded: boolean;
   modelId: string | null;
