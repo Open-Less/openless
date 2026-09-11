@@ -192,12 +192,10 @@ impl PlatformApi for LinuxPlatformApi {
 
 #[cfg(target_os = "linux")]
 fn enumerate_microphones() -> Result<Vec<MicrophoneDevice>, BackendError> {
-    use cpal::traits::{DeviceTrait, HostTrait};
+    use cpal::traits::HostTrait;
 
     let host = cpal::default_host();
-    let default_name = host
-        .default_input_device()
-        .and_then(|device| device.name().ok());
+    let default_name = host.default_input_device().map(|device| device.to_string());
     let devices = host.input_devices().map_err(|error| {
         BackendError::new(
             BackendErrorCode::Platform,
@@ -207,12 +205,7 @@ fn enumerate_microphones() -> Result<Vec<MicrophoneDevice>, BackendError> {
     devices
         .enumerate()
         .map(|(index, device)| {
-            let name = device.name().map_err(|error| {
-                BackendError::new(
-                    BackendErrorCode::Platform,
-                    format!("failed to read Linux microphone name: {error}"),
-                )
-            })?;
+            let name = device.to_string();
             Ok(MicrophoneDevice {
                 id: format!("cpal:{index}:{name}"),
                 is_default: default_name.as_deref() == Some(name.as_str()),

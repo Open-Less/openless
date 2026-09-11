@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT=/usr
+if [ -n "${APPDIR:-}" ]; then ROOT="$APPDIR/usr"; fi
+exec bash "$ROOT/lib/openless/resources/linux-desktop/install.sh" "$@"

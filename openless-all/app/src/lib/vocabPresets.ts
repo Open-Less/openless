@@ -1,4 +1,4 @@
-import defaultPresetsJson from './vocab-presets.json';
+import defaultPresetsJson from '../../assets/vocab-presets.json';
 import { listVocabPresets, saveVocabPresets } from './ipc';
 import type { VocabPreset, VocabPresetStore } from './types';
 

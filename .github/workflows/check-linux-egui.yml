@@ -1,0 +1,16 @@
+name: Linux egui build and backend checks
+on:
+  pull_request:
+    branches: [beta]
+    paths:
+      - 'openless-all/app/**'
+      - 'openless-all/scripts/linux-*/**'
+      - '.github/workflows/*linux-egui.yml'
+  push:
+    branches: [Linux-egui]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  native:
+    uses: ./.github/workflows/release-linux-egui.yml

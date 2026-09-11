@@ -1,119 +1,208 @@
-//! Presentation state only: changing pages never owns or cancels a Core session.
+//! Persistence of pure Linux-UI state (view-model preferences that are *not*
+//! business truth). Business truth lives in Core's `UserPreferences`; this
+//! module keeps only UI-surface state such as the chosen display language,
+//! stored on disk beside Core but never inside a Core-owned document.
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub(super) enum Page {
-    #[default]
-    Start,
-    Dictation,
-    Qa,
-    Selection,
-    Agent,
-    Services,
-    Models,
-    Remote,
-    History,
-    Settings,
+use std::path::PathBuf;
+
+use crate::desktop::atomic_save;
+use crate::i18n::{LocalePref, FOLLOW_SYSTEM};
+
+const STATE_FILE: &str = "linux-ui-state.json";
+
+#[derive(Debug)]
+pub enum UiStateError {
+    Io {
+        operation: &'static str,
+        source: std::io::Error,
+    },
+    Json(String),
 }
 
-impl Page {
-    pub const ALL: [Self; 10] = [
-        Self::Start,
-        Self::Dictation,
-        Self::Qa,
-        Self::Selection,
-        Self::Agent,
-        Self::Services,
-        Self::Models,
-        Self::Remote,
-        Self::History,
-        Self::Settings,
-    ];
-
-    pub fn label(self) -> &'static str {
+impl std::fmt::Display for UiStateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Start => "开始",
-            Self::Dictation => "听写",
-            Self::Qa => "问答",
-            Self::Selection => "选区润色",
-            Self::Agent => "Less Computer",
-            Self::Services => "AI 服务",
-            Self::Models => "本地模型",
-            Self::Remote => "手机输入",
-            Self::History => "历史",
-            Self::Settings => "环境与设置",
+            Self::Io { operation, source } => write!(f, "{operation}: {source}"),
+            Self::Json(message) => f.write_str(message),
         }
     }
 }
 
-#[derive(Default)]
-pub(super) struct Navigation {
-    pub page: Page,
-    unread: [bool; Page::ALL.len()],
+impl std::error::Error for UiStateError {}
+
+fn io_error(operation: &'static str, source: std::io::Error) -> UiStateError {
+    UiStateError::Io { operation, source }
 }
 
-impl Navigation {
-    pub fn open(&mut self, page: Page) {
-        self.page = page;
-        self.unread[page as usize] = false;
-    }
+/// The application data directory, mirroring the runtime's `backend_config`
+/// derivation (XDG_DATA_HOME, falling back to `~/.local/share`). Kept here so
+/// the main window *and* the separate popup window resolve the exact same
+/// state file without sharing a process-local handle.
+pub fn ui_state_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".local/share"));
+    Some(base.join("OpenLess"))
+}
 
-    pub fn notify(&mut self, page: Page) {
-        if self.page != page {
-            self.unread[page as usize] = true;
-        }
-    }
+/// Absolute path to the persisted Linux-UI state document.
+pub fn ui_state_path() -> Option<PathBuf> {
+    ui_state_dir().map(|dir| dir.join(STATE_FILE))
+}
 
-    pub fn has_update(&self, page: Page) -> bool {
-        self.unread[page as usize]
+/// Read the persisted locale preference. A missing, empty or unreadable file
+/// (plus any unrecognised value) degrades to `LocalePref::System` — following
+/// the OS locale — so a corrupt state can never wedge the UI on the wrong
+/// language.
+pub fn load_locale_pref() -> LocalePref {
+    let Some(path) = ui_state_path() else {
+        return LocalePref::System;
+    };
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(_) => return LocalePref::System,
+    };
+    let value = match serde_json::from_str::<serde_json::Value>(&raw) {
+        Ok(value) => value,
+        Err(_) => return LocalePref::System,
+    };
+    match value.get("locale").and_then(serde_json::Value::as_str) {
+        Some(tag) => LocalePref::from_tag(tag),
+        None => LocalePref::System,
     }
+}
+
+/// Persist the locale preference atomically. Returns an error only when the
+/// state cannot be written at all; unknown environments (no HOME) simply leave
+/// the preference unsaved and are reported as a recoverable failure.
+pub fn save_locale_pref(pref: LocalePref) -> Result<(), UiStateError> {
+    let Some(dir) = ui_state_dir() else {
+        return Err(io_error(
+            "resolve ui-state directory",
+            std::io::Error::new(std::io::ErrorKind::NotFound, "HOME is unavailable"),
+        ));
+    };
+    let Some(path) = ui_state_path() else {
+        return Err(io_error(
+            "resolve ui-state path",
+            std::io::Error::new(std::io::ErrorKind::NotFound, "HOME is unavailable"),
+        ));
+    };
+    std::fs::create_dir_all(&dir).map_err(|error| io_error("create ui-state directory", error))?;
+    let tag = match pref {
+        LocalePref::System => FOLLOW_SYSTEM.to_string(),
+        LocalePref::Lang(lang) => lang.tag().to_string(),
+    };
+    let mut document = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .filter(|value| value.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+    document["locale"] = serde_json::json!(tag);
+    let bytes = serde_json::to_vec_pretty(&document)
+        .map_err(|error| UiStateError::Json(error.to_string()))?;
+    atomic_save(&path, &bytes)
+        .map(|_| ())
+        .map_err(|error| match error {
+            crate::desktop::DesktopError::InvalidInput(message) => UiStateError::Json(message),
+            crate::desktop::DesktopError::Io { operation, source } => {
+                UiStateError::Io { operation, source }
+            }
+            other => UiStateError::Json(other.to_string()),
+        })
+}
+
+pub fn load_ui_value(key: &str) -> Option<serde_json::Value> {
+    let path = ui_state_path()?;
+    let document: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    document.get(key).cloned()
+}
+pub fn save_ui_value(key: &str, value: serde_json::Value) -> Result<(), UiStateError> {
+    let path = ui_state_path()
+        .ok_or_else(|| UiStateError::Json("UI state directory unavailable".into()))?;
+    let mut document = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+    document[key] = value;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| io_error("create UI state directory", error))?;
+    }
+    let bytes = serde_json::to_vec_pretty(&document)
+        .map_err(|error| UiStateError::Json(error.to_string()))?;
+    atomic_save(&path, &bytes)
+        .map(|_| ())
+        .map_err(|error| UiStateError::Json(error.to_string()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::i18n::Lang;
+    use std::sync::{Mutex, OnceLock};
 
-    #[test]
-    fn background_work_keeps_its_notice_until_its_own_page_is_opened() {
-        let mut navigation = Navigation::default();
-        navigation.notify(Page::Qa);
-        navigation.notify(Page::Selection);
-        navigation.notify(Page::Agent);
-        navigation.open(Page::Settings);
-        for page in [Page::Qa, Page::Selection, Page::Agent] {
-            assert!(navigation.has_update(page));
+    /// Env vars are process-global, so these tests must not interleave.
+    fn test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn with_tmp_state(run: impl FnOnce(PathBuf)) {
+        // Recover a poisoned lock (from an earlier assertion) rather than
+        // failing the whole module: env vars must stay consistent per test.
+        let _guard = test_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir =
+            std::env::temp_dir().join(format!("openless-ui-state-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Point every data-dir resolver at the temp dir via XDG_DATA_HOME.
+        let previous = std::env::var_os("XDG_DATA_HOME");
+        std::env::set_var("XDG_DATA_HOME", &dir);
+        run(dir.clone());
+        if let Some(value) = previous {
+            std::env::set_var("XDG_DATA_HOME", value);
+        } else {
+            std::env::remove_var("XDG_DATA_HOME");
         }
-        navigation.open(Page::Qa);
-        assert!(!navigation.has_update(Page::Qa));
-        assert!(navigation.has_update(Page::Selection));
-        assert!(navigation.has_update(Page::Agent));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn reading_a_page_does_not_create_an_unread_notice() {
-        let mut navigation = Navigation::default();
-        navigation.open(Page::Agent);
-        navigation.notify(Page::Agent);
-        assert!(!navigation.has_update(Page::Agent));
-        navigation.open(Page::Start);
-        navigation.notify(Page::Agent);
-        assert!(navigation.has_update(Page::Agent));
-        assert_eq!(navigation.page, Page::Start);
+    fn absent_state_resolves_to_follow_system() {
+        with_tmp_state(|dir| {
+            // No file has been written in this fresh dir.
+            assert_eq!(load_locale_pref(), LocalePref::System);
+            std::fs::remove_dir_all(&dir).ok();
+        });
     }
 
     #[test]
-    fn every_destination_can_be_opened_without_clearing_other_destinations() {
-        let mut navigation = Navigation::default();
-        for page in Page::ALL {
-            assert!(!page.label().is_empty());
-            navigation.notify(page);
-        }
-        for (index, page) in Page::ALL.into_iter().enumerate() {
-            navigation.open(page);
-            assert_eq!(navigation.page, page);
-            assert!(!navigation.has_update(page));
-            for remaining in &Page::ALL[index + 1..] {
-                assert!(navigation.has_update(*remaining));
-            }
-        }
+    fn locale_preference_persists_and_roundtrips_across_reload() {
+        with_tmp_state(|_dir| {
+            save_locale_pref(LocalePref::Lang(Lang::ZhTw)).unwrap();
+            assert_eq!(load_locale_pref(), LocalePref::Lang(Lang::ZhTw));
+            save_locale_pref(LocalePref::System).unwrap();
+            assert_eq!(load_locale_pref(), LocalePref::System);
+            save_locale_pref(LocalePref::Lang(Lang::Ko)).unwrap();
+            assert_eq!(load_locale_pref(), LocalePref::Lang(Lang::Ko));
+        });
+    }
+
+    #[test]
+    fn corrupt_state_file_degrades_to_follow_system() {
+        with_tmp_state(|_dir| {
+            let path = ui_state_path().unwrap();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "{ not json").unwrap();
+            assert_eq!(load_locale_pref(), LocalePref::System);
+            // A later valid write repairs the state.
+            save_locale_pref(LocalePref::Lang(Lang::Ja)).unwrap();
+            assert_eq!(load_locale_pref(), LocalePref::Lang(Lang::Ja));
+        });
     }
 }

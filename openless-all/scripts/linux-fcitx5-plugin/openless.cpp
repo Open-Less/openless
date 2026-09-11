@@ -20,6 +20,7 @@
  *    SetAuxDown(s: text)                 — 在候选词列表下方显示状态文本
  *    ClearAuxDown()                      — 清除候选词列表下方文本
  *    GetSelectionText() -> s             — 读取当前 PRIMARY 选区文本（由 clipboard addon 维护）
+ *    SetClipboardText(s: text) -> b      — 通过 clipboard addon 写入 CLIPBOARD
  *    CaptureSelectionTarget(s: ticket) -> s — 捕获选区和原输入上下文
  *    ApplySelectionTarget(sss: ticket, source, replacement) -> b — 校验后替换
  *    RevertSelectionTarget(s: ticket) -> b — 校验光标前文本后撤销替换
@@ -34,8 +35,12 @@
  *    TranslationModifierEvent(uub: sym, states, isPress) — 翻译修饰键按下/抬起
  */
 
+#include <algorithm>
 #include <memory>
+#include <sstream>
+#include <iomanip>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -87,6 +92,14 @@ public:
           translationRawStates_(0),
           lessComputerRawSym_(0),
           lessComputerRawStates_(0),
+          switchStyleRawSym_(0),
+          switchStyleRawStates_(0),
+          lessComputerPanelRawSym_(0),
+          lessComputerPanelRawStates_(0),
+          lessComputerQuickRawSym_(0),
+          lessComputerQuickRawStates_(0),
+          openAppRawSym_(0),
+          openAppRawStates_(0),
           hasCustomDictationKey_(false),
           dictationTriggerHeld_(false),
           dictationTriggerCombined_(false),
@@ -240,6 +253,31 @@ public:
                             << "Translation modifier: sym=" << sym;
                         translationModifierEvent(sym, states, isPress);
                     }
+                    if (switchStyleRawSym_ != 0 && sym == switchStyleRawSym_ &&
+                        states == switchStyleRawStates_) {
+                        switchStyleEvent(sym, states, isPress);
+                        keyEvent.filterAndAccept();
+                        return;
+                    }
+                    if (lessComputerPanelRawSym_ != 0 && sym == lessComputerPanelRawSym_ && states == lessComputerPanelRawStates_) {
+                        lessComputerPanelEvent(sym,states,isPress); keyEvent.filterAndAccept(); return;
+                    }
+                    if (lessComputerQuickRawSym_ != 0 && sym == lessComputerQuickRawSym_ && states == lessComputerQuickRawStates_) {
+                        lessComputerQuickEvent(sym,states,isPress); keyEvent.filterAndAccept(); return;
+                    }
+                    if (openAppRawSym_ != 0 && sym == openAppRawSym_ &&
+                        states == openAppRawStates_) {
+                        openAppEvent(sym, states, isPress);
+                        keyEvent.filterAndAccept();
+                        return;
+                    }
+                    for (const auto &[packId, packSym, packStates] : stylePackHotkeys_) {
+                        if (packSym != 0 && sym == packSym && states == packStates) {
+                            stylePackHotkeyEvent(sym, states, isPress);
+                            keyEvent.filterAndAccept();
+                            return;
+                        }
+                    }
                 }));
 
         // 4. 监听 InputContext 销毁事件，自动清空 savedIc_ 避免野指针
@@ -249,6 +287,10 @@ public:
                 EventWatcherPhase::Default,
                 [this](Event &event) {
                     auto &icEvent = static_cast<InputContextEvent &>(event);
+                    for (auto it = contextTargets_.begin(); it != contextTargets_.end();) {
+                        if (it->second == icEvent.inputContext()) it = contextTargets_.erase(it);
+                        else ++it;
+                    }
                     if (icEvent.inputContext() == savedIc_) {
                         savedIc_ = nullptr;
                     }
@@ -341,8 +383,57 @@ public:
         return true;
     }
 
+    // Independently versioned read-only bridge. A target UUID never aliases a
+    // newly created input context, and includeText=false never reads its text.
+    std::string contextSnapshot(const std::string &expected, bool includeText) {
+        InputContext *ic = nullptr;
+        bool selectionTicket = false;
+        if (expected.empty()) {
+            instance_->inputContextManager().foreachFocused([&ic](InputContext *candidate) {
+                ic = candidate; return false;
+            });
+        } else {
+            auto found = contextTargets_.find(expected);
+            if (found != contextTargets_.end()) ic = found->second;
+            auto selected = selectionTargets_.find(expected);
+            if (selected != selectionTargets_.end()) { ic=selected->second.inputContext; selectionTicket=true; }
+        }
+        if (!ic || !ic->hasFocus()) return "{}";
+        std::ostringstream id;
+        for (auto byte : ic->uuid()) id << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(byte);
+        const auto target = selectionTicket ? expected : id.str();
+        if (!expected.empty() && expected != target) return "{}";
+        if (!selectionTicket) contextTargets_[target] = ic;
+        const bool sensitive = ic->capabilityFlags().test(CapabilityFlag::Password);
+        auto quote = [](const std::string &value) {
+            std::ostringstream out; out << '"';
+            for (unsigned char c : value) {
+                if (c == '"' || c == '\\') out << '\\' << c;
+                else if (c < 0x20) out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << static_cast<unsigned>(c);
+                else out << c;
+            }
+            out << '"'; return out.str();
+        };
+        std::ostringstream out;
+        out << "{\"version\":1,\"target\":" << quote(target)
+            << ",\"application\":" << quote(ic->program())
+            << ",\"sensitive\":" << (sensitive ? "true" : "false");
+        if (includeText && !sensitive && ic->surroundingText().isValid()) {
+            const auto &text = ic->surroundingText();
+            // Reject oversized documents rather than returning a moving window
+            // that could be mistaken for a user edit by the observer.
+            if (text.text().size() <= 65536)
+                out << ",\"text\":" << quote(text.text()) << ",\"cursor\":" << text.cursor();
+        }
+        out << '}'; return out.str();
+    }
+
     std::string captureSelectionTarget(const std::string &ticket) {
-        if (ticket.empty() || !selectionIc_) {
+        selectionIc_ = nullptr;
+        instance_->inputContextManager().foreachFocused([this](InputContext *ic) {
+            selectionIc_ = ic; return false;
+        });
+        if (ticket.empty() || !selectionIc_ || selectionIc_->capabilityFlags().test(CapabilityFlag::Password)) {
             return std::string();
         }
         std::string source;
@@ -363,6 +454,10 @@ public:
     }
 
     bool captureDictationTarget(const std::string &ticket) {
+        savedIc_ = nullptr;
+        instance_->inputContextManager().foreachFocused([this](InputContext *ic) {
+            savedIc_ = ic; return false;
+        });
         if (ticket.empty() || !savedIc_) return false;
         // A session keeps its own native target even when later key events
         // update savedIc_. Destruction invalidates the ticket instead of
@@ -372,7 +467,7 @@ public:
 
     bool commitDictationTarget(const std::string &ticket, const std::string &text) {
         auto found = dictationTargets_.find(ticket);
-        if (found == dictationTargets_.end()) return false;
+        if (found == dictationTargets_.end() || !found->second->hasFocus()) return false;
         found->second->commitString(text);
         return true;
     }
@@ -393,6 +488,7 @@ public:
             return false;
         }
         auto *ic = found->second.inputContext;
+        if (!ic->hasFocus()) return false;
         const auto &surrounding = ic->surroundingText();
         const auto &captured = found->second;
         // PRIMARY can outlive the selection, and the same selected string may
@@ -418,6 +514,7 @@ public:
             return false;
         }
         auto *ic = found->second.inputContext;
+        if (!ic->hasFocus()) return false;
         const auto &replacement = found->second.replacement;
         const auto &surrounding = ic->surroundingText();
         if (!surrounding.isValid()) {
@@ -658,6 +755,45 @@ public:
         safeSaveAsIni(raw, configFile());
     }
 
+    void setSwitchStyleHotkeyRaw(uint32_t sym, uint32_t states) {
+        switchStyleRawSym_ = sym;
+        switchStyleRawStates_ = states;
+        persistRawHotkey("SwitchStyle", sym, states);
+    }
+
+    void setLessComputerPanelHotkeyRaw(uint32_t sym,uint32_t states) {
+        lessComputerPanelRawSym_=sym; lessComputerPanelRawStates_=states; persistRawHotkey("LessComputerPanel",sym,states);
+    }
+
+    void setLessComputerQuickHotkeyRaw(uint32_t sym,uint32_t states) {
+        lessComputerQuickRawSym_=sym; lessComputerQuickRawStates_=states; persistRawHotkey("LessComputerQuick",sym,states);
+    }
+
+    void setOpenAppHotkeyRaw(uint32_t sym, uint32_t states) {
+        openAppRawSym_ = sym;
+        openAppRawStates_ = states;
+        persistRawHotkey("OpenApp", sym, states);
+    }
+
+    void setStylePackHotkeys(
+        const std::vector<dbus::DBusStruct<std::string, uint32_t, uint32_t>> &bindings) {
+        stylePackHotkeys_.clear();
+        stylePackHotkeys_.reserve(bindings.size());
+        for (const auto &binding : bindings) {
+            stylePackHotkeys_.push_back(binding.data());
+        }
+        RawConfig raw;
+        readAsIni(raw, configFile());
+        raw.setValueByPath("StylePackHotkeyCount", std::to_string(bindings.size()));
+        for (size_t index = 0; index < stylePackHotkeys_.size(); ++index) {
+            const auto prefix = "StylePackHotkey" + std::to_string(index);
+            raw.setValueByPath(prefix + "Id", std::get<0>(stylePackHotkeys_[index]));
+            raw.setValueByPath(prefix + "Sym", std::to_string(std::get<1>(stylePackHotkeys_[index])));
+            raw.setValueByPath(prefix + "States", std::to_string(std::get<2>(stylePackHotkeys_[index])));
+        }
+        safeSaveAsIni(raw, configFile());
+    }
+
     /// 读取当前 PRIMARY 选区文本。空字符串表示无选区或 clipboard addon 不可用。
     std::string getSelectionText() {
         auto *clipboard = instance_->addonManager().addon("clipboard");
@@ -674,7 +810,19 @@ public:
         return text;
     }
 
+    bool setClipboardText(const std::string &text) {
+        auto *clipboard = instance_->addonManager().addon("clipboard");
+        if (!clipboard) {
+            FCITX_LOGC(openless, Debug)
+                << "SetClipboardText: clipboard addon not loaded";
+            return false;
+        }
+        clipboard->call<IClipboard::setClipboard>("openless", text);
+        return true;
+    }
+
     FCITX_OBJECT_VTABLE_METHOD(commitText, "CommitText", "s", "b");
+    FCITX_OBJECT_VTABLE_METHOD(contextSnapshot, "ContextSnapshot", "sb", "s");
     FCITX_OBJECT_VTABLE_METHOD(captureDictationTarget, "CaptureDictationTarget", "s", "b");
     FCITX_OBJECT_VTABLE_METHOD(commitDictationTarget, "CommitDictationTarget", "ss", "b");
     FCITX_OBJECT_VTABLE_METHOD(cancelDictationTarget, "CancelDictationTarget", "s", "b");
@@ -692,7 +840,13 @@ public:
     FCITX_OBJECT_VTABLE_METHOD(setSelectionPolishHotkeyRaw, "SetSelectionPolishHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setTranslationHotkeyRaw, "SetTranslationHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setLessComputerHotkeyRaw, "SetLessComputerHotkeyRaw", "uu", "");
+    FCITX_OBJECT_VTABLE_METHOD(setSwitchStyleHotkeyRaw, "SetSwitchStyleHotkeyRaw", "uu", "");
+    FCITX_OBJECT_VTABLE_METHOD(setLessComputerPanelHotkeyRaw,"SetLessComputerPanelHotkeyRaw","uu","");
+    FCITX_OBJECT_VTABLE_METHOD(setLessComputerQuickHotkeyRaw,"SetLessComputerQuickHotkeyRaw","uu","");
+    FCITX_OBJECT_VTABLE_METHOD(setOpenAppHotkeyRaw, "SetOpenAppHotkeyRaw", "uu", "");
+    FCITX_OBJECT_VTABLE_METHOD(setStylePackHotkeys, "SetStylePackHotkeys", "a(suu)", "");
     FCITX_OBJECT_VTABLE_METHOD(getSelectionText, "GetSelectionText", "", "s");
+    FCITX_OBJECT_VTABLE_METHOD(setClipboardText, "SetClipboardText", "s", "b");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyEvent, "DictationKeyEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyCombined, "DictationKeyCombined", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(lessComputerKeyEvent, "LessComputerKeyEvent", "uub");
@@ -700,6 +854,11 @@ public:
     FCITX_OBJECT_VTABLE_SIGNAL(qaShortcutEvent, "QaShortcutEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(selectionPolishEvent, "SelectionPolishEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(translationModifierEvent, "TranslationModifierEvent", "uub");
+    FCITX_OBJECT_VTABLE_SIGNAL(switchStyleEvent, "SwitchStyleEvent", "uub");
+    FCITX_OBJECT_VTABLE_SIGNAL(lessComputerPanelEvent,"LessComputerPanelEvent","uub");
+    FCITX_OBJECT_VTABLE_SIGNAL(lessComputerQuickEvent,"LessComputerQuickEvent","uub");
+    FCITX_OBJECT_VTABLE_SIGNAL(openAppEvent, "OpenAppEvent", "uub");
+    FCITX_OBJECT_VTABLE_SIGNAL(stylePackHotkeyEvent, "StylePackHotkeyEvent", "uub");
 
     Instance *instance() { return instance_; }
 
@@ -748,6 +907,26 @@ public:
         {
             auto *v = raw.valueByPath("LessComputerRawStates");
             lessComputerRawStates_ = v ? std::stoul(*v, nullptr, 0) : 0;
+        }
+        loadRawHotkey(raw, "SwitchStyle", switchStyleRawSym_, switchStyleRawStates_);
+        loadRawHotkey(raw,"LessComputerPanel",lessComputerPanelRawSym_,lessComputerPanelRawStates_);
+        loadRawHotkey(raw,"LessComputerQuick",lessComputerQuickRawSym_,lessComputerQuickRawStates_);
+        loadRawHotkey(raw, "OpenApp", openAppRawSym_, openAppRawStates_);
+        stylePackHotkeys_.clear();
+        if (auto *countValue = raw.valueByPath("StylePackHotkeyCount")) {
+            const auto count = std::min<size_t>(
+                std::stoul(*countValue, nullptr, 0), 128);
+            for (size_t index = 0; index < count; ++index) {
+                const auto prefix = "StylePackHotkey" + std::to_string(index);
+                auto *id = raw.valueByPath(prefix + "Id");
+                auto *sym = raw.valueByPath(prefix + "Sym");
+                auto *states = raw.valueByPath(prefix + "States");
+                if (id && sym && states && !id->empty()) {
+                    stylePackHotkeys_.emplace_back(
+                        *id, std::stoul(*sym, nullptr, 0),
+                        std::stoul(*states, nullptr, 0));
+                }
+            }
         }
         lessComputerTriggerHeld_ = false;
         lessComputerTriggerCombined_ = false;
@@ -814,6 +993,23 @@ private:
         triggerKeyList_ = config_.triggerKey.value();
     }
 
+    void persistRawHotkey(const std::string &name, uint32_t sym,
+                          uint32_t states) {
+        RawConfig raw;
+        readAsIni(raw, configFile());
+        raw.setValueByPath(name + "RawSym", std::to_string(sym));
+        raw.setValueByPath(name + "RawStates", std::to_string(states));
+        safeSaveAsIni(raw, configFile());
+    }
+
+    static void loadRawHotkey(RawConfig &raw, const std::string &name,
+                              uint32_t &sym, uint32_t &states) {
+        auto *symValue = raw.valueByPath(name + "RawSym");
+        auto *statesValue = raw.valueByPath(name + "RawStates");
+        sym = symValue ? std::stoul(*symValue, nullptr, 0) : 0;
+        states = statesValue ? std::stoul(*statesValue, nullptr, 0) : 0;
+    }
+
     Instance *instance_;
     OpenLessConfig config_;
     KeyList triggerKeyList_;
@@ -827,6 +1023,15 @@ private:
     uint32_t translationRawStates_;
     uint32_t lessComputerRawSym_;
     uint32_t lessComputerRawStates_;
+    uint32_t switchStyleRawSym_;
+    uint32_t switchStyleRawStates_;
+    uint32_t lessComputerPanelRawSym_;
+    uint32_t lessComputerPanelRawStates_;
+    uint32_t lessComputerQuickRawSym_;
+    uint32_t lessComputerQuickRawStates_;
+    uint32_t openAppRawSym_;
+    uint32_t openAppRawStates_;
+    std::vector<std::tuple<std::string, uint32_t, uint32_t>> stylePackHotkeys_;
     Key customDictationKey_;
     bool hasCustomDictationKey_;
     bool dictationTriggerHeld_;
@@ -837,6 +1042,7 @@ private:
     /// 事件处理线程和 DBus 处理线程都是 fcitx5 主事件循环，无竞态。
     /// 通过 InputContextDestroyed 事件监听 IC 销毁时自动清空指针。
     InputContext *savedIc_;
+    std::unordered_map<std::string, InputContext *> contextTargets_;
     /// QA/Selection 快捷键按下时的原输入上下文。该指针只能由 fcitx5 主事件循环
     /// 访问，并在 InputContextDestroyed 中与所有关联 ticket 一起失效。
     InputContext *selectionIc_;

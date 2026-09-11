@@ -513,8 +513,8 @@ fn validate_provider_endpoint(endpoint: &str, allow_websocket: bool) -> Result<(
     let url =
         url::Url::parse(endpoint).map_err(|_| invalid_request("provider endpoint is invalid"))?;
     if url.host_str().is_none()
-        || !matches!(url.scheme(), "http" | "https")
-            && !(allow_websocket && matches!(url.scheme(), "ws" | "wss"))
+        || !(matches!(url.scheme(), "http" | "https")
+            || allow_websocket && matches!(url.scheme(), "ws" | "wss"))
     {
         return Err(invalid_request("provider endpoint is invalid"));
     }

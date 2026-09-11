@@ -162,7 +162,7 @@ impl CloudSyncService {
                     .parse::<std::net::IpAddr>()
                     .is_ok_and(|ip| ip.is_loopback())
         });
-        if (!matches!(url.scheme(), "https") && !(url.scheme() == "http" && loopback))
+        if !(url.scheme() == "https" || url.scheme() == "http" && loopback)
             || !url.username().is_empty()
             || url.password().is_some()
         {

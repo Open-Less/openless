@@ -355,4 +355,7 @@ pub use types::{
     SelectionVoiceIntentMode, SelectionVoiceManualIntent, SessionId, StylePackChange,
     TranscriptAccumulator, TranscriptDelta, VocabPreset, VocabPresetStore, VocabularyChange,
 };
-pub use vocabulary::{list_vocab_presets, save_vocab_presets, DictionaryStore};
+pub use vocabulary::{
+    builtin_vocab_presets, list_vocab_presets, resolve_vocab_presets, save_vocab_presets,
+    DictionaryStore,
+};

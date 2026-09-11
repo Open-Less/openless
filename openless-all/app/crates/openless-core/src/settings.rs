@@ -52,6 +52,10 @@ pub struct HotkeyRuntimeTarget {
     pub selection_polish: Option<ShortcutBinding>,
     pub coding_agent_enabled: bool,
     pub coding_agent_voice: Option<ShortcutBinding>,
+    #[serde(default)]
+    pub coding_agent_panel: Option<ShortcutBinding>,
+    #[serde(default)]
+    pub coding_agent_quick: Option<ShortcutBinding>,
     pub style_packs: Vec<StylePackHotkey>,
 }
 
@@ -67,6 +71,8 @@ impl From<&UserPreferences> for HotkeyRuntimeTarget {
             selection_polish: preferences.selection_polish_hotkey.clone(),
             coding_agent_enabled: preferences.coding_agent_enabled,
             coding_agent_voice: preferences.coding_agent_voice_hotkey.clone(),
+            coding_agent_panel: preferences.coding_agent_panel_hotkey.clone(),
+            coding_agent_quick: preferences.coding_agent_quick_hotkey.clone(),
             style_packs: preferences.style_pack_hotkeys.clone(),
         }
     }
@@ -105,6 +111,8 @@ pub struct SettingsEffectPlan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_asr_provider: Option<SettingsValueChange<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_at_login: Option<SettingsValueChange<bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub windows_keyboard: Option<SettingsValueChange<WindowsKeyboardRuntimeTarget>>,
 }
 
@@ -120,6 +128,7 @@ impl SettingsEffectPlan {
                 previous.active_asr_provider.clone(),
                 next.active_asr_provider.clone(),
             ),
+            launch_at_login: changed(previous.launch_at_login, next.launch_at_login),
             windows_keyboard: changed(previous.into(), next.into()),
         }
     }
@@ -127,6 +136,7 @@ impl SettingsEffectPlan {
     pub fn is_empty(&self) -> bool {
         self.hotkeys.is_none()
             && self.active_asr_provider.is_none()
+            && self.launch_at_login.is_none()
             && self.windows_keyboard.is_none()
     }
 }
@@ -136,6 +146,7 @@ impl SettingsEffectPlan {
 pub enum SettingsEffectKind {
     WindowsKeyboard,
     ActiveAsrProvider,
+    LaunchAtLogin,
     Hotkeys,
 }
 
