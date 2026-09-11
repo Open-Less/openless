@@ -11,7 +11,9 @@ Linux Host Adapter 的剩余实现、全局热键、窗口/托盘/权限/更新�
 - 组装：`linux-egui/src/backend.rs` — `LinuxBackendBuilder::from_shared_providers(BackendConfig)` + `with_*` 注入（recorder/polisher/inserter/credential store/host actions/settings runtime/local ASR runtime/polish failure policy）。
 - Host 门面：`lib.rs` `LinuxHost` — `snapshot` / `subscribe` / `save_settings` / `update_settings_strict` / `drain_events` / `backend()`。
 - 已实现模块：`audio.rs`（CPAL 录制）、`credentials.rs`（Secret Service）、`fcitx5.rs`（输入/选区）、`hotkeys.rs`（fcitx5 热键监听）、`selection.rs`、`qa.rs`、`coding_agent.rs`、`marketplace.rs`、`remote_input.rs`、`settings.rs`、`single_instance.rs`、`capabilities.rs`、`resources.rs`、`runtime.rs`、`ui_state.rs`。
-- 页面：`ui_state.rs` `Page` 枚举 10 页（Start/Dictation/Qa/Selection/Agent/Services/Models/Remote/History/Settings），主循环 `main.rs`。
+- 2.0 视觉系统（2026-09-10）：`design_tokens.rs`（tokens.css 对照表，跨平台单测）+ `ui/`（`theme.rs` 主题与 CJK 字体、`widgets.rs` 组件库、`prefs.rs` 外观偏好）；页面渲染一律取令牌，不写裸色值。
+- 页面：`ui_state.rs` `Page` 枚举 10 页（Start/Dictation/Qa/Selection/Agent/Services/Models/Remote/History/Settings），主循环 `main.rs`；主导航 = 开始/听写/历史 + 工具分组（问答/选区/Agent），Services/Models/Remote/Settings 收纳进设置弹窗（对齐 2.0 SettingsModal）。
+- CI：`ci.yml` `linux-egui` 任务（ubuntu）跑 `cargo test + check -p openless-linux-egui --all-targets`，是 UI 改动的编译门禁。
 - 打包：`release-linux-egui.yml`（deb/rpm/AppImage，独立 manifest）。
 
 ## 3. 阅读顺序

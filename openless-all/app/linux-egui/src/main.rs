@@ -21,6 +21,7 @@ mod linux_app {
         LocalAsrRuntime, QaStateEvent, QaStateKind, SelectionPhase, SelectionSnapshot,
         TranscriptAccumulator, UserPreferences,
     };
+    use openless_linux_egui::ui::{self as ui20, UiPrefs};
     use openless_linux_egui::{
         drain_events, ensure_fcitx5_plugin_installed, EventDrainOutcome, Fcitx5HotkeyListener,
         FcitxPluginInstallPlan, FcitxPluginStatus, LinuxBackendBuilder, LinuxCapabilitySnapshot,
@@ -138,6 +139,13 @@ mod linux_app {
         startup_error: Option<String>,
         tx: mpsc::Sender<UiResult>,
         rx: mpsc::Receiver<UiResult>,
+        /// 2.0 外观偏好（深浅主题）；表现层状态，不进 Core 合同。
+        ui_prefs: UiPrefs,
+        /// 设置弹窗当前打开的分区；None = 关闭。Services / Models / Remote /
+        /// Settings 与其他平台一致地收纳进设置弹窗，不再是主导航页面。
+        settings_modal: Option<Page>,
+        /// 侧栏「工具」分组是否展开（对应 React 侧栏的可展开分组）。
+        tools_group_open: bool,
     }
 
     impl OpenLessEguiApp {
@@ -193,6 +201,9 @@ mod linux_app {
                         startup_error: None,
                         tx,
                         rx,
+                        ui_prefs: UiPrefs::load(),
+                        settings_modal: None,
+                        tools_group_open: true,
                     };
                     app.load_models();
                     app.load_remote_status();
@@ -240,6 +251,9 @@ mod linux_app {
                     startup_error: Some(error),
                     tx,
                     rx,
+                    ui_prefs: UiPrefs::load(),
+                    settings_modal: None,
+                    tools_group_open: true,
                 },
             }
         }
@@ -823,85 +837,154 @@ mod linux_app {
         }
 
         fn dictation_ui(&mut self, ui: &mut egui::Ui) {
-            ui.heading("听写");
+            ui20::widgets::page_header(
+                ui,
+                "听写",
+                Some("用已配置的听写快捷键或此页控制录音；转写与润色结果实时返回。"),
+            );
             let phase = self
                 .snapshot
                 .as_ref()
                 .map(|snapshot| snapshot.dictation.phase)
                 .unwrap_or(DictationPhase::Idle);
-            ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(phase == DictationPhase::Idle, egui::Button::new("开始"))
-                    .clicked()
-                {
-                    if let Some(backend) = self.backend() {
-                        self.transcript.clear();
-                        self.spawn(async move {
-                            backend.start_dictation().await?;
-                            Ok("正在录音".to_string())
-                        });
-                    }
-                }
-                if ui
-                    .add_enabled(
-                        phase == DictationPhase::Recording,
-                        egui::Button::new("停止"),
-                    )
-                    .clicked()
-                {
-                    if let Some(backend) = self.backend() {
-                        self.spawn(async move {
-                            let result = backend.stop_dictation().await?;
-                            Ok(format!("完成：{} 字", result.polished_text.chars().count()))
-                        });
-                    }
-                }
-                if ui
-                    .add_enabled(phase != DictationPhase::Idle, egui::Button::new("取消"))
-                    .clicked()
-                {
-                    if let Some(backend) = self.backend() {
-                        self.spawn(async move {
-                            backend.cancel_dictation(None).await?;
-                            Ok("听写已取消".to_string())
-                        });
-                    }
-                }
+            let (phase_label, phase_status) = match phase {
+                DictationPhase::Idle => ("空闲", ui20::widgets::Status::Info),
+                DictationPhase::Starting => ("启动中", ui20::widgets::Status::Info),
+                DictationPhase::Recording => ("录音中", ui20::widgets::Status::Warn),
+                DictationPhase::Transcribing => ("转写中", ui20::widgets::Status::Info),
+                DictationPhase::Polishing => ("润色中", ui20::widgets::Status::Info),
+                DictationPhase::Inserting => ("落字中", ui20::widgets::Status::Info),
+                DictationPhase::Completed => ("已完成", ui20::widgets::Status::Ok),
+                DictationPhase::Cancelled => ("已取消", ui20::widgets::Status::Warn),
+                DictationPhase::Failed => ("失败", ui20::widgets::Status::Err),
+            };
+            ui20::widgets::card(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui20::widgets::status_pill(ui, phase_label, phase_status);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui20::widgets::secondary_button(
+                            ui,
+                            "取消",
+                            phase != DictationPhase::Idle,
+                        )
+                        .clicked()
+                        {
+                            if let Some(backend) = self.backend() {
+                                self.spawn(async move {
+                                    backend.cancel_dictation(None).await?;
+                                    Ok("听写已取消".to_string())
+                                });
+                            }
+                        }
+                        if ui20::widgets::secondary_button(
+                            ui,
+                            "停止",
+                            phase == DictationPhase::Recording,
+                        )
+                        .clicked()
+                        {
+                            if let Some(backend) = self.backend() {
+                                self.spawn(async move {
+                                    let result = backend.stop_dictation().await?;
+                                    Ok(format!("完成：{} 字", result.polished_text.chars().count()))
+                                });
+                            }
+                        }
+                        if ui20::widgets::primary_button(ui, "开始", phase == DictationPhase::Idle)
+                            .clicked()
+                        {
+                            if let Some(backend) = self.backend() {
+                                self.transcript.clear();
+                                self.spawn(async move {
+                                    backend.start_dictation().await?;
+                                    Ok("正在录音".to_string())
+                                });
+                            }
+                        }
+                    });
+                });
             });
-            ui.label(if self.transcript.is_empty() {
-                "尚无转写结果"
-            } else {
-                &self.transcript
+            ui.add_space(8.0);
+            ui20::widgets::subtle_card(ui, |ui| {
+                ui20::widgets::section_title(ui, "转写结果");
+                if self.transcript.is_empty() {
+                    ui20::widgets::hint(ui, "尚无转写结果");
+                } else {
+                    ui.label(egui::RichText::new(&self.transcript).size(14.0));
+                }
             });
         }
 
         fn less_computer_ui(&mut self, ui: &mut egui::Ui) {
-            ui.heading("Less Computer");
-            ui.text_edit_multiline(&mut self.less_computer_input);
-            ui.horizontal(|ui| {
-                if ui.button("运行").clicked() && !self.less_computer_input.trim().is_empty() {
-                    if let Some(backend) = self.backend() {
-                        let prompt = self.less_computer_input.clone();
-                        self.less_computer_output.clear();
-                        self.spawn(async move {
-                            backend.submit_less_computer(prompt).await?;
-                            Ok("Less Computer 已完成".to_string())
-                        });
+            ui20::widgets::page_header(
+                ui,
+                "Less Computer",
+                Some("向 Agent 描述任务；工具执行沿用 Core 的审批规则。"),
+            );
+            if self.pending_approval.is_some() {
+                let p = ui20::current(ui.ctx());
+                egui::Frame::default()
+                    .fill(p.warn_soft())
+                    .corner_radius(egui::CornerRadius::same(
+                        openless_linux_egui::design_tokens::radius::CARD,
+                    ))
+                    .inner_margin(egui::Margin::same(16))
+                    .show(ui, |ui| {
+                        ui20::widgets::section_title(ui, "等待审批");
+                        self.agent_approval_ui(ui);
+                    });
+                ui.add_space(8.0);
+            }
+            ui20::widgets::card(ui, |ui| {
+                ui20::widgets::section_title(ui, "任务");
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.less_computer_input)
+                        .desired_rows(4)
+                        .desired_width(f32::INFINITY),
+                );
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui20::widgets::primary_button(
+                        ui,
+                        "运行",
+                        !self.less_computer_input.trim().is_empty(),
+                    )
+                    .clicked()
+                    {
+                        if let Some(backend) = self.backend() {
+                            let prompt = self.less_computer_input.clone();
+                            self.less_computer_output.clear();
+                            self.spawn(async move {
+                                backend.submit_less_computer(prompt).await?;
+                                Ok("Less Computer 已完成".to_string())
+                            });
+                        }
                     }
-                }
-                if ui.button("取消").clicked() {
-                    if let Some(backend) = self.backend() {
-                        self.spawn(async move {
-                            backend.cancel_less_computer(None).await?;
-                            Ok("Less Computer 已取消".to_string())
-                        });
+                    if ui20::widgets::secondary_button(ui, "取消", true).clicked() {
+                        if let Some(backend) = self.backend() {
+                            self.spawn(async move {
+                                backend.cancel_less_computer(None).await?;
+                                Ok("Less Computer 已取消".to_string())
+                            });
+                        }
                     }
-                }
+                });
             });
-            ui.label(if self.less_computer_output.is_empty() {
-                "尚无 Agent 输出"
-            } else {
-                &self.less_computer_output
+            ui.add_space(8.0);
+            ui20::widgets::subtle_card(ui, |ui| {
+                ui20::widgets::section_title(ui, "输出");
+                if self.less_computer_output.is_empty() {
+                    ui20::widgets::hint(ui, "尚无 Agent 输出");
+                } else {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(&self.less_computer_output)
+                                .size(13.5)
+                                .monospace(),
+                        )
+                        .wrap(),
+                    );
+                }
             });
         }
 
@@ -911,7 +994,14 @@ mod linux_app {
                     .id_salt("approval_command")
                     .max_height(72.0)
                     .show(ui, |ui| {
-                        ui.label(format!("请求执行：{command}"));
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("请求执行：{command}"))
+                                    .size(13.5)
+                                    .monospace(),
+                            )
+                            .wrap(),
+                        );
                     });
                 ui.horizontal(|ui| {
                     for (label, approved) in [("允许", true), ("拒绝", false)] {
@@ -935,294 +1025,456 @@ mod linux_app {
         }
 
         fn qa_ui(&mut self, ui: &mut egui::Ui) {
-            ui.heading("问答");
+            ui20::widgets::page_header(
+                ui,
+                "划词问答",
+                Some("文字或语音提问；切换页面保留当前会话。"),
+            );
             if !self.qa_visible {
-                ui.label("打开问答后可文字提问或语音提问。切换页面会保留当前会话；关闭会话使用下方的关闭操作。");
-                if ui.button("打开问答").clicked() {
-                    if let Some(backend) = self.backend() {
-                        self.spawn(async move {
-                            backend.services().qa.show().await?;
-                            Ok("问答已打开".to_string())
-                        });
+                ui20::widgets::info_panel(ui, |ui| {
+                    ui20::widgets::section_title(ui, "打开问答后可文字提问或语音提问。");
+                    ui20::widgets::hint(ui, "切换页面会保留当前会话；关闭会话使用下方的关闭操作。");
+                    if ui20::widgets::blue_button(ui, "打开问答", true).clicked() {
+                        if let Some(backend) = self.backend() {
+                            self.spawn(async move {
+                                backend.services().qa.show().await?;
+                                Ok("问答已打开".to_string())
+                            });
+                        }
                     }
-                }
+                });
                 return;
             }
-            if let Some(state) = &self.qa_state {
-                if let Some(messages) = &state.messages {
-                    for message in messages {
-                        ui.label(format!("{}：{}", message.role, message.content));
-                    }
-                }
-                if let Some(chunk) = &state.chunk {
-                    ui.label(chunk);
-                }
-                if let Some(error) = &state.error {
-                    ui.colored_label(egui::Color32::RED, error);
-                }
-            }
-            ui.text_edit_multiline(&mut self.qa_input);
-            ui.horizontal(|ui| {
-                let recording = self
-                    .qa_state
-                    .as_ref()
-                    .is_some_and(|state| state.kind == QaStateKind::Recording);
-                if ui
-                    .button(if recording {
-                        "结束录音"
-                    } else {
-                        "语音提问"
-                    })
+            ui20::widgets::card(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("qa_messages")
+                    .max_height((ui.available_height() - 96.0).max(160.0))
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let mut last_was_assistant = false;
+                        if let Some(state) = &self.qa_state {
+                            if let Some(messages) = &state.messages {
+                                for message in messages {
+                                    Self::qa_bubble(ui, &message.role, &message.content);
+                                    last_was_assistant = message.role == "assistant";
+                                }
+                            }
+                        }
+                        // 流式增量与错误行紧跟在最后一条消息之后。
+                        if let Some(state) = &self.qa_state {
+                            if let Some(chunk) = &state.chunk {
+                                if !chunk.is_empty() && !last_was_assistant {
+                                    Self::qa_bubble(ui, "assistant", chunk);
+                                }
+                            }
+                            if let Some(error) = &state.error {
+                                ui20::widgets::status_pill(ui, error, ui20::widgets::Status::Err);
+                            }
+                            match state.kind {
+                                QaStateKind::Recording => {
+                                    ui20::widgets::status_pill(
+                                        ui,
+                                        "录音中…",
+                                        ui20::widgets::Status::Warn,
+                                    );
+                                }
+                                QaStateKind::Thinking => {
+                                    ui20::widgets::status_pill(
+                                        ui,
+                                        "思考中…",
+                                        ui20::widgets::Status::Info,
+                                    );
+                                }
+                                _ => {}
+                            }
+                        }
+                    });
+            });
+            ui.add_space(8.0);
+            ui20::widgets::subtle_card(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.qa_input)
+                        .desired_rows(2)
+                        .desired_width(f32::INFINITY)
+                        .hint_text("输入问题，Enter 发送"),
+                );
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    let recording = self
+                        .qa_state
+                        .as_ref()
+                        .is_some_and(|state| state.kind == QaStateKind::Recording);
+                    if ui20::widgets::secondary_button(
+                        ui,
+                        if recording {
+                            "结束录音"
+                        } else {
+                            "语音提问"
+                        },
+                        true,
+                    )
                     .clicked()
-                {
-                    if let Some(backend) = self.backend() {
-                        self.spawn(async move {
-                            backend.services().qa.toggle_recording().await?;
-                            Ok("问答录音状态已更新".to_string())
-                        });
+                    {
+                        if let Some(backend) = self.backend() {
+                            self.spawn(async move {
+                                backend.services().qa.toggle_recording().await?;
+                                Ok("问答录音状态已更新".to_string())
+                            });
+                        }
                     }
-                }
-                if ui.button("发送").clicked() && !self.qa_input.trim().is_empty() {
-                    if let Some(backend) = self.backend() {
-                        let text = std::mem::take(&mut self.qa_input);
-                        self.spawn(async move {
-                            backend.services().qa.submit_text(text).await?;
-                            Ok("问答已提交".to_string())
-                        });
+                    if ui20::widgets::primary_button(ui, "发送", !self.qa_input.trim().is_empty())
+                        .clicked()
+                    {
+                        if let Some(backend) = self.backend() {
+                            let text = std::mem::take(&mut self.qa_input);
+                            self.spawn(async move {
+                                backend.services().qa.submit_text(text).await?;
+                                Ok("问答已提交".to_string())
+                            });
+                        }
                     }
-                }
-                if ui.button("关闭").clicked() {
-                    if let Some(backend) = self.backend() {
-                        self.spawn(async move {
-                            backend.services().qa.dismiss().await?;
-                            Ok("问答已关闭".to_string())
-                        });
+                    if ui20::widgets::secondary_button(ui, "取消本轮", true).clicked() {
+                        if let Some(backend) = self.backend() {
+                            let session_id = self
+                                .qa_state
+                                .as_ref()
+                                .and_then(|state| state.session_id.as_deref())
+                                .and_then(|id| uuid::Uuid::parse_str(id).ok())
+                                .map(openless_core::SessionId::from_uuid);
+                            self.spawn(async move {
+                                backend.services().qa.cancel(session_id).await?;
+                                Ok("问答本轮已取消".to_string())
+                            });
+                        }
                     }
-                }
-                if ui.button("取消本轮").clicked() {
-                    if let Some(backend) = self.backend() {
-                        let session_id = self
-                            .qa_state
-                            .as_ref()
-                            .and_then(|state| state.session_id.as_deref())
-                            .and_then(|id| uuid::Uuid::parse_str(id).ok())
-                            .map(openless_core::SessionId::from_uuid);
-                        self.spawn(async move {
-                            backend.services().qa.cancel(session_id).await?;
-                            Ok("问答本轮已取消".to_string())
-                        });
-                    }
-                }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui20::widgets::danger_button(ui, "关闭会话", true).clicked() {
+                            if let Some(backend) = self.backend() {
+                                self.spawn(async move {
+                                    backend.services().qa.dismiss().await?;
+                                    Ok("问答已关闭".to_string())
+                                });
+                            }
+                        }
+                    });
+                });
             });
         }
 
+        /// QA 消息气泡：用户右对齐（蓝色软底）、助手左对齐（surface-2 软底），
+        /// 对齐 #997 egui 弹窗与 React QaPanel 的双气泡布局。
+        fn qa_bubble(ui: &mut egui::Ui, role: &str, content: &str) {
+            let p = ui20::current(ui.ctx());
+            let user = role.eq_ignore_ascii_case("user");
+            let align = if user {
+                egui::Layout::right_to_left(egui::Align::Min)
+            } else {
+                egui::Layout::left_to_right(egui::Align::Min)
+            };
+            ui.with_layout(align, |ui| {
+                let max_width = ui.available_width() * 0.78;
+                egui::Frame::default()
+                    .fill(if user { p.blue_soft() } else { p.surface_2() })
+                    .corner_radius(egui::CornerRadius::same(
+                        openless_linux_egui::design_tokens::radius::MD,
+                    ))
+                    .inner_margin(egui::Margin::symmetric(12, 8))
+                    .show(ui, |ui| {
+                        ui.set_max_width(max_width);
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(content).size(14.0).color(if user {
+                                    p.ink()
+                                } else {
+                                    p.ink_2()
+                                }),
+                            )
+                            .wrap(),
+                        );
+                    });
+            });
+            ui.add_space(2.0);
+        }
+
         fn selection_ui(&mut self, ui: &mut egui::Ui) {
-            ui.heading("选区润色");
+            ui20::widgets::page_header(
+                ui,
+                "选区润色",
+                Some("在目标应用选中文字后用选区润色快捷键触发；确认前可编辑或取消。"),
+            );
             let Some(selection) = self.selection.clone() else {
-                ui.label("先在目标应用中选中文字，再使用已配置的选区润色快捷键。预览会在此显示，确认前可以编辑或取消。");
-                ui.small("此入口是现有 Selection polish；Selection Voice 的完整意图路由尚未接入。");
+                ui20::widgets::info_panel(ui, |ui| {
+                    ui20::widgets::section_title(
+                        ui,
+                        "先在目标应用中选中文字，再使用已配置的选区润色快捷键。",
+                    );
+                    ui20::widgets::hint(
+                        ui,
+                        "预览会在此显示，确认前可以编辑或取消。此入口是现有 Selection polish；Selection Voice 的完整意图路由尚未接入。",
+                    );
+                });
                 return;
             };
-            ui.label(format!("当前状态：{:?}", selection.phase));
-            if self.selection_preview_visible && selection.phase == SelectionPhase::Preview {
-                ui.strong("选区预览");
-                ui.text_edit_multiline(&mut self.selection_draft);
+            ui20::widgets::card(ui, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.button("确认替换").clicked() {
-                        if let (Some(backend), Some(session_id)) =
-                            (self.backend(), selection.session_id)
-                        {
-                            let text = self.selection_draft.clone();
-                            self.spawn(async move {
-                                backend
-                                    .services()
-                                    .selection
-                                    .confirm(session_id, Some(text))
-                                    .await?;
-                                Ok("选区替换已确认".to_string())
-                            });
-                        }
-                    }
-                    if ui.button("取消").clicked() {
-                        if let (Some(backend), Some(session_id)) =
-                            (self.backend(), selection.session_id)
-                        {
-                            self.spawn(async move {
-                                backend
-                                    .services()
-                                    .selection
-                                    .cancel(Some(session_id))
-                                    .await?;
-                                Ok("选区替换已取消".to_string())
-                            });
-                        }
-                    }
+                    let (phase_label, phase_status) = match selection.phase {
+                        SelectionPhase::Preview => ("待确认", ui20::widgets::Status::Warn),
+                        SelectionPhase::Completed => ("已完成", ui20::widgets::Status::Ok),
+                        _ => ("进行中", ui20::widgets::Status::Info),
+                    };
+                    ui20::widgets::status_pill(ui, phase_label, phase_status);
                 });
-            } else if selection.phase == SelectionPhase::Completed
-                && selection.revert_outcome.is_none()
-            {
-                ui.horizontal(|ui| {
-                    ui.label("最近一次选区替换已完成");
-                    if ui.button("撤销").clicked() {
-                        if let (Some(backend), Some(session_id)) =
-                            (self.backend(), selection.session_id)
-                        {
-                            self.spawn(async move {
-                                backend.services().selection.revert(session_id).await?;
-                                Ok("选区替换已撤销".to_string())
-                            });
+                ui.add_space(6.0);
+                if self.selection_preview_visible && selection.phase == SelectionPhase::Preview {
+                    ui20::widgets::section_title(ui, "选区预览");
+                    ui.add(
+                        egui::TextEdit::multiline(&mut self.selection_draft)
+                            .desired_rows(5)
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if ui20::widgets::primary_button(ui, "确认替换", true).clicked() {
+                            if let (Some(backend), Some(session_id)) =
+                                (self.backend(), selection.session_id)
+                            {
+                                let text = self.selection_draft.clone();
+                                self.spawn(async move {
+                                    backend
+                                        .services()
+                                        .selection
+                                        .confirm(session_id, Some(text))
+                                        .await?;
+                                    Ok("选区替换已确认".to_string())
+                                });
+                            }
                         }
-                    }
-                });
-            }
+                        if ui20::widgets::secondary_button(ui, "取消", true).clicked() {
+                            if let (Some(backend), Some(session_id)) =
+                                (self.backend(), selection.session_id)
+                            {
+                                self.spawn(async move {
+                                    backend
+                                        .services()
+                                        .selection
+                                        .cancel(Some(session_id))
+                                        .await?;
+                                    Ok("选区替换已取消".to_string())
+                                });
+                            }
+                        }
+                    });
+                } else if selection.phase == SelectionPhase::Completed
+                    && selection.revert_outcome.is_none()
+                {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("最近一次选区替换已完成").size(14.0));
+                        if ui20::widgets::secondary_button(ui, "撤销", true).clicked() {
+                            if let (Some(backend), Some(session_id)) =
+                                (self.backend(), selection.session_id)
+                            {
+                                self.spawn(async move {
+                                    backend.services().selection.revert(session_id).await?;
+                                    Ok("选区替换已撤销".to_string())
+                                });
+                            }
+                        }
+                    });
+                }
+            });
         }
 
         fn models_ui(&mut self, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
-                ui.heading("本地模型");
-                if ui.button("刷新").clicked() {
-                    self.models = ModelsState::Loading;
-                    self.load_models();
-                }
+                ui20::widgets::page_header(ui, "本地模型", None);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui20::widgets::secondary_button(ui, "刷新", true).clicked() {
+                        self.models = ModelsState::Loading;
+                        self.load_models();
+                    }
+                });
             });
             let models = match self.models.clone() {
                 ModelsState::Loading => {
-                    ui.label("正在加载模型目录…");
+                    ui20::widgets::hint(ui, "正在加载模型目录…");
                     return;
                 }
                 ModelsState::Failed(error) => {
-                    ui.colored_label(egui::Color32::RED, error);
+                    ui20::widgets::status_pill(ui, &error, ui20::widgets::Status::Err);
                     return;
                 }
                 ModelsState::Loaded(models) if models.is_empty() => {
-                    ui.label("模型目录未返回任何可用模型");
+                    ui20::widgets::info_panel(ui, |ui| {
+                        ui20::widgets::hint(ui, "模型目录未返回任何可用模型");
+                    });
                     return;
                 }
                 ModelsState::Loaded(models) => models,
             };
             for model in models {
-                ui.horizontal(|ui| {
-                    ui.label(format!(
-                        "{} · {} · {}",
-                        model.display_name,
-                        model.family,
-                        if model.installed {
-                            "已安装"
-                        } else {
-                            "未安装"
-                        }
-                    ));
-                    if !model.installed && ui.button("下载").clicked() {
-                        if let Some(backend) = self.backend() {
-                            let target = model.target.clone();
-                            self.spawn(async move {
-                                backend
-                                    .services()
-                                    .local_asr
-                                    .start_download(target, None)
-                                    .await?;
-                                Ok("模型下载完成".to_string())
-                            });
-                        }
-                    }
-                    if model.installed && ui.button("激活").clicked() {
-                        if let Some(backend) = self.backend() {
-                            let target = model.target.clone();
-                            self.spawn(async move {
-                                let descriptor =
-                                    openless_core::provider_rules::provider_descriptor(
-                                        openless_core::ProviderKind::Asr,
-                                        "local-qwen3-c",
-                                    )
-                                    .ok_or_else(|| {
-                                        openless_core::BackendError::new(
-                                            openless_core::BackendErrorCode::Unsupported,
-                                            "local Qwen provider is unavailable",
-                                        )
-                                    })?;
-                                let provider_type = descriptor.provider_type.as_str().to_string();
-                                let existing = backend
-                                    .list_channels(openless_core::ChannelKind::Asr)
-                                    .await?
-                                    .into_iter()
-                                    .find(|channel| channel.provider_type == provider_type)
-                                    .map(|channel| channel.id);
-                                let provider_id = match existing {
-                                    Some(provider_id) => provider_id,
-                                    None => {
+                ui20::widgets::card(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(&model.display_name).size(15.0).strong());
+                        ui20::widgets::status_pill(
+                            ui,
+                            if model.installed {
+                                "已安装"
+                            } else {
+                                "未安装"
+                            },
+                            if model.installed {
+                                ui20::widgets::Status::Ok
+                            } else {
+                                ui20::widgets::Status::Info
+                            },
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui20::widgets::secondary_button(ui, "取消下载", true).clicked() {
+                                if let Some(backend) = self.backend() {
+                                    let target = model.target.clone();
+                                    self.spawn(async move {
                                         backend
-                                            .create_channel(
-                                                openless_core::ChannelKind::Asr,
-                                                provider_type,
-                                                descriptor.label_key,
+                                            .services()
+                                            .local_asr
+                                            .cancel_download(target)
+                                            .await?;
+                                        Ok("模型下载已取消".to_string())
+                                    });
+                                }
+                            }
+                            if model.installed
+                                && ui20::widgets::primary_button(ui, "激活", true).clicked()
+                            {
+                                if let Some(backend) = self.backend() {
+                                    let target = model.target.clone();
+                                    self.spawn(async move {
+                                        let descriptor =
+                                            openless_core::provider_rules::provider_descriptor(
+                                                openless_core::ProviderKind::Asr,
+                                                "local-qwen3-c",
                                             )
+                                            .ok_or_else(|| {
+                                                openless_core::BackendError::new(
+                                                    openless_core::BackendErrorCode::Unsupported,
+                                                    "local Qwen provider is unavailable",
+                                                )
+                                            })?;
+                                        let provider_type =
+                                            descriptor.provider_type.as_str().to_string();
+                                        let existing = backend
+                                            .list_channels(openless_core::ChannelKind::Asr)
                                             .await?
-                                    }
-                                };
-                                backend
-                                    .activate_local_asr(openless_core::LocalAsrActivationRequest {
-                                        target,
-                                        provider_id,
-                                    })
-                                    .await?;
-                                Ok("本地模型已激活并预加载".to_string())
-                            });
-                        }
+                                            .into_iter()
+                                            .find(|channel| channel.provider_type == provider_type)
+                                            .map(|channel| channel.id);
+                                        let provider_id = match existing {
+                                            Some(provider_id) => provider_id,
+                                            None => {
+                                                backend
+                                                    .create_channel(
+                                                        openless_core::ChannelKind::Asr,
+                                                        provider_type,
+                                                        descriptor.label_key,
+                                                    )
+                                                    .await?
+                                            }
+                                        };
+                                        backend
+                                            .activate_local_asr(
+                                                openless_core::LocalAsrActivationRequest {
+                                                    target,
+                                                    provider_id,
+                                                },
+                                            )
+                                            .await?;
+                                        Ok("本地模型已激活并预加载".to_string())
+                                    });
+                                }
+                            }
+                            if !model.installed
+                                && ui20::widgets::blue_button(ui, "下载", true).clicked()
+                            {
+                                if let Some(backend) = self.backend() {
+                                    let target = model.target.clone();
+                                    self.spawn(async move {
+                                        backend
+                                            .services()
+                                            .local_asr
+                                            .start_download(target, None)
+                                            .await?;
+                                        Ok("模型下载完成".to_string())
+                                    });
+                                }
+                            }
+                        });
+                    });
+                    ui20::widgets::divider(ui);
+                    ui20::widgets::kv_row(ui, "模型家族", &model.family);
+                    if let Some(mode) = &model.mode {
+                        ui20::widgets::kv_row(ui, "模式", mode);
                     }
-                    if ui.button("取消").clicked() {
-                        if let Some(backend) = self.backend() {
-                            let target = model.target.clone();
-                            self.spawn(async move {
-                                backend.services().local_asr.cancel_download(target).await?;
-                                Ok("模型下载已取消".to_string())
-                            });
-                        }
+                    if !model.languages.is_empty() {
+                        ui20::widgets::kv_row(ui, "支持语言", &model.languages.join(" / "));
+                    }
+                    if let Some(size) = model.size_bytes {
+                        ui20::widgets::kv_row(ui, "体积", &format!("{} MB", size / (1024 * 1024)));
                     }
                 });
+                ui.add_space(2.0);
             }
         }
 
         fn provider_management_ui(&mut self, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
-                ui.strong("凭据渠道");
-                for (kind, label) in [
-                    (openless_core::ChannelKind::Asr, "ASR"),
-                    (openless_core::ChannelKind::Llm, "LLM"),
-                ] {
-                    if ui
-                        .selectable_label(self.provider_kind == kind, label)
-                        .clicked()
-                        && self.provider_kind != kind
-                    {
-                        self.provider_kind = kind;
+                ui20::widgets::section_title(ui, "凭据渠道");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui20::widgets::secondary_button(ui, "刷新渠道", true).clicked() {
                         self.providers = ProvidersState::Loading;
-                        self.selected_channel_id = None;
-                        self.pending_channel_delete = None;
-                        self.provider_editor = ProviderEditorState::Idle;
-                        self.provider_models.clear();
-                        self.load_providers(kind);
+                        self.load_providers(self.provider_kind);
                     }
-                }
-                if ui.button("刷新渠道").clicked() {
-                    self.providers = ProvidersState::Loading;
-                    self.load_providers(self.provider_kind);
-                }
+                });
             });
+            ui.add_space(4.0);
+            let kind_index = match self.provider_kind {
+                openless_core::ChannelKind::Asr => 0,
+                openless_core::ChannelKind::Llm => 1,
+            };
+            if let Some(picked) = ui20::widgets::segmented(
+                ui,
+                "provider-kind",
+                &["ASR 语音识别", "LLM 文本处理"],
+                kind_index,
+            ) {
+                let kind = match picked {
+                    0 => openless_core::ChannelKind::Asr,
+                    _ => openless_core::ChannelKind::Llm,
+                };
+                if self.provider_kind != kind {
+                    self.provider_kind = kind;
+                    self.providers = ProvidersState::Loading;
+                    self.selected_channel_id = None;
+                    self.pending_channel_delete = None;
+                    self.provider_editor = ProviderEditorState::Idle;
+                    self.provider_models.clear();
+                    self.load_providers(kind);
+                }
+            }
+            ui.add_space(6.0);
 
             let panel = match self.providers.clone() {
                 ProvidersState::Loading => {
-                    ui.label("正在读取 Core 渠道目录…");
+                    ui20::widgets::hint(ui, "正在读取 Core 渠道目录…");
                     return;
                 }
                 ProvidersState::Failed(error) => {
-                    ui.colored_label(egui::Color32::RED, error);
+                    ui20::widgets::status_pill(ui, &error, ui20::widgets::Status::Err);
                     return;
                 }
                 ProvidersState::Loaded(panel) => panel,
             };
 
-            ui.group(|ui| {
-                ui.label("新增渠道");
+            ui20::widgets::subtle_card(ui, |ui| {
+                ui20::widgets::section_title(ui, "新增渠道");
                 ui.horizontal(|ui| {
                     egui::ComboBox::from_id_salt("new-provider-type")
                         .selected_text(
@@ -1485,28 +1737,52 @@ mod linux_app {
         }
 
         fn services_ui(&mut self, ui: &mut egui::Ui) {
-            ui.heading("AI 服务");
-            ui.label("选择 ASR 语音识别、LLM 文本处理或 Omni 服务，再编辑并校验渠道。已配置不代表网络请求已通过。");
+            ui20::widgets::page_header(
+                ui,
+                "AI 服务",
+                Some("选择 ASR 语音识别、LLM 文本处理或 Omni 服务，再编辑并校验渠道。已配置不代表网络请求已通过。"),
+            );
             if let Some(snapshot) = &self.snapshot {
                 let credentials = &snapshot.credentials;
-                ui.label(format!(
-                    "ASR：{}（{}）",
-                    credentials.active_asr_provider,
-                    if credentials.asr_configured {
-                        "已配置"
-                    } else {
-                        "未配置"
-                    }
-                ));
-                ui.label(format!(
-                    "LLM：{}（{}）",
-                    credentials.active_llm_provider,
-                    if credentials.llm_configured {
-                        "已配置"
-                    } else {
-                        "未配置"
-                    }
-                ));
+                ui20::widgets::card(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui20::widgets::status_pill(
+                            ui,
+                            &format!(
+                                "ASR：{}（{}）",
+                                credentials.active_asr_provider,
+                                if credentials.asr_configured {
+                                    "已配置"
+                                } else {
+                                    "未配置"
+                                }
+                            ),
+                            if credentials.asr_configured {
+                                ui20::widgets::Status::Ok
+                            } else {
+                                ui20::widgets::Status::Warn
+                            },
+                        );
+                        ui20::widgets::status_pill(
+                            ui,
+                            &format!(
+                                "LLM：{}（{}）",
+                                credentials.active_llm_provider,
+                                if credentials.llm_configured {
+                                    "已配置"
+                                } else {
+                                    "未配置"
+                                }
+                            ),
+                            if credentials.llm_configured {
+                                ui20::widgets::Status::Ok
+                            } else {
+                                ui20::widgets::Status::Warn
+                            },
+                        );
+                    });
+                });
+                ui.add_space(8.0);
             }
             self.provider_management_ui(ui);
         }
@@ -1540,10 +1816,11 @@ mod linux_app {
 
         fn settings_actions_ui(&mut self, ui: &mut egui::Ui) {
             ui.horizontal_wrapped(|ui| {
-                if ui.button("保存设置").clicked() {
+                if ui20::widgets::primary_button(ui, "保存设置", true).clicked() {
                     self.save_preferences();
                 }
-                if ui.button("放弃修改并重新读取").clicked() {
+                if ui20::widgets::secondary_button(ui, "放弃修改并重新读取", true).clicked()
+                {
                     if let Some(backend) = self.backend() {
                         self.preferences = Some(backend.get_preferences());
                         self.snapshot = Some(backend.snapshot());
@@ -1551,189 +1828,313 @@ mod linux_app {
                     }
                 }
             });
-            ui.small(
+            ui20::widgets::hint(
+                ui,
                 "环境与设置、手机输入共用设置草稿；保存会一起应用。保存冲突时可重新读取后再修改。",
             );
         }
 
         fn settings_ui(&mut self, ui: &mut egui::Ui) {
-            ui.heading("环境与设置");
-            ui.strong("现有功能设置");
-            if let Some(preferences) = self.preferences.as_mut() {
-                ui.checkbox(&mut preferences.streaming_insert, "流式插入");
-                ui.small("将转写逐步发送到原输入目标，实际结果以听写与历史反馈为准。");
-                ui.checkbox(&mut preferences.coding_agent_enabled, "启用 Less Computer");
-                ui.small("使用已有 Agent 配置与 CLI；进程执行仍遵循 Core 的审批规则。");
-                self.settings_actions_ui(ui);
-            }
-            ui.horizontal_wrapped(|ui| {
-                if ui.button("配置 AI 服务").clicked() {
-                    self.navigation.open(Page::Services);
-                }
-                if ui.button("设置手机输入").clicked() {
-                    self.navigation.open(Page::Remote);
+            ui20::widgets::page_header(
+                ui,
+                "环境与设置",
+                Some("环境与设置、手机输入共用设置草稿；保存会一起应用。"),
+            );
+            ui20::widgets::card(ui, |ui| {
+                ui20::widgets::section_title(ui, "外观");
+                let mut dark = self.ui_prefs.dark;
+                ui20::widgets::toggle_row(ui, &mut dark, "深色主题", Some("2.0 默认浅色"));
+                if dark != self.ui_prefs.dark {
+                    self.ui_prefs.dark = dark;
+                    self.ui_prefs.save();
+                    ui20::apply_theme(ui.ctx(), dark);
                 }
             });
-            ui.small(
-                "托盘、自启、自动更新、系统静音与额外全局热键尚未完整接入，此页没有对应开关。",
-            );
-            ui.separator();
+            ui.add_space(8.0);
+            ui20::widgets::card(ui, |ui| {
+                ui20::widgets::section_title(ui, "现有功能设置");
+                if let Some(preferences) = self.preferences.as_mut() {
+                    let mut streaming = preferences.streaming_insert;
+                    ui20::widgets::toggle_row(
+                        ui,
+                        &mut streaming,
+                        "流式插入",
+                        Some("将转写逐步发送到原输入目标，实际结果以听写与历史反馈为准。"),
+                    );
+                    preferences.streaming_insert = streaming;
+                    let mut agent = preferences.coding_agent_enabled;
+                    ui20::widgets::toggle_row(
+                        ui,
+                        &mut agent,
+                        "启用 Less Computer",
+                        Some("使用已有 Agent 配置与 CLI；进程执行仍遵循 Core 的审批规则。"),
+                    );
+                    preferences.coding_agent_enabled = agent;
+                    ui.add_space(4.0);
+                    self.settings_actions_ui(ui);
+                } else {
+                    ui20::widgets::hint(ui, "Core 未连接，暂无可编辑设置。");
+                }
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui20::widgets::secondary_button(ui, "配置 AI 服务", true).clicked() {
+                        self.settings_modal = Some(Page::Services);
+                    }
+                    if ui20::widgets::secondary_button(ui, "设置手机输入", true).clicked() {
+                        self.settings_modal = Some(Page::Remote);
+                    }
+                    if ui20::widgets::secondary_button(ui, "管理本地模型", true).clicked() {
+                        self.settings_modal = Some(Page::Models);
+                    }
+                });
+                ui20::widgets::hint(
+                    ui,
+                    "托盘、自启、自动更新、系统静音与额外全局热键尚未完整接入，此页没有对应开关。",
+                );
+            });
+            ui.add_space(8.0);
             self.environment_ui(ui);
         }
 
         fn remote_ui(&mut self, ui: &mut egui::Ui) {
-            ui.heading("手机输入");
-            ui.label(
-                "先启用并保存，再让手机连接同一局域网，打开本机提供的 HTTPS 地址并输入配对码。",
+            ui20::widgets::page_header(
+                ui,
+                "手机输入",
+                Some(
+                    "先启用并保存，再让手机连接同一局域网，打开本机提供的 HTTPS 地址并输入配对码。",
+                ),
             );
-            ui.label("首次连接需要确认并信任本服务的证书；服务运行不代表手机已连接。");
-            if let Some(preferences) = self.preferences.as_mut() {
-                ui.checkbox(&mut preferences.remote_input_enabled, "启用远程输入");
-                ui.add(
-                    egui::DragValue::new(&mut preferences.remote_input_port)
-                        .range(1..=u16::MAX)
-                        .prefix("端口 "),
+            ui20::widgets::card(ui, |ui| {
+                ui20::widgets::section_title(ui, "远程输入");
+                ui.label(
+                    egui::RichText::new(
+                        "首次连接需要确认并信任本服务的证书；服务运行不代表手机已连接。",
+                    )
+                    .size(13.0),
                 );
-                self.settings_actions_ui(ui);
-            }
-            ui.separator();
-            if ui.button("刷新连接状态").clicked() {
-                self.load_remote_status();
-            }
-            if let Some(error) = &self.remote_error {
-                ui.colored_label(
-                    egui::Color32::YELLOW,
-                    format!("暂时无法读取连接状态：{error}"),
-                );
-                ui.label("检查桌面密钥环、网络和端口后刷新；旧地址与配对码已隐藏。");
-            } else if self.remote_access.is_none() {
-                ui.label("尚未取得手机输入状态。");
-            }
-            if let Some((remote, pin)) = &self.remote_access {
-                ui.label(if remote.running {
-                    "远程输入服务：运行中"
-                } else if remote.starting {
-                    "远程输入服务：启动中"
+                ui.add_space(4.0);
+                if let Some(preferences) = self.preferences.as_mut() {
+                    let mut enabled = preferences.remote_input_enabled;
+                    ui20::widgets::toggle_row(ui, &mut enabled, "启用远程输入", None);
+                    preferences.remote_input_enabled = enabled;
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("端口").size(14.0));
+                        ui.add(
+                            egui::DragValue::new(&mut preferences.remote_input_port)
+                                .range(1..=u16::MAX),
+                        );
+                    });
+                    self.settings_actions_ui(ui);
                 } else {
-                    "远程输入服务：已停止"
+                    ui20::widgets::hint(ui, "Core 未连接，暂不可配置远程输入。");
+                }
+            });
+            ui.add_space(8.0);
+            ui20::widgets::card(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui20::widgets::section_title(ui, "连接状态");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui20::widgets::secondary_button(ui, "刷新连接状态", true).clicked()
+                        {
+                            self.load_remote_status();
+                        }
+                    });
                 });
-                ui.label(format!("当前连接数：{}", remote.connection_count));
-                if remote.active_session_id.is_some() {
-                    ui.label("手机语音会话进行中，可使用顶部的语音取消。");
-                }
-                if remote.urls_stale {
-                    ui.colored_label(
-                        egui::Color32::YELLOW,
-                        "网络地址已过期，请检查网络后刷新状态。",
+                ui.add_space(4.0);
+                if let Some(error) = &self.remote_error {
+                    ui20::widgets::status_pill(
+                        ui,
+                        &format!("暂时无法读取连接状态：{error}"),
+                        ui20::widgets::Status::Warn,
                     );
+                    ui20::widgets::hint(
+                        ui,
+                        "检查桌面密钥环、网络和端口后刷新；旧地址与配对码已隐藏。",
+                    );
+                } else if self.remote_access.is_none() {
+                    ui20::widgets::hint(ui, "尚未取得手机输入状态。");
                 }
-                if remote.enabled && remote.running && !remote.urls_stale {
-                    // 首次信任前必须核对根证书指纹：网页与描述文件名称不能证明身份。
-                    ui.label("本机根证书 SHA-256");
-                    match remote.ca_fingerprint_sha256.as_ref().filter(|value| {
-                        value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-                    }) {
-                        Some(fingerprint) => {
-                            let display = fingerprint
-                                .as_bytes()
-                                .chunks(2)
-                                .map(|pair| std::str::from_utf8(pair).unwrap().to_ascii_uppercase())
-                                .collect::<Vec<_>>()
-                                .join(" ");
-                            ui.add(egui::Label::new(egui::RichText::new(&display).monospace()).wrap());
-                            if ui.button("复制完整指纹").clicked() {
-                                ui.ctx().copy_text(display);
+                if let Some((remote, pin)) = &self.remote_access {
+                    let running_status = if remote.running {
+                        ("运行中", ui20::widgets::Status::Ok)
+                    } else if remote.starting {
+                        ("启动中", ui20::widgets::Status::Info)
+                    } else {
+                        ("已停止", ui20::widgets::Status::Warn)
+                    };
+                    ui.horizontal(|ui| {
+                        ui20::widgets::status_pill(ui, "远程输入服务", running_status.1);
+                        ui.label(egui::RichText::new(running_status.0).size(13.0));
+                    });
+                    ui20::widgets::kv_row(ui, "当前连接数", &remote.connection_count.to_string());
+                    if remote.active_session_id.is_some() {
+                        ui20::widgets::hint(ui, "手机语音会话进行中，可使用语音取消。");
+                    }
+                    if remote.urls_stale {
+                        ui20::widgets::status_pill(
+                            ui,
+                            "网络地址已过期，请检查网络后刷新状态",
+                            ui20::widgets::Status::Warn,
+                        );
+                    }
+                    if remote.enabled && remote.running && !remote.urls_stale {
+                        // 首次信任前必须核对根证书指纹：网页与描述文件名称不能证明身份。
+                        ui.label("本机根证书 SHA-256");
+                        match remote.ca_fingerprint_sha256.as_ref().filter(|value| {
+                            value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+                        }) {
+                            Some(fingerprint) => {
+                                let display = fingerprint
+                                    .as_bytes()
+                                    .chunks(2)
+                                    .map(|pair| {
+                                        std::str::from_utf8(pair).unwrap().to_ascii_uppercase()
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(" ");
+                                ui.add(
+                                    egui::Label::new(egui::RichText::new(&display).monospace())
+                                        .wrap(),
+                                );
+                                if ui.button("复制完整指纹").clicked() {
+                                    ui.ctx().copy_text(display);
+                                }
+                            }
+                            // 两臂统一为 ()：None 臂不能返回 Response（match 臂类型
+                            // 必须一致；这是 #1048 移植后未被编译验证过的潜伏错误）。
+                            None => {
+                                ui.label("完整指纹不可用。请勿安装或信任下载的证书。");
                             }
                         }
-                        None => ui.label("完整指纹不可用。请勿安装或信任下载的证书。"),
+                        ui.label("安装或开启完全信任前，在手机系统的证书详情中核对全部 SHA-256 字符，必须与此处一致。网页、描述文件名称和标识不能证明证书身份。若不一致或无法查看，请停止并移除已下载或安装的描述文件。");
+                        ui.label("描述文件应只包含一张根证书。若有其他证书、VPN 或设备管理配置，请勿安装。首次下载仍可能被局域网攻击者替换；核验后再信任。根证书可签发其他证书，不再使用时请移除。");
+                        ui.monospace(format!("PIN：{pin}"));
+                        for url in &remote.urls {
+                            ui.monospace(url);
+                        }
+                        if remote.urls.is_empty() {
+                            ui.label("服务已启动，但尚未提供可用地址；请检查本机局域网连接。");
+                        }
                     }
-                    ui.label("安装或开启完全信任前，在手机系统的证书详情中核对全部 SHA-256 字符，必须与此处一致。网页、描述文件名称和标识不能证明证书身份。若不一致或无法查看，请停止并移除已下载或安装的描述文件。");
-                    ui.label("描述文件应只包含一张根证书。若有其他证书、VPN 或设备管理配置，请勿安装。首次下载仍可能被局域网攻击者替换；核验后再信任。根证书可签发其他证书，不再使用时请移除。");
-                    ui.monospace(format!("PIN：{pin}"));
-                    for url in &remote.urls {
-                        ui.monospace(url);
-                    }
-                    if remote.urls.is_empty() {
-                        ui.label("服务已启动，但尚未提供可用地址；请检查本机局域网连接。");
+                    if remote.enabled && ui.button("重置配对码").clicked() {
+                        if let Some(backend) = self.backend() {
+                            self.spawn(async move {
+                                backend
+                                    .services()
+                                    .remote_input
+                                    .regenerate_pairing_pin()
+                                    .await?;
+                                Ok("远程输入配对码已重置".to_string())
+                            });
+                        }
                     }
                 }
-                if remote.enabled && ui.button("重置配对码").clicked() {
-                    if let Some(backend) = self.backend() {
-                        self.spawn(async move {
-                            backend
-                                .services()
-                                .remote_input
-                                .regenerate_pairing_pin()
-                                .await?;
-                            Ok("远程输入配对码已重置".to_string())
-                        });
-                    }
-                }
-            }
+            });
         }
 
         fn environment_ui(&mut self, ui: &mut egui::Ui) {
-            ui.strong("Linux 环境准备");
-            ui.label(if self.native.is_some() {
-                "Core 已连接。下面的环境检查不代表录音、落字或服务调用已经实测成功。"
-            } else {
-                "Core 未连接。可查看准备步骤；修复启动问题后，请退出并重新启动 OpenLess。"
-            });
-            if let Some(environment) = &self.environment {
-                ui.label(match environment.session {
-                    LinuxDesktopSession::X11 => "桌面会话：检测到 X11 环境",
-                    LinuxDesktopSession::Wayland => "桌面会话：检测到 Wayland 环境",
-                    LinuxDesktopSession::Headless => "桌面会话：未检测到 DISPLAY / WAYLAND_DISPLAY",
-                });
-                ui.label(if environment.fcitx5_ready {
-                    "fcitx5：D-Bus 探测有响应，插件加载、快捷键与目标应用落字仍需实际操作确认。"
+            ui20::widgets::card(ui, |ui| {
+                ui20::widgets::section_title(ui, "Linux 环境准备");
+                let connected = self.native.is_some();
+                ui20::widgets::status_pill(
+                    ui,
+                    if connected {
+                        "Core 已连接"
+                    } else {
+                        "Core 未连接"
+                    },
+                    if connected {
+                        ui20::widgets::Status::Ok
+                    } else {
+                        ui20::widgets::Status::Warn
+                    },
+                );
+                ui20::widgets::hint(
+                    ui,
+                    if connected {
+                        "下面的环境检查不代表录音、落字或服务调用已经实测成功。"
+                    } else {
+                        "可查看准备步骤；修复启动问题后，请退出并重新启动 OpenLess。"
+                    },
+                );
+                ui20::widgets::divider(ui);
+                if let Some(environment) = &self.environment {
+                    ui20::widgets::kv_row(
+                        ui,
+                        "桌面会话",
+                        match environment.session {
+                            LinuxDesktopSession::X11 => "检测到 X11 环境",
+                            LinuxDesktopSession::Wayland => "检测到 Wayland 环境",
+                            LinuxDesktopSession::Headless => "未检测到 DISPLAY / WAYLAND_DISPLAY",
+                        },
+                    );
+                    ui20::widgets::kv_row(
+                        ui,
+                        "fcitx5",
+                        if environment.fcitx5_ready {
+                            "D-Bus 探测有响应；插件加载、快捷键与落字仍需实际确认"
+                        } else {
+                            "D-Bus 探测未通过，可能是会话总线、服务或插件未就绪"
+                        },
+                    );
+                    ui20::widgets::kv_row(
+                        ui,
+                        "麦克风",
+                        match environment.permissions.microphone {
+                            openless_core::PermissionState::Unsupported => {
+                                "当前探测环境不支持；请进入图形桌面会话"
+                            }
+                            _ => "尚未验证录音；请在系统声音设置选择输入设备后短听写",
+                        },
+                    );
                 } else {
-                    "fcitx5：D-Bus 探测未通过，可能是会话总线、服务或插件未就绪。"
-                });
-                ui.label(match environment.permissions.microphone {
-                    openless_core::PermissionState::Unsupported => {
-                        "麦克风：当前探测环境不支持；请进入图形桌面会话。"
-                    }
-                    _ => "麦克风：尚未验证录音。请在系统声音设置选择输入设备，再进行一次短听写。",
-                });
-            } else {
-                ui.label("尚未取得桌面环境探测结果。");
-            }
-            ui.label(match &self.plugin_check {
-                Some(Ok(FcitxPluginStatus::Ready)) => {
-                    "本次启动插件检查：找到插件文件；文件存在不代表 fcitx5 已加载它。"
+                    ui20::widgets::hint(ui, "尚未取得桌面环境探测结果。");
                 }
-                Some(Ok(FcitxPluginStatus::Updated)) => {
-                    "本次启动插件检查：插件文件已安装或更新，需要重载配置并重新启动 fcitx5。"
+                ui20::widgets::kv_row(
+                    ui,
+                    "本次启动插件检查",
+                    match &self.plugin_check {
+                        Some(Ok(FcitxPluginStatus::Ready)) => {
+                            "找到插件文件；文件存在不代表 fcitx5 已加载它"
+                        }
+                        Some(Ok(FcitxPluginStatus::Updated)) => {
+                            "插件文件已安装或更新，需要重载配置并重新启动 fcitx5"
+                        }
+                        Some(Ok(FcitxPluginStatus::Missing)) => {
+                            "未找到插件文件，请重新安装含 OpenLess 插件的软件包"
+                        }
+                        Some(Err(_)) => "检查失败，请查看下方具体原因",
+                        None => "未执行",
+                    },
+                );
+                if let Some(Err(error)) = &self.plugin_check {
+                    ui20::widgets::status_pill(ui, error, ui20::widgets::Status::Warn);
                 }
-                Some(Ok(FcitxPluginStatus::Missing)) => {
-                    "本次启动插件检查：未找到插件文件，请重新安装含 OpenLess 插件的软件包。"
-                }
-                Some(Err(_)) => "本次启动插件检查：检查失败，请查看下方具体原因。",
-                None => "本次启动插件检查：未执行。",
-            });
-            if let Some(Err(error)) = &self.plugin_check {
-                ui.colored_label(egui::Color32::YELLOW, error);
-            }
-            if ui
-                .add_enabled(
-                    !self.environment_refreshing,
-                    egui::Button::new(if self.environment_refreshing {
+                ui.add_space(4.0);
+                if ui20::widgets::secondary_button(
+                    ui,
+                    if self.environment_refreshing {
                         "正在检测…"
                     } else {
                         "重新检测会话与 D-Bus"
-                    }),
+                    },
+                    !self.environment_refreshing,
                 )
                 .clicked()
-            {
-                self.environment_refreshing = true;
-                let tx = self.tx.clone();
-                self.tokio.spawn_blocking(move || {
-                    let environment = LinuxCapabilitySnapshot::detect(false, package_kind());
-                    let _ = tx.send(UiResult::Environment(environment));
-                });
-            }
-            ui.small("重新检测只更新上面的会话与 D-Bus 信息，不安装插件，也不重新连接 Core。本次启动检查结果保留到退出。");
+                {
+                    self.environment_refreshing = true;
+                    let tx = self.tx.clone();
+                    self.tokio.spawn_blocking(move || {
+                        let environment = LinuxCapabilitySnapshot::detect(false, package_kind());
+                        let _ = tx.send(UiResult::Environment(environment));
+                    });
+                }
+                ui20::widgets::hint(
+                    ui,
+                    "重新检测只更新上面的会话与 D-Bus 信息，不安装插件，也不重新连接 Core。本次启动检查结果保留到退出。",
+                );
+            });
+            ui.add_space(6.0);
             egui::CollapsingHeader::new("准备步骤与官方指南")
                 .default_open(self.native.is_none())
                 .show(ui, |ui| {
@@ -1772,83 +2173,123 @@ mod linux_app {
         }
 
         fn start_ui(&mut self, ui: &mut egui::Ui) {
-            ui.heading("从一次听写开始");
-            ui.label("先准备 Linux 输入环境，再选择识别服务。切换页面不会停止正在进行的任务。");
+            ui20::widgets::page_header(
+                ui,
+                "从一次听写开始",
+                Some("先准备 Linux 输入环境，再选择识别服务。切换页面不会停止正在进行的任务。"),
+            );
             if let Some(error) = &self.startup_error {
-                ui.colored_label(egui::Color32::YELLOW, format!("启动未完成：{error}"));
+                ui20::widgets::status_pill(
+                    ui,
+                    &format!("启动未完成：{error}"),
+                    ui20::widgets::Status::Warn,
+                );
+                ui.add_space(6.0);
             }
             if let Some(snapshot) = &self.snapshot {
-                ui.label(if snapshot.running {
-                    "Core：运行中"
-                } else {
-                    "Core：未运行"
+                ui20::widgets::card(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui20::widgets::status_pill(
+                            ui,
+                            if snapshot.running {
+                                "Core 运行中"
+                            } else {
+                                "Core 未运行"
+                            },
+                            if snapshot.running {
+                                ui20::widgets::Status::Ok
+                            } else {
+                                ui20::widgets::Status::Warn
+                            },
+                        );
+                    });
+                    ui20::widgets::divider(ui);
+                    let credentials = &snapshot.credentials;
+                    match credentials.pipeline_mode {
+                        openless_core::shared_types::PipelineMode::Multimodal => {
+                            ui20::widgets::kv_row(ui, "当前管线", "多模态（Omni）");
+                            ui20::widgets::kv_row(
+                                ui,
+                                "Omni",
+                                if credentials.omni_configured {
+                                    "已配置"
+                                } else {
+                                    "尚未配置，请到 AI 服务配置 Omni"
+                                },
+                            );
+                        }
+                        openless_core::shared_types::PipelineMode::Traditional => {
+                            ui20::widgets::kv_row(ui, "当前管线", "传统（ASR + LLM）");
+                            ui20::widgets::kv_row(
+                                ui,
+                                "ASR 语音识别",
+                                if credentials.asr_configured {
+                                    "已配置"
+                                } else {
+                                    "尚未配置，请配置 AI 服务或激活本地模型"
+                                },
+                            );
+                            ui20::widgets::kv_row(
+                                ui,
+                                "LLM 润色",
+                                if credentials.llm_configured {
+                                    "已配置"
+                                } else {
+                                    "尚未配置"
+                                },
+                            );
+                        }
+                    }
+                    ui20::widgets::hint(ui, "已配置不代表校验通过；请到 AI 服务验证连接。");
                 });
-                let credentials = &snapshot.credentials;
-                match credentials.pipeline_mode {
-                    openless_core::shared_types::PipelineMode::Multimodal => {
-                        ui.label("当前管线：多模态（Omni）");
-                        ui.label(if credentials.omni_configured {
-                            "Omni：已配置。"
-                        } else {
-                            "Omni：尚未配置，请到 AI 服务配置 Omni。"
-                        });
-                    }
-                    openless_core::shared_types::PipelineMode::Traditional => {
-                        ui.label("当前管线：传统（ASR + LLM）");
-                        ui.label(if credentials.asr_configured {
-                            "ASR 语音识别：已配置。"
-                        } else {
-                            "ASR 语音识别：尚未配置，请配置 AI 服务或激活本地模型。"
-                        });
-                        ui.label(if credentials.llm_configured {
-                            "LLM 润色：已配置。"
-                        } else {
-                            "LLM 润色：尚未配置。"
-                        });
-                    }
-                }
-                ui.small("已配置不代表校验通过；请到 AI 服务验证连接。");
+                ui.add_space(8.0);
             }
-            ui.horizontal_wrapped(|ui| {
-                for (page, label) in [
-                    (Page::Settings, "1. 准备环境"),
-                    (Page::Services, "2. 配置 AI 服务"),
-                    (Page::Models, "使用本地模型"),
-                    (Page::Dictation, "3. 打开听写"),
-                ] {
-                    if ui
-                        .add_enabled(
-                            self.native.is_some() || page == Page::Settings,
-                            egui::Button::new(label),
-                        )
-                        .clicked()
-                    {
-                        self.navigation.open(page);
-                    }
-                }
-            });
-            ui.separator();
-            if self.native.is_none() {
-                self.environment_ui(ui);
-            } else {
-                ui.strong("继续其他任务");
+            ui20::widgets::subtle_card(ui, |ui| {
+                ui20::widgets::section_title(ui, "快速开始");
                 ui.horizontal_wrapped(|ui| {
-                    for page in [
-                        Page::Qa,
-                        Page::Selection,
-                        Page::Agent,
-                        Page::Remote,
-                        Page::History,
+                    for (page, label) in [
+                        (Page::Settings, "1. 准备环境"),
+                        (Page::Services, "2. 配置 AI 服务"),
+                        (Page::Models, "使用本地模型"),
+                        (Page::Dictation, "3. 打开听写"),
                     ] {
-                        if ui.button(page.label()).clicked() {
-                            self.navigation.open(page);
+                        let enabled = self.native.is_some() || page == Page::Settings;
+                        if ui20::widgets::secondary_button(ui, label, enabled).clicked() {
+                            if matches!(page, Page::Settings | Page::Services | Page::Models) {
+                                self.navigation.open(Page::Start);
+                                self.settings_modal = Some(page);
+                            } else {
+                                self.navigation.open(page);
+                            }
                         }
                     }
                 });
-                ui.label("问答支持文字与语音；选区润色保留确认、取消与撤销；Less Computer 的工具执行继续使用原有审批。");
-                ui.small(
-                    "Linux 当前提供已有 Core / Host 能力的入口，完整原生支持与发布验收仍在继续。",
-                );
+            });
+            ui.add_space(8.0);
+            if self.native.is_none() {
+                self.environment_ui(ui);
+            } else {
+                ui20::widgets::card(ui, |ui| {
+                    ui20::widgets::section_title(ui, "继续其他任务");
+                    ui.horizontal_wrapped(|ui| {
+                        for page in [Page::Qa, Page::Selection, Page::Agent, Page::History] {
+                            if ui20::widgets::secondary_button(ui, page.label(), true).clicked() {
+                                self.navigation.open(page);
+                            }
+                        }
+                        if ui20::widgets::secondary_button(ui, "手机输入", true).clicked() {
+                            self.settings_modal = Some(Page::Remote);
+                        }
+                    });
+                    ui20::widgets::hint(
+                        ui,
+                        "问答支持文字与语音；选区润色保留确认、取消与撤销；Less Computer 的工具执行继续使用原有审批。",
+                    );
+                    ui20::widgets::hint(
+                        ui,
+                        "Linux 当前提供已有 Core / Host 能力的入口，完整原生支持与发布验收仍在继续。",
+                    );
+                });
             }
         }
 
@@ -1884,17 +2325,429 @@ mod linux_app {
             }
         }
 
-        fn navigation_button(&mut self, ui: &mut egui::Ui, page: Page) {
-            let label = match self.page_activity(page) {
-                Some(activity) => format!("{} · {activity}", page.label()),
-                None => page.label().to_string(),
-            };
-            if ui
-                .selectable_label(self.navigation.page == page, label)
-                .clicked()
-            {
+        /// 2.0 主侧栏：226px、`--ol-sidebar-bg` 底、版本行 + 导航 + 底部设置。
+        /// 服务商 / 本地模型 / 手机输入 / 环境设置与其他平台一致，收纳进设置弹窗。
+        fn sidebar_ui(&mut self, ctx: &egui::Context) {
+            let p = ui20::current(ctx);
+            egui::SidePanel::left("navigation")
+                .resizable(false)
+                .exact_width(openless_linux_egui::design_tokens::SIDEBAR_WIDTH)
+                .frame(
+                    egui::Frame::default()
+                        .fill(p.sidebar_bg())
+                        .stroke(egui::Stroke::new(0.5_f32, p.line()))
+                        .inner_margin(egui::Margin {
+                            left: 10,
+                            right: 10,
+                            top: 14,
+                            bottom: 12,
+                        }),
+                )
+                .show(ctx, |ui| {
+                    egui::TopBottomPanel::bottom("navigation_footer")
+                        .frame(egui::Frame::default())
+                        .show_inside(ui, |ui| {
+                            ui20::widgets::divider(ui);
+                            if !self.status.is_empty() {
+                                let status = self.status.clone();
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(status).size(11.5).color(p.ink_4()),
+                                    )
+                                    .truncate(),
+                                );
+                            }
+                            self.nav_settings_item(ui);
+                        });
+                    egui::ScrollArea::vertical()
+                        .id_salt("navigation_scroll")
+                        .show(ui, |ui| {
+                            self.version_row(ui);
+                            ui.add_space(6.0);
+                            self.nav_item(ui, Page::Start, false);
+                            self.nav_item(ui, Page::Dictation, false);
+                            self.nav_item(ui, Page::History, false);
+                            ui.add_space(2.0);
+                            // 「工具」可展开分组（React 侧栏同款交互：点标题展开/收起）。
+                            let group_active = self.settings_modal.is_none()
+                                && matches!(
+                                    self.navigation.page,
+                                    Page::Qa | Page::Selection | Page::Agent
+                                );
+                            egui::CollapsingHeader::new(
+                                egui::RichText::new("工具").size(12.5).color(p.ink_4()),
+                            )
+                            .default_open(true)
+                            .show_unindented(ui, |ui| {
+                                if group_active {
+                                    ui.add_space(0.0);
+                                }
+                                self.nav_item(ui, Page::Qa, true);
+                                self.nav_item(ui, Page::Selection, true);
+                                self.nav_item(ui, Page::Agent, true);
+                            });
+                        });
+                });
+        }
+
+        /// 版本行：品牌 + BETA 徽章 + 版本号（React `shell.footer.version` 同款）。
+        /// 版本显示 Core 后端合同版本，与 Tauri 端读取的合同保持同源。
+        fn version_row(&mut self, ui: &mut egui::Ui) {
+            let p = ui20::current(ui.ctx());
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("OpenLess")
+                        .size(13.0)
+                        .strong()
+                        .color(p.ink()),
+                );
+                egui::Frame::default()
+                    .stroke(egui::Stroke::new(0.5_f32, p.blue()))
+                    .corner_radius(egui::CornerRadius::same(5))
+                    .inner_margin(egui::Margin::symmetric(6, 1))
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new("BETA")
+                                .size(10.0)
+                                .strong()
+                                .color(p.blue()),
+                        );
+                    });
+            });
+            ui.label(
+                egui::RichText::new(format!("版本 {}", openless_core::BACKEND_CONTRACT_VERSION))
+                    .size(12.0)
+                    .color(p.ink_4()),
+            );
+        }
+
+        /// 2.0 导航项：`.ol-nav-btn` 规格（8px 10px 内边距、8px 圆角、15px 文字）；
+        /// 选中 = surface-2 底 + ink 文字，未选中 = ink-3。
+        fn nav_item(&mut self, ui: &mut egui::Ui, page: Page, indent: bool) {
+            let p = ui20::current(ui.ctx());
+            let active = self.settings_modal.is_none() && self.navigation.page == page;
+            let activity = self.page_activity(page);
+            let frame = egui::Frame::default()
+                .fill(if active {
+                    p.surface_2()
+                } else {
+                    egui::Color32::TRANSPARENT
+                })
+                .corner_radius(egui::CornerRadius::same(8))
+                .inner_margin(egui::Margin {
+                    left: if indent { 30 } else { 10 },
+                    right: 10,
+                    top: 8,
+                    bottom: 8,
+                });
+            let response = frame
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(page.label())
+                                .size(15.0)
+                                .color(if active { p.ink() } else { p.ink_3() }),
+                        );
+                        if let Some(activity) = activity {
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui20::widgets::pill(ui, activity, p.blue_soft(), p.blue());
+                                },
+                            );
+                        }
+                    });
+                })
+                .response;
+            let response = ui.interact(
+                response.rect,
+                ui.id().with(("nav", page)),
+                egui::Sense::click(),
+            );
+            if response.clicked() {
                 self.navigation.open(page);
+                self.settings_modal = None;
             }
+            response.on_hover_cursor(egui::CursorIcon::PointingHand);
+        }
+
+        /// 侧栏底部「设置」入口：打开 2.0 设置弹窗（含 AI 服务/本地模型/手机输入）。
+        fn nav_settings_item(&mut self, ui: &mut egui::Ui) {
+            let p = ui20::current(ui.ctx());
+            let active = self.settings_modal.is_some();
+            let frame = egui::Frame::default()
+                .fill(if active {
+                    p.surface_2()
+                } else {
+                    egui::Color32::TRANSPARENT
+                })
+                .corner_radius(egui::CornerRadius::same(8))
+                .inner_margin(egui::Margin {
+                    left: 10,
+                    right: 10,
+                    top: 8,
+                    bottom: 8,
+                });
+            let response = frame
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("设置").size(15.0).color(if active {
+                            p.ink()
+                        } else {
+                            p.ink_3()
+                        }));
+                    });
+                })
+                .response;
+            let response = ui.interact(
+                response.rect,
+                ui.id().with("nav-settings"),
+                egui::Sense::click(),
+            );
+            if response.clicked() {
+                self.settings_modal = Some(Page::Settings);
+            }
+            response.on_hover_cursor(egui::CursorIcon::PointingHand);
+        }
+
+        /// 紧凑窗口（<760px）下的横向导航：胶囊式主页面 + 设置入口。
+        fn compact_navigation_ui(&mut self, ctx: &egui::Context) {
+            let p = ui20::current(ctx);
+            egui::TopBottomPanel::top("compact_navigation")
+                .frame(
+                    egui::Frame::default()
+                        .fill(p.surface())
+                        .stroke(egui::Stroke::new(0.5_f32, p.line()))
+                        .inner_margin(egui::Margin::symmetric(10, 8)),
+                )
+                .show(ctx, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        for page in [
+                            Page::Start,
+                            Page::Dictation,
+                            Page::History,
+                            Page::Qa,
+                            Page::Selection,
+                            Page::Agent,
+                        ] {
+                            self.compact_nav_chip(ui, page);
+                        }
+                        let modal_open = self.settings_modal.is_some();
+                        if ui20::widgets::pill(
+                            ui,
+                            "设置",
+                            if modal_open {
+                                p.surface_2()
+                            } else {
+                                egui::Color32::TRANSPARENT
+                            },
+                            p.ink_3(),
+                        )
+                        .interact(egui::Sense::click())
+                        .clicked()
+                        {
+                            self.settings_modal = Some(Page::Settings);
+                        }
+                    });
+                });
+        }
+
+        fn compact_nav_chip(&mut self, ui: &mut egui::Ui, page: Page) {
+            let p = ui20::current(ui.ctx());
+            let active = self.settings_modal.is_none() && self.navigation.page == page;
+            let response = ui20::widgets::pill(
+                ui,
+                page.label(),
+                if active {
+                    p.surface_2()
+                } else {
+                    egui::Color32::TRANSPARENT
+                },
+                if active { p.ink() } else { p.ink_3() },
+            )
+            .interact(egui::Sense::click());
+            if response.clicked() {
+                self.navigation.open(page);
+                self.settings_modal = None;
+            }
+        }
+
+        /// 2.0 设置弹窗：遮罩 + 居中 960x680 面板（14px 圆角、`--ol-settings-*`），
+        /// 左侧 rail 分区导航、右侧分区内容。分区复用各页面既有渲染函数。
+        fn settings_modal_ui(&mut self, ctx: &egui::Context) {
+            let Some(section) = self.settings_modal else {
+                return;
+            };
+            let p = ui20::current(ctx);
+            let screen = ctx.screen_rect();
+            // 遮罩：`--ol-overlay-bg`。Middle 层在面板之后、弹窗（Foreground）之下。
+            let overlay_layer =
+                egui::LayerId::new(egui::Order::Middle, egui::Id::new("settings-overlay"));
+            ctx.layer_painter(overlay_layer).rect_filled(
+                screen,
+                egui::CornerRadius::same(0),
+                p.overlay(),
+            );
+
+            let size = egui::vec2(
+                (screen.width() * 0.94).min(openless_linux_egui::design_tokens::SETTINGS_MAX_WIDTH),
+                (screen.height() * 0.92)
+                    .min(openless_linux_egui::design_tokens::SETTINGS_MAX_HEIGHT),
+            );
+            let mut open = true;
+            egui::Window::new("settings-modal")
+                .id(egui::Id::new("settings-modal"))
+                .title_bar(false)
+                .resizable(false)
+                .collapsible(false)
+                .movable(false)
+                .fixed_size(size)
+                .current_pos(egui::pos2(
+                    screen.center().x - size.x / 2.0,
+                    screen.center().y - size.y / 2.0,
+                ))
+                .frame(
+                    egui::Frame::default()
+                        .fill(p.settings_content_bg())
+                        .corner_radius(egui::CornerRadius::same(
+                            openless_linux_egui::design_tokens::radius::CARD,
+                        ))
+                        .stroke(egui::Stroke::new(0.5_f32, p.line()))
+                        .inner_margin(egui::Margin::same(0)),
+                )
+                .show(ctx, |ui| {
+                    egui::TopBottomPanel::top("settings-header")
+                        .frame(
+                            egui::Frame::default()
+                                .fill(p.surface())
+                                .stroke(egui::Stroke::new(0.5_f32, p.line()))
+                                .inner_margin(egui::Margin {
+                                    left: 18,
+                                    right: 14,
+                                    top: 12,
+                                    bottom: 12,
+                                }),
+                        )
+                        .show_inside(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new("设置")
+                                        .size(17.0)
+                                        .strong()
+                                        .color(p.ink()),
+                                );
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui20::widgets::secondary_button(ui, "关闭", true)
+                                            .clicked()
+                                        {
+                                            open = false;
+                                        }
+                                    },
+                                );
+                            });
+                        });
+                    egui::SidePanel::left("settings-rail")
+                        .resizable(false)
+                        .exact_width(196.0)
+                        .frame(
+                            egui::Frame::default()
+                                .fill(p.settings_rail_bg())
+                                .stroke(egui::Stroke::new(0.5_f32, p.line()))
+                                .inner_margin(egui::Margin {
+                                    left: 10,
+                                    right: 10,
+                                    top: 14,
+                                    bottom: 10,
+                                }),
+                        )
+                        .show_inside(ui, |ui| {
+                            egui::ScrollArea::vertical()
+                                .id_salt("settings-rail-scroll")
+                                .show(ui, |ui| {
+                                    for rail_page in
+                                        [Page::Settings, Page::Services, Page::Models, Page::Remote]
+                                    {
+                                        self.settings_rail_item(ui, rail_page, section);
+                                    }
+                                });
+                        });
+                    egui::CentralPanel::default()
+                        .frame(
+                            egui::Frame::default()
+                                .fill(p.settings_content_bg())
+                                .inner_margin(egui::Margin::same(20)),
+                        )
+                        .show_inside(ui, |ui| {
+                            egui::ScrollArea::vertical()
+                                .id_salt(("settings-section", section))
+                                .show(ui, |ui| {
+                                    if self.native.is_none() && !matches!(section, Page::Settings) {
+                                        ui20::widgets::page_header(ui, section.label(), None);
+                                        ui.label("Core 尚未连接，此分区需要 Core 启动后才能使用。");
+                                        if ui20::widgets::blue_button(ui, "前往环境准备", true)
+                                            .clicked()
+                                        {
+                                            self.settings_modal = Some(Page::Settings);
+                                        }
+                                        return;
+                                    }
+                                    match section {
+                                        Page::Settings => self.settings_ui(ui),
+                                        Page::Services => self.services_ui(ui),
+                                        Page::Models => self.models_ui(ui),
+                                        Page::Remote => self.remote_ui(ui),
+                                        _ => {}
+                                    }
+                                });
+                        });
+                });
+            if !open {
+                self.settings_modal = None;
+            }
+        }
+
+        /// 设置弹窗左 rail 的分区项。
+        fn settings_rail_item(&mut self, ui: &mut egui::Ui, page: Page, section: Page) {
+            let p = ui20::current(ui.ctx());
+            let active = section == page;
+            let frame = egui::Frame::default()
+                .fill(if active {
+                    p.surface()
+                } else {
+                    egui::Color32::TRANSPARENT
+                })
+                .corner_radius(egui::CornerRadius::same(8))
+                .inner_margin(egui::Margin {
+                    left: 10,
+                    right: 10,
+                    top: 8,
+                    bottom: 8,
+                });
+            let response = frame
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(page.label())
+                                .size(14.0)
+                                .color(if active { p.ink() } else { p.ink_3() }),
+                        );
+                    });
+                })
+                .response;
+            let response = ui.interact(
+                response.rect,
+                ui.id().with(("settings-rail", page)),
+                egui::Sense::click(),
+            );
+            if response.clicked() {
+                self.settings_modal = Some(page);
+            }
+            response.on_hover_cursor(egui::CursorIcon::PointingHand);
         }
 
         fn activity_ui(&mut self, ui: &mut egui::Ui) {
@@ -1968,32 +2821,55 @@ mod linux_app {
         }
 
         fn history_ui(&mut self, ui: &mut egui::Ui) {
-            ui.heading("历史");
-            ui.label("最近 20 条，只读。插入、复制回退与已发送粘贴分别显示实际结果。");
+            ui20::widgets::page_header(
+                ui,
+                "历史",
+                Some("最近 20 条，只读。插入、复制回退与已发送粘贴分别显示实际结果。"),
+            );
             let Some(backend) = self.backend() else {
                 return;
             };
             match backend.list_history() {
                 Ok(history) if history.is_empty() => {
-                    ui.label("暂无历史记录");
+                    ui20::widgets::info_panel(ui, |ui| {
+                        ui20::widgets::hint(ui, "暂无历史记录");
+                    });
                 }
                 Ok(history) => {
                     for item in history.into_iter().rev().take(20) {
                         let delivery = match item.insert_status {
-                            HistoryInsertStatus::Inserted => "已插入",
-                            HistoryInsertStatus::CopiedFallback => "已复制",
-                            HistoryInsertStatus::PasteSent => "已发送粘贴",
-                            HistoryInsertStatus::Failed => "失败",
-                            HistoryInsertStatus::NotRequested => "未请求插入",
+                            HistoryInsertStatus::Inserted => ("已插入", ui20::widgets::Status::Ok),
+                            HistoryInsertStatus::CopiedFallback => {
+                                ("已复制", ui20::widgets::Status::Info)
+                            }
+                            HistoryInsertStatus::PasteSent => {
+                                ("已发送粘贴", ui20::widgets::Status::Info)
+                            }
+                            HistoryInsertStatus::Failed => ("失败", ui20::widgets::Status::Err),
+                            HistoryInsertStatus::NotRequested => {
+                                ("未请求插入", ui20::widgets::Status::Warn)
+                            }
                         };
-                        ui.label(format!(
-                            "{} · {} · {}",
-                            item.created_at, delivery, item.final_text
-                        ));
+                        ui20::widgets::card(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(&item.created_at)
+                                        .size(12.5)
+                                        .color(ui20::current(ui.ctx()).ink_4()),
+                                );
+                                ui20::widgets::status_pill(ui, delivery.0, delivery.1);
+                            });
+                            ui.add_space(2.0);
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(&item.final_text).size(14.0))
+                                    .wrap(),
+                            );
+                        });
+                        ui.add_space(2.0);
                     }
                 }
                 Err(error) => {
-                    ui.label(error.to_string());
+                    ui20::widgets::status_pill(ui, &error.to_string(), ui20::widgets::Status::Err);
                 }
             }
         }
@@ -2004,80 +2880,81 @@ mod linux_app {
             // Poll every frame before routing pages. Hidden pages retain their
             // drafts, session ownership, event replay and async completion paths.
             self.poll(ctx);
+            // 设置弹窗打开时 Esc 只关弹窗；关闭后才恢复全局语音取消。
             if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-                self.cancel_voice();
-            }
-            egui::TopBottomPanel::top("status").show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.strong("OpenLess 2.0");
-                    ui.separator();
-                    ui.add(egui::Label::new(&self.status).truncate())
-                        .on_hover_text(&self.status);
-                });
-                self.activity_ui(ui);
-                if self.pending_approval.is_some() {
-                    ui.strong("Less Computer 等待审批");
-                    self.agent_approval_ui(ui);
+                if self.settings_modal.is_some() {
+                    self.settings_modal = None;
+                } else {
+                    self.cancel_voice();
                 }
-            });
-            if ctx.screen_rect().width() < 760.0 {
-                egui::TopBottomPanel::top("compact_navigation").show(ctx, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        for page in Page::ALL {
-                            self.navigation_button(ui, page);
-                        }
-                    });
-                });
-            } else {
-                egui::SidePanel::left("navigation")
-                    .resizable(false)
-                    .default_width(176.0)
-                    .show(ctx, |ui| {
-                        egui::ScrollArea::vertical()
-                            .id_salt("navigation_scroll")
-                            .show(ui, |ui| {
-                                ui.strong("工作空间");
-                                ui.add_space(8.0);
-                                for page in Page::ALL {
-                                    if page == Page::Services {
-                                        ui.separator();
-                                        ui.strong("准备与管理");
-                                    }
-                                    self.navigation_button(ui, page);
-                                }
-                            });
-                    });
             }
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let page = self.navigation.page;
-                egui::ScrollArea::vertical()
-                    .id_salt(("page", page))
-                    .show(ui, |ui| {
-                        if self.native.is_none() && !matches!(page, Page::Start | Page::Settings) {
-                            ui.heading(page.label());
-                            ui.label("Core 尚未连接，请先完成 Linux 环境准备并重新启动应用。");
-                            if let Some(error) = &self.startup_error {
-                                ui.colored_label(egui::Color32::YELLOW, error);
+            let compact = ctx.screen_rect().width() < 760.0;
+            if compact {
+                self.compact_navigation_ui(ctx);
+            } else {
+                self.sidebar_ui(ctx);
+            }
+            egui::CentralPanel::default()
+                .frame(
+                    egui::Frame::default()
+                        .fill(ui20::current(ctx).surface())
+                        .inner_margin(egui::Margin {
+                            left: 20,
+                            right: 20,
+                            top: 14,
+                            bottom: 14,
+                        }),
+                )
+                .show(ctx, |ui| {
+                    let page = self.navigation.page;
+                    // 跨页审批：Agent 页自身渲染审批卡，其余页面顶部保留入口。
+                    if self.pending_approval.is_some() && page != Page::Agent {
+                        ui20::widgets::info_panel(ui, |ui| {
+                            ui20::widgets::section_title(ui, "Less Computer 等待审批");
+                            self.agent_approval_ui(ui);
+                        });
+                        ui.add_space(8.0);
+                    }
+                    egui::ScrollArea::vertical()
+                        .id_salt(("page", page))
+                        .show(ui, |ui| {
+                            if self.native.is_none()
+                                && !matches!(page, Page::Start | Page::Settings)
+                            {
+                                ui20::widgets::page_header(ui, page.label(), None);
+                                ui.label("Core 尚未连接，请先完成 Linux 环境准备并重新启动应用。");
+                                if let Some(error) = &self.startup_error {
+                                    ui20::widgets::status_pill(
+                                        ui,
+                                        &format!("启动未完成：{error}"),
+                                        ui20::widgets::Status::Warn,
+                                    );
+                                }
+                                if ui20::widgets::blue_button(ui, "查看环境准备步骤", true)
+                                    .clicked()
+                                {
+                                    self.navigation.open(Page::Start);
+                                    self.settings_modal = Some(Page::Settings);
+                                }
+                                return;
                             }
-                            if ui.button("查看环境准备步骤").clicked() {
-                                self.navigation.open(Page::Settings);
+                            match page {
+                                Page::Start => self.start_ui(ui),
+                                Page::Dictation => self.dictation_ui(ui),
+                                Page::Qa => self.qa_ui(ui),
+                                Page::Selection => self.selection_ui(ui),
+                                Page::Agent => self.less_computer_ui(ui),
+                                Page::Services => self.services_ui(ui),
+                                Page::Models => self.models_ui(ui),
+                                Page::Remote => self.remote_ui(ui),
+                                Page::History => self.history_ui(ui),
+                                Page::Settings => self.settings_ui(ui),
                             }
-                            return;
-                        }
-                        match page {
-                            Page::Start => self.start_ui(ui),
-                            Page::Dictation => self.dictation_ui(ui),
-                            Page::Qa => self.qa_ui(ui),
-                            Page::Selection => self.selection_ui(ui),
-                            Page::Agent => self.less_computer_ui(ui),
-                            Page::Services => self.services_ui(ui),
-                            Page::Models => self.models_ui(ui),
-                            Page::Remote => self.remote_ui(ui),
-                            Page::History => self.history_ui(ui),
-                            Page::Settings => self.settings_ui(ui),
-                        }
-                    });
-            });
+                        });
+                });
+            if self.settings_modal.is_some() {
+                self.settings_modal_ui(ctx);
+            }
             ctx.request_repaint_after(Duration::from_millis(50));
         }
     }
@@ -2728,10 +3605,13 @@ mod linux_app {
         eframe::run_native(
             "OpenLess",
             options,
-            Box::new(move |_| {
+            Box::new(move |cc| {
                 let mut app = OpenLessEguiApp::new(tokio, native);
                 app.environment = Some(environment);
                 app.plugin_check = Some(plugin_check);
+                // 2.0 主题与 CJK 字体：默认白底体系（偏好持久化在 ui-prefs.json）。
+                ui20::install_cjk_fonts(&cc.egui_ctx);
+                ui20::apply_theme(&cc.egui_ctx, app.ui_prefs.dark);
                 Ok(Box::new(app))
             }),
         )
@@ -2802,15 +3682,17 @@ mod linux_app {
                         ..Default::default()
                     });
                     let text = rendered_text(|ui| app.start_ui(ui));
+                    // 2.0 卡片把状态拆成键值两行（rendered_text 按 \n 连接），
+                    // 断言跟随结构：多模态只报 Omni，不出现传统管线的行。
                     let expected = if omni_configured {
-                        "Omni：已配置"
+                        "已配置"
                     } else {
-                        "Omni：尚未配置"
+                        "尚未配置，请到 AI 服务配置 Omni"
                     };
+                    assert!(text.contains("Omni"), "{text}");
                     assert!(text.contains(expected), "missing {expected}: {text}");
-                    assert!(!text.contains("语音识别：尚未配置"), "{text}");
-                    assert!(!text.contains("ASR 语音识别："), "{text}");
-                    assert!(!text.contains("LLM 润色："), "{text}");
+                    assert!(!text.contains("ASR 语音识别"), "{text}");
+                    assert!(!text.contains("LLM 润色"), "{text}");
                     assert!(text.contains("已配置不代表校验通过"), "{text}");
                 }
             }
@@ -2843,21 +3725,26 @@ mod linux_app {
                         ..Default::default()
                     });
                     let text = rendered_text(|ui| app.start_ui(ui));
-                    for expected in [
-                        if asr_configured {
-                            "ASR 语音识别：已配置"
+                    // 键值两行结构：键行 + 状态值行分别断言（语义与旧断言一致）。
+                    assert!(text.contains("ASR 语音识别"), "{text}");
+                    assert!(
+                        text.contains(if asr_configured {
+                            "已配置"
                         } else {
-                            "ASR 语音识别：尚未配置"
-                        },
-                        if llm_configured {
-                            "LLM 润色：已配置"
+                            "尚未配置，请配置 AI 服务或激活本地模型"
+                        }),
+                        "{text}"
+                    );
+                    assert!(text.contains("LLM 润色"), "{text}");
+                    assert!(
+                        text.contains(if llm_configured {
+                            "已配置"
                         } else {
-                            "LLM 润色：尚未配置"
-                        },
-                    ] {
-                        assert!(text.contains(expected), "missing {expected}: {text}");
-                    }
-                    assert!(!text.contains("Omni："), "{text}");
+                            "尚未配置"
+                        }),
+                        "{text}"
+                    );
+                    assert!(!text.contains("Omni"), "{text}");
                     assert!(text.contains("已配置不代表校验通过"), "{text}");
                 }
             }
@@ -3003,6 +3890,7 @@ mod linux_app {
                         urls: vec!["https://old.example.invalid".into()],
                         urls_stale,
                         locale: "en".into(),
+                        ca_fingerprint_sha256: None,
                         connection_count: 0,
                         active_session_id: None,
                     },
@@ -3011,7 +3899,7 @@ mod linux_app {
                 let text = rendered_text(|ui| app.remote_ui(ui));
                 assert!(!text.contains("fixture-pin"), "{text}");
                 assert!(!text.contains("https://old.example.invalid"), "{text}");
-                assert!(text.contains("当前连接数：0"), "{text}");
+                assert!(text.contains("当前连接数"), "{text}");
             }
         }
 
