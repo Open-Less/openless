@@ -296,32 +296,39 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }
         // Stroke mode follows the reference layout: a compact candidate strip,
         // punctuation column, 3-column stroke grid, and a separate action rail.
-        val top = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        val strokeRow = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
         val strokeIndicator = TextView(this).apply {
             text = "—"
             textSize = 20f
             setTextColor(Color.rgb(190, 30, 82))
             gravity = android.view.Gravity.CENTER
         }
-        top.addView(strokeIndicator, LinearLayout.LayoutParams(dp(42), dp(38)))
+        strokeRow.addView(strokeIndicator, LinearLayout.LayoutParams(dp(42), dp(30)))
         strokePreview = TextView(this).apply {
-            text = ui("①", "①")
-            textSize = 18f
+            text = ui("—", "—")
+            textSize = 16f
             setTextColor(Color.rgb(210, 210, 210))
-            gravity = android.view.Gravity.CENTER
+            gravity = android.view.Gravity.CENTER_VERTICAL
         }
-        top.addView(strokePreview, LinearLayout.LayoutParams(dp(44), dp(38)))
+        strokeRow.addView(strokePreview, LinearLayout.LayoutParams(0, dp(30), 1f))
+        strokeRow.addView(keyboardKey("⌄", .5f) { clearStrokes() }, LinearLayout.LayoutParams(dp(38), dp(30)))
+        top.addView(strokeRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)))
+
+        val candidateRow = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
         val candidatesScroll = android.widget.HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             strokeCandidates = LinearLayout(context).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
             addView(strokeCandidates, ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
         }
-        top.addView(candidatesScroll, LinearLayout.LayoutParams(0, dp(38), 1f))
-        top.addView(keyboardKey("⌄", .5f) { clearStrokes() }, LinearLayout.LayoutParams(dp(38), dp(38)))
+        candidateRow.addView(candidatesScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)))
         listOf("不", "有", "下", "↓", "在", "要").forEach { candidate ->
-            strokeCandidates?.addView(keyboardKey(candidate, 1f) { commitStrokeCandidate(candidate) }, LinearLayout.LayoutParams(dp(42), dp(36)))
+            strokeCandidates?.addView(keyboardKey(candidate, 1f) { commitStrokeCandidate(candidate) }, LinearLayout.LayoutParams(dp(38), dp(30)))
         }
-        root.addView(top, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)))
+        top.addView(candidateRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)))
+        root.addView(top, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(60)))
 
         val body = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
         val punctuation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = android.view.Gravity.CENTER }
@@ -340,18 +347,23 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         strokeRows.forEach { rowItems ->
             val row = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
             rowItems.forEach { (label, code) ->
-                row.addView(keyboardKey(label, 1f) {
+                val key = if (code == "voice") keyboardKey("🎙", 1f) {
+                    currentInputConnection?.commitText(" ", 1)
+                }.apply {
+                    setOnLongClickListener {
+                        inputMode = InputMode.VOICE
+                        clearStrokes()
+                        refreshInputView()
+                        true
+                    }
+                } else keyboardKey(label, 1f) {
                     when (code) {
-                        "voice" -> {
-                            inputMode = InputMode.VOICE
-                            clearStrokes()
-                            refreshInputView()
-                        }
                         "symbols" -> currentInputConnection?.commitText("#", 1)
                         " " -> currentInputConnection?.commitText(" ", 1)
-                    else -> if (code in listOf("h", "s", "p", "n", "z", "*")) appendStroke(code) else currentInputConnection?.commitText(code, 1)
+                        else -> if (code in listOf("h", "s", "p", "n", "z", "*")) appendStroke(code) else currentInputConnection?.commitText(code, 1)
                     }
-                })
+                }
+                row.addView(key)
             }
             grid.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         }
@@ -416,7 +428,11 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     private fun keyboardKey(label: String, weight: Float, action: () -> Unit): TextView {
         return TextView(this).apply {
-            text = label
+            text = if ('\n' in label) {
+                android.text.SpannableString(label).apply {
+                    setSpan(android.text.style.RelativeSizeSpan(0.55f), 0, 1, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+            } else label
             textSize = if (label == "return") 17f else 22f
             gravity = android.view.Gravity.CENTER
             setTextColor(Color.rgb(245, 245, 245))
