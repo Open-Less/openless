@@ -325,7 +325,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }
         candidateRow.addView(candidatesScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)))
         listOf("不", "有", "下", "↓", "在", "要").forEach { candidate ->
-            strokeCandidates?.addView(keyboardKey(candidate, 1f) { commitStrokeCandidate(candidate) }, LinearLayout.LayoutParams(dp(38), dp(30)))
+            strokeCandidates?.addView(keyboardKey(candidate, 1f) { commitStrokeCandidate(candidate) }.apply { textSize = 18f }, LinearLayout.LayoutParams(dp(36), dp(30)))
         }
         top.addView(candidateRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)))
         root.addView(top, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(60)))
@@ -333,7 +333,12 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         val body = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
         val punctuation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = android.view.Gravity.CENTER }
         listOf(",", "°", "?", "!", "~").forEach { mark ->
-            punctuation.addView(keyboardKey(mark, 1f) { currentInputConnection?.commitText(mark, 1) })
+            punctuation.addView(keyboardKey(mark, 1f) { currentInputConnection?.commitText(mark, 1) }.apply {
+                textSize = 18f
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
+                    setMargins(dp(1), dp(1), dp(1), dp(1))
+                }
+            })
         }
         body.addView(punctuation, LinearLayout.LayoutParams(dp(42), ViewGroup.LayoutParams.MATCH_PARENT))
 
@@ -363,6 +368,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                         else -> if (code in listOf("h", "s", "p", "n", "z", "*")) appendStroke(code) else currentInputConnection?.commitText(code, 1)
                     }
                 }
+                key.textSize = if (code == "voice") 18f else 17f
                 row.addView(key)
             }
             grid.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -372,6 +378,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         val actions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = android.view.Gravity.CENTER }
         listOf("⌫" to { deleteStroke() }, "↵" to { sendEnterKey() }, ui("清空", "Clear") to { clearStrokes() }, "123" to { inputMode = InputMode.ENGLISH; clearStrokes(); refreshInputView() }).forEach { (label, action) ->
             actions.addView(keyboardKey(label, 1f, action).apply {
+                textSize = 17f
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
+                    setMargins(dp(1), dp(2), dp(1), dp(2))
+                }
                 background = roundedButton(Color.rgb(92, 28, 48), dp(7))
             })
         }
@@ -389,7 +399,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             if (query != strokeQueryEpoch || inputMode != InputMode.STROKE) return@searchAsync
             strokeCandidates?.removeAllViews()
             result.forEach { candidate ->
-                strokeCandidates?.addView(keyboardKey(candidate, 1f) { commitStrokeCandidate(candidate) }, LinearLayout.LayoutParams(dp(44), dp(36)))
+                strokeCandidates?.addView(keyboardKey(candidate, 1f) { commitStrokeCandidate(candidate) }.apply { textSize = 18f }, LinearLayout.LayoutParams(dp(36), dp(30)))
             }
         }
     }
