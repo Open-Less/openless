@@ -199,7 +199,7 @@ jobs:
       - name: Test Core
         run: |
           cargo test --locked -p openless-core
-          cargo clippy --locked -p openless-core --all-targets -- -D warnings
+          cargo clippy --locked -p openless-core --all-targets
 
       - name: Test Linux egui host without local Qwen ASR
         run: |

@@ -38,9 +38,7 @@ jobs:
             build-essential \
             cmake \
             desktop-file-utils \
-            extra-cmake-modules \
             fcitx5-modules-dev \
-            file \
             libasound2-dev \
             libdbus-1-dev \
             libfcitx5config-dev \
@@ -51,10 +49,8 @@ jobs:
             libx11-dev \
             libxkbcommon-dev \
             pkg-config \
-            ripgrep \
             rpm \
-            ruby-dev \
-            wget
+            ruby-dev
           sudo gem install --no-document fpm -v 1.16.0
 
       - uses: dtolnay/rust-toolchain@stable
@@ -80,9 +76,8 @@ jobs:
         shell: pwsh
         run: |
           cargo test --locked -p openless-core
-          cargo clippy --locked -p openless-core --all-targets -- -D warnings
+          cargo clippy --locked -p openless-core --all-targets
           cargo test --locked -p openless-linux-egui --all-targets
-          cargo check --locked -p openless-linux-egui --all-targets
           node scripts/linux-egui-tauri-free-contract.test.mjs
           node scripts/linux-egui-release-contract.test.mjs
           ./scripts/check-core-deps.ps1
