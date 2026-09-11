@@ -23,13 +23,14 @@ mod linux_app {
         QaStateKind, SelectionPhase, SelectionSnapshot, TranscriptAccumulator, UserPreferences,
     };
     use openless_linux_egui::{
-        drain_events, ensure_fcitx5_plugin_installed, notify, open_external, reload_running_fcitx5,
-        write_jsonl, EventDrainOutcome, Fcitx5HotkeyListener, FcitxPluginInstallPlan,
-        FcitxPluginStatus, HostToPopup, LinuxBackendBuilder, LinuxCapabilitySnapshot,
-        LinuxLaunchIntent, LinuxNativeRuntime, LinuxPackageKind, LinuxResourceLayout,
-        LinuxUpdateSupport, Notification, PopupActionGuard, PopupChatMessage, PopupKind,
-        PopupState, PopupSupervisor, PopupSupervisorEvent, PopupToHost, SingleInstanceBroker,
-        SingleInstanceRole, UpdateManifest, UpdateSchedule, POPUP_PROTOCOL_VERSION,
+        drain_events, ensure_fcitx5_plugin_installed, fcitx5_copy_to_clipboard, notify,
+        open_external, reload_running_fcitx5, write_jsonl, EventDrainOutcome, Fcitx5HotkeyListener,
+        FcitxPluginInstallPlan, FcitxPluginStatus, HostToPopup, LinuxBackendBuilder,
+        LinuxCapabilitySnapshot, LinuxLaunchIntent, LinuxNativeRuntime, LinuxPackageKind,
+        LinuxResourceLayout, LinuxUpdateSupport, Notification, PopupActionGuard, PopupChatMessage,
+        PopupKind, PopupState, PopupSupervisor, PopupSupervisorEvent, PopupToHost,
+        SingleInstanceBroker, SingleInstanceRole, UpdateManifest, UpdateSchedule,
+        POPUP_PROTOCOL_VERSION,
     };
     use openless_linux_egui::{
         fmt_l10n, load_locale_pref, save_locale_pref, tr_l10n, Lang, LocalePref, LANGS,
@@ -4232,9 +4233,7 @@ mod linux_app {
                     }
                     if let Some((id, operation, text)) = action {
                         match operation {
-                            "copy" => match arboard::Clipboard::new()
-                                .and_then(|mut clipboard| clipboard.set_text(text))
-                            {
+                            "copy" => match fcitx5_copy_to_clipboard(&text) {
                                 Ok(()) => {
                                     self.status = tr_l10n(lang, "status.history_copied").to_string()
                                 }
@@ -4847,9 +4846,7 @@ mod linux_app {
                     let _ = open_external("https://github.com/earendil-works/openless/issues");
                 }
                 frontend::view_model::SettingsActionField::CopyQQ => {
-                    match arboard::Clipboard::new()
-                        .and_then(|mut clipboard| clipboard.set_text("1078960553"))
-                    {
+                    match fcitx5_copy_to_clipboard("1078960553") {
                         Ok(()) => {
                             self.frontend_vm.settings_notice =
                                 Some(tr_l10n(self.lang, "status.copied").to_string());

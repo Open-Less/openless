@@ -286,35 +286,50 @@ fn run_audio_thread(
     runtime_error: Arc<std::sync::Mutex<Option<BackendError>>>,
     startup: std::sync::mpsc::SyncSender<Result<(), BackendError>>,
 ) {
-    use cpal::traits::{DeviceTrait, StreamTrait};
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-    let result = (|| {
-        let host = cpal::default_host();
-        let device = select_input_device(&host, preferred_device_name.as_deref())?;
-        let supported = device
-            .default_input_config()
-            .map_err(|error| classify_audio_error("default input config", error.to_string()))?;
-        let sample_format = supported.sample_format();
-        let input_sample_rate = supported.sample_rate().0;
-        let channels = usize::from(supported.channels());
-        let config: cpal::StreamConfig = supported.into();
-        let stream = build_input_stream(
-            &device,
-            &config,
-            sample_format,
-            input_sample_rate,
-            channels,
-            consumer,
-            progress,
-            writer,
-            Arc::clone(&stop),
-            runtime_error,
-        )?;
-        stream
-            .play()
-            .map_err(|error| classify_audio_error("start input stream", error.to_string()))?;
-        Ok::<_, BackendError>(stream)
-    })();
+    let mut result = Err(BackendError::new(
+        BackendErrorCode::Platform,
+        "no Linux audio backend is available",
+    ));
+    for backend in audio_backend_order() {
+        let Some(host_id) = cpal::available_hosts()
+            .into_iter()
+            .find(|id| id.name().eq_ignore_ascii_case(backend))
+        else {
+            continue;
+        };
+        let host = match cpal::host_from_id(host_id) {
+            Ok(host) => host,
+            Err(error) => {
+                result = Err(classify_audio_error(
+                    &format!("initialize {backend} backend"),
+                    error.to_string(),
+                ));
+                log::warn!("{backend} audio backend unavailable: {error}");
+                continue;
+            }
+        };
+        match try_start_audio_stream(
+            &host,
+            backend,
+            preferred_device_name.as_deref(),
+            &consumer,
+            &progress,
+            &writer,
+            &stop,
+            &runtime_error,
+        ) {
+            Ok(stream) => {
+                result = Ok(stream);
+                break;
+            }
+            Err(error) => {
+                log::warn!("{backend} audio backend failed; trying next backend: {error}");
+                result = Err(error);
+            }
+        }
+    }
 
     let stream = match result {
         Ok(stream) => {
@@ -330,6 +345,55 @@ fn run_audio_thread(
         std::thread::park_timeout(std::time::Duration::from_millis(25));
     }
     drop(stream);
+}
+
+#[cfg(target_os = "linux")]
+fn audio_backend_order() -> [&'static str; 3] {
+    // Native desktop servers are preferred because they handle device policy,
+    // hot-plugging and format conversion. ALSA remains the universal fallback.
+    ["pipewire", "pulseaudio", "alsa"]
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+fn try_start_audio_stream(
+    host: &cpal::Host,
+    backend: &str,
+    preferred_device_name: Option<&str>,
+    consumer: &Arc<dyn AudioConsumer>,
+    progress: &Arc<dyn RecordingProgressSink>,
+    writer: &Option<Arc<std::sync::Mutex<LinuxWavWriter>>>,
+    stop: &Arc<std::sync::atomic::AtomicBool>,
+    runtime_error: &Arc<std::sync::Mutex<Option<BackendError>>>,
+) -> Result<cpal::Stream, BackendError> {
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+    let device = select_input_device(host, preferred_device_name).map_err(|error| {
+        BackendError::new(error.code, format!("{backend} backend: {}", error.message))
+    })?;
+    let supported = device
+        .default_input_config()
+        .map_err(|error| classify_audio_error("default input config", error.to_string()))?;
+    let sample_format = supported.sample_format();
+    let input_sample_rate = supported.sample_rate().0;
+    let channels = usize::from(supported.channels());
+    let config: cpal::StreamConfig = supported.into();
+    let stream = build_input_stream(
+        &device,
+        &config,
+        sample_format,
+        input_sample_rate,
+        channels,
+        Arc::clone(consumer),
+        Arc::clone(progress),
+        writer.clone(),
+        Arc::clone(stop),
+        Arc::clone(runtime_error),
+    )?;
+    stream
+        .play()
+        .map_err(|error| classify_audio_error("start input stream", error.to_string()))?;
+    Ok(stream)
 }
 
 #[cfg(target_os = "linux")]
@@ -578,5 +642,11 @@ mod tests {
         let mut wav = wav_header(pcm.len() as u32).to_vec();
         wav.extend_from_slice(&pcm);
         assert_eq!(canonical_wav_pcm(&wav).unwrap(), pcm);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn audio_backends_are_ordered_from_desktop_server_to_universal_fallback() {
+        assert_eq!(audio_backend_order(), ["pipewire", "pulseaudio", "alsa"]);
     }
 }

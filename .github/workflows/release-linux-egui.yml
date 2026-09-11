@@ -41,6 +41,8 @@ jobs:
             fcitx5-modules-dev \
             libasound2-dev \
             libdbus-1-dev \
+            libpipewire-0.3-dev \
+            libpulse-dev \
             libfcitx5config-dev \
             libfcitx5core-dev \
             libfcitx5utils-dev \

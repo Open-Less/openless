@@ -68,6 +68,7 @@ fpm -s dir -t deb -C "$DEB_ROOT" \
   --url https://github.com/Open-Less/openless \
   --after-install "$POST_INSTALL" \
   -d fcitx5 -d fcitx5-module-dbus -d libdbus-1-3 -d libasound2 \
+  -d libpipewire-0.3-0 -d libpulse0 \
   -p "$OUTPUT/OpenLess-Linux-egui-${VERSION}-${ARCH}.deb" .
 
 RPM_ROOT="$TARGET_DIR/linux-egui-rpm-root"
@@ -84,6 +85,7 @@ fpm -s dir -t rpm -C "$RPM_ROOT" \
   --url https://github.com/Open-Less/openless \
   --after-install "$POST_INSTALL" \
   -d fcitx5 -d dbus-libs -d alsa-lib \
+  -d pipewire-libs -d pulseaudio-libs \
   -p "$OUTPUT/OpenLess-Linux-egui-${VERSION}-${ARCH}.rpm" .
 
 find "$OUTPUT" -maxdepth 1 -type f -printf '%f\n' | sort

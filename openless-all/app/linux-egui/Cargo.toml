@@ -25,9 +25,8 @@ uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus = "0.9"
-arboard = { version = "3", features = ["wayland-data-control"] }
 keyring = { version = "3.6.3", default-features = false, features = ["linux-native-sync-persistent", "crypto-rust"] }
-cpal = "0.15"
+cpal = { version = "0.18.2", default-features = false, features = ["pipewire", "pulseaudio"] }
 rfd = { version = "0.16", default-features = false, features = ["xdg-portal", "tokio"] }
 egui = "=0.33.3"
 eframe = { version = "=0.33.3", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }

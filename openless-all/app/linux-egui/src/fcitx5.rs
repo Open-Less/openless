@@ -686,12 +686,25 @@ fn fcitx5_name_has_owner() -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn copy_to_clipboard(text: &str) -> Result<(), BackendError> {
-    let mut clipboard = arboard::Clipboard::new()
-        .map_err(|error| platform_error(format!("failed to open Linux clipboard: {error}")))?;
-    clipboard
-        .set_text(text.to_string())
-        .map_err(|error| platform_error(format!("failed to write Linux clipboard: {error}")))
+pub fn copy_to_clipboard(text: &str) -> Result<(), BackendError> {
+    use dbus::blocking::BlockingSender;
+    let connection = dbus::blocking::Connection::new_session().map_err(dbus_error)?;
+    let message =
+        dbus::Message::new_method_call(DESTINATION, OBJECT_PATH, INTERFACE, "SetClipboardText")
+            .map_err(|error| {
+                platform_error(format!("failed to build fcitx5 clipboard call: {error}"))
+            })?
+            .append1(text.to_string());
+    let reply = connection
+        .send_with_reply_and_block(message, TIMEOUT)
+        .map_err(dbus_error)?;
+    if reply.read1::<bool>().unwrap_or(false) {
+        Ok(())
+    } else {
+        Err(platform_error(
+            "fcitx5 clipboard addon is unavailable".to_string(),
+        ))
+    }
 }
 
 #[cfg(target_os = "linux")]
