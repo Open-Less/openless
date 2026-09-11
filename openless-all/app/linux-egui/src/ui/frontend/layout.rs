@@ -256,6 +256,12 @@ pub fn resize_handles(ctx: &egui::Context) {
     // We need a temporary area to check for resize interactions.
     egui::Area::new(egui::Id::new("openless-resize-handles"))
         .order(egui::Order::Foreground)
+        // `Area` itself registers an input region covering its complete size.
+        // This layer spans the window, so leaving it interactable makes that
+        // invisible region win hit testing over every button beneath it. The
+        // individual edge widgets below remain interactive; only the empty
+        // interior is click-through.
+        .interactable(false)
         .fixed_pos(window.min)
         .show(ctx, |ui| {
             ui.set_min_size(window.size());

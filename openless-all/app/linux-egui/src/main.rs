@@ -6219,11 +6219,9 @@ mod linux_app {
 
     /// Map an fcitx5 addon install result onto startup.
     ///
-    /// A freshly written addon (`Updated`) is harmless: the addon is loaded
-    /// either by the next fcitx5 start or, when a daemon is already running, by
-    /// `reload` right now. Both `Ready` and `Updated` let startup continue down
-    /// the normal fcitx5 DBus path — never a global-hotkey fallback — and only a
-    /// genuinely missing plugin aborts startup.
+    /// A ready addon lets startup continue down the normal fcitx5 DBus path —
+    /// never a global-hotkey fallback — and only a genuinely missing plugin
+    /// aborts startup.
     fn reconcile_fcitx5_install(status: FcitxPluginStatus) -> Result<(), String> {
         match status {
             FcitxPluginStatus::Ready => Ok(()),
@@ -7003,21 +7001,18 @@ mod linux_app {
         }
 
         #[test]
-        #[test]
         fn ready_install_needs_no_reload_but_continues() {
             assert!(reconcile_fcitx5_install(FcitxPluginStatus::Ready).is_ok());
         }
 
         #[test]
         fn missing_install_aborts_without_reloading() {
-            let mut reloads = 0;
-            let error = reconcile_fcitx5_install(FcitxPluginStatus::Missing, || reloads += 1)
+            let error = reconcile_fcitx5_install(FcitxPluginStatus::Missing)
                 .expect_err("a missing plugin must abort startup");
             assert!(
                 error.contains("OpenLess fcitx5 插件"),
                 "unexpected Missing message: {error}"
             );
-            assert_eq!(reloads, 0, "Missing must never reload fcitx5");
         }
 
         // ---- Overview summary (Tauri parity) -----------------------------
