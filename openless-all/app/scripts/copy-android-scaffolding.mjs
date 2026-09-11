@@ -19,6 +19,7 @@ const kotlinAndroidTestRoot = join(kotlinRoot, 'androidTest');
 const manifestsRoot = join(appRoot, 'android/manifests');
 const androidIconRoot = join(appRoot, 'src-tauri/icons/android');
 const aidlRoot = join(appRoot, 'android/aidl');
+const androidAssetsRoot = join(appRoot, 'android/assets');
 const androidAppRoot = join(appRoot, 'src-tauri/gen/android/app');
 const genRoot = join(appRoot, 'src-tauri/gen/android/app/src/main');
 const kotlinDest = join(genRoot, 'java/com/openless/app');
@@ -29,6 +30,7 @@ const androidAppGradle = join(androidAppRoot, 'build.gradle.kts');
 const resDest = join(genRoot, 'res');
 const resXmlDest = join(genRoot, 'res/xml');
 const aidlDest = join(genRoot, 'aidl');
+const assetsDest = join(genRoot, 'assets');
 
 const KOTLIN_FILES = [
   'OpenLessAppContext.kt',
@@ -358,6 +360,9 @@ function main() {
     copyDirectoryContents(aidlRoot, aidlDest, dryRun);
   }
   copyDirectoryContents(androidIconRoot, resDest, dryRun);
+  if (existsSync(androidAssetsRoot)) {
+    copyDirectoryContents(androidAssetsRoot, assetsDest, dryRun);
+  }
   copyNamedFiles(KOTLIN_FILES, kotlinRoot, kotlinDest, dryRun);
   ensureMainActivityOpen(dryRun);
   copyNamedFiles(KOTLIN_TEST_FILES, kotlinTestRoot, kotlinTestDest, dryRun);

@@ -34,7 +34,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var status: TextView? = null
     private var voiceButton: VoiceButton? = null
     private var englishUi = false
-    private val strokeRepository = StrokeInputRepository()
+    private val strokeRepository by lazy { StrokeInputRepository(this) }
     private var strokeCode = ""
     private var strokeQueryEpoch = 0L
     private var strokePreview: TextView? = null
@@ -391,7 +391,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     private fun appendStroke(stroke: String) {
-        if (strokeCode.length >= 8) return
+        if (strokeCode.length >= 32) return
         strokeCode += stroke
         strokePreview?.text = ui("笔画：$strokeCode", "Strokes: $strokeCode")
         val query = ++strokeQueryEpoch
