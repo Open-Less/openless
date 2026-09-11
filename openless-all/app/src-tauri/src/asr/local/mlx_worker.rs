@@ -1910,8 +1910,13 @@ mod tests {
             .set_read_timeout(Some(Duration::from_millis(50)))
             .unwrap();
         let mut byte = [0_u8; 1];
+        let read_started_at = Instant::now();
         let error = stream.read(&mut byte).unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::TimedOut);
+        assert!(read_started_at.elapsed() >= Duration::from_millis(25));
+        assert!(matches!(
+            error.kind(),
+            ErrorKind::TimedOut | ErrorKind::WouldBlock
+        ));
         drop(stream);
         drop(client.join().unwrap());
         terminate_unmanaged_child(&mut child);
