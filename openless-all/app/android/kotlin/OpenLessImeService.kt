@@ -297,13 +297,20 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // Stroke mode follows the reference layout: a compact candidate strip,
         // punctuation column, 3-column stroke grid, and a separate action rail.
         val top = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
+        val strokeIndicator = TextView(this).apply {
+            text = "—"
+            textSize = 20f
+            setTextColor(Color.rgb(190, 30, 82))
+            gravity = android.view.Gravity.CENTER
+        }
+        top.addView(strokeIndicator, LinearLayout.LayoutParams(dp(42), dp(38)))
         strokePreview = TextView(this).apply {
-            text = ui("—", "—")
-            textSize = 16f
+            text = ui("①", "①")
+            textSize = 18f
             setTextColor(Color.rgb(210, 210, 210))
             gravity = android.view.Gravity.CENTER
         }
-        top.addView(strokePreview, LinearLayout.LayoutParams(dp(58), dp(38)))
+        top.addView(strokePreview, LinearLayout.LayoutParams(dp(44), dp(38)))
         val candidatesScroll = android.widget.HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             strokeCandidates = LinearLayout(context).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
@@ -311,6 +318,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }
         top.addView(candidatesScroll, LinearLayout.LayoutParams(0, dp(38), 1f))
         top.addView(keyboardKey("⌄", .5f) { clearStrokes() }, LinearLayout.LayoutParams(dp(38), dp(38)))
+        listOf("不", "有", "下", "↓", "在", "要").forEach { candidate ->
+            strokeCandidates?.addView(keyboardKey(candidate, 1f) { commitStrokeCandidate(candidate) }, LinearLayout.LayoutParams(dp(42), dp(36)))
+        }
         root.addView(top, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)))
 
         val body = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
@@ -322,10 +332,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
         val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = android.view.Gravity.CENTER }
         val strokeRows = listOf(
-            listOf("1" to "h", "2" to "s", "3" to "p"),
-            listOf("4" to "n", "5" to "z", "6" to "*"),
-            listOf(ui("分词", "Word") to " ", ":" to ":", ";" to ";"),
-            listOf(ui("中", "中") to "中", "⌨" to "voice", ui("符号", "Symbols") to "symbols"),
+            listOf("1\n一" to "h", "2\n丨" to "s", "3\n丿" to "p"),
+            listOf("4\n丶" to "n", "5\n乛" to "z", "6\n${ui("通配", "Wildcard")}" to "*"),
+            listOf("7\n${ui("分词", "Word")}" to " ", "8\n：" to ":", "9\n；" to ";"),
+            listOf(ui("中", "CN") to "中", "⌨" to "voice", ui("符号", "Symbols") to "symbols"),
         )
         strokeRows.forEach { rowItems ->
             val row = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
@@ -339,7 +349,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                         }
                         "symbols" -> currentInputConnection?.commitText("#", 1)
                         " " -> currentInputConnection?.commitText(" ", 1)
-                        else -> if (code.length == 1 && code in listOf("h", "s", "p", "n", "z", "*")) appendStroke(code) else currentInputConnection?.commitText(code, 1)
+                    else -> if (code in listOf("h", "s", "p", "n", "z", "*")) appendStroke(code) else currentInputConnection?.commitText(code, 1)
                     }
                 })
             }
