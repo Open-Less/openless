@@ -91,6 +91,10 @@ pub fn titlebar(ctx: &egui::Context, actions: &mut Vec<FrontendAction>) {
 
     egui::Area::new(egui::Id::new("openless-titlebar"))
         .order(egui::Order::Middle)
+        // The titlebar defines its own drag zone and window-control buttons.
+        // Keep the area in the hit-test stack for its children, without adding
+        // an area-wide click target that would consume their input.
+        .sense(egui::Sense::hover())
         .fixed_pos(window.min)
         .show(ctx, |ui| {
             ui.set_min_size(egui::vec2(window.width(), TITLEBAR_HEIGHT));
@@ -250,26 +254,21 @@ pub fn resize_handles(ctx: &egui::Context) {
         ),
     ];
 
-    // We need a temporary area to check for resize interactions.
-    egui::Area::new(egui::Id::new("openless-resize-handles"))
-        .order(egui::Order::Foreground)
-        // `Area` itself registers an input region covering its complete size.
-        // This layer spans the window, so leaving it interactable makes that
-        // invisible region win hit testing over every button beneath it. The
-        // individual edge widgets below remain interactive; only the empty
-        // interior is click-through.
-        .interactable(false)
-        .fixed_pos(window.min)
-        .show(ctx, |ui| {
-            ui.set_min_size(window.size());
-            for (index, (rect, direction)) in zones.into_iter().enumerate() {
-                let response =
-                    ui.interact(rect, ui.id().with(("resize", index)), egui::Sense::drag());
-                if response.drag_started() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
-                }
-            }
-        });
+    // Each edge gets its own foreground area. A single window-sized Area would
+    // become the top hit-test layer for the entire UI, including its transparent
+    // interior, and would swallow every button click.
+    for (index, (rect, direction)) in zones.into_iter().enumerate() {
+        let response = egui::Area::new(egui::Id::new(("openless-resize", index)))
+            .order(egui::Order::Foreground)
+            .fixed_pos(rect.min)
+            .default_size(rect.size())
+            .sense(egui::Sense::drag())
+            .show(ctx, |ui| ui.set_min_size(rect.size()))
+            .response;
+        if response.drag_started() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
+        }
+    }
 }
 
 // ── Sidebar ─────────────────────────────────────────────────────────────────
@@ -278,6 +277,9 @@ pub fn sidebar(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Ve
     let body = body_rect(ctx);
     egui::Area::new(egui::Id::new("openless-sidebar"))
         .order(egui::Order::Middle)
+        // Navigation rows own their input. A hover-only area preserves their
+        // layer while avoiding an invisible area-wide click target.
+        .sense(egui::Sense::hover())
         .fixed_pos(body.min)
         .show(ctx, |ui| {
             ui.set_min_size(egui::vec2(SIDEBAR_WIDTH, body.height()));
@@ -484,6 +486,8 @@ pub fn content_panel(ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::U
     );
     egui::Area::new(egui::Id::new("openless-content"))
         .order(egui::Order::Middle)
+        // Buttons and text fields inside the panel register their own hit targets.
+        .sense(egui::Sense::hover())
         .fixed_pos(content.min)
         .show(ctx, |ui| {
             ui.set_min_size(content.size());

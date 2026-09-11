@@ -123,3 +123,106 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn viewport() -> egui::Rect {
+        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1240.0, 800.0))
+    }
+
+    fn frame(ctx: &egui::Context, events: Vec<egui::Event>) -> Vec<FrontendAction> {
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(viewport()),
+            events,
+            ..Default::default()
+        });
+        let mut vm = FrontendViewModel::default();
+        let mut actions = Vec::new();
+        render(ctx, &mut vm, &mut actions);
+        let _ = ctx.end_pass();
+        actions
+    }
+
+    #[test]
+    fn sidebar_navigation_receives_pointer_clicks_above_window_layers() {
+        let ctx = egui::Context::default();
+
+        // Areas use their first pass to establish their screen rectangles.
+        frame(&ctx, Vec::new());
+        frame(&ctx, Vec::new());
+
+        let pointer = egui::pos2(50.0, 142.0);
+        assert_eq!(
+            ctx.layer_id_at(pointer),
+            Some(egui::LayerId::new(
+                egui::Order::Middle,
+                egui::Id::new("openless-sidebar"),
+            )),
+            "the sidebar must be the top input layer at a navigation button"
+        );
+        frame(
+            &ctx,
+            vec![
+                egui::Event::PointerMoved(pointer),
+                egui::Event::PointerButton {
+                    pos: pointer,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        let actions = frame(
+            &ctx,
+            vec![egui::Event::PointerButton {
+                pos: pointer,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+
+        assert!(
+            actions
+                .iter()
+                .any(|action| matches!(action, FrontendAction::Navigate(Page::History))),
+            "the foreground resize layer must not consume sidebar clicks"
+        );
+    }
+
+    #[test]
+    fn titlebar_close_control_receives_pointer_clicks() {
+        let ctx = egui::Context::default();
+        frame(&ctx, Vec::new());
+        frame(&ctx, Vec::new());
+
+        let pointer = egui::pos2(1214.0, 20.0);
+        frame(
+            &ctx,
+            vec![egui::Event::PointerButton {
+                pos: pointer,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        let actions = frame(
+            &ctx,
+            vec![egui::Event::PointerButton {
+                pos: pointer,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+
+        assert!(
+            actions
+                .iter()
+                .any(|action| matches!(action, FrontendAction::WindowClose)),
+            "the titlebar container must not consume the close button click"
+        );
+    }
+}

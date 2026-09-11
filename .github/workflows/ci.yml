@@ -168,7 +168,9 @@ jobs:
 
   linux-core-contract:
     name: Linux core and egui host tests
-    runs-on: ubuntu-22.04
+    # cpal's PipeWire backend needs the PipeWire/libspa ABI shipped by 24.04.
+    # 22.04 headers fail to compile libspa 0.10.x (missing spa_meta_first etc.).
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: openless-all/app
