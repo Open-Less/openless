@@ -7,7 +7,7 @@ const source = await readFile(
   'utf8',
 );
 const html = await readFile(
-  new URL('../src-tauri/src/remote_server/assets/index.html', import.meta.url),
+  new URL('../assets/remote-input/index.html', import.meta.url),
   'utf8',
 );
 

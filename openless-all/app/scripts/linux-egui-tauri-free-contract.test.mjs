@@ -1,5 +1,6 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { extname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const appRoot = new URL('..', import.meta.url);
 const roots = [
@@ -10,14 +11,14 @@ const roots = [
 const sourceExtensions = new Set(['.rs', '.toml', '.sh', '.yml', '.yaml']);
 
 async function collect(url) {
-  const path = url.pathname;
+  const path = fileURLToPath(url);
   if (extname(path)) return [path];
   const entries = await readdir(path, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
     if (entry.name === 'target') continue;
     const child = join(path, entry.name);
-    if (entry.isDirectory()) files.push(...await collect(new URL(`file://${child}/`)));
+    if (entry.isDirectory()) files.push(...await collect(pathToFileURL(`${child}/`)));
     else if (sourceExtensions.has(extname(entry.name))) files.push(child);
   }
   return files;

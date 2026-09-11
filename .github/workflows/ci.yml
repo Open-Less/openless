@@ -194,7 +194,8 @@ jobs:
             libwayland-dev \
             libx11-dev \
             libxkbcommon-dev \
-            pkg-config
+            pkg-config \
+            ripgrep
 
       - name: Test Core
         run: |
