@@ -457,6 +457,7 @@ mod tests {
             .provider
             .list_models(ProviderRequest {
                 kind: ProviderKind::Llm,
+                thinking_enabled: false,
                 channel_id: None,
             })
             .await

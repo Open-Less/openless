@@ -1488,6 +1488,7 @@ mod linux_app {
                     .provider
                     .list_models(openless_core::ProviderRequest {
                         kind: provider_kind(kind),
+                        thinking_enabled: false,
                         channel_id: Some(channel_id.clone()),
                     })
                     .await
@@ -5705,6 +5706,7 @@ mod linux_app {
             openless_core::AuthRequirement::Volcengine => "auth.volcengine",
             openless_core::AuthRequirement::Xfyun => "auth.xfyun",
             openless_core::AuthRequirement::OAuth => "auth.oauth",
+            openless_core::AuthRequirement::TencentCloud => "auth.api_key",
         };
         tr_l10n(lang, key)
     }
@@ -6061,6 +6063,7 @@ mod linux_app {
             .provider
             .validate(openless_core::ProviderRequest {
                 kind: provider_kind(kind),
+                thinking_enabled: false,
                 channel_id: Some(channel_id.clone()),
             })
             .await;
