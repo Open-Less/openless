@@ -929,6 +929,13 @@ export const zhCN = {
       outputPlaceholder: '输出会流式显示在这里…',
     },
     codingAgent: {
+      piHint:
+        'PI 与桌面控制工具随应用安装。配置模型凭据后即可截图、点击、滚动和输入；macOS 首次使用需授予屏幕录制与辅助功能权限，Linux 当前支持 X11。',
+      piReady: '内置 PI 已就绪（{{version}}）',
+      piMissing: '内置 PI 资源不完整，请重新安装应用或执行后端打包命令。',
+      piModelHint:
+        '填写 provider/model，留空使用封装 PI 的配置。凭据配置见 docs/less-computer-pi.md。',
+      piMode: { plan: '只读：查看文件与截图', acceptEdits: '允许操作桌面与编辑文件' },
       title: 'Less Computer',
       desc: '按住一个键说话，由所选 Agent 帮你操作电脑。仅 macOS。',
       enable: '启用 Less Computer',

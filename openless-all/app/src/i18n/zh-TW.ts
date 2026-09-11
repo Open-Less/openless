@@ -930,6 +930,13 @@ export const zhTW: typeof zhCN = {
       outputPlaceholder: '輸出會串流顯示在這裡…',
     },
     codingAgent: {
+      piHint:
+        'PI 與桌面控制工具隨應用程式安裝。設定模型憑據後即可截圖、點擊、捲動及輸入；macOS 首次使用需授予螢幕錄製與輔助使用權限，Linux 目前支援 X11。',
+      piReady: '內建 PI 已就緒（{{version}}）',
+      piMissing: '內建 PI 資源不完整，請重新安裝應用程式或執行後端打包命令。',
+      piModelHint:
+        '填寫 provider/model，留空使用封裝 PI 的設定。憑據設定請參閱 docs/less-computer-pi.md。',
+      piMode: { plan: '唯讀：查看檔案與截圖', acceptEdits: '允許操作桌面與編輯檔案' },
       title: 'Less Computer',
       desc: '按住一個鍵說話，由所選 Agent 幫你操作電腦。僅 macOS。',
       enable: '啟用 Less Computer',

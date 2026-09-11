@@ -40,6 +40,7 @@ jobs:
             appstream \
             build-essential \
             cmake \
+            clang \
             desktop-file-utils \
             extra-cmake-modules \
             fcitx5-modules-dev \
@@ -51,6 +52,10 @@ jobs:
             libfcitx5core-dev \
             libfcitx5utils-dev \
             libopenblas-dev \
+            libpipewire-0.3-dev \
+            libxcb1-dev \
+            libgbm-dev \
+            libegl1-mesa-dev \
             libssl-dev \
             libwayland-dev \
             libx11-dev \
@@ -77,6 +82,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.2'
+          cache: npm
+          cache-dependency-path: 'openless-all/app/pi-backend/package-lock.json'
 
       - name: Cache Cargo
         uses: swatinem/rust-cache@v2
@@ -147,6 +158,15 @@ jobs:
       - name: Build Linux egui host
         working-directory: openless-all/app
         run: cargo build --locked --release -p openless-linux-egui
+
+      - name: Build bundled PI and native Computer runtime
+        working-directory: openless-all/app
+        run: |
+          node --test scripts/prepare-pi-backend.test.mjs
+          node scripts/prepare-pi-backend.mjs --target x86_64-unknown-linux-gnu
+          src-tauri/resources/pi-backend/node --version
+          src-tauri/resources/pi-backend/node src-tauri/resources/pi-backend/runtime/index.mjs --health
+          src-tauri/resources/pi-backend/openless-computer --capabilities
 
       - name: Resolve package version
         id: version

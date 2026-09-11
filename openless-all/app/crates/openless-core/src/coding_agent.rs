@@ -19,6 +19,8 @@ use crate::events::{BackendEventKind, BackendEventPublisher, CodingAgentStreamEv
 /// Coding Agent provider，对应持久化偏好中的稳定字符串。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CodingAgentProvider {
+    #[serde(rename = "pi-bundled")]
+    PiBundled,
     #[serde(rename = "claude-code-cli")]
     ClaudeCodeCli,
     #[serde(rename = "opencode-cli")]
@@ -32,6 +34,7 @@ pub enum CodingAgentProvider {
 impl CodingAgentProvider {
     pub fn from_pref(value: &str) -> Self {
         match value.trim() {
+            "pi-bundled" => Self::PiBundled,
             "opencode-cli" => Self::OpenCodeCli,
             "codex-cli" => Self::CodexCli,
             "dsh-cli" => Self::DshCli,
@@ -41,6 +44,7 @@ impl CodingAgentProvider {
 
     pub fn as_pref(self) -> &'static str {
         match self {
+            Self::PiBundled => "pi-bundled",
             Self::ClaudeCodeCli => "claude-code-cli",
             Self::OpenCodeCli => "opencode-cli",
             Self::CodexCli => "codex-cli",
@@ -54,6 +58,7 @@ impl CodingAgentProvider {
 
     pub fn default_exe(self) -> &'static str {
         match self {
+            Self::PiBundled => "openless-pi",
             Self::ClaudeCodeCli => "claude",
             Self::OpenCodeCli => "opencode",
             Self::CodexCli => "codex",
@@ -64,7 +69,7 @@ impl CodingAgentProvider {
     pub fn max_budget_usd(self) -> Option<f64> {
         match self {
             Self::ClaudeCodeCli => Some(2.0),
-            Self::OpenCodeCli | Self::CodexCli | Self::DshCli => None,
+            Self::PiBundled | Self::OpenCodeCli | Self::CodexCli | Self::DshCli => None,
         }
     }
 }
@@ -80,7 +85,7 @@ pub fn resolve_coding_agent_model(
     match provider {
         CodingAgentProvider::ClaudeCodeCli => configured.or_else(|| Some("sonnet".to_string())),
         CodingAgentProvider::OpenCodeCli => configured.filter(|model| model.contains('/')),
-        CodingAgentProvider::CodexCli => configured,
+        CodingAgentProvider::PiBundled | CodingAgentProvider::CodexCli => configured,
         CodingAgentProvider::DshCli => None,
     }
 }
@@ -120,7 +125,9 @@ pub fn normalize_less_computer_permission_mode(
         _ => CodingAgentPermissionMode::AcceptEdits,
     };
     match provider {
-        CodingAgentProvider::CodexCli | CodingAgentProvider::DshCli
+        CodingAgentProvider::PiBundled
+        | CodingAgentProvider::CodexCli
+        | CodingAgentProvider::DshCli
             if matches!(
                 mode,
                 CodingAgentPermissionMode::Default | CodingAgentPermissionMode::BypassPermissions
@@ -878,6 +885,10 @@ pub fn build_agent_command(request: &CodingAgentRequest) -> Result<AgentCommand,
     let mut env = BTreeMap::new();
     let mut temporary_files = Vec::new();
     let (argv, prompt) = match request.provider {
+        CodingAgentProvider::PiBundled => (
+            vec!["--request".into()],
+            PromptPayload::Stdin(crate::pi_backend::encode_request(request)?),
+        ),
         CodingAgentProvider::ClaudeCodeCli => {
             let approved = request
                 .approved_patterns
@@ -1185,12 +1196,13 @@ async fn run_process(
     let result = {
         let mut consume_line = |line: ProcessOutputLine| {
             match line.stream {
-                ProcessStream::Stdout => {
+                ProcessStream::Stdout if request.provider != CodingAgentProvider::PiBundled => {
                     if !stdout.is_empty() {
                         stdout.push('\n');
                     }
                     stdout.push_str(&line.line);
                 }
+                ProcessStream::Stdout => {}
                 ProcessStream::Stderr if stderr.len() < 16 * 1024 => {
                     if !stderr.is_empty() {
                         stderr.push('\n');
@@ -1211,6 +1223,9 @@ async fn run_process(
             let event = match (request.provider, line.stream) {
                 (CodingAgentProvider::ClaudeCodeCli, ProcessStream::Stdout) => {
                     parse_claude_stream_line(&request.session_id, &line.line)
+                }
+                (CodingAgentProvider::PiBundled, ProcessStream::Stdout) => {
+                    crate::pi_backend::parse_stream_line(&request.session_id, &line.line)
                 }
                 (CodingAgentProvider::OpenCodeCli, ProcessStream::Stdout) => {
                     parse_opencode_stream_line(&request.session_id, &line.line)
@@ -1274,6 +1289,13 @@ async fn run_process(
         let _ = events.send(CodingAgentStreamEvent::Error {
             session_id: request.session_id,
             message: "Codex 进程结束但未收到 turn.completed".into(),
+        });
+        return Ok(());
+    }
+    if request.provider == CodingAgentProvider::PiBundled {
+        let _ = events.send(CodingAgentStreamEvent::Error {
+            session_id: request.session_id,
+            message: "PI 后端结束但未返回完成事件".into(),
         });
         return Ok(());
     }
@@ -1467,6 +1489,11 @@ pub fn normalize_coding_agent_executable(
     provider: CodingAgentProvider,
     executable: Option<String>,
 ) -> Result<String, BackendError> {
+    // The bundled provider is always resolved by the host from application
+    // resources. A stale executable preference must never select a global CLI.
+    if provider == CodingAgentProvider::PiBundled {
+        return Ok(provider.default_exe().to_string());
+    }
     let executable = executable
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -1543,7 +1570,9 @@ pub fn normalize_coding_agent_test_request(
     }
     let permission_mode = match (request.provider, request.permission_mode) {
         (
-            CodingAgentProvider::CodexCli | CodingAgentProvider::DshCli,
+            CodingAgentProvider::PiBundled
+            | CodingAgentProvider::CodexCli
+            | CodingAgentProvider::DshCli,
             CodingAgentPermissionMode::Default | CodingAgentPermissionMode::BypassPermissions,
         ) => CodingAgentPermissionMode::Plan,
         (_, mode) => mode,
@@ -1758,7 +1787,14 @@ impl crate::domains::CodingAgentApi for CodingAgentService {
                 normalize_coding_agent_executable(request.provider, request.executable)?;
             let probe = execute_capture(
                 Arc::clone(&process),
-                simple_command(executable.clone(), vec!["--version".into()]),
+                simple_command(
+                    executable.clone(),
+                    vec![if request.provider == CodingAgentProvider::PiBundled {
+                        "--health".into()
+                    } else {
+                        "--version".into()
+                    }],
+                ),
                 std::time::Duration::from_secs(10),
                 CancellationToken::new(),
             )
@@ -1773,7 +1809,7 @@ impl crate::domains::CodingAgentApi for CodingAgentService {
             let mcp_servers = if installed && request.provider == CodingAgentProvider::ClaudeCodeCli
             {
                 match execute_capture(
-                    process,
+                    Arc::clone(&process),
                     simple_command(executable.clone(), vec!["mcp".into(), "list".into()]),
                     std::time::Duration::from_secs(15),
                     CancellationToken::new(),
@@ -1788,7 +1824,25 @@ impl crate::domains::CodingAgentApi for CodingAgentService {
             } else {
                 Vec::new()
             };
-            let has_computer_use = has_computer_use_mcp(&mcp_servers);
+            let has_computer_use =
+                if installed && request.provider == CodingAgentProvider::PiBundled {
+                    execute_capture(
+                        Arc::clone(&process),
+                        simple_command(executable.clone(), vec!["--capabilities".into()]),
+                        std::time::Duration::from_secs(10),
+                        CancellationToken::new(),
+                    )
+                    .await
+                    .is_ok_and(|(exit, stdout, _)| {
+                        exit.success
+                            && serde_json::from_str::<serde_json::Value>(&stdout)
+                                .ok()
+                                .and_then(|value| value.get("computer").and_then(|v| v.as_bool()))
+                                .unwrap_or(false)
+                    })
+                } else {
+                    has_computer_use_mcp(&mcp_servers)
+                };
             Ok(CodingAgentAvailability {
                 provider: request.provider,
                 installed,
@@ -1806,7 +1860,10 @@ impl crate::domains::CodingAgentApi for CodingAgentService {
     ) -> BoxFuture<'static, Result<Vec<String>, BackendError>> {
         let process = Arc::clone(&self.process);
         Box::pin(async move {
-            if request.provider != CodingAgentProvider::OpenCodeCli {
+            if !matches!(
+                request.provider,
+                CodingAgentProvider::OpenCodeCli | CodingAgentProvider::PiBundled
+            ) {
                 return Err(BackendError::new(
                     BackendErrorCode::Unsupported,
                     "selected coding agent provider does not expose a model-list command",
@@ -1814,8 +1871,12 @@ impl crate::domains::CodingAgentApi for CodingAgentService {
             }
             let executable =
                 normalize_coding_agent_executable(request.provider, request.executable)?;
-            let mut argv = vec!["models".into()];
-            if request.refresh {
+            let mut argv = vec![if request.provider == CodingAgentProvider::PiBundled {
+                "--list-models".into()
+            } else {
+                "models".into()
+            }];
+            if request.refresh && request.provider == CodingAgentProvider::OpenCodeCli {
                 argv.push("--refresh".into());
             }
             let (exit, stdout, stderr) = execute_capture(
@@ -1826,17 +1887,33 @@ impl crate::domains::CodingAgentApi for CodingAgentService {
             )
             .await?;
             if !exit.success {
+                let pi_error = if request.provider == CodingAgentProvider::PiBundled {
+                    stdout.lines().find_map(|line| {
+                        match crate::pi_backend::parse_stream_line("models", line) {
+                            Some(CodingAgentStreamEvent::Error { message, .. }) => Some(message),
+                            _ => None,
+                        }
+                    })
+                } else {
+                    None
+                };
                 return Err(BackendError::new(
                     BackendErrorCode::Provider,
-                    summarize_stderr(&stderr)
-                        .unwrap_or_else(|| "OpenCode model command failed".into()),
+                    pi_error
+                        .or_else(|| summarize_stderr(&stderr))
+                        .unwrap_or_else(|| {
+                            format!("{} model command failed", request.provider.as_pref())
+                        }),
                 ));
             }
             let models = parse_coding_agent_models(&stdout);
             if models.is_empty() {
                 Err(BackendError::new(
                     BackendErrorCode::Provider,
-                    "OpenCode returned no available models",
+                    format!(
+                        "{} returned no available models",
+                        request.provider.as_pref()
+                    ),
                 ))
             } else {
                 Ok(models)
@@ -2104,6 +2181,7 @@ mod tests {
             (CodingAgentProvider::OpenCodeCli, "opencode-cli"),
             (CodingAgentProvider::CodexCli, "codex-cli"),
             (CodingAgentProvider::DshCli, "dsh-cli"),
+            (CodingAgentProvider::PiBundled, "pi-bundled"),
         ];
         for (provider, value) in cases {
             assert_eq!(CodingAgentProvider::from_pref(value), provider);
@@ -2252,6 +2330,9 @@ mod tests {
                 .iter()
                 .any(|argument| argument.contains("-line")));
             match provider {
+                CodingAgentProvider::PiBundled => {
+                    assert!(matches!(command.prompt, PromptPayload::Stdin(_)));
+                }
                 CodingAgentProvider::ClaudeCodeCli
                 | CodingAgentProvider::OpenCodeCli
                 | CodingAgentProvider::CodexCli => {
@@ -2399,6 +2480,68 @@ mod tests {
                 PathBuf::from("/usr/local/bin"),
                 PathBuf::from("/bin"),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn pi_requires_explicit_completion_and_preserves_runtime_errors() {
+        for (lines, expected) in [
+            (
+                vec![r#"{"type":"delta","text":"partial"}"#],
+                CodingAgentRunOutcome::Failed("PI 后端结束但未返回完成事件".into()),
+            ),
+            (
+                vec![r#"{"type":"complete","text":"完成"}"#],
+                CodingAgentRunOutcome::Completed {
+                    text: "完成".into(),
+                    cost_usd: None,
+                    duration_ms: None,
+                },
+            ),
+            (
+                vec![r#"{"type":"error","message":"需要配置模型凭据"}"#],
+                CodingAgentRunOutcome::Failed("需要配置模型凭据".into()),
+            ),
+        ] {
+            let runner = CodingAgentRunner::new(Arc::new(ScriptedProcess(
+                lines
+                    .into_iter()
+                    .map(|line| ProcessOutputLine {
+                        stream: ProcessStream::Stdout,
+                        line: line.into(),
+                    })
+                    .collect(),
+                Ok(ProcessExit {
+                    code: Some(0),
+                    success: true,
+                }),
+            )));
+            let mut request = CodingAgentRequest::new("pi-session", "查看桌面");
+            request.provider = CodingAgentProvider::PiBundled;
+            let result = runner
+                .run(request, Arc::new(AtomicBool::new(false)))
+                .await
+                .unwrap();
+            assert_eq!(result.outcome, expected);
+        }
+    }
+
+    #[test]
+    fn pi_permission_modes_never_expand_legacy_bypass_preferences() {
+        assert_eq!(
+            normalize_less_computer_permission_mode(
+                CodingAgentProvider::PiBundled,
+                "bypassPermissions"
+            ),
+            CodingAgentPermissionMode::Plan
+        );
+        assert_eq!(
+            normalize_less_computer_permission_mode(CodingAgentProvider::PiBundled, "default"),
+            CodingAgentPermissionMode::Plan
+        );
+        assert_eq!(
+            normalize_less_computer_permission_mode(CodingAgentProvider::PiBundled, "acceptEdits"),
+            CodingAgentPermissionMode::AcceptEdits
         );
     }
 

@@ -215,7 +215,8 @@ export type QaHotkeyBinding = ShortcutBinding;
 /** 自定义录音组合键绑定。当 hotkey.trigger == 'custom' 时使用。 */
 export type ComboBinding = ShortcutBinding;
 
-export type CodingAgentProviderId = 'claude-code-cli' | 'opencode-cli' | 'codex-cli' | 'dsh-cli';
+export type CodingAgentProviderId =
+  'pi-bundled' | 'claude-code-cli' | 'opencode-cli' | 'codex-cli' | 'dsh-cli';
 export type CodingAgentPermissionMode = 'plan' | 'default' | 'acceptEdits' | 'bypassPermissions';
 
 /** 模拟粘贴时按下的快捷键。仅 Windows/Linux 生效；macOS 走 AX 直写。
@@ -418,7 +419,7 @@ export interface UserPreferences {
   stylePackHotkeys: StylePackHotkey[];
   /** Less Computer：是否启用。默认关闭。 */
   codingAgentEnabled: boolean;
-  /** Agent 后端：claude-code-cli（默认）/ opencode-cli / codex-cli / dsh-cli。 */
+  /** Agent 后端：pi-bundled（内置）或用户安装的外部 CLI。 */
   codingAgentProvider: CodingAgentProviderId;
   /**
    * Agent 模型，null = 交给后端自己的默认。

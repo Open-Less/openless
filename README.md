@@ -256,6 +256,12 @@ On first launch, grant the permissions the app requests.
 
 For the full end-user walkthrough, see [USAGE.md](USAGE.md).
 
+## Bundled PI for Less Computer
+
+The desktop app includes a private PI runtime and native Computer tools. Enable Less Computer and configure a vision-capable model to take screenshots, click, scroll, and type using text or voice requests. No separate PI, Node.js, or Computer MCP installation is required. Desktop control supports Windows, macOS (with system permissions), and Linux X11; Wayland input is currently unsupported. Existing external CLI providers remain available.
+
+See the [PI setup and build guide](docs/less-computer-pi.md) for model configuration, permission modes, and platform requirements.
+
 ## Build from source (developers)
 
 The active workspace lives in `openless-all/app/`. `crates/openless-core` is the framework-independent backend, `src-tauri` hosts macOS/Windows/Android, and `linux-egui` contains the native Linux UI and its platform adapters. Initialize submodules before a Tauri source build: its manifest resolves local path dependencies even when their target-specific code is not compiled. These include macOS ASR engines such as [`Open-Less/qwen-asr`](https://github.com/Open-Less/qwen-asr) under `src-tauri/vendor/`. The root Core/Linux workspace excludes `src-tauri`, so its independent checks do not parse the Tauri manifest or require those submodules. Start with the [documentation index](docs/index.md), [architecture](docs/architecture.md), and [source structure](docs/structure.md).

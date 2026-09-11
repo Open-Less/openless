@@ -986,6 +986,17 @@ export const de: typeof zhCN = {
       outputPlaceholder: 'Die laufende Ausgabe erscheint hier…',
     },
     codingAgent: {
+      piHint:
+        'PI und Desktop-Werkzeuge werden mitinstalliert. Nach Einrichtung der Modell-Zugangsdaten sind Screenshots, Klicks, Scrollen und Texteingabe verfügbar. macOS benötigt Bildschirmaufnahme und Bedienungshilfen; Linux unterstützt derzeit X11.',
+      piReady: 'Integriertes PI ist bereit ({{version}})',
+      piMissing:
+        'PI-Dateien fehlen. Installieren Sie die App erneut oder erstellen Sie das Backend-Paket.',
+      piModelHint:
+        'provider/model eingeben oder für die PI-Konfiguration leer lassen. Zugangsdaten: docs/less-computer-pi.md.',
+      piMode: {
+        plan: 'Nur lesen: Dateien und Screenshots',
+        acceptEdits: 'Desktop-Aktionen und Dateiänderungen erlauben',
+      },
       title: 'Less Computer',
       desc: 'Halte eine Taste gedrückt und sprich. Der gewählte Agent bedient deinen Computer. Nur unter macOS.',
       enable: 'Less Computer aktivieren',

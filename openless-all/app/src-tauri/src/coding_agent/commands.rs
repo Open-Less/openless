@@ -90,7 +90,9 @@ pub async fn coding_agent_detect_cli(
     let parsed = openless_core::CodingAgentProvider::from_pref(&provider);
     if !matches!(
         parsed,
-        openless_core::CodingAgentProvider::CodexCli | openless_core::CodingAgentProvider::DshCli
+        openless_core::CodingAgentProvider::PiBundled
+            | openless_core::CodingAgentProvider::CodexCli
+            | openless_core::CodingAgentProvider::DshCli
     ) {
         return Err(format!("该后端不走通用检测: {provider}"));
     }

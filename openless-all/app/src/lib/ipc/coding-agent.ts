@@ -35,14 +35,14 @@ export function codingAgentDetectOpencode(exe?: string): Promise<OpenCodeDetecti
 }
 
 /**
- * 检测 Codex / dsh 是否安装。与 OpenCode 共用同一个检测结果形状。
- * `provider` 传 prefs 里的后端 id（只认 `codex-cli` / `dsh-cli`）。
+ * 检测内置 PI / Codex / dsh。与 OpenCode 共用同一个检测结果形状。
  */
 export function codingAgentDetectCli(provider: string, exe?: string): Promise<OpenCodeDetection> {
   return invokeOrMock('coding_agent_detect_cli', { provider, exe }, () => ({
     installed: false,
     version: null,
-    exe: exe || (provider === 'dsh-cli' ? 'dsh' : 'codex'),
+    exe:
+      exe || (provider === 'pi-bundled' ? 'openless-pi' : provider === 'dsh-cli' ? 'dsh' : 'codex'),
   }));
 }
 

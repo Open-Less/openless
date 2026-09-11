@@ -1414,7 +1414,7 @@ fn is_right_control_modifier_shortcut(binding: &ShortcutBinding) -> bool {
 }
 
 fn default_coding_agent_provider() -> String {
-    "claude-code-cli".to_string()
+    "pi-bundled".to_string()
 }
 
 fn default_coding_agent_permission_mode() -> String {

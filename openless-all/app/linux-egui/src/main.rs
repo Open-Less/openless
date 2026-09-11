@@ -1563,7 +1563,64 @@ mod linux_app {
                 ui.checkbox(&mut preferences.streaming_insert, "流式插入");
                 ui.small("将转写逐步发送到原输入目标，实际结果以听写与历史反馈为准。");
                 ui.checkbox(&mut preferences.coding_agent_enabled, "启用 Less Computer");
-                ui.small("使用已有 Agent 配置与 CLI；进程执行仍遵循 Core 的审批规则。");
+                egui::ComboBox::from_label("Agent 后端")
+                    .selected_text(&preferences.coding_agent_provider)
+                    .show_ui(ui, |ui| {
+                        for (id, label) in [
+                            ("pi-bundled", "PI（内置）"),
+                            ("claude-code-cli", "Claude Code"),
+                            ("opencode-cli", "OpenCode"),
+                            ("codex-cli", "Codex"),
+                            ("dsh-cli", "dsh"),
+                        ] {
+                            if ui
+                                .selectable_value(
+                                    &mut preferences.coding_agent_provider,
+                                    id.to_string(),
+                                    label,
+                                )
+                                .changed()
+                            {
+                                preferences.coding_agent_exe = None;
+                                preferences.coding_agent_model = None;
+                            }
+                        }
+                    });
+                if preferences.coding_agent_provider == "pi-bundled" {
+                    ui.small("PI 和桌面工具随安装包提供。配置模型凭据后即可操作；当前支持 X11，Wayland 会提示不支持。");
+                    ui.horizontal(|ui| {
+                        ui.label("模型 provider/model");
+                        let mut model = preferences.coding_agent_model.clone().unwrap_or_default();
+                        if ui.text_edit_singleline(&mut model).changed() {
+                            preferences.coding_agent_model = if model.trim().is_empty() {
+                                None
+                            } else {
+                                Some(model.trim().to_string())
+                            };
+                        }
+                    });
+                    egui::ComboBox::from_label("PI 操作权限")
+                        .selected_text(
+                            if preferences.coding_agent_permission_mode == "acceptEdits" {
+                                "允许操作桌面与编辑文件"
+                            } else {
+                                "只读：文件与截图"
+                            },
+                        )
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut preferences.coding_agent_permission_mode,
+                                "plan".into(),
+                                "只读：文件与截图",
+                            );
+                            ui.selectable_value(
+                                &mut preferences.coding_agent_permission_mode,
+                                "acceptEdits".into(),
+                                "允许操作桌面与编辑文件",
+                            );
+                        });
+                    ui.small("凭据配置：~/.config/openless/pi/config.json（遵循 XDG_CONFIG_HOME），也可使用标准模型 API Key 环境变量。");
+                }
                 self.settings_actions_ui(ui);
             }
             ui.horizontal_wrapped(|ui| {
@@ -1640,7 +1697,9 @@ mod linux_app {
                                 .map(|pair| std::str::from_utf8(pair).unwrap().to_ascii_uppercase())
                                 .collect::<Vec<_>>()
                                 .join(" ");
-                            ui.add(egui::Label::new(egui::RichText::new(&display).monospace()).wrap());
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(&display).monospace()).wrap(),
+                            );
                             if ui.button("复制完整指纹").clicked() {
                                 ui.ctx().copy_text(display);
                             }

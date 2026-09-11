@@ -952,6 +952,17 @@ export const ja: typeof zhCN = {
       outputPlaceholder: '出力はここにストリーミング表示されます…',
     },
     codingAgent: {
+      piHint:
+        'PI とデスクトップ操作ツールはアプリに同梱されます。モデルの認証情報を設定すると、画面撮影、クリック、スクロール、入力ができます。macOS は画面収録とアクセシビリティの許可が必要です。Linux は現在 X11 に対応しています。',
+      piReady: '内蔵 PI の準備ができました（{{version}}）',
+      piMissing:
+        'PI ファイルが不足しています。アプリを再インストールするか、バックエンドをビルドしてください。',
+      piModelHint:
+        'provider/model を入力するか、空欄で PI の設定を使用します。認証情報の設定は docs/less-computer-pi.md を参照してください。',
+      piMode: {
+        plan: '読み取り専用：ファイルと画面撮影',
+        acceptEdits: 'デスクトップ操作とファイル編集を許可',
+      },
       title: 'Less Computer',
       desc: 'キーを押して話すと、選択した Agent が PC を操作します。macOS のみ。',
       enable: 'Less Computer を有効化',

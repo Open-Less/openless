@@ -17,6 +17,7 @@ mod cloud_sync_transaction;
 mod cloud_sync_types;
 mod cloud_sync_validation;
 pub mod coding_agent;
+mod pi_backend;
 pub mod coding_agent_guard;
 pub mod config;
 pub mod correction;
