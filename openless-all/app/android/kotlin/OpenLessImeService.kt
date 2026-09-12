@@ -287,7 +287,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         setInputView(onCreateInputView())
     }
 
-    private fun buildModeToggle(): View = ModeToggle(this, inputMode, englishUi) { selected ->
+    private fun buildModeToggle(): View = ModeToggle(this, inputMode) { selected ->
         if (recording || processing) cancelDictation()
         inputMode = selected
         saveInputMode(selected)
@@ -325,7 +325,15 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }
         header.addView(brand, LinearLayout.LayoutParams(0, dp(38), 1f))
         header.addView(buildModeToggle(), LinearLayout.LayoutParams(dp(150), dp(38)))
-        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)))
+        // This panel's own root padding (8dp) is narrower than the voice panel's
+        // (16dp), which it needs for its body rows. Compensate with margins so
+        // the header/toggle still land at the same canonical 16dp/8dp inset as
+        // every other panel — otherwise the logo and toggle visibly jump left
+        // and up when switching modes.
+        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply {
+            marginStart = dp(8)
+            marginEnd = dp(8)
+        })
 
         // 保持和 Typeless 类似的五排结构：数字、字母三排、底部功能排。
         addKeyboardRow(root, listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0"))
@@ -380,7 +388,14 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }
         header.addView(brand, LinearLayout.LayoutParams(0, dp(38), 1f))
         header.addView(buildModeToggle(), LinearLayout.LayoutParams(dp(150), dp(38)))
-        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)))
+        // Stroke mode's root padding is much tighter (4dp/3dp) to fit its dense
+        // grid. Compensate with margins so the header/toggle still land at the
+        // same canonical 16dp/8dp inset as every other panel.
+        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply {
+            marginStart = dp(12)
+            marginEnd = dp(12)
+            topMargin = dp(5)
+        })
 
         // Stroke mode follows the reference layout: a compact stroke row,
         // candidate row, punctuation column, stroke grid, and action rail.
@@ -460,6 +475,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                         saveInputMode(inputMode)
                         clearStrokes()
                         refreshInputView()
+                        if (!recording) toggleDictation()
                         true
                     }
                 } else {
@@ -530,7 +546,13 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }
         header.addView(brand, LinearLayout.LayoutParams(0, dp(38), 1f))
         header.addView(buildModeToggle(), LinearLayout.LayoutParams(dp(150), dp(38)))
-        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)))
+        // This panel's own root padding (8dp) is narrower than the voice panel's
+        // (16dp). Compensate with margins so the header/toggle still land at the
+        // same canonical 16dp/8dp inset as every other panel.
+        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply {
+            marginStart = dp(8)
+            marginEnd = dp(8)
+        })
 
         val rows = listOf(
             listOf("@", "1", "2", "3", ui("退格", "Backspace")),
@@ -1189,10 +1211,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private class ModeToggle(
         context: android.content.Context,
         private val selectedMode: InputMode,
-        private val englishUi: Boolean,
         private val onModeSelected: (InputMode) -> Unit,
     ) : View(context) {
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
 
         private fun dp(value: Int): Float = value * resources.displayMetrics.density
 
@@ -1226,11 +1248,33 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 val half = height * 0.32f * factor
                 canvas.drawLine(x, centerY - half, x, centerY + half, paint)
             }
-            paint.textSize = dp(if (englishUi) 11 else 15)
-            paint.textAlign = Paint.Align.CENTER
-            paint.typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
-            canvas.drawText(if (englishUi) "Stroke" else "笔", segmentWidth * 1.5f, centerY - (paint.ascent() + paint.descent()) / 2f, paint)
-            canvas.drawText("EN", segmentWidth * 2.5f, centerY - (paint.ascent() + paint.descent()) / 2f, paint)
+            // Fixed-size icons (not text) so the label never changes footprint
+            // across UI-language switches, which previously shifted the whole
+            // toggle/logo header and read as the panel "jumping".
+            drawLabelIcon(canvas, strokeIcon(), segmentWidth * 1.5f, centerY, segmentWidth)
+            drawLabelIcon(canvas, enIcon(), segmentWidth * 2.5f, centerY, segmentWidth)
+        }
+
+        private fun drawLabelIcon(canvas: Canvas, bitmap: android.graphics.Bitmap, centerX: Float, centerY: Float, segmentWidth: Float) {
+            val targetHeight = dp(20)
+            val maxWidth = segmentWidth - dp(6)
+            val scale = minOf(targetHeight / bitmap.height, maxWidth / bitmap.width)
+            val w = bitmap.width * scale
+            val h = bitmap.height * scale
+            val dst = android.graphics.RectF(centerX - w / 2f, centerY - h / 2f, centerX + w / 2f, centerY + h / 2f)
+            canvas.drawBitmap(bitmap, null, dst, iconPaint)
+        }
+
+        private fun strokeIcon(): android.graphics.Bitmap {
+            strokeBitmap?.let { return it }
+            return android.graphics.BitmapFactory.decodeResource(resources, R.drawable.toggle_stroke)
+                .also { strokeBitmap = it }
+        }
+
+        private fun enIcon(): android.graphics.Bitmap {
+            enBitmap?.let { return it }
+            return android.graphics.BitmapFactory.decodeResource(resources, R.drawable.toggle_en)
+                .also { enBitmap = it }
         }
 
         override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
@@ -1243,6 +1287,11 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 })
             }
             return true
+        }
+
+        companion object {
+            private var strokeBitmap: android.graphics.Bitmap? = null
+            private var enBitmap: android.graphics.Bitmap? = null
         }
     }
 
@@ -1281,10 +1330,12 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             if (top.isNotEmpty()) {
                 paint.color = Color.rgb(155, 155, 155)
                 paint.textSize = 20f * unit
-                canvas.drawText(top, x, 20f * unit, paint)
+                // Matches the "0" key's TextView-rendered top-gravity number, which
+                // sits lower than this baseline-based canvas position implied.
+                canvas.drawText(top, x, 32f * unit, paint)
                 paint.color = Color.rgb(232, 232, 232)
             }
-            paint.textSize = if (text in listOf("符号", "通配", "分词", "繁")) 28f * unit else 27f * unit
+            paint.textSize = if (text in listOf("符号", "通配", "分词", "繁")) 33f * unit else 27f * unit
             canvas.drawText(text, x, if (top.isEmpty()) 61f * unit else 76f * unit, paint)
         }
     }
@@ -1330,7 +1381,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                     canvas.drawLine(cx - 22f * u, cy + 15f * u, cx - 10f * u, cy + 25f * u, paint)
                 }
                 else -> {
-                    textPaint.textSize = if (actionCode == "清除") 27f * u else 25f * u
+                    textPaint.textSize = if (actionCode == "清除") 32f * u else 30f * u
                     canvas.drawText(actionCode, cx, cy - (textPaint.ascent() + textPaint.descent()) / 2f, textPaint)
                 }
             }
@@ -1364,7 +1415,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 else -> "5"
             }
             numberPaint.textSize = 20f * unit
-            canvas.drawText(topNumber, centerX, 20f * unit, numberPaint)
+            // Matches the "0" key's TextView-rendered top-gravity number, which
+            // sits lower than this baseline-based canvas position implied.
+            canvas.drawText(topNumber, centerX, 32f * unit, numberPaint)
 
             strokePaint.strokeWidth = 3.2f * unit
             val stroke = Path()
@@ -1451,12 +1504,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             strokeJoin = Paint.Join.ROUND
             style = Paint.Style.FILL
         }
-        private val cherryPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(196, 0, 58)
-            textAlign = Paint.Align.CENTER
-            typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
-        }
-
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             // Keep the same proportions as VoiceButton, but leave room for the small 0 label.
@@ -1499,8 +1546,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 microphonePaint,
             )
             microphonePaint.style = Paint.Style.FILL
-            cherryPaint.textSize = 12f * unit
-            canvas.drawText("CHERRY◆", centerX, height - 18f * unit, cherryPaint)
         }
     }
 
