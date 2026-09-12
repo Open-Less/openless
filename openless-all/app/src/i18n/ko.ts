@@ -1299,6 +1299,12 @@ export const ko: typeof zhCN = {
       volcengineAccessKeyLabel: 'Access Token',
       volcengineApiKeyLabel: 'API Key',
       volcengineResourceIdLabel: 'Resource ID',
+      volcengineServiceLabel: '서비스',
+      volcengineServiceStandard: '일반 서비스',
+      volcengineAgentPlanNote:
+        'Doubao 스트리밍 ASR용 Agent Plan 전용 API 키를 사용하세요. 기본 Resource ID: volc.seedasr.sauc.duration. 일반 서비스와 키가 다르므로 별도 채널을 사용하세요.',
+      volcengineServiceInvalid:
+        '잘못된 서비스 설정입니다. 일반 서비스 또는 Agent Plan을 다시 선택하세요.',
       volcengineAuthModeLabel: '인증 모드',
       volcengineAuthModeAppIdToken: '레거시 앱 (APP ID + Access Token)',
       volcengineAuthModeApiKey: '새 콘솔 API Key',

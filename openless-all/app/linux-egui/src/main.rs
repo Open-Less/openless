@@ -77,6 +77,7 @@ mod linux_app {
         name: String,
         endpoint: String,
         model: String,
+        volcengine_service: String,
         auth_mode: String,
         resource_id: String,
         app_id: String,
@@ -2230,6 +2231,19 @@ mod linux_app {
             .await?
             .or_else(|| descriptor.default_model.clone())
             .unwrap_or_default();
+        let volcengine_service =
+            if descriptor.auth_requirement == openless_core::AuthRequirement::Volcengine {
+                read_provider_value(
+                    &backend,
+                    kind,
+                    &channel.id,
+                    openless_core::credentials::VOLCENGINE_SERVICE_ACCOUNT,
+                )
+                .await?
+                .unwrap_or_else(|| "standard".to_string())
+            } else {
+                String::new()
+            };
         let (auth_mode, resource_id) =
             if descriptor.auth_requirement == openless_core::AuthRequirement::Volcengine {
                 (
@@ -2273,6 +2287,7 @@ mod linux_app {
             descriptor,
             endpoint,
             model,
+            volcengine_service,
             auth_mode,
             resource_id,
             app_id,
@@ -2300,21 +2315,53 @@ mod linux_app {
                 ui.label("此 Provider 使用 OAuth；Linux egui 不读取或显示 OAuth token。");
             }
             openless_core::AuthRequirement::Volcengine => {
-                egui::ComboBox::from_id_salt("volcengine-auth-mode")
-                    .selected_text(&editor.auth_mode)
+                let previous_api_key =
+                    editor.volcengine_service == "agent_plan" || editor.auth_mode == "api_key";
+                egui::ComboBox::from_id_salt("volcengine-service")
+                    .selected_text(if editor.volcengine_service == "agent_plan" {
+                        "Agent Plan"
+                    } else {
+                        "普通服务"
+                    })
                     .show_ui(ui, |ui| {
                         ui.selectable_value(
-                            &mut editor.auth_mode,
-                            "app_id_token".to_string(),
-                            "APP ID + Access Token",
+                            &mut editor.volcengine_service,
+                            "standard".to_string(),
+                            "普通服务",
                         );
                         ui.selectable_value(
-                            &mut editor.auth_mode,
-                            "api_key".to_string(),
-                            "API Key",
+                            &mut editor.volcengine_service,
+                            "agent_plan".to_string(),
+                            "Agent Plan",
                         );
                     });
-                if editor.auth_mode == "api_key" {
+                if editor.volcengine_service != "agent_plan" {
+                    egui::ComboBox::from_id_salt("volcengine-auth-mode")
+                        .selected_text(&editor.auth_mode)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut editor.auth_mode,
+                                "app_id_token".to_string(),
+                                "APP ID + Access Token",
+                            );
+                            ui.selectable_value(
+                                &mut editor.auth_mode,
+                                "api_key".to_string(),
+                                "API Key",
+                            );
+                        });
+                }
+                let api_key =
+                    editor.volcengine_service == "agent_plan" || editor.auth_mode == "api_key";
+                if api_key != previous_api_key {
+                    // Input buffers change meaning; persisted credential slots remain untouched.
+                    editor.primary_secret.clear();
+                    editor.secondary_secret.clear();
+                }
+                if editor.volcengine_service == "agent_plan" {
+                    ui.label("使用 Agent Plan 专属 API Key；普通服务请使用单独渠道。");
+                }
+                if editor.volcengine_service == "agent_plan" || editor.auth_mode == "api_key" {
                     secret_edit(ui, "API Key", &mut editor.primary_secret);
                 } else {
                     secret_edit(ui, "APP ID", &mut editor.primary_secret);
@@ -2415,6 +2462,14 @@ mod linux_app {
                     &backend,
                     editor.kind,
                     channel_id,
+                    openless_core::credentials::VOLCENGINE_SERVICE_ACCOUNT,
+                    &editor.volcengine_service,
+                )
+                .await?;
+                write_or_remove_provider_value(
+                    &backend,
+                    editor.kind,
+                    channel_id,
                     openless_core::credentials::VOLCENGINE_AUTH_MODE_ACCOUNT,
                     &editor.auth_mode,
                 )
@@ -2435,7 +2490,7 @@ mod linux_app {
                     &editor.model,
                 )
                 .await?;
-                if editor.auth_mode == "api_key" {
+                if editor.volcengine_service == "agent_plan" || editor.auth_mode == "api_key" {
                     write_secret_if_entered(
                         &backend,
                         editor.kind,

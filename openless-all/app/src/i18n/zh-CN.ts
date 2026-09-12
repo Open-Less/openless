@@ -1258,6 +1258,11 @@ export const zhCN = {
       volcengineAccessKeyLabel: 'Access Token',
       volcengineApiKeyLabel: 'API Key',
       volcengineResourceIdLabel: 'Resource ID',
+      volcengineServiceLabel: '服务',
+      volcengineServiceStandard: '普通服务',
+      volcengineAgentPlanNote:
+        '使用 Agent Plan 专属 API Key；仅支持豆包流式 ASR。默认 Resource ID 为 volc.seedasr.sauc.duration。普通服务密钥与套餐密钥不同，建议分别创建渠道。',
+      volcengineServiceInvalid: '服务配置无效，请重新选择普通服务或 Agent Plan。',
       volcengineAuthModeLabel: '鉴权模式',
       volcengineAuthModeAppIdToken: '旧版应用（APP ID + Access Token）',
       volcengineAuthModeApiKey: '新版控制台 API Key',

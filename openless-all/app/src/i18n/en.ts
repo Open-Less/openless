@@ -1320,6 +1320,12 @@ export const en: typeof zhCN = {
       volcengineAccessKeyLabel: 'Access Token',
       volcengineApiKeyLabel: 'API Key',
       volcengineResourceIdLabel: 'Resource ID',
+      volcengineServiceLabel: 'Service',
+      volcengineServiceStandard: 'Standard service',
+      volcengineAgentPlanNote:
+        'Use a dedicated Agent Plan API key for Doubao streaming ASR. Default Resource ID: volc.seedasr.sauc.duration. Standard and plan keys differ; use separate channels for each service.',
+      volcengineServiceInvalid:
+        'Invalid service configuration. Select Standard service or Agent Plan again.',
       volcengineAuthModeLabel: 'Auth mode',
       volcengineAuthModeAppIdToken: 'Legacy app (APP ID + Access Token)',
       volcengineAuthModeApiKey: 'API Key (new console)',

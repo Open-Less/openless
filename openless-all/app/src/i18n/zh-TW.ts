@@ -1260,6 +1260,11 @@ export const zhTW: typeof zhCN = {
       volcengineAccessKeyLabel: 'Access Token',
       volcengineApiKeyLabel: 'API Key',
       volcengineResourceIdLabel: 'Resource ID',
+      volcengineServiceLabel: '服務',
+      volcengineServiceStandard: '一般服務',
+      volcengineAgentPlanNote:
+        '使用 Agent Plan 專屬 API Key；僅支援豆包串流 ASR。預設 Resource ID 為 volc.seedasr.sauc.duration。一般服務與套餐密鑰不同，建議分別建立渠道。',
+      volcengineServiceInvalid: '服務設定無效，請重新選擇一般服務或 Agent Plan。',
       volcengineAuthModeLabel: '鑑權模式',
       volcengineAuthModeAppIdToken: '舊版應用（APP ID + Access Token）',
       volcengineAuthModeApiKey: '新版控制台 API Key',

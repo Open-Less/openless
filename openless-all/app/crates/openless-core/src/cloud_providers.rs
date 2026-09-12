@@ -559,6 +559,17 @@ async fn build_cloud_transcription_session(
             )
         }
         ActiveAsrProviderKind::Volcengine => {
+            let service = read_channel_credential(
+                credentials,
+                CredentialNamespace::Asr,
+                channel_id,
+                crate::credentials::VOLCENGINE_SERVICE_ACCOUNT,
+            )
+            .await?;
+            let service = crate::asr::volcengine::VolcengineService::parse(
+                service.as_deref().unwrap_or_default(),
+            )
+            .map_err(|message| BackendError::new(BackendErrorCode::InvalidArgument, message))?;
             let auth_mode = read_channel_credential(
                 credentials,
                 CredentialNamespace::Asr,
@@ -568,6 +579,7 @@ async fn build_cloud_transcription_session(
             .await?
             .map(|value| VolcengineAuthMode::parse(&value))
             .unwrap_or(VolcengineAuthMode::AppIdToken);
+            let auth_mode = service.auth_mode(auth_mode);
             let app_id = read_channel_credential(
                 credentials,
                 CredentialNamespace::Asr,
@@ -599,6 +611,7 @@ async fn build_cloud_transcription_session(
             )
             .await?;
             let credentials = VolcengineCredentials {
+                service,
                 auth_mode,
                 app_id,
                 access_token,

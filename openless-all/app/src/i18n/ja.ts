@@ -1307,6 +1307,12 @@ export const ja: typeof zhCN = {
       volcengineAccessKeyLabel: 'Access Token',
       volcengineApiKeyLabel: 'API Key',
       volcengineResourceIdLabel: 'Resource ID',
+      volcengineServiceLabel: 'サービス',
+      volcengineServiceStandard: '通常サービス',
+      volcengineAgentPlanNote:
+        '豆包ストリーミング ASR 用の Agent Plan 専用 API キーを使用します。既定の Resource ID: volc.seedasr.sauc.duration。通常サービスとはキーが異なるため、別のチャネルを作成してください。',
+      volcengineServiceInvalid:
+        'サービス設定が無効です。通常サービスまたは Agent Plan を選択してください。',
       volcengineAuthModeLabel: '認証モード',
       volcengineAuthModeAppIdToken: 'レガシーアプリ（APP ID + Access Token）',
       volcengineAuthModeApiKey: '新版コンソール API Key',

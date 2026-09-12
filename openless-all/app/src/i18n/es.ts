@@ -1345,6 +1345,12 @@ export const es: typeof zhCN = {
       volcengineAccessKeyLabel: 'Access Token',
       volcengineApiKeyLabel: 'Clave API',
       volcengineResourceIdLabel: 'Resource ID',
+      volcengineServiceLabel: 'Servicio',
+      volcengineServiceStandard: 'Servicio estándar',
+      volcengineAgentPlanNote:
+        'Usa una clave API exclusiva de Agent Plan para ASR en streaming de Doubao. Resource ID predeterminado: volc.seedasr.sauc.duration. Las claves son distintas; usa canales separados para cada servicio.',
+      volcengineServiceInvalid:
+        'Configuración de servicio no válida. Selecciona de nuevo el servicio estándar o Agent Plan.',
       volcengineAuthModeLabel: 'Modo de autenticación',
       volcengineAuthModeAppIdToken: 'Aplicación anterior (APP ID + Access Token)',
       volcengineAuthModeApiKey: 'Clave API (consola nueva)',

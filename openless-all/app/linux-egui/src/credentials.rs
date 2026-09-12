@@ -349,6 +349,29 @@ impl CredentialStore for LinuxCredentialStore {
                 let _ = auth_mode_key;
                 None
             };
+            let service_key = CredentialKey::new(
+                CredentialNamespace::Asr,
+                Some(volcengine_provider.to_string()),
+                openless_core::credentials::VOLCENGINE_SERVICE_ACCOUNT,
+            )?;
+            #[cfg(target_os = "linux")]
+            let volcengine_service = if has(
+                CredentialNamespace::Asr,
+                volcengine_provider,
+                openless_core::credentials::VOLCENGINE_SERVICE_ACCOUNT,
+            ) {
+                tokio::task::spawn_blocking(move || read_secret(&service_key))
+                    .await
+                    .map_err(join_error)??
+                    .map(SecretValue::into_exposed)
+            } else {
+                None
+            };
+            #[cfg(not(target_os = "linux"))]
+            let volcengine_service = {
+                let _ = service_key;
+                None
+            };
             let configuration = openless_core::provider_rules::CredentialConfiguration {
                 asr_api_key: has(
                     CredentialNamespace::Asr,
@@ -365,6 +388,7 @@ impl CredentialStore for LinuxCredentialStore {
                     &active_asr_provider,
                     ASR_MODEL_ACCOUNT,
                 ),
+                volcengine_service,
                 volcengine_auth_mode,
                 volcengine_app_key: has(
                     CredentialNamespace::Asr,

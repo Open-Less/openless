@@ -535,6 +535,7 @@ fn credential_configuration(
         asr_api_key: configured(&snap.asr_api_key),
         asr_endpoint: configured(&snap.asr_endpoint),
         asr_model: configured(&snap.asr_model),
+        volcengine_service: snap.volcengine_service.clone(),
         volcengine_auth_mode: snap.volcengine_auth_mode.clone(),
         volcengine_app_key: configured(&snap.volcengine_app_key),
         volcengine_access_key: configured(&snap.volcengine_access_key),
@@ -801,6 +802,7 @@ fn account_provider_kind(account: CredentialAccount) -> CredentialProviderKind {
         CredentialAccount::VolcengineAppKey
         | CredentialAccount::VolcengineAccessKey
         | CredentialAccount::VolcengineResourceId
+        | CredentialAccount::VolcengineService
         | CredentialAccount::VolcengineAuthMode
         | CredentialAccount::VolcengineApiKey
         | CredentialAccount::AsrApiKey
@@ -832,6 +834,7 @@ fn parse_account(s: &str) -> Result<CredentialAccount, String> {
         "volcengine.app_key" => Ok(CredentialAccount::VolcengineAppKey),
         "volcengine.access_key" => Ok(CredentialAccount::VolcengineAccessKey),
         "volcengine.resource_id" => Ok(CredentialAccount::VolcengineResourceId),
+        "volcengine.service" => Ok(CredentialAccount::VolcengineService),
         "volcengine.auth_mode" => Ok(CredentialAccount::VolcengineAuthMode),
         "volcengine.api_key" => Ok(CredentialAccount::VolcengineApiKey),
         "ark.api_key" => Ok(CredentialAccount::ArkApiKey),

@@ -1362,6 +1362,12 @@ export const fr: typeof zhCN = {
       volcengineAccessKeyLabel: 'Access Token',
       volcengineApiKeyLabel: 'Clé API',
       volcengineResourceIdLabel: 'Resource ID',
+      volcengineServiceLabel: 'Service',
+      volcengineServiceStandard: 'Service standard',
+      volcengineAgentPlanNote:
+        'Utilisez une clé API dédiée à Agent Plan pour la reconnaissance vocale en streaming Doubao. Resource ID par défaut : volc.seedasr.sauc.duration. Les clés sont différentes ; utilisez des canaux séparés.',
+      volcengineServiceInvalid:
+        'Configuration du service invalide. Sélectionnez à nouveau le service standard ou Agent Plan.',
       volcengineAuthModeLabel: 'Mode d’authentification',
       volcengineAuthModeAppIdToken: 'Ancienne application (APP ID + Access Token)',
       volcengineAuthModeApiKey: 'Clé API (nouvelle console)',
