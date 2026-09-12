@@ -525,7 +525,7 @@ pub fn api_key_required(
                 || descriptor
                     .endpoint_presets
                     .iter()
-                    .any(|preset| equivalent_endpoint(endpoint, &preset.endpoint))
+                    .any(|preset| matches_endpoint_preset(endpoint, &preset.endpoint))
         }
         _ => true,
     }
@@ -1306,6 +1306,15 @@ mod tests {
 
     #[test]
     fn ark_official_endpoints_require_keys_but_custom_endpoints_do_not() {
+        for endpoint in [
+            "https://ark.cn-beijing.volces.com/api/plan/messages",
+            "https://ark.cn-beijing.volces.com/api/coding/messages",
+        ] {
+            assert!(
+                api_key_required(ProviderKind::Llm, "ark", Some(endpoint)),
+                "{endpoint}"
+            );
+        }
         for endpoint in [
             "https://ark.cn-beijing.volces.com/api/v3",
             "https://ark.cn-beijing.volces.com/api/plan/v3",
