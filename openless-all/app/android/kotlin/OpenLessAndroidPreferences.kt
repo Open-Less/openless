@@ -66,6 +66,12 @@ object OpenLessAndroidPreferences {
             ?: "simplified"
     }
 
+    fun strokeAssociationEnabled(context: Context): Boolean =
+        readPreferenceBoolean(context, "strokeAssociationEnabled") ?: true
+
+    fun strokeUsageEnabled(context: Context): Boolean =
+        readPreferenceBoolean(context, "strokeUsageEnabled") ?: true
+
     private fun readPreferenceString(context: Context, key: String): String? {
         for (file in preferenceFiles(context).distinctBy { it.absolutePath }) {
             if (!file.isFile) {
@@ -100,6 +106,19 @@ object OpenLessAndroidPreferences {
                 }
             if (value != null) {
                 return value
+            }
+        }
+        return null
+    }
+
+    private fun readPreferenceBoolean(context: Context, key: String): Boolean? {
+        for (file in preferenceFiles(context).distinctBy { it.absolutePath }) {
+            if (!file.isFile) continue
+            try {
+                val json = JSONObject(file.readText())
+                if (json.has(key)) return json.optBoolean(key)
+            } catch (error: Throwable) {
+                Log.w(TAG, "read ${file.absolutePath} failed", error)
             }
         }
         return null

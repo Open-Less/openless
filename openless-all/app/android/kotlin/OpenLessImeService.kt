@@ -577,13 +577,19 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         val connection = currentInputConnection ?: return
         val contextBeforeCommit = confirmedText.takeLast(MAX_ASSOCIATION_CONTEXT)
         if (!connection.commitText(outputScript(candidate), 1)) return
-        userFrequency.record(currentInputEditorInfo?.packageName.orEmpty(), contextBeforeCommit, candidate)
+        if (OpenLessAndroidPreferences.strokeUsageEnabled(this)) {
+            userFrequency.record(currentInputEditorInfo?.packageName.orEmpty(), contextBeforeCommit, candidate)
+        }
         confirmedText = (confirmedText + candidate).takeLast(MAX_ASSOCIATION_CONTEXT)
         clearStrokes()
         refreshAssociations()
     }
 
     private fun refreshAssociations() {
+        if (!OpenLessAndroidPreferences.strokeAssociationEnabled(this)) {
+            strokeCandidates?.removeAllViews()
+            return
+        }
         val context = confirmedText.takeLast(MAX_ASSOCIATION_CONTEXT)
         val query = ++phraseQueryEpoch
         if (context.isEmpty()) return
@@ -603,7 +609,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         val suffix = displayText.removePrefix(matchedContext)
         val connection = currentInputConnection ?: return
         if (suffix.isNotEmpty() && !connection.commitText(outputScript(suffix), 1)) return
-        userFrequency.record(currentInputEditorInfo?.packageName.orEmpty(), matchedContext, displayText)
+        if (OpenLessAndroidPreferences.strokeUsageEnabled(this)) {
+            userFrequency.record(currentInputEditorInfo?.packageName.orEmpty(), matchedContext, displayText)
+        }
         confirmedText = (confirmedText + suffix).takeLast(MAX_ASSOCIATION_CONTEXT)
         clearStrokes()
         refreshAssociations()
