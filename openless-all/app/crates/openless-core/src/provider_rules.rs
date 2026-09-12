@@ -402,7 +402,7 @@ pub struct CredentialConfiguration {
     pub tencent_cloud_secret_key: bool,
     pub llm_api_key: bool,
     pub llm_endpoint: bool,
-    pub llm_endpoint_matches_default: bool,
+    pub llm_api_key_required: bool,
     pub llm_model: bool,
     pub codex_oauth: bool,
     pub omni_api_key: bool,
@@ -487,8 +487,7 @@ pub fn auth_requirement_satisfied(
         AuthRequirement::ApiKeyUnlessCustomEndpoint => {
             endpoint
                 && model
-                && (api_key
-                    || (configuration.llm_endpoint && !configuration.llm_endpoint_matches_default))
+                && (api_key || (configuration.llm_endpoint && !configuration.llm_api_key_required))
         }
         AuthRequirement::Volcengine => volcengine_configured(configuration),
         AuthRequirement::Xfyun => configuration.xfyun_app_id && configuration.xfyun_api_key,
@@ -523,6 +522,10 @@ pub fn api_key_required(
                 .default_endpoint
                 .as_deref()
                 .is_some_and(|default| equivalent_endpoint(endpoint, default))
+                || descriptor
+                    .endpoint_presets
+                    .iter()
+                    .any(|preset| equivalent_endpoint(endpoint, &preset.endpoint))
         }
         _ => true,
     }
@@ -1134,7 +1137,7 @@ mod tests {
         let mut configuration = CredentialConfiguration {
             asr_api_key: true,
             llm_endpoint: true,
-            llm_endpoint_matches_default: true,
+            llm_api_key_required: true,
             llm_model: true,
             omni_api_key: true,
             omni_model: true,
@@ -1145,7 +1148,7 @@ mod tests {
         configuration.llm_api_key = true;
         assert!(llm_configured("openrouterFree", &configuration));
         configuration.llm_api_key = false;
-        configuration.llm_endpoint_matches_default = false;
+        configuration.llm_api_key_required = false;
         assert!(llm_configured("openrouterFree", &configuration));
         assert!(omni_configured("gemini", &configuration));
 
@@ -1201,7 +1204,7 @@ mod tests {
         ));
         let mut configuration = CredentialConfiguration {
             llm_endpoint: true,
-            llm_endpoint_matches_default: true,
+            llm_api_key_required: true,
             llm_model: true,
             ..CredentialConfiguration::default()
         };
@@ -1298,6 +1301,45 @@ mod tests {
                     .validation_probe,
                 ValidationProbe::Unsupported
             );
+        }
+    }
+
+    #[test]
+    fn ark_official_endpoints_require_keys_but_custom_endpoints_do_not() {
+        for endpoint in [
+            "https://ark.cn-beijing.volces.com/api/v3",
+            "https://ark.cn-beijing.volces.com/api/plan/v3",
+            "https://ark.cn-beijing.volces.com/api/coding/v3",
+            "http://127.0.0.1:8080/v1",
+        ] {
+            let required = !endpoint.starts_with("http://127.0.0.1");
+            for suffix in ["", "/", "/chat/completions/", "/responses", "/messages/"] {
+                let endpoint = format!("{endpoint}{suffix}");
+                assert_eq!(
+                    api_key_required(ProviderKind::Llm, "ark", Some(&endpoint)),
+                    required,
+                    "{endpoint}"
+                );
+                for key in [None, Some(""), Some(" \t\n"), Some("fixture-key")] {
+                    let has_key = key.is_some_and(|value: &str| !value.trim().is_empty());
+                    let configuration = CredentialConfiguration {
+                        llm_api_key: has_key,
+                        llm_endpoint: true,
+                        llm_api_key_required: api_key_required(
+                            ProviderKind::Llm,
+                            "ark",
+                            Some(&endpoint),
+                        ),
+                        llm_model: true,
+                        ..CredentialConfiguration::default()
+                    };
+                    assert_eq!(
+                        llm_configured("ark", &configuration),
+                        has_key || !required,
+                        "{endpoint}"
+                    );
+                }
+            }
         }
     }
 

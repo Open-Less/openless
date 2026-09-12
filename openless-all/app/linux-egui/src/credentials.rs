@@ -443,12 +443,11 @@ impl CredentialStore for LinuxCredentialStore {
                 llm_endpoint: llm_endpoint
                     .as_deref()
                     .is_some_and(|value| !value.trim().is_empty()),
-                llm_endpoint_matches_default: llm_endpoint.as_deref().is_some_and(|endpoint| {
-                    openless_core::provider_rules::default_llm_endpoint(&llm_provider_type)
-                        .is_some_and(|default| {
-                            openless_core::provider_rules::equivalent_endpoint(endpoint, default)
-                        })
-                }),
+                llm_api_key_required: openless_core::provider_rules::api_key_required(
+                    openless_core::ProviderKind::Llm,
+                    &llm_provider_type,
+                    llm_endpoint.as_deref(),
+                ),
                 llm_model: has(
                     CredentialNamespace::Llm,
                     &active_llm_provider,

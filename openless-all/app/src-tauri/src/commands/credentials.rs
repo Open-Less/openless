@@ -548,11 +548,11 @@ fn credential_configuration(
         tencent_cloud_secret_key: configured(&snap.tencent_cloud_secret_key),
         llm_api_key: configured(&snap.ark_api_key),
         llm_endpoint: llm_endpoint.is_some(),
-        llm_endpoint_matches_default: llm_endpoint.is_some_and(|endpoint| {
-            openless_core::provider_rules::default_llm_endpoint(llm_provider).is_some_and(
-                |default| openless_core::provider_rules::equivalent_endpoint(endpoint, default),
-            )
-        }),
+        llm_api_key_required: openless_core::provider_rules::api_key_required(
+            openless_core::ProviderKind::Llm,
+            llm_provider,
+            llm_endpoint,
+        ),
         llm_model: configured(&snap.ark_model_id),
         codex_oauth,
         omni_api_key: configured(&snap.omni_api_key),

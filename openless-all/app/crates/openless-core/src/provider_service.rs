@@ -995,6 +995,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ark_endpoint_key_validation_runs_before_network_probes() {
+        for endpoint in [
+            "https://ark.cn-beijing.volces.com/api/v3",
+            "https://ark.cn-beijing.volces.com/api/plan/v3",
+            "https://ark.cn-beijing.volces.com/api/coding/v3",
+            "http://127.0.0.1:8080/v1",
+        ] {
+            for key in [None, Some(""), Some(" \t\n"), Some("fixture-key")] {
+                let credentials = Arc::new(InMemoryCredentialStore::default());
+                let mut values = vec![
+                    (LLM_ENDPOINT_ACCOUNT, endpoint),
+                    (LLM_MODEL_ACCOUNT, "fixture-model"),
+                ];
+                if let Some(key) = key {
+                    values.push((LLM_API_KEY_ACCOUNT, key));
+                }
+                let channel =
+                    create_channel_with_values(&credentials, ChannelKind::Llm, "ark", &values)
+                        .await;
+                let service = ProviderService::new(credentials, Arc::new(crate::TokioTaskSpawner));
+                let resolved = service
+                    .resolve(ProviderRequest {
+                        kind: ProviderKind::Llm,
+                        channel_id: Some(channel),
+                        thinking_enabled: false,
+                    })
+                    .await
+                    .unwrap();
+                let result = validate_configuration(&resolved);
+                if !endpoint.starts_with("http://127.0.0.1")
+                    && key.is_none_or(|value| value.trim().is_empty())
+                {
+                    let error = result.unwrap_err();
+                    assert_eq!(error.code, BackendErrorCode::Provider);
+                    assert_eq!(error.message, "LLM API key is not configured");
+                } else {
+                    result.unwrap();
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn validation_and_model_lists_use_channel_protocol_and_thinking() {
         use crate::llm_protocol::*;
         for (format, preset, sse, path) in [
