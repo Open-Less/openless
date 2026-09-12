@@ -369,7 +369,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }
         val strokeRow = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
         strokePreview = TextView(this).apply {
-            text = ui("—", "—")
+            text = ""
             textSize = 16f
             setTextColor(Color.rgb(210, 210, 210))
             gravity = android.view.Gravity.CENTER_VERTICAL
@@ -458,7 +458,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // Rebuilds caused by switching back from the numeric panel must restore
         // both the visible code and its candidates from the retained buffer.
         if (strokeCode.isNotEmpty()) {
-            strokePreview?.text = ui("笔画：$strokeCode", "Strokes: $strokeCode")
+            strokePreview?.text = strokeCode
             refreshStrokeCandidates(strokeCode)
         }
         return root
@@ -531,7 +531,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             strokeCandidates?.removeAllViews()
         }
         strokeCode += stroke
-        strokePreview?.text = ui("笔画：$strokeCode", "Strokes: $strokeCode")
+        strokePreview?.text = strokeCode
         refreshStrokeCandidates(strokeCode)
     }
 
@@ -541,7 +541,11 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             if (query != strokeQueryEpoch || inputMode != InputMode.STROKE) return@searchAsync
             strokeCandidates?.removeAllViews()
             result.forEach { candidate ->
-                strokeCandidates?.addView(keyboardKey(outputScript(candidate), 1f) { commitStrokeCandidate(candidate) }.apply { textSize = 18f }, LinearLayout.LayoutParams(dp(36), dp(30)))
+                strokeCandidates?.addView(keyboardKey(outputScript(candidate), 1f) { commitStrokeCandidate(candidate) }.apply {
+                    textSize = 18f
+                    setSingleLine(true)
+                    maxLines = 1
+                }, LinearLayout.LayoutParams(dp(44), dp(30)))
             }
         }
     }
@@ -550,7 +554,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         if (strokeCode.isNotEmpty()) {
             strokeCode = strokeCode.dropLast(1)
             strokeQueryEpoch++
-            strokePreview?.text = ui("笔画：$strokeCode", "Strokes: $strokeCode")
+            strokePreview?.text = strokeCode
             strokeCandidates?.removeAllViews()
             if (strokeCode.isNotEmpty()) appendStroke("")
         } else {
@@ -568,7 +572,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private fun clearStrokes() {
         strokeCode = ""
         strokeQueryEpoch++
-        strokePreview?.text = ui("笔画：请选择", "Strokes: choose strokes")
+        strokePreview?.text = ""
         strokeCandidates?.removeAllViews()
     }
 
@@ -599,7 +603,13 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             strokeCandidates?.removeAllViews()
             result.forEach { candidate ->
                 val matchedPrefix = candidate.matchedPrefix.ifEmpty { context }
-                strokeCandidates?.addView(keyboardKey(outputScript(candidate.text), 1f) { commitAssociation(candidate.text, matchedPrefix) }.apply { textSize = 18f }, LinearLayout.LayoutParams(dp(68), dp(30)))
+                val displayText = outputScript(candidate.text)
+                val candidateWidth = dp((displayText.codePointCount(0, displayText.length) * 26 + 20).coerceAtLeast(52))
+                strokeCandidates?.addView(keyboardKey(displayText, 1f) { commitAssociation(candidate.text, matchedPrefix) }.apply {
+                    textSize = 18f
+                    setSingleLine(true)
+                    maxLines = 1
+                }, LinearLayout.LayoutParams(candidateWidth, dp(30)))
             }
         }
     }
