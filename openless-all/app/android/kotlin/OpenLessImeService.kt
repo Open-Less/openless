@@ -420,6 +420,12 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }
         body.addView(actions, LinearLayout.LayoutParams(dp(58), ViewGroup.LayoutParams.MATCH_PARENT))
         root.addView(body, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        // Rebuilds caused by switching back from the numeric panel must restore
+        // both the visible code and its candidates from the retained buffer.
+        if (strokeCode.isNotEmpty()) {
+            strokePreview?.text = ui("笔画：$strokeCode", "Strokes: $strokeCode")
+            refreshStrokeCandidates(strokeCode)
+        }
         return root
     }
 
@@ -491,8 +497,12 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }
         strokeCode += stroke
         strokePreview?.text = ui("笔画：$strokeCode", "Strokes: $strokeCode")
+        refreshStrokeCandidates(strokeCode)
+    }
+
+    private fun refreshStrokeCandidates(code: String) {
         val query = ++strokeQueryEpoch
-        strokeRepository.searchAsync(strokeCode) { result ->
+        strokeRepository.searchAsync(code) { result ->
             if (query != strokeQueryEpoch || inputMode != InputMode.STROKE) return@searchAsync
             strokeCandidates?.removeAllViews()
             result.forEach { candidate ->
