@@ -1419,6 +1419,9 @@ export const en: typeof zhCN = {
         'Save the fields above, then validate the selected model or fetch models. Manual model input remains available if fetching fails.',
       validate: 'Validate',
       validating: 'Validating…',
+      planModelsHint:
+        'Open the plan console, copy a supported text model ID, and enter it in the model field.',
+      viewModels: 'View supported models',
       fetchModels: 'Fetch models',
       loadingModels: 'Fetching models…',
       modelMissing: 'No model is configured. Please enter a model ID first.',

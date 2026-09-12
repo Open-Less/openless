@@ -1440,6 +1440,9 @@ export const es: typeof zhCN = {
         'Guarda los campos de arriba y después comprueba el modelo o consulta los modelos disponibles. Si la consulta falla, puedes escribir el modelo manualmente.',
       validate: 'Comprobar',
       validating: 'Comprobando…',
+      planModelsHint:
+        'Abra la consola del plan, copie un ID de modelo de texto compatible e introdúzcalo en el campo del modelo.',
+      viewModels: 'Ver modelos compatibles',
       fetchModels: 'Obtener modelos',
       loadingModels: 'Obteniendo modelos…',
       modelMissing: 'No hay ningún modelo configurado. Introduce primero su ID.',

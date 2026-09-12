@@ -1404,6 +1404,9 @@ export const ja: typeof zhCN = {
         '上記の設定を保存してから、現在のモデル接続性を検証またはモデル一覧を取得します。失敗してもモデル ID を手動入力できます。',
       validate: '検証',
       validating: '検証中…',
+      planModelsHint:
+        'プランのコンソールで対応するテキストモデル ID をコピーし、モデル欄に入力してください。',
+      viewModels: '対応モデルを確認',
       fetchModels: 'モデル一覧',
       loadingModels: 'モデル取得中…',
       modelMissing: 'モデルが未設定です。先にモデル ID を入力してください。',

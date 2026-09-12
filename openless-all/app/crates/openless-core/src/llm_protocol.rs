@@ -52,14 +52,26 @@ impl LlmRequestFormat {
     }
 
     pub fn url(self, endpoint: &str) -> Result<String, LLMError> {
-        endpoint_url(
-            endpoint,
-            match self {
-                Self::ChatCompletions => "/chat/completions",
-                Self::Responses => "/responses",
-                Self::Messages => "/messages",
-            },
-        )
+        let suffix = match self {
+            Self::ChatCompletions => "/chat/completions",
+            Self::Responses => "/responses",
+            Self::Messages => "/messages",
+        };
+        let endpoint = endpoint_url(endpoint, suffix)?;
+        let mut url = url::Url::parse(&endpoint)
+            .map_err(|_| LLMError::ParseError("invalid LLM endpoint".into()))?;
+        // 火山套餐的 Messages 使用 /api/{plan}，OpenAI 兼容格式使用 /v3。
+        // 只适配官方套餐路径，自定义网关及普通方舟保持原样。
+        if url.scheme() == "https" && url.host_str() == Some("ark.cn-beijing.volces.com") {
+            let prefix = url.path().strip_suffix(suffix).unwrap_or_default();
+            let plan = prefix.strip_suffix("/v3").unwrap_or(prefix);
+            if matches!(plan, "/api/plan" | "/api/coding") {
+                let version = if self == Self::Messages { "" } else { "/v3" };
+                let path = format!("{plan}{version}{suffix}");
+                url.set_path(&path);
+            }
+        }
+        Ok(url.to_string())
     }
 
     pub fn headers(self, api_key: &str) -> Vec<(String, String)> {
@@ -595,6 +607,22 @@ mod tests {
                     endpoint_url(&base, "/models").unwrap(),
                     "https://example.com/gateway/v1/models?tenant=1#local"
                 );
+            }
+            // 套餐的 Messages 与 OpenAI 兼容地址使用不同的版本前缀。
+            for plan in ["plan", "coding"] {
+                for base in [format!("/api/{plan}"), format!("/api/{plan}/v3")] {
+                    let prefix = if format == LlmRequestFormat::Messages {
+                        format!("/api/{plan}")
+                    } else {
+                        format!("/api/{plan}/v3")
+                    };
+                    assert_eq!(
+                        format
+                            .url(&format!("https://ark.cn-beijing.volces.com{base}"))
+                            .unwrap(),
+                        format!("https://ark.cn-beijing.volces.com{prefix}/{suffix}")
+                    );
+                }
             }
             let headers = format.headers("test-key");
             if format == LlmRequestFormat::Messages {

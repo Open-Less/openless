@@ -1467,7 +1467,21 @@ mod linux_app {
                                 });
                             }
                         }
-                        if ui.button("列出模型").clicked() {
+                        if let Some(url) = editor
+                            .descriptor
+                            .endpoint_presets
+                            .iter()
+                            .find(|preset| {
+                                openless_core::provider_rules::matches_endpoint_preset(
+                                    &editor.endpoint,
+                                    &preset.endpoint,
+                                )
+                            })
+                            .and_then(|preset| preset.models_url.as_deref())
+                        {
+                            self.provider_models.clear();
+                            ui.hyperlink_to("查看支持的模型", url);
+                        } else if ui.button("列出模型").clicked() {
                             self.provider_models.clear();
                             self.request_provider_models(editor.kind, editor.channel.id.clone());
                         }
@@ -2394,9 +2408,54 @@ mod linux_app {
             }
             _ => {
                 secret_edit(ui, "API Key（留空表示不修改）", &mut editor.primary_secret);
+                let mut endpoint_read_only = false;
+                if editor.kind == openless_core::ChannelKind::Llm
+                    && editor.channel.provider_type == "ark"
+                {
+                    let presets = editor
+                        .descriptor
+                        .default_endpoint
+                        .as_deref()
+                        .map(|endpoint| ("火山方舟", endpoint))
+                        .into_iter()
+                        .chain(
+                            editor
+                                .descriptor
+                                .endpoint_presets
+                                .iter()
+                                .map(|preset| (preset.name.as_str(), preset.endpoint.as_str())),
+                        )
+                        .collect::<Vec<_>>();
+                    let selected = presets
+                        .iter()
+                        .find(|(_, endpoint)| {
+                            openless_core::provider_rules::matches_endpoint_preset(
+                                &editor.endpoint,
+                                endpoint,
+                            )
+                        })
+                        .map(|(label, _)| *label);
+                    endpoint_read_only = selected.is_some();
+                    egui::ComboBox::from_id_salt("ark-service")
+                        .selected_text(selected.unwrap_or("自定义"))
+                        .show_ui(ui, |ui| {
+                            for (label, endpoint) in presets {
+                                if ui
+                                    .selectable_label(selected == Some(label), label)
+                                    .clicked()
+                                {
+                                    editor.endpoint = endpoint.to_string();
+                                    endpoint_read_only = true;
+                                }
+                            }
+                        });
+                }
                 ui.horizontal(|ui| {
                     ui.label("Endpoint");
-                    ui.text_edit_singleline(&mut editor.endpoint);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut editor.endpoint)
+                            .interactive(!endpoint_read_only),
+                    );
                 });
                 ui.horizontal(|ui| {
                     ui.label("Model");

@@ -1460,6 +1460,9 @@ export const fr: typeof zhCN = {
         'Enregistrez les champs ci-dessus, puis vérifiez le modèle choisi ou récupérez les modèles disponibles. Vous pouvez saisir un modèle manuellement si la récupération échoue.',
       validate: 'Vérifier',
       validating: 'Vérification…',
+      planModelsHint:
+        'Ouvrez la console du forfait, copiez un ID de modèle de texte pris en charge et collez-le dans le champ du modèle.',
+      viewModels: 'Voir les modèles pris en charge',
       fetchModels: 'Récupérer les modèles',
       loadingModels: 'Récupération des modèles…',
       modelMissing: 'Aucun modèle configuré. Saisissez d’abord un ID de modèle.',

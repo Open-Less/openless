@@ -1396,6 +1396,8 @@ export const ko: typeof zhCN = {
         '위 설정을 먼저 저장한 후 현재 모델 연결성을 검증하거나 모델을 가져오세요. 실패해도 모델 ID 를 수동 입력할 수 있습니다.',
       validate: '검증',
       validating: '검증 중…',
+      planModelsHint: '요금제 콘솔에서 지원되는 텍스트 모델 ID를 복사해 모델 필드에 입력하세요.',
+      viewModels: '지원 모델 보기',
       fetchModels: '모델 가져오기',
       loadingModels: '모델 가져오는 중…',
       modelMissing: '모델이 설정되지 않았습니다. 먼저 모델 ID 를 입력해 주세요.',

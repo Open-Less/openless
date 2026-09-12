@@ -1348,6 +1348,8 @@ export const zhTW: typeof zhCN = {
       toolsDesc: '先保存上方配置，再驗證當前模型連通性或拉取模型；失敗時仍可手動填寫模型 ID。',
       validate: '驗證',
       validating: '驗證中…',
+      planModelsHint: '開啟方案控制台，複製支援的文字模型 ID 並填入模型欄位。',
+      viewModels: '查看支援的模型',
       fetchModels: '拉取模型',
       loadingModels: '拉取模型中…',
       modelMissing: '未配置模型，請先填寫模型 ID。',

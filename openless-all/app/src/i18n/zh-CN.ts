@@ -1346,6 +1346,8 @@ export const zhCN = {
       toolsDesc: '先保存上方配置，再验证当前模型连通性或拉取模型；失败时仍可手动填写模型 ID。',
       validate: '验证',
       validating: '验证中…',
+      planModelsHint: '打开套餐控制台，复制支持的文本模型 ID 并填写到模型栏。',
+      viewModels: '查看支持的模型',
       fetchModels: '拉取模型',
       loadingModels: '拉取模型中…',
       modelMissing: '未配置模型，请先填写模型 ID。',

@@ -1449,6 +1449,9 @@ export const de: typeof zhCN = {
         'Speichere die Felder oben und prüfe anschließend das gewählte Modell oder rufe Modelle ab. Falls das Abrufen fehlschlägt, bleibt die manuelle Eingabe möglich.',
       validate: 'Prüfen',
       validating: 'Wird geprüft…',
+      planModelsHint:
+        'Öffnen Sie die Tarifkonsole, kopieren Sie eine unterstützte Textmodell-ID und tragen Sie sie im Modellfeld ein.',
+      viewModels: 'Unterstützte Modelle ansehen',
       fetchModels: 'Modelle abrufen',
       loadingModels: 'Modelle werden abgerufen…',
       modelMissing: 'Kein Modell eingerichtet. Gib zuerst eine Modell-ID ein.',

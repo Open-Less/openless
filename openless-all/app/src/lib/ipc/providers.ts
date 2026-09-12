@@ -19,6 +19,7 @@ export interface ProviderDescriptor {
   providerType: string;
   labelKey: string;
   defaultEndpoint: string | null;
+  endpointPresets?: { name: string; endpoint: string; modelsUrl?: string }[];
   defaultModel: string | null;
   authRequirement: AuthRequirement;
   validationProbe: string;

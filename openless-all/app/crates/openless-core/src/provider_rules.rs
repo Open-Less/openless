@@ -137,17 +137,50 @@ pub enum ValidationProbe {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProviderEndpointPreset {
+    pub name: String,
+    pub endpoint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderDescriptor {
     pub kind: ProviderKind,
     pub provider_type: ProviderType,
     pub label_key: String,
     pub default_endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub endpoint_presets: Vec<ProviderEndpointPreset>,
     pub default_model: Option<String>,
     pub auth_requirement: AuthRequirement,
     pub validation_probe: ValidationProbe,
     pub static_models: Vec<String>,
     pub default_request_format: Option<crate::llm_protocol::LlmRequestFormat>,
     pub supported_request_formats: Vec<crate::llm_protocol::LlmRequestFormat>,
+}
+
+/// Match a service preset without treating custom URL credentials or parameters as presets.
+pub fn matches_endpoint_preset(endpoint: &str, preset: &str) -> bool {
+    let (Ok(current), Ok(preset)) = (url::Url::parse(endpoint.trim()), url::Url::parse(preset))
+    else {
+        return false;
+    };
+    let base_path = |path: &str| {
+        let path = path.trim_end_matches('/');
+        let path = ["/chat/completions", "/responses", "/messages", "/models"]
+            .iter()
+            .find_map(|suffix| path.strip_suffix(suffix))
+            .unwrap_or(path);
+        path.strip_suffix("/v3").unwrap_or(path).to_string()
+    };
+    current.origin() == preset.origin()
+        && current.query().is_none()
+        && current.fragment().is_none()
+        && current.username().is_empty()
+        && current.password().is_none()
+        && base_path(current.path()) == base_path(preset.path())
 }
 
 pub fn provider_descriptors(kind: ProviderKind) -> Vec<ProviderDescriptor> {
@@ -249,6 +282,29 @@ fn provider_descriptor_with_label(
         provider_type,
         label_key: label_key.to_string(),
         default_endpoint: default_endpoint.map(str::to_string),
+        endpoint_presets: if kind == ProviderKind::Llm && id == "ark" {
+            [
+                (
+                    "Agent Plan",
+                    "https://ark.cn-beijing.volces.com/api/plan/v3",
+                    "https://console.volcengine.com/ark/subscription/agent-plan",
+                ),
+                (
+                    "Coding Plan",
+                    "https://ark.cn-beijing.volces.com/api/coding/v3",
+                    "https://console.volcengine.com/ark/subscription/coding-plan",
+                ),
+            ]
+            .into_iter()
+            .map(|(name, endpoint, models_url)| ProviderEndpointPreset {
+                name: name.to_string(),
+                endpoint: endpoint.to_string(),
+                models_url: Some(models_url.to_string()),
+            })
+            .collect()
+        } else {
+            Vec::new()
+        },
         default_model: default_model.map(str::to_string),
         auth_requirement,
         validation_probe,
@@ -981,6 +1037,28 @@ pub fn whisper_transcribe_timeout(audio_secs: f64) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn service_presets_match_equivalent_urls_but_preserve_custom_urls() {
+        let preset = "https://ark.cn-beijing.volces.com/api/plan/v3";
+        for endpoint in [
+            preset,
+            "https://ARK.CN-BEIJING.VOLCES.COM:443/api/plan/v3",
+            "https://ark.cn-beijing.volces.com/api/plan/messages",
+        ] {
+            assert!(matches_endpoint_preset(endpoint, preset));
+        }
+        for endpoint in [
+            "https://ark.cn-beijing.volces.com/api/plan/v3?tenant=1",
+            "https://ark.cn-beijing.volces.com/api/plan/v3#custom",
+            "https://user@ark.cn-beijing.volces.com/api/plan/v3",
+            "http://ark.cn-beijing.volces.com/api/plan/v3",
+            "https://ark.cn-beijing.volces.com/api/coding/v3",
+            "invalid",
+        ] {
+            assert!(!matches_endpoint_preset(endpoint, preset));
+        }
+    }
 
     #[test]
     fn routes_bailian_and_stepfun_models() {

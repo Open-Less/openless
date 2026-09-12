@@ -4,6 +4,18 @@
     "providerType": "ark",
     "labelKey": "ark",
     "defaultEndpoint": "https://ark.cn-beijing.volces.com/api/v3",
+    "endpointPresets": [
+      {
+        "endpoint": "https://ark.cn-beijing.volces.com/api/plan/v3",
+        "modelsUrl": "https://console.volcengine.com/ark/subscription/agent-plan",
+        "name": "Agent Plan"
+      },
+      {
+        "endpoint": "https://ark.cn-beijing.volces.com/api/coding/v3",
+        "modelsUrl": "https://console.volcengine.com/ark/subscription/coding-plan",
+        "name": "Coding Plan"
+      }
+    ],
     "defaultModel": "deepseek-v3-2",
     "authRequirement": "api_key_unless_custom_endpoint",
     "validationProbe": "llm_text",
