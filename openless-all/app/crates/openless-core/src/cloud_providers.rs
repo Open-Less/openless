@@ -2500,56 +2500,63 @@ mod tests {
             "https://ark.cn-beijing.volces.com/api/coding/v3",
             "http://127.0.0.1:8080/v1",
         ] {
-            for format in ["chat_completions", "responses", "messages"] {
-                for key in [None, Some(""), Some(" \t\n"), Some("fixture-key")] {
-                    let store = InMemoryCredentialStore::default();
+            // Key rejection is independent of protocol; exercise each key state once,
+            // then retain successful construction coverage for all three protocols.
+            for (format, key) in [
+                ("chat_completions", None),
+                ("chat_completions", Some("")),
+                ("chat_completions", Some(" \t\n")),
+                ("chat_completions", Some("fixture-key")),
+                ("responses", Some("fixture-key")),
+                ("messages", Some("fixture-key")),
+            ] {
+                let store = InMemoryCredentialStore::default();
+                write_channel_secret(
+                    &store,
+                    CredentialNamespace::Llm,
+                    "ark-channel",
+                    LLM_ENDPOINT_ACCOUNT,
+                    endpoint,
+                )
+                .await;
+                write_channel_secret(
+                    &store,
+                    CredentialNamespace::Llm,
+                    "ark-channel",
+                    crate::llm_protocol::REQUEST_FORMAT_ACCOUNT,
+                    format,
+                )
+                .await;
+                if let Some(key) = key {
                     write_channel_secret(
                         &store,
                         CredentialNamespace::Llm,
                         "ark-channel",
-                        LLM_ENDPOINT_ACCOUNT,
-                        endpoint,
+                        LLM_API_KEY_ACCOUNT,
+                        key,
                     )
                     .await;
-                    write_channel_secret(
-                        &store,
-                        CredentialNamespace::Llm,
-                        "ark-channel",
-                        crate::llm_protocol::REQUEST_FORMAT_ACCOUNT,
-                        format,
-                    )
-                    .await;
-                    if let Some(key) = key {
-                        write_channel_secret(
-                            &store,
-                            CredentialNamespace::Llm,
-                            "ark-channel",
-                            LLM_API_KEY_ACCOUNT,
-                            key,
-                        )
-                        .await;
-                    }
-                    let mut llm = ProviderInvocation::new("ark-channel", "ark");
-                    llm.model = Some("fixture-model".to_string());
-                    let context = DictationContext {
-                        llm,
-                        ..DictationContext::default()
+                }
+                let mut llm = ProviderInvocation::new("ark-channel", "ark");
+                llm.model = Some("fixture-model".to_string());
+                let context = DictationContext {
+                    llm,
+                    ..DictationContext::default()
+                };
+                let result = build_cloud_polisher_provider(&store, &context).await;
+                if !endpoint.starts_with("http://127.0.0.1")
+                    && key.is_none_or(|value| value.trim().is_empty())
+                {
+                    let error = match result {
+                        Err(error) => error,
+                        Ok(_) => {
+                            panic!("official endpoint must require an API key: {endpoint}")
+                        }
                     };
-                    let result = build_cloud_polisher_provider(&store, &context).await;
-                    if !endpoint.starts_with("http://127.0.0.1")
-                        && key.is_none_or(|value| value.trim().is_empty())
-                    {
-                        let error = match result {
-                            Err(error) => error,
-                            Ok(_) => {
-                                panic!("official endpoint must require an API key: {endpoint}")
-                            }
-                        };
-                        assert_eq!(error.code, BackendErrorCode::Provider);
-                        assert_eq!(error.message, "LLM API key is not configured");
-                    } else {
-                        assert!(result.is_ok(), "{endpoint}");
-                    }
+                    assert_eq!(error.code, BackendErrorCode::Provider);
+                    assert_eq!(error.message, "LLM API key is not configured");
+                } else {
+                    assert!(result.is_ok(), "{endpoint}");
                 }
             }
         }

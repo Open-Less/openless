@@ -2933,101 +2933,58 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn polish_request_omits_temperature_for_unconfigured_custom_provider() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let request = read_http_request(&mut stream);
-            let header_end = request
-                .windows(4)
-                .position(|window| window == b"\r\n\r\n")
-                .expect("request must contain headers");
-            let body: serde_json::Value = serde_json::from_slice(&request[header_end + 4..])
-                .expect("request body must be JSON");
-            assert!(body.get("temperature").is_none());
+    async fn polish_request_sends_default_temperature_only_for_builtin_provider() {
+        for (provider_id, expected_temperature) in [("custom", None), ("ark", Some("0.3"))] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_http_request(&mut stream);
+                let header_end = request
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                    .expect("request must contain headers");
+                let body: Value = serde_json::from_slice(&request[header_end + 4..]).unwrap();
+                let response_body = r#"{"choices":[{"message":{"content":"polished"}}]}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+                    response_body.len()
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+                body
+            });
 
-            let body = r#"{"choices":[{"message":{"content":"polished"}}]}"#;
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            stream.write_all(response.as_bytes()).unwrap();
-        });
-
-        let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
-            "custom",
-            "Custom",
-            format!("http://{addr}"),
-            "",
-            "test-model",
-        ));
-        let output = provider
-            .polish(
-                "raw text",
-                PolishMode::Raw,
-                &[],
+            let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+                provider_id,
+                provider_id,
+                format!("http://{addr}"),
                 "",
-                &[],
-                ChineseScriptPreference::Auto,
-                OutputLanguagePreference::Auto,
-                None,
-                None,
-                &[],
-            )
-            .await
-            .unwrap();
+                "test-model",
+            ));
+            let output = provider
+                .polish(
+                    "raw text",
+                    PolishMode::Raw,
+                    &[],
+                    "",
+                    &[],
+                    ChineseScriptPreference::Auto,
+                    OutputLanguagePreference::Auto,
+                    None,
+                    None,
+                    &[],
+                )
+                .await
+                .unwrap();
 
-        assert_eq!(output, "polished");
-        server.join().unwrap();
-    }
-
-    #[tokio::test]
-    async fn polish_request_preserves_default_decimal_temperature() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let request = read_http_request(&mut stream);
-            let header_end = request
-                .windows(4)
-                .position(|window| window == b"\r\n\r\n")
-                .expect("request must contain headers");
-            let body: Value = serde_json::from_slice(&request[header_end + 4..]).unwrap();
-            let response_body = r#"{"choices":[{"message":{"content":"polished"}}]}"#;
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
-                response_body.len()
+            assert_eq!(output, "polished");
+            let request = server.join().unwrap();
+            assert_eq!(
+                request.get("temperature").map(Value::to_string).as_deref(),
+                expected_temperature,
+                "{provider_id} default temperature"
             );
-            stream.write_all(response.as_bytes()).unwrap();
-            body
-        });
-
-        let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
-            "ark",
-            "Ark",
-            format!("http://{addr}"),
-            "",
-            "test-model",
-        ));
-        let output = provider
-            .polish(
-                "raw text",
-                PolishMode::Raw,
-                &[],
-                "",
-                &[],
-                ChineseScriptPreference::Auto,
-                OutputLanguagePreference::Auto,
-                None,
-                None,
-                &[],
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(output, "polished");
-        assert_eq!(server.join().unwrap()["temperature"].to_string(), "0.3");
+        }
     }
 
     // ──────────────── 对话感知 polish 的 chat 消息构造 ────────────────
