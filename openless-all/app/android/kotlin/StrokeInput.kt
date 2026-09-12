@@ -27,10 +27,14 @@ internal class StrokeInputRepository(context: Context) {
     )
 
     private val index = AtomicReference<Map<String, List<Pair<String, String>>>>(emptyMap())
+    private val frequency = AtomicReference<Map<String, Long>>(emptyMap())
     private val loading = Any()
 
     private fun loadEntries(context: Context): List<Pair<String, String>> {
-        val table = runCatching {
+        // A character may have more than one valid stroke sequence in Rime.
+        // Keep every code here; deduplicate only the rendered character list
+        // after filtering, otherwise valid aliases such as 过/hsnnzn vanish.
+        return runCatching {
             context.assets.open("stroke.dict.tsv").bufferedReader().useLines { lines ->
                 lines.mapNotNull { line ->
                     val parts = line.split('\t', limit = 2)
@@ -40,30 +44,33 @@ internal class StrokeInputRepository(context: Context) {
                 }.toList()
             }
         }.getOrElse { builtInEntries }
-        val preferred = listOf(
-            "一", "王", "二", "三", "十", "丁", "七", "大", "天", "人", "不", "有", "中", "国", "上", "下",
-            "个", "了", "是", "的", "我", "你", "他", "她", "们", "在", "要", "来", "看", "去", "就",
-        ).withIndex().associate { it.value to it.index }
-        // A character may have more than one valid stroke sequence in Rime.
-        // Keep every code here; deduplicate only the rendered character list
-        // after filtering, otherwise valid aliases such as 过/hsnnzn vanish.
-        return table.withIndex()
-            .sortedWith(compareBy({ preferred[it.value.first] ?: Int.MAX_VALUE }, { it.index }))
-            .map { it.value }
     }
+
+    /** Corpus character frequency, used to rank candidates by how common they are. */
+    private fun loadFrequency(context: Context): Map<String, Long> = runCatching {
+        context.assets.open("stroke-frequency.tsv").bufferedReader().useLines { lines ->
+            lines.mapNotNull { line ->
+                val parts = line.split('\t', limit = 2)
+                val weight = parts.getOrNull(1)?.toLongOrNull()
+                if (parts.size == 2 && parts[0].isNotEmpty() && weight != null) parts[0] to weight else null
+            }.toMap()
+        }
+    }.getOrElse { emptyMap() }
 
     fun searchAsync(pattern: String, callback: (List<String>) -> Unit) {
         executor.execute {
             ensureLoaded()
             val lookupKey = pattern.takeWhile { it != '*' }.take(PREFIX_INDEX_LENGTH)
+            val freq = frequency.get()
             val result = if (pattern.isEmpty()) emptyList() else index.get()
                 .getOrDefault(lookupKey, emptyList())
                 .asSequence()
                 .filter { (_, code) -> matches(pattern, code) }
                 .map { it.first }
                 .distinct()
-                .take(MAX_CANDIDATES)
                 .toList()
+                .sortedByDescending { freq[it] ?: 0L }
+                .take(MAX_CANDIDATES)
             android.os.Handler(android.os.Looper.getMainLooper()).post { callback(result) }
         }
     }
@@ -83,6 +90,7 @@ internal class StrokeInputRepository(context: Context) {
                     buckets.getOrPut(code.substring(0, length)) { ArrayList() }.add(entry)
                 }
             }
+            frequency.set(loadFrequency(appContext))
             index.set(buckets)
         }
     }
