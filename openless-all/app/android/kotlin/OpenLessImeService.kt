@@ -29,6 +29,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var inputMode = InputMode.VOICE
     private var symbolMode = false
     private var strokeNumberMode = false
+    private var traditionalOutput = false
     private var keyboardShift = false
     private var state = "idle"
     private var currentMessage = "点击开始说话"
@@ -50,8 +51,25 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private fun ui(zh: String, en: String) = if (englishUi) en else zh
 
     private fun outputScript(text: String): String {
-        if (OpenLessAndroidPreferences.chineseScriptPreference(this) != "traditional") return text
+        if (!traditionalOutput) return text
         return runCatching { simplifiedToTraditional.transliterate(text) }.getOrDefault(text)
+    }
+
+    private fun restoreScriptPreference() {
+        val preferences = getSharedPreferences("openless_ime_ui", MODE_PRIVATE)
+        traditionalOutput = if (preferences.contains("stroke_traditional_output")) {
+            preferences.getBoolean("stroke_traditional_output", false)
+        } else {
+            OpenLessAndroidPreferences.chineseScriptPreference(this) == "traditional"
+        }
+    }
+
+    private fun toggleScriptPreference() {
+        traditionalOutput = !traditionalOutput
+        getSharedPreferences("openless_ime_ui", MODE_PRIVATE).edit()
+            .putBoolean("stroke_traditional_output", traditionalOutput)
+            .apply()
+        refreshInputView()
     }
 
     private fun restoreInputMode() {
@@ -77,6 +95,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     override fun onCreate() {
         super.onCreate()
         restoreInputMode()
+        restoreScriptPreference()
         activeInstance = java.lang.ref.WeakReference(this)
         OpenLessOverlayBridge.imeListener = this
         OpenLessOverlayBridge.imeTextListener = ::commitImeText
@@ -386,12 +405,18 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             listOf("1\n一" to "h", "2\n丨" to "s", "3\n丿" to "p"),
             listOf("4\n丶" to "n", "5\n乛" to "z", "6\n${ui("通配", "Wildcard")}" to "*"),
             listOf("7\n${ui("分词", "Word")}" to " ", "8\n：" to ":", "9\n；" to ";"),
-            listOf(ui("中", "CN") to "中", "⌨" to "voice", ui("符号", "Symbols") to "symbols"),
+            listOf(ui("简繁", "CN") to "script", "⌨" to "voice", ui("符号", "Symbols") to "symbols"),
         )
         strokeRows.forEach { rowItems ->
             val row = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
             rowItems.forEach { (label, code) ->
-                val key = if (code == "voice") keyboardKey("🎙", 1f) {
+                val key = if (code == "script") keyboardKey(label, 1f) {
+                    toggleScriptPreference()
+                }.apply {
+                    if (traditionalOutput) {
+                        background = roundedButton(Color.rgb(112, 78, 92), dp(10))
+                    }
+                } else if (code == "voice") keyboardKey("🎙", 1f) {
                     currentInputConnection?.commitText(" ", 1)
                 }.apply {
                     setOnLongClickListener {
@@ -647,6 +672,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     override fun onStartInput(attribute: EditorInfo?, restarting: Boolean) {
         super.onStartInput(attribute, restarting)
         restoreInputMode()
+        restoreScriptPreference()
         refreshLanguage()
         strokeNumberMode = false
         startRuntimeService()
