@@ -1159,6 +1159,7 @@ export const ko: typeof zhCN = {
       lastCheck: '마지막 확인',
       verifying: '확인 중…',
       notVerified: '아직 확인하지 않음',
+      verificationUnavailable: '이 채널은 확인을 지원하지 않습니다',
       passed: '확인 성공',
       failed: '확인 실패 · {{reason}}',
       elapsed: '소요 시간 {{ms}} ms',

@@ -1,6 +1,11 @@
 import type { OS } from '../../components/WindowChrome';
 import type { ProviderDescriptor } from '../../lib/ipc';
-import { defaultChannelNameForProvider, presetsFor, shouldRecycleDraft } from './ChannelList';
+import {
+  channelTestMode,
+  defaultChannelNameForProvider,
+  presetsFor,
+  shouldRecycleDraft,
+} from './ChannelList';
 
 const localProviders = [
   'local-qwen3',
@@ -110,6 +115,24 @@ if (defaultChannelNameForProvider('orcarouter', 'My primary key') !== 'My primar
 }
 if (defaultChannelNameForProvider('openai', '') !== '') {
   throw new Error('non-OrcaRouter channel naming must remain unchanged');
+}
+
+for (const provider of ['local-qwen3', 'local-qwen3-mlx', 'local-qwen3-c', 'local-whisper']) {
+  if (channelTestMode('asr', provider, 'unsupported') !== 'local-model') {
+    throw new Error(`${provider} must use the local model channel test`);
+  }
+}
+if (channelTestMode('asr', 'apple-speech', 'unsupported') !== 'unavailable') {
+  throw new Error('Apple Speech must not expose a verification action without a native probe');
+}
+if (channelTestMode('asr', 'apple-speech', undefined) !== 'unavailable') {
+  throw new Error('Apple Speech must stay unavailable while provider descriptors are loading');
+}
+if (channelTestMode('asr', 'apple-speech', 'asr_native_silence') !== 'provider') {
+  throw new Error('Apple Speech must use the native provider probe when Core exposes it');
+}
+if (channelTestMode('asr', 'volcengine', 'asr_silence') !== 'provider') {
+  throw new Error('cloud ASR providers must keep the generic provider validation path');
 }
 
 console.log('ChannelList platform filtering and draft lifecycle tests passed');

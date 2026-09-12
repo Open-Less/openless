@@ -1348,9 +1348,16 @@ impl LocalAsrApi for LocalAsrService {
                 ));
             }
             let model_dir = model_store.runtime_model_dir(&target)?;
-            runtime
+            let result = runtime
                 .test_model_for_provider(target, model_dir, provider_type)
-                .await
+                .await?;
+            if result.transcribed_text.trim().is_empty() {
+                return Err(BackendError::new(
+                    BackendErrorCode::Provider,
+                    "transcription provider returned an empty transcript",
+                ));
+            }
+            Ok(result)
         })
     }
 }

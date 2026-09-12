@@ -1208,6 +1208,7 @@ export const de: typeof zhCN = {
       lastCheck: 'Letzte Prüfung',
       verifying: 'Wird geprüft…',
       notVerified: 'Noch nicht geprüft',
+      verificationUnavailable: 'Die Prüfung wird für diesen Kanal nicht unterstützt',
       passed: 'Prüfung bestanden',
       failed: 'Prüfung fehlgeschlagen · {{reason}}',
       elapsed: 'Dauer: {{ms}} ms',

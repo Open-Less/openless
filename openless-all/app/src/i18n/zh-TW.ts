@@ -1127,6 +1127,7 @@ export const zhTW: typeof zhCN = {
       lastCheck: '上次驗證',
       verifying: '正在驗證…',
       notVerified: '尚未驗證',
+      verificationUnavailable: '此渠道暫不支援驗證',
       passed: '驗證通過',
       failed: '驗證失敗 · {{reason}}',
       elapsed: '耗時 {{ms}} ms',

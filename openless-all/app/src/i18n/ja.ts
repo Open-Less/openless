@@ -1167,6 +1167,7 @@ export const ja: typeof zhCN = {
       lastCheck: '前回の接続確認',
       verifying: '確認中…',
       notVerified: '未確認',
+      verificationUnavailable: 'このチャンネルは確認に対応していません',
       passed: '確認に成功',
       failed: '確認に失敗 · {{reason}}',
       elapsed: '所要時間 {{ms}} ms',

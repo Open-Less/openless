@@ -1216,6 +1216,7 @@ export const fr: typeof zhCN = {
       lastCheck: 'Dernière vérification',
       verifying: 'Vérification…',
       notVerified: 'Pas encore vérifié',
+      verificationUnavailable: 'La vérification n’est pas disponible pour ce canal',
       passed: 'Vérification réussie',
       failed: 'Échec de la vérification · {{reason}}',
       elapsed: 'Durée : {{ms}} ms',

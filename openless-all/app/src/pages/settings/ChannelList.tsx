@@ -168,6 +168,31 @@ function shortErrorLabel(raw: string | null, t: ReturnType<typeof useTranslation
 /** 一天以前的验证结果只能算"旧消息"，褪色表示不保证现在还有效。 */
 const STALE_TEST_SECONDS = 24 * 60 * 60;
 
+type ChannelTestMode = 'provider' | 'local-model' | 'unavailable';
+
+const LOCAL_MODEL_CHANNEL_PROVIDERS = new Set([
+  'local-qwen3',
+  'local-qwen3-mlx',
+  'local-qwen3-c',
+  'local-whisper',
+]);
+
+export function channelTestMode(
+  kind: ChannelKind,
+  providerType: string,
+  validationProbe: string | undefined,
+): ChannelTestMode {
+  if (kind !== 'asr') return 'provider';
+  if (LOCAL_MODEL_CHANNEL_PROVIDERS.has(providerType)) return 'local-model';
+  if (
+    providerType === 'apple-speech' &&
+    (validationProbe == null || validationProbe === 'unsupported')
+  ) {
+    return 'unavailable';
+  }
+  return 'provider';
+}
+
 function relativeTime(at: number, t: ReturnType<typeof useTranslation>['t']): string {
   const seconds = Math.max(0, Math.floor(Date.now() / 1000) - at);
   if (seconds < 60) return t('settings.channels.justNow');
@@ -290,21 +315,19 @@ export function ChannelList({
 
   const runTest = async (channel: Channel) => {
     if (testingIds[channel.id]) return;
+    const mode = channelTestMode(
+      kind,
+      channel.providerType,
+      descriptors.find((item) => item.providerType === channel.providerType)?.validationProbe,
+    );
+    if (mode === 'unavailable') return;
     setTestingIds((prev) => ({ ...prev, [channel.id]: true }));
     const started = performance.now();
     try {
-      const isGenericLocalAsr =
-        kind === 'asr' &&
-        [
-          'local-qwen3',
-          'local-qwen3-mlx',
-          'local-qwen3-c',
-          'local-whisper',
-          'apple-speech',
-        ].includes(channel.providerType);
-      const result = isGenericLocalAsr
-        ? await testLocalAsrChannel(channel.id).then(() => ({ ok: true }))
-        : await validateProviderCredentials(kind, channel.id);
+      const result =
+        mode === 'local-model'
+          ? await testLocalAsrChannel(channel.id).then(() => ({ ok: true }))
+          : await validateProviderCredentials(kind, channel.id);
       const latency = Math.round(performance.now() - started);
       await recordChannelTest(
         kind,
@@ -598,9 +621,9 @@ export function ChannelList({
           const providerLabel = presetLabel(kind, channel.providerType, t, descriptors);
           const label = channel.name.trim() || providerLabel;
           const model = models[channel.id] ?? '';
-          const localEngine =
-            descriptors.find((item) => item.providerType === channel.providerType)
-              ?.authRequirement === 'none';
+          const descriptor = descriptors.find((item) => item.providerType === channel.providerType);
+          const localEngine = descriptor?.authRequirement === 'none';
+          const testMode = channelTestMode(kind, channel.providerType, descriptor?.validationProbe);
           return (
             <div
               key={channel.id}
@@ -707,6 +730,7 @@ export function ChannelList({
                   <ChannelTestResult
                     channel={channel}
                     testing={Boolean(testingIds[channel.id])}
+                    unavailable={testMode === 'unavailable'}
                     t={t}
                   />
                 </div>
@@ -722,17 +746,19 @@ export function ChannelList({
                   width: preferenceStack ? '100%' : undefined,
                 }}
               >
-                <Btn
-                  size="sm"
-                  disabled={Boolean(testingIds[channel.id])}
-                  onClick={() => void runTest(channel)}
-                >
-                  {t(
-                    testingIds[channel.id]
-                      ? 'settings.channels.verifying'
-                      : 'settings.channels.verify',
-                  )}
-                </Btn>
+                {testMode !== 'unavailable' && (
+                  <Btn
+                    size="sm"
+                    disabled={Boolean(testingIds[channel.id])}
+                    onClick={() => void runTest(channel)}
+                  >
+                    {t(
+                      testingIds[channel.id]
+                        ? 'settings.channels.verifying'
+                        : 'settings.channels.verify',
+                    )}
+                  </Btn>
+                )}
                 <button
                   type="button"
                   role="switch"
@@ -803,10 +829,12 @@ export function ChannelList({
 function ChannelTestResult({
   channel,
   testing,
+  unavailable,
   t,
 }: {
   channel: Channel;
   testing: boolean;
+  unavailable: boolean;
   t: ReturnType<typeof useTranslation>['t'];
 }) {
   const last = channel.lastTest;
@@ -827,8 +855,12 @@ function ChannelTestResult({
         color: 'var(--ol-ink-3)',
       }}
     >
-      <span>{t('settings.channels.lastCheck')}</span>
-      {testing ? (
+      <span>
+        {t(
+          unavailable ? 'settings.channels.verificationUnavailable' : 'settings.channels.lastCheck',
+        )}
+      </span>
+      {unavailable ? null : testing ? (
         <span>{t('settings.channels.verifying')}</span>
       ) : !last ? (
         <span>{t('settings.channels.notVerified')}</span>

@@ -1203,6 +1203,7 @@ export const es: typeof zhCN = {
       lastCheck: 'Última comprobación',
       verifying: 'Comprobando…',
       notVerified: 'Sin comprobar',
+      verificationUnavailable: 'La comprobación no está disponible para este canal',
       passed: 'Comprobación correcta',
       failed: 'Comprobación fallida · {{reason}}',
       elapsed: 'Duración: {{ms}} ms',

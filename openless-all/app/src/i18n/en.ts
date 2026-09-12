@@ -1179,6 +1179,7 @@ export const en: typeof zhCN = {
       lastCheck: 'Last check',
       verifying: 'Checking…',
       notVerified: 'Not checked yet',
+      verificationUnavailable: 'Verification is not supported for this channel',
       passed: 'Check passed',
       failed: 'Check failed · {{reason}}',
       elapsed: 'Took {{ms}} ms',

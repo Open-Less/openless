@@ -1125,6 +1125,7 @@ export const zhCN = {
       lastCheck: '上次验证',
       verifying: '正在验证…',
       notVerified: '尚未验证',
+      verificationUnavailable: '此渠道暂不支持验证',
       passed: '验证通过',
       failed: '验证失败 · {{reason}}',
       elapsed: '耗时 {{ms}} ms',

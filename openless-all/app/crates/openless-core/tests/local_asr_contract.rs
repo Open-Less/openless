@@ -5,8 +5,8 @@ use openless_core::{
     ChannelMutation, ChannelMutationResult, ChannelSummary, CredentialKey, CredentialStore,
     CredentialsStatus, FoundryRuntimeSource, InMemoryCredentialStore, LocalAsrActivationRequest,
     LocalAsrMirror, LocalAsrRuntime, LocalAsrRuntimeLease, LocalAsrRuntimeStatus, LocalAsrSettings,
-    LocalAsrTarget, ModelRuntimeAdapter, ModelStore, ModelStoreConfig, NativeModelState,
-    OpenLessBackend, PreferencesStore, ProviderSlot, SecretValue,
+    LocalAsrTarget, LocalAsrTestResult, ModelRuntimeAdapter, ModelStore, ModelStoreConfig,
+    NativeModelState, OpenLessBackend, PreferencesStore, ProviderSlot, SecretValue,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -79,11 +79,38 @@ struct RecordingLocalAsrRuntime {
     operations: Mutex<Vec<String>>,
     during_prepare: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     loaded_models: Arc<Mutex<std::collections::HashMap<LocalAsrTarget, u64>>>,
+    test_transcript: Mutex<String>,
+    tested_providers: Mutex<Vec<String>>,
 }
 
 impl ModelRuntimeAdapter for RecordingLocalAsrRuntime {
     fn engine_available(&self, _: LocalAsrRuntime) -> bool {
         true
+    }
+
+    fn test_model_for_provider(
+        &self,
+        target: LocalAsrTarget,
+        _model_dir: PathBuf,
+        provider_type: String,
+    ) -> BoxFuture<'static, Result<LocalAsrTestResult, BackendError>> {
+        let transcribed_text = self.test_transcript.lock().unwrap().clone();
+        self.tested_providers
+            .lock()
+            .unwrap()
+            .push(provider_type.clone());
+        Box::pin(async move {
+            Ok(LocalAsrTestResult {
+                target,
+                backend: provider_type,
+                expected_text: "Hello. This is a test of the Voxtrail speech-to-text system."
+                    .into(),
+                transcribed_text,
+                audio_ms: 3_000,
+                load_ms: 10,
+                transcribe_ms: 20,
+            })
+        })
     }
 
     fn runtime_status(
@@ -451,6 +478,62 @@ fn local_asr_backend_with_credentials(
     )
     .unwrap();
     (data_dir, runtime, backend)
+}
+
+#[tokio::test]
+async fn channel_test_requires_a_non_blank_transcript() {
+    let (data_dir, runtime, backend) = local_asr_backend();
+    let target = LocalAsrTarget::parse(LocalAsrRuntime::Generic, "qwen3-asr-0.6b").unwrap();
+    let model_dir = data_dir.join("models").join(target.model_id());
+    std::fs::create_dir_all(&model_dir).unwrap();
+    std::fs::write(
+        model_dir.join(openless_core::MODEL_READY_SENTINEL),
+        b"ready",
+    )
+    .unwrap();
+    backend
+        .services()
+        .local_asr
+        .set_active_model(target)
+        .await
+        .unwrap();
+    let channel_id = backend
+        .create_channel(
+            ChannelKind::Asr,
+            "local-qwen3-c".into(),
+            "Local Qwen".into(),
+        )
+        .await
+        .unwrap();
+
+    for transcript in ["", " \n\t"] {
+        *runtime.test_transcript.lock().unwrap() = transcript.into();
+        let error = backend
+            .services()
+            .local_asr
+            .test_channel(channel_id.clone())
+            .await
+            .expect_err("blank channel-test transcripts must fail");
+        assert_eq!(error.code, BackendErrorCode::Provider);
+        assert_eq!(
+            error.message,
+            "transcription provider returned an empty transcript"
+        );
+    }
+
+    *runtime.test_transcript.lock().unwrap() = "Hello from the local model".into();
+    let result = backend
+        .services()
+        .local_asr
+        .test_channel(channel_id)
+        .await
+        .unwrap();
+    assert_eq!(result.transcribed_text, "Hello from the local model");
+    assert_eq!(
+        runtime.tested_providers.lock().unwrap().as_slice(),
+        ["local-qwen3-c", "local-qwen3-c", "local-qwen3-c"]
+    );
+    let _ = std::fs::remove_dir_all(data_dir);
 }
 
 #[tokio::test]
