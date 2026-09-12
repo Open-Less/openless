@@ -1135,18 +1135,14 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private fun openSettings() {
         requestHideSelf(0)
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-            // If cold-start created the Tauri host through the IME, that Activity is
-            // already the real settings UI. Starting MainActivity as a second Tauri
-            // host produces the black window that only disappears after Back.
-            if (OpenLessBackendWarmupActivity.openSettingsIfRunning(this)) {
-                return@postDelayed
-            }
-            startActivity(android.content.Intent(this, MainActivity::class.java).apply {
-                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                addFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                addFlags(android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                addFlags(android.content.Intent.FLAG_ACTIVITY_NO_ANIMATION)
-            })
+            // Always go through OpenLessBackendWarmupActivity so there is ever only
+            // one tracked Tauri host: it reuses the existing instance if one is
+            // running, or starts fresh otherwise. Starting the bare MainActivity
+            // here would spin up an untracked second host and re-run Tauri/Rust
+            // setup from scratch, which is what produced the black window /
+            // native crash seen when settings was opened before any warmup host
+            // was tracked as running.
+            OpenLessBackendWarmupActivity.openSettings(this)
         }, 180L)
     }
 
@@ -1160,17 +1156,25 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         try {
             OpenLessNative.requireBackendContract()
         } catch (error: Throwable) {
+            // The warmup Activity can crash the whole process before it finishes
+            // warming up the backend (native HWUI teardown race). That kills this
+            // in-memory throttle along with it, so a plain instance field lets a
+            // crash loop retry every few seconds forever. Persist the attempt time
+            // so a fresh process still honors the cooldown.
+            val runtimePrefs = getSharedPreferences("openless_runtime", MODE_PRIVATE)
+            val wallNow = System.currentTimeMillis()
+            val lastAttempt = runtimePrefs.getLong(BACKEND_WARMUP_ATTEMPT_KEY, 0L)
+            if (wallNow >= lastAttempt && wallNow - lastAttempt < BACKEND_WARMUP_RETRY_DELAY_MS) return
             lastBackendWarmupAt = now
+            runtimePrefs.edit().putLong(BACKEND_WARMUP_ATTEMPT_KEY, wallNow).apply()
             android.util.Log.i("OpenLessImeService", "backend is not ready; launching main process", error)
             android.os.Handler(mainLooper).postDelayed({
                 runCatching {
-                    android.content.Intent(this, OpenLessBackendWarmupActivity::class.java).apply {
-                        currentInputEditorInfo?.packageName?.let {
-                            putExtra(OpenLessBackendWarmupActivity.EXTRA_RETURN_PACKAGE, it)
-                        }
+                    startActivity(android.content.Intent(this, OpenLessBackendWarmupActivity::class.java).apply {
                         addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        addFlags(android.content.Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
                         addFlags(android.content.Intent.FLAG_ACTIVITY_NO_ANIMATION)
-                    }?.let(::startActivity)
+                    })
                 }.onFailure { launchError ->
                     android.util.Log.w("OpenLessImeService", "failed to launch main process", launchError)
                 }
@@ -1629,6 +1633,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     companion object {
         private const val TEST_TEXT = "OpenLess IME 测试上屏"
         private const val MAX_ASSOCIATION_CONTEXT = 8
+        private const val BACKEND_WARMUP_ATTEMPT_KEY = "backend_warmup_attempt_wall_time"
+        private const val BACKEND_WARMUP_RETRY_DELAY_MS = 30_000L
         @Volatile
         private var activeInstance: java.lang.ref.WeakReference<OpenLessImeService>? = null
 
