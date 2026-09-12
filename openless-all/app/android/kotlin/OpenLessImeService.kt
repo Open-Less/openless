@@ -27,6 +27,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var processing = false
     private var inputMode = InputMode.VOICE
     private var symbolMode = false
+    private var strokeNumberMode = false
     private var keyboardShift = false
     private var state = "idle"
     private var currentMessage = "点击开始说话"
@@ -98,7 +99,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         refreshLanguage()
         startRuntimeService()
         if (inputMode == InputMode.ENGLISH) return buildKeyboardView()
-        if (inputMode == InputMode.STROKE) return buildStrokeView()
+        if (inputMode == InputMode.STROKE) return if (strokeNumberMode) buildStrokeNumberView() else buildStrokeView()
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(300))
@@ -245,6 +246,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         inputMode = selected
         saveInputMode(selected)
         symbolMode = false
+        strokeNumberMode = false
         keyboardShift = false
         strokeCode = ""
         strokeQueryEpoch++
@@ -407,7 +409,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         body.addView(grid, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
 
         val actions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = android.view.Gravity.CENTER }
-        listOf("⌫" to { deleteStroke() }, "↵" to { sendEnterKey() }, ui("清空", "Clear") to { clearStrokes() }, "123" to { inputMode = InputMode.ENGLISH; saveInputMode(inputMode); clearStrokes(); refreshInputView() }).forEach { (label, action) ->
+        listOf("⌫" to { deleteStroke() }, "↵" to { sendEnterKey() }, ui("清空", "Clear") to { clearStrokes() }, "123" to { strokeNumberMode = true; refreshInputView() }).forEach { (label, action) ->
             actions.addView(keyboardKey(label, 1f, action).apply {
                 textSize = 17f
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
@@ -417,6 +419,66 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             })
         }
         body.addView(actions, LinearLayout.LayoutParams(dp(58), ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(body, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        return root
+    }
+
+    /** Numeric/symbol quick panel; pending stroke input is intentionally preserved. */
+    private fun buildStrokeNumberView(): View {
+        refreshLanguage()
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(300))
+            minimumHeight = dp(300)
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            setBackgroundColor(Color.rgb(48, 48, 48))
+        }
+        val header = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
+        val brand = TextView(this).apply {
+            text = "◔  OpenLess"
+            textSize = 18f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(dp(8), 0, 0, 0)
+            contentDescription = ui("打开 OpenLess 设置", "Open OpenLess settings")
+            setOnClickListener { openSettings() }
+        }
+        header.addView(brand, LinearLayout.LayoutParams(0, dp(38), 1f))
+        header.addView(buildModeToggle(), LinearLayout.LayoutParams(dp(150), dp(38)))
+        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)))
+
+        val rows = listOf(
+            listOf("@", "1", "2", "3", ui("退格", "Backspace")),
+            listOf(":", "4", "5", "6", ui("←", "Back")),
+            listOf(",", "7", "8", "9", ui("麦克风", "Voice")),
+            listOf("+", "-", ".", ui("符号", "Symbols"), ui("返回", "Return")),
+        )
+        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        rows.forEachIndexed { rowIndex, rowItems ->
+            val row = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
+            rowItems.forEachIndexed { index, label ->
+                val isAction = index == rowItems.lastIndex
+                val action: () -> Unit = when {
+                    rowIndex == 0 && isAction -> ({ currentInputConnection?.deleteSurroundingText(1, 0) })
+                    rowIndex == 1 && isAction -> ({ sendEnterKey() })
+                    rowIndex == 2 && isAction -> ({
+                        inputMode = InputMode.VOICE
+                        saveInputMode(inputMode)
+                        strokeNumberMode = false
+                        refreshInputView()
+                    })
+                    rowIndex == 3 && isAction -> ({ strokeNumberMode = false; refreshInputView() })
+                    label == ui("符号", "Symbols") -> ({ currentInputConnection?.commitText("#", 1) })
+                    else -> ({ currentInputConnection?.commitText(label, 1) })
+                }
+                row.addView(keyboardKey(label, 1f, action).apply {
+                    textSize = if (isAction) 15f else 20f
+                    if (isAction) background = roundedButton(Color.rgb(153, 26, 40), dp(7))
+                })
+            }
+            body.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        }
         root.addView(body, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         return root
     }
@@ -569,6 +631,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         super.onStartInput(attribute, restarting)
         restoreInputMode()
         refreshLanguage()
+        strokeNumberMode = false
         startRuntimeService()
         sessionEpoch++
         confirmedText = ""
