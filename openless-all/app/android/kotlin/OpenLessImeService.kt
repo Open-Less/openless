@@ -1,6 +1,7 @@
 package com.openless.app
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Canvas
 import android.graphics.Color
@@ -11,7 +12,14 @@ import android.graphics.Shader
 import android.graphics.drawable.GradientDrawable
 import android.icu.text.Transliterator
 import android.inputmethodservice.InputMethodService
+import android.os.Handler
+import android.os.Looper
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.text.InputType
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
@@ -334,17 +342,17 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         val bottom = LinearLayout(this).apply {
             gravity = android.view.Gravity.CENTER_VERTICAL
         }
-        val modeButton = keyboardKey(if (symbolMode) "ABC" else ui("符号", "#+="), 1f) {
+        val modeButton = keyboardKey(if (symbolMode) "ABC" else ui("符号", "#+="), 1f, action = {
             symbolMode = !symbolMode
             keyboardShift = false
             refreshInputView()
-        }
-        val spaceButton = keyboardKey("", 2.7f) {
+        })
+        val spaceButton = keyboardKey("", 2.7f, action = {
             currentInputConnection?.commitText(" ", 1)
-        }
-        val returnButton = keyboardKey("return", 1.35f) {
+        })
+        val returnButton = keyboardKey("return", 1.35f, action = {
             sendEnterKey()
-        }
+        })
         bottom.addView(modeButton)
         bottom.addView(spaceButton)
         bottom.addView(returnButton)
@@ -404,36 +412,49 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         root.addView(top, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(60)))
 
         val body = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
-        val punctuation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = android.view.Gravity.CENTER }
-        listOf(",", "°", "?", "!", "~").forEach { mark ->
-            punctuation.addView(keyboardKey(mark, 1f) { currentInputConnection?.commitText(mark, 1) }.apply {
-                textSize = 18f
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
-                    setMargins(dp(1), dp(1), dp(1), dp(1))
-                }
-            })
+        val punctuation = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = android.view.Gravity.CENTER
+            setPadding(dp(2), dp(2), dp(2), dp(2))
+            background = roundedButton(Color.rgb(45, 45, 45), dp(4))
         }
-        body.addView(punctuation, LinearLayout.LayoutParams(dp(42), ViewGroup.LayoutParams.MATCH_PARENT))
+        listOf(",", "°", "?", "!", "~").forEachIndexed { index, mark ->
+            punctuation.addView(keyboardKey(mark, 1f, action = { currentInputConnection?.commitText(mark, 1) }).apply {
+                textSize = 18f
+                // The rail is one connected key surface; separators provide the only visual split.
+                background = GradientDrawable().apply { setColor(Color.TRANSPARENT) }
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            })
+            if (index < 4) {
+                punctuation.addView(View(this).apply {
+                    setBackgroundColor(Color.rgb(28, 28, 28))
+                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)))
+            }
+        }
+        // Match the reference proportions: both side rails occupy the same share of the panel.
+        body.addView(punctuation, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.16f))
 
         val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = android.view.Gravity.CENTER }
         val strokeRows = listOf(
             listOf("1\n一" to "h", "2\n丨" to "s", "3\n丿" to "p"),
-            listOf("4\n丶" to "n", "5\n乛" to "z", "6\n${ui("通配", "Wildcard")}" to "*"),
-            listOf("7\n${ui("分词", "Word")}" to " ", "8\n：" to ":", "9\n；" to ";"),
-            listOf("繁" to "script", "⌨" to "voice", ui("符号", "Symbols") to "symbols"),
+            listOf("4\n丶" to "n", "5\n乙" to "z", "6\n通配" to "*"),
+            listOf("7\n分词" to " ", "8\n：" to ":", "9\n；" to ";"),
+            listOf("繁" to "script", "🎙" to "voice", "符号" to "symbols"),
         )
         strokeRows.forEach { rowItems ->
             val row = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
             rowItems.forEach { (label, code) ->
-                val key = if (code == "script") keyboardKey(label, 1f) {
+                val key = if (code == "script") keyboardKey(label, 1f, action = {
                     toggleScriptPreference()
-                }.apply {
+                }, graphicCode = "script").apply {
                     if (traditionalOutput) {
-                        background = roundedButton(Color.rgb(112, 78, 92), dp(10))
+                        background = roundedButton(Color.rgb(112, 78, 92), dp(5))
                     }
-                } else if (code == "voice") keyboardKey("🎙", 1f) {
+                } else if (code == "voice") keyboardKey("0", 1f, action = {
                     currentInputConnection?.commitText(" ", 1)
-                }.apply {
+                }, swipeUpAction = {
+                    currentInputConnection?.commitText("0", 1)
+                }, swipePreview = "0", microphoneIcon = true).apply {
                     setOnLongClickListener {
                         inputMode = InputMode.VOICE
                         saveInputMode(inputMode)
@@ -441,31 +462,41 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                         refreshInputView()
                         true
                     }
-                } else keyboardKey(label, 1f) {
+                } else {
+                    val swipeDigit = label.substringBefore("\n").takeIf { it.length == 1 && it[0].isDigit() }
+                    keyboardKey(label, 1f, action = {
                     when (code) {
                         "symbols" -> currentInputConnection?.commitText("#", 1)
                         " " -> currentInputConnection?.commitText(" ", 1)
                         else -> if (code in listOf("h", "s", "p", "n", "z", "*")) appendStroke(code) else currentInputConnection?.commitText(code, 1)
                     }
+                    }, swipeUpAction = swipeDigit?.let { digit ->
+                        { currentInputConnection?.commitText(digit, 1) }
+                    }, swipePreview = swipeDigit, strokeIconCode = code.takeIf {
+                        it in listOf("h", "s", "p", "n", "z")
+                    }, graphicCode = code.takeIf {
+                        it in listOf("*", ":", ";", " ", "symbols")
+                    })
                 }
-                key.textSize = if (code == "voice") 18f else 17f
+                key.textSize = if (code == "voice") 10f else 17f
                 row.addView(key)
             }
             grid.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         }
-        body.addView(grid, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+        body.addView(grid, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.65f))
 
         val actions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = android.view.Gravity.CENTER }
-        listOf("⌫" to { deleteStroke() }, "↵" to { sendEnterKey() }, ui("清空", "Clear") to { clearStrokes() }, "123" to { strokeNumberMode = true; refreshInputView() }).forEach { (label, action) ->
-            actions.addView(keyboardKey(label, 1f, action).apply {
-                textSize = 17f
+        listOf("←" to { deleteStroke() }, "↵" to { sendEnterKey() }, "清除" to { clearStrokes() }, "123" to { strokeNumberMode = true; refreshInputView() }).forEach { (label, action) ->
+            actions.addView(keyboardKey(label, 1f, action, repeatOnLongPress = label == "←", repeatAction = action,
+                graphicActionCode = label).apply {
+                textSize = if (label == "←" || label == "↵") 30f else 17f
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
                     setMargins(dp(1), dp(2), dp(1), dp(2))
                 }
-                background = roundedButton(Color.rgb(92, 28, 48), dp(7))
+                background = roundedButton(Color.rgb(153, 26, 40), dp(5))
             })
         }
-        body.addView(actions, LinearLayout.LayoutParams(dp(58), ViewGroup.LayoutParams.MATCH_PARENT))
+        body.addView(actions, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.19f))
         root.addView(body, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         // Rebuilds caused by switching back from the numeric panel must restore
         // both the visible code and its candidates from the retained buffer.
@@ -525,7 +556,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                     label == ui("符号", "Symbols") -> ({ currentInputConnection?.commitText("#", 1) })
                     else -> ({ currentInputConnection?.commitText(label, 1) })
                 }
-                row.addView(keyboardKey(label, 1f, action).apply {
+                row.addView(keyboardKey(label, 1f, action, repeatOnLongPress = rowIndex == 0 && isAction, repeatAction = action).apply {
                     textSize = if (isAction) 15f else 20f
                     if (isAction) background = roundedButton(Color.rgb(153, 26, 40), dp(7))
                 })
@@ -553,7 +584,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             if (query != strokeQueryEpoch || inputMode != InputMode.STROKE) return@searchAsync
             strokeCandidates?.removeAllViews()
             result.forEach { candidate ->
-                strokeCandidates?.addView(keyboardKey(outputScript(candidate), 1f) { commitStrokeCandidate(candidate) }.apply {
+                strokeCandidates?.addView(keyboardKey(outputScript(candidate), 1f, action = { commitStrokeCandidate(candidate) }).apply {
                     textSize = 18f
                     setSingleLine(true)
                     maxLines = 1
@@ -617,7 +648,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 val matchedPrefix = candidate.matchedPrefix.ifEmpty { context }
                 val displayText = outputScript(candidate.text)
                 val candidateWidth = dp((displayText.codePointCount(0, displayText.length) * 26 + 20).coerceAtLeast(52))
-                strokeCandidates?.addView(keyboardKey(displayText, 1f) { commitAssociation(candidate.text, matchedPrefix) }.apply {
+                strokeCandidates?.addView(keyboardKey(displayText, 1f, action = { commitAssociation(candidate.text, matchedPrefix) }).apply {
                     textSize = 18f
                     setSingleLine(true)
                     maxLines = 1
@@ -644,26 +675,177 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             gravity = android.view.Gravity.CENTER
         }
         keys.forEach { key ->
-            row.addView(keyboardKey(key, 1f) { handleKeyboardKey(key) })
+            row.addView(keyboardKey(
+                key,
+                1f,
+                { handleKeyboardKey(key) },
+                repeatOnLongPress = key == "⌫",
+                repeatAction = { currentInputConnection?.deleteSurroundingText(1, 0) },
+            ))
         }
         parent.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
     }
 
-    private fun keyboardKey(label: String, weight: Float, action: () -> Unit): TextView {
-        return TextView(this).apply {
-            text = if ('\n' in label) {
+    private fun keyboardKey(
+        label: String,
+        weight: Float,
+        action: () -> Unit = {},
+        repeatOnLongPress: Boolean = false,
+        repeatAction: (() -> Unit)? = null,
+        swipeUpAction: (() -> Unit)? = null,
+        swipePreview: String? = null,
+        microphoneIcon: Boolean = false,
+        strokeIconCode: String? = null,
+        graphicCode: String? = null,
+        graphicActionCode: String? = null,
+    ): TextView {
+        val keyView = when {
+            microphoneIcon -> MicrophoneKeyView(this)
+            strokeIconCode != null -> StrokeKeyView(this, strokeIconCode)
+            graphicCode != null -> StrokeGlyphView(this, graphicCode)
+            graphicActionCode != null -> StrokeActionView(this, graphicActionCode)
+            label == "←" || label == "↵" -> ActionSymbolView(this, label)
+            else -> TextView(this)
+        }
+        return keyView.apply {
+            text = if (strokeIconCode != null || graphicCode != null || graphicActionCode != null) {
+                ""
+            } else if ('\n' in label) {
                 android.text.SpannableString(label).apply {
                     setSpan(android.text.style.RelativeSizeSpan(0.55f), 0, 1, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
             } else label
-            textSize = if (label == "return") 17f else 22f
-            gravity = android.view.Gravity.CENTER
+            textSize = if (microphoneIcon) 10f else if (strokeIconCode != null) 1f else if (label == "return") 17f else 22f
+            gravity = if (microphoneIcon) android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL else android.view.Gravity.CENTER
+            if (microphoneIcon) setPadding(0, dp(2), 0, 0)
             setTextColor(Color.rgb(245, 245, 245))
-            background = roundedButton(Color.rgb(78, 78, 78), dp(10))
+            background = roundedButton(Color.rgb(52, 52, 54), dp(5))
+            // Keep the existing palette and geometry, but give each key a subtle raised surface.
+            elevation = dp(5).toFloat()
+            translationZ = dp(1).toFloat()
             contentDescription = label.ifBlank { ui("空格", "Space") }
-            setOnClickListener { action() }
+            var suppressNextClick = false
+            var downY = 0f
+            var swipePopup: android.widget.PopupWindow? = null
+            setOnClickListener {
+                if (suppressNextClick) {
+                    suppressNextClick = false
+                } else {
+                    action()
+                }
+            }
+            val repeatHandler = if (repeatOnLongPress && repeatAction != null) {
+                Handler(Looper.getMainLooper())
+            } else null
+            val repeatRunnable = if (repeatHandler != null && repeatAction != null) {
+                object : Runnable {
+                    override fun run() {
+                        repeatAction.invoke()
+                        repeatHandler.postDelayed(this, keyRepeatIntervalMs())
+                    }
+                }
+            } else null
+            if (repeatHandler != null && repeatRunnable != null && repeatAction != null) {
+                setOnLongClickListener {
+                    repeatAction.invoke()
+                    repeatHandler.postDelayed(repeatRunnable, keyRepeatIntervalMs())
+                    true
+                }
+            }
+            setOnTouchListener { view, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        downY = event.y
+                        view.animate()
+                            .scaleX(0.97f)
+                            .scaleY(0.97f)
+                            .translationZ(dp(3).toFloat())
+                            .alpha(0.90f)
+                            .setDuration(65L)
+                            .start()
+                        performKeyHaptic()
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        if (swipePopup == null && swipeUpAction != null && swipePreview != null && downY - event.y >= dp(10)) {
+                            val preview = TextView(this@OpenLessImeService).apply {
+                                text = swipePreview
+                                textSize = 22f
+                                gravity = android.view.Gravity.CENTER
+                                setTextColor(Color.WHITE)
+                                background = GradientDrawable().apply {
+                                    shape = GradientDrawable.RECTANGLE
+                                    cornerRadius = dp(10).toFloat()
+                                    setColor(Color.argb(205, 65, 65, 65))
+                                    setStroke(dp(1), Color.rgb(105, 105, 105))
+                                }
+                            }
+                            swipePopup = android.widget.PopupWindow(
+                                preview,
+                                dp(64),
+                                dp(40),
+                                false,
+                            ).apply {
+                                isClippingEnabled = false
+                                elevation = dp(6).toFloat()
+                                showAtLocation(
+                                    view.rootView,
+                                    android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL,
+                                    0,
+                                    dp(8),
+                                )
+                            }
+                        }
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        if (event.actionMasked == MotionEvent.ACTION_UP && swipeUpAction != null && downY - event.y >= dp(10)) {
+                            swipeUpAction.invoke()
+                            suppressNextClick = true
+                        }
+                        repeatHandler?.let { handler ->
+                            repeatRunnable?.let { handler.removeCallbacks(it) }
+                        }
+                        swipePopup?.dismiss()
+                        swipePopup = null
+                        view.animate()
+                            .scaleX(1f)
+                            .scaleY(1f)
+                            .translationZ(0f)
+                            .alpha(1f)
+                            .setDuration(90L)
+                            .start()
+                    }
+                }
+                false
+            }
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, weight).apply {
                 setMargins(dp(3), dp(3), dp(3), dp(3))
+            }
+        }
+    }
+
+    private fun keyRepeatIntervalMs(): Long {
+        return getSharedPreferences("openless_ime_ui", MODE_PRIVATE)
+            .getLong("key_haptic_repeat_interval_ms", 60L)
+            .coerceIn(30L, 200L)
+    }
+
+    private fun performKeyHaptic() {
+        val preferences = getSharedPreferences("openless_ime_ui", MODE_PRIVATE)
+        if (!preferences.getBoolean("key_haptic_enabled", true)) return
+        val durationMs = preferences.getLong("key_haptic_duration_ms", 12L).coerceIn(1L, 100L)
+        val amplitude = preferences.getInt("key_haptic_amplitude", 55).coerceIn(1, 255)
+        runCatching {
+            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(VibrationEffect.createOneShot(durationMs, amplitude))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(durationMs)
             }
         }
     }
@@ -903,12 +1085,37 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
-    private fun roundedButton(color: Int, radius: Int): GradientDrawable {
-        return GradientDrawable().apply {
+    private fun roundedButton(color: Int, radius: Int): android.graphics.drawable.Drawable {
+        val lowerEdge = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = radius.toFloat()
-            setColor(color)
+            setColor(mixColor(color, Color.BLACK, 0.72f))
         }
+        val face = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = radius.toFloat()
+            orientation = GradientDrawable.Orientation.TOP_BOTTOM
+            colors = intArrayOf(
+                mixColor(color, Color.WHITE, 0.09f),
+                color,
+                mixColor(color, Color.BLACK, 0.18f),
+            )
+            setStroke(dp(1), mixColor(color, Color.BLACK, 0.55f))
+        }
+        return android.graphics.drawable.LayerDrawable(arrayOf(lowerEdge, face)).apply {
+            // The exposed lower layer forms the reference keyboard's dark keycap step.
+            setLayerInset(0, 0, dp(2), 0, 0)
+            setLayerInset(1, 0, 0, 0, dp(3))
+        }
+    }
+
+    private fun mixColor(first: Int, second: Int, amount: Float): Int {
+        val ratio = amount.coerceIn(0f, 1f)
+        return Color.rgb(
+            (Color.red(first) + (Color.red(second) - Color.red(first)) * ratio).toInt(),
+            (Color.green(first) + (Color.green(second) - Color.green(first)) * ratio).toInt(),
+            (Color.blue(first) + (Color.blue(second) - Color.blue(first)) * ratio).toInt(),
+        )
     }
 
     private fun startRuntimeService() {
@@ -1032,6 +1239,264 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 })
             }
             return true
+        }
+    }
+
+    /** Central stroke keys use a canvas glyph so their proportions do not depend on a font. */
+    private class StrokeGlyphView(
+        context: android.content.Context,
+        private val glyphCode: String,
+    ) : TextView(context) {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(232, 232, 232)
+            textAlign = Paint.Align.CENTER
+            typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val unit = minOf(width, height).coerceAtLeast(1) / 100f
+            val x = width / 2f
+            paint.style = Paint.Style.FILL
+            paint.textSize = 19f * unit
+            val text = when (glyphCode) {
+                "*" -> "通配"
+                " " -> "分词"
+                ":" -> ":"
+                ";" -> ";"
+                "symbols" -> "符号"
+                "script" -> "繁"
+                else -> glyphCode
+            }
+            val top = when (glyphCode) {
+                "*" -> "6"
+                " " -> "7"
+                ":" -> "8"
+                ";" -> "9"
+                else -> ""
+            }
+            if (top.isNotEmpty()) {
+                paint.color = Color.rgb(155, 155, 155)
+                paint.textSize = 20f * unit
+                canvas.drawText(top, x, 20f * unit, paint)
+                paint.color = Color.rgb(232, 232, 232)
+            }
+            paint.textSize = if (text in listOf("符号", "通配", "分词", "繁")) 28f * unit else 27f * unit
+            canvas.drawText(text, x, if (top.isEmpty()) 61f * unit else 76f * unit, paint)
+        }
+    }
+
+    /** Red actions are also custom-drawn to keep the reference glyph geometry stable. */
+    private class StrokeActionView(
+        context: android.content.Context,
+        private val actionCode: String,
+    ) : TextView(context) {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            style = Paint.Style.STROKE
+            strokeWidth = 5.2f
+            strokeCap = Paint.Cap.SQUARE
+            strokeJoin = Paint.Join.MITER
+        }
+        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textAlign = Paint.Align.CENTER
+            typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val u = minOf(width, height).coerceAtLeast(1) / 100f
+            val cx = width / 2f
+            val cy = height / 2f
+            paint.strokeWidth = 5.2f * u
+            when (actionCode) {
+                "←" -> {
+                    canvas.drawLine(cx - 23f * u, cy, cx + 23f * u, cy, paint)
+                    canvas.drawLine(cx - 23f * u, cy, cx - 8f * u, cy - 12f * u, paint)
+                    canvas.drawLine(cx - 23f * u, cy, cx - 8f * u, cy + 12f * u, paint)
+                }
+                "↵" -> {
+                    val path = Path().apply {
+                        moveTo(cx + 23f * u, cy - 14f * u)
+                        lineTo(cx + 23f * u, cy + 5f * u)
+                        quadTo(cx + 23f * u, cy + 15f * u, cx + 13f * u, cy + 15f * u)
+                        lineTo(cx - 22f * u, cy + 15f * u)
+                    }
+                    canvas.drawPath(path, paint)
+                    canvas.drawLine(cx - 22f * u, cy + 15f * u, cx - 10f * u, cy + 5f * u, paint)
+                    canvas.drawLine(cx - 22f * u, cy + 15f * u, cx - 10f * u, cy + 25f * u, paint)
+                }
+                else -> {
+                    textPaint.textSize = if (actionCode == "清除") 27f * u else 25f * u
+                    canvas.drawText(actionCode, cx, cy - (textPaint.ascent() + textPaint.descent()) / 2f, textPaint)
+                }
+            }
+        }
+    }
+
+    private class StrokeKeyView(
+        context: android.content.Context,
+        private val strokeCode: String,
+    ) : TextView(context) {
+        private val numberPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(155, 155, 155)
+            textAlign = Paint.Align.CENTER
+            typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
+        }
+        private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(232, 232, 232)
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val unit = minOf(width, height).coerceAtLeast(1) / 100f
+            val centerX = width / 2f
+            val topNumber = when (strokeCode) {
+                "h" -> "1"
+                "s" -> "2"
+                "p" -> "3"
+                "n" -> "4"
+                else -> "5"
+            }
+            numberPaint.textSize = 20f * unit
+            canvas.drawText(topNumber, centerX, 20f * unit, numberPaint)
+
+            strokePaint.strokeWidth = 3.2f * unit
+            val stroke = Path()
+            when (strokeCode) {
+                "h" -> {
+                    stroke.moveTo(centerX - 20f * unit, 62f * unit)
+                    stroke.lineTo(centerX + 20f * unit, 62f * unit)
+                }
+                "s" -> {
+                    stroke.moveTo(centerX, 42f * unit)
+                    stroke.lineTo(centerX, 79f * unit)
+                }
+                "p" -> {
+                    stroke.moveTo(centerX + 13f * unit, 43f * unit)
+                    stroke.cubicTo(centerX + 10f * unit, 55f * unit, centerX - 2f * unit, 72f * unit, centerX - 16f * unit, 79f * unit)
+                }
+                "n" -> {
+                    stroke.moveTo(centerX - 11f * unit, 48f * unit)
+                    stroke.cubicTo(centerX - 4f * unit, 57f * unit, centerX + 3f * unit, 68f * unit, centerX + 11f * unit, 76f * unit)
+                }
+                else -> {
+                    // Draw the reference's折笔 directly: a clean descending stroke
+                    // from upper-right to lower-left, then a horizontal finish to the right.
+                    stroke.moveTo(centerX + 12f * unit, 44f * unit)
+                    stroke.lineTo(centerX - 8f * unit, 75f * unit)
+                    stroke.lineTo(centerX + 17f * unit, 75f * unit)
+                }
+            }
+            canvas.drawPath(stroke, strokePaint)
+        }
+    }
+
+    private class ActionSymbolView(
+        context: android.content.Context,
+        private val symbol: String,
+    ) : TextView(context) {
+        private val symbolPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.SQUARE
+            strokeJoin = Paint.Join.ROUND
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val unit = minOf(width, height).coerceAtLeast(1) / 100f
+            val centerX = width / 2f
+            val centerY = height / 2f
+            symbolPaint.strokeWidth = 5.5f * unit
+            if (symbol == "←") {
+                val left = centerX - 27f * unit
+                val right = centerX + 27f * unit
+                canvas.drawLine(left + 13f * unit, centerY, right, centerY, symbolPaint)
+                val arrow = Path().apply {
+                    moveTo(left + 13f * unit, centerY)
+                    lineTo(left + 27f * unit, centerY - 12f * unit)
+                    moveTo(left + 13f * unit, centerY)
+                    lineTo(left + 27f * unit, centerY + 12f * unit)
+                }
+                canvas.drawPath(arrow, symbolPaint)
+            } else {
+                val path = Path().apply {
+                    moveTo(centerX + 29f * unit, centerY - 14f * unit)
+                    lineTo(centerX + 29f * unit, centerY + 8f * unit)
+                    lineTo(centerX + 21f * unit, centerY + 18f * unit)
+                    lineTo(centerX + 7f * unit, centerY + 18f * unit)
+                    lineTo(centerX - 25f * unit, centerY + 18f * unit)
+                }
+                canvas.drawPath(path, symbolPaint)
+                val arrow = Path().apply {
+                    moveTo(centerX - 25f * unit, centerY + 18f * unit)
+                    lineTo(centerX - 12f * unit, centerY + 8f * unit)
+                    moveTo(centerX - 25f * unit, centerY + 18f * unit)
+                    lineTo(centerX - 12f * unit, centerY + 28f * unit)
+                }
+                canvas.drawPath(arrow, symbolPaint)
+            }
+        }
+    }
+
+    private class MicrophoneKeyView(context: android.content.Context) : TextView(context) {
+        private val microphonePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(190, 190, 190)
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            style = Paint.Style.FILL
+        }
+        private val cherryPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(196, 0, 58)
+            textAlign = Paint.Align.CENTER
+            typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            // Keep the same proportions as VoiceButton, but leave room for the small 0 label.
+            val unit = minOf(width, height).coerceAtLeast(1) / 160f
+            val centerX = width / 2f
+            val centerY = height * 0.56f
+            val bodyWidth = 11.5f * unit
+            val bodyTop = centerY - 24f * unit
+            val bodyBottom = centerY + 20f * unit
+            canvas.drawRoundRect(
+                centerX - bodyWidth,
+                bodyTop,
+                centerX + bodyWidth,
+                bodyBottom,
+                bodyWidth,
+                bodyWidth,
+                microphonePaint,
+            )
+            microphonePaint.style = Paint.Style.STROKE
+            microphonePaint.strokeWidth = 4.5f * unit
+            val arc = Path().apply {
+                moveTo(centerX - 19f * unit, centerY + 8f * unit)
+                cubicTo(
+                    centerX - 18f * unit, centerY + 25f * unit,
+                    centerX - 9f * unit, centerY + 30f * unit,
+                    centerX, centerY + 30f * unit,
+                )
+                cubicTo(
+                    centerX + 9f * unit, centerY + 30f * unit,
+                    centerX + 18f * unit, centerY + 25f * unit,
+                    centerX + 19f * unit, centerY + 8f * unit,
+                )
+            }
+            canvas.drawPath(arc, microphonePaint)
+            canvas.drawLine(
+                centerX,
+                centerY + 30f * unit,
+                centerX,
+                centerY + 39f * unit,
+                microphonePaint,
+            )
+            microphonePaint.style = Paint.Style.FILL
+            cherryPaint.textSize = 12f * unit
+            canvas.drawText("CHERRY◆", centerX, height - 18f * unit, cherryPaint)
         }
     }
 
@@ -1164,7 +1629,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     companion object {
         private const val TEST_TEXT = "OpenLess IME 测试上屏"
         private const val MAX_ASSOCIATION_CONTEXT = 8
-
         @Volatile
         private var activeInstance: java.lang.ref.WeakReference<OpenLessImeService>? = null
 
