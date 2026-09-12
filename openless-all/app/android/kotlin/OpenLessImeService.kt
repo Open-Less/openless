@@ -381,7 +381,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         val candidateRow = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
         val candidatesScroll = android.widget.HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
+            isFillViewport = false
+            overScrollMode = View.OVER_SCROLL_NEVER
             strokeCandidates = LinearLayout(context).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
+            strokeCandidates?.orientation = LinearLayout.HORIZONTAL
             addView(strokeCandidates, ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
         }
         candidateRow.addView(candidatesScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)))
@@ -405,7 +408,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             listOf("1\n一" to "h", "2\n丨" to "s", "3\n丿" to "p"),
             listOf("4\n丶" to "n", "5\n乛" to "z", "6\n${ui("通配", "Wildcard")}" to "*"),
             listOf("7\n${ui("分词", "Word")}" to " ", "8\n：" to ":", "9\n；" to ";"),
-            listOf(ui("简繁", "CN") to "script", "⌨" to "voice", ui("符号", "Symbols") to "symbols"),
+            listOf("繁" to "script", "⌨" to "voice", ui("符号", "Symbols") to "symbols"),
         )
         strokeRows.forEach { rowItems ->
             val row = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
