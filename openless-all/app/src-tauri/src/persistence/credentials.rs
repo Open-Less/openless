@@ -327,8 +327,8 @@ struct CredsAsrEntry {
     authMode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     volcengineService: Option<String>,
-    /// 方舟（Ark）API Key —— 仅 `api_key` 鉴权模式使用，与旧版 Access Token 槽位
-    /// (`accessKey`) 隔离，避免两模式切换时残留凭据互相污染。
+    /// ASR API Key —— 普通服务 API Key 鉴权或 Agent Plan 使用，与旧版 Access Token 槽位
+    /// (`accessKey`) 隔离，避免不同鉴权方式的凭据互相污染。
     #[serde(skip_serializing_if = "Option::is_none")]
     volcengineApiKey: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1818,7 +1818,7 @@ pub enum CredentialAccount {
     VolcengineResourceId,
     VolcengineService,
     VolcengineAuthMode,
-    /// 方舟（Ark）语音模型 API Key（`api_key` 鉴权模式使用，独立于旧版 Access Token 槽位）。
+    /// ASR API Key（普通服务 API Key 鉴权或 Agent Plan 使用，独立于旧版 Access Token 槽位）。
     VolcengineApiKey,
     ArkApiKey,
     ArkModelId,

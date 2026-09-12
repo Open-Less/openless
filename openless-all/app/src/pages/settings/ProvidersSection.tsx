@@ -545,7 +545,7 @@ export function ChannelCredentialFields({
           </ChannelFormRow>
         )}
         {/* 两种模式使用各自独立的凭据槽位：旧版 Access Token（volcengine.access_key）
-            与方舟 API Key（volcengine.api_key）互不预填，切换模式不会残留混淆。 */}
+            与 ASR API Key（volcengine.api_key，普通服务 API Key 鉴权或 Agent Plan 使用）互不预填。 */}
         {!agentPlan && volcengineAuthMode === 'app_id_token' ? (
           <>
             <CredentialField

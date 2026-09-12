@@ -16,10 +16,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex, Notify};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::HeaderValue;
-use tokio_tungstenite::tungstenite::{
-    handshake::client::Request as WebSocketRequest,
-    Error as WebSocketError, Message,
-};
+use tokio_tungstenite::tungstenite::{handshake::client::Request as WebSocketRequest, Message};
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use uuid::Uuid;
 
@@ -56,9 +53,10 @@ const CONNECT_RETRY_BACKOFF: Duration = Duration::from_millis(250);
 /// Volcengine ASR 鉴权模式。
 ///
 /// - `AppIdToken`：旧版语音控制台应用，使用 `X-Api-App-Key` + `X-Api-Access-Key` 双表头鉴权。
-/// - `ApiKey`：新版方舟（Ark）语音模型，使用单个 `X-Api-Key` 表头鉴权。
+/// - `ApiKey`：普通服务 API Key 或 Agent Plan 专属 API Key，使用单个 `X-Api-Key` 表头鉴权。
 ///
-/// 两种模式共享完全相同的 WebSocket 端点与二进制帧协议，仅握手鉴权头不同。
+/// 普通服务下，两种模式共享 WebSocket 端点与二进制帧协议，仅握手鉴权头不同。
+/// Agent Plan 按服务选择专属端点，并固定使用 ApiKey 鉴权。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VolcengineAuthMode {
     AppIdToken,
@@ -83,7 +81,7 @@ impl VolcengineAuthMode {
     /// 当前模式下所需凭据是否齐备（统一 trim 语义）。
     ///
     /// `secret` 的语义随模式：AppIdToken = Access Token（旧版语音控制台），
-    /// ApiKey = 方舟语音模型 API Key。`app_id` 仅在 AppIdToken 模式要求非空。
+    /// ApiKey = 普通服务或 Agent Plan 的 ASR API Key。`app_id` 仅在 AppIdToken 模式要求非空。
     ///
     /// 所有按模式判定凭据完整性的入口（`open_session`、`volcengine_configured`、
     /// `ensure_asr_credentials`）都应复用此方法，避免三处规则漂移。
@@ -387,7 +385,7 @@ impl VolcengineStreamingASR {
 
         // 根据鉴权模式选择表头：
         // - AppIdToken：X-Api-App-Key + X-Api-Access-Key（旧版语音控制台）
-        // - ApiKey：X-Api-Key（新版方舟语音模型，单头即可）
+        // - ApiKey：X-Api-Key（普通服务或 Agent Plan 的 ASR API Key，单头即可）
         match auth_mode {
             VolcengineAuthMode::AppIdToken => {
                 headers.insert(
@@ -436,10 +434,7 @@ impl VolcengineStreamingASR {
     /// (hung handshake or a transient blip) doesn't kill the whole dictation.
     /// `AuthRejected` / `RateLimited` short-circuit — bad credentials never heal on
     /// retry, and hammering a rate-limited account only makes the throttle worse.
-    async fn connect_with_retry(
-        &self,
-        connect_id: &str,
-    ) -> Result<WsStream, VolcengineASRError> {
+    async fn connect_with_retry(&self, connect_id: &str) -> Result<WsStream, VolcengineASRError> {
         let mut attempt = 0usize;
         loop {
             attempt += 1;
