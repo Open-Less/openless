@@ -46,6 +46,20 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     private fun ui(zh: String, en: String) = if (englishUi) en else zh
 
+    private fun restoreInputMode() {
+        inputMode = when (getSharedPreferences("openless_ime_ui", MODE_PRIVATE).getString("input_mode", "voice")) {
+            "stroke" -> InputMode.STROKE
+            "english" -> InputMode.ENGLISH
+            else -> InputMode.VOICE
+        }
+    }
+
+    private fun saveInputMode(mode: InputMode) {
+        getSharedPreferences("openless_ime_ui", MODE_PRIVATE).edit()
+            .putString("input_mode", mode.name.lowercase())
+            .apply()
+    }
+
     private fun refreshLanguage() {
         val locale = getSharedPreferences("openless_ime_ui", MODE_PRIVATE)
             .getString("locale", null) ?: resources.configuration.locales[0].toLanguageTag()
@@ -54,6 +68,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     override fun onCreate() {
         super.onCreate()
+        restoreInputMode()
         activeInstance = java.lang.ref.WeakReference(this)
         OpenLessOverlayBridge.imeListener = this
         OpenLessOverlayBridge.imeTextListener = ::commitImeText
@@ -225,6 +240,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private fun buildModeToggle(): View = ModeToggle(this, inputMode, englishUi) { selected ->
         if (recording || processing) cancelDictation()
         inputMode = selected
+        saveInputMode(selected)
         symbolMode = false
         keyboardShift = false
         strokeCode = ""
@@ -368,6 +384,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 }.apply {
                     setOnLongClickListener {
                         inputMode = InputMode.VOICE
+                        saveInputMode(inputMode)
                         clearStrokes()
                         refreshInputView()
                         true
@@ -387,7 +404,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         body.addView(grid, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
 
         val actions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = android.view.Gravity.CENTER }
-        listOf("⌫" to { deleteStroke() }, "↵" to { sendEnterKey() }, ui("清空", "Clear") to { clearStrokes() }, "123" to { inputMode = InputMode.ENGLISH; clearStrokes(); refreshInputView() }).forEach { (label, action) ->
+        listOf("⌫" to { deleteStroke() }, "↵" to { sendEnterKey() }, ui("清空", "Clear") to { clearStrokes() }, "123" to { inputMode = InputMode.ENGLISH; saveInputMode(inputMode); clearStrokes(); refreshInputView() }).forEach { (label, action) ->
             actions.addView(keyboardKey(label, 1f, action).apply {
                 textSize = 17f
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
@@ -547,6 +564,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     override fun onStartInput(attribute: EditorInfo?, restarting: Boolean) {
         super.onStartInput(attribute, restarting)
+        restoreInputMode()
         refreshLanguage()
         startRuntimeService()
         sessionEpoch++
