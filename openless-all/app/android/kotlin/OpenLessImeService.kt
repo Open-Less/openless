@@ -30,6 +30,7 @@ import android.widget.TextView
 /** Minimal system IME surface. Voice transport is intentionally added in a later phase. */
 class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlayStateListener {
     private enum class InputMode { VOICE, STROKE, ENGLISH }
+    private enum class ShiftState { OFF, SHIFT_ONCE, CAPS_LOCK }
 
     private var sessionEpoch = 0L
     private var recording = false
@@ -37,8 +38,23 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var inputMode = InputMode.VOICE
     private var symbolMode = false
     private var strokeNumberMode = false
+    private var numberSymbolMode = false
+    private var symbolPageIndex = 0
+    private val numberPanelSymbolPages = listOf(
+        listOf("、", "。", "，", "；", "：", "？", "！", "…", "—", "～", "·", "（"),
+        listOf("）", "《", "》", "“", "”", "‘", "’", "【", "】", "「", "」", "￥"),
+        listOf("%", "#", "&", "*", "=", "/", "\\", "<", ">", "^", "_", "|"),
+    )
+    private var punctuationGroupIndex = 0
+    private val punctuationGroups = listOf(
+        listOf(",", "°", "?", "!", "~"),
+        listOf(".", "、", ";", ":", "\""),
+        listOf("(", ")", "[", "]", "-"),
+        listOf("@", "#", "$", "%", "&"),
+        listOf("*", "+", "=", "/", "_"),
+    )
     private var traditionalOutput = false
-    private var keyboardShift = false
+    private var shiftState = ShiftState.OFF
     private var state = "idle"
     private var currentMessage = "点击开始说话"
     private var lastBackendWarmupAt = 0L
@@ -51,6 +67,12 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private val userFrequency by lazy { StrokeUserFrequency(this) }
     private var strokeCode = ""
     private var strokeQueryEpoch = 0L
+    // In-memory word-segmentation buffer: characters the user has marked with
+    // 分词 while composing a multi-character word. Never touches the actual
+    // input connection until the assembled word (or its final character) is
+    // committed — see segmentStroke()/commitWord().
+    private val wordSegments = mutableListOf<String>()
+    private var lastStrokeCandidates: List<String> = emptyList()
     private var confirmedText = ""
     private var phraseQueryEpoch = 0L
     private var strokePreview: TextView? = null
@@ -146,7 +168,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         startRuntimeService()
         if (inputMode == InputMode.ENGLISH) return buildKeyboardView()
         if (inputMode == InputMode.STROKE) return if (strokeNumberMode) buildStrokeNumberView() else buildStrokeView()
-        val root = LinearLayout(this).apply {
+        val root = SwipeModeContainer(this) { direction -> swipeInputMode(direction) }.apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(300))
             minimumHeight = dp(300)
@@ -210,72 +232,58 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             clipChildren = false
             clipToPadding = false
         }
-        val inputMethodButton = TextView(this).apply {
-            text = "⌨"
-            textSize = 22f
-            gravity = android.view.Gravity.CENTER
-            setTextColor(Color.rgb(205, 205, 205))
-            contentDescription = ui("切换输入法", "Switch input method")
-            setOnClickListener {
-                (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)
-                    ?.showInputMethodPicker()
+        // @ / return / backspace all use the same keyboardKey() styling as
+        // the stroke panel's own keys — rounded corners + elevation shadow —
+        // instead of the previous ad-hoc pill backgrounds, so this row reads
+        // as consistent with the rest of the keyboard.
+        // Flat pill style matching the mic capsule below (Color.rgb(54,54,54),
+        // fully rounded, no elevation), not the stroke panel's raised-shadow
+        // keys — this row sits directly above the mic and reads oddly if it
+        // looks like a separate raised keyboard instead of part of this page.
+        val footerButtonHeight = dp(48)
+        fun flattenFooterButton(view: TextView) {
+            view.elevation = 0f
+            view.translationZ = 0f
+            // A single flat fill, not roundedButton()'s layered "keycap" look
+            // (gradient face + exposed darker step) — genuinely flat, matching
+            // the mic capsule's own plain drawRoundRect fill exactly.
+            view.background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = (footerButtonHeight / 2).toFloat()
+                setColor(Color.rgb(54, 54, 54))
             }
         }
-        val returnButton = TextView(this).apply {
-            text = "return"
-            textSize = 18f
-            gravity = android.view.Gravity.CENTER
-            setTextColor(Color.WHITE)
-            background = roundedButton(Color.rgb(82, 82, 82), dp(24))
-            contentDescription = ui("回车", "Return")
-            setOnClickListener {
-                currentInputConnection?.sendKeyEvent(android.view.KeyEvent(
-                    android.view.KeyEvent.ACTION_DOWN,
-                    android.view.KeyEvent.KEYCODE_ENTER,
-                ))
-                currentInputConnection?.sendKeyEvent(android.view.KeyEvent(
-                    android.view.KeyEvent.ACTION_UP,
-                    android.view.KeyEvent.KEYCODE_ENTER,
-                ))
-            }
-        }
-        val backspaceButton = TextView(this).apply {
-            text = "⌫"
-            textSize = 23f
-            gravity = android.view.Gravity.CENTER
-            setTextColor(Color.WHITE)
-            background = roundedButton(Color.rgb(68, 68, 68), dp(20))
-            contentDescription = ui("退格", "Backspace")
-            setOnClickListener { currentInputConnection?.deleteSurroundingText(1, 0) }
-        }
-        val atButton = TextView(this).apply {
-            text = "@"
-            textSize = 23f
-            gravity = android.view.Gravity.CENTER
-            setTextColor(Color.WHITE)
-            background = roundedButton(Color.rgb(68, 68, 68), dp(20))
+        val atButton = keyboardKey("@", 1f, action = { currentInputConnection?.commitText("@", 1) }).apply {
+            textSize = 20f
             contentDescription = ui("输入 @", "Insert at sign")
-            setOnClickListener { currentInputConnection?.commitText("@", 1) }
+            layoutParams = LinearLayout.LayoutParams(dp(84), footerButtonHeight)
+            flattenFooterButton(this)
         }
-        val sideButtons = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = android.view.Gravity.CENTER
-            // Lift the two utility buttons slightly above the bottom edge while
-            // keeping the fixed 300dp keyboard panel height unchanged.
-            translationY = -dp(10).toFloat()
-            // 单独留出足够高度，避免退格按钮被语音区域或父布局裁切。
-            addView(backspaceButton, LinearLayout.LayoutParams(dp(44), dp(36)))
-            addView(atButton, LinearLayout.LayoutParams(dp(44), dp(36)).apply {
-                topMargin = dp(12)
-            })
+        val returnButton = keyboardKey("return", 1f, action = { sendEnterKey() }).apply {
+            textSize = 18f
+            contentDescription = ui("回车", "Return")
+            layoutParams = LinearLayout.LayoutParams(dp(120), footerButtonHeight)
+            flattenFooterButton(this)
         }
-        footer.addView(inputMethodButton, LinearLayout.LayoutParams(dp(44), dp(84)))
+        val backspaceButton = keyboardKey(
+            "⌫",
+            1f,
+            action = { currentInputConnection?.deleteSurroundingText(1, 0) },
+            repeatOnLongPress = true,
+            repeatAction = { currentInputConnection?.deleteSurroundingText(1, 0) },
+        ).apply {
+            textSize = 22f
+            contentDescription = ui("退格", "Backspace")
+            layoutParams = LinearLayout.LayoutParams(dp(84), footerButtonHeight)
+            flattenFooterButton(this)
+        }
         val returnHolder = LinearLayout(this).apply {
             gravity = android.view.Gravity.CENTER
-            addView(returnButton, LinearLayout.LayoutParams(dp(120), dp(48)))
+            addView(returnButton)
         }
+        footer.addView(atButton)
         footer.addView(returnHolder, LinearLayout.LayoutParams(0, dp(84), 1f))
-        footer.addView(sideButtons, LinearLayout.LayoutParams(dp(44), dp(84)))
+        footer.addView(backspaceButton)
         root.addView(footer, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             dp(84),
@@ -287,13 +295,18 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         setInputView(onCreateInputView())
     }
 
-    private fun buildModeToggle(): View = ModeToggle(this, inputMode) { selected ->
+    private fun buildModeToggle(): View = ModeToggle(this, inputMode) { selected -> selectInputMode(selected) }
+
+    private fun selectInputMode(selected: InputMode) {
         if (recording || processing) cancelDictation()
         inputMode = selected
         saveInputMode(selected)
         symbolMode = false
         strokeNumberMode = false
-        keyboardShift = false
+        numberSymbolMode = false
+        symbolPageIndex = 0
+        punctuationGroupIndex = 0
+        shiftState = ShiftState.OFF
         strokeCode = ""
         strokeQueryEpoch++
         confirmedText = ""
@@ -301,8 +314,19 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         refreshInputView()
     }
 
+    /**
+     * Left/right swipe on any panel steps through the same Voice-Stroke-English
+     * order as the toggle switch, clamped at both ends (no wraparound) —
+     * swiping left keeps landing on Voice, right keeps landing on English.
+     */
+    private fun swipeInputMode(direction: Int) {
+        val modes = InputMode.entries
+        val next = modes[(inputMode.ordinal + direction).coerceIn(0, modes.lastIndex)]
+        if (next != inputMode) selectInputMode(next)
+    }
+
     private fun buildKeyboardView(): View {
-        val root = LinearLayout(this).apply {
+        val root = SwipeModeContainer(this) { direction -> swipeInputMode(direction) }.apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(300))
             minimumHeight = dp(300)
@@ -352,7 +376,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }
         val modeButton = keyboardKey(if (symbolMode) "ABC" else ui("符号", "#+="), 1f, action = {
             symbolMode = !symbolMode
-            keyboardShift = false
+            shiftState = ShiftState.OFF
             refreshInputView()
         })
         val spaceButton = keyboardKey("", 2.7f, action = {
@@ -369,7 +393,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     private fun buildStrokeView(): View {
-        val root = LinearLayout(this).apply {
+        val root = SwipeModeContainer(this) { direction -> swipeInputMode(direction) }.apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(300))
             minimumHeight = dp(300)
@@ -427,13 +451,19 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         root.addView(top, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(60)))
 
         val body = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
-        val punctuation = LinearLayout(this).apply {
+        // Swiping the rail up/down cycles through punctuationGroups instead of
+        // scrolling — one swipe always advances exactly one group.
+        val punctuation = SwipeRail(this) { direction ->
+            val count = punctuationGroups.size
+            punctuationGroupIndex = ((punctuationGroupIndex + direction) % count + count) % count
+            refreshInputView()
+        }.apply {
             orientation = LinearLayout.VERTICAL
             gravity = android.view.Gravity.CENTER
             setPadding(dp(2), dp(2), dp(2), dp(2))
             background = roundedButton(Color.rgb(45, 45, 45), dp(4))
         }
-        listOf(",", "°", "?", "!", "~").forEachIndexed { index, mark ->
+        punctuationGroups[punctuationGroupIndex].forEachIndexed { index, mark ->
             punctuation.addView(keyboardKey(mark, 1f, action = { currentInputConnection?.commitText(mark, 1) }).apply {
                 textSize = 18f
                 // The rail is one connected key surface; separators provide the only visual split.
@@ -482,8 +512,13 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                     val swipeDigit = label.substringBefore("\n").takeIf { it.length == 1 && it[0].isDigit() }
                     keyboardKey(label, 1f, action = {
                     when (code) {
-                        "symbols" -> currentInputConnection?.commitText("#", 1)
-                        " " -> currentInputConnection?.commitText(" ", 1)
+                        "symbols" -> {
+                            strokeNumberMode = true
+                            numberSymbolMode = true
+                            symbolPageIndex = 0
+                            refreshInputView()
+                        }
+                        " " -> segmentStroke()
                         else -> if (code in listOf("h", "s", "p", "n", "z", "*")) appendStroke(code) else currentInputConnection?.commitText(code, 1)
                     }
                     }, swipeUpAction = swipeDigit?.let { digit ->
@@ -502,7 +537,12 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         body.addView(grid, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.65f))
 
         val actions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = android.view.Gravity.CENTER }
-        listOf("←" to { deleteStroke() }, "↵" to { sendEnterKey() }, "清除" to { clearStrokes() }, "123" to { strokeNumberMode = true; refreshInputView() }).forEach { (label, action) ->
+        listOf("←" to { deleteStroke() }, "↵" to { sendEnterKey() }, "清除" to { clearStrokes() }, "123" to {
+            strokeNumberMode = true
+            numberSymbolMode = false
+            symbolPageIndex = 0
+            refreshInputView()
+        }).forEach { (label, action) ->
             actions.addView(keyboardKey(label, 1f, action, repeatOnLongPress = label == "←", repeatAction = action,
                 graphicActionCode = label).apply {
                 textSize = if (label == "←" || label == "↵") 30f else 17f
@@ -526,7 +566,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     /** Numeric/symbol quick panel; pending stroke input is intentionally preserved. */
     private fun buildStrokeNumberView(): View {
         refreshLanguage()
-        val root = LinearLayout(this).apply {
+        val root = SwipeModeContainer(this) { direction -> swipeInputMode(direction) }.apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(300))
             minimumHeight = dp(300)
@@ -554,12 +594,27 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             marginEnd = dp(8)
         })
 
-        val rows = listOf(
-            listOf("@", "1", "2", "3", ui("退格", "Backspace")),
-            listOf(":", "4", "5", "6", ui("←", "Back")),
-            listOf(",", "7", "8", "9", ui("麦克风", "Voice")),
-            listOf("+", "-", ".", ui("符号", "Symbols"), ui("返回", "Return")),
-        )
+        // Backspace/Enter/Voice/Return/Symbols stay in Chinese regardless of UI
+        // language: they're functional keys on the number/symbol panel, not
+        // content the user is composing.
+        val rows = if (numberSymbolMode) {
+            val page = numberPanelSymbolPages[symbolPageIndex.coerceIn(numberPanelSymbolPages.indices)]
+            listOf(
+                page.subList(0, 4) + "退格",
+                page.subList(4, 8) + "回车",
+                page.subList(8, 12) + "语音",
+                listOf("▲", "${symbolPageIndex + 1}/${numberPanelSymbolPages.size}", "▼", "数字", "返回"),
+            )
+        } else {
+            listOf(
+                listOf("@", "1", "2", "3", "退格"),
+                listOf(":", "4", "5", "6", "回车"),
+                listOf(",", "7", "8", "9", "语音"),
+                // "0" sits directly under "8", flanked by +/. — the same
+                // layout convention as a phone dial pad's "* 0 #" row.
+                listOf("+", "0", ".", "符号", "返回"),
+            )
+        }
         val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         rows.forEachIndexed { rowIndex, rowItems ->
             val row = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
@@ -572,10 +627,33 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                         inputMode = InputMode.VOICE
                         saveInputMode(inputMode)
                         strokeNumberMode = false
+                        numberSymbolMode = false
+                        symbolPageIndex = 0
                         refreshInputView()
                     })
-                    rowIndex == 3 && isAction -> ({ strokeNumberMode = false; refreshInputView() })
-                    label == ui("符号", "Symbols") -> ({ currentInputConnection?.commitText("#", 1) })
+                    // Symbol-page navigation only replaces row 3's first three
+                    // cells (previously "+ - .") while in symbol mode; the
+                    // middle cell is just a page indicator, not clickable.
+                    rowIndex == 3 && index == 0 && numberSymbolMode -> ({
+                        symbolPageIndex = (symbolPageIndex - 1 + numberPanelSymbolPages.size) % numberPanelSymbolPages.size
+                        refreshInputView()
+                    })
+                    rowIndex == 3 && index == 1 && numberSymbolMode -> ({})
+                    rowIndex == 3 && index == 2 && numberSymbolMode -> ({
+                        symbolPageIndex = (symbolPageIndex + 1) % numberPanelSymbolPages.size
+                        refreshInputView()
+                    })
+                    rowIndex == 3 && index == 3 -> ({
+                        numberSymbolMode = !numberSymbolMode
+                        symbolPageIndex = 0
+                        refreshInputView()
+                    })
+                    rowIndex == 3 && isAction -> ({
+                        strokeNumberMode = false
+                        numberSymbolMode = false
+                        symbolPageIndex = 0
+                        refreshInputView()
+                    })
                     else -> ({ currentInputConnection?.commitText(label, 1) })
                 }
                 row.addView(keyboardKey(label, 1f, action, repeatOnLongPress = rowIndex == 0 && isAction, repeatAction = action).apply {
@@ -593,25 +671,62 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         if (strokeCode.length >= 32) return
         if (strokeCode.isEmpty()) {
             phraseQueryEpoch++
-            strokeCandidates?.removeAllViews()
+            lastStrokeCandidates = emptyList()
+            renderCandidateRow(emptyList())
         }
         strokeCode += stroke
-        strokePreview?.text = displayStrokeCode(strokeCode)
+        updateStrokePreview()
         refreshStrokeCandidates(strokeCode)
+    }
+
+    /** Marks the current character as a word segment without committing it yet. */
+    private fun segmentStroke() {
+        if (strokeCode.isEmpty()) return
+        val candidate = lastStrokeCandidates.firstOrNull() ?: return
+        wordSegments.add(candidate)
+        strokeCode = ""
+        strokeQueryEpoch++
+        lastStrokeCandidates = emptyList()
+        updateStrokePreview()
+        renderCandidateRow(emptyList())
+    }
+
+    private fun updateStrokePreview() {
+        strokePreview?.text = wordSegments.joinToString("") + displayStrokeCode(strokeCode)
     }
 
     private fun refreshStrokeCandidates(code: String) {
         val query = ++strokeQueryEpoch
         strokeRepository.searchAsync(code) { result ->
             if (query != strokeQueryEpoch || inputMode != InputMode.STROKE) return@searchAsync
-            strokeCandidates?.removeAllViews()
-            result.forEach { candidate ->
-                strokeCandidates?.addView(keyboardKey(outputScript(candidate), 1f, action = { commitStrokeCandidate(candidate) }).apply {
-                    textSize = 18f
-                    setSingleLine(true)
-                    maxLines = 1
-                }, LinearLayout.LayoutParams(dp(44), dp(30)))
-            }
+            lastStrokeCandidates = result
+            renderCandidateRow(result)
+        }
+    }
+
+    /**
+     * Renders the stroke candidate row: a leading "commit the whole word"
+     * button for any segments marked via 分词 (if present), followed by the
+     * single-character candidates for the character currently being typed.
+     */
+    private fun renderCandidateRow(strokeMatches: List<String>) {
+        strokeCandidates?.removeAllViews()
+        if (wordSegments.isNotEmpty()) {
+            val word = wordSegments.joinToString("")
+            val displayWord = outputScript(word)
+            val wordWidth = dp((displayWord.codePointCount(0, displayWord.length) * 26 + 20).coerceAtLeast(52))
+            strokeCandidates?.addView(keyboardKey(displayWord, 1f, action = { commitWord(word) }).apply {
+                textSize = 18f
+                setSingleLine(true)
+                maxLines = 1
+            }, LinearLayout.LayoutParams(wordWidth, dp(30)))
+        }
+        strokeMatches.forEach { candidate ->
+            strokeCandidates?.addView(keyboardKey(outputScript(candidate), 1f, action = { commitStrokeCandidate(candidate) }).apply {
+                textSize = 18f
+                setSingleLine(true)
+                maxLines = 1
+            }, LinearLayout.LayoutParams(dp(44), dp(30)))
         }
     }
 
@@ -619,9 +734,17 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         if (strokeCode.isNotEmpty()) {
             strokeCode = strokeCode.dropLast(1)
             strokeQueryEpoch++
-            strokePreview?.text = displayStrokeCode(strokeCode)
-            strokeCandidates?.removeAllViews()
-            if (strokeCode.isNotEmpty()) appendStroke("")
+            updateStrokePreview()
+            if (strokeCode.isNotEmpty()) {
+                appendStroke("")
+            } else {
+                lastStrokeCandidates = emptyList()
+                renderCandidateRow(emptyList())
+            }
+        } else if (wordSegments.isNotEmpty()) {
+            wordSegments.removeAt(wordSegments.lastIndex)
+            updateStrokePreview()
+            renderCandidateRow(emptyList())
         } else {
             currentInputConnection?.deleteSurroundingText(1, 0)
             if (confirmedText.isNotEmpty()) {
@@ -637,19 +760,26 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private fun clearStrokes() {
         strokeCode = ""
         strokeQueryEpoch++
+        wordSegments.clear()
+        lastStrokeCandidates = emptyList()
         strokePreview?.text = ""
         strokeCandidates?.removeAllViews()
     }
 
+    /** Commits the current character together with any segments already marked via 分词. */
     private fun commitStrokeCandidate(candidate: String) {
-        if (isSensitiveField(currentInputEditorInfo)) return
+        commitWord((wordSegments + candidate).joinToString(""))
+    }
+
+    private fun commitWord(word: String) {
+        if (word.isEmpty() || isSensitiveField(currentInputEditorInfo)) return
         val connection = currentInputConnection ?: return
         val contextBeforeCommit = confirmedText.takeLast(MAX_ASSOCIATION_CONTEXT)
-        if (!connection.commitText(outputScript(candidate), 1)) return
+        if (!connection.commitText(outputScript(word), 1)) return
         if (OpenLessAndroidPreferences.strokeUsageEnabled(this)) {
-            userFrequency.record(currentInputEditorInfo?.packageName.orEmpty(), contextBeforeCommit, candidate)
+            userFrequency.record(currentInputEditorInfo?.packageName.orEmpty(), contextBeforeCommit, word)
         }
-        confirmedText = (confirmedText + candidate).takeLast(MAX_ASSOCIATION_CONTEXT)
+        confirmedText = (confirmedText + word).takeLast(MAX_ASSOCIATION_CONTEXT)
         clearStrokes()
         refreshAssociations()
     }
@@ -697,8 +827,16 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             gravity = android.view.Gravity.CENTER
         }
         keys.forEach { key ->
+            // The key's identity (passed to handleKeyboardKey) always stays
+            // lowercase; only the displayed label follows shiftState, so the
+            // keyboard visibly shows what tapping it will actually type.
+            val displayLabel = if (shiftState != ShiftState.OFF && key.length == 1 && key[0].isLetter()) {
+                key.uppercase()
+            } else {
+                key
+            }
             row.addView(keyboardKey(
-                key,
+                displayLabel,
                 1f,
                 { handleKeyboardKey(key) },
                 repeatOnLongPress = key == "⌫",
@@ -727,10 +865,11 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             graphicCode != null -> StrokeGlyphView(this, graphicCode)
             graphicActionCode != null -> StrokeActionView(this, graphicActionCode)
             label == "←" || label == "↵" -> ActionSymbolView(this, label)
+            label == "⇧" -> ShiftKeyView(this, shiftState)
             else -> TextView(this)
         }
         return keyView.apply {
-            text = if (strokeIconCode != null || graphicCode != null || graphicActionCode != null) {
+            text = if (strokeIconCode != null || graphicCode != null || graphicActionCode != null || label == "⇧") {
                 ""
             } else if ('\n' in label) {
                 android.text.SpannableString(label).apply {
@@ -876,19 +1015,26 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         when (key) {
             "⌫" -> currentInputConnection?.deleteSurroundingText(1, 0)
             "⇧" -> {
-                keyboardShift = !keyboardShift
+                // Cycles lowercase -> capitalize-next -> caps-lock -> lowercase.
+                shiftState = when (shiftState) {
+                    ShiftState.OFF -> ShiftState.SHIFT_ONCE
+                    ShiftState.SHIFT_ONCE -> ShiftState.CAPS_LOCK
+                    ShiftState.CAPS_LOCK -> ShiftState.OFF
+                }
                 refreshInputView()
             }
             "ABC" -> {
                 symbolMode = false
-                keyboardShift = false
+                shiftState = ShiftState.OFF
                 refreshInputView()
             }
             else -> {
-                val text = if (keyboardShift && key.length == 1) key.uppercase() else key
+                val text = if (shiftState != ShiftState.OFF && key.length == 1) key.uppercase() else key
                 currentInputConnection?.commitText(text, 1)
-                if (keyboardShift) {
-                    keyboardShift = false
+                // Caps-lock stays on for every letter; a one-shot shift only
+                // capitalizes the single letter that was just typed.
+                if (shiftState == ShiftState.SHIFT_ONCE) {
+                    shiftState = ShiftState.OFF
                     refreshInputView()
                 }
             }
@@ -912,11 +1058,15 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         restoreScriptPreference()
         refreshLanguage()
         strokeNumberMode = false
+        numberSymbolMode = false
+        symbolPageIndex = 0
         startRuntimeService()
         sessionEpoch++
         confirmedText = ""
         phraseQueryEpoch++
         strokeCode = ""
+        wordSegments.clear()
+        lastStrokeCandidates = emptyList()
         recording = false
         processing = false
         if (isSensitiveField(attribute)) {
@@ -1208,6 +1358,124 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         runCatching { stopService(android.content.Intent(this, OpenLessRuntimeService::class.java)) }
     }
 
+    /**
+     * A vertical stack of keys that also recognizes a whole-column swipe:
+     * once a drag exceeds touch slop, this claims the gesture from whichever
+     * child key the drag started on (via onInterceptTouchEvent) so a single
+     * swipe anywhere in the column advances exactly one group, rather than
+     * being absorbed as a press/drag on one key.
+     */
+    private class SwipeRail(
+        context: android.content.Context,
+        private val onSwipe: (Int) -> Unit,
+    ) : LinearLayout(context) {
+        private var startY = 0f
+        private var intercepting = false
+        private val touchSlop = android.view.ViewConfiguration.get(context).scaledTouchSlop
+
+        init {
+            excludeFromSystemGestures(this)
+        }
+
+        override fun onInterceptTouchEvent(ev: android.view.MotionEvent): Boolean {
+            when (ev.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    startY = ev.y
+                    intercepting = false
+                }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    if (!intercepting && kotlin.math.abs(ev.y - startY) > touchSlop) {
+                        intercepting = true
+                        // Stop the outer SwipeModeContainer (or any other
+                        // ancestor) from also trying to claim this gesture
+                        // once we've committed to handling it as a vertical
+                        // drag — otherwise a still-moving finger can flip
+                        // back and forth between the two interceptors.
+                        parent?.requestDisallowInterceptTouchEvent(true)
+                    }
+                }
+            }
+            return intercepting
+        }
+
+        override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
+            if (event.actionMasked == android.view.MotionEvent.ACTION_UP ||
+                event.actionMasked == android.view.MotionEvent.ACTION_CANCEL
+            ) {
+                val dy = startY - event.y
+                // Swiping up (finger moves toward the top, dy > 0) advances to
+                // the next group; swiping down goes back to the previous one.
+                // Posted rather than called inline: onSwipe rebuilds the whole
+                // input view, and doing that synchronously while this touch
+                // gesture is still unwinding through the view we're about to
+                // replace is what caused the panel to visibly flicker
+                // closed/open under the finger.
+                if (kotlin.math.abs(dy) > touchSlop) post { onSwipe(if (dy > 0) 1 else -1) }
+                intercepting = false
+            }
+            return true
+        }
+    }
+
+    /**
+     * Horizontal swipe-to-switch-mode, applied to every panel's root
+     * container: a left/right drag anywhere that isn't already claimed by a
+     * vertical gesture (like SwipeRail) steps the input mode toward
+     * Voice/English, matching the toggle switch's order.
+     */
+    private class SwipeModeContainer(
+        context: android.content.Context,
+        private val onSwipe: (Int) -> Unit,
+    ) : LinearLayout(context) {
+        private var startX = 0f
+        private var startY = 0f
+        private var intercepting = false
+        private val touchSlop = android.view.ViewConfiguration.get(context).scaledTouchSlop
+
+        init {
+            excludeFromSystemGestures(this)
+        }
+
+        override fun onInterceptTouchEvent(ev: android.view.MotionEvent): Boolean {
+            when (ev.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    startX = ev.x
+                    startY = ev.y
+                    intercepting = false
+                }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    val dx = ev.x - startX
+                    val dy = ev.y - startY
+                    // Require a clearly horizontal drag so this never steals a
+                    // vertical gesture meant for a nested SwipeRail.
+                    if (!intercepting && kotlin.math.abs(dx) > touchSlop && kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.5f) {
+                        intercepting = true
+                        parent?.requestDisallowInterceptTouchEvent(true)
+                    }
+                }
+            }
+            return intercepting
+        }
+
+        override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
+            if (event.actionMasked == android.view.MotionEvent.ACTION_UP ||
+                event.actionMasked == android.view.MotionEvent.ACTION_CANCEL
+            ) {
+                val dx = event.x - startX
+                // Swiping left (finger moves toward the start, dx < 0) steps
+                // toward Voice; swiping right steps toward English. (This is
+                // inverted from the raw dx sign — on-device testing showed
+                // dx < 0 landing on English, so the mapping below matches what
+                // actually happens rather than the "obvious" sign.)
+                // Posted for the same reason as SwipeRail: avoid rebuilding
+                // the input view synchronously mid-gesture.
+                if (kotlin.math.abs(dx) > touchSlop) post { onSwipe(if (dx < 0) 1 else -1) }
+                intercepting = false
+            }
+            return true
+        }
+    }
+
     private class ModeToggle(
         context: android.content.Context,
         private val selectedMode: InputMode,
@@ -1431,19 +1699,28 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                     stroke.lineTo(centerX, 79f * unit)
                 }
                 "p" -> {
-                    stroke.moveTo(centerX + 13f * unit, 43f * unit)
-                    stroke.cubicTo(centerX + 10f * unit, 55f * unit, centerX - 2f * unit, 72f * unit, centerX - 16f * unit, 79f * unit)
+                    // Traced from the reference glyph: straight down for most
+                    // of the stroke, hooking left only at the very end — a "J"
+                    // shape, not a curve along its whole length.
+                    stroke.moveTo(centerX - 2f * unit, 38f * unit)
+                    stroke.cubicTo(
+                        centerX - 2f * unit, 55f * unit,
+                        centerX - 5f * unit, 68f * unit,
+                        centerX - 16f * unit, 77f * unit,
+                    )
                 }
                 "n" -> {
-                    stroke.moveTo(centerX - 11f * unit, 48f * unit)
-                    stroke.cubicTo(centerX - 4f * unit, 57f * unit, centerX + 3f * unit, 68f * unit, centerX + 11f * unit, 76f * unit)
+                    // Traced from the reference glyph: a short, straight tick,
+                    // not a long curve — 丶 is a dot/dian, not a swooping line.
+                    stroke.moveTo(centerX - 7f * unit, 50f * unit)
+                    stroke.lineTo(centerX + 6f * unit, 67f * unit)
                 }
                 else -> {
-                    // Draw the reference's折笔 directly: a clean descending stroke
-                    // from upper-right to lower-left, then a horizontal finish to the right.
-                    stroke.moveTo(centerX + 12f * unit, 44f * unit)
-                    stroke.lineTo(centerX - 8f * unit, 75f * unit)
-                    stroke.lineTo(centerX + 17f * unit, 75f * unit)
+                    // Traced from the reference glyph: a diagonal down-left to
+                    // a corner, then a horizontal finish to the right (乙/横折).
+                    stroke.moveTo(centerX + 1f * unit, 42f * unit)
+                    stroke.lineTo(centerX - 13f * unit, 71f * unit)
+                    stroke.lineTo(centerX + 15f * unit, 71f * unit)
                 }
             }
             canvas.drawPath(stroke, strokePaint)
@@ -1493,6 +1770,59 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                     lineTo(centerX - 12f * unit, centerY + 28f * unit)
                 }
                 canvas.drawPath(arrow, symbolPaint)
+            }
+        }
+    }
+
+    /**
+     * The English keyboard's shift key draws one of three distinct icons so
+     * its state is visible at a glance: a hollow arrow (lowercase), a solid
+     * arrow (capitalize the next letter only), or a solid arrow with an
+     * underline bar (caps lock — every letter is capitalized until toggled
+     * off again).
+     */
+    private class ShiftKeyView(
+        context: android.content.Context,
+        private val state: ShiftState,
+    ) : TextView(context) {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            strokeJoin = Paint.Join.ROUND
+            strokeCap = Paint.Cap.ROUND
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val unit = minOf(width, height).coerceAtLeast(1) / 100f
+            val cx = width / 2f
+            val cy = height / 2f - 6f * unit
+            val arrow = Path().apply {
+                moveTo(cx, cy - 20f * unit)
+                lineTo(cx + 17f * unit, cy - 2f * unit)
+                lineTo(cx + 8f * unit, cy - 2f * unit)
+                lineTo(cx + 8f * unit, cy + 15f * unit)
+                lineTo(cx - 8f * unit, cy + 15f * unit)
+                lineTo(cx - 8f * unit, cy - 2f * unit)
+                lineTo(cx - 17f * unit, cy - 2f * unit)
+                close()
+            }
+            when (state) {
+                ShiftState.OFF -> {
+                    paint.style = Paint.Style.STROKE
+                    paint.strokeWidth = 3f * unit
+                    paint.color = Color.rgb(190, 190, 190)
+                }
+                ShiftState.SHIFT_ONCE, ShiftState.CAPS_LOCK -> {
+                    paint.style = Paint.Style.FILL
+                    paint.color = Color.rgb(245, 245, 245)
+                }
+            }
+            canvas.drawPath(arrow, paint)
+            if (state == ShiftState.CAPS_LOCK) {
+                paint.style = Paint.Style.FILL
+                paint.color = Color.rgb(245, 245, 245)
+                canvas.drawRoundRect(
+                    cx - 17f * unit, cy + 22f * unit, cx + 17f * unit, cy + 28f * unit,
+                    3f * unit, 3f * unit, paint,
+                )
             }
         }
     }
@@ -1640,30 +1970,47 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             if (isRecording) {
                 // Monochrome waveform: quiet input stays compact while speech
                 // expands the bars clearly with the live microphone level.
+                // Longer bar group (17 vs the original 9) with a genuine
+                // left-flowing traveling wave — as `phase` advances, the sine
+                // term's peak visibly drifts from higher to lower bar
+                // indices, i.e. right to left — layered on top of the same
+                // bell-shaped envelope (tallest in the middle) as before.
+                // Gap is derived from bar count so the group always spans the
+                // same ~86% of the view width regardless of how many bars.
                 val live = (audioLevel * 1.15f).coerceIn(0f, 1f)
-                val heights = floatArrayOf(.12f, .22f, .40f, .68f, .92f, 1f, .78f, .50f, .28f)
-                val gap = width * 0.095f
-                val startX = centerX - gap * (heights.size - 1) / 2f
-                heights.forEachIndexed { index, heightFactor ->
+                val barCount = 17
+                val envelopeCenter = (barCount - 1) / 2f
+                val gap = width * 0.86f / (barCount - 1)
+                val startX = centerX - gap * (barCount - 1) / 2f
+                for (index in 0 until barCount) {
                     val x = startX + index * gap
-                    val shimmer = 0.82f + 0.18f * kotlin.math.sin(
-                        (phase * 1.8f + index * 1.37f).toDouble(),
+                    val distanceFromCenter = kotlin.math.abs(index - envelopeCenter) / envelopeCenter
+                    val envelope = 1f - distanceFromCenter * distanceFromCenter * 0.75f
+                    val flow = 0.55f + 0.45f * kotlin.math.sin(
+                        (phase * 2.2f + index * 0.9f).toDouble(),
                     ).toFloat()
                     val halfHeight = minOf(height * 0.95f, dp(66).toFloat()) *
-                        (0.035f + live * 0.965f) * heightFactor * shimmer
+                        (0.035f + live * 0.965f) * envelope * flow
                     paint.color = Color.rgb(222, 222, 222)
                     paint.strokeWidth = dp(3).toFloat()
                     canvas.drawLine(x, centerY - halfHeight, x, centerY + halfHeight, paint)
                 }
             } else if (isProcessing) {
-                // Analysis state uses the same restrained monochrome palette.
+                // Analysis state uses the same restrained monochrome palette;
+                // the ring of dots keeps rotating exactly as before, and on
+                // top of that the whole ring's radius now breathes — growing
+                // then shrinking together as one — rather than each dot
+                // sizing itself independently off its own angle.
                 val colors = intArrayOf(
                     Color.rgb(245, 245, 245), Color.rgb(205, 205, 205),
                     Color.rgb(170, 170, 170), Color.rgb(235, 235, 235),
                     Color.rgb(190, 190, 190), Color.rgb(220, 220, 220),
                 )
-                val orbit = minOf(width * 0.28f, height * 0.52f)
-                val dotRadius = minOf(width * 0.055f, height * 0.15f)
+                val baseOrbit = minOf(width * 0.28f, height * 0.52f)
+                val baseDotRadius = minOf(width * 0.055f, height * 0.15f)
+                val breathe = 0.6f + 0.4f * ((1f + kotlin.math.sin((phase * 0.5f).toDouble()).toFloat()) / 2f)
+                val orbit = baseOrbit * breathe
+                val dotRadius = baseDotRadius * breathe
                 colors.forEachIndexed { index, color ->
                     val angle = phase * 0.65f + index * (Math.PI.toFloat() / 3f)
                     val x = centerX + kotlin.math.cos(angle.toDouble()).toFloat() * orbit
@@ -1680,6 +2027,22 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         private const val MAX_ASSOCIATION_CONTEXT = 8
         private const val BACKEND_WARMUP_ATTEMPT_KEY = "backend_warmup_attempt_wall_time"
         private const val BACKEND_WARMUP_RETRY_DELAY_MS = 30_000L
+
+        /**
+         * Opts a view out of Android's system gesture navigation (back/home
+         * edge swipes) so our own in-keyboard swipe gestures aren't preempted
+         * by the OS, which otherwise reads as the IME window flickering
+         * closed and reopening under the user's finger.
+         */
+        fun excludeFromSystemGestures(view: View) {
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) return
+            view.addOnLayoutChangeListener { v, left, top, right, bottom, _, _, _, _ ->
+                if (right > left && bottom > top) {
+                    v.systemGestureExclusionRects = listOf(android.graphics.Rect(0, 0, right - left, bottom - top))
+                }
+            }
+        }
+
         @Volatile
         private var activeInstance: java.lang.ref.WeakReference<OpenLessImeService>? = null
 
