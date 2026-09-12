@@ -30,6 +30,11 @@ internal class StrokeInputRepository(context: Context) {
     private val frequency = AtomicReference<Map<String, Long>>(emptyMap())
     private val loading = Any()
 
+    /** Warm the offline index before the first stroke key is pressed. */
+    fun preloadAsync() {
+        executor.execute { ensureLoaded() }
+    }
+
     private fun loadEntries(context: Context): List<Pair<String, String>> {
         // A character may have more than one valid stroke sequence in Rime.
         // Keep every code here; deduplicate only the rendered character list
@@ -81,6 +86,7 @@ internal class StrokeInputRepository(context: Context) {
         if (index.get().isNotEmpty()) return
         synchronized(loading) {
             if (index.get().isNotEmpty()) return
+            val startedAt = android.os.SystemClock.elapsedRealtime()
             val entries = loadEntries(appContext)
             val buckets = HashMap<String, MutableList<Pair<String, String>>>()
             buckets[""] = entries.toMutableList()
@@ -92,6 +98,11 @@ internal class StrokeInputRepository(context: Context) {
             }
             frequency.set(loadFrequency(appContext))
             index.set(buckets)
+            android.util.Log.i(
+                "OpenLessStroke",
+                "index ready entries=${entries.size} frequency=${frequency.get().size} " +
+                    "elapsed=${android.os.SystemClock.elapsedRealtime() - startedAt}ms",
+            )
         }
     }
 

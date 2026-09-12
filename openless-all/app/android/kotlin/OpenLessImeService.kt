@@ -73,6 +73,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         OpenLessOverlayBridge.imeListener = this
         OpenLessOverlayBridge.imeTextListener = ::commitImeText
         startRuntimeService()
+        // Load the offline stroke dictionary while the IME is idle, so the
+        // first stroke key does not pay the asset parsing cost.
+        strokeRepository.preloadAsync()
     }
 
     override fun onDestroy() {
