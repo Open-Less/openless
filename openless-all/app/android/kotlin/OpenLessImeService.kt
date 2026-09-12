@@ -55,6 +55,18 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         return runCatching { simplifiedToTraditional.transliterate(text) }.getOrDefault(text)
     }
 
+    private fun displayStrokeCode(code: String): String = code.map { stroke ->
+        when (stroke) {
+            'h' -> '一'
+            's' -> '丨'
+            'p' -> '丿'
+            'n' -> '丶'
+            'z' -> '乙'
+            '*' -> '＊'
+            else -> stroke
+        }
+    }.joinToString("")
+
     private fun restoreScriptPreference() {
         val preferences = getSharedPreferences("openless_ime_ui", MODE_PRIVATE)
         traditionalOutput = if (preferences.contains("stroke_traditional_output")) {
@@ -458,7 +470,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // Rebuilds caused by switching back from the numeric panel must restore
         // both the visible code and its candidates from the retained buffer.
         if (strokeCode.isNotEmpty()) {
-            strokePreview?.text = strokeCode
+            strokePreview?.text = displayStrokeCode(strokeCode)
             refreshStrokeCandidates(strokeCode)
         }
         return root
@@ -531,7 +543,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             strokeCandidates?.removeAllViews()
         }
         strokeCode += stroke
-        strokePreview?.text = strokeCode
+        strokePreview?.text = displayStrokeCode(strokeCode)
         refreshStrokeCandidates(strokeCode)
     }
 
@@ -554,7 +566,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         if (strokeCode.isNotEmpty()) {
             strokeCode = strokeCode.dropLast(1)
             strokeQueryEpoch++
-            strokePreview?.text = strokeCode
+            strokePreview?.text = displayStrokeCode(strokeCode)
             strokeCandidates?.removeAllViews()
             if (strokeCode.isNotEmpty()) appendStroke("")
         } else {
