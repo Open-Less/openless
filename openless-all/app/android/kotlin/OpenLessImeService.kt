@@ -9,6 +9,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Shader
 import android.graphics.drawable.GradientDrawable
+import android.icu.text.Transliterator
 import android.inputmethodservice.InputMethodService
 import android.text.InputType
 import android.view.View
@@ -35,6 +36,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var status: TextView? = null
     private var voiceButton: VoiceButton? = null
     private var englishUi = false
+    private val simplifiedToTraditional by lazy { Transliterator.getInstance("Hans-Hant") }
     private val strokeRepository by lazy { StrokeInputRepository(this) }
     private val phraseRepository by lazy { StrokePhraseRepository(this) }
     private val userFrequency by lazy { StrokeUserFrequency(this) }
@@ -46,6 +48,11 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var strokeCandidates: LinearLayout? = null
 
     private fun ui(zh: String, en: String) = if (englishUi) en else zh
+
+    private fun outputScript(text: String): String {
+        if (OpenLessAndroidPreferences.chineseScriptPreference(this) != "traditional") return text
+        return runCatching { simplifiedToTraditional.transliterate(text) }.getOrDefault(text)
+    }
 
     private fun restoreInputMode() {
         inputMode = when (getSharedPreferences("openless_ime_ui", MODE_PRIVATE).getString("input_mode", "voice")) {
@@ -506,7 +513,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             if (query != strokeQueryEpoch || inputMode != InputMode.STROKE) return@searchAsync
             strokeCandidates?.removeAllViews()
             result.forEach { candidate ->
-                strokeCandidates?.addView(keyboardKey(candidate, 1f) { commitStrokeCandidate(candidate) }.apply { textSize = 18f }, LinearLayout.LayoutParams(dp(36), dp(30)))
+                strokeCandidates?.addView(keyboardKey(outputScript(candidate), 1f) { commitStrokeCandidate(candidate) }.apply { textSize = 18f }, LinearLayout.LayoutParams(dp(36), dp(30)))
             }
         }
     }
@@ -541,7 +548,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         if (isSensitiveField(currentInputEditorInfo)) return
         val connection = currentInputConnection ?: return
         val contextBeforeCommit = confirmedText.takeLast(MAX_ASSOCIATION_CONTEXT)
-        if (!connection.commitText(candidate, 1)) return
+        if (!connection.commitText(outputScript(candidate), 1)) return
         userFrequency.record(currentInputEditorInfo?.packageName.orEmpty(), contextBeforeCommit, candidate)
         confirmedText = (confirmedText + candidate).takeLast(MAX_ASSOCIATION_CONTEXT)
         clearStrokes()
@@ -558,7 +565,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             strokeCandidates?.removeAllViews()
             result.forEach { candidate ->
                 val matchedPrefix = candidate.matchedPrefix.ifEmpty { context }
-                strokeCandidates?.addView(keyboardKey(candidate.text, 1f) { commitAssociation(candidate.text, matchedPrefix) }.apply { textSize = 18f }, LinearLayout.LayoutParams(dp(68), dp(30)))
+                strokeCandidates?.addView(keyboardKey(outputScript(candidate.text), 1f) { commitAssociation(candidate.text, matchedPrefix) }.apply { textSize = 18f }, LinearLayout.LayoutParams(dp(68), dp(30)))
             }
         }
     }
@@ -567,7 +574,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         if (isSensitiveField(currentInputEditorInfo) || !displayText.startsWith(matchedContext)) return
         val suffix = displayText.removePrefix(matchedContext)
         val connection = currentInputConnection ?: return
-        if (suffix.isNotEmpty() && !connection.commitText(suffix, 1)) return
+        if (suffix.isNotEmpty() && !connection.commitText(outputScript(suffix), 1)) return
         userFrequency.record(currentInputEditorInfo?.packageName.orEmpty(), matchedContext, displayText)
         confirmedText = (confirmedText + suffix).takeLast(MAX_ASSOCIATION_CONTEXT)
         clearStrokes()

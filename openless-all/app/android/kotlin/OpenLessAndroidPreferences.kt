@@ -15,6 +15,7 @@ object OpenLessAndroidPreferences {
     private const val KEY_OVERLAY_LEFT_SWIPE_ACTION = "androidOverlayLeftSwipeAction"
     private const val KEY_OVERLAY_CANCEL_SWIPE_DIRECTION = "androidOverlayCancelSwipeDirection"
     private const val KEY_OVERLAY_SIZE_DP = "androidOverlaySizeDp"
+    private const val KEY_CHINESE_SCRIPT_PREFERENCE = "chineseScriptPreference"
     private const val DEFAULT_OVERLAY_SIZE_DP = 72
     private const val MIN_OVERLAY_SIZE_DP = 48
     private const val MAX_OVERLAY_SIZE_DP = 120
@@ -57,6 +58,12 @@ object OpenLessAndroidPreferences {
     fun overlaySizeDp(context: Context): Int {
         return readPreferenceInt(context, KEY_OVERLAY_SIZE_DP)
             ?.coerceIn(MIN_OVERLAY_SIZE_DP, MAX_OVERLAY_SIZE_DP) ?: DEFAULT_OVERLAY_SIZE_DP
+    }
+
+    fun chineseScriptPreference(context: Context): String {
+        return readPreferenceString(context, KEY_CHINESE_SCRIPT_PREFERENCE)
+            ?.takeIf { it == "simplified" || it == "traditional" }
+            ?: "simplified"
     }
 
     private fun readPreferenceString(context: Context, key: String): String? {
