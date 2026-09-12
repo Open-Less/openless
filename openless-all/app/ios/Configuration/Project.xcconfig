@@ -1,0 +1,15 @@
+// Both targets inherit these values. Set signing identifiers for your Apple developer team here.
+OPENLESS_BUNDLE_ID = com.openless.ios
+OPENLESS_APP_GROUP = group.com.openless.ios
+DEVELOPMENT_TEAM =
+CODE_SIGN_STYLE = Automatic
+
+IPHONEOS_DEPLOYMENT_TARGET = 17.0
+SWIFT_VERSION = 5.0
+TARGETED_DEVICE_FAMILY = 1,2
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1
+SUPPORTED_PLATFORMS = iphoneos iphonesimulator
+SUPPORTS_MACCATALYST = NO
+SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO
+GENERATE_INFOPLIST_FILE = NO
