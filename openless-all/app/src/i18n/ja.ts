@@ -1307,6 +1307,12 @@ export const ja: typeof zhCN = {
       volcengineAccessKeyLabel: 'Access Token',
       volcengineApiKeyLabel: 'API Key',
       volcengineResourceIdLabel: 'Resource ID',
+      volcengineServiceLabel: 'サービス',
+      volcengineServiceStandard: '通常サービス',
+      volcengineAgentPlanNote:
+        '豆包ストリーミング ASR 用の Agent Plan 専用 API キーを使用します。既定の Resource ID: volc.seedasr.sauc.duration。通常サービスとはキーが異なるため、別のチャネルを作成してください。',
+      volcengineServiceInvalid:
+        'サービス設定が無効です。通常サービスまたは Agent Plan を選択してください。',
       volcengineAuthModeLabel: '認証モード',
       volcengineAuthModeAppIdToken: 'レガシーアプリ（APP ID + Access Token）',
       volcengineAuthModeApiKey: '新版コンソール API Key',
@@ -1407,6 +1413,10 @@ export const ja: typeof zhCN = {
       modelSaved: 'モデル {{model}} を保存しました。',
       validateSuccess: '接続チェックに合格しました。',
       validateFailed: '接続チェックに失敗しました。',
+      arkTextModelsHint:
+        'コンソールで対応するテキスト生成モデルを選択してください。画像・動画・埋め込みモデルは使用できません。プランでは ark-code-latest を入力して接続を確認できます。一覧への掲載はプランでの利用を保証しません。',
+      providerModelsUnavailable:
+        'このエンドポイントではモデル一覧を取得できません。プロバイダーのコンソールにあるテキストモデル名を入力し、接続を確認してください。一覧を取得できなくても、API キーが無効とは限りません。',
       providerHttpStatus:
         'サプライヤーが {{status}} を返しました。API Key 権限またはエンドポイントを確認してください。',
       endpointMustUseHttps:

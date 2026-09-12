@@ -274,7 +274,7 @@ pub(crate) fn request_body(
         && !(config.protocol.format == LlmRequestFormat::Messages && config.thinking_enabled)
     {
         if let Some(temperature) = config.temperature {
-            body["temperature"] = json!(temperature);
+            body["temperature"] = crate::polish::temperature_json(temperature);
         }
     }
     body

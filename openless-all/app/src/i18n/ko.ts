@@ -1299,6 +1299,12 @@ export const ko: typeof zhCN = {
       volcengineAccessKeyLabel: 'Access Token',
       volcengineApiKeyLabel: 'API Key',
       volcengineResourceIdLabel: 'Resource ID',
+      volcengineServiceLabel: '서비스',
+      volcengineServiceStandard: '일반 서비스',
+      volcengineAgentPlanNote:
+        'Doubao 스트리밍 ASR용 Agent Plan 전용 API 키를 사용하세요. 기본 Resource ID: volc.seedasr.sauc.duration. 일반 서비스와 키가 다르므로 별도 채널을 사용하세요.',
+      volcengineServiceInvalid:
+        '잘못된 서비스 설정입니다. 일반 서비스 또는 Agent Plan을 다시 선택하세요.',
       volcengineAuthModeLabel: '인증 모드',
       volcengineAuthModeAppIdToken: '레거시 앱 (APP ID + Access Token)',
       volcengineAuthModeApiKey: '새 콘솔 API Key',
@@ -1399,6 +1405,10 @@ export const ko: typeof zhCN = {
       modelSaved: '모델 {{model}} 을(를) 저장했습니다.',
       validateSuccess: '연결 확인을 통과했습니다.',
       validateFailed: '연결 확인에 실패했습니다.',
+      arkTextModelsHint:
+        '콘솔에서 지원하는 텍스트 생성 모델을 선택하세요. 이미지, 영상, 임베딩 모델은 사용할 수 없습니다. 요금제는 ark-code-latest를 입력한 뒤 연결을 확인할 수 있습니다. 목록에 있어도 요금제에서 지원되지 않을 수 있습니다.',
+      providerModelsUnavailable:
+        '이 엔드포인트에서 모델 목록을 가져올 수 없습니다. 제공업체 콘솔의 텍스트 모델 이름을 입력한 뒤 연결을 확인하세요. 목록을 가져올 수 없다고 API 키가 유효하지 않은 것은 아닙니다.',
       providerHttpStatus:
         '공급자가 {{status}} 를 반환했습니다. API Key 권한 또는 Endpoint 를 확인해 주세요.',
       endpointMustUseHttps:

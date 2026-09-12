@@ -737,6 +737,10 @@ async fn fetch_models(
         )
         .await
         .map_err(map_transport_error)?;
+    // A missing catalog route does not determine whether the inference key/model works.
+    if response.status == 404 {
+        return Err(provider_error("providerModelsUnavailable"));
+    }
     if !(200..300).contains(&response.status) {
         return Err(BackendError::new(
             BackendErrorCode::Provider,
@@ -1476,6 +1480,84 @@ mod tests {
         let error = parse_model_list(br#"{"error":"secret-key"}"#, false, None, false).unwrap_err();
         assert_eq!(error.code, BackendErrorCode::Provider);
         assert!(!format!("{error:?}").contains("secret-key"));
+    }
+
+    #[tokio::test]
+    async fn missing_catalog_preserves_manual_model_and_other_channel_catalog() {
+        let credentials = Arc::new(InMemoryCredentialStore::default());
+        let agent = create_channel_with_values(
+            &credentials,
+            ChannelKind::Llm,
+            "ark",
+            &[
+                (LLM_API_KEY_ACCOUNT, "agent-key"),
+                (
+                    LLM_ENDPOINT_ACCOUNT,
+                    "https://ark.cn-beijing.volces.com/api/plan/v3",
+                ),
+                (LLM_MODEL_ACCOUNT, "ark-code-latest"),
+            ],
+        )
+        .await;
+        let coding = create_channel_with_values(
+            &credentials,
+            ChannelKind::Llm,
+            "ark",
+            &[
+                (LLM_API_KEY_ACCOUNT, "coding-key"),
+                (
+                    LLM_ENDPOINT_ACCOUNT,
+                    "https://ark.cn-beijing.volces.com/api/coding/v3",
+                ),
+                (LLM_MODEL_ACCOUNT, "ark-code-latest"),
+            ],
+        )
+        .await;
+        let transport = Arc::new(FakeProviderTransport::default());
+        transport.push_response(404, b"not found".to_vec());
+        transport.push_response(200, br#"{"data":[{"id":"available-model"}]}"#.to_vec());
+        let service = ProviderService::new_with_transport(
+            credentials.clone(),
+            Arc::new(crate::TokioTaskSpawner),
+            transport.clone(),
+        );
+        let error = service
+            .list_models(ProviderRequest {
+                kind: ProviderKind::Llm,
+                channel_id: Some(agent.clone()),
+                thinking_enabled: false,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.message, "providerModelsUnavailable");
+        let models = service
+            .list_models(ProviderRequest {
+                kind: ProviderKind::Llm,
+                channel_id: Some(coding),
+                thinking_enabled: false,
+            })
+            .await
+            .unwrap()
+            .models;
+        assert_eq!(models, vec!["available-model"]);
+        let saved = credentials
+            .read(
+                CredentialKey::new(CredentialNamespace::Llm, Some(agent), LLM_MODEL_ACCOUNT)
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.expose_secret(), "ark-code-latest");
+        let requests = transport.requests();
+        assert_eq!(
+            requests[0].url,
+            "https://ark.cn-beijing.volces.com/api/plan/v3/models"
+        );
+        assert_eq!(
+            requests[1].url,
+            "https://ark.cn-beijing.volces.com/api/coding/v3/models"
+        );
     }
 
     #[tokio::test]

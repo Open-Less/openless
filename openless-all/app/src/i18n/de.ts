@@ -1353,6 +1353,12 @@ export const de: typeof zhCN = {
       volcengineAccessKeyLabel: 'Access Token',
       volcengineApiKeyLabel: 'API-Schlüssel',
       volcengineResourceIdLabel: 'Ressourcen-ID',
+      volcengineServiceLabel: 'Dienst',
+      volcengineServiceStandard: 'Standarddienst',
+      volcengineAgentPlanNote:
+        'Verwende einen eigenen Agent-Plan-API-Schlüssel für Doubao Streaming-ASR. Standard-Resource-ID: volc.seedasr.sauc.duration. Standard- und Planschlüssel unterscheiden sich; verwende getrennte Kanäle.',
+      volcengineServiceInvalid:
+        'Ungültige Dienstkonfiguration. Wähle Standarddienst oder Agent Plan erneut.',
       volcengineAuthModeLabel: 'Anmeldemethode',
       volcengineAuthModeAppIdToken: 'Bisherige App-Anmeldung (APP ID + Access Token)',
       volcengineAuthModeApiKey: 'API-Schlüssel (neue Konsole)',
@@ -1458,6 +1464,10 @@ export const de: typeof zhCN = {
       modelSaved: 'Modell {{model}} gespeichert.',
       validateSuccess: 'Verbindungsprüfung bestanden.',
       validateFailed: 'Verbindungsprüfung fehlgeschlagen.',
+      arkTextModelsHint:
+        'Wähle ein in der Konsole unterstütztes Textmodell, kein Bild-, Video- oder Embedding-Modell. Bei Plänen kannst du ark-code-latest eingeben und prüfen. Katalogeinträge garantieren keinen Zugriff im Plan.',
+      providerModelsUnavailable:
+        'Dieser Endpunkt liefert keine Modellliste. Gib einen Textmodellnamen aus der Anbieter-Konsole ein und prüfe die Verbindung. Eine fehlende Liste bedeutet nicht, dass der API-Schlüssel ungültig ist.',
       providerHttpStatus:
         'Der Anbieter hat HTTP {{status}} zurückgegeben. Prüfe die Berechtigungen des API-Schlüssels oder den Endpunkt.',
       endpointMustUseHttps:

@@ -333,6 +333,7 @@ pub struct CredentialConfiguration {
     pub asr_api_key: bool,
     pub asr_endpoint: bool,
     pub asr_model: bool,
+    pub volcengine_service: Option<String>,
     pub volcengine_auth_mode: Option<String>,
     pub volcengine_app_key: bool,
     pub volcengine_access_key: bool,
@@ -358,12 +359,21 @@ pub fn volcengine_configured(configuration: &CredentialConfiguration) -> bool {
 
     // resource id 不是配置门槛：留空时运行时回落默认资源
     //（见 VolcengineCredentials::resolve_resource_id），认证只取决于密钥本身。
-    match configuration
-        .volcengine_auth_mode
-        .as_deref()
-        .map(VolcengineAuthMode::parse)
-        .unwrap_or(VolcengineAuthMode::AppIdToken)
-    {
+    let Ok(service) = crate::asr::volcengine::VolcengineService::parse(
+        configuration
+            .volcengine_service
+            .as_deref()
+            .unwrap_or_default(),
+    ) else {
+        return false;
+    };
+    match service.auth_mode(
+        configuration
+            .volcengine_auth_mode
+            .as_deref()
+            .map(VolcengineAuthMode::parse)
+            .unwrap_or(VolcengineAuthMode::AppIdToken),
+    ) {
         VolcengineAuthMode::AppIdToken => {
             configuration.volcengine_app_key && configuration.volcengine_access_key
         }
@@ -693,7 +703,10 @@ pub fn is_stepfun_realtime_provider(id: &str) -> bool {
 }
 
 pub fn is_mimo_provider(id: &str) -> bool {
-    matches!(id, MIMO_PROVIDER_ID | crate::asr::mimo::ORCAROUTER_PROVIDER_ID)
+    matches!(
+        id,
+        MIMO_PROVIDER_ID | crate::asr::mimo::ORCAROUTER_PROVIDER_ID
+    )
 }
 
 pub fn is_dashscope_multimodal_provider(id: &str) -> bool {

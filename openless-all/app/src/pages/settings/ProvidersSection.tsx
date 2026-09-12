@@ -211,16 +211,42 @@ export function ChannelCredentialFields({
     'app_id_token',
   );
 
+  const providerForm = useContext(ProviderFormContext);
+  const formTrack = providerForm?.track;
+  const trackVolcengineSetting = useCallback(
+    (account: string, blocked: boolean) => {
+      trackField(account, blocked);
+      formTrack?.(account, blocked);
+    },
+    [trackField, formTrack],
+  );
+  const [volcengineService, setVolcengineService] = useState('standard');
+  const onAsrMutation = () => {
+    onUserMutation?.();
+    setConfigRevision((value) => value + 1);
+  };
+
   useEffect(() => {
-    if (providerType === 'volcengine') {
-      readCredential('volcengine.auth_mode', channelId)
-        .then((v) => {
-          if (v === 'api_key') setVolcengineAuthMode('api_key');
-          else setVolcengineAuthMode('app_id_token');
-        })
-        .catch(() => setVolcengineAuthMode('app_id_token'));
-    }
-  }, [providerType, channelId]);
+    if (providerType !== 'volcengine') return;
+    let cancelled = false;
+    trackField('volcengine.config', true);
+    Promise.all([
+      readCredential('volcengine.service', channelId),
+      readCredential('volcengine.auth_mode', channelId),
+    ])
+      .then(([service, mode]) => {
+        if (cancelled) return;
+        setVolcengineService(service || 'standard');
+        setVolcengineAuthMode(mode === 'api_key' ? 'api_key' : 'app_id_token');
+        trackField('volcengine.config', false);
+      })
+      .catch(() => {
+        if (!cancelled) emitSaved('failed', t('common.operationFailed'));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [providerType, channelId, trackField, t]);
 
   useEffect(() => {
     if (!unifiedBailian) setBailianModel('');
@@ -373,6 +399,11 @@ export function ChannelCredentialFields({
             onBlockedChange={trackField}
           />
         )}
+        {providerType === 'ark' && (
+          <p style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
+            {t('settings.providers.arkTextModelsHint')}
+          </p>
+        )}
         <ProviderTools
           key={configRevision}
           disabled={
@@ -395,40 +426,86 @@ export function ChannelCredentialFields({
   const defaultModel = descriptor?.defaultModel;
 
   if (descriptor?.authRequirement === 'volcengine') {
+    const agentPlan = volcengineService === 'agent_plan';
+    const configBlocked = blockedFields['volcengine.config'] !== false;
+    const activeAccounts = [
+      'volcengine.service',
+      'volcengine.auth_mode',
+      'volcengine.resource_id',
+      ...(!agentPlan && volcengineAuthMode === 'app_id_token'
+        ? ['volcengine.app_key', 'volcengine.access_key']
+        : ['volcengine.api_key']),
+    ];
+    const blocked = configBlocked || activeAccounts.some((account) => blockedFields[account]);
     return (
       <>
-        <ChannelFormRow label={t('settings.providers.volcengineAuthModeLabel')}>
+        <ChannelFormRow label={t('settings.providers.volcengineServiceLabel')}>
           <SelectLite
-            value={volcengineAuthMode}
-            onChange={async (v) => {
-              onUserMutation?.();
-              const mode = v as 'app_id_token' | 'api_key';
-              const prev = volcengineAuthMode;
-              setVolcengineAuthMode(mode);
+            value={volcengineService}
+            disabled={blocked}
+            onChange={async (service) => {
+              onAsrMutation();
+              const previous = volcengineService;
+              setVolcengineService(service);
+              trackVolcengineSetting('volcengine.service', true);
               try {
-                await setCredential('volcengine.auth_mode', mode, channelId);
+                await setCredential('volcengine.service', service, channelId);
+                onTested?.();
               } catch (error) {
-                // 写入失败必须回滚 UI 并提示：否则模式看着已切换、重启后却静默回退，
-                // 配合独立 API Key 槽会造成「Key 存在但模式不对」的混乱。
-                console.error('[settings] failed to save volcengine auth mode', error);
-                setVolcengineAuthMode(prev);
+                console.error('[settings] failed to save volcengine service', error);
+                setVolcengineService(previous);
                 emitSaved('failed', t('common.operationFailed'));
+              } finally {
+                trackVolcengineSetting('volcengine.service', false);
               }
             }}
             options={[
-              {
-                value: 'app_id_token',
-                label: t('settings.providers.volcengineAuthModeAppIdToken'),
-              },
-              { value: 'api_key', label: t('settings.providers.volcengineAuthModeApiKey') },
+              { value: 'standard', label: t('settings.providers.volcengineServiceStandard') },
+              { value: 'agent_plan', label: 'Agent Plan' },
             ]}
-            ariaLabel={t('settings.providers.volcengineAuthModeLabel')}
+            ariaLabel={t('settings.providers.volcengineServiceLabel')}
             style={{ ...inputStyle, width: '100%', maxWidth: '100%', height: 38 }}
           />
         </ChannelFormRow>
+        {!agentPlan && (
+          <ChannelFormRow label={t('settings.providers.volcengineAuthModeLabel')}>
+            <SelectLite
+              value={volcengineAuthMode}
+              disabled={blocked}
+              onChange={async (v) => {
+                onAsrMutation();
+                const mode = v as 'app_id_token' | 'api_key';
+                const prev = volcengineAuthMode;
+                setVolcengineAuthMode(mode);
+                trackVolcengineSetting('volcengine.auth_mode', true);
+                try {
+                  await setCredential('volcengine.auth_mode', mode, channelId);
+                  onTested?.();
+                } catch (error) {
+                  // 写入失败必须回滚 UI 并提示：否则模式看着已切换、重启后却静默回退，
+                  // 配合独立 API Key 槽会造成「Key 存在但模式不对」的混乱。
+                  console.error('[settings] failed to save volcengine auth mode', error);
+                  setVolcengineAuthMode(prev);
+                  emitSaved('failed', t('common.operationFailed'));
+                } finally {
+                  trackVolcengineSetting('volcengine.auth_mode', false);
+                }
+              }}
+              options={[
+                {
+                  value: 'app_id_token',
+                  label: t('settings.providers.volcengineAuthModeAppIdToken'),
+                },
+                { value: 'api_key', label: t('settings.providers.volcengineAuthModeApiKey') },
+              ]}
+              ariaLabel={t('settings.providers.volcengineAuthModeLabel')}
+              style={{ ...inputStyle, width: '100%', maxWidth: '100%', height: 38 }}
+            />
+          </ChannelFormRow>
+        )}
         {/* 两种模式使用各自独立的凭据槽位：旧版 Access Token（volcengine.access_key）
             与方舟 API Key（volcengine.api_key）互不预填，切换模式不会残留混淆。 */}
-        {volcengineAuthMode === 'app_id_token' ? (
+        {!agentPlan && volcengineAuthMode === 'app_id_token' ? (
           <>
             <CredentialField
               key={`${channelId}:app_key`}
@@ -437,7 +514,8 @@ export function ChannelCredentialFields({
               provider={channelId}
               mono
               mask
-              onUserMutation={onUserMutation}
+              onUserMutation={onAsrMutation}
+              onBlockedChange={trackField}
             />
             <CredentialField
               key={`${channelId}:access_key`}
@@ -446,7 +524,8 @@ export function ChannelCredentialFields({
               provider={channelId}
               mono
               mask
-              onUserMutation={onUserMutation}
+              onUserMutation={onAsrMutation}
+              onBlockedChange={trackField}
             />
           </>
         ) : (
@@ -457,7 +536,8 @@ export function ChannelCredentialFields({
             provider={channelId}
             mono
             mask
-            onUserMutation={onUserMutation}
+            onUserMutation={onAsrMutation}
+            onBlockedChange={trackField}
           />
         )}
         <div style={channelSectionStyle}>
@@ -469,16 +549,21 @@ export function ChannelCredentialFields({
           account="volcengine.resource_id"
           provider={channelId}
           mono
-          onUserMutation={onUserMutation}
+          onUserMutation={onAsrMutation}
+          onBlockedChange={trackField}
           placeholder={ASR_DEFAULT_RESOURCE_ID}
           defaultValue={ASR_DEFAULT_RESOURCE_ID}
         />
         <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
-          {volcengineAuthMode === 'api_key'
-            ? t('settings.providers.volcengineApiKeyNote')
-            : t('settings.providers.volcengineMappingNote')}
+          {agentPlan
+            ? t('settings.providers.volcengineAgentPlanNote')
+            : volcengineAuthMode === 'api_key'
+              ? t('settings.providers.volcengineApiKeyNote')
+              : t('settings.providers.volcengineMappingNote')}
         </div>
         <ProviderTools
+          key={configRevision}
+          disabled={blocked}
           kind="asr"
           modelAccount="asr.model"
           provider={channelId}
@@ -1370,6 +1455,8 @@ function ProviderTools({
 function providerErrorMessage(error: unknown, t: ReturnType<typeof useTranslation>['t']): string {
   const message = error instanceof Error ? error.message : String(error);
   for (const code of [
+    'providerModelsUnavailable',
+    'volcengineServiceInvalid',
     'llmRequestFormatInvalid',
     'llmThinkingModeInvalid',
     'llmTokenLimitInvalid',

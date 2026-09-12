@@ -1362,6 +1362,12 @@ export const fr: typeof zhCN = {
       volcengineAccessKeyLabel: 'Access Token',
       volcengineApiKeyLabel: 'Clé API',
       volcengineResourceIdLabel: 'Resource ID',
+      volcengineServiceLabel: 'Service',
+      volcengineServiceStandard: 'Service standard',
+      volcengineAgentPlanNote:
+        'Utilisez une clé API dédiée à Agent Plan pour la reconnaissance vocale en streaming Doubao. Resource ID par défaut : volc.seedasr.sauc.duration. Les clés sont différentes ; utilisez des canaux séparés.',
+      volcengineServiceInvalid:
+        'Configuration du service invalide. Sélectionnez à nouveau le service standard ou Agent Plan.',
       volcengineAuthModeLabel: 'Mode d’authentification',
       volcengineAuthModeAppIdToken: 'Ancienne application (APP ID + Access Token)',
       volcengineAuthModeApiKey: 'Clé API (nouvelle console)',
@@ -1469,6 +1475,10 @@ export const fr: typeof zhCN = {
       modelSaved: 'Modèle {{model}} enregistré.',
       validateSuccess: 'Connexion vérifiée avec succès.',
       validateFailed: 'Échec de la vérification de connexion.',
+      arkTextModelsHint:
+        'Choisissez un modèle de génération de texte pris en charge dans la console, pas un modèle image, vidéo ou embedding. Pour les forfaits, saisissez ark-code-latest puis vérifiez. Le catalogue ne garantit pas l’accès avec le forfait.',
+      providerModelsUnavailable:
+        'Ce point de terminaison ne fournit pas de liste de modèles. Saisissez un nom de modèle de texte depuis la console du fournisseur, puis vérifiez la connexion. Une liste indisponible ne signifie pas que la clé API est invalide.',
       providerHttpStatus:
         'Le fournisseur a renvoyé HTTP {{status}}. Vérifiez les autorisations de la clé API ou l’adresse.',
       endpointMustUseHttps:

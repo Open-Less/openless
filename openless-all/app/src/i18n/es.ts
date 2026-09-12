@@ -1345,6 +1345,12 @@ export const es: typeof zhCN = {
       volcengineAccessKeyLabel: 'Access Token',
       volcengineApiKeyLabel: 'Clave API',
       volcengineResourceIdLabel: 'Resource ID',
+      volcengineServiceLabel: 'Servicio',
+      volcengineServiceStandard: 'Servicio estándar',
+      volcengineAgentPlanNote:
+        'Usa una clave API exclusiva de Agent Plan para ASR en streaming de Doubao. Resource ID predeterminado: volc.seedasr.sauc.duration. Las claves son distintas; usa canales separados para cada servicio.',
+      volcengineServiceInvalid:
+        'Configuración de servicio no válida. Selecciona de nuevo el servicio estándar o Agent Plan.',
       volcengineAuthModeLabel: 'Modo de autenticación',
       volcengineAuthModeAppIdToken: 'Aplicación anterior (APP ID + Access Token)',
       volcengineAuthModeApiKey: 'Clave API (consola nueva)',
@@ -1449,6 +1455,10 @@ export const es: typeof zhCN = {
       modelSaved: 'Modelo {{model}} guardado.',
       validateSuccess: 'Conexión comprobada correctamente.',
       validateFailed: 'La comprobación de conexión falló.',
+      arkTextModelsHint:
+        'Elige un modelo de generación de texto admitido en la consola, no de imagen, vídeo o embeddings. Para planes, puedes introducir ark-code-latest y verificar. El catálogo no garantiza acceso con el plan.',
+      providerModelsUnavailable:
+        'Este endpoint no pudo proporcionar una lista de modelos. Introduce un nombre de modelo de texto de la consola del proveedor y verifica la conexión. Que la lista no esté disponible no significa que la clave API no sea válida.',
       providerHttpStatus:
         'El proveedor devolvió HTTP {{status}}. Comprueba los permisos de la clave API o la dirección.',
       endpointMustUseHttps:

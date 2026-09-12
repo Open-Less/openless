@@ -9,14 +9,17 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{future::BoxFuture, SinkExt, StreamExt};
 use parking_lot::Mutex as ParkingMutex;
 use serde_json::{json, Value};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex, Notify};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::HeaderValue;
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{
+    handshake::client::{Request as WebSocketRequest, Response as WebSocketResponse},
+    Error as WebSocketError, Message,
+};
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use uuid::Uuid;
 
@@ -31,6 +34,9 @@ use crate::ports::{TextStreamChunk, TextStreamSink};
 /// 新旧两种鉴权模式共享同一端点，仅握手鉴权头不同。
 const ENDPOINT_APP_ID_TOKEN: &str = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async";
 const ENDPOINT_API_KEY: &str = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async";
+/// Agent Plan uses a dedicated subscription endpoint with API-key authentication.
+/// https://docs.volcengine.com/docs/82379/2516286
+const ENDPOINT_AGENT_PLAN: &str = "wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async";
 /// 200 ms of 16 kHz / 16-bit / mono PCM.
 pub const TARGET_AUDIO_CHUNK_BYTES: usize = 6_400;
 /// 16 kHz · 16-bit · mono = 32 000 bytes/sec → 32 bytes/ms.
@@ -90,8 +96,34 @@ impl VolcengineAuthMode {
     }
 }
 
+/// Service selection is separate from the standard service's authentication mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VolcengineService {
+    #[default]
+    Standard,
+    AgentPlan,
+}
+
+impl VolcengineService {
+    pub fn parse(value: &str) -> Result<Self, &'static str> {
+        match value.trim() {
+            "" | "standard" => Ok(Self::Standard),
+            "agent_plan" => Ok(Self::AgentPlan),
+            _ => Err("volcengineServiceInvalid"),
+        }
+    }
+
+    pub fn auth_mode(self, configured: VolcengineAuthMode) -> VolcengineAuthMode {
+        match self {
+            Self::Standard => configured,
+            Self::AgentPlan => VolcengineAuthMode::ApiKey,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct VolcengineCredentials {
+    pub service: VolcengineService,
     pub auth_mode: VolcengineAuthMode,
     /// App ID（AppIdToken 模式使用；ApiKey 模式下为空）。
     pub app_id: String,
@@ -114,7 +146,9 @@ impl VolcengineCredentials {
 
     /// 凭据是否满足当前鉴权模式的要求（统一 trim 语义，见 [`VolcengineAuthMode::auth_ok`]）。
     pub fn auth_ok(&self) -> bool {
-        self.auth_mode.auth_ok(&self.app_id, &self.access_token)
+        self.service
+            .auth_mode(self.auth_mode.clone())
+            .auth_ok(&self.app_id, &self.access_token)
     }
 }
 
@@ -144,8 +178,28 @@ pub enum VolcengineASRError {
     DecodeFailed(String),
 }
 
-type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
-type WsSink = futures_util::stream::SplitSink<WsStream, Message>;
+pub type VolcengineWebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+/// External connection boundary; the provider still owns the URL and auth headers.
+pub trait VolcengineConnector: Send + Sync {
+    fn connect(
+        &self,
+        request: WebSocketRequest,
+    ) -> BoxFuture<'static, Result<(VolcengineWebSocket, WebSocketResponse), WebSocketError>>;
+}
+
+struct DefaultVolcengineConnector;
+
+impl VolcengineConnector for DefaultVolcengineConnector {
+    fn connect(
+        &self,
+        request: WebSocketRequest,
+    ) -> BoxFuture<'static, Result<(VolcengineWebSocket, WebSocketResponse), WebSocketError>> {
+        Box::pin(connect_async(request))
+    }
+}
+
+type WsSink = futures_util::stream::SplitSink<VolcengineWebSocket, Message>;
 type SharedWriter = Arc<AsyncMutex<Option<WsSink>>>;
 type AudioFrameSender = mpsc::UnboundedSender<(i32, Vec<u8>)>;
 
@@ -167,6 +221,7 @@ struct SyncState {
 }
 
 pub struct VolcengineStreamingASR {
+    connector: Arc<dyn VolcengineConnector>,
     credentials: VolcengineCredentials,
     task_spawner: Arc<dyn TaskSpawner>,
     hotwords: Vec<DictionaryHotword>,
@@ -200,6 +255,7 @@ impl VolcengineStreamingASR {
         task_spawner: Arc<dyn TaskSpawner>,
     ) -> Self {
         Self {
+            connector: Arc::new(DefaultVolcengineConnector),
             credentials,
             task_spawner,
             hotwords,
@@ -215,6 +271,11 @@ impl VolcengineStreamingASR {
 
     pub fn set_partial_sink(&self, sink: Arc<dyn TextStreamSink>) {
         *self.partial_sink.lock() = Some(sink);
+    }
+
+    pub fn with_connector(mut self, connector: Arc<dyn VolcengineConnector>) -> Self {
+        self.connector = connector;
+        self
     }
 
     pub async fn open_session(self: &Arc<Self>) -> Result<(), VolcengineASRError> {
@@ -336,11 +397,15 @@ impl VolcengineStreamingASR {
         &self,
         connect_id: &str,
         request_id: &str,
-    ) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request, VolcengineASRError>
-    {
-        let endpoint = match &self.credentials.auth_mode {
-            VolcengineAuthMode::AppIdToken => ENDPOINT_APP_ID_TOKEN,
-            VolcengineAuthMode::ApiKey => ENDPOINT_API_KEY,
+    ) -> Result<WebSocketRequest, VolcengineASRError> {
+        let auth_mode = self
+            .credentials
+            .service
+            .auth_mode(self.credentials.auth_mode.clone());
+        let endpoint = match (self.credentials.service, &auth_mode) {
+            (VolcengineService::AgentPlan, _) => ENDPOINT_AGENT_PLAN,
+            (_, VolcengineAuthMode::AppIdToken) => ENDPOINT_APP_ID_TOKEN,
+            (_, VolcengineAuthMode::ApiKey) => ENDPOINT_API_KEY,
         };
         let mut request = endpoint
             .into_client_request()
@@ -350,7 +415,7 @@ impl VolcengineStreamingASR {
         // 根据鉴权模式选择表头：
         // - AppIdToken：X-Api-App-Key + X-Api-Access-Key（旧版语音控制台）
         // - ApiKey：X-Api-Key（新版方舟语音模型，单头即可）
-        match &self.credentials.auth_mode {
+        match auth_mode {
             VolcengineAuthMode::AppIdToken => {
                 headers.insert(
                     "X-Api-App-Key",
@@ -398,14 +463,34 @@ impl VolcengineStreamingASR {
     /// (hung handshake or a transient blip) doesn't kill the whole dictation.
     /// `AuthRejected` / `RateLimited` short-circuit — bad credentials never heal on
     /// retry, and hammering a rate-limited account only makes the throttle worse.
-    async fn connect_with_retry(&self, connect_id: &str) -> Result<WsStream, VolcengineASRError> {
+    async fn connect_with_retry(
+        &self,
+        connect_id: &str,
+    ) -> Result<VolcengineWebSocket, VolcengineASRError> {
         let mut attempt = 0usize;
         loop {
             attempt += 1;
             let request_id = Uuid::new_v4().to_string();
             let request = self.build_connect_request(connect_id, &request_id)?;
-            match tokio::time::timeout(CONNECT_TIMEOUT, connect_async(request)).await {
-                Ok(Ok((ws, _resp))) => return Ok(ws),
+            log::info!(
+                "[asr] Volcengine connect endpoint={} connect_id={} request_id={}",
+                request.uri(),
+                connect_id,
+                request_id
+            );
+            match tokio::time::timeout(CONNECT_TIMEOUT, self.connector.connect(request)).await {
+                Ok(Ok((ws, response))) => {
+                    log::info!(
+                        "[asr] Volcengine connected connect_id={} log_id={}",
+                        connect_id,
+                        response
+                            .headers()
+                            .get("X-Tt-Logid")
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or("-")
+                    );
+                    return Ok(ws);
+                }
                 Ok(Err(e)) => {
                     let classified = classify_connect_error(e);
                     if is_non_retryable(&classified) || attempt >= CONNECT_MAX_ATTEMPTS {
@@ -1062,6 +1147,7 @@ mod tests {
         for (mode, endpoint, expects_app_headers, expects_api_key) in cases {
             let asr = VolcengineStreamingASR::new(
                 VolcengineCredentials {
+                    service: VolcengineService::Standard,
                     auth_mode: mode.clone(),
                     app_id: "app".into(),
                     access_token: "secret".into(),
@@ -1182,6 +1268,7 @@ mod tests {
     async fn await_final_result_returns_error_when_final_frame_never_arrives() {
         let asr = VolcengineStreamingASR::new(
             VolcengineCredentials {
+                service: VolcengineService::Standard,
                 auth_mode: VolcengineAuthMode::AppIdToken,
                 app_id: "app".into(),
                 access_token: "token".into(),

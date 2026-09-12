@@ -1260,6 +1260,11 @@ export const zhTW: typeof zhCN = {
       volcengineAccessKeyLabel: 'Access Token',
       volcengineApiKeyLabel: 'API Key',
       volcengineResourceIdLabel: 'Resource ID',
+      volcengineServiceLabel: '服務',
+      volcengineServiceStandard: '一般服務',
+      volcengineAgentPlanNote:
+        '使用 Agent Plan 專屬 API Key；僅支援豆包串流 ASR。預設 Resource ID 為 volc.seedasr.sauc.duration。一般服務與套餐密鑰不同，建議分別建立渠道。',
+      volcengineServiceInvalid: '服務設定無效，請重新選擇一般服務或 Agent Plan。',
       volcengineAuthModeLabel: '鑑權模式',
       volcengineAuthModeAppIdToken: '舊版應用（APP ID + Access Token）',
       volcengineAuthModeApiKey: '新版控制台 API Key',
@@ -1352,6 +1357,10 @@ export const zhTW: typeof zhCN = {
       modelSaved: '已保存模型 {{model}}。',
       validateSuccess: '連接檢查通過。',
       validateFailed: '連接檢查未通過。',
+      arkTextModelsHint:
+        '僅選擇控制台支援的文字生成模型；圖片、影片和向量化模型不能用於潤色。套餐可填寫 ark-code-latest 後驗證連線，清單不代表套餐均可呼叫。',
+      providerModelsUnavailable:
+        '目前 Endpoint 無法提供模型清單。請填寫供應商控制台中的文字模型名稱，再點擊「驗證」。清單不可用不代表 API Key 無效。',
       providerHttpStatus: '供應商接口返回 {{status}}，請檢查 API Key 權限或 Endpoint。',
       endpointMustUseHttps:
         '允許使用 HTTP Endpoint，但請注意：API Key 和音訊內容可能在傳輸中外洩。',
