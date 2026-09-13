@@ -36,7 +36,7 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
-    "@shadcn/react": "^0.2.0",
+    "@shadcn/react": "^0.2.1",
     "@tailwindcss/vite": "^4.3.2",
     "@tauri-apps/api": "^2.1.1",
     "@tauri-apps/plugin-dialog": "^2.7.2",
