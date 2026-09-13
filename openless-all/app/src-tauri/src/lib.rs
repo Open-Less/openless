@@ -2756,7 +2756,7 @@ fn ensure_selection_polish_preview_window<R: tauri::Runtime>(
         "selection-polish-preview",
         WebviewUrl::App("index.html?window=selection-polish-preview".into()),
     )
-    .title("OpenLess 选区润色预览")
+    .title("OpenLess 選區潤色預覽")
     .inner_size(640.0, 440.0)
     .min_inner_size(480.0, 320.0)
     .resizable(true)
@@ -2906,7 +2906,7 @@ fn install_selection_preview_first_click_guard(panel: *mut objc2::runtime::AnyOb
                 }
                 let expected: *mut AnyObject = msg_send![
                     objc2::runtime::AnyClass::get("NSString").expect("NSString class"),
-                    stringWithUTF8String: c"OpenLess 选区润色预览".as_ptr()
+                    stringWithUTF8String: c"OpenLess 選區潤色預覽".as_ptr()
                 ];
                 if expected.is_null() {
                     return false;
