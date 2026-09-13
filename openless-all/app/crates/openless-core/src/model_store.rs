@@ -2485,10 +2485,10 @@ fn parse_hf_tree_page_for_entry(
     Ok(files)
 }
 
+/// The Hugging Face tree API returns `lfs.oid` as a bare SHA-256 hex digest;
+/// the `sha256:`-prefixed form (as in Git LFS pointer files) is accepted too.
 fn parse_lfs_sha256(oid: &str) -> Result<String, BackendError> {
-    let digest = oid
-        .strip_prefix("sha256:")
-        .ok_or_else(|| invalid("unsupported Hugging Face LFS oid"))?;
+    let digest = oid.strip_prefix("sha256:").unwrap_or(oid);
     if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(invalid("invalid Hugging Face LFS sha256 oid"));
     }
