@@ -1,19 +1,40 @@
 # OpenLess All-Platform
 
-This is the current cross-platform OpenLess workspace.
+This directory contains the cross-platform OpenLess application and design handoff material. Start with the repository [documentation index](../docs/index.md), [architecture](../docs/architecture.md), and [source structure](../docs/structure.md).
 
 ## App Directory
 
-The runnable Tauri app lives in `app/`. The macOS build links a vendored C ASR engine (`Open-Less/qwen-asr`, forked from `antirez/qwen-asr`) tracked as a git submodule under `app/src-tauri/vendor/qwen-asr/`, so initialize submodules on first clone.
+The runnable sources live in `app/`:
+
+- `app/crates/openless-core`: framework-independent shared backend Interface and business rules;
+- `app/src`: React frontend for the Tauri hosts;
+- `app/src-tauri`: macOS, Windows, and Android Tauri Host and native adapters;
+- `app/linux-egui`: Linux Host and egui/eframe UI; it does not depend on Tauri or WebKitGTK.
+
+The Tauri manifest includes local ASR path dependencies under `app/src-tauri/vendor/`; initialize submodules before resolving it, including for non-macOS source builds. The root Core/Linux workspace excludes `src-tauri`, so its independent checks do not require those submodules.
 
 ```bash
-# First clone only — pull in vendored submodules
+# Tauri source development — pull in vendored submodules
 git submodule update --init --recursive
 
 cd app
 npm ci
 npm run tauri dev
 ```
+
+## Shared backend and Linux host
+
+This repository supplies the shared typed Rust interface, semantic events, fixtures, and Linux adapters. `linux-egui/src/main.rs` now implements an egui/eframe application, with `LinuxHost` and `LinuxBackendBuilder` connecting it to Core. Remaining Host/UI work and product acceptance are tracked in the [Linux handoff](../docs/linux-egui-handoff/README.md).
+
+```bash
+cd app
+cargo test -p openless-core --locked
+cargo test -p openless-linux-egui --all-targets --locked
+pwsh ./scripts/check-core-deps.ps1
+pwsh ./scripts/check-core-deps.ps1 openless-linux-egui
+```
+
+The independent [Linux package workflow](../.github/workflows/release-linux-egui.yml) builds deb/rpm/AppImage and the fcitx5 plugin without WebKitGTK. It supports manual and reusable-workflow invocation; automatic tag triggering remains gated on real Ubuntu runtime, input, installation, upgrade, and rollback evidence.
 
 ## macOS Build
 
@@ -27,7 +48,7 @@ INSTALL=0 ./scripts/build-mac.sh
 Generated macOS artifacts:
 
 - `app/src-tauri/target/release/bundle/macos/OpenLess.app`
-- `app/src-tauri/target/release/bundle/dmg/OpenLess_1.1.0_aarch64.dmg`
+- `app/src-tauri/target/release/bundle/dmg/OpenLess_<version>_aarch64.dmg`
 
 For local install during development:
 
@@ -115,7 +136,7 @@ npm run check:hotkey-injection
 
 ## Release Signing
 
-Tagged releases (`v*-tauri`) must be Developer ID signed and notarized so users can download and open the macOS app without manually removing quarantine attributes.
+Tagged Tauri releases (`v*-tauri`) must be Developer ID signed and notarized so users can download and open the macOS app without manually removing quarantine attributes. Linux packages use the separate manual egui workflow and an independent minisign secret.
 
 Required GitHub secrets:
 
@@ -138,6 +159,7 @@ The following are intentionally local-only:
 
 - `app/node_modules/`
 - `app/dist/`
+- `app/target/`
 - `app/src-tauri/target/`
 - `app/src-tauri/gen/`
 - `.DS_Store`

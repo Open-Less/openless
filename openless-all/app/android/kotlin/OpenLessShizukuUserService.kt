@@ -4,23 +4,21 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import androidx.annotation.Keep
-import org.json.JSONObject
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import org.json.JSONObject
 
 /**
- * Runs in a Shizuku UserService process with shell/root identity.
- * Best-effort accessibility recovery — Secure Settings writes are not compare-and-set.
+ * Runs in a Shizuku UserService process with shell/root identity. Best-effort accessibility
+ * recovery — Secure Settings writes are not compare-and-set.
  */
 @Keep
-class OpenLessShizukuUserService @JvmOverloads constructor(
-    private val appPackage: String = "",
-) : IOpenLessShizukuUserService.Stub() {
+class OpenLessShizukuUserService @JvmOverloads constructor(private val appPackage: String = "") :
+    IOpenLessShizukuUserService.Stub() {
 
-    @Keep
-    constructor(context: Context) : this(context.packageName)
+    @Keep constructor(context: Context) : this(context.packageName)
 
     override fun destroy() {
         Log.i(TAG, "destroy")
@@ -66,11 +64,12 @@ class OpenLessShizukuUserService @JvmOverloads constructor(
         serviceComponent: String,
         attempt: Int,
     ): RecoveryAttemptResult {
-        val preWrite = readSnapshot()
-            ?: return RecoveryAttemptResult.Failure(
-                OpenLessShizukuBridge.RecoveryOutcome.ShellFailed,
-                "read_failed",
-            )
+        val preWrite =
+            readSnapshot()
+                ?: return RecoveryAttemptResult.Failure(
+                    OpenLessShizukuBridge.RecoveryOutcome.ShellFailed,
+                    "read_failed",
+                )
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && appPackage.isNotBlank()) {
             if (!allowRestrictedSettingsForApp()) {
@@ -78,21 +77,23 @@ class OpenLessShizukuUserService @JvmOverloads constructor(
             }
         }
 
-        val immediate = readSnapshot()
-            ?: return RecoveryAttemptResult.Failure(
-                OpenLessShizukuBridge.RecoveryOutcome.ShellFailed,
-                "read_failed",
-            )
+        val immediate =
+            readSnapshot()
+                ?: return RecoveryAttemptResult.Failure(
+                    OpenLessShizukuBridge.RecoveryOutcome.ShellFailed,
+                    "read_failed",
+                )
         if (OpenLessShizukuBridge.preWriteSnapshotChanged(preWrite, immediate)) {
             Log.i(TAG, "pre-put snapshot changed attempt=$attempt")
             return RecoveryAttemptResult.Retry
         }
 
-        val prePut = readSnapshot()
-            ?: return RecoveryAttemptResult.Failure(
-                OpenLessShizukuBridge.RecoveryOutcome.ShellFailed,
-                "read_failed",
-            )
+        val prePut =
+            readSnapshot()
+                ?: return RecoveryAttemptResult.Failure(
+                    OpenLessShizukuBridge.RecoveryOutcome.ShellFailed,
+                    "read_failed",
+                )
         if (OpenLessShizukuBridge.preWriteSnapshotChanged(immediate, prePut)) {
             Log.i(TAG, "immediate pre-put snapshot changed attempt=$attempt")
             return RecoveryAttemptResult.Retry
@@ -105,10 +106,11 @@ class OpenLessShizukuUserService @JvmOverloads constructor(
             )
         }
 
-        val merged = OpenLessShizukuBridge.mergeEnabledAccessibilityServices(
-            prePut.services,
-            serviceComponent,
-        )
+        val merged =
+            OpenLessShizukuBridge.mergeEnabledAccessibilityServices(
+                prePut.services,
+                serviceComponent,
+            )
         if (merged.isBlank()) {
             return RecoveryAttemptResult.Failure(
                 OpenLessShizukuBridge.RecoveryOutcome.ShellFailed,
@@ -123,20 +125,22 @@ class OpenLessShizukuUserService @JvmOverloads constructor(
             )
         }
 
-        val postServicesPut = readEnabledServices()
-            ?: run {
-                val rollback = rollbackWrittenState(
-                    WrittenState(merged, null),
-                    prePut,
-                )
-                return failureAfterRollback(
-                    rollback,
-                    prePut,
-                    WrittenState(merged, null),
-                    OpenLessShizukuBridge.RecoveryOutcome.ShellFailed,
-                    "readback_failed",
-                )
-            }
+        val postServicesPut =
+            readEnabledServices()
+                ?: run {
+                    val rollback =
+                        rollbackWrittenState(
+                            WrittenState(merged, null),
+                            prePut,
+                        )
+                    return failureAfterRollback(
+                        rollback,
+                        prePut,
+                        WrittenState(merged, null),
+                        OpenLessShizukuBridge.RecoveryOutcome.ShellFailed,
+                        "readback_failed",
+                    )
+                }
         if (!OpenLessShizukuBridge.servicesListsEqual(postServicesPut, merged)) {
             Log.w(TAG, "services changed immediately after write attempt=$attempt")
             rollbackWrittenState(
@@ -148,10 +152,11 @@ class OpenLessShizukuUserService @JvmOverloads constructor(
 
         val writtenEnabled = "1"
         if (!putSecureSetting(KEY_ACCESSIBILITY_ENABLED, writtenEnabled)) {
-            val rollback = rollbackWrittenState(
-                WrittenState(merged, writtenEnabled),
-                prePut,
-            )
+            val rollback =
+                rollbackWrittenState(
+                    WrittenState(merged, writtenEnabled),
+                    prePut,
+                )
             return failureAfterRollback(
                 rollback,
                 prePut,
@@ -161,31 +166,35 @@ class OpenLessShizukuUserService @JvmOverloads constructor(
             )
         }
 
-        val readback = readEnabledServices()
-            ?: run {
-                val rollback = rollbackWrittenState(
-                    WrittenState(merged, writtenEnabled),
-                    prePut,
-                )
-                return failureAfterRollback(
-                    rollback,
-                    prePut,
-                    WrittenState(merged, writtenEnabled),
-                    OpenLessShizukuBridge.RecoveryOutcome.ShellFailed,
-                    "readback_failed",
-                )
-            }
+        val readback =
+            readEnabledServices()
+                ?: run {
+                    val rollback =
+                        rollbackWrittenState(
+                            WrittenState(merged, writtenEnabled),
+                            prePut,
+                        )
+                    return failureAfterRollback(
+                        rollback,
+                        prePut,
+                        WrittenState(merged, writtenEnabled),
+                        OpenLessShizukuBridge.RecoveryOutcome.ShellFailed,
+                        "readback_failed",
+                    )
+                }
 
         if (!OpenLessShizukuBridge.verifyReadbackExact(readback, merged)) {
-            val rollback = rollbackWrittenState(
-                WrittenState(merged, writtenEnabled),
-                prePut,
-            )
-            val failureCause = if (!OpenLessShizukuBridge.readbackContainsComponent(readback, serviceComponent)) {
-                "oem_rollback"
-            } else {
-                "concurrent_change"
-            }
+            val rollback =
+                rollbackWrittenState(
+                    WrittenState(merged, writtenEnabled),
+                    prePut,
+                )
+            val failureCause =
+                if (!OpenLessShizukuBridge.readbackContainsComponent(readback, serviceComponent)) {
+                    "oem_rollback"
+                } else {
+                    "concurrent_change"
+                }
             return failureAfterRollback(
                 rollback,
                 prePut,
@@ -203,24 +212,25 @@ class OpenLessShizukuUserService @JvmOverloads constructor(
         snapshot: OpenLessShizukuBridge.AccessibilitySettingsSnapshot,
     ): RollbackOutcome {
         val servicesResult = rollbackServicesIfUnchanged(written.services, snapshot.services)
-        val enabledResult = if (written.enabled == null) {
-            OpenLessShizukuBridge.EnabledRollbackResult.Skipped
-        } else if (
-            OpenLessShizukuBridge.shouldRollbackEnabledAfterServices(
-                servicesResult,
-                written.enabled,
-                snapshot.enabled,
-            )
-        ) {
-            rollbackEnabledIfUnchanged(
-                written.enabled,
-                snapshot.enabled,
-                snapshot.services,
-            )
-        } else {
-            Log.w(TAG, "skip enabled rollback: services rollback=${servicesResult.name}")
-            OpenLessShizukuBridge.EnabledRollbackResult.SkippedDueToServicesConflict
-        }
+        val enabledResult =
+            if (written.enabled == null) {
+                OpenLessShizukuBridge.EnabledRollbackResult.Skipped
+            } else if (
+                OpenLessShizukuBridge.shouldRollbackEnabledAfterServices(
+                    servicesResult,
+                    written.enabled,
+                    snapshot.enabled,
+                )
+            ) {
+                rollbackEnabledIfUnchanged(
+                    written.enabled,
+                    snapshot.enabled,
+                    snapshot.services,
+                )
+            } else {
+                Log.w(TAG, "skip enabled rollback: services rollback=${servicesResult.name}")
+                OpenLessShizukuBridge.EnabledRollbackResult.SkippedDueToServicesConflict
+            }
         return RollbackOutcome(servicesResult, enabledResult)
     }
 
@@ -231,15 +241,16 @@ class OpenLessShizukuUserService @JvmOverloads constructor(
         outcome: OpenLessShizukuBridge.RecoveryOutcome,
         failureCause: String,
     ): RecoveryAttemptResult.Failure {
-        val messageKey = OpenLessShizukuBridge.recoveryFailureMessageKey(
-            OpenLessShizukuBridge.RecoveryRollbackStatus(
-                rollback.services,
-                rollback.enabled,
-            ),
-            wroteEnabled = written.enabled != null,
-            baselineEnabled = snapshot.enabled,
-            failureCause = failureCause,
-        )
+        val messageKey =
+            OpenLessShizukuBridge.recoveryFailureMessageKey(
+                OpenLessShizukuBridge.RecoveryRollbackStatus(
+                    rollback.services,
+                    rollback.enabled,
+                ),
+                wroteEnabled = written.enabled != null,
+                baselineEnabled = snapshot.enabled,
+                failureCause = failureCause,
+            )
         return RecoveryAttemptResult.Failure(outcome, messageKey)
     }
 
@@ -247,8 +258,8 @@ class OpenLessShizukuUserService @JvmOverloads constructor(
         writtenServices: String,
         baselineServices: String,
     ): OpenLessShizukuBridge.ServicesRollbackResult {
-        val current = readEnabledServices()
-            ?: return OpenLessShizukuBridge.ServicesRollbackResult.ReadFailed
+        val current =
+            readEnabledServices() ?: return OpenLessShizukuBridge.ServicesRollbackResult.ReadFailed
 
         if (OpenLessShizukuBridge.servicesListsEqual(writtenServices, baselineServices)) {
             return OpenLessShizukuBridge.evaluateUnchangedServicesWriteRollback(
@@ -280,14 +291,15 @@ class OpenLessShizukuUserService @JvmOverloads constructor(
             Log.w(TAG, "skip enabled rollback: refusing to auto-disable global accessibility")
             return OpenLessShizukuBridge.EnabledRollbackResult.SkippedDueToServicesConflict
         }
-        val currentEnabled = readAccessibilityEnabled()
-            ?: return OpenLessShizukuBridge.EnabledRollbackResult.ReadFailed
+        val currentEnabled =
+            readAccessibilityEnabled()
+                ?: return OpenLessShizukuBridge.EnabledRollbackResult.ReadFailed
         if (currentEnabled != writtenEnabled) {
             Log.w(TAG, "skip enabled rollback: current differs from written")
             return OpenLessShizukuBridge.EnabledRollbackResult.Skipped
         }
-        val currentServices = readEnabledServices()
-            ?: return OpenLessShizukuBridge.EnabledRollbackResult.ReadFailed
+        val currentServices =
+            readEnabledServices() ?: return OpenLessShizukuBridge.EnabledRollbackResult.ReadFailed
         if (!OpenLessShizukuBridge.servicesListsEqual(currentServices, baselineServices)) {
             Log.w(TAG, "skip enabled rollback: services changed before enabled put")
             return OpenLessShizukuBridge.EnabledRollbackResult.SkippedDueToServicesConflict
@@ -331,8 +343,9 @@ class OpenLessShizukuUserService @JvmOverloads constructor(
             return false
         }
         return runProcess(
-            listOf("cmd", "appops", "set", appPackage, "ACCESS_RESTRICTED_SETTINGS", "allow"),
-        ) is ShellResult.Success
+            listOf("cmd", "appops", "set", appPackage, "ACCESS_RESTRICTED_SETTINGS", "allow")
+        ) is
+            ShellResult.Success
     }
 
     private fun runPasteKeyInjection(): ShellResult {
@@ -373,11 +386,10 @@ class OpenLessShizukuUserService @JvmOverloads constructor(
             return ShellResult.Failure
         }
         return try {
-            val process = ProcessBuilder(command)
-                .redirectErrorStream(true)
-                .start()
+            val process = ProcessBuilder(command).redirectErrorStream(true).start()
             val reader = Executors.newSingleThreadExecutor()
-            val outputTask = reader.submit(Callable { process.inputStream.bufferedReader().readText() })
+            val outputTask =
+                reader.submit(Callable { process.inputStream.bufferedReader().readText() })
             try {
                 if (!process.waitFor(SHELL_TIMEOUT_SEC, TimeUnit.SECONDS)) {
                     process.destroyForcibly()
@@ -403,10 +415,7 @@ class OpenLessShizukuUserService @JvmOverloads constructor(
         outcome: OpenLessShizukuBridge.RecoveryOutcome,
         messageKey: String,
     ): String {
-        return JSONObject()
-            .put("outcome", outcome.name)
-            .put("messageKey", messageKey)
-            .toString()
+        return JSONObject().put("outcome", outcome.name).put("messageKey", messageKey).toString()
     }
 
     private data class WrittenState(
@@ -421,7 +430,9 @@ class OpenLessShizukuUserService @JvmOverloads constructor(
 
     private sealed class RecoveryAttemptResult {
         data object Success : RecoveryAttemptResult()
+
         data object Retry : RecoveryAttemptResult()
+
         data class Failure(
             val outcome: OpenLessShizukuBridge.RecoveryOutcome,
             val messageKey: String,
@@ -430,6 +441,7 @@ class OpenLessShizukuUserService @JvmOverloads constructor(
 
     private sealed class ShellResult {
         data class Success(val value: String) : ShellResult()
+
         data object Failure : ShellResult()
     }
 

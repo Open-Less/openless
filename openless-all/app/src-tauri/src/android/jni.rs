@@ -209,22 +209,64 @@ pub mod android {
         }
     }
 
+    fn log_keystore_failure(method: &str, kind: &str, detail: &str) {
+        let safe: String = detail
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | ':' | '-' | '/') {
+                    ch
+                } else {
+                    ' '
+                }
+            })
+            .take(120)
+            .collect();
+        if safe.is_empty() {
+            log::warn!("[vault] Android Keystore method={method} status={kind}");
+        } else {
+            log::warn!("[vault] Android Keystore method={method} status={kind} detail={safe}");
+        }
+    }
+
     fn keystore_temporarily_unavailable<T>(env: &mut JNIEnv) -> Result<T, String> {
         clear_pending_exception(env);
         Err(KEYSTORE_TEMPORARILY_UNAVAILABLE.to_string())
     }
 
-    fn credential_response(response: Vec<u8>) -> Result<Vec<u8>, String> {
+    fn credential_response(method: &str, response: Vec<u8>) -> Result<Vec<u8>, String> {
         let Some((&status, payload)) = response.split_first() else {
+            log_keystore_failure(method, "empty_response", "");
             return Err(KEYSTORE_TEMPORARILY_UNAVAILABLE.to_string());
         };
         match status {
-            0 => Ok(payload.to_vec()),
-            1 => Err(KEYSTORE_KEY_MISSING.to_string()),
-            2 => Err(KEYSTORE_AUTHENTICATION_FAILED.to_string()),
-            3 => Err(KEYSTORE_TEMPORARILY_UNAVAILABLE.to_string()),
-            4 => Err(KEYSTORE_MALFORMED.to_string()),
-            _ => Err(KEYSTORE_TEMPORARILY_UNAVAILABLE.to_string()),
+            0 => {
+                if method == "deleteKey" && payload == b"legacy-key-cleanup-deferred" {
+                    log_keystore_failure(method, "legacy_cleanup_deferred", "");
+                }
+                Ok(payload.to_vec())
+            }
+            1 => {
+                let detail = String::from_utf8_lossy(payload);
+                log_keystore_failure(method, "status_key_missing", &detail);
+                Err(KEYSTORE_KEY_MISSING.to_string())
+            }
+            2 => {
+                log_keystore_failure(method, "authentication_failed", "");
+                Err(KEYSTORE_AUTHENTICATION_FAILED.to_string())
+            }
+            3 => {
+                let detail = String::from_utf8_lossy(payload);
+                log_keystore_failure(method, "status_temporarily_unavailable", &detail);
+                Err(KEYSTORE_TEMPORARILY_UNAVAILABLE.to_string())
+            }
+            4 => {
+                log_keystore_failure(method, "malformed", "");
+                Err(KEYSTORE_MALFORMED.to_string())
+            }
+            _ => {
+                log_keystore_failure(method, "status_unknown", &status.to_string());
+                Err(KEYSTORE_TEMPORARILY_UNAVAILABLE.to_string())
+            }
         }
     }
 
@@ -236,15 +278,24 @@ pub mod android {
         with_android_env(|env, context| {
             let class = match load_context_class(env, context, CREDENTIAL_VAULT_CLASS) {
                 Ok(class) => class,
-                Err(_) => return keystore_temporarily_unavailable(env),
+                Err(error) => {
+                    log_keystore_failure(method, "class_load", &error);
+                    return keystore_temporarily_unavailable(env);
+                }
             };
             let first_array = match env.byte_array_from_slice(first) {
                 Ok(array) => array,
-                Err(_) => return keystore_temporarily_unavailable(env),
+                Err(error) => {
+                    log_keystore_failure(method, "jni_array", &error.to_string());
+                    return keystore_temporarily_unavailable(env);
+                }
             };
             let second_array = match env.byte_array_from_slice(second) {
                 Ok(array) => array,
-                Err(_) => return keystore_temporarily_unavailable(env),
+                Err(error) => {
+                    log_keystore_failure(method, "jni_array", &error.to_string());
+                    return keystore_temporarily_unavailable(env);
+                }
             };
             let first_object = JObject::from(first_array);
             let second_object = JObject::from(second_array);
@@ -258,21 +309,31 @@ pub mod android {
                 ],
             ) {
                 Ok(value) => value,
-                Err(_) => return keystore_temporarily_unavailable(env),
+                Err(error) => {
+                    log_keystore_failure(method, "jni_call", &error.to_string());
+                    return keystore_temporarily_unavailable(env);
+                }
             };
             let object = match value.l() {
                 Ok(object) => object,
-                Err(_) => return keystore_temporarily_unavailable(env),
+                Err(error) => {
+                    log_keystore_failure(method, "jni_object", &error.to_string());
+                    return keystore_temporarily_unavailable(env);
+                }
             };
             if object.is_null() {
+                log_keystore_failure(method, "null_response", "");
                 return Err(KEYSTORE_TEMPORARILY_UNAVAILABLE.to_string());
             }
             let array = JByteArray::from(object);
             let response = match env.convert_byte_array(&array) {
                 Ok(response) => response,
-                Err(_) => return keystore_temporarily_unavailable(env),
+                Err(error) => {
+                    log_keystore_failure(method, "jni_bytes", &error.to_string());
+                    return keystore_temporarily_unavailable(env);
+                }
             };
-            credential_response(response)
+            credential_response(method, response)
         })
     }
 
@@ -280,25 +341,38 @@ pub mod android {
         with_android_env(|env, context| {
             let class = match load_context_class(env, context, CREDENTIAL_VAULT_CLASS) {
                 Ok(class) => class,
-                Err(_) => return keystore_temporarily_unavailable(env),
+                Err(error) => {
+                    log_keystore_failure(method, "class_load", &error);
+                    return keystore_temporarily_unavailable(env);
+                }
             };
             let value = match env.call_static_method(class, method, "()[B", &[]) {
                 Ok(value) => value,
-                Err(_) => return keystore_temporarily_unavailable(env),
+                Err(error) => {
+                    log_keystore_failure(method, "jni_call", &error.to_string());
+                    return keystore_temporarily_unavailable(env);
+                }
             };
             let object = match value.l() {
                 Ok(object) => object,
-                Err(_) => return keystore_temporarily_unavailable(env),
+                Err(error) => {
+                    log_keystore_failure(method, "jni_object", &error.to_string());
+                    return keystore_temporarily_unavailable(env);
+                }
             };
             if object.is_null() {
+                log_keystore_failure(method, "null_response", "");
                 return Err(KEYSTORE_TEMPORARILY_UNAVAILABLE.to_string());
             }
             let array = JByteArray::from(object);
             let response = match env.convert_byte_array(&array) {
                 Ok(response) => response,
-                Err(_) => return keystore_temporarily_unavailable(env),
+                Err(error) => {
+                    log_keystore_failure(method, "jni_bytes", &error.to_string());
+                    return keystore_temporarily_unavailable(env);
+                }
             };
-            credential_response(response)
+            credential_response(method, response)
         })
     }
 
@@ -430,12 +504,11 @@ pub mod android {
             &[JValue::Object(&action_obj)],
         )
         .map_err(|error| format!("set service action: {error}"))?;
-        let start_method =
-            if action.ends_with(".START_RECORDING") && android_sdk_int(env)? >= 26 {
-                "startForegroundService"
-            } else {
-                "startService"
-            };
+        let start_method = if action.ends_with(".START_RECORDING") && android_sdk_int(env)? >= 26 {
+            "startForegroundService"
+        } else {
+            "startService"
+        };
         env.call_method(
             context,
             start_method,
@@ -557,10 +630,7 @@ pub mod android {
 
     /// 读取剪贴板当前的第一条纯文本内容，用于在粘贴后还原。
     /// 失败或剪贴板为空时返回 None（不返回错误，避免阻塞主流程）。
-    pub fn get_primary_clip_text(
-        env: &mut JNIEnv,
-        context: &JObject,
-    ) -> Option<String> {
+    pub fn get_primary_clip_text(env: &mut JNIEnv, context: &JObject) -> Option<String> {
         let clipboard_name = jobject_str(env, "clipboard").ok()?;
         let clipboard = env
             .call_method(
@@ -596,12 +666,7 @@ pub mod android {
             return None;
         }
         let text_val = env
-            .call_method(
-                &item,
-                "getText",
-                "()Ljava/lang/CharSequence;",
-                &[],
-            )
+            .call_method(&item, "getText", "()Ljava/lang/CharSequence;", &[])
             .and_then(|value| value.l())
             .ok()?;
         if text_val.is_null() {
@@ -757,9 +822,14 @@ pub mod android {
         env: &mut JNIEnv<'local>,
         context: &JObject<'local>,
     ) -> Result<JObject<'local>, String> {
-        env.call_method(context, "getContentResolver", "()Landroid/content/ContentResolver;", &[])
-            .and_then(|value| value.l())
-            .map_err(|error| format!("Context.getContentResolver: {error}"))
+        env.call_method(
+            context,
+            "getContentResolver",
+            "()Landroid/content/ContentResolver;",
+            &[],
+        )
+        .and_then(|value| value.l())
+        .map_err(|error| format!("Context.getContentResolver: {error}"))
     }
 
     fn jstring_object_to_option<'local>(
@@ -1041,8 +1111,7 @@ pub mod android {
         let max_bytes = i32::try_from(max_bytes)
             .map_err(|_| "content URI byte limit exceeds Android integer range".to_string())?;
         with_android_env(|env, context| {
-            let class =
-                load_context_class(env, context, "com.openless.app.OpenLessContentReader")?;
+            let class = load_context_class(env, context, "com.openless.app.OpenLessContentReader")?;
             let uri_obj = jobject_str(env, uri)?;
             let value = env
                 .call_static_method(
@@ -1087,9 +1156,7 @@ pub mod android {
                     ],
                 )
                 .and_then(|value| value.z())
-                .map_err(|error| {
-                    format!("call OpenLessContentWriter.writeBytes: {error}")
-                })?;
+                .map_err(|error| format!("call OpenLessContentWriter.writeBytes: {error}"))?;
             if ok {
                 Ok(())
             } else {

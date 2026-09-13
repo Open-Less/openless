@@ -34,12 +34,7 @@ export function discoverTestFiles(appRoot = DEFAULT_APP_ROOT) {
 
 export function runTestFiles(
   testFiles,
-  {
-    appRoot = DEFAULT_APP_ROOT,
-    log = console.log,
-    spawn = spawnSync,
-    tsxCli,
-  } = {},
+  { appRoot = DEFAULT_APP_ROOT, log = console.log, spawn = spawnSync, tsxCli } = {},
 ) {
   let resolvedTsxCli = tsxCli;
 

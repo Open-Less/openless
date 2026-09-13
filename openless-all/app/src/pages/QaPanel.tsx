@@ -12,7 +12,7 @@
 // 语音状态**只在输入区**表达（用户拍板：不进面板上部）：
 //   录音 = 输入组绕圈红光；转译思考（问题还没落到对话里）= 绕圈黑光；
 //   问题落定发出后光停，此时才在对话里出现助手思考行 —— 头像永远不先于
-//   用户的话出现（修「AI 头像先出来、动画抽搐」）。
+//   用户的话出现（修「AI 头像先出来、动画抖动」）。
 //
 // 触发链路：
 //   1) 用户按 Cmd+Shift+;（默认）→ 后端 toggle 浮窗可见性；显示时发
@@ -24,7 +24,13 @@
 // 关闭：Esc / ✕ / 再按 Cmd+Shift+; → qa_window_dismiss → 后端发
 // `chat-panel:closing`（退场动画）→ 240ms 后隐藏窗口并清历史。
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ArrowUpIcon,
@@ -148,7 +154,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
   onRequestCloseRef.current = onRequestClose;
 
   // 新轮次信号：用户消息条数变化 = 新提问发出，也用它刷新 GitHub 头像。
-  const userTurnCount = messages.filter(m => m.role === 'user').length;
+  const userTurnCount = messages.filter((m) => m.role === 'user').length;
   const githubLogin = useGithubLogin(userTurnCount);
 
   // ── 后端事件订阅（mount 时订阅一次，永不重订阅）──────────────────
@@ -160,7 +166,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     (async () => {
       try {
         const { listen } = await import('@tauri-apps/api/event');
-        const stateHandle = await listen<QaStatePayload>('qa:state', event => {
+        const stateHandle = await listen<QaStatePayload>('qa:state', (event) => {
           const payload = event.payload;
           const sessionEvent = acceptQaSessionEvent(activeSessionIdRef.current, payload);
           if (!sessionEvent.accepted) {
@@ -170,14 +176,14 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
           if (payload.messages) {
             setMessages(payload.messages);
           }
-          if (typeof payload.edit_apply_available === 'boolean') {
-            setEditApplyAvailable(payload.edit_apply_available);
+          if (typeof payload.editApplyAvailable === 'boolean') {
+            setEditApplyAvailable(payload.editApplyAvailable);
           }
-          if (typeof payload.edit_revert_available === 'boolean') {
-            setEditRevertAvailable(payload.edit_revert_available);
+          if (typeof payload.editRevertAvailable === 'boolean') {
+            setEditRevertAvailable(payload.editRevertAvailable);
           }
-          if (typeof payload.edit_instruction_mode === 'boolean') {
-            setEditInstructionMode(payload.edit_instruction_mode);
+          if (typeof payload.editInstructionMode === 'boolean') {
+            setEditInstructionMode(payload.editInstructionMode);
           }
           switch (payload.kind) {
             case 'idle':
@@ -190,7 +196,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               break;
             case 'recording':
               setStatus('recording');
-              setSelectionPreview(payload.selection_preview ?? '');
+              setSelectionPreview(payload.selectionPreview ?? '');
               setErrorMsg('');
               setStreamingAnswer('');
               setEditApplyAvailable(false);
@@ -200,8 +206,8 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               // ASR 在 finalize、user message 还没 push 的过渡帧。提前切到 thinking
               // 视图避免 UI 卡 recording 几百 ms 反馈缺失。详见 issue #161。
               setStatus('thinking');
-              if (payload.selection_preview != null) {
-                setSelectionPreview(payload.selection_preview);
+              if (payload.selectionPreview != null) {
+                setSelectionPreview(payload.selectionPreview);
               }
               setErrorMsg('');
               setStreamingAnswer('');
@@ -210,8 +216,8 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               break;
             case 'thinking':
               setStatus('thinking');
-              if (payload.selection_preview != null) {
-                setSelectionPreview(payload.selection_preview);
+              if (payload.selectionPreview != null) {
+                setSelectionPreview(payload.selectionPreview);
               }
               setErrorMsg('');
               setStreamingAnswer('');
@@ -221,14 +227,24 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
             case 'answer_delta':
               // 流式增量。仍保持 thinking 状态——直到 answer 事件落定后才回 idle。
               if (payload.chunk) {
-                setStreamingAnswer(prev => prev + payload.chunk);
+                setStreamingAnswer((prev) => prev + payload.chunk);
               }
+              break;
+            case 'awaiting_approval':
+              setStatus('thinking');
               break;
             case 'answer':
               setStatus('idle');
               setErrorMsg('');
               // messages 已被上面的 setMessages 落定，清掉流式 buffer 避免和最终气泡重影。
               setStreamingAnswer('');
+              break;
+            case 'cancelled':
+              setStatus('idle');
+              setErrorMsg('');
+              setStreamingAnswer('');
+              setEditApplyAvailable(false);
+              setEditRevertAvailable(false);
               break;
             case 'error':
               setStatus('error');
@@ -301,7 +317,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     const text = composerText.trim();
     if (!text || status === 'thinking' || status === 'recording') return;
     setComposerText('');
-    void qaSubmitText(text).catch(error => {
+    void qaSubmitText(text).catch((error) => {
       console.error('[QaPanel] qa_submit_text failed', error);
       setErrorMsg(error instanceof Error ? error.message : String(error));
       setStatus('error');
@@ -310,14 +326,14 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
 
   const onToggleRecording = () => {
     if (status === 'thinking') return;
-    void qaToggleRecording().catch(error => {
+    void qaToggleRecording().catch((error) => {
       console.error('[QaPanel] qa_toggle_recording failed', error);
     });
   };
 
   const onEditInstructionModeChange = (enabled: boolean) => {
     setEditInstructionMode(enabled);
-    void qaSetEditInstructionMode(enabled).catch(error => {
+    void qaSetEditInstructionMode(enabled).catch((error) => {
       console.error('[QaPanel] qa_set_edit_instruction_mode failed', error);
     });
   };
@@ -378,8 +394,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
         : undefined;
   // 助手思考行：问题已在对话里、答案还没开始流出时才出现（头像不先于用户的话）。
   const thinkingRow = status === 'thinking' && !streamingAnswer && lastRole === 'user';
-  const showEmpty =
-    messages.length === 0 && !streamingAnswer && !thinkingRow && status !== 'error';
+  const showEmpty = messages.length === 0 && !streamingAnswer && !thinkingRow && status !== 'error';
 
   // ── 官方 message-scroller-demo 同款骨架 ─────────────────────────────
   return (
@@ -405,7 +420,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               variant="ghost"
               size="icon-sm"
               onClick={onClose}
-              onMouseDown={event => {
+              onMouseDown={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
               }}
@@ -568,7 +583,7 @@ function Composer({
 
   return (
     <form
-      onSubmit={event => {
+      onSubmit={(event) => {
         event.preventDefault();
         onSubmit();
       }}
@@ -578,7 +593,7 @@ function Composer({
         <InputGroupInput
           value={value}
           placeholder={t('qa.composerPlaceholder')}
-          onChange={event => onChange(event.currentTarget.value)}
+          onChange={(event) => onChange(event.currentTarget.value)}
           onKeyDown={onKeyDown}
           onCompositionStart={() => {
             composingRef.current = true;
@@ -596,7 +611,7 @@ function Composer({
               className="size-3.5 accent-foreground"
               checked={editInstructionMode}
               disabled={busy}
-              onChange={event => onEditInstructionModeChange(event.currentTarget.checked)}
+              onChange={(event) => onEditInstructionModeChange(event.currentTarget.checked)}
             />
             {t('qa.editInstructionMode')}
           </label>

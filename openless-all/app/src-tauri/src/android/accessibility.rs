@@ -84,18 +84,23 @@ fn is_valid_android_package_name(package_name: &str) -> bool {
     }
     let mut segments = package_name.split('.');
     let first = segments.next().unwrap_or("");
-    if first.is_empty() || !first.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+    if first.is_empty()
+        || !first
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic())
+    {
         return false;
     }
-    if !first
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_')
-    {
+    if !first.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return false;
     }
     for segment in segments {
         if segment.is_empty()
-            || !segment.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            || !segment
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic())
             || !segment
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -273,10 +278,9 @@ mod android_impl {
 #[cfg(test)]
 mod tests {
     use super::{
-        components_equal, enabled_services_contain, normalize_component_key,
-        paste_via_accessibility_with_result, parse_service_entries,
-        should_retry_paste_after_failure, PASTE_RESULT_IPC_PROTOCOL_ERROR,
-        PASTE_RESULT_SERVICE_NOT_CONNECTED,
+        components_equal, enabled_services_contain, normalize_component_key, parse_service_entries,
+        paste_via_accessibility_with_result, should_retry_paste_after_failure,
+        PASTE_RESULT_IPC_PROTOCOL_ERROR, PASTE_RESULT_SERVICE_NOT_CONNECTED,
     };
 
     const FULL: &str = "com.openless.app/com.openless.app.OpenLessAccessibilityService";
@@ -310,10 +314,7 @@ mod tests {
 
     #[test]
     fn normalize_component_key_treats_short_and_full_forms_as_equal() {
-        assert_eq!(
-            normalize_component_key(SHORT_FORM),
-            Some(FULL.to_string())
-        );
+        assert_eq!(normalize_component_key(SHORT_FORM), Some(FULL.to_string()));
         assert_eq!(normalize_component_key(FULL), Some(FULL.to_string()));
         assert!(components_equal(SHORT_FORM, FULL));
     }

@@ -1016,7 +1016,13 @@ try {
   if ([string]::IsNullOrWhiteSpace($targetText)) {
     throw "$Target readback is empty."
   }
-  if (-not $targetText.Contains($latest.finalText)) {
+  $targetTextForComparison = $targetText.Replace("`r`n", "`n")
+  $finalTextForComparison = ([string]$latest.finalText).Replace("`r`n", "`n")
+  $targetStartsEmpty = $Target -in @("notepad", "browser", "win32edit")
+  if ($targetStartsEmpty -and $targetTextForComparison -cne $finalTextForComparison) {
+    throw "$Target readback does not exactly match latest finalText in an initially empty target; duplicate or partial insertion detected (expected length=$($finalTextForComparison.Length), actual length=$($targetTextForComparison.Length))."
+  }
+  if (-not $targetStartsEmpty -and -not $targetText.Contains($latest.finalText)) {
     if ($targetText.Contains($clipboardSentinel)) {
       throw "$Target readback contains the pre-dictation clipboard sentinel instead of latest finalText."
     }

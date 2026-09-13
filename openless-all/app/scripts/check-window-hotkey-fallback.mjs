@@ -9,7 +9,9 @@ const outfile = join(tmp, 'window-hotkey-fallback-test.mjs');
 
 try {
   await esbuild.build({
-    entryPoints: [fileURLToPath(new URL('../src/lib/windowHotkeyFallback.test.ts', import.meta.url))],
+    entryPoints: [
+      fileURLToPath(new URL('../src/lib/windowHotkeyFallback.test.ts', import.meta.url)),
+    ],
     outfile,
     bundle: true,
     platform: 'node',

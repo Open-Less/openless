@@ -21,10 +21,11 @@ object OpenLessContentReader {
             val uri = Uri.parse(uriString)
             context.contentResolver.openInputStream(uri)?.use { input ->
                 readBounded(input, maxBytes)
-            } ?: run {
-                Log.w(TAG, "openInputStream returned null for selected document")
-                null
             }
+                ?: run {
+                    Log.w(TAG, "openInputStream returned null for selected document")
+                    null
+                }
         } catch (error: Throwable) {
             Log.e(TAG, "failed to read selected document", error)
             null

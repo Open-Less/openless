@@ -2,9 +2,7 @@ package com.openless.app
 
 import android.view.accessibility.AccessibilityNodeInfo
 
-/**
- * Pure helpers for validating editable focus targets (unit-testable without a live service).
- */
+/** Pure helpers for validating editable focus targets (unit-testable without a live service). */
 internal object OpenLessAccessibilityTarget {
     private const val ACTION_PASTE_ID = 0x00008000
     private const val ACTION_SET_TEXT_ID = 0x00200000
@@ -74,8 +72,8 @@ internal object OpenLessAccessibilityTarget {
     }
 
     /**
-     * Limited cache validation without tree walks or pseudo node identity.
-     * Caller must prefer [AccessibilityNodeInfo.findFocus] first.
+     * Limited cache validation without tree walks or pseudo node identity. Caller must prefer
+     * [AccessibilityNodeInfo.findFocus] first.
      */
     fun isValidCachedEditable(
         cached: AccessibilityNodeInfo,

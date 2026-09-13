@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { ChevronDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { formatComboParts, modifiersFromPressedCodes } from '../lib/hotkey';
+import { functionKeyPrimaryFromEvent } from '../lib/hotkeyRecorder';
 import { KbdGroup } from './Kbd';
 import { setShortcutRecordingActive, validateShortcutBinding } from '../lib/ipc';
 import type { ShortcutBinding } from '../lib/types';
@@ -11,7 +12,7 @@ import type { ShortcutBinding } from '../lib/types';
 const SLIDE_DISTANCE = 48;
 /** 下拉菜单展开后的固定高度（px）：菜单按钮行高恒定，用固定值动画避免每次测量。 */
 const MENU_HEIGHT = 34;
-/** 滑动切换用 spring（与 Style.tsx 编辑抽屉同款）。只动 transform/opacity，不驱动布局，避免抽搐。 */
+/** 滑动切换用 spring（与 Style.tsx 编辑抽屉同款）。只动 transform/opacity，不驱动布局，避免抖动。 */
 const slideSpring = { type: 'spring' as const, damping: 26, stiffness: 280 };
 /** 下拉菜单展开/收起缓动，与 --ol-motion-soft 一致。 */
 const menuEase = [0.22, 0.8, 0.22, 1] as const;
@@ -28,6 +29,7 @@ export function ShortcutRecorder({
   resetLabel,
   comboOnly = false,
   sideSpecificModifiers = false,
+  allowMacDictationKey = false,
 }: {
   value: ShortcutBinding | null;
   onSave: (binding: ShortcutBinding) => Promise<void>;
@@ -45,11 +47,19 @@ export function ShortcutRecorder({
   comboOnly?: boolean;
   /** 听写 start/stop 专用：录制 cmd-left / ctrl-right 等侧向修饰键。 */
   sideSpecificModifiers?: boolean;
+  /** macOS dictation only: choose the dedicated key as the single trigger. */
+  allowMacDictationKey?: boolean;
 }) {
   const { t } = useTranslation();
   const [recording, setRecording] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const nativeSelected = allowMacDictationKey && value?.primary === 'MacDictationKey';
+  const nativeError =
+    error &&
+    ['Permission', 'Busy', 'Unavailable', 'Changed'].find((kind) =>
+      error.includes(`macDictationKey${kind}`),
+    );
   const pendingModifier = useRef<ShortcutBinding | null>(null);
   const pendingTimer = useRef<number | null>(null);
   const pressedCodes = useRef<Set<string>>(new Set());
@@ -59,15 +69,21 @@ export function ShortcutRecorder({
   useEffect(() => {
     if (!menuOpen) return;
     const onKeyDown = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape') setMenuOpen(false);
+      if (e.key === 'Escape' && !e.isComposing) {
+        e.preventDefault();
+        e.stopPropagation();
+        setMenuOpen(false);
+        rootRef.current?.querySelector<HTMLButtonElement>('[aria-expanded]')?.focus();
+      }
     };
     const onPointerDown = (e: MouseEvent) => {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setMenuOpen(false);
     };
-    window.addEventListener('keydown', onKeyDown);
+    // Capture Escape before the surrounding settings dialog handles it.
+    window.addEventListener('keydown', onKeyDown, true);
     window.addEventListener('mousedown', onPointerDown);
     return () => {
-      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('mousedown', onPointerDown);
     };
   }, [menuOpen]);
@@ -89,9 +105,12 @@ export function ShortcutRecorder({
     clearPressedCodes();
   };
 
-  useEffect(() => () => {
-    resetRecordingState();
-  }, []);
+  useEffect(
+    () => () => {
+      resetRecordingState();
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!disabled || !recording) return;
@@ -106,8 +125,11 @@ export function ShortcutRecorder({
       resetRecordingState();
       setRecording(false);
       setError(null);
-    } catch {
-      setError(t('settings.recording.comboConflict'));
+    } catch (reason) {
+      const message = String(reason);
+      setError(
+        message.includes('macDictationKey') ? message : t('settings.recording.comboConflict'),
+      );
     }
   };
 
@@ -187,7 +209,10 @@ export function ShortcutRecorder({
     clearPendingModifier();
     const primary = primaryFromKeyboardEvent(e);
     if (primary) {
-      void finish({ primary, modifiers: modifiersFromPressedCodes(pressedCodes.current, sideSpecificModifiers) });
+      void finish({
+        primary,
+        modifiers: modifiersFromPressedCodes(pressedCodes.current, sideSpecificModifiers),
+      });
     }
   };
 
@@ -205,10 +230,17 @@ export function ShortcutRecorder({
     }
   };
 
-  const doReset = () => {
+  const doReset = async () => {
     setMenuOpen(false);
     setError(null);
-    if (onReset) void onReset();
+    try {
+      await onReset?.();
+    } catch (reason) {
+      const message = String(reason);
+      setError(
+        message.includes('macDictationKey') ? message : t('settings.recording.comboConflict'),
+      );
+    }
   };
 
   const doDisable = () => {
@@ -225,6 +257,9 @@ export function ShortcutRecorder({
     flexDirection: 'column',
     gap: 6,
     width: '100%',
+    // 设置行里的快捷键录制控件不再拉满整行（此前「Right ⌃」值贴左、
+    // 下拉箭头甩到最右缘），与输入框同宽上限，紧凑地跟在标签列之后。
+    maxWidth: 360,
   };
   const recorderRowStyle: CSSProperties = {
     display: 'flex',
@@ -286,7 +321,7 @@ export function ShortcutRecorder({
   return (
     <div style={rootStyle} ref={rootRef}>
       {/* mode="wait"：主行与「正在录入」面板不重叠渲染；切换只做 transform/opacity 动画，
-          不驱动布局，面板运动过程不抽搐。所有滑入/滑出统一向右。 */}
+          不驱动布局，面板运动过程不抖动。所有滑入/滑出统一向右。 */}
       <AnimatePresence mode="wait" initial={false}>
         {recording ? (
           <motion.div
@@ -298,7 +333,7 @@ export function ShortcutRecorder({
             tabIndex={-1}
             onKeyDown={onKeyDown}
             onKeyUp={onKeyUp}
-            ref={el => el?.focus()}
+            ref={(el) => el?.focus()}
             style={{
               minHeight: 36,
               display: 'flex',
@@ -314,7 +349,9 @@ export function ShortcutRecorder({
             }}
           >
             {t('settings.recording.comboRecordHint')}
-            <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 4 }}>Esc 取消</div>
+            <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 4 }}>
+              Esc · {t('common.cancel')}
+            </div>
           </motion.div>
         ) : (
           <motion.div
@@ -331,7 +368,7 @@ export function ShortcutRecorder({
               <div style={controlsGroupStyle}>
                 <motion.button
                   whileTap={{ scale: 0.9 }}
-                  onClick={() => setMenuOpen(open => !open)}
+                  onClick={() => setMenuOpen((open) => !open)}
                   aria-label={t('settings.recording.comboMenuToggle', 'More options')}
                   aria-expanded={menuOpen}
                   title={t('settings.recording.comboMenuToggle', 'More options')}
@@ -354,11 +391,37 @@ export function ShortcutRecorder({
                 <motion.div
                   key="menu"
                   initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: MENU_HEIGHT, opacity: 1 }}
+                  animate={{
+                    height: allowMacDictationKey ? MENU_HEIGHT * 2 : MENU_HEIGHT,
+                    opacity: 1,
+                  }}
                   exit={{ height: 0, opacity: 0 }}
                   transition={{ duration: 0.16, ease: menuEase }}
                   style={{ overflow: 'hidden' }}
                 >
+                  {allowMacDictationKey && (
+                    <div style={menuRowStyle}>
+                      <button
+                        type="button"
+                        aria-pressed={nativeSelected}
+                        disabled={disabled}
+                        title={t('macDictationKey.description')}
+                        onClick={() => {
+                          setMenuOpen(false);
+                          void finish({ primary: 'MacDictationKey', modifiers: [] });
+                        }}
+                        style={
+                          disabled
+                            ? disabledMenuButtonStyle
+                            : nativeSelected
+                              ? menuPrimaryStyle
+                              : menuButtonStyle
+                        }
+                      >
+                        {t('macDictationKey.label')}
+                      </button>
+                    </div>
+                  )}
                   <div style={menuRowStyle}>
                     <motion.button
                       initial={{ y: 4, opacity: 0 }}
@@ -403,7 +466,11 @@ export function ShortcutRecorder({
           </motion.div>
         )}
       </AnimatePresence>
-      {error && <div style={{ fontSize: 11, color: 'var(--ol-red, #ef4444)' }}>{error}</div>}
+      {error && (
+        <div role="alert" style={{ fontSize: 11, color: 'var(--ol-red, #ef4444)' }}>
+          {nativeError ? t(`macDictationKey.${nativeError}`) : error}
+        </div>
+      )}
     </div>
   );
 }
@@ -426,6 +493,8 @@ function modifierPrimaryFromCode(code: string, key: string): string {
 }
 
 function primaryFromKeyboardEvent(e: KeyboardEvent): string {
+  const functionKey = functionKeyPrimaryFromEvent(e);
+  if (functionKey) return functionKey;
   const printable = primaryFromPrintableCode(e.code);
   if (printable) return printable;
   if (e.key.length === 1) return e.key;

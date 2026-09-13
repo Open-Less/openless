@@ -4,7 +4,7 @@
 // 动画沿用 global.css 的 ol-modal-backdrop-in / ol-modal-card-in（纯 opacity +
 // transform，不碰 blur），与设置弹窗、各市场弹窗保持一致。
 
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 interface ModalProps {
@@ -14,9 +14,21 @@ interface ModalProps {
   zIndex?: number;
   /** 卡片宽度，默认 'min(560px, 100%)'。 */
   width?: string;
+  /** 需要固定标题和底栏的弹窗可由内部内容区负责滚动。 */
+  style?: CSSProperties;
+  /** true 时反向播放入场动画；调用方用
+   *  useExitMount 门控卸载时机，动画播完再 unmount。 */
+  closing?: boolean;
 }
 
-export function Modal({ children, onClose, zIndex = 50, width = 'min(560px, 100%)' }: ModalProps) {
+export function Modal({
+  children,
+  onClose,
+  zIndex = 50,
+  width = 'min(560px, 100%)',
+  style,
+  closing = false,
+}: ModalProps) {
   // Portal 到 document.body：弹窗常从设置 / 市场等面板内部触发，而窗口 chrome
   // （WindowChrome）和页面容器带常驻 `will-change: transform`，会创建 containing
   // block —— 直接渲染的话 backdrop 的 `position: fixed` 会相对那个祖先而非视口定位，
@@ -33,11 +45,13 @@ export function Modal({ children, onClose, zIndex = 50, width = 'min(560px, 100%
         placeItems: 'center',
         zIndex,
         padding: 20,
-        animation: 'ol-modal-backdrop-in 0.18s var(--ol-motion-soft)',
+        animation: closing
+          ? 'ol-modal-backdrop-in 0.18s var(--ol-motion-soft) reverse both'
+          : 'ol-modal-backdrop-in 0.18s var(--ol-motion-soft)',
       }}
     >
       <div
-        onClick={e => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
         style={{
           width,
           maxHeight: '85vh',
@@ -47,7 +61,10 @@ export function Modal({ children, onClose, zIndex = 50, width = 'min(560px, 100%
           border: '0.5px solid var(--ol-line-strong)',
           boxShadow: '0 18px 42px rgba(0,0,0,0.18)',
           padding: 22,
-          animation: 'ol-modal-card-in 0.24s var(--ol-motion-spring)',
+          animation: closing
+            ? 'ol-modal-card-in 0.18s var(--ol-motion-soft) reverse both'
+            : 'ol-modal-card-in 0.24s var(--ol-motion-spring)',
+          ...style,
         }}
       >
         {children}

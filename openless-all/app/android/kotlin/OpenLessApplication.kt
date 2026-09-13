@@ -8,9 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 
-/**
- * Registers activity lifecycle hooks for overlay background trigger mode.
- */
+/** Registers activity lifecycle hooks for overlay background trigger mode. */
 class OpenLessApplication : Application() {
     override fun onCreate() {
         super.onCreate()
@@ -18,29 +16,38 @@ class OpenLessApplication : Application() {
         if (isMainProcess()) {
             OpenLessShizukuBridge.initialize()
         }
-        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
-            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
-            override fun onActivityStarted(activity: Activity) {
-                if (activity.javaClass.name.endsWith("MainActivity")) {
-                    maybeHideOverlayOnForeground()
+        registerActivityLifecycleCallbacks(
+            object : ActivityLifecycleCallbacks {
+                override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) =
+                    Unit
+
+                override fun onActivityStarted(activity: Activity) {
+                    if (activity.javaClass.name.endsWith("MainActivity")) {
+                        maybeHideOverlayOnForeground()
+                    }
                 }
-            }
-            override fun onActivityResumed(activity: Activity) = Unit
-            override fun onActivityPaused(activity: Activity) = Unit
-            override fun onActivityStopped(activity: Activity) {
-                if (activity.javaClass.name.endsWith("MainActivity")) {
-                    maybeShowOverlayOnBackground()
+
+                override fun onActivityResumed(activity: Activity) = Unit
+
+                override fun onActivityPaused(activity: Activity) = Unit
+
+                override fun onActivityStopped(activity: Activity) {
+                    if (activity.javaClass.name.endsWith("MainActivity")) {
+                        maybeShowOverlayOnBackground()
+                    }
                 }
+
+                override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) =
+                    Unit
+
+                override fun onActivityDestroyed(activity: Activity) = Unit
             }
-            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
-            override fun onActivityDestroyed(activity: Activity) = Unit
-        })
+        )
     }
 
     private fun maybeShowOverlayOnBackground() {
         val configured = configuredOverlayTriggerMode()
-        val shouldShow = configured == "background" ||
-            configured == "always"
+        val shouldShow = configured == "background" || configured == "always"
         if (!shouldShow) {
             return
         }
@@ -70,9 +77,11 @@ class OpenLessApplication : Application() {
 
     private fun sendOverlayAction(action: String) {
         try {
-            startService(Intent(this, OpenLessOverlayService::class.java).apply {
-                this.action = action
-            })
+            startService(
+                Intent(this, OpenLessOverlayService::class.java).apply {
+                    this.action = action
+                }
+            )
         } catch (error: Throwable) {
             Log.w(TAG, "overlay action failed: $action", error)
         }
@@ -89,9 +98,7 @@ class OpenLessApplication : Application() {
         }
         val pid = android.os.Process.myPid()
         val activityManager = getSystemService(ACTIVITY_SERVICE) as? ActivityManager ?: return null
-        return activityManager.runningAppProcesses
-            ?.firstOrNull { it.pid == pid }
-            ?.processName
+        return activityManager.runningAppProcesses?.firstOrNull { it.pid == pid }?.processName
     }
 
     companion object {

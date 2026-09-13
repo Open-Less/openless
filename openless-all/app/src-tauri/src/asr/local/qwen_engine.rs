@@ -1,7 +1,7 @@
 //! vendored Open-Less/qwen-asr 的安全 Rust 包装。
 //!
-//! 当前只暴露**最小可用面**：`load` / `transcribe_audio` / `transcribe_stream`
-//! + token 回调。后续接 coordinator 时再扩 prompt/language 设置。
+//! 管理模型 context、批处理/流式转写和 token 回调；同一 context 的原生调用
+//! 由 run_lock 串行化，取消后的 worker 返回前也不能复用该 context。
 
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};

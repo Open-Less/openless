@@ -137,7 +137,7 @@ function resolveAudioContextCtor(): AudioContextCtor | null {
 function getContext(): AudioContext | null {
   const Ctor = resolveAudioContextCtor();
   if (!Ctor) return null;
-  // 已 closed 的 ctx 无法复活，丢弃后重建——否则后续所有提示音永久静默（本 bug 根因）。
+  // 已 closed 的 ctx 无法复活，丢弃后重建——否则后续所有提示音永久静默。
   // 旧 ctx 上挂着的 activeVoices 也一并清空，避免去叠音时操作已失效节点。
   if (sharedCtx && audioContextActionForState(sharedCtx.state) === 'recreate') {
     sharedCtx = null;
@@ -218,7 +218,7 @@ function scheduleCueVoices(ctx: AudioContext): void {
       const voice: ActiveVoice = { osc, gain };
       activeVoices.push(voice);
       osc.onended = () => {
-        activeVoices = activeVoices.filter(v => v !== voice);
+        activeVoices = activeVoices.filter((v) => v !== voice);
         try {
           osc.disconnect();
           gain.disconnect();

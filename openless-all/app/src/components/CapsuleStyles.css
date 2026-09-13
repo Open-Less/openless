@@ -1,0 +1,255 @@
+.ol-typeless-capsule-wrap {
+  --ol-typeless-bg: #18181b;
+  --ol-typeless-border: #52525b;
+  --ol-typeless-ink: #fafafa;
+  --ol-typeless-button-bg: #3f3f46;
+  --ol-typeless-button-hover: #52525b;
+  --ol-typeless-confirm-bg: #fafafa;
+  --ol-typeless-confirm-ink: #18181b;
+  position: relative;
+  font-family: var(--ol-font-sans);
+  /* 整体缩放使药丸面积为原尺寸的 1/5（线性 1/√5≈0.447），与 206×57 的胶囊窗口配套；
+     尺寸基准见 src-tauri/src/lib.rs 的 capsule_window_bounds_for_style。 */
+  zoom: 0.447;
+}
+
+/* 黑色胶囊配白色波纹。 */
+.ol-typeless-capsule .ol-capsule-waveform > span {
+  background: #ffffff;
+}
+
+.ol-typeless-capsule {
+  position: relative;
+  width: 176px;
+  height: 64px;
+  overflow: hidden;
+  border: 1px solid var(--ol-typeless-border);
+  border-radius: 999px;
+  box-sizing: border-box;
+  background: var(--ol-typeless-bg);
+  color: var(--ol-typeless-ink);
+  box-shadow:
+    0 5px 14px rgb(0 0 0 / 16%),
+    inset 0 1px 0 rgb(255 255 255 / 5%);
+  transition: width 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ol-typeless-capsule[data-recording='true'] {
+  width: 232px;
+}
+.ol-typeless-capsule[data-error='true'] {
+  width: 300px;
+}
+
+.ol-typeless-recording,
+.ol-typeless-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 8px;
+  box-sizing: border-box;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.ol-typeless-recording {
+  width: 230px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.ol-typeless-capsule[data-recording='true'] .ol-typeless-recording,
+.ol-typeless-capsule:not([data-recording='true']) .ol-typeless-status {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.ol-typeless-action {
+  display: inline-flex;
+  flex: 0 0 46px;
+  width: 46px;
+  height: 46px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--ol-typeless-button-bg);
+  color: var(--ol-typeless-ink);
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    transform 120ms ease;
+}
+
+.ol-typeless-confirm {
+  background: var(--ol-typeless-confirm-bg);
+  color: var(--ol-typeless-confirm-ink);
+}
+.ol-typeless-action:hover {
+  background: var(--ol-typeless-button-hover);
+}
+.ol-typeless-confirm:hover {
+  background: var(--ol-typeless-confirm-bg);
+  opacity: 0.85;
+}
+.ol-typeless-action:active {
+  transform: scale(0.94);
+}
+.ol-typeless-action:focus-visible,
+.ol-typeless-stop:focus-visible {
+  outline: 2px solid #79b0ff;
+  outline-offset: 2px;
+}
+
+.ol-capsule-waveform {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 80px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+
+.ol-capsule-waveform > span {
+  width: 3px;
+  height: 28px;
+  border-radius: 999px;
+  background: #3478f6;
+  transform-origin: center;
+  transition: transform 100ms linear;
+}
+
+.ol-capsule-waveform[data-warming='true'] {
+  opacity: 0.5;
+}
+.ol-typeless-status {
+  gap: 6px;
+  padding-inline: 18px;
+}
+.ol-typeless-status > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+.ol-typeless-capsule[data-error='true'] .ol-typeless-status {
+  color: var(--ol-err);
+}
+.ol-typeless-capsule[data-processing='true'] .ol-typeless-status > span {
+  animation: ol-typeless-thinking 1.8s ease-in-out infinite;
+}
+.ol-typeless-stop {
+  display: inline-flex;
+  flex: 0 0 24px;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--ol-typeless-button-bg);
+  color: var(--ol-typeless-ink);
+  padding: 0;
+  cursor: pointer;
+}
+.ol-typeless-translation {
+  position: absolute;
+  bottom: calc(100% + 7px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 10px;
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--ol-typeless-ink);
+  background: var(--ol-typeless-bg);
+  border: 1px solid var(--ol-typeless-border);
+  border-radius: 999px;
+}
+
+.ol-capsule-style-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 256px;
+  max-width: 100%;
+  height: 96px;
+  margin-top: 8px;
+  border-radius: 12px;
+  background: var(--ol-surface-2);
+  pointer-events: none;
+}
+.ol-typeless-capsule-wrap[data-preview='true'] {
+  transform: scale(0.86);
+}
+.ol-classic-capsule-preview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 176px;
+  height: 42px;
+  padding: 0 7px;
+  box-sizing: border-box;
+  border: 1px solid var(--ol-capsule-pill-border);
+  border-radius: 999px;
+  background: var(--ol-capsule-pill-bg);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 10%);
+}
+.ol-classic-capsule-preview > span:not(.ol-capsule-waveform) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: var(--ol-capsule-btn-ink);
+  background: var(--ol-capsule-btn-bg);
+}
+.ol-classic-capsule-preview .ol-capsule-waveform {
+  width: 60px;
+  transform: scale(0.7);
+}
+/* Siri 预览 = 缩小的真实光效舞台（460×180 → ×0.5 = 230×90，正好放进 256×96 预览框）。 */
+.ol-siri-capsule-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ol-siri-capsule-preview > div {
+  transform: scale(0.5);
+}
+
+[data-ol-theme='dark'] .ol-typeless-capsule-wrap {
+  --ol-typeless-bg: #101014;
+  --ol-typeless-border: #3f3f46;
+  --ol-typeless-ink: #fafafa;
+  --ol-typeless-button-bg: #27272a;
+  --ol-typeless-button-hover: #3f3f46;
+  --ol-typeless-confirm-bg: #fafafa;
+  --ol-typeless-confirm-ink: #18181b;
+}
+
+@keyframes ol-typeless-thinking {
+  50% {
+    opacity: 0.55;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-typeless-capsule,
+  .ol-typeless-recording,
+  .ol-typeless-status,
+  .ol-capsule-waveform > span {
+    transition: none;
+  }
+  .ol-typeless-capsule[data-processing='true'] .ol-typeless-status > span {
+    animation: none;
+  }
+}

@@ -1,7 +1,4 @@
-import {
-  areProvidersConfigured,
-  shouldShowProviderSetupPrompt,
-} from './providerSetup';
+import { areProvidersConfigured, shouldShowProviderSetupPrompt } from './providerSetup';
 
 function assertEqual(actual: boolean, expected: boolean, name: string) {
   if (actual !== expected) {

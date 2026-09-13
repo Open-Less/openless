@@ -9,7 +9,10 @@ import android.util.Log
 class MicrophonePermissionActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+        if (
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+        ) {
             OpenLessPermissionBridge.resolveRecordAudioPermission(true)
             finish()
             return
@@ -26,8 +29,8 @@ class MicrophonePermissionActivity : Activity() {
         if (requestCode != REQUEST_RECORD_AUDIO) {
             return
         }
-        val granted = grantResults.isNotEmpty() &&
-            grantResults[0] == PackageManager.PERMISSION_GRANTED
+        val granted =
+            grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
         Log.i(TAG, "RECORD_AUDIO permission result granted=$granted")
         OpenLessPermissionBridge.resolveRecordAudioPermission(granted)
         finish()
@@ -36,7 +39,8 @@ class MicrophonePermissionActivity : Activity() {
     override fun onDestroy() {
         if (isFinishing) {
             OpenLessPermissionBridge.resolveRecordAudioPermission(
-                checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED,
+                checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+                    PackageManager.PERMISSION_GRANTED
             )
         }
         super.onDestroy()

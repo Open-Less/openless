@@ -1,5 +1,4 @@
-// 隐私 → 数据存储：本地保留的历史会话与对话上下文窗口。
-// 自 Settings.tsx 的 RecordingSection「历史与上下文」折叠组拆出，逻辑零改动。
+// 历史与上下文数据的保留、清理和存储设置。
 
 import { useTranslation } from 'react-i18next';
 import { detectOS } from '../../components/WindowChrome';
@@ -55,7 +54,7 @@ export function DataStorageSection() {
           min={0}
           max={365}
           value={prefs.historyRetentionDays}
-          onChange={e => onHistoryRetentionChange(e.target.value)}
+          onChange={(e) => onHistoryRetentionChange(e.target.value)}
           style={{ ...inputStyle, width: 80, textAlign: 'right' }}
         />
       </SettingRow>
@@ -66,7 +65,7 @@ export function DataStorageSection() {
           max={200}
           placeholder="200"
           value={prefs.historyMaxEntries ?? ''}
-          onChange={e => onHistoryMaxEntriesChange(e.target.value)}
+          onChange={(e) => onHistoryMaxEntriesChange(e.target.value)}
           style={{ ...inputStyle, width: 80, textAlign: 'right' }}
         />
       </SettingRow>
@@ -76,7 +75,7 @@ export function DataStorageSection() {
           min={0}
           max={60}
           value={prefs.polishContextWindowMinutes}
-          onChange={e => onPolishContextWindowChange(e.target.value)}
+          onChange={(e) => onPolishContextWindowChange(e.target.value)}
           style={{ ...inputStyle, width: 80, textAlign: 'right' }}
         />
       </SettingRow>
@@ -90,7 +89,7 @@ export function DataStorageSection() {
         >
           <Toggle
             on={prefs.cursorContextEnabled}
-            onToggle={next => void savePrefs({ ...prefs, cursorContextEnabled: next })}
+            onToggle={(next) => void savePrefs({ ...prefs, cursorContextEnabled: next })}
           />
         </SettingRow>
       )}

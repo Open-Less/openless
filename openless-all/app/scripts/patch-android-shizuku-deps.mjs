@@ -85,8 +85,7 @@ export function patchAidlBuildFeature(gradleContent) {
     throw new Error('android block not found in Gradle file');
   }
   const indent = androidMatch[1];
-  const insertion =
-    `${androidMatch[0]}\n${indent}    buildFeatures {\n${indent}        ${AIDL_FEATURE}\n${indent}    }`;
+  const insertion = `${androidMatch[0]}\n${indent}    buildFeatures {\n${indent}        ${AIDL_FEATURE}\n${indent}    }`;
   const updated = gradleContent.replace(androidMatch[0], insertion);
   return { content: updated, changed: true };
 }

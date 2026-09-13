@@ -15,7 +15,9 @@ export function readFontScale(): FontScaleId {
   try {
     const v = window.localStorage.getItem(FONT_SCALE_KEY);
     if (v === 'small' || v === 'medium' || v === 'large') return v;
-  } catch { /* localStorage 不可用：忽略，落回默认 */ }
+  } catch {
+    /* localStorage 不可用：忽略，落回默认 */
+  }
   // Windows 默认 'large'（用户反馈 medium 在 Windows 上字号偏小）；其他平台保持 medium。
   if (typeof navigator !== 'undefined') {
     const hint = `${navigator.userAgent || ''} ${navigator.platform || ''}`;
@@ -32,5 +34,9 @@ export function applyFontScale(id: FontScaleId): void {
 
 export function setFontScale(id: FontScaleId): void {
   applyFontScale(id);
-  try { window.localStorage.setItem(FONT_SCALE_KEY, id); } catch { /* 忽略 */ }
+  try {
+    window.localStorage.setItem(FONT_SCALE_KEY, id);
+  } catch {
+    /* 忽略 */
+  }
 }

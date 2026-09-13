@@ -1,4 +1,4 @@
-import { invokeOrMock } from "./shared"
+import { invokeOrMock } from './shared';
 
 /**
  * 让当前聊天面板窗口成为 key window（获得键盘焦点）。
@@ -9,5 +9,5 @@ import { invokeOrMock } from "./shared"
  * 前端在用户点进输入框时调用本命令，此刻抢焦点正是用户想要的。
  */
 export function chatPanelFocusKeyboard(): Promise<void> {
-    return invokeOrMock("chat_panel_focus_keyboard", undefined, () => undefined)
+  return invokeOrMock('chat_panel_focus_keyboard', undefined, () => undefined);
 }

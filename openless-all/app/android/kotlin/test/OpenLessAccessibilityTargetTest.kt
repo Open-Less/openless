@@ -14,7 +14,7 @@ class OpenLessAccessibilityTargetTest {
                 isFocused = true,
                 nodePackage = "com.example.app",
                 activePackage = "com.example.app",
-            ),
+            )
         )
         assertFalse(
             OpenLessAccessibilityTarget.passesEditableFocusChecks(
@@ -22,7 +22,7 @@ class OpenLessAccessibilityTargetTest {
                 isFocused = true,
                 nodePackage = "com.example.app",
                 activePackage = "com.example.app",
-            ),
+            )
         )
         assertFalse(
             OpenLessAccessibilityTarget.passesEditableFocusChecks(
@@ -30,7 +30,7 @@ class OpenLessAccessibilityTargetTest {
                 isFocused = false,
                 nodePackage = "com.example.app",
                 activePackage = "com.example.app",
-            ),
+            )
         )
         assertFalse(
             OpenLessAccessibilityTarget.passesEditableFocusChecks(
@@ -38,7 +38,7 @@ class OpenLessAccessibilityTargetTest {
                 isFocused = true,
                 nodePackage = "com.other.app",
                 activePackage = "com.example.app",
-            ),
+            )
         )
     }
 
@@ -75,7 +75,7 @@ class OpenLessAccessibilityTargetTest {
                 isPassword = false,
                 className = "android.widget.EditText",
                 actions = emptyList(),
-            ),
+            )
         )
         assertTrue(
             OpenLessAccessibilityTarget.isPasteTarget(
@@ -83,7 +83,7 @@ class OpenLessAccessibilityTargetTest {
                 isPassword = false,
                 className = "android.view.View",
                 actionIds = listOf(0x00008000),
-            ),
+            )
         )
         assertFalse(
             OpenLessAccessibilityTarget.isPasteTarget(
@@ -91,7 +91,7 @@ class OpenLessAccessibilityTargetTest {
                 isPassword = true,
                 className = "android.widget.EditText",
                 actions = emptyList(),
-            ),
+            )
         )
     }
 }

@@ -39,7 +39,9 @@ function expectSuccessSilent(name, path) {
     throw new Error(`${name}: expected exit 0, got ${result.status}\n${result.stderr}`);
   }
   if (result.stdout !== '' || result.stderr !== '') {
-    throw new Error(`${name}: success must be silent, got ${JSON.stringify(result.stdout + result.stderr)}`);
+    throw new Error(
+      `${name}: success must be silent, got ${JSON.stringify(result.stdout + result.stderr)}`,
+    );
   }
 }
 
@@ -61,7 +63,10 @@ try {
   expectFailure('missing key', writeFixture('missing-key.plist', ''));
   expectFailure(
     'empty string',
-    writeFixture('empty-string.plist', '<key>NSSpeechRecognitionUsageDescription</key><string></string>'),
+    writeFixture(
+      'empty-string.plist',
+      '<key>NSSpeechRecognitionUsageDescription</key><string></string>',
+    ),
   );
   expectFailure(
     'whitespace-only string',

@@ -890,7 +890,16 @@ fn accept_worker(
 ) -> Result<UnixStream> {
     loop {
         match listener.accept() {
-            Ok((stream, _)) => return Ok(stream),
+            Ok((stream, _)) => {
+                // `listener` is nonblocking for the startup poll loop. macOS may
+                // propagate that flag to accepted sockets, which would make the
+                // handshake read return `WouldBlock` immediately despite the
+                // read timeout configured by the client.
+                stream
+                    .set_nonblocking(false)
+                    .context("set MLX worker socket blocking")?;
+                return Ok(stream);
+            }
             Err(error) if error.kind() == ErrorKind::WouldBlock => {}
             Err(error) => {
                 log::error!(
@@ -1031,7 +1040,44 @@ pub(crate) fn run_if_requested() {
     }
 }
 
+fn bundled_mlx_metallib_from_exe(exe: &Path) -> Option<PathBuf> {
+    let macos_dir = exe.parent()?;
+    if macos_dir.file_name().is_none_or(|name| name != "MacOS") {
+        return None;
+    }
+    Some(macos_dir.parent()?.join("Resources").join("mlx.metallib"))
+}
+
+fn apply_bundled_mlx_metallib_path() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some(metallib) = bundled_mlx_metallib_from_exe(&exe) else {
+        return;
+    };
+    if !metallib.is_file() {
+        return;
+    }
+    let Some(path) = metallib.to_str() else {
+        return;
+    };
+    let Ok(c_path) = std::ffi::CString::new(path) else {
+        return;
+    };
+    extern "C" {
+        fn openless_mlx_set_metallib_path(path: *const std::os::raw::c_char) -> i32;
+    }
+    let status = unsafe { openless_mlx_set_metallib_path(c_path.as_ptr()) };
+    if status != 0 {
+        eprintln!(
+            "failed to set MLX metallib path {}: status={status}",
+            metallib.display()
+        );
+    }
+}
+
 fn run_worker(socket_path: &Path) -> Result<()> {
+    apply_bundled_mlx_metallib_path();
     let stream = UnixStream::connect(socket_path)
         .with_context(|| format!("connect MLX worker socket: {}", socket_path.display()))?;
     let session_dir = socket_path
@@ -1240,6 +1286,21 @@ mod tests {
             .args(["-c", "sleep 30"])
             .spawn()
             .unwrap()
+    }
+
+    #[test]
+    fn bundled_metallib_uses_contents_resources_not_macos() {
+        let exe = Path::new("/Applications/OpenLess.app/Contents/MacOS/openless");
+        assert_eq!(
+            bundled_mlx_metallib_from_exe(exe).as_deref(),
+            Some(Path::new(
+                "/Applications/OpenLess.app/Contents/Resources/mlx.metallib"
+            ))
+        );
+        assert_eq!(
+            bundled_mlx_metallib_from_exe(Path::new("/target/release/openless")),
+            None
+        );
     }
 
     #[test]
@@ -1823,6 +1884,42 @@ mod tests {
         let result = accept_worker(&listener, &mut child, started, &Diagnostics::default());
         assert!(result.is_err());
         assert!(started.elapsed() < Duration::from_secs(1));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn accepted_worker_socket_is_blocking_after_nonblocking_accept_loop() {
+        let dir = test_dir();
+        let socket_path = dir.join("worker.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let client_path = socket_path.clone();
+        let client = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            UnixStream::connect(client_path).unwrap()
+        });
+        let mut child = sleeping_child();
+        let mut stream = accept_worker(
+            &listener,
+            &mut child,
+            Instant::now(),
+            &Diagnostics::default(),
+        )
+        .unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        let mut byte = [0_u8; 1];
+        let read_started_at = Instant::now();
+        let error = stream.read(&mut byte).unwrap_err();
+        assert!(read_started_at.elapsed() >= Duration::from_millis(25));
+        assert!(matches!(
+            error.kind(),
+            ErrorKind::TimedOut | ErrorKind::WouldBlock
+        ));
+        drop(stream);
+        drop(client.join().unwrap());
+        terminate_unmanaged_child(&mut child);
         fs::remove_dir_all(dir).unwrap();
     }
 

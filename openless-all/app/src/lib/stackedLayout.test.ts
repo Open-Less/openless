@@ -1,8 +1,5 @@
-import {
-  applyStackedLayout,
-  applyStackedLayoutFromPrefs,
-  isStackedLayoutActive,
-} from './stackedLayout';
+import { applyStackedLayoutFromPrefs } from './stackedLayout';
+import { applyConservativeLayout } from './conservativeLayout';
 
 function assert(condition: boolean, message: string): void {
   if (!condition) throw new Error(message);
@@ -16,17 +13,24 @@ Object.defineProperty(globalThis, 'document', {
 });
 
 try {
+  dataset.olStackedLayout = 'true';
   applyStackedLayoutFromPrefs(true);
-  assert(dataset.olStackedLayout === 'true', 'enabled preference should set the root layout attribute');
-  assert(isStackedLayoutActive(), 'active query should reflect the root layout attribute');
+  assert(
+    !('olStackedLayout' in dataset),
+    'retired enabled preference must clear the old root layout attribute',
+  );
 
   applyStackedLayoutFromPrefs(false);
-  assert(!('olStackedLayout' in dataset), 'disabled preference should remove the root layout attribute');
-  assert(!isStackedLayoutActive(), 'active query should become false after removal');
-
-  applyStackedLayout(true);
+  assert(
+    !('olStackedLayout' in dataset),
+    'disabled preference should remove the root layout attribute',
+  );
+  dataset.olStackedLayout = 'true';
   applyStackedLayoutFromPrefs(undefined);
   assert(!('olStackedLayout' in dataset), 'missing preference should restore the base layout');
+  dataset.olConservativeLayout = 'true';
+  applyConservativeLayout(true);
+  assert(!('olConservativeLayout' in dataset), 'retired single-column layout must not reactivate');
 } finally {
   if (previousDocument) {
     Object.defineProperty(globalThis, 'document', previousDocument);

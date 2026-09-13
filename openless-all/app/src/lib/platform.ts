@@ -11,8 +11,8 @@ let cachedCapabilities: PlatformCapabilities | null = null;
 function detectAndroidFromUa(): boolean {
   if (typeof navigator === 'undefined') return false;
   const uaDataPlatform =
-    (navigator as Navigator & { userAgentData?: { platform?: string } })
-      .userAgentData?.platform ?? '';
+    (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ??
+    '';
   const hints = `${navigator.userAgent || ''} ${navigator.platform || ''} ${uaDataPlatform}`;
   return /Android/i.test(hints);
 }
@@ -20,8 +20,8 @@ function detectAndroidFromUa(): boolean {
 function detectIosFromUa(): boolean {
   if (typeof navigator === 'undefined') return false;
   const uaDataPlatform =
-    (navigator as Navigator & { userAgentData?: { platform?: string } })
-      .userAgentData?.platform ?? '';
+    (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ??
+    '';
   const hints = `${navigator.userAgent || ''} ${navigator.platform || ''} ${uaDataPlatform}`;
   return /iPhone|iPad|iPod/i.test(hints);
 }
@@ -46,10 +46,7 @@ export function isAndroid(): boolean {
 
 export function isMobile(): boolean {
   if (cachedCapabilities) {
-    return (
-      cachedCapabilities.platform === 'mobile' ||
-      cachedCapabilities.platform === 'android'
-    );
+    return cachedCapabilities.platform === 'mobile' || cachedCapabilities.platform === 'android';
   }
   return isAndroid() || detectIosFromUa();
 }
@@ -97,9 +94,7 @@ export function inferPlatformCapabilities(): PlatformCapabilities {
 export async function getPlatformCapabilities(): Promise<PlatformCapabilities> {
   if (cachedCapabilities) return cachedCapabilities;
 
-  const isTauri =
-    globalThis.window !== undefined &&
-    '__TAURI_INTERNALS__' in globalThis.window;
+  const isTauri = globalThis.window !== undefined && '__TAURI_INTERNALS__' in globalThis.window;
 
   if (!isTauri) {
     cachedCapabilities = inferPlatformCapabilities();
@@ -108,15 +103,10 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilities> {
 
   try {
     const { invoke } = await import('@tauri-apps/api/core');
-    cachedCapabilities = await invoke<PlatformCapabilities>(
-      'get_platform_capabilities',
-    );
+    cachedCapabilities = await invoke<PlatformCapabilities>('get_platform_capabilities');
     return cachedCapabilities;
   } catch (err) {
-    console.warn(
-      '[platform] get_platform_capabilities unavailable; using inferred defaults',
-      err,
-    );
+    console.warn('[platform] get_platform_capabilities unavailable; using inferred defaults', err);
     cachedCapabilities = inferPlatformCapabilities();
     return cachedCapabilities;
   }
@@ -129,10 +119,7 @@ export function getCachedPlatformCapabilities(): PlatformCapabilities | null {
 /** Sync Windows 11 native title bar with in-app dark/light tokens. No-op off Windows. */
 export async function syncWindowsCaptionTheme(dark: boolean): Promise<void> {
   if (detectOS() !== 'win') return;
-  if (
-    globalThis.window === undefined ||
-    !('__TAURI_INTERNALS__' in globalThis.window)
-  ) {
+  if (globalThis.window === undefined || !('__TAURI_INTERNALS__' in globalThis.window)) {
     return;
   }
   try {

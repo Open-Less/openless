@@ -1,15 +1,12 @@
-// FloatingShell.tsx — frosted outer frame + raised inner console.
-// Sidebar lives INSIDE the console card.
-// Settings opens as a centered modal sheet from the sidebar bottom entry.
-//
-// Ported verbatim from design_handoff_openless/variants.jsx::FloatingShell.
+// 主窗口外壳：组织侧栏导航、页面切换、移动端面板和设置弹窗。
+// 各页面共享偏好状态；业务读写通过 typed IPC 交给 Core。
 
-import { useEffect, useMemo, useState, type ComponentType, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type ComponentType, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { Tooltip } from './Tooltip';
 import { WindowChrome, detectOS, type OS } from './WindowChrome';
-import { AudioCueListener } from "./AudioCue";
+import { AudioCueListener } from './AudioCue';
 import { SettingsModal } from './SettingsModal';
 import { Overview } from '../pages/Overview';
 import { History } from '../pages/History';
@@ -18,9 +15,7 @@ import { Style } from '../pages/Style';
 import { Marketplace } from '../pages/Marketplace';
 import { Translation } from '../pages/Translation';
 import { SelectionAsk } from '../pages/SelectionAsk';
-// 风格市场（Marketplace）现在是侧栏「风格」展开组下的独立页面（不再是 Style 页面内 modal）。
-// LocalAsr 不再作为主 nav tab——本地 ASR 模型管理已合并到 Settings → Advanced 中
-// 通过 <LocalAsr embedded /> 渲染。这里之前的 import 与 NAV_BASE 条目都已移除。
+import { Corrections } from '../pages/Corrections';
 import { APP_VERSION_LABEL, IS_BETA_BUILD } from '../lib/appVersion';
 import {
   HOTKEY_MODE_MIGRATION_ACK_KEY,
@@ -28,6 +23,7 @@ import {
   shouldShowHotkeyModeMigrationPrompt,
 } from '../lib/hotkeyMigration';
 import { applyFontScale, readFontScale } from '../lib/fontScale';
+import { useExitMount } from '../lib/useExitMount';
 import { getCredentials } from '../lib/ipc';
 import {
   PROVIDER_SETUP_PROMPT_DEFERRED_KEY,
@@ -43,12 +39,12 @@ import { useMobileLayout, useConservativeLayout } from '../lib/useMobileLayout';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { useAppState, type AppTab } from '../state/useAppState';
 
-const MORE_TAB_IDS: AppTab[] = ['vocab', 'translation', 'selectionAsk'];
+const MORE_TAB_IDS: AppTab[] = ['vocab', 'translation', 'selectionAsk', 'corrections'];
 const STYLE_TAB_IDS: AppTab[] = ['style', 'marketplace'];
 
-/** macOS 上侧栏顶部需让开原生红绿灯的高度（红绿灯竖直落在 ~6–22px）。 */
-const MAC_TRAFFIC_LIGHT_CLEARANCE = 30;
-const SIDEBAR_WIDTH = 188;
+/** Reserve the native traffic-light strip before the sidebar's version row. */
+const MAC_TRAFFIC_LIGHT_CLEARANCE = 44;
+const SIDEBAR_WIDTH = 226;
 
 /** tab → 页面组件映射（渲染主内容用；与侧栏树解耦，含未直接列在树上的页）。 */
 const PAGE_CMP: Record<Exclude<AppTab, 'localAsr'>, ComponentType> = {
@@ -59,12 +55,10 @@ const PAGE_CMP: Record<Exclude<AppTab, 'localAsr'>, ComponentType> = {
   marketplace: Marketplace,
   translation: Translation,
   selectionAsk: SelectionAsk,
+  corrections: Corrections,
 };
 
-/** 侧栏导航树：扁平项 + 可展开分组（用户拍板的结构）。
- *  - 概览 / 历史 / 词汇：扁平项，位置不变。
- *  - 风格：展开组 → 润色模式(=style 页) + 风格市场(=marketplace 页，原为 Style 内 modal)。
- *  - 工具：展开组 → 划词追问 + 翻译（原本两个扁平项合并成一个可展开分组）。 */
+/** 主导航分为直接入口与可展开分组；页面组件由 PAGE_CMP 统一解析。 */
 type NavNode =
   | { kind: 'item'; id: AppTab; icon: string }
   | { kind: 'group'; key: string; icon: string; children: Array<{ id: AppTab }> };
@@ -73,8 +67,18 @@ const NAV_TREE: NavNode[] = [
   { kind: 'item', id: 'overview', icon: 'overview' },
   { kind: 'item', id: 'history', icon: 'history' },
   { kind: 'item', id: 'vocab', icon: 'vocab' },
-  { kind: 'group', key: 'style', icon: 'style', children: [{ id: 'style' }, { id: 'marketplace' }] },
-  { kind: 'group', key: 'tools', icon: 'selectionAsk', children: [{ id: 'selectionAsk' }, { id: 'translation' }] },
+  {
+    kind: 'group',
+    key: 'style',
+    icon: 'style',
+    children: [{ id: 'style' }, { id: 'marketplace' }],
+  },
+  {
+    kind: 'group',
+    key: 'tools',
+    icon: 'selectionAsk',
+    children: [{ id: 'translation' }, { id: 'selectionAsk' }, { id: 'corrections' }],
+  },
 ];
 
 interface FloatingShellProps {
@@ -83,7 +87,11 @@ interface FloatingShellProps {
   initialSettings?: boolean;
 }
 
-export function FloatingShell({ os: osProp, initialTab = 'overview', initialSettings = false }: FloatingShellProps) {
+export function FloatingShell({
+  os: osProp,
+  initialTab = 'overview',
+  initialSettings = false,
+}: FloatingShellProps) {
   const os = osProp ?? detectOS();
   return (
     <WindowChrome os={os} title="OpenLess" height="100%">
@@ -92,17 +100,40 @@ export function FloatingShell({ os: osProp, initialTab = 'overview', initialSett
   );
 }
 
-function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initialTab: AppTab; initialSettings: boolean }) {
+function FloatingShellBody({
+  os,
+  initialTab,
+  initialSettings,
+}: {
+  os: OS;
+  initialTab: AppTab;
+  initialSettings: boolean;
+}) {
   const { t } = useTranslation();
   const mobile = useMobileLayout();
   const conservative = useConservativeLayout();
   const { prefs } = useHotkeySettings();
-  const { currentTab, setCurrentTab, settingsOpen, setSettingsOpen } = useAppState(initialTab, initialSettings);
-  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId | undefined>();
+  const { currentTab, setCurrentTab, settingsOpen, setSettingsOpen } = useAppState(
+    initialTab,
+    initialSettings,
+  );
+  const [settingsInitialSection, setSettingsInitialSection] = useState<
+    SettingsSectionId | undefined
+  >();
   const [providerPromptOpen, setProviderPromptOpen] = useState(false);
   const [hotkeyModePromptOpen, setHotkeyModePromptOpen] = useState(false);
+  // 退出动画门：关闭时先反向播放入场动画再卸载。
+  const settingsMount = useExitMount(settingsOpen, 220);
+  const providerPromptMount = useExitMount(providerPromptOpen);
+  const hotkeyPromptMount = useExitMount(hotkeyModePromptOpen);
   const [moreOpen, setMoreOpen] = useState(false);
   const [styleOpen, setStyleOpen] = useState(false);
+  const shellRef = useRef<HTMLDivElement>(null);
+
+  // The dialog records and moves focus before its background becomes inert.
+  useEffect(() => {
+    if (shellRef.current) shellRef.current.inert = settingsOpen;
+  }, [settingsOpen]);
 
   // tab 切换的 cross-fade：旧页 blur+fade out（180ms），结束后挂载新页（走 ol-page-slide enter）。
   // displayTab 是实际渲染的 tab，currentTab 是用户点中的目标 tab。
@@ -133,7 +164,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   // 分组展开态：默认展开「当前所在页所属的分组」。用户点分组标题手动切换。
   const groupOfTab = (tab: AppTab): string | null => {
     for (const node of NAV_TREE) {
-      if (node.kind === 'group' && node.children.some(c => c.id === tab)) return node.key;
+      if (node.kind === 'group' && node.children.some((c) => c.id === tab)) return node.key;
     }
     return null;
   };
@@ -144,17 +175,24 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   // 切到某分组内的页时自动展开该组（例如从胶囊直接跳到 marketplace）。
   useEffect(() => {
     const active = groupOfTab(currentTab);
-    if (active) setOpenGroups(prev => (prev[active] ? prev : { ...prev, [active]: true }));
+    if (active) setOpenGroups((prev) => (prev[active] ? prev : { ...prev, [active]: true }));
   }, [currentTab]);
-  const toggleGroup = (key: string) => setOpenGroups(prev => ({ ...prev, [key]: !prev[key] }));
+  const toggleGroup = (key: string) => setOpenGroups((prev) => ({ ...prev, [key]: !prev[key] }));
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const credentials = await getCredentials();
-      const promptDeferredValue = window.sessionStorage.getItem(PROVIDER_SETUP_PROMPT_DEFERRED_KEY);
-      if (!cancelled && shouldShowProviderSetupPrompt(credentials, promptDeferredValue)) {
-        setProviderPromptOpen(true);
+      try {
+        const credentials = await getCredentials();
+        const promptDeferredValue = window.sessionStorage.getItem(
+          PROVIDER_SETUP_PROMPT_DEFERRED_KEY,
+        );
+        if (!cancelled && shouldShowProviderSetupPrompt(credentials, promptDeferredValue)) {
+          setProviderPromptOpen(true);
+        }
+      } catch (error) {
+        // A locked/unavailable credential store is not an unconfigured provider.
+        console.warn('[startup] credential status unavailable', error);
       }
     })();
     return () => {
@@ -171,7 +209,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   }, []);
 
   // 之前监听的 NAVIGATE_LOCAL_ASR_EVENT 已无意义——「模型设置」独立 tab 已下线，
-  // 模型管理 UI 现在通过 Settings → Advanced 的 <LocalAsr embedded /> 渲染，
+  // 模型管理 UI 现在通过 Settings → Services 的 <LocalAsr embedded /> 渲染，
   // 用户在 Settings 内即可一站式管理，无需跨页跳转。
 
   const rememberProviderPrompt = () => {
@@ -191,17 +229,17 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
     setStyleOpen(false);
   };
 
-  // ⌘, 打开设置页面
+  // 跟随平台的设置快捷键。
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.metaKey && e.key === ',') {
+      if ((os === 'mac' ? e.metaKey : e.ctrlKey) && e.key === ',') {
         e.preventDefault();
         openSettings();
       }
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, []);
+  }, [os]);
 
   const openProviderSettings = () => {
     rememberProviderPrompt();
@@ -214,195 +252,229 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
     openSettings('general');
   };
 
-  const mobileTitle = settingsOpen
-    ? t('shell.footer.settings')
-    : t(subItemLabelKey(currentTab));
+  const mobileTitle = settingsOpen ? t('shell.footer.settings') : t(subItemLabelKey(currentTab));
   const moreTabActive = MORE_TAB_IDS.includes(currentTab);
   const styleTabActive = STYLE_TAB_IDS.includes(currentTab);
 
   return (
-    // 不再为 macOS 红绿灯预留顶部 28px 空条（用户反馈「块上方多一条丑横条」）：
-    // 侧栏与内容块都顶到窗口最上沿，原生红绿灯直接浮在侧栏左上角的块面上。
-    // 侧栏内 brand 行在 mac 上加 topClearance 让「OpenLess」避开红绿灯。
-    <div style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0, paddingTop: 0, background: 'var(--ol-app-shell-bg)' }}>
-
+    // 窗口内容从顶端铺开；macOS 仅在侧栏内部预留红绿灯区域。
+    <div
+      style={{
+        flex: 1,
+        position: 'relative',
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 0,
+        paddingTop: 0,
+        background: 'var(--ol-app-shell-bg)',
+      }}
+    >
       {mobile && (
-        <MobileTopBar
-          title={mobileTitle}
-          onOpenSettings={() => openSettings()}
-          settingsActive={settingsOpen}
-        />
+        <div
+          ref={(element) => {
+            if (element) element.inert = settingsOpen;
+          }}
+          style={{ display: 'contents' }}
+        >
+          <MobileTopBar
+            title={mobileTitle}
+            onOpenSettings={() => openSettings()}
+            settingsActive={settingsOpen}
+          />
+        </div>
       )}
 
       {/* Main shell — flush with the frosted backplate (no separate float). */}
       <div
+        ref={shellRef}
         data-ol-settings-open={settingsOpen ? 'true' : undefined}
         className="ol-app-shell-bg"
         style={{
-          flex: 1, minHeight: 0,
+          flex: 1,
+          minHeight: 0,
           display: 'flex',
           overflow: 'hidden',
           position: 'relative',
           zIndex: 1,
-        }}>
-
+        }}
+      >
         {/* Sidebar — desktop / wide only。 */}
         {!mobile && (
-        <aside
-          className="ol-sidebar-surface"
-          style={{
-            width: SIDEBAR_WIDTH,
-            height: '100%',
-            flexShrink: 0,
-            display: 'flex', flexDirection: 'column',
-            background: 'var(--ol-sidebar-bg)',
-            borderRight: '0.5px solid var(--ol-line)',
-            // mac：顶部空出红绿灯高度，让 brand/nav 落在红绿灯下方。
-            padding: os === 'mac' ? `${MAC_TRAFFIC_LIGHT_CLEARANCE}px 10px 12px` : '10px 10px 12px',
-          }}>
-
-          {/* brand */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '2px 8px 12px' }}>
-            <img
-              src="AppIcon.png"
-              alt="OpenLess"
-              style={{ width: 22, height: 22, borderRadius: 5, flexShrink: 0, boxShadow: '0 1px 2px rgba(0,0,0,.1), 0 0 0 0.5px rgba(0,0,0,.06)' }} />
-
-            <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600, letterSpacing: '-0.01em', color: 'var(--ol-ink)', whiteSpace: 'nowrap' }}>OpenLess</span>
-          </div>
-
-          {/* nav — 扁平项 + 可展开分组（用户拍板结构）。扁平项：概览/历史/词汇。
-              分组：风格(润色模式+风格市场) / 工具(划词追问+翻译)。active 项由
-              .ol-nav-btn-active class 给 surface-2 静态圆角底；分组标题点击展开/收起。 */}
-          <nav style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-            {NAV_TREE.map((node) => {
-              if (node.kind === 'item') {
-                const active = !settingsOpen && currentTab === node.id;
-                return (
-                  <Tooltip key={node.id} content={t(`shell.navHint.${node.id}`)} placement="right">
-                    <button
-                      onClick={() => setCurrentTab(node.id)}
-                      className={active ? 'ol-nav-btn ol-nav-btn-active' : 'ol-nav-btn'}
-                      style={navBtnStyle}
-                    >
-                      <Icon name={node.icon} size={14} />
-                      <span style={{ flex: 1 }}>{t(`nav.${node.id}`)}</span>
-                    </button>
-                  </Tooltip>
-                );
-              }
-              const expanded = !!openGroups[node.key];
-              const groupActive = !settingsOpen && node.children.some(c => c.id === currentTab);
-              return (
-                <div key={node.key}>
-                  {/* 分组标题：点击只展开/收起，不导航（用户：点风格弹出下拉选项）。 */}
-                  <button
-                    onClick={() => toggleGroup(node.key)}
-                    className={groupActive && !expanded ? 'ol-nav-btn ol-nav-btn-active' : 'ol-nav-btn'}
-                    aria-expanded={expanded}
-                    style={navBtnStyle}
-                  >
-                    <Icon name={node.icon} size={14} />
-                    <span style={{ flex: 1 }}>{t(`nav.group.${node.key}`)}</span>
-                    <svg
-                      width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden
-                      style={{
-                        color: 'var(--ol-ink-4)', flexShrink: 0,
-                        transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
-                        transition: 'transform 0.20s var(--ol-motion-spring)',
-                      }}
-                    >
-                      <path d="M6 3.5 10.5 8 6 12.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </button>
-                  {/* 子项：grid-rows 0fr↔1fr 过渡实现无高度硬编码的展开动画。 */}
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateRows: expanded ? '1fr' : '0fr',
-                      transition: 'grid-template-rows 0.24s var(--ol-motion-spring)',
-                    }}
-                  >
-                    <div style={{ overflow: 'hidden', minHeight: 0 }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 1, padding: '1px 0 2px' }}>
-                        {node.children.map(child => {
-                          const active = !settingsOpen && currentTab === child.id;
-                          return (
-                            <button
-                              key={child.id}
-                              onClick={() => setCurrentTab(child.id)}
-                              className={active ? 'ol-nav-btn ol-nav-subitem ol-nav-btn-active' : 'ol-nav-btn ol-nav-subitem'}
-                              tabIndex={expanded ? 0 : -1}
-                              style={{ ...navBtnStyle, paddingLeft: 30 }}
-                            >
-                              <span style={{ flex: 1 }}>{t(subItemLabelKey(child.id))}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </nav>
-
-          <div style={{ flex: 1 }} />
-
-          {/* 底部两行：上行 = 版本 chip（含 BETA 标），下行 = 设置按钮。
-              单行布局在窄 sidebar 下会把「设置」挤成两行竖字 + 版本糊一起；
-              翻回两行同时把顺序反过来：设置真正落到最底，版本在它上面。 */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 10 }}>
+          <aside
+            className="ol-sidebar-surface"
+            style={{
+              width: SIDEBAR_WIDTH,
+              height: '100%',
+              flexShrink: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              background: 'var(--ol-sidebar-bg)',
+              borderRight: '0.5px solid var(--ol-line)',
+              // mac：顶部空出红绿灯高度，让 brand/nav 落在红绿灯下方。
+              padding:
+                os === 'mac' ? `${MAC_TRAFFIC_LIGHT_CLEARANCE}px 10px 12px` : '10px 10px 12px',
+            }}
+          >
+            {/* 版本信息行：原「OpenLess」品牌位置直接改为显示版本信息，
+              填掉导航上方的空档；BETA 徽章与版本号同基线。 */}
             <div
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: 8,
                 flexWrap: 'wrap',
-                padding: '0 10px',
+                padding: '0 10px 12px',
                 fontFamily: 'var(--ol-font-sans)',
-                fontSize: 11,
+                fontSize: 12,
                 color: 'var(--ol-ink-4)',
               }}
             >
               {IS_BETA_BUILD && (
-                <span style={{
-                  display: 'inline-block',
-                  padding: '2px 8px',
-                  fontSize: 10,
-                  fontWeight: 600,
-                  letterSpacing: '0.04em',
-                  textTransform: 'uppercase',
-                  color: 'var(--ol-blue)',
-                  background: 'var(--ol-blue-soft)',
-                  border: '0.5px solid var(--ol-pill-blue-border)',
-                  borderRadius: 999,
-                }}>{t('shell.betaTag')}</span>
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    padding: '1px 6px',
+                    fontSize: 10,
+                    lineHeight: '14px',
+                    fontWeight: 600,
+                    letterSpacing: '0.05em',
+                    textTransform: 'uppercase',
+                    color: 'var(--ol-blue)',
+                    background: 'transparent',
+                    border: '0.5px solid var(--ol-pill-blue-border)',
+                    borderRadius: 5,
+                  }}
+                >
+                  {t('shell.betaTag')}
+                </span>
               )}
 
               <span>{t('shell.footer.version', { version: APP_VERSION_LABEL })}</span>
             </div>
 
-            <Tooltip content={t('shell.navHint.settings')} placement="right">
-              <button
-                onClick={() => openSettings()}
-                className={settingsOpen ? 'ol-nav-btn ol-nav-btn-active' : 'ol-nav-btn'}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 10,
-                  padding: '7px 10px',
-                  borderRadius: 8, border: 0,
-                  fontFamily: 'inherit', fontSize: 13,
-                  cursor: 'default',
-                  transition: 'color 0.16s var(--ol-motion-quick), background 0.16s var(--ol-motion-quick)',
-                  textAlign: 'left',
-                }}
-              >
-                <Icon name="settings" size={14} />
-                <span style={{ flex: 1 }}>{t('shell.footer.settings')}</span>
-              </button>
-            </Tooltip>
-          </div>
-        </aside>
+            {/* nav — 扁平项 + 可展开分组（用户拍板结构）。扁平项：概览/历史/词汇。
+              分组：风格(润色模式+风格市场) / 工具(划词追问+翻译)。active 项由
+              .ol-nav-btn-active class 给 surface-2 静态圆角底；分组标题点击展开/收起。 */}
+            <nav style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {NAV_TREE.map((node) => {
+                if (node.kind === 'item') {
+                  const active = !settingsOpen && currentTab === node.id;
+                  return (
+                    <Tooltip
+                      key={node.id}
+                      content={t(`shell.navHint.${node.id}`)}
+                      placement="right"
+                    >
+                      <button
+                        onClick={() => setCurrentTab(node.id)}
+                        className={active ? 'ol-nav-btn ol-nav-btn-active' : 'ol-nav-btn'}
+                        style={navBtnStyle}
+                      >
+                        <Icon name={node.icon} size={16} />
+                        <span style={{ flex: 1 }}>{t(`nav.${node.id}`)}</span>
+                      </button>
+                    </Tooltip>
+                  );
+                }
+                const expanded = !!openGroups[node.key];
+                const groupActive = !settingsOpen && node.children.some((c) => c.id === currentTab);
+                return (
+                  <div key={node.key}>
+                    {/* 分组标题：点击只展开/收起，不导航（用户：点风格弹出下拉选项）。 */}
+                    <button
+                      onClick={() => toggleGroup(node.key)}
+                      className={
+                        groupActive && !expanded ? 'ol-nav-btn ol-nav-btn-active' : 'ol-nav-btn'
+                      }
+                      aria-expanded={expanded}
+                      style={navBtnStyle}
+                    >
+                      <Icon name={node.icon} size={16} />
+                      <span style={{ flex: 1 }}>{t(`nav.group.${node.key}`)}</span>
+                      <Icon
+                        name="chevRight"
+                        size={12}
+                        style={{
+                          color: 'var(--ol-ink-4)',
+                          flexShrink: 0,
+                          transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                          transition: 'transform 0.20s var(--ol-motion-spring)',
+                        }}
+                      />
+                    </button>
+                    {/* 子项：grid-rows 0fr↔1fr 过渡实现无高度硬编码的展开动画。 */}
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateRows: expanded ? '1fr' : '0fr',
+                        transition: 'grid-template-rows 0.24s var(--ol-motion-spring)',
+                      }}
+                    >
+                      <div style={{ overflow: 'hidden', minHeight: 0 }}>
+                        <div
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 1,
+                            padding: '1px 0 2px',
+                          }}
+                        >
+                          {node.children.map((child) => {
+                            const active = !settingsOpen && currentTab === child.id;
+                            return (
+                              <button
+                                key={child.id}
+                                onClick={() => setCurrentTab(child.id)}
+                                className={
+                                  active
+                                    ? 'ol-nav-btn ol-nav-subitem ol-nav-btn-active'
+                                    : 'ol-nav-btn ol-nav-subitem'
+                                }
+                                tabIndex={expanded ? 0 : -1}
+                                style={{ ...navBtnStyle, paddingLeft: 30 }}
+                              >
+                                <span style={{ flex: 1 }}>{t(subItemLabelKey(child.id))}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </nav>
+
+            <div style={{ flex: 1 }} />
+
+            {/* 底部只剩设置按钮。 */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 10 }}>
+              <Tooltip content={t('shell.navHint.settings')} placement="right">
+                <button
+                  onClick={() => openSettings()}
+                  className={settingsOpen ? 'ol-nav-btn ol-nav-btn-active' : 'ol-nav-btn'}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    border: 0,
+                    fontFamily: 'inherit',
+                    fontSize: 15,
+                    cursor: 'default',
+                    transition:
+                      'color 0.16s var(--ol-motion-quick), background 0.16s var(--ol-motion-quick)',
+                    textAlign: 'left',
+                  }}
+                >
+                  <Icon name="settings" size={16} />
+                  <span style={{ flex: 1 }}>{t('shell.footer.settings')}</span>
+                </button>
+              </Tooltip>
+            </div>
+          </aside>
         )}
 
         {/* Main content — 平铺实底块（用户反馈：右侧要一整块、不要圆角、别浮成卡）。
@@ -412,7 +484,8 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
           <main
             className="ol-console-main"
             style={{
-              flex: 1, minWidth: 0,
+              flex: 1,
+              minWidth: 0,
               overflow: 'hidden',
               background: 'var(--ol-surface)',
               borderRadius: 0,
@@ -439,35 +512,55 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
               //     真挤不下了才 fallback 出细滚动条。
               //   - 其他 tab 同样走细滚动条。
               className="ol-thinscroll ol-scroll-fade"
+              // 概览单屏固定页（overflow hidden，永不出滚动条）不预留滚动条槽位。
+              data-ol-page-fixed={displayTab === 'overview' && !mobile ? 'true' : undefined}
               style={{
-                flex: 1, minHeight: 0,
-                overflow: 'auto',
+                flex: 1,
+                minHeight: 0,
+                // 概览页是单屏固定页：不滚动，所有仪表盘铺在一屏内，
+                // 由 Overview.tsx 内部 flex 自行分配高度；其余页保持细滚动条。
+                overflow: displayTab === 'overview' && !mobile ? 'hidden' : 'auto',
                 padding: mobile
                   ? '16px 16px calc(16px + env(safe-area-inset-bottom, 0px) + 56px)'
-                  : '24px 28px 32px',
+                  : displayTab === 'overview'
+                    ? `${os === 'mac' ? 80 : 56}px 28px 24px`
+                    : `${os === 'mac' ? 80 : 56}px 28px 32px`,
                 // position:relative 让页面里的"已保存"toast 用 absolute top:16 right:16
                 // 锚到这块控制台卡的右上角，而不是横在页头变成长横幅。
                 position: 'relative',
                 animation: mobile
-                  ? (tabPhase === 'exiting'
+                  ? tabPhase === 'exiting'
                     ? 'ol-page-fadeout-mobile 0.18s var(--ol-motion-soft) forwards'
-                    : 'ol-page-fade-mobile 0.22s var(--ol-motion-soft) both')
-                  : (tabPhase === 'exiting'
+                    : 'ol-page-fade-mobile 0.22s var(--ol-motion-soft) both'
+                  : tabPhase === 'exiting'
                     ? 'ol-page-fadeout 0.18s var(--ol-motion-soft) forwards'
-                    : 'ol-page-slide 0.34s var(--ol-motion-spring) both'),
+                    : 'ol-page-slide 0.34s var(--ol-motion-spring) both',
                 willChange: mobile ? 'opacity' : 'opacity, transform',
                 display: 'flex',
                 flexDirection: 'column',
               }}
             >
               {displayTab === 'overview' ? (
-                <Overview onOpenHistory={() => setCurrentTab('history')} />
+                <Overview
+                  onOpenHistory={() => setCurrentTab('history')}
+                  onOpenSettings={openSettings}
+                />
               ) : (
                 <div
                   className={conservative ? 'ol-conservative-scope' : undefined}
-                  style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    // 保留使用指南的内容高度，让外层滚动区的底部导航留白生效。
+                    flex: displayTab === 'selectionAsk' ? '1 0 auto' : 1,
+                    minHeight: 0,
+                  }}
                 >
-                  <Page />
+                  {displayTab === 'selectionAsk' ? (
+                    <SelectionAsk onOpenShortcuts={() => openSettings('shortcuts')} />
+                  ) : (
+                    <Page />
+                  )}
                 </div>
               )}
             </div>
@@ -478,33 +571,33 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
       {mobile && (
         <>
           {!settingsOpen && !styleOpen && !moreOpen && (
-          <MobileBottomNav
-            currentTab={currentTab}
-            moreOpen={moreOpen}
-            moreTabActive={moreTabActive}
-            styleOpen={styleOpen}
-            styleTabActive={styleTabActive}
-            settingsOpen={settingsOpen}
-            onSelectTab={id => {
-              setMoreOpen(false);
-              setStyleOpen(false);
-              setCurrentTab(id);
-            }}
-            onOpenStyle={() => {
-              setMoreOpen(false);
-              setStyleOpen(true);
-            }}
-            onOpenMore={() => {
-              setStyleOpen(false);
-              setMoreOpen(true);
-            }}
-          />
+            <MobileBottomNav
+              currentTab={currentTab}
+              moreOpen={moreOpen}
+              moreTabActive={moreTabActive}
+              styleOpen={styleOpen}
+              styleTabActive={styleTabActive}
+              settingsOpen={settingsOpen}
+              onSelectTab={(id) => {
+                setMoreOpen(false);
+                setStyleOpen(false);
+                setCurrentTab(id);
+              }}
+              onOpenStyle={() => {
+                setMoreOpen(false);
+                setStyleOpen(true);
+              }}
+              onOpenMore={() => {
+                setStyleOpen(false);
+                setMoreOpen(true);
+              }}
+            />
           )}
           <MobileStyleSheet
             open={styleOpen}
             currentTab={currentTab}
             onClose={() => setStyleOpen(false)}
-            onSelectTab={id => {
+            onSelectTab={(id) => {
               setStyleOpen(false);
               setCurrentTab(id);
             }}
@@ -519,23 +612,26 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
         </>
       )}
 
-      {/* Settings modal — rendered inside this window */}
-      {settingsOpen &&
+      {/* Settings modal — rendered inside this window；settingsMount 门控退场动画 */}
+      {settingsMount.mounted && (
         <SettingsModal
           key={settingsInitialSection ?? 'default'}
           os={os}
+          closing={settingsMount.closing}
           initialSettingsSection={settingsInitialSection}
           onClose={() => setSettingsOpen(false)}
         />
-      }
+      )}
 
-      {providerPromptOpen ? (
+      {providerPromptMount.mounted ? (
         <ProviderSetupPrompt
+          closing={providerPromptMount.closing}
           onLater={rememberProviderPrompt}
           onOpenSettings={openProviderSettings}
         />
-      ) : hotkeyModePromptOpen ? (
+      ) : hotkeyPromptMount.mounted ? (
         <HotkeyModeMigrationPrompt
+          closing={hotkeyPromptMount.closing}
           onLater={deferHotkeyModePrompt}
           onOpenSettings={openHotkeyRecordingSettings}
         />
@@ -718,7 +814,7 @@ function MobileBottomNav({
         background: 'var(--ol-surface)',
       }}
     >
-      {MOBILE_BOTTOM_TABS.map(tab => {
+      {MOBILE_BOTTOM_TABS.map((tab) => {
         const active = !settingsOpen && currentTab === tab.id;
         return (
           <button
@@ -729,7 +825,9 @@ function MobileBottomNav({
             style={mobileNavBtnStyle}
           >
             <Icon name={tab.icon} size={18} />
-            <span style={{ fontSize: 10.5, fontWeight: active ? 600 : 500 }}>{t(`nav.${tab.id}`)}</span>
+            <span style={{ fontSize: 10.5, fontWeight: active ? 600 : 500 }}>
+              {t(`nav.${tab.id}`)}
+            </span>
           </button>
         );
       })}
@@ -740,7 +838,9 @@ function MobileBottomNav({
         style={mobileNavBtnStyle}
       >
         <Icon name="style" size={18} />
-        <span style={{ fontSize: 10.5, fontWeight: styleActive ? 600 : 500 }}>{t('nav.group.style')}</span>
+        <span style={{ fontSize: 10.5, fontWeight: styleActive ? 600 : 500 }}>
+          {t('nav.group.style')}
+        </span>
       </button>
       <button
         type="button"
@@ -773,17 +873,30 @@ const mobileNavBtnStyle: CSSProperties = {
 
 /** 侧栏导航按钮基础样式（扁平项 / 分组标题 / 子项共用；子项额外覆盖 paddingLeft）。 */
 const navBtnStyle: CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 10,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
   width: '100%',
-  padding: '7px 10px',
-  borderRadius: 8, border: 0,
-  fontFamily: 'inherit', fontSize: 13,
+  padding: '8px 10px',
+  borderRadius: 8,
+  border: 0,
+  // （参考 Codex 侧栏）：导航文字 15px、图标 16px，观感更接近参考稿。
+  fontFamily: 'inherit',
+  fontSize: 15,
   cursor: 'default',
   transition: 'color 0.16s var(--ol-motion-quick), background 0.16s var(--ol-motion-quick)',
   textAlign: 'left',
 };
 
-function ProviderSetupPrompt({ onLater, onOpenSettings }: { onLater: () => void; onOpenSettings: () => void }) {
+function ProviderSetupPrompt({
+  closing = false,
+  onLater,
+  onOpenSettings,
+}: {
+  closing?: boolean;
+  onLater: () => void;
+  onOpenSettings: () => void;
+}) {
   const { t } = useTranslation();
   return (
     <div
@@ -798,7 +911,9 @@ function ProviderSetupPrompt({ onLater, onOpenSettings }: { onLater: () => void;
         background: 'rgba(15,17,22,0.28)',
         backdropFilter: 'blur(6px) saturate(140%)',
         WebkitBackdropFilter: 'blur(6px) saturate(140%)',
-        animation: 'ol-prompt-fade 0.2s var(--ol-motion-soft)',
+        animation: closing
+          ? 'ol-prompt-fade 0.18s var(--ol-motion-soft) reverse both'
+          : 'ol-prompt-fade 0.2s var(--ol-motion-soft)',
       }}
     >
       <div
@@ -809,7 +924,9 @@ function ProviderSetupPrompt({ onLater, onOpenSettings }: { onLater: () => void;
           border: '0.5px solid rgba(0,0,0,.08)',
           boxShadow: '0 24px 70px -24px rgba(15,17,22,.38), 0 0 0 0.5px rgba(0,0,0,.06)',
           padding: 20,
-          animation: 'ol-prompt-pop 0.26s var(--ol-motion-spring)',
+          animation: closing
+            ? 'ol-prompt-pop 0.18s var(--ol-motion-soft) reverse both'
+            : 'ol-prompt-pop 0.26s var(--ol-motion-spring)',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
@@ -828,7 +945,9 @@ function ProviderSetupPrompt({ onLater, onOpenSettings }: { onLater: () => void;
           >
             <Icon name="settings" size={17} />
           </div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink)' }}>{t('shell.providerPrompt.title')}</div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink)' }}>
+            {t('shell.providerPrompt.title')}
+          </div>
         </div>
         <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.55 }}>
           {t('shell.providerPrompt.body')}
@@ -847,7 +966,8 @@ function ProviderSetupPrompt({ onLater, onOpenSettings }: { onLater: () => void;
               fontSize: 12.5,
               fontWeight: 500,
               cursor: 'default',
-              transition: 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
+              transition:
+                'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
             }}
           >
             {t('shell.providerPrompt.later')}
@@ -865,7 +985,8 @@ function ProviderSetupPrompt({ onLater, onOpenSettings }: { onLater: () => void;
               fontSize: 12.5,
               fontWeight: 500,
               cursor: 'default',
-              transition: 'background 0.16s var(--ol-motion-quick), transform 0.12s var(--ol-motion-quick)',
+              transition:
+                'background 0.16s var(--ol-motion-quick), transform 0.12s var(--ol-motion-quick)',
             }}
           >
             {t('shell.providerPrompt.openSettings')}
@@ -876,7 +997,15 @@ function ProviderSetupPrompt({ onLater, onOpenSettings }: { onLater: () => void;
   );
 }
 
-function HotkeyModeMigrationPrompt({ onLater, onOpenSettings }: { onLater: () => void; onOpenSettings: () => void }) {
+function HotkeyModeMigrationPrompt({
+  closing = false,
+  onLater,
+  onOpenSettings,
+}: {
+  closing?: boolean;
+  onLater: () => void;
+  onOpenSettings: () => void;
+}) {
   const { t } = useTranslation();
   return (
     <div
@@ -891,7 +1020,9 @@ function HotkeyModeMigrationPrompt({ onLater, onOpenSettings }: { onLater: () =>
         background: 'rgba(15,17,22,0.28)',
         backdropFilter: 'blur(6px) saturate(140%)',
         WebkitBackdropFilter: 'blur(6px) saturate(140%)',
-        animation: 'ol-prompt-fade 0.2s var(--ol-motion-soft)',
+        animation: closing
+          ? 'ol-prompt-fade 0.18s var(--ol-motion-soft) reverse both'
+          : 'ol-prompt-fade 0.2s var(--ol-motion-soft)',
       }}
     >
       <div
@@ -902,7 +1033,9 @@ function HotkeyModeMigrationPrompt({ onLater, onOpenSettings }: { onLater: () =>
           border: '0.5px solid rgba(0,0,0,.08)',
           boxShadow: '0 24px 70px -24px rgba(15,17,22,.38), 0 0 0 0.5px rgba(0,0,0,.06)',
           padding: 20,
-          animation: 'ol-prompt-pop 0.26s var(--ol-motion-spring)',
+          animation: closing
+            ? 'ol-prompt-pop 0.18s var(--ol-motion-soft) reverse both'
+            : 'ol-prompt-pop 0.26s var(--ol-motion-spring)',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
@@ -921,7 +1054,9 @@ function HotkeyModeMigrationPrompt({ onLater, onOpenSettings }: { onLater: () =>
           >
             <Icon name="mic" size={17} />
           </div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink)' }}>{t('shell.hotkeyModePrompt.title')}</div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink)' }}>
+            {t('shell.hotkeyModePrompt.title')}
+          </div>
         </div>
         <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.55 }}>
           {t('shell.hotkeyModePrompt.body')}
@@ -940,7 +1075,8 @@ function HotkeyModeMigrationPrompt({ onLater, onOpenSettings }: { onLater: () =>
               fontSize: 12.5,
               fontWeight: 500,
               cursor: 'default',
-              transition: 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
+              transition:
+                'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
             }}
           >
             {t('shell.hotkeyModePrompt.later')}
@@ -958,7 +1094,8 @@ function HotkeyModeMigrationPrompt({ onLater, onOpenSettings }: { onLater: () =>
               fontSize: 12.5,
               fontWeight: 500,
               cursor: 'default',
-              transition: 'background 0.16s var(--ol-motion-quick), transform 0.12s var(--ol-motion-quick)',
+              transition:
+                'background 0.16s var(--ol-motion-quick), transform 0.12s var(--ol-motion-quick)',
             }}
           >
             {t('shell.hotkeyModePrompt.openSettings')}

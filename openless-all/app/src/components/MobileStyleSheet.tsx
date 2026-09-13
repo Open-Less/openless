@@ -40,7 +40,7 @@ export function MobileStyleSheet({
       }}
     >
       <div
-        onClick={e => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
         style={{
           background: 'var(--ol-surface)',
           borderTopLeftRadius: 16,
@@ -51,8 +51,17 @@ export function MobileStyleSheet({
           animation: 'ol-mobile-sheet-up 0.26s var(--ol-motion-spring)',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 8px 12px' }}>
-          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink)' }}>{t('nav.group.style')}</span>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '4px 8px 12px',
+          }}
+        >
+          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink)' }}>
+            {t('nav.group.style')}
+          </span>
           <button
             type="button"
             onClick={onClose}
@@ -63,7 +72,7 @@ export function MobileStyleSheet({
           </button>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {STYLE_TABS.map(item => {
+          {STYLE_TABS.map((item) => {
             const active = currentTab === item.id;
             return (
               <button

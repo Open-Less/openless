@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/openless-core",
+    "linux-egui",
+]
+exclude = [
+    "src-tauri",
+    "src-tauri/backend-tests",
+]

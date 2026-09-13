@@ -9,8 +9,7 @@ class OpenLessAccessibilityComponentIdsTest {
     private val full = "com.openless.app/com.openless.app.OpenLessAccessibilityService"
     private val shortForm = "com.openless.app/.OpenLessAccessibilityService"
     private val thirdParty = "com.example/.OtherService"
-    private val similarClass =
-        "com.openless.app/com.openless.app.OpenLessAccessibilityServiceFake"
+    private val similarClass = "com.openless.app/com.openless.app.OpenLessAccessibilityServiceFake"
 
     @Test
     fun componentIdsEqualTreatsShortAndFullFormsAsEqual() {

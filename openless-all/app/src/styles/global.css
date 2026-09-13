@@ -1,4 +1,6 @@
-html, body, #root {
+html,
+body,
+#root {
   height: 100%;
   width: 100%;
   margin: 0;
@@ -7,15 +9,15 @@ html, body, #root {
   overflow: hidden;
 }
 
-html[data-ol-platform="linux"],
-html[data-ol-platform="linux"] body,
-html[data-ol-platform="linux"] #root {
+html[data-ol-platform='linux'],
+html[data-ol-platform='linux'] body,
+html[data-ol-platform='linux'] #root {
   background: var(--ol-surface);
 }
 
-html[data-ol-platform="android"],
-html[data-ol-platform="android"] body,
-html[data-ol-platform="android"] #root {
+html[data-ol-platform='android'],
+html[data-ol-platform='android'] body,
+html[data-ol-platform='android'] #root {
   background: var(--ol-surface);
 }
 
@@ -27,6 +29,9 @@ body {
   background: transparent;
   user-select: none;
   -webkit-user-select: none;
+  /* 全局基准字号 14px（此前未设 → 浏览器默认 16 但组件几乎全部
+     显式写 11–13px 小字，视觉偏小）。控件/正文的显式字号已同步上调到 13.5–14。 */
+  font-size: 14px;
 }
 
 #root {
@@ -55,21 +60,39 @@ button {
 }
 
 @keyframes ol-select-pop {
-  from { opacity: 0; transform: translateY(-4px) scale(.98); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 /* SelectLite popover 关闭动画 —— 反向收缩 + 淡出 + 上移，跟入场对偶。 */
 @keyframes ol-select-pop-out {
-  from { opacity: 1; transform: translateY(0) scale(1); }
-  to   { opacity: 0; transform: translateY(-4px) scale(.98); }
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
 }
 
 /* SelectLite 触发器选中值切换动画：值变化时 span 以 key 重挂载，重放这段
    淡入微滑移 —— 录音方式/胶囊样式/粘贴快捷键等横向选框的「切换」反馈。 */
 @keyframes ol-select-value-in {
-  from { opacity: 0.3; transform: translateY(3px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0.3;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* 键盘焦点指示：鼠标点击 (:focus) 不显示，键盘 Tab (:focus-visible) 才显示。
@@ -79,13 +102,17 @@ button {
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.45);
 }
 
-input, textarea {
+input,
+textarea {
   font-family: inherit;
   user-select: text;
   -webkit-user-select: text;
 }
 
-a { color: inherit; text-decoration: none; }
+a {
+  color: inherit;
+  text-decoration: none;
+}
 
 /* 窗口入场 —— 纯 opacity / transform（无 blur）：WKWebView 对带 filter 的
    常驻合成层（fill-mode: both 保留终帧）会反复重栅格化，整窗出现
@@ -105,30 +132,52 @@ a { color: inherit; text-decoration: none; }
    背景不再逐帧动画 backdrop-filter（会卡顿、闪烁）；模糊由宿主元素静态设定，
    动画只负责淡入淡出。设置弹窗 / 各市场弹窗 / GitHub 登录弹窗共用这套。 */
 @keyframes ol-modal-backdrop-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes ol-modal-backdrop-out {
-  from { opacity: 1; }
-  to   { opacity: 0; }
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
 }
 
 @keyframes ol-modal-card-in {
-  from { opacity: 0; transform: translateY(8px) scale(0.985); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 /* 设置弹窗切换 tab 时右侧内容的轻微淡入。 */
 @keyframes ol-tab-fade {
-  from { opacity: 0; transform: translateY(4px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* 通用旋转 —— 「检查更新」按钮检查中的转圈动画等。
    refresh 图标是逆时针（ccw）箭头，旋转方向与其一致，避免视觉上"反着转"。 */
 @keyframes ol-spin {
-  to { transform: rotate(-360deg); }
+  to {
+    transform: rotate(-360deg);
+  }
 }
 
 @keyframes ol-modal-drawer-in {
@@ -155,8 +204,14 @@ a { color: inherit; text-decoration: none; }
 
 /* 风格市场全高抽屉从右缘滑入（MarketplaceModal 引用此名）。 */
 @keyframes ol-drawer-in-right {
-  from { opacity: 0; transform: translateX(48px); }
-  to   { opacity: 1; transform: translateX(0); }
+  from {
+    opacity: 0;
+    transform: translateX(48px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 /* ── 假毛玻璃面（qa 追问框 / capsule 语音胶囊等透明浮窗）─────────────────────
@@ -188,24 +243,24 @@ a { color: inherit; text-decoration: none; }
   pointer-events: none;
 }
 
-html[data-ol-platform="linux"] .ol-frost {
+html[data-ol-platform='linux'] .ol-frost {
   background: var(--ol-surface);
 }
 
-html[data-ol-platform="linux"] .ol-frost::before {
+html[data-ol-platform='linux'] .ol-frost::before {
   content: none;
 }
 
-html[data-ol-platform="android"] .ol-frost {
+html[data-ol-platform='android'] .ol-frost {
   background: var(--ol-surface);
 }
 
-html[data-ol-platform="android"] .ol-frost::before {
+html[data-ol-platform='android'] .ol-frost::before {
   content: none;
 }
 
 /* Android WebView：modal 遮罩禁用 backdrop-filter，避免触摸迟滞与渲染异常。 */
-html[data-ol-platform="android"] .ol-modal-backdrop {
+html[data-ol-platform='android'] .ol-modal-backdrop {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
@@ -219,38 +274,37 @@ html[data-ol-platform="android"] .ol-modal-backdrop {
   align-items: center;
 }
 
-html[data-ol-stacked-layout="true"] .ol-flex-row {
+html[data-ol-stacked-layout='true'] .ol-flex-row {
   flex-wrap: wrap;
   align-items: flex-start;
 }
 
-html[data-ol-stacked-layout="true"] .ol-flex-row.ol-flex-split {
+html[data-ol-stacked-layout='true'] .ol-flex-row.ol-flex-split {
   flex: 1 1 100%;
   max-width: 100%;
   min-width: 0;
 }
 
-html[data-ol-stacked-layout="true"] .ol-flex-row.ol-flex-push {
+html[data-ol-stacked-layout='true'] .ol-flex-row.ol-flex-push {
   flex: 0 0 auto;
   max-width: 100%;
 }
 
-html[data-ol-stacked-layout="true"] .ol-grid-auto-cards {
+html[data-ol-stacked-layout='true'] .ol-grid-auto-cards {
   grid-template-columns: 1fr !important;
 }
 
-html[data-ol-stacked-layout="true"] .ol-console-main {
+html[data-ol-stacked-layout='true'] .ol-console-main {
   overflow-x: hidden;
 }
-
 
 /* ── 保守排版（data-ol-conservative-layout）──────────────────────────────────────
    除首页、顶栏、底栏与胶囊窗外，内容区强制单列满宽。 */
-html[data-ol-conservative-layout="true"] .ol-conservative-scope {
+html[data-ol-conservative-layout='true'] .ol-conservative-scope {
   overflow-x: hidden;
 }
 
-html[data-ol-conservative-layout="true"] .ol-conservative-scope .ol-conservative-stack {
+html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-conservative-stack {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -258,20 +312,22 @@ html[data-ol-conservative-layout="true"] .ol-conservative-scope .ol-conservative
   min-width: 0;
 }
 
-html[data-ol-conservative-layout="true"] .ol-conservative-scope .ol-conservative-stack > * {
+html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-conservative-stack > * {
   max-width: 100%;
   min-width: 0;
   flex: 0 0 auto;
 }
 
-html[data-ol-conservative-layout="true"] .ol-conservative-scope .ol-grid-auto-cards,
-html[data-ol-conservative-layout="true"] .ol-conservative-scope .ol-conservative-grid {
+html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-grid-auto-cards,
+html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-conservative-grid {
   grid-template-columns: 1fr !important;
 }
 
-html[data-ol-conservative-layout="true"] .ol-conservative-scope select,
-html[data-ol-conservative-layout="true"] .ol-conservative-scope input:not([type="checkbox"]):not([type="radio"]),
-html[data-ol-conservative-layout="true"] .ol-conservative-scope .ol-select-lite-trigger {
+html[data-ol-conservative-layout='true'] .ol-conservative-scope select,
+html[data-ol-conservative-layout='true']
+  .ol-conservative-scope
+  input:not([type='checkbox']):not([type='radio']),
+html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-trigger {
   width: 100%;
   max-width: 100%;
 }
@@ -296,7 +352,513 @@ html[data-ol-conservative-layout="true"] .ol-conservative-scope .ol-select-lite-
   background: var(--ol-settings-content-bg);
 }
 
-.ol-settings-surface[data-ol-mobile="true"] {
+.ol-settings-content-pane[data-ol-advanced='true'] {
+  background: var(--ol-settings-content-bg);
+}
+.ol-settings-back {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--ol-line-strong);
+  border-radius: 8px;
+  background: var(--ol-surface);
+  color: var(--ol-ink-2);
+  cursor: pointer;
+}
+.ol-settings-back:hover {
+  background: var(--ol-surface-2);
+  color: var(--ol-ink);
+}
+.ol-settings-back:focus-visible {
+  outline: 2px solid var(--ol-blue);
+  outline-offset: 3px;
+}
+.ol-advanced-settings-list {
+  border: 1px solid var(--ol-line);
+  border-radius: 14px;
+  background: var(--ol-surface);
+  overflow: hidden;
+}
+.ol-advanced-settings-entry {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 19px 18px;
+  border: 0;
+  background: transparent;
+  color: var(--ol-ink);
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 160ms ease;
+}
+.ol-advanced-settings-entry + .ol-advanced-settings-entry {
+  border-top: 1px solid var(--ol-line-soft);
+}
+.ol-advanced-settings-entry:hover {
+  background: var(--ol-surface-2);
+}
+.ol-advanced-settings-entry:focus-visible {
+  outline: 2px solid var(--ol-blue);
+  outline-offset: -4px;
+  border-radius: 9px;
+}
+.ol-advanced-entry-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--ol-line);
+  border-radius: 10px;
+  background: var(--ol-surface-2);
+  color: var(--ol-ink-2);
+}
+.ol-advanced-entry-copy {
+  flex: 1;
+  min-width: 0;
+}
+.ol-advanced-entry-title {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.ol-advanced-entry-description {
+  display: block;
+  margin-top: 5px;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--ol-ink-3);
+}
+.ol-advanced-entry-arrow {
+  flex-shrink: 0;
+  color: var(--ol-ink-3);
+}
+.ol-advanced-settings-detail[hidden] {
+  display: none;
+}
+.ol-advanced-settings-detail:not([hidden]) {
+  animation: ol-settings-detail-in 200ms var(--ol-motion-soft) both;
+}
+@keyframes ol-settings-detail-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@media (max-width: 600px) {
+  .ol-advanced-settings-entry {
+    padding: 17px 14px;
+    gap: 11px;
+  }
+  .ol-advanced-entry-title {
+    font-size: 13.5px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-advanced-settings-detail:not([hidden]) {
+    animation: none;
+  }
+  .ol-advanced-settings-entry {
+    transition: none;
+  }
+}
+
+/* 桌面端设置侧栏导航：选中底色由滑动 thumb 提供，按钮自身透明；
+   hover 给弱底色反馈；选中项文字蓝色加粗走 [aria-current]。 */
+.ol-settings-rail-btn {
+  color: var(--ol-ink-2);
+  background: transparent;
+  font-weight: 400;
+  transition:
+    color 0.16s var(--ol-motion-quick),
+    background 0.16s var(--ol-motion-quick);
+}
+.ol-settings-rail-btn:not([aria-current='page']):hover {
+  background: var(--ol-nav-hover-bg);
+  color: var(--ol-ink);
+}
+.ol-settings-rail-btn[aria-current='page'] {
+  color: var(--ol-blue);
+  font-weight: 600;
+}
+
+/* 翻译页顶部两栏：左栏略宽让语言 chips 每行 4 个，
+   与右栏卡片高度更接近；窄屏叠成单栏。 */
+.ol-translation-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(300px, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+@media (max-width: 880px) {
+  .ol-translation-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* 语言/标签选择 chip：底色走 token 以兼容深色模式，
+   选中态走 [aria-pressed]，悬浮给描边+加深反馈。 */
+.ol-chip {
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  text-align: center;
+  border: 0.5px solid var(--ol-line);
+  background: var(--ol-pill-bg);
+  color: var(--ol-ink-2);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+  transition:
+    background 0.14s var(--ol-motion-quick),
+    border-color 0.14s var(--ol-motion-quick),
+    color 0.14s var(--ol-motion-quick);
+}
+.ol-chip:hover {
+  border-color: var(--ol-line-strong);
+  background: var(--ol-control-muted-strong);
+}
+.ol-chip[aria-pressed='true'] {
+  background: var(--ol-blue);
+  border-color: var(--ol-blue);
+  color: #fff;
+  font-weight: 600;
+}
+.ol-chip[aria-pressed='true']:hover {
+  border-color: var(--ol-blue);
+}
+
+/* 列表项通用入场：新条目淡入轻降。
+   key 稳定时只有真正新增/过滤变化的项会重播，存量项不动。 */
+@keyframes ol-item-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ── 2.0 开屏 PV（仅首启播放一次）──────────────────────────────────────
+   任意窗口比例下 object-fit: cover 裁切铺满、无黑边；黑底防首帧前闪白。
+   入场短促淡入；播放结束后整层从最后一帧画面慢慢变透明直至消失——
+   「从哪来到哪去」，渐隐时长与 SplashVideo.tsx 的 FADE_MS 保持一致。 */
+.ol-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  background: #000;
+  animation: ol-splash-in 0.25s ease both;
+}
+.ol-splash[data-fading] {
+  animation: ol-splash-out 1.2s ease both;
+  pointer-events: none;
+}
+.ol-splash-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+@keyframes ol-splash-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes ol-splash-out {
+  to {
+    opacity: 0;
+  }
+}
+
+/* ── 词典页────────────────────────────────────────────── */
+
+/* 来源分段筛选：灰底胶囊容器 + 白色浮起选中片（参考 Typeless 词典稿）。 */
+.ol-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--ol-surface-2);
+  border: 0.5px solid var(--ol-line);
+}
+.ol-seg-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ol-ink-3);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: default;
+  transition:
+    background 0.18s var(--ol-motion-quick),
+    color 0.18s var(--ol-motion-quick),
+    box-shadow 0.18s var(--ol-motion-soft);
+}
+.ol-seg-item:not(.ol-seg-item-active):hover {
+  color: var(--ol-ink);
+}
+.ol-seg-item-active {
+  background: var(--ol-surface);
+  color: var(--ol-ink);
+  font-weight: 600;
+  box-shadow: var(--ol-shadow-sm);
+}
+
+/* 圆形搜索：同一个胶囊容器原地变形 —— 收起 36px 圆钮，
+   展开 220px 搜索框；放大镜图标始终贴右缘不动，输入文字在左侧淡入。
+   展开/收起共用同一条 width 过渡，两个方向都有动画（从哪来回到哪去）。 */
+.ol-search {
+  display: flex;
+  align-items: center;
+  width: 36px;
+  height: 36px;
+  overflow: hidden;
+  border-radius: 999px;
+  border: 0.5px solid var(--ol-line);
+  background: var(--ol-surface-2);
+  transition:
+    width 0.28s var(--ol-motion-spring),
+    background 0.16s var(--ol-motion-quick),
+    border-color 0.16s var(--ol-motion-quick);
+}
+.ol-search:hover {
+  border-color: var(--ol-line-strong);
+}
+.ol-search-open {
+  width: 220px;
+  background: var(--ol-surface);
+  border-color: var(--ol-line-strong);
+}
+.ol-search-field {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  box-sizing: border-box;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--ol-ink);
+  /* 收起态 padding 必须为 0：否则输入框虽然宽度塌成 0，左右 padding 仍占位，
+     会把 36px 的放大镜按钮顶出圆形容器、被 overflow 裁掉。 */
+  padding: 0;
+  opacity: 0;
+  transition:
+    opacity 0.16s var(--ol-motion-quick),
+    padding 0.28s var(--ol-motion-spring);
+}
+.ol-search-open .ol-search-field {
+  opacity: 1;
+  padding: 0 4px 0 12px;
+}
+.ol-search-field::placeholder {
+  color: var(--ol-ink-4);
+}
+.ol-search-icon {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  background: transparent;
+  color: var(--ol-ink-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+  transition: color 0.16s var(--ol-motion-quick);
+}
+.ol-search-icon:hover {
+  color: var(--ol-ink);
+}
+
+/* 词条卡片：默认安静（图标+文字+命中数）；hover/focus-within 变灰并从右侧
+   浮现编辑/删除操作。操作按钮常驻 DOM，只过渡 opacity，布局不跳动。 */
+.ol-word-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: 0.5px solid var(--ol-line);
+  background: var(--ol-surface);
+  transition:
+    background 0.16s var(--ol-motion-quick),
+    border-color 0.16s var(--ol-motion-quick),
+    opacity 0.18s var(--ol-motion-soft);
+  animation: ol-chip-in 0.22s var(--ol-motion-spring);
+}
+.ol-word-card:hover,
+.ol-word-card:focus-within {
+  background: var(--ol-surface-2);
+  border-color: var(--ol-line-strong);
+}
+.ol-word-card[data-disabled='true'] {
+  opacity: 0.55;
+}
+.ol-word-card-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  color: var(--ol-ink-4);
+}
+.ol-word-card-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--ol-ink);
+  font-family: var(--ol-font-mono);
+  font-size: 13px;
+  cursor: default;
+}
+.ol-word-card-hits {
+  flex-shrink: 0;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ol-control-muted);
+  color: var(--ol-ink-4);
+  font-variant-numeric: tabular-nums;
+}
+.ol-word-card-actions {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.16s var(--ol-motion-quick);
+}
+.ol-word-card:hover .ol-word-card-actions,
+.ol-word-card:focus-within .ol-word-card-actions {
+  opacity: 1;
+}
+.ol-word-card-action {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ol-ink-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+  transition:
+    background 0.14s var(--ol-motion-quick),
+    color 0.14s var(--ol-motion-quick);
+}
+.ol-word-card-action:hover {
+  background: var(--ol-control-muted-strong);
+  color: var(--ol-ink);
+}
+
+.ol-service-views {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--ol-settings-content-bg);
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--ol-line);
+  margin-bottom: 4px;
+}
+
+.ol-service-views > button {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ol-ink-3);
+  cursor: pointer;
+}
+
+/* 必配服务（语言模型/语音识别）tab 上的状态点：未配置红、已配置黄。 */
+.ol-service-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background 0.16s var(--ol-motion-quick);
+}
+.ol-service-status-dot[data-state='missing'] {
+  background: var(--ol-red, #ef4444);
+}
+.ol-service-status-dot[data-state='ok'] {
+  background: var(--ol-warn);
+}
+
+.ol-service-views > button[aria-pressed='true'] {
+  color: var(--ol-blue);
+  border-bottom-color: var(--ol-blue);
+  font-weight: 650;
+}
+
+.ol-service-views > button:hover {
+  color: var(--ol-ink);
+}
+.ol-service-views > button:focus-visible {
+  outline: 2px solid var(--ol-blue);
+  outline-offset: -3px;
+}
+.ol-service-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+.ol-service-storage-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ol-ink-3);
+}
+
+.ol-settings-surface[data-ol-mobile='true'] {
   border-radius: var(--ol-panel-radius) var(--ol-panel-radius) 0 0;
 }
 
@@ -305,8 +867,8 @@ html[data-ol-conservative-layout="true"] .ol-conservative-scope .ol-select-lite-
   border-color: var(--ol-capsule-pill-border) !important;
 }
 
-html[data-ol-platform="linux"] .ol-capsule-pill,
-html[data-ol-platform="android"] .ol-capsule-pill {
+html[data-ol-platform='linux'] .ol-capsule-pill,
+html[data-ol-platform='android'] .ol-capsule-pill {
   background: var(--ol-capsule-pill-bg) !important;
 }
 
@@ -333,12 +895,10 @@ html[data-ol-platform="android"] .ol-capsule-pill {
 .ol-scroll-fade {
   -webkit-mask-image:
     linear-gradient(to bottom, transparent, black var(--ol-sf-t)),
-    linear-gradient(to top, transparent, black var(--ol-sf-b)),
-    linear-gradient(black, black);
+    linear-gradient(to top, transparent, black var(--ol-sf-b)), linear-gradient(black, black);
   mask-image:
     linear-gradient(to bottom, transparent, black var(--ol-sf-t)),
-    linear-gradient(to top, transparent, black var(--ol-sf-b)),
-    linear-gradient(black, black);
+    linear-gradient(to top, transparent, black var(--ol-sf-b)), linear-gradient(black, black);
   -webkit-mask-composite: source-in;
   mask-composite: intersect;
 }
@@ -356,17 +916,462 @@ html[data-ol-platform="android"] .ol-capsule-pill {
       ol-sf-top linear both,
       ol-sf-bottom linear both;
     animation-timeline: scroll(self y);
-    animation-range: 0 96px, calc(100% - 96px) 100%;
+    animation-range:
+      0 96px,
+      calc(100% - 96px) 100%;
   }
 
   @keyframes ol-sf-top {
-    from { --ol-sf-t: 0px; }
-    to   { --ol-sf-t: 28px; }
+    from {
+      --ol-sf-t: 0px;
+    }
+    to {
+      --ol-sf-t: 28px;
+    }
   }
 
   @keyframes ol-sf-bottom {
-    from { --ol-sf-b: 28px; }
-    to   { --ol-sf-b: 0px; }
+    from {
+      --ol-sf-b: 28px;
+    }
+    to {
+      --ol-sf-b: 0px;
+    }
+  }
+}
+
+.ol-page-header-actions > div {
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
+/* 渠道表单：中间区域容纳动态字段，标题与操作始终可见。 */
+.ol-channel-edit-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border: 1px solid var(--ol-line);
+  border-radius: 8px;
+  background: var(--ol-surface);
+  color: var(--ol-ink-2);
+  font: 500 12.5px var(--ol-font-sans);
+  cursor: pointer;
+}
+.ol-channel-edit-button:hover {
+  background: var(--ol-surface-2);
+  border-color: var(--ol-line-strong);
+}
+.ol-channel-dialog.ol-channel-dialog-embedded {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  width: 100%;
+  height: 100%;
+  background: var(--ol-sidebar-bg);
+  animation: ol-settings-detail-in 200ms var(--ol-motion-soft) both;
+}
+.ol-channel-dialog-embedded[data-closing='true'] {
+  animation: ol-channel-detail-out 180ms var(--ol-motion-soft) both;
+}
+.ol-channel-dialog-embedded .ol-channel-dialog-header {
+  padding: 18px 24px;
+}
+.ol-channel-dialog-embedded .ol-channel-dialog-body {
+  padding: 8px 24px 22px;
+}
+.ol-channel-dialog-embedded .ol-channel-form-sheet {
+  padding: 18px;
+  border: 1px solid var(--ol-line);
+  border-radius: 14px;
+  background: var(--ol-surface);
+}
+.ol-channel-dialog-embedded .ol-channel-dialog-footer {
+  background: var(--ol-sidebar-bg);
+  padding: 16px 24px;
+}
+@keyframes ol-channel-detail-out {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+.ol-style-icon-picker {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+}
+.ol-style-icon-button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--ol-line-strong);
+  border-radius: 11px;
+  background: var(--ol-style-card-icon-bg);
+  color: var(--ol-ink-2);
+  cursor: pointer;
+}
+.ol-style-icon-button:hover {
+  background: var(--ol-style-card-icon-bg-active);
+}
+.ol-style-icon-button[data-custom='true'] {
+  background: #f0f0f1;
+}
+.ol-style-icon-button img {
+  object-fit: contain;
+}
+.ol-style-icon-button:focus-visible,
+.ol-style-icon-reset:focus-visible,
+.ol-channel-edit-button:focus-visible {
+  outline: 2px solid var(--ol-blue);
+  outline-offset: 3px;
+}
+.ol-style-icon-button:disabled,
+.ol-style-icon-reset:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+.ol-style-icon-edit {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--ol-line-strong);
+  border-radius: 5px;
+  background: var(--ol-surface);
+  color: var(--ol-ink-2);
+}
+.ol-style-icon-reset {
+  position: absolute;
+  right: -5px;
+  top: -5px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--ol-line-strong);
+  border-radius: 50%;
+  background: var(--ol-surface);
+  color: var(--ol-ink-3);
+  cursor: pointer;
+}
+.ol-style-pack-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 8px;
+  border: 1px solid var(--ol-line-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ol-ink-3);
+  cursor: pointer;
+}
+.ol-style-pack-delete:hover {
+  color: var(--ol-err);
+  border-color: var(--ol-err);
+}
+@media (max-width: 600px) {
+  .ol-channel-dialog-embedded .ol-channel-dialog-header {
+    padding: 18px 16px;
+  }
+  .ol-channel-dialog-embedded .ol-channel-dialog-body {
+    padding: 4px 12px 18px;
+  }
+  .ol-channel-dialog-embedded .ol-channel-form-sheet {
+    padding: 14px;
+  }
+  .ol-channel-dialog-embedded .ol-channel-dialog-footer {
+    padding: 14px 16px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-channel-dialog.ol-channel-dialog-embedded {
+    animation: none;
+  }
+}
+.ol-channel-form-row {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px 20px;
+  padding: 10px 0;
+}
+.ol-channel-form-row > label {
+  padding-top: 9px;
+  color: var(--ol-ink-2);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.ol-channel-form-row[data-stacked='true'] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.ol-channel-form-row[data-stacked='true'] > label {
+  padding-top: 0;
+}
+.ol-channel-section-heading h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ol-channel-section-heading h3 svg {
+  flex-shrink: 0;
+  color: var(--ol-ink-3);
+}
+.ol-provider-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.ol-provider-result > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.ol-channel-fetch-models,
+.ol-channel-verify {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.ol-channel-dialog {
+  display: flex;
+  flex-direction: column;
+  height: min(780px, calc(100dvh - 40px));
+  min-width: 0;
+  min-height: 0;
+  color: var(--ol-ink);
+  outline: none;
+}
+.ol-channel-dialog :is(input, button, [role='combobox']):focus-visible {
+  outline: 2px solid var(--ol-blue) !important;
+  outline-offset: 3px;
+}
+.ol-channel-dialog button:disabled {
+  opacity: 0.55;
+}
+.ol-channel-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  flex-shrink: 0;
+  gap: 14px;
+  padding: 24px 26px 22px;
+  border-bottom: 1px solid var(--ol-line);
+}
+.ol-channel-dialog-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--ol-blue-ring);
+  border-radius: 12px;
+  background: var(--ol-blue-soft);
+  color: var(--ol-blue);
+}
+.ol-channel-dialog-heading {
+  flex: 1;
+  min-width: 0;
+}
+.ol-channel-dialog-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.ol-channel-dialog-title h2 {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.02em;
+}
+.ol-channel-dialog-title > span {
+  padding: 2px 7px;
+  border: 1px solid var(--ol-line);
+  border-radius: 5px;
+  color: var(--ol-ink-3);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+.ol-channel-dialog-heading > p {
+  margin: 8px 0 0;
+  color: var(--ol-ink-3);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.ol-channel-dialog-close {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--ol-line);
+  border-radius: 8px;
+  background: var(--ol-surface);
+  color: var(--ol-ink-3);
+  cursor: pointer;
+}
+.ol-channel-dialog-close:hover {
+  color: var(--ol-ink);
+  background: var(--ol-surface-2);
+}
+.ol-channel-dialog-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scroll-padding-block: 16px;
+  padding: 24px 26px 28px;
+}
+.ol-channel-dialog .ol-channel-form-row {
+  padding-block: 9px;
+}
+.ol-channel-dialog .ol-channel-form-row > label {
+  font-size: 13px;
+}
+.ol-channel-name-hint {
+  margin: 7px 0 0;
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--ol-ink-3);
+}
+.ol-channel-local-hint {
+  margin: 18px 0 0;
+  padding: 14px;
+  border: 1px solid var(--ol-line);
+  border-radius: 10px;
+  background: var(--ol-surface-2);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ol-ink-3);
+}
+.ol-channel-dialog .ol-channel-model-tools[data-populated='true'] {
+  padding: 12px;
+  border: 1px solid var(--ol-line);
+  border-radius: 10px;
+  background: var(--ol-bg-base);
+}
+.ol-channel-dialog .ol-channel-validation-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+.ol-channel-dialog .ol-channel-validation-heading > .ol-channel-section-heading {
+  flex: 1;
+  min-width: 0;
+}
+.ol-channel-dialog .ol-provider-result {
+  padding: 9px 11px;
+  border: 1px solid var(--ol-line);
+  border-radius: 8px;
+  background: var(--ol-bg-base);
+}
+.ol-channel-dialog .ol-provider-result[data-status='success'] {
+  background: var(--ol-ok-soft);
+  border-color: transparent;
+}
+.ol-channel-dialog .ol-provider-result[data-status='error'] {
+  background: var(--ol-warn-soft);
+  border-color: transparent;
+}
+.ol-channel-dialog-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 18px 26px;
+  border-top: 1px solid var(--ol-line);
+  background: var(--ol-bg-base);
+}
+.ol-channel-dialog-footer-end {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.ol-channel-autosave-hint {
+  color: var(--ol-ink-3);
+  font-size: 11.5px;
+}
+.ol-channel-delete-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 6px 12px;
+  border: 1px solid rgba(220, 38, 38, 0.3);
+  border-radius: 8px;
+  background: rgba(220, 38, 38, 0.05);
+  color: var(--ol-err);
+  font: 500 12.5px / 1.5 var(--ol-font-sans);
+  cursor: pointer;
+}
+.ol-channel-delete-button:hover {
+  background: rgba(220, 38, 38, 0.11);
+  border-color: var(--ol-err);
+}
+.ol-channel-delete-button svg {
+  flex-shrink: 0;
+}
+.ol-channel-delete-confirm {
+  display: flex;
+  flex: 1 1 250px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ol-channel-delete-confirm p {
+  width: 100%;
+  margin: 0 0 3px;
+  color: var(--ol-err);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+@media (max-width: 600px) {
+  .ol-channel-dialog-header {
+    padding: 20px 18px;
+    gap: 10px;
+  }
+  .ol-channel-dialog-icon {
+    display: none;
+  }
+  .ol-channel-dialog-title h2 {
+    font-size: 20px;
+  }
+  .ol-channel-dialog-body {
+    padding: 20px 18px 24px;
+  }
+  .ol-channel-dialog-footer {
+    padding: 14px 18px;
+  }
+  .ol-channel-autosave-hint {
+    display: none;
+  }
+  .ol-channel-dialog .ol-channel-validation-heading {
+    flex-direction: column;
+    gap: 0;
   }
 }
 
@@ -376,9 +1381,180 @@ html[data-ol-platform="android"] .ol-capsule-pill {
    两缘也会有 28px 轻微渐隐。 */
 @supports not (animation-timeline: scroll(self y)) {
   .ol-scroll-fade {
-    -webkit-mask-image: linear-gradient(to bottom, transparent, black 28px, black calc(100% - 28px), transparent);
-    mask-image: linear-gradient(to bottom, transparent, black 28px, black calc(100% - 28px), transparent);
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      transparent,
+      black 28px,
+      black calc(100% - 28px),
+      transparent
+    );
+    mask-image: linear-gradient(
+      to bottom,
+      transparent,
+      black 28px,
+      black calc(100% - 28px),
+      transparent
+    );
     -webkit-mask-composite: source-over;
     mask-composite: add;
   }
+}
+
+/* Content surfaces stay opaque; grain supplies the material texture on every host. */
+.ol-vocab-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ol-ink-2);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.ol-vocab-select-all input,
+.ol-word-card-select {
+  accent-color: var(--ol-ink-2);
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.ol-word-card-select {
+  margin: 0 0 0 8px;
+}
+.ol-word-card[data-selected='true'] {
+  background: var(--ol-surface-2);
+  border-color: var(--ol-ink-3);
+}
+.ol-word-card {
+  border-radius: 14px;
+  animation: none;
+}
+.ol-vocab-delete-selected {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--ol-line-strong);
+  background: var(--ol-surface);
+  color: var(--ol-err);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ol-vocab-delete-selected:hover {
+  background: var(--ol-surface-2);
+}
+.ol-vocab-delete-selected:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+.ol-vocab-delete-selected:focus-visible,
+.ol-word-card-select:focus-visible {
+  outline: 2px solid var(--ol-blue);
+  outline-offset: 3px;
+}
+.ol-settings-rail-btn {
+  white-space: normal;
+  line-height: 1.4;
+  min-height: 38px;
+}
+.ol-page-header-actions {
+  align-self: flex-start;
+}
+html:lang(ja) {
+  --ol-font-sans:
+    -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Yu Gothic UI', 'Noto Sans JP', sans-serif;
+}
+html:lang(ko) {
+  --ol-font-sans:
+    -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR',
+    sans-serif;
+}
+html:lang(es),
+html:lang(fr),
+html:lang(de) {
+  --ol-font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', sans-serif;
+}
+:lang(es) h1,
+:lang(fr) h1,
+:lang(de) h1 {
+  overflow-wrap: anywhere;
+  hyphens: auto;
+}
+.ol-language-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 2px;
+}
+.ol-language-option {
+  unicode-bidi: isolate;
+}
+.ol-cloud-sync header {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 18px;
+}
+.ol-cloud-sync header > div {
+  flex: 1;
+  min-width: 0;
+}
+.ol-cloud-sync h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+.ol-cloud-sync p {
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--ol-ink-3);
+  overflow-wrap: anywhere;
+  margin: 6px 0 12px;
+}
+.ol-cloud-sync-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 12px;
+  background: var(--ol-surface-2);
+  color: var(--ol-ink-2);
+}
+.ol-cloud-sync-account {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+}
+.ol-cloud-sync-account strong {
+  margin-left: auto;
+}
+.ol-cloud-sync-backup {
+  margin: 14px 0;
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--ol-surface-2);
+  font-size: 13px;
+}
+.ol-cloud-sync-backup small {
+  color: var(--ol-ink-3);
+}
+.ol-cloud-sync-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.ol-cloud-sync .ol-cloud-sync-error {
+  color: var(--ol-err);
+}
+.ol-cloud-sync .ol-cloud-sync-scope {
+  margin: 14px 0 0;
+  font-size: 12px;
 }

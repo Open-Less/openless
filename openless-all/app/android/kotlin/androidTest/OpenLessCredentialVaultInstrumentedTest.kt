@@ -1,6 +1,8 @@
 package com.openless.app
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import java.io.File
 import java.security.KeyStore
 import java.util.UUID
 import org.junit.After
@@ -30,6 +32,19 @@ class OpenLessCredentialVaultInstrumentedTest {
     private fun payload(response: ByteArray): ByteArray {
         assertEquals(CREDENTIAL_STATUS_OK, response.first())
         return response.copyOfRange(1, response.size)
+    }
+
+    private fun legacyVault() =
+        AndroidKeystoreCredentialVault("com.openless.app.credentials.v2")
+
+    private fun softwareStore(): SoftwareAesCredentialStore {
+        val filesDir = InstrumentationRegistry.getInstrumentation().targetContext.filesDir
+        return SoftwareAesCredentialStore(File(filesDir, "OpenLess"))
+    }
+
+    private fun resetFacadeState() {
+        OpenLessCredentialVault.deleteKey()
+        legacyVault().deleteKey()
     }
 
     @Test
@@ -63,6 +78,35 @@ class OpenLessCredentialVaultInstrumentedTest {
             assertArrayEquals(plaintext, payload(OpenLessCredentialVault.open(packet, aad)))
         } finally {
             OpenLessCredentialVault.deleteKey()
+        }
+    }
+
+    @Test
+    fun publicFacadeReadsBeta1V2Envelope() {
+        resetFacadeState()
+        try {
+            val plaintext = "beta1 credential".toByteArray()
+            val aad = "format-version-account".toByteArray()
+            val packet = payload(legacyVault().seal(plaintext, aad))
+
+            assertArrayEquals(plaintext, payload(OpenLessCredentialVault.open(packet, aad)))
+        } finally {
+            resetFacadeState()
+        }
+    }
+
+    @Test
+    fun softwareKeyCreatedBeforeEnvelopeCommitDoesNotHideV2Envelope() {
+        resetFacadeState()
+        try {
+            val plaintext = "still-v2 credential".toByteArray()
+            val aad = "format-version-account".toByteArray()
+            val packet = payload(legacyVault().seal(plaintext, aad))
+            payload(softwareStore().seal("discarded candidate".toByteArray(), aad))
+
+            assertArrayEquals(plaintext, payload(OpenLessCredentialVault.open(packet, aad)))
+        } finally {
+            resetFacadeState()
         }
     }
 

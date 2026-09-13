@@ -3,15 +3,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const insertPath = fileURLToPath(
-  new URL('../src-tauri/src/android/insert.rs', import.meta.url),
-);
+const insertPath = fileURLToPath(new URL('../src-tauri/src/android/insert.rs', import.meta.url));
 const tiersPath = fileURLToPath(
   new URL('../src-tauri/src/android/insert_tiers.rs', import.meta.url),
 );
-const shizukuPath = fileURLToPath(
-  new URL('../src-tauri/src/android/shizuku.rs', import.meta.url),
-);
+const shizukuPath = fileURLToPath(new URL('../src-tauri/src/android/shizuku.rs', import.meta.url));
 const bridgePath = fileURLToPath(
   new URL('../android/kotlin/OpenLessShizukuBridge.kt', import.meta.url),
 );

@@ -1,6 +1,6 @@
 # Windows sherpa-onnx 本地 ASR 实施规划
 
-> 状态：草案 / 待评审
+> 状态：历史规划 / 已实现（当前行为以代码与测试为准）
 > 日期：2026-05-12
 > 范围：仅 Windows；不替换 macOS `local-qwen3`；不替换 Windows `foundry-local-whisper`
 
@@ -58,7 +58,8 @@ asr/local/
   `#[cfg(target_os = "windows")]` 分支
 - `commands.rs`：增加准备 / 释放 / 状态 / 模型管理命令
 - `types.rs`：增加 `UserPreferences` 字段
-- 前端 Settings 高级页：在 Windows 下新增第三个本地 ASR toggle
+- 前端 Settings 服务页：本地模型板块负责模型管理；是否启用由「AI 提供商」中的
+  `sherpa-onnx-local` 渠道开关统一控制，不再保留第二套本地 ASR 总开关
 
 ---
 
@@ -303,7 +304,7 @@ sherpa-onnx = "..."   # 选最新稳定版，feature 关闭非必要后端
 - `sherpa_provider.rs` / `sherpa_runtime.rs` / `sherpa_models.rs` 文件结构
 - `ActiveAsr::SherpaOnnxLocal`
 - `commands.rs` 桩函数
-- 前端 toggle + i18n
+- 前端渠道开关 + i18n
 - **不实际推理**，先打通主链路（mock transcribe 返回空串或固定字符串）
 
 ### M2 Batch 推理可用 (1.5 周)

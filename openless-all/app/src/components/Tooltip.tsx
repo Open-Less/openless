@@ -106,7 +106,7 @@ export function Tooltip({
 
   const hide = () => {
     clearTimer();
-    setPos(prev => {
+    setPos((prev) => {
       if (prev) warmUntil = Date.now() + WARM_LINGER_MS;
       return null;
     });
@@ -155,15 +155,15 @@ export function Tooltip({
     let nextPlacement = pos.placement;
 
     if (
-      pos.placement === 'bottom'
-      && bubbleRect.bottom > window.innerHeight - margin
-      && pos.anchor.top - 8 - bubbleRect.height >= margin
+      pos.placement === 'bottom' &&
+      bubbleRect.bottom > window.innerHeight - margin &&
+      pos.anchor.top - 8 - bubbleRect.height >= margin
     ) {
       nextPlacement = 'top';
     } else if (
-      pos.placement === 'top'
-      && bubbleRect.top < margin
-      && pos.anchor.bottom + 8 + bubbleRect.height <= window.innerHeight - margin
+      pos.placement === 'top' &&
+      bubbleRect.top < margin &&
+      pos.anchor.bottom + 8 + bubbleRect.height <= window.innerHeight - margin
     ) {
       nextPlacement = 'bottom';
     }
@@ -173,10 +173,12 @@ export function Tooltip({
       return;
     }
 
-    const offsetX = Math.max(margin - bubbleRect.left, 0)
-      - Math.max(bubbleRect.right - (window.innerWidth - margin), 0);
-    const offsetY = Math.max(margin - bubbleRect.top, 0)
-      - Math.max(bubbleRect.bottom - (window.innerHeight - margin), 0);
+    const offsetX =
+      Math.max(margin - bubbleRect.left, 0) -
+      Math.max(bubbleRect.right - (window.innerWidth - margin), 0);
+    const offsetY =
+      Math.max(margin - bubbleRect.top, 0) -
+      Math.max(bubbleRect.bottom - (window.innerHeight - margin), 0);
 
     if (Math.abs(offsetX) > 0.5 || Math.abs(offsetY) > 0.5) {
       setPos({
@@ -266,7 +268,8 @@ const bubbleStyle: CSSProperties = {
   WebkitBackdropFilter: 'blur(12px) saturate(150%)',
   border: '0.5px solid var(--ol-glass-border)',
   boxShadow: 'var(--ol-shadow-md)',
-  whiteSpace: 'nowrap',
+  whiteSpace: 'normal',
+  overflowWrap: 'anywhere',
   pointerEvents: 'none',
   animation: 'ol-tooltip-in 0.12s ease-out both',
 };

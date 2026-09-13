@@ -26,9 +26,16 @@ assert.ok(hasStringResource(mergedAll.content, 'openless_shizuku_open_manager'))
 const mergedPartial = mergeMissingStringResources(partialXml, SHIZUKU_STRINGS_BY_LOCALE.values);
 assert.equal(mergedPartial.changed, true);
 assert.ok(hasStringResource(mergedPartial.content, 'openless_shizuku_open_manager'));
-assert.ok(!mergedPartial.content.includes('exists</string>\n    <string name="openless_shizuku_permission_rationale">'));
+assert.ok(
+  !mergedPartial.content.includes(
+    'exists</string>\n    <string name="openless_shizuku_permission_rationale">',
+  ),
+);
 
-const mergedTwice = mergeMissingStringResources(mergedAll.content, SHIZUKU_STRINGS_BY_LOCALE.values);
+const mergedTwice = mergeMissingStringResources(
+  mergedAll.content,
+  SHIZUKU_STRINGS_BY_LOCALE.values,
+);
 assert.equal(mergedTwice.changed, false);
 
 for (const [locale, stringsByName] of Object.entries(SHIZUKU_STRINGS_BY_LOCALE)) {

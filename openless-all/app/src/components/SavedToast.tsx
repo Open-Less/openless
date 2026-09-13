@@ -16,7 +16,12 @@ interface SavedToastProps {
   slideFrom?: ToastSlideFrom;
 }
 
-export function SavedToast({ saveState, message, offsetStyle, slideFrom = 'right' }: SavedToastProps) {
+export function SavedToast({
+  saveState,
+  message,
+  offsetStyle,
+  slideFrom = 'right',
+}: SavedToastProps) {
   // 维护内部状态，使通知可以自己倒计时关闭（即使用户父组件的 timer 长于 0.8s）
   const [internalVisible, setInternalVisible] = useState(false);
 
@@ -43,10 +48,8 @@ export function SavedToast({ saveState, message, offsetStyle, slideFrom = 'right
     zIndex: 99999,
     padding: '4px 11px',
     borderRadius: 999,
-    border: failed
-      ? '0.5px solid rgba(239,68,68,0.22)'
-      : '0.5px solid rgba(37,99,235,0.16)',
-    background: failed ? 'rgba(254,242,242,0.92)' : 'rgba(239,244,255,0.92)',
+    border: failed ? '0.5px solid rgba(239,68,68,0.22)' : '0.5px solid rgba(37,99,235,0.16)',
+    background: failed ? '#fef2f2' : '#eff4ff',
     color: failed ? '#dc2626' : '#2563eb',
     fontSize: 11.5,
     fontWeight: 600,
@@ -65,9 +68,8 @@ export function SavedToast({ saveState, message, offsetStyle, slideFrom = 'right
 
   // "从哪来，回哪去"：入场起点 == 退场终点，方向由 slideFrom 决定。
   // 两个分支都写全 x / y —— motion variant 保持完整，避免另一轴落到隐式默认值。
-  const offscreen = slideFrom === 'top'
-    ? { opacity: 0, x: 0, y: '-220%' }
-    : { opacity: 0, x: '120%', y: 0 };
+  const offscreen =
+    slideFrom === 'top' ? { opacity: 0, x: 0, y: '-220%' } : { opacity: 0, x: '120%', y: 0 };
 
   return (
     <AnimatePresence>

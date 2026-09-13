@@ -39,7 +39,12 @@ import {
   writeMarketplaceListCache,
 } from '../lib/ipc';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
-import type { MarketplaceDetail, MarketplaceListItem, MarketplaceMyPackItem, StylePack } from '../lib/types';
+import type {
+  MarketplaceDetail,
+  MarketplaceListItem,
+  MarketplaceMyPackItem,
+  StylePack,
+} from '../lib/types';
 import {
   canStartMarketplaceInstall,
   isMarketplaceInstallActive,
@@ -109,7 +114,7 @@ export function Marketplace() {
         setLikedIds(new Set());
         setMyPacks([]);
         if (currentLogin) {
-          await updatePrefs(current => ({ ...current, marketplaceDevLogin: '' }));
+          await updatePrefs((current) => ({ ...current, marketplaceDevLogin: '' }));
         }
       }
       return status.signedIn;
@@ -138,8 +143,7 @@ export function Marketplace() {
     setLoadError(null);
     try {
       // backend 只认 popular/new —— 'liked' 走 popular 拉一批回来，前端再过滤。
-      const serverSort: 'popular' | 'new' =
-        sort === 'liked' ? 'popular' : sort;
+      const serverSort: 'popular' | 'new' = sort === 'liked' ? 'popular' : sort;
       const list = await listMarketplace({ query: debouncedQuery, sort: serverSort, limit: 50 });
       if (seq !== reqSeqRef.current) return; // stale response
       setItems(list);
@@ -157,7 +161,7 @@ export function Marketplace() {
   }, [debouncedQuery, sort]);
 
   const visibleItems = useMemo(() => {
-    if (sort === 'liked') return items.filter(it => likedIds.has(it.id));
+    if (sort === 'liked') return items.filter((it) => likedIds.has(it.id));
     return items;
   }, [items, sort, likedIds]);
 
@@ -168,12 +172,14 @@ export function Marketplace() {
     // - superseded：新版上架后旧版的服务端 state，对用户来说该旧版本已经"被替换"，
     //   不应再算进「我的发布」当前在线列表。
     const q = myPacksQuery.trim().toLowerCase();
-    return myPacks.filter(pack => {
+    return myPacks.filter((pack) => {
       if (pack.state === 'withdrawn' || pack.state === 'superseded') return false;
       if (!q) return true;
-      return pack.name.toLowerCase().includes(q)
-        || pack.description.toLowerCase().includes(q)
-        || pack.tags.some(tag => tag.toLowerCase().includes(q));
+      return (
+        pack.name.toLowerCase().includes(q) ||
+        pack.description.toLowerCase().includes(q) ||
+        pack.tags.some((tag) => tag.toLowerCase().includes(q))
+      );
     });
   }, [myPacks, myPacksQuery]);
 
@@ -190,7 +196,9 @@ export function Marketplace() {
     let cancelled = false;
     if (!marketplaceSignedIn) {
       setLikedIds(new Set());
-      return () => { cancelled = true; };
+      return () => {
+        cancelled = true;
+      };
     }
     void (async () => {
       try {
@@ -201,7 +209,9 @@ export function Marketplace() {
         console.warn('[marketplace] fetch my-likes failed', error);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [marketplaceSignedIn, refreshAuthStatus]);
 
   const refreshMyPacks = useCallback(async () => {
@@ -244,10 +254,10 @@ export function Marketplace() {
     setSelectedId(id);
     setDetail(null);
     setDetailLoading(true);
-    setInstallError(previous => previous?.packId === id ? previous : null);
+    setInstallError((previous) => (previous?.packId === id ? previous : null));
     // 差量缓存命中：list 已经带 version+updatedAt，按三元组匹配本机 detail。
     // 命中 = 直接渲染、跳过网络；未命中 = 走 fetchMarketplaceDetail。
-    const listItem = items.find(it => it.id === id);
+    const listItem = items.find((it) => it.id === id);
     if (listItem) {
       const cached = readMarketplaceDetailCache(
         id,
@@ -271,7 +281,10 @@ export function Marketplace() {
     } catch (error) {
       if (seq !== detailSeqRef.current) return;
       console.error('[marketplace] detail failed', error);
-      setActionMsg({ kind: 'err', text: t('marketplace.errors.detail', { err: errorMessage(error) }) });
+      setActionMsg({
+        kind: 'err',
+        text: t('marketplace.errors.detail', { err: errorMessage(error) }),
+      });
       setSelectedId(null);
     } finally {
       if (seq === detailSeqRef.current) setDetailLoading(false);
@@ -288,7 +301,7 @@ export function Marketplace() {
     try {
       await installMarketplacePack(packId);
       setActionMsg({ kind: 'ok', text: t('marketplace.installed', { name: packName }) });
-      setSelectedId(current => shouldCloseMarketplaceDetail(current, packId) ? null : current);
+      setSelectedId((current) => (shouldCloseMarketplaceDetail(current, packId) ? null : current));
     } catch (error) {
       const errorText = errorMessage(error);
       const message = t('marketplace.errors.install', { err: errorText });
@@ -296,7 +309,7 @@ export function Marketplace() {
       setActionMsg({ kind: 'err', text: message });
       clientFailureLog = `[marketplace-install] stage=ipc-failed pack_id=${packId} error=${errorText}`;
     } finally {
-      setInstallingPackId(current => current === packId ? null : current);
+      setInstallingPackId((current) => (current === packId ? null : current));
       if (clientFailureLog) void logClientError(clientFailureLog);
     }
   };
@@ -311,9 +324,12 @@ export function Marketplace() {
       await downloadMarketplacePack(pack.id, targetPath);
       setActionMsg({ kind: 'ok', text: t('marketplace.downloaded', { name: pack.name }) });
     } catch (error) {
-      setActionMsg({ kind: 'err', text: t('marketplace.errors.download', { err: errorMessage(error) }) });
+      setActionMsg({
+        kind: 'err',
+        text: t('marketplace.errors.download', { err: errorMessage(error) }),
+      });
     } finally {
-      setDownloadingPackId(current => current === pack.id ? null : current);
+      setDownloadingPackId((current) => (current === pack.id ? null : current));
     }
   };
 
@@ -330,20 +346,26 @@ export function Marketplace() {
     const wasLiked = prevLikedIds.has(packId);
     // optimistic mutate：立即切红心 + 调计数，让用户感觉点击即生效。
     const optimisticCount = Math.max(0, prevLikeCount + (wasLiked ? -1 : 1));
-    setLikedIds(prev => {
+    setLikedIds((prev) => {
       const next = new Set(prev);
       if (wasLiked) next.delete(packId);
       else next.add(packId);
       return next;
     });
-    setDetail(prev => (prev && prev.id === packId ? { ...prev, likeCount: optimisticCount } : prev));
-    setItems(prev => prev.map(p => (p.id === packId ? { ...p, likeCount: optimisticCount } : p)));
+    setDetail((prev) =>
+      prev && prev.id === packId ? { ...prev, likeCount: optimisticCount } : prev,
+    );
+    setItems((prev) =>
+      prev.map((p) => (p.id === packId ? { ...p, likeCount: optimisticCount } : p)),
+    );
     try {
       const r = await likeMarketplacePack(packId);
       // 服务端回来后以服务端 likeCount / alreadyLiked 为准校准（防止并发或本地 drift）。
-      setDetail(prev => (prev && prev.id === packId ? { ...prev, likeCount: r.likeCount } : prev));
-      setItems(prev => prev.map(p => (p.id === packId ? { ...p, likeCount: r.likeCount } : p)));
-      setLikedIds(prev => {
+      setDetail((prev) =>
+        prev && prev.id === packId ? { ...prev, likeCount: r.likeCount } : prev,
+      );
+      setItems((prev) => prev.map((p) => (p.id === packId ? { ...p, likeCount: r.likeCount } : p)));
+      setLikedIds((prev) => {
         const next = new Set(prev);
         if (r.alreadyLiked) next.add(packId);
         else next.delete(packId);
@@ -353,13 +375,23 @@ export function Marketplace() {
       void refreshAuthStatus();
       // rollback 到点击前的状态
       setLikedIds(prevLikedIds);
-      setDetail(prev => (prev && prev.id === packId ? { ...prev, likeCount: prevLikeCount } : prev));
-      setItems(prev => prev.map(p => (p.id === packId ? { ...p, likeCount: prevLikeCount } : p)));
-      setActionMsg({ kind: 'err', text: t('marketplace.errors.like', { err: errorMessage(error) }) });
+      setDetail((prev) =>
+        prev && prev.id === packId ? { ...prev, likeCount: prevLikeCount } : prev,
+      );
+      setItems((prev) =>
+        prev.map((p) => (p.id === packId ? { ...p, likeCount: prevLikeCount } : p)),
+      );
+      setActionMsg({
+        kind: 'err',
+        text: t('marketplace.errors.like', { err: errorMessage(error) }),
+      });
     }
   };
 
-  const openUploadPicker = async (originPackId: string | null = null, targetName: string | null = null) => {
+  const openUploadPicker = async (
+    originPackId: string | null = null,
+    targetName: string | null = null,
+  ) => {
     try {
       setUploadOriginPackId(originPackId);
       setUploadTargetName(targetName);
@@ -367,7 +399,7 @@ export function Marketplace() {
       // 内置 pack 是只读模板，不能上传；更新时把同名本地版本排到最前面。
       const target = (targetName ?? '').trim().toLowerCase();
       const editable = packs
-        .filter(p => p.kind !== 'builtin')
+        .filter((p) => p.kind !== 'builtin')
         .sort((a, b) => {
           const aMatch = target.length > 0 && a.name.trim().toLowerCase() === target;
           const bMatch = target.length > 0 && b.name.trim().toLowerCase() === target;
@@ -376,13 +408,17 @@ export function Marketplace() {
         });
       setLocalPacks(editable);
       // 更新流程下预选「建议更新」的本地包（同名），用户多数情况下一键确认。
-      const recommended = target.length > 0
-        ? editable.find(p => p.name.trim().toLowerCase() === target)
-        : undefined;
+      const recommended =
+        target.length > 0
+          ? editable.find((p) => p.name.trim().toLowerCase() === target)
+          : undefined;
       setSelectedUploadPackId(recommended?.id ?? null);
       setShowUpload(true);
     } catch (error) {
-      setActionMsg({ kind: 'err', text: t('marketplace.errors.loadLocal', { err: errorMessage(error) }) });
+      setActionMsg({
+        kind: 'err',
+        text: t('marketplace.errors.loadLocal', { err: errorMessage(error) }),
+      });
     }
   };
 
@@ -396,11 +432,14 @@ export function Marketplace() {
       setActionMsg({ kind: 'ok', text: t('marketplace.detail.withdrawSuccess') });
       setSelectedId(null);
       // 撤回后立即从列表里去掉，再请求一次确认
-      setItems(prev => prev.filter(p => p.id !== detail.id));
+      setItems((prev) => prev.filter((p) => p.id !== detail.id));
       void refresh();
     } catch (error) {
       void refreshAuthStatus();
-      setActionMsg({ kind: 'err', text: t('marketplace.detail.withdrawFailed', { err: errorMessage(error) }) });
+      setActionMsg({
+        kind: 'err',
+        text: t('marketplace.detail.withdrawFailed', { err: errorMessage(error) }),
+      });
     }
   };
 
@@ -411,17 +450,20 @@ export function Marketplace() {
     try {
       await marketplaceDelete(pack.id);
       setActionMsg({ kind: 'ok', text: t('marketplace.detail.withdrawSuccess') });
-      setMyPacks(prev => prev.filter(p => p.id !== pack.id));
-      setItems(prev => prev.filter(p => p.id !== pack.id));
+      setMyPacks((prev) => prev.filter((p) => p.id !== pack.id));
+      setItems((prev) => prev.filter((p) => p.id !== pack.id));
       void refreshMyPacks();
     } catch (error) {
       void refreshAuthStatus();
-      setActionMsg({ kind: 'err', text: t('marketplace.detail.withdrawFailed', { err: errorMessage(error) }) });
+      setActionMsg({
+        kind: 'err',
+        text: t('marketplace.detail.withdrawFailed', { err: errorMessage(error) }),
+      });
     }
   };
 
   const onUpload = async (packId: string) => {
-    const localPack = localPacks.find(p => p.id === packId);
+    const localPack = localPacks.find((p) => p.id === packId);
     try {
       const result = await uploadMarketplacePack(packId, uploadOriginPackId);
       // optimistic：拿到 200 立即把这条包推到「我的发布」最前面，状态置为后端返回值（通常 'pending'）。
@@ -445,8 +487,8 @@ export function Marketplace() {
           originAuthorLogin: null,
           state: result.state,
         };
-        setMyPacks(prev => {
-          const idx = prev.findIndex(p => p.id === result.id);
+        setMyPacks((prev) => {
+          const idx = prev.findIndex((p) => p.id === result.id);
           if (idx >= 0) {
             // 原作者更新同 id：保留 likes/downloads 等服务端计数，覆盖元信息 + 重置 state 为 pending。
             const next = [...prev];
@@ -473,22 +515,32 @@ export function Marketplace() {
       // issue #470：上传后给后端一点时间落库 + 跑审核，再用服务端真实数据校准一次
       // （审核状态可能 pending→approved/rejected）。乐观更新已即时反映「我的发布」，
       // 这里只需单次兜底刷新；取较长延时（5s）确保后端最终一致后能查到，去掉冗余的 1.5s 那次。
-      window.setTimeout(() => { void refresh(); void refreshMyPacks(); }, 5000);
+      window.setTimeout(() => {
+        void refresh();
+        void refreshMyPacks();
+      }, 5000);
     } catch (error) {
       void refreshAuthStatus();
-      setActionMsg({ kind: 'err', text: t('marketplace.errors.upload', { err: errorMessage(error) }) });
+      setActionMsg({
+        kind: 'err',
+        text: t('marketplace.errors.upload', { err: errorMessage(error) }),
+      });
     }
   };
 
   // GitHub 登录成功后 Rust 已保存 token；prefs 只缓存 login 供界面展示。
-  const onLoginSuccess = useCallback((nextLogin: string) => {
-    setMarketplaceSignedIn(true);
-    // prefs 写入失败只 console 记一笔（与重构前的 OAuth 轮询一致）—— 不能裸 void，
-    // 否则 reject 会冒成未处理的 promise rejection。
-    void updatePrefs(current => ({ ...current, marketplaceDevLogin: nextLogin }))
-      .catch(e => console.warn('[marketplace] save login to prefs failed', e));
-    setActionMsg({ kind: 'ok', text: t('marketplace.oauth.successAs', { login: nextLogin }) });
-  }, [updatePrefs, t]);
+  const onLoginSuccess = useCallback(
+    (nextLogin: string) => {
+      setMarketplaceSignedIn(true);
+      // prefs 写入失败只 console 记一笔（与重构前的 OAuth 轮询一致）—— 不能裸 void，
+      // 否则 reject 会冒成未处理的 promise rejection。
+      void updatePrefs((current) => ({ ...current, marketplaceDevLogin: nextLogin })).catch((e) =>
+        console.warn('[marketplace] save login to prefs failed', e),
+      );
+      setActionMsg({ kind: 'ok', text: t('marketplace.oauth.successAs', { login: nextLogin }) });
+    },
+    [updatePrefs, t],
+  );
 
   const sortPills = useMemo<Array<{ id: SortMode; label: string }>>(
     () => [
@@ -500,34 +552,65 @@ export function Marketplace() {
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, position: 'relative' }}>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        minHeight: 0,
+        position: 'relative',
+      }}
+    >
       <PageHeader
         kicker={t('marketplace.kicker')}
         title={t('marketplace.title')}
         desc={t('marketplace.desc')}
         right={
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <div
+            style={{
+              display: 'flex',
+              gap: 8,
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              justifyContent: 'flex-end',
+            }}
+          >
             <button
               type="button"
               onClick={() => setShowMyPacks(true)}
-              title={authorizedLogin ? t('marketplace.myPacks.buttonTitle', { login: authorizedLogin }) : t('marketplace.myPacks.buttonTitleEmpty')}
+              title={
+                authorizedLogin
+                  ? t('marketplace.myPacks.buttonTitle', { login: authorizedLogin })
+                  : t('marketplace.myPacks.buttonTitleEmpty')
+              }
               style={{
-                display: 'inline-flex', alignItems: 'center', gap: 8,
-                height: 30, padding: '0 12px', borderRadius: 9,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 8,
+                height: 30,
+                padding: '0 12px',
+                borderRadius: 9,
                 border: '0.5px solid var(--ol-line-strong)',
                 background: 'var(--ol-surface)',
                 color: 'var(--ol-ink-2)',
-                fontSize: 12, fontWeight: 650,
+                fontSize: 12,
+                fontWeight: 650,
                 cursor: 'pointer',
                 boxShadow: '0 1px 2px rgba(15,17,22,0.04)',
               }}
             >
-              <span style={{
-                width: 18, height: 18, borderRadius: 999,
-                display: 'inline-grid', placeItems: 'center',
-                background: 'var(--ol-surface-2)',
-                fontSize: 10, fontWeight: 750,
-              }}>
+              <span
+                style={{
+                  width: 18,
+                  height: 18,
+                  borderRadius: 999,
+                  display: 'inline-grid',
+                  placeItems: 'center',
+                  background: 'var(--ol-surface-2)',
+                  fontSize: 10,
+                  fontWeight: 750,
+                }}
+              >
                 {(authorizedLogin || '?').slice(0, 1).toUpperCase()}
               </span>
               <span>{t('marketplace.myPacks.buttonLabel')}</span>
@@ -567,7 +650,7 @@ export function Marketplace() {
             type="search"
             placeholder={t('marketplace.searchPlaceholder')}
             value={query}
-            onChange={e => setQuery(e.target.value)}
+            onChange={(e) => setQuery(e.target.value)}
             style={{
               flex: 1,
               outline: 'none',
@@ -578,8 +661,11 @@ export function Marketplace() {
             }}
           />
         </div>
-        <div className="ol-flex-row ol-flex-split" style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-          {sortPills.map(p => (
+        <div
+          className="ol-flex-row ol-flex-split"
+          style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}
+        >
+          {sortPills.map((p) => (
             <button
               key={p.id}
               onClick={() => setSort(p.id)}
@@ -608,7 +694,14 @@ export function Marketplace() {
 
       {loadError && (
         <Card padding={16} style={{ marginBottom: 12, borderColor: 'var(--ol-err)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 10,
+            }}
+          >
             <div style={{ fontSize: 12, color: 'var(--ol-err)', flex: 1, wordBreak: 'break-word' }}>
               {t('marketplace.loadFailed', { err: loadError })}
             </div>
@@ -649,9 +742,16 @@ export function Marketplace() {
             </div>
           </Card>
         ) : (
-          <div className="ol-grid-auto-cards" style={{ display: 'grid', gridTemplateColumns: stackLayout ? '1fr' : 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
+          <div
+            className="ol-grid-auto-cards"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: stackLayout ? '1fr' : 'repeat(auto-fill, minmax(260px, 1fr))',
+              gap: 12,
+            }}
+          >
             <AnimatePresence mode="sync">
-              {visibleItems.map(p => {
+              {visibleItems.map((p) => {
                 const isDownloading = downloadingPackId === p.id;
                 return (
                   <motion.article
@@ -662,7 +762,7 @@ export function Marketplace() {
                     transition={{
                       layout: { type: 'spring', damping: 25, stiffness: 220 },
                       opacity: { duration: 0.2 },
-                      scale: { duration: 0.2 }
+                      scale: { duration: 0.2 },
                     }}
                     key={p.id}
                     style={{
@@ -690,29 +790,84 @@ export function Marketplace() {
                         gap: 6,
                       }}
                     >
-                      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 6 }}>
-                        <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink-1)' }}>{p.name}</span>
-                        <span style={{ fontSize: 10, color: 'var(--ol-ink-4)', fontFamily: 'var(--ol-font-mono)' }}>v{p.version}</span>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'baseline',
+                          justifyContent: 'space-between',
+                          gap: 6,
+                        }}
+                      >
+                        <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink-1)' }}>
+                          {p.name}
+                        </span>
+                        <span
+                          style={{
+                            fontSize: 10,
+                            color: 'var(--ol-ink-4)',
+                            fontFamily: 'var(--ol-font-mono)',
+                          }}
+                        >
+                          v{p.version}
+                        </span>
                       </div>
-                      <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', minHeight: 36 }}>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: 'var(--ol-ink-3)',
+                          lineHeight: 1.5,
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden',
+                          minHeight: 36,
+                        }}
+                      >
                         {p.description || t('marketplace.noDescription')}
                       </div>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
-                        <Pill size="sm" tone="outline">{p.baseMode}</Pill>
+                        <Pill size="sm" tone="outline">
+                          {p.baseMode}
+                        </Pill>
                         {isDerivative(p.originAuthorLogin) && (
-                          <span title={t('marketplace.derivativeBadge', { login: p.originAuthorLogin })}>
-                            <Pill size="sm" tone="ok">{t('marketplace.derivativeBadge', { login: p.originAuthorLogin })}</Pill>
+                          <span
+                            title={t('marketplace.derivativeBadge', { login: p.originAuthorLogin })}
+                          >
+                            <Pill size="sm" tone="ok">
+                              {t('marketplace.derivativeBadge', { login: p.originAuthorLogin })}
+                            </Pill>
                           </span>
                         )}
-                        {p.tags.slice(0, 2).map(tag => <Pill key={tag} size="sm" tone="default">{tag}</Pill>)}
+                        {p.tags.slice(0, 2).map((tag) => (
+                          <Pill key={tag} size="sm" tone="default">
+                            {tag}
+                          </Pill>
+                        ))}
                       </div>
                     </button>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, padding: '0 14px 12px', fontSize: 11, color: 'var(--ol-ink-4)' }}>
-                      <span style={{ fontWeight: 500, color: 'var(--ol-ink-3)' }}>@{p.authorLogin}</span>
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                        gap: 8,
+                        padding: '0 14px 12px',
+                        fontSize: 11,
+                        color: 'var(--ol-ink-4)',
+                      }}
+                    >
+                      <span style={{ fontWeight: 500, color: 'var(--ol-ink-3)' }}>
+                        @{p.authorLogin}
+                      </span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span>
-                          <span style={{ color: likedIds.has(p.id) ? '#ef4444' : 'var(--ol-ink-4)' }}>{likedIds.has(p.id) ? '★' : '☆'}</span>
-                          {' '}{p.likeCount} · ↓ {p.downloadCount}
+                          <span
+                            style={{ color: likedIds.has(p.id) ? '#ef4444' : 'var(--ol-ink-4)' }}
+                          >
+                            {likedIds.has(p.id) ? '★' : '☆'}
+                          </span>{' '}
+                          {p.likeCount} · ↓ {p.downloadCount}
                         </span>
                         <button
                           type="button"
@@ -737,7 +892,9 @@ export function Marketplace() {
                           }}
                         >
                           <Icon name="download" size={12} />
-                          {isDownloading ? t('marketplace.downloadingZipBtn') : t('marketplace.downloadZipBtn')}
+                          {isDownloading
+                            ? t('marketplace.downloadingZipBtn')
+                            : t('marketplace.downloadZipBtn')}
                         </button>
                       </div>
                     </div>
@@ -751,7 +908,13 @@ export function Marketplace() {
 
       {/* 详情弹窗 */}
       {selectedId && (
-        <Modal zIndex={mobile || stackLayout ? 70 : 50} onClose={() => { setSelectedId(null); setInstallError(null); }}>
+        <Modal
+          zIndex={mobile || stackLayout ? 70 : 50}
+          onClose={() => {
+            setSelectedId(null);
+            setInstallError(null);
+          }}
+        >
           {detailLoading || !detail ? (
             <div
               style={{
@@ -769,28 +932,59 @@ export function Marketplace() {
             </div>
           ) : (
             <>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 6, flexWrap: 'wrap' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'baseline',
+                  gap: 10,
+                  marginBottom: 6,
+                  flexWrap: 'wrap',
+                }}
+              >
                 <h2 style={{ margin: 0, fontSize: 18, fontWeight: 650 }}>{detail.name}</h2>
-                <Pill size="sm" tone="outline">{detail.baseMode}</Pill>
+                <Pill size="sm" tone="outline">
+                  {detail.baseMode}
+                </Pill>
                 {isDerivative(detail.originAuthorLogin) && (
-                  <span title={t('marketplace.derivativeBadge', { login: detail.originAuthorLogin })}>
-                    <Pill size="sm" tone="ok">{t('marketplace.derivativeBadge', { login: detail.originAuthorLogin })}</Pill>
+                  <span
+                    title={t('marketplace.derivativeBadge', { login: detail.originAuthorLogin })}
+                  >
+                    <Pill size="sm" tone="ok">
+                      {t('marketplace.derivativeBadge', { login: detail.originAuthorLogin })}
+                    </Pill>
                   </span>
                 )}
-                <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', fontFamily: 'var(--ol-font-mono)' }}>
+                <span
+                  style={{
+                    fontSize: 11,
+                    color: 'var(--ol-ink-4)',
+                    fontFamily: 'var(--ol-font-mono)',
+                  }}
+                >
                   v{detail.version}
                 </span>
               </div>
               <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginBottom: 12 }}>
-                <span style={{ fontWeight: 500, color: 'var(--ol-ink-3)' }}>@{detail.authorLogin}</span>
+                <span style={{ fontWeight: 500, color: 'var(--ol-ink-3)' }}>
+                  @{detail.authorLogin}
+                </span>
                 {' · '}
                 <span style={{ color: likedIds.has(detail.id) ? '#ef4444' : 'var(--ol-ink-4)' }}>
                   {likedIds.has(detail.id) ? '★' : '☆'}
-                </span>
-                {' '}{detail.likeCount}{' · ↓ '}{detail.downloadCount}
+                </span>{' '}
+                {detail.likeCount}
+                {' · ↓ '}
+                {detail.downloadCount}
               </div>
               {detail.description && (
-                <div style={{ fontSize: 13, color: 'var(--ol-ink-2)', lineHeight: 1.6, marginBottom: 14 }}>
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: 'var(--ol-ink-2)',
+                    lineHeight: 1.6,
+                    marginBottom: 14,
+                  }}
+                >
                   {detail.description}
                 </div>
               )}
@@ -812,18 +1006,36 @@ export function Marketplace() {
                 {detail.prompt}
               </div>
               {isMarketplaceInstallErrorForPack(installError, detail.id) && (
-                <div role="alert" style={{ color: '#ef4444', fontSize: 12, whiteSpace: 'normal', overflowWrap: 'anywhere', marginBottom: 10 }}>
+                <div
+                  role="alert"
+                  style={{
+                    color: '#ef4444',
+                    fontSize: 12,
+                    whiteSpace: 'normal',
+                    overflowWrap: 'anywhere',
+                    marginBottom: 10,
+                  }}
+                >
                   {installError.message}
                 </div>
               )}
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  alignItems: 'center',
+                }}
+              >
                 <div>
-                  {marketplaceSignedIn && detail.authorLogin === currentLogin && currentLogin.length > 0 && (
-                    <Btn variant="ghost" size="sm" onClick={() => void onDelete()}>
-                      <span style={{ color: '#ef4444', marginRight: 4 }}>🗑</span>
-                      {t('marketplace.detail.withdrawBtn')}
-                    </Btn>
-                  )}
+                  {marketplaceSignedIn &&
+                    detail.authorLogin === currentLogin &&
+                    currentLogin.length > 0 && (
+                      <Btn variant="ghost" size="sm" onClick={() => void onDelete()}>
+                        <span style={{ color: '#ef4444', marginRight: 4 }}>🗑</span>
+                        {t('marketplace.detail.withdrawBtn')}
+                      </Btn>
+                    )}
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <motion.button
@@ -842,7 +1054,7 @@ export function Marketplace() {
                       borderRadius: 8,
                       fontSize: 12,
                       fontWeight: 500,
-                      color: 'var(--ol-ink-2)'
+                      color: 'var(--ol-ink-2)',
                     }}
                   >
                     <span
@@ -856,7 +1068,14 @@ export function Marketplace() {
                     </span>
                     {detail.likeCount}
                   </motion.button>
-                  <Btn variant="ghost" size="sm" onClick={() => { setSelectedId(null); setInstallError(null); }}>
+                  <Btn
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setSelectedId(null);
+                      setInstallError(null);
+                    }}
+                  >
                     {installingPackId !== null ? t('common.close') : t('common.cancel')}
                   </Btn>
                   <Btn
@@ -888,29 +1107,49 @@ export function Marketplace() {
           }}
         >
           <h2 style={{ margin: '0 0 12px', fontSize: 16, fontWeight: 650 }}>
-            {uploadOriginPackId ? t('marketplace.upload.updateTitle', { name: uploadTargetName ?? t('style.pack.title') }) : t('marketplace.uploadTitle')}
+            {uploadOriginPackId
+              ? t('marketplace.upload.updateTitle', {
+                  name: uploadTargetName ?? t('style.pack.title'),
+                })
+              : t('marketplace.uploadTitle')}
           </h2>
           <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', marginBottom: 12 }}>
-            {uploadOriginPackId ? t('marketplace.upload.updateHint') : t('marketplace.uploadHint', { login: prefs?.marketplaceDevLogin ?? '' })}
+            {uploadOriginPackId
+              ? t('marketplace.upload.updateHint')
+              : t('marketplace.uploadHint', { login: prefs?.marketplaceDevLogin ?? '' })}
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 360, overflow: 'auto' }}>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+              maxHeight: 360,
+              overflow: 'auto',
+            }}
+          >
             {localPacks.length === 0 ? (
-              <div style={{ fontSize: 12, color: 'var(--ol-ink-4)', textAlign: 'center', padding: 20 }}>
+              <div
+                style={{ fontSize: 12, color: 'var(--ol-ink-4)', textAlign: 'center', padding: 20 }}
+              >
                 {t('marketplace.uploadNoLocal')}
               </div>
             ) : (
-              localPacks.map(p => {
-                const recommended = !!uploadTargetName && p.name.trim().toLowerCase() === uploadTargetName.trim().toLowerCase();
+              localPacks.map((p) => {
+                const recommended =
+                  !!uploadTargetName &&
+                  p.name.trim().toLowerCase() === uploadTargetName.trim().toLowerCase();
                 const selected = selectedUploadPackId === p.id;
                 return (
                   <button
                     key={p.id}
                     type="button"
-                    onClick={() => setSelectedUploadPackId(prev => (prev === p.id ? null : p.id))}
+                    onClick={() => setSelectedUploadPackId((prev) => (prev === p.id ? null : p.id))}
                     style={{
                       textAlign: 'left',
                       padding: 10,
-                      border: selected ? '1px solid var(--ol-blue)' : '0.5px solid var(--ol-line-strong)',
+                      border: selected
+                        ? '1px solid var(--ol-blue)'
+                        : '0.5px solid var(--ol-line-strong)',
                       borderRadius: 8,
                       background: selected ? 'var(--ol-blue-soft)' : 'var(--ol-surface)',
                       cursor: 'pointer',
@@ -920,21 +1159,41 @@ export function Marketplace() {
                     }}
                   >
                     {/* 选中圈：未选空圆，选中蓝实心 + 白勾 */}
-                    <span style={{
-                      flexShrink: 0,
-                      width: 18, height: 18, borderRadius: 999,
-                      border: selected ? '1px solid var(--ol-blue)' : '1px solid var(--ol-line-strong)',
-                      background: selected ? 'var(--ol-blue)' : 'transparent',
-                      display: 'inline-grid', placeItems: 'center',
-                      color: '#fff', fontSize: 11, fontWeight: 700,
-                      transition: 'background 0.12s, border-color 0.12s',
-                    }}>
+                    <span
+                      style={{
+                        flexShrink: 0,
+                        width: 18,
+                        height: 18,
+                        borderRadius: 999,
+                        border: selected
+                          ? '1px solid var(--ol-blue)'
+                          : '1px solid var(--ol-line-strong)',
+                        background: selected ? 'var(--ol-blue)' : 'transparent',
+                        display: 'inline-grid',
+                        placeItems: 'center',
+                        color: '#fff',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        transition: 'background 0.12s, border-color 0.12s',
+                      }}
+                    >
                       {selected && '✓'}
                     </span>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' }}>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8,
+                          justifyContent: 'space-between',
+                        }}
+                      >
                         <div style={{ fontSize: 13, fontWeight: 600 }}>{p.name}</div>
-                        {recommended && <Pill size="sm" tone="blue">{t('marketplace.upload.recommendedBadge')}</Pill>}
+                        {recommended && (
+                          <Pill size="sm" tone="blue">
+                            {t('marketplace.upload.recommendedBadge')}
+                          </Pill>
+                        )}
                       </div>
                       <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 2 }}>
                         {p.description || t('marketplace.noDescription')}
@@ -947,19 +1206,25 @@ export function Marketplace() {
           </div>
           {/* 底部：取消 / 确定上传（未选中时 disabled）*/}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
-            <Btn variant="ghost" size="sm" onClick={() => {
-              setShowUpload(false);
-              setUploadOriginPackId(null);
-              setUploadTargetName(null);
-              setSelectedUploadPackId(null);
-            }}>
+            <Btn
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setShowUpload(false);
+                setUploadOriginPackId(null);
+                setUploadTargetName(null);
+                setSelectedUploadPackId(null);
+              }}
+            >
               {t('common.cancel')}
             </Btn>
             <Btn
               variant="blue"
               size="sm"
               disabled={!selectedUploadPackId}
-              onClick={() => { if (selectedUploadPackId) void onUpload(selectedUploadPackId); }}
+              onClick={() => {
+                if (selectedUploadPackId) void onUpload(selectedUploadPackId);
+              }}
             >
               {t('marketplace.upload.confirmBtn')}
             </Btn>
@@ -990,7 +1255,7 @@ export function Marketplace() {
                 type="search"
                 placeholder={t('marketplace.myPacks.searchPlaceholder')}
                 value={myPacksQuery}
-                onChange={e => setMyPacksQuery(e.target.value)}
+                onChange={(e) => setMyPacksQuery(e.target.value)}
                 autoFocus
                 style={{
                   flex: 1,
@@ -1006,28 +1271,44 @@ export function Marketplace() {
                 已登录时再点会重新走一次（切账号）。 */}
             <button
               type="button"
-              title={authorizedLogin ? t('marketplace.oauth.reloginTooltip', { login: authorizedLogin }) : t('marketplace.oauth.loginTooltip')}
+              title={
+                authorizedLogin
+                  ? t('marketplace.oauth.reloginTooltip', { login: authorizedLogin })
+                  : t('marketplace.oauth.loginTooltip')
+              }
               onClick={() => setShowLogin(true)}
               style={{
-                display: 'inline-flex', alignItems: 'center', gap: 6,
-                padding: '5px 10px', borderRadius: 9,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '5px 10px',
+                borderRadius: 9,
                 border: '0.5px solid var(--ol-line-strong)',
                 background: authorizedLogin ? 'var(--ol-blue-soft)' : 'var(--ol-surface)',
                 color: authorizedLogin ? 'var(--ol-blue)' : 'var(--ol-ink-3)',
-                fontSize: 12, fontWeight: 650,
+                fontSize: 12,
+                fontWeight: 650,
                 cursor: 'pointer',
                 whiteSpace: 'nowrap',
               }}
             >
-              <span style={{
-                width: 18, height: 18, borderRadius: 999,
-                display: 'inline-grid', placeItems: 'center',
-                background: authorizedLogin ? 'rgba(37,99,235,0.14)' : 'var(--ol-surface-2)',
-                fontSize: 10, fontWeight: 750,
-              }}>
+              <span
+                style={{
+                  width: 18,
+                  height: 18,
+                  borderRadius: 999,
+                  display: 'inline-grid',
+                  placeItems: 'center',
+                  background: authorizedLogin ? 'rgba(37,99,235,0.14)' : 'var(--ol-surface-2)',
+                  fontSize: 10,
+                  fontWeight: 750,
+                }}
+              >
                 {(authorizedLogin || '?').slice(0, 1).toUpperCase()}
               </span>
-              <span>{authorizedLogin ? `@${authorizedLogin}` : t('marketplace.oauth.loginBtn')}</span>
+              <span>
+                {authorizedLogin ? `@${authorizedLogin}` : t('marketplace.oauth.loginBtn')}
+              </span>
             </button>
             {/* 关闭 × */}
             <button
@@ -1036,13 +1317,17 @@ export function Marketplace() {
               title={t('common.close')}
               onClick={() => setShowMyPacks(false)}
               style={{
-                width: 30, height: 30, borderRadius: 9,
-                display: 'inline-grid', placeItems: 'center',
+                width: 30,
+                height: 30,
+                borderRadius: 9,
+                display: 'inline-grid',
+                placeItems: 'center',
                 border: '0.5px solid var(--ol-line-strong)',
                 background: 'var(--ol-surface)',
                 color: 'var(--ol-ink-2)',
                 cursor: 'pointer',
-                fontSize: 18, lineHeight: 1,
+                fontSize: 18,
+                lineHeight: 1,
                 fontWeight: 500,
               }}
             >
@@ -1052,23 +1337,46 @@ export function Marketplace() {
 
           {/* 第二行：计数信息（左）+ 刷新 + 上传（右）。计数走 visibleMyPacks（已剔除
               withdrawn / superseded），跟列表里看到的卡片数对得上。 */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 12 }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              marginBottom: 12,
+            }}
+          >
             <div style={{ fontSize: 11.5, color: 'var(--ol-ink-3)' }}>
               {(() => {
                 if (!marketplaceSignedIn) return t('marketplace.myPacks.notLoggedIn');
                 const activeCount = visibleMyPacks.length;
-                const pendingCount = visibleMyPacks.filter(p => p.state === 'pending').length;
+                const pendingCount = visibleMyPacks.filter((p) => p.state === 'pending').length;
                 return pendingCount > 0
-                  ? t('marketplace.myPacks.summaryPending', { count: activeCount, pending: pendingCount })
+                  ? t('marketplace.myPacks.summaryPending', {
+                      count: activeCount,
+                      pending: pendingCount,
+                    })
                   : t('marketplace.myPacks.summary', { count: activeCount });
               })()}
             </div>
             <div style={{ display: 'flex', gap: 6 }}>
-              <Btn icon="refresh" variant="ghost" size="sm" onClick={() => void refreshMyPacks()} disabled={!marketplaceSignedIn || myPacksLoading}>
+              <Btn
+                icon="refresh"
+                variant="ghost"
+                size="sm"
+                onClick={() => void refreshMyPacks()}
+                disabled={!marketplaceSignedIn || myPacksLoading}
+              >
                 {t('common.refresh')}
               </Btn>
               <span title={canUpload ? '' : t('marketplace.uploadDisabledHint')}>
-                <Btn icon="cloud" variant="blue" size="sm" onClick={() => void openUploadPicker()} disabled={!canUpload}>
+                <Btn
+                  icon="cloud"
+                  variant="blue"
+                  size="sm"
+                  onClick={() => void openUploadPicker()}
+                  disabled={!canUpload}
+                >
                   {t('marketplace.uploadBtn')}
                 </Btn>
               </span>
@@ -1098,7 +1406,14 @@ export function Marketplace() {
                   <div style={{ fontSize: 13, color: 'var(--ol-red, #ef4444)', marginBottom: 8 }}>
                     {t('marketplace.myPacks.loadErrorTitle')}
                   </div>
-                  <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 12, wordBreak: 'break-word' }}>
+                  <div
+                    style={{
+                      fontSize: 11.5,
+                      color: 'var(--ol-ink-4)',
+                      marginBottom: 12,
+                      wordBreak: 'break-word',
+                    }}
+                  >
                     {myPacksError}
                   </div>
                   <Btn variant="blue" size="sm" onClick={() => void refreshMyPacks()}>
@@ -1112,7 +1427,9 @@ export function Marketplace() {
                 <div style={{ padding: '32px 12px', textAlign: 'center' }}>
                   <div style={{ fontSize: 13, color: 'var(--ol-ink-3)', marginBottom: 6 }}>
                     {marketplaceSignedIn
-                      ? (myPacks.length === 0 ? t('marketplace.myPacks.emptyTitle') : t('marketplace.myPacks.noMatch'))
+                      ? myPacks.length === 0
+                        ? t('marketplace.myPacks.emptyTitle')
+                        : t('marketplace.myPacks.noMatch')
                       : t('marketplace.myPacks.notLoggedIn')}
                   </div>
                   {marketplaceSignedIn && myPacks.length === 0 && (
@@ -1127,7 +1444,7 @@ export function Marketplace() {
           })()}
           {visibleMyPacks.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {visibleMyPacks.map(pack => (
+              {visibleMyPacks.map((pack) => (
                 <div
                   key={pack.id}
                   style={{
@@ -1140,29 +1457,84 @@ export function Marketplace() {
                     gap: 8,
                   }}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'flex-start',
+                      gap: 8,
+                    }}
+                  >
                     <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: 14, fontWeight: 650, color: 'var(--ol-ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pack.name}</div>
-                      <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 3 }}>v{pack.version} · {new Date(pack.updatedAt).toLocaleDateString()}</div>
+                      <div
+                        style={{
+                          fontSize: 14,
+                          fontWeight: 650,
+                          color: 'var(--ol-ink)',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {pack.name}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 3 }}>
+                        v{pack.version} · {new Date(pack.updatedAt).toLocaleDateString()}
+                      </div>
                     </div>
-                    <Pill size="sm" tone={pack.state === 'approved' ? 'ok' : 'outline'} style={pack.state === 'rejected' || pack.state === 'withdrawn' ? { color: '#ef4444', borderColor: 'rgba(239,68,68,0.28)' } : undefined}>{statusLabel(pack.state, t)}</Pill>
+                    <Pill
+                      size="sm"
+                      tone={pack.state === 'approved' ? 'ok' : 'outline'}
+                      style={
+                        pack.state === 'rejected' || pack.state === 'withdrawn'
+                          ? { color: '#ef4444', borderColor: 'rgba(239,68,68,0.28)' }
+                          : undefined
+                      }
+                    >
+                      {statusLabel(pack.state, t)}
+                    </Pill>
                   </div>
                   {pack.description && (
-                    <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.5 }}>{pack.description}</div>
+                    <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.5 }}>
+                      {pack.description}
+                    </div>
                   )}
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    <Pill size="sm" tone="outline">{pack.baseMode}</Pill>
-                    {pack.tags.slice(0, 3).map(tag => <Pill key={tag} size="sm" tone="default">{tag}</Pill>)}
+                    <Pill size="sm" tone="outline">
+                      {pack.baseMode}
+                    </Pill>
+                    {pack.tags.slice(0, 3).map((tag) => (
+                      <Pill key={tag} size="sm" tone="default">
+                        {tag}
+                      </Pill>
+                    ))}
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginTop: 2 }}>
-                    <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>★ {pack.likeCount} · ↓ {pack.downloadCount}</span>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: 8,
+                      marginTop: 2,
+                    }}
+                  >
+                    <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>
+                      ★ {pack.likeCount} · ↓ {pack.downloadCount}
+                    </span>
                     <div style={{ display: 'flex', gap: 6 }}>
-                      <Btn variant="ghost" size="sm" onClick={() => void openUploadPicker(pack.id, pack.name)} disabled={!canUpload}>
+                      <Btn
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void openUploadPicker(pack.id, pack.name)}
+                        disabled={!canUpload}
+                      >
                         {t('marketplace.myPacks.actions.update')}
                       </Btn>
                       {pack.state !== 'withdrawn' && (
                         <Btn variant="ghost" size="sm" onClick={() => void onDeleteMine(pack)}>
-                          <span style={{ color: '#ef4444' }}>{t('marketplace.myPacks.actions.withdraw')}</span>
+                          <span style={{ color: '#ef4444' }}>
+                            {t('marketplace.myPacks.actions.withdraw')}
+                          </span>
                         </Btn>
                       )}
                     </div>
@@ -1176,10 +1548,7 @@ export function Marketplace() {
 
       {/* GitHub 登录弹窗 */}
       {showLogin && (
-        <GithubLoginModal
-          onClose={() => setShowLogin(false)}
-          onSuccess={onLoginSuccess}
-        />
+        <GithubLoginModal onClose={() => setShowLogin(false)} onSuccess={onLoginSuccess} />
       )}
     </div>
   );
@@ -1187,12 +1556,18 @@ export function Marketplace() {
 
 function statusLabel(state: string, t: (key: string) => string): string {
   switch (state) {
-    case 'pending': return t('marketplace.state.pending');
-    case 'approved': return t('marketplace.state.approved');
-    case 'rejected': return t('marketplace.state.rejected');
-    case 'withdrawn': return t('marketplace.state.withdrawn');
-    case 'superseded': return t('marketplace.state.superseded');
-    default: return state || t('marketplace.state.unknown');
+    case 'pending':
+      return t('marketplace.state.pending');
+    case 'approved':
+      return t('marketplace.state.approved');
+    case 'rejected':
+      return t('marketplace.state.rejected');
+    case 'withdrawn':
+      return t('marketplace.state.withdrawn');
+    case 'superseded':
+      return t('marketplace.state.superseded');
+    default:
+      return state || t('marketplace.state.unknown');
   }
 }
 

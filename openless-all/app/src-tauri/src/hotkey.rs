@@ -7,10 +7,10 @@
 //!   trigger（如右 Control / 右 Alt）的真实语义。
 //! - Linux：fcitx5 插件提供热键事件（DBus 信号 `DictationKeyEvent`）。
 //!
-//! 仅产出"边沿"事件，toggle vs hold 由 Coordinator 解释。
+//! 仅产出带代次和单调时间戳的原始边沿，业务语义由 openless-core 解释。
 //!
 //! Esc（取消）与组合键撤销（触发键按住期间叠加了普通键）**都不走** `HotkeyEvent`
-//! 通道，而是独立的 `Sender<u64>`：Pressed/Released 的 bridge 线程为了修 #468/#475 的
+//! 通道，而是独立的 `Sender<HotkeyCombinedEdge>`：Pressed/Released 的 bridge 线程为了修 #468/#475 的
 //! latch 竞态改成了串行 block_on，Pressed / Released 会在 bridge 线程上同步跑完
 //! `begin_session`（开麦 + ASR 握手）或整个转写 + 润色流程 —— 若取消 / 撤销与它们同
 //! 队列，事件只能排队等流程跑完，观感就是「晚几百毫秒才生效」。独立通道 + 专用消费
@@ -29,8 +29,14 @@ use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyCapability, HotkeyIns
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HotkeyEvent {
-    Pressed { at: Instant, press_id: u64 },
-    Released { at: Instant },
+    Pressed {
+        at: Instant,
+        press_id: u64,
+    },
+    Released {
+        at: Instant,
+        press_id: u64,
+    },
     // 组合键撤销不在此枚举里：走独立的 `combo_abort` 通道，避免被上面 Pressed →
     // begin_session 的同步开麦流程堵在队列里（见模块注释）。
     /// Shift（或未来配置项指定的修饰键）按下边沿。可在录音过程中任何时刻产生；
@@ -42,6 +48,12 @@ pub enum HotkeyEvent {
     /// 录制态按下 Fn（浏览器不向网页层下发 Fn 的 keydown，无法通过 recorder 捕获；
     /// 由 CGEventTap 在录制态检测后上报，供前端 ShortcutRecorder 提交 Fn 绑定）。
     FnRecordingPressed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HotkeyCombinedEdge {
+    pub at: Instant,
+    pub press_id: u64,
 }
 
 #[cfg(test)]
@@ -143,12 +155,6 @@ pub trait HotkeyAdapter: Send + Sync {
     /// 快捷键录制态开关。激活期间监听器上报 Fn 按下边沿（`FnRecordingPressed`），
     /// 供前端 recorder 提交 Fn 绑定（浏览器不向网页层下发 Fn keydown）。
     fn set_recording_active(&self, _active: bool) {}
-    /// 本次按住期间，监听器是否已经看到触发键被叠加了普通键。上层的「仲裁窗口」
-    /// 按下后先等一小会儿再读它，命中就整条按下作废（麦克风都不用开）。
-    /// 没有键盘监听器的平台（Linux/fcitx5）恒为 false。
-    fn trigger_combined_since_press(&self, _press_id: u64) -> bool {
-        false
-    }
     fn shutdown(&self) {}
 }
 
@@ -188,14 +194,14 @@ impl HotkeyMonitor {
     ///
     /// `cancel_tx`：Esc 按下即发一个 `()`。独立于 `tx`，见模块注释——不能与
     /// Pressed/Released 挤同一条串行 bridge，否则 Processing 期间取消排不上队。
-    /// `combo_tx`：触发键按住期间叠加了普通键就发一个 press id。独立于 `tx`，见模块
+    /// `combo_tx`：触发键按住期间叠加了普通键就发一个带时间戳的 press edge。独立于 `tx`，见模块
     /// 注释——不能与 Pressed/Released 挤同一条串行 bridge，否则撤销要等
     /// `begin_session` 开完麦才排得上队，胶囊晚几百毫秒才消失。
     pub fn start(
         binding: HotkeyBinding,
         tx: Sender<HotkeyEvent>,
         cancel_tx: Sender<()>,
-        combo_tx: Sender<u64>,
+        combo_tx: Sender<HotkeyCombinedEdge>,
     ) -> Result<Self, HotkeyInstallError> {
         Ok(Self {
             adapter: platform::start_adapter(binding, tx, cancel_tx, combo_tx)?,
@@ -231,10 +237,6 @@ impl HotkeyMonitor {
         self.adapter.set_recording_active(active);
     }
 
-    pub fn trigger_combined_since_press(&self, press_id: u64) -> bool {
-        self.adapter.trigger_combined_since_press(press_id)
-    }
-
     pub fn capability() -> HotkeyCapability {
         HotkeyCapability::current()
     }
@@ -265,8 +267,11 @@ fn send_cancel_or_log(tx: &Sender<()>) {
     }
 }
 
-fn send_combo_abort_or_log(tx: &Sender<u64>, press_id: u64) {
-    if let Err(e) = tx.send(press_id) {
+fn send_combo_abort_or_log(tx: &Sender<HotkeyCombinedEdge>, press_id: u64) {
+    if let Err(e) = tx.send(HotkeyCombinedEdge {
+        at: Instant::now(),
+        press_id,
+    }) {
         log::warn!("[hotkey] 组合键撤销事件发送失败: {e}");
     }
 }
@@ -274,6 +279,7 @@ fn send_combo_abort_or_log(tx: &Sender<u64>, press_id: u64) {
 static NEXT_PRESS_ID: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) fn next_press_id() -> u64 {
+    // 这里只需要跨监听器唯一；边沿的先后顺序由各自携带的 Instant 表达。
     NEXT_PRESS_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
@@ -303,7 +309,7 @@ fn start_listener_thread<T, F>(
     binding: HotkeyBinding,
     tx: Sender<HotkeyEvent>,
     cancel_tx: Sender<()>,
-    combo_tx: Sender<u64>,
+    combo_tx: Sender<HotkeyCombinedEdge>,
     thread_name: &str,
     startup_timeout_message: &'static str,
     run_listen_loop: F,
@@ -314,9 +320,10 @@ where
             Arc<Shared>,
             Sender<HotkeyEvent>,
             Sender<()>,
-            Sender<u64>,
+            Sender<HotkeyCombinedEdge>,
             StartupTx<T>,
-        ) + Send + 'static,
+        ) + Send
+        + 'static,
 {
     let shared = Arc::new(Shared {
         binding: RwLock::new(binding),
@@ -426,17 +433,19 @@ mod platform {
 
     use super::{
         esc_exclusive, install_error, reset_shared_held_state, send_cancel_or_log,
-        send_combo_abort_or_log, send_or_log,
-        start_listener_thread, update_shared_binding, update_shared_modifier_shortcuts,
-        HotkeyAdapter, HotkeyEvent, Shared, StartupTx,
+        send_combo_abort_or_log, send_or_log, start_listener_thread, update_shared_binding,
+        update_shared_modifier_shortcuts, HotkeyAdapter, HotkeyCombinedEdge, HotkeyEvent, Shared,
+        StartupTx,
     };
-    use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError, HotkeyTrigger};
+    use crate::types::{
+        HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError, HotkeyMode, HotkeyTrigger,
+    };
 
     pub fn start_adapter(
         binding: HotkeyBinding,
         tx: Sender<HotkeyEvent>,
         cancel_tx: Sender<()>,
-        combo_tx: Sender<u64>,
+        combo_tx: Sender<HotkeyCombinedEdge>,
     ) -> Result<Box<dyn HotkeyAdapter>, HotkeyInstallError> {
         let listener = start_listener_thread(
             binding,
@@ -508,13 +517,6 @@ mod platform {
             }
         }
 
-        fn trigger_combined_since_press(&self, press_id: u64) -> bool {
-            self.shared
-                .trigger_companion_seen
-                .load(Ordering::SeqCst)
-                == press_id
-        }
-
         fn shutdown(&self) {
             // 顺序：先 disable tap 让 OS 不再向我们派发事件，然后 stop runloop
             // 让 listener 线程从 CFRunLoopRun() 返回退出。take() 保证幂等。
@@ -565,6 +567,9 @@ mod platform {
     const KEY_DOWN: CgEventType = 10;
     const KEY_UP: CgEventType = 11;
     const FLAGS_CHANGED: CgEventType = 12;
+    /// Brightness / volume / keyboard-backlight and similar macOS function-layer
+    /// actions are delivered as system-defined events instead of KEY_DOWN.
+    const SYSTEM_DEFINED: CgEventType = 14;
     const TAP_DISABLED_BY_TIMEOUT: CgEventType = 0xFFFF_FFFE;
     const TAP_DISABLED_BY_USER_INPUT: CgEventType = 0xFFFF_FFFF;
 
@@ -577,6 +582,15 @@ mod platform {
     const FLAG_MASK_SECONDARY_FN: CgEventFlags = 0x0080_0000;
 
     const ESC_KEYCODE: i64 = 53;
+    // IOKit hidsystem/IOLLEvent.h + ev_keymap.h. systemDefined subtype 8 carries
+    // auxiliary control keys in data1's high 16 bits; 0..=23 are the scanned
+    // brightness / volume / media / illumination family. Globe/Menu is 25 and
+    // must stay excluded, otherwise a plain Fn tap could cancel itself.
+    const NX_SUBTYPE_AUX_CONTROL_BUTTONS: i16 = 8;
+    const NX_NUM_SCANNED_SPECIAL_KEYS: u16 = 24;
+    /// Auto / Toggle 下 Fn 是双用途键：短按用于听写，明显长按留给 macOS 功能层。
+    /// 与 Auto 模式既有的 350ms 短按 / 长按分界保持一致。
+    const FN_TAP_MAX_DURATION: std::time::Duration = std::time::Duration::from_millis(350);
 
     type CgEventTapCallBack = extern "C" fn(
         proxy: *mut c_void,
@@ -620,7 +634,9 @@ mod platform {
         /// Esc 专用通道，见模块注释——不与 tx 挤同一条串行 bridge。
         cancel_tx: Sender<()>,
         /// 组合键撤销专用通道，见模块注释——不与 tx 挤同一条串行 bridge。
-        combo_tx: Sender<u64>,
+        combo_tx: Sender<HotkeyCombinedEdge>,
+        /// Auto / Toggle 下 Fn 延迟到松开才决定是否派发：短按派发，长按或功能层组合丢弃。
+        fn_pressed_at: parking_lot::Mutex<Option<std::time::Instant>>,
         /// 与 MacHotkeyAdapter 共享的 (tap, runloop) refs。tap re-enable on
         /// TAP_DISABLED_BY_TIMEOUT 走 handles.tap；adapter shutdown 也走这两个 lock。
         handles: Arc<MacShutdownHandles>,
@@ -633,12 +649,13 @@ mod platform {
         shared: Arc<Shared>,
         tx: Sender<HotkeyEvent>,
         cancel_tx: Sender<()>,
-        combo_tx: Sender<u64>,
+        combo_tx: Sender<HotkeyCombinedEdge>,
         status_tx: StartupTx<Arc<MacShutdownHandles>>,
     ) {
         let mask: CgEventMask = (1u64 << FLAGS_CHANGED)
             | (1u64 << KEY_DOWN)
-            | (1u64 << KEY_UP);
+            | (1u64 << KEY_UP)
+            | (1u64 << SYSTEM_DEFINED);
         let handles = Arc::new(MacShutdownHandles {
             tap: std::sync::Mutex::new(None),
             runloop: std::sync::Mutex::new(None),
@@ -648,6 +665,7 @@ mod platform {
             tx,
             cancel_tx,
             combo_tx,
+            fn_pressed_at: parking_lot::Mutex::new(None),
             handles: Arc::clone(&handles),
         }));
 
@@ -721,6 +739,13 @@ mod platform {
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
                 crate::side_aware_combo::platform::dispatch_keycode(keycode, false, 0, false);
             }
+            // Fn+亮度 / 音量 / 键盘背光等不会产生 KEY_DOWN，而是 systemDefined。
+            // 只要 Fn 触发键正按住，就把它视为功能层组合，不能同时唤起听写。
+            SYSTEM_DEFINED => {
+                if let Some((subtype, data1)) = system_defined_event_payload(event) {
+                    note_fn_function_layer_event(ctx, subtype, data1);
+                }
+            }
             _ => {}
         }
         event
@@ -744,6 +769,9 @@ mod platform {
                 ctx.shared.recording_fn_held.store(false, Ordering::SeqCst);
                 log::info!("[hotkey] 录制态 Fn↑（松开）");
             }
+            // 录制态只负责把 Fn 交给 ShortcutRecorder。不要同时更新听写触发 latch，
+            // 否则前端保存 Fn、退出录制态后，同一次物理松手会被误当成一次听写短按。
+            return;
         }
 
         // Shift 是翻译模式修饰键 — 与触发键的 keycode 检查独立，任何时刻按 Shift 都生效。
@@ -790,17 +818,35 @@ mod platform {
             None,
         );
 
-        let trigger = ctx.shared.binding.read().trigger;
-        if trigger == HotkeyTrigger::Custom {
+        handle_dictation_trigger_flags_changed(ctx, keycode, flags, std::time::Instant::now());
+    }
+
+    fn fn_uses_tap_only_semantics(trigger: HotkeyTrigger, mode: HotkeyMode) -> bool {
+        trigger == HotkeyTrigger::Fn && matches!(mode, HotkeyMode::Auto | HotkeyMode::Toggle)
+    }
+
+    /// 处理 modifier-only 听写触发键的 flagsChanged 边沿。
+    ///
+    /// Fn 在 Auto / Toggle 下不能沿用其他修饰键的“按下即触发”：它同时是 macOS
+    /// 功能层修饰键。这里先记住按下，等松开后确认是短按且未叠加功能键，才补发一对
+    /// Pressed / Released。这样长按、Fn+F1/音量/亮度等系统操作从未启动听写，不会闪胶囊。
+    fn handle_dictation_trigger_flags_changed(
+        ctx: &CallbackContext,
+        keycode: i64,
+        flags: CgEventFlags,
+        now: std::time::Instant,
+    ) {
+        let (trigger, mode) = {
+            let binding = ctx.shared.binding.read();
+            (binding.trigger, binding.mode)
+        };
+        if trigger == HotkeyTrigger::Custom || keycode != trigger_to_keycode(trigger) {
             return;
         }
-        let expected_keycode = trigger_to_keycode(trigger);
-        if keycode != expected_keycode {
-            return;
-        }
-        let mask = trigger_to_flag_mask(trigger);
-        let is_active = (flags & mask) != 0;
+
+        let is_active = (flags & trigger_to_flag_mask(trigger)) != 0;
         let was_held = ctx.shared.trigger_held.load(Ordering::SeqCst);
+        let tap_only_fn = fn_uses_tap_only_semantics(trigger, mode);
 
         if is_active && !was_held {
             ctx.shared.trigger_held.store(true, Ordering::SeqCst);
@@ -808,19 +854,47 @@ mod platform {
             ctx.shared
                 .trigger_press_id
                 .store(press_id, Ordering::SeqCst);
-            ctx.shared
-                .trigger_companion_seen
-                .store(0, Ordering::SeqCst);
-            send_or_log(
-                &ctx.tx,
-                HotkeyEvent::Pressed {
-                    at: std::time::Instant::now(),
-                    press_id,
-                },
-            );
-        } else if !is_active && was_held {
+            ctx.shared.trigger_companion_seen.store(0, Ordering::SeqCst);
+            if tap_only_fn {
+                *ctx.fn_pressed_at.lock() = Some(now);
+                log::debug!("[hotkey] Fn↓ 等待松开后判定短按 / 功能层操作");
+            } else {
+                send_or_log(&ctx.tx, HotkeyEvent::Pressed { at: now, press_id });
+            }
+            return;
+        }
+
+        if !is_active && was_held {
             ctx.shared.trigger_held.store(false, Ordering::SeqCst);
-            send_or_log(&ctx.tx, HotkeyEvent::Released { at: std::time::Instant::now() });
+            let press_id = ctx.shared.trigger_press_id.swap(0, Ordering::SeqCst);
+            if !tap_only_fn {
+                send_or_log(&ctx.tx, HotkeyEvent::Released { at: now, press_id });
+                return;
+            }
+
+            let pressed_at = ctx.fn_pressed_at.lock().take();
+            let companion_seen = press_id != 0
+                && ctx.shared.trigger_companion_seen.load(Ordering::SeqCst) == press_id;
+            let held_for = pressed_at.map(|at| now.saturating_duration_since(at));
+            if !companion_seen && held_for.is_some_and(|duration| duration < FN_TAP_MAX_DURATION) {
+                let pressed_at = pressed_at.expect("checked above");
+                send_or_log(
+                    &ctx.tx,
+                    HotkeyEvent::Pressed {
+                        at: pressed_at,
+                        press_id,
+                    },
+                );
+                send_or_log(&ctx.tx, HotkeyEvent::Released { at: now, press_id });
+            } else {
+                log::info!(
+                    "[hotkey] Fn 操作未触发听写（held_ms={}, companion_seen={companion_seen}）",
+                    held_for.map(|duration| duration.as_millis()).unwrap_or(0)
+                );
+            }
+        } else if !is_active && trigger == HotkeyTrigger::Fn {
+            // 录制态 / binding 更新会主动重置 held latch；物理松手仍需清掉旧时间戳。
+            ctx.fn_pressed_at.lock().take();
         }
     }
 
@@ -865,6 +939,40 @@ mod platform {
         note_companion_key_down(ctx);
     }
 
+    fn system_defined_event_payload(event: CgEventRef) -> Option<(i16, isize)> {
+        use objc2::msg_send;
+        use objc2::runtime::{AnyClass, AnyObject};
+
+        if event.is_null() {
+            return None;
+        }
+        let cls = AnyClass::get("NSEvent")?;
+        let ns_event: *mut AnyObject =
+            unsafe { msg_send![cls, eventWithCGEvent: event.cast::<c_void>()] };
+        if ns_event.is_null() {
+            return None;
+        }
+        let subtype: i16 = unsafe { msg_send![ns_event, subtype] };
+        let data1: isize = unsafe { msg_send![ns_event, data1] };
+        Some((subtype, data1))
+    }
+
+    fn is_auxiliary_function_key_event(subtype: i16, data1: isize) -> bool {
+        if subtype != NX_SUBTYPE_AUX_CONTROL_BUTTONS {
+            return false;
+        }
+        let key_type = ((data1 as u64 >> 16) & 0xffff) as u16;
+        key_type < NX_NUM_SCANNED_SPECIAL_KEYS
+    }
+
+    fn note_fn_function_layer_event(ctx: &CallbackContext, subtype: i16, data1: isize) {
+        if is_auxiliary_function_key_event(subtype, data1)
+            && ctx.shared.binding.read().trigger == HotkeyTrigger::Fn
+        {
+            note_companion_key_down(ctx);
+        }
+    }
+
     /// 触发键按住期间按下任意普通键 = 用户在打组合键（Option+任意字母/数字键、Option+Tab…），
     /// 不是想说话 —— 往组合键撤销通道发一次让上层撤销这次按下。
     ///
@@ -886,6 +994,16 @@ mod platform {
                 .compare_exchange(0, press_id, Ordering::SeqCst, Ordering::SeqCst)
                 .is_err()
         {
+            return;
+        }
+        let deferred_fn = {
+            let binding = ctx.shared.binding.read();
+            fn_uses_tap_only_semantics(binding.trigger, binding.mode)
+        };
+        if deferred_fn {
+            // Auto / Toggle 下 Fn 尚未向 coordinator 派发 Pressed；记住 companion 即可，
+            // 松手时会整次丢弃。此时发送 abort 只会留下一个永远等不到 Pressed 的 pending id。
+            log::info!("[hotkey] Fn 功能层组合按下 —— 本次短按候选作废");
             return;
         }
         log::info!("[hotkey] 触发键与其他键组合按下 —— 撤销本次触发");
@@ -956,7 +1074,7 @@ mod platform {
         ) -> (
             CallbackContext,
             mpsc::Receiver<HotkeyEvent>,
-            mpsc::Receiver<u64>,
+            mpsc::Receiver<HotkeyCombinedEdge>,
         ) {
             let (tx, rx) = mpsc::channel();
             let (cancel_tx, _cancel_rx) = mpsc::channel();
@@ -967,6 +1085,7 @@ mod platform {
                     tx,
                     cancel_tx,
                     combo_tx,
+                    fn_pressed_at: parking_lot::Mutex::new(None),
                     handles: Arc::new(MacShutdownHandles {
                         tap: std::sync::Mutex::new(None),
                         runloop: std::sync::Mutex::new(None),
@@ -983,7 +1102,7 @@ mod platform {
             (ctx, rx)
         }
 
-        fn drain_combo(rx: &mpsc::Receiver<u64>) -> usize {
+        fn drain_combo(rx: &mpsc::Receiver<HotkeyCombinedEdge>) -> usize {
             rx.try_iter().count()
         }
 
@@ -1064,9 +1183,7 @@ mod platform {
             note_companion_key_down(&ctx);
             assert_eq!(drain_combo(&combo_rx), 0);
 
-            shared
-                .trigger_press_id
-                .store(1, Ordering::SeqCst);
+            shared.trigger_press_id.store(1, Ordering::SeqCst);
             shared.trigger_held.store(true, Ordering::SeqCst);
             // OS 自动重复 / 按住触发键连按多个键，都只撤销一次。
             note_companion_key_down(&ctx);
@@ -1075,14 +1192,147 @@ mod platform {
 
             // 下一次 Pressed 边沿会重置 latch（handle_flags_changed 里做），下一轮组合键
             // 才能再次撤销 —— 否则第二次组合键会被当成正常听写。
-            shared
-                .trigger_companion_seen
-                .store(0, Ordering::SeqCst);
+            shared.trigger_companion_seen.store(0, Ordering::SeqCst);
             note_companion_key_down(&ctx);
             assert_eq!(drain_combo(&combo_rx), 1);
 
             // 撤销全程不碰 Pressed/Released 那条串行通道 —— 它此刻正卡在 begin_session 里。
             assert!(drain(&rx).is_empty());
+        }
+
+        #[test]
+        fn mac_fn_auto_short_tap_dispatches_only_after_release() {
+            let shared = shared(HotkeyTrigger::Fn);
+            shared.binding.write().mode = HotkeyMode::Auto;
+            let (ctx, rx, combo_rx) = callback_context_with_combo(Arc::clone(&shared));
+            let pressed_at = std::time::Instant::now();
+
+            handle_dictation_trigger_flags_changed(
+                &ctx,
+                trigger_to_keycode(HotkeyTrigger::Fn),
+                FLAG_MASK_SECONDARY_FN,
+                pressed_at,
+            );
+            assert!(drain(&rx).is_empty(), "Fn down must stay a tap candidate");
+
+            let released_at = pressed_at + std::time::Duration::from_millis(120);
+            handle_dictation_trigger_flags_changed(
+                &ctx,
+                trigger_to_keycode(HotkeyTrigger::Fn),
+                0,
+                released_at,
+            );
+
+            let events = drain(&rx);
+            assert!(matches!(events.as_slice(), (
+                [HotkeyEvent::Pressed { press_id: left, .. }, HotkeyEvent::Released { press_id: right, .. }]
+            ) if *left != 0 && left == right));
+            assert_eq!(drain_combo(&combo_rx), 0);
+        }
+
+        #[test]
+        fn mac_fn_auto_long_hold_is_reserved_for_system_functions() {
+            let shared = shared(HotkeyTrigger::Fn);
+            shared.binding.write().mode = HotkeyMode::Auto;
+            let (ctx, rx, combo_rx) = callback_context_with_combo(Arc::clone(&shared));
+            let pressed_at = std::time::Instant::now();
+
+            handle_dictation_trigger_flags_changed(
+                &ctx,
+                trigger_to_keycode(HotkeyTrigger::Fn),
+                FLAG_MASK_SECONDARY_FN,
+                pressed_at,
+            );
+            handle_dictation_trigger_flags_changed(
+                &ctx,
+                trigger_to_keycode(HotkeyTrigger::Fn),
+                0,
+                pressed_at + FN_TAP_MAX_DURATION,
+            );
+
+            assert!(drain(&rx).is_empty());
+            assert_eq!(drain_combo(&combo_rx), 0);
+        }
+
+        #[test]
+        fn mac_fn_function_layer_event_suppresses_tap_without_pending_abort() {
+            let shared = shared(HotkeyTrigger::Fn);
+            shared.binding.write().mode = HotkeyMode::Toggle;
+            let (ctx, rx, combo_rx) = callback_context_with_combo(Arc::clone(&shared));
+            let pressed_at = std::time::Instant::now();
+
+            handle_dictation_trigger_flags_changed(
+                &ctx,
+                trigger_to_keycode(HotkeyTrigger::Fn),
+                FLAG_MASK_SECONDARY_FN,
+                pressed_at,
+            );
+            // brightness-up (NX_KEYTYPE_BRIGHTNESS_UP=2) 的 subtype/data1 编码。
+            note_fn_function_layer_event(
+                &ctx,
+                NX_SUBTYPE_AUX_CONTROL_BUTTONS,
+                (2_i64 << 16) as isize,
+            );
+            handle_dictation_trigger_flags_changed(
+                &ctx,
+                trigger_to_keycode(HotkeyTrigger::Fn),
+                0,
+                pressed_at + std::time::Duration::from_millis(80),
+            );
+
+            assert!(drain(&rx).is_empty());
+            assert_eq!(drain_combo(&combo_rx), 0);
+        }
+
+        #[test]
+        fn mac_system_defined_event_does_not_abort_non_fn_dictation() {
+            let shared = shared(HotkeyTrigger::LeftOption);
+            let (ctx, rx, combo_rx) = callback_context_with_combo(Arc::clone(&shared));
+            shared.trigger_press_id.store(7, Ordering::SeqCst);
+            shared.trigger_held.store(true, Ordering::SeqCst);
+
+            note_fn_function_layer_event(
+                &ctx,
+                NX_SUBTYPE_AUX_CONTROL_BUTTONS,
+                (2_i64 << 16) as isize,
+            );
+
+            assert_eq!(shared.trigger_companion_seen.load(Ordering::SeqCst), 0);
+            assert!(drain(&rx).is_empty());
+            assert_eq!(drain_combo(&combo_rx), 0);
+        }
+
+        #[test]
+        fn mac_globe_system_event_is_not_mistaken_for_a_function_layer_key() {
+            assert!(!is_auxiliary_function_key_event(
+                NX_SUBTYPE_AUX_CONTROL_BUTTONS,
+                (25_i64 << 16) as isize,
+            ));
+            assert!(!is_auxiliary_function_key_event(0, (2_i64 << 16) as isize));
+        }
+
+        #[test]
+        fn mac_fn_hold_mode_keeps_press_to_talk_semantics() {
+            let shared = shared(HotkeyTrigger::Fn);
+            shared.binding.write().mode = HotkeyMode::Hold;
+            let (ctx, rx) = callback_context(Arc::clone(&shared));
+            let pressed_at = std::time::Instant::now();
+
+            handle_dictation_trigger_flags_changed(
+                &ctx,
+                trigger_to_keycode(HotkeyTrigger::Fn),
+                FLAG_MASK_SECONDARY_FN,
+                pressed_at,
+            );
+            assert_eq!(edge_names(drain(&rx)), vec!["pressed"]);
+
+            handle_dictation_trigger_flags_changed(
+                &ctx,
+                trigger_to_keycode(HotkeyTrigger::Fn),
+                0,
+                pressed_at + std::time::Duration::from_secs(1),
+            );
+            assert_eq!(edge_names(drain(&rx)), vec!["released"]);
         }
     }
 }
@@ -1091,8 +1341,8 @@ mod platform {
 
 #[cfg(target_os = "windows")]
 mod platform {
+    use std::cell::Cell;
     use std::sync::atomic::Ordering;
-    use std::sync::atomic::{AtomicPtr, Ordering as AtomicOrdering};
     use std::sync::mpsc::Sender;
     use std::sync::Arc;
 
@@ -1106,9 +1356,9 @@ mod platform {
 
     use super::{
         esc_exclusive, install_error, reset_shared_held_state, send_cancel_or_log,
-        send_combo_abort_or_log, send_or_log,
-        start_listener_thread, update_shared_binding, update_shared_modifier_shortcuts,
-        HotkeyAdapter, HotkeyEvent, Shared, StartupTx,
+        send_combo_abort_or_log, send_or_log, start_listener_thread, update_shared_binding,
+        update_shared_modifier_shortcuts, HotkeyAdapter, HotkeyCombinedEdge, HotkeyEvent, Shared,
+        StartupTx,
     };
     use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError, HotkeyTrigger};
 
@@ -1131,13 +1381,18 @@ mod platform {
     const VK_RWIN: u32 = 0x5C;
     const VK_LWIN: u32 = 0x5B;
     const VK_MEDIA_PLAY_PAUSE: u32 = 0xB3;
-    static HOOK_CONTEXT: AtomicPtr<CallbackContext> = AtomicPtr::new(std::ptr::null_mut());
+    thread_local! {
+        // WH_KEYBOARD_LL 回调由安装 hook 的线程执行。主听写与 Less Computer
+        // 各有监听线程，进程全局指针会被第二个 monitor 覆盖，并在它退出后悬垂。
+        // 每个线程只拥有自己的 context；先 unhook/清槽，再释放 Box。
+        static HOOK_CONTEXT: Cell<*mut CallbackContext> = const { Cell::new(std::ptr::null_mut()) };
+    }
 
     pub fn start_adapter(
         binding: HotkeyBinding,
         tx: Sender<HotkeyEvent>,
         cancel_tx: Sender<()>,
-        combo_tx: Sender<u64>,
+        combo_tx: Sender<HotkeyCombinedEdge>,
     ) -> Result<Box<dyn HotkeyAdapter>, HotkeyInstallError> {
         let listener = start_listener_thread(
             binding,
@@ -1186,11 +1441,8 @@ mod platform {
             reset_shared_held_state(&self.shared);
         }
 
-        fn trigger_combined_since_press(&self, press_id: u64) -> bool {
-            self.shared
-                .trigger_companion_seen
-                .load(Ordering::SeqCst)
-                == press_id
+        fn set_recording_active(&self, active: bool) {
+            self.shared.recording_active.store(active, Ordering::SeqCst);
         }
 
         fn shutdown(&self) {
@@ -1209,18 +1461,15 @@ mod platform {
         /// Esc 专用通道，见模块注释——不与 tx 挤同一条串行 bridge。
         cancel_tx: Sender<()>,
         /// 组合键撤销专用通道，见模块注释——不与 tx 挤同一条串行 bridge。
-        combo_tx: Sender<u64>,
+        combo_tx: Sender<HotkeyCombinedEdge>,
         hook: std::sync::Mutex<Option<HHOOK>>,
     }
-
-    unsafe impl Send for CallbackContext {}
-    unsafe impl Sync for CallbackContext {}
 
     fn run_listen_loop(
         shared: Arc<Shared>,
         tx: Sender<HotkeyEvent>,
         cancel_tx: Sender<()>,
-        combo_tx: Sender<u64>,
+        combo_tx: Sender<HotkeyCombinedEdge>,
         status_tx: StartupTx<u32>,
     ) {
         let thread_id = unsafe { GetCurrentThreadId() };
@@ -1231,7 +1480,7 @@ mod platform {
             combo_tx,
             hook: std::sync::Mutex::new(None),
         }));
-        HOOK_CONTEXT.store(context, AtomicOrdering::SeqCst);
+        HOOK_CONTEXT.set(context);
 
         unsafe {
             let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(low_level_keyboard_proc), None, 0);
@@ -1239,10 +1488,16 @@ mod platform {
                 Ok(hook) => {
                     *(*context).hook.lock().unwrap() = Some(hook);
                     log::info!("[hotkey] Windows low-level keyboard hook 已启动");
-                    let _ = status_tx.send(Ok(thread_id));
+                    if status_tx.send(Ok(thread_id)).is_err() {
+                        // 启动调用方超时退出后已无人持有 monitor，不能留下孤立 hook。
+                        let _ = UnhookWindowsHookEx(hook);
+                        HOOK_CONTEXT.set(std::ptr::null_mut());
+                        let _ = Box::from_raw(context);
+                        return;
+                    }
                 }
                 Err(err) => {
-                    HOOK_CONTEXT.store(std::ptr::null_mut(), AtomicOrdering::SeqCst);
+                    HOOK_CONTEXT.set(std::ptr::null_mut());
                     let _ = Box::from_raw(context);
                     let _ = status_tx.send(Err(install_error(
                         "hook_install_failed",
@@ -1274,7 +1529,7 @@ mod platform {
             // hook 消息循环异常结束）。先清理内部锁存，避免下一次监听器复用
             // 共享状态时把旧的按下状态带过去。
             super::reset_shared_held_state(&(*context).shared);
-            HOOK_CONTEXT.store(std::ptr::null_mut(), AtomicOrdering::SeqCst);
+            HOOK_CONTEXT.set(std::ptr::null_mut());
             let _ = Box::from_raw(context);
         }
     }
@@ -1300,7 +1555,7 @@ mod platform {
     }
 
     unsafe fn callback_context<'a>() -> Option<&'a CallbackContext> {
-        let ptr = HOOK_CONTEXT.load(AtomicOrdering::SeqCst);
+        let ptr = HOOK_CONTEXT.get();
         if ptr.is_null() {
             None
         } else {
@@ -1309,6 +1564,10 @@ mod platform {
     }
 
     fn dispatch_keyboard_event(ctx: &CallbackContext, vk_code: u32, message: usize) -> bool {
+        // 快捷键录制由前端接收真实键盘事件，主听写/Agent hook 都不得吞键。
+        if ctx.shared.recording_active.load(Ordering::SeqCst) {
+            return false;
+        }
         let pressed = matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN);
         if vk_code == VK_ESCAPE && (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) {
             note_companion_key_down(ctx);
@@ -1343,7 +1602,8 @@ mod platform {
                 }
                 _ => {}
             }
-            return false;
+            // Shift 仍需经过下方配置触发键的匹配，否则左右 Shift 的 Hold
+            // 语音键只有翻译通知、没有 Pressed/Released，会成为可保存的死键。
         }
 
         handle_optional_modifier_trigger(
@@ -1390,9 +1650,7 @@ mod platform {
                     ctx.shared
                         .trigger_press_id
                         .store(press_id, Ordering::SeqCst);
-                    ctx.shared
-                        .trigger_companion_seen
-                        .store(0, Ordering::SeqCst);
+                    ctx.shared.trigger_companion_seen.store(0, Ordering::SeqCst);
                     log::info!("[hotkey] Windows trigger pressed vk={vk_code}");
                     send_or_log(
                         &ctx.tx,
@@ -1406,8 +1664,15 @@ mod platform {
             WM_KEYUP | WM_SYSKEYUP => {
                 let was_held = ctx.shared.trigger_held.swap(false, Ordering::SeqCst);
                 if was_held {
+                    let press_id = ctx.shared.trigger_press_id.swap(0, Ordering::SeqCst);
                     log::info!("[hotkey] Windows trigger released vk={vk_code}");
-                    send_or_log(&ctx.tx, HotkeyEvent::Released { at: std::time::Instant::now() });
+                    send_or_log(
+                        &ctx.tx,
+                        HotkeyEvent::Released {
+                            at: std::time::Instant::now(),
+                            press_id,
+                        },
+                    );
                 }
             }
             _ => {}
@@ -1546,7 +1811,7 @@ mod platform {
         ) -> (
             CallbackContext,
             mpsc::Receiver<HotkeyEvent>,
-            mpsc::Receiver<u64>,
+            mpsc::Receiver<HotkeyCombinedEdge>,
         ) {
             let (tx, rx) = mpsc::channel();
             let (cancel_tx, _cancel_rx) = mpsc::channel();
@@ -1570,7 +1835,7 @@ mod platform {
             (ctx, rx)
         }
 
-        fn drain_combo(rx: &mpsc::Receiver<u64>) -> usize {
+        fn drain_combo(rx: &mpsc::Receiver<HotkeyCombinedEdge>) -> usize {
             rx.try_iter().count()
         }
 
@@ -1590,6 +1855,136 @@ mod platform {
         }
 
         #[test]
+        fn windows_hook_context_belongs_to_its_listener_thread() {
+            let (ctx, _) = callback_context(shared(HotkeyTrigger::RightControl));
+            let mut ctx = Box::new(ctx);
+            HOOK_CONTEXT.set(&mut *ctx);
+            let other_thread_has_no_context =
+                std::thread::spawn(|| unsafe { super::callback_context().is_none() })
+                    .join()
+                    .unwrap();
+            HOOK_CONTEXT.set(std::ptr::null_mut());
+            assert!(
+                other_thread_has_no_context,
+                "another listener must never see this hook's context"
+            );
+        }
+
+        #[test]
+        fn windows_shift_trigger_keeps_both_recording_edges() {
+            for (trigger, key) in [
+                (HotkeyTrigger::LeftShift, VK_LSHIFT),
+                (HotkeyTrigger::RightShift, VK_RSHIFT),
+            ] {
+                let (ctx, rx) = callback_context(shared(trigger));
+                assert!(dispatch_keyboard_event(&ctx, key, WM_KEYDOWN));
+                assert!(dispatch_keyboard_event(&ctx, key, WM_KEYUP));
+                let events: Vec<_> = rx
+                    .try_iter()
+                    .filter(|event| !matches!(event, HotkeyEvent::TranslationModifierPressed))
+                    .collect();
+                assert!(matches!(
+                    events.as_slice(),
+                    [HotkeyEvent::Pressed { .. }, HotkeyEvent::Released { .. }]
+                ));
+            }
+        }
+
+        #[test]
+        fn windows_shortcut_recording_passes_bound_keys_to_the_frontend() {
+            let state = shared(HotkeyTrigger::LeftControl);
+            state.recording_active.store(true, Ordering::SeqCst);
+            let (ctx, rx) = callback_context(Arc::clone(&state));
+            assert!(!dispatch_keyboard_event(&ctx, VK_LCONTROL, WM_KEYDOWN));
+            assert!(!dispatch_keyboard_event(&ctx, VK_LCONTROL, WM_KEYUP));
+            assert!(rx.try_recv().is_err());
+            state.recording_active.store(false, Ordering::SeqCst);
+            assert!(dispatch_keyboard_event(&ctx, VK_LCONTROL, WM_KEYDOWN));
+            assert!(dispatch_keyboard_event(&ctx, VK_LCONTROL, WM_KEYUP));
+            assert_eq!(rx.try_iter().count(), 2);
+        }
+
+        #[test]
+        #[ignore = "interactive Windows smoke: injects captured Ctrl keys into real hooks"]
+        fn windows_multiple_native_monitors_survive_independent_shutdown() {
+            use crate::hotkey::HotkeyMonitor;
+            use windows::Win32::UI::Input::KeyboardAndMouse::{
+                SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY,
+            };
+
+            let start = |trigger| {
+                let (tx, rx) = mpsc::channel();
+                let (cancel_tx, _) = mpsc::channel();
+                let (combo_tx, _) = mpsc::channel();
+                let monitor = HotkeyMonitor::start(
+                    HotkeyBinding {
+                        trigger,
+                        mode: crate::types::HotkeyMode::Hold,
+                        keys: None,
+                    },
+                    tx,
+                    cancel_tx,
+                    combo_tx,
+                )
+                .unwrap();
+                (monitor, rx)
+            };
+            let press_and_release = |key: u32, rx: &mpsc::Receiver<HotkeyEvent>| {
+                let input = |flags| INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: VIRTUAL_KEY(key as u16),
+                            dwFlags: flags,
+                            ..Default::default()
+                        },
+                    },
+                };
+                // 两个 Ctrl 都由各自 hook 吞掉，不向目标应用输入文字。
+                assert_eq!(
+                    unsafe {
+                        SendInput(
+                            &[input(Default::default()), input(KEYEVENTF_KEYUP)],
+                            std::mem::size_of::<INPUT>() as i32,
+                        )
+                    },
+                    2
+                );
+                let pressed = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+                let released = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+                assert!(matches!((pressed, released), (
+                    HotkeyEvent::Pressed { press_id: left, .. },
+                    HotkeyEvent::Released { press_id: right, .. }
+                ) if left != 0 && left == right));
+            };
+            let (dictation, dictation_rx) = start(HotkeyTrigger::RightControl);
+            let (agent, agent_rx) = start(HotkeyTrigger::LeftControl);
+            press_and_release(VK_RCONTROL, &dictation_rx);
+            assert!(agent_rx.try_recv().is_err());
+            press_and_release(VK_LCONTROL, &agent_rx);
+            assert!(dictation_rx.try_recv().is_err());
+            drop(agent);
+            assert_eq!(
+                agent_rx.recv_timeout(std::time::Duration::from_secs(2)),
+                Err(mpsc::RecvTimeoutError::Disconnected)
+            );
+            press_and_release(VK_RCONTROL, &dictation_rx);
+            let (replacement, replacement_rx) = start(HotkeyTrigger::LeftControl);
+            press_and_release(VK_LCONTROL, &replacement_rx);
+            drop(dictation);
+            assert_eq!(
+                dictation_rx.recv_timeout(std::time::Duration::from_secs(2)),
+                Err(mpsc::RecvTimeoutError::Disconnected)
+            );
+            press_and_release(VK_LCONTROL, &replacement_rx);
+            drop(replacement);
+            assert_eq!(
+                replacement_rx.recv_timeout(std::time::Duration::from_secs(2)),
+                Err(mpsc::RecvTimeoutError::Disconnected)
+            );
+        }
+
+        #[test]
         fn windows_modifier_edges_are_deduped_from_mock_hook_events() {
             let shared = shared(HotkeyTrigger::RightControl);
             let (ctx, rx) = callback_context(shared);
@@ -1599,10 +1994,20 @@ mod platform {
             assert!(dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYUP));
             assert!(dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYUP));
 
-            assert_eq!(
-                edge_names(drain(&rx)),
-                vec!["pressed", "released"]
-            );
+            let events = drain(&rx);
+            assert_eq!(edge_names(events.clone()), vec!["pressed", "released"]);
+            let [HotkeyEvent::Pressed {
+                press_id: pressed_id,
+                ..
+            }, HotkeyEvent::Released {
+                press_id: released_id,
+                ..
+            }] = events.as_slice()
+            else {
+                panic!("expected one paired Windows press/release generation")
+            };
+            assert_ne!(*pressed_id, 0);
+            assert_eq!(pressed_id, released_id);
         }
 
         #[test]
@@ -1688,10 +2093,7 @@ mod platform {
             assert!(!dispatch_keyboard_event(&left_ctx, VK_RMENU, WM_KEYDOWN));
             assert!(dispatch_keyboard_event(&left_ctx, VK_LMENU, WM_KEYDOWN));
             assert!(dispatch_keyboard_event(&left_ctx, VK_LMENU, WM_KEYUP));
-            assert_eq!(
-                edge_names(drain(&left_rx)),
-                vec!["pressed", "released"]
-            );
+            assert_eq!(edge_names(drain(&left_rx)), vec!["pressed", "released"]);
 
             let right_option_shared = shared(HotkeyTrigger::RightOption);
             let (right_option_ctx, right_option_rx) = callback_context(right_option_shared);
@@ -1768,12 +2170,13 @@ mod platform {
             dispatch_keyboard_event(&ctx, VK_LSHIFT, WM_KEYDOWN);
             dispatch_keyboard_event(&ctx, 0x44, WM_KEYDOWN);
 
-            assert!(matches!(combo_rx.recv().unwrap(), ComboHotkeyEvent::Pressed { .. }));
-            assert!(
-                hotkey_rx
-                    .try_iter()
-                    .any(|evt| evt == HotkeyEvent::TranslationModifierPressed)
-            );
+            assert!(matches!(
+                combo_rx.recv().unwrap(),
+                ComboHotkeyEvent::Pressed { .. }
+            ));
+            assert!(hotkey_rx
+                .try_iter()
+                .any(|evt| evt == HotkeyEvent::TranslationModifierPressed));
 
             drop(monitor);
         }
@@ -1786,7 +2189,7 @@ mod platform {
 mod platform {
     use std::sync::mpsc::Sender;
 
-    use super::{HotkeyAdapter, HotkeyEvent};
+    use super::{HotkeyAdapter, HotkeyCombinedEdge, HotkeyEvent};
     use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError, HotkeyTrigger};
 
     /// Linux 统一使用 fcitx5 插件作为热键源（Wayland / X11 均可）。
@@ -1797,7 +2200,7 @@ mod platform {
         _binding: HotkeyBinding,
         _tx: Sender<HotkeyEvent>,
         _cancel_tx: Sender<()>,
-        _combo_tx: Sender<u64>,
+        _combo_tx: Sender<HotkeyCombinedEdge>,
     ) -> Result<Box<dyn HotkeyAdapter>, HotkeyInstallError> {
         log::info!("[hotkey] Linux — fcitx5 plugin handles hotkeys");
         Ok(Box::new(PlaceholderAdapter {
@@ -1813,7 +2216,7 @@ mod platform {
     struct PlaceholderAdapter {
         _tx: Sender<HotkeyEvent>,
         _cancel_tx: Sender<()>,
-        _combo_tx: Sender<u64>,
+        _combo_tx: Sender<HotkeyCombinedEdge>,
     }
 
     impl HotkeyAdapter for PlaceholderAdapter {

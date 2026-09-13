@@ -9,7 +9,13 @@ const servicePath = fileURLToPath(
 const source = readFileSync(servicePath, 'utf8');
 
 function kotlinFunctionBody(functionSignature) {
-  const signatureIndex = source.indexOf(functionSignature);
+  // Formatting may wrap parameters; keep the function name and signature checks.
+  const pattern = functionSignature
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    .replace(/\s+/g, '\\s+')
+    .replaceAll('\\(', '\\(\\s*')
+    .replaceAll('\\)', '\\s*\\)');
+  const signatureIndex = source.search(new RegExp(pattern));
   assert.notEqual(signatureIndex, -1, `missing Kotlin function: ${functionSignature}`);
   const openBrace = source.indexOf('{', signatureIndex);
   assert.notEqual(openBrace, -1, `missing opening brace: ${functionSignature}`);
@@ -23,7 +29,9 @@ function kotlinFunctionBody(functionSignature) {
   assert.fail(`missing closing brace: ${functionSignature}`);
 }
 
-const pasteBody = kotlinFunctionBody('private fun performPasteToFocusedFieldInternal(pasteText: String? = null)');
+const pasteBody = kotlinFunctionBody(
+  'private fun performPasteToFocusedFieldInternal(pasteText: String? = null)',
+);
 assert.match(
   pasteBody,
   /finally\s*\{\s*target\.recycle\(\)\s*\}/s,
@@ -72,7 +80,9 @@ assert.match(source, /pasteAppearsApplied/, 'paste must verify editor text chang
 assert.match(source, /paste=unverified/, 'paste must log unverified ACTION_PASTE results');
 assert.match(
   readFileSync(
-    fileURLToPath(new URL('../android/kotlin/OpenLessAccessibilityCommandReceiver.kt', import.meta.url)),
+    fileURLToPath(
+      new URL('../android/kotlin/OpenLessAccessibilityCommandReceiver.kt', import.meta.url),
+    ),
     'utf8',
   ),
   /EXTRA_PASTE_TEXT/,

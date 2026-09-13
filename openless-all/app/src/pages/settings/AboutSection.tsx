@@ -32,9 +32,12 @@ export function AboutSection() {
     void getPlatformCapabilities().then(setPlatformCaps);
   }, []);
 
-  useEffect(() => () => {
-    if (qqCopiedRef.current) clearTimeout(qqCopiedRef.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (qqCopiedRef.current) clearTimeout(qqCopiedRef.current);
+    },
+    [],
+  );
 
   const copyQq = () => {
     navigator.clipboard?.writeText('1078960553');
@@ -69,15 +72,27 @@ export function AboutSection() {
             }}
           />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 17, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>OpenLess</div>
-            <div style={{
-              fontSize: 12,
-              color: 'var(--ol-ink-3)',
-              marginTop: 2,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}>
+            <div
+              style={{
+                fontSize: 17,
+                fontWeight: 600,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              OpenLess
+            </div>
+            <div
+              style={{
+                fontSize: 12,
+                color: 'var(--ol-ink-3)',
+                marginTop: 2,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
               {t('modal.about.tagline')} · {APP_VERSION_LABEL}
             </div>
           </div>
@@ -94,7 +109,10 @@ export function AboutSection() {
       <Card>
         <SectionTitle>{t('settings.about.linksTitle')}</SectionTitle>
         <Row label={t('modal.about.source')}>
-          <button style={btnGhostStyle} onClick={() => openExternal('https://github.com/Open-Less/openless')}>
+          <button
+            style={btnGhostStyle}
+            onClick={() => openExternal('https://github.com/Open-Less/openless')}
+          >
             GitHub
           </button>
         </Row>
@@ -114,23 +132,37 @@ export function AboutSection() {
           </button>
         </Row>
         <Row label={t('modal.about.feedback')}>
-          <button style={btnGhostStyle} onClick={() => openExternal('https://github.com/Open-Less/openless/issues')}>
+          <button
+            style={btnGhostStyle}
+            onClick={() => openExternal('https://github.com/Open-Less/openless/issues')}
+          >
             {t('modal.about.feedbackBtn')}
           </button>
         </Row>
         <Row label={t('modal.about.qq')}>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <kbd style={{
-              padding: '4px 10px', fontSize: 12, fontFamily: 'var(--ol-font-mono)',
-              borderRadius: 6, background: 'var(--ol-surface-2)',
-              border: '0.5px solid var(--ol-line-strong)',
-              boxShadow: '0 1px 0 rgba(0,0,0,0.04)',
-              color: 'var(--ol-ink-2)',
-            }}>1078960553</kbd>
+            <kbd
+              style={{
+                padding: '4px 10px',
+                fontSize: 12,
+                fontFamily: 'var(--ol-font-mono)',
+                borderRadius: 6,
+                background: 'var(--ol-surface-2)',
+                border: '0.5px solid var(--ol-line-strong)',
+                boxShadow: '0 1px 0 rgba(0,0,0,0.04)',
+                color: 'var(--ol-ink-2)',
+              }}
+            >
+              1078960553
+            </kbd>
             <button onClick={copyQq} title={t('modal.about.copyQq')} style={btnGhostStyle}>
               <Icon name="copy" size={14} />
             </button>
-            {qqCopied && <span style={{ fontSize: 11, color: 'var(--ol-ok)', whiteSpace: 'nowrap' }}>{t('common.copied')}</span>}
+            {qqCopied && (
+              <span style={{ fontSize: 11, color: 'var(--ol-ok)', whiteSpace: 'nowrap' }}>
+                {t('common.copied')}
+              </span>
+            )}
           </div>
         </Row>
       </Card>

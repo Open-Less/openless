@@ -24,7 +24,7 @@ export function useChatPanelLifecycle(): { enterEpoch: number; closing: boolean 
         const { listen } = await import('@tauri-apps/api/event');
         const shownHandle = await listen('chat-panel:shown', () => {
           setClosing(false);
-          setEnterEpoch(epoch => epoch + 1);
+          setEnterEpoch((epoch) => epoch + 1);
         });
         const closingHandle = await listen('chat-panel:closing', () => {
           setClosing(true);

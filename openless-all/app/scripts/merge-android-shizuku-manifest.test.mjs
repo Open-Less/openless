@@ -4,14 +4,20 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { mergeShizukuManifest } from './merge-android-shizuku-manifest.mjs';
 
-const manifestScript = fileURLToPath(new URL('./merge-android-shizuku-manifest.mjs', import.meta.url));
+const manifestScript = fileURLToPath(
+  new URL('./merge-android-shizuku-manifest.mjs', import.meta.url),
+);
 const depsScript = fileURLToPath(new URL('./patch-android-shizuku-deps.mjs', import.meta.url));
 const ANDROID_NAMESPACE_URI = 'http://schemas.android.com/apk/res/android';
 
 const manifestSource = readFileSync(manifestScript, 'utf8');
 const depsSource = readFileSync(depsScript, 'utf8');
 
-assert.match(manifestSource, /android:multiprocess="false"/, 'Shizuku provider must set multiprocess=false');
+assert.match(
+  manifestSource,
+  /android:multiprocess="false"/,
+  'Shizuku provider must set multiprocess=false',
+);
 assert.match(
   manifestSource,
   /moe\.shizuku\.privileged\.api/,
@@ -23,8 +29,16 @@ assert.match(
   'merge script must upgrade legacy multiprocess=true manifests',
 );
 
-assert.match(depsSource, /dev\.rikka\.shizuku:api:13\.1\.5/, 'Shizuku API dependency must be pinned');
-assert.match(depsSource, /dev\.rikka\.shizuku:provider:13\.1\.5/, 'Shizuku provider dependency must be pinned');
+assert.match(
+  depsSource,
+  /dev\.rikka\.shizuku:api:13\.1\.5/,
+  'Shizuku API dependency must be pinned',
+);
+assert.match(
+  depsSource,
+  /dev\.rikka\.shizuku:provider:13\.1\.5/,
+  'Shizuku provider dependency must be pinned',
+);
 assert.match(depsSource, /aidl = true/, 'Gradle patch must enable AIDL build feature');
 
 const fixture = `<?xml version="1.0" encoding="utf-8"?>
@@ -223,8 +237,7 @@ assert.match(singleQuoteProviderTag, /android:exported="true"/);
 assert.match(singleQuoteProviderTag, /android:multiprocess="false"/);
 assertParsableManifest(singleQuoteMerged.content);
 
-const compactManifestFixture =
-  `<?xml version="1.0"?><manifest xmlns:android="http://schemas.android.com/apk/res/android"><application></application></manifest>`;
+const compactManifestFixture = `<?xml version="1.0"?><manifest xmlns:android="http://schemas.android.com/apk/res/android"><application></application></manifest>`;
 
 const compactMerged = mergeShizukuManifest(compactManifestFixture);
 assert.equal(compactMerged.changed, true);
@@ -280,8 +293,14 @@ assert.equal((partialAliasNamespaceMerged.content.match(/<activity\b/g) || []).l
 assert.equal((partialAliasNamespaceMerged.content.match(/<package\b/g) || []).length, 1);
 assert.match(partialAliasNamespaceMerged.content, /a:enabled="true"/);
 assert.match(partialAliasNamespaceMerged.content, /a:name="\.ShizukuPermissionActivity"/);
-assert.match(partialAliasNamespaceMerged.content, /<package a:name="moe\.shizuku\.privileged\.api"/);
-assert.match(partialAliasNamespaceMerged.content, /a:theme="@android:style\/Theme\.Translucent\.NoTitleBar"/);
+assert.match(
+  partialAliasNamespaceMerged.content,
+  /<package a:name="moe\.shizuku\.privileged\.api"/,
+);
+assert.match(
+  partialAliasNamespaceMerged.content,
+  /a:theme="@android:style\/Theme\.Translucent\.NoTitleBar"/,
+);
 assert.doesNotMatch(partialAliasNamespaceMerged.content, /@a:style/);
 assert.equal(mergeShizukuManifest(partialAliasNamespaceMerged.content).changed, false);
 
@@ -396,7 +415,11 @@ const regexPrefixFixture = `<?xml version="1.0" encoding="utf-8"?>
 </manifest>`;
 
 const regexPrefixMerged = mergeShizukuManifest(regexPrefixFixture);
-assert.match(regexPrefixMerged.content, /axb:enabled="keep"/, 'non-Android axb attribute must remain unchanged');
+assert.match(
+  regexPrefixMerged.content,
+  /axb:enabled="keep"/,
+  'non-Android axb attribute must remain unchanged',
+);
 assert.match(regexPrefixMerged.content, /a\.b:enabled="true"/);
 assert.equal((regexPrefixMerged.content.match(/a\.b:enabled=/g) || []).length, 1);
 assert.equal(mergeShizukuManifest(regexPrefixMerged.content).changed, false);
@@ -411,8 +434,16 @@ for (const [label, rootPrefix, applicationDeclaration] of [
 </manifest>`;
   const applicationShadowMerged = mergeShizukuManifest(applicationShadowFixture);
   assert.equal(applicationShadowMerged.changed, true, label);
-  assert.equal((applicationShadowMerged.content.match(/<provider\b/g) || []).length, 1, `${label}: one provider`);
-  assert.equal((applicationShadowMerged.content.match(/<activity\b/g) || []).length, 1, `${label}: one activity`);
+  assert.equal(
+    (applicationShadowMerged.content.match(/<provider\b/g) || []).length,
+    1,
+    `${label}: one provider`,
+  );
+  assert.equal(
+    (applicationShadowMerged.content.match(/<activity\b/g) || []).length,
+    1,
+    `${label}: one activity`,
+  );
   assert.match(
     applicationShadowMerged.content,
     /<provider\s+xmlns:openlessAndroid="http:\/\/schemas\.android\.com\/apk\/res\/android"[\s\S]*openlessAndroid:name="rikka\.shizuku\.ShizukuProvider"/,
@@ -423,7 +454,11 @@ for (const [label, rootPrefix, applicationDeclaration] of [
     /<activity\s+xmlns:openlessAndroid="http:\/\/schemas\.android\.com\/apk\/res\/android"[\s\S]*openlessAndroid:name="\.ShizukuPermissionActivity"/,
     `${label}: inserted activity must bind its name to the Android URI`,
   );
-  assert.equal(mergeShizukuManifest(applicationShadowMerged.content).changed, false, `${label}: idempotent`);
+  assert.equal(
+    mergeShizukuManifest(applicationShadowMerged.content).changed,
+    false,
+    `${label}: idempotent`,
+  );
 }
 
 const unprefixedNameFixture = `<?xml version="1.0" encoding="utf-8"?>
@@ -435,10 +470,25 @@ const unprefixedNameFixture = `<?xml version="1.0" encoding="utf-8"?>
     </application>
 </manifest>`;
 const unprefixedNameMerged = mergeShizukuManifest(unprefixedNameFixture);
-assert.equal((unprefixedNameMerged.content.match(/<provider\b/g) || []).length, 2, 'plain name must not count as android:name');
-assert.equal((unprefixedNameMerged.content.match(/<activity\b/g) || []).length, 2, 'plain name must not count as android:name');
-assert.equal((unprefixedNameMerged.content.match(/<package\b/g) || []).length, 2, 'plain name must not count as android:name');
-assert.match(unprefixedNameMerged.content, /<provider\s+android:name="rikka\.shizuku\.ShizukuProvider"/);
+assert.equal(
+  (unprefixedNameMerged.content.match(/<provider\b/g) || []).length,
+  2,
+  'plain name must not count as android:name',
+);
+assert.equal(
+  (unprefixedNameMerged.content.match(/<activity\b/g) || []).length,
+  2,
+  'plain name must not count as android:name',
+);
+assert.equal(
+  (unprefixedNameMerged.content.match(/<package\b/g) || []).length,
+  2,
+  'plain name must not count as android:name',
+);
+assert.match(
+  unprefixedNameMerged.content,
+  /<provider\s+android:name="rikka\.shizuku\.ShizukuProvider"/,
+);
 assert.match(unprefixedNameMerged.content, /<package android:name="moe\.shizuku\.privileged\.api"/);
 assert.equal(mergeShizukuManifest(unprefixedNameMerged.content).changed, false);
 
@@ -449,9 +499,20 @@ const foreignProviderFixture = `<?xml version="1.0" encoding="utf-8"?>
     </application>
 </manifest>`;
 const foreignProviderMerged = mergeShizukuManifest(foreignProviderFixture);
-assert.match(foreignProviderMerged.content, /<x:provider android:name="rikka\.shizuku\.ShizukuProvider" x:enabled="keep"\s*\/>/, 'foreign provider must remain untouched');
-assert.match(foreignProviderMerged.content, /<provider\s+android:name="rikka\.shizuku\.ShizukuProvider"/);
-assert.equal((foreignProviderMerged.content.match(/<provider\b/g) || []).length, 1, 'one real provider must be injected');
+assert.match(
+  foreignProviderMerged.content,
+  /<x:provider android:name="rikka\.shizuku\.ShizukuProvider" x:enabled="keep"\s*\/>/,
+  'foreign provider must remain untouched',
+);
+assert.match(
+  foreignProviderMerged.content,
+  /<provider\s+android:name="rikka\.shizuku\.ShizukuProvider"/,
+);
+assert.equal(
+  (foreignProviderMerged.content.match(/<provider\b/g) || []).length,
+  1,
+  'one real provider must be injected',
+);
 assert.equal(mergeShizukuManifest(foreignProviderMerged.content).changed, false);
 
 console.log('Shizuku Android scaffolding contract checks passed');

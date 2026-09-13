@@ -36,6 +36,17 @@ pub trait AudioConsumer: Send + Sync {
     fn consume_pcm_chunk(&self, pcm: &[u8]);
 }
 
+/// Compatibility bridge for legacy recorder call sites while cloud ASR
+/// implementations live in the framework-independent core.
+impl<T> AudioConsumer for T
+where
+    T: openless_core::AudioConsumer + ?Sized,
+{
+    fn consume_pcm_chunk(&self, pcm: &[u8]) {
+        openless_core::AudioConsumer::consume_pcm_chunk(self, pcm);
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MicrophoneDevice {
@@ -446,7 +457,8 @@ fn classify_default_config_err(msg: String) -> RecorderError {
     let lower = msg.to_lowercase();
     if is_no_device_error(&lower) {
         RecorderError::NoInputDevice
-    } else if lower.contains("permission") || lower.contains("denied") || lower.contains("authoriz") {
+    } else if lower.contains("permission") || lower.contains("denied") || lower.contains("authoriz")
+    {
         RecorderError::PermissionDenied
     } else {
         RecorderError::EngineFailed(format!("default_input_config: {msg}"))
@@ -459,7 +471,8 @@ fn classify_build_stream_err(err: cpal::BuildStreamError) -> RecorderError {
     let lower = msg.to_lowercase();
     if is_no_device_error(&lower) {
         RecorderError::NoInputDevice
-    } else if lower.contains("permission") || lower.contains("denied") || lower.contains("authoriz") {
+    } else if lower.contains("permission") || lower.contains("denied") || lower.contains("authoriz")
+    {
         RecorderError::PermissionDenied
     } else {
         RecorderError::EngineFailed(format!("build_input_stream: {msg}"))

@@ -3,7 +3,7 @@ pub const OPENLESS_TSF_LANG_ID: u16 = 0x0804;
 pub const OPENLESS_TEXT_SERVICE_CLSID_BRACED: &str = "{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}";
 pub const OPENLESS_PROFILE_GUID_BRACED: &str = "{9B5F5E04-23F6-47DA-9A26-D221F6C3F02E}";
 
-use crate::types::{UserPreferences, WindowsImeInstallState, WindowsImeStatus};
+use crate::types::{WindowsImeInstallState, WindowsImeStatus};
 
 #[cfg(target_os = "windows")]
 fn parse_guid(value: &str) -> WindowsImeProfileResult<windows::core::GUID> {
@@ -172,14 +172,6 @@ pub fn get_windows_ime_status() -> WindowsImeStatus {
     }
 }
 
-/// 根据偏好决定 OpenLess 语言配置文件是否应在用户键盘列表中启用。
-pub fn desired_openless_language_profile_enabled(prefs: &UserPreferences) -> bool {
-    if !prefs.windows_sendinput_insertion_only {
-        return true;
-    }
-    prefs.windows_show_openless_in_keyboard_list
-}
-
 #[cfg(target_os = "windows")]
 pub fn set_openless_language_profile_enabled(enabled: bool) -> WindowsImeProfileResult<()> {
     windows_impl::set_openless_language_profile_enabled(enabled)
@@ -208,7 +200,7 @@ pub fn is_openless_language_profile_enabled() -> WindowsImeProfileResult<bool> {
 ///
 /// 返回 `Some(result)` 表示无需触碰注册表即可结束；`None` 表示已安装，需要走真正的
 /// `EnableLanguageProfile` 变更。抽成纯函数，使「未安装」这一分支能在任意平台上被测试
-/// 覆盖到（`apply_windows_openless_keyboard_list_pref` 依赖 Windows 注册表，macOS/CI
+/// 覆盖到（`apply_windows_openless_keyboard_list` 依赖 Windows 注册表，macOS/CI
 /// 无法命中其内部分支）。
 ///
 /// 关键语义：TSF IME 未安装时，键盘列表里根本没有 OpenLess 条目——
@@ -216,8 +208,8 @@ pub fn is_openless_language_profile_enabled() -> WindowsImeProfileResult<bool> {
 /// - `desired == true`（显示）也只能是 no-op（没东西可启用）。
 ///
 /// 两支都必须是 `Ok(())`。此前「不显示 + 未安装」错误地返回 `Err`，经 settings.rs 的
-/// `apply_keyboard_list(&prefs)?` 传播，导致整个设置保存事务回滚（用户勾「仅 SendInput
-/// 插入」+「不在键盘列表显示」且未装 TSF IME 时，之后任何设置都存不进）。
+/// 设置事务传播，导致整个设置保存回滚（用户在非 TSF 插入方式下
+/// 勾「不在键盘列表显示」且未装 TSF IME 时，之后任何设置都存不进）。
 fn keyboard_list_pref_short_circuit(
     install_state: WindowsImeInstallState,
     _desired: bool,
@@ -229,9 +221,8 @@ fn keyboard_list_pref_short_circuit(
     }
 }
 
-/// 将「SendInput + 键盘列表可见性」偏好同步到当前用户的 TSF 语言配置文件。
-pub fn apply_windows_openless_keyboard_list_pref(prefs: &UserPreferences) -> Result<(), String> {
-    let desired = desired_openless_language_profile_enabled(prefs);
+/// 将 Core 已决定的键盘列表目标状态同步到当前用户的 TSF 语言配置文件。
+pub fn apply_windows_openless_keyboard_list(desired: bool) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         let status = get_windows_ime_status();
@@ -325,11 +316,9 @@ pub(super) fn report_restore_step_results(
     }
     match (legacy_result, modern_result) {
         (Ok(()), _) | (_, Ok(())) => Ok(()),
-        (Err(legacy_error), Err(modern_error)) => Err(WindowsImeProfileError::WindowsApi(
-            format!(
-                "both legacy and modern restore failed: legacy={legacy_error}; modern={modern_error}"
-            ),
-        )),
+        (Err(legacy_error), Err(modern_error)) => Err(WindowsImeProfileError::WindowsApi(format!(
+            "both legacy and modern restore failed: legacy={legacy_error}; modern={modern_error}"
+        ))),
     }
 }
 
@@ -340,13 +329,13 @@ mod windows_impl {
     use std::path::Path;
     use std::ptr;
     use windows::core::{GUID, HRESULT};
+    use windows::Win32::Foundation::BOOL;
     use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
         COINIT_APARTMENTTHREADED,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::HKL;
-    use windows::Win32::Foundation::BOOL;
     use windows::Win32::UI::TextServices::{
         CLSID_TF_InputProcessorProfiles, ITfInputProcessorProfileMgr, ITfInputProcessorProfiles,
         GUID_TFCAT_TIP_KEYBOARD, TF_INPUTPROCESSORPROFILE, TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE,
@@ -556,12 +545,7 @@ mod windows_impl {
         let enable_flag = BOOL::from(enabled);
 
         with_input_processor_profiles(|profiles| unsafe {
-            profiles.EnableLanguageProfile(
-                &clsid,
-                OPENLESS_TSF_LANG_ID,
-                &profile_guid,
-                enable_flag,
-            )
+            profiles.EnableLanguageProfile(&clsid, OPENLESS_TSF_LANG_ID, &profile_guid, enable_flag)
         })
     }
 
@@ -570,11 +554,8 @@ mod windows_impl {
         let profile_guid = parse_guid(OPENLESS_PROFILE_GUID_BRACED)?;
 
         with_input_processor_profiles(|profiles| unsafe {
-            let enabled = profiles.IsEnabledLanguageProfile(
-                &clsid,
-                OPENLESS_TSF_LANG_ID,
-                &profile_guid,
-            )?;
+            let enabled =
+                profiles.IsEnabledLanguageProfile(&clsid, OPENLESS_TSF_LANG_ID, &profile_guid)?;
             Ok(enabled.as_bool())
         })
     }
@@ -871,30 +852,6 @@ mod tests {
 
         let keyboard = ImeProfileSnapshot::keyboard_layout(0x0409, 0x0409_0409);
         assert!(!is_openless_profile_snapshot(&keyboard));
-    }
-
-    #[test]
-    fn desired_openless_language_profile_enabled_follows_sendinput_and_visibility_pref() {
-        let tsf_only = UserPreferences {
-            windows_sendinput_insertion_only: false,
-            windows_show_openless_in_keyboard_list: false,
-            ..UserPreferences::default()
-        };
-        assert!(desired_openless_language_profile_enabled(&tsf_only));
-
-        let sendinput_show = UserPreferences {
-            windows_sendinput_insertion_only: true,
-            windows_show_openless_in_keyboard_list: true,
-            ..UserPreferences::default()
-        };
-        assert!(desired_openless_language_profile_enabled(&sendinput_show));
-
-        let sendinput_hide = UserPreferences {
-            windows_sendinput_insertion_only: true,
-            windows_show_openless_in_keyboard_list: false,
-            ..UserPreferences::default()
-        };
-        assert!(!desired_openless_language_profile_enabled(&sendinput_hide));
     }
 
     // ── Fix: TSF IME 未安装时「键盘列表可见性」偏好不应报错 ──

@@ -133,15 +133,16 @@ function scanXmlTags(xml) {
       }
       const tagQName = parseQName(name);
       for (const attribute of attributes) {
-        attribute.namespaceUri = attribute.prefix === 'xmlns'
-          ? 'http://www.w3.org/2000/xmlns/'
-          : attribute.name === 'xmlns'
+        attribute.namespaceUri =
+          attribute.prefix === 'xmlns'
             ? 'http://www.w3.org/2000/xmlns/'
-            // XML default namespaces apply to elements only. An unprefixed
-            // attribute is always in no namespace (except xmlns above).
-            : attribute.prefix === null
-              ? null
-              : scope.get(attribute.prefix) ?? null;
+            : attribute.name === 'xmlns'
+              ? 'http://www.w3.org/2000/xmlns/'
+              : // XML default namespaces apply to elements only. An unprefixed
+                // attribute is always in no namespace (except xmlns above).
+                attribute.prefix === null
+                ? null
+                : (scope.get(attribute.prefix) ?? null);
       }
       const entry = {
         name,
@@ -229,9 +230,11 @@ function findManifestTag(manifestXml) {
 
 function findAndroidNamespacePrefix(manifestXml) {
   const manifestTag = findManifestTag(manifestXml);
-  return manifestTag.attributes.find(
-    (attribute) => attribute.prefix === 'xmlns' && attribute.value === ANDROID_NAMESPACE_URI,
-  )?.localName ?? null;
+  return (
+    manifestTag.attributes.find(
+      (attribute) => attribute.prefix === 'xmlns' && attribute.value === ANDROID_NAMESPACE_URI,
+    )?.localName ?? null
+  );
 }
 
 function ensureAndroidNamespace(manifestXml) {
@@ -249,13 +252,15 @@ function ensureAndroidNamespace(manifestXml) {
 
 function hasNamedTag(manifestXml, tagName, androidName) {
   return scanXmlTags(manifestXml).some(
-    (tag) => !tag.closing
-      && tag.localName === tagName
-      && tag.namespaceUri === null
-      && tag.attributes.some(
-        (attribute) => attribute.namespaceUri === ANDROID_NAMESPACE_URI
-          && attribute.localName === 'name'
-          && attribute.value === androidName,
+    (tag) =>
+      !tag.closing &&
+      tag.localName === tagName &&
+      tag.namespaceUri === null &&
+      tag.attributes.some(
+        (attribute) =>
+          attribute.namespaceUri === ANDROID_NAMESPACE_URI &&
+          attribute.localName === 'name' &&
+          attribute.value === androidName,
       ),
   );
 }
@@ -263,13 +268,15 @@ function hasNamedTag(manifestXml, tagName, androidName) {
 function findProviderTagBounds(manifestXml) {
   const tags = scanXmlTags(manifestXml);
   const providerIndex = tags.findIndex(
-    (tag) => !tag.closing
-      && tag.localName === 'provider'
-      && tag.namespaceUri === null
-      && tag.attributes.some(
-        (attribute) => attribute.namespaceUri === ANDROID_NAMESPACE_URI
-          && attribute.localName === 'name'
-          && attribute.value === SHIZUKU_PROVIDER_CLASS,
+    (tag) =>
+      !tag.closing &&
+      tag.localName === 'provider' &&
+      tag.namespaceUri === null &&
+      tag.attributes.some(
+        (attribute) =>
+          attribute.namespaceUri === ANDROID_NAMESPACE_URI &&
+          attribute.localName === 'name' &&
+          attribute.value === SHIZUKU_PROVIDER_CLASS,
       ),
   );
   if (providerIndex === -1) return null;
@@ -290,9 +297,10 @@ function findProviderTagBounds(manifestXml) {
 
 function selectAndroidPrefix(tag) {
   const nameAttribute = tag.attributes.find(
-    (attribute) => attribute.namespaceUri === ANDROID_NAMESPACE_URI
-      && attribute.localName === 'name'
-      && attribute.prefix,
+    (attribute) =>
+      attribute.namespaceUri === ANDROID_NAMESPACE_URI &&
+      attribute.localName === 'name' &&
+      attribute.prefix,
   );
   if (nameAttribute) return nameAttribute.prefix;
   return [...tag.scope.entries()].find(([, uri]) => uri === ANDROID_NAMESPACE_URI)?.[0] || null;
@@ -333,7 +341,8 @@ function fixProviderOpeningTag(openingTag, provider, fallbackAndroidPrefix) {
   const replacements = [];
   const present = new Set();
   for (const attribute of provider.attributes) {
-    if (attribute.namespaceUri !== ANDROID_NAMESPACE_URI || !expected.has(attribute.localName)) continue;
+    if (attribute.namespaceUri !== ANDROID_NAMESPACE_URI || !expected.has(attribute.localName))
+      continue;
     if (present.has(attribute.localName)) {
       throw new Error(`duplicate Android ${attribute.localName} in Shizuku provider tag`);
     }
@@ -452,8 +461,7 @@ function mergeQueries(manifestXml, androidPrefix) {
   }
   const manifestOpen = findManifestTag(manifestXml);
   const insertAt = manifestOpen.end;
-  const content =
-    `${manifestXml.slice(0, insertAt)}\n    ${replaceAndroidAttributePrefix(QUERIES_SNIPPET, androidPrefix)}\n${manifestXml.slice(insertAt)}`;
+  const content = `${manifestXml.slice(0, insertAt)}\n    ${replaceAndroidAttributePrefix(QUERIES_SNIPPET, androidPrefix)}\n${manifestXml.slice(insertAt)}`;
   return { content, changed: true };
 }
 

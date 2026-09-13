@@ -1,0 +1,133 @@
+.ol-translation-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.ol-language-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 240px;
+  max-width: 440px;
+  min-height: 36px;
+  padding: 0 11px;
+  border: 1px solid var(--ol-line);
+  border-radius: 9px;
+  background: var(--ol-control-muted);
+  color: var(--ol-ink-4);
+}
+
+.ol-language-search:focus-within {
+  border-color: var(--ol-ink-4);
+}
+
+.ol-language-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ol-ink);
+  font: inherit;
+  font-size: 12px;
+}
+
+.ol-translation-count,
+.ol-translation-description,
+.ol-translation-language-hint {
+  color: var(--ol-ink-4);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.ol-translation-description {
+  margin: 0 0 12px;
+}
+
+.ol-language-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  align-content: start;
+  gap: 6px;
+  max-height: 316px;
+  overflow: auto;
+  padding: 1px 3px 1px 1px;
+}
+
+.ol-language-choice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+  min-width: 0;
+  min-height: 54px;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: var(--ol-control-muted);
+  color: var(--ol-ink-2);
+  text-align: start;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ol-language-choice:hover,
+.ol-language-choice[data-selected='true'] {
+  border-color: var(--ol-line-strong);
+  background: var(--ol-control-elevated);
+  color: var(--ol-ink);
+}
+
+.ol-language-choice:focus-visible {
+  outline: 2px solid var(--ol-ink-4);
+  outline-offset: 1px;
+}
+
+.ol-language-name,
+.ol-language-native {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.ol-language-name {
+  font-size: 12px;
+  font-weight: 550;
+  line-height: 1.4;
+}
+
+.ol-language-native {
+  margin-top: 2px;
+  color: var(--ol-ink-4);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.ol-language-check {
+  display: grid;
+  flex: 0 0 17px;
+  width: 17px;
+  height: 17px;
+  place-items: center;
+  border: 1px solid var(--ol-line-strong);
+  border-radius: 5px;
+}
+
+.ol-language-choice[data-selected='true'] .ol-language-check {
+  border-color: var(--ol-ink-3);
+  background: var(--ol-ink-2);
+  color: var(--ol-surface);
+}
+
+.ol-language-empty {
+  grid-column: 1 / -1;
+  padding: 28px 10px;
+  text-align: center;
+  color: var(--ol-ink-4);
+  font-size: 12px;
+}
+
+.ol-translation-language-hint {
+  margin: 12px 0 0;
+}

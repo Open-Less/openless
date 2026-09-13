@@ -8,8 +8,8 @@ import androidx.annotation.Keep
 /**
  * Writes bytes to a SAF content:// URI via ContentResolver.
  *
- * Prefer this over tauri-plugin-fs for exports: fs detaches the FD early and
- * some providers finalize a 0-byte file before Rust finishes writing.
+ * Prefer this over tauri-plugin-fs for exports: fs detaches the FD early and some providers
+ * finalize a 0-byte file before Rust finishes writing.
  */
 @Keep
 object OpenLessContentWriter {
@@ -23,10 +23,11 @@ object OpenLessContentWriter {
             context.contentResolver.openOutputStream(uri)?.use { output ->
                 output.write(bytes)
                 output.flush()
-            } ?: run {
-                Log.w(TAG, "openOutputStream returned null for selected document")
-                return false
             }
+                ?: run {
+                    Log.w(TAG, "openOutputStream returned null for selected document")
+                    return false
+                }
             Log.i(TAG, "wrote ${bytes.size} bytes to selected document")
             true
         } catch (error: Throwable) {

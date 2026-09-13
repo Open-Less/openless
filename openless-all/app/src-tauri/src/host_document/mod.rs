@@ -25,22 +25,16 @@
 //! 模块可用但**不接产品链路** —— 只有一个 debug 命令 `debug_read_cursor_context`
 //! 在调它。接进润色 prompt 是下一步的事，那里才引入用户可见的开关（默认关）。
 
-mod diff;
-mod window;
-
 #[cfg(target_os = "macos")]
 mod macos;
 
 // `minimal_edit` 目前只有 macOS 的观察回调在用，非 macOS 构建下没有消费方。
 #[allow(unused_imports)]
-pub use diff::{
-    edit_is_within_typed_text, is_vocab_worthy, learned_rule, minimal_edit, EditPair, LearnedRule,
+pub use openless_core::host_document::{
+    edit_is_within_typed_text, is_vocab_worthy, learned_rule, minimal_edit, plan_window,
+    utf16_offset_to_char_offset, window_around_cursor, DocumentWindow, EditPair, LearnedRule,
+    WindowSpan,
 };
-
-// `WindowSpan` 目前只有 `plan_window` 的返回类型用到，本 crate 内没有别的引用点；
-// 跟着一起导出是为了让调用方能给它命名（对齐 `unicode_keystroke` 的既有写法）。
-#[allow(unused_imports)]
-pub use window::{plan_window, utf16_offset_to_char_offset, window_around_cursor, WindowSpan};
 
 use serde::Serialize;
 
@@ -65,41 +59,6 @@ const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1200)
 /// 只会收进噪声。同时这也是「观察器绝不泄漏」的最后一道保险。
 #[cfg(target_os = "macos")]
 const EDIT_WATCH_MAX_LIFETIME: std::time::Duration = std::time::Duration::from_secs(60);
-
-/// 已按预算截过窗的上下文。`cursor` 是窗口内的 char 下标。
-///
-/// 没有与之对应的「完整文档」类型：手改监听的基线是**落字那一段文本**而不是整篇文档
-/// （见 [`watch_for_edits`]），整篇文档在本模块里除了被截窗之外没有第二个用途。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DocumentWindow {
-    pub text: String,
-    pub cursor: usize,
-}
-
-impl DocumentWindow {
-    /// 光标之前的部分（用户已经写完的语境）。
-    pub fn before(&self) -> &str {
-        let byte_idx = self
-            .text
-            .char_indices()
-            .nth(self.cursor)
-            .map(|(i, _)| i)
-            .unwrap_or(self.text.len());
-        &self.text[..byte_idx]
-    }
-
-    /// 光标之后的部分。
-    pub fn after(&self) -> &str {
-        let byte_idx = self
-            .text
-            .char_indices()
-            .nth(self.cursor)
-            .map(|(i, _)| i)
-            .unwrap_or(self.text.len());
-        &self.text[byte_idx..]
-    }
-}
 
 /// 一次读取的结局。`Ok` 之外的每一种都要能说清「为什么没读到」—— 装机验证时全靠它
 /// 判断某个 app 是「被拦了」还是「AX 根本不支持」。
@@ -340,7 +299,10 @@ async fn macos_probe(budget_chars: usize) -> HostDocumentReadResult {
 
 #[cfg(target_os = "macos")]
 fn blocked_result(reason: BlockReason) -> HostDocumentReadResult {
-    HostDocumentReadResult::new(HostDocumentStatus::Blocked, Some(reason.as_str().to_string()))
+    HostDocumentReadResult::new(
+        HostDocumentStatus::Blocked,
+        Some(reason.as_str().to_string()),
+    )
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -361,8 +323,7 @@ impl EditWatcher {
     /// 主动解除。幂等，drop 时会自动调用。
     pub fn disarm(&self) {
         #[cfg(target_os = "macos")]
-        self.stop
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -382,7 +343,7 @@ impl Drop for EditWatcher {
 /// 接受的，影响落字不行。
 pub fn watch_for_edits<F>(typed_text: String, on_edit: F) -> Option<EditWatcher>
 where
-    F: Fn(EditPair) + Send + Sync + 'static,
+    F: Fn(EditPair) -> bool + Send + Sync + 'static,
 {
     #[cfg(target_os = "macos")]
     {
@@ -463,7 +424,11 @@ mod tests {
     #[test]
     fn secure_text_field_role_blocks() {
         assert_eq!(
-            evaluate_gate(&gate(Some("com.apple.Safari"), Some("AXSecureTextField"), None)),
+            evaluate_gate(&gate(
+                Some("com.apple.Safari"),
+                Some("AXSecureTextField"),
+                None
+            )),
             Some(BlockReason::SecureTextField)
         );
     }

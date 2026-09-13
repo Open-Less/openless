@@ -3,7 +3,10 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AndroidPermissionsPanel } from '@android/components/AndroidPermissionsPanel';
-import { checkAndroidMicrophoneAccess, requestAndroidMicrophoneAccess } from '@android/lib/androidMicrophonePermission';
+import {
+  checkAndroidMicrophoneAccess,
+  requestAndroidMicrophoneAccess,
+} from '@android/lib/androidMicrophonePermission';
 import {
   checkAccessibilityPermission,
   checkMicrophonePermission,
@@ -23,12 +26,7 @@ interface OnboardingProps {
 }
 
 type AndroidStepId =
-  | 'microphone'
-  | 'accessibility'
-  | 'overlayPermission'
-  | 'overlayConfig'
-  | 'asr'
-  | 'llm';
+  'microphone' | 'accessibility' | 'overlayPermission' | 'overlayConfig' | 'asr' | 'llm';
 
 export function Onboarding({ onComplete }: OnboardingProps) {
   const { t } = useTranslation();
@@ -158,7 +156,9 @@ function AndroidOnboarding({ onComplete }: OnboardingProps) {
               {t('onboarding.androidStepCounter', { current: stepIndex + 1, total: steps.length })}
             </div>
             <div style={{ fontSize: 17, fontWeight: 650 }}>{current.title}</div>
-            <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.55, marginTop: 5 }}>
+            <div
+              style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.55, marginTop: 5 }}
+            >
               {current.desc}
             </div>
           </div>
@@ -196,13 +196,25 @@ function AndroidStepContent({ step }: { step: AndroidStepId }) {
     return <AndroidMicrophoneStep />;
   }
   if (step === 'accessibility') {
-    return <AndroidStepCard><AndroidPermissionsPanel mode="accessibility" /></AndroidStepCard>;
+    return (
+      <AndroidStepCard>
+        <AndroidPermissionsPanel mode="accessibility" />
+      </AndroidStepCard>
+    );
   }
   if (step === 'overlayPermission') {
-    return <AndroidStepCard><AndroidPermissionsPanel mode="overlayPermission" /></AndroidStepCard>;
+    return (
+      <AndroidStepCard>
+        <AndroidPermissionsPanel mode="overlayPermission" />
+      </AndroidStepCard>
+    );
   }
   if (step === 'overlayConfig') {
-    return <AndroidStepCard><AndroidPermissionsPanel mode="overlayConfig" /></AndroidStepCard>;
+    return (
+      <AndroidStepCard>
+        <AndroidPermissionsPanel mode="overlayConfig" />
+      </AndroidStepCard>
+    );
   }
   if (step === 'asr') {
     return <ProvidersSection kind="asr" autoCreateWhenEmpty />;
@@ -222,8 +234,12 @@ function AndroidMicrophoneStep() {
   useEffect(() => {
     void refresh();
     // issue #470：纯事件驱动，去掉高频轮询。窗口重新聚焦或重新可见时刷新（授权必经系统设置再切回）。
-    const onFocus = () => { void refresh(); };
-    const onVisibility = () => { if (document.visibilityState === 'visible') void refresh(); };
+    const onFocus = () => {
+      void refresh();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
@@ -249,14 +265,19 @@ function AndroidMicrophoneStep() {
   const granted = status === 'granted' || status === 'notApplicable';
   return (
     <AndroidStepCard>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+      <div
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
+      >
         <div>
           <div style={{ fontSize: 13, fontWeight: 600 }}>{t('onboarding.micTitle')}</div>
           <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.5, marginTop: 4 }}>
             {t('onboarding.micDesc')}
           </div>
         </div>
-        <StatusBadge granted={granted} label={granted ? t('settings.permissions.granted') : t('settings.permissions.denied')} />
+        <StatusBadge
+          granted={granted}
+          label={granted ? t('settings.permissions.granted') : t('settings.permissions.denied')}
+        />
       </div>
       <button
         type="button"
@@ -290,10 +311,7 @@ function DesktopOnboarding({
   const requiresAccessibility = !!capability?.requiresAccessibilityPermission;
 
   const refresh = async () => {
-    const [a, m] = await Promise.all([
-      checkAccessibilityPermission(),
-      checkMicrophonePermission(),
-    ]);
+    const [a, m] = await Promise.all([checkAccessibilityPermission(), checkMicrophonePermission()]);
     setAccessibility(a);
     setMicrophone(m);
     // Gate on the real permission status — macOS returns granted/denied, other
@@ -312,8 +330,12 @@ function DesktopOnboarding({
   useEffect(() => {
     void refresh();
     // issue #470：纯事件驱动，去掉每秒轮询。授权必经系统设置 App，切回 OpenLess 必触发 focus/visibilitychange。
-    const onFocus = () => { void refresh(); };
-    const onVisibility = () => { if (document.visibilityState === 'visible') void refresh(); };
+    const onFocus = () => {
+      void refresh();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
@@ -379,10 +401,18 @@ function DesktopOnboarding({
           <>
             <PermissionStep
               index={1}
-              title={capability?.requiresAccessibilityPermission ? t('onboarding.accessibilityTitle') : t('onboarding.hotkeyTitle')}
-              desc={capability?.requiresAccessibilityPermission
-                ? t('onboarding.accessibilityDesc', { trigger: getHotkeyTriggerLabel(capability.availableTriggers[0]) })
-                : capability?.statusHint ?? t('onboarding.hotkeyDesc')}
+              title={
+                capability?.requiresAccessibilityPermission
+                  ? t('onboarding.accessibilityTitle')
+                  : t('onboarding.hotkeyTitle')
+              }
+              desc={
+                capability?.requiresAccessibilityPermission
+                  ? t('onboarding.accessibilityDesc', {
+                      trigger: getHotkeyTriggerLabel(capability.availableTriggers[0]),
+                    })
+                  : (capability?.statusHint ?? t('onboarding.hotkeyDesc'))
+              }
               status={accessibility}
               actionLabel={
                 !capability?.requiresAccessibilityPermission || accessibility === 'notApplicable'
@@ -395,13 +425,25 @@ function DesktopOnboarding({
               }
               onAction={onGrantAccessibility}
               disabled={busy || accessibility === 'granted' || accessibility === 'notApplicable'}
-              hint={capability?.requiresAccessibilityPermission ? t('onboarding.accessibilityHint') : undefined}
+              hint={
+                capability?.requiresAccessibilityPermission
+                  ? t('onboarding.accessibilityHint')
+                  : undefined
+              }
             />
             {accessibility === 'denied' && tccPromptShown && (
-              <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid var(--ol-line-soft)' }}>
+              <div
+                style={{
+                  marginTop: 10,
+                  paddingTop: 10,
+                  borderTop: '0.5px solid var(--ol-line-soft)',
+                }}
+              >
                 <button
                   type="button"
-                  onClick={() => { resetAccessibilityPermissionAndRestartApp().catch(console.error); }}
+                  onClick={() => {
+                    resetAccessibilityPermissionAndRestartApp().catch(console.error);
+                  }}
                   style={{
                     width: '100%',
                     padding: '8px 14px',
@@ -423,7 +465,7 @@ function DesktopOnboarding({
         )}
 
         <PermissionStep
-          index={(requiresAccessibility || accessibility === 'denied') ? 2 : 1}
+          index={requiresAccessibility || accessibility === 'denied' ? 2 : 1}
           title={t('onboarding.micTitle')}
           desc={t('onboarding.micDesc')}
           status={microphone}
@@ -432,18 +474,16 @@ function DesktopOnboarding({
               ? t('onboarding.actionGranted')
               : microphone === 'noDevice'
                 ? t('common.retry')
-              : microphone === 'denied'
-                ? t('onboarding.actionOpenSystem')
-                : t('onboarding.actionRequestMic')
+                : microphone === 'denied'
+                  ? t('onboarding.actionOpenSystem')
+                  : t('onboarding.actionRequestMic')
           }
           onAction={microphone === 'noDevice' ? refresh : onRequestMicrophone}
           disabled={busy || microphone === 'granted'}
           hint={microphone === 'noDevice' ? t('onboarding.micNoDeviceHint') : undefined}
         />
 
-        <div style={footerHintStyle}>
-          {t('onboarding.footerHint')}
-        </div>
+        <div style={footerHintStyle}>{t('onboarding.footerHint')}</div>
         <button
           type="button"
           onClick={onComplete}
@@ -496,7 +536,8 @@ function OnboardingSurface({ children }: { children: ReactNode }) {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: 'calc(18px + env(safe-area-inset-top, 0px)) 16px calc(18px + env(safe-area-inset-bottom, 0px))',
+        padding:
+          'calc(18px + env(safe-area-inset-top, 0px)) 16px calc(18px + env(safe-area-inset-bottom, 0px))',
         boxSizing: 'border-box',
         fontFamily: 'var(--ol-font-sans)',
       }}
@@ -506,9 +547,24 @@ function OnboardingSurface({ children }: { children: ReactNode }) {
   );
 }
 
-function BrandHeader({ title, desc, compact = false }: { title: string; desc: string; compact?: boolean }) {
+function BrandHeader({
+  title,
+  desc,
+  compact = false,
+}: {
+  title: string;
+  desc: string;
+  compact?: boolean;
+}) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: compact ? 12 : 14, marginBottom: compact ? 4 : 18 }}>
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: compact ? 12 : 14,
+        marginBottom: compact ? 4 : 18,
+      }}
+    >
       <img
         src="AppIcon.png"
         alt="OpenLess"
@@ -577,7 +633,16 @@ interface StepProps {
   hint?: string;
 }
 
-function PermissionStep({ index, title, desc, status, actionLabel, onAction, disabled, hint }: StepProps) {
+function PermissionStep({
+  index,
+  title,
+  desc,
+  status,
+  actionLabel,
+  onAction,
+  disabled,
+  hint,
+}: StepProps) {
   const granted = status === 'granted' || status === 'notApplicable';
   return (
     <div
@@ -608,10 +673,20 @@ function PermissionStep({ index, title, desc, status, actionLabel, onAction, dis
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13.5, fontWeight: 600 }}>{title}</div>
-        <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', marginTop: 3, lineHeight: 1.5 }}>{desc}</div>
+        <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', marginTop: 3, lineHeight: 1.5 }}>
+          {desc}
+        </div>
         {hint && (
           <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 4, lineHeight: 1.5 }}>
-            {hint.split('**').map((seg, i) => (i % 2 === 0 ? seg : <b key={i} style={{ color: 'var(--ol-ink-2)' }}>{seg}</b>))}
+            {hint.split('**').map((seg, i) =>
+              i % 2 === 0 ? (
+                seg
+              ) : (
+                <b key={i} style={{ color: 'var(--ol-ink-2)' }}>
+                  {seg}
+                </b>
+              ),
+            )}
           </div>
         )}
       </div>
@@ -630,7 +705,8 @@ function PermissionStep({ index, title, desc, status, actionLabel, onAction, dis
           color: granted ? 'var(--ol-ink-3)' : 'var(--ol-primary-solid-ink)',
           cursor: disabled ? 'not-allowed' : 'default',
           opacity: disabled && !granted ? 0.6 : 1,
-          transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), opacity 0.18s var(--ol-motion-soft), transform 0.12s var(--ol-motion-quick)',
+          transition:
+            'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), opacity 0.18s var(--ol-motion-soft), transform 0.12s var(--ol-motion-quick)',
         }}
       >
         {actionLabel}

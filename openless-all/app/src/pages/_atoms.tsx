@@ -12,42 +12,94 @@ interface PageHeaderProps {
   desc?: string;
   right?: ReactNode;
   titleRight?: ReactNode;
+  /** 概览等单屏页用：收紧标题与下方内容的间距。 */
+  compact?: boolean;
 }
 
-export function PageHeader({ kicker, title, desc, right, titleRight }: PageHeaderProps) {
+export function PageHeader({
+  kicker,
+  title,
+  desc,
+  right,
+  titleRight,
+  compact = false,
+}: PageHeaderProps) {
   const mobile = useMobileLayout();
   const readable = useReadableLayout();
   const conservative = useConservativeLayout();
   const preferenceStack = readable || conservative;
   const stackLayout = mobile || preferenceStack;
   return (
-    <div style={{
-      display: 'flex',
-      alignItems: 'flex-start',
-      justifyContent: 'space-between',
-      gap: stackLayout ? 12 : mobile ? 12 : 24,
-      marginBottom: stackLayout ? 16 : mobile ? 16 : 24,
-      flexWrap: stackLayout ? 'wrap' : 'nowrap',
-    }}>
-      <div style={{ minWidth: 0 }}>
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        justifyContent: 'space-between',
+        gap: stackLayout ? 12 : mobile ? 12 : 24,
+        marginBottom: compact ? 8 : stackLayout ? 16 : mobile ? 16 : 24,
+        flexWrap: 'wrap',
+        flexShrink: 0,
+      }}
+    >
+      <div style={{ minWidth: 0, flex: '1 1 240px' }}>
         {kicker && (
-          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--ol-ink-4)', marginBottom: 8 }}>{kicker}</div>
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              letterSpacing: '.08em',
+              textTransform: 'uppercase',
+              color: 'var(--ol-ink-4)',
+              marginBottom: 8,
+            }}
+          >
+            {kicker}
+          </div>
         )}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <h1 style={{ margin: 0, fontSize: mobile ? 22 : 26, fontWeight: 600, letterSpacing: '-0.02em', color: 'var(--ol-ink)' }}>{title}</h1>
+          <h1
+            style={{
+              margin: 0,
+              fontSize: mobile ? 22 : 26,
+              fontWeight: 600,
+              letterSpacing: '-0.02em',
+              color: 'var(--ol-ink)',
+            }}
+          >
+            {title}
+          </h1>
           {titleRight}
         </div>
-        {desc && <p style={{ margin: '8px 0 0', fontSize: 13, color: 'var(--ol-ink-3)', maxWidth: preferenceStack ? undefined : 640, lineHeight: 1.55 }}>{desc}</p>}
+        {desc && (
+          <p
+            style={{
+              margin: '8px 0 0',
+              fontSize: 13,
+              color: 'var(--ol-ink-3)',
+              maxWidth: preferenceStack ? undefined : 640,
+              lineHeight: 1.55,
+            }}
+          >
+            {desc}
+          </p>
+        )}
       </div>
-      {right && (
-        preferenceStack ? (
-          <div className="ol-flex-row ol-flex-split" style={{ width: '100%' }}>
+      {right &&
+        (preferenceStack ? (
+          <div
+            className="ol-flex-row ol-flex-split ol-page-header-actions"
+            style={{ width: '100%' }}
+          >
             {right}
           </div>
         ) : (
-          right
-        )
-      )}
+          <div
+            className="ol-page-header-actions"
+            style={{ maxWidth: '100%', minWidth: 0, display: 'flex', flexWrap: 'wrap', gap: 8 }}
+          >
+            {right}
+          </div>
+        ))}
     </div>
   );
 }
@@ -93,19 +145,26 @@ interface PillProps {
 export function Pill({ children, tone = 'default', size = 'md', style }: PillProps) {
   const tones: Record<PillTone, { bg: string; color: string; bd: string }> = {
     default: { bg: 'var(--ol-pill-bg)', color: 'var(--ol-ink-2)', bd: 'transparent' },
-    blue:    { bg: 'var(--ol-pill-blue-bg)', color: 'var(--ol-blue)', bd: 'transparent' },
-    ok:      { bg: 'var(--ol-pill-ok-bg)', color: 'var(--ol-ok)', bd: 'transparent' },
+    blue: { bg: 'var(--ol-pill-blue-bg)', color: 'var(--ol-blue)', bd: 'transparent' },
+    ok: { bg: 'var(--ol-pill-ok-bg)', color: 'var(--ol-ok)', bd: 'transparent' },
     outline: { bg: 'transparent', color: 'var(--ol-ink-3)', bd: 'var(--ol-line-strong)' },
-    dark:    { bg: 'var(--ol-pill-selected-bg)', color: 'var(--ol-pill-selected-ink)', bd: 'transparent' },
+    dark: {
+      bg: 'var(--ol-pill-selected-bg)',
+      color: 'var(--ol-pill-selected-ink)',
+      bd: 'transparent',
+    },
   };
   const t = tones[tone];
-  const sz = size === 'sm'
-    ? { padding: '2px 8px', fontSize: 10.5 }
-    : { padding: '4px 10px', fontSize: 11.5 };
+  const sz =
+    size === 'sm'
+      ? { padding: '2px 8px', fontSize: 10.5 }
+      : { padding: '4px 10px', fontSize: 11.5 };
   return (
     <span
       style={{
-        display: 'inline-flex', alignItems: 'center', gap: 6,
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
         borderRadius: 999,
         background: t.bg,
         color: t.color,
@@ -135,32 +194,60 @@ interface BtnProps {
   disabled?: boolean;
 }
 
-export function Btn({ children, variant = 'ghost', size = 'md', icon, style, onClick, disabled = false }: BtnProps) {
+export function Btn({
+  children,
+  variant = 'ghost',
+  size = 'md',
+  icon,
+  style,
+  onClick,
+  disabled = false,
+}: BtnProps) {
   const variants: Record<BtnVariant, { bg: string; color: string; bd: string; sh: string }> = {
-    primary: { bg: 'var(--ol-primary-solid-bg)', color: 'var(--ol-primary-solid-ink)', bd: 'transparent', sh: 'var(--ol-shadow-sm)' },
-    blue:    { bg: 'var(--ol-accent-solid-bg)', color: 'var(--ol-accent-solid-ink)', bd: 'transparent', sh: 'var(--ol-shadow-sm)' },
-    ghost:   { bg: 'transparent', color: 'var(--ol-ink-2)', bd: 'var(--ol-line-strong)', sh: 'none' },
-    soft:    { bg: 'var(--ol-control-muted)', color: 'var(--ol-ink-2)', bd: 'transparent', sh: 'none' },
+    primary: {
+      bg: 'var(--ol-primary-solid-bg)',
+      color: 'var(--ol-primary-solid-ink)',
+      bd: 'transparent',
+      sh: 'var(--ol-shadow-sm)',
+    },
+    blue: {
+      bg: 'var(--ol-accent-solid-bg)',
+      color: 'var(--ol-accent-solid-ink)',
+      bd: 'transparent',
+      sh: 'var(--ol-shadow-sm)',
+    },
+    ghost: { bg: 'transparent', color: 'var(--ol-ink-2)', bd: 'var(--ol-line-strong)', sh: 'none' },
+    soft: {
+      bg: 'var(--ol-control-muted)',
+      color: 'var(--ol-ink-2)',
+      bd: 'transparent',
+      sh: 'none',
+    },
   };
   const v = variants[variant];
   const sizes: Record<BtnSize, { padding: string; fontSize: number }> = {
-    sm: { padding: '5px 10px', fontSize: 12 },
-    md: { padding: '7px 14px', fontSize: 12.5 },
+    sm: { padding: '5px 10px', fontSize: 13 },
+    md: { padding: '7px 14px', fontSize: 13.5 },
   };
   return (
     <button
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
       style={{
-        display: 'inline-flex', alignItems: 'center', gap: 6,
-        background: v.bg, color: v.color,
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        background: v.bg,
+        color: v.color,
         border: v.bd === 'transparent' ? '0.5px solid transparent' : `0.5px solid ${v.bd}`,
         borderRadius: 8,
         boxShadow: v.sh,
-        fontFamily: 'inherit', fontWeight: 500,
+        fontFamily: 'inherit',
+        fontWeight: 500,
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.55 : 1,
-        transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), box-shadow 0.18s var(--ol-motion-soft), transform 0.12s var(--ol-motion-quick)',
+        transition:
+          'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), box-shadow 0.18s var(--ol-motion-soft), transform 0.12s var(--ol-motion-quick)',
         ...sizes[size],
         ...style,
       }}
@@ -192,7 +279,13 @@ interface CollapsibleProps {
 /// `embedded=true`：嵌在 `<Card padding={0}>` 里、与其他 Collapsible 共享一张 Card 时使用，
 /// 底部加一道 0.5px 分隔。
 /// `embedded=false`：独立 block，自带 Card 同款外观（border / radius / shadow）。
-export function Collapsible({ title, desc, defaultOpen = false, embedded = false, children }: CollapsibleProps) {
+export function Collapsible({
+  title,
+  desc,
+  defaultOpen = false,
+  embedded = false,
+  children,
+}: CollapsibleProps) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div
@@ -210,7 +303,7 @@ export function Collapsible({ title, desc, defaultOpen = false, embedded = false
     >
       <button
         type="button"
-        onClick={() => setOpen(o => !o)}
+        onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         // 让屏幕阅读器朗读折叠状态；键盘 focus 保留浏览器默认 outline 而不是
         // outline: 'none'，避免 Tab 切换时丢失视觉焦点指示（pr-agent #407 反馈）。
@@ -232,7 +325,11 @@ export function Collapsible({ title, desc, defaultOpen = false, embedded = false
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ fontSize: 13, fontWeight: 600 }}>{title}</div>
           {desc && (
-            <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginTop: 3, lineHeight: 1.5 }}>{desc}</div>
+            <div
+              style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginTop: 3, lineHeight: 1.5 }}
+            >
+              {desc}
+            </div>
           )}
         </div>
         <span

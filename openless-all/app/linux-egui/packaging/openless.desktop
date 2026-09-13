@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=OpenLess
+Comment=Voice dictation and writing assistant
+Exec=openless
+Icon=openless
+Terminal=false
+Categories=Utility;Accessibility;
+StartupNotify=true

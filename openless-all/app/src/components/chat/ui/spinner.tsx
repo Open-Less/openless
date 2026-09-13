@@ -1,18 +1,20 @@
-import * as React from "react"
-import { Loader2Icon } from "lucide-react"
+import * as React from 'react';
+import { Loader2Icon } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
-import { cn } from "../lib/utils"
+import { cn } from '../lib/utils';
 
-function Spinner({ className, ...props }: React.ComponentProps<"svg">) {
+function Spinner({ className, ...props }: React.ComponentProps<'svg'>) {
+  const { t } = useTranslation();
   return (
     <Loader2Icon
       data-slot="spinner"
       role="status"
-      aria-label="Loading"
-      className={cn("size-4 animate-spin", className)}
+      aria-label={t('common.loading')}
+      className={cn('size-4 animate-spin', className)}
       {...props}
     />
-  )
+  );
 }
 
-export { Spinner }
+export { Spinner };

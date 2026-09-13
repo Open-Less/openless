@@ -20,9 +20,7 @@ export function NetworkSection() {
       >
         <Toggle
           on={prefs.useSystemProxy}
-          onToggle={next =>
-            void updatePrefs(current => ({ ...current, useSystemProxy: next }))
-          }
+          onToggle={(next) => void updatePrefs((current) => ({ ...current, useSystemProxy: next }))}
         />
       </SettingRow>
     </Card>

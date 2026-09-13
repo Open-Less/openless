@@ -18,9 +18,7 @@ if (!confPubkey) {
 }
 
 const logicSource = readFileSync(logicPath, 'utf8');
-const match = logicSource.match(
-  /pub const UPDATER_PUBKEY_B64: &str\s*=\s*"([^"]+)"/,
-);
+const match = logicSource.match(/pub const UPDATER_PUBKEY_B64: &str\s*=\s*"([^"]+)"/);
 if (!match) {
   console.error('check-android-updater-pubkey: UPDATER_PUBKEY_B64 not found in updater_logic.rs');
   process.exit(1);

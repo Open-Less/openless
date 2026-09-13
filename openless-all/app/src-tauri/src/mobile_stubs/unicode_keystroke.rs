@@ -15,6 +15,15 @@ pub enum TypeError {
     Unavailable,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum TisError {
+    #[error("input-source switching is unavailable on mobile: {0}")]
+    MainThreadDispatch(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreviousInputSource;
+
 impl TypeError {
     pub fn typed_chars(&self) -> usize {
         match self {
@@ -24,14 +33,18 @@ impl TypeError {
     }
 }
 
-pub async fn switch_to_ascii<R: Runtime>(_app: &AppHandle<R>) -> Result<Option<()>, TypeError> {
-    Err(TypeError::Unavailable)
+pub async fn switch_to_ascii<R: Runtime>(
+    _app: &AppHandle<R>,
+) -> Result<Option<PreviousInputSource>, TisError> {
+    Err(TisError::MainThreadDispatch(
+        "input-source switching is unavailable on mobile".to_string(),
+    ))
 }
 
 pub async fn restore_input_source<R: Runtime>(
     _app: &AppHandle<R>,
-    _previous: Option<()>,
-) -> Result<(), TypeError> {
+    _previous: Option<PreviousInputSource>,
+) -> Result<(), TisError> {
     Ok(())
 }
 

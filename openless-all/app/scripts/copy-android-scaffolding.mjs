@@ -1,5 +1,13 @@
 #!/usr/bin/env node
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -134,10 +142,7 @@ export function mergeMissingStringResources(xml, stringsByName) {
     if (!content.includes('</resources>')) {
       throw new Error('strings.xml is missing </resources>');
     }
-    content = content.replace(
-      '</resources>',
-      `${formatStringResource(name, value)}\n</resources>`,
-    );
+    content = content.replace('</resources>', `${formatStringResource(name, value)}\n</resources>`);
     changed = true;
   }
   return { content, changed };
@@ -333,20 +338,13 @@ function main() {
   copyDirectoryContents(androidIconRoot, resDest, dryRun);
   copyNamedFiles(KOTLIN_FILES, kotlinRoot, kotlinDest, dryRun);
   copyNamedFiles(KOTLIN_TEST_FILES, kotlinTestRoot, kotlinTestDest, dryRun);
-  copyNamedFiles(
-    KOTLIN_ANDROID_TEST_FILES,
-    kotlinAndroidTestRoot,
-    kotlinAndroidTestDest,
-    dryRun,
-  );
+  copyNamedFiles(KOTLIN_ANDROID_TEST_FILES, kotlinAndroidTestRoot, kotlinAndroidTestDest, dryRun);
   ensureInstrumentationRunner(dryRun);
 
   for (const [relSrc, destName] of XML_FILES) {
     const src = join(manifestsRoot, relSrc);
     const dest = join(resXmlDest, destName);
-    const content = existsSync(src)
-      ? readFileSync(src, 'utf8')
-      : GENERATED_ACCESSIBILITY_CONFIG;
+    const content = existsSync(src) ? readFileSync(src, 'utf8') : GENERATED_ACCESSIBILITY_CONFIG;
     if (dryRun) {
       console.log(`[dry-run] Would write ${dest}`);
       continue;

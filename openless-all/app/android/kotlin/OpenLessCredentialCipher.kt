@@ -29,10 +29,7 @@ internal object OpenLessCredentialCipher {
             throw IllegalArgumentException("malformed credential packet")
         }
         val nonceLength = packet[0].toInt() and 0xff
-        if (
-            nonceLength != NONCE_BYTES ||
-            packet.size < 1 + nonceLength + TAG_BYTES
-        ) {
+        if (nonceLength != NONCE_BYTES || packet.size < 1 + nonceLength + TAG_BYTES) {
             throw IllegalArgumentException("malformed credential packet")
         }
         val nonce = packet.copyOfRange(1, 1 + nonceLength)

@@ -15,10 +15,10 @@
 //! - commands: Tauri IPC surface
 
 mod android;
-#[cfg(test)]
-mod build_target;
 mod asr;
 mod audio_mute;
+#[cfg(test)]
+mod build_target;
 mod cli;
 mod coding_agent;
 #[cfg(not(mobile))]
@@ -29,9 +29,12 @@ mod combo_hotkey;
 mod commands;
 mod coordinator;
 mod coordinator_state;
+mod core_adapters;
 mod correction;
-mod edit_plan;
-mod selection_voice_intent;
+#[cfg(target_os = "macos")]
+mod macos_dictation_key;
+mod qa_adapter;
+mod tauri_coordinator_host;
 // 托盘麦克风设备变更监听：macOS CoreAudio / Windows MMDevice 原生通知（空闲零唤醒），
 // Linux 退化为纯轮询兜底。仅桌面端。详见 issue #470。
 #[cfg(not(mobile))]
@@ -84,6 +87,7 @@ mod side_aware_combo;
 #[cfg(mobile)]
 #[path = "mobile_stubs/side_aware_combo.rs"]
 mod side_aware_combo;
+mod tauri_events;
 mod types;
 #[cfg(not(mobile))]
 mod unicode_keystroke;
@@ -98,6 +102,8 @@ mod windows_ime_protocol;
 mod windows_ime_restore;
 #[cfg(target_os = "windows")]
 mod windows_ime_session;
+#[cfg(target_os = "windows")]
+mod windows_ime_target;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "macos")]
@@ -141,6 +147,20 @@ use tauri::{WebviewUrl, WebviewWindowBuilder};
 #[cfg(not(mobile))]
 use crate::types::{PolishMode, StylePack, StylePackKind};
 
+#[cfg(test)]
+pub(crate) fn set_backend_preferences_for_test(
+    backend: &openless_core::OpenLessBackend,
+    preferences: crate::types::UserPreferences,
+) {
+    backend
+        .update_settings(
+            preferences,
+            openless_core::SettingsUpdateOptions::STRICT,
+            &openless_core::NoopSettingsRuntime,
+        )
+        .expect("test preferences must satisfy the public settings contract");
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -158,6 +178,7 @@ pub fn run() {
 macro_rules! app_invoke_handler_desktop {
     () => {
         tauri::generate_handler![
+            commands::get_startup_snapshot,
             commands::get_settings,
             commands::get_default_style_system_prompts,
             commands::set_settings,
@@ -170,6 +191,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::fetch_latest_beta_release,
             commands::app_check_update_with_channel,
             commands::check_network,
+            commands::take_splash_playback,
             commands::get_hotkey_status,
             commands::get_hotkey_capability,
             commands::set_shortcut_recording_active,
@@ -211,11 +233,16 @@ macro_rules! app_invoke_handler_desktop {
             commands::github_device_flow_poll,
             commands::github_device_flow_cancel,
             commands::marketplace_auth_status,
+            commands::cloud_sync_status,
+            commands::cloud_sync_upload,
+            commands::cloud_sync_restore,
+            commands::cloud_sync_delete,
             commands::marketplace_logout,
             commands::list_vocab,
             commands::add_vocab,
             commands::remove_vocab,
             commands::set_vocab_enabled,
+            commands::update_vocab,
             commands::list_correction_rules,
             commands::add_correction_rule,
             commands::remove_correction_rule,
@@ -247,6 +274,8 @@ macro_rules! app_invoke_handler_desktop {
             commands::list_style_packs,
             commands::create_style_pack_from_template,
             commands::save_style_pack,
+            commands::set_style_pack_icon,
+            commands::read_style_pack_icon,
             commands::preview_style_pack_runtime,
             commands::set_active_style_pack,
             commands::set_style_pack_enabled,
@@ -309,11 +338,13 @@ macro_rules! app_invoke_handler_desktop {
             commands::less_computer_approve,
             commands::validate_combo_hotkey,
             commands::set_combo_hotkey,
+            commands::list_provider_descriptors,
             commands::validate_provider_credentials,
             commands::list_provider_models,
             commands::local_asr_get_settings,
             commands::local_asr_storage_settings,
             commands::local_asr_set_models_base_dir,
+            commands::local_asr_activate,
             commands::local_asr_set_active_model,
             commands::local_asr_set_mirror,
             commands::local_asr_list_models,
@@ -322,10 +353,12 @@ macro_rules! app_invoke_handler_desktop {
             commands::local_asr_download_model,
             commands::local_asr_cancel_download,
             commands::local_asr_delete_model,
+            commands::local_asr_cleanup_incomplete,
             commands::local_asr_model_dir,
             commands::local_asr_reveal_model_dir,
             commands::local_asr_reveal_models_root,
             commands::local_asr_test_model,
+            commands::local_asr_test_channel,
             commands::local_asr_engine_status,
             commands::local_asr_release_engine,
             commands::local_asr_preload,
@@ -335,6 +368,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::foundry_local_asr_set_model,
             commands::foundry_local_asr_set_language_hint,
             commands::foundry_local_asr_set_runtime_source,
+            commands::foundry_local_asr_set_keep_loaded_secs,
             commands::foundry_local_asr_prepare,
             commands::foundry_local_asr_cancel_prepare,
             commands::foundry_local_asr_release,
@@ -388,10 +422,12 @@ macro_rules! app_invoke_handler_desktop {
 macro_rules! app_invoke_handler_mobile {
     () => {
         tauri::generate_handler![
+            $crate::commands::get_startup_snapshot,
             $crate::commands::get_settings,
             $crate::commands::get_default_style_system_prompts,
             $crate::commands::set_settings,
             $crate::commands::check_network,
+            $crate::commands::take_splash_playback,
             $crate::commands::get_platform_capabilities,
             $crate::commands::get_android_overlay_status,
             $crate::commands::request_android_overlay_permission,
@@ -422,6 +458,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::reorder_channels,
             $crate::commands::record_channel_test,
             $crate::commands::set_active_omni_provider,
+            $crate::commands::list_provider_descriptors,
             $crate::commands::validate_provider_credentials,
             $crate::commands::list_provider_models,
             $crate::commands::list_history,
@@ -444,11 +481,16 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::github_device_flow_poll,
             $crate::commands::github_device_flow_cancel,
             $crate::commands::marketplace_auth_status,
+            $crate::commands::cloud_sync_status,
+            $crate::commands::cloud_sync_upload,
+            $crate::commands::cloud_sync_restore,
+            $crate::commands::cloud_sync_delete,
             $crate::commands::marketplace_logout,
             $crate::commands::list_vocab,
             $crate::commands::add_vocab,
             $crate::commands::remove_vocab,
             $crate::commands::set_vocab_enabled,
+            $crate::commands::update_vocab,
             $crate::commands::list_correction_rules,
             $crate::commands::add_correction_rule,
             $crate::commands::remove_correction_rule,
@@ -466,6 +508,8 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::list_style_packs,
             $crate::commands::create_style_pack_from_template,
             $crate::commands::save_style_pack,
+            $crate::commands::set_style_pack_icon,
+            $crate::commands::read_style_pack_icon,
             $crate::commands::preview_style_pack_runtime,
             $crate::commands::set_active_style_pack,
             $crate::commands::set_style_pack_enabled,
@@ -498,8 +542,6 @@ macro_rules! app_invoke_handler_mobile {
 fn run_desktop() {
     let foundry_local_runtime = Arc::new(asr::local::FoundryLocalRuntime::new());
     let sherpa_onnx_runtime = Arc::new(asr::local::SherpaOnnxRuntime::new());
-    let sherpa_download_manager =
-        Arc::new(asr::local::sherpa_download::SherpaDownloadManager::new());
     #[cfg(target_os = "windows")]
     let coordinator = Arc::new(coordinator::Coordinator::new_with_local_runtimes(
         Arc::clone(&foundry_local_runtime),
@@ -507,12 +549,14 @@ fn run_desktop() {
     ));
     #[cfg(not(target_os = "windows"))]
     let coordinator = Arc::new(coordinator::Coordinator::new());
-    #[cfg(target_os = "windows")]
-    if let Err(error) = coordinator.sync_active_asr_provider_from_preferences() {
-        log::warn!("[startup] sync active ASR provider from preferences failed: {error}");
+    let core_backend = coordinator.backend();
+    // 启动时把偏好里的 active ASR 同步进凭据库；get_credentials 按凭据库的 active 渠道取密钥。
+    let startup_active_asr = core_backend.get_preferences().active_asr_provider;
+    if !startup_active_asr.is_empty() {
+        if let Err(error) = commands::sync_active_asr_provider_to_vault(&startup_active_asr) {
+            log::warn!("[startup] sync active ASR provider from preferences failed: {error}");
+        }
     }
-    let local_asr_download_manager = Arc::new(asr::local::DownloadManager::new());
-
     let builder = tauri::Builder::default();
     // macOS：胶囊要叠到别的 app 的全屏 Space 之上，必须是「非激活 NSPanel」(普通
     // NSWindow 即便设 collectionBehavior 也做不到 —— tauri#9556 / #11488)。下面 setup 里
@@ -542,7 +586,7 @@ fn run_desktop() {
                 .try_state::<Arc<coordinator::Coordinator>>()
                 .map(|s| Arc::clone(&*s))
             {
-                if coordinator.prefs().get().start_minimized {
+                if coordinator.backend().get_preferences().start_minimized {
                     log::info!(
                         "[single-instance] start_minimized=true → skipping show on relaunch"
                     );
@@ -565,8 +609,7 @@ fn run_desktop() {
             None,
         ))
         .manage(coordinator.clone())
-        .manage(local_asr_download_manager.clone())
-        .manage(sherpa_download_manager.clone())
+        .manage(core_backend.clone())
         .manage(foundry_local_runtime.clone())
         .manage(sherpa_onnx_runtime.clone())
         .manage(commands::MicrophoneMonitorState::new(None))
@@ -577,14 +620,17 @@ fn run_desktop() {
             log::info!("=== OpenLess 启动 ===");
 
             #[cfg(target_os = "windows")]
-            if let Err(err) =
-                crate::windows_ime_profile::apply_windows_openless_keyboard_list_pref(
-                    &coordinator.prefs().get(),
-                )
             {
-                log::warn!(
-                    "[windows-ime] apply keyboard list visibility pref on startup failed: {err}"
+                let target = openless_core::WindowsKeyboardRuntimeTarget::from(
+                    &coordinator.backend().get_preferences(),
                 );
+                if let Err(err) = crate::windows_ime_profile::apply_windows_openless_keyboard_list(
+                    target.openless_language_profile_enabled,
+                ) {
+                    log::warn!(
+                        "[windows-ime] apply keyboard list visibility pref on startup failed: {err}"
+                    );
+                }
             }
 
             // Capsule 启动时定位到屏幕底部居中并隐藏；coordinator 按需显示。
@@ -690,7 +736,8 @@ fn run_desktop() {
                 // 于 prefs。
                 let force_show =
                     std::env::var("OPENLESS_SHOW_MAIN_ON_START").ok().as_deref() == Some("1");
-                let suppress_show = !force_show && coordinator.prefs().get().start_minimized;
+                let suppress_show =
+                    !force_show && coordinator.backend().get_preferences().start_minimized;
                 if suppress_show {
                     log::info!("[main] start_minimized=true → 跳过初始 show，等用户点托盘");
                 } else {
@@ -801,7 +848,9 @@ fn run_desktop() {
 
             // Spin up hotkey listener; coordinator owns the lifecycle.
             let app_handle = app.handle().clone();
-            coordinator.bind_app(app_handle);
+            coordinator.tauri_host().bind(app_handle);
+            coordinator.sync_capsule_style_from_preferences();
+            crate::tauri_events::start(app.handle().clone(), Arc::clone(&core_backend));
             coordinator.start_hotkey_listener();
             // QA / custom combo hotkeys use `global-hotkey` (Carbon on macOS).
             // Start those after RunEvent::Ready, when the AppKit event loop is live.
@@ -860,6 +909,10 @@ fn run_desktop() {
                 coordinator.stop_switch_style_hotkey_listener();
                 coordinator.stop_open_app_hotkey_listener();
                 coordinator.stop_style_pack_hotkey_listeners();
+                let backend = coordinator.backend();
+                tauri::async_runtime::spawn(async move {
+                    let _ = backend.shutdown().await;
+                });
             }
             _ => {}
         });
@@ -914,6 +967,45 @@ impl TrayLabels {
                 light: "Light polish",
                 structured: "Structured",
                 formal: "Formal",
+            },
+            "es" => Self {
+                toggle: "Mostrar ventana principal",
+                style: "Estilo de salida",
+                microphone: "Seleccionar micrófono",
+                default_microphone: "Micrófono del sistema",
+                no_microphones: "No se encontraron micrófonos",
+                default_device_suffix: " (Predeterminado del sistema)",
+                quit: "Salir de OpenLess",
+                raw: "Texto original",
+                light: "Pulido ligero",
+                structured: "Estructurado",
+                formal: "Formal",
+            },
+            "fr" => Self {
+                toggle: "Afficher la fenêtre principale",
+                style: "Style de sortie",
+                microphone: "Choisir le microphone",
+                default_microphone: "Microphone du système",
+                no_microphones: "Aucun microphone détecté",
+                default_device_suffix: " (Par défaut du système)",
+                quit: "Quitter OpenLess",
+                raw: "Texte original",
+                light: "Retouche légère",
+                structured: "Structuré",
+                formal: "Formel",
+            },
+            "de" => Self {
+                toggle: "Hauptfenster anzeigen",
+                style: "Ausgabestil",
+                microphone: "Mikrofon auswählen",
+                default_microphone: "Systemmikrofon",
+                no_microphones: "Keine Mikrofone gefunden",
+                default_device_suffix: " (Systemstandard)",
+                quit: "OpenLess beenden",
+                raw: "Originaltext",
+                light: "Leichte Überarbeitung",
+                structured: "Strukturiert",
+                formal: "Formell",
             },
             "zh-TW" => Self {
                 toggle: "顯示主視窗",
@@ -1070,7 +1162,12 @@ fn build_tray_menu<M: Manager<tauri::Wry>>(
     app: &M,
     coordinator: &Arc<coordinator::Coordinator>,
 ) -> tauri::Result<TrayMenu> {
-    let labels = TrayLabels::for_locale(&coordinator.remote_locale());
+    let locale = app
+        .try_state::<Arc<openless_core::OpenLessBackend>>()
+        .and_then(|backend| backend.services().remote_input.status().ok())
+        .map(|status| status.locale)
+        .unwrap_or_else(|| "zh-CN".to_string());
+    let labels = TrayLabels::for_locale(&locale);
     let toggle = MenuItemBuilder::with_id("toggle", labels.toggle).build(app)?;
     let microphone_menu = build_microphone_tray_menu(app, coordinator, labels)?;
     let quit = MenuItemBuilder::with_id("quit", labels.quit).build(app)?;
@@ -1098,11 +1195,14 @@ fn build_style_tray_menu<M: Manager<tauri::Wry>>(
     coordinator: &Arc<coordinator::Coordinator>,
     labels: TrayLabels,
 ) -> tauri::Result<StyleTrayMenu> {
-    let prefs = coordinator.prefs().get();
-    let packs = coordinator.style_packs().list().unwrap_or_else(|err| {
-        log::warn!("[tray] list style packs for tray menu failed: {err}");
-        Vec::new()
-    });
+    let prefs = coordinator.backend().get_preferences();
+    let packs = coordinator
+        .backend()
+        .list_style_packs(&prefs.active_style_pack_id)
+        .unwrap_or_else(|err| {
+            log::warn!("[tray] list style packs for tray menu failed: {err}");
+            Vec::new()
+        });
     let mut submenu = SubmenuBuilder::with_id(app, "style", labels.style);
     for entry in tray_style_pack_menu_entries(&packs, &prefs.active_style_pack_id, labels) {
         let item = CheckMenuItemBuilder::with_id(&entry.id, entry.label)
@@ -1121,7 +1221,10 @@ fn build_microphone_tray_menu<M: Manager<tauri::Wry>>(
     coordinator: &Arc<coordinator::Coordinator>,
     labels: TrayLabels,
 ) -> tauri::Result<MicrophoneTrayMenu> {
-    let selected = coordinator.prefs().get().microphone_device_name;
+    let selected = coordinator
+        .backend()
+        .get_preferences()
+        .microphone_device_name;
     let mut items = Vec::new();
     let mut submenu = SubmenuBuilder::with_id(app, "microphone", labels.microphone);
     // CoreAudio device enumeration can block inside AudioUnitSetProperty while AppKit is
@@ -1233,7 +1336,11 @@ fn refresh_microphone_on_main(app: &AppHandle) {
     if let Err(err) = refresh_tray_microphone_menu(app) {
         log::warn!("[tray] refresh microphone menu after device change failed: {err}");
     }
-    let _ = app.emit("microphone:devices-changed", serde_json::json!({}));
+    tauri_events::publish(
+        app,
+        None,
+        openless_core::BackendEventKind::MicrophoneDevicesChanged,
+    );
 }
 
 /// 设备变更去抖闭包：被 OS 原生通知回调（macOS CoreAudio / Windows MMDevice）调用。
@@ -1323,13 +1430,13 @@ fn handle_microphone_tray_menu_event(app: &AppHandle, id: &str) {
     };
 
     let coord = app.state::<Arc<coordinator::Coordinator>>();
-    let mut prefs = coord.prefs().get();
-    prefs.microphone_device_name = selected.device_name.clone();
-    if let Err(err) = coord.prefs().set(prefs.clone()) {
+    if let Err(err) = coord
+        .backend()
+        .select_microphone_device(selected.device_name.clone())
+    {
         log::warn!("[tray] save microphone preference failed: {err}");
         return;
     }
-    let _ = app.emit("prefs:changed", &prefs);
 
     commands::sync_tray_microphone_selection(&items, &selected.device_name);
 }
@@ -1340,7 +1447,11 @@ fn handle_style_tray_menu_event(app: &AppHandle, id: &str) -> bool {
         return false;
     };
     let coord = app.state::<Arc<coordinator::Coordinator>>();
-    let packs = match coord.style_packs().list() {
+    let prefs = coord.backend().get_preferences();
+    let packs = match coord
+        .backend()
+        .list_style_packs(&prefs.active_style_pack_id)
+    {
         Ok(packs) => packs,
         Err(err) => {
             log::warn!("[tray] validate style pack tray item failed: {err}");
@@ -1651,66 +1762,63 @@ pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     activate_app(app);
 }
 
-/// 把 CLI intent 路由到 coordinator。两个入口共用：
+/// 把 CLI intent 路由到共享 Core 或仍由 Tauri 承载的 QA host。两个入口共用：
 /// 1. 首次启动（lib.rs setup 末尾）
 /// 2. single-instance 回调（第二个进程被拦截后转发 argv）
 ///
-/// 异步动作（start_dictation / stop_dictation 是 async）通过 tauri 自带 runtime spawn，
-/// 不阻塞回调线程。所有动作都按 coordinator 当前状态自检：
-/// - ToggleDictation 在 Idle → start，在 Listening → stop，Starting/Processing/Inserting 忽略并记日志
+/// 异步动作通过 Tauri runtime spawn，不阻塞回调线程：
+/// - ToggleDictation 进入共享 Core facade；CancelDictation先释放Less Host capture再取消Core
 /// - ToggleQa 直接转发到 handle_qa_hotkey_pressed（语义等同于按一次 QA 热键）
-/// - CancelDictation 直接调 cancel（cancel 本身在非 Listening 时也安全）
 fn dispatch_cli_intent<R: Runtime>(app: &AppHandle<R>, intent: cli::CliIntent) {
-    let coordinator = app
-        .try_state::<Arc<coordinator::Coordinator>>()
-        .map(|s| Arc::clone(&*s));
-    let Some(coordinator) = coordinator else {
-        log::warn!("[cli] coordinator not yet managed; dropping intent={intent:?}");
-        return;
-    };
     match intent {
         cli::CliIntent::ToggleDictation => {
-            let coord = Arc::clone(&coordinator);
+            let backend = app
+                .try_state::<Arc<openless_core::OpenLessBackend>>()
+                .map(|state| Arc::clone(&*state));
+            let Some(backend) = backend else {
+                log::warn!("[cli] core backend not yet managed; dropping intent={intent:?}");
+                return;
+            };
             tauri::async_runtime::spawn(async move {
-                let phase = coord.dictation_phase_for_cli();
-                use coordinator_state::SessionPhase;
-                match phase {
-                    SessionPhase::Idle => {
-                        log::info!("[cli] toggle-dictation: Idle → start_dictation");
-                        if let Err(e) = coord.start_dictation().await {
-                            log::warn!("[cli] start_dictation failed: {e}");
-                        }
+                log::info!("[cli] dispatching intent={intent:?} to core backend");
+                if !backend.snapshot().running {
+                    if let Err(error) = backend.start().await {
+                        log::warn!("[cli] core backend start failed: {error}");
+                        return;
                     }
-                    SessionPhase::Listening => {
-                        log::info!("[cli] toggle-dictation: Listening → stop_dictation");
-                        if let Err(e) = coord.stop_dictation().await {
-                            log::warn!("[cli] stop_dictation failed: {e}");
-                        }
-                    }
-                    SessionPhase::Starting => {
-                        // 复用 stop_dictation 自身的 Starting → pending_stop 处理，
-                        // 与按一次主热键的行为对齐（issue #51）。
-                        log::info!("[cli] toggle-dictation: Starting → stop_dictation (pending)");
-                        if let Err(e) = coord.stop_dictation().await {
-                            log::warn!("[cli] stop_dictation failed: {e}");
-                        }
-                    }
-                    other => {
-                        log::info!("[cli] toggle-dictation ignored (phase={other:?})");
-                    }
+                }
+                if let Err(error) = backend.dispatch_cli_intent(intent).await {
+                    log::warn!("[cli] core intent failed: {error}");
+                }
+            });
+        }
+        cli::CliIntent::CancelDictation => {
+            let coordinator = app
+                .try_state::<Arc<coordinator::Coordinator>>()
+                .map(|state| Arc::clone(&*state));
+            let Some(coordinator) = coordinator else {
+                log::warn!("[cli] coordinator not yet managed; dropping cancel intent");
+                return;
+            };
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = coordinator.cancel_dictation_from_cli().await {
+                    log::warn!("[cli] cancel failed: {error}");
                 }
             });
         }
         cli::CliIntent::ToggleQa => {
+            let coordinator = app
+                .try_state::<Arc<coordinator::Coordinator>>()
+                .map(|state| Arc::clone(&*state));
+            let Some(coordinator) = coordinator else {
+                log::warn!("[cli] coordinator not yet managed; dropping QA intent");
+                return;
+            };
             let coord = Arc::clone(&coordinator);
             tauri::async_runtime::spawn(async move {
                 log::info!("[cli] toggle-qa: dispatching to qa hotkey handler");
                 coord.cli_toggle_qa_panel().await;
             });
-        }
-        cli::CliIntent::CancelDictation => {
-            log::info!("[cli] cancel-dictation: invoking cancel");
-            coordinator.cancel_dictation();
         }
     }
 }
@@ -1876,18 +1984,6 @@ fn bottom_center_position(
     (x, y)
 }
 
-fn bottom_visual_position(
-    frame: LogicalMonitorFrame,
-    window_width: f64,
-    visual_height: f64,
-    bottom_padding: f64,
-    bottom_inset: f64,
-) -> (f64, f64) {
-    let x = frame.x + ((frame.width - window_width) / 2.0).max(0.0);
-    let y = frame.y + (frame.height - visual_height - bottom_padding - bottom_inset).max(0.0);
-    (x, y)
-}
-
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn frame_contains_point(frame: LogicalMonitorFrame, x: f64, y: f64) -> bool {
     x >= frame.x && x < frame.x + frame.width && y >= frame.y && y < frame.y + frame.height
@@ -1914,6 +2010,10 @@ pub(crate) struct CapsuleTargetMonitor {
     pub(crate) physical_y: i32,
     pub(crate) physical_width: u32,
     pub(crate) physical_height: u32,
+    pub(crate) work_x: i32,
+    pub(crate) work_y: i32,
+    pub(crate) work_width: u32,
+    pub(crate) work_height: u32,
     pub(crate) scale: f64,
 }
 
@@ -1925,6 +2025,16 @@ impl CapsuleTargetMonitor {
             self.physical_y,
             self.physical_width,
             self.physical_height,
+            self.scale,
+        )
+    }
+
+    fn logical_work_area(self) -> LogicalMonitorFrame {
+        logical_monitor_frame(
+            self.work_x,
+            self.work_y,
+            self.work_width,
+            self.work_height,
             self.scale,
         )
     }
@@ -1959,16 +2069,34 @@ fn monitor_for_anchor_point<R: tauri::Runtime>(
     y: f64,
 ) -> Option<CapsuleTargetMonitor> {
     let monitors = window.available_monitors().ok()?;
-    let mut nearest: Option<(f64, CapsuleTargetMonitor)> = None;
-
-    for monitor in monitors {
-        let target = CapsuleTargetMonitor {
+    pick_monitor_for_anchor_point(
+        monitors.into_iter().map(|monitor| CapsuleTargetMonitor {
             physical_x: monitor.position().x,
             physical_y: monitor.position().y,
             physical_width: monitor.size().width,
             physical_height: monitor.size().height,
+            work_x: monitor.work_area().position.x,
+            work_y: monitor.work_area().position.y,
+            work_width: monitor.work_area().size.width,
+            work_height: monitor.work_area().size.height,
             scale: monitor.scale_factor(),
-        };
+        }),
+        x,
+        y,
+    )
+}
+
+/// 选屏本身的纯逻辑（不碰 Tauri / AppKit，便于单测多屏排列）：先返回包含该点的屏，
+/// 都不包含时退到距离最近的屏。
+#[cfg(target_os = "macos")]
+fn pick_monitor_for_anchor_point(
+    monitors: impl IntoIterator<Item = CapsuleTargetMonitor>,
+    x: f64,
+    y: f64,
+) -> Option<CapsuleTargetMonitor> {
+    let mut nearest: Option<(f64, CapsuleTargetMonitor)> = None;
+
+    for target in monitors {
         let frame = target.logical_frame();
         if frame_contains_point(frame, x, y) {
             return Some(target);
@@ -1981,6 +2109,39 @@ fn monitor_for_anchor_point<R: tauri::Runtime>(
     }
 
     nearest.map(|(_, target)| target)
+}
+
+/// 浮窗（QA / Less Computer 面板 / glow 描边）该摆到哪块显示器。
+///
+/// macOS 走和胶囊同一条信号 —— 鼠标光标所在的屏（见 [`capsule_target_monitor`]），
+/// 于是浮窗永远和胶囊出现在同一块屏上。其它平台没有这条通路，仍用窗口自己的
+/// `current_monitor`。
+///
+/// 关键：**不能**只问浮窗自己的 `current_monitor`。这几个浮窗都是懒创建 + 常驻隐藏，
+/// 隐藏时它停在上一次出现的屏，而它这辈子第一次出现就在系统默认（主）屏 —— 于是
+/// 每次 show 都算出主屏、又铺回主屏，多显示器下被永久钉死，跟胶囊分家。胶囊自己
+/// 踩过并修好了这个坑（见 `capsule_target_monitor` 的注释），三个浮窗漏了，这里补齐。
+fn floating_window_monitor_frame<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+) -> tauri::Result<Option<LogicalMonitorFrame>> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(monitor) = capsule_target_monitor(window) {
+            return Ok(Some(monitor.logical_frame()));
+        }
+    }
+    let Some(monitor) = window.current_monitor()? else {
+        return Ok(None);
+    };
+    let size = monitor.size();
+    let pos = monitor.position();
+    Ok(Some(logical_monitor_frame(
+        pos.x,
+        pos.y,
+        size.width,
+        size.height,
+        monitor.scale_factor(),
+    )))
 }
 
 #[cfg(target_os = "macos")]
@@ -2263,14 +2424,9 @@ fn clamp_to_monitor(
 /// 把 QA 浮窗放到屏幕底部居中、紧贴胶囊上方。tauri 启动期 + show 之前都会调一次，
 /// 防止用户切换显示器后位置错乱。
 fn position_qa_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> tauri::Result<()> {
-    let monitor = match window.current_monitor()? {
-        Some(m) => m,
-        None => return Ok(()),
+    let Some(frame) = floating_window_monitor_frame(window)? else {
+        return Ok(());
     };
-    let scale = monitor.scale_factor();
-    let size = monitor.size();
-    let pos = monitor.position();
-    let frame = logical_monitor_frame(pos.x, pos.y, size.width, size.height, scale);
     let capsule_height = capsule_height_for_qa();
     let (x, y) = bottom_center_position(
         frame,
@@ -2306,11 +2462,13 @@ pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind
             Ok(()) => log::info!("[qa] android requested MainActivity foreground for QA"),
             Err(error) => log::warn!("[qa] android failed to foreground MainActivity: {error}"),
         }
-        log::info!("[qa] android emit qa:state to main kind={content_kind}");
-        let _ = app.emit_to(
-            "main",
-            "qa:state",
-            serde_json::json!({ "kind": content_kind }),
+        log::info!("[qa] android publish qa:state to main kind={content_kind}");
+        tauri_events::publish(
+            app,
+            None,
+            openless_core::BackendEventKind::QaState(openless_core::QaStateEvent::simple(
+                openless_core::QaStateKind::Idle,
+            )),
         );
         return;
     }
@@ -2373,10 +2531,12 @@ pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind
     // 作废挂起的退场 hide（快速关-开），并让前端重放入场动画。
     QA_PANEL_EPOCH.fetch_add(1, Ordering::SeqCst);
     let _ = app.emit_to("qa", "chat-panel:shown", serde_json::json!({}));
-    let _ = app.emit_to(
-        "qa",
-        "qa:state",
-        serde_json::json!({ "kind": content_kind }),
+    tauri_events::publish(
+        app,
+        None,
+        openless_core::BackendEventKind::QaState(openless_core::QaStateEvent::simple(
+            openless_core::QaStateKind::Idle,
+        )),
     );
 }
 
@@ -2505,7 +2665,7 @@ fn ensure_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<tauri::Webv
     app.get_webview_window("qa")
 }
 
-/// 懒创建 Less Computer 浮窗（macOS only）。配置与原 tauri.conf 的 less-computer 块一致。
+/// 懒创建 Less Computer 浮窗。macOS 额外转换为不抢焦点的 NSPanel。
 #[cfg(target_os = "macos")]
 fn ensure_less_computer_window<R: tauri::Runtime>(
     app: &AppHandle<R>,
@@ -2546,6 +2706,36 @@ fn ensure_less_computer_window<R: tauri::Runtime>(
             None
         }
     }
+}
+
+#[cfg(target_os = "windows")]
+fn ensure_less_computer_window<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Option<tauri::WebviewWindow<R>> {
+    if let Some(window) = app.get_webview_window("less-computer") {
+        return Some(window);
+    }
+    WebviewWindowBuilder::new(
+        app,
+        "less-computer",
+        WebviewUrl::App("index.html?window=less-computer".into()),
+    )
+    .title("OpenLess Less Computer")
+    .inner_size(LESS_COMPUTER_WINDOW_WIDTH, LESS_COMPUTER_WINDOW_HEIGHT)
+    .decorations(false)
+    .transparent(true)
+    .shadow(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .resizable(false)
+    .focused(false)
+    .visible(false)
+    .build()
+    .map(Some)
+    .unwrap_or_else(|error| {
+        log::warn!("[less-computer] lazy window create failed: {error}");
+        None
+    })
 }
 
 /// 懒创建 Less Computer glow 描边窗（macOS only）。shadow:false、无 acceptFirstMouse。
@@ -2715,11 +2905,7 @@ pub(crate) fn show_selection_voice_intent_prompt<R: tauri::Runtime>(app: &AppHan
     if let Err(error) = window.set_focus() {
         log::warn!("[selection-voice] focus intent prompt failed: {error}");
     }
-    let _ = app.emit_to(
-        "selection-voice-intent",
-        "selection-voice-intent:shown",
-        (),
-    );
+    let _ = app.emit_to("selection-voice-intent", "selection-voice-intent:shown", ());
 }
 
 #[cfg(not(all(not(mobile), target_os = "windows")))]
@@ -2738,15 +2924,15 @@ pub(crate) fn hide_selection_voice_intent_prompt<R: tauri::Runtime>(_app: &AppHa
 // ───────────────────────── Less Computer 浮窗 ─────────────────────────
 //
 // Less Computer 语音 Agent 的聊天浮窗（窗口 label = "less-computer"）。
-// 仅 macOS：和 coordinator / 前端对 Less Computer 的 gating 一致（Windows/Linux
-// 不注册热键、前端 detectOS 不渲染入口），所以这些窗口操作全部 `#[cfg(macos)]`，
-// 其它平台是 no-op，避免在非目标平台动 NSWindow / 弹一个空浮窗。
+// Windows/macOS 均提供入口、热键和聊天浮窗，共用 Core 的会话与事件；原生窗口
+// 操作仍按平台分支，macOS 的 NSWindow/AppKit 调整不能流入 Windows 构建。
+// Linux 的产品窗口由 egui Host 接入，不在 Tauri 创建；不支持的平台保留 no-op。
 
 /// Less Computer 浮窗尺寸：与 QA 同款「统一聊天面板」固定大小 —— 窗口出现即
 /// 定死，内容只在面板内部的 MessageScroller 里滚动，不再按内容自适应缩放窗口。
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const LESS_COMPUTER_WINDOW_WIDTH: f64 = 420.0;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const LESS_COMPUTER_WINDOW_HEIGHT: f64 = 540.0;
 
 /// 把 Less Computer 浮窗（固定尺寸）摆到屏幕底部居中、紧贴胶囊上方。
@@ -2754,14 +2940,9 @@ const LESS_COMPUTER_WINDOW_HEIGHT: f64 = 540.0;
 fn position_less_computer_window<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
 ) -> tauri::Result<()> {
-    let monitor = match window.current_monitor()? {
-        Some(m) => m,
-        None => return Ok(()),
+    let Some(frame) = floating_window_monitor_frame(window)? else {
+        return Ok(());
     };
-    let scale = monitor.scale_factor();
-    let size = monitor.size();
-    let pos = monitor.position();
-    let frame = logical_monitor_frame(pos.x, pos.y, size.width, size.height, scale);
     let capsule_height = capsule_height_for_qa();
     let (x, y) = bottom_center_position(
         frame,
@@ -2824,16 +3005,29 @@ pub(crate) fn show_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     let _ = app.emit_to("less-computer", "chat-panel:shown", serde_json::json!({}));
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+pub(crate) fn show_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let Some(window) = ensure_less_computer_window(app) else {
+        return;
+    };
+    if let Err(error) = window.show() {
+        log::warn!("[less-computer] show failed: {error}");
+        return;
+    }
+    LESS_COMPUTER_PANEL_EPOCH.fetch_add(1, Ordering::SeqCst);
+    let _ = app.emit_to("less-computer", "chat-panel:shown", serde_json::json!({}));
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) fn show_less_computer_window<R: tauri::Runtime>(_app: &AppHandle<R>) {}
 
 /// 隐藏 Less Computer 浮窗。供 dismiss 命令 / session 收尾共用。
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn hide_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     hide_chat_window_animated(app, "less-computer", &LESS_COMPUTER_PANEL_EPOCH);
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) fn hide_less_computer_window<R: tauri::Runtime>(_app: &AppHandle<R>) {}
 
 /// 显示全屏彩虹描边浮层：盖满当前显示器、点击穿透、置顶。Agent 工作时点亮整屏边缘。
@@ -2842,25 +3036,27 @@ pub(crate) fn show_less_computer_glow<R: tauri::Runtime>(app: &AppHandle<R>) {
     let Some(window) = ensure_less_computer_glow_window(app) else {
         return;
     };
-    // 盖满当前（否则主）显示器，含菜单栏/Dock 区域。关键：用「逻辑坐标」(物理/缩放) ——
-    // Retina 上 monitor.size() 是物理像素(2x)，直接 set_size 会把窗口铺成两倍、错位、不贴边。
-    let monitor = window
-        .current_monitor()
+    // 盖满胶囊所在的那块显示器（跟随鼠标光标，见 floating_window_monitor_frame），
+    // 含菜单栏/Dock 区域。frame 已是「逻辑坐标」—— Retina 上 monitor.size() 是物理像素(2x)，
+    // 直接拿去 set_size 会把窗口铺成两倍、错位、不贴边。
+    let frame = floating_window_monitor_frame(&window)
         .ok()
         .flatten()
-        .or_else(|| app.primary_monitor().ok().flatten());
-    if let Some(monitor) = monitor {
-        let scale = monitor.scale_factor();
-        let size = monitor.size();
-        let pos = monitor.position();
-        let _ = window.set_position(tauri::LogicalPosition::new(
-            pos.x as f64 / scale,
-            pos.y as f64 / scale,
-        ));
-        let _ = window.set_size(tauri::LogicalSize::new(
-            size.width as f64 / scale,
-            size.height as f64 / scale,
-        ));
+        .or_else(|| {
+            let monitor = app.primary_monitor().ok().flatten()?;
+            let size = monitor.size();
+            let pos = monitor.position();
+            Some(logical_monitor_frame(
+                pos.x,
+                pos.y,
+                size.width,
+                size.height,
+                monitor.scale_factor(),
+            ))
+        });
+    if let Some(frame) = frame {
+        let _ = window.set_position(tauri::LogicalPosition::new(frame.x, frame.y));
+        let _ = window.set_size(tauri::LogicalSize::new(frame.width, frame.height));
     }
     // 点击穿透：纯视觉浮层，绝不拦截鼠标。
     let _ = window.set_ignore_cursor_events(true);
@@ -3026,13 +3222,27 @@ pub(crate) fn foreground_window_monitor() -> Option<ForegroundMonitor> {
     }
 }
 
-/// 把 capsule 窗口移到屏幕底部居中，与 Swift `CapsuleWindowController.repositionToBottomCenter` 同效。
-/// 留 80pt 给 macOS Dock；Windows 任务栏一般在底部 48pt 以内，整体也合适。
+/// 初始化和卡片归还路径使用默认舞台；录音显示路径显式传入当前样式。
 pub(crate) fn position_capsule_bottom_center<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
     translation_active: bool,
 ) -> tauri::Result<()> {
-    let bounds = capsule_window_bounds(translation_active);
+    position_capsule_bottom_center_with_style(window, translation_active, types::CapsuleStyle::Siri)
+}
+
+/// 使用系统报告的可用工作区，自动避开 Dock / taskbar，并随自动隐藏设置更新。
+pub(crate) fn position_capsule_bottom_center_with_style<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    _translation_active: bool,
+    style: types::CapsuleStyle,
+) -> tauri::Result<()> {
+    let bounds = capsule_window_bounds_for_style(style);
+    const EDGE_GAP: f64 = 12.0;
+    // typeless 贴紧工作区底边（工作区已由系统排除 Dock / taskbar）。
+    let bottom_gap = match style {
+        types::CapsuleStyle::Typeless => 0.0,
+        _ => EDGE_GAP,
+    };
 
     // Windows：跟随「正在输入的 App」所在显示器摆放，避免多显示器下胶囊
     // 总是固定出现在主屏 / 胶囊自己那块屏。
@@ -3047,21 +3257,14 @@ pub(crate) fn position_capsule_bottom_center<R: tauri::Runtime>(
                 phys_h.max(1) as u32,
             ))?;
 
-            let mon_w = mon.right - mon.left;
-            let x = mon.left + ((mon_w - phys_w) / 2).max(0);
-            // 与既有行为一致：「距底部 visual高度 + 80 + inset」，按 physical px 计算。
-            let offset_from_bottom =
-                (capsule_visual_height(translation_active) + 80.0 + bounds.bottom_inset) * scale;
-            let y = ((mon.bottom as f64) - offset_from_bottom).round() as i32;
-
-            // #470：四边都夹到「工作区」内（去掉任务栏），保证整窗可见。GetMonitorInfoW
-            // 取不到 rcWork 时（理论上不会，rcWork 总随 rcMonitor 一同填）退回整屏矩形。
             let (work_l, work_t, work_r, work_b) =
                 if mon.work_right > mon.work_left && mon.work_bottom > mon.work_top {
                     (mon.work_left, mon.work_top, mon.work_right, mon.work_bottom)
                 } else {
                     (mon.left, mon.top, mon.right, mon.bottom)
                 };
+            let x = work_l + ((work_r - work_l - phys_w) / 2).max(0);
+            let y = work_b - phys_h - (bottom_gap * scale).round() as i32;
             let (clamped_x, clamped_y) =
                 clamp_to_monitor(x, y, phys_w, phys_h, work_l, work_t, work_r, work_b);
             log::debug!(
@@ -3082,13 +3285,11 @@ pub(crate) fn position_capsule_bottom_center<R: tauri::Runtime>(
     {
         if let Some(mon) = capsule_target_monitor(window) {
             window.set_size(LogicalSize::new(bounds.width, bounds.height))?;
-            let frame = mon.logical_frame();
-            let (x, y) = bottom_visual_position(
-                frame,
+            let (x, y) = bottom_center_position(
+                mon.logical_work_area(),
                 bounds.width,
-                capsule_visual_height(translation_active),
-                80.0,
-                bounds.bottom_inset,
+                bounds.height,
+                bottom_gap,
             );
             log::debug!(
                 "[capsule] mac position: mon=({},{}) size=({}x{}) scale={:.2} -> logical=({:.1},{:.1})",
@@ -3112,16 +3313,10 @@ pub(crate) fn position_capsule_bottom_center<R: tauri::Runtime>(
     window.set_size(LogicalSize::new(bounds.width, bounds.height))?;
 
     let scale = monitor.scale_factor();
-    let size = monitor.size();
-    let pos = monitor.position();
+    let size = &monitor.work_area().size;
+    let pos = &monitor.work_area().position;
     let frame = logical_monitor_frame(pos.x, pos.y, size.width, size.height, scale);
-    let (x, y) = bottom_visual_position(
-        frame,
-        bounds.width,
-        capsule_visual_height(translation_active),
-        80.0,
-        bounds.bottom_inset,
-    );
+    let (x, y) = bottom_center_position(frame, bounds.width, bounds.height, bottom_gap);
     window.set_position(LogicalPosition::new(x, y))?;
     Ok(())
 }
@@ -3137,17 +3332,28 @@ fn capsule_window_bounds(translation_active: bool) -> CapsuleWindowBounds {
     // 纯光效语音舞台（siri-glsl 原始比例）：光条横贯 ~420px + 发光扩散余量。
     // 与前端 src/lib/capsuleLayout.ts 的 VOICE_ORB_STAGE_* 保持一致。
     let _ = translation_active;
+    capsule_window_bounds_for_style(types::CapsuleStyle::Siri)
+}
+
+fn capsule_window_bounds_for_style(style: types::CapsuleStyle) -> CapsuleWindowBounds {
     CapsuleWindowBounds {
-        width: 460.0,
-        height: 180.0,
+        // typeless 窗口面积是原尺寸（460×128）的 1/5；前端用 CSS zoom 同步缩放内容，
+        // 见 CapsuleStyles.css 与 src/lib/capsuleLayout.ts。
+        width: match style {
+            types::CapsuleStyle::Typeless => 206.0,
+            types::CapsuleStyle::Siri | types::CapsuleStyle::Classic => 460.0,
+        },
+        height: match style {
+            types::CapsuleStyle::Siri => 180.0,
+            types::CapsuleStyle::Classic => 100.0,
+            types::CapsuleStyle::Typeless => 57.0,
+        },
         bottom_inset: 0.0,
     }
 }
 
 fn capsule_visual_height(_translation_active: bool) -> f64 {
-    // 故意小于窗口高(180)：窗口整体下沉 40px，让光条视觉中心落回原胶囊的高度
-    // 附近（bottom_visual_position 以此值算窗口顶 y = 屏底 - 80 - visual_height）。
-    // 底部 40px 只是发光余量，窗口透明 + 鼠标穿透，压到 Dock 上方无碍。
+    // QA 面板沿用此视觉高度计算垂直间距；胶囊本身按样式尺寸和系统工作区定位。
     140.0
 }
 
@@ -3158,14 +3364,18 @@ fn capsule_height_for_qa() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        bottom_center_position, bottom_visual_position, capsule_height_for_qa,
-        capsule_visual_height, capsule_window_bounds, clamp_to_monitor, frame_contains_point,
-        frame_distance_to_point_squared, logical_monitor_frame, parse_tray_style_pack_menu_id,
-        resolve_tray_style_pack_id, rotate_log_if_too_large, tray_style_menu_enabled,
-        tray_style_pack_menu_entries, tray_style_pack_menu_id, LogicalMonitorFrame, TrayLabels,
-        LOG_ROTATE_LIMIT_BYTES,
+        bottom_center_position, capsule_height_for_qa, capsule_visual_height,
+        capsule_window_bounds, capsule_window_bounds_for_style, clamp_to_monitor,
+        frame_contains_point, frame_distance_to_point_squared, logical_monitor_frame,
+        parse_tray_style_pack_menu_id, resolve_tray_style_pack_id, rotate_log_if_too_large,
+        tray_style_menu_enabled, tray_style_pack_menu_entries, tray_style_pack_menu_id,
+        LogicalMonitorFrame, TrayLabels, LOG_ROTATE_LIMIT_BYTES,
     };
-    use crate::types::{builtin_style_pack_for_mode, PolishMode, StylePack, StylePackKind};
+    #[cfg(target_os = "macos")]
+    use super::{pick_monitor_for_anchor_point, CapsuleTargetMonitor};
+    use crate::types::{
+        builtin_style_pack_for_mode, CapsuleStyle, PolishMode, StylePack, StylePackKind,
+    };
     use std::io::Write;
 
     #[test]
@@ -3258,6 +3468,19 @@ mod tests {
 
         let chinese = TrayLabels::for_locale("zh-CN");
         assert_eq!(chinese.style_pack_name(PolishMode::Structured), "清晰结构");
+        assert_eq!(TrayLabels::for_locale("es").quit, "Salir de OpenLess");
+        assert_eq!(
+            TrayLabels::for_locale("fr").toggle,
+            "Afficher la fenêtre principale"
+        );
+        assert_eq!(
+            TrayLabels::for_locale("de").microphone,
+            "Mikrofon auswählen"
+        );
+        assert_eq!(
+            TrayLabels::for_locale("fr").style_pack_name(PolishMode::Structured),
+            "Structuré"
+        );
         assert_eq!(TrayLabels::for_locale("unknown").toggle, "显示主窗口");
     }
 
@@ -3345,6 +3568,33 @@ mod tests {
     }
 
     #[test]
+    fn capsule_tracks_reserved_and_auto_hidden_system_bars() {
+        let monitor = LogicalMonitorFrame {
+            x: -1440.0,
+            y: 0.0,
+            width: 1440.0,
+            height: 900.0,
+        };
+        let work_area = LogicalMonitorFrame {
+            height: 830.0,
+            ..monitor
+        };
+        for style in [
+            CapsuleStyle::Siri,
+            CapsuleStyle::Classic,
+            CapsuleStyle::Typeless,
+        ] {
+            let bounds = capsule_window_bounds_for_style(style);
+            let (x, reserved_y) =
+                bottom_center_position(work_area, bounds.width, bounds.height, 12.0);
+            let (_, hidden_y) = bottom_center_position(monitor, bounds.width, bounds.height, 12.0);
+            assert_eq!(x, work_area.x + (work_area.width - bounds.width) / 2.0);
+            assert_eq!(reserved_y + bounds.height, 818.0);
+            assert_eq!(hidden_y - reserved_y, 70.0);
+        }
+    }
+
+    #[test]
     fn capsule_window_bounds_stay_fixed_for_translation_badge() {
         let bounds = capsule_window_bounds(true);
         assert_eq!(
@@ -3354,7 +3604,13 @@ mod tests {
     }
 
     #[test]
-    fn capsule_visual_height_sinks_stage_toward_dock() {
+    fn typeless_capsule_window_is_one_fifth_of_the_old_area() {
+        let bounds = capsule_window_bounds_for_style(CapsuleStyle::Typeless);
+        assert_eq!((bounds.width, bounds.height), (206.0, 57.0));
+    }
+
+    #[test]
+    fn capsule_visual_height_keeps_the_qa_anchor_reference() {
         assert_eq!(capsule_visual_height(true), 140.0);
     }
 
@@ -3406,6 +3662,71 @@ mod tests {
         assert_eq!(frame_distance_to_point_squared(frame, -10.0, -910.0), 200.0);
     }
 
+    /// 内置 Retina 屏在左、外接 1x 屏在右的典型双屏排列。物理坐标按每块屏
+    /// 自己的缩放表示，因此 1x 外接屏从内屏的逻辑右边缘 x=1512 开始。
+    #[cfg(target_os = "macos")]
+    fn built_in_and_external_monitors() -> [CapsuleTargetMonitor; 2] {
+        [
+            CapsuleTargetMonitor {
+                physical_x: 0,
+                physical_y: 0,
+                physical_width: 3024,
+                physical_height: 1964,
+                work_x: 0,
+                work_y: 48,
+                work_width: 3024,
+                work_height: 1760,
+                scale: 2.0,
+            },
+            CapsuleTargetMonitor {
+                physical_x: 1512,
+                physical_y: 0,
+                physical_width: 2560,
+                physical_height: 1440,
+                work_x: 1512,
+                work_y: 24,
+                work_width: 2560,
+                work_height: 1320,
+                scale: 1.0,
+            },
+        ]
+    }
+
+    /// 浮窗（QA / Less Computer 面板 / glow 描边）跟的是光标所在屏，不是窗口自己
+    /// 上一次停留的屏 —— 这条一旦回退，多显示器下浮窗会被钉死在主屏。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn anchor_point_selects_the_monitor_under_the_cursor() {
+        let monitors = built_in_and_external_monitors();
+
+        let on_external = pick_monitor_for_anchor_point(monitors, 2000.0, 600.0)
+            .expect("external monitor should win when the cursor is on it");
+        assert_eq!(on_external, monitors[1]);
+
+        let on_built_in = pick_monitor_for_anchor_point(monitors, 700.0, 600.0)
+            .expect("built-in monitor should win when the cursor is on it");
+        assert_eq!(on_built_in, monitors[0]);
+    }
+
+    /// 光标短暂落在两屏之间的空隙（排列错位 / 屏幕刚拔掉）时退到最近的屏，
+    /// 而不是返回 None 让浮窗留在原地。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn anchor_point_outside_every_monitor_falls_back_to_the_nearest() {
+        let monitors = built_in_and_external_monitors();
+
+        // x=-100 落在所有屏左侧，离内置屏最近。
+        let picked = pick_monitor_for_anchor_point(monitors, -100.0, 600.0)
+            .expect("nearest monitor should be returned for an off-screen point");
+        assert_eq!(picked, monitors[0]);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn anchor_point_without_any_monitor_yields_none() {
+        assert!(pick_monitor_for_anchor_point(Vec::new(), 0.0, 0.0).is_none());
+    }
+
     #[test]
     fn bottom_center_position_keeps_window_on_left_monitor() {
         let frame = LogicalMonitorFrame {
@@ -3418,20 +3739,6 @@ mod tests {
         let pos = bottom_center_position(frame, 380.0, 440.0, 184.0);
 
         assert_eq!(pos, (-910.0, 276.0));
-    }
-
-    #[test]
-    fn bottom_visual_position_keeps_capsule_on_upper_monitor() {
-        let frame = LogicalMonitorFrame {
-            x: 0.0,
-            y: -900.0,
-            width: 1440.0,
-            height: 900.0,
-        };
-
-        let pos = bottom_visual_position(frame, 220.0, 96.0, 80.0, 0.0);
-
-        assert_eq!(pos, (610.0, -176.0));
     }
 
     // ---- #470: capsule 四边 clamp（纯函数，合成多显示器 / 负原点 / 1.5x DPI 输入）----

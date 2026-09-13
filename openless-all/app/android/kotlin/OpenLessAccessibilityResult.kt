@@ -1,8 +1,8 @@
 package com.openless.app
 
 /**
- * Structured result for accessibility command IPC.
- * [code] values are sent via [android.os.ResultReceiver].
+ * Structured result for accessibility command IPC. [code] values are sent via
+ * [android.os.ResultReceiver].
  */
 enum class AccessibilityPasteResult(val code: Int) {
     SUCCESS(1),
@@ -10,8 +10,7 @@ enum class AccessibilityPasteResult(val code: Int) {
     NO_FOCUSED_EDITOR(3),
     PASTE_REJECTED(4),
     TIMEOUT(5),
-    IPC_PROTOCOL_ERROR(6),
-    ;
+    IPC_PROTOCOL_ERROR(6);
 
     val reason: String
         get() = name

@@ -1,5 +1,5 @@
 // 权限/连通性面板：麦克风 / 辅助功能 / 全局热键 / Windows IME / 网络。
-// 内含三个状态 Pill + 适配器名称翻译辅助函数。
+// Normal states use localized labels; failed native checks retain their diagnostic details.
 
 import { useEffect, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -20,7 +20,10 @@ import type { NetworkCheckResult } from '../../lib/ipc';
 import { emitSaved } from '../../lib/savedEvent';
 import { getPlatformCapabilities } from '../../lib/platform';
 import { useLayoutStack, useConservativeLayout } from '../../lib/useMobileLayout';
-import { checkAndroidMicrophoneAccess, requestAndroidMicrophoneAccess } from '@android/lib/androidMicrophonePermission';
+import {
+  checkAndroidMicrophoneAccess,
+  requestAndroidMicrophoneAccess,
+} from '@android/lib/androidMicrophonePermission';
 import type {
   HotkeyStatus,
   PermissionStatus,
@@ -50,9 +53,11 @@ export function PermissionsSection() {
     flexDirection: conservative ? 'column' : 'row',
     alignItems: conservative ? 'flex-start' : 'center',
     justifyContent: stackLayout ? 'flex-start' : 'flex-end',
-    width: '100%', flexWrap: conservative ? 'nowrap' : 'wrap', minWidth: 0, gap: 8,
+    width: '100%',
+    flexWrap: conservative ? 'nowrap' : 'wrap',
+    minWidth: 0,
+    gap: 8,
   };
-
 
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
@@ -109,7 +114,9 @@ export function PermissionsSection() {
       refreshNetwork();
     };
     const onFocus = () => refreshAll();
-    const onVisibility = () => { if (document.visibilityState === 'visible') refreshAll(); };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') refreshAll();
+    };
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
@@ -148,7 +155,15 @@ export function PermissionsSection() {
 
   return (
     <Card>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 6 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 10,
+          marginBottom: 6,
+        }}
+      >
         <div style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.permissions.title')}</div>
         {platformCaps?.platform === 'android' && (
           <Btn
@@ -170,10 +185,16 @@ export function PermissionsSection() {
             <Btn variant="ghost" size="sm" onClick={refreshPermissions}>
               {t('common.retry')}
             </Btn>
-          ) : microphone !== 'granted' && microphone !== 'notApplicable' && microphone !== 'loading' && (
-            <Btn variant="ghost" size="sm" onClick={reRequestMicrophone}>
-              {microphone === 'denied' || microphone === 'restricted' ? t('settings.permissions.openSystem') : t('settings.permissions.grant')}
-            </Btn>
+          ) : (
+            microphone !== 'granted' &&
+            microphone !== 'notApplicable' &&
+            microphone !== 'loading' && (
+              <Btn variant="ghost" size="sm" onClick={reRequestMicrophone}>
+                {microphone === 'denied' || microphone === 'restricted'
+                  ? t('settings.permissions.openSystem')
+                  : t('settings.permissions.grant')}
+              </Btn>
+            )
           )}
         </div>
       </SettingRow>
@@ -181,18 +202,26 @@ export function PermissionsSection() {
         <SettingRow label={t('settings.permissions.accLabel')}>
           <div style={permissionActionsStyle}>
             <PermissionPill status={accessibility} />
-            {accessibility !== 'granted' && accessibility !== 'notApplicable' && accessibility !== 'loading' && (
-              <Btn variant="ghost" size="sm" onClick={reRequestAccessibility}>
-                {accessibility === 'denied' ? t('settings.permissions.openSystem') : t('settings.permissions.grant')}
-              </Btn>
-            )}
+            {accessibility !== 'granted' &&
+              accessibility !== 'notApplicable' &&
+              accessibility !== 'loading' && (
+                <Btn variant="ghost" size="sm" onClick={reRequestAccessibility}>
+                  {accessibility === 'denied'
+                    ? t('settings.permissions.openSystem')
+                    : t('settings.permissions.grant')}
+                </Btn>
+              )}
             {accessibility === 'denied' && (
-              <Btn variant="ghost" size="sm" onClick={() => {
-                resetAccessibilityPermissionAndRestartApp().catch((error) => {
-                  console.error('[settings] reset accessibility permission failed', error);
-                  emitSaved('failed', t('common.operationFailed'));
-                });
-              }}>
+              <Btn
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  resetAccessibilityPermissionAndRestartApp().catch((error) => {
+                    console.error('[settings] reset accessibility permission failed', error);
+                    emitSaved('failed', t('common.operationFailed'));
+                  });
+                }}
+              >
                 {t('settings.permissions.restart')}
               </Btn>
             )}
@@ -200,20 +229,26 @@ export function PermissionsSection() {
         </SettingRow>
       )}
       {platformCaps?.supportsDesktopHotkey === true && (
-      <SettingRow label={t('settings.permissions.hotkeyLabel')}>
-        <div style={permissionActionsStyle}>
-          {hotkey?.message && (
-            <span style={{
-              fontSize: 11.5, color: 'var(--ol-ink-4)',
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-              minWidth: 0, flex: '0 1 auto',
-            }}>
-              {hotkey.message}
-            </span>
-          )}
-          <HotkeyStatusPill status={hotkey} />
-        </div>
-      </SettingRow>
+        <SettingRow label={t('settings.permissions.hotkeyLabel')}>
+          <div style={permissionActionsStyle}>
+            {hotkey?.state === 'failed' && hotkey.message && (
+              <span
+                style={{
+                  fontSize: 11.5,
+                  color: 'var(--ol-ink-4)',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  minWidth: 0,
+                  flex: '0 1 auto',
+                }}
+              >
+                {hotkey.message}
+              </span>
+            )}
+            <HotkeyStatusPill status={hotkey} />
+          </div>
+        </SettingRow>
       )}
       {platformCaps?.supportsOverlay && platformCaps.platform === 'android' && (
         <AndroidPermissionsPanel />
@@ -222,11 +257,17 @@ export function PermissionsSection() {
         <SettingRow label={t('settings.permissions.windowsImeLabel')}>
           <div style={permissionActionsStyle}>
             {windowsIme && (
-              <span style={{
-                fontSize: 11.5, color: 'var(--ol-ink-4)',
-                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                minWidth: 0, flex: '0 1 auto',
-              }}>
+              <span
+                style={{
+                  fontSize: 11.5,
+                  color: 'var(--ol-ink-4)',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  minWidth: 0,
+                  flex: '0 1 auto',
+                }}
+              >
                 {t(`settings.permissions.windowsIme.${windowsIme.state}`)}
               </span>
             )}
@@ -237,9 +278,7 @@ export function PermissionsSection() {
       <SettingRow label={t('settings.permissions.networkLabel')}>
         <div style={permissionActionsStyle}>
           {network && network.latencyMs != null && (
-            <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>
-              {network.latencyMs}ms
-            </span>
+            <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>{network.latencyMs}ms</span>
           )}
           <NetworkStatusPill status={network} />
           {network && !network.online && (
@@ -259,7 +298,12 @@ function PermissionPill({ status }: { status: PermissionStatus | 'loading' }) {
     return <Pill tone="default">{t('settings.permissions.checking')}</Pill>;
   }
   if (status === 'granted') {
-    return <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.granted')}</Pill>;
+    return (
+      <Pill tone="ok">
+        <Icon name="check" size={11} />
+        {t('settings.permissions.granted')}
+      </Pill>
+    );
   }
   if (status === 'notApplicable') {
     return <Pill tone="default">{t('settings.permissions.notApplicable')}</Pill>;
@@ -279,7 +323,12 @@ function HotkeyStatusPill({ status }: { status: HotkeyStatus | null }) {
     return <Pill tone="default">{t('settings.permissions.checking')}</Pill>;
   }
   if (status.state === 'installed') {
-    return <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.hotkeyInstalled')}</Pill>;
+    return (
+      <Pill tone="ok">
+        <Icon name="check" size={11} />
+        {t('settings.permissions.hotkeyInstalled')}
+      </Pill>
+    );
   }
   if (status.state === 'starting') {
     return <Pill tone="default">{t('settings.permissions.hotkeyStarting')}</Pill>;
@@ -293,7 +342,12 @@ function WindowsImeStatusPill({ status }: { status: WindowsImeStatus | null }) {
     return <Pill tone="default">{t('settings.permissions.checking')}</Pill>;
   }
   if (status.state === 'installed') {
-    return <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.windowsImeInstalled')}</Pill>;
+    return (
+      <Pill tone="ok">
+        <Icon name="check" size={11} />
+        {t('settings.permissions.windowsImeInstalled')}
+      </Pill>
+    );
   }
   return <Pill tone="outline">{t('settings.permissions.windowsImeUnavailable')}</Pill>;
 }
@@ -304,7 +358,12 @@ function NetworkStatusPill({ status }: { status: NetworkCheckResult | null }) {
     return <Pill tone="default">{t('settings.permissions.checking')}</Pill>;
   }
   if (status.online) {
-    return <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.networkOk')}</Pill>;
+    return (
+      <Pill tone="ok">
+        <Icon name="check" size={11} />
+        {t('settings.permissions.networkOk')}
+      </Pill>
+    );
   }
   return <Pill tone="outline">{t('settings.permissions.networkOffline') ?? '不可用'}</Pill>;
 }

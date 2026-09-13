@@ -6,14 +6,16 @@ function assertMatch(source, pattern, name) {
   }
 }
 
-// 契约函数 show_capsule_window_no_activate 的实现现位于编译进二进制的
-// coordinator/capsule_focus.rs（2026-06 板块化重构从 coordinator.rs 迁出，行为不变；
-// 函数可见性随迁移改为 pub(super)）。契约必须校验真正编译的那份，否则会出现
+// 契约函数 show_capsule_window_no_activate 位于显式 Tauri Host Module。
+// 契约必须校验真正编译的那份，否则会出现
 // 「测试绿、线上坏」的假信心。
 const capsuleFocusRs = (
   await readFile(new URL('../src-tauri/src/coordinator/capsule_focus.rs', import.meta.url), 'utf-8')
 ).replace(/\r\n/g, '\n');
-const functionMatch = capsuleFocusRs.match(
+const coordinatorHostRs = (
+  await readFile(new URL('../src-tauri/src/tauri_coordinator_host.rs', import.meta.url), 'utf-8')
+).replace(/\r\n/g, '\n');
+const functionMatch = coordinatorHostRs.match(
   /#\[cfg\(target_os = "macos"\)\]\s*(?:pub\((?:crate|super)\) )?fn show_capsule_window_no_activate[\s\S]*?\n}\n\n#\[cfg\(target_os = "linux"\)\]/,
 );
 
@@ -71,7 +73,7 @@ assertMatch(
 );
 
 assertMatch(
-  capsuleFocusRs,
+  coordinatorHostRs,
   /#\[cfg\(target_os = "macos"\)\][\s\S]*?crate::capsule_target_monitor\(window\)/,
   'macOS capsule layout cache key must reuse capsule_target_monitor, or it will skip repositioning when the cursor moves to another screen',
 );
@@ -97,9 +99,14 @@ assertMatch(
 const coordinatorRs = (
   await readFile(new URL('../src-tauri/src/coordinator.rs', import.meta.url), 'utf-8')
 ).replace(/\r\n/g, '\n');
+assertMatch(
+  coordinatorHostRs,
+  /fn set_cursor_passthrough[\s\S]*?window\.set_ignore_cursor_events\(passthrough\)[\s\S]*?cursor_passthrough[\s\S]*?store\(passthrough, Ordering::SeqCst\)/,
+  'the narrow capsule-window capability must update the Tauri window and its host-owned passthrough cache together',
+);
 
 function extractFn(source, name) {
-  const match = source.match(new RegExp(`pub\\(crate\\) fn ${name}[\\s\\S]*?\\n}\\n`));
+  const match = source.match(new RegExp(`(?:pub\\(crate\\) )?fn ${name}[\\s\\S]*?\\n}\\n`));
   if (!match) {
     throw new Error(`${name}: function not found in coordinator.rs`);
   }
@@ -111,13 +118,13 @@ for (const name of ['show_vocab_suggestion_card', 'show_insert_fallback_card']) 
   const body = extractFn(coordinatorRs, name);
   assertMatch(
     body,
-    /\*inner\.capsule_layout\.lock\(\) = None;/,
+    /capsule\.invalidate_layout\(\)/,
     `${name} moves the shared capsule window, so it must invalidate the capsule_layout dedup cache`,
   );
   assertMatch(
     body,
-    /capsule_cursor_passthrough\s*\.store\(false, Ordering::SeqCst\)/,
-    `${name} calls set_ignore_cursor_events directly, so it must keep capsule_cursor_passthrough in sync`,
+    /capsule\.set_cursor_passthrough\(false\)/,
+    `${name} must change cursor passthrough through the host capability that keeps its cache in sync`,
   );
 }
 
@@ -126,13 +133,8 @@ for (const name of ['hide_vocab_suggestion_card', 'hide_insert_fallback_card']) 
   const body = extractFn(coordinatorRs, name);
   assertMatch(
     body,
-    /set_ignore_cursor_events\(true\)/,
+    /set_cursor_passthrough\(true\)/,
     `${name} must restore cursor passthrough, or the capsule keeps blocking that strip of screen`,
-  );
-  assertMatch(
-    body,
-    /capsule_cursor_passthrough\s*\.store\(true, Ordering::SeqCst\)/,
-    `${name} must keep the capsule_cursor_passthrough cache in sync with the window it just touched`,
   );
   assertMatch(
     body,
@@ -141,17 +143,17 @@ for (const name of ['hide_vocab_suggestion_card', 'hide_insert_fallback_card']) 
   );
   assertMatch(
     body,
-    /\*inner\.capsule_layout\.lock\(\) = None;/,
+    /capsule\.invalidate_layout\(\)/,
     `${name} must invalidate the capsule_layout dedup cache, or the next recording skips repositioning and the capsule stays bottom-right`,
   );
   assertMatch(
     body,
-    /position_capsule_bottom_center\(&window, false\)/,
+    /position_capsule_bottom_center\(false\)/,
     `${name} must move the capsule window back to bottom-center; restoring size alone leaves it in the card's bottom-right corner`,
   );
   // 顺序不变量：尺寸和位置要一起动，窗口还亮着时改就有概率被合成出一帧
   //「卡片被拉宽、还横着飞过半个屏幕」。
-  const hideAt = body.indexOf('window.hide()');
+  const hideAt = body.indexOf('capsule.hide()');
   const resizeAt = body.indexOf('set_size');
   if (hideAt === -1 || hideAt > resizeAt) {
     throw new Error(
