@@ -551,6 +551,30 @@ fn activate_app_by_pid(pid: i32) {
     }
 }
 
+/// macOS 专用：贴上前一刻的最终防线。`validate_selection_insertion_target`
+/// 的 simulate_copy 兜底最长含 200ms 重试，期间前台焦点可能跳到别的窗口或
+/// 应用（而对方恰好暴露相同选区文本时，仅靠文本比对会放行）。这里在
+/// `insert()` 之前立即重读前台应用 pid+name 并与捕获时比对，任何变化都拒绝
+/// 粘贴——宁可替换失败，不能写错目标。
+#[cfg(target_os = "macos")]
+pub(crate) fn selection_target_still_front(target: &SelectionInsertionTarget) -> bool {
+    let Some(captured) = target.macos.as_ref() else {
+        return false;
+    };
+    let Some(pid) = captured.front_app_pid else {
+        return false;
+    };
+    if current_front_app_pid() != Some(pid) {
+        return false;
+    }
+    if let Some(name) = captured.front_app.as_deref() {
+        if current_front_app().as_deref() != Some(name) {
+            return false;
+        }
+    }
+    true
+}
+
 /// 捕获选区。Linux 只通过 fcitx5 DBus 读取 PRIMARY 选区，失败统一视为无选区。
 pub fn capture_selection_with_status() -> SelectionCaptureOutcome {
     capture_selection_with_status_diag().0

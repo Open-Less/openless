@@ -135,6 +135,69 @@ pub fn apply_chinese_script_preference(text: &str, preference: ChineseScriptPref
         .map_or_else(|| text.to_string(), |converter| converter.convert(text))
 }
 
+/// 剝離模型完整回顯的 user-message 腳手架。
+///
+/// 以真正的 prompt builder 產生 canonical 模板，再比對標籤前後的完整內容；不手抄
+/// 導語，避免 prompt 改字後判定漂移。另接受整套模板被簡繁轉換後的版本。只有完整
+/// 模板命中才取信封正文；單純 XML、文件範例或前後另有正文一律保留原輸出。
+fn strip_complete_template(text: &str, template: &str, open: &str, close: &str) -> Option<String> {
+    let template_open = template.find(open)?;
+    let template_inner_start = template_open + open.len();
+    let template_close = template[template_inner_start..].find(close)? + template_inner_start;
+    let expected_before = normalize_scaffold_prose(template[..template_open].trim());
+    let expected_after = normalize_scaffold_prose(template[template_close + close.len()..].trim());
+
+    let trimmed = text.trim();
+    let open_pos = trimmed.find(open)?;
+    let inner_start = open_pos + open.len();
+    let inner_end = trimmed[inner_start..].find(close)? + inner_start;
+    let before = normalize_scaffold_prose(trimmed[..open_pos].trim());
+    let after = normalize_scaffold_prose(trimmed[inner_end + close.len()..].trim());
+    if before != expected_before || after != expected_after {
+        return None;
+    }
+    let inner = trimmed[inner_start..inner_end].trim();
+    (!inner.is_empty()).then(|| inner.to_string())
+}
+
+fn normalize_scaffold_prose(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+pub fn strip_echoed_scaffolding(text: &str) -> String {
+    const MARKER: &str = "__OPENLESS_SCAFFOLD_BODY__";
+    let raw = crate::prompts::user_prompt(MARKER);
+    let selection = crate::prompts::selection_user_prompt(MARKER);
+    let raw_traditional = apply_chinese_script_preference(
+        &raw,
+        ChineseScriptPreference::Traditional,
+    );
+    let selection_traditional = apply_chinese_script_preference(
+        &selection,
+        ChineseScriptPreference::Traditional,
+    );
+
+    let stripped = [raw.as_str(), raw_traditional.as_str()]
+        .into_iter()
+        .find_map(|template| {
+            strip_complete_template(text, template, "<raw_transcript>", "</raw_transcript>")
+        })
+        .or_else(|| {
+            [selection.as_str(), selection_traditional.as_str()]
+                .into_iter()
+                .find_map(|template| {
+                    strip_complete_template(
+                        text,
+                        template,
+                        "<selected_text>",
+                        "</selected_text>",
+                    )
+                })
+        })
+        .unwrap_or_else(|| text.to_string());
+    stripped
+}
+
 pub fn append_typed_prefix(target: &mut String, delta: &str, typed_chars: usize) -> usize {
     let prefix: String = delta.chars().take(typed_chars).collect();
     let count = prefix.chars().count();
@@ -153,6 +216,66 @@ pub fn streaming_insert_eligible(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn strip_echoed_scaffolding_none_passes_through() {
+        assert_eq!(strip_echoed_scaffolding("純正文，沒有標籤。"), "純正文，沒有標籤。");
+    }
+
+    #[test]
+    fn strip_echoed_scaffolding_unescaped_user_content_not_touched() {
+        // 用戶正文裡的標籤經 sanitize 後是 &lt;raw_transcript，不是活標籤——不得剝。
+        let text = "文中提到 &lt;raw_transcript 的用法。";
+        assert_eq!(strip_echoed_scaffolding(text), text);
+    }
+
+    #[test]
+    fn strip_echoed_scaffolding_drops_echoed_template_and_tags() {
+        // 蜘蛛故事事故形態：模型照抄整套 raw user prompt，並被轉成繁體。
+        let text = crate::prompts::user_prompt("從前，有一隻蜘蛛。");
+        let text = apply_chinese_script_preference(&text, ChineseScriptPreference::Traditional);
+        assert_eq!(strip_echoed_scaffolding(&text), "從前，有一隻蜘蛛。");
+    }
+
+    #[test]
+    fn strip_echoed_scaffolding_empty_inner_keeps_original() {
+        // 標籤內為空（模型只回顯了空信封）——保守不剝，避免把正文吃掉。
+        let text = "脚手架\n<raw_transcript>\n</raw_transcript>\n正文在這裡。";
+        assert_eq!(strip_echoed_scaffolding(text), text);
+    }
+
+    #[test]
+    fn strip_echoed_scaffolding_missing_close_keeps_original() {
+        // 流被截斷、只回顯了開標籤——保守不剝。
+        let text = "<raw_transcript>\n只有開標籤，流斷了。";
+        assert_eq!(strip_echoed_scaffolding(text), text);
+    }
+
+    #[test]
+    fn strip_echoed_scaffolding_legitimate_xml_is_not_touched() {
+        let text = "請輸出以下 XML 範例：<selected_text>保留我</selected_text>，並補充說明。";
+        assert_eq!(strip_echoed_scaffolding(text), text);
+    }
+
+    #[test]
+    fn strip_echoed_scaffolding_selected_text_echo_stripped() {
+        // 圈選路徑：模型完整回顯真實 selection user prompt。
+        let text = crate::prompts::selection_user_prompt("从前，有一只蜘蛛。");
+        assert_eq!(strip_echoed_scaffolding(&text), "从前，有一只蜘蛛。");
+    }
+
+    #[test]
+    fn strip_echoed_scaffolding_selected_text_empty_inner_keeps_original() {
+        let text = "脚手架\n<selected_text>\n</selected_text>\n正文在这里。";
+        assert_eq!(strip_echoed_scaffolding(text), text);
+    }
+
+    #[test]
+    fn strip_echoed_scaffolding_escaped_selected_text_not_touched() {
+        // 用戶正文裡的 <selected_text> 經 sanitize 後是 &lt;selected_text，不是活標籤。
+        let text = "文中提到 &lt;selected_text 的用法。";
+        assert_eq!(strip_echoed_scaffolding(text), text);
+    }
+
     use super::*;
     use crate::shared_types::MacosNewlineMode;
 

@@ -235,6 +235,12 @@ impl SelectionServiceInner {
         context.polish.cursor_context = None;
         context.polish.context_window_minutes = 0;
         context.polish.prior_turns.clear();
+        // 圈選專用 user message 框架：選區沒有「語音輸入 / mode / 游標」，
+        // 必須用 <selected_text> 選區框架。預設 RawTranscript 只屬於語音輸入
+        // 路徑（DictationContext::capture 的預設值），這裡是唯一把它改成
+        // SelectedText 的地方。
+        context.polish.user_envelope =
+            crate::prompt_compose::UserEnvelope::SelectedText;
         Ok((context, preferences.selection_polish_output_mode, uses_llm))
     }
 
@@ -615,7 +621,13 @@ impl SelectionApi for SelectionService {
                 inner.set_context(session_id, Arc::clone(&context))?;
                 let (output, polish_ms) = if uses_llm {
                     let polish_started = std::time::Instant::now();
-                    let output = inner
+                    // C 案：圈選潤色此前漏接簡繁偏好（語音輸入路徑在 finish 時已套用
+                    // apply_chinese_script_preference）。這裡對齊——LLM 輸出依用戶
+                    // 設定做確定性簡繁轉換，與 prompt 無關，避免小模型簡體漂移直接
+                    // 進預覽/替換。非 LLM 分支只回顯原始選區，不轉換。
+                    // `context` 稍後被 move 進 polish()，先把 Copy 的偏好抓成局部。
+                    let script_pref = context.polish.chinese_script_preference;
+                    let mut output = inner
                         .polisher
                         .polish(
                             session_id,
@@ -624,6 +636,35 @@ impl SelectionApi for SelectionService {
                             Arc::new(DiscardTextStreamSink),
                         )
                         .await?;
+                    // 脚手架剥离（2026-09-11 蜘蛛故事事故）：小模型间歇性把 user
+                    // message 的模板句与 <raw_transcript> 信封连同正文一起回显。
+                    // prompt 层禁令对 35B 小模型只有部分效果，这里做确定性后处理
+                    // （模型无关）：活标签必然来自回显——用户正文进 LLM 前标签已被
+                    // sanitize 中和，正规输出不可能含活标签，取标签内正文零误伤。
+                    let before_strip = output.text.clone();
+                    let stripped =
+                        crate::streaming_insert::strip_echoed_scaffolding(&output.text);
+                    if stripped != before_strip {
+                        log::info!(
+                            "[selection-polish] stripped echoed scaffolding: {} -> {} chars",
+                            before_strip.chars().count(),
+                            stripped.chars().count()
+                        );
+                        output.text = stripped;
+                    }
+                    let before = output.text.clone();
+                    output.text = crate::streaming_insert::apply_chinese_script_preference(
+                        &output.text,
+                        script_pref,
+                    );
+                    if output.text != before {
+                        log::info!(
+                            "[selection-polish] script preference applied: {:?} {} -> {} chars",
+                            script_pref,
+                            before.chars().count(),
+                            output.text.chars().count(),
+                        );
+                    }
                     (
                         output,
                         Some(

@@ -102,6 +102,7 @@ impl GeminiProvider {
         front_app: Option<&str>,
         cursor_context: Option<&str>,
         prior_turns: &[(String, String)],
+        user_envelope: crate::prompt_compose::UserEnvelope,
     ) -> Result<String, LLMError> {
         let (system_prompt, user_prompt) = compose_polish_prompts(
             raw_text,
@@ -114,6 +115,7 @@ impl GeminiProvider {
             front_app,
             cursor_context,
             !prior_turns.is_empty(),
+            user_envelope,
         );
 
         let contents = build_polish_history_contents(prior_turns, &user_prompt);

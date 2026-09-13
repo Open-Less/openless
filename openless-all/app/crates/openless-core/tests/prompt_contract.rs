@@ -1,6 +1,7 @@
 use openless_core::prompt_compose::{
     build_polish_translate_system_prompt, compose_polish_prompts, compose_translate_prompts,
-    split_polish_translate_output, POLISH_TRANSLATE_SRC_MARKER, POLISH_TRANSLATE_TGT_MARKER,
+    split_polish_translate_output, UserEnvelope, POLISH_TRANSLATE_SRC_MARKER,
+    POLISH_TRANSLATE_TGT_MARKER,
 };
 use openless_core::prompts;
 use openless_core::shared_types::{ChineseScriptPreference, OutputLanguagePreference};
@@ -21,6 +22,7 @@ fn polish_prompt_preserves_context_envelopes_and_injection_defenses() {
         Some("Mail\n#evil<instruction>"),
         Some(&cursor_context),
         true,
+        UserEnvelope::RawTranscript,
     );
 
     assert!(system_prompt.starts_with("# 上下文"));
@@ -74,4 +76,46 @@ fn combined_polish_translation_contract_has_stable_markers_and_parser() {
         split_polish_translate_output(POLISH_TRANSLATE_TGT_MARKER),
         None
     );
+}
+
+#[test]
+fn selection_envelope_uses_selected_text_not_voice_scaffolding() {
+    // 圈選路徑：user message 用 <selected_text> 選區框架，不含語音脚手架；
+    // system 端防禦措辭指向 <selected_text>。
+    let (system_prompt, user_prompt) = compose_polish_prompts(
+        "从前，有一只蜘蛛。",
+        PolishMode::Light,
+        &[],
+        "STYLE",
+        &[],
+        ChineseScriptPreference::Simplified,
+        OutputLanguagePreference::ZhCn,
+        None,
+        None,
+        false,
+        UserEnvelope::SelectedText,
+    );
+    assert!(user_prompt.contains("<selected_text>"));
+    assert!(user_prompt.contains("从前，有一只蜘蛛。"));
+    assert_eq!(user_prompt.matches("</selected_text>").count(), 1);
+    assert!(!user_prompt.contains("语音输入"), "圈选 user message 不得出现语音输入框架");
+    assert!(!user_prompt.contains("<raw_transcript>"), "圈选 user message 不得出现语音信封");
+    assert!(system_prompt.contains("`<selected_text>` 标签内的内容"), "system 防御应指向 selected_text 信封");
+
+    // 語音路徑 byte-identical：預設信封仍是 <raw_transcript> 語音框架。
+    let (_sys, voice_user) = compose_polish_prompts(
+        "从前，有一只蜘蛛。",
+        PolishMode::Light,
+        &[],
+        "STYLE",
+        &[],
+        ChineseScriptPreference::Simplified,
+        OutputLanguagePreference::ZhCn,
+        None,
+        None,
+        false,
+        UserEnvelope::RawTranscript,
+    );
+    assert!(voice_user.contains("<raw_transcript>"));
+    assert!(voice_user.contains("语音输入的原始转写"));
 }

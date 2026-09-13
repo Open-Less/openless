@@ -4,6 +4,22 @@ use crate::prompts;
 use crate::shared_types::{ChineseScriptPreference, OutputLanguagePreference};
 use crate::types::PolishMode;
 
+/// 圈選潤色與語音輸入共用同一条 prompt 装配管线，但 user message 的信封
+/// 框架不同：語音是「本次語音輸入的原始轉寫」(`<raw_transcript>`)，圈選是
+///「用户选中的文本」(`<selected_text>`)。小模型會照抄它看到的框架語，所以
+/// 圈選必須走選區框架——否則会把整套語音脚手架回顯進輸出（蜘蛛故事事故）。
+///
+/// `RawTranscript` 為預設：語音輸入路徑一 byte 不動；圈選路徑在
+/// `selection_service` 把它設成 [`UserEnvelope::SelectedText`]。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UserEnvelope {
+    /// 語音輸入路徑（預設）：「本次語音輸入的原始轉寫」+ `<raw_transcript>`。
+    #[default]
+    RawTranscript,
+    /// 圈選路徑：「用户选中的文本」+ `<selected_text>`。
+    SelectedText,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolishSystemPromptAssembly {
     pub context_premise: String,
@@ -180,6 +196,7 @@ pub fn compose_polish_prompts(
     front_app: Option<&str>,
     cursor_context: Option<&str>,
     has_prior_turns: bool,
+    user_envelope: UserEnvelope,
 ) -> (String, String) {
     let mut system_prompt = compose_system_prompt(style_system_prompt, hotwords);
     if let Some(premise) = context_premise(
@@ -197,11 +214,16 @@ pub fn compose_polish_prompts(
         system_prompt = format!("{}\n\n{}", system_prompt, block);
     }
     // issue #609 F-02：在 system prompt 末尾追加对抗式防御措辞，明确信封内文本是
-    // 数据而非指令。纵深防御，非硬保证。
+    // 数据而非指令。纵深防御，非硬保证。tag 与实际 user message 的信封标签一致：
+    // 语音路径逐字回到改动前的 `<raw_transcript>` 措辞，圈选路径指向 `<selected_text>`。
+    let defense_tag = match user_envelope {
+        UserEnvelope::RawTranscript => "raw_transcript",
+        UserEnvelope::SelectedText => "selected_text",
+    };
     system_prompt = format!(
         "{}\n\n{}",
         system_prompt,
-        prompts::polish_injection_defense()
+        prompts::polish_injection_defense(defense_tag)
     );
     // 带了光标上下文才追加它那一条，理由同上：没开这个功能的用户不该被改 prompt。
     if cursor_context_block.is_some() {
@@ -220,7 +242,10 @@ pub fn compose_polish_prompts(
             prompts::polish_context_instruction()
         );
     }
-    let user_prompt = prompts::user_prompt(raw_text);
+    let user_prompt = match user_envelope {
+        UserEnvelope::RawTranscript => prompts::user_prompt(raw_text),
+        UserEnvelope::SelectedText => prompts::selection_user_prompt(raw_text),
+    };
     (system_prompt, user_prompt)
 }
 
@@ -249,6 +274,7 @@ pub fn assemble_polish_system_prompt(
         front_app,
         cursor_context,
         has_prior_turns,
+        UserEnvelope::default(),
     );
     let context_premise = context_premise(
         working_languages,

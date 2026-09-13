@@ -282,8 +282,8 @@ pub use prompt_compose::{
     assemble_polish_system_prompt, build_hotword_block, build_polish_translate_system_prompt,
     compose_hotword_block_preview, compose_polish_prompts, compose_qa_system_prompt,
     compose_system_prompt, compose_translate_prompts, context_premise,
-    split_polish_translate_output, PolishSystemPromptAssembly, POLISH_TRANSLATE_SRC_MARKER,
-    POLISH_TRANSLATE_TGT_MARKER,
+    split_polish_translate_output, PolishSystemPromptAssembly, UserEnvelope,
+    POLISH_TRANSLATE_SRC_MARKER, POLISH_TRANSLATE_TGT_MARKER,
 };
 pub use provider_registry::{DictationEngineRouter, TextPolisherRouter, TranscriptionRouter};
 pub use provider_rules::{AuthRequirement, ProviderDescriptor, ValidationProbe};

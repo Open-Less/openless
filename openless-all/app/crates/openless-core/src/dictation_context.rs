@@ -8,6 +8,7 @@ use crate::shared_types::{
     PasteShortcut, PipelineMode, UserPreferences, WindowsInsertionMode,
     WindowsSendInputNewlineMode,
 };
+use crate::prompt_compose::UserEnvelope;
 use crate::style_packs::{translation_effective, StylePack};
 use crate::types::{DictationSession, PolishMode};
 
@@ -106,6 +107,9 @@ pub struct DictationPolishContext {
     pub cursor_context: Option<String>,
     /// Newest-first turns captured when the session starts.
     pub prior_turns: Vec<PolishHistoryTurn>,
+    /// 圈選路徑設 [`UserEnvelope::SelectedText`]；預設 [`UserEnvelope::RawTranscript`]
+    /// （語音輸入路徑一 byte 不動）。
+    pub user_envelope: UserEnvelope,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,6 +284,7 @@ impl DictationContext {
                 front_app: options.front_app.clone().and_then(non_blank_owned),
                 cursor_context: options.cursor_context.clone().and_then(non_blank_owned),
                 prior_turns,
+                user_envelope: UserEnvelope::default(),
             },
             insertion: DictationInsertionContext {
                 enabled: options.insert_text,
@@ -320,6 +325,7 @@ impl DictationContext {
             self.polish.front_app.as_deref(),
             self.polish.cursor_context.as_deref(),
             !self.polish.prior_turns.is_empty(),
+            self.polish.user_envelope,
         )
     }
 

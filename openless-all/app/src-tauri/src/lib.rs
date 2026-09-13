@@ -2764,6 +2764,9 @@ fn ensure_selection_polish_preview_window<R: tauri::Runtime>(
     .skip_taskbar(true)
     .focused(false)
     .visible(false)
+    // Nonactivating NSPanel 的 WebKit 內容不可靠地接受 first mouse；native flag
+    // 仍保留作輔助，HTML 第一擊由下方 local NSEvent monitor 保證。
+    .accept_first_mouse(true)
     .build();
     match built {
         Ok(window) => {
@@ -2828,8 +2831,146 @@ fn make_selection_polish_preview_panel_macos<R: tauri::Runtime>(window: &tauri::
                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
                     | NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces,
             );
+            install_selection_preview_first_click_guard(raw);
         }
         Err(e) => log::warn!("[selection-polish] preview to_panel failed: {e:?}"),
+    }
+}
+
+/// 圈選預覽窗第一擊護欄（macOS）。
+///
+/// local monitor 在 AppKit 派發前，若左鍵事件屬於目前的選區預覽窗且該窗不是 key，
+/// 先 makeKeyWindow，再原樣放行事件。監聽器只永久保存 windowNumber，不保存 NSPanel
+/// 裸指標；預覽窗重建時更新 windowNumber，避免 stale pointer。
+#[cfg(target_os = "macos")]
+fn install_selection_preview_first_click_guard(panel: *mut objc2::runtime::AnyObject) {
+    use block2::RcBlock;
+    use objc2::msg_send;
+    use objc2::runtime::{AnyObject, Bool};
+    use std::sync::atomic::{AtomicI64, AtomicPtr, Ordering};
+
+    static TARGET_WINDOW_NUMBER: AtomicI64 = AtomicI64::new(-1);
+    static MONITOR: AtomicPtr<AnyObject> = AtomicPtr::new(std::ptr::null_mut());
+
+    if panel.is_null() {
+        return;
+    }
+    let window_number = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+            let number: isize = msg_send![panel, windowNumber];
+            number as i64
+        }))
+    })) {
+        Ok(Ok(number)) if number >= 0 => number,
+        Ok(Ok(_)) => {
+            log::warn!("[selection-polish] first-click guard: invalid windowNumber");
+            return;
+        }
+        Ok(Err(error)) => {
+            log::warn!("[selection-polish] first-click guard: windowNumber raised: {error:?}");
+            return;
+        }
+        Err(_) => {
+            log::error!("[selection-polish] first-click guard: Rust panic reading windowNumber");
+            return;
+        }
+    };
+    TARGET_WINDOW_NUMBER.store(window_number, Ordering::SeqCst);
+
+    if !MONITOR.load(Ordering::SeqCst).is_null() {
+        log::info!(
+            "[selection-polish] first-click guard target updated window_number={window_number}"
+        );
+        return;
+    }
+
+    let block = RcBlock::new(move |event: *mut AnyObject| -> *mut AnyObject {
+        let guarded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                if event.is_null() {
+                    return false;
+                }
+                let win: *mut AnyObject = msg_send![event, window];
+                if win.is_null() {
+                    return false;
+                }
+                let event_window_number: isize = msg_send![win, windowNumber];
+                if event_window_number as i64 != TARGET_WINDOW_NUMBER.load(Ordering::SeqCst) {
+                    return false;
+                }
+                // windowNumber 可能在視窗銷毀後被 AppKit 重用；再用固定 title 驗證
+                // 事件確實來自選區預覽窗，避免誤把其他 OpenLess 視窗扶成 key。
+                let title: *mut AnyObject = msg_send![win, title];
+                if title.is_null() {
+                    return false;
+                }
+                let expected: *mut AnyObject = msg_send![
+                    objc2::runtime::AnyClass::get("NSString").expect("NSString class"),
+                    stringWithUTF8String: c"OpenLess 选区润色预览".as_ptr()
+                ];
+                if expected.is_null() {
+                    return false;
+                }
+                let title_matches: Bool = msg_send![title, isEqualToString: expected];
+                if !title_matches.as_bool() {
+                    return false;
+                }
+                let is_key: Bool = msg_send![win, isKeyWindow];
+                if !is_key.as_bool() {
+                    let _: () = msg_send![win, makeKeyWindow];
+                    return true;
+                }
+                false
+            }))
+        }));
+        match guarded {
+            Ok(Ok(true)) => log::info!(
+                "[selection-polish] first-click guard: panel made key before first mouse-down"
+            ),
+            Ok(Ok(false)) => {}
+            Ok(Err(error)) => log::warn!(
+                "[selection-polish] first-click guard: ObjC exception caught; event passed through: {error:?}"
+            ),
+            Err(_) => log::error!(
+                "[selection-polish] first-click guard: Rust panic caught; event passed through"
+            ),
+        }
+        event
+    });
+
+    let registration = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+            let Some(cls) = objc2::runtime::AnyClass::get("NSEvent") else {
+                return std::ptr::null_mut();
+            };
+            const MASK_LEFT_MOUSE_DOWN: u64 = 1 << 1;
+            let monitor: *mut AnyObject = msg_send![
+                cls,
+                addLocalMonitorForEventsMatchingMask: MASK_LEFT_MOUSE_DOWN,
+                handler: &*block
+            ];
+            if !monitor.is_null() {
+                let _: *mut AnyObject = msg_send![monitor, retain];
+            }
+            monitor
+        }))
+    }));
+    match registration {
+        Ok(Ok(monitor)) if !monitor.is_null() => {
+            MONITOR.store(monitor, Ordering::SeqCst);
+            log::info!(
+                "[selection-polish] first-click guard installed window_number={window_number}"
+            );
+        }
+        Ok(Ok(_)) => log::warn!(
+            "[selection-polish] first-click guard: monitor registration unavailable; will retry"
+        ),
+        Ok(Err(error)) => log::warn!(
+            "[selection-polish] first-click guard: registration raised; will retry: {error:?}"
+        ),
+        Err(_) => log::error!(
+            "[selection-polish] first-click guard: Rust panic during registration; will retry"
+        ),
     }
 }
 
@@ -2863,6 +3004,8 @@ pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R
                         log::warn!("[selection-polish] ns_window null; falling back to show()");
                         let _ = window_clone.show();
                     } else {
+                        // 每次 show 都刷新 target；若初次 monitor 註冊失敗，這裡也會重試。
+                        install_selection_preview_first_click_guard(ns);
                         unsafe {
                             let _: () = msg_send![ns, orderFrontRegardless];
                         }
@@ -2907,6 +3050,107 @@ pub(crate) fn hide_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R
     #[cfg(not(target_os = "macos"))]
     {
         let _ = window.hide();
+    }
+}
+
+/// Confirm 前同步撤掉選區預覽 NSPanel 的 key-window 狀態。
+///
+/// NonactivatingPanel 可以在來源 app 已是 frontmost 時仍保有 key window；若不先
+/// resign，validate 的全域 Cmd+C 可能仍送進預覽 WebView，讀到空剪貼簿後誤判
+/// SelectionChanged。只 resign、不 hide：失敗時預覽仍可見並可重試；成功後沿用
+/// selection service 原本的 hide 流程。
+#[cfg(target_os = "macos")]
+fn resign_selection_polish_preview_key_macos<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+) -> Result<bool, String> {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyObject, Bool};
+
+    let handle = window
+        .ns_window()
+        .map_err(|error| format!("ns_window unavailable: {error}"))?;
+    let ns = handle as *mut AnyObject;
+    if ns.is_null() {
+        return Err("ns_window returned null".to_string());
+    }
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+            let was_key: Bool = msg_send![ns, isKeyWindow];
+            if was_key.as_bool() {
+                let _: () = msg_send![ns, resignKeyWindow];
+            }
+            was_key.as_bool()
+        }))
+    }));
+    match caught {
+        Ok(Ok(was_key)) => Ok(was_key),
+        Ok(Err(error)) => Err(format!("resignKeyWindow raised: {error:?}")),
+        Err(_) => Err("Rust panic while resigning preview key window".to_string()),
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn resign_selection_polish_preview_key_for_apply<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> bool {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, Bool};
+
+    let Some(window) = app.get_webview_window("selection-polish-preview") else {
+        log::warn!("[selection-polish] apply: preview window missing before focus handoff");
+        return false;
+    };
+
+    let on_main_thread = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+            AnyClass::get("NSThread").is_some_and(|class| {
+                let is_main: Bool = msg_send![class, isMainThread];
+                is_main.as_bool()
+            })
+        }))
+    })) {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => {
+            log::warn!("[selection-polish] apply: NSThread lookup raised: {error:?}");
+            return false;
+        }
+        Err(_) => {
+            log::error!("[selection-polish] apply: Rust panic checking main thread");
+            return false;
+        }
+    };
+    let result = if on_main_thread {
+        resign_selection_polish_preview_key_macos(&window)
+    } else {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let window_clone = window.clone();
+        if let Err(error) = app.run_on_main_thread(move || {
+            let result = resign_selection_polish_preview_key_macos(&window_clone);
+            let _ = tx.send(result);
+        }) {
+            log::warn!(
+                "[selection-polish] apply: main-thread focus handoff dispatch failed: {error}"
+            );
+            return false;
+        }
+        // 呼叫端是 blocking apply；事件已排入主執行緒後等待唯一結果。主執行緒路徑
+        // 已在上方直接執行，不會 self-deadlock；不設 timeout，避免回報失敗後延遲
+        // resign 又在別的互動中生效。
+        rx.recv()
+            .unwrap_or_else(|error| Err(format!("preview resign channel closed: {error}")))
+    };
+
+    match result {
+        Ok(was_key) => {
+            log::info!(
+                "[selection-polish] apply: preview resigned key before reactivate was_key={was_key}"
+            );
+            true
+        }
+        Err(error) => {
+            log::warn!("[selection-polish] apply: preview resign failed: {error}");
+            false
+        }
     }
 }
 
