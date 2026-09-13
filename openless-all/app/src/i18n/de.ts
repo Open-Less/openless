@@ -1287,6 +1287,7 @@ export const de: typeof zhCN = {
       pipelineIsolationNotice:
         'Die beiden Modi speichern ihre Zugangsdaten vollständig getrennt. Beim Wechsel bleiben die Daten des anderen Modus gespeichert und werden beim Zurückwechseln wieder verwendet.',
       presets: {
+        lmstudio: 'LM Studio',
         opencode: 'OpenCode Zen',
         tencentTokenHub: 'Tencent Cloud TokenHub',
         customChatCompletions: 'Benutzerdefiniert · Chat Completions',
@@ -1399,6 +1400,7 @@ export const de: typeof zhCN = {
       fillDefault: 'Standardwert eintragen',
       readFailed: 'Lesen fehlgeschlagen',
       apiKeyLabel: 'API-Schlüssel',
+      apiKeyOptionalLabel: 'API-Schlüssel (optional)',
       baseUrlLabel: 'Basis-URL',
       modelLabel: 'Modell',
       customModelLabel: 'Eigenes Modell…',

@@ -1241,6 +1241,7 @@ export const ja: typeof zhCN = {
       pipelineIsolationNotice:
         '2つのモードは完全に独立した認証情報を使用します。切り替えてももう一方の設定は削除されず、切り戻せば復元されます。',
       presets: {
+        lmstudio: 'LM Studio',
         ark: 'ARK（Volcengine Ark）',
         deepseek: 'DeepSeek',
         siliconflow: 'SiliconFlow',
@@ -1351,6 +1352,7 @@ export const ja: typeof zhCN = {
       fillDefault: 'デフォルト値を入力',
       readFailed: '読み込み失敗',
       apiKeyLabel: 'API キー',
+      apiKeyOptionalLabel: 'API キー（任意）',
       baseUrlLabel: 'エンドポイント',
       modelLabel: 'モデル',
       customModelLabel: 'カスタムモデル…',

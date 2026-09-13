@@ -1296,6 +1296,7 @@ export const fr: typeof zhCN = {
       pipelineIsolationNotice:
         'Les deux modes conservent des identifiants distincts. Changer de mode garde l’autre configuration sans l’utiliser ; elle est restaurée à votre retour.',
       presets: {
+        lmstudio: 'LM Studio',
         opencode: 'OpenCode Zen',
         tencentTokenHub: 'TokenHub Tencent Cloud',
         customChatCompletions: 'Personnalisé · Chat Completions',
@@ -1407,6 +1408,7 @@ export const fr: typeof zhCN = {
       fillDefault: 'Renseigner la valeur par défaut',
       readFailed: 'Échec de la lecture',
       apiKeyLabel: 'Clé API',
+      apiKeyOptionalLabel: 'Clé API (facultative)',
       baseUrlLabel: 'URL de base',
       modelLabel: 'Modèle',
       customModelLabel: 'Modèle personnalisé…',

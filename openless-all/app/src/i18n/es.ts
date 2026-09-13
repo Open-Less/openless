@@ -1279,6 +1279,7 @@ export const es: typeof zhCN = {
       pipelineIsolationNotice:
         'Cada modo conserva sus propias credenciales. Al cambiar, las del otro modo se guardan sin usarse y se restauran cuando vuelves.',
       presets: {
+        lmstudio: 'LM Studio',
         opencode: 'OpenCode Zen',
         tencentTokenHub: 'TokenHub de Tencent Cloud',
         customChatCompletions: 'Personalizado · Chat Completions',
@@ -1390,6 +1391,7 @@ export const es: typeof zhCN = {
       fillDefault: 'Usar valor predeterminado',
       readFailed: 'No se pudo leer',
       apiKeyLabel: 'Clave API',
+      apiKeyOptionalLabel: 'Clave API (opcional)',
       baseUrlLabel: 'URL base',
       modelLabel: 'Modelo',
       customModelLabel: 'Modelo personalizado…',

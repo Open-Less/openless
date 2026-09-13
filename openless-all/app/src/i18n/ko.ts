@@ -1233,6 +1233,7 @@ export const ko: typeof zhCN = {
       pipelineIsolationNotice:
         '두 모드는 완전히 분리된 자격 증명을 사용합니다. 전환해도 다른 쪽 설정은 삭제되지 않으며, 다시 전환하면 복원됩니다.',
       presets: {
+        lmstudio: 'LM Studio',
         ark: 'ARK (Volcengine Ark)',
         deepseek: 'DeepSeek',
         siliconflow: 'SiliconFlow',
@@ -1342,6 +1343,7 @@ export const ko: typeof zhCN = {
       fillDefault: '기본값 입력',
       readFailed: '읽기 실패',
       apiKeyLabel: 'API 키',
+      apiKeyOptionalLabel: 'API 키 (선택 사항)',
       baseUrlLabel: '엔드포인트',
       modelLabel: '모델',
       customModelLabel: '사용자 정의 모델…',

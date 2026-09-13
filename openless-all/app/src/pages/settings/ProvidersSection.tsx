@@ -144,6 +144,7 @@ export const LLM_LABELS = [
   ['stepfun', 'stepfun'],
   ['opencode', 'opencode'],
   ['tencentTokenHub', 'tencentTokenHub'],
+  ['lmstudio', 'lmstudio'],
   ['custom', 'customChatCompletions'],
   ['custom_responses', 'customResponses'],
   ['custom_messages', 'customMessages'],
@@ -338,7 +339,11 @@ export function ChannelCredentialFields({
           <>
             <CredentialField
               key={`${channelId}:api_key`}
-              label={t('settings.providers.apiKeyLabel')}
+              label={t(
+                descriptor.authRequirement === 'endpoint_model_optional_api_key'
+                  ? 'settings.providers.apiKeyOptionalLabel'
+                  : 'settings.providers.apiKeyLabel',
+              )}
               account="ark.api_key"
               provider={channelId}
               mono

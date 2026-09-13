@@ -68,6 +68,7 @@ const LLM_PROVIDER_TYPES: &[(&str, &str)] = &[
     ("stepfun", "stepfun"),
     ("opencode", "opencode"),
     ("tencentTokenHub", "tencentTokenHub"),
+    ("lmstudio", "lmstudio"),
     ("custom", "customChatCompletions"),
     ("custom_responses", "customResponses"),
     ("custom_messages", "customMessages"),
@@ -256,6 +257,7 @@ fn provider_descriptor_with_label(
             match id.as_str() {
                 crate::polish::CODEX_OAUTH_PROVIDER_ID => AuthRequirement::OAuth,
                 "gemini" => AuthRequirement::ApiKey,
+                "lmstudio" => AuthRequirement::EndpointModelOptionalApiKey,
                 _ => AuthRequirement::ApiKeyUnlessCustomEndpoint,
             },
             ValidationProbe::LlmText,
@@ -601,6 +603,7 @@ pub fn default_llm_endpoint(provider_type: &str) -> Option<&'static str> {
         "minimax" => Some("https://api.minimaxi.com/v1"),
         "stepfun" => Some("https://api.stepfun.com/v1"),
         "tencentTokenHub" => Some("https://tokenhub.tencentmaas.com/v1"),
+        "lmstudio" => Some("http://localhost:1234/v1"),
         _ => None,
     }
 }
@@ -1394,6 +1397,34 @@ mod tests {
             .flat_map(provider_descriptors)
             .collect::<Vec<_>>();
         assert_eq!(fixture, actual);
+    }
+
+    #[test]
+    fn lmstudio_requires_a_model_but_not_an_api_key() {
+        let descriptor = provider_descriptor(ProviderKind::Llm, "lmstudio").unwrap();
+        assert_eq!(
+            descriptor.default_endpoint.as_deref(),
+            Some("http://localhost:1234/v1")
+        );
+        assert!(descriptor.default_model.is_none());
+        assert_eq!(
+            descriptor.auth_requirement,
+            AuthRequirement::EndpointModelOptionalApiKey
+        );
+        assert_eq!(descriptor.validation_probe, ValidationProbe::LlmText);
+        assert!(crate::cloud_providers::SHARED_CLOUD_LLM_PROVIDER_TYPES.contains(&"lmstudio"));
+        assert!(provider_descriptor(ProviderKind::Omni, "lmstudio").is_none());
+        for endpoint in [
+            None,
+            Some("http://localhost:1234/v1"),
+            Some("https://gateway.example/v1"),
+        ] {
+            assert!(!api_key_required(ProviderKind::Llm, "lmstudio", endpoint));
+        }
+        let mut configuration = CredentialConfiguration::default();
+        assert!(!llm_configured("lmstudio", &configuration));
+        configuration.llm_model = true;
+        assert!(llm_configured("lmstudio", &configuration));
     }
 
     #[test]

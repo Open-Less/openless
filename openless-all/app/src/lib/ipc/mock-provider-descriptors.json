@@ -217,6 +217,18 @@
   },
   {
     "kind": "llm",
+    "providerType": "lmstudio",
+    "labelKey": "lmstudio",
+    "defaultEndpoint": "http://localhost:1234/v1",
+    "defaultModel": null,
+    "authRequirement": "endpoint_model_optional_api_key",
+    "validationProbe": "llm_text",
+    "staticModels": [],
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
+  },
+  {
+    "kind": "llm",
     "providerType": "custom",
     "labelKey": "customChatCompletions",
     "defaultEndpoint": null,

@@ -84,6 +84,7 @@ pub const SHARED_CLOUD_LLM_PROVIDER_TYPES: &[&str] = &[
     "stepfun",
     "opencode",
     "tencentTokenHub",
+    "lmstudio",
     "custom",
     "custom_responses",
     "custom_messages",
@@ -2559,6 +2560,18 @@ mod tests {
                     assert!(result.is_ok(), "{endpoint}");
                 }
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn lmstudio_generation_still_requires_a_model() {
+        let context = DictationContext {
+            llm: ProviderInvocation::new("lmstudio-channel", "lmstudio"),
+            ..DictationContext::default()
+        };
+        match build_cloud_polisher_provider(&InMemoryCredentialStore::default(), &context).await {
+            Err(error) => assert_eq!(error.message, "LLM model is not configured"),
+            Ok(_) => panic!("LM Studio must not generate without a selected model"),
         }
     }
 

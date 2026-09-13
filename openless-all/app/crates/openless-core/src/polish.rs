@@ -1869,6 +1869,14 @@ pub(crate) fn apply_openai_compatible_thinking_control(
                 "type": if thinking_enabled { "adaptive" } else { "disabled" },
             });
         }
+        // 仅显式选择 LM Studio 预设时下发，不根据地址或端口推断本地服务。
+        Some(ThinkingControl::LmStudioThinking) => {
+            body["chat_template_kwargs"] = json!({ "enable_thinking": thinking_enabled });
+            if !thinking_enabled {
+                body["reasoning_effort"] = json!("none");
+                body["reasoning"] = json!({ "type": "disabled" });
+            }
+        }
         None => {}
     }
 }
@@ -1905,10 +1913,12 @@ pub(crate) enum ThinkingControl {
     OpenRouterReasoning,
     DeepSeekThinking,
     MiniMaxThinking,
+    LmStudioThinking,
 }
 
 pub(crate) fn openai_compatible_thinking_control(provider_id: &str) -> Option<ThinkingControl> {
     match provider_id.trim() {
+        "lmstudio" => Some(ThinkingControl::LmStudioThinking),
         "deepseek" => Some(ThinkingControl::DeepSeekThinking),
         // provider_id 预设(见 ProvidersSection.tsx::LLM_PRESETS)。
         "minimax" => Some(ThinkingControl::MiniMaxThinking),
@@ -2331,14 +2341,28 @@ mod tests {
 
     #[tokio::test]
     async fn all_text_entrypoints_use_the_selected_protocol_over_http() {
-        for (format, (preset, prefix)) in LlmRequestFormat::ALL.into_iter().flat_map(|format| {
-            [
-                ("custom", "/gateway/v1"),
-                ("opencode", "/zen/v1"),
-                ("opencode", "/zen/go/v1"),
-            ]
-            .map(|entry| (format, entry))
-        }) {
+        for (format, preset, prefix, thinking_enabled, api_key) in LlmRequestFormat::ALL
+            .into_iter()
+            .flat_map(|format| {
+                [
+                    ("custom", "/gateway/v1"),
+                    ("opencode", "/zen/v1"),
+                    ("opencode", "/zen/go/v1"),
+                ]
+                .map(|(preset, prefix)| (format, preset, prefix, false, "fixture-key"))
+            })
+            .chain([false, true].into_iter().flat_map(|enabled| {
+                ["", "fixture-key"].map(|key| {
+                    (
+                        LlmRequestFormat::ChatCompletions,
+                        "lmstudio",
+                        "/gateway/v1",
+                        enabled,
+                        key,
+                    )
+                })
+            }))
+        {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let address = listener.local_addr().unwrap();
             let server = thread::spawn(move || {
@@ -2365,7 +2389,26 @@ mod tests {
                         assert!(!headers.contains("authorization:"));
                         assert!(body["system"].as_str().is_some_and(|text| !text.is_empty()));
                     } else {
-                        assert!(headers.contains("authorization: bearer fixture-key"));
+                        assert_eq!(
+                            headers.contains("authorization: bearer fixture-key"),
+                            !api_key.is_empty()
+                        );
+                        if api_key.is_empty() {
+                            assert!(!headers.contains("authorization:"));
+                        }
+                    }
+                    if preset == "lmstudio" {
+                        assert_eq!(
+                            body["chat_template_kwargs"]["enable_thinking"],
+                            thinking_enabled
+                        );
+                        if thinking_enabled {
+                            assert!(body.get("reasoning_effort").is_none());
+                            assert!(body.get("reasoning").is_none());
+                        } else {
+                            assert_eq!(body["reasoning_effort"], "none");
+                            assert_eq!(body["reasoning"]["type"], "disabled");
+                        }
                     }
                     assert!(!headers.contains("chatgpt-account-id"));
                     let messages = if format == LlmRequestFormat::Responses {
@@ -2410,10 +2453,11 @@ mod tests {
                 preset,
                 "test",
                 format!("http://{address}{prefix}/chat/completions?tenant=1"),
-                "fixture-key",
+                api_key,
                 "test",
             )
             .with_temperature(Some(0.7))
+            .with_thinking_enabled(thinking_enabled)
             .with_protocol(LlmProtocolConfig {
                 format,
                 ..Default::default()
@@ -3630,6 +3674,39 @@ mod tests {
     }
 
     #[test]
+    fn lmstudio_thinking_control_uses_only_the_preset() {
+        for endpoint in [
+            "http://localhost:1234/v1",
+            "http://127.0.0.1:8080/v1/",
+            "http://192.168.1.50:12345/v1",
+            "https://gateway.example/v1",
+        ] {
+            for enabled in [false, true] {
+                for preset in ["lmstudio", "custom"] {
+                    let provider = OpenAICompatibleLLMProvider::new(
+                        OpenAICompatibleConfig::new(preset, preset, endpoint, "", "model")
+                            .with_thinking_enabled(enabled),
+                    );
+                    let body =
+                        provider.chat_body(false, vec![json!({"role": "user", "content": "hi"})]);
+                    if preset == "lmstudio" {
+                        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], enabled);
+                        if !enabled {
+                            assert_eq!(body["reasoning_effort"], "none");
+                            assert_eq!(body["reasoning"]["type"], "disabled");
+                            continue;
+                        }
+                    } else {
+                        assert!(body.get("chat_template_kwargs").is_none());
+                    }
+                    assert!(body.get("reasoning_effort").is_none());
+                    assert!(body.get("reasoning").is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn openai_chat_body_omits_thinking_control_for_unknown_provider() {
         let provider = OpenAICompatibleLLMProvider::new(
             OpenAICompatibleConfig::new(
@@ -3647,6 +3724,7 @@ mod tests {
         assert!(body.get("reasoning_effort").is_none());
         assert!(body.get("enable_thinking").is_none());
         assert!(body.get("reasoning").is_none());
+        assert!(body.get("chat_template_kwargs").is_none());
     }
 
     #[test]

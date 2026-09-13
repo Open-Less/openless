@@ -81,6 +81,20 @@ for (const id of ['opencode', 'custom', 'custom_responses', 'custom_messages']) 
   );
 }
 const tokenhub = presets.find((p) => p.id === 'tencentTokenHub');
+const lmstudio = presets.find((p) => p.id === 'lmstudio');
+assert(
+  lmstudio &&
+    lmstudio.defaultEndpoint === 'http://localhost:1234/v1' &&
+    lmstudio.defaultModel === undefined &&
+    lmstudio.authRequirement === 'endpoint_model_optional_api_key' &&
+    lmstudio.defaultRequestFormat == null &&
+    lmstudio.supportedRequestFormats?.length === 0,
+  'LM Studio must allow a custom endpoint and optional key with fixed Chat Completions',
+);
+assert(
+  !(await listProviderDescriptors('omni')).some((item) => item.providerType === 'lmstudio'),
+  'LM Studio preset is limited to LLM channels',
+);
 assert(
   tokenhub &&
     tokenhub.defaultRequestFormat == null &&
@@ -144,6 +158,23 @@ assert(
   (await readCredential('ark.api_key', first)) === 'fixture-key',
   'Changing preset preserves the key',
 );
+await setCredential('ark.request_format', 'responses', first);
+await setChannelProviderType('llm', first, 'lmstudio');
+assert(
+  (await listChannels('llm')).find((channel) => channel.id === first)?.providerType === 'lmstudio',
+  'LM Studio selection must survive reopening the channel',
+);
+for (const [account, expected] of [
+  ['ark.endpoint', 'https://opencode.ai/zen/go/v1'],
+  ['ark.model_id', 'new-model'],
+  ['ark.api_key', 'fixture-key'],
+  ['ark.request_format', null],
+] as const) {
+  assert(
+    (await readCredential(account, first)) === expected,
+    `Switching to LM Studio must preserve credentials and clear the protocol override: ${account}`,
+  );
+}
 await recordChannelTest('llm', first, true, 1, null);
 const settings = await getSettings();
 const asrTestAt = (await listChannels('asr'))[0].lastTest?.at;

@@ -1195,6 +1195,7 @@ export const zhTW: typeof zhCN = {
       pipelineIsolationNotice:
         '兩種模式使用完全獨立的憑證設定。切換模式不會刪除另一套設定，只是暫時停用；切回即恢復。',
       presets: {
+        lmstudio: 'LM Studio',
         ark: 'ARK（火山方舟）',
         deepseek: 'DeepSeek',
         siliconflow: '硅基流動',
@@ -1300,6 +1301,7 @@ export const zhTW: typeof zhCN = {
       fillDefault: '填入默認值',
       readFailed: '讀取失敗',
       apiKeyLabel: 'API 密鑰',
+      apiKeyOptionalLabel: 'API 密鑰（選填）',
       baseUrlLabel: '接口地址',
       modelLabel: '模型',
       customModelLabel: '自訂模型…',

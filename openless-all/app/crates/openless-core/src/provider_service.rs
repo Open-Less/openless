@@ -227,7 +227,7 @@ impl ProviderService {
             return Err(cancelled_request());
         }
         ensure_supported_kind(&resolved)?;
-        validate_configuration(&resolved)?;
+        validate_configuration(&resolved, true)?;
         let probe = validation_probe_for(
             resolved.kind,
             &resolved.provider_type,
@@ -333,7 +333,7 @@ impl ProviderService {
             self.validate_resolved(resolved, cancellation).await?;
             return Ok(ProviderModelsResult { models });
         }
-        validate_configuration(&resolved)?;
+        validate_configuration(&resolved, false)?;
         let models = fetch_models(&resolved, Arc::clone(&self.transport), cancellation).await?;
         Ok(ProviderModelsResult { models })
     }
@@ -437,7 +437,10 @@ fn ensure_supported_kind(resolved: &ResolvedProvider) -> Result<(), BackendError
     }
 }
 
-fn validate_configuration(resolved: &ResolvedProvider) -> Result<(), BackendError> {
+fn validate_configuration(
+    resolved: &ResolvedProvider,
+    require_model: bool,
+) -> Result<(), BackendError> {
     let descriptor = provider_descriptor(resolved.kind, &resolved.provider_type)
         .ok_or_else(|| provider_error("provider descriptor is not configured"))?;
     let api_key = resolved.api_key.as_deref().unwrap_or_default();
@@ -463,7 +466,8 @@ fn validate_configuration(resolved: &ResolvedProvider) -> Result<(), BackendErro
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .or(descriptor.default_model.as_deref());
-    if model.is_none()
+    if require_model
+        && model.is_none()
         && !matches!(
             descriptor.auth_requirement,
             AuthRequirement::None
@@ -1023,7 +1027,7 @@ mod tests {
                     })
                     .await
                     .unwrap();
-                let result = validate_configuration(&resolved);
+                let result = validate_configuration(&resolved, true);
                 if !endpoint.starts_with("http://127.0.0.1")
                     && key.is_none_or(|value| value.trim().is_empty())
                 {
@@ -1032,6 +1036,173 @@ mod tests {
                     assert_eq!(error.message, "LLM API key is not configured");
                 } else {
                     result.unwrap();
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn lmstudio_model_listing_allows_an_empty_model_and_optional_key() {
+        for api_key in ["", "fixture-key"] {
+            let (endpoint, request) =
+                spawn_http_response("200 OK", "application/json", r#"{"data":[{"id":"model"}]}"#);
+            let credentials = Arc::new(InMemoryCredentialStore::default());
+            let channel = create_channel_with_values(
+                &credentials,
+                ChannelKind::Llm,
+                "lmstudio",
+                &[
+                    (LLM_ENDPOINT_ACCOUNT, &endpoint),
+                    (LLM_API_KEY_ACCOUNT, api_key),
+                ],
+            )
+            .await;
+            let service = ProviderService::new(credentials, Arc::new(crate::TokioTaskSpawner));
+            let parameters = ProviderRequest {
+                kind: ProviderKind::Llm,
+                channel_id: Some(channel),
+                thinking_enabled: false,
+            };
+            assert_eq!(
+                service
+                    .list_models(parameters.clone())
+                    .await
+                    .unwrap()
+                    .models,
+                vec!["model"]
+            );
+            let request = String::from_utf8(request.recv_timeout(Duration::from_secs(2)).unwrap())
+                .unwrap()
+                .to_ascii_lowercase();
+            assert!(request.starts_with("get /v1/models "));
+            assert_eq!(
+                request.contains("authorization: bearer fixture-key"),
+                !api_key.is_empty()
+            );
+            if api_key.is_empty() {
+                assert!(!request.contains("authorization:"));
+            }
+            assert_eq!(
+                service.validate(parameters).await.unwrap_err().message,
+                "provider model is not configured"
+            );
+        }
+
+        // Listing skips only the model requirement, not endpoint or authentication checks.
+        for (preset, endpoint, expected) in [
+            ("lmstudio", "file:///models", "provider endpoint is invalid"),
+            (
+                "openai",
+                "https://api.openai.com/v1",
+                "LLM API key is not configured",
+            ),
+        ] {
+            let credentials = Arc::new(InMemoryCredentialStore::default());
+            let channel = create_channel_with_values(
+                &credentials,
+                ChannelKind::Llm,
+                preset,
+                &[(LLM_ENDPOINT_ACCOUNT, endpoint)],
+            )
+            .await;
+            let service = ProviderService::new(credentials, Arc::new(crate::TokioTaskSpawner));
+            let error = service
+                .list_models(ProviderRequest {
+                    kind: ProviderKind::Llm,
+                    channel_id: Some(channel),
+                    thinking_enabled: false,
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error.message, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn lmstudio_validation_preserves_channel_values_and_uses_its_thinking_control() {
+        for enabled in [false, true] {
+            for api_key in ["", "fixture-key"] {
+                let (endpoint, request) = spawn_http_response(
+                    "200 OK",
+                    "text/event-stream",
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n",
+                );
+                let credentials = Arc::new(InMemoryCredentialStore::default());
+                let values = [
+                    (LLM_ENDPOINT_ACCOUNT, endpoint.as_str()),
+                    (LLM_MODEL_ACCOUNT, "test-model"),
+                    (LLM_API_KEY_ACCOUNT, api_key),
+                ];
+                let channel = create_channel_with_values(
+                    &credentials,
+                    ChannelKind::Llm,
+                    "custom_responses",
+                    &values,
+                )
+                .await;
+                credentials
+                    .mutate_channel(ChannelMutation::SetProviderType {
+                        kind: ChannelKind::Llm,
+                        id: channel.clone(),
+                        provider_type: "lmstudio".into(),
+                    })
+                    .await
+                    .unwrap();
+                // Even a stale format written after the switch must not override the fixed protocol.
+                credentials
+                    .write(
+                        CredentialKey::new(
+                            CredentialNamespace::Llm,
+                            Some(channel.clone()),
+                            crate::llm_protocol::REQUEST_FORMAT_ACCOUNT,
+                        )
+                        .unwrap(),
+                        SecretValue::new("messages"),
+                    )
+                    .await
+                    .unwrap();
+                let service =
+                    ProviderService::new(credentials.clone(), Arc::new(crate::TokioTaskSpawner));
+                for (account, value) in values {
+                    assert_eq!(
+                        service
+                            .read(CredentialNamespace::Llm, &channel, account)
+                            .await
+                            .unwrap()
+                            .as_deref(),
+                        Some(value)
+                    );
+                }
+                assert_eq!(
+                    credentials.list_channels(ChannelKind::Llm).await.unwrap()[0].provider_type,
+                    "lmstudio"
+                );
+                service
+                    .validate(ProviderRequest {
+                        kind: ProviderKind::Llm,
+                        channel_id: Some(channel),
+                        thinking_enabled: enabled,
+                    })
+                    .await
+                    .unwrap();
+                let request =
+                    String::from_utf8(request.recv_timeout(Duration::from_secs(2)).unwrap())
+                        .unwrap();
+                assert!(request.starts_with("POST /v1/chat/completions "));
+                let (headers, body) = request.split_once("\r\n\r\n").unwrap();
+                assert_eq!(
+                    headers.to_ascii_lowercase().contains("authorization:"),
+                    !api_key.is_empty()
+                );
+                let body: serde_json::Value = serde_json::from_str(body).unwrap();
+                assert_eq!(body["model"], "test-model");
+                assert_eq!(body["chat_template_kwargs"]["enable_thinking"], enabled);
+                if enabled {
+                    assert!(body.get("reasoning_effort").is_none());
+                    assert!(body.get("reasoning").is_none());
+                } else {
+                    assert_eq!(body["reasoning_effort"], "none");
+                    assert_eq!(body["reasoning"]["type"], "disabled");
                 }
             }
         }

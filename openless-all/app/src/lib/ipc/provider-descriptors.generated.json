@@ -559,6 +559,18 @@
       "validationProbe": "llm_text"
     },
     {
+      "authRequirement": "endpoint_model_optional_api_key",
+      "defaultEndpoint": "http://localhost:1234/v1",
+      "defaultModel": null,
+      "defaultRequestFormat": null,
+      "kind": "llm",
+      "labelKey": "lmstudio",
+      "providerType": "lmstudio",
+      "staticModels": [],
+      "supportedRequestFormats": [],
+      "validationProbe": "llm_text"
+    },
+    {
       "authRequirement": "api_key_unless_custom_endpoint",
       "defaultEndpoint": null,
       "defaultModel": null,

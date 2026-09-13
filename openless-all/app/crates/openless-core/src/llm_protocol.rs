@@ -39,7 +39,10 @@ impl LlmRequestFormat {
     }
 
     pub fn selectable(provider: &str) -> bool {
-        !matches!(provider, "gemini" | "codex_oauth" | "tencentTokenHub")
+        !matches!(
+            provider,
+            "gemini" | "codex_oauth" | "tencentTokenHub" | "lmstudio"
+        )
     }
 
     pub fn parse(value: &str) -> Result<Self, BackendError> {
@@ -544,7 +547,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tokenhub_is_fixed_to_chat_completions() {
+    async fn tokenhub_and_lmstudio_are_fixed_to_chat_completions() {
         let store = InMemoryCredentialStore::default();
         store
             .write(
@@ -559,14 +562,16 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(!LlmRequestFormat::selectable("tencentTokenHub"));
-        assert_eq!(
-            LlmProtocolConfig::load(&store, "tokenhub", "tencentTokenHub")
-                .await
-                .unwrap()
-                .format,
-            LlmRequestFormat::ChatCompletions
-        );
+        for provider in ["tencentTokenHub", "lmstudio"] {
+            assert!(!LlmRequestFormat::selectable(provider));
+            assert_eq!(
+                LlmProtocolConfig::load(&store, "tokenhub", provider)
+                    .await
+                    .unwrap()
+                    .format,
+                LlmRequestFormat::ChatCompletions
+            );
+        }
     }
 
     #[test]
