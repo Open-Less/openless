@@ -2941,6 +2941,31 @@ mod tests {
     }
 
     #[test]
+    fn hf_tree_accepts_bare_lfs_oid_from_live_api() {
+        // Shape returned by huggingface.co and hf-mirror.com for Qwen/Qwen3-ASR-0.6B
+        // (2026-09-13): `lfs.oid` is the bare hex digest, without a `sha256:` prefix.
+        let entries = vec![serde_json::json!({
+            "type": "file",
+            "oid": "3d4b2a1f0e9c8b7a6d5e4f3a2b1c0d9e8f7a6b5c",
+            "size": 1876091704u64,
+            "path": "model.safetensors",
+            "lfs": {
+                "oid": "79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea",
+                "size": 1876091704u64,
+                "pointerSize": 135
+            }
+        })];
+        let files = parse_hf_tree_page("Qwen/Qwen3-ASR-0.6B", "qwen3-asr-0.6b", &entries).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "model.safetensors");
+        assert_eq!(files[0].size_bytes, 1_876_091_704);
+        assert_eq!(
+            files[0].sha256.as_deref(),
+            Some("79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea")
+        );
+    }
+
+    #[test]
     fn hf_link_pagination_accepts_same_origin_and_rejects_redirected_origin() {
         let current = "https://huggingface.co/api/models/org/model/tree/main?limit=1000";
         assert_eq!(
