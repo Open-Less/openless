@@ -12,6 +12,9 @@
 | Host（Win/mac/Android） | `src-tauri/`（crate `openless`） | `src/lib.rs` 注册命令；适配窗口、热键、音频、凭据、插入、IME 和生命周期 |
 | 共享 Core | `crates/openless-core/` | 业务规则、会话、服务调用和数据仓储；通过 trait 接入 Host 能力 |
 | Linux Host + UI | `linux-egui/`（crate `openless-linux-egui`） | `backend.rs` 组装 `OpenLessBackend`，`main.rs` 实现 egui/eframe UI，不依赖 Tauri/WebKitGTK |
+| iOS 原生应用 + 键盘 | `ios/OpenLess/`、`ios/Keyboard/`、`ios/Shared/` | SwiftUI + UIKit；Swift 独立实现录音、Apple Speech、OpenAI 兼容服务与本地存储，未链接 Rust Core |
+
+iOS 工程入口为 `ios/OpenLess.xcodeproj`，初版支持听写主流程和用户主动发送文字到键盘后的跨应用插入。它沿用产品语义与兼容服务协议，不是 Core 的新 Host 实现，不能据此推断已覆盖桌面 provider、市场、云同步等功能。详细边界与签名配置见 [iOS README](../openless-all/app/ios/README.md)。该源工程本次未执行编译或验证。
 
 Android 侧：`src-tauri/src/android/`（JNI/桥接）+ `android/`（aidl、kotlin、manifests、frontend）；`android/frontend` 经 Vite 别名 `@android` 被 `src/` 引用；manifest 由 `scripts/merge-android-*.mjs` 合成。Linux 已有可复用 Host/UI 起点，剩余能力与产品验收见 [交接目录](linux-egui-handoff/README.md)。
 

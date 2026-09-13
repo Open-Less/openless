@@ -22,6 +22,7 @@
         ├── src-tauri/            Tauri Host，独立 Cargo manifest
         ├── linux-egui/           Linux Host 和 egui UI
         ├── android/              Kotlin / AIDL / manifest / 前端片段
+        ├── ios/                  独立 SwiftUI 应用 / UIKit 键盘扩展 / Xcode 工程
         ├── windows-ime/          原生 TSF/IME 工程
         ├── contract/             机器可读 backend-2.0 合同
         ├── scripts/              构建、平台检查与合同测试
@@ -45,6 +46,7 @@
 | Tauri 组装与系统能力 | `src-tauri/src/coordinator.rs`、`core_adapters.rs`、`tauri_coordinator_host.rs` | 窗口、热键、权限、平台输入与生命周期 |
 | Linux 原生接入 | `linux-egui/src/main.rs`、`lib.rs`、`backend.rs` | `audio/credentials/fcitx5/hotkeys/settings` 等 Host 模块；见 [交接](linux-egui-handoff/README.md) |
 | Android 集成 | `android/`、`src-tauri/src/android/` | `@android` 别名与 `merge-android-*.mjs` 生成链 |
+| iOS 原生应用 | `ios/OpenLess/`、`ios/Keyboard/`、`ios/Shared/` | 独立 Swift 实现；工程、签名和支持范围见 [iOS README](../openless-all/app/ios/README.md) |
 | Windows 输入法 | `windows-ime/`、`src-tauri/src/windows_ime_*.rs` | 原生工程、IPC 协议、目标应用和安装检查 |
 
 Core 其余模块按领域列于 [架构模块地图](architecture.md)。平台缺口、事件签名与验收项由专项文档维护，本文件只提供定位。
