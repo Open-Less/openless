@@ -947,6 +947,16 @@ export const ko: typeof zhCN = {
       outputPlaceholder: '출력이 여기에 스트리밍됩니다…',
     },
     codingAgent: {
+      piHint:
+        'PI와 데스크톱 도구가 함께 설치됩니다. 모델 인증 정보를 설정하면 화면 캡처, 클릭, 스크롤 및 입력을 사용할 수 있습니다. macOS는 화면 기록 및 손쉬운 사용 권한이 필요하며 Linux는 현재 X11을 지원합니다.',
+      piReady: '내장 PI가 준비되었습니다 ({{version}})',
+      piMissing: 'PI 파일이 누락되었습니다. 앱을 다시 설치하거나 백엔드 패키지를 준비하세요.',
+      piModelHint:
+        'provider/model을 입력하거나 비워 두어 PI 설정을 사용하세요. 인증 정보: docs/less-computer-pi.md.',
+      piMode: {
+        plan: '읽기 전용: 파일 및 화면 캡처',
+        acceptEdits: '데스크톱 작업 및 파일 편집 허용',
+      },
       title: 'Less Computer',
       desc: '키를 누르고 말하면 선택한 Agent가 PC를 조작합니다. macOS 전용.',
       enable: 'Less Computer 켜기',

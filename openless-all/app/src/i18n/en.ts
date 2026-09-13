@@ -966,6 +966,17 @@ export const en: typeof zhCN = {
       outputPlaceholder: 'Output streams here…',
     },
     codingAgent: {
+      piHint:
+        'PI and desktop tools are included. Configure model credentials to take screenshots, click, scroll and type. macOS requires Screen Recording and Accessibility permissions; Linux currently supports X11.',
+      piReady: 'Bundled PI is ready ({{version}})',
+      piMissing:
+        'Bundled PI files are incomplete. Reinstall the app or prepare the backend bundle.',
+      piModelHint:
+        'Enter provider/model, or leave blank to use the bundled PI configuration. See docs/less-computer-pi.md for credentials.',
+      piMode: {
+        plan: 'Read only: files and screenshots',
+        acceptEdits: 'Allow desktop actions and file edits',
+      },
       title: 'Less Computer',
       desc: 'Hold a key, speak, and your selected agent operates your computer. macOS only.',
       enable: 'Enable Less Computer',

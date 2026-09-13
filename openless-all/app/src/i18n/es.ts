@@ -982,6 +982,16 @@ export const es: typeof zhCN = {
       outputPlaceholder: 'La salida aparecerá aquí progresivamente…',
     },
     codingAgent: {
+      piHint:
+        'PI y las herramientas de escritorio se incluyen con la aplicación. Configure las credenciales del modelo para capturar, hacer clic, desplazar y escribir. macOS requiere permisos de grabación de pantalla y accesibilidad; Linux admite X11.',
+      piReady: 'PI integrado está listo ({{version}})',
+      piMissing: 'Faltan archivos de PI. Reinstale la aplicación o prepare el paquete del backend.',
+      piModelHint:
+        'Introduzca provider/model o deje vacío para usar la configuración de PI. Credenciales: docs/less-computer-pi.md.',
+      piMode: {
+        plan: 'Solo lectura: archivos y capturas',
+        acceptEdits: 'Permitir acciones de escritorio y editar archivos',
+      },
       title: 'Less Computer',
       desc: 'Mantén pulsada una tecla y habla para que el agente elegido actúe en tu ordenador. Solo macOS.',
       enable: 'Activar Less Computer',

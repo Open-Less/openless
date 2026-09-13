@@ -1,7 +1,7 @@
-// 高级 → Less Computer 配置：启用开关、后端（Claude / OpenCode / Codex / dsh）、
+// 高级 → Less Computer 配置：启用开关、内置 PI 与外部 CLI 后端、
 // 模型 / 权限模式 / 工作目录。
 //
-// 四个后端的能力不一样，这一页要如实反映差异，别让用户以为选项都通用：
+// 各后端的能力不同：PI 的文件/桌面权限与外部 CLI 的沙箱模式分别展示。
 // - 模型：Claude 用别名下拉，OpenCode 拉账号可用列表，Codex 收裸模型名（自由文本），
 //   dsh 压根没有模型开关 —— 那一行直接不显示。
 // - 护栏：Claude / OpenCode 是逐命令 deny 清单（撞了能弹审批卡放行单条）；
@@ -38,14 +38,16 @@ function isSandboxPermissionProvider(provider: CodingAgentProviderId) {
 }
 
 function permissionModesForProvider(provider: CodingAgentProviderId) {
-  return isSandboxPermissionProvider(provider) ? SANDBOX_PERMISSION_MODES : PERMISSION_MODES;
+  return isSandboxPermissionProvider(provider) || provider === 'pi-bundled'
+    ? SANDBOX_PERMISSION_MODES
+    : PERMISSION_MODES;
 }
 
 function normalizePermissionMode(
   provider: CodingAgentProviderId,
   mode: CodingAgentPermissionMode,
 ): CodingAgentPermissionMode {
-  return isSandboxPermissionProvider(provider) &&
+  return (isSandboxPermissionProvider(provider) || provider === 'pi-bundled') &&
     (mode === 'default' || mode === 'bypassPermissions')
     ? 'plan'
     : mode;
@@ -53,8 +55,9 @@ function normalizePermissionMode(
 
 type OpenCodeModelsStatus = 'idle' | 'loading' | 'loaded' | 'error';
 
-/** 后端下拉的选项。顺序 = 接入先后，Claude 保持第一（默认后端）。 */
+/** 新安装默认使用随应用分发的 PI。已有用户的显式后端配置保持有效。 */
 const PROVIDERS: { value: CodingAgentProviderId; label: string }[] = [
+  { value: 'pi-bundled', label: 'PI' },
   { value: 'claude-code-cli', label: 'Claude Code' },
   { value: 'opencode-cli', label: 'OpenCode' },
   { value: 'codex-cli', label: 'Codex' },
@@ -63,6 +66,7 @@ const PROVIDERS: { value: CodingAgentProviderId; label: string }[] = [
 
 /** 各后端默认的可执行文件名，用作「自定义路径」输入框的 placeholder。 */
 const DEFAULT_EXE: Record<CodingAgentProviderId, string> = {
+  'pi-bundled': 'openless-pi',
   'claude-code-cli': 'claude',
   'opencode-cli': 'opencode',
   'codex-cli': 'codex',
@@ -80,17 +84,19 @@ export function CodingAgentSection() {
   const [opencodeModelsStatus, setOpencodeModelsStatus] = useState<OpenCodeModelsStatus>('idle');
   const [opencodeModelsError, setOpencodeModelsError] = useState('');
 
-  const provider: CodingAgentProviderId = prefs?.codingAgentProvider ?? 'claude-code-cli';
+  const provider: CodingAgentProviderId = prefs?.codingAgentProvider ?? 'pi-bundled';
+  const usePi = prefs?.codingAgentEnabled && provider === 'pi-bundled';
   const useOpencode = prefs?.codingAgentEnabled && provider === 'opencode-cli';
   const useCodex = prefs?.codingAgentEnabled && provider === 'codex-cli';
   const useDsh = prefs?.codingAgentEnabled && provider === 'dsh-cli';
   // 只有沙箱档位、没有逐命令 deny 清单的后端：审批卡对它们不生效。
   const sandboxOnly = Boolean(useCodex || useDsh);
+  const detectCli = Boolean(sandboxOnly || usePi);
 
   // Codex / dsh 的安装检测（两家共用同一个通用检测命令）。
   const [cliDetection, setCliDetection] = useState<OpenCodeDetection | null>(null);
   useEffect(() => {
-    if (!sandboxOnly) {
+    if (!detectCli) {
       setCliDetection(null);
       return;
     }
@@ -108,7 +114,7 @@ export function CodingAgentSection() {
     return () => {
       alive = false;
     };
-  }, [sandboxOnly, provider, prefs?.codingAgentExe]);
+  }, [detectCli, provider, prefs?.codingAgentExe]);
   useEffect(() => {
     if (!useOpencode) {
       setOpencode(null);
@@ -151,7 +157,7 @@ export function CodingAgentSection() {
   useEffect(() => {
     if (
       !prefs ||
-      !isSandboxPermissionProvider(provider) ||
+      (!isSandboxPermissionProvider(provider) && provider !== 'pi-bundled') ||
       (prefs.codingAgentPermissionMode !== 'default' &&
         prefs.codingAgentPermissionMode !== 'bypassPermissions')
     ) {
@@ -222,6 +228,22 @@ export function CodingAgentSection() {
               style={{ ...inputStyle, maxWidth: 240 }}
             />
           </SettingRow>
+
+          {usePi && (
+            <div role="status" style={{ fontSize: 12, lineHeight: 1.6, marginBottom: 12 }}>
+              {t('settings.codingAgent.piHint')}
+              {cliDetection && (
+                <p>
+                  {t(
+                    cliDetection.installed
+                      ? 'settings.codingAgent.piReady'
+                      : 'settings.codingAgent.piMissing',
+                    { version: cliDetection.version ?? '?' },
+                  )}
+                </p>
+              )}
+            </div>
+          )}
 
           {/* OpenCode 后端：提示安装/登录状态。issue #579。 */}
           {useOpencode && opencode && (
@@ -297,9 +319,11 @@ export function CodingAgentSection() {
               options={permissionModesForProvider(provider).map((m) => ({
                 value: m,
                 label: t(
-                  isSandboxPermissionProvider(provider)
-                    ? `settings.codingAgent.codexMode.${m === 'acceptEdits' ? 'workspaceWrite' : 'plan'}`
-                    : `settings.codingConsole.mode.${m}`,
+                  usePi
+                    ? `settings.codingAgent.piMode.${m}`
+                    : isSandboxPermissionProvider(provider)
+                      ? `settings.codingAgent.codexMode.${m === 'acceptEdits' ? 'workspaceWrite' : 'plan'}`
+                      : `settings.codingConsole.mode.${m}`,
                 ),
               }))}
               ariaLabel={t('settings.codingConsole.permissionMode')}
@@ -325,21 +349,25 @@ export function CodingAgentSection() {
             <SettingRow
               label={t('settings.codingAgent.model')}
               desc={t(
-                useOpencode
-                  ? 'settings.codingAgent.opencodeModelHint'
-                  : useCodex
-                    ? 'settings.codingAgent.codexModelHint'
-                    : 'settings.codingAgent.modelHint',
+                usePi
+                  ? 'settings.codingAgent.piModelHint'
+                  : useOpencode
+                    ? 'settings.codingAgent.opencodeModelHint'
+                    : useCodex
+                      ? 'settings.codingAgent.codexModelHint'
+                      : 'settings.codingAgent.modelHint',
               )}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                {useCodex ? (
+                {useCodex || usePi ? (
                   // Codex 的模型名是裸名（gpt-5 / o3 / 自建网关的任意名字），枚举不过来，
                   // 给自由文本；留空 = 用 ~/.codex/config.toml 里的设置。
                   <input
                     type="text"
                     value={prefs.codingAgentModel ?? ''}
-                    placeholder={t('settings.codingAgent.codexModelPlaceholder')}
+                    placeholder={
+                      usePi ? 'provider/model' : t('settings.codingAgent.codexModelPlaceholder')
+                    }
                     spellCheck={false}
                     aria-label={t('settings.codingAgent.model')}
                     onChange={(e) => {
@@ -449,19 +477,21 @@ export function CodingAgentSection() {
             />
           </SettingRow>
 
-          <SettingRow label={t('settings.codingAgent.exe')}>
-            <input
-              type="text"
-              value={prefs.codingAgentExe ?? ''}
-              placeholder={DEFAULT_EXE[provider]}
-              spellCheck={false}
-              onChange={(e) => {
-                const v = e.target.value.trim();
-                void savePrefs({ ...prefs, codingAgentExe: v === '' ? null : v });
-              }}
-              style={inputStyle}
-            />
-          </SettingRow>
+          {!usePi && (
+            <SettingRow label={t('settings.codingAgent.exe')}>
+              <input
+                type="text"
+                value={prefs.codingAgentExe ?? ''}
+                placeholder={DEFAULT_EXE[provider]}
+                spellCheck={false}
+                onChange={(e) => {
+                  const v = e.target.value.trim();
+                  void savePrefs({ ...prefs, codingAgentExe: v === '' ? null : v });
+                }}
+                style={inputStyle}
+              />
+            </SettingRow>
+          )}
 
           <SettingRow
             label={t('settings.codingAgent.openPanel')}

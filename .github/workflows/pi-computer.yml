@@ -1,0 +1,147 @@
+name: PI and Computer backend
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/pi-computer.yml'
+      - '.cargo/config.toml'
+      - 'openless-all/app/Cargo.toml'
+      - 'openless-all/app/Cargo.lock'
+      - 'openless-all/app/crates/openless-computer/**'
+      - 'openless-all/app/crates/openless-core/**'
+      - 'openless-all/app/pi-backend/**'
+      - 'openless-all/app/scripts/prepare-pi-backend*'
+      - 'openless-all/app/scripts/pi-node-entitlements.plist'
+  pull_request:
+    paths:
+      - '.github/workflows/pi-computer.yml'
+      - '.cargo/config.toml'
+      - 'openless-all/app/Cargo.toml'
+      - 'openless-all/app/Cargo.lock'
+      - 'openless-all/app/crates/openless-computer/**'
+      - 'openless-all/app/crates/openless-core/**'
+      - 'openless-all/app/pi-backend/**'
+      - 'openless-all/app/scripts/prepare-pi-backend*'
+      - 'openless-all/app/scripts/pi-node-entitlements.plist'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-computer-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+        working-directory: openless-all/app
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.2'
+          cache: npm
+          cache-dependency-path: openless-all/app/pi-backend/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'openless-all/app -> target'
+
+      - name: Install Linux native build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang pkg-config \
+            libxkbcommon-dev libxcb1-dev \
+            libpipewire-0.3-dev libwayland-dev libgbm-dev libegl1-mesa-dev
+
+      - name: Install PI dependencies
+        run: npm ci --prefix pi-backend --ignore-scripts --no-audit --no-fund
+
+      - name: Test PI tools and protocol
+        run: npm --prefix pi-backend test
+
+      - name: Test native Computer protocol
+        run: cargo test --locked -p openless-computer
+
+      - name: Test relevant application core modules
+        # Keep this job scoped to PI/Computer. The unrelated Whisper HTTP fixture
+        # tests are exercised by the existing core test workflow.
+        run: |
+          cargo test --locked -p openless-core coding_agent
+          cargo test --locked -p openless-core less_computer
+          cargo test --locked -p openless-core pi_backend
+
+      - name: Test packaging contract
+        run: node --test scripts/prepare-pi-backend.test.mjs
+
+      - name: Prepare standalone PI and Computer bundle
+        run: node scripts/prepare-pi-backend.mjs --force
+
+      - name: Verify bundled runtime without desktop access
+        # Run from a different directory to catch accidental source-tree lookup.
+        # Both flags only inspect installation health; no screenshot or input.
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { spawnSync } from 'node:child_process';
+          import { join, resolve } from 'node:path';
+          const bundle = resolve('src-tauri/resources/pi-backend');
+          const suffix = process.platform === 'win32' ? '.exe' : '';
+          const node = join(bundle, `node${suffix}`);
+          const computer = join(bundle, `openless-computer${suffix}`);
+          const options = {
+            cwd: process.env.RUNNER_TEMP,
+            encoding: 'utf8',
+            windowsHide: true,
+            timeout: 30000,
+            env: { ...process.env, OPENLESS_COMPUTER_BIN: computer },
+          };
+          function check(executable, args) {
+            const result = spawnSync(executable, args, options);
+            if (result.error) throw result.error;
+            assert.equal(result.status, 0, result.stderr || result.stdout);
+            const response = JSON.parse(result.stdout);
+            assert.equal(response.ok, true);
+            return response;
+          }
+          const health = check(node, [join(bundle, 'runtime/index.mjs'), '--health']);
+          const capabilities = check(computer, ['--capabilities']);
+          assert.equal(capabilities.data.protocol_version, 1);
+          assert.equal(capabilities.data.availability, 'not_probed');
+          console.log(JSON.stringify({ health, capabilities }));
+          NODE
+
+      - name: Archive standalone backend
+        # Tar preserves the executable bits needed by the bundled Node/helper on Unix.
+        run: |
+          mkdir -p pi-artifacts
+          tar -czf "pi-artifacts/openless-pi-backend-${{ runner.os }}-${{ runner.arch }}.tar.gz" \
+            -C src-tauri/resources pi-backend
+
+      - name: Upload standalone backend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openless-pi-backend-${{ runner.os }}-${{ runner.arch }}
+          path: openless-all/app/pi-artifacts/*.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
