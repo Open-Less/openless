@@ -128,6 +128,22 @@ pub fn polish_injection_defense() -> &'static str {
 ///
 /// The instruction is executable user intent, but it cannot redefine the
 /// system contract or turn the selected text into another instruction source.
+/// 圈選潤色的 user message：選區專用框架（`<selected_text>` 信封）。
+///
+/// 蜘蛛故事事故（2026-09-11/12）：圈選路徑曾複用 `user_prompt`（語音輸入框架——
+/// 「语音输入的原始转写 / 当前 mode 的任务描述 / 插入到光标位置」），小模型把整套
+/// 語音脚手架照抄進輸出。選區沒有「語音輸入」「mode」「游標」，必須用選區框架。
+pub fn selection_user_prompt(selected_text: &str) -> String {
+    let escaped = sanitize_for_xml_envelope(selected_text, "selected_text");
+    format!(
+        "下面是用户选中的文本。请按 system prompt 中的任务要求处理这段文本，\
+         输出处理后的正文，它会被原样替换选区。\n\n\
+         <selected_text>\n{}\n</selected_text>\n\n\
+         只输出处理后的文本正文。",
+        escaped
+    )
+}
+
 pub fn selection_instruction_block(instruction: &str) -> Option<String> {
     let instruction = instruction.trim();
     if instruction.is_empty() {
