@@ -57,7 +57,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var shiftState = ShiftState.OFF
     private var state = "idle"
     private var currentMessage = "点击开始说话"
-    private var lastBackendWarmupAt = 0L
     private var status: TextView? = null
     private var voiceButton: VoiceButton? = null
     private var englishUi = false
@@ -1318,41 +1317,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }, 180L)
     }
 
-    private fun ensureBackendReady() {
-        val now = android.os.SystemClock.elapsedRealtime()
-        if (now - lastBackendWarmupAt < 5_000L) return
-        // The Tauri host owns the Rust backend and remains alive in the background.
-        // Re-launching it for every new editor focus creates a full-screen transition
-        // and steals focus, which is the visible flash when switching applications.
-        if (OpenLessBackendWarmupActivity.isRunning()) return
-        try {
-            OpenLessNative.requireBackendContract()
-        } catch (error: Throwable) {
-            // The warmup Activity can crash the whole process before it finishes
-            // warming up the backend (native HWUI teardown race). That kills this
-            // in-memory throttle along with it, so a plain instance field lets a
-            // crash loop retry every few seconds forever. Persist the attempt time
-            // so a fresh process still honors the cooldown.
-            val runtimePrefs = getSharedPreferences("openless_runtime", MODE_PRIVATE)
-            val wallNow = System.currentTimeMillis()
-            val lastAttempt = runtimePrefs.getLong(BACKEND_WARMUP_ATTEMPT_KEY, 0L)
-            if (wallNow >= lastAttempt && wallNow - lastAttempt < BACKEND_WARMUP_RETRY_DELAY_MS) return
-            lastBackendWarmupAt = now
-            runtimePrefs.edit().putLong(BACKEND_WARMUP_ATTEMPT_KEY, wallNow).apply()
-            android.util.Log.i("OpenLessImeService", "backend is not ready; launching main process", error)
-            android.os.Handler(mainLooper).postDelayed({
-                runCatching {
-                    startActivity(android.content.Intent(this, OpenLessBackendWarmupActivity::class.java).apply {
-                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                        addFlags(android.content.Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
-                        addFlags(android.content.Intent.FLAG_ACTIVITY_NO_ANIMATION)
-                    })
-                }.onFailure { launchError ->
-                    android.util.Log.w("OpenLessImeService", "failed to launch main process", launchError)
-                }
-            }, 120L)
-        }
-    }
+    private fun ensureBackendReady() = OpenLessBackendWarmupActivity.ensureBackendReady(this)
 
     private fun stopRuntimeService() {
         runCatching { stopService(android.content.Intent(this, OpenLessRuntimeService::class.java)) }
@@ -2025,8 +1990,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     companion object {
         private const val TEST_TEXT = "OpenLess IME 测试上屏"
         private const val MAX_ASSOCIATION_CONTEXT = 8
-        private const val BACKEND_WARMUP_ATTEMPT_KEY = "backend_warmup_attempt_wall_time"
-        private const val BACKEND_WARMUP_RETRY_DELAY_MS = 30_000L
 
         /**
          * Opts a view out of Android's system gesture navigation (back/home

@@ -113,5 +113,55 @@ class OpenLessBackendWarmupActivity : MainActivity() {
                 addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
             })
         }
+
+        private const val BACKEND_WARMUP_ATTEMPT_KEY = "backend_warmup_attempt_wall_time"
+        private const val BACKEND_WARMUP_RETRY_DELAY_MS = 30_000L
+        @Volatile
+        private var lastWarmupAttemptElapsed = 0L
+
+        /**
+         * Warms the Tauri/Rust backend if it isn't ready yet, from whatever
+         * Context happens to notice first — not just the IME service reacting
+         * to a focused text field. Called from OpenLessImeService.onCreate()
+         * (the original path) and now also from OpenLessRuntimeService's
+         * START_STICKY restart, so a system-triggered service restart (which
+         * can happen before the user ever taps a field again) gets a chance to
+         * finish this warmup — and the disruptive foreground-stealing
+         * Activity launch it requires — before that tap happens, instead of
+         * only ever reacting to it.
+         *
+         * The 30s persisted cooldown (SharedPreferences, survives a process
+         * crash) is shared across every caller, so calling this from more
+         * places never launches the warmup Activity more often than before —
+         * it only widens the chance that one of those launches lands before
+         * the user is looking at some other app's text field.
+         */
+        fun ensureBackendReady(context: Context) {
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (now - lastWarmupAttemptElapsed < 5_000L) return
+            if (isRunning()) return
+            try {
+                OpenLessNative.requireBackendContract()
+            } catch (error: Throwable) {
+                val runtimePrefs = context.getSharedPreferences("openless_runtime", Context.MODE_PRIVATE)
+                val wallNow = System.currentTimeMillis()
+                val lastAttempt = runtimePrefs.getLong(BACKEND_WARMUP_ATTEMPT_KEY, 0L)
+                if (wallNow >= lastAttempt && wallNow - lastAttempt < BACKEND_WARMUP_RETRY_DELAY_MS) return
+                lastWarmupAttemptElapsed = now
+                runtimePrefs.edit().putLong(BACKEND_WARMUP_ATTEMPT_KEY, wallNow).apply()
+                android.util.Log.i("OpenLessBackendWarmupActivity", "backend is not ready; launching warmup", error)
+                Handler(Looper.getMainLooper()).postDelayed({
+                    runCatching {
+                        context.startActivity(Intent(context, OpenLessBackendWarmupActivity::class.java).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+                            addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                        })
+                    }.onFailure { launchError ->
+                        android.util.Log.w("OpenLessBackendWarmupActivity", "failed to launch warmup", launchError)
+                    }
+                }, 120L)
+            }
+        }
     }
 }

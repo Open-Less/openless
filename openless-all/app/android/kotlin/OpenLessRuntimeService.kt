@@ -35,6 +35,15 @@ class OpenLessRuntimeService : Service() {
             stopSelf(startId)
             return START_NOT_STICKY
         }
+        // START_STICKY means the system can restart this service on its own —
+        // e.g. after killing it under memory pressure — with no IME
+        // interaction involved at all. Piggyback the backend warmup check on
+        // every start (including those system-triggered restarts) so a cold
+        // backend has a chance to finish warming up (and the foreground-
+        // stealing Activity that requires goes away) before the user is next
+        // looking at some other app's text field, instead of only ever
+        // reacting to that tap.
+        OpenLessBackendWarmupActivity.ensureBackendReady(this)
         return START_STICKY
     }
 
