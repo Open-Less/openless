@@ -2804,6 +2804,8 @@ impl CoreTextInserter for TauriTextInserter {
                 previous_input_source: Arc::new(Mutex::new(previous_input_source)),
                 #[cfg(target_os = "macos")]
                 streaming_ready,
+                #[cfg(target_os = "macos")]
+                confirm_keyboard_delivery: Arc::new(AtomicBool::new(true)),
             }) as Arc<dyn TextInsertionSession>)
         })
     }
@@ -2825,6 +2827,8 @@ struct TauriTextInsertionSession {
     previous_input_source: Arc<Mutex<Option<crate::unicode_keystroke::PreviousInputSource>>>,
     #[cfg(target_os = "macos")]
     streaming_ready: bool,
+    #[cfg(target_os = "macos")]
+    confirm_keyboard_delivery: Arc<AtomicBool>,
 }
 
 impl TauriTextInsertionSession {
@@ -2848,9 +2852,30 @@ impl TauriTextInsertionSession {
             let newline_mode = self.context.insertion.windows_sendinput_newline_mode;
             #[cfg(target_os = "macos")]
             let newline_mode = self.context.insertion.macos_newline_mode;
+            #[cfg(target_os = "macos")]
+            let confirm_delivery = Arc::clone(&self.confirm_keyboard_delivery);
             let finished = Arc::clone(&self.finished);
             let written = tauri::async_runtime::spawn_blocking(move || {
                 if finished.load(Ordering::Acquire) {
+                    return 0;
+                }
+                // CGEventPost returns before the target has consumed its input.
+                // Retain the original control before posting; inspect only its
+                // caret, on this blocking thread, before completing the write.
+                #[cfg(target_os = "macos")]
+                let delivery = if confirm_delivery.load(Ordering::Acquire)
+                    && !(newline_mode == crate::types::MacosNewlineMode::Return
+                        && chunk.contains('\n'))
+                {
+                    crate::host_document::KeyboardDelivery::capture()
+                } else {
+                    None
+                };
+                #[cfg(target_os = "macos")]
+                if delivery
+                    .as_ref()
+                    .is_some_and(|delivery| !delivery.is_focused())
+                {
                     return 0;
                 }
                 #[cfg(target_os = "windows")]
@@ -2863,10 +2888,23 @@ impl TauriTextInsertionSession {
                     crate::unicode_keystroke::type_unicode_chunk_with_options(&chunk, newline_mode);
                 #[cfg(target_os = "linux")]
                 let result = crate::unicode_keystroke::type_unicode_chunk(&chunk);
-                match result {
+                let written = match result {
                     Ok(written) => written,
                     Err(error) => error.typed_chars(),
+                };
+                #[cfg(target_os = "macos")]
+                {
+                    let delivered = delivery.is_some_and(|delivery| {
+                        let posted: String = chunk.chars().take(written).collect();
+                        delivery.wait(&posted)
+                    });
+                    // Unsupported/stalled controls are tried once per session,
+                    // so a missing AX caret cannot add a delay to every delta.
+                    if !delivered {
+                        confirm_delivery.store(false, Ordering::Release);
+                    }
                 }
+                written
             })
             .await
             .map_err(|error| {

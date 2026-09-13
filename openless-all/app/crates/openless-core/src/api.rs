@@ -8663,7 +8663,10 @@ mod tests {
         )
         .unwrap();
         let first = backend.start().await.expect("first start must not fail");
-        let second = backend.start().await.expect("handshake start must not fail");
+        let second = backend
+            .start()
+            .await
+            .expect("handshake start must not fail");
         assert!(first.backend.running);
         assert!(second.backend.running);
         let _ = data_dir;
@@ -10705,9 +10708,16 @@ mod tests {
         assert_streaming_polish_deltas_flush_before_final_insert(true).await;
     }
 
-    async fn assert_cancel_drains_native_insertion(
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum NativeInsertionEnd {
+        Complete,
+        Cancel,
+        DropStopAndCancel,
+    }
+
+    async fn assert_native_insertion_lifecycle(
         streaming: bool,
-        drop_stop: bool,
+        ending: NativeInsertionEnd,
         translation: bool,
     ) {
         struct BlockingInsertion {
@@ -10740,10 +10750,12 @@ mod tests {
                 &self,
                 text: String,
             ) -> BoxFuture<'static, Result<InsertOutcome, BackendError>> {
-                let writing = self.write(text);
+                let writing = (!text.is_empty()).then(|| self.write(text));
                 let actions = Arc::clone(&self.actions);
                 boxed(async move {
-                    writing.await?;
+                    if let Some(writing) = writing {
+                        writing.await?;
+                    }
                     actions.lock().unwrap().push("input source restored");
                     Ok(InsertOutcome::Inserted)
                 })
@@ -10769,8 +10781,12 @@ mod tests {
         let actions = Arc::new(Mutex::new(Vec::new()));
         let started = Arc::new(tokio::sync::Semaphore::new(0));
         let release = Arc::new(tokio::sync::Semaphore::new(0));
-        let data_dir = TestDataDir::new("stream-cancel-drain");
+        let data_dir = TestDataDir::new("native-insertion-lifecycle");
+        let prefix = "长文字🙂\r\n".repeat(256);
+        let output = format!("{prefix}{}", "等待最后一段🌍\n".repeat(256));
+        let host = Arc::new(FakeHost::default());
         let mut deps = BackendDependencies::unsupported();
+        deps.host_actions = host.clone();
         deps.credential_store = Arc::new(crate::credentials::InMemoryCredentialStore::default());
         deps.text_inserter = Arc::new(BlockingInserter(Arc::new(BlockingInsertion {
             actions: Arc::clone(&actions),
@@ -10778,16 +10794,17 @@ mod tests {
             release: Arc::clone(&release),
         })));
         deps.dictation_engine = Arc::new(
-            crate::testing::FixtureDictationEngine::successful("raw", "streamed")
-                .with_polish_deltas(if streaming {
+            crate::testing::FixtureDictationEngine::successful("raw", &output).with_polish_deltas(
+                if streaming {
                     vec![crate::types::PolishDelta {
-                        text: "streamed".into(),
+                        text: prefix,
                         offset: 0,
                         is_final: false,
                     }]
                 } else {
                     Vec::new()
-                }),
+                },
+            ),
         );
         deps.task_spawner = Arc::new(TokioTaskSpawner);
         let backend = Arc::new(
@@ -10807,6 +10824,7 @@ mod tests {
         preferences.working_languages = vec!["简体中文".into()];
         backend.set_preferences(preferences).unwrap();
         backend.start().await.unwrap();
+        let mut events = backend.subscribe();
         let session_id = backend
             .start_dictation_with_options(DictationStartOptions {
                 translation_requested: translation,
@@ -10816,7 +10834,68 @@ mod tests {
             .unwrap();
         let stopping_backend = Arc::clone(&backend);
         let stop = tokio::spawn(async move { stopping_backend.stop_dictation().await });
-        started.acquire().await.unwrap().forget();
+        tokio::time::timeout(std::time::Duration::from_secs(2), started.acquire())
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+        if ending == NativeInsertionEnd::Complete {
+            // Hold both the streamed prefix and the final reconciliation tail.
+            // An LLM final delta must not end feedback before either native write.
+            for write_index in 0..if streaming { 2 } else { 1 } {
+                if write_index > 0 {
+                    tokio::time::timeout(std::time::Duration::from_secs(2), started.acquire())
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .forget();
+                }
+                assert!(!stop.is_finished());
+                assert_eq!(
+                    backend.snapshot().dictation.phase,
+                    DictationPhase::Inserting
+                );
+                assert!(!host
+                    .0
+                    .lock()
+                    .unwrap()
+                    .contains(&HostAction::HideDictationFeedback));
+                while let Ok(event) = events.try_recv() {
+                    assert!(!matches!(
+                        event.kind,
+                        BackendEventKind::DictationCompleted(_)
+                            | BackendEventKind::DictationStateChanged(DictationStateSnapshot {
+                                phase: DictationPhase::Completed | DictationPhase::Idle,
+                                ..
+                            })
+                    ));
+                }
+                release.add_permits(1);
+            }
+            let result = tokio::time::timeout(std::time::Duration::from_secs(2), stop)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(result.polished_text, output);
+            assert_eq!(
+                actions.lock().unwrap().last(),
+                Some(&"input source restored")
+            );
+            assert_eq!(
+                std::iter::from_fn(|| events.try_recv().ok())
+                    .filter(|event| matches!(event.kind, BackendEventKind::DictationCompleted(_)))
+                    .count(),
+                1
+            );
+            assert!(host
+                .0
+                .lock()
+                .unwrap()
+                .contains(&HostAction::HideDictationFeedback));
+            return;
+        }
+        let drop_stop = ending == NativeInsertionEnd::DropStopAndCancel;
         if drop_stop {
             stop.abort();
             tokio::task::yield_now().await;
@@ -10855,22 +10934,38 @@ mod tests {
 
     #[tokio::test]
     async fn streaming_cancel_drains_native_write_before_restoring_and_releasing_voice() {
-        assert_cancel_drains_native_insertion(true, false, false).await;
+        assert_native_insertion_lifecycle(true, NativeInsertionEnd::Cancel, false).await;
     }
 
     #[tokio::test]
     async fn final_insert_cancel_waits_for_the_committed_native_effect() {
-        assert_cancel_drains_native_insertion(false, false, false).await;
+        assert_native_insertion_lifecycle(false, NativeInsertionEnd::Cancel, false).await;
     }
 
     #[tokio::test]
     async fn final_insert_cancellation_survives_a_dropped_stop_caller() {
-        assert_cancel_drains_native_insertion(false, true, false).await;
+        assert_native_insertion_lifecycle(false, NativeInsertionEnd::DropStopAndCancel, false)
+            .await;
     }
 
     #[tokio::test]
     async fn streaming_translation_cancel_drains_native_write() {
-        assert_cancel_drains_native_insertion(true, false, true).await;
+        assert_native_insertion_lifecycle(true, NativeInsertionEnd::Cancel, true).await;
+    }
+
+    #[tokio::test]
+    async fn long_text_feedback_waits_for_stream_and_final_tail() {
+        assert_native_insertion_lifecycle(true, NativeInsertionEnd::Complete, false).await;
+    }
+
+    #[tokio::test]
+    async fn translation_feedback_waits_for_stream_and_final_tail() {
+        assert_native_insertion_lifecycle(true, NativeInsertionEnd::Complete, true).await;
+    }
+
+    #[tokio::test]
+    async fn non_streaming_feedback_waits_for_native_completion() {
+        assert_native_insertion_lifecycle(false, NativeInsertionEnd::Complete, false).await;
     }
 
     #[tokio::test]

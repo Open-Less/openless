@@ -186,6 +186,7 @@ extern "C" {
 extern "C" {
     fn CFRelease(cf: CFTypeRef);
     fn CFRetain(cf: CFTypeRef) -> CFTypeRef;
+    fn CFEqual(a: CFTypeRef, b: CFTypeRef) -> u8;
     fn CFGetTypeID(cf: CFTypeRef) -> CFTypeId;
     fn CFStringGetTypeID() -> CFTypeId;
     fn CFNumberGetTypeID() -> CFTypeId;
@@ -378,6 +379,209 @@ unsafe fn copy_selected_range(focused: AxUiElementRef) -> Option<CFRange> {
     );
     CFRelease(value);
     (ok != 0).then_some(range)
+}
+
+/// Confirms a posted keyboard chunk against the original text control's caret.
+/// Only metadata is read; the target's document text is never fetched.
+/// Create, wait and drop on the same blocking insertion thread.
+pub(crate) struct KeyboardDelivery {
+    element: AxUiElementRef,
+    start: usize,
+}
+
+impl KeyboardDelivery {
+    pub(crate) fn capture() -> Option<Self> {
+        let gate = GateInputs {
+            secure_input: crate::unicode_keystroke::is_secure_input_enabled(),
+            bundle_id: crate::selection::current_front_app_parts().1,
+            ..GateInputs::default()
+        };
+        // SAFETY: the shared gate returns a retained AX element with a messaging
+        // timeout. This thread owns it until Drop, including failed caret reads.
+        unsafe {
+            let GatedElement::Ready(element) = focused_element_passing_the_gate(gate) else {
+                return None;
+            };
+            let mut delivery = Self { element, start: 0 };
+            delivery.start = copy_caret_offset(element)?;
+            Some(delivery)
+        }
+    }
+
+    pub(crate) fn is_focused(&self) -> bool {
+        // AX capture can take time. Recheck the exact control before sending
+        // keys so a focus change during capture does not redirect this chunk.
+        unsafe {
+            let system = AXUIElementCreateSystemWide();
+            if system.is_null() {
+                return false;
+            }
+            AXUIElementSetMessagingTimeout(system, AX_MESSAGING_TIMEOUT_SECS);
+            let focused = copy_element_attr(system, b"AXFocusedUIElement\0");
+            CFRelease(system as CFTypeRef);
+            let Some(focused) = focused else { return false };
+            let same = CFEqual(focused as CFTypeRef, self.element as CFTypeRef) != 0;
+            CFRelease(focused as CFTypeRef);
+            same
+        }
+    }
+
+    /// False means this target cannot be confirmed; stop probing it for this session.
+    pub(crate) fn wait(self, posted_text: &str) -> bool {
+        let started = Instant::now();
+        let outcome = wait_for_caret_delivery(
+            self.start,
+            posted_text,
+            || {
+                if crate::unicode_keystroke::is_secure_input_enabled() {
+                    return None;
+                }
+                // SAFETY: self retains the same control throughout this wait.
+                unsafe { copy_selected_range(self.element) }.and_then(|range| {
+                    if range.length < 0 {
+                        return None;
+                    }
+                    caret_offset_from_location(range.location).map(|offset| (offset, range.length))
+                })
+            },
+            || {
+                if started.elapsed() >= Duration::from_secs(10) {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+                true
+            },
+        );
+        if outcome == KeyboardDeliveryOutcome::TimedOut {
+            log::warn!(
+                "[insertion] target caret did not acknowledge posted keyboard input within 10s"
+            );
+        }
+        outcome == KeyboardDeliveryOutcome::Delivered
+    }
+}
+
+impl Drop for KeyboardDelivery {
+    fn drop(&mut self) {
+        // SAFETY: capture owns exactly one retained reference.
+        unsafe { CFRelease(self.element as CFTypeRef) };
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum KeyboardDeliveryOutcome {
+    Delivered,
+    Unavailable,
+    TimedOut,
+}
+
+fn wait_for_caret_delivery(
+    start: usize,
+    posted_text: &str,
+    mut read: impl FnMut() -> Option<(usize, isize)>,
+    mut wait: impl FnMut() -> bool,
+) -> KeyboardDeliveryOutcome {
+    // AX offsets count UTF-16 units. CR is consumed without posting a key.
+    let units = posted_text
+        .chars()
+        .filter(|ch| *ch != '\r')
+        .map(char::len_utf16)
+        .sum();
+    if units == 0 {
+        return KeyboardDeliveryOutcome::Delivered;
+    }
+    let Some(expected) = start.checked_add(units) else {
+        return KeyboardDeliveryOutcome::Unavailable;
+    };
+    loop {
+        let Some((offset, selected_length)) = read() else {
+            return KeyboardDeliveryOutcome::Unavailable;
+        };
+        if selected_length == 0 && offset >= expected {
+            return KeyboardDeliveryOutcome::Delivered;
+        }
+        if !wait() {
+            return KeyboardDeliveryOutcome::TimedOut;
+        }
+    }
+}
+
+#[cfg(test)]
+mod keyboard_delivery_tests {
+    use super::*;
+
+    #[test]
+    fn posted_input_waits_until_target_consumes_the_last_character() {
+        // A selected range / intermediate caret is not an insertion receipt.
+        let mut samples = [(120, 20), (101, 0), (119, 0), (120, 0)].into_iter();
+        let mut waits = 0;
+        assert_eq!(
+            wait_for_caret_delivery(
+                100,
+                &"字".repeat(20),
+                || samples.next(),
+                || {
+                    waits += 1;
+                    true
+                }
+            ),
+            KeyboardDeliveryOutcome::Delivered
+        );
+        assert_eq!(waits, 3);
+    }
+
+    #[test]
+    fn unavailable_or_stalled_targets_do_not_wait_forever() {
+        assert_eq!(
+            wait_for_caret_delivery(
+                0,
+                "input",
+                || None,
+                || panic!("unavailable target must stop")
+            ),
+            KeyboardDeliveryOutcome::Unavailable
+        );
+        let mut waits = 0;
+        assert_eq!(
+            wait_for_caret_delivery(
+                0,
+                "input",
+                || Some((3, 0)),
+                || {
+                    waits += 1;
+                    waits < 3
+                }
+            ),
+            KeyboardDeliveryOutcome::TimedOut
+        );
+        assert_eq!(waits, 3);
+    }
+
+    #[test]
+    fn unicode_and_crlf_wait_for_the_actual_utf16_end() {
+        let mut samples = [(11, 0), (12, 0)].into_iter();
+        let mut waits = 0;
+        assert_eq!(
+            wait_for_caret_delivery(
+                7,
+                "A🙂\r\n界",
+                || samples.next(),
+                || {
+                    waits += 1;
+                    true
+                }
+            ),
+            KeyboardDeliveryOutcome::Delivered
+        );
+        assert_eq!(
+            waits, 1,
+            "must neither stop at a scalar offset nor wait for swallowed CR"
+        );
+        assert_eq!(
+            wait_for_caret_delivery(7, "\r", || panic!("no keys were posted"), || false),
+            KeyboardDeliveryOutcome::Delivered
+        );
+    }
 }
 
 /// `AXStringForRange(range)` —— 只把光标附近那段跨进程拷回来。
