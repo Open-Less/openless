@@ -1,3 +1,5 @@
+use openless_linux_egui::Lang;
+
 // ── Page / Tab ──────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -10,6 +12,7 @@ pub enum Page {
     Marketplace,
     SelectionAsk,
     Translation,
+    Corrections,
     Settings,
 }
 
@@ -46,24 +49,30 @@ pub enum FrontendAction {
     MarketplaceToggleLike(usize),
     /// History search query changed.
     HistorySearch(String),
-    /// History filter changed.
-    HistoryFilter(usize),
-    /// Select a history entry.
+    /// Select a history entry (index into `history_entries`).
     HistorySelect(usize),
-    /// Clear all history.
-    HistoryClear,
-    /// Refresh history list.
+    /// Re-read the history list from Core.
     HistoryRefresh,
-    /// Play/pause history audio.
-    HistoryTogglePlay,
-    /// Repolish a history entry.
-    HistoryRepolish,
-    /// Delete a history entry.
-    HistoryDelete(usize),
-    /// Export history recording.
+    /// Ask for confirmation before clearing all history.
+    HistoryRequestClear,
+    /// Ask for confirmation before deleting one entry.
+    HistoryRequestDelete(usize),
+    /// Confirm the pending destructive history action.
+    HistoryConfirmAction,
+    /// Dismiss the pending confirmation dialog.
+    HistoryCancelConfirm,
+    /// Export a history entry's recording to a file.
     HistoryExport(usize),
+    /// Re-run ASR on a history entry's recording.
+    HistoryRetranscribe(usize),
+    /// Open a history entry's recording in the system player.
+    HistoryPlay(usize),
     /// Vocab entry added.
     VocabAddPhrase(String),
+    /// Vocab list filter changed (0 = all, 1 = auto-collected, 2 = manual).
+    VocabFilter(usize),
+    /// Vocab search query changed.
+    VocabSearch(String),
     /// Vocab entry removed.
     VocabRemovePhrase(usize),
     /// Vocab entry toggled enabled/disabled.
@@ -116,6 +125,12 @@ pub enum FrontendAction {
     SettingsSection(SettingsSection),
     /// Settings notice message.
     SettingsNotice(String),
+    /// Overview: re-read credentials / history / activity from Core.
+    OverviewRefresh,
+    /// Overview: period toggle (0 = last 7 days, 1 = last 30 days).
+    OverviewPeriod(usize),
+    /// Overview: metric toggle (0 = count, 1 = chars, 2 = duration).
+    OverviewMetric(usize),
     /// Window close requested.
     WindowClose,
     /// Window maximize/minimize toggle.
@@ -155,6 +170,8 @@ pub struct MarketplacePack {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsSection {
     General,
+    Shortcuts,
+    Appearance,
     Services,
     Privacy,
     Advanced,
@@ -249,12 +266,47 @@ pub struct SavedVocabPreset {
 
 // ── History types ───────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug)]
+/// Insert outcome, mirrored from Core's `HistoryInsertStatus` into a plain
+/// frontend enum so the page never has to depend on Core types.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HistoryInsertStatus {
+    #[default]
+    NotRequested,
+    Inserted,
+    PasteSent,
+    CopiedFallback,
+    Failed,
+}
+
+/// A pending destructive action that needs an in-window confirmation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryConfirm {
+    Clear,
+    Delete(usize),
+}
+
+/// One history row plus everything the detail panel shows.
+#[derive(Clone, Debug, Default)]
 pub struct HistoryEntry {
-    pub time: String,
-    pub text: String,
-    pub duration: String,
-    pub tag: String,
+    pub id: String,
+    pub created_at: String,
+    /// Base polish mode; drives the list pill tone (raw renders as outline).
+    pub mode: OverviewMode,
+    /// Pill text: the style-pack name, or the mode name for records without one.
+    pub style_label: String,
+    pub raw_transcript: String,
+    pub final_text: String,
+    pub duration_ms: Option<u64>,
+    pub insert_status: HistoryInsertStatus,
+    pub has_audio: bool,
+    pub asr_provider: Option<String>,
+    pub asr_model: Option<String>,
+    pub asr_ms: Option<u64>,
+    pub llm_provider: Option<String>,
+    pub llm_model: Option<String>,
+    pub polish_ms: Option<u64>,
+    pub app_name: Option<String>,
+    pub dictionary_count: Option<u32>,
 }
 
 // ── Style types ─────────────────────────────────────────────────────────────
@@ -271,6 +323,34 @@ pub struct StylePack {
 
 // ── Overview types ──────────────────────────────────────────────────────────
 
+/// Polish mode shown as the mode pill on a "recent" row.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OverviewMode {
+    #[default]
+    Raw,
+    Light,
+    Structured,
+    Formal,
+}
+
+/// One calendar day of activity (chronological inside
+/// [`OverviewSummary::activity_daily`]).
+#[derive(Clone, Debug, Default)]
+pub struct OverviewActivityDay {
+    /// `YYYY-MM-DD` in the host's local timezone.
+    pub date: String,
+    pub count: u32,
+    pub chars: u64,
+    pub duration_ms: u64,
+}
+
+/// One day of the annual activity heatmap (`YYYY-MM-DD` + dictation count).
+#[derive(Clone, Debug, Default)]
+pub struct OverviewHeatmapDay {
+    pub date: String,
+    pub count: u32,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct OverviewSummary {
     pub asr_provider: String,
@@ -283,17 +363,22 @@ pub struct OverviewSummary {
     pub avg_latency_ms: u64,
     pub history_total: usize,
     pub recent: Vec<OverviewRecentEntry>,
-    pub last_7_segments: u64,
-    pub last_30_segments: u64,
-    pub heatmap_weeks: Vec<[u32; 7]>,
-    pub heatmap_days: u32,
-    pub activity_days_total: usize,
+    /// Last 30 days ending today, chronological (oldest first). The period
+    /// chart slices the tail for the 7-day view.
+    pub activity_daily: Vec<OverviewActivityDay>,
+    /// Calendar year rendered by the annual heatmap card.
+    pub heatmap_year: i32,
+    /// Every day of `heatmap_year`, chronological. Days without activity are
+    /// present with `count == 0` so the page can lay out the grid.
+    pub heatmap: Vec<OverviewHeatmapDay>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct OverviewRecentEntry {
     pub created_at: String,
     pub final_text: String,
+    pub raw_transcript: String,
+    pub mode: OverviewMode,
     pub duration_ms: Option<u64>,
 }
 
@@ -309,24 +394,32 @@ pub struct FrontendViewModel {
     pub tools_open: bool,
     pub settings_open: bool,
 
+    /// Resolved UI language, injected by the host each frame so the pure
+    /// renderer can look up localized strings without touching global state.
+    pub lang: Lang,
+
     // Overview
     pub overview_loading: bool,
     pub overview_error: Option<String>,
     pub overview: Option<OverviewSummary>,
+    pub overview_period: usize,
+    pub overview_metric: usize,
 
     // History
     pub history_query: String,
-    pub history_filter: usize,
     pub history_selected: usize,
     pub history_entries: Vec<HistoryEntry>,
-    pub history_cleared: bool,
-    pub history_repolished: bool,
-    pub history_audio_playing: bool,
-    pub history_style_picker_open: bool,
+    pub history_loading: bool,
+    pub history_error: Option<String>,
+    /// Set while a destructive action awaits confirmation (clear-all / delete).
+    pub history_confirm: Option<HistoryConfirm>,
 
     // Vocab
     pub vocab_entries: Vec<VocabEntry>,
     pub vocab_rules: Vec<CorrectionRule>,
+    /// 0 = all, 1 = auto-collected, 2 = manual.
+    pub vocab_filter: usize,
+    pub vocab_query: String,
     pub vocab_input: String,
     pub vocab_pattern: String,
     pub vocab_replacement: String,
@@ -362,6 +455,8 @@ pub struct FrontendViewModel {
 
     // Settings
     pub settings_section: SettingsSection,
+    /// Rail search query in the settings modal.
+    pub settings_query: String,
     pub settings_notice: Option<String>,
     pub settings: SettingsFields,
 
@@ -371,34 +466,45 @@ pub struct FrontendViewModel {
 
     // Translation
     pub translation_working_languages: Vec<String>,
+    /// Language search query on the translation page.
+    pub translation_query: String,
     pub translation_target_language: String,
     pub translation_unsupported: bool,
 
     // Status bar
     pub version: String,
     pub status: String,
+    /// Display label for the dictation shortcut (e.g. `Ctrl+Shift+Space`).
+    pub dictation_hotkey: String,
+    /// Display label for the selection-ask popup shortcut.
+    pub qa_hotkey: String,
+    /// Display label for the translation modifier shortcut.
+    pub translation_hotkey: String,
 }
 
 impl Default for FrontendViewModel {
     fn default() -> Self {
         Self {
+            lang: Lang::ZhCn,
             active_page: Page::Overview,
             style_open: true,
-            tools_open: false,
+            tools_open: true,
             settings_open: false,
             overview_loading: true,
             overview_error: None,
             overview: None,
+            overview_period: 0,
+            overview_metric: 0,
             history_query: String::new(),
-            history_filter: 0,
             history_selected: 0,
             history_entries: Vec::new(),
-            history_cleared: false,
-            history_repolished: false,
-            history_audio_playing: false,
-            history_style_picker_open: false,
+            history_loading: true,
+            history_error: None,
+            history_confirm: None,
             vocab_entries: Vec::new(),
             vocab_rules: Vec::new(),
+            vocab_filter: 0,
+            vocab_query: String::new(),
             vocab_input: String::new(),
             vocab_pattern: String::new(),
             vocab_replacement: String::new(),
@@ -428,15 +534,20 @@ impl Default for FrontendViewModel {
             marketplace_loading: true,
             marketplace_unsupported: true,
             settings_section: SettingsSection::General,
+            settings_query: String::new(),
             settings_notice: None,
             settings: SettingsFields::default(),
             qa_save_history: false,
             selection_unsupported: true,
             translation_working_languages: Vec::new(),
+            translation_query: String::new(),
             translation_target_language: String::new(),
             translation_unsupported: true,
             version: env!("CARGO_PKG_VERSION").to_string(),
             status: String::new(),
+            dictation_hotkey: String::new(),
+            qa_hotkey: String::new(),
+            translation_hotkey: String::new(),
         }
     }
 }

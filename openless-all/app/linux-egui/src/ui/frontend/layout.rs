@@ -1,5 +1,7 @@
 use eframe::egui;
 
+use openless_linux_egui::{fmt_l10n, tr_l10n};
+
 use super::icons::{self, IconName};
 use super::theme;
 use super::view_model::{FrontendAction, FrontendViewModel, Page};
@@ -98,14 +100,32 @@ pub fn titlebar(ctx: &egui::Context, actions: &mut Vec<FrontendAction>) {
         .fixed_pos(window.min)
         .show(ctx, |ui| {
             ui.set_min_size(egui::vec2(window.width(), TITLEBAR_HEIGHT));
+
+            let button_width = 40.0;
+            let controls_left = titlebar.right() - button_width * 3.0;
+            // The drag zone stops before the window controls so a press on the
+            // buttons can never be claimed by the titlebar drag target.
+            let drag_rect = egui::Rect::from_min_max(
+                titlebar.min,
+                egui::pos2(controls_left, titlebar.bottom()),
+            );
             let drag = ui.interact(
-                titlebar,
+                drag_rect,
                 ui.id().with("titlebar-drag"),
                 egui::Sense::click_and_drag(),
             );
-            if drag.drag_started() {
+            // Ask the compositor to move the window on the *press* frame: on
+            // Wayland `xdg_toplevel.move` needs the pointer serial from that
+            // event, so deferring to `drag_started` silently does nothing.
+            let pressed_now =
+                drag.is_pointer_button_down_on() && ui.input(|input| input.pointer.any_pressed());
+            if drag.drag_started() || pressed_now {
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
+            if drag.double_clicked() {
+                actions.push(FrontendAction::WindowMaximize);
+            }
+
             let texture = load_app_icon(ctx);
             paint_app_icon(
                 ui,
@@ -123,7 +143,6 @@ pub fn titlebar(ctx: &egui::Context, actions: &mut Vec<FrontendAction>) {
                 theme::INK_2,
             );
 
-            let button_width = 40.0;
             let close = egui::Rect::from_min_max(
                 egui::pos2(titlebar.right() - button_width, titlebar.top()),
                 titlebar.right_bottom(),
@@ -154,7 +173,9 @@ pub fn titlebar(ctx: &egui::Context, actions: &mut Vec<FrontendAction>) {
                         .rect_filled(rect, egui::CornerRadius::same(6), theme::SURFACE_2);
                 }
             }
+
             let stroke = egui::Stroke::new(1.0, theme::INK_3);
+            // Minimize: a single horizontal line.
             ui.painter().line_segment(
                 [
                     minimize.center() - egui::vec2(5.0, 0.0),
@@ -162,12 +183,37 @@ pub fn titlebar(ctx: &egui::Context, actions: &mut Vec<FrontendAction>) {
                 ],
                 stroke,
             );
-            ui.painter().rect_stroke(
-                maximize.shrink(14.0),
-                egui::CornerRadius::ZERO,
-                stroke,
-                egui::StrokeKind::Inside,
-            );
+            // Maximize shows a square, restored windows show the two-square glyph.
+            let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
+            let center = maximize.center();
+            if maximized {
+                let half = 4.0;
+                ui.painter().rect_stroke(
+                    egui::Rect::from_min_max(
+                        center + egui::vec2(-half - 2.0, -half),
+                        center + egui::vec2(half - 2.0, half),
+                    ),
+                    egui::CornerRadius::ZERO,
+                    stroke,
+                    egui::StrokeKind::Inside,
+                );
+                ui.painter().rect_stroke(
+                    egui::Rect::from_min_max(
+                        center + egui::vec2(-half + 2.0, -half + 2.0),
+                        center + egui::vec2(half + 2.0, half + 2.0),
+                    ),
+                    egui::CornerRadius::ZERO,
+                    stroke,
+                    egui::StrokeKind::Inside,
+                );
+            } else {
+                ui.painter().rect_stroke(
+                    egui::Rect::from_center_size(center, egui::vec2(10.0, 10.0)),
+                    egui::CornerRadius::ZERO,
+                    stroke,
+                    egui::StrokeKind::Inside,
+                );
+            }
             ui.painter().line_segment(
                 [
                     close.center() - egui::vec2(5.0, 5.0),
@@ -189,7 +235,8 @@ pub fn titlebar(ctx: &egui::Context, actions: &mut Vec<FrontendAction>) {
 
 pub fn resize_handles(ctx: &egui::Context) {
     let window = window_rect(ctx);
-    let edge = 10.0;
+    // Keep the draggable titlebar band generous: only a thin strip resizes.
+    let edge = 6.0;
     let corner = 18.0;
     let left = window.left();
     let right = window.right();
@@ -287,11 +334,20 @@ pub fn sidebar(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Ve
                 body.min,
                 egui::vec2(SIDEBAR_WIDTH, body.height()),
             ));
-            ui.painter().rect_filled(ui.max_rect(), 0.0, theme::SURFACE);
+            ui.painter().rect_filled(
+                ui.max_rect(),
+                egui::CornerRadius {
+                    nw: 0,
+                    ne: 0,
+                    sw: WINDOW_RADIUS,
+                    se: 0,
+                },
+                theme::SURFACE,
+            );
             ui.painter().line_segment(
                 [
-                    egui::pos2(SIDEBAR_WIDTH, 0.0),
-                    egui::pos2(SIDEBAR_WIDTH, body.height()),
+                    egui::pos2(body.left() + SIDEBAR_WIDTH, body.top()),
+                    egui::pos2(body.left() + SIDEBAR_WIDTH, body.bottom()),
                 ],
                 egui::Stroke::new(1.0, theme::LINE),
             );
@@ -300,78 +356,166 @@ pub fn sidebar(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Ve
                 .show(ui, |ui| {
                     ui.set_width(SIDEBAR_WIDTH - 20.0);
                     ui.horizontal(|ui| {
-                        let (rect, _) =
-                            ui.allocate_exact_size(egui::vec2(20.0, 22.0), egui::Sense::hover());
-                        let texture = load_app_icon(ctx);
-                        paint_app_icon(ui, rect, &texture);
-                        ui.label(egui::RichText::new("OpenLess").strong().size(14.0));
-                    });
-                    ui.add_space(16.0);
-                    nav(ui, vm, "概览", Page::Overview, IconName::Overview, actions);
-                    nav(ui, vm, "历史", Page::History, IconName::History, actions);
-                    nav(ui, vm, "词汇表", Page::Vocab, IconName::Vocab, actions);
-                    ui.add_space(4.0);
-                    group(ui, vm, "风格", IconName::Style, actions);
-                    if vm.style_open {
-                        subnav(ui, vm, "润色模式", Page::Style, actions);
-                        subnav(ui, vm, "风格市场", Page::Marketplace, actions);
-                    }
-                    group(ui, vm, "工具", IconName::SelectionAsk, actions);
-                    if vm.tools_open {
-                        subnav(ui, vm, "划词追问", Page::SelectionAsk, actions);
-                        subnav(ui, vm, "翻译", Page::Translation, actions);
-                    }
-                    ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                        nav_with_icon(ui, vm, "设置", Page::Settings, IconName::Settings, actions);
                         ui.add_space(10.0);
-                        ui.horizontal(|ui| {
-                            ui.add_space(10.0);
-                            ui.vertical(|ui| {
-                                egui::Frame::new()
-                                    .fill(theme::BLUE_SOFT)
-                                    .corner_radius(egui::CornerRadius::same(7))
-                                    .inner_margin(egui::Margin::symmetric(6, 2))
-                                    .show(ui, |ui| {
-                                        ui.label(
-                                            egui::RichText::new("BETA")
-                                                .size(9.5)
-                                                .strong()
-                                                .color(theme::BLUE),
-                                        );
-                                    });
-                                ui.add_space(3.0);
+                        egui::Frame::new()
+                            .fill(theme::BLUE_SOFT)
+                            .corner_radius(egui::CornerRadius::same(7))
+                            .inner_margin(egui::Margin::symmetric(6, 2))
+                            .show(ui, |ui| {
                                 ui.label(
-                                    egui::RichText::new(format!("版本 {}", vm.version))
-                                        .size(10.5)
-                                        .color(theme::INK_4),
+                                    egui::RichText::new("BETA")
+                                        .size(9.5)
+                                        .strong()
+                                        .color(theme::BLUE),
                                 );
                             });
-                        });
+                        ui.label(
+                            egui::RichText::new(fmt_l10n(vm.lang, "shell.version", &[&vm.version]))
+                                .size(10.5)
+                                .color(theme::INK_4),
+                        );
+                    });
+                    ui.add_space(14.0);
+                    nav(
+                        ui,
+                        vm,
+                        "nav.overview",
+                        NavTarget::Page(Page::Overview),
+                        IconName::Overview,
+                        actions,
+                    );
+                    nav(
+                        ui,
+                        vm,
+                        "nav.history",
+                        NavTarget::Page(Page::History),
+                        IconName::History,
+                        actions,
+                    );
+                    nav(
+                        ui,
+                        vm,
+                        "nav.vocab",
+                        NavTarget::Page(Page::Vocab),
+                        IconName::Vocab,
+                        actions,
+                    );
+                    ui.add_space(4.0);
+                    group(
+                        ui,
+                        vm,
+                        "nav.group_style",
+                        IconName::Style,
+                        vm.style_open,
+                        FrontendAction::SidebarToggleStyle,
+                        actions,
+                    );
+                    if vm.style_open {
+                        subnav(
+                            ui,
+                            vm,
+                            "nav.polish_mode",
+                            NavTarget::Page(Page::Style),
+                            actions,
+                        );
+                        subnav(
+                            ui,
+                            vm,
+                            "nav.marketplace",
+                            NavTarget::Page(Page::Marketplace),
+                            actions,
+                        );
+                    }
+                    group(
+                        ui,
+                        vm,
+                        "nav.group_tools",
+                        IconName::SelectionAsk,
+                        vm.tools_open,
+                        FrontendAction::SidebarToggleTools,
+                        actions,
+                    );
+                    if vm.tools_open {
+                        subnav(
+                            ui,
+                            vm,
+                            "nav.translation",
+                            NavTarget::Page(Page::Translation),
+                            actions,
+                        );
+                        subnav(
+                            ui,
+                            vm,
+                            "nav.selection_ask",
+                            NavTarget::Page(Page::SelectionAsk),
+                            actions,
+                        );
+                        subnav(
+                            ui,
+                            vm,
+                            "nav.corrections",
+                            NavTarget::Page(Page::Corrections),
+                            actions,
+                        );
+                    }
+                    ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                        nav_with_icon(
+                            ui,
+                            vm,
+                            "nav.settings",
+                            NavTarget::Page(Page::Settings),
+                            IconName::Settings,
+                            actions,
+                        );
                     });
                 });
         });
 }
 
+/// Where a sidebar row navigates to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NavTarget {
+    Page(Page),
+}
+
+fn nav_active(vm: &FrontendViewModel, target: NavTarget) -> bool {
+    match target {
+        NavTarget::Page(page) => vm.active_page == page,
+    }
+}
+
+fn nav_click(target: NavTarget, actions: &mut Vec<FrontendAction>) {
+    match target {
+        NavTarget::Page(page) => {
+            actions.push(FrontendAction::Navigate(page));
+            if page == Page::Settings {
+                actions.push(FrontendAction::ToggleSettings);
+            }
+        }
+    }
+}
+
 fn nav(
     ui: &mut egui::Ui,
     vm: &mut FrontendViewModel,
-    label: &str,
-    page: Page,
+    key: &'static str,
+    target: NavTarget,
     icon: IconName,
     actions: &mut Vec<FrontendAction>,
 ) {
-    nav_with_icon(ui, vm, label, page, icon, actions);
+    nav_with_icon(ui, vm, key, target, icon, actions);
 }
 
 fn nav_with_icon(
     ui: &mut egui::Ui,
     vm: &mut FrontendViewModel,
-    label: &str,
-    page: Page,
+    key: &'static str,
+    target: NavTarget,
     icon: IconName,
     actions: &mut Vec<FrontendAction>,
 ) {
-    let active = vm.active_page == page;
+    let label = tr_l10n(vm.lang, key);
+    let active = nav_active(vm, target);
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(SIDEBAR_WIDTH - 20.0, 32.0), egui::Sense::click());
     if active {
@@ -388,21 +532,19 @@ fn nav_with_icon(
         color,
     );
     if response.clicked() {
-        actions.push(FrontendAction::Navigate(page));
-        if page == Page::Settings {
-            actions.push(FrontendAction::ToggleSettings);
-        }
+        nav_click(target, actions);
     }
 }
 
 fn subnav(
     ui: &mut egui::Ui,
     vm: &mut FrontendViewModel,
-    label: &str,
-    page: Page,
+    key: &'static str,
+    target: NavTarget,
     actions: &mut Vec<FrontendAction>,
 ) {
-    let active = vm.active_page == page;
+    let label = tr_l10n(vm.lang, key);
+    let active = nav_active(vm, target);
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(SIDEBAR_WIDTH - 20.0, 30.0), egui::Sense::click());
     if active {
@@ -417,17 +559,21 @@ fn subnav(
         if active { theme::INK } else { theme::INK_3 },
     );
     if response.clicked() {
-        actions.push(FrontendAction::Navigate(page));
+        nav_click(target, actions);
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn group(
     ui: &mut egui::Ui,
     vm: &mut FrontendViewModel,
-    label: &str,
+    key: &'static str,
     icon: IconName,
+    is_open: bool,
+    toggle: FrontendAction,
     actions: &mut Vec<FrontendAction>,
 ) {
+    let label = tr_l10n(vm.lang, key);
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(SIDEBAR_WIDTH - 20.0, 32.0), egui::Sense::click());
     let color = if response.hovered() {
@@ -445,10 +591,6 @@ fn group(
     );
     let x = rect.max.x - 18.0;
     let y = rect.center().y;
-    let is_open = match icon {
-        IconName::Style => vm.style_open,
-        _ => vm.tools_open,
-    };
     if is_open {
         ui.painter().line_segment(
             [egui::pos2(x - 3.0, y - 1.0), egui::pos2(x, y + 2.0)],
@@ -469,10 +611,7 @@ fn group(
         );
     }
     if response.clicked() {
-        match icon {
-            IconName::Style => actions.push(FrontendAction::SidebarToggleStyle),
-            _ => actions.push(FrontendAction::SidebarToggleTools),
-        }
+        actions.push(toggle);
     }
 }
 
@@ -628,6 +767,36 @@ pub fn card_at(ui: &mut egui::Ui, rect: egui::Rect, contents: impl FnOnce(&mut e
     );
 }
 
+/// A stable per-card salt derived from its position, so child widget ids stay
+/// unique across the cards on a page without threading a name through.
+pub fn card_salt(rect: egui::Rect) -> (i32, i32) {
+    (rect.left().round() as i32, rect.top().round() as i32)
+}
+
+/// Run `contents` inside a child `Ui` pinned to `rect`, **without** moving the
+/// parent cursor.
+///
+/// `Ui::scope_builder` / `Ui::scope` advance the parent cursor to the child's
+/// *used* rect (`scope_dyn` calls `advance_cursor_after_rect`). Cards on these
+/// pages are positioned explicitly and mostly paint instead of allocating, so
+/// a scope would rewind the cursor and make the next row overlap the card.
+/// Use this (or `card_at`) for absolutely positioned content.
+pub fn fixed_ui<R>(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    id_salt: impl std::hash::Hash,
+    contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt(id_salt)
+            .max_rect(rect)
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+    child.set_clip_rect(child.clip_rect().intersect(rect));
+    contents(&mut child)
+}
+
 pub fn tag(ui: &egui::Ui, pos: egui::Pos2, text: &str, blue: bool) {
     let width = (text.chars().count() as f32 * 10.0 + 16.0).max(48.0);
     let rect = egui::Rect::from_min_size(pos, egui::vec2(width, 20.0));
@@ -659,15 +828,354 @@ pub fn soft_separator(ui: &mut egui::Ui) {
     );
 }
 
-pub fn unsupported_page(ui: &mut egui::Ui, title: &str) {
-    ui.add_space(28.0);
-    ui.label(
-        egui::RichText::new(title)
-            .size(28.0)
-            .strong()
-            .color(theme::INK),
+/// Width of `text` at `size` points, measured with the live font atlas.
+/// Needed wherever a control is laid out by hand rather than by egui's cursor.
+pub fn text_width(ui: &egui::Ui, text: &str, size: f32) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    ui.fonts_mut(|fonts| {
+        fonts
+            .layout_no_wrap(
+                text.to_owned(),
+                egui::FontId::proportional(size),
+                egui::Color32::PLACEHOLDER,
+            )
+            .size()
+            .x
+    })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ButtonKind {
+    /// Transparent fill, hairline border, ink text (the default toolbar look).
+    Ghost,
+    /// Filled with `SURFACE_2`, no border.
+    Soft,
+    /// Filled with the accent blue, white text.
+    Blue,
+}
+
+/// A bordered button drawn into an exact rectangle, with an optional leading
+/// icon. Used by the pages that position their cards explicitly.
+pub fn action_button(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    label: &str,
+    icon: Option<IconName>,
+    kind: ButtonKind,
+) -> egui::Response {
+    let id = ui.id().with((
+        "openless-action-button",
+        label,
+        rect.left().round() as i32,
+        rect.top().round() as i32,
+    ));
+    let response = ui.interact(rect, id, egui::Sense::click());
+    let (fill, stroke, ink) = match kind {
+        ButtonKind::Ghost => (
+            if response.hovered() {
+                theme::SURFACE_2
+            } else {
+                egui::Color32::TRANSPARENT
+            },
+            Some(egui::Stroke::new(0.8, theme::LINE)),
+            theme::INK_2,
+        ),
+        ButtonKind::Soft => (theme::SURFACE_2, None, theme::INK_2),
+        ButtonKind::Blue => (
+            if response.hovered() {
+                theme::BLUE.linear_multiply(0.92)
+            } else {
+                theme::BLUE
+            },
+            None,
+            egui::Color32::WHITE,
+        ),
+    };
+    let painter = ui.painter().with_clip_rect(rect);
+    painter.rect_filled(rect, egui::CornerRadius::same(8), fill);
+    if let Some(stroke) = stroke {
+        painter.rect_stroke(
+            rect,
+            egui::CornerRadius::same(8),
+            stroke,
+            egui::StrokeKind::Inside,
+        );
+    }
+    let label_width = text_width(ui, label, 12.5);
+    let icon_space = if icon.is_some() { 19.0 } else { 0.0 };
+    let mut x = rect.center().x - (label_width + icon_space) / 2.0;
+    if let Some(icon) = icon {
+        icons::draw_icon(ui, egui::pos2(x + 6.5, rect.center().y), icon, ink);
+        x += icon_space;
+    }
+    painter.text(
+        egui::pos2(x, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(12.5),
+        ink,
     );
-    ui.add_space(22.0);
+    response
+}
+
+/// Draw the standard page header (uppercase kicker, title, optional desc) and
+/// return the row so the caller can place right-aligned actions on it.
+pub fn page_header(
+    ui: &mut egui::Ui,
+    width: f32,
+    kicker: &str,
+    title: &str,
+    desc: Option<&str>,
+) -> egui::Rect {
+    let height = if desc.is_some() { 84.0 } else { 60.0 };
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let painter = ui.painter().with_clip_rect(rect);
+    painter.text(
+        egui::pos2(rect.left(), rect.top() + 2.0),
+        egui::Align2::LEFT_TOP,
+        kicker,
+        egui::FontId::proportional(11.0),
+        theme::INK_4,
+    );
+    painter.text(
+        egui::pos2(rect.left(), rect.top() + 18.0),
+        egui::Align2::LEFT_TOP,
+        title,
+        egui::FontId::proportional(26.0),
+        theme::INK,
+    );
+    if let Some(desc) = desc {
+        painter.text(
+            egui::pos2(rect.left(), rect.top() + 56.0),
+            egui::Align2::LEFT_TOP,
+            desc,
+            egui::FontId::proportional(13.0),
+            theme::INK_3,
+        );
+    }
+    rect
+}
+
+/// Paint the standard card background (white, hairline border, 14pt radius).
+pub fn paint_card(painter: &egui::Painter, rect: egui::Rect) {
+    painter.rect_filled(rect, egui::CornerRadius::same(14), theme::SURFACE);
+    painter.rect_stroke(
+        rect,
+        egui::CornerRadius::same(14),
+        egui::Stroke::new(1.0, theme::LINE),
+        egui::StrokeKind::Inside,
+    );
+}
+
+/// A card with padded contents that never moves the parent layout cursor.
+pub fn card(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    padding: f32,
+    contents: impl FnOnce(&mut egui::Ui, egui::Rect),
+) {
+    paint_card(ui.painter(), rect);
+    let inner = rect.shrink(padding);
+    fixed_ui(ui, inner, card_salt(rect), |ui| contents(ui, inner));
+}
+
+/// iOS-style switch painted into an exact rectangle.
+pub fn toggle(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    on: bool,
+    id_salt: impl std::hash::Hash,
+) -> egui::Response {
+    let response = ui.interact(rect, ui.id().with(id_salt), egui::Sense::click());
+    let track = if on {
+        theme::BLUE
+    } else {
+        egui::Color32::from_rgb(184, 184, 187)
+    };
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(10), track);
+    let knob_x = if on {
+        rect.right() - 10.0
+    } else {
+        rect.left() + 10.0
+    };
+    ui.painter().circle_filled(
+        egui::pos2(knob_x, rect.center().y),
+        8.0,
+        egui::Color32::WHITE,
+    );
+    response
+}
+
+/// Lay out text into a galley with a width/row limit. Used by pages that paint
+/// their content at explicit positions instead of with the layout cursor.
+pub fn text_galley(
+    ui: &egui::Ui,
+    text: &str,
+    color: egui::Color32,
+    size: f32,
+    max_width: f32,
+    max_rows: usize,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = max_width.max(1.0);
+    job.wrap.max_rows = max_rows;
+    job.append(
+        text,
+        0.0,
+        egui::text::TextFormat {
+            font_id: egui::FontId::proportional(size),
+            color,
+            ..Default::default()
+        },
+    );
+    ui.fonts_mut(|fonts| fonts.layout_job(job))
+}
+
+/// Width of a segmented control for `options`.
+pub fn segmented_width(ui: &egui::Ui, options: &[&str]) -> f32 {
+    let mut width = 4.0;
+    for (index, option) in options.iter().enumerate() {
+        if index > 0 {
+            width += 2.0;
+        }
+        width += text_width(ui, option, 12.0) + 18.0;
+    }
+    width
+}
+
+/// A segmented button group (the Tauri `ol-seg` control). Returns the index the
+/// user clicked. Every segment is a real button, not a text label.
+pub fn segmented(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    options: &[&str],
+    selected: usize,
+) -> Option<usize> {
+    let painter = ui.painter().with_clip_rect(rect);
+    painter.rect_filled(rect, egui::CornerRadius::same(8), theme::SURFACE_2);
+    painter.rect_stroke(
+        rect,
+        egui::CornerRadius::same(8),
+        egui::Stroke::new(0.5, theme::LINE),
+        egui::StrokeKind::Inside,
+    );
+    let mut x = rect.left() + 2.0;
+    let mut clicked = None;
+    for (index, option) in options.iter().enumerate() {
+        let width = text_width(ui, option, 12.0) + 18.0;
+        let option_rect = egui::Rect::from_min_size(
+            egui::pos2(x, rect.top() + 2.0),
+            egui::vec2(width, rect.height() - 4.0),
+        );
+        let id = ui.id().with((
+            "openless-segment",
+            index,
+            rect.left().round() as i32,
+            rect.top().round() as i32,
+        ));
+        let response = ui.interact(option_rect, id, egui::Sense::click());
+        let is_selected = index == selected;
+        if is_selected {
+            painter.rect_filled(option_rect, egui::CornerRadius::same(6), theme::BLUE);
+        } else if response.hovered() {
+            painter.rect_filled(option_rect, egui::CornerRadius::same(6), theme::SURFACE);
+        }
+        painter.text(
+            option_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            option,
+            egui::FontId::proportional(12.0),
+            if is_selected {
+                egui::Color32::WHITE
+            } else {
+                theme::INK_3
+            },
+        );
+        if response.clicked() {
+            clicked = Some(index);
+        }
+        x += width + 2.0;
+    }
+    clicked
+}
+
+/// A labelled section block: title plus optional smaller description line.
+pub fn section_title(ui: &mut egui::Ui, width: f32, title: &str, desc: Option<&str>) {
+    let height = if desc.is_some() { 40.0 } else { 20.0 };
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let painter = ui.painter().with_clip_rect(rect);
+    painter.text(
+        egui::pos2(rect.left(), rect.top()),
+        egui::Align2::LEFT_TOP,
+        title,
+        egui::FontId::proportional(13.0),
+        theme::INK,
+    );
+    if let Some(desc) = desc {
+        painter.text(
+            egui::pos2(rect.left(), rect.top() + 20.0),
+            egui::Align2::LEFT_TOP,
+            desc,
+            egui::FontId::proportional(11.5),
+            theme::INK_4,
+        );
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PillTone {
+    /// Transparent fill with a hairline border (used for "raw").
+    Outline,
+    /// Neutral `SURFACE_2` fill.
+    Gray,
+    /// Accent-tinted fill.
+    Blue,
+}
+
+/// Natural size of a small pill for `text`.
+pub fn pill_size(ui: &egui::Ui, text: &str) -> egui::Vec2 {
+    egui::vec2(text_width(ui, text, 10.5) + 16.0, 18.0)
+}
+
+/// Paint a small rounded pill into an exact rectangle.
+pub fn paint_pill(painter: &egui::Painter, rect: egui::Rect, text: &str, tone: PillTone) {
+    let (fill, border, color) = match tone {
+        PillTone::Outline => (egui::Color32::TRANSPARENT, Some(theme::LINE), theme::INK_3),
+        PillTone::Gray => (theme::SURFACE_2, None, theme::INK_3),
+        PillTone::Blue => (theme::BLUE_SOFT, None, theme::BLUE),
+    };
+    painter.rect_filled(rect, egui::CornerRadius::same(9), fill);
+    if let Some(border) = border {
+        painter.rect_stroke(
+            rect,
+            egui::CornerRadius::same(9),
+            egui::Stroke::new(0.7, border),
+            egui::StrokeKind::Inside,
+        );
+    }
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        text,
+        egui::FontId::proportional(10.5),
+        color,
+    );
+}
+
+pub fn unsupported_page(ui: &mut egui::Ui, lang: openless_linux_egui::Lang, title: &str) {
+    ui.add_space(28.0);
+    if !title.is_empty() {
+        ui.label(
+            egui::RichText::new(title)
+                .size(28.0)
+                .strong()
+                .color(theme::INK),
+        );
+        ui.add_space(22.0);
+    }
     egui::Frame::new()
         .fill(theme::SURFACE)
         .stroke(egui::Stroke::new(1.0, theme::LINE))
@@ -676,15 +1184,21 @@ pub fn unsupported_page(ui: &mut egui::Ui, title: &str) {
         .show(ui, |ui| {
             ui.vertical_centered(|ui| {
                 ui.label(
-                    egui::RichText::new("此页面暂未接线")
-                        .size(13.0)
-                        .color(theme::INK_3),
+                    egui::RichText::new(openless_linux_egui::tr_l10n(
+                        lang,
+                        "common.unsupported_title",
+                    ))
+                    .size(13.0)
+                    .color(theme::INK_3),
                 );
                 ui.add_space(4.0);
                 ui.label(
-                    egui::RichText::new("数据桥接将在后续阶段完成")
-                        .size(11.0)
-                        .color(theme::INK_4),
+                    egui::RichText::new(openless_linux_egui::tr_l10n(
+                        lang,
+                        "common.unsupported_hint",
+                    ))
+                    .size(11.0)
+                    .color(theme::INK_4),
                 );
             });
         });

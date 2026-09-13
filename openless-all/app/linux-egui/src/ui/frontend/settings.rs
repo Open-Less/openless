@@ -1,4 +1,5 @@
 use eframe::egui;
+use openless_linux_egui::{tr_l10n, Lang};
 
 use super::theme;
 use super::view_model::{
@@ -7,10 +8,13 @@ use super::view_model::{
 };
 
 const RAIL_WIDTH: f32 = 198.0;
+const SIDEBAR_RAIL_INPUT: f32 = 150.0;
 
 #[derive(Clone, Copy)]
 enum SettingsIcon {
     Settings,
+    Keyboard,
+    Sun,
     Cloud,
     Shield,
     Bolt,
@@ -21,19 +25,24 @@ enum SettingsIcon {
 }
 
 impl SettingsSection {
-    fn label(self) -> &'static str {
+    fn label(self, lang: Lang) -> &'static str {
+        // Keys are spelled out per arm so the i18n sync script can see them.
         match self {
-            Self::General => "通用",
-            Self::Services => "服务",
-            Self::Privacy => "隐私",
-            Self::Advanced => "高级",
-            Self::About => "关于",
+            Self::General => tr_l10n(lang, "modal.sections.general"),
+            Self::Shortcuts => tr_l10n(lang, "modal.sections.shortcuts"),
+            Self::Appearance => tr_l10n(lang, "modal.sections.appearance"),
+            Self::Services => tr_l10n(lang, "modal.sections.services"),
+            Self::Privacy => tr_l10n(lang, "modal.sections.privacy"),
+            Self::Advanced => tr_l10n(lang, "modal.sections.advanced"),
+            Self::About => tr_l10n(lang, "modal.sections.about"),
         }
     }
 
     fn icon(self) -> SettingsIcon {
         match self {
             Self::General => SettingsIcon::Settings,
+            Self::Shortcuts => SettingsIcon::Keyboard,
+            Self::Appearance => SettingsIcon::Sun,
             Self::Services => SettingsIcon::Cloud,
             Self::Privacy => SettingsIcon::Shield,
             Self::Advanced => SettingsIcon::Bolt,
@@ -123,18 +132,43 @@ pub fn settings_overlay(
 }
 
 fn rail(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
+    let lang = vm.lang;
     egui::Frame::NONE
-        .inner_margin(egui::Margin::symmetric(12, 18))
+        .inner_margin(egui::Margin::symmetric(12, 14))
         .show(ui, |ui| {
+            // Section search, like the Tauri rail.
+            egui::Frame::new()
+                .fill(theme::SURFACE_2)
+                .stroke(egui::Stroke::new(0.8, theme::LINE))
+                .corner_radius(egui::CornerRadius::same(8))
+                .inner_margin(egui::Margin::symmetric(10, 4))
+                .show(ui, |ui| {
+                    ui.set_width(SIDEBAR_RAIL_INPUT);
+                    ui.add_sized(
+                        [SIDEBAR_RAIL_INPUT, 20.0],
+                        egui::TextEdit::singleline(&mut vm.settings_query)
+                            .hint_text(tr_l10n(lang, "modal.search_placeholder"))
+                            .frame(false),
+                    );
+                });
+            ui.add_space(10.0);
+
+            let query = vm.settings_query.trim().to_lowercase();
+            // Tauri's rail order.
             for section in [
                 SettingsSection::General,
+                SettingsSection::Shortcuts,
                 SettingsSection::Services,
+                SettingsSection::Appearance,
                 SettingsSection::Privacy,
                 SettingsSection::Advanced,
                 SettingsSection::About,
             ] {
-                let active = vm.settings_section == section;
-                let response = rail_item(ui, section.label(), section.icon(), active);
+                let label = section.label(lang);
+                if !query.is_empty() && !label.to_lowercase().contains(&query) {
+                    continue;
+                }
+                let response = rail_item(ui, label, section.icon(), vm.settings_section == section);
                 if response.clicked() {
                     actions.push(FrontendAction::SettingsSection(section));
                 }
@@ -142,16 +176,14 @@ fn rail(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronten
             ui.add_space(14.0);
             ui.separator();
             ui.add_space(7.0);
-            for (label, icon, message) in [
+            for (label, icon) in [
                 (
-                    "帮助中心",
+                    tr_l10n(lang, "modal.sections.help_center"),
                     SettingsIcon::Help,
-                    "帮助中心将在 egui 外链桥接完成后打开",
                 ),
                 (
-                    "发布日志",
+                    tr_l10n(lang, "modal.sections.release_notes"),
                     SettingsIcon::Document,
-                    "发布日志将在 egui 外链桥接完成后打开",
                 ),
             ] {
                 let response = rail_item(ui, label, icon, false);
@@ -163,7 +195,9 @@ fn rail(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronten
                     theme::INK_4,
                 );
                 if response.clicked() {
-                    vm.settings_notice = Some(message.into());
+                    actions.push(FrontendAction::SettingsAction(
+                        SettingsActionField::OpenHelp,
+                    ));
                 }
             }
         });
@@ -208,6 +242,30 @@ fn draw_rail_icon(ui: &egui::Ui, center: egui::Pos2, icon: SettingsIcon, color: 
             ] {
                 let direction = egui::vec2(angle.cos(), angle.sin());
                 painter.line_segment([center + direction * 5.0, center + direction * 7.0], stroke);
+            }
+        }
+        SettingsIcon::Keyboard => {
+            painter.rect_stroke(
+                egui::Rect::from_center_size(center, egui::vec2(15.0, 11.0)),
+                egui::CornerRadius::same(2),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.line_segment([point(-5.0, 2.5), point(5.0, 2.5)], stroke);
+            for x in [-4.5, 0.0, 4.5] {
+                painter.circle_filled(point(x, -2.0), 0.9, color);
+            }
+        }
+        SettingsIcon::Sun => {
+            painter.circle_stroke(center, 3.6, stroke);
+            for angle in [
+                0.0,
+                std::f32::consts::FRAC_PI_2,
+                std::f32::consts::PI,
+                3.0 * std::f32::consts::FRAC_PI_2,
+            ] {
+                let direction = egui::vec2(angle.cos(), angle.sin());
+                painter.line_segment([center + direction * 5.6, center + direction * 7.6], stroke);
             }
         }
         SettingsIcon::Cloud => {
@@ -305,6 +363,7 @@ fn draw_rail_icon(ui: &egui::Ui, center: egui::Pos2, icon: SettingsIcon, color: 
 }
 
 fn panel(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
+    let lang = vm.lang;
     egui::Frame::NONE
         .inner_margin(egui::Margin::symmetric(24, 16))
         .show(ui, |ui| {
@@ -323,24 +382,34 @@ fn panel(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
             }
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new(vm.settings_section.label())
+                    egui::RichText::new(vm.settings_section.label(lang))
                         .size(22.0)
                         .strong()
                         .color(theme::INK),
                 );
-                ui.add_space(ui.available_width() - 38.0);
-                if ui
-                    .add(
-                        egui::Button::new(egui::RichText::new("×").size(22.0).color(theme::INK_3))
+                // Auto-save hint + close, right aligned like the Tauri modal.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("×").size(22.0).color(theme::INK_3),
+                            )
                             .fill(theme::SURFACE_2)
                             .stroke(egui::Stroke::new(0.7, theme::LINE))
                             .corner_radius(egui::CornerRadius::same(8))
                             .min_size(egui::vec2(30.0, 30.0)),
-                    )
-                    .clicked()
-                {
-                    actions.push(FrontendAction::CloseSettings);
-                }
+                        )
+                        .clicked()
+                    {
+                        actions.push(FrontendAction::CloseSettings);
+                    }
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new(tr_l10n(lang, "modal.auto_save_hint"))
+                            .size(11.0)
+                            .color(theme::INK_4),
+                    );
+                });
             });
             if let Some(notice) = &vm.settings_notice {
                 ui.add_space(4.0);
@@ -352,6 +421,8 @@ fn panel(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
                 .auto_shrink([false, false])
                 .show(ui, |ui| match vm.settings_section {
                     SettingsSection::General => general(ui, vm, actions),
+                    SettingsSection::Shortcuts => shortcuts(ui, vm, actions),
+                    SettingsSection::Appearance => appearance(ui, vm, actions),
                     SettingsSection::Services => services(ui, vm, actions),
                     SettingsSection::Privacy => privacy(ui, vm, actions),
                     SettingsSection::Advanced => advanced(ui, vm, actions),
@@ -361,17 +432,22 @@ fn panel(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
 }
 
 fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
+    let lang = vm.lang;
     card(
         ui,
-        "录音与输入",
-        "全局录音的快捷键与触发方式。",
+        tr_l10n(lang, "settings.recording.title"),
+        tr_l10n(lang, "settings.recording.desc"),
         |ui| {
-            text_row(ui, "录音快捷键", "右 Option");
+            text_row(
+                ui,
+                "录音快捷键",
+                tr_l10n(lang, "hotkey.triggers.right_option"),
+            );
             combo_bool_row(
                 ui,
-                "录音方式",
+                tr_l10n(lang, "settings.recording.mode_label"),
                 vm.settings.realtime_mode,
-                &["切换式", "按住说话"],
+                &[tr_l10n(lang, "settings.recording.mode_toggle"), "按住说话"],
                 || {
                     actions.push(FrontendAction::SettingsToggle(SettingsField::RealtimeMode));
                 },
@@ -380,7 +456,11 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                 ui,
                 "麦克风",
                 vm.settings.provider,
-                &["系统默认", "内置麦克风", "外接麦克风"],
+                &[
+                    tr_l10n(lang, "settings.recording.microphone_system_default"),
+                    "内置麦克风",
+                    "外接麦克风",
+                ],
                 |val| {
                     actions.push(FrontendAction::SettingsCombo(
                         SettingsComboField::Provider,
@@ -403,16 +483,21 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     SettingsField::StreamingInsert,
                 ));
             });
-            toggle_row(ui, "录音时静音", vm.settings.selection_voice, || {
-                actions.push(FrontendAction::SettingsToggle(
-                    SettingsField::SelectionVoice,
-                ));
-            });
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.recording.mute_during_recording_label"),
+                vm.settings.selection_voice,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::SelectionVoice,
+                    ));
+                },
+            );
         },
     );
     card(
         ui,
-        "插入与剪贴板",
+        tr_l10n(lang, "settings.recording.insert_group_title"),
         "识别结果如何回到当前光标位置。",
         |ui| {
             toggle_row(ui, "恢复剪贴板", vm.settings.restore_clipboard, || {
@@ -420,7 +505,11 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     SettingsField::RestoreClipboard,
                 ));
             });
-            text_row(ui, "模拟粘贴快捷键", "Ctrl V");
+            text_row(
+                ui,
+                tr_l10n(lang, "settings.recording.paste_shortcut_label"),
+                "Ctrl V",
+            );
             toggle_row(
                 ui,
                 "流式结果保存剪贴板",
@@ -435,33 +524,31 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
     );
     card(
         ui,
-        "布局",
-        "让浮层和内容更适合你的工作方式。",
-        |ui| {
-            toggle_row(ui, "堆叠设置行", vm.settings.stacked_layout, || {
-                actions.push(FrontendAction::SettingsToggle(SettingsField::StackedLayout));
-            });
-            toggle_row(ui, "紧凑布局", vm.settings.conservative_layout, || {
-                actions.push(FrontendAction::SettingsToggle(
-                    SettingsField::ConservativeLayout,
-                ));
-            });
-        },
-    );
-    card(
-        ui,
-        "远程输入",
+        tr_l10n(lang, "settings.remote_input.title"),
         "通过局域网接收来自其他设备的输入。",
         |ui| {
-            toggle_row(ui, "启用远程输入", vm.settings.remote_input, || {
-                actions.push(FrontendAction::SettingsToggle(SettingsField::RemoteInput));
-            });
-            text_row(ui, "监听端口", &vm.settings.remote_port);
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.remote_input.enable_label"),
+                vm.settings.remote_input,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(SettingsField::RemoteInput));
+                },
+            );
+            text_row(
+                ui,
+                tr_l10n(lang, "settings.remote_input.port_label"),
+                &vm.settings.remote_port,
+            );
             combo_index_row(
                 ui,
                 "默认模式",
                 vm.settings.provider,
-                &["润色", "原文", "翻译"],
+                &[
+                    tr_l10n(lang, "history.step_polish"),
+                    "原文",
+                    tr_l10n(lang, "nav.translation"),
+                ],
                 |val| {
                     actions.push(FrontendAction::SettingsCombo(
                         SettingsComboField::Provider,
@@ -473,10 +560,31 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
     );
     card(
         ui,
-        "快捷键",
+        tr_l10n(lang, "settings.recording.startup_group_title"),
+        "控制 OpenLess 启动时的行为。",
+        |ui| {
+            toggle_row(
+                ui,
+                "启动时最小化",
+                vm.settings.start_minimized,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::StartMinimized,
+                    ));
+                },
+            );
+        },
+    );
+}
+
+fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
+    let lang = vm.lang;
+    card(
+        ui,
+        tr_l10n(lang, "overview.actions.shortcuts"),
         "开始/停止、翻译、问答和风格切换。",
         |ui| {
-            text_row(ui, "翻译", "⌥ T");
+            text_row(ui, tr_l10n(lang, "nav.translation"), "⌥ T");
             text_row(ui, "划词追问", "⌥ Q");
             text_row(ui, "切换风格", "⌥ S");
             text_row(ui, "唤起 OpenLess", "⌥ Space");
@@ -489,42 +597,72 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
             );
         },
     );
-    card(ui, "主题", "外观与概览页显示选项。", |ui| {
-        combo_index_row(
-            ui,
-            "主题",
-            vm.settings.theme,
-            &["跟随系统", "浅色", "深色"],
-            |val| {
-                actions.push(FrontendAction::SettingsCombo(
-                    SettingsComboField::Theme,
-                    val,
-                ));
-            },
-        );
-        toggle_row(
-            ui,
-            "显示活动热力图",
-            vm.settings.activity_heatmap,
-            || {
-                actions.push(FrontendAction::SettingsToggle(
-                    SettingsField::ActivityHeatmap,
-                ));
-            },
-        );
-    });
     card(
         ui,
-        "界面语言",
+        tr_l10n(lang, "settings.selection_workspace.title"),
+        tr_l10n(lang, "settings.selection_workspace.hint"),
+        |ui| {
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.selection_workspace.voice_enable"),
+                vm.settings.selection_assistant,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::SelectionAssistant,
+                    ));
+                },
+            );
+        },
+    );
+}
+
+fn appearance(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
+    let lang = vm.lang;
+    card(
+        ui,
+        tr_l10n(lang, "settings.theme.label"),
+        "外观与概览页显示选项。",
+        |ui| {
+            combo_index_row(
+                ui,
+                tr_l10n(lang, "settings.theme.label"),
+                vm.settings.theme,
+                &[
+                    "跟随系统",
+                    tr_l10n(lang, "settings.theme.light"),
+                    tr_l10n(lang, "settings.theme.dark"),
+                ],
+                |val| {
+                    actions.push(FrontendAction::SettingsCombo(
+                        SettingsComboField::Theme,
+                        val,
+                    ));
+                },
+            );
+            toggle_row(
+                ui,
+                "显示活动热力图",
+                vm.settings.activity_heatmap,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::ActivityHeatmap,
+                    ));
+                },
+            );
+        },
+    );
+    card(
+        ui,
+        tr_l10n(lang, "settings.language.title"),
         "选择 OpenLess 使用的界面语言。",
         |ui| {
             combo_index_row(
                 ui,
-                "语言",
+                tr_l10n(lang, "settings.language.label"),
                 vm.settings.language,
                 &[
                     "跟随系统",
-                    "简体中文",
+                    tr_l10n(lang, "settings.language.zh"),
                     "繁体中文",
                     "English",
                     "日本語",
@@ -539,21 +677,25 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
             );
         },
     );
-    card(ui, "启动", "控制 OpenLess 启动时的行为。", |ui| {
-        toggle_row(
-            ui,
-            "启动时最小化",
-            vm.settings.start_minimized,
-            || {
+    card(
+        ui,
+        tr_l10n(lang, "settings.layout.title"),
+        "让浮层和内容更适合你的工作方式。",
+        |ui| {
+            toggle_row(ui, "堆叠设置行", vm.settings.stacked_layout, || {
+                actions.push(FrontendAction::SettingsToggle(SettingsField::StackedLayout));
+            });
+            toggle_row(ui, "紧凑布局", vm.settings.conservative_layout, || {
                 actions.push(FrontendAction::SettingsToggle(
-                    SettingsField::StartMinimized,
+                    SettingsField::ConservativeLayout,
                 ));
-            },
-        );
-    });
+            });
+        },
+    );
 }
 
 fn services(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
+    let lang = vm.lang;
     card(
         ui,
         "AI 提供商",
@@ -563,7 +705,12 @@ fn services(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                 ui,
                 "当前提供商",
                 vm.settings.provider,
-                &["OpenAI 兼容", "百炼", "SiliconFlow", "本地服务"],
+                &[
+                    tr_l10n(lang, "overview.llm_name"),
+                    "百炼",
+                    "SiliconFlow",
+                    "本地服务",
+                ],
                 |val| {
                     actions.push(FrontendAction::SettingsCombo(
                         SettingsComboField::Provider,
@@ -609,12 +756,17 @@ fn services(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
     );
     card(
         ui,
-        "网络",
+        tr_l10n(lang, "settings.network.title"),
         "网络请求的代理和连接选项。",
         |ui| {
-            toggle_row(ui, "使用系统代理", vm.settings.system_proxy, || {
-                actions.push(FrontendAction::SettingsToggle(SettingsField::SystemProxy));
-            });
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.network.use_system_proxy_label"),
+                vm.settings.system_proxy,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(SettingsField::SystemProxy));
+                },
+            );
             toggle_row(ui, "失败时自动重试", vm.settings.auto_update, || {
                 actions.push(FrontendAction::SettingsToggle(SettingsField::AutoUpdate));
             });
@@ -622,7 +774,7 @@ fn services(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
     );
     card(
         ui,
-        "扩展市场",
+        tr_l10n(lang, "settings.marketplace.title"),
         "浏览和安装风格包及输入扩展。",
         |ui| {
             toggle_row(
@@ -641,6 +793,7 @@ fn services(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
 }
 
 fn privacy(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
+    let lang = vm.lang;
     egui::Frame::new()
         .fill(theme::BLUE_SOFT)
         .corner_radius(egui::CornerRadius::same(10))
@@ -659,18 +812,24 @@ fn privacy(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
         });
     card(
         ui,
-        "权限",
+        tr_l10n(lang, "settings.permissions.title"),
         "查看 OpenLess 使用麦克风、辅助功能和网络的权限。",
         |ui| {
             status_row(ui, "麦克风", "已授权", theme::OK);
             status_row(ui, "辅助功能", "待检查", theme::INK_4);
             status_row(ui, "键盘输入", "待检查", theme::INK_4);
-            action_row(ui, "权限管理", "打开系统设置", None, actions);
+            action_row(
+                ui,
+                tr_l10n(lang, "settings.permissions.title"),
+                "打开系统设置",
+                None,
+                actions,
+            );
         },
     );
     card(
         ui,
-        "数据存储",
+        tr_l10n(lang, "settings.data_storage.title"),
         "控制历史记录、上下文和调试音频的保留方式。",
         |ui| {
             toggle_row(
@@ -708,6 +867,7 @@ fn privacy(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
 }
 
 fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
+    let lang = vm.lang;
     card(
         ui,
         "Less Computer",
@@ -715,7 +875,7 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
         |ui| {
             toggle_row(
                 ui,
-                "启用 Less Computer",
+                tr_l10n(lang, "settings.coding_agent.enable"),
                 vm.settings.less_computer,
                 || {
                     actions.push(FrontendAction::SettingsToggle(SettingsField::LessComputer));
@@ -723,7 +883,7 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
             );
             combo_index_row(
                 ui,
-                "权限模式",
+                tr_l10n(lang, "settings.coding_console.permission_mode"),
                 vm.settings.retention,
                 &["接受编辑", "计划模式", "默认", "绕过权限"],
                 |val| {
@@ -733,12 +893,16 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                     ));
                 },
             );
-            text_row(ui, "工作目录", "当前项目");
+            text_row(
+                ui,
+                tr_l10n(lang, "settings.coding_console.workdir"),
+                "当前项目",
+            );
         },
     );
     card(
         ui,
-        "Claude 控制台",
+        tr_l10n(lang, "settings.coding_console.title"),
         "检测 Claude CLI、MCP 和 computer use 状态。",
         |ui| {
             action_row(
@@ -763,18 +927,23 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
     );
     card(
         ui,
-        "多模态管线",
+        tr_l10n(lang, "settings.advanced.multimodal_pipeline_title"),
         "实验性的图片和音频上下文处理。",
         |ui| {
-            toggle_row(ui, "启用多模态处理", vm.settings.multimodal, || {
-                actions.push(FrontendAction::SettingsToggle(SettingsField::Multimodal));
-            });
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.advanced.multimodal_pipeline_label"),
+                vm.settings.multimodal,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(SettingsField::Multimodal));
+                },
+            );
             text_row(ui, "处理方式", "跟随当前服务");
         },
     );
     card(
         ui,
-        "调试工具",
+        tr_l10n(lang, "settings.debug.title"),
         "导出诊断信息，帮助定位输入和插入问题。",
         |ui| {
             toggle_row(
@@ -795,12 +964,19 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                     ));
                 },
             );
-            action_row(ui, "诊断信息", "导出错误日志", None, actions);
+            action_row(
+                ui,
+                "诊断信息",
+                tr_l10n(lang, "modal.about.export_error_log"),
+                None,
+                actions,
+            );
         },
     );
 }
 
 fn about(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
+    let lang = vm.lang;
     card(
         ui,
         "OpenLess",
@@ -821,12 +997,22 @@ fn about(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
                 Some("当前已是最新版本（占位）".into()),
                 actions,
             );
-            toggle_row(ui, "加入 Beta 渠道", vm.settings.beta_channel, || {
-                actions.push(FrontendAction::SettingsToggle(SettingsField::BetaChannel));
-            });
-            toggle_row(ui, "自动检查更新", vm.settings.auto_update, || {
-                actions.push(FrontendAction::SettingsToggle(SettingsField::AutoUpdate));
-            });
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.about.beta_channel_label"),
+                vm.settings.beta_channel,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(SettingsField::BetaChannel));
+                },
+            );
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.recording.auto_update_check_label"),
+                vm.settings.auto_update,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(SettingsField::AutoUpdate));
+                },
+            );
         },
     );
     card(
@@ -835,7 +1021,10 @@ fn about(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
         "获取帮助、查看源码或提交问题。",
         |ui| {
             for (label, action) in [
-                ("GitHub", "打开 GitHub"),
+                (
+                    "GitHub",
+                    tr_l10n(lang, "settings.marketplace.github.open_github"),
+                ),
                 ("文档", "打开帮助中心"),
                 ("发行说明", "打开发行说明"),
                 ("反馈", "打开问题反馈"),

@@ -165,6 +165,16 @@ pub const CATALOG: &[Msg] = &[
         text: row("能力", "能力", "Capabilities", "機能", "기능"),
     },
     Msg {
+        key: "shell.version",
+        text: row(
+            "版本 {}",
+            "版本 {}",
+            "Version {}",
+            "バージョン {}",
+            "버전 {}",
+        ),
+    },
+    Msg {
         key: "nav.overview",
         text: row("概览", "概覽", "Overview", "概要", "개요"),
     },
@@ -174,13 +184,7 @@ pub const CATALOG: &[Msg] = &[
     },
     Msg {
         key: "nav.vocab",
-        text: row(
-            "词汇与纠错",
-            "詞彙與糾錯",
-            "Vocabulary & Correction",
-            "語彙と修正",
-            "어휘 및 교정",
-        ),
+        text: row("词典", "詞典", "Dictionary", "辞書", "사전"),
     },
     Msg {
         key: "nav.styles",
@@ -195,11 +199,11 @@ pub const CATALOG: &[Msg] = &[
     Msg {
         key: "nav.marketplace",
         text: row(
+            "风格市场",
+            "風格市場",
             "Marketplace",
-            "Marketplace",
-            "Marketplace",
-            "マーケットプレイス",
-            "마켓플레이스",
+            "マーケット",
+            "마켓",
         ),
     },
     Msg {
@@ -235,6 +239,42 @@ pub const CATALOG: &[Msg] = &[
     Msg {
         key: "nav.settings",
         text: row("设置", "設定", "Settings", "設定", "설정"),
+    },
+    Msg {
+        key: "nav.group_style",
+        text: row("风格", "風格", "Style", "スタイル", "스타일"),
+    },
+    Msg {
+        key: "nav.group_tools",
+        text: row("工具", "工具", "Tools", "ツール", "도구"),
+    },
+    Msg {
+        key: "nav.polish_mode",
+        text: row(
+            "润色模式",
+            "潤色模式",
+            "Polish mode",
+            "推敲モード",
+            "다듬기 모드",
+        ),
+    },
+    Msg {
+        key: "nav.translation",
+        text: row("翻译", "翻譯", "Translation", "翻訳", "번역"),
+    },
+        Msg {
+        key: "nav.selection_ask",
+        text: row("划词追问", "劃詞追問", "Ask", "選択追問", "선택 질문"),
+    },
+    Msg {
+        key: "nav.corrections",
+        text: row(
+            "纠错规则",
+            "糾錯規則",
+            "Corrections",
+            "修正ルール",
+            "교정 규칙",
+        ),
     },
     // ---- Common controls ----------------------------------------------------
     Msg {
@@ -723,6 +763,759 @@ pub const CATALOG: &[Msg] = &[
             "({}일 · {}일 기록)",
         ),
     },
+    // ---- Overview page (2.0 dashboard) ------------------------------------
+        Msg {
+        key: "overview.title",
+        text: row(
+            "今日概览",
+            "今日概覽",
+            "Today's overview",
+            "本日の概要",
+            "오늘 개요",
+        ),
+    },
+    Msg {
+        key: "overview.mode_raw",
+        text: row("原文", "原文", "Verbatim", "原文", "원문"),
+    },
+    Msg {
+        key: "overview.mode_light",
+        text: row(
+            "轻度润色",
+            "輕度潤色",
+            "Light polish",
+            "軽い推敲",
+            "가벼운 다듬기",
+        ),
+    },
+    Msg {
+        key: "overview.mode_structured",
+        text: row(
+            "清晰结构",
+            "清晰結構",
+            "Structured",
+            "明確な構造",
+            "명확한 구조",
+        ),
+    },
+    Msg {
+        key: "overview.mode_formal",
+        text: row(
+            "正式表达",
+            "正式表達",
+            "Formal",
+            "フォーマル",
+            "격식체",
+        ),
+    },
+        Msg {
+        key: "overview.refresh",
+        text: row(
+            "刷新状态",
+            "重新整理狀態",
+            "Refresh status",
+            "状態を更新",
+            "상태 새로고침",
+        ),
+    },
+        Msg {
+        key: "overview.stats_title",
+        text: row(
+            "使用记录",
+            "使用紀錄",
+            "Your activity",
+            "利用記録",
+            "사용 기록",
+        ),
+    },
+        Msg {
+        key: "overview.metric_chars",
+        text: row(
+            "今日字数",
+            "今日字數",
+            "Characters today",
+            "本日の文字数",
+            "오늘 글자 수",
+        ),
+    },
+        Msg {
+        key: "overview.metric_segments",
+        text: row("{} 段", "{} 段", "{} segments", "{} セグメント", "{} 세그먼트"),
+    },
+        Msg {
+        key: "overview.metric_duration",
+        text: row(
+            "今日总时长",
+            "今日總時長",
+            "Total duration today",
+            "本日の合計時間",
+            "오늘 총 시간",
+        ),
+    },
+        Msg {
+        key: "overview.metric_avg",
+        text: row(
+            "平均段落",
+            "平均段落",
+            "Avg per segment",
+            "平均セグメント",
+            "평균 세그먼트",
+        ),
+    },
+        Msg {
+        key: "overview.metric_avg_trend",
+        text: row(
+            "今日均值",
+            "今日均值",
+            "Today's average",
+            "本日の平均",
+            "오늘 평균",
+        ),
+    },
+        Msg {
+        key: "overview.metric_no_data",
+        text: row("暂无数据", "暫無數據", "No data", "データなし", "데이터 없음"),
+    },
+    Msg {
+        key: "overview.history_error",
+        text: row(
+            "历史读取失败",
+            "歷史讀取失敗",
+            "Failed to load history",
+            "履歴の読み込みに失敗",
+            "기록을 불러오지 못함",
+        ),
+    },
+    Msg {
+        key: "overview.metric_total",
+        text: row(
+            "累计记录",
+            "累計記錄",
+            "Total records",
+            "累計記録",
+            "누적 기록",
+        ),
+    },
+    Msg {
+        key: "overview.metric_total_trend",
+        text: row(
+            "本机存档（上限 {}）",
+            "本機存檔（上限 {}）",
+            "Stored locally (max {})",
+            "ローカル保存（上限 {}）",
+            "로컬 저장(최대 {})",
+        ),
+    },
+    Msg {
+        key: "overview.period_last7",
+        text: row("近 7 天", "近 7 天", "Last 7 days", "直近 7 日", "최근 7일"),
+    },
+    Msg {
+        key: "overview.period_last30",
+        text: row(
+            "近 30 天",
+            "近 30 天",
+            "Last 30 days",
+            "直近 30 日",
+            "최근 30일",
+        ),
+    },
+    Msg {
+        key: "overview.daily_avg",
+        text: row("日均 {}", "日均 {}", "{} / day", "1日平均 {}", "일평균 {}"),
+    },
+    Msg {
+        key: "overview.metric_count",
+        text: row("条数", "條數", "Count", "件数", "건수"),
+    },
+    Msg {
+        key: "overview.metric_chars_name",
+        text: row("字数", "字數", "Characters", "文字数", "글자 수"),
+    },
+    Msg {
+        key: "overview.metric_duration_name",
+        text: row("时长", "時長", "Duration", "時間", "시간"),
+    },
+        Msg {
+        key: "overview.recent_title",
+        text: row(
+            "最近识别",
+            "最近識別",
+            "Recent transcripts",
+            "最近の認識",
+            "최근 인식",
+        ),
+    },
+        Msg {
+        key: "overview.recent_all",
+        text: row("全部记录 →", "全部記錄 →", "View all →", "すべて表示 →", "전체 보기 →"),
+    },
+        Msg {
+        key: "overview.recent_empty_hint",
+        text: row(
+            "还没有听写记录。跟着上方的引导试一次，结果会显示在这里。",
+            "還沒有聽寫紀錄。依照上方引導試一次，結果就會顯示在這裡。",
+            "No dictations yet. Follow the guide above to try one; your result will appear here.",
+            "まだ音声入力の記録がありません。上の案内に沿って試すと、ここに結果が表示されます。",
+            "아직 받아쓰기 기록이 없습니다. 위 안내에 따라 사용해 보면 결과가 여기에 표시됩니다.",
+        ),
+    },
+    Msg {
+        key: "overview.recent_failed",
+        text: row(
+            "无法读取最近识别，请重试。",
+            "無法讀取最近辨識，請重試。",
+            "Could not load recent items — retry.",
+            "最近の認識を読み込めません。再試行してください。",
+            "최근 인식을 불러오지 못했습니다. 다시 시도하세요.",
+        ),
+    },
+    Msg {
+        key: "overview.retry",
+        text: row("重试", "重試", "Retry", "再試行", "다시 시도"),
+    },
+        Msg {
+        key: "overview.activity_title",
+        text: row(
+            "年度活动",
+            "年度活動",
+            "Annual activity",
+            "年間アクティビティ",
+            "연간 활동",
+        ),
+    },
+        Msg {
+        key: "overview.activity_count",
+        text: row(
+            "{} 次听写",
+            "{} 次聽寫",
+            "{} dictation(s)",
+            "{} 回の入力",
+            "{}회 받아쓰기",
+        ),
+    },
+    Msg {
+        key: "overview.activity_error",
+        text: row(
+            "活动数据读取失败",
+            "活動資料讀取失敗",
+            "Failed to load activity",
+            "アクティビティの読み込みに失敗",
+            "활동 데이터를 불러오지 못함",
+        ),
+    },
+        Msg {
+        key: "overview.services_title",
+        text: row(
+            "当前语音服务",
+            "目前的語音服務",
+            "Current voice services",
+            "使用中の音声サービス",
+            "현재 음성 서비스",
+        ),
+    },
+    Msg {
+        key: "overview.asr_kind",
+        text: row(
+            "语音识别",
+            "語音辨識",
+            "Speech recognition",
+            "音声認識",
+            "음성 인식",
+        ),
+    },
+    Msg {
+        key: "overview.llm_kind",
+        text: row(
+            "文字处理",
+            "文字處理",
+            "Text processing",
+            "テキスト処理",
+            "텍스트 처리",
+        ),
+    },
+        Msg {
+        key: "overview.provider_help_asr",
+        text: row(
+            "将语音转成文字。",
+            "將語音轉成文字。",
+            "Turns your speech into text.",
+            "音声をテキストに変換します。",
+            "음성을 텍스트로 변환합니다.",
+        ),
+    },
+        Msg {
+        key: "overview.provider_help_llm",
+        text: row(
+            "按你的风格整理和润色文字。",
+            "依照你的風格整理和潤飾文字。",
+            "Organizes and polishes text in your style.",
+            "あなたのスタイルに合わせて文章を整えます。",
+            "내 스타일에 맞게 글을 정리하고 다듬습니다.",
+        ),
+    },
+    Msg {
+        key: "overview.configure_provider",
+        text: row("去配置", "前往設定", "Configure", "設定する", "설정하기"),
+    },
+        Msg {
+        key: "overview.manage_provider",
+        text: row(
+            "管理服务",
+            "管理服務",
+            "Manage service",
+            "サービスを管理",
+            "서비스 관리",
+        ),
+    },
+    Msg {
+        key: "overview.status_loading",
+        text: row(
+            "正在读取服务配置…",
+            "正在讀取服務設定…",
+            "Reading service configuration…",
+            "サービス設定を読み込み中…",
+            "서비스 설정을 불러오는 중…",
+        ),
+    },
+    Msg {
+        key: "overview.credentials_error",
+        text: row(
+            "无法读取凭据状态",
+            "無法讀取憑證狀態",
+            "Could not read credential status",
+            "資格情報の状態を読み取れません",
+            "자격 증명 상태를 읽을 수 없음",
+        ),
+    },
+    Msg {
+        key: "overview.week_days",
+        text: row(
+            "日|一|二|三|四|五|六",
+            "日|一|二|三|四|五|六",
+            "Sun|Mon|Tue|Wed|Thu|Fri|Sat",
+            "日|月|火|水|木|金|土",
+            "일|월|화|수|목|금|토",
+        ),
+    },
+    Msg {
+        key: "overview.months",
+        text: row(
+            "1月|2月|3月|4月|5月|6月|7月|8月|9月|10月|11月|12月",
+            "1月|2月|3月|4月|5月|6月|7月|8月|9月|10月|11月|12月",
+            "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec",
+            "1月|2月|3月|4月|5月|6月|7月|8月|9月|10月|11月|12月",
+            "1월|2월|3월|4월|5월|6월|7월|8월|9월|10월|11월|12월",
+        ),
+    },
+    Msg {
+        key: "overview.minutes",
+        text: row("{} 分钟", "{} 分鐘", "{} min", "{} 分", "{}분"),
+    },
+    Msg {
+        key: "overview.hours_minutes",
+        text: row(
+            "{} 小时 {} 分",
+            "{} 小時 {} 分",
+            "{} h {} min",
+            "{} 時間 {} 分",
+            "{}시간 {}분",
+        ),
+    },
+    Msg {
+        key: "overview.copy",
+        text: row("复制", "複製", "Copy", "コピー", "복사"),
+    },
+    Msg {
+        key: "overview.copied",
+        text: row("已复制", "已複製", "Copied", "コピー済み", "복사됨"),
+    },
+    // ---- Shared controls ---------------------------------------------------
+        Msg {
+        key: "common.refresh",
+        text: row("刷新", "刷新", "Refresh", "更新", "새로고침"),
+    },
+        Msg {
+        key: "common.clear",
+        text: row("清空", "清空", "Clear", "クリア", "지우기"),
+    },
+        Msg {
+        key: "common.loading",
+        text: row("加载中…", "加載中…", "Loading…", "読み込み中…", "로딩 중…"),
+    },
+    Msg {
+        key: "common.retry",
+        text: row("重试", "重試", "Retry", "再試行", "다시 시도"),
+    },
+    Msg {
+        key: "common.copy",
+        text: row("复制", "複製", "Copy", "コピー", "복사"),
+    },
+        Msg {
+        key: "common.copied",
+        text: row("已复制", "已複製", "Copied", "コピーしました", "복사됨"),
+    },
+    Msg {
+        key: "settings.unsupported_linux",
+        text: row(
+            "当前平台暂不支持此设置",
+            "目前平台暫不支援此設定",
+            "This setting is not available on Linux",
+            "この設定は Linux では利用できません",
+            "이 설정은 Linux에서 사용할 수 없습니다",
+        ),
+    },
+    Msg {
+        key: "status.copied",
+        text: row("已复制", "已複製", "Copied", "コピー済み", "복사됨"),
+    },
+    // egui-only: the style page's pack counter and new-pack hint are not part of
+    // the Tauri catalog (it renders the equivalent UI from Core data).
+    Msg {
+        key: "style.pack_count",
+        text: row(
+            "{} 个风格包",
+            "{} 個風格包",
+            "{} style packs",
+            "{} 個のスタイルパック",
+            "스타일 팩 {}개",
+        ),
+    },
+    Msg {
+        key: "style.new_pack_hint",
+        text: row(
+            "从模板开始创建自己的风格",
+            "從範本開始建立自己的風格",
+            "Start from a template",
+            "テンプレートから作成",
+            "템플릿에서 시작",
+        ),
+    },
+    // egui-only: the Core vocabulary presets are loaded from the backend in the
+    // Tauri app; the egui host lists the four built-ins by name.
+    Msg {
+        key: "vocab.presets_dev_tools",
+        text: row(
+            "开发工具",
+            "開發工具",
+            "Dev tools",
+            "開発ツール",
+            "개발 도구",
+        ),
+    },
+    Msg {
+        key: "vocab.presets_products",
+        text: row(
+            "产品与平台",
+            "產品與平台",
+            "Products & platforms",
+            "製品とプラットフォーム",
+            "제품 및 플랫폼",
+        ),
+    },
+    Msg {
+        key: "vocab.presets_terms",
+        text: row(
+            "技术术语",
+            "技術術語",
+            "Technical terms",
+            "技術用語",
+            "기술 용어",
+        ),
+    },
+    Msg {
+        key: "vocab.presets_english",
+        text: row(
+            "英文写作",
+            "英文寫作",
+            "English writing",
+            "英語ライティング",
+            "영어 작문",
+        ),
+    },
+    // egui-only: the not-yet-wired page placeholder and the marketplace's
+    // decorative preview text have no Tauri counterpart.
+    Msg {
+        key: "common.unsupported_title",
+        text: row(
+            "此页面暂未接线",
+            "此頁面暫未接線",
+            "This page is not wired up yet",
+            "このページは未接続です",
+            "이 페이지는 아직 연결되지 않았습니다",
+        ),
+    },
+    Msg {
+        key: "common.unsupported_hint",
+        text: row(
+            "数据桥接将在后续阶段完成",
+            "資料橋接將在後續階段完成",
+            "Data wiring lands in a later stage",
+            "データ連携は後続の段階で完了します",
+            "데이터 연결은 이후 단계에서 완료됩니다",
+        ),
+    },
+    Msg {
+        key: "marketplace.preview_placeholder",
+        text: row(
+            "本地占位预览\n将原始表达保留在上下文中，优化语气、结构和可读性。\n这段内容会由真实风格包提示词替换。",
+            "本機預覽占位\n保留原始表達，優化語氣、結構與可讀性。\n這段內容會被實際風格包提示詞取代。",
+            "Local placeholder preview\nKeeps the original wording in context while improving tone, structure and readability.\nReplaced by the real style-pack prompt.",
+            "ローカル用のプレースホルダープレビュー\n原文の言い回しを保ちつつ、語調・構成・可読性を整えます。\n実際のスタイルパックのプロンプトに置き換わります。",
+            "로컬 자리표시자 미리보기\n원문 표현을 유지하면서 어조, 구조, 가독성을 다듬습니다.\n실제 스타일 팩 프롬프트로 대체됩니다.",
+        ),
+    },
+    Msg {
+        key: "common.delete",
+        text: row("删除", "刪除", "Delete", "削除", "삭제"),
+    },
+    Msg {
+        key: "common.cancel",
+        text: row("取消", "取消", "Cancel", "キャンセル", "취소"),
+    },
+    Msg {
+        key: "common.confirm",
+        text: row("确认", "確認", "Confirm", "確認", "확인"),
+    },
+        Msg {
+        key: "common.duration_minutes",
+        text: row("{} 分钟", "{} 分鐘", "{}m", "{} 分", "{}분"),
+    },
+    // ---- History -----------------------------------------------------------
+        Msg {
+        key: "history.kicker",
+        text: row("历史记录", "歷史記錄", "HISTORY", "履歴", "기록"),
+    },
+    Msg {
+        key: "history.title",
+        text: row("历史记录", "歷史記錄", "History", "履歴", "기록"),
+    },
+        Msg {
+        key: "history.desc",
+        text: row(
+            "本机保存的识别记录。",
+            "本機保存的識別記錄。",
+            "Locally stored transcripts.",
+            "ローカルに保存された認識記録。",
+            "로컬에 저장된 인식 기록.",
+        ),
+    },
+        Msg {
+        key: "history.search_placeholder",
+        text: row(
+            "搜索转写内容…（{}）",
+            "搜尋轉寫內容…（{}）",
+            "Search transcripts… ({})",
+            "文字起こしを検索…（{}）",
+            "기록 검색…（{}）",
+        ),
+    },
+    Msg {
+        key: "history.empty",
+        text: row(
+            "还没有历史记录。",
+            "還沒有歷史記錄。",
+            "No history yet.",
+            "履歴はまだありません。",
+            "아직 기록이 없습니다.",
+        ),
+    },
+        Msg {
+        key: "history.search_no_match",
+        text: row(
+            "没有匹配「{}」的记录。",
+            "沒有符合「{}」的記錄。",
+            "No entries match “{}”.",
+            "「{}」に一致する項目はありません。",
+            "“{}”과(와) 일치하는 항목이 없습니다.",
+        ),
+    },
+        Msg {
+        key: "history.load_failed",
+        text: row(
+            "加载历史失败：{}",
+            "加載歷史失敗：{}",
+            "Failed to load history: {}",
+            "履歴の読み込みに失敗：{}",
+            "기록 로드 실패: {}",
+        ),
+    },
+        Msg {
+        key: "history.select_hint",
+        text: row(
+            "左侧选一条查看详情。",
+            "左側選一條查看詳情。",
+            "Select an entry on the left to see details.",
+            "左側から 1 件選択して詳細を表示。",
+            "왼쪽에서 하나를 선택하여 자세히 보기.",
+        ),
+    },
+    Msg {
+        key: "history.recorded",
+        text: row("录音 {}", "錄音 {}", "Recorded {}", "録音 {}", "녹음 {}"),
+    },
+    Msg {
+        key: "history.play",
+        text: row(
+            "播放录音",
+            "播放錄音",
+            "Play recording",
+            "録音を再生",
+            "녹음 재생",
+        ),
+    },
+    Msg {
+        key: "history.export",
+        text: row(
+            "导出录音",
+            "匯出錄音",
+            "Export recording",
+            "録音をエクスポート",
+            "녹음 내보내기",
+        ),
+    },
+    Msg {
+        key: "history.retranscribe",
+        text: row(
+            "重新转写",
+            "重新轉寫",
+            "Retranscribe",
+            "再文字起こし",
+            "다시 받아쓰기",
+        ),
+    },
+        Msg {
+        key: "history.raw_label",
+        text: row("原文", "原文", "Raw", "原文", "원문"),
+    },
+    Msg {
+        key: "history.raw_empty",
+        text: row("（空）", "（空）", "(empty)", "（空）", "(비어 있음)"),
+    },
+    Msg {
+        key: "history.step_asr",
+        text: row("识别", "辨識", "Transcribe", "認識", "인식"),
+    },
+        Msg {
+        key: "history.step_polish",
+        text: row("润色", "潤飾", "Polish", "推敲", "다듬기"),
+    },
+    Msg {
+        key: "history.step_insert",
+        text: row("插入", "插入", "Insert", "挿入", "삽입"),
+    },
+    Msg {
+        key: "history.chars",
+        text: row("{} 字", "{} 字", "{} chars", "{} 文字", "{}자"),
+    },
+        Msg {
+        key: "history.vocab_hits",
+        text: row(
+            "{} 个热词",
+            "{} 個熱詞",
+            "{} vocab hits",
+            "{} ホットワード",
+            "핫워드 {}개",
+        ),
+    },
+        Msg {
+        key: "history.inserted",
+        text: row("已插入", "已插入", "Inserted", "入力済み", "입력됨"),
+    },
+        Msg {
+        key: "history.paste_sent",
+        text: row("已尝试粘贴", "已嘗試粘貼", "Paste sent", "貼り付けを試行", "붙여넣기 시도됨"),
+    },
+        Msg {
+        key: "history.copied_fallback",
+        text: row(
+            "已复制(需 {})",
+            "已複製(需 {})",
+            "Copied (use {})",
+            "コピー済み（要 {}）",
+            "복사됨({} 필요)",
+        ),
+    },
+        Msg {
+        key: "history.insert_failed",
+        text: row(
+            "插入失败",
+            "插入失敗",
+            "Insert failed",
+            "入力失敗",
+            "입력 실패",
+        ),
+    },
+        Msg {
+        key: "history.confirm_clear",
+        text: row(
+            "确定清空全部 {} 条记录？此操作不可恢复。",
+            "確定清空全部 {} 條記錄？此操作不可恢復。",
+            "Delete all {} history entries? This cannot be undone.",
+            "全 {} 件の記録を削除しますか？この操作は取り消せません。",
+            "전체 {}건의 기록을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.",
+        ),
+    },
+    Msg {
+        key: "history.confirm_delete",
+        text: row(
+            "确定删除这条记录？此操作不可恢复。",
+            "確定刪除這筆記錄？此操作無法復原。",
+            "Delete this record? This cannot be undone.",
+            "この記録を削除しますか？元に戻せません。",
+            "이 기록을 삭제할까요? 되돌릴 수 없습니다.",
+        ),
+    },
+        Msg {
+        key: "history.clear_failed",
+        text: row(
+            "清空失败：{}",
+            "清空失敗：{}",
+            "Failed to clear history: {}",
+            "履歴の消去に失敗：{}",
+            "기록 비우기 실패: {}",
+        ),
+    },
+        Msg {
+        key: "history.delete_failed",
+        text: row(
+            "删除失败：{}",
+            "刪除失敗：{}",
+            "Failed to delete entry: {}",
+            "記録の削除に失敗：{}",
+            "항목 삭제 실패: {}",
+        ),
+    },
+        Msg {
+        key: "history.copy_failed",
+        text: row(
+            "复制失败：{}",
+            "複製失敗：{}",
+            "Failed to copy: {}",
+            "コピーに失敗：{}",
+            "복사 실패: {}",
+        ),
+    },
+        Msg {
+        key: "history.export_failed",
+        text: row(
+            "导出失败：{}",
+            "匯出失敗：{}",
+            "Failed to export: {}",
+            "エクスポート失敗：{}",
+            "내보내기 실패: {}",
+        ),
+    },
+        Msg {
+        key: "history.retranscribe_failed",
+        text: row(
+            "重新转录失败：{}",
+            "重新轉錄失敗：{}",
+            "Retranscribe failed: {}",
+            "再認識に失敗：{}",
+            "다시 인식 실패: {}",
+        ),
+    },
     // ---- Durations ---------------------------------------------------------
     Msg {
         key: "dur.ms",
@@ -747,14 +1540,14 @@ pub const CATALOG: &[Msg] = &[
         key: "settings.language",
         text: row("界面语言", "介面語言", "UI language", "UI 言語", "UI 언어"),
     },
-    Msg {
+        Msg {
         key: "settings.language_follow_system",
         text: row(
             "跟随系统",
             "跟隨系統",
             "Follow system",
             "システムに従う",
-            "시스템 따르기",
+            "시스템 따라가기",
         ),
     },
     Msg {
@@ -1024,10 +1817,6 @@ pub const CATALOG: &[Msg] = &[
     Msg { key: "auth.xfyun", text: row("讯飞 AppID + API Key", "訊飛 AppID + API Key", "iFlytek AppID + API Key", "讯飛 AppID + API Key", "iFlytek AppID + API Key") },
     Msg { key: "auth.oauth", text: row("OAuth", "OAuth", "OAuth", "OAuth", "OAuth") },
     // ---- Empty / info labels
-    Msg { key: "history.empty", text: row("暂无历史记录", "暫無歷史紀錄", "No history yet", "履歴はありません", "기록이 없습니다") },
-    Msg { key: "history.inserted", text: row("已插入", "已插入", "Inserted", "挿入済み", "삽입됨") },
-    Msg { key: "history.copied_fallback", text: row("已复制", "已複製", "Copied", "コピー済み", "복사됨") },
-    Msg { key: "history.paste_sent", text: row("已发送粘贴", "已傳送貼上", "Paste sent", "貼り付け送信", "붙여넣기 전송됨") },
     Msg { key: "history.failed", text: row("失败", "失敗", "Failed", "失敗", "실패") },
     Msg { key: "history.not_requested", text: row("未请求插入", "未請求插入", "Not requested", "挿入未要求", "삽입 요청 안 됨") },
     Msg { key: "models.loading_dir", text: row("正在加载模型目录…", "正在載入模型目錄…", "Loading the model catalog…", "モデル目録を読み込み中…", "모델 목록을 불러오는 중…") },
@@ -1133,6 +1922,1166 @@ pub const CATALOG: &[Msg] = &[
     Msg { key: "tray.show", text: row("显示 OpenLess", "顯示 OpenLess", "Show OpenLess", "OpenLess を表示", "OpenLess 표시") },
     Msg { key: "tray.previous_style", text: row("切换到上一风格", "切換到上一風格", "Switch to previous style", "前のスタイルに切り替え", "이전 스타일로 전환") },
     Msg { key: "tray.quit", text: row("退出", "結束", "Quit", "終了", "종료") },
+    Msg {
+        key: "selection_ask.desc",
+        text: row(
+            "选中文字后语音提问，支持多轮追问。",
+            "選中文字後語音提問，支援多輪追問。",
+            "Select text and ask questions by voice, with multi-turn follow-ups.",
+            "テキストを選択して音声で質問。複数ターンの追問対応。",
+            "텍스트 선택 후 음성으로 질문. 다중 라운드 후속 질문 지원.",
+        ),
+    },
+    Msg {
+        key: "selection_ask.guide_ask_desc",
+        text: row(
+            "按 {} 录音，再按一次提交。",
+            "按 {} 錄音，再按一次提交。",
+            "Press {} to record, then press again to submit.",
+            "{} で録音し、もう一度押して送信します。",
+            "{}로 녹음하고, 다시 눌러 전송하세요.",
+        ),
+    },
+    Msg {
+        key: "selection_ask.guide_ask_title",
+        text: row(
+            "开口说出问题",
+            "開口說出問題",
+            "Say your question",
+            "声で質問する",
+            "말로 질문하기",
+        ),
+    },
+    Msg {
+        key: "selection_ask.guide_dismiss",
+        text: row(
+            "关闭浮窗，结束本次对话",
+            "關閉浮窗，結束本次對話",
+            "Close the panel and end this conversation",
+            "パネルを閉じて、この会話を終了",
+            "패널을 닫고 이번 대화 종료",
+        ),
+    },
+    Msg {
+        key: "selection_ask.guide_followup",
+        text: row(
+            "继续使用录音快捷键，即可多轮追问。",
+            "繼續使用錄音快捷鍵，即可多輪追問。",
+            "Use the recording shortcut again to ask a follow-up.",
+            "録音キーでもう一度、続けて質問できます。",
+            "녹음 단축키를 다시 눌러 후속 질문을 할 수 있어요.",
+        ),
+    },
+    Msg {
+        key: "selection_ask.guide_open_desc",
+        text: row(
+            "按 {}，开始一轮对话。",
+            "按 {}，開始一輪對話。",
+            "Press {} to start a conversation.",
+            "{} で会話を始めます。",
+            "{}로 대화를 시작하세요.",
+        ),
+    },
+    Msg {
+        key: "selection_ask.guide_open_title",
+        text: row(
+            "打开追问浮窗",
+            "開啟追問浮窗",
+            "Open the panel",
+            "パネルを開く",
+            "질문 패널 열기",
+        ),
+    },
+    Msg {
+        key: "selection_ask.guide_select_title",
+        text: row(
+            "选中想了解的内容",
+            "選取想了解的內容",
+            "Select something to explore",
+            "知りたい内容を選択",
+            "궁금한 내용 선택",
+        ),
+    },
+    Msg {
+        key: "selection_ask.guide_unset_desc",
+        text: row(
+            "先在快捷键设置中，为划词追问设置一个快捷键。",
+            "先到快捷鍵設定中，為劃詞追問設定快捷鍵。",
+            "Assign a Selection Ask shortcut in Shortcut settings first.",
+            "まずショートカット設定で選択追問のキーを割り当ててください。",
+            "먼저 단축키 설정에서 선택 질문 단축키를 지정하세요.",
+        ),
+    },
+    Msg {
+        key: "selection_ask.history_desc",
+        text: row(
+            "开启后在本地保存问答记录，默认关闭。",
+            "開啟後在本地保存問答記錄，預設關閉。",
+            "Save Q&A records locally when enabled. Off by default.",
+            "有効時、Q&A 記録をローカルに保存。デフォルト OFF。",
+            "활성화 시 Q&A 기록을 로컬에 저장. 기본 OFF.",
+        ),
+    },
+    Msg {
+        key: "selection_ask.history_title",
+        text: row("保存历史", "保存歷史", "Save history", "履歴を保存", "기록 저장"),
+    },
+    Msg {
+        key: "selection_ask.howto_step2",
+        text: row(
+            "在任意 app 选中文字。",
+            "在任意 app 選中文字。",
+            "Select text in any app.",
+            "任意のアプリでテキストを選択。",
+            "아무 앱에서 텍스트 선택.",
+        ),
+    },
+    Msg {
+        key: "selection_ask.howto_title",
+        text: row("使用方法", "使用方法", "How to use", "使い方", "사용 방법"),
+    },
+    Msg {
+        key: "selection_ask.title",
+        text: row(
+            "划词追问",
+            "劃詞追問",
+            "Selection Ask",
+            "選択追問",
+            "선택 질문",
+        ),
+    },
+    Msg {
+        key: "translation.desc",
+        text: row(
+            "录音后自动翻译为目标语言再插入。",
+            "錄音後自動翻譯為目標語言再插入。",
+            "Auto-translate recordings into a target language before insertion.",
+            "録音後に自動翻訳してから入力。",
+            "녹음 후 대상 언어로 자동 번역하여 삽입.",
+        ),
+    },
+    Msg {
+        key: "translation.howto_step1",
+        text: row(
+            "在任意输入框聚焦光标。",
+            "在任意輸入框聚焦游標。",
+            "Place cursor in any text field.",
+            "任意の入力欄にカーソルを置く。",
+            "아무 입력 필드에 커서를 놓으세요.",
+        ),
+    },
+    Msg {
+        key: "translation.howto_step2",
+        text: row(
+            "按 {} 开始录音。",
+            "按 {} 開始錄音。",
+            "Press {} to start recording.",
+            "{} を押して録音開始。",
+            "{} 를 눌러 녹음 시작.",
+        ),
+    },
+    Msg {
+        key: "translation.howto_step3",
+        text: row(
+            "录音中按一下 {} 激活翻译。",
+            "錄音中按一下 {} 啟動翻譯。",
+            "Press {} once during recording to activate translation.",
+            "録音中に {} を一度押して翻訳を起動。",
+            "녹음 중 {} 를 한 번 눌러 번역 활성화.",
+        ),
+    },
+    Msg {
+        key: "translation.howto_step4",
+        text: row(
+            "再按 {} 停止录音。",
+            "再按 {} 停止錄音。",
+            "Press {} again to stop.",
+            "再度 {} を押して停止。",
+            "다시 {} 를 눌러 정지.",
+        ),
+    },
+    Msg {
+        key: "translation.howto_step5",
+        text: row(
+            "翻译结果自动插入到光标位置。",
+            "翻譯結果自動插入到游標位置。",
+            "Translated text is inserted at the cursor.",
+            "翻訳結果がカーソル位置に挿入されます。",
+            "번역 결과가 커서 위치에 삽입됩니다.",
+        ),
+    },
+    Msg {
+        key: "translation.howto_title",
+        text: row("使用方法", "使用方法", "How to use", "使い方", "사용 방법"),
+    },
+    Msg {
+        key: "translation.kicker",
+        text: row("翻译", "翻譯", "TRANSLATION", "翻訳", "번역"),
+    },
+    Msg {
+        key: "translation.status_disabled",
+        text: row("未启用", "未啓用", "Disabled", "無効", "비활성화됨"),
+    },
+    Msg {
+        key: "translation.status_enabled",
+        text: row("已启用", "已啓用", "Enabled", "有効", "활성화됨"),
+    },
+    Msg {
+        key: "translation.style_desc",
+        text: row(
+            "自动继承「风格」页当前激活的风格包。",
+            "自動沿用「風格」頁目前啓用的風格包。",
+            "Automatically inherits the active style pack from the Style page.",
+            "「スタイル」ページで現在有効なスタイルパックを自動的に引き継ぎます。",
+            "「스타일」 페이지에서 현재 활성화된 스타일 팩을 자동으로 사용합니다.",
+        ),
+    },
+    Msg {
+        key: "translation.style_title",
+        text: row(
+            "翻译风格",
+            "翻譯風格",
+            "Translation style",
+            "翻訳スタイル",
+            "번역 스타일",
+        ),
+    },
+    Msg {
+        key: "translation.target_desc",
+        text: row(
+            "录音时按 Shift 触发翻译。选「不启用」则 Shift 无效。",
+            "錄音時按 Shift 觸發翻譯。選「不啟用」則 Shift 無效。",
+            "Press Shift during recording to trigger translation. \"Disabled\" makes Shift a no-op.",
+            "録音中に Shift で翻訳を起動。「無効」で Shift 無効化。",
+            "녹음 중 Shift 로 번역 실행. \"비활성화\" 시 Shift 무효.",
+        ),
+    },
+    Msg {
+        key: "translation.target_disabled",
+        text: row(
+            "不启用（Shift 按下不触发翻译）",
+            "不啓用（Shift 按下不觸發翻譯）",
+            "Disabled (Shift does nothing)",
+            "無効（Shift で翻訳を発動しない）",
+            "비활성화 (Shift 로 번역 발동 안 함)",
+        ),
+    },
+    Msg {
+        key: "translation.target_same_as_working",
+        text: row(
+            "目标语言与你唯一的工作语言相同，翻译不会生效：按 Shift 仍按普通润色处理。换一个目标语言，或在上方多勾选一个工作语言。",
+            "目標語言與你唯一的工作語言相同，翻譯不會生效：按 Shift 仍按普通潤色處理。換一個目標語言，或在上方多勾選一個工作語言。",
+            "The target matches your only working language, so translation cannot take effect — Shift will just run a normal polish. Pick a different target, or add another working language above.",
+            "ターゲット言語が唯一の作業言語と同じため、翻訳は発動しません（Shift を押しても通常の整文になります）。別のターゲットを選ぶか、上で作業言語を追加してください。",
+            "대상 언어가 유일한 작업 언어와 같아 번역이 실행되지 않습니다. Shift 를 눌러도 일반 정리로 처리됩니다. 다른 대상 언어를 고르거나 위에서 작업 언어를 추가하세요.",
+        ),
+    },
+    Msg {
+        key: "translation.target_title",
+        text: row(
+            "翻译目标语言",
+            "翻譯目標語言",
+            "Translation target language",
+            "翻訳ターゲット言語",
+            "번역 대상 언어",
+        ),
+    },
+    Msg {
+        key: "translation.title",
+        text: row("翻译", "翻譯", "Translation", "翻訳", "번역"),
+    },
+    Msg {
+        key: "translation.working_desc",
+        text: row(
+            "勾选日常使用的语言，影响润色与翻译效果。",
+            "勾選日常使用的語言，影響潤色與翻譯效果。",
+            "Select languages you use regularly to improve polish and translation.",
+            "日常使用する言語を選択し、整文と翻訳に反映。",
+            "일상적으로 사용하는 언어를 선택하여 정리와 번역에 반영.",
+        ),
+    },
+    Msg {
+        key: "translation.working_title",
+        text: row(
+            "工作语言",
+            "工作語言",
+            "Working languages",
+            "作業言語",
+            "작업 언어",
+        ),
+    },
+    Msg {
+        key: "vocab.corrections_empty",
+        text: row(
+            "还没有纠正规则。",
+            "還沒有糾正規則。",
+            "No correction rules yet.",
+            "補正ルールはまだありません。",
+            "아직 교정 규칙이 없습니다.",
+        ),
+    },
+    Msg {
+        key: "vocab.corrections_learned_badge",
+        text: row("自动", "自動", "auto", "自動", "자동"),
+    },
+    Msg {
+        key: "vocab.corrections_pattern_placeholder",
+        text: row(
+            "误识别写法，如 {num}粒",
+            "誤識別寫法，如 {num}粒",
+            "Mistaken text, e.g. {num}粒",
+            "誤認識された表記（例：{num}粒）",
+            "오인식 표현, 예: {num}粒",
+        ),
+    },
+    Msg {
+        key: "vocab.corrections_replacement_placeholder",
+        text: row(
+            "目标写法，如 {num}例",
+            "目標寫法，如 {num}例",
+            "Target text, e.g. {num}例",
+            "修正後の表記（例：{num}例）",
+            "대상 표현, 예: {num}例",
+        ),
+    },
+    Msg {
+        key: "vocab.corrections_tip",
+        text: row(
+            "修正常见 ASR 误识别，支持 {num} 数字通配。",
+            "修正常見 ASR 誤識別，支援 {num} 數字通配。",
+            "Fix common ASR mistakes. Supports {num} number wildcard.",
+            "ASR の誤認識を修正。{num} 数字ワイルドカード対応。",
+            "ASR 오인식 수정. {num} 숫자 와일드카드 지원.",
+        ),
+    },
+    Msg {
+        key: "vocab.corrections_title",
+        text: row(
+            "纠正规则",
+            "糾正規則",
+            "Correction rules",
+            "補正ルール",
+            "교정 규칙",
+        ),
+    },
+    Msg {
+        key: "vocab.desc",
+        text: row(
+            "添加生词或专业术语，提高识别准确率。",
+            "添加生詞或專業術語，提高識別準確率。",
+            "Add terms or jargon to improve recognition accuracy.",
+            "新語や専門用語を追加して認識精度を向上。",
+            "새 단어나 전문 용어를 추가하여 인식 정확도 향상.",
+        ),
+    },
+    Msg {
+        key: "vocab.kicker",
+        text: row("词典", "詞典", "DICTIONARY", "辞書", "사전"),
+    },
+    Msg {
+        key: "vocab.learned_section",
+        text: row(
+            "自动收集（{}）",
+            "自動收集（{}）",
+            "Auto-collected ({})",
+            "自動収集（{}）",
+            "자동 수집 ({})",
+        ),
+    },
+    Msg {
+        key: "vocab.placeholder",
+        text: row(
+            "输入词语，按 Enter 或点添加…",
+            "輸入詞語，按 Enter 或點添加…",
+            "Type a word, press Enter or click Add…",
+            "単語を入力し、Enter または追加をクリック…",
+            "단어를 입력하고 Enter 또는 추가 클릭…",
+        ),
+    },
+    Msg {
+        key: "vocab.presets_apply",
+        text: row(
+            "启用所选",
+            "啓用所選",
+            "Apply selected",
+            "選択中を有効化",
+            "선택 활성화",
+        ),
+    },
+    Msg {
+        key: "vocab.presets_create",
+        text: row("新建预设", "新建預設", "New preset", "プリセット新規作成", "프리셋 새로 만들기"),
+    },
+    Msg {
+        key: "vocab.presets_edit",
+        text: row("编辑 {}", "編輯 {}", "Edit {}", "{} を編集", "{} 편집"),
+    },
+    Msg {
+        key: "vocab.presets_name_placeholder",
+        text: row("预设名称", "預設名稱", "Preset name", "プリセット名", "프리셋 이름"),
+    },
+    Msg {
+        key: "vocab.presets_new_preset",
+        text: row("新预设", "新預設", "New preset", "新しいプリセット", "새 프리셋"),
+    },
+    Msg {
+        key: "vocab.presets_save",
+        text: row("保存预设", "保存預設", "Save preset", "プリセットを保存", "프리셋 저장"),
+    },
+    Msg {
+        key: "vocab.presets_tip",
+        text: row(
+            "可多选批量启用，支持编辑和新建。",
+            "可多選批量啟用，支援編輯和新建。",
+            "Multi-select to apply in batch. Supports edit and create.",
+            "複数選択で一括適用。編集・新規作成対応。",
+            "다중 선택 일괄 적용 가능. 편집 및 생성 지원.",
+        ),
+    },
+    Msg {
+        key: "vocab.presets_title",
+        text: row(
+            "场景预设",
+            "場景預設",
+            "Scenario presets",
+            "シーンプリセット",
+            "시나리오 프리셋",
+        ),
+    },
+    Msg {
+        key: "vocab.presets_words_placeholder",
+        text: row(
+            "词条（用逗号或换行分隔）",
+            "詞條（用逗號或換行分隔）",
+            "Terms (comma or newline separated)",
+            "語彙（カンマまたは改行区切り）",
+            "어휘(쉼표 또는 줄바꿈으로 구분)",
+        ),
+    },
+    Msg {
+        key: "vocab.remove_all_learned",
+        text: row("全部删除", "全部刪除", "Remove all", "すべて削除", "모두 삭제"),
+    },
+    Msg {
+        key: "vocab.section_title",
+        text: row("词条", "詞條", "Entries", "項目", "항목"),
+    },
+    Msg {
+        key: "vocab.tip",
+        text: row(
+            "支持中英混合 · 数字开头按字面识别 · 命中次数自动计数",
+            "支持中英混合 · 數字開頭按字面識別 · 命中次數自動計數",
+            "Mixed Chinese/English supported · numeric prefixes are matched literally · hits counted automatically",
+            "日本語と英数の混在対応 · 数字始まりは字面通り認識 · ヒット回数を自動カウント",
+            "한영 혼용 지원 · 숫자로 시작하면 그대로 인식 · 적중 횟수 자동 카운트",
+        ),
+    },
+    Msg {
+        key: "vocab.title",
+        text: row("词典", "詞典", "Dictionary", "辞書", "사전"),
+    },
+    Msg {
+        key: "style.custom_prompt_save",
+        text: row("保存提示词", "保存提示詞", "Save prompt", "プロンプトを保存", "프롬프트 저장"),
+    },
+    Msg {
+        key: "style.desc",
+        text: row(
+            "选择录音的默认输出风格。",
+            "選擇錄音的預設輸出風格。",
+            "Choose the default output style for recording.",
+            "録音のデフォルト出力スタイルを選択。",
+            "녹음의 기본 출력 스타일 선택.",
+        ),
+    },
+    Msg {
+        key: "style.kicker",
+        text: row("风格", "風格", "STYLE", "スタイル", "스타일"),
+    },
+    Msg {
+        key: "style.pack.builtin",
+        text: row("内置", "內建", "Built-in", "ビルトイン", "기본"),
+    },
+    Msg {
+        key: "style.pack.current",
+        text: row("当前", "目前", "Current", "現在", "현재"),
+    },
+    Msg {
+        key: "style.pack.dictation_prompt_title",
+        text: row(
+            "录音 / ASR Prompt",
+            "錄音 / ASR Prompt",
+            "Recording / ASR prompt",
+            "録音 / ASRプロンプト",
+            "녹음 / ASR 프롬프트",
+        ),
+    },
+    Msg {
+        key: "style.pack.dictation_tab",
+        text: row(
+            "录音 / ASR 风格",
+            "錄音 / ASR 風格",
+            "Recording / ASR styles",
+            "録音 / ASRスタイル",
+            "녹음 / ASR 스타일",
+        ),
+    },
+    Msg {
+        key: "style.pack.new_description",
+        text: row(
+            "简短描述这个风格的使用场景。",
+            "簡短描述這個風格的使用情境。",
+            "Briefly describe when to use this style.",
+            "このスタイルを使う場面を簡潔に説明してください。",
+            "이 스타일을 언제 사용하는지 간단히 설명하세요.",
+        ),
+    },
+    Msg {
+        key: "style.pack.selection_tab",
+        text: row(
+            "选区润色",
+            "選區潤色",
+            "Selection polish",
+            "選択範囲の推敲",
+            "선택 영역 다듬기",
+        ),
+    },
+    Msg {
+        key: "style.title",
+        text: row("输出风格", "輸出風格", "Output style", "出力スタイル", "출력 스타일"),
+    },
+    Msg {
+        key: "marketplace.desc",
+        text: row(
+            "浏览、安装和分享社区风格包。",
+            "瀏覽、安裝和分享社區風格包。",
+            "Browse, install, and share community style packs.",
+            "コミュニティのスタイルパックを閲覧・インストール・共有。",
+            "커뮤니티 스타일 팩 둘러보기, 설치, 공유.",
+        ),
+    },
+    Msg {
+        key: "marketplace.download_zip_btn",
+        text: row("下载 ZIP", "下載 ZIP", "Download ZIP", "ZIP をダウンロード", "ZIP 다운로드"),
+    },
+    Msg {
+        key: "marketplace.empty",
+        text: row(
+            "还没有风格包",
+            "還沒有風格包",
+            "No style packs yet",
+            "まだスタイルパックがありません",
+            "아직 스타일 팩이 없습니다",
+        ),
+    },
+    Msg {
+        key: "marketplace.empty_hint",
+        text: row(
+            "换个搜索词，或自己上传一个分享给社区",
+            "換個搜尋詞，或自己上傳一個分享給社群",
+            "Try a different keyword, or upload your own",
+            "別のキーワードを試すか、自分のパックを共有してみましょう",
+            "다른 키워드로 검색하거나 직접 업로드해 보세요",
+        ),
+    },
+    Msg {
+        key: "marketplace.install_btn",
+        text: row("安装到本地", "安裝到本機", "Install", "インストール", "설치"),
+    },
+    Msg {
+        key: "marketplace.kicker",
+        text: row("风格市场", "風格市場", "MARKETPLACE", "マーケット", "마켓"),
+    },
+    Msg {
+        key: "marketplace.my_packs_button_label",
+        text: row("我的发布", "我的發布", "My Packs", "自分の公開", "내 게시물"),
+    },
+    Msg {
+        key: "marketplace.refresh_btn",
+        text: row("刷新", "重新整理", "Refresh", "更新", "새로고침"),
+    },
+    Msg {
+        key: "marketplace.search_placeholder",
+        text: row(
+            "搜索名称 / 描述 / 标签…",
+            "搜尋名稱 / 描述 / 標籤…",
+            "Search name / description / tags…",
+            "名前 / 説明 / タグを検索…",
+            "이름 / 설명 / 태그 검색…",
+        ),
+    },
+    Msg {
+        key: "marketplace.sort_liked",
+        text: row("我赞过的", "我讚過的", "Liked", "いいね済み", "좋아요한 팩"),
+    },
+    Msg {
+        key: "marketplace.sort_new",
+        text: row("最新", "最新", "Newest", "新着", "최신"),
+    },
+    Msg {
+        key: "marketplace.sort_popular",
+        text: row("按热度", "按熱度", "Popular", "人気順", "인기순"),
+    },
+    Msg {
+        key: "hotkey.triggers.right_option",
+        text: row("右 Option", "右 Option", "Right Option", "右 Option", "오른쪽 Option"),
+    },
+    Msg {
+        key: "modal.about.export_error_log",
+        text: row(
+            "导出错误日志",
+            "匯出錯誤日誌",
+            "Export error log",
+            "エラーログをエクスポート",
+            "오류 로그 내보내기",
+        ),
+    },
+    Msg {
+        key: "modal.sections.help_center",
+        text: row("帮助中心", "幫助中心", "Help center", "ヘルプセンター", "도움말 센터"),
+    },
+    Msg {
+        key: "modal.sections.release_notes",
+        text: row(
+            "发布日志",
+            "發佈日誌",
+            "Release notes",
+            "リリースノート",
+            "릴리스 노트",
+        ),
+    },
+    Msg {
+        key: "overview.actions.shortcuts",
+        text: row("快捷键", "快捷鍵", "Shortcuts", "ショートカット", "단축키"),
+    },
+    Msg {
+        key: "overview.llm_name",
+        text: row(
+            "OpenAI 兼容",
+            "OpenAI 兼容",
+            "OpenAI-compatible",
+            "OpenAI 互換",
+            "OpenAI 호환",
+        ),
+    },
+    Msg {
+        key: "settings.about.beta_channel_label",
+        text: row(
+            "加入 Beta 渠道",
+            "加入 Beta 渠道",
+            "Join Beta channel",
+            "Beta チャンネルに参加",
+            "Beta 채널 참여",
+        ),
+    },
+    Msg {
+        key: "settings.coding_agent.enable",
+        text: row(
+            "启用 Less Computer",
+            "啟用 Less Computer",
+            "Enable Less Computer",
+            "Less Computer を有効化",
+            "Less Computer 켜기",
+        ),
+    },
+    Msg {
+        key: "settings.coding_console.permission_mode",
+        text: row(
+            "权限模式",
+            "權限模式",
+            "Permission mode",
+            "権限モード",
+            "권한 모드",
+        ),
+    },
+    Msg {
+        key: "settings.coding_console.title",
+        text: row(
+            "Claude 控制台",
+            "Claude 主控台",
+            "Claude Console",
+            "Claude コンソール",
+            "Claude 콘솔",
+        ),
+    },
+    Msg {
+        key: "settings.coding_console.workdir",
+        text: row(
+            "工作目录",
+            "工作目錄",
+            "Working directory",
+            "作業ディレクトリ",
+            "작업 디렉터리",
+        ),
+    },
+    Msg {
+        key: "settings.data_storage.title",
+        text: row("数据存储", "資料儲存", "Data storage", "データ保存", "데이터 저장"),
+    },
+    Msg {
+        key: "settings.debug.title",
+        text: row("调试工具", "除錯工具", "Debug tools", "デバッグツール", "디버그 도구"),
+    },
+    Msg {
+        key: "settings.language.title",
+        text: row(
+            "界面语言",
+            "界面語言",
+            "Interface language",
+            "表示言語",
+            "인터페이스 언어",
+        ),
+    },
+    Msg {
+        key: "settings.language.zh",
+        text: row("简体中文", "簡體中文", "简体中文", "简体中文", "简体中文"),
+    },
+    Msg {
+        key: "settings.layout.title",
+        text: row("布局", "布局", "Layout", "レイアウト", "레이아웃"),
+    },
+    Msg {
+        key: "settings.marketplace.github.open_github",
+        text: row("打开 GitHub", "開啟 GitHub", "Open GitHub", "GitHub を開く", "GitHub 열기"),
+    },
+    Msg {
+        key: "settings.marketplace.title",
+        text: row("扩展市场", "擴充市集", "Marketplace", "拡張マーケット", "확장 마켓"),
+    },
+    Msg {
+        key: "settings.network.use_system_proxy_label",
+        text: row(
+            "使用系统代理",
+            "使用系統代理",
+            "Use system proxy",
+            "システムプロキシを使用",
+            "시스템 프록시 사용",
+        ),
+    },
+    Msg {
+        key: "settings.permissions.title",
+        text: row("权限", "權限", "Permissions", "権限", "권한"),
+    },
+    Msg {
+        key: "settings.recording.auto_update_check_label",
+        text: row(
+            "自动检查更新",
+            "自動檢查更新",
+            "Auto-check for updates",
+            "アップデートを自動チェック",
+            "자동 업데이트 확인",
+        ),
+    },
+    Msg {
+        key: "settings.recording.desc",
+        text: row(
+            "全局录音的快捷键与触发方式。",
+            "定義全局錄音的快捷鍵與觸發方式。",
+            "Global recording hotkey and trigger mode.",
+            "グローバル録音のショートカットとトリガー方式を定義します。",
+            "전역 녹음의 단축키와 트리거 방식을 정의합니다.",
+        ),
+    },
+    Msg {
+        key: "settings.recording.insert_group_title",
+        text: row(
+            "插入与剪贴板",
+            "插入與剪貼板",
+            "Insertion & clipboard",
+            "挿入とクリップボード",
+            "삽입 및 클립보드",
+        ),
+    },
+    Msg {
+        key: "settings.recording.microphone_system_default",
+        text: row(
+            "系统默认",
+            "系統默認",
+            "system default",
+            "システムデフォルト",
+            "시스템 기본값",
+        ),
+    },
+    Msg {
+        key: "settings.recording.mode_label",
+        text: row("录音方式", "錄音方式", "Trigger mode", "録音方式", "녹음 방식"),
+    },
+    Msg {
+        key: "settings.recording.mode_toggle",
+        text: row("切换式", "切換式", "Toggle", "トグル式", "토글 방식"),
+    },
+    Msg {
+        key: "settings.recording.mute_during_recording_label",
+        text: row(
+            "录音时静音",
+            "錄音時靜音",
+            "Mute while recording",
+            "録音中はミュート",
+            "녹음 중 음소거",
+        ),
+    },
+    Msg {
+        key: "settings.recording.paste_shortcut_label",
+        text: row(
+            "模拟粘贴快捷键",
+            "模擬粘貼快捷鍵",
+            "Simulated paste shortcut",
+            "貼り付けショートカット",
+            "붙여넣기 단축키",
+        ),
+    },
+    Msg {
+        key: "settings.recording.startup_group_title",
+        text: row("启动", "啟動", "Startup", "起動", "시작"),
+    },
+    Msg {
+        key: "settings.remote_input.enable_label",
+        text: row(
+            "启用远程输入",
+            "啟用遠端輸入",
+            "Enable remote input",
+            "リモート入力を有効化",
+            "원격 입력 활성화",
+        ),
+    },
+    Msg {
+        key: "settings.remote_input.port_label",
+        text: row("监听端口", "監聽連接埠", "Port", "待ち受けポート", "수신 포트"),
+    },
+    Msg {
+        key: "settings.remote_input.title",
+        text: row("远程输入", "遠端輸入", "Remote Input", "リモート入力", "원격 입력"),
+    },
+    Msg {
+        key: "settings.theme.dark",
+        text: row("深色", "深色", "Dark", "ダーク", "다크"),
+    },
+    Msg {
+        key: "settings.theme.label",
+        text: row("主题", "主題", "Theme", "テーマ", "테마"),
+    },
+    Msg {
+        key: "settings.theme.light",
+        text: row("浅色", "淺色", "Light", "ライト", "라이트"),
+    },
+    Msg {
+        key: "marketplace.title",
+        text: row(
+            "风格包市场",
+            "風格包市場",
+            "Style Pack Marketplace",
+            "スタイルパック マーケット",
+            "스타일 팩 마켓",
+        ),
+    },
+    Msg {
+        key: "settings.selection_workspace.title",
+        text: row(
+            "选区助手",
+            "選區助手",
+            "Selection Assistant",
+            "選択範囲アシスタント",
+            "선택 영역 도우미",
+        ),
+    },
+    Msg {
+        key: "modal.sections.about",
+        text: row(
+            "关于与更新",
+            "關於與更新",
+            "About & updates",
+            "バージョンと更新",
+            "정보 및 업데이트",
+        ),
+    },
+    Msg {
+        key: "modal.sections.advanced",
+        text: row(
+            "实验与扩展",
+            "實驗與擴充",
+            "Experiments & extensions",
+            "実験機能と拡張",
+            "실험 기능 및 확장",
+        ),
+    },
+    Msg {
+        key: "modal.sections.appearance",
+        text: row(
+            "外观与语言",
+            "外觀與語言",
+            "Appearance & language",
+            "外観と言語",
+            "모양 및 언어",
+        ),
+    },
+    Msg {
+        key: "modal.sections.general",
+        text: row(
+            "录音与输入",
+            "錄音與輸入",
+            "Recording & input",
+            "録音と入力",
+            "녹음 및 입력",
+        ),
+    },
+    Msg {
+        key: "modal.sections.privacy",
+        text: row(
+            "权限与数据",
+            "權限與資料",
+            "Permissions & data",
+            "権限とデータ",
+            "권한 및 데이터",
+        ),
+    },
+    Msg {
+        key: "modal.sections.services",
+        text: row(
+            "AI 服务与模型",
+            "AI 服務與模型",
+            "AI services & models",
+            "AI サービスとモデル",
+            "AI 서비스 및 모델",
+        ),
+    },
+    Msg {
+        key: "modal.sections.shortcuts",
+        text: row(
+            "快捷键与选区",
+            "快捷鍵與選取文字",
+            "Shortcuts & selection",
+            "ショートカットと選択",
+            "단축키 및 선택",
+        ),
+    },
+    Msg {
+        key: "settings.selection_workspace.hint",
+        text: row(
+            "选中文字后按同一快捷键：关闭语音编辑时直接润色；开启后口述指令，说完再选择「提问」或「编辑选区」。",
+            "選中文字後按同一快捷鍵：關閉語音編輯時直接潤色；開啟後口述指令，說完再選擇「提問」或「編輯選區」。",
+            "Select text, then use one shortcut: polish when voice edit is off; hold and speak when voice edit is on, then choose Ask or Edit.",
+            "テキスト選択後、同じショートカットで：音声編集オフ時は推敲、オン時は押しながら話してから「質問」か「編集」を選択。",
+            "텍스트 선택 후 같은 단축키: 음성 편집 끄면 바로 다듬기, 켜면 누른 채 말한 뒤 「질문」 또는 「편집」 선택.",
+        ),
+    },
+    Msg {
+        key: "settings.selection_workspace.voice_enable",
+        text: row("语音编辑", "語音編輯", "Voice edit", "音声編集", "음성 편집"),
+    },
+    Msg {
+        key: "settings.advanced.multimodal_pipeline_label",
+        text: row(
+            "启用多模态识别管线",
+            "啟用多模態辨識管線",
+            "Enable multimodal pipeline",
+            "マルチモーダルパイプラインを有効化",
+            "멀티모달 파이프라인 활성화",
+        ),
+    },
+    Msg {
+        key: "settings.advanced.multimodal_pipeline_title",
+        text: row(
+            "多模态识别管线",
+            "多模態辨識管線",
+            "Multimodal recognition pipeline",
+            "マルチモーダル認識パイプライン",
+            "멀티모달 인식 파이프라인 ",
+        ),
+    },
+    Msg {
+        key: "settings.language.label",
+        text: row("语言", "語言", "Language", "言語", "언어"),
+    },
+    Msg {
+        key: "settings.network.title",
+        text: row("网络", "網路", "Network", "ネットワーク", "네트워크"),
+    },
+    Msg {
+        key: "settings.recording.title",
+        text: row(
+            "录音与输入",
+            "錄音與輸入",
+            "Recording & input",
+            "録音と入力",
+            "녹음 및 입력",
+        ),
+    },
+    Msg {
+        key: "selection_ask.shortcut_settings",
+        text: row(
+            "快捷键设置",
+            "快捷鍵設定",
+            "Shortcut settings",
+            "ショートカット設定",
+            "단축키 설정",
+        ),
+    },
+    Msg {
+        key: "vocab.corrections_only_learned",
+        text: row(
+            "只看自动收集的（{}）",
+            "只看自動收集的（{}）",
+            "Only auto-collected ({})",
+            "自動収集のみ表示（{}）",
+            "자동 수집만 보기 ({})",
+        ),
+    },
+    Msg {
+        key: "vocab.corrections_remove_all_learned",
+        text: row(
+            "删除全部自动收集的",
+            "刪除全部自動收集的",
+            "Delete all auto-collected",
+            "自動収集をすべて削除",
+            "자동 수집 전체 삭제",
+        ),
+    },
+    Msg {
+        key: "vocab.empty",
+        text: row(
+            "还没有词条。在上面输入一个生词或专业术语，让模型在听写时优先匹配。",
+            "還沒有詞條。在上面輸入一個生詞或專業術語，讓模型在聽寫時優先匹配。",
+            "No entries yet. Add a new term or piece of jargon above so the model can prioritize it.",
+            "語彙がありません。新語や専門用語を上に入力すると、ディクテーション時に優先的にマッチします。",
+            "어휘가 없습니다. 위에 새 단어나 전문 용어를 입력하면 받아쓰기 시 우선 매칭됩니다.",
+        ),
+    },
+    Msg {
+        key: "vocab.filter_all",
+        text: row("所有", "所有", "All", "すべて", "전체"),
+    },
+    Msg {
+        key: "vocab.filter_auto",
+        text: row("自动添加", "自動新增", "Auto-Added", "自動追加", "자동 추가"),
+    },
+    Msg {
+        key: "vocab.filter_manual",
+        text: row(
+            "手动添加",
+            "手動新增",
+            "Manually Added",
+            "手動追加",
+            "수동 추가",
+        ),
+    },
+    Msg {
+        key: "vocab.new_word",
+        text: row("新词", "新詞", "New Word", "新語", "새 단어"),
+    },
+    Msg {
+        key: "vocab.search_empty",
+        text: row(
+            "没有匹配的词条。",
+            "沒有符合的詞條。",
+            "No matching words.",
+            "一致する単語がありません。",
+            "일치하는 단어가 없습니다.",
+        ),
+    },
+    Msg {
+        key: "vocab.search_placeholder",
+        text: row("搜索", "搜尋", "Search", "検索", "검색"),
+    },
+    Msg {
+        key: "translation.howto_fallback_desc",
+        text: row(
+            "翻译失败时回退为插入原始转写，不会丢字。",
+            "翻譯失敗時回退為插入原始轉寫，不會丟字。",
+            "If translation fails, the raw transcript is inserted instead.",
+            "翻訳失敗時は原文がそのまま挿入されます。",
+            "번역 실패 시 원본 전사가 삽입됩니다.",
+        ),
+    },
+    Msg {
+        key: "translation.howto_fallback_title",
+        text: row(
+            "安全兜底",
+            "安全兜底",
+            "Safety fallbacks",
+            "セーフティフォールバック",
+            "안전 폴백",
+        ),
+    },
+    Msg {
+        key: "translation.howto_indicator_desc",
+        text: row(
+            "按 Shift 后屏幕底部会显示蓝色「正在翻译」标识。",
+            "按 Shift 後螢幕底部會顯示藍色「正在翻譯」標識。",
+            "A blue \"Translating\" indicator appears at the bottom of the screen after pressing Shift.",
+            "Shift を押すと画面下部に青い「翻訳中」表示が出ます。",
+            "Shift 를 누르면 화면 하단에 파란색 \"번역 중\" 표시가 나타납니다.",
+        ),
+    },
+    Msg {
+        key: "translation.howto_indicator_title",
+        text: row(
+            "翻译模式指示",
+            "怎麼知道翻譯模式生效了",
+            "How to confirm translation mode is on",
+            "翻訳モードの確認方法",
+            "번역 모드 활성화 확인 방법",
+        ),
+    },
+    Msg {
+        key: "translation.language_support_hint",
+        text: row(
+            "语音服务支持的语种可能不同；翻译目标不受界面语言限制。",
+            "語音服務支援的語種可能不同；翻譯目標不受介面語言限制。",
+            "Available speech languages depend on your provider. Translation targets are independent of the app language.",
+            "音声認識で使える言語はサービスによって異なります。翻訳先はアプリの表示言語とは独立しています。",
+            "음성 서비스에 따라 지원 언어가 다릅니다. 번역 언어는 앱 표시 언어와 별개입니다.",
+        ),
+    },
+    Msg {
+        key: "translation.no_matching_languages",
+        text: row(
+            "没有匹配的语言",
+            "沒有符合的語言",
+            "No matching languages",
+            "一致する言語がありません",
+            "일치하는 언어가 없습니다",
+        ),
+    },
+    Msg {
+        key: "translation.search_languages",
+        text: row(
+            "搜索语言…",
+            "搜尋語言…",
+            "Search languages…",
+            "言語を検索…",
+            "언어 검색…",
+        ),
+    },
+    Msg {
+        key: "translation.selected_languages",
+        text: row(
+            "已选择 {} 种语言",
+            "已選擇 {} 種語言",
+            "{} languages selected",
+            "{} 言語を選択中",
+            "언어 {}개 선택됨",
+        ),
+    },
+    Msg {
+        key: "modal.auto_save_hint",
+        text: row(
+            "修改后自动保存",
+            "修改後自動儲存",
+            "Changes save automatically",
+            "変更は自動保存されます",
+            "변경 사항이 자동 저장됩니다",
+        ),
+    },
+    Msg {
+        key: "modal.search_placeholder",
+        text: row(
+            "查找设置分类…",
+            "尋找設定分類…",
+            "Find a settings category…",
+            "設定カテゴリを検索…",
+            "설정 카테고리 찾기…",
+        ),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

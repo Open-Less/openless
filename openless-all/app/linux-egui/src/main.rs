@@ -189,7 +189,20 @@ mod linux_app {
     struct RecentEntry {
         created_at: String,
         final_text: String,
+        raw_transcript: String,
+        mode: openless_core::PolishMode,
         duration_ms: Option<u64>,
+    }
+
+    /// One calendar day of activity. Used both by the trailing daily series
+    /// behind the period chart and by the calendar-year heatmap.
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    struct DailyActivity {
+        /// `YYYY-MM-DD` local date.
+        date: String,
+        count: u32,
+        chars: u64,
+        duration_ms: u64,
     }
 
     /// Activity aggregate over a trailing calendar window. Zero days that never
@@ -218,11 +231,14 @@ mod linux_app {
         recent: Vec<RecentEntry>,
         last_7: ActivityAggregate,
         last_30: ActivityAggregate,
-        /// GitHub-style weekly columns (Sunday-first). Chronological oldest
-        /// first; a partial leading week keeps left-edge calendar alignment.
-        heatmap_weeks: Vec<[u32; 7]>,
-        heatmap_days: u32,
-        activity_days_total: usize,
+        /// Last 30 calendar days ending today, chronological (oldest first).
+        /// The 7-day view slices the tail.
+        activity_daily: Vec<DailyActivity>,
+        /// Calendar year rendered by the annual heatmap card.
+        heatmap_year: i32,
+        /// Every day of `heatmap_year`, chronological. Days without activity
+        /// are present with `count == 0` so the page can lay out the grid.
+        heatmap: Vec<DailyActivity>,
     }
 
     #[derive(Clone, Debug)]
@@ -239,8 +255,8 @@ mod linux_app {
         Failed(String),
     }
 
-    /// Trailing annual window rendered by the Overview heatmap.
-    const OVERVIEW_HEATMAP_DAYS: i64 = 364;
+    /// Trailing window (days) covered by the period chart's daily series.
+    const OVERVIEW_DAILY_DAYS: i64 = 30;
 
     impl OverviewState {
         fn summary(&self, today: chrono::NaiveDate) -> Option<OverviewSummary> {
@@ -276,31 +292,49 @@ mod linux_app {
         aggregate
     }
 
-    /// Build a Sunday-first weekly heatmap grid over the trailing `days` window
-    /// (inclusive) ending at `today`. Columns are chronological weeks; the first
-    /// column may be partial so weekday edges align like a GitHub contribution
-    /// graph. Dates absent from the store render as an inactive (0) cell.
-    fn build_heatmap_weeks(
+    /// Build the trailing daily series ending at `today` (inclusive), oldest
+    /// first. Days absent from the store render as zero.
+    fn build_daily_series(
         by_date: &std::collections::BTreeMap<chrono::NaiveDate, &openless_core::ActivityDay>,
         today: chrono::NaiveDate,
         days: i64,
-    ) -> Vec<[u32; 7]> {
-        let mut weeks: Vec<[u32; 7]> = Vec::new();
-        let mut date = today - chrono::Duration::days(days - 1);
-        while date <= today {
-            let weekday = date.weekday().num_days_from_sunday() as usize;
-            if weekday == 0 || weeks.is_empty() {
-                // A fresh column. Sunday starts a new week; a partial leading
-                // column is created on the first non-Sunday date instead.
-                weeks.push([0u32; 7]);
-            }
-            weeks
-                .last_mut()
-                .expect("a heatmap week always exists before writing a cell")[weekday] =
-                by_date.get(&date).map(|day| day.count).unwrap_or(0);
+    ) -> Vec<DailyActivity> {
+        let mut series = Vec::with_capacity(days as usize);
+        for offset in (0..days).rev() {
+            let date = today - chrono::Duration::days(offset);
+            series.push(daily_activity(by_date, date));
+        }
+        series
+    }
+
+    /// Build the full calendar-year heatmap for `year`: January 1st through
+    /// December 31st, chronological, inactive days included.
+    fn build_calendar_year_heatmap(
+        by_date: &std::collections::BTreeMap<chrono::NaiveDate, &openless_core::ActivityDay>,
+        year: i32,
+    ) -> Vec<DailyActivity> {
+        let mut days = Vec::with_capacity(366);
+        let Some(mut date) = chrono::NaiveDate::from_ymd_opt(year, 1, 1) else {
+            return days;
+        };
+        while date.year() == year {
+            days.push(daily_activity(by_date, date));
             date += chrono::Duration::days(1);
         }
-        weeks
+        days
+    }
+
+    fn daily_activity(
+        by_date: &std::collections::BTreeMap<chrono::NaiveDate, &openless_core::ActivityDay>,
+        date: chrono::NaiveDate,
+    ) -> DailyActivity {
+        let day = by_date.get(&date);
+        DailyActivity {
+            date: date.format("%Y-%m-%d").to_string(),
+            count: day.map(|day| day.count).unwrap_or(0),
+            chars: day.map(|day| day.chars).unwrap_or(0),
+            duration_ms: day.map(|day| day.duration_ms).unwrap_or(0),
+        }
     }
 
     /// Shape the fetched Core snapshot into the display summary. Pure and free of
@@ -330,6 +364,8 @@ mod linux_app {
             .map(|session| RecentEntry {
                 created_at: session.created_at.clone(),
                 final_text: session.final_text.clone(),
+                raw_transcript: session.raw_transcript.clone(),
+                mode: session.mode,
                 duration_ms: session.duration_ms,
             })
             .collect();
@@ -359,9 +395,9 @@ mod linux_app {
             recent,
             last_7: aggregate_window(&by_date, today, 7),
             last_30: aggregate_window(&by_date, today, 30),
-            heatmap_weeks: build_heatmap_weeks(&by_date, today, OVERVIEW_HEATMAP_DAYS),
-            heatmap_days: OVERVIEW_HEATMAP_DAYS as u32,
-            activity_days_total: by_date.len(),
+            activity_daily: build_daily_series(&by_date, today, OVERVIEW_DAILY_DAYS),
+            heatmap_year: today.year(),
+            heatmap: build_calendar_year_heatmap(&by_date, today.year()),
         }
     }
 
@@ -375,181 +411,6 @@ mod linux_app {
             let seconds = (ms % 60_000) / 1000;
             fmt_l10n(lang, "dur.min_sec", &[&minutes, &seconds])
         }
-    }
-
-    fn overview_provider_cards(ui: &mut egui::Ui, summary: &OverviewSummary, lang: Lang) {
-        ui.columns(2, |columns| {
-            overview_provider_card(
-                &mut columns[0],
-                tr_l10n(lang, "overview.provider_cards"),
-                &summary.asr_provider,
-                summary.asr_configured,
-                lang,
-            );
-            overview_provider_card(
-                &mut columns[1],
-                tr_l10n(lang, "overview.provider_cards_llm"),
-                &summary.llm_provider,
-                summary.llm_configured,
-                lang,
-            );
-        });
-    }
-
-    fn overview_provider_card(
-        ui: &mut egui::Ui,
-        kind: &str,
-        provider: &str,
-        configured: bool,
-        lang: Lang,
-    ) {
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.set_min_width(140.0);
-            ui.label(egui::RichText::new(kind).weak());
-            let name = if provider.is_empty() {
-                tr_l10n(lang, "overview.not_set").to_string()
-            } else {
-                provider.to_string()
-            };
-            ui.label(egui::RichText::new(name).strong());
-            if configured {
-                ui.colored_label(
-                    egui::Color32::from_rgb(60, 160, 90),
-                    tr_l10n(lang, "overview.configured_dot"),
-                );
-            } else {
-                ui.label(tr_l10n(lang, "overview.unconfigured"));
-            }
-        });
-    }
-
-    fn overview_metric(ui: &mut egui::Ui, label: &str, value: String, trend: &str) {
-        ui.vertical(|ui| {
-            ui.set_min_width(120.0);
-            ui.label(egui::RichText::new(label).weak());
-            ui.label(egui::RichText::new(value).strong().size(18.0));
-            if !trend.is_empty() {
-                ui.label(egui::RichText::new(trend).small().weak());
-            }
-        });
-    }
-
-    fn overview_metric_row(ui: &mut egui::Ui, summary: &OverviewSummary, lang: Lang) {
-        let latency_trend = if summary.segments_today > 0 {
-            "".to_string()
-        } else {
-            tr_l10n(lang, "metric.no_data_today").to_string()
-        };
-        egui::Grid::new("overview_metric_row")
-            .num_columns(4)
-            .spacing([16.0, 8.0])
-            .show(ui, |ui| {
-                overview_metric(
-                    ui,
-                    tr_l10n(lang, "metric.chars_today"),
-                    summary.chars_today.to_string(),
-                    &fmt_l10n(lang, "metric.total_segments", &[&summary.segments_today]),
-                );
-                overview_metric(
-                    ui,
-                    tr_l10n(lang, "metric.duration_today"),
-                    format_duration(summary.duration_ms_today, lang),
-                    "",
-                );
-                overview_metric(
-                    ui,
-                    tr_l10n(lang, "metric.avg_latency"),
-                    format_duration(summary.avg_latency_ms, lang),
-                    &latency_trend,
-                );
-                overview_metric(
-                    ui,
-                    tr_l10n(lang, "metric.total"),
-                    summary.history_total.to_string(),
-                    &fmt_l10n(
-                        lang,
-                        "metric.near7",
-                        &[&summary.last_7.segments, &summary.last_30.segments],
-                    ),
-                );
-                ui.end_row();
-            });
-    }
-
-    fn overview_recent(ui: &mut egui::Ui, summary: &OverviewSummary, lang: Lang) {
-        ui.label(egui::RichText::new(tr_l10n(lang, "heading.recent")).strong());
-        if summary.recent.is_empty() {
-            ui.label(tr_l10n(lang, "overview.recent_empty"));
-            return;
-        }
-        for entry in &summary.recent {
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.label(format!(
-                    "{} · {}",
-                    entry.created_at,
-                    format_duration(entry.duration_ms.unwrap_or(0), lang)
-                ));
-                let text = if entry.final_text.trim().is_empty() {
-                    tr_l10n(lang, "overview.no_text").to_string()
-                } else {
-                    entry.final_text.clone()
-                };
-                ui.label(text);
-            });
-            ui.add_space(4.0);
-        }
-    }
-
-    fn heat_color(count: u32) -> egui::Color32 {
-        match count {
-            0 => egui::Color32::from_gray(60),
-            1..=2 => egui::Color32::from_rgb(80, 140, 220),
-            3..=5 => egui::Color32::from_rgb(90, 120, 235),
-            6..=10 => egui::Color32::from_rgb(110, 100, 235),
-            _ => egui::Color32::from_rgb(150, 90, 235),
-        }
-    }
-
-    fn overview_heatmap(ui: &mut egui::Ui, summary: &OverviewSummary, lang: Lang) {
-        ui.label(egui::RichText::new(tr_l10n(lang, "overview.heatmap_title")).strong());
-        let weeks = &summary.heatmap_weeks;
-        if weeks.is_empty() {
-            ui.label(tr_l10n(lang, "overview.heatmap_empty"));
-            return;
-        }
-        let cell = 10.0f32;
-        let gap = 2.0f32;
-        let width = gap + weeks.len() as f32 * (cell + gap);
-        let height = gap + 7.0f32 * (cell + gap);
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
-        let painter = ui.painter();
-        for (column, week) in weeks.iter().enumerate() {
-            for (row, count) in week.iter().enumerate() {
-                let min = egui::pos2(
-                    rect.left() + gap + column as f32 * (cell + gap),
-                    rect.top() + gap + row as f32 * (cell + gap),
-                );
-                painter.rect_filled(
-                    egui::Rect::from_min_size(min, egui::vec2(cell, cell)),
-                    2.0,
-                    heat_color(*count),
-                );
-            }
-        }
-        ui.horizontal(|ui| {
-            ui.label(tr_l10n(lang, "overview.heatmap_less"));
-            for count in [0u32, 1, 4, 8, 15] {
-                let (swatch, _) =
-                    ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-                ui.painter().rect_filled(swatch, 2.0, heat_color(count));
-            }
-            ui.label(tr_l10n(lang, "overview.heatmap_more"));
-            ui.label(fmt_l10n(
-                lang,
-                "overview.heatmap_footnote",
-                &[&summary.heatmap_days, &summary.activity_days_total],
-            ));
-        });
     }
 
     #[derive(Clone)]
@@ -638,6 +499,9 @@ mod linux_app {
         update_busy: bool,
         update_progress: Option<openless_linux_egui::DownloadProgress>,
         marketplace_items: Vec<openless_core::MarketplaceListItem>,
+        /// True once a marketplace list request has completed (ok or error), so
+        /// the page can leave its loading state even when the result is empty.
+        marketplace_attempted: bool,
         marketplace_query: String,
         marketplace_flow: Option<openless_core::OAuthDeviceFlow>,
         marketplace_detail: Option<openless_core::MarketplaceDetail>,
@@ -738,6 +602,7 @@ mod linux_app {
                         update_busy: false,
                         update_progress: None,
                         marketplace_items: Vec::new(),
+                        marketplace_attempted: false,
                         marketplace_query: String::new(),
                         marketplace_flow: None,
                         marketplace_detail: None,
@@ -822,6 +687,7 @@ mod linux_app {
                     update_busy: false,
                     update_progress: None,
                     marketplace_items: Vec::new(),
+                    marketplace_attempted: false,
                     marketplace_query: String::new(),
                     marketplace_flow: None,
                     marketplace_detail: None,
@@ -1248,11 +1114,17 @@ mod linux_app {
             });
         }
 
-        fn load_marketplace(&self) {
+        fn load_marketplace(&mut self) {
             let Some(backend) = self.backend() else {
                 return;
             };
+            self.marketplace_attempted = false;
             let query = self.marketplace_query.trim().to_string();
+            let sort = match self.frontend_vm.marketplace_sort {
+                frontend::view_model::MarketplaceSort::Popular => "popular",
+                frontend::view_model::MarketplaceSort::New => "new",
+                frontend::view_model::MarketplaceSort::Liked => "liked",
+            };
             let tx = self.tx.clone();
             self.tokio.spawn(async move {
                 let result = backend
@@ -1260,7 +1132,7 @@ mod linux_app {
                     .marketplace
                     .list(openless_core::MarketplaceQuery {
                         query: (!query.is_empty()).then_some(query),
-                        sort: Some("updated".to_string()),
+                        sort: Some(sort.to_string()),
                         limit: Some(100),
                     })
                     .await
@@ -2071,8 +1943,12 @@ mod linux_app {
                     UiResult::Marketplace(Ok(items)) => {
                         self.status = fmt_l10n(lang, "status.marketplace_loaded", &[&items.len()]);
                         self.marketplace_items = items;
+                        self.marketplace_attempted = true;
                     }
-                    UiResult::Marketplace(Err(error)) => self.status = error,
+                    UiResult::Marketplace(Err(error)) => {
+                        self.status = error;
+                        self.marketplace_attempted = true;
+                    }
                     UiResult::MarketplaceFlow(Ok(flow)) => {
                         self.status = fmt_l10n(lang, "status.device_code", &[&flow.user_code]);
                         self.marketplace_flow = Some(flow);
@@ -2166,63 +2042,6 @@ mod linux_app {
             }
             if let Some(backend) = self.backend() {
                 self.snapshot = Some(backend.snapshot());
-            }
-        }
-
-        fn overview_summary_ui(&mut self, ui: &mut egui::Ui) {
-            let lang = self.lang;
-            let mut reload = false;
-            ui.horizontal(|ui| {
-                ui.heading(tr_l10n(lang, "heading.overview"));
-                ui.add_space(8.0);
-                if ui.button(tr_l10n(lang, "btn.refresh")).clicked() {
-                    reload = true;
-                }
-            });
-            if reload {
-                self.overview = OverviewState::Loading;
-                self.load_overview();
-                return;
-            }
-            match &self.overview {
-                OverviewState::Loading => {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(tr_l10n(lang, "loading.overview"));
-                    });
-                }
-                OverviewState::Failed(error) => {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(220, 80, 80),
-                        format!("{}: {error}", tr_l10n(lang, "overview.load_failed")),
-                    );
-                    if ui.button(tr_l10n(lang, "btn.retry")).clicked() {
-                        reload = true;
-                    }
-                }
-                OverviewState::Loaded(_) => {
-                    let show_heatmap = self
-                        .preferences
-                        .as_ref()
-                        .map(|preferences| preferences.show_overview_activity_heatmap)
-                        .unwrap_or(true);
-                    let today = chrono::Local::now().date_naive();
-                    if let Some(summary) = self.overview.summary(today) {
-                        overview_provider_cards(ui, &summary, lang);
-                        ui.add_space(6.0);
-                        overview_metric_row(ui, &summary, lang);
-                        ui.add_space(6.0);
-                        overview_recent(ui, &summary, lang);
-                        if show_heatmap && summary.activity_days_total > 0 {
-                            ui.add_space(6.0);
-                            overview_heatmap(ui, &summary, lang);
-                        }
-                    }
-                }
-            }
-            if reload {
-                self.overview = OverviewState::Loading;
-                self.load_overview();
             }
         }
 
@@ -4428,10 +4247,22 @@ mod linux_app {
                 shell::Page::Marketplace => frontend::view_model::Page::Marketplace,
                 shell::Page::Providers => frontend::view_model::Page::Settings,
                 shell::Page::Assistant => frontend::view_model::Page::SelectionAsk,
+                shell::Page::Translation => frontend::view_model::Page::Translation,
+                shell::Page::Corrections => frontend::view_model::Page::Corrections,
             };
 
             vm.status = self.status.clone();
-            vm.version = env!("CARGO_PKG_VERSION").to_string();
+            vm.version = env!("OPENLESS_APP_VERSION").to_string();
+            vm.lang = lang;
+            if let Some(prefs) = &self.preferences {
+                vm.dictation_hotkey = prefs.dictation_hotkey.display_label();
+                vm.qa_hotkey = prefs
+                    .qa_hotkey
+                    .as_ref()
+                    .map(|binding| binding.display_label())
+                    .unwrap_or_default();
+                vm.translation_hotkey = prefs.translation_hotkey.display_label();
+            }
 
             // Overview: wire real data when available.
             if let Some(summary) = self.overview.summary(chrono::Local::now().date_naive()) {
@@ -4453,14 +4284,22 @@ mod linux_app {
                         .map(|entry| frontend::view_model::OverviewRecentEntry {
                             created_at: entry.created_at,
                             final_text: entry.final_text,
+                            raw_transcript: entry.raw_transcript,
+                            mode: overview_mode(entry.mode),
                             duration_ms: entry.duration_ms,
                         })
                         .collect(),
-                    last_7_segments: summary.last_7.segments,
-                    last_30_segments: summary.last_30.segments,
-                    heatmap_weeks: summary.heatmap_weeks,
-                    heatmap_days: summary.heatmap_days,
-                    activity_days_total: summary.activity_days_total,
+                    activity_daily: summary
+                        .activity_daily
+                        .into_iter()
+                        .map(overview_activity_day)
+                        .collect(),
+                    heatmap_year: summary.heatmap_year,
+                    heatmap: summary
+                        .heatmap
+                        .into_iter()
+                        .map(overview_heatmap_day)
+                        .collect(),
                 });
             } else if let Some(error) = overview_err {
                 vm.overview_loading = false;
@@ -4500,27 +4339,70 @@ mod linux_app {
 
             // History: wire from Core when backend is available.
             if let Some(backend) = backend {
-                if let Ok(history) = backend.list_history() {
-                    vm.history_entries = history
-                        .into_iter()
-                        .rev()
-                        .map(|item| frontend::view_model::HistoryEntry {
-                            time: item.id.clone(),
-                            text: item.final_text,
-                            duration: item
-                                .duration_ms
-                                .map(|d| format_duration(d, lang))
-                                .unwrap_or_default(),
-                            tag: match item.insert_status {
-                                HistoryInsertStatus::Inserted => "已插入",
-                                HistoryInsertStatus::CopiedFallback => "已复制",
-                                HistoryInsertStatus::PasteSent => "已发送",
-                                HistoryInsertStatus::Failed => "失败",
-                                HistoryInsertStatus::NotRequested => "未请求",
-                            }
-                            .to_string(),
-                        })
-                        .collect();
+                match backend.list_history() {
+                    Ok(history) => {
+                        // The wav on disk is the real source of truth: older records
+                        // carry no `has_audio_recording` flag, so the detail panel's
+                        // play/export/retranscribe actions would disappear.
+                        let recordings_dir = backend.config().data_dir.clone();
+                        // Core stores history newest-first; keep that order.
+                        vm.history_entries = history
+                            .into_iter()
+                            .map(|item| {
+                                let has_audio = item.has_audio_recording.unwrap_or(false)
+                                    || openless_linux_egui::recording_path(
+                                        &recordings_dir,
+                                        &item.id,
+                                    )
+                                    .map(|path| path.exists())
+                                    .unwrap_or(false);
+                                frontend::view_model::HistoryEntry {
+                                    id: item.id,
+                                created_at: item.created_at,
+                                mode: overview_mode(item.mode),
+                                // A record's style pack name is not resolvable here without the
+                                // pack catalog, so the pill falls back to the polish mode label
+                                // (which is what records without a style pack show anyway).
+                                style_label: polish_mode_label(lang, item.mode).to_string(),
+                                raw_transcript: item.raw_transcript,
+                                final_text: item.final_text,
+                                duration_ms: item.duration_ms,
+                                insert_status: match item.insert_status {
+                                    HistoryInsertStatus::Inserted => {
+                                        frontend::view_model::HistoryInsertStatus::Inserted
+                                    }
+                                    HistoryInsertStatus::CopiedFallback => {
+                                        frontend::view_model::HistoryInsertStatus::CopiedFallback
+                                    }
+                                    HistoryInsertStatus::PasteSent => {
+                                        frontend::view_model::HistoryInsertStatus::PasteSent
+                                    }
+                                    HistoryInsertStatus::Failed => {
+                                        frontend::view_model::HistoryInsertStatus::Failed
+                                    }
+                                    HistoryInsertStatus::NotRequested => {
+                                        frontend::view_model::HistoryInsertStatus::NotRequested
+                                    }
+                                },
+                                has_audio,
+                                    asr_provider: item.asr_provider,
+                                asr_model: item.asr_model,
+                                asr_ms: item.asr_ms,
+                                llm_provider: item.llm_provider,
+                                llm_model: item.llm_model,
+                                polish_ms: item.polish_ms,
+                                app_name: item.app_name,
+                                dictionary_count: item.dictionary_entry_count,
+                                }
+                            })
+                            .collect();
+                        vm.history_loading = false;
+                        vm.history_error = None;
+                    }
+                    Err(error) => {
+                        vm.history_loading = false;
+                        vm.history_error = Some(error.to_string());
+                    }
                 }
             }
 
@@ -4579,10 +4461,16 @@ mod linux_app {
                     .collect();
             }
 
-            // Marketplace: wire from Core data when available.
+            // Translation and selection-ask are always wired through Core; the
+            // pages only render state that is already loaded.
+            vm.translation_unsupported = false;
+            vm.selection_unsupported = false;
+
+            // Marketplace: wired through Core; the list loads lazily on first visit.
+            vm.marketplace_unsupported = false;
+            vm.marketplace_loading = !self.marketplace_attempted;
             if !self.marketplace_items.is_empty() {
                 vm.marketplace_loading = false;
-                vm.marketplace_unsupported = false;
                 vm.marketplace_packs = self
                     .marketplace_items
                     .iter()
@@ -4592,7 +4480,7 @@ mod linux_app {
                         description: item.description.clone(),
                         mode: item.base_mode.clone(),
                         author: item.author_login.clone(),
-                        tags: vec![item.base_mode.clone()],
+                        tags: item.tags.clone(),
                         likes: item.like_count as u32,
                         downloads: item.download_count as u32,
                         is_new: false,
@@ -4925,9 +4813,15 @@ mod linux_app {
                             frontend::view_model::Page::Style => shell::Page::Styles,
                             frontend::view_model::Page::Marketplace => shell::Page::Marketplace,
                             frontend::view_model::Page::SelectionAsk => shell::Page::Assistant,
-                            frontend::view_model::Page::Translation => shell::Page::Assistant,
+                            frontend::view_model::Page::Translation => shell::Page::Translation,
+                            frontend::view_model::Page::Corrections => shell::Page::Corrections,
                             frontend::view_model::Page::Settings => shell::Page::Providers,
                         };
+                        if page == frontend::view_model::Page::Marketplace {
+                            // The list is fetched lazily; entering the page is what
+                            // triggers the first load.
+                            self.load_marketplace();
+                        }
                     }
                     frontend::view_model::FrontendAction::ToggleSettings => {
                         self.frontend_vm.settings_open = !self.frontend_vm.settings_open;
@@ -4942,10 +4836,24 @@ mod linux_app {
                     frontend::view_model::FrontendAction::SidebarToggleStyle => {
                         self.frontend_vm.style_open = !self.frontend_vm.style_open;
                     }
+                    frontend::view_model::FrontendAction::OverviewRefresh => {
+                        self.overview = OverviewState::Loading;
+                        self.load_overview();
+                    }
+                    frontend::view_model::FrontendAction::OverviewPeriod(period) => {
+                        self.frontend_vm.overview_period = period.min(1);
+                    }
+                    frontend::view_model::FrontendAction::OverviewMetric(metric) => {
+                        self.frontend_vm.overview_metric = metric.min(2);
+                    }
                     frontend::view_model::FrontendAction::SidebarToggleTools => {
                         self.frontend_vm.tools_open = !self.frontend_vm.tools_open;
                     }
                     frontend::view_model::FrontendAction::WindowClose => {
+                        // Closing the window is an explicit quit: without this the
+                        // tray handler below would only hide it, which reads as a
+                        // dead close button.
+                        self.exit_requested = true;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                     frontend::view_model::FrontendAction::WindowMaximize => {
@@ -4964,6 +4872,7 @@ mod linux_app {
                     }
                     frontend::view_model::FrontendAction::MarketplaceSearch(query) => {
                         self.marketplace_query = query;
+                        self.load_marketplace();
                     }
                     frontend::view_model::FrontendAction::MarketplaceCloseDetail => {
                         self.frontend_vm.marketplace_selected = None;
@@ -5068,45 +4977,143 @@ mod linux_app {
                             }
                         }
                     }
-                    frontend::view_model::FrontendAction::MarketplaceSort(_sort) => {
-                        // Sort is handled locally in the frontend for now.
-                    }
-                    frontend::view_model::FrontendAction::HistoryClear => {
-                        if let Some(backend) = self.backend() {
-                            let lang = self.lang;
-                            self.spawn(async move {
-                                backend.clear_history()?;
-                                Ok(tr_l10n(lang, "status.history_cleared").to_string())
-                            });
-                        }
+                    frontend::view_model::FrontendAction::MarketplaceSort(sort) => {
+                        self.frontend_vm.marketplace_sort = sort;
+                        self.load_marketplace();
                     }
                     frontend::view_model::FrontendAction::HistoryRefresh => {
-                        self.frontend_vm.history_cleared = false;
+                        self.frontend_vm.history_loading = true;
+                        self.frontend_vm.history_error = None;
+                        self.frontend_vm.history_confirm = None;
                     }
                     frontend::view_model::FrontendAction::HistorySearch(query) => {
                         self.frontend_vm.history_query = query;
                     }
-                    frontend::view_model::FrontendAction::HistoryFilter(index) => {
-                        self.frontend_vm.history_filter = index;
-                    }
                     frontend::view_model::FrontendAction::HistorySelect(index) => {
                         self.frontend_vm.history_selected = index;
                     }
-                    frontend::view_model::FrontendAction::HistoryTogglePlay => {
-                        self.frontend_vm.history_audio_playing =
-                            !self.frontend_vm.history_audio_playing;
+                    frontend::view_model::FrontendAction::HistoryRequestClear => {
+                        self.frontend_vm.history_confirm =
+                            Some(frontend::view_model::HistoryConfirm::Clear);
                     }
-                    frontend::view_model::FrontendAction::HistoryRepolish => {
-                        self.frontend_vm.history_repolished = true;
+                    frontend::view_model::FrontendAction::HistoryRequestDelete(index) => {
+                        self.frontend_vm.history_confirm =
+                            Some(frontend::view_model::HistoryConfirm::Delete(index));
                     }
-                    frontend::view_model::FrontendAction::HistoryDelete(index) => {
+                    frontend::view_model::FrontendAction::HistoryCancelConfirm => {
+                        self.frontend_vm.history_confirm = None;
+                    }
+                    frontend::view_model::FrontendAction::HistoryConfirmAction => {
+                        match self.frontend_vm.history_confirm.take() {
+                            Some(frontend::view_model::HistoryConfirm::Clear) => {
+                                if let Some(backend) = self.backend() {
+                                    let lang = self.lang;
+                                    self.spawn(async move {
+                                        backend.clear_history()?;
+                                        Ok(tr_l10n(lang, "status.history_cleared").to_string())
+                                    });
+                                }
+                            }
+                            Some(frontend::view_model::HistoryConfirm::Delete(index)) => {
+                                if let Some(backend) = self.backend() {
+                                    if let Some(entry) = self.frontend_vm.history_entries.get(index)
+                                    {
+                                        let id = entry.id.clone();
+                                        let lang = self.lang;
+                                        self.spawn(async move {
+                                            backend.delete_history(&id)?;
+                                            Ok(tr_l10n(lang, "status.history_deleted").to_string())
+                                        });
+                                    }
+                                }
+                            }
+                            None => {}
+                        }
+                    }
+                    frontend::view_model::FrontendAction::HistoryPlay(index) => {
                         if let Some(backend) = self.backend() {
                             if let Some(entry) = self.frontend_vm.history_entries.get(index) {
-                                let id = entry.time.clone();
+                                let id = entry.id.clone();
+                                let data_dir = backend.config().data_dir.clone();
                                 let lang = self.lang;
                                 self.spawn(async move {
-                                    backend.delete_history(&id)?;
-                                    Ok(tr_l10n(lang, "status.history_deleted").to_string())
+                                    let path = openless_linux_egui::recording_path(&data_dir, &id)
+                                        .map_err(|error| {
+                                            BackendError::new(
+                                                openless_core::BackendErrorCode::Persistence,
+                                                error.to_string(),
+                                            )
+                                        })?;
+                                    tokio::task::spawn_blocking(move || {
+                                        openless_linux_egui::open_local_file(&path)
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Platform,
+                                            error.to_string(),
+                                        )
+                                    })?;
+                                    Ok(tr_l10n(lang, "status.opened_player").to_string())
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::HistoryRetranscribe(index) => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(entry) = self.frontend_vm.history_entries.get(index) {
+                                let id = entry.id.clone();
+                                let data_dir = backend.config().data_dir.clone();
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    let recording_id = id.clone();
+                                    let wav = tokio::task::spawn_blocking(move || {
+                                        openless_linux_egui::read_recording_wav(
+                                            &data_dir,
+                                            &recording_id,
+                                        )
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Persistence,
+                                            error.to_string(),
+                                        )
+                                    })?;
+                                    let pcm = openless_linux_egui::recording_pcm(&wav)
+                                        .map_err(|error| {
+                                            BackendError::new(
+                                                openless_core::BackendErrorCode::Persistence,
+                                                error.to_string(),
+                                            )
+                                        })?
+                                        .to_vec();
+                                    let started = std::time::Instant::now();
+                                    let result = backend
+                                        .services()
+                                        .auxiliary
+                                        .retranscribe_pcm(pcm)
+                                        .await
+                                        .map_err(|failure| failure.error)?;
+                                    let entry = backend.apply_history_retranscription(
+                                        &id,
+                                        result.text,
+                                        &result.asr,
+                                        started.elapsed().as_millis() as u64,
+                                    )?;
+                                    Ok(fmt_l10n(lang, "status.retranscribed", &[&entry.final_text]))
                                 });
                             }
                         }
@@ -5114,7 +5121,7 @@ mod linux_app {
                     frontend::view_model::FrontendAction::HistoryExport(index) => {
                         if let Some(backend) = self.backend() {
                             if let Some(entry) = self.frontend_vm.history_entries.get(index) {
-                                let id = entry.time.clone();
+                                let id = entry.id.clone();
                                 let data_dir = backend.config().data_dir.clone();
                                 let lang = self.lang;
                                 self.spawn(async move {
@@ -5179,67 +5186,11 @@ mod linux_app {
                             }
                         }
                     }
-                    frontend::view_model::FrontendAction::HistoryRepolish => {
-                        if let Some(backend) = self.backend() {
-                            if let Some(entry) = self
-                                .frontend_vm
-                                .history_entries
-                                .get(self.frontend_vm.history_selected)
-                            {
-                                let text = entry.text.clone();
-                                let service = Arc::clone(&backend.services().auxiliary);
-                                let lang = self.lang;
-                                self.spawn(async move {
-                                    let polished = service
-                                        .repolish(openless_core::RepolishRequest {
-                                            raw_text: text,
-                                            style_pack_id: None,
-                                            front_app: None,
-                                        })
-                                        .await?;
-                                    Ok(fmt_l10n(lang, "status.repolish_done", &[&polished]))
-                                });
-                            }
-                        }
+                    frontend::view_model::FrontendAction::VocabFilter(index) => {
+                        self.frontend_vm.vocab_filter = index.min(2);
                     }
-                    frontend::view_model::FrontendAction::HistoryTogglePlay => {
-                        if let Some(backend) = self.backend() {
-                            if let Some(entry) = self
-                                .frontend_vm
-                                .history_entries
-                                .get(self.frontend_vm.history_selected)
-                            {
-                                let id = entry.time.clone();
-                                let data_dir = backend.config().data_dir.clone();
-                                let lang = self.lang;
-                                self.spawn(async move {
-                                    let path = openless_linux_egui::recording_path(&data_dir, &id)
-                                        .map_err(|error| {
-                                            BackendError::new(
-                                                openless_core::BackendErrorCode::Persistence,
-                                                error.to_string(),
-                                            )
-                                        })?;
-                                    tokio::task::spawn_blocking(move || {
-                                        openless_linux_egui::open_local_file(&path)
-                                    })
-                                    .await
-                                    .map_err(|error| {
-                                        BackendError::new(
-                                            openless_core::BackendErrorCode::Internal,
-                                            error.to_string(),
-                                        )
-                                    })?
-                                    .map_err(|error| {
-                                        BackendError::new(
-                                            openless_core::BackendErrorCode::Platform,
-                                            error.to_string(),
-                                        )
-                                    })?;
-                                    Ok(tr_l10n(lang, "status.opened_player").to_string())
-                                });
-                            }
-                        }
+                    frontend::view_model::FrontendAction::VocabSearch(query) => {
+                        self.frontend_vm.vocab_query = query;
                     }
                     frontend::view_model::FrontendAction::VocabAddPhrase(phrase) => {
                         if let Some(backend) = self.backend() {
@@ -5622,6 +5573,42 @@ mod linux_app {
             Lang::En => "lang.en",
             Lang::Ja => "lang.ja",
             Lang::Ko => "lang.ko",
+        }
+    }
+
+    fn overview_activity_day(day: DailyActivity) -> frontend::view_model::OverviewActivityDay {
+        frontend::view_model::OverviewActivityDay {
+            date: day.date,
+            count: day.count,
+            chars: day.chars,
+            duration_ms: day.duration_ms,
+        }
+    }
+
+    fn overview_heatmap_day(day: DailyActivity) -> frontend::view_model::OverviewHeatmapDay {
+        frontend::view_model::OverviewHeatmapDay {
+            date: day.date,
+            count: day.count,
+        }
+    }
+
+    /// Core polish mode -> frontend display enum.
+    fn overview_mode(mode: openless_core::PolishMode) -> frontend::view_model::OverviewMode {
+        match mode {
+            openless_core::PolishMode::Raw => frontend::view_model::OverviewMode::Raw,
+            openless_core::PolishMode::Light => frontend::view_model::OverviewMode::Light,
+            openless_core::PolishMode::Structured => frontend::view_model::OverviewMode::Structured,
+            openless_core::PolishMode::Formal => frontend::view_model::OverviewMode::Formal,
+        }
+    }
+
+    /// Localized label for a polish mode (used as the history pill fallback).
+    fn polish_mode_label(lang: Lang, mode: openless_core::PolishMode) -> &'static str {
+        match mode {
+            openless_core::PolishMode::Raw => tr_l10n(lang, "overview.mode_raw"),
+            openless_core::PolishMode::Light => tr_l10n(lang, "overview.mode_light"),
+            openless_core::PolishMode::Structured => tr_l10n(lang, "overview.mode_structured"),
+            openless_core::PolishMode::Formal => tr_l10n(lang, "overview.mode_formal"),
         }
     }
 
@@ -7134,20 +7121,22 @@ mod linux_app {
             // Last-30 window covers Jan 15, Jan 8 and Jan 1.
             assert_eq!(summary.last_30.active_days, 3);
             assert_eq!(summary.last_30.segments, 10);
-            assert_eq!(summary.activity_days_total, 4);
 
-            // The trailing 364-day heatmap sums every in-window day.
-            let heat_total: u32 = summary
-                .heatmap_weeks
-                .iter()
-                .flat_map(|week| week.iter())
-                .sum();
-            assert_eq!(heat_total, 19);
-            assert_eq!(summary.heatmap_days, 364);
+            // The daily series is the trailing 30 days ending today.
+            assert_eq!(summary.activity_daily.len(), 30);
+            assert_eq!(summary.activity_daily.last().unwrap().date, "2026-01-15");
+            assert_eq!(summary.activity_daily.last().unwrap().count, 5);
+
+            // The heatmap now covers the whole calendar year (Jan 1 – Dec 31),
+            // so every 2026 day counts and the 2025 day drops out.
+            assert_eq!(summary.heatmap_year, 2026);
+            assert_eq!(summary.heatmap.len(), 365);
+            let heat_total: u32 = summary.heatmap.iter().map(|day| day.count).sum();
+            assert_eq!(heat_total, 10);
         }
 
         #[test]
-        fn overview_heatmap_excludes_days_outside_trailing_window() {
+        fn overview_heatmap_excludes_days_outside_the_calendar_year() {
             let today = chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
             let far = (today - chrono::Duration::days(400))
                 .format("%Y-%m-%d")
@@ -7161,16 +7150,11 @@ mod linux_app {
                 today,
             );
 
-            let heat_total: u32 = summary
-                .heatmap_weeks
-                .iter()
-                .flat_map(|week| week.iter())
-                .sum();
+            let heat_total: u32 = summary.heatmap.iter().map(|day| day.count).sum();
             assert_eq!(
                 heat_total, 3,
-                "days older than the trailing window must not appear in the heatmap"
+                "days outside the calendar year must not appear in the heatmap"
             );
-            assert_eq!(summary.activity_days_total, 2);
         }
     }
 }

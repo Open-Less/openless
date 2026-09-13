@@ -1,5 +1,7 @@
 use eframe::egui;
+use openless_linux_egui::{tr_l10n, Lang};
 
+use super::layout;
 use super::theme;
 use super::view_model::{FrontendAction, FrontendViewModel, MarketplaceSort};
 
@@ -11,37 +13,45 @@ pub fn marketplace_page(
     actions: &mut Vec<FrontendAction>,
     body_rect: egui::Rect,
 ) {
-    ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new("探索社区风格包")
-                .size(13.0)
-                .color(theme::INK_3),
-        );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let refresh = ui.add(
-                egui::Button::new(egui::RichText::new("↻  刷新").size(11.5))
-                    .fill(theme::SURFACE)
-                    .stroke(egui::Stroke::new(0.8, theme::LINE))
-                    .corner_radius(egui::CornerRadius::same(8))
-                    .min_size(egui::vec2(70.0, 29.0)),
-            );
-            if refresh.clicked() {
-                actions.push(FrontendAction::MarketplaceRefresh);
-            }
-            ui.add_space(8.0);
-            let mine = ui.add(
-                egui::Button::new(egui::RichText::new("我的发布").size(11.5))
-                    .fill(theme::SURFACE)
-                    .stroke(egui::Stroke::new(0.8, theme::LINE))
-                    .corner_radius(egui::CornerRadius::same(8))
-                    .min_size(egui::vec2(78.0, 29.0)),
-            );
-            if mine.clicked() {
-                actions.push(FrontendAction::MarketplaceMyPacks);
-            }
-        });
-    });
-    ui.add_space(18.0);
+    let lang = vm.lang;
+    let width = (ui.available_width() - 24.0).max(1.0);
+    ui.set_min_width(width);
+    ui.set_max_width(width);
+
+    let header = layout::page_header(
+        ui,
+        width,
+        tr_l10n(lang, "marketplace.kicker"),
+        tr_l10n(lang, "marketplace.title"),
+        Some(tr_l10n(lang, "marketplace.desc")),
+    );
+    let mine = tr_l10n(lang, "marketplace.my_packs_button_label");
+    let mine_width = layout::text_width(ui, mine, 12.5) + 34.0;
+    let mine_rect = egui::Rect::from_min_size(
+        egui::pos2(header.right() - mine_width, header.top() + 22.0),
+        egui::vec2(mine_width, 30.0),
+    );
+    if layout::action_button(ui, mine_rect, mine, None, layout::ButtonKind::Ghost).clicked() {
+        actions.push(FrontendAction::MarketplaceMyPacks);
+    }
+    let refresh = tr_l10n(lang, "marketplace.refresh_btn");
+    let refresh_width = layout::text_width(ui, refresh, 12.5) + 34.0;
+    let refresh_rect = egui::Rect::from_min_size(
+        egui::pos2(mine_rect.left() - 8.0 - refresh_width, header.top() + 22.0),
+        egui::vec2(refresh_width, 30.0),
+    );
+    if layout::action_button(
+        ui,
+        refresh_rect,
+        refresh,
+        Some(super::icons::IconName::Refresh),
+        layout::ButtonKind::Ghost,
+    )
+    .clicked()
+    {
+        actions.push(FrontendAction::MarketplaceRefresh);
+    }
+    ui.add_space(14.0);
 
     // Search + sort
     ui.horizontal(|ui| {
@@ -69,7 +79,7 @@ pub fn marketplace_page(
                     let mut query = vm.marketplace_query.clone();
                     let resp = ui.add(
                         egui::TextEdit::singleline(&mut query)
-                            .hint_text("搜索风格包")
+                            .hint_text(tr_l10n(lang, "marketplace.search_placeholder"))
                             .frame(false)
                             .desired_width(search_width - 34.0),
                     );
@@ -80,9 +90,15 @@ pub fn marketplace_page(
             });
         ui.add_space(10.0);
         for (mode, label) in [
-            (MarketplaceSort::Popular, "热门"),
-            (MarketplaceSort::New, "最新"),
-            (MarketplaceSort::Liked, "我赞过的"),
+            (
+                MarketplaceSort::Popular,
+                tr_l10n(lang, "marketplace.sort_popular"),
+            ),
+            (MarketplaceSort::New, tr_l10n(lang, "marketplace.sort_new")),
+            (
+                MarketplaceSort::Liked,
+                tr_l10n(lang, "marketplace.sort_liked"),
+            ),
         ] {
             let selected = vm.marketplace_sort == mode;
             let response = ui.add(
@@ -122,7 +138,7 @@ pub fn marketplace_page(
     if vm.marketplace_loading {
         ui.horizontal(|ui| {
             ui.spinner();
-            ui.label("正在加载风格市场…");
+            ui.label(tr_l10n(lang, "common.loading"));
         });
         return;
     }
@@ -136,13 +152,13 @@ pub fn marketplace_page(
             .show(ui, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.label(
-                        egui::RichText::new("风格市场暂未接线")
+                        egui::RichText::new(tr_l10n(lang, "marketplace.kicker"))
                             .size(13.0)
                             .color(theme::INK_3),
                     );
                     ui.add_space(4.0);
                     ui.label(
-                        egui::RichText::new("市场后端桥接将在后续阶段完成")
+                        egui::RichText::new(tr_l10n(lang, "marketplace.desc"))
                             .size(11.0)
                             .color(theme::INK_4),
                     );
@@ -160,13 +176,13 @@ pub fn marketplace_page(
             .show(ui, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.label(
-                        egui::RichText::new("暂时没有找到风格包")
+                        egui::RichText::new(tr_l10n(lang, "marketplace.empty"))
                             .size(13.0)
                             .color(theme::INK_3),
                     );
                     ui.add_space(4.0);
                     ui.label(
-                        egui::RichText::new("试试其他关键词或筛选条件")
+                        egui::RichText::new(tr_l10n(lang, "marketplace.empty_hint"))
                             .size(11.0)
                             .color(theme::INK_4),
                     );
@@ -200,6 +216,7 @@ pub fn marketplace_page(
         if let Some(pack) = vm.marketplace_packs.get(index) {
             marketplace_detail(
                 ui.ctx(),
+                lang,
                 pack,
                 index,
                 vm.marketplace_liked.contains(&index),
@@ -215,10 +232,18 @@ fn marketplace_card(
     width: f32,
     pack: &super::view_model::MarketplacePack,
     index: usize,
-    _vm: &FrontendViewModel,
+    vm: &FrontendViewModel,
     actions: &mut Vec<FrontendAction>,
 ) {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 156.0), egui::Sense::click());
+    let lang = vm.lang;
+    let padding = 14.0;
+    let inner_width = (width - padding * 2.0).max(1.0);
+    // Lay the description out first so the card can size itself to its content
+    // instead of clipping the footer (which used to spill into the next row).
+    let description =
+        layout::text_galley(ui, &pack.description, theme::INK_3, 12.0, inner_width, 3);
+    let height = padding * 2.0 + 20.0 + 6.0 + description.size().y + 10.0 + 18.0 + 10.0 + 26.0;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
     let fill = if response.hovered() {
         theme::SURFACE_2
     } else {
@@ -232,80 +257,96 @@ fn marketplace_card(
         egui::Stroke::new(1.0, theme::LINE),
         egui::StrokeKind::Inside,
     );
-    let inner = rect.shrink(14.0);
-    let mut card_ui = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(inner)
-            .layout(egui::Layout::top_down(egui::Align::Min)),
+    let inner = rect.shrink(padding);
+    let painter = ui.painter().with_clip_rect(inner);
+
+    // Title row: name on the left, version on the right.
+    painter.text(
+        inner.left_top(),
+        egui::Align2::LEFT_TOP,
+        &pack.name,
+        egui::FontId::proportional(14.0),
+        theme::INK,
     );
-    let ui = &mut card_ui;
-    ui.style_mut().interaction.selectable_labels = false;
-    ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new(&pack.name)
-                .size(14.0)
-                .strong()
-                .color(theme::INK),
-        );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(
-                egui::RichText::new(format!("v{}", pack.version))
-                    .size(10.0)
-                    .color(theme::INK_4)
-                    .family(egui::FontFamily::Monospace),
-            );
-        });
-    });
-    ui.add_space(6.0);
-    let description_width = ui.available_width();
-    ui.allocate_ui_with_layout(
-        egui::vec2(description_width, 36.0),
-        egui::Layout::top_down(egui::Align::Min),
-        |ui| {
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(&pack.description)
-                        .size(12.0)
-                        .color(theme::INK_3),
-                )
-                .wrap(),
-            );
-        },
+    painter.text(
+        egui::pos2(inner.right(), inner.top() + 2.0),
+        egui::Align2::RIGHT_TOP,
+        format!("v{}", pack.version),
+        egui::FontId::monospace(10.0),
+        theme::INK_4,
     );
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        pill(ui, &pack.mode, true);
-        for tag in pack.tags.iter().take(2) {
-            pill(ui, tag, false);
+
+    // Description.
+    let description_top = inner.top() + 26.0;
+    painter.galley(
+        egui::pos2(inner.left(), description_top),
+        description.clone(),
+        theme::INK_3,
+    );
+
+    // Tags: base mode (outline) followed by the pack's own tags.
+    let mut x = inner.left();
+    let tags_top = description_top + description.size().y + 10.0;
+    for (text, tone) in std::iter::once((pack.mode.as_str(), layout::PillTone::Outline)).chain(
+        pack.tags
+            .iter()
+            .take(2)
+            .map(|tag| (tag.as_str(), layout::PillTone::Gray)),
+    ) {
+        let size = layout::pill_size(ui, text);
+        if x + size.x > inner.right() {
+            break;
         }
-    });
-    ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(format!("@{}", pack.author))
-                    .size(11.0)
-                    .color(theme::INK_3),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let download = ui.add(
-                    egui::Button::new(egui::RichText::new("下载 ZIP").size(10.0))
-                        .fill(theme::SURFACE_2)
-                        .stroke(egui::Stroke::new(0.7, theme::LINE))
-                        .corner_radius(egui::CornerRadius::same(7))
-                        .min_size(egui::vec2(62.0, 23.0)),
-                );
-                if download.clicked() {
-                    actions.push(FrontendAction::MarketplaceDownload(index));
-                }
-                ui.add_space(7.0);
-                ui.label(
-                    egui::RichText::new(format!("☆ {}  ·  ↓ {}", pack.likes, pack.downloads))
-                        .size(10.5)
-                        .color(theme::INK_4),
-                );
-            });
-        });
-    });
+        layout::paint_pill(
+            &painter,
+            egui::Rect::from_min_size(egui::pos2(x, tags_top), size),
+            text,
+            tone,
+        );
+        x += size.x + 6.0;
+    }
+
+    // Footer: author on the left, stats and actions on the right.
+    let footer_height = 26.0;
+    let footer_center_y = rect.bottom() - padding - footer_height / 2.0;
+    painter.text(
+        egui::pos2(inner.left(), footer_center_y),
+        egui::Align2::LEFT_CENTER,
+        format!("@{}", pack.author),
+        egui::FontId::proportional(11.0),
+        theme::INK_3,
+    );
+
+    let download = tr_l10n(lang, "marketplace.download_zip_btn");
+    let download_width = layout::text_width(ui, download, 11.5) + 26.0;
+    let download_rect = egui::Rect::from_min_size(
+        egui::pos2(inner.right() - download_width, footer_center_y - 12.0),
+        egui::vec2(download_width, 24.0),
+    );
+    let install = tr_l10n(lang, "marketplace.install_btn");
+    let install_width = layout::text_width(ui, install, 11.5) + 26.0;
+    let install_rect = egui::Rect::from_min_size(
+        egui::pos2(
+            download_rect.left() - 6.0 - install_width,
+            footer_center_y - 12.0,
+        ),
+        egui::vec2(install_width, 24.0),
+    );
+    painter.text(
+        egui::pos2(install_rect.left() - 10.0, footer_center_y),
+        egui::Align2::RIGHT_CENTER,
+        format!("☆ {}  ·  ↓ {}", pack.likes, pack.downloads),
+        egui::FontId::proportional(10.5),
+        theme::INK_4,
+    );
+    if layout::action_button(ui, install_rect, install, None, layout::ButtonKind::Ghost).clicked() {
+        actions.push(FrontendAction::MarketplaceInstall(index));
+    }
+    if layout::action_button(ui, download_rect, download, None, layout::ButtonKind::Ghost).clicked()
+    {
+        actions.push(FrontendAction::MarketplaceDownload(index));
+    }
+
     if response.clicked() {
         actions.push(FrontendAction::MarketplaceDetail(index));
     }
@@ -335,6 +376,7 @@ fn pill(ui: &mut egui::Ui, text: &str, outline: bool) {
 
 fn marketplace_detail(
     ctx: &egui::Context,
+    lang: Lang,
     pack: &super::view_model::MarketplacePack,
     index: usize,
     liked: bool,
@@ -387,7 +429,11 @@ fn marketplace_detail(
                     ui.set_width(modal_width - 40.0);
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(&pack.name).size(18.0).strong());
-                        ui.label(egui::RichText::new(&pack.mode).size(11.0).color(theme::INK_3));
+                        ui.label(
+                            egui::RichText::new(&pack.mode)
+                                .size(11.0)
+                                .color(theme::INK_3),
+                        );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
                                 egui::RichText::new(format!("v{}", pack.version))
@@ -418,9 +464,10 @@ fn marketplace_detail(
                         .inner_margin(egui::Margin::same(12))
                         .show(ui, |ui| {
                             ui.label(
-                                egui::RichText::new(
-                                    "本地占位预览\n将原始表达保留在上下文中，优化语气、结构和可读性。\n这段内容会由真实风格包提示词替换。",
-                                )
+                                egui::RichText::new(tr_l10n(
+                                    lang,
+                                    "marketplace.preview_placeholder",
+                                ))
                                 .size(12.0)
                                 .color(theme::INK_2)
                                 .family(egui::FontFamily::Monospace),
@@ -430,9 +477,11 @@ fn marketplace_detail(
                     ui.horizontal(|ui| {
                         if ui
                             .add(
-                                egui::Button::new(
-                                    egui::RichText::new(if liked { "★" } else { "☆" }),
-                                )
+                                egui::Button::new(egui::RichText::new(if liked {
+                                    "★"
+                                } else {
+                                    "☆"
+                                }))
                                 .fill(theme::SURFACE)
                                 .stroke(egui::Stroke::new(1.0, theme::LINE))
                                 .corner_radius(egui::CornerRadius::same(8)),
@@ -444,7 +493,7 @@ fn marketplace_detail(
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui
                                 .add(
-                                    egui::Button::new("安装到本地")
+                                    egui::Button::new(tr_l10n(lang, "marketplace.install_btn"))
                                         .fill(theme::BLUE)
                                         .stroke(egui::Stroke::NONE)
                                         .corner_radius(egui::CornerRadius::same(8)),
@@ -456,7 +505,7 @@ fn marketplace_detail(
                             }
                             if ui
                                 .add(
-                                    egui::Button::new("取消")
+                                    egui::Button::new(tr_l10n(lang, "common.cancel"))
                                         .fill(theme::SURFACE)
                                         .stroke(egui::Stroke::new(1.0, theme::LINE))
                                         .corner_radius(egui::CornerRadius::same(8)),

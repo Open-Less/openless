@@ -19,6 +19,8 @@ pub enum Page {
     Marketplace,
     Providers,
     Assistant,
+    Translation,
+    Corrections,
 }
 
 impl Page {
@@ -31,6 +33,8 @@ impl Page {
             Self::Marketplace => "nav.marketplace",
             Self::Providers => "nav.providers",
             Self::Assistant => "nav.assistant",
+            Self::Translation => "nav.translation",
+            Self::Corrections => "nav.corrections",
         };
         tr_l10n(lang, key)
     }
