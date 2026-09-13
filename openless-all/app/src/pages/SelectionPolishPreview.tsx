@@ -65,6 +65,8 @@ export function SelectionPolishPreview() {
       style={{
         display: 'flex',
         flexDirection: 'column',
+        flex: '1 1 auto',
+        width: '100%',
         height: '100%',
         boxSizing: 'border-box',
         padding: 18,
