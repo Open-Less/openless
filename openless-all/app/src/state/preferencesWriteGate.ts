@@ -1,29 +1,50 @@
-/**
- * Prevents an older `prefs:changed` broadcast from overwriting an optimistic
- * local edit while one or more local writes are queued. Events cannot be
- * correlated to a particular write, so they are discarded instead of replayed
- * after the queue drains; the latest local value is already optimistic.
- */
-export class PreferencesWriteGate<T = unknown> {
-  private pendingWrites = 0;
+export interface IncomingPreference<T> {
+  value: T;
+  wasPending: boolean;
+  isOwnWrite: boolean;
+}
 
-  beginWrite(): () => boolean {
-    this.pendingWrites += 1;
+/** Correlates preference broadcasts with writes initiated by this webview. */
+export class PreferencesWriteGate<T = unknown> {
+  private readonly pendingWrites = new Map<number, T>();
+  private readonly recentWrites: T[] = [];
+  private nextWriteId = 0;
+
+  constructor(
+    private readonly equals: (left: T, right: T) => boolean = Object.is,
+  ) {}
+
+  beginWrite(value: T): (canonical?: T) => boolean {
+    const writeId = this.nextWriteId++;
+    this.pendingWrites.set(writeId, value);
     let finished = false;
-    return () => {
+    return (canonical) => {
       if (finished) return false;
       finished = true;
-      this.pendingWrites = Math.max(0, this.pendingWrites - 1);
-      return this.pendingWrites === 0;
+      this.pendingWrites.delete(writeId);
+      this.remember(value);
+      if (canonical !== undefined) this.remember(canonical);
+      return this.pendingWrites.size === 0;
     };
   }
 
   shouldApplyIncoming(): boolean {
-    return this.pendingWrites === 0;
+    return this.pendingWrites.size === 0;
   }
 
-  receiveIncoming(value: T): T | null {
-    if (this.shouldApplyIncoming()) return value;
-    return null;
+  receiveIncoming(value: T): IncomingPreference<T> {
+    const wasPending = this.pendingWrites.size > 0;
+    const isOwnWrite = [
+      ...this.pendingWrites.values(),
+      ...this.recentWrites,
+    ].some(expected => this.equals(expected, value));
+    return { value, wasPending, isOwnWrite };
+  }
+
+  private remember(value: T) {
+    const previousIndex = this.recentWrites.findIndex(item => this.equals(item, value));
+    if (previousIndex >= 0) this.recentWrites.splice(previousIndex, 1);
+    this.recentWrites.push(value);
+    if (this.recentWrites.length > 16) this.recentWrites.shift();
   }
 }

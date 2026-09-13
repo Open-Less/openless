@@ -14,9 +14,13 @@ object OpenLessNative {
 
     @JvmStatic external fun nativeStartDictation()
 
+    @JvmStatic external fun nativeStartDictationForIme()
+
     @JvmStatic external fun nativeStartDictationWithTranslation(translation: Boolean)
 
     @JvmStatic external fun nativeStopDictation()
+
+    @JvmStatic external fun nativeStopDictationForIme()
 
     @JvmStatic external fun nativeStopDictationWithTranslation(translation: Boolean)
 

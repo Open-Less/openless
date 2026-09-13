@@ -11,6 +11,8 @@ const PERMISSIONS = [
   'android.permission.SYSTEM_ALERT_WINDOW',
   'android.permission.FOREGROUND_SERVICE',
   'android.permission.FOREGROUND_SERVICE_MICROPHONE',
+  'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
+  'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
 ];
 
 const APPLICATION_SNIPPET = `
@@ -23,6 +25,25 @@ const SERVICE_SNIPPETS = [
             android:name=".OpenLessOverlayService"
             android:exported="false"
             android:foregroundServiceType="microphone" />`,
+  `<service
+            android:name=".OpenLessRuntimeService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="ime_runtime" />
+        </service>`,
+  `<service
+            android:name=".OpenLessImeService"
+            android:exported="true"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/openless_ime_method" />
+        </service>`,
   `<service
             android:name=".OpenLessAccessibilityService"
             android:process=":accessibility"
@@ -47,6 +68,12 @@ const SERVICE_SNIPPETS = [
             android:name=".MicrophonePermissionActivity"
             android:exported="false"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />`,
+  `<activity
+            android:name=".OpenLessBackendWarmupActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="false"
+            android:theme="@style/Theme.openless" />`,
 ];
 
 function printHelp() {
