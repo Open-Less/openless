@@ -28,6 +28,11 @@ export function SelectionPolishPreview() {
     void load();
     void import('@tauri-apps/api/event').then(({ listen }) =>
       listen('selection-polish-preview:shown', () => {
+        // 预览窗是复用的：上一轮 confirm/cancel 成功后窗口 hide，但组件不卸载，
+        // busy 会停留在 true → 下一轮两个按钮全 disabled（表现为「点确认没反应」）。
+        // 每次重新 show 必须复位交互状态。
+        setBusy(false);
+        setError(null);
         void load();
       }).then((handle) => {
         if (cancelled) handle();
@@ -60,6 +65,8 @@ export function SelectionPolishPreview() {
       style={{
         display: 'flex',
         flexDirection: 'column',
+        flex: '1 1 auto',
+        width: '100%',
         height: '100%',
         boxSizing: 'border-box',
         padding: 18,

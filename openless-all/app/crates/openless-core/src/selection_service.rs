@@ -479,8 +479,16 @@ impl SelectionServiceInner {
 
     fn fail_if_active(&self, session_id: SessionId) -> bool {
         let mut state = self.state.write().expect("selection state lock poisoned");
+        // 只对「还在进行中」的 session 结算：Cancelled 是用户主动结束，
+        // Completed 是已粘贴成功（race：complete 与 fail 判断之间的窄窗口，
+        // 若误标 Failed 会把成功状态覆盖掉）。
         if state.snapshot.session_id == Some(session_id)
-            && !matches!(state.snapshot.phase, SelectionPhase::Cancelled)
+            && matches!(
+                state.snapshot.phase,
+                SelectionPhase::Capturing
+                    | SelectionPhase::Preview
+                    | SelectionPhase::Applying
+            )
         {
             state.snapshot.phase = SelectionPhase::Failed;
             let snapshot = state.snapshot.clone();
@@ -493,6 +501,38 @@ impl SelectionServiceInner {
         } else {
             false
         }
+    }
+
+    /// confirm 失败结算：session 已失效（stale / 目标变更 / 并发占用）结算为
+    /// Failed 并隐藏预览；瞬时的平台错误（焦点恢复 / 目标复核抖动）回退到
+    /// Preview 保持可重试——直接失败掉会让预览窗被隐藏、编辑内容丢失，
+    /// 用户看到的只是「点确认没反应」。
+    fn settle_confirm_failure(&self, session_id: SessionId, error: &BackendError) -> bool {
+        let settled = matches!(
+            error.code,
+            BackendErrorCode::Cancelled
+                | BackendErrorCode::InvalidState
+                | BackendErrorCode::InvalidArgument
+                | BackendErrorCode::Busy
+        );
+        let mut state = self.state.write().expect("selection state lock poisoned");
+        let active = state.snapshot.session_id == Some(session_id)
+            && !matches!(state.snapshot.phase, SelectionPhase::Cancelled);
+        if !active {
+            return false;
+        }
+        state.snapshot.phase = if settled {
+            SelectionPhase::Failed
+        } else {
+            SelectionPhase::Preview
+        };
+        let snapshot = state.snapshot.clone();
+        drop(state);
+        self.events.publish(
+            Some(session_id),
+            BackendEventKind::SelectionStateChanged(snapshot),
+        );
+        settled
     }
 
     fn begin_revert(&self, session_id: SessionId) -> Result<(), BackendError> {
@@ -575,7 +615,13 @@ impl SelectionApi for SelectionService {
                 inner.set_context(session_id, Arc::clone(&context))?;
                 let (output, polish_ms) = if uses_llm {
                     let polish_started = std::time::Instant::now();
-                    let output = inner
+                    // C 案：圈選潤色此前漏接簡繁偏好（語音輸入路徑在 finish 時已套用
+                    // apply_chinese_script_preference）。這裡對齊——LLM 輸出依用戶
+                    // 設定做確定性簡繁轉換，與 prompt 無關，避免小模型簡體漂移直接
+                    // 進預覽/替換。非 LLM 分支只回顯原始選區，不轉換。
+                    // `context` 稍後被 move 進 polish()，先把 Copy 的偏好抓成局部。
+                    let script_pref = context.polish.chinese_script_preference;
+                    let mut output = inner
                         .polisher
                         .polish(
                             session_id,
@@ -584,6 +630,35 @@ impl SelectionApi for SelectionService {
                             Arc::new(DiscardTextStreamSink),
                         )
                         .await?;
+                    // 脚手架剥离（2026-09-11 蜘蛛故事事故）：小模型间歇性把 user
+                    // message 的模板句与 <raw_transcript> 信封连同正文一起回显。
+                    // prompt 层禁令对 35B 小模型只有部分效果，这里做确定性后处理
+                    // （模型无关）：活标签必然来自回显——用户正文进 LLM 前标签已被
+                    // sanitize 中和，正规输出不可能含活标签，取标签内正文零误伤。
+                    let before_strip = output.text.clone();
+                    let stripped =
+                        crate::streaming_insert::strip_echoed_scaffolding(&output.text);
+                    if stripped != before_strip {
+                        log::info!(
+                            "[selection-polish] stripped echoed scaffolding: {} -> {} chars",
+                            before_strip.chars().count(),
+                            stripped.chars().count()
+                        );
+                        output.text = stripped;
+                    }
+                    let before = output.text.clone();
+                    output.text = crate::streaming_insert::apply_chinese_script_preference(
+                        &output.text,
+                        script_pref,
+                    );
+                    if output.text != before {
+                        log::info!(
+                            "[selection-polish] script preference applied: {:?} {} -> {} chars",
+                            script_pref,
+                            before.chars().count(),
+                            output.text.chars().count(),
+                        );
+                    }
                     (
                         output,
                         Some(
@@ -650,7 +725,10 @@ impl SelectionApi for SelectionService {
                     Ok(())
                 }
                 Err(error) => {
-                    if inner.fail_if_active(session_id) {
+                    // 分流：session 已失效（stale / 并发 confirm）必须结算；瞬时的
+                    // 平台错误（焦点恢复 / 目标复核抖动）保持 preview 可重试——
+                    // 否则窗口被隐藏、busy 卡死，表现为「点确认没反应」。
+                    if inner.settle_confirm_failure(session_id, &error) {
                         let _ = inner.polisher.cancel(session_id).await;
                         let _ = inner.runtime.cancel(session_id).await;
                         inner.hide_preview();
