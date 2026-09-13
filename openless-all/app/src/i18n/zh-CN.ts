@@ -2030,7 +2030,8 @@ export const zhCN = {
     loadNow: '立即加载',
     releaseNow: '立即释放',
     keepLoadedLabel: '保持加载多久',
-    keepLoadedDesc: '决定 Qwen3-ASR 用完后多久从内存释放，避免长期占用内存。',
+    keepLoadedDesc:
+      '决定当前本地 ASR 引擎在下次转写后保持加载多久；“不释放”会持续驻留至手动释放或退出。',
     keepImmediate: '说完话立即释放',
     keep1min: '上次使用后 1 分钟',
     keep5min: '上次使用后 5 分钟（默认）',

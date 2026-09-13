@@ -1,4 +1,4 @@
-import { isLocalAsrModelSupportedOnOs } from './localAsr';
+import { LOCAL_ASR_KEEP_LOADED_OPTIONS, isLocalAsrModelSupportedOnOs } from './localAsr';
 
 function assertEqual(actual: boolean, expected: boolean, name: string) {
   if (actual !== expected) {
@@ -30,3 +30,8 @@ assertEqual(
   true,
   'Whisper is available on macOS',
 );
+
+const keepLoadedSeconds = LOCAL_ASR_KEEP_LOADED_OPTIONS.map((option) => option.seconds);
+if (JSON.stringify(keepLoadedSeconds) !== JSON.stringify([0, 60, 300, 1800, 86400])) {
+  throw new Error(`unexpected keep-loaded options: ${keepLoadedSeconds.join(', ')}`);
+}

@@ -2229,7 +2229,7 @@ export const fr: typeof zhCN = {
     releaseNow: 'Libérer maintenant',
     keepLoadedLabel: 'Conserver en mémoire pendant',
     keepLoadedDesc:
-      'Durée pendant laquelle Qwen3-ASR reste en mémoire après sa dernière utilisation avant d’être libéré.',
+      'Durée de chargement du moteur ASR local actuel après la prochaine transcription ; « Ne jamais libérer » le conserve jusqu’à une libération manuelle ou la fermeture.',
     keepImmediate: 'Libérer immédiatement',
     keep1min: '1 minute après la dernière utilisation',
     keep5min: '5 minutes après la dernière utilisation (par défaut)',

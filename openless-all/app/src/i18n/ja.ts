@@ -2120,7 +2120,7 @@ export const ja: typeof zhCN = {
     releaseNow: '今すぐ解放',
     keepLoadedLabel: 'ロード保持時間',
     keepLoadedDesc:
-      'ローカル ASR を使用後、何分でメモリから解放するかを決定。1+ GB の RAM 占有を回避。',
+      '現在のローカル ASR を次回の文字起こし後に保持する時間を指定します。「解放しない」は手動解放または終了まで保持します。',
     keepImmediate: '使用直後に解放',
     keep1min: '最終使用から 1 分',
     keep5min: '最終使用から 5 分（既定）',

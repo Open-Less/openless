@@ -2151,7 +2151,8 @@ export const en: typeof zhCN = {
     loadNow: 'Load now',
     releaseNow: 'Release now',
     keepLoadedLabel: 'Keep loaded for',
-    keepLoadedDesc: 'How long Qwen3-ASR stays in memory after the last use, before being freed.',
+    keepLoadedDesc:
+      'How long the current local ASR engine stays loaded after the next transcription; Never release keeps it loaded until manual release or exit.',
     keepImmediate: 'Release immediately',
     keep1min: '1 minute after last use',
     keep5min: '5 minutes after last use (default)',

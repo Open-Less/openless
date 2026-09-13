@@ -368,6 +368,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::foundry_local_asr_set_model,
             commands::foundry_local_asr_set_language_hint,
             commands::foundry_local_asr_set_runtime_source,
+            commands::foundry_local_asr_set_keep_loaded_secs,
             commands::foundry_local_asr_prepare,
             commands::foundry_local_asr_cancel_prepare,
             commands::foundry_local_asr_release,

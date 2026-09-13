@@ -104,9 +104,18 @@ export interface FoundryLocalAsrStatus {
   runtimeSource: FoundryRuntimeSource;
   activeModel: string;
   loadedModelId: string | null;
+  keepLoadedSecs: number;
   endpoint: string | null;
   error: string | null;
 }
+
+export const LOCAL_ASR_KEEP_LOADED_OPTIONS = [
+  { seconds: 0, labelKey: 'localAsr.keepImmediate' },
+  { seconds: 60, labelKey: 'localAsr.keep1min' },
+  { seconds: 300, labelKey: 'localAsr.keep5min' },
+  { seconds: 1800, labelKey: 'localAsr.keep30min' },
+  { seconds: 86400, labelKey: 'localAsr.keepForever' },
+] as const;
 
 export const FOUNDRY_LOCAL_ASR_MODEL_ALIASES = [
   'whisper-small',
@@ -403,6 +412,7 @@ export function getFoundryLocalAsrStatus(): Promise<FoundryLocalAsrStatus> {
     runtimeSource: 'auto',
     activeModel: 'whisper-small',
     loadedModelId: null,
+    keepLoadedSecs: 300,
     endpoint: null,
     error: null,
   }));
@@ -422,6 +432,10 @@ export function setFoundryLocalAsrLanguageHint(languageHint: string): Promise<vo
 
 export function setFoundryLocalRuntimeSource(source: string): Promise<void> {
   return invokeOrMock('foundry_local_asr_set_runtime_source', { source }, () => undefined);
+}
+
+export function setFoundryLocalAsrKeepLoadedSecs(seconds: number): Promise<void> {
+  return invokeOrMock('foundry_local_asr_set_keep_loaded_secs', { seconds }, () => undefined);
 }
 
 export function prepareFoundryLocalAsr(modelAlias: string): Promise<string> {

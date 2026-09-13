@@ -445,7 +445,7 @@ export interface UserPreferences {
   /** 本地模型下载源镜像（'huggingface' / 'hf-mirror'）。 */
   localAsrMirror: string;
   /** 本地 ASR 引擎在内存中的保留时长（秒）。0 = 说完话即释放；
-   *  300 = 默认 5 分钟；86400 ≈ 不释放（保持加载）。 */
+   *  300 = 默认 5 分钟；86400 = 不自动释放（保持加载）。 */
   localAsrKeepLoadedSecs: number;
   /** Windows Foundry Local Whisper 当前激活的模型 alias。 */
   foundryLocalAsrModel: string;

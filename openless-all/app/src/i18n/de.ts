@@ -2219,7 +2219,7 @@ export const de: typeof zhCN = {
     releaseNow: 'Jetzt entladen',
     keepLoadedLabel: 'Geladen halten für',
     keepLoadedDesc:
-      'Wie lange Qwen3-ASR nach der letzten Verwendung im Arbeitsspeicher bleibt, bevor es entladen wird.',
+      'Wie lange die aktuelle lokale ASR-Engine nach der nächsten Transkription geladen bleibt; „Nie entladen“ gilt bis zum manuellen Entladen oder Beenden.',
     keepImmediate: 'Sofort entladen',
     keep1min: '1 Minute nach letzter Verwendung',
     keep5min: '5 Minuten nach letzter Verwendung (Standard)',

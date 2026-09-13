@@ -2102,7 +2102,7 @@ export const ko: typeof zhCN = {
     releaseNow: '지금 해제',
     keepLoadedLabel: '로드 유지 시간',
     keepLoadedDesc:
-      '로컬 ASR 사용 후 메모리에서 해제되기까지의 시간을 결정. 1+ GB RAM 장기 점유 회피.',
+      '현재 로컬 ASR 엔진을 다음 전사 후 얼마나 유지할지 정합니다. 해제하지 않음은 수동 해제 또는 종료까지 유지합니다.',
     keepImmediate: '말하기 직후 해제',
     keep1min: '마지막 사용 후 1분',
     keep5min: '마지막 사용 후 5분(기본)',

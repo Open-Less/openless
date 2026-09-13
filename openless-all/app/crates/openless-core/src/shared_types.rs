@@ -19,6 +19,9 @@ pub use crate::android_types::{
 
 pub use crate::types::{HistorySource, PolishMode};
 
+/// 本地 ASR 保持加载设置的兼容值：不自动释放，仅由显式操作或进程退出卸载。
+pub const LOCAL_ASR_KEEP_LOADED_FOREVER_SECS: u32 = 86_400;
+
 /// 识别管线模式（issue #902）：`traditional` = 两段式 ASR + LLM 润色；
 /// `multimodal` = 单个多模态模型一步完成「音频 + 提示词 → 最终文本」。
 /// 两套配置在凭据库中完全隔离，运行时只读当前模式，切换不删除另一套配置。
@@ -530,7 +533,7 @@ pub struct UserPreferences {
     #[serde(default = "default_local_asr_mirror")]
     pub local_asr_mirror: String,
     /// 本地 ASR 引擎在内存中的保留时长（秒）。0 = 说完话即释放；
-    /// 较大值 = 上次使用后驻留 N 秒再释放；86400 = 一天 ≈ 永不释放。
+    /// 较大值 = 上次使用后驻留 N 秒再释放；86400 = 永不自动释放。
     /// 默认 300（5 分钟）：兼顾连续听写不重加载、长时间不用释放 1.2GB+ RAM。
     #[serde(default = "default_local_asr_keep_loaded_secs")]
     pub local_asr_keep_loaded_secs: u32,

@@ -307,16 +307,6 @@ impl TauriLocalAsrRuntimeAdapter {
             foundry_rebind_pending: Arc::new(AtomicBool::new(false)),
         }
     }
-
-    #[cfg(target_os = "windows")]
-    fn invalidate_release(&self, runtime: openless_core::LocalAsrRuntime) {
-        match runtime {
-            openless_core::LocalAsrRuntime::Foundry => &self.native.foundry_generation,
-            openless_core::LocalAsrRuntime::SherpaOnnx => &self.native.sherpa_generation,
-            openless_core::LocalAsrRuntime::Generic => return,
-        }
-        .fetch_add(1, Ordering::AcqRel);
-    }
 }
 
 impl openless_core::ModelRuntimeAdapter for TauriLocalAsrRuntimeAdapter {
@@ -550,7 +540,7 @@ impl openless_core::ModelRuntimeAdapter for TauriLocalAsrRuntimeAdapter {
         progress: openless_core::ModelPrepareProgressSink,
     ) -> BoxFuture<'static, Result<String, BackendError>> {
         #[cfg(target_os = "windows")]
-        self.invalidate_release(target.runtime);
+        self.invalidate_scheduled_release(target.runtime);
         let foundry = Arc::clone(&self.native.foundry);
         let sherpa = Arc::clone(&self.native.sherpa);
         let foundry_rebind_pending = Arc::clone(&self.foundry_rebind_pending);
@@ -692,7 +682,7 @@ impl openless_core::ModelRuntimeAdapter for TauriLocalAsrRuntimeAdapter {
         runtime: openless_core::LocalAsrRuntime,
     ) -> BoxFuture<'static, Result<(), BackendError>> {
         #[cfg(target_os = "windows")]
-        self.invalidate_release(runtime);
+        self.invalidate_scheduled_release(runtime);
         let foundry = Arc::clone(&self.native.foundry);
         let sherpa = Arc::clone(&self.native.sherpa);
         #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -812,6 +802,16 @@ impl openless_core::ModelRuntimeAdapter for TauriLocalAsrRuntimeAdapter {
         if runtime == openless_core::LocalAsrRuntime::Foundry {
             self.native.foundry.invalidate_route();
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn invalidate_scheduled_release(&self, runtime: openless_core::LocalAsrRuntime) {
+        match runtime {
+            openless_core::LocalAsrRuntime::Foundry => &self.native.foundry_generation,
+            openless_core::LocalAsrRuntime::SherpaOnnx => &self.native.sherpa_generation,
+            openless_core::LocalAsrRuntime::Generic => return,
+        }
+        .fetch_add(1, Ordering::AcqRel);
     }
 }
 
@@ -2275,6 +2275,12 @@ fn pcm_duration_ms(bytes: &[u8]) -> u64 {
     (bytes.len() as u64 / 2).saturating_mul(1_000) / 16_000
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux", test))]
+fn local_asr_release_delay(keep_loaded_secs: u32) -> Option<std::time::Duration> {
+    (keep_loaded_secs != openless_core::LOCAL_ASR_KEEP_LOADED_FOREVER_SECS)
+        .then(|| std::time::Duration::from_secs(keep_loaded_secs as u64))
+}
+
 #[cfg(target_os = "windows")]
 fn schedule_foundry_release(
     runtime: Arc<crate::asr::local::FoundryLocalRuntime>,
@@ -2298,8 +2304,11 @@ fn schedule_foundry_release(
                 }
             }
         }
-        if keep_loaded_secs > 0 {
-            tokio::time::sleep(std::time::Duration::from_secs(keep_loaded_secs as u64)).await;
+        let Some(delay) = local_asr_release_delay(keep_loaded_secs) else {
+            return;
+        };
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
         }
         if current_generation.load(Ordering::Acquire) != generation {
             return;
@@ -2327,9 +2336,12 @@ fn schedule_sherpa_release(
     generation: u64,
     current_generation: Arc<AtomicU64>,
 ) {
+    let Some(delay) = local_asr_release_delay(keep_loaded_secs) else {
+        return;
+    };
     tauri::async_runtime::spawn(async move {
-        if keep_loaded_secs > 0 {
-            tokio::time::sleep(std::time::Duration::from_secs(keep_loaded_secs as u64)).await;
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
         }
         if current_generation.load(Ordering::Acquire) == generation {
             if let Err(error) = runtime
@@ -2348,8 +2360,10 @@ fn schedule_qwen_release(
     engine: std::sync::Weak<crate::asr::local::LocalQwenEngine>,
     keep_loaded_secs: u32,
 ) {
+    let Some(threshold) = local_asr_release_delay(keep_loaded_secs) else {
+        return;
+    };
     tauri::async_runtime::spawn(async move {
-        let threshold = std::time::Duration::from_secs(keep_loaded_secs as u64);
         if !threshold.is_zero() {
             tokio::time::sleep(threshold).await;
         }
@@ -2363,8 +2377,10 @@ fn schedule_whisper_release(
     engine: std::sync::Weak<crate::asr::local::WhisperEngine>,
     keep_loaded_secs: u32,
 ) {
+    let Some(threshold) = local_asr_release_delay(keep_loaded_secs) else {
+        return;
+    };
     tauri::async_runtime::spawn(async move {
-        let threshold = std::time::Duration::from_secs(keep_loaded_secs as u64);
         if !threshold.is_zero() {
             tokio::time::sleep(threshold).await;
         }
@@ -3373,6 +3389,22 @@ mod tests {
 
     struct IgnoreTextStreamSink;
 
+    #[test]
+    fn local_asr_keep_loaded_delay_distinguishes_immediate_finite_and_forever() {
+        assert_eq!(
+            super::local_asr_release_delay(0),
+            Some(std::time::Duration::ZERO)
+        );
+        assert_eq!(
+            super::local_asr_release_delay(300),
+            Some(std::time::Duration::from_secs(300))
+        );
+        assert_eq!(
+            super::local_asr_release_delay(openless_core::LOCAL_ASR_KEEP_LOADED_FOREVER_SECS),
+            None
+        );
+    }
+
     #[cfg(target_os = "windows")]
     #[tokio::test]
     async fn windows_preload_requires_the_requested_model_to_be_prepared() {
@@ -3395,10 +3427,34 @@ mod tests {
                 .unwrap_err();
             assert_eq!(error.code, BackendErrorCode::InvalidState);
         }
-        adapter.invalidate_release(LocalAsrRuntime::Foundry);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn windows_scheduled_release_invalidation_is_runtime_scoped() {
+        use openless_core::{LocalAsrRuntime, ModelRuntimeAdapter};
+
+        let adapter = TauriLocalAsrRuntimeAdapter::new(
+            TauriNativeAsrDependencies::new(
+                Arc::new(crate::asr::local::FoundryLocalRuntime::new()),
+                Arc::new(crate::asr::local::SherpaOnnxRuntime::new()),
+            ),
+            Arc::new(openless_core::PreferencesStore::in_memory()),
+        );
+        let stale_foundry_generation = adapter.native.foundry_generation.load(Ordering::Acquire);
+        adapter.invalidate_scheduled_release(LocalAsrRuntime::Foundry);
         assert_eq!(adapter.native.foundry_generation.load(Ordering::Acquire), 1);
         assert_eq!(adapter.native.sherpa_generation.load(Ordering::Acquire), 0);
-        adapter.invalidate_release(LocalAsrRuntime::SherpaOnnx);
+        assert!(!adapter
+            .native
+            .foundry
+            .release_if_generation(
+                adapter.native.foundry_generation.as_ref(),
+                stale_foundry_generation,
+            )
+            .await
+            .unwrap());
+        adapter.invalidate_scheduled_release(LocalAsrRuntime::SherpaOnnx);
         assert_eq!(adapter.native.foundry_generation.load(Ordering::Acquire), 1);
         assert_eq!(adapter.native.sherpa_generation.load(Ordering::Acquire), 1);
     }

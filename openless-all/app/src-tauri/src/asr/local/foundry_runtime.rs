@@ -130,9 +130,12 @@ mod imp {
     }
 
     use anyhow::{Context, Result};
-    use foundry_local_sdk::{DeviceType, FoundryLocalConfig, FoundryLocalManager, Model};
+    use foundry_local_sdk::{
+        AudioTranscriptionResponse, DeviceType, FoundryLocalConfig, FoundryLocalManager, Model,
+    };
+    use futures_util::{Stream, StreamExt};
     use parking_lot::Mutex;
-    use tokio::sync::Mutex as AsyncMutex;
+    use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 
     use super::{
         FoundryCpuFallbackTerminalError, FoundryFallbackNotice, FoundryFallbackNoticeCallback,
@@ -493,6 +496,19 @@ mod imp {
             .ok_or_else(|| anyhow::anyhow!("Foundry Local Whisper total timeout exhausted"))
     }
 
+    async fn collect_foundry_transcription_text<S, E>(
+        mut stream: S,
+    ) -> std::result::Result<String, E>
+    where
+        S: Stream<Item = std::result::Result<AudioTranscriptionResponse, E>> + Unpin,
+    {
+        let mut text = String::new();
+        while let Some(chunk) = stream.next().await {
+            text.push_str(&chunk?.text);
+        }
+        Ok(text)
+    }
+
     struct FoundrySdkExecution<'a> {
         runtime: &'a FoundryLocalRuntime,
         manager: &'static FoundryLocalManager,
@@ -546,16 +562,19 @@ mod imp {
                 client = client.language(language_hint);
             }
             let model_id = self.loaded.model_id.clone();
-            let result = tokio::time::timeout(timeout, client.transcribe(audio_path))
-                .await
-                .with_context(|| {
-                    format!(
-                        "transcribe audio with Foundry model {model_id} timed out after {} seconds",
-                        timeout.as_secs()
-                    )
-                })?
-                .with_context(|| format!("transcribe audio with Foundry model {model_id}"))?;
-            Ok(result.text)
+            let result = tokio::time::timeout(timeout, async {
+                let stream = client.transcribe_streaming(audio_path).await?;
+                collect_foundry_transcription_text(stream).await
+            })
+            .await
+            .with_context(|| {
+                format!(
+                    "transcribe audio with Foundry model {model_id} timed out after {} seconds",
+                    timeout.as_secs()
+                )
+            })?
+            .with_context(|| format!("transcribe audio with Foundry model {model_id}"))?;
+            Ok(result)
         }
 
         async fn switch_to_cpu(
@@ -692,6 +711,8 @@ mod imp {
         /// 仍可中断（`cancel_prepare` + `check_prepare_cancelled`）。若未来要缩小粒度，
         /// 可让下载阶段不持锁、下载完成后重新校验 route epoch 再持锁加载/推理。
         lifecycle: AsyncMutex<()>,
+        /// EP 注册会使 SDK 的模型目录缓存失效；成功后本进程不再重复注册。
+        execution_providers_ready: OnceCell<()>,
         cancel_prepare: Arc<AtomicBool>,
         temporary_cpu_fallback_sequence: AtomicU64,
         route_epoch: AtomicU64,
@@ -708,6 +729,7 @@ mod imp {
         pub fn new() -> Self {
             Self {
                 lifecycle: AsyncMutex::new(()),
+                execution_providers_ready: OnceCell::new(),
                 cancel_prepare: Arc::new(AtomicBool::new(false)),
                 temporary_cpu_fallback_sequence: AtomicU64::new(0),
                 route_epoch: AtomicU64::new(0),
@@ -1084,24 +1106,33 @@ mod imp {
             ));
             let runtime_progress = Arc::clone(&progress);
             let runtime_alias = alias.to_string();
-            manager
-                .download_and_register_eps_with_progress(
-                    None,
-                    move |ep_name: &str, percent: f64| {
-                        let label = if ep_name.trim().is_empty() {
-                            "Foundry Local runtime components".to_string()
-                        } else {
-                            format!("Foundry Local runtime component: {ep_name}")
-                        };
-                        runtime_progress.as_ref()(FoundryPrepareProgressPayload::runtime(
-                            runtime_alias.clone(),
-                            label,
-                            percent,
-                        ));
-                    },
-                )
-                .await
-                .context("download/register Foundry execution providers")?;
+            let cancel_prepare = Arc::clone(&self.cancel_prepare);
+            self.execution_providers_ready
+                .get_or_try_init(|| async move {
+                    manager
+                        .download_and_register_eps_with_progress(
+                            None,
+                            move |ep_name: &str, percent: f64| {
+                                let label = if ep_name.trim().is_empty() {
+                                    "Foundry Local runtime components".to_string()
+                                } else {
+                                    format!("Foundry Local runtime component: {ep_name}")
+                                };
+                                runtime_progress.as_ref()(FoundryPrepareProgressPayload::runtime(
+                                    runtime_alias.clone(),
+                                    label,
+                                    percent,
+                                ));
+                            },
+                        )
+                        .await
+                        .context("download/register Foundry execution providers")?;
+                    if cancel_prepare.load(Ordering::SeqCst) {
+                        anyhow::bail!("Foundry Local Whisper prepare cancelled");
+                    }
+                    Ok::<(), anyhow::Error>(())
+                })
+                .await?;
             progress.as_ref()(FoundryPrepareProgressPayload::runtime(
                 alias,
                 "Foundry Local runtime components",
@@ -1662,15 +1693,16 @@ mod imp {
         }
 
         use super::{
-            cpu_load_completion, foundry_native_dir_candidates, is_cuda_cudnn_failure,
-            is_cuda_fallback_candidate, may_reuse_loaded_model, normalized_language_hint,
-            select_cpu_variant_id, select_foundry_native_dir,
+            collect_foundry_transcription_text, cpu_load_completion, foundry_native_dir_candidates,
+            is_cuda_cudnn_failure, is_cuda_fallback_candidate, may_reuse_loaded_model,
+            normalized_language_hint, select_cpu_variant_id, select_foundry_native_dir,
             should_release_temporary_cpu_fallback, transcribe_recording_with_adapter,
             FoundryCpuLoadCompletion, FoundryCpuSwitch, FoundryExecutionAdapter,
             FoundryExecutionDevice, FoundryFallbackNotice, FoundryFallbackNoticeCallback,
             FoundryLocalRuntime, FoundryVariantDescriptor,
         };
         use anyhow::Result;
+        use foundry_local_sdk::AudioTranscriptionResponse;
         use std::{
             collections::VecDeque,
             fs,
@@ -1821,6 +1853,45 @@ mod imp {
                 callback_received.lock().unwrap().push(notice);
             });
             (callback, received)
+        }
+
+        fn transcription_response(text: &str) -> AudioTranscriptionResponse {
+            AudioTranscriptionResponse {
+                text: text.to_string(),
+                language: None,
+                duration: None,
+                segments: None,
+                words: None,
+            }
+        }
+
+        #[tokio::test]
+        async fn foundry_streaming_transcription_concatenates_ordered_responses() {
+            let stream = futures_util::stream::iter([
+                Ok::<_, &'static str>(transcription_response("中文")),
+                Ok(transcription_response("")),
+                Ok(transcription_response("转写完成")),
+            ]);
+
+            assert_eq!(
+                collect_foundry_transcription_text(stream).await.unwrap(),
+                "中文转写完成"
+            );
+        }
+
+        #[tokio::test]
+        async fn foundry_streaming_transcription_propagates_chunk_errors() {
+            let stream = futures_util::stream::iter([
+                Ok(transcription_response("partial")),
+                Err("stream failed"),
+            ]);
+
+            assert_eq!(
+                collect_foundry_transcription_text(stream)
+                    .await
+                    .unwrap_err(),
+                "stream failed"
+            );
         }
 
         #[tokio::test]
