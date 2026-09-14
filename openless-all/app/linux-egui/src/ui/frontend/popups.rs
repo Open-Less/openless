@@ -13,7 +13,7 @@
 
 use eframe::egui;
 
-use super::{icons, layout, theme};
+use super::{icons, layout, siri_gl, theme};
 use openless_linux_egui::{
     fmt_l10n, tr_l10n, CapsulePopupState, Lang, PopupChatMessage, PreviewPopupState, QaPopupState,
 };
@@ -448,9 +448,34 @@ pub fn selection_ask(
                         egui::Stroke::new(0.5, theme::LINE_STRONG),
                         egui::StrokeKind::Inside,
                     );
-                    // olchat-ring：录音红光 / 思考黑光绕输入组转圈。
+                    // olchat-ring：录音红光 / 思考黑光绕输入组转圈。GPU 路径用
+                    // 圆角矩形 SDF 片元着色器（时间/尺寸/圆角/颜色 4 组 uniform），
+                    // 驱动拒绝着色器时回落到 CPU 采样版。
                     if recording || thinking {
-                        spinner_ring(ui, rect, if recording { theme::ERR } else { theme::INK });
+                        let tint = if recording {
+                            color_to_f32(theme::ERR)
+                        } else {
+                            color_to_f32(theme::INK)
+                        };
+                        let drive = siri_gl::SiriDrive {
+                            level: 0.0,
+                            resolved: if recording { 1.0 } else { 0.0 },
+                            // 思考态转得更快，和 Tauri 的 state→speed 语义一致。
+                            speed: if recording { 1.0 } else { 1.45 },
+                            warming: false,
+                        };
+                        let dt = ui.input(|input| input.stable_dt);
+                        let clock = siri_gl::tick(ui.ctx(), "qa-composer-ring", drive, dt);
+                        let glow = siri_gl::SiriGlow::ring(
+                            clock.time,
+                            12.0,
+                            if recording { 2.0 } else { 1.6 },
+                            if recording { 1.5 } else { 2.1 },
+                        )
+                        .with_tint(tint);
+                        if !siri_gl::paint(ui, rect.expand(3.0), glow) {
+                            spinner_ring(ui, rect, if recording { theme::ERR } else { theme::INK });
+                        }
                     }
                     let inner = rect.shrink2(egui::vec2(10.0, 6.0));
                     let mic_rect = egui::Rect::from_center_size(
@@ -878,6 +903,16 @@ fn rounded_rect_points(rect: egui::Rect, radius: f32, segments: usize) -> Vec<eg
     points
 }
 
+/// egui color → the shader's `uTint` (linear 0..1, gamma-space value is fine
+/// here because the glow is additive on a translucent window).
+fn color_to_f32(color: egui::Color32) -> [f32; 3] {
+    [
+        f32::from(color.r()) / 255.0,
+        f32::from(color.g()) / 255.0,
+        f32::from(color.b()) / 255.0,
+    ]
+}
+
 fn hairline(ui: &mut egui::Ui, color: egui::Color32) {
     let rect = ui
         .allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover())
@@ -962,6 +997,44 @@ pub fn dictation_capsule(
                 egui::Stroke::new(1.0, theme::LINE),
                 egui::StrokeKind::Inside,
             );
+            // 录音=红光、思考=黑光，绕药丸一圈（GPU 圆角矩形扫光；速度也不同）。
+            let thinking = matches!(
+                phase.as_str(),
+                "starting" | "transcribing" | "polishing" | "inserting"
+            );
+            if phase == "recording" || thinking {
+                let tint = if phase == "recording" {
+                    color_to_f32(theme::ERR)
+                } else {
+                    color_to_f32(theme::INK)
+                };
+                let drive = siri_gl::SiriDrive {
+                    level: 0.0,
+                    resolved: if phase == "recording" { 1.0 } else { 0.0 },
+                    speed: if phase == "recording" { 1.0 } else { 1.45 },
+                    warming: false,
+                };
+                let dt = ui.input(|input| input.stable_dt);
+                let clock = siri_gl::tick(ui.ctx(), "capsule-ring", drive, dt);
+                let glow = siri_gl::SiriGlow::ring(
+                    clock.time,
+                    PILL_HEIGHT / 2.0,
+                    if phase == "recording" { 2.2 } else { 1.6 },
+                    if phase == "recording" { 1.5 } else { 2.1 },
+                )
+                .with_tint(tint);
+                if !siri_gl::paint(ui, rect.expand(3.0), glow) {
+                    spinner_ring(
+                        ui,
+                        rect,
+                        if phase == "recording" {
+                            theme::ERR
+                        } else {
+                            theme::INK
+                        },
+                    );
+                }
+            }
             let cancel_rect = egui::Rect::from_center_size(
                 egui::pos2(rect.left() + 8.0 + ROUND_BUTTON / 2.0, rect.center().y),
                 egui::vec2(ROUND_BUTTON, ROUND_BUTTON),
@@ -1009,7 +1082,42 @@ pub fn dictation_capsule(
                 "starting" | "transcribing" | "polishing" | "inserting"
             );
             if phase == "recording" {
-                audio_bars(ui, center, state.audio_level.unwrap_or_default());
+                // Siri 声波（Tauri `SiriGL` wave 模式）：GPU 路径用真实电平驱动，
+                // 失败时回落到经典五根音量条。
+                let drive = siri_gl::SiriDrive {
+                    level: state.audio_level.unwrap_or_default(),
+                    resolved: 1.0,
+                    speed: 1.0,
+                    warming: state.audio_level.is_none(),
+                };
+                let dt = ui.input(|input| input.stable_dt);
+                let clock = siri_gl::tick(ui.ctx(), "capsule-siri-wave", drive, dt);
+                let glow = siri_gl::SiriGlow::wave(clock.time, clock.level, clock.resolved);
+                if !siri_gl::paint(ui, center, glow) {
+                    audio_bars(ui, center, state.audio_level.unwrap_or_default());
+                }
+            } else if processing {
+                // 思考中：Siri 流体圆点（orb），从 wave 收拢的光点化开成环。
+                let drive = siri_gl::SiriDrive {
+                    level: 0.0,
+                    resolved: 0.0,
+                    speed: 1.3,
+                    warming: false,
+                };
+                let dt = ui.input(|input| input.stable_dt);
+                let clock = siri_gl::tick(ui.ctx(), "capsule-siri-orb", drive, dt);
+                // 0.3s 全聚圆心接住 wave 收拢的光点，再缓缓散开成环。
+                let gather = (1.0 - (clock.time / 0.9).clamp(0.0, 1.0)).clamp(0.0, 1.0);
+                let glow = siri_gl::SiriGlow::orb(clock.time, gather);
+                if !siri_gl::paint(ui, center, glow) {
+                    ui.painter().text(
+                        center.center(),
+                        egui::Align2::CENTER_CENTER,
+                        tr_l10n(lang, "capsule.thinking"),
+                        egui::FontId::proportional(17.0),
+                        theme::INK,
+                    );
+                }
             } else if state.text.is_empty() {
                 let label = if processing {
                     tr_l10n(lang, "capsule.thinking")
@@ -1363,6 +1471,9 @@ mod tests {
     /// Render one popup for two frames (egui sizes some widgets lazily) and
     /// return everything it painted.
     fn run(size: egui::Vec2, mut render: impl FnMut(&egui::Context) -> String) -> String {
+        // Every popup test renders the same frontend as the GPU-state tests, so
+        // they share the process-global glow flags and must not run in parallel.
+        let _guard = super::siri_gl::gpu_state_guard();
         let ctx = egui::Context::default();
         let mut painted = String::new();
         for _ in 0..2 {
@@ -1502,6 +1613,59 @@ mod tests {
         assert!(
             has(&painted, "selection shown while recording"),
             "{painted}"
+        );
+    }
+
+    /// The recording capsule must take the GPU glow path: one `PaintCallback`
+    /// for the wave plus one for the red perimeter ring, two for thinking
+    /// (orb + ink ring) and none once the capsule reaches a terminal state.
+    #[test]
+    fn capsule_queues_the_gpu_glow_per_state() {
+        // The GPU state is process-global; take the shared test guard.
+        let _guard = super::siri_gl::gpu_state_guard();
+        super::siri_gl::seed_gpu_ready_for_tests();
+        let callbacks = |state: CapsulePopupState| {
+            let ctx = egui::Context::default();
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(200.0, 100.0),
+                )),
+                ..Default::default()
+            });
+            let _ = dictation_capsule(&ctx, &state, Lang::ZhCn);
+            let output = ctx.end_pass();
+            output
+                .shapes
+                .iter()
+                .filter(|clipped| matches!(clipped.shape, egui::Shape::Callback(_)))
+                .count()
+        };
+        assert_eq!(
+            callbacks(CapsulePopupState {
+                phase: "recording".into(),
+                audio_level: Some(0.2),
+                ..Default::default()
+            }),
+            2,
+            "recording = siri wave + red ring"
+        );
+        assert_eq!(
+            callbacks(CapsulePopupState {
+                phase: "transcribing".into(),
+                ..Default::default()
+            }),
+            2,
+            "thinking = orb + ink ring"
+        );
+        assert_eq!(
+            callbacks(CapsulePopupState {
+                phase: "inserted".into(),
+                text: "hello".into(),
+                ..Default::default()
+            }),
+            0,
+            "terminal capsule paints no glow"
         );
     }
 
