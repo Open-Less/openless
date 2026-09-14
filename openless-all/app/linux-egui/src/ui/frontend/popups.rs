@@ -233,6 +233,9 @@ pub fn selection_ask(
                 .stroke(egui::Stroke::new(0.5, theme::LINE)),
         )
         .show(ctx, |ui| {
+            // 首帧只编译不绘制地把三个程序编译好（进程内只排一次），
+            // 免得录音/思考的第一帧才发现要编译——那是按热键后「慢一拍」的来源。
+            siri_gl::warm_up(ui);
             // ── CardHeader：整条可拖，✕ 在右 ─────────────────────────────
             egui::Frame::NONE
                 .inner_margin(egui::Margin::symmetric(CARD_SPACING as i8, 12))
@@ -973,6 +976,8 @@ pub fn dictation_capsule(
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
         .show(ctx, |ui| {
+            // 胶囊进程的首帧预热（同 QA 面板；录音环与 Siri 波都是 GPU 路径）。
+            siri_gl::warm_up(ui);
             // Tauri 经典药丸宿主：窗口高 100，药丸水平居中、距底 16，徽章再上移 8。
             let available = ui.available_rect_before_wrap();
             let rect = egui::Rect::from_min_size(

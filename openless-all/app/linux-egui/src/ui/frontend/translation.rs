@@ -96,8 +96,11 @@ fn toolbar(ui: &mut egui::Ui, width: f32, vm: &mut FrontendViewModel) {
         .show(ui, |ui| {
             let inner_width = ui.available_width().max(1.0);
             ui.set_width(inner_width);
+            // 右侧计数标签画在同一行的右端，输入框按它的宽度让位（此前没让，
+            // 文字会压到「已选 N 种语言」上）。
+            let field_width = (inner_width - count_width).max(1.0);
             ui.add_sized(
-                [inner_width, 22.0],
+                [field_width, 22.0],
                 egui::TextEdit::singleline(&mut vm.translation_query)
                     .id(egui::Id::new("openless-translation-search"))
                     .hint_text(tr_l10n(lang, "translation.search_languages"))

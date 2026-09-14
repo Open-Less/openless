@@ -469,16 +469,97 @@ pub fn seed_gpu_ready_for_tests() {
     GPU_READY.store(true, Ordering::Relaxed);
 }
 
+/// Test hook: pretend the driver already rejected the shaders.
+#[cfg(test)]
+pub fn seed_gpu_failed_for_tests() {
+    GPU_READY.store(false, Ordering::Relaxed);
+    GPU_FAILED.store(true, Ordering::Relaxed);
+}
+
+/// Test hook: pretend the warm-up callback already ran.
+#[cfg(test)]
+pub fn seed_warm_up_done_for_tests() {
+    WARM_UP_DONE.store(true, Ordering::Relaxed);
+}
+
+/// Test hook: `(queued, done)` for the warm-up.
+#[cfg(test)]
+pub fn warm_up_state() -> (bool, bool) {
+    (
+        WARM_UP_QUEUED.load(Ordering::Relaxed),
+        WARM_UP_DONE.load(Ordering::Relaxed),
+    )
+}
+
 /// Test hook: forget any previous failure so a fresh `paint` can be observed.
 #[cfg(test)]
 pub fn reset_gpu_state() {
     GPU_FAILED.store(false, Ordering::Relaxed);
     GPU_READY.store(false, Ordering::Relaxed);
+    WARM_UP_QUEUED.store(false, Ordering::Relaxed);
+    WARM_UP_DONE.store(false, Ordering::Relaxed);
 }
 
 static GPU_FAILED: AtomicBool = AtomicBool::new(false);
 static GPU_READY: AtomicBool = AtomicBool::new(false);
+/// A compile-only callback has been queued for this process (set by the first
+/// `warm_up` caller).
+static WARM_UP_QUEUED: AtomicBool = AtomicBool::new(false);
+/// That callback ran: every program is compiled, so nobody queues another one.
+static WARM_UP_DONE: AtomicBool = AtomicBool::new(false);
 static PROGRAMS: OnceLock<Mutex<[Option<GlowProgram>; 3]>> = OnceLock::new();
+
+/// Compile every mode's program ahead of the first glow frame.
+///
+/// The programs are otherwise built lazily inside the paint callback, i.e. on
+/// the very frame that first needs the glow — which showed up as a one-frame
+/// hitch right after pressing the recording hotkey. This queues a compile-only
+/// callback (no draw, so it never paints a pixel) on the popup's first frame,
+/// so the render thread has the programs ready by the time the glow appears.
+///
+/// At most one callback is queued per process, and once it has run (or once the
+/// driver has already failed / a GPU frame has already drawn) this is a single
+/// relaxed atomic load — no extra work, and no repaint request.
+pub fn warm_up(ui: &egui::Ui) {
+    if !should_queue_warm_up() {
+        return;
+    }
+    let center = ui.max_rect().center();
+    if !center.is_finite() {
+        return;
+    }
+    let callback = egui::PaintCallback {
+        rect: egui::Rect::from_center_size(center, egui::vec2(1.0, 1.0)),
+        callback: Arc::new(CallbackFn::new(|_info, painter| {
+            let started = std::time::Instant::now();
+            match prepare_all(painter.gl()) {
+                Ok(()) => {
+                    WARM_UP_DONE.store(true, Ordering::Relaxed);
+                    // 一次性证据行：真机上（每个浮窗进程一次）能确认预热跑过。
+                    log::info!("siri glow shaders precompiled in {:?}", started.elapsed());
+                }
+                Err(error) => {
+                    // Same degradation contract as a failed draw: fall back to
+                    // the CPU painter for the rest of the process.
+                    if !gpu_disabled() {
+                        log::warn!("siri glow GPU path disabled during warm-up: {error}");
+                    }
+                    GPU_FAILED.store(true, Ordering::Relaxed);
+                }
+            }
+        })),
+    };
+    ui.painter().add(egui::Shape::Callback(callback));
+}
+
+/// True when this call is the one that must queue the warm-up callback.
+fn should_queue_warm_up() -> bool {
+    if gpu_disabled() || gpu_ready() || WARM_UP_DONE.load(Ordering::Relaxed) {
+        return false;
+    }
+    // The first caller flips false to true; every later caller sees true.
+    !WARM_UP_QUEUED.swap(true, Ordering::Relaxed)
+}
 
 /// Queue the GPU glow for `rect`.
 ///
@@ -659,6 +740,34 @@ fn compile(gl: &glow::Context, kind: u32, source: &str) -> Result<glow::Shader, 
     }
 }
 
+/// Compile every program the glow can use. Shared by the lazy path in `draw`
+/// and the eager `warm_up`, so both build exactly the same programs.
+fn prepare_all(gl: &Arc<glow::Context>) -> Result<(), String> {
+    let programs = PROGRAMS.get_or_init(|| Mutex::new([None, None, None]));
+    let mut programs = programs
+        .lock()
+        .map_err(|_| "siri glow program cache poisoned".to_string())?;
+    for mode in [SiriMode::Wave, SiriMode::Orb, SiriMode::Ring] {
+        ensure_program(&mut programs, gl, mode)?;
+    }
+    Ok(())
+}
+
+/// Build `mode`'s program unless the cache already holds it.
+fn ensure_program(
+    programs: &mut [Option<GlowProgram>; 3],
+    gl: &Arc<glow::Context>,
+    mode: SiriMode,
+) -> Result<(), String> {
+    let index = mode.index();
+    if programs[index].is_none() {
+        // Compilation happens on the render thread, i.e. exactly where the GL
+        // context is current — never on the UI thread.
+        programs[index] = Some(unsafe { GlowProgram::create(gl, mode)? });
+    }
+    Ok(())
+}
+
 /// Compile (once per mode) and draw. Called from the paint callback, which
 /// already has the callback viewport bound and restores egui's GL state after.
 fn draw(
@@ -670,13 +779,8 @@ fn draw(
     let mut programs = programs
         .lock()
         .map_err(|_| "siri glow program cache poisoned".to_string())?;
-    let index = glow.mode.index();
-    if programs[index].is_none() {
-        // Compilation happens on the render thread, i.e. exactly where the GL
-        // context is current — never on the UI thread.
-        programs[index] = Some(unsafe { GlowProgram::create(gl, glow.mode)? });
-    }
-    let program = programs[index].as_ref().expect("just created");
+    ensure_program(&mut programs, gl, glow.mode)?;
+    let program = programs[glow.mode.index()].as_ref().expect("just created");
     let viewport = info.viewport_in_pixels();
     let width = viewport.width_px.max(1) as f32;
     let height = viewport.height_px.max(1) as f32;
@@ -781,6 +885,82 @@ mod tests {
             callbacks, 3,
             "every mode must reach the paint callback registration"
         );
+    }
+
+    /// The warm-up must queue a single compile-only callback and then stay out
+    /// of the way, while leaving the CPU fallback ownership rule untouched.
+    #[test]
+    fn warm_up_queues_one_compile_callback_and_keeps_the_cpu_fallback() {
+        let ctx = egui::Context::default();
+        // The GPU state is process-global, so serialise with the other GPU tests.
+        let _guard = gpu_state_guard();
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(320.0, 240.0),
+            )),
+            ..Default::default()
+        });
+        egui::CentralPanel::default().show(&ctx, |ui| {
+            warm_up(ui);
+            warm_up(ui);
+            // Warm-up only compiles: until a real glow frame draws, the caller
+            // still owns its CPU fallback.
+            assert!(!paint(
+                ui,
+                ui.max_rect(),
+                SiriGlow::ring(0.0, 12.0, 2.0, 1.6)
+            ));
+        });
+        let output = ctx.end_pass();
+        let callbacks = output
+            .shapes
+            .iter()
+            .filter(|clipped| matches!(clipped.shape, egui::Shape::Callback(_)))
+            .count();
+        assert_eq!(
+            callbacks, 2,
+            "one warm-up callback plus the ring, no matter how often warm_up runs"
+        );
+        let (queued, done) = warm_up_state();
+        assert!(queued, "the warm-up callback must be queued");
+        assert!(
+            !done,
+            "the callback body needs a GL context, so it cannot have run"
+        );
+    }
+
+    /// Once the programs exist (or the driver already failed), warm-up is a
+    /// single atomic load and queues nothing — hidden/idle popups keep repaint
+    /// costs at the idle rate.
+    #[test]
+    fn warm_up_is_skipped_once_the_gpu_path_is_settled() {
+        for seed in [
+            seed_warm_up_done_for_tests,
+            seed_gpu_ready_for_tests,
+            seed_gpu_failed_for_tests,
+        ] {
+            let ctx = egui::Context::default();
+            let _guard = gpu_state_guard();
+            seed();
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(320.0, 240.0),
+                )),
+                ..Default::default()
+            });
+            egui::CentralPanel::default().show(&ctx, |ui| warm_up(ui));
+            let output = ctx.end_pass();
+            let callbacks = output
+                .shapes
+                .iter()
+                .filter(|clipped| matches!(clipped.shape, egui::Shape::Callback(_)))
+                .count();
+            assert_eq!(callbacks, 0, "settled GPU state must not re-queue warm-up");
+            let (queued, _) = warm_up_state();
+            assert!(!queued, "no warm-up may stay queued after it is settled");
+        }
     }
 
     /// Cheap static sanity for the shader sources: the compile call path is
