@@ -1354,6 +1354,12 @@ pub const CATALOG: &[Msg] = &[
         key: "history.recorded",
         text: row("录音 {}", "錄音 {}", "Recorded {}", "録音 {}", "녹음 {}"),
     },
+    // egui-only: the in-app player bar toggles play/stop; the Tauri player uses
+    // an icon-only button.
+    Msg {
+        key: "history.stop_playback",
+        text: row("停止播放", "停止播放", "Stop", "停止", "정지"),
+    },
     Msg {
         key: "history.play",
         text: row(
@@ -3080,6 +3086,1844 @@ pub const CATALOG: &[Msg] = &[
             "Find a settings category…",
             "設定カテゴリを検索…",
             "설정 카테고리 찾기…",
+        ),
+    },
+    Msg {
+        key: "modal.service_views.asr",
+        text: row(
+            "语音识别",
+            "語音辨識",
+            "Speech recognition",
+            "音声認識",
+            "음성 인식",
+        ),
+    },
+    Msg {
+        key: "modal.service_views.connections",
+        text: row("连接与扩展", "連線與擴充", "Connections", "接続と拡張", "연결 및 확장"),
+    },
+    Msg {
+        key: "modal.service_views.llm",
+        text: row(
+            "语言模型",
+            "語言模型",
+            "Language models",
+            "言語モデル",
+            "언어 모델",
+        ),
+    },
+    Msg {
+        key: "modal.service_views.models",
+        text: row("本地模型", "本機模型", "Local models", "ローカルモデル", "로컬 모델"),
+    },
+    Msg {
+        key: "selection_ask.hotkey_title",
+        text: row(
+            "弹出浮窗的快捷键",
+            "彈出浮窗的快捷鍵",
+            "Hotkey to open the panel",
+            "フロートウィンドウのショートカット",
+            "플로팅 창 단축키",
+        ),
+    },
+    Msg {
+        key: "settings.about.beta_channel_toggle_label",
+        text: row(
+            "启用 Beta 渠道",
+            "啟用 Beta 渠道",
+            "Enable Beta channel",
+            "Beta チャンネルを有効化",
+            "Beta 채널 사용",
+        ),
+    },
+    Msg {
+        key: "settings.about.check_stable_update_btn",
+        text: row(
+            "检查正式版更新",
+            "檢查正式版更新",
+            "Check stable update",
+            "正式版を確認",
+            "정식판 확인",
+        ),
+    },
+    Msg {
+        key: "settings.about.docs",
+        text: row("文档", "文檔", "Docs", "ドキュメント", "문서"),
+    },
+    Msg {
+        key: "settings.about.feedback",
+        text: row("反馈", "反饋", "Feedback", "フィードバック", "피드백"),
+    },
+    Msg {
+        key: "settings.about.links_title",
+        text: row(
+            "文档链接",
+            "文件連結",
+            "Documentation",
+            "ドキュメント",
+            "문서 링크",
+        ),
+    },
+    Msg {
+        key: "settings.about.local_first",
+        text: row("本地优先", "本地優先", "Local-first", "ローカル優先", "로컬 우선"),
+    },
+    Msg {
+        key: "settings.about.privacy_desc",
+        text: row(
+            "录音可能会发送到你配置的云端服务商进行转写。",
+            "錄音可能會傳送至你設定的雲端服務商進行轉寫。",
+            "Recordings may be sent to the cloud provider you configure for transcription.",
+            "録音は、設定したクラウドプロバイダーへ文字起こしのため送信される場合があります。",
+            "녹음은 전사를 위해 설정한 클라우드 공급자에게 전송될 수 있습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.about.qq",
+        text: row(
+            "社区 QQ 群",
+            "社區 QQ 羣",
+            "QQ community group",
+            "コミュニティ QQ グループ",
+            "커뮤니티 QQ 그룹",
+        ),
+    },
+    Msg {
+        key: "settings.about.source",
+        text: row("源码", "源碼", "Source", "ソース", "소스"),
+    },
+    Msg {
+        key: "settings.about.tagline",
+        text: row(
+            "自然说话，完美书写",
+            "自然說話，完美書寫",
+            "Speak naturally, write perfectly",
+            "自然に話し、きれいに書く",
+            "자연스럽게 말하고, 정확하게 작성하세요",
+        ),
+    },
+    Msg {
+        key: "settings.advanced.local_asr_desc",
+        text: row(
+            "把转写从云端切到本机推理。仅推荐离线 / 隐私敏感场景。",
+            "把轉寫從雲端切到本機推理。僅推薦離線 / 隱私敏感場景。",
+            "Move transcription from cloud ASR to on-device inference. Offline / privacy-sensitive use only.",
+            "転写をクラウドから本機推論に切り替えます。オフライン／プライバシー重視向け。",
+            "전사를 클라우드에서 로컬 추론으로 전환합니다. 오프라인 / 프라이버시용에만 권장됩니다.",
+        ),
+    },
+    Msg {
+        key: "settings.advanced.multimodal_pipeline_title_hint",
+        text: row(
+            "用单个多模态模型一步完成语音识别；与传统 ASR + LLM 配置完全隔离。",
+            "用單一多模態模型一步完成語音辨識；與傳統 ASR + LLM 設定完全隔離。",
+            "One-pass audio recognition with a single multimodal model; traditional ASR + LLM configuration is fully isolated from it.",
+            "1つのマルチモーダルモデルで音声認識を一括実行。従来の ASR + LLM 設定から完全に分離されます。",
+            "단일 멀티모달 모델로 음성 인식을 한 번에 처리합니다. 기존 ASR + LLM 설정과 완전히 분리됩니다.",
+        ),
+    },
+    Msg {
+        key: "settings.advanced.platform_not_supported",
+        text: row(
+            "该平台暂未支持本地 ASR 模型集成。",
+            "該平臺暫未支持本地 ASR 模型集成。",
+            "Local ASR model integration is not supported on this platform.",
+            "このプラットフォームではローカル ASR モデル統合に対応していません。",
+            "이 플랫폼에서는 로컬 ASR 모델 통합이 아직 지원되지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.advanced.streaming_insert_desc",
+        text: row(
+            "逐字实时插入，降低感知延迟。不满足条件时回落到一次性粘贴。",
+            "逐字即時插入，降低感知延遲。不滿足條件時回落到一次性貼上。",
+            "Streams text to cursor character by character, reducing perceived latency. Falls back to one-shot paste when conditions are not met.",
+            "逐字リアルタイム挿入で体感遅延を低減。条件不一致時はワンショット貼り付けにフォールバック。",
+            "실시간 글자별 삽입으로 체감 지연 감소. 조건 불충족 시 일괄 붙여넣기로 전환.",
+        ),
+    },
+    Msg {
+        key: "settings.advanced.streaming_insert_label",
+        text: row(
+            "流式输入",
+            "流式輸入",
+            "Streaming insertion",
+            "ストリーミング入力",
+            "스트리밍 입력",
+        ),
+    },
+    Msg {
+        key: "settings.advanced.streaming_insert_save_clipboard_label",
+        text: row(
+            "同步到剪贴板",
+            "同步到剪貼簿",
+            "Copy to clipboard",
+            "クリップボードに保存",
+            "클립보드에 저장",
+        ),
+    },
+    Msg {
+        key: "settings.advanced.streaming_insert_title_linux",
+        text: row(
+            "流式输入（实验性）",
+            "流式輸入（實驗性）",
+            "Streaming insertion (Experimental)",
+            "ストリーミング入力（実験的）",
+            "스트리밍 입력 (실험적)",
+        ),
+    },
+    Msg {
+        key: "settings.channels.add",
+        text: row("添加渠道", "新增渠道", "Add channel", "チャネルを追加", "채널 추가"),
+    },
+    Msg {
+        key: "settings.channels.asr_title",
+        text: row(
+            "语音识别渠道",
+            "語音辨識渠道",
+            "Speech recognition channels",
+            "音声認識チャンネル",
+            "음성 인식 채널",
+        ),
+    },
+    Msg {
+        key: "settings.channels.create",
+        text: row("创建", "建立", "Create", "作成", "만들기"),
+    },
+    Msg {
+        key: "settings.channels.current",
+        text: row(
+            "当前使用",
+            "目前使用",
+            "Currently used",
+            "使用中",
+            "현재 사용 중",
+        ),
+    },
+    Msg {
+        key: "settings.channels.delete",
+        text: row(
+            "删除渠道",
+            "刪除渠道",
+            "Delete channel",
+            "チャネルを削除",
+            "채널 삭제",
+        ),
+    },
+    Msg {
+        key: "settings.channels.disabled",
+        text: row("已停用", "已停用", "Disabled", "無効", "사용 안 함"),
+    },
+    Msg {
+        key: "settings.channels.elapsed",
+        text: row("耗时 {} ms", "耗時 {} ms", "Took {} ms", "所要時間 {} ms", "소요 시간 {} ms"),
+    },
+    Msg {
+        key: "settings.channels.empty",
+        text: row(
+            "还没有渠道。点击「添加渠道」，连接你的第一个服务。",
+            "還沒有渠道。點選「新增渠道」，連接你的第一個服務。",
+            "No channels yet. Choose \"Add channel\" to connect your first service.",
+            "チャネルがまだありません。「チャネルを追加」で最初のサービスを接続しましょう。",
+            "아직 채널이 없습니다. \"채널 추가\"로 첫 서비스를 연결하세요.",
+        ),
+    },
+    Msg {
+        key: "settings.channels.enabled",
+        text: row("启用", "啟用", "Enabled", "有効", "사용"),
+    },
+    Msg {
+        key: "settings.channels.failed",
+        text: row(
+            "验证失败 · {}",
+            "驗證失敗 · {}",
+            "Check failed · {}",
+            "確認に失敗 · {}",
+            "확인 실패 · {}",
+        ),
+    },
+    Msg {
+        key: "settings.channels.llm_title",
+        text: row(
+            "文字处理渠道",
+            "文字處理渠道",
+            "Text processing channels",
+            "テキスト処理チャンネル",
+            "텍스트 처리 채널",
+        ),
+    },
+    Msg {
+        key: "settings.channels.name_hint",
+        text: row(
+            "名称仅用于区分同一供应商的多个渠道，不影响模型或连接。",
+            "名稱僅用於區分同一供應商的多個渠道，不影響模型或連線。",
+            "This name distinguishes channels from the same provider. It does not affect the model or connection.",
+            "同じプロバイダーのチャンネルを区別するための名前です。モデルや接続には影響しません。",
+            "같은 제공업체의 여러 채널을 구분하는 이름입니다. 모델이나 연결에는 영향을 주지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.channels.name_placeholder",
+        text: row(
+            "例如：硅基流动-主号",
+            "例如：矽基流動-主帳號",
+            "e.g. SiliconFlow — main key",
+            "例：SiliconFlow — メインキー",
+            "예: SiliconFlow — 메인 키",
+        ),
+    },
+    Msg {
+        key: "settings.channels.not_verified",
+        text: row(
+            "尚未验证",
+            "尚未驗證",
+            "Not checked yet",
+            "未確認",
+            "아직 확인하지 않음",
+        ),
+    },
+    Msg {
+        key: "settings.channels.order_hint",
+        text: row(
+            "列表中第一个启用的渠道用于请求。拖动调整顺序；停用的渠道移到末尾。",
+            "請求會使用列表中第一個啟用的渠道。拖曳可調整順序；停用的渠道會移到末尾。",
+            "Requests use the first enabled channel. Drag to reorder; disabled channels move to the bottom.",
+            "有効なチャネルのうち、先頭のものを使用します。ドラッグで順序を変更できます。無効なチャネルは末尾に移動します。",
+            "사용 중인 채널 중 맨 위의 채널로 요청합니다. 드래그로 순서를 바꾸면 사용하지 않는 채널은 맨 아래로 이동합니다.",
+        ),
+    },
+    Msg {
+        key: "settings.channels.passed",
+        text: row("验证通过", "驗證通過", "Check passed", "確認に成功", "확인 성공"),
+    },
+    Msg {
+        key: "settings.channels.verify",
+        text: row("验证", "驗證", "Verify", "検証", "검증"),
+    },
+    Msg {
+        key: "settings.coding_agent.desc",
+        text: row(
+            "按住一个键说话，由所选 Agent 帮你操作电脑。仅 macOS。",
+            "按住一個鍵說話，由所選 Agent 幫你操作電腦。僅 macOS。",
+            "Hold a key, speak, and your selected agent operates your computer. macOS only.",
+            "キーを押して話すと、選択した Agent が PC を操作します。macOS のみ。",
+            "키를 누르고 말하면 선택한 Agent가 PC를 조작합니다. macOS 전용.",
+        ),
+    },
+    Msg {
+        key: "settings.coding_agent.title",
+        text: row(
+            "Less Computer",
+            "Less Computer",
+            "Less Computer",
+            "Less Computer",
+            "Less Computer",
+        ),
+    },
+    Msg {
+        key: "settings.coding_console.desc",
+        text: row(
+            "检测本机 Claude Code 与 MCP（computer use）状态，并护栏化地无头跑一次 Claude、流式查看输出与用量。",
+            "偵測本機 Claude Code 與 MCP（computer use）狀態，並以護欄方式無頭執行一次 Claude、串流檢視輸出與用量。",
+            "Detect your local Claude Code and MCP (computer use) status, then run Claude headlessly behind guardrails and watch the streamed output and cost.",
+            "ローカルの Claude Code と MCP（computer use）の状態を検出し、ガードレール付きで Claude をヘッドレス実行して、出力とコストをストリーミング表示します。",
+            "로컬 Claude Code 와 MCP(computer use) 상태를 감지하고, 가드레일 아래에서 Claude 를 헤드리스로 실행하여 출력과 비용을 스트리밍으로 확인합니다.",
+        ),
+    },
+    Msg {
+        key: "settings.coding_console.detect",
+        text: row("检测", "偵測", "Detect", "検出", "감지"),
+    },
+    Msg {
+        key: "settings.coding_console.status",
+        text: row("状态", "狀態", "Status", "状態", "상태"),
+    },
+    Msg {
+        key: "settings.data_storage.desc",
+        text: row(
+            "本机保留的历史会话与对话上下文。",
+            "本機保留的歷史會話與對話上下文。",
+            "Conversation history and context kept on this device.",
+            "この端末に保存される会話履歴とコンテキスト。",
+            "이 기기에 보관되는 대화 기록과 컨텍스트.",
+        ),
+    },
+    Msg {
+        key: "settings.debug.desc",
+        text: row(
+            "排查识别问题时使用，平时无需开启。",
+            "排查辨識問題時使用，平時無需開啟。",
+            "For troubleshooting recognition issues; off by default.",
+            "認識の問題を調査するときに使用。通常はオフのままで構いません。",
+            "인식 문제를 진단할 때 사용합니다. 평소에는 꺼두어도 됩니다.",
+        ),
+    },
+    Msg {
+        key: "settings.language.desc",
+        text: row(
+            "切换 UI 显示语言。当前会话即时生效，下次启动自动沿用。",
+            "切換 UI 顯示語言。當前會話即時生效，下次啓動自動沿用。",
+            "Switch the UI language. Applies to the current session immediately and persists across launches.",
+            "UI の表示言語を切り替えます。現在のセッションに即時反映され、次回起動時も維持されます。",
+            "UI 표시 언어를 전환합니다. 현재 세션에 즉시 반영되며 다음 실행에도 유지됩니다.",
+        ),
+    },
+    Msg {
+        key: "settings.language.en",
+        text: row("English", "English", "English", "English", "English"),
+    },
+    Msg {
+        key: "settings.language.follow_system",
+        text: row(
+            "跟随系统",
+            "跟隨系統",
+            "Follow system",
+            "システムに従う",
+            "시스템 따라가기",
+        ),
+    },
+    Msg {
+        key: "settings.language.ja",
+        text: row("日本語 (Beta)", "日本語 (Beta)", "日本語 (Beta)", "日本語 (Beta)", "日本語 (Beta)"),
+    },
+    Msg {
+        key: "settings.language.ko",
+        text: row("한국어 (Beta)", "한국어 (Beta)", "한국어 (Beta)", "한국어 (Beta)", "한국어 (Beta)"),
+    },
+    Msg {
+        key: "settings.language.restart_hint",
+        text: row(
+            "部分原生菜单（系统托盘等）可能需要重启 App 才会切换。",
+            "部分原生菜單（系統托盤等）可能需要重啓 App 纔會切換。",
+            "Some native menus (system tray, etc.) may require an app restart to fully switch.",
+            "一部のネイティブメニュー（トレイ等）は再起動後に反映されます。",
+            "일부 네이티브 메뉴(트레이 등)는 앱 재시작 후 반영될 수 있습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.language.zh_tw",
+        text: row("繁體中文", "繁體中文", "繁體中文", "繁體中文", "繁體中文"),
+    },
+    Msg {
+        key: "settings.marketplace.desc",
+        text: row(
+            "风格市场的上传身份。浏览与安装风格在「风格」页内完成。",
+            "風格市集的上傳身份。瀏覽與安裝風格在「風格」頁內完成。",
+            "Upload identity for the style marketplace. Browse and install styles on the Styles page.",
+            "スタイルマーケットの投稿者 ID。スタイルの閲覧とインストールは「スタイル」ページで行います。",
+            "스타일 마켓 업로드 신원. 스타일 둘러보기와 설치는 「스타일」 페이지에서 합니다.",
+        ),
+    },
+    Msg {
+        key: "settings.marketplace.github.sign_in",
+        text: row(
+            "用 GitHub 账号登录",
+            "用 GitHub 帳號登入",
+            "Sign in with GitHub",
+            "GitHub でログイン",
+            "GitHub로 로그인",
+        ),
+    },
+    Msg {
+        key: "settings.permissions.acc_label",
+        text: row(
+            "辅助功能",
+            "輔助功能",
+            "Accessibility",
+            "アクセシビリティ",
+            "접근성",
+        ),
+    },
+    Msg {
+        key: "settings.permissions.desc_no_acc",
+        text: row(
+            "麦克风必需；全局快捷键状态用来检测 native hook 是否运行。",
+            "OpenLess 需要麥克風可用，並依賴全局快捷鍵監聽狀態判斷 native hook 是否正常工作。",
+            "OpenLess needs microphone access and uses the global hotkey listener state to verify the native hook is running.",
+            "OpenLess はマイクへのアクセスと、グローバルショートカット監視状態を通じてネイティブフックの正常動作を判定する必要があります。",
+            "OpenLess 는 마이크 사용과 전역 단축키 감지 상태를 통해 네이티브 후크의 정상 동작을 판정해야 합니다.",
+        ),
+    },
+    Msg {
+        key: "settings.permissions.granted",
+        text: row("已授权", "已授權", "Granted", "許可済み", "허용됨"),
+    },
+    Msg {
+        key: "settings.permissions.hotkey_label",
+        text: row(
+            "全局快捷键",
+            "全局快捷鍵",
+            "Global hotkey",
+            "グローバルショートカット",
+            "전역 단축키",
+        ),
+    },
+    Msg {
+        key: "settings.permissions.indeterminate",
+        text: row("未确定", "未確定", "Undetermined", "未確定", "미결정"),
+    },
+    Msg {
+        key: "settings.permissions.mic_label",
+        text: row("麦克风", "麥克風", "Microphone", "マイク", "마이크"),
+    },
+    Msg {
+        key: "settings.permissions.network_label",
+        text: row("网络", "網絡", "Network", "ネットワーク", "네트워크"),
+    },
+    Msg {
+        key: "settings.permissions.network_ok",
+        text: row("可用", "可用", "Available", "利用可能", "사용 가능"),
+    },
+    Msg {
+        key: "settings.permissions.open_system",
+        text: row(
+            "打开系统设置",
+            "打開系統設置",
+            "Open System Settings",
+            "システム設定を開く",
+            "시스템 설정 열기",
+        ),
+    },
+    Msg {
+        key: "settings.providers.credential_storage_notice",
+        text: row(
+            "凭据保存在系统凭据库中。",
+            "憑據保存在系統憑據庫中。",
+            "Credentials are stored in the OS credential vault.",
+            "資格情報は OS の資格情報ストアに保存されます。",
+            "자격 증명은 OS 자격 증명 저장소에 보관됩니다.",
+        ),
+    },
+    Msg {
+        key: "settings.recording.audio_cue_label",
+        text: row(
+            "录音提示音",
+            "錄音提示音",
+            "Recording start sound",
+            "録音開始音",
+            "녹음 시작음",
+        ),
+    },
+    Msg {
+        key: "settings.recording.audio_recording_max_entries_label",
+        text: row(
+            "原始录音保留条数",
+            "原始錄音保留條數",
+            "Max raw recordings",
+            "元音声の保持件数",
+            "원본 녹음 보관 개수",
+        ),
+    },
+    Msg {
+        key: "settings.recording.history_group_title",
+        text: row(
+            "历史与上下文",
+            "歷史與上下文",
+            "History & context",
+            "履歴とコンテキスト",
+            "기록 및 컨텍스트",
+        ),
+    },
+    Msg {
+        key: "settings.recording.history_max_entries_label",
+        text: row(
+            "历史条数上限",
+            "歷史條數上限",
+            "Max history entries",
+            "履歴件数の上限",
+            "기록 개수 상한",
+        ),
+    },
+    Msg {
+        key: "settings.recording.history_retention_label",
+        text: row(
+            "历史保留天数",
+            "歷史保留天數",
+            "History retention (days)",
+            "履歴保持期間（日）",
+            "기록 보관 기간(일)",
+        ),
+    },
+    Msg {
+        key: "settings.recording.hotkey_label",
+        text: row(
+            "录音快捷键",
+            "錄音快捷鍵",
+            "Recording hotkey",
+            "録音ショートカット",
+            "녹음 단축키",
+        ),
+    },
+    Msg {
+        key: "settings.recording.microphone_label",
+        text: row(
+            "首选麦克风",
+            "首選麥克風",
+            "Preferred microphone",
+            "優先マイク",
+            "기본 선택 마이크",
+        ),
+    },
+    Msg {
+        key: "settings.recording.paste_shortcut_ctrl_shift_v",
+        text: row(
+            "Ctrl+Shift+V（kitty / alacritty / wezterm / 多数终端）",
+            "Ctrl+Shift+V（kitty / alacritty / wezterm / 多數終端）",
+            "Ctrl+Shift+V (kitty / alacritty / wezterm / most terminals)",
+            "Ctrl+Shift+V（kitty / alacritty / wezterm / ほとんどのターミナル）",
+            "Ctrl+Shift+V (kitty / alacritty / wezterm / 대부분 터미널)",
+        ),
+    },
+    Msg {
+        key: "settings.recording.paste_shortcut_ctrl_v",
+        text: row(
+            "Ctrl+V（默认 / 多数应用）",
+            "Ctrl+V（默認 / 多數應用）",
+            "Ctrl+V (default / most apps)",
+            "Ctrl+V（既定 / ほとんどのアプリ）",
+            "Ctrl+V (기본 / 대부분 앱)",
+        ),
+    },
+    Msg {
+        key: "settings.recording.paste_shortcut_shift_insert",
+        text: row(
+            "Shift+Insert（xterm / urxvt）",
+            "Shift+Insert（xterm / urxvt）",
+            "Shift+Insert (xterm / urxvt)",
+            "Shift+Insert（xterm / urxvt）",
+            "Shift+Insert (xterm / urxvt)",
+        ),
+    },
+    Msg {
+        key: "settings.recording.record_audio_for_debug_label",
+        text: row(
+            "保留原始录音（调试）",
+            "保留原始錄音（除錯）",
+            "Keep raw recording (debug)",
+            "元の録音を保持（デバッグ）",
+            "원본 녹음 보관(디버그)",
+        ),
+    },
+    Msg {
+        key: "settings.recording.restore_clipboard_label",
+        text: row(
+            "插入后恢复剪贴板",
+            "插入後恢復剪貼板",
+            "Restore clipboard after insert",
+            "入力後にクリップボードを復元",
+            "입력 후 클립보드 복원",
+        ),
+    },
+    Msg {
+        key: "settings.recording.silence_auto_stop_label",
+        text: row(
+            "静音后自动停止",
+            "靜音後自動停止",
+            "Auto-stop after silence",
+            "無音で自動停止",
+            "침묵 시 자동 중지",
+        ),
+    },
+    Msg {
+        key: "settings.recording.silence_auto_stop_seconds_label",
+        text: row(
+            "静音时长",
+            "靜音時長",
+            "Silence duration",
+            "無音の長さ",
+            "침묵 시간",
+        ),
+    },
+    Msg {
+        key: "settings.recording.silence_auto_stop_seconds_value",
+        text: row("{} 秒", "{} 秒", "{}s", "{} 秒", "{}초"),
+    },
+    Msg {
+        key: "settings.recording.start_minimized_label",
+        text: row(
+            "启动时静默运行",
+            "啓動時靜默運行",
+            "Start minimized (no main window)",
+            "起動時にメインウィンドウを表示しない",
+            "시작 시 메인 창 숨기기",
+        ),
+    },
+    Msg {
+        key: "settings.recording.startup_at_boot",
+        text: row(
+            "开机自启",
+            "開機自啓",
+            "Launch at login",
+            "起動時に自動起動",
+            "부팅 시 자동 시작",
+        ),
+    },
+    Msg {
+        key: "settings.remote_input.default_mode_label",
+        text: row(
+            "默认录音方式",
+            "預設錄音方式",
+            "Default recording mode",
+            "既定の録音方式",
+            "기본 녹음 방식",
+        ),
+    },
+    Msg {
+        key: "settings.remote_input.enable_desc",
+        text: row(
+            "手机/平板浏览器连到电脑录音，语音实时落到电脑光标处（需 HTTPS，首次访问要信任证书）",
+            "手機/平板瀏覽器連到電腦錄音，語音即時落到電腦游標處（需 HTTPS，首次存取要信任憑證）",
+            "Record from a phone/tablet browser on your LAN; speech is typed at your computer's cursor (HTTPS required; trust the certificate on first visit)",
+            "スマホ/タブレットのブラウザから PC に接続して録音し、音声を PC のカーソル位置にリアルタイムで入力します（HTTPS が必要。初回アクセス時は証明書を信頼してください）",
+            "휴대폰/태블릿 브라우저를 PC에 연결해 녹음하고, 음성을 PC 커서 위치에 실시간으로 입력합니다(HTTPS 필요, 첫 접속 시 인증서를 신뢰해야 함)",
+        ),
+    },
+    Msg {
+        key: "settings.remote_input.mode_hold",
+        text: row("按住说话", "按住說話", "Hold to talk", "押し続けて話す", "눌러서 말하기"),
+    },
+    Msg {
+        key: "settings.remote_input.mode_toggle",
+        text: row(
+            "点击切换",
+            "點擊切換",
+            "Tap to toggle",
+            "タップで切替",
+            "탭하여 전환",
+        ),
+    },
+    Msg {
+        key: "settings.shortcuts.agent_voice",
+        text: row(
+            "Less Computer",
+            "Less Computer",
+            "Less Computer",
+            "Less Computer",
+            "Less Computer",
+        ),
+    },
+    Msg {
+        key: "settings.shortcuts.cancel",
+        text: row(
+            "取消本次录音",
+            "取消本次錄音",
+            "Cancel current recording",
+            "本回の録音をキャンセル",
+            "이번 녹음 취소",
+        ),
+    },
+    Msg {
+        key: "settings.shortcuts.desc_no_acc",
+        text: row(
+            "所有快捷键全局生效。若无响应，请在权限页查看全局快捷键监听状态。",
+            "所有快捷鍵全局生效。若無響應，請在權限頁查看全局快捷鍵監聽狀態。",
+            "All shortcuts apply globally. If unresponsive, check the global hotkey status in Permissions.",
+            "すべてのショートカットはグローバルで有効。応答がない場合は権限ページでグローバルショートカット監視の状態を確認してください。",
+            "모든 단축키는 전역에서 작동. 응답이 없으면 권한 페이지에서 전역 단축키 감지 상태를 확인해 주세요.",
+        ),
+    },
+    Msg {
+        key: "settings.shortcuts.open_app",
+        text: row(
+            "打开 OpenLess",
+            "打開 OpenLess",
+            "Open OpenLess",
+            "OpenLess を開く",
+            "OpenLess 열기",
+        ),
+    },
+    Msg {
+        key: "settings.shortcuts.start_stop",
+        text: row(
+            "开始 / 停止录音",
+            "開始 / 停止錄音",
+            "Start / Stop recording",
+            "録音開始 / 停止",
+            "녹음 시작 / 정지",
+        ),
+    },
+    Msg {
+        key: "settings.shortcuts.style_pack_add",
+        text: row(
+            "添加风格快捷键",
+            "新增風格快捷鍵",
+            "Add style shortcut",
+            "スタイルショートカットを追加",
+            "스타일 단축키 추가",
+        ),
+    },
+    Msg {
+        key: "settings.shortcuts.style_pack_title",
+        text: row(
+            "风格直达快捷键",
+            "風格直達快捷鍵",
+            "Style shortcuts",
+            "スタイル直行ショートカット",
+            "스타일 바로가기 단축키",
+        ),
+    },
+    Msg {
+        key: "settings.shortcuts.switch_style",
+        text: row(
+            "切换到上一个风格",
+            "切換到上一個風格",
+            "Switch to previous style",
+            "前のスタイルに切り替え",
+            "이전 스타일로 전환",
+        ),
+    },
+    Msg {
+        key: "settings.shortcuts.title",
+        text: row(
+            "快捷键设置",
+            "快捷鍵設定",
+            "Shortcut settings",
+            "ショートカット設定",
+            "단축키 설정",
+        ),
+    },
+    Msg {
+        key: "settings.theme.activity_heatmap_label",
+        text: row(
+            "概览页显示年度活动热力图",
+            "概覽頁顯示年度活動熱力圖",
+            "Show annual activity heatmap on Overview",
+            "概要ページに年間アクティビティを表示",
+            "개요 페이지에 연간 활동 표시",
+        ),
+    },
+    Msg {
+        key: "settings.theme.conservative_layout_label",
+        text: row(
+            "保守排版",
+            "保守排版",
+            "Conservative layout",
+            "保守レイアウト",
+            "보수적 레이아웃",
+        ),
+    },
+    Msg {
+        key: "settings.theme.stacked_row_layout_label",
+        text: row(
+            "易读布局（防溢出换行）",
+            "易讀布局（防溢出換行）",
+            "Readable layout (wrap rows)",
+            "読みやすいレイアウト（はみ出し防止）",
+            "읽기 쉬운 레이아웃(넘침 방지 줄바꿈)",
+        ),
+    },
+    Msg {
+        key: "settings.theme.system",
+        text: row(
+            "跟随系统",
+            "跟隨系統",
+            "Follow system",
+            "システムに従う",
+            "시스템 따르기",
+        ),
+    },
+    Msg {
+        key: "settings.theme.title",
+        text: row("外观", "外觀", "Appearance", "外観", "모양"),
+    },
+    Msg {
+        key: "vocab.delete_selected",
+        text: row(
+            "删除已选（{}）",
+            "刪除已選（{}）",
+            "Delete selected ({})",
+            "選択項目を削除（{}）",
+            "선택 항목 삭제({})",
+        ),
+    },
+    Msg {
+        key: "vocab.select_all_visible",
+        text: row(
+            "选择当前结果",
+            "選取目前結果",
+            "Select current results",
+            "現在の結果を選択",
+            "현재 결과 선택",
+        ),
+    },
+    Msg {
+        key: "vocab.selected_count",
+        text: row(
+            "已选择 {} 个词",
+            "已選取 {} 個詞",
+            "{} words selected",
+            "{} 語を選択中",
+            "단어 {}개 선택됨",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.ark",
+        text: row(
+            "ARK（火山方舟）",
+            "ARK（火山方舟）",
+            "ARK (Volcengine Ark)",
+            "ARK（Volcengine Ark）",
+            "ARK (Volcengine Ark)",
+        ),
+    },
+    Msg { key: "settings.providers.presets.deepseek", text: row("DeepSeek", "DeepSeek", "DeepSeek", "DeepSeek", "DeepSeek") },
+    Msg { key: "settings.providers.presets.siliconflow", text: row("硅基流动", "硅基流動", "SiliconFlow", "SiliconFlow", "SiliconFlow") },
+    Msg { key: "settings.providers.presets.atlascloud", text: row("Atlas Cloud", "Atlas Cloud", "Atlas Cloud", "Atlas Cloud", "Atlas Cloud") },
+    Msg { key: "settings.providers.presets.openai", text: row("OpenAI", "OpenAI", "OpenAI", "OpenAI", "OpenAI") },
+    Msg {
+        key: "settings.providers.presets.gemini",
+        text: row(
+            "Google Gemini",
+            "Google Gemini",
+            "Google Gemini",
+            "Google Gemini",
+            "Google Gemini",
+        ),
+    },
+    Msg { key: "settings.providers.presets.codexOAuth", text: row("Codex OAuth", "Codex OAuth", "Codex OAuth", "Codex OAuth", "Codex OAuth") },
+    Msg { key: "settings.providers.presets.mimo", text: row("小米 MiMo", "小米 MiMo", "Xiaomi MiMo", "Xiaomi MiMo", "Xiaomi MiMo") },
+    Msg { key: "settings.providers.presets.cometapi", text: row("CometAPI", "CometAPI", "CometAPI", "CometAPI", "CometAPI") },
+    Msg {
+        key: "settings.providers.presets.openrouterFree",
+        text: row(
+            "OpenRouter（免费模型）",
+            "OpenRouter（免費模型）",
+            "OpenRouter (free models)",
+            "OpenRouter（無料モデル）",
+            "OpenRouter(무료 모델)",
+        ),
+    },
+    Msg { key: "settings.providers.presets.orcarouter", text: row("OrcaRouter", "OrcaRouter", "OrcaRouter", "OrcaRouter", "OrcaRouter") },
+    Msg {
+        key: "settings.providers.presets.alibabaCoding",
+        text: row(
+            "阿里云 Coding Plan",
+            "阿里雲 Coding Plan",
+            "Alibaba Cloud Coding Plan",
+            "Alibaba Cloud Coding Plan",
+            "Alibaba Cloud Coding Plan",
+        ),
+    },
+    Msg { key: "settings.providers.presets.codingPlanX", text: row("CodingPlanX", "CodingPlanX", "CodingPlanX", "CodingPlanX", "CodingPlanX") },
+    Msg { key: "settings.providers.presets.minimax", text: row("MiniMax（M3）", "MiniMax（M3）", "MiniMax (M3)", "MiniMax（M3）", "MiniMax (M3)") },
+    Msg {
+        key: "settings.providers.presets.stepfun",
+        text: row(
+            "StepFun（阶跃星辰）",
+            "StepFun（階躍星辰）",
+            "StepFun",
+            "StepFun（階躍星辰）",
+            "StepFun",
+        ),
+    },
+    Msg { key: "settings.providers.presets.opencode", text: row("OpenCode Zen", "OpenCode Zen", "OpenCode Zen", "OpenCode Zen", "OpenCode Zen") },
+    Msg {
+        key: "settings.providers.presets.tencentTokenHub",
+        text: row(
+            "腾讯云 TokenHub",
+            "騰訊雲 TokenHub",
+            "Tencent Cloud TokenHub",
+            "Tencent Cloud TokenHub",
+            "Tencent Cloud TokenHub",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.customChatCompletions",
+        text: row(
+            "自定义 · Chat Completions",
+            "自訂 · Chat Completions",
+            "Custom · Chat Completions",
+            "カスタム · Chat Completions",
+            "사용자 지정 · Chat Completions",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.customResponses",
+        text: row(
+            "自定义 · Responses",
+            "自訂 · Responses",
+            "Custom · Responses",
+            "カスタム · Responses",
+            "사용자 지정 · Responses",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.customMessages",
+        text: row(
+            "自定义 · Messages",
+            "自訂 · Messages",
+            "Custom · Messages",
+            "カスタム · Messages",
+            "사용자 지정 · Messages",
+        ),
+    },
+    Msg { key: "settings.providers.presets.custom", text: row("自定义", "自定義", "Custom", "カスタム", "사용자 정의") },
+    Msg {
+        key: "settings.providers.presets.asrVolcengine",
+        text: row(
+            "火山引擎 bigasr",
+            "火山引擎 bigasr",
+            "Volcengine bigasr",
+            "Volcengine bigasr",
+            "Volcengine bigasr",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.asrBailian",
+        text: row(
+            "阿里云百炼实时 ASR",
+            "阿里雲百煉即時 ASR",
+            "Alibaba Bailian realtime ASR",
+            "Alibaba Bailian リアルタイム ASR",
+            "Alibaba Bailian 실시간 ASR",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.asrBailianQwen3",
+        text: row(
+            "阿里云百炼 Qwen3 实时 ASR",
+            "阿里雲百煉 Qwen3 即時 ASR",
+            "Bailian Qwen3 Realtime ASR",
+            "Bailian Qwen3 リアルタイム ASR",
+            "Bailian Qwen3 실시간 ASR",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.asrBailianFunAsrFlash",
+        text: row(
+            "阿里云百炼 Fun-ASR-Flash（录音文件）",
+            "阿里雲百煉 Fun-ASR-Flash（錄音檔）",
+            "Bailian Fun-ASR-Flash (recorded file)",
+            "Bailian Fun-ASR-Flash（録音ファイル）",
+            "Bailian Fun-ASR-Flash (녹음 파일)",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.asrSiliconflow",
+        text: row(
+            "硅基流动 SenseVoice",
+            "硅基流動 SenseVoice",
+            "SiliconFlow SenseVoice",
+            "SiliconFlow SenseVoice",
+            "SiliconFlow SenseVoice",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.asrStepfun",
+        text: row(
+            "阶跃星辰 StepAudio",
+            "階躍星辰 StepAudio",
+            "StepFun StepAudio ASR",
+            "StepFun StepAudio ASR",
+            "StepFun StepAudio ASR",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.asrZhipu",
+        text: row(
+            "智谱 GLM-ASR",
+            "智譜 GLM-ASR",
+            "Zhipu GLM-ASR",
+            "Zhipu GLM-ASR",
+            "Zhipu GLM-ASR",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.asrGroq",
+        text: row(
+            "Groq Whisper-large-v3",
+            "Groq Whisper-large-v3",
+            "Groq Whisper-large-v3",
+            "Groq Whisper-large-v3",
+            "Groq Whisper-large-v3",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.asrWhisper",
+        text: row(
+            "OpenAI Whisper（兼容）",
+            "OpenAI Whisper（兼容）",
+            "OpenAI Whisper (compatible)",
+            "OpenAI Whisper（互換）",
+            "OpenAI Whisper(호환)",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.asrOpenrouter",
+        text: row(
+            "OpenRouter Whisper",
+            "OpenRouter Whisper",
+            "OpenRouter Whisper",
+            "OpenRouter Whisper",
+            "OpenRouter Whisper",
+        ),
+    },
+    Msg { key: "settings.providers.presets.asrZenmux", text: row("ZenMux", "ZenMux", "ZenMux", "ZenMux", "ZenMux") },
+    Msg {
+        key: "settings.providers.presets.asrOpenAiCompatible",
+        text: row(
+            "自定义 OpenAI 兼容",
+            "自訂 OpenAI 相容",
+            "Custom OpenAI-compatible",
+            "カスタム OpenAI 互換",
+            "커스텀 OpenAI 호환",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.asrXiaomiMimo",
+        text: row(
+            "小米 MiMo ASR",
+            "小米 MiMo ASR",
+            "Xiaomi MiMo ASR",
+            "Xiaomi MiMo ASR",
+            "Xiaomi MiMo ASR",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.asrIflytek",
+        text: row(
+            "讯飞实时语音转写",
+            "訊飛即時語音轉寫",
+            "iFlytek Realtime ASR",
+            "iFlytek リアルタイム音声認識",
+            "iFlytek 실시간 음성 인식",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.asrTencentCloud",
+        text: row(
+            "腾讯云混元实时 ASR",
+            "騰訊雲混元即時 ASR",
+            "Tencent Cloud Hunyuan Realtime ASR",
+            "Tencent Cloud Hunyuan リアルタイム ASR",
+            "Tencent Cloud Hunyuan 실시간 ASR",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.asrElevenLabs",
+        text: row(
+            "ElevenLabs Scribe",
+            "ElevenLabs Scribe",
+            "ElevenLabs Scribe",
+            "ElevenLabs Scribe",
+            "ElevenLabs Scribe",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.asrSherpaOnnxLocal",
+        text: row(
+            "本地 sherpa-onnx（实验性）",
+            "本地 sherpa-onnx（實驗性）",
+            "Local sherpa-onnx (Experimental)",
+            "ローカル sherpa-onnx（実験的）",
+            "로컬 sherpa-onnx(실험적)",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.asrFoundryLocalWhisper",
+        text: row(
+            "本地 Whisper（Foundry Local）",
+            "本地 Whisper（Foundry Local）",
+            "Local Whisper (Foundry Local)",
+            "ローカル Whisper（Foundry Local）",
+            "로컬 Whisper(Foundry Local)",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.asrLocalWhisper",
+        text: row(
+            "本地 Whisper（批量解码）",
+            "本地 Whisper（批次解碼）",
+            "Local Whisper (batch)",
+            "ローカル Whisper（バッチ）",
+            "로컬 Whisper(배치)",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.asrLocalQwen3",
+        text: row(
+            "本地 Qwen3-ASR",
+            "本地 Qwen3-ASR",
+            "Local Qwen3-ASR",
+            "ローカル Qwen3-ASR",
+            "로컬 Qwen3-ASR",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.asrLocalQwen3Mlx",
+        text: row(
+            "本地 Qwen3-ASR（MLX / Metal）",
+            "本地 Qwen3-ASR（MLX / Metal）",
+            "Local Qwen3-ASR (MLX / Metal)",
+            "ローカル Qwen3-ASR（MLX / Metal）",
+            "로컬 Qwen3-ASR(MLX / Metal)",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.asrLocalQwen3C",
+        text: row(
+            "本地 Qwen3-ASR（C / CPU）",
+            "本地 Qwen3-ASR（C / CPU）",
+            "Local Qwen3-ASR (C / CPU)",
+            "ローカル Qwen3-ASR（C / CPU）",
+            "로컬 Qwen3-ASR(C / CPU)",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.asrAppleSpeech",
+        text: row(
+            "Apple 语音（macOS）",
+            "Apple 語音（macOS）",
+            "Apple Speech (macOS)",
+            "Apple 音声認識 (macOS)",
+            "Apple 음성 (macOS)",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.omniOpenai",
+        text: row(
+            "OpenAI（支持音频）",
+            "OpenAI（支援音訊）",
+            "OpenAI (audio-capable)",
+            "OpenAI（音声対応）",
+            "OpenAI (오디오 지원)",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.omniGemini",
+        text: row(
+            "Google Gemini",
+            "Google Gemini",
+            "Google Gemini",
+            "Google Gemini",
+            "Google Gemini",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presets.omniDashscope",
+        text: row(
+            "阿里云百炼 Omni",
+            "阿里雲百煉 Omni",
+            "Alibaba DashScope Omni",
+            "Alibaba DashScope Omni",
+            "Alibaba DashScope Omni",
+        ),
+    },
+    Msg { key: "settings.recording.history_retention_never", text: row("不按时间清理", "不按時間清理", "Never", "時間で削除しない", "시간 기준 삭제 안 함") },
+    Msg { key: "settings.recording.history_retention_days", text: row("{} 天", "{} 天", "{} days", "{} 日", "{}일") },
+    Msg { key: "channel.beta", text: row("Beta", "Beta", "Beta", "ベータ", "베타") },
+    Msg {
+        key: "style.pack.activate",
+        text: row("激活", "啟用", "Activate", "有効化", "활성화"),
+    },
+    Msg {
+        key: "style.pack.add_pack_tile_hint",
+        text: row(
+            "从空白模板开始。",
+            "從空白範本開始。",
+            "Start from a blank template.",
+            "空のテンプレートから開始。",
+            "빈 템플릿으로 시작.",
+        ),
+    },
+    Msg {
+        key: "style.pack.add_pack_tile_title",
+        text: row("新建风格包", "新建風格包", "New Pack", "新規パック", "새 팩"),
+    },
+    Msg {
+        key: "style.pack.dictation_prompt_hint",
+        text: row(
+            "用于录音转写后的 ASR 文本；这里可以写口语整理、ASR 错字纠正和专有名词还原规则。",
+            "用於錄音轉寫後的 ASR 文本；這裡可以寫口語整理、ASR 錯字糾正和專有名詞還原規則。",
+            "For ASR text after dictation; write spoken-language cleanup, ASR typo fixes and term restoration rules here.",
+            "録音の書き起こし後のASRテキスト用。口語整理、ASR誤字修正、固有名詞の復元ルールをここに書けます。",
+            "녹음 후 받아쓰기한 ASR 텍스트용. 구어 정리, ASR 오타 수정, 고유명사 복원 규칙을 여기에 작성하세요.",
+        ),
+    },
+    Msg {
+        key: "style.pack.edit",
+        text: row("编辑", "編輯", "Edit", "編集", "편집"),
+    },
+    Msg {
+        key: "style.pack.export_short",
+        text: row("导出", "匯出", "Export", "エクスポート", "내보내기"),
+    },
+    Msg {
+        key: "style.pack.import_zip",
+        text: row("导入 ZIP", "匯入 ZIP", "Import ZIP", "ZIP をインポート", "ZIP 가져오기"),
+    },
+    Msg {
+        key: "style.pack.imported",
+        text: row("导入", "匯入", "Imported", "インポート", "가져옴"),
+    },
+    Msg {
+        key: "style.pack.list_count",
+        text: row("{} 个风格包", "{} 個風格包", "{} packs", "{} 個", "{}개"),
+    },
+    Msg {
+        key: "style.pack.list_title",
+        text: row("本地风格包", "本機風格包", "Local Packs", "ローカルパック", "로컬 팩"),
+    },
+    Msg {
+        key: "marketplace.liked_empty",
+        text: row(
+            "你还没有赞过任何风格包",
+            "你還沒有讚過任何風格包",
+            "You have not liked any style packs yet",
+            "まだいいねしたパックがありません",
+            "아직 좋아요한 팩이 없습니다",
+        ),
+    },
+    Msg {
+        key: "marketplace.liked_empty_hint",
+        text: row(
+            "点开任一风格包，红色星星点亮后会出现在这里",
+            "點開任一風格包，紅色星星點亮後會出現在這裡",
+            "Open any pack and tap the star — liked packs appear here",
+            "パックを開いて星をタップするとここに表示されます",
+            "팩을 열고 별을 누르면 여기에 표시됩니다",
+        ),
+    },
+    Msg {
+        key: "modal.descriptions.about",
+        text: row(
+            "查看当前版本、更新渠道与自动更新设置。",
+            "查看目前版本、更新管道與自動更新設定。",
+            "View your version, update channel and automatic update settings.",
+            "現在のバージョン、更新チャンネル、自動更新を確認します。",
+            "현재 버전, 업데이트 채널 및 자동 업데이트 설정을 확인합니다.",
+        ),
+    },
+    Msg {
+        key: "modal.descriptions.advanced",
+        text: row(
+            "按需配置 Less Computer、多模态与调试功能。",
+            "按需設定 Less Computer、多模態與除錯功能。",
+            "Configure Less Computer, multimodal processing and debugging as needed.",
+            "必要に応じて Less Computer、マルチモーダル処理、デバッグを設定します。",
+            "필요에 따라 Less Computer, 멀티모달 처리 및 디버깅을 설정합니다.",
+        ),
+    },
+    Msg {
+        key: "modal.descriptions.appearance",
+        text: row(
+            "调整主题、页面排版和界面语言，让阅读更舒服。",
+            "調整主題、頁面排版和介面語言，讓閱讀更舒服。",
+            "Adjust the theme, page layout and interface language for comfortable reading.",
+            "テーマ、レイアウト、表示言語を読みやすく調整します。",
+            "테마, 페이지 배치, 인터페이스 언어를 편하게 읽도록 조정합니다.",
+        ),
+    },
+    Msg {
+        key: "modal.descriptions.general",
+        text: row(
+            "选择麦克风、设置录音方式与文字输入，也可连接手机输入。",
+            "選擇麥克風、設定錄音方式與文字輸入，也可連接手機輸入。",
+            "Choose a microphone, adjust recording and text input, or connect your phone.",
+            "マイク、録音方法、文字入力を設定し、スマートフォンからの入力を接続します。",
+            "마이크, 녹음 방식, 텍스트 입력을 설정하고 휴대폰 입력을 연결합니다.",
+        ),
+    },
+    Msg {
+        key: "modal.descriptions.privacy",
+        text: row(
+            "检查系统权限与连接状态，管理历史、录音和本地数据。",
+            "檢查系統權限與連線狀態，管理歷史、錄音和本機資料。",
+            "Check system permissions and connections. Manage history, recordings and local data.",
+            "システム権限と接続を確認し、履歴、録音、ローカルデータを管理します。",
+            "시스템 권한과 연결을 확인하고 기록, 녹음 및 로컬 데이터를 관리합니다.",
+        ),
+    },
+    Msg {
+        key: "modal.descriptions.services",
+        text: row(
+            "选择语音识别与文字处理服务，管理渠道、本地模型和网络连接。",
+            "選擇語音辨識與文字處理服務，管理管道、本機模型和網路連線。",
+            "Choose speech recognition and text processing services. Manage channels, local models and connections.",
+            "音声認識と文章処理のサービス、チャンネル、ローカルモデル、接続を管理します。",
+            "음성 인식과 텍스트 처리 서비스, 채널, 로컬 모델 및 연결을 관리합니다.",
+        ),
+    },
+    Msg {
+        key: "modal.descriptions.shortcuts",
+        text: row(
+            "设置各功能的触发方式，以及选中文字后的操作。",
+            "設定各功能的觸發方式，以及選取文字後的操作。",
+            "Set up shortcuts and choose what happens when you select text.",
+            "各機能のショートカットと、テキスト選択後の操作を設定します。",
+            "기능별 단축키와 텍스트 선택 후 동작을 설정합니다.",
+        ),
+    },
+    Msg {
+        key: "modal.advanced_pages.debug",
+        text: row(
+            "保留调试录音、探测光标上下文和导出日志。",
+            "保留偵錯錄音、探測游標上下文與匯出日誌。",
+            "Keep debug recordings, inspect cursor context, and export logs.",
+            "デバッグ録音の保持、カーソル周辺の確認、ログの書き出しを行います。",
+            "디버그 녹음을 보관하고 커서 문맥을 확인하며 로그를 내보냅니다.",
+        ),
+    },
+    Msg {
+        key: "modal.advanced_pages.less_computer",
+        text: row(
+            "选择 Agent，配置模型、权限与工作目录。",
+            "選擇 Agent，設定模型、權限與工作目錄。",
+            "Choose an agent and configure its model, permissions, and working directory.",
+            "Agent を選び、モデル・権限・作業ディレクトリを設定します。",
+            "Agent를 선택하고 모델, 권한, 작업 디렉터리를 설정합니다.",
+        ),
+    },
+    Msg {
+        key: "modal.advanced_pages.multimodal",
+        text: row(
+            "管理多模态识别的实验性开关。",
+            "管理多模態辨識的實驗性開關。",
+            "Manage the experimental multimodal recognition switch.",
+            "実験的なマルチモーダル認識の有効・無効を設定します。",
+            "실험적 멀티모달 인식 기능의 사용 여부를 설정합니다.",
+        ),
+    },
+    Msg {
+        key: "modal.service_views.omni",
+        text: row("多模态模型", "多模態模型", "Multimodal", "マルチモーダル", "멀티모달"),
+    },
+    Msg {
+        key: "settings.about.beta_channel_desc",
+        text: row(
+            "开启后，后台自动更新将跟随 Beta 渠道；关闭则回到正式版。下方按钮可随时手动检查 Beta 更新。",
+            "開啟後，背景自動更新將跟隨 Beta 渠道；關閉則回到正式版。下方按鈕可隨時手動檢查 Beta 更新。",
+            "When on, background auto-update follows Beta; when off, it uses stable. Use the button below to manually check Beta anytime.",
+            "オンにするとバックグラウンド自動更新が Beta に従います。オフで正式版に戻ります。下のボタンでいつでも Beta を手動確認できます。",
+            "켜면 백그라운드 자동 업데이트가 Beta를 따릅니다. 끄면 정식판으로 돌아갑니다. 아래 버튼으로 언제든 Beta를 수동 확인할 수 있습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.about.check_beta_update_btn",
+        text: row(
+            "检查 Beta 更新",
+            "檢查 Beta 更新",
+            "Check Beta update",
+            "Beta を確認",
+            "Beta 확인",
+        ),
+    },
+    Msg {
+        key: "settings.advanced.multimodal_pipeline_hint",
+        text: row(
+            "开启后，「服务 → AI 提供商」页出现「传统模式 / 多模态模式」切换。传统 = ASR + LLM；多模态 = 单个支持音频的模型。两套配置分开存储、绝不共享凭据。",
+            "開啟後，「服務 → AI 提供者」頁出現「傳統模式 / 多模態模式」切換。傳統 = ASR + LLM；多模態 = 單一支援音訊的模型。兩套設定分開儲存、絕不共用憑證。",
+            "Adds a Traditional / Multimodal switch on the AI providers page. Traditional = ASR + LLM; Multimodal = one audio-capable model. The two configurations are stored separately and never share credentials.",
+            "有効にすると「サービス → AI プロバイダー」ページに従来 / マルチモーダルの切り替えが表示されます。従来 = ASR + LLM、マルチモーダル = 音声対応モデル1つ。設定は別々に保存され、認証情報を共有しません。",
+            "활성화하면 「서비스 → AI 공급자」 페이지에 전통 / 멀티모달 전환이 나타납니다. 전통 = ASR + LLM, 멀티모달 = 오디오 지원 모델 1개. 두 설정은 별도로 저장되며 자격 증명을 공유하지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.language.label_desc",
+        text: row(
+            "选择「跟随系统」时按操作系统当前语言显示。",
+            "選擇「跟隨系統」時按操作系統當前語言顯示。",
+            "Choose \"Follow system\" to match the OS language at launch.",
+            "「システムに従う」を選ぶと OS の言語に合わせます。",
+            "\"시스템 따라가기\"를 선택하면 OS 언어를 따릅니다.",
+        ),
+    },
+    Msg {
+        key: "settings.network.use_system_proxy_desc",
+        text: row(
+            "开启时请求跟随系统代理；关闭后所有网络请求直连（国内服务延迟通常更低），GitHub 登录、更新等境外服务可能连不上。实时语音流与 Less Computer 不受此开关影响。",
+            "開啟時請求跟隨系統代理；關閉後所有網路請求直連（國內服務延遲通常更低），GitHub 登入、更新等境外服務可能連不上。即時語音串流與 Less Computer 不受此開關影響。",
+            "When on, requests follow the system proxy. When off, all requests connect directly (usually lower latency for domestic services), but overseas services such as GitHub sign-in and updates may fail. Realtime voice streams and Less Computer are unaffected.",
+            "オンにするとリクエストはシステムプロキシを経由します。オフにするとすべて直接接続します（国内サービスの遅延が低くなる傾向）。GitHub ログインやアップデートなど海外サービスには接続できない場合があります。リアルタイム音声ストリームと Less Computer は影響を受けません。",
+            "켜면 요청이 시스템 프록시를 따릅니다. 끄면 모든 요청이 직결됩니다(국내 서비스는 보통 더 빠름). GitHub 로그인·업데이트 등 해외 서비스는 연결되지 않을 수 있습니다. 실시간 음성 스트림과 Less Computer는 영향을 받지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.permissions.denied",
+        text: row("未授权", "未授權", "Not granted", "未許可", "허용되지 않음"),
+    },
+    Msg {
+        key: "settings.permissions.not_applicable",
+        text: row("无需授权", "無需授權", "Not required", "権限不要", "권한 불필요"),
+    },
+    Msg {
+        key: "settings.recording.audio_cue_desc",
+        text: row(
+            "按下热键开始录音时播放一段合成提示音，提醒已开始录音。胶囊隐藏时也会响。",
+            "按下熱鍵開始錄音時播放一段合成提示音，提醒已開始錄音。膠囊隱藏時也會響。",
+            "Play a short synthesized chime when you press the hotkey to start recording. Plays even when the capsule is hidden.",
+            "ホットキーで録音を開始するとき、合成した短い通知音を再生します。カプセルが非表示でも鳴ります。",
+            "단축키로 녹음을 시작할 때 합성된 짧은 알림음을 재생합니다. 캡슐이 숨겨져 있어도 재생됩니다.",
+        ),
+    },
+    Msg {
+        key: "settings.recording.audio_recording_max_entries_desc",
+        text: row(
+            "本地保留 wav 文件数上限，留空 = 200。",
+            "本地保留 wav 檔案數上限，留空 = 200。",
+            "Max wav files retained locally. Blank = 200.",
+            "ローカル保持 wav ファイル上限。空欄 = 200。",
+            "로컬 보관 wav 파일 상한. 빈칸 = 200.",
+        ),
+    },
+    Msg {
+        key: "settings.recording.combo_disable_hint",
+        text: row(
+            "核心快捷键不可停用，录音必须绑定一个热键",
+            "核心快捷鍵不可停用，錄音必須綁定一個快捷鍵",
+            "Core hotkey cannot be disabled — recording needs a hotkey",
+            "コアショートカットは無効化できません（録音にはショートカットが必須です）",
+            "핵심 단축키는 비활성화할 수 없습니다 (녹음에는 단축키가 필수입니다)",
+        ),
+    },
+    Msg {
+        key: "settings.recording.microphone_desc",
+        text: row(
+            "选择优先输入设备。设备断开时自动切到系统默认。",
+            "選擇優先使用的輸入設備。設備暫時不可用時會使用系統默認麥克風，重新連接後自動切回首選設備。",
+            "Choose the preferred input device; falls back to system default when unavailable.",
+            "優先して使用する入力デバイスを選択します。一時的に利用できない場合はシステムのデフォルトマイクを使い、再接続後に自動で優先デバイスへ戻します。",
+            "우선 사용할 입력 장치를 선택합니다. 장치를 일시적으로 사용할 수 없으면 시스템 기본 마이크를 사용하고, 다시 연결되면 자동으로 우선 장치로 돌아갑니다.",
+        ),
+    },
+    Msg {
+        key: "settings.recording.mode_auto",
+        text: row("自动", "自動", "Auto", "自動", "자동"),
+    },
+    Msg {
+        key: "settings.recording.mode_desc",
+        text: row(
+            "切换式按一次开始、再按一次结束；按住说话按下保持、松开结束。",
+            "切換式 = 按一次開始、再按一次結束；按住說話 = 按住開始、鬆開結束。",
+            "Toggle = tap once to start, again to stop. Push-to-talk = hold to record.",
+            "トグル式 = 1 回押して開始、もう 1 回押して終了；押し続けて話す = 押している間だけ録音。",
+            "토글 방식 = 한 번 누르면 시작, 다시 누르면 종료; 눌러서 말하기 = 누르고 있는 동안만 녹음.",
+        ),
+    },
+    Msg {
+        key: "settings.recording.mode_hold",
+        text: row("按住说话", "按住說話", "Push-to-talk", "押し続けて話す", "눌러서 말하기"),
+    },
+    Msg {
+        key: "settings.recording.mute_during_recording_desc",
+        text: row(
+            "录音期间临时静音系统输出，避免扬声器回音。",
+            "錄音期間臨時靜音系統輸出，避免揚聲器回音。",
+            "Temporarily mute system output during voice input to avoid speaker echo.",
+            "録音中にシステム出力を一時的にミュートし、スピーカーのエコーを防ぎます。",
+            "녹음 중 시스템 출력을 일시적으로 음소거하여 스피커 에코를 방지합니다.",
+        ),
+    },
+    Msg {
+        key: "settings.recording.paste_shortcut_desc",
+        text: row(
+            "插入时模拟按下的粘贴键，部分终端类应用需要 Ctrl+Shift+V（仅 Windows / Linux）。",
+            "插入時模擬按下的粘貼鍵，部分終端類應用需要 Ctrl+Shift+V（僅 Windows / Linux）。",
+            "Which paste combo to simulate when inserting; some terminals need Ctrl+Shift+V (Windows / Linux only).",
+            "挿入時に模擬するペーストショートカット。一部のターミナルでは Ctrl+Shift+V が必要（Windows / Linux のみ）。",
+            "삽입 시 시뮬레이션할 붙여넣기 단축키. 일부 터미널은 Ctrl+Shift+V 가 필요 (Windows / Linux 만).",
+        ),
+    },
+    Msg {
+        key: "settings.recording.polish_context_window_desc",
+        text: row(
+            "把最近 N 分钟内已润色的转写作为多轮上下文，0 = 关闭。",
+            "把最近 N 分鐘內已潤色的轉寫作為多輪上下文，0 = 關閉。",
+            "Use the last N minutes of polished transcripts as multi-turn context; 0 = disabled.",
+            "直近 N 分間の整文済み転写をマルチターン文脈として渡します。0 = 無効。",
+            "최근 N 분간 정리된 전사를 멀티턴 컨텍스트로 전달합니다. 0 = 비활성화.",
+        ),
+    },
+    Msg {
+        key: "settings.recording.polish_context_window_label",
+        text: row(
+            "对话上下文窗口（分钟）",
+            "對話上下文窗口（分鐘）",
+            "Polish context window (minutes)",
+            "会話コンテキスト窓（分）",
+            "대화 컨텍스트 윈도(분)",
+        ),
+    },
+    Msg {
+        key: "settings.recording.restore_clipboard_desc",
+        text: row(
+            "粘贴成功后恢复你原来的剪贴板内容（仅 Windows / Linux）。",
+            "粘貼成功後恢復你原來的剪貼板內容（僅 Windows / Linux）。",
+            "Restore your original clipboard after a successful paste (Windows / Linux only).",
+            "ペースト成功後に元のクリップボード内容を復元（Windows / Linux のみ）。",
+            "붙여넣기 성공 후 원래 클립보드 내용을 복원합니다 (Windows / Linux 만).",
+        ),
+    },
+    Msg {
+        key: "settings.recording.silence_auto_stop_desc",
+        text: row(
+            "仅切换模式生效。检测到语音后，连续静音达到所选时长即自动结束并提交；一直没说话则 10 秒后取消。默认关闭；第二次按键停止和 Esc 取消仍然有效。",
+            "僅切換模式生效。偵測到語音後，連續靜音達到所選時長即自動結束並提交；一直沒說話則 10 秒後取消。預設關閉；第二次按鍵停止和 Esc 取消仍然有效。",
+            "Toggle only. After speech is detected, recording stops and submits automatically once silence lasts the chosen duration. Off by default; a second hotkey press and Esc still work.",
+            "トグルモードのみ有効。音声を検出した後、無音が選択した時間続いたら録音を自動停止して送信します。一度も話さない場合は10秒後にキャンセル。既定ではオフで、2回目のキー押下による停止と Esc によるキャンセルは引き続き有効です。",
+            "토글 모드에서만 동작합니다. 음성이 감지된 후 선택한 시간 동안 침묵이 이어지면 녹음을 자동으로 종료하고 제출합니다. 말을 전혀 하지 않으면 10초 후 취소됩니다. 기본적으로 꺼져 있으며, 두 번째 키 누름으로 중지하고 Esc로 취소하는 동작은 그대로 유지됩니다.",
+        ),
+    },
+    Msg {
+        key: "settings.remote_input.cert_fingerprint_copy",
+        text: row(
+            "复制完整指纹",
+            "複製完整指紋",
+            "Copy full fingerprint",
+            "指紋全体をコピー",
+            "전체 지문 복사",
+        ),
+    },
+    Msg {
+        key: "settings.remote_input.cert_fingerprint_label",
+        text: row(
+            "本机根证书 SHA-256",
+            "本機根憑證 SHA-256",
+            "This computer's root CA SHA-256",
+            "このコンピューターのルート CA SHA-256",
+            "이 컴퓨터의 루트 CA SHA-256",
+        ),
+    },
+    Msg {
+        key: "settings.remote_input.cert_fingerprint_unavailable",
+        text: row(
+            "完整指纹不可用。请勿安装或信任下载的证书。",
+            "完整指紋無法取得。請勿安裝或信任下載的憑證。",
+            "The full fingerprint is unavailable. Do not install or trust a downloaded certificate.",
+            "完全な指紋を取得できません。ダウンロードした証明書をインストールしたり信頼したりしないでください。",
+            "전체 지문을 확인할 수 없습니다. 다운로드한 인증서를 설치하거나 신뢰하지 마세요.",
+        ),
+    },
+    Msg {
+        key: "settings.remote_input.cert_verify_hint",
+        text: row(
+            "在手机系统的证书详情中找到 SHA-256，与这里的全部 64 个字符逐一核对（忽略空格和冒号）。必须在开启完全信任前完成。网页、描述文件名称和标识不能证明证书身份；若不一致或无法查看完整指纹，请停止并移除已下载或安装的描述文件。",
+            "在手機系統的憑證詳細資訊中找到 SHA-256，與此處全部 64 個字元逐一核對（忽略空格和冒號）。必須在開啟完全信任前完成。網頁、描述檔名稱與識別碼不能證明憑證身分；若不一致或無法查看完整指紋，請停止並移除已下載或安裝的描述檔。",
+            "Find SHA-256 in the phone's system certificate details and compare all 64 characters with this value (ignore spaces and colons) before enabling full trust. A web page, profile name or identifier cannot prove identity. If the fingerprint differs or cannot be viewed in full, stop and remove the downloaded or installed profile.",
+            "スマートフォンのシステム証明書詳細にある SHA-256 の全 64 文字を、空白とコロンを除いてこの値と照合し、完全に信頼する前に確認してください。Web ページ、プロファイル名や識別子は身元の証明にはなりません。一致しない場合や全体を表示できない場合は中止し、ダウンロード済みまたはインストール済みのプロファイルを削除してください。",
+            "휴대폰 시스템의 인증서 상세 정보에서 SHA-256을 찾아, 완전한 신뢰를 켜기 전에 공백과 콜론을 제외한 64자 전체를 이 값과 비교하세요. 웹 페이지, 프로파일 이름이나 식별자는 신원 증명이 아닙니다. 일치하지 않거나 전체 지문을 볼 수 없으면 중단하고 다운로드했거나 설치한 프로파일을 제거하세요.",
+        ),
+    },
+    Msg {
+        key: "settings.remote_input.pin_label",
+        text: row("配对码", "配對碼", "Pairing code", "ペアリングコード", "페어링 코드"),
+    },
+    Msg {
+        key: "settings.remote_input.security_hint",
+        text: row(
+            "仅同一局域网可访问，需输入配对码；不用时建议关闭。",
+            "僅同一區域網路可存取，需輸入配對碼；不用時建議關閉。",
+            "Reachable only on the same LAN and requires the pairing code; turn it off when not in use.",
+            "同一 LAN からのみアクセス可能で、ペアリングコードの入力が必要です。使わないときはオフにすることを推奨します。",
+            "같은 LAN에서만 접속 가능하며 페어링 코드 입력이 필요합니다. 사용하지 않을 때는 끄는 것을 권장합니다.",
+        ),
+    },
+    Msg {
+        key: "settings.remote_input.url_label",
+        text: row("访问网址", "存取網址", "Access URL", "アクセス URL", "접속 URL"),
+    },
+    Msg {
+        key: "settings.selection_polish.direct_replace",
+        text: row(
+            "直接覆盖",
+            "直接覆蓋",
+            "Replace directly",
+            "直接置き換え",
+            "직접 교체",
+        ),
+    },
+    Msg {
+        key: "settings.selection_polish.preview_confirm",
+        text: row(
+            "预览确认",
+            "預覽確認",
+            "Preview & confirm",
+            "プレビューして確認",
+            "미리보기 후 확인",
+        ),
+    },
+    Msg {
+        key: "settings.selection_workspace.polish_delivery",
+        text: row(
+            "结果处理",
+            "結果處理",
+            "Result handling",
+            "結果の処理",
+            "결과 처리",
+        ),
+    },
+    Msg {
+        key: "settings.selection_workspace.polish_hotkey",
+        text: row(
+            "选区助手快捷键",
+            "選區助手快捷鍵",
+            "Selection assistant shortcut",
+            "選択範囲アシスタントのショートカット",
+            "선택 영역 도우미 단축키",
+        ),
+    },
+    Msg {
+        key: "settings.selection_workspace.polish_hotkey_desc",
+        text: row(
+            "关闭语音编辑时直接润色；开启语音编辑时按住口述指令（录音方式跟随全局设置）。",
+            "關閉語音編輯時直接潤色；開啟語音編輯時按住口述指令（錄音方式跟隨全域設定）。",
+            "Polishes directly when voice edit is off; hold to speak when voice edit is on (recording follows global settings).",
+            "音声編集オフ時は推敲、オン時は押しながら話す（録音方式はグローバル設定に従う）。",
+            "음성 편집 끄면 바로 다듬기, 켜면 누른 채 말하기(녹음 방식은 전역 설정 따름).",
+        ),
+    },
+    Msg {
+        key: "settings.shortcuts.style_pack_desc",
+        text: row(
+            "为常用风格包各配一个快捷键，按下直接切换；停用中的包会自动启用。",
+            "為常用風格包各配一個快捷鍵，按下直接切換；停用中的包會自動啟用。",
+            "Bind a shortcut to each favorite style pack for one-press switching; disabled packs are re-enabled automatically.",
+            "よく使うスタイルパックにショートカットを割り当てて一発切替；無効中のパックは自動で有効化されます。",
+            "자주 쓰는 스타일 팩에 단축키를 지정해 한 번에 전환합니다. 비활성화된 팩은 자동으로 다시 활성화됩니다.",
+        ),
+    },
+    Msg {
+        key: "modal.about.docs_btn",
+        text: row(
+            "openless.app/docs ↗",
+            "openless.app/docs ↗",
+            "openless.app/docs ↗",
+            "openless.app/docs ↗",
+            "openless.app/docs ↗",
+        ),
+    },
+    Msg {
+        key: "modal.about.feedback_btn",
+        text: row(
+            "GitHub Issues ↗",
+            "GitHub Issues ↗",
+            "GitHub Issues ↗",
+            "GitHub Issues ↗",
+            "GitHub Issues ↗",
+        ),
+    },
+    Msg {
+        key: "settings.coding_agent.coming_soon_note",
+        text: row(
+            "配置即时保存；热键触发与执行链路随后续版本生效。",
+            "設定即時儲存；熱鍵觸發與執行鏈路隨後續版本生效。",
+            "Config is saved now; hotkey triggering and the execution flow land in a later version.",
+            "設定はすぐ保存されます。ホットキー起動と実行フローは今後のバージョンで対応。",
+            "설정은 즉시 저장됩니다. 단축키 트리거와 실행 흐름은 이후 버전에서 제공됩니다.",
+        ),
+    },
+    Msg {
+        key: "settings.coding_agent.exe",
+        text: row(
+            "可执行文件路径",
+            "可執行檔路徑",
+            "Executable path",
+            "実行ファイルのパス",
+            "실행 파일 경로",
+        ),
+    },
+    Msg {
+        key: "settings.coding_agent.hotkey_hint",
+        text: row(
+            "开启后，按住快捷键说话，松开后由所选 Agent 处理并把结果显示在胶囊里。",
+            "開啟後，按住快捷鍵說話，放開後由所選 Agent 處理並把結果顯示在膠囊裡。",
+            "When enabled, hold the shortcut to talk; release it and the selected agent shows the result in the capsule.",
+            "有効にすると、ショートカットを押しながら話し、離すと選択した Agent の結果がカプセルに表示されます。",
+            "켜면 단축키를 누른 채 말하고, 놓으면 선택한 Agent 결과가 캡슐에 표시됩니다.",
+        ),
+    },
+    Msg {
+        key: "settings.coding_agent.model",
+        text: row("模型", "模型", "Model", "モデル", "모델"),
+    },
+    Msg {
+        key: "settings.coding_agent.model_hint",
+        text: row(
+            "Haiku 最快 · Sonnet 均衡 · Opus 最强",
+            "Haiku 最快 · Sonnet 均衡 · Opus 最強",
+            "Haiku = fastest · Sonnet = balanced · Opus = strongest",
+            "Haiku = 最速 · Sonnet = バランス · Opus = 最強",
+            "Haiku = 가장 빠름 · Sonnet = 균형 · Opus = 최강",
+        ),
+    },
+    Msg {
+        key: "settings.coding_agent.model_placeholder",
+        text: row(
+            "默认 sonnet",
+            "預設 sonnet",
+            "Default: sonnet",
+            "デフォルト: sonnet",
+            "기본: sonnet",
+        ),
+    },
+    Msg {
+        key: "settings.coding_agent.provider",
+        text: row(
+            "Agent 后端",
+            "Agent 後端",
+            "Agent backend",
+            "Agent バックエンド",
+            "Agent 백엔드",
+        ),
+    },
+    Msg {
+        key: "settings.coding_console.mode.accept_edits",
+        text: row(
+            "放行（可恢复操作）",
+            "放行（可復原操作）",
+            "Allow (reversible)",
+            "許可（復元可能）",
+            "허용(복구 가능)",
+        ),
+    },
+    Msg {
+        key: "settings.coding_console.mode.bypass_permissions",
+        text: row(
+            "完全放行（高风险）",
+            "完全放行（高風險）",
+            "Full bypass (risky)",
+            "完全許可（高リスク）",
+            "완전 허용(위험)",
+        ),
+    },
+    Msg {
+        key: "settings.coding_console.mode.default",
+        text: row(
+            "默认（逐项确认）",
+            "預設（逐項確認）",
+            "Default (ask each)",
+            "デフォルト（都度確認）",
+            "기본(매번 확인)",
+        ),
+    },
+    Msg {
+        key: "settings.coding_console.mode.plan",
+        text: row(
+            "只读 / 计划",
+            "唯讀 / 計畫",
+            "Read-only / plan",
+            "読み取り専用 / 計画",
+            "읽기 전용 / 계획",
+        ),
+    },
+    Msg {
+        key: "settings.coding_console.workdir_desc",
+        text: row(
+            "可选。Claude 在此目录内运行；填写 git 仓库可启用运行前快照回滚。",
+            "選填。Claude 在此目錄內執行；填入 git 儲存庫可啟用執行前快照回滾。",
+            "Optional. Claude runs inside this dir; a git repo enables a pre-run snapshot for rollback.",
+            "任意。Claude はこのディレクトリ内で実行。git リポジトリなら実行前スナップショットで巻き戻し可能。",
+            "선택 사항. Claude 가 이 디렉터리에서 실행됩니다. git 저장소이면 실행 전 스냅샷으로 되돌릴 수 있습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.coding_console.workdir_placeholder",
+        text: row(
+            "留空则在临时目录运行",
+            "留空則於暫存目錄執行",
+            "Empty = run in a temp dir",
+            "空欄なら一時ディレクトリで実行",
+            "비우면 임시 디렉터리에서 실행",
         ),
     },
 ];

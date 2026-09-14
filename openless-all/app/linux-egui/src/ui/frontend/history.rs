@@ -218,6 +218,7 @@ fn list_card(
                     egui::TextEdit::singleline(&mut vm.history_query)
                         .id(search_id)
                         .hint_text(hint)
+                        .text_color(theme::INK)
                         .font(egui::FontId::proportional(12.5))
                         .vertical_align(egui::Align::Center)
                         .frame(false),
@@ -436,7 +437,14 @@ fn detail_card(
                         hint(ui, width, &message);
                         return;
                     };
-                    detail_body(ui, &vm.history_entries[index], index, lang, actions);
+                    detail_body(
+                        ui,
+                        &vm.history_entries[index],
+                        index,
+                        vm.history_playback.as_ref(),
+                        lang,
+                        actions,
+                    );
                 });
         },
     );
@@ -446,6 +454,7 @@ fn detail_body(
     ui: &mut egui::Ui,
     entry: &HistoryEntry,
     index: usize,
+    playback: Option<&super::view_model::HistoryPlayback>,
     lang: Lang,
     actions: &mut Vec<FrontendAction>,
 ) {
@@ -539,19 +548,58 @@ fn detail_body(
         }
     }
 
-    // Playback opens the recording in the system player.
+    // In-app playback: a player bar with the elapsed time and a progress track.
     if entry.has_audio {
         ui.add_space(10.0);
-        let (play_row, _) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::hover());
-        let play = tr_l10n(lang, "history.play");
-        let play_rect = egui::Rect::from_min_size(
-            play_row.min,
-            egui::vec2(layout::text_width(ui, play, 12.5) + 42.0, 30.0),
-        );
-        if layout::action_button(ui, play_rect, play, Some(IconName::Play), ButtonKind::Ghost)
-            .clicked()
-        {
+        let (play_row, _) = ui.allocate_exact_size(egui::vec2(width, 32.0), egui::Sense::hover());
+        let playing = playback.filter(|playback| playback.id == entry.id);
+        let label = if playing.is_some() {
+            tr_l10n(lang, "history.stop_playback")
+        } else {
+            tr_l10n(lang, "history.play")
+        };
+        let icon = if playing.is_some() {
+            IconName::Stop
+        } else {
+            IconName::Play
+        };
+        let button_width = layout::text_width(ui, label, 12.5) + 42.0;
+        let button_rect = egui::Rect::from_min_size(play_row.min, egui::vec2(button_width, 32.0));
+        if layout::action_button(ui, button_rect, label, Some(icon), ButtonKind::Ghost).clicked() {
             actions.push(FrontendAction::HistoryPlay(index));
+        }
+        if let Some(playback) = playing {
+            // Progress track to the right of the button.
+            let track = egui::Rect::from_min_max(
+                egui::pos2(button_rect.right() + 12.0, play_row.center().y - 3.0),
+                egui::pos2(play_row.right() - 96.0, play_row.center().y + 3.0),
+            );
+            if track.width() > 20.0 {
+                let ratio = if playback.total_ms == 0 {
+                    0.0
+                } else {
+                    (playback.position_ms as f32 / playback.total_ms as f32).clamp(0.0, 1.0)
+                };
+                ui.painter()
+                    .rect_filled(track, egui::CornerRadius::same(3), theme::SURFACE_2);
+                let filled = egui::Rect::from_min_max(
+                    track.min,
+                    egui::pos2(track.left() + track.width() * ratio, track.bottom()),
+                );
+                ui.painter()
+                    .rect_filled(filled, egui::CornerRadius::same(3), theme::BLUE);
+                ui.painter().text(
+                    egui::pos2(play_row.right(), play_row.center().y),
+                    egui::Align2::RIGHT_CENTER,
+                    format!(
+                        "{} / {}",
+                        playback_clock(playback.position_ms),
+                        playback_clock(playback.total_ms)
+                    ),
+                    egui::FontId::monospace(11.0),
+                    theme::INK_4,
+                );
+            }
         }
     }
 
@@ -930,6 +978,12 @@ fn confirm_overlay(
 }
 
 // ── Painting helpers ────────────────────────────────────────────────────────
+
+/// `m:ss` clock used by the in-app player bar.
+fn playback_clock(ms: u64) -> String {
+    let seconds = ms / 1000;
+    format!("{}:{:02}", seconds / 60, seconds % 60)
+}
 
 fn paint_card(painter: &egui::Painter, rect: egui::Rect) {
     painter.rect_filled(rect, egui::CornerRadius::same(14), theme::SURFACE);

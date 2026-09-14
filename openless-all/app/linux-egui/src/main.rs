@@ -24,7 +24,7 @@ mod linux_app {
     };
     use openless_linux_egui::{
         drain_events, ensure_fcitx5_plugin_installed, fcitx5_copy_to_clipboard, notify,
-        open_external, reload_running_fcitx5, write_jsonl, EventDrainOutcome, Fcitx5HotkeyListener,
+        open_external, write_jsonl, EventDrainOutcome, Fcitx5HotkeyListener,
         FcitxPluginInstallPlan, FcitxPluginStatus, HostToPopup, LinuxBackendBuilder,
         LinuxCapabilitySnapshot, LinuxLaunchIntent, LinuxNativeRuntime, LinuxPackageKind,
         LinuxResourceLayout, LinuxUpdateSupport, Notification, PopupActionGuard, PopupChatMessage,
@@ -33,13 +33,16 @@ mod linux_app {
         POPUP_PROTOCOL_VERSION,
     };
     use openless_linux_egui::{
-        fmt_l10n, load_locale_pref, save_locale_pref, tr_l10n, Lang, LocalePref, LANGS,
+        fmt_l10n, load_locale_pref, save_locale_pref, tr_l10n, Lang, LocalePref,
     };
 
     enum UiResult {
         Message(String),
         Remote(Result<(openless_core::RemoteInputStatus, String), String>),
         Providers(Result<ProviderPanel, String>),
+        /// Credential channels for the settings modal's AI-services tab.
+        SettingsChannels(Result<Vec<SettingsChannelRow>, String>),
+        ServiceConfigured([bool; 2]),
         ProviderEditor {
             kind: openless_core::ChannelKind,
             channel_id: String,
@@ -54,6 +57,7 @@ mod linux_app {
         Library(Result<LibraryPanel, String>),
         SettingsSaved(Box<Result<openless_core::SettingsUpdateOutcome, String>>),
         Marketplace(Result<Vec<openless_core::MarketplaceListItem>, String>),
+        MarketplaceLikes(Result<Vec<String>, String>),
         MarketplaceFlow(Result<openless_core::OAuthDeviceFlow, String>),
         MarketplaceAuthPoll(Result<openless_core::OAuthPollResult, String>),
         MarketplaceDetail(Result<openless_core::MarketplaceDetail, String>),
@@ -79,6 +83,19 @@ mod linux_app {
         style_packs: Vec<openless_core::StylePack>,
         vocab_preset_store: openless_core::VocabPresetStore,
         vocab_presets: Vec<openless_core::VocabPreset>,
+    }
+
+    /// One credential channel cached for the settings modal.
+    #[derive(Clone, Debug)]
+    struct SettingsChannelRow {
+        id: String,
+        name: String,
+        provider_type: String,
+        model: String,
+        enabled: bool,
+        last_ok: Option<bool>,
+        last_latency_ms: Option<u32>,
+        last_error: Option<String>,
     }
 
     #[derive(Default, Clone, Copy)]
@@ -145,6 +162,12 @@ mod linux_app {
                 merged.silence_auto_stop_seconds = draft.silence_auto_stop_seconds;
                 merged.mute_during_recording = draft.mute_during_recording;
                 merged.audio_cue_on_record = draft.audio_cue_on_record;
+                merged.record_audio_for_debug = draft.record_audio_for_debug;
+                merged.restore_clipboard_after_paste = draft.restore_clipboard_after_paste;
+                merged.paste_shortcut = draft.paste_shortcut;
+                merged.history_retention_days = draft.history_retention_days;
+                merged.history_max_entries = draft.history_max_entries;
+                merged.remote_input_default_mode = draft.remote_input_default_mode.clone();
             }
             if self.microphone {
                 merged.microphone_device_name = draft.microphone_device_name.clone();
@@ -152,6 +175,11 @@ mod linux_app {
             if self.appearance {
                 merged.theme_mode = draft.theme_mode;
                 merged.show_overview_activity_heatmap = draft.show_overview_activity_heatmap;
+                merged.stacked_row_layout = draft.stacked_row_layout;
+                merged.conservative_layout = draft.conservative_layout;
+                merged.use_system_proxy = draft.use_system_proxy;
+                merged.multimodal_pipeline_enabled = draft.multimodal_pipeline_enabled;
+                merged.selection_voice_enabled = draft.selection_voice_enabled;
             }
             if self.hotkeys {
                 merged.dictation_hotkey = draft.dictation_hotkey.clone();
@@ -401,18 +429,6 @@ mod linux_app {
         }
     }
 
-    fn format_duration(ms: u64, lang: Lang) -> String {
-        if ms < 1000 {
-            fmt_l10n(lang, "dur.ms", &[&ms])
-        } else if ms < 60_000 {
-            fmt_l10n(lang, "dur.sec", &[&format!("{:.1}", ms as f64 / 1000.0)])
-        } else {
-            let minutes = ms / 60_000;
-            let seconds = (ms % 60_000) / 1000;
-            fmt_l10n(lang, "dur.min_sec", &[&minutes, &seconds])
-        }
-    }
-
     #[derive(Clone)]
     struct ProviderEditor {
         kind: openless_core::ChannelKind,
@@ -447,6 +463,14 @@ mod linux_app {
         snapshot: Option<BackendSnapshot>,
         preferences: Option<UserPreferences>,
         settings_dirty: SettingsDirty,
+        settings_channel_kind: openless_core::ChannelKind,
+        settings_channels: Vec<SettingsChannelRow>,
+        settings_channels_loading: bool,
+        /// 语言模型 / 语音识别是否各自有启用的渠道（AI 服务页的状态点）。
+        service_configured: [bool; 2],
+        /// 文本型设置行（端口/条数/路径…）只在偏好刚载入或外部变更时回灌，
+        /// 否则每帧覆盖会把用户正在输入的内容弹回去（表现为「输入框用不了」）。
+        hydrate_text_fields: bool,
         overview: OverviewState,
         microphones: Vec<openless_core::MicrophoneDevice>,
         transcript: String,
@@ -498,6 +522,8 @@ mod linux_app {
         update_manifest: Option<UpdateManifest>,
         update_busy: bool,
         update_progress: Option<openless_linux_egui::DownloadProgress>,
+        /// Currently playing history recording (session id + player handle).
+        history_clip: Option<(String, openless_linux_egui::ClipPlayer)>,
         marketplace_items: Vec<openless_core::MarketplaceListItem>,
         /// True once a marketplace list request has completed (ok or error), so
         /// the page can leave its loading state even when the result is empty.
@@ -550,6 +576,11 @@ mod linux_app {
                         snapshot: Some(snapshot),
                         preferences: Some(preferences),
                         settings_dirty: SettingsDirty::default(),
+                        settings_channel_kind: openless_core::ChannelKind::Llm,
+                        settings_channels: Vec::new(),
+                        settings_channels_loading: false,
+                        service_configured: [false; 2],
+                        hydrate_text_fields: true,
                         overview: OverviewState::Loading,
                         microphones: Vec::new(),
                         transcript: String::new(),
@@ -601,6 +632,7 @@ mod linux_app {
                         update_manifest: None,
                         update_busy: false,
                         update_progress: None,
+                        history_clip: None,
                         marketplace_items: Vec::new(),
                         marketplace_attempted: false,
                         marketplace_query: String::new(),
@@ -633,8 +665,13 @@ mod linux_app {
                     native: None,
                     subscription: None,
                     snapshot: None,
+                    hydrate_text_fields: true,
                     preferences: None,
                     settings_dirty: SettingsDirty::default(),
+                    settings_channel_kind: openless_core::ChannelKind::Llm,
+                    settings_channels: Vec::new(),
+                    settings_channels_loading: false,
+                    service_configured: [false; 2],
                     overview: OverviewState::Loading,
                     microphones: Vec::new(),
                     transcript: String::new(),
@@ -686,6 +723,7 @@ mod linux_app {
                     update_manifest: None,
                     update_busy: false,
                     update_progress: None,
+                    history_clip: None,
                     marketplace_items: Vec::new(),
                     marketplace_attempted: false,
                     marketplace_query: String::new(),
@@ -1114,19 +1152,89 @@ mod linux_app {
             });
         }
 
+        /// Refresh the required-service dots on the AI-services tabs.
+        fn load_service_configured(&self) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let mut configured = [false; 2];
+                for (index, kind) in [
+                    (0usize, openless_core::ChannelKind::Llm),
+                    (1usize, openless_core::ChannelKind::Asr),
+                ] {
+                    if let Ok(channels) = backend.list_channels(kind).await {
+                        configured[index] = channels.iter().any(|channel| channel.enabled);
+                    }
+                }
+                let _ = tx.send(UiResult::ServiceConfigured(configured));
+            });
+        }
+
+        /// Load the credential channels for the settings modal's AI-services tab.
+        fn load_settings_channels(&mut self) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let kind = self.settings_channel_kind;
+            self.settings_channels_loading = true;
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let result = async {
+                    let channels = backend.list_channels(kind).await?;
+                    let account = model_account(kind).to_string();
+                    let mut rows = Vec::with_capacity(channels.len());
+                    for channel in channels {
+                        let model = read_provider_value(&backend, kind, &channel.id, &account)
+                            .await?
+                            .unwrap_or_default();
+                        rows.push(SettingsChannelRow {
+                            id: channel.id.clone(),
+                            name: channel.name.clone(),
+                            provider_type: channel.provider_type.clone(),
+                            model,
+                            enabled: channel.enabled,
+                            last_ok: channel.last_test.as_ref().map(|test| test.ok),
+                            last_latency_ms: channel
+                                .last_test
+                                .as_ref()
+                                .and_then(|test| test.latency_ms),
+                            last_error: channel
+                                .last_test
+                                .as_ref()
+                                .and_then(|test| test.error.clone()),
+                        });
+                    }
+                    Ok::<_, BackendError>(rows)
+                }
+                .await
+                .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::SettingsChannels(result));
+            });
+        }
+
         fn load_marketplace(&mut self) {
             let Some(backend) = self.backend() else {
                 return;
             };
             self.marketplace_attempted = false;
             let query = self.marketplace_query.trim().to_string();
+            // The backend only ranks by popular/new; 「我赞过的」 is a filter over
+            // the signed-in user's like list, exactly like the Tauri page.
             let sort = match self.frontend_vm.marketplace_sort {
-                frontend::view_model::MarketplaceSort::Popular => "popular",
+                frontend::view_model::MarketplaceSort::Popular
+                | frontend::view_model::MarketplaceSort::Liked => "popular",
                 frontend::view_model::MarketplaceSort::New => "new",
-                frontend::view_model::MarketplaceSort::Liked => "liked",
             };
             let tx = self.tx.clone();
             self.tokio.spawn(async move {
+                let likes = backend
+                    .services()
+                    .marketplace
+                    .my_likes()
+                    .await
+                    .map_err(|error| error.to_string());
                 let result = backend
                     .services()
                     .marketplace
@@ -1137,6 +1245,7 @@ mod linux_app {
                     })
                     .await
                     .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::MarketplaceLikes(likes));
                 let _ = tx.send(UiResult::Marketplace(result));
             });
         }
@@ -1238,33 +1347,6 @@ mod linux_app {
             });
         }
 
-        fn install_update(&mut self) {
-            let (LinuxUpdateSupport::AppImage(updater), Some(manifest)) =
-                (self.update_support.clone(), self.update_manifest.clone())
-            else {
-                return;
-            };
-            if self.update_busy {
-                return;
-            }
-            self.update_busy = true;
-            self.update_progress = Some(openless_linux_egui::DownloadProgress {
-                downloaded: 0,
-                content_length: None,
-            });
-            let tx = self.tx.clone();
-            self.tokio.spawn(async move {
-                let progress_tx = tx.clone();
-                let result = updater
-                    .download_and_install(manifest, move |progress| {
-                        let _ = progress_tx.send(UiResult::UpdateProgress(progress));
-                    })
-                    .await
-                    .map_err(|error| error.to_string());
-                let _ = tx.send(UiResult::UpdateInstalled(result));
-            });
-        }
-
         fn drain_tray(&mut self, ctx: &egui::Context) {
             let lang = self.lang;
             let mut commands = Vec::new();
@@ -1334,43 +1416,6 @@ mod linux_app {
                     kind,
                     channel_id,
                     result: Box::new(result),
-                });
-            });
-        }
-
-        fn spawn_provider_mutation<F>(&self, future: F)
-        where
-            F: Future<Output = Result<String, BackendError>> + Send + 'static,
-        {
-            let tx = self.tx.clone();
-            self.tokio.spawn(async move {
-                let _ = tx.send(UiResult::ProviderMutation(
-                    future.await.map_err(|error| error.to_string()),
-                ));
-            });
-        }
-
-        fn request_provider_models(&self, kind: openless_core::ChannelKind, channel_id: String) {
-            let Some(backend) = self.backend() else {
-                return;
-            };
-            let tx = self.tx.clone();
-            self.tokio.spawn(async move {
-                let result = backend
-                    .services()
-                    .provider
-                    .list_models(openless_core::ProviderRequest {
-                        kind: provider_kind(kind),
-                        thinking_enabled: false,
-                        channel_id: Some(channel_id.clone()),
-                    })
-                    .await
-                    .map(|models| models.models)
-                    .map_err(|error| error.to_string());
-                let _ = tx.send(UiResult::ProviderModels {
-                    kind,
-                    channel_id,
-                    result,
                 });
             });
         }
@@ -1544,6 +1589,8 @@ mod linux_app {
                     }
                 }
                 BackendEventKind::PreferencesChanged(_) => {
+                    // 外部改动（Core 事件 / 托盘 / 另一窗口）要重新灌一次文本行。
+                    self.hydrate_text_fields = true;
                     if let Some(backend) = self.backend() {
                         let latest = backend.get_preferences();
                         self.preferences = Some(match self.preferences.as_ref() {
@@ -1919,6 +1966,8 @@ mod linux_app {
                     UiResult::SettingsSaved(result) => match *result {
                         Ok(outcome) => {
                             self.preferences = Some(outcome.preferences.clone());
+                            // Core 可能夹取过值（例如条数下限 5），保存后重新灌一次文本行。
+                            self.hydrate_text_fields = true;
                             if let Some(native) = &self.native {
                                 self.snapshot = Some(native.host().snapshot());
                             }
@@ -1948,6 +1997,22 @@ mod linux_app {
                     UiResult::Marketplace(Err(error)) => {
                         self.status = error;
                         self.marketplace_attempted = true;
+                    }
+                    UiResult::MarketplaceLikes(Ok(likes)) => self.marketplace_my_likes = likes,
+                    UiResult::MarketplaceLikes(Err(error)) => {
+                        // Not signed in / offline: keep the previous like set.
+                        log::debug!("marketplace likes unavailable: {error}");
+                    }
+                    UiResult::SettingsChannels(Ok(rows)) => {
+                        self.settings_channels = rows;
+                        self.settings_channels_loading = false;
+                    }
+                    UiResult::ServiceConfigured(configured) => {
+                        self.service_configured = configured;
+                    }
+                    UiResult::SettingsChannels(Err(error)) => {
+                        self.settings_channels_loading = false;
+                        self.frontend_vm.settings_notice = Some(error);
                     }
                     UiResult::MarketplaceFlow(Ok(flow)) => {
                         self.status = fmt_l10n(lang, "status.device_code", &[&flow.user_code]);
@@ -2045,575 +2110,6 @@ mod linux_app {
             }
         }
 
-        fn dictation_ui(&mut self, ui: &mut egui::Ui) {
-            let lang = self.lang;
-            ui.heading(tr_l10n(lang, "heading.dictation"));
-            let phase = self
-                .snapshot
-                .as_ref()
-                .map(|snapshot| snapshot.dictation.phase)
-                .unwrap_or(DictationPhase::Idle);
-            ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(
-                        phase == DictationPhase::Idle,
-                        egui::Button::new(tr_l10n(lang, "btn.start")),
-                    )
-                    .clicked()
-                {
-                    if let Some(backend) = self.backend() {
-                        self.transcript.clear();
-                        self.spawn(async move {
-                            backend.start_dictation().await?;
-                            Ok(tr_l10n(lang, "dictation.recording").to_string())
-                        });
-                    }
-                }
-                if ui
-                    .add_enabled(
-                        phase == DictationPhase::Recording,
-                        egui::Button::new(tr_l10n(lang, "btn.stop")),
-                    )
-                    .clicked()
-                {
-                    if let Some(backend) = self.backend() {
-                        self.spawn(async move {
-                            let result = backend.stop_dictation().await?;
-                            Ok(fmt_l10n(
-                                lang,
-                                "status.done_chars",
-                                &[&result.polished_text.chars().count()],
-                            ))
-                        });
-                    }
-                }
-                if ui
-                    .add_enabled(
-                        phase != DictationPhase::Idle,
-                        egui::Button::new(tr_l10n(lang, "btn.cancel")),
-                    )
-                    .clicked()
-                {
-                    if let Some(backend) = self.backend() {
-                        self.spawn(async move {
-                            backend.cancel_dictation(None).await?;
-                            Ok(tr_l10n(lang, "status.dictation_cancelled").to_string())
-                        });
-                    }
-                }
-            });
-            ui.label(if self.transcript.is_empty() {
-                tr_l10n(lang, "dictation.no_transcript")
-            } else {
-                &self.transcript
-            });
-        }
-
-        fn less_computer_ui(&mut self, ui: &mut egui::Ui) {
-            let lang = self.lang;
-            ui.heading("Less Computer");
-            ui.text_edit_multiline(&mut self.less_computer_input);
-            ui.horizontal(|ui| {
-                if ui.button(tr_l10n(lang, "btn.run")).clicked()
-                    && !self.less_computer_input.trim().is_empty()
-                {
-                    if let Some(backend) = self.backend() {
-                        let prompt = self.less_computer_input.clone();
-                        self.less_computer_output.clear();
-                        self.spawn(async move {
-                            backend.submit_less_computer(prompt).await?;
-                            Ok(tr_l10n(lang, "less_computer.done").to_string())
-                        });
-                    }
-                }
-                if ui.button(tr_l10n(lang, "btn.cancel")).clicked() {
-                    if let Some(backend) = self.backend() {
-                        self.spawn(async move {
-                            backend.cancel_less_computer(None).await?;
-                            Ok(tr_l10n(lang, "less_computer.cancelled").to_string())
-                        });
-                    }
-                }
-            });
-            if let Some((token, command)) = self.pending_approval.clone() {
-                ui.label(fmt_l10n(lang, "approval.request_run", &[&command]));
-                ui.horizontal(|ui| {
-                    for (label, approved) in [
-                        (tr_l10n(lang, "btn.allow"), true),
-                        (tr_l10n(lang, "btn.deny"), false),
-                    ] {
-                        if ui.button(label).clicked() {
-                            if let Some(backend) = self.backend() {
-                                let token = token.clone();
-                                self.pending_approval = None;
-                                self.spawn(async move {
-                                    backend
-                                        .services()
-                                        .less_computer
-                                        .approve(token, approved)
-                                        .await?;
-                                    Ok(tr_l10n(lang, "approval.submitted").to_string())
-                                });
-                            }
-                        }
-                    }
-                });
-            }
-            ui.label(if self.less_computer_output.is_empty() {
-                tr_l10n(lang, "less_computer.no_output")
-            } else {
-                &self.less_computer_output
-            });
-        }
-
-        fn qa_ui(&mut self, ui: &mut egui::Ui) {
-            if !self.qa_visible {
-                return;
-            }
-            let lang = self.lang;
-            ui.heading(tr_l10n(lang, "heading.qa"));
-            if let Some(state) = &self.qa_state {
-                if let Some(messages) = &state.messages {
-                    for message in messages {
-                        ui.label(format!("{}：{}", message.role, message.content));
-                    }
-                }
-                if let Some(chunk) = &state.chunk {
-                    ui.label(chunk);
-                }
-                if let Some(error) = &state.error {
-                    ui.colored_label(egui::Color32::RED, error);
-                }
-            }
-            ui.text_edit_multiline(&mut self.qa_input);
-            ui.horizontal(|ui| {
-                let recording = self
-                    .qa_state
-                    .as_ref()
-                    .is_some_and(|state| state.kind == QaStateKind::Recording);
-                if ui
-                    .button(if recording {
-                        tr_l10n(lang, "btn.end_recording")
-                    } else {
-                        tr_l10n(lang, "btn.voice_ask")
-                    })
-                    .clicked()
-                {
-                    if let Some(backend) = self.backend() {
-                        self.spawn(async move {
-                            backend.services().qa.toggle_recording().await?;
-                            Ok(tr_l10n(lang, "qa.recording_updated").to_string())
-                        });
-                    }
-                }
-                if ui.button(tr_l10n(lang, "btn.send")).clicked()
-                    && !self.qa_input.trim().is_empty()
-                {
-                    if let Some(backend) = self.backend() {
-                        let text = std::mem::take(&mut self.qa_input);
-                        self.spawn(async move {
-                            backend.services().qa.submit_text(text).await?;
-                            Ok(tr_l10n(lang, "qa.submitted").to_string())
-                        });
-                    }
-                }
-                if ui.button(tr_l10n(lang, "btn.close")).clicked() {
-                    if let Some(backend) = self.backend() {
-                        self.spawn(async move {
-                            backend.services().qa.dismiss().await?;
-                            Ok(tr_l10n(lang, "qa.closed").to_string())
-                        });
-                    }
-                }
-            });
-        }
-
-        fn selection_ui(&mut self, ui: &mut egui::Ui) {
-            let Some(selection) = self.selection.clone() else {
-                return;
-            };
-            let lang = self.lang;
-            if self.selection_preview_visible && selection.phase == SelectionPhase::Preview {
-                ui.heading(tr_l10n(lang, "heading.selection_preview"));
-                ui.text_edit_multiline(&mut self.selection_draft);
-                ui.horizontal(|ui| {
-                    if ui.button(tr_l10n(lang, "btn.confirm_replace")).clicked() {
-                        if let (Some(backend), Some(session_id)) =
-                            (self.backend(), selection.session_id)
-                        {
-                            let text = self.selection_draft.clone();
-                            self.spawn(async move {
-                                backend
-                                    .services()
-                                    .selection
-                                    .confirm(session_id, Some(text))
-                                    .await?;
-                                Ok(tr_l10n(lang, "selection.replaced").to_string())
-                            });
-                        }
-                    }
-                    if ui.button(tr_l10n(lang, "btn.cancel")).clicked() {
-                        if let (Some(backend), Some(session_id)) =
-                            (self.backend(), selection.session_id)
-                        {
-                            self.spawn(async move {
-                                backend
-                                    .services()
-                                    .selection
-                                    .cancel(Some(session_id))
-                                    .await?;
-                                Ok(tr_l10n(lang, "selection.cancelled").to_string())
-                            });
-                        }
-                    }
-                });
-            } else if selection.phase == SelectionPhase::Completed
-                && selection.revert_outcome.is_none()
-            {
-                ui.horizontal(|ui| {
-                    ui.label(tr_l10n(lang, "selection.replace_completed"));
-                    if ui.button(tr_l10n(lang, "btn.undo")).clicked() {
-                        if let (Some(backend), Some(session_id)) =
-                            (self.backend(), selection.session_id)
-                        {
-                            self.spawn(async move {
-                                backend.services().selection.revert(session_id).await?;
-                                Ok(tr_l10n(lang, "selection.reverted").to_string())
-                            });
-                        }
-                    }
-                });
-            }
-        }
-
-        fn provider_management_ui(&mut self, ui: &mut egui::Ui) {
-            let lang = self.lang;
-            ui.horizontal(|ui| {
-                ui.strong(tr_l10n(lang, "providers.credentials"));
-                for (kind, label) in [
-                    (openless_core::ChannelKind::Asr, "ASR"),
-                    (openless_core::ChannelKind::Llm, "LLM"),
-                ] {
-                    if ui
-                        .selectable_label(self.provider_kind == kind, label)
-                        .clicked()
-                        && self.provider_kind != kind
-                    {
-                        self.provider_kind = kind;
-                        self.providers = ProvidersState::Loading;
-                        self.selected_channel_id = None;
-                        self.pending_channel_delete = None;
-                        self.provider_editor = ProviderEditorState::Idle;
-                        self.provider_models.clear();
-                        self.load_providers(kind);
-                    }
-                }
-                if ui.button(tr_l10n(lang, "btn.refresh_channel")).clicked() {
-                    self.providers = ProvidersState::Loading;
-                    self.load_providers(self.provider_kind);
-                }
-            });
-
-            let panel = match self.providers.clone() {
-                ProvidersState::Loading => {
-                    ui.label(tr_l10n(lang, "providers.loading_dir"));
-                    return;
-                }
-                ProvidersState::Failed(error) => {
-                    ui.colored_label(egui::Color32::RED, error);
-                    return;
-                }
-                ProvidersState::Loaded(panel) => panel,
-            };
-
-            ui.group(|ui| {
-                ui.label(tr_l10n(lang, "btn.new_channel"));
-                ui.horizontal(|ui| {
-                    egui::ComboBox::from_id_salt("new-provider-type")
-                        .selected_text(
-                            panel
-                                .descriptors
-                                .iter()
-                                .find(|item| item.provider_type.as_str() == self.new_provider_type)
-                                .map(provider_descriptor_label)
-                                .unwrap_or_else(|| {
-                                    tr_l10n(lang, "lbl.choose_provider").to_string()
-                                }),
-                        )
-                        .show_ui(ui, |ui| {
-                            for descriptor in &panel.descriptors {
-                                ui.selectable_value(
-                                    &mut self.new_provider_type,
-                                    descriptor.provider_type.as_str().to_string(),
-                                    provider_descriptor_label(descriptor),
-                                );
-                            }
-                        });
-                    ui.text_edit_singleline(&mut self.new_channel_name);
-                    if ui
-                        .add_enabled(
-                            !self.new_provider_type.is_empty(),
-                            egui::Button::new(tr_l10n(lang, "btn.create")),
-                        )
-                        .clicked()
-                    {
-                        if let (Some(backend), Some(descriptor)) = (
-                            self.backend(),
-                            panel
-                                .descriptors
-                                .iter()
-                                .find(|item| item.provider_type.as_str() == self.new_provider_type),
-                        ) {
-                            let kind = panel.kind;
-                            let provider_type = descriptor.provider_type.as_str().to_string();
-                            let name = if self.new_channel_name.trim().is_empty() {
-                                descriptor.label_key.clone()
-                            } else {
-                                self.new_channel_name.trim().to_string()
-                            };
-                            self.new_channel_name.clear();
-                            self.spawn_provider_mutation(async move {
-                                backend.create_channel(kind, provider_type, name).await?;
-                                Ok(tr_l10n(lang, "status.channel_created").to_string())
-                            });
-                        }
-                    }
-                });
-                ui.small(tr_l10n(lang, "providers.core_note"));
-            });
-
-            if panel.channels.is_empty() {
-                ui.label(tr_l10n(lang, "providers.empty"));
-                return;
-            }
-
-            for (index, channel) in panel.channels.iter().enumerate() {
-                let active = channel.id == panel.active_provider;
-                ui.horizontal(|ui| {
-                    let selected = self.selected_channel_id.as_deref() == Some(channel.id.as_str());
-                    let active_suffix = if active {
-                        tr_l10n(lang, "btn.status_active")
-                    } else {
-                        ""
-                    };
-                    let disabled_suffix = if channel.enabled {
-                        ""
-                    } else {
-                        tr_l10n(lang, "btn.status_disabled")
-                    };
-                    if ui
-                        .selectable_label(
-                            selected,
-                            format!(
-                                "{} · {}{active_suffix}{disabled_suffix}",
-                                channel.name, channel.provider_type,
-                            ),
-                        )
-                        .clicked()
-                    {
-                        self.selected_channel_id = Some(channel.id.clone());
-                        self.provider_models.clear();
-                        if let Some((channel, descriptor)) =
-                            provider_channel_descriptor(&panel, &channel.id)
-                        {
-                            self.provider_editor = ProviderEditorState::Loading {
-                                kind: panel.kind,
-                                channel_id: channel.id.clone(),
-                            };
-                            self.load_provider_editor(panel.kind, channel, descriptor);
-                        }
-                    }
-                    if !active
-                        && channel.enabled
-                        && ui.button(tr_l10n(lang, "btn.set_active")).clicked()
-                    {
-                        if let Some(backend) = self.backend() {
-                            let slot = provider_slot(panel.kind);
-                            let channel_id = channel.id.clone();
-                            self.spawn_provider_mutation(async move {
-                                backend.set_active_provider(slot, channel_id).await?;
-                                Ok(tr_l10n(lang, "status.channel_active").to_string())
-                            });
-                        }
-                    }
-                    if ui
-                        .button(if channel.enabled {
-                            tr_l10n(lang, "btn.disable")
-                        } else {
-                            tr_l10n(lang, "btn.enable")
-                        })
-                        .clicked()
-                    {
-                        if let Some(backend) = self.backend() {
-                            let kind = panel.kind;
-                            let channel_id = channel.id.clone();
-                            let enabled = !channel.enabled;
-                            self.spawn_provider_mutation(async move {
-                                backend
-                                    .set_channel_enabled(kind, channel_id, enabled)
-                                    .await?;
-                                Ok(tr_l10n(lang, "status.channel_enabled").to_string())
-                            });
-                        }
-                    }
-                    if index > 0 && ui.button(tr_l10n(lang, "btn.move_up")).clicked() {
-                        if let Some(backend) = self.backend() {
-                            let kind = panel.kind;
-                            let mut ids = panel
-                                .channels
-                                .iter()
-                                .map(|item| item.id.clone())
-                                .collect::<Vec<_>>();
-                            ids.swap(index, index - 1);
-                            self.spawn_provider_mutation(async move {
-                                backend.reorder_channels(kind, ids).await?;
-                                Ok(tr_l10n(lang, "status.channel_reordered").to_string())
-                            });
-                        }
-                    }
-                    if index + 1 < panel.channels.len()
-                        && ui.button(tr_l10n(lang, "btn.move_down")).clicked()
-                    {
-                        if let Some(backend) = self.backend() {
-                            let kind = panel.kind;
-                            let mut ids = panel
-                                .channels
-                                .iter()
-                                .map(|item| item.id.clone())
-                                .collect::<Vec<_>>();
-                            ids.swap(index, index + 1);
-                            self.spawn_provider_mutation(async move {
-                                backend.reorder_channels(kind, ids).await?;
-                                Ok(tr_l10n(lang, "status.channel_reordered").to_string())
-                            });
-                        }
-                    }
-                    if self.pending_channel_delete.as_deref() == Some(channel.id.as_str()) {
-                        if ui.button(tr_l10n(lang, "btn.confirm_delete")).clicked() {
-                            self.pending_channel_delete = None;
-                            if let Some(backend) = self.backend() {
-                                let kind = panel.kind;
-                                let channel_id = channel.id.clone();
-                                self.spawn_provider_mutation(async move {
-                                    backend.delete_channel(kind, channel_id).await?;
-                                    Ok(tr_l10n(lang, "status.channel_deleted").to_string())
-                                });
-                            }
-                        }
-                        if ui.button(tr_l10n(lang, "btn.cancel_delete")).clicked() {
-                            self.pending_channel_delete = None;
-                        }
-                    } else if ui.button(tr_l10n(lang, "btn.delete")).clicked() {
-                        // Channel deletion may remove the last usable provider
-                        // and its persisted secrets, so require a deliberate
-                        // second click even in this intentionally compact UI.
-                        self.pending_channel_delete = Some(channel.id.clone());
-                    }
-                });
-            }
-
-            match self.provider_editor.clone() {
-                ProviderEditorState::Idle => {}
-                ProviderEditorState::Loading { kind, channel_id } => {
-                    ui.label(fmt_l10n(
-                        lang,
-                        "providers.reading_channel",
-                        &[&format!("{kind:?}"), &channel_id],
-                    ));
-                }
-                ProviderEditorState::Failed(error) => {
-                    ui.colored_label(egui::Color32::RED, error);
-                }
-                ProviderEditorState::Loaded(editor) => {
-                    let mut editor = *editor;
-                    ui.separator();
-                    ui.strong(fmt_l10n(lang, "providers.editing", &[&editor.channel.id]));
-                    let mut provider_type = editor.descriptor.provider_type.as_str().to_string();
-                    egui::ComboBox::from_id_salt("edit-provider-type")
-                        .selected_text(provider_descriptor_label(&editor.descriptor))
-                        .show_ui(ui, |ui| {
-                            for descriptor in &panel.descriptors {
-                                ui.selectable_value(
-                                    &mut provider_type,
-                                    descriptor.provider_type.as_str().to_string(),
-                                    provider_descriptor_label(descriptor),
-                                );
-                            }
-                        });
-                    if provider_type != editor.descriptor.provider_type.as_str() {
-                        if let Some(backend) = self.backend() {
-                            let kind = editor.kind;
-                            let channel_id = editor.channel.id.clone();
-                            self.spawn_provider_mutation(async move {
-                                backend
-                                    .set_channel_provider_type(kind, channel_id, provider_type)
-                                    .await?;
-                                Ok(tr_l10n(lang, "status.provider_type_updated").to_string())
-                            });
-                        }
-                        return;
-                    }
-
-                    ui.label(fmt_l10n(
-                        lang,
-                        "providers.auth_probe",
-                        &[
-                            &auth_requirement_label(lang, editor.descriptor.auth_requirement),
-                            &format!("{:?}", editor.descriptor.validation_probe),
-                        ],
-                    ));
-                    ui.horizontal(|ui| {
-                        ui.label(tr_l10n(lang, "providers.name"));
-                        ui.text_edit_singleline(&mut editor.name);
-                    });
-                    provider_fields_ui(ui, lang, &mut editor);
-
-                    ui.horizontal(|ui| {
-                        if ui.button(tr_l10n(lang, "btn.save_fields")).clicked() {
-                            if let Some(backend) = self.backend() {
-                                let saved = editor.clone();
-                                self.spawn_provider_mutation(async move {
-                                    save_provider_editor(backend, saved).await?;
-                                    Ok(tr_l10n(lang, "status.channel_saved").to_string())
-                                });
-                            }
-                        }
-                        if ui.button(tr_l10n(lang, "btn.clear_secret")).clicked() {
-                            if let Some(backend) = self.backend() {
-                                let cleared = editor.clone();
-                                self.spawn_provider_mutation(async move {
-                                    clear_provider_secrets(backend, &cleared).await?;
-                                    Ok(tr_l10n(lang, "status.secret_cleared").to_string())
-                                });
-                            }
-                        }
-                        if ui.button(tr_l10n(lang, "btn.validate")).clicked() {
-                            if let Some(backend) = self.backend() {
-                                let kind = editor.kind;
-                                let channel_id = editor.channel.id.clone();
-                                self.spawn_provider_mutation(async move {
-                                    validate_provider_channel(lang, backend, kind, channel_id).await
-                                });
-                            }
-                        }
-                        if ui.button(tr_l10n(lang, "btn.list_models")).clicked() {
-                            self.provider_models.clear();
-                            self.request_provider_models(editor.kind, editor.channel.id.clone());
-                        }
-                    });
-                    if !self.provider_models.is_empty() {
-                        ui.label(tr_l10n(lang, "providers.model_list"));
-                        for model in self.provider_models.clone() {
-                            if ui.button(&model).clicked() {
-                                editor.model = model;
-                            }
-                        }
-                    }
-                    self.provider_editor = ProviderEditorState::Loaded(Box::new(editor));
-                }
-            }
-        }
-
         /// Apply a newly chosen UI locale immediately: persist it as Linux-UI
         /// state (never Core business truth), resolve it to a concrete language
         /// and let the next frame re-render every localized surface. Persistence
@@ -2636,1595 +2132,6 @@ mod linux_app {
         /// The language selector row shown in Settings. Changing it re-renders
         /// the whole window immediately (shell, headings, labels, popups later
         /// pick it up from the persisted UI state on their next launch).
-        fn language_selector_ui(&mut self, ui: &mut egui::Ui) {
-            let mut chosen: Option<LocalePref> = None;
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(tr_l10n(self.lang, "settings.language")).strong());
-                let pref = self.locale_pref;
-                let lang = self.lang;
-                let selected = match pref {
-                    LocalePref::System => {
-                        tr_l10n(lang, "settings.language_follow_system").to_string()
-                    }
-                    LocalePref::Lang(explicit) => {
-                        tr_l10n(explicit, locale_key(explicit)).to_string()
-                    }
-                };
-                egui::ComboBox::from_id_salt("openless-ui-language")
-                    .width(240.0)
-                    .selected_text(selected)
-                    .show_ui(ui, |ui| {
-                        if ui
-                            .selectable_label(
-                                pref == LocalePref::System,
-                                tr_l10n(lang, "settings.language_follow_system"),
-                            )
-                            .clicked()
-                        {
-                            chosen = Some(LocalePref::System);
-                        }
-                        for option in LANGS {
-                            let native_label = tr_l10n(option, locale_key(option));
-                            if ui
-                                .selectable_label(pref == LocalePref::Lang(option), native_label)
-                                .clicked()
-                            {
-                                chosen = Some(LocalePref::Lang(option));
-                            }
-                        }
-                    });
-            });
-            if let Some(pref) = chosen {
-                self.apply_locale_pref(pref);
-                self.status = tr_l10n(self.lang, "settings.locale_saved").to_string();
-                ui.ctx().request_repaint();
-            }
-        }
-
-        fn settings_ui(&mut self, ui: &mut egui::Ui) {
-            let lang = self.lang;
-            ui.heading(tr_l10n(lang, "nav.providers"));
-            self.language_selector_ui(ui);
-            ui.separator();
-            if let Some(snapshot) = &self.snapshot {
-                let credentials = &snapshot.credentials;
-                let asr_state = if credentials.asr_configured {
-                    tr_l10n(lang, "overview.configured")
-                } else {
-                    tr_l10n(lang, "overview.unconfigured")
-                };
-                let llm_state = if credentials.llm_configured {
-                    tr_l10n(lang, "overview.configured")
-                } else {
-                    tr_l10n(lang, "overview.unconfigured")
-                };
-                ui.label(format!(
-                    "ASR：{}（{asr_state}）",
-                    credentials.active_asr_provider
-                ));
-                ui.label(format!(
-                    "LLM：{}（{llm_state}）",
-                    credentials.active_llm_provider
-                ));
-            }
-            self.provider_management_ui(ui);
-            ui.separator();
-            let mut save_settings = false;
-            if let Some(preferences) = self.preferences.as_mut() {
-                self.settings_dirty.streaming_insert |= ui
-                    .checkbox(
-                        &mut preferences.streaming_insert,
-                        tr_l10n(lang, "settings.streaming_insert"),
-                    )
-                    .changed();
-                self.settings_dirty.coding_agent_enabled |= ui
-                    .checkbox(
-                        &mut preferences.coding_agent_enabled,
-                        tr_l10n(lang, "settings.enable_coding_agent"),
-                    )
-                    .changed();
-                ui.collapsing(tr_l10n(lang, "settings.recording_input"), |ui| {
-                    let previous_mode = preferences.hotkey.mode;
-                    egui::ComboBox::from_label(tr_l10n(lang, "settings.rec_mode"))
-                        .selected_text(match preferences.hotkey.mode {
-                            openless_core::shared_types::HotkeyMode::Toggle => {
-                                tr_l10n(lang, "recmode.toggle")
-                            }
-                            openless_core::shared_types::HotkeyMode::Hold => {
-                                tr_l10n(lang, "recmode.hold")
-                            }
-                            openless_core::shared_types::HotkeyMode::DoubleClick => {
-                                tr_l10n(lang, "recmode.double_click")
-                            }
-                            openless_core::shared_types::HotkeyMode::Auto => {
-                                tr_l10n(lang, "recmode.auto")
-                            }
-                        })
-                        .show_ui(ui, |ui| {
-                            for (mode, key) in [
-                                (
-                                    openless_core::shared_types::HotkeyMode::Toggle,
-                                    "recmode.toggle",
-                                ),
-                                (
-                                    openless_core::shared_types::HotkeyMode::Hold,
-                                    "recmode.hold",
-                                ),
-                                (
-                                    openless_core::shared_types::HotkeyMode::Auto,
-                                    "recmode.auto",
-                                ),
-                            ] {
-                                ui.selectable_value(
-                                    &mut preferences.hotkey.mode,
-                                    mode,
-                                    tr_l10n(lang, key),
-                                );
-                            }
-                        });
-                    self.settings_dirty.recording |= preferences.hotkey.mode != previous_mode;
-                    self.settings_dirty.recording |= ui
-                        .checkbox(
-                            &mut preferences.silence_auto_stop_enabled,
-                            tr_l10n(lang, "settings.auto_stop"),
-                        )
-                        .changed();
-                    if preferences.silence_auto_stop_enabled {
-                        let previous = preferences.silence_auto_stop_seconds;
-                        egui::ComboBox::from_label(tr_l10n(lang, "settings.silence_duration"))
-                            .selected_text(fmt_l10n(lang, "settings.seconds", &[&previous]))
-                            .show_ui(ui, |ui| {
-                                for seconds in [1.0, 1.5, 2.0, 3.0, 4.0, 5.0] {
-                                    ui.selectable_value(
-                                        &mut preferences.silence_auto_stop_seconds,
-                                        seconds,
-                                        fmt_l10n(lang, "settings.seconds", &[&seconds]),
-                                    );
-                                }
-                            });
-                        self.settings_dirty.recording |=
-                            preferences.silence_auto_stop_seconds != previous;
-                    }
-                    let selected_microphone = if preferences.microphone_device_name.is_empty() {
-                        tr_l10n(lang, "settings.system_default").to_string()
-                    } else {
-                        preferences.microphone_device_name.clone()
-                    };
-                    let previous_microphone = preferences.microphone_device_name.clone();
-                    egui::ComboBox::from_label(tr_l10n(lang, "settings.microphone"))
-                        .selected_text(selected_microphone)
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut preferences.microphone_device_name,
-                                String::new(),
-                                tr_l10n(lang, "settings.system_default"),
-                            );
-                            for device in &self.microphones {
-                                ui.selectable_value(
-                                    &mut preferences.microphone_device_name,
-                                    device.name.clone(),
-                                    &device.name,
-                                );
-                            }
-                        });
-                    self.settings_dirty.microphone |=
-                        preferences.microphone_device_name != previous_microphone;
-                    self.settings_dirty.recording |= ui
-                        .checkbox(
-                            &mut preferences.mute_during_recording,
-                            tr_l10n(lang, "settings.mute_while"),
-                        )
-                        .changed();
-                    self.settings_dirty.recording |= ui
-                        .checkbox(
-                            &mut preferences.audio_cue_on_record,
-                            tr_l10n(lang, "settings.cue_audio"),
-                        )
-                        .changed();
-                });
-                ui.collapsing(tr_l10n(lang, "settings.appearance"), |ui| {
-                    let previous_theme = preferences.theme_mode;
-                    egui::ComboBox::from_label(tr_l10n(lang, "settings.theme"))
-                        .selected_text(match preferences.theme_mode {
-                            openless_core::shared_types::ThemeMode::System => {
-                                tr_l10n(lang, "theme.follow_system")
-                            }
-                            openless_core::shared_types::ThemeMode::Light => {
-                                tr_l10n(lang, "theme.light")
-                            }
-                            openless_core::shared_types::ThemeMode::Dark => {
-                                tr_l10n(lang, "theme.dark")
-                            }
-                        })
-                        .show_ui(ui, |ui| {
-                            for (mode, key) in [
-                                (
-                                    openless_core::shared_types::ThemeMode::System,
-                                    "theme.follow_system",
-                                ),
-                                (openless_core::shared_types::ThemeMode::Light, "theme.light"),
-                                (openless_core::shared_types::ThemeMode::Dark, "theme.dark"),
-                            ] {
-                                ui.selectable_value(
-                                    &mut preferences.theme_mode,
-                                    mode,
-                                    tr_l10n(lang, key),
-                                );
-                            }
-                        });
-                    self.settings_dirty.appearance |= preferences.theme_mode != previous_theme;
-                    self.settings_dirty.appearance |= ui
-                        .checkbox(
-                            &mut preferences.show_overview_activity_heatmap,
-                            tr_l10n(lang, "settings.show_heatmap"),
-                        )
-                        .changed();
-                });
-                ui.collapsing(tr_l10n(lang, "settings.hotkeys_group"), |ui| {
-                    self.settings_dirty.hotkeys |= shortcut_editor(
-                        ui,
-                        tr_l10n(lang, "hotkey.dictation"),
-                        &mut preferences.dictation_hotkey,
-                    );
-                    self.settings_dirty.hotkeys |=
-                        optional_shortcut_editor(ui, lang, "QA", &mut preferences.qa_hotkey, ";");
-                    self.settings_dirty.hotkeys |= shortcut_editor(
-                        ui,
-                        tr_l10n(lang, "hotkey.translation"),
-                        &mut preferences.translation_hotkey,
-                    );
-                    self.settings_dirty.hotkeys |= optional_shortcut_editor(
-                        ui,
-                        lang,
-                        tr_l10n(lang, "hotkey.selection_polish"),
-                        &mut preferences.selection_polish_hotkey,
-                        "P",
-                    );
-                    self.settings_dirty.hotkeys |= optional_shortcut_editor(
-                        ui,
-                        lang,
-                        tr_l10n(lang, "hotkey.switch_style"),
-                        &mut preferences.switch_style_hotkey,
-                        "S",
-                    );
-                    self.settings_dirty.hotkeys |= optional_shortcut_editor(
-                        ui,
-                        lang,
-                        tr_l10n(lang, "hotkey.open_app"),
-                        &mut preferences.open_app_hotkey,
-                        "O",
-                    );
-                    self.settings_dirty.hotkeys |= optional_shortcut_editor(
-                        ui,
-                        lang,
-                        tr_l10n(lang, "hotkey.coding_agent"),
-                        &mut preferences.coding_agent_voice_hotkey,
-                        "L",
-                    );
-                });
-                self.settings_dirty.start_minimized |= ui
-                    .checkbox(
-                        &mut preferences.start_minimized,
-                        tr_l10n(lang, "settings.start_minimized"),
-                    )
-                    .changed();
-                self.settings_dirty.launch_at_login |= ui
-                    .checkbox(
-                        &mut preferences.launch_at_login,
-                        tr_l10n(lang, "settings.launch_at_login"),
-                    )
-                    .changed();
-                self.settings_dirty.auto_update_check |= ui
-                    .checkbox(
-                        &mut preferences.auto_update_check,
-                        tr_l10n(lang, "settings.auto_update"),
-                    )
-                    .changed();
-                let previous_channel = preferences.update_channel;
-                egui::ComboBox::from_label(tr_l10n(lang, "settings.update_channel"))
-                    .selected_text(match preferences.update_channel {
-                        openless_core::shared_types::UpdateChannel::Stable => {
-                            tr_l10n(lang, "channel.stable")
-                        }
-                        openless_core::shared_types::UpdateChannel::Beta => "Beta",
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut preferences.update_channel,
-                            openless_core::shared_types::UpdateChannel::Stable,
-                            tr_l10n(lang, "channel.stable"),
-                        );
-                        ui.selectable_value(
-                            &mut preferences.update_channel,
-                            openless_core::shared_types::UpdateChannel::Beta,
-                            "Beta",
-                        );
-                    });
-                self.settings_dirty.update_channel |=
-                    preferences.update_channel != previous_channel;
-                self.settings_dirty.remote_input_enabled |= ui
-                    .checkbox(
-                        &mut preferences.remote_input_enabled,
-                        tr_l10n(lang, "settings.enable_remote"),
-                    )
-                    .changed();
-                self.settings_dirty.remote_input_port |= ui
-                    .add(
-                        egui::DragValue::new(&mut preferences.remote_input_port)
-                            .range(1..=u16::MAX)
-                            .prefix(tr_l10n(lang, "settings.port")),
-                    )
-                    .changed();
-                if ui.button(tr_l10n(lang, "btn.save_settings")).clicked() {
-                    save_settings = true;
-                }
-            }
-            if save_settings {
-                if let (Some(native), Some(draft), Some(snapshot)) =
-                    (&self.native, self.preferences.clone(), &self.snapshot)
-                {
-                    let host = native.host_arc();
-                    let revision = snapshot.preferences_revision;
-                    let dirty = self.settings_dirty;
-                    let tx = self.tx.clone();
-                    self.tokio.spawn(async move {
-                        let outcome = tokio::task::spawn_blocking(move || {
-                            let save = |preferences, revision| {
-                                if dirty.hotkeys {
-                                    host.update_settings_strict(preferences, revision)
-                                } else {
-                                    host.save_settings(preferences, revision)
-                                }
-                            };
-                            match save(draft.clone(), revision) {
-                                Err(error)
-                                    if error.code == openless_core::BackendErrorCode::Busy =>
-                                {
-                                    let latest_snapshot = host.snapshot();
-                                    let latest = host.backend().get_preferences();
-                                    save(
-                                        dirty.merge(&latest, &draft),
-                                        latest_snapshot.preferences_revision,
-                                    )
-                                }
-                                result => result,
-                            }
-                        })
-                        .await
-                        .map_err(|error| error.to_string())
-                        .and_then(|result| result.map_err(|error| error.to_string()));
-                        let _ = tx.send(UiResult::SettingsSaved(Box::new(outcome)));
-                    });
-                }
-            }
-            if let Some((remote, pin)) = &self.remote_access {
-                let remote_state = if remote.running {
-                    tr_l10n(lang, "remote.running")
-                } else if remote.starting {
-                    tr_l10n(lang, "remote.starting")
-                } else {
-                    tr_l10n(lang, "remote.stopped")
-                };
-                ui.label(remote_state);
-                if remote.enabled {
-                    ui.label(fmt_l10n(
-                        lang,
-                        "remote.lang_conns",
-                        &[&remote.locale, &remote.connection_count],
-                    ));
-                    ui.monospace(format!("PIN：{pin}"));
-                    for url in &remote.urls {
-                        ui.monospace(url);
-                    }
-                    if ui.button(tr_l10n(lang, "btn.reset_pairing")).clicked() {
-                        if let Some(backend) = self.backend() {
-                            self.spawn(async move {
-                                backend
-                                    .services()
-                                    .remote_input
-                                    .regenerate_pairing_pin()
-                                    .await?;
-                                Ok(tr_l10n(lang, "status.remote_pin_reset").to_string())
-                            });
-                        }
-                    }
-                }
-            }
-            if ui.button(tr_l10n(lang, "btn.export_error_log")).clicked() {
-                if let Some(backend) = self.backend() {
-                    let source = openless_linux_egui::log_path(&backend.config().data_dir);
-                    self.spawn(async move {
-                        let destination = tokio::task::spawn_blocking(|| {
-                            rfd::FileDialog::new()
-                                .add_filter("Log", &["log"])
-                                .set_file_name("openless.log")
-                                .save_file()
-                        })
-                        .await
-                        .map_err(|error| {
-                            BackendError::new(
-                                openless_core::BackendErrorCode::Internal,
-                                error.to_string(),
-                            )
-                        })?
-                        .ok_or_else(|| {
-                            BackendError::new(
-                                openless_core::BackendErrorCode::Cancelled,
-                                tr_l10n(lang, "dialog.export_log_cancelled"),
-                            )
-                        })?;
-                        tokio::task::spawn_blocking(move || {
-                            openless_linux_egui::export_error_log(&source, &destination)
-                        })
-                        .await
-                        .map_err(|error| {
-                            BackendError::new(
-                                openless_core::BackendErrorCode::Internal,
-                                error.to_string(),
-                            )
-                        })?
-                        .map_err(|error| {
-                            BackendError::new(
-                                openless_core::BackendErrorCode::Platform,
-                                error.to_string(),
-                            )
-                        })?;
-                        Ok(tr_l10n(lang, "status.export_log_done").to_string())
-                    });
-                }
-            }
-            ui.separator();
-            ui.heading(tr_l10n(lang, "head.software_update"));
-            let channel = self
-                .preferences
-                .as_ref()
-                .map(|preferences| preferences.update_channel)
-                .unwrap_or_default();
-            match &self.update_support {
-                LinuxUpdateSupport::AppImage(_) => {
-                    ui.horizontal(|ui| {
-                        if ui
-                            .add_enabled(
-                                !self.update_busy,
-                                egui::Button::new(tr_l10n(lang, "btn.check_now")),
-                            )
-                            .clicked()
-                        {
-                            self.request_update_check(channel);
-                        }
-                        if self.update_manifest.is_some()
-                            && ui
-                                .add_enabled(
-                                    !self.update_busy,
-                                    egui::Button::new(tr_l10n(lang, "btn.download_install")),
-                                )
-                                .clicked()
-                        {
-                            self.install_update();
-                        }
-                    });
-                    if let Some(manifest) = &self.update_manifest {
-                        ui.label(fmt_l10n(lang, "update.available", &[&manifest.version]));
-                    }
-                    if let Some(progress) = self.update_progress {
-                        let fraction = progress
-                            .content_length
-                            .filter(|total| *total > 0)
-                            .map(|total| progress.downloaded as f32 / total as f32);
-                        if let Some(fraction) = fraction {
-                            ui.add(egui::ProgressBar::new(fraction.clamp(0.0, 1.0)));
-                        }
-                        ui.label(fmt_l10n(lang, "update.downloaded", &[&progress.downloaded]));
-                    }
-                }
-                LinuxUpdateSupport::ManualOnly { releases_url } => {
-                    ui.label(tr_l10n(lang, "update.manual_notice"));
-                    if ui.button(tr_l10n(lang, "btn.open_releases")).clicked() {
-                        let url = (*releases_url).to_string();
-                        std::thread::spawn(move || {
-                            let _ = open_external(&url);
-                        });
-                    }
-                }
-            }
-        }
-
-        fn vocabulary_ui(&mut self, ui: &mut egui::Ui) {
-            let lang = self.lang;
-            if let Some(backend) = self.backend() {
-                let pending = backend.pending_corrections();
-                if !pending.is_empty() {
-                    ui.heading(tr_l10n(lang, "head.pending_corrections"));
-                    let mut action: Option<(String, bool)> = None;
-                    for suggestion in pending {
-                        ui.horizontal(|ui| {
-                            ui.label(format!(
-                                "{} → {}",
-                                suggestion.pattern, suggestion.replacement
-                            ));
-                            if ui.small_button(tr_l10n(lang, "btn.accept")).clicked() {
-                                action = Some((suggestion.id.clone(), true));
-                            }
-                            if ui.small_button(tr_l10n(lang, "btn.ignore")).clicked() {
-                                action = Some((suggestion.id.clone(), false));
-                            }
-                        });
-                    }
-                    if ui.button(tr_l10n(lang, "btn.close_all")).clicked() {
-                        backend.dismiss_pending_corrections();
-                    }
-                    if let Some((id, accept)) = action {
-                        self.spawn(async move {
-                            if accept {
-                                backend.accept_pending_correction(&id)?;
-                            } else {
-                                backend.reject_pending_correction(&id);
-                            }
-                            Ok(tr_l10n(lang, "status.suggestion_handled").to_string())
-                        });
-                    }
-                    ui.separator();
-                }
-            }
-            ui.heading(tr_l10n(lang, "head.vocab_presets"));
-            ui.label(tr_l10n(lang, "lbl.preset_note"));
-            let mut preset_action: Option<(String, String)> = None;
-            for preset in &self.vocab_presets {
-                ui.horizontal_wrapped(|ui| {
-                    ui.strong(&preset.name);
-                    ui.label(fmt_l10n(lang, "lbl.preset_count", &[&preset.phrases.len()]));
-                    if ui.small_button(tr_l10n(lang, "btn.apply")).clicked() {
-                        preset_action = Some((preset.id.clone(), "apply".into()));
-                    }
-                    if self
-                        .vocab_preset_store
-                        .custom
-                        .iter()
-                        .any(|custom| custom.id == preset.id)
-                        && ui.small_button(tr_l10n(lang, "btn.delete")).clicked()
-                    {
-                        preset_action = Some((preset.id.clone(), "delete".into()));
-                    } else if openless_core::builtin_vocab_presets()
-                        .iter()
-                        .any(|builtin| builtin.id == preset.id)
-                        && ui.small_button(tr_l10n(lang, "btn.hide_builtin")).clicked()
-                    {
-                        preset_action = Some((preset.id.clone(), "disable".into()));
-                    }
-                    ui.weak(preset.phrases.join("、"));
-                });
-            }
-            for id in self.vocab_preset_store.disabled_builtin_preset_ids.clone() {
-                if ui
-                    .small_button(fmt_l10n(lang, "btn.restore_builtin", &[&id]))
-                    .clicked()
-                {
-                    preset_action = Some((id, "enable".into()));
-                }
-            }
-            ui.group(|ui| {
-                ui.label(tr_l10n(lang, "lbl.new_custom_preset"));
-                ui.text_edit_singleline(&mut self.vocab_preset_name);
-                ui.add(
-                    egui::TextEdit::multiline(&mut self.vocab_preset_phrases)
-                        .hint_text(tr_l10n(lang, "hint.preset_phrases"))
-                        .desired_rows(3),
-                );
-                if ui.button(tr_l10n(lang, "btn.save_preset")).clicked()
-                    && !self.vocab_preset_name.trim().is_empty()
-                    && !self.vocab_preset_phrases.trim().is_empty()
-                {
-                    preset_action = Some((String::new(), "create".into()));
-                }
-            });
-            if let (Some(backend), Some((id, operation))) = (self.backend(), preset_action) {
-                let name = std::mem::take(&mut self.vocab_preset_name);
-                let phrases_text = std::mem::take(&mut self.vocab_preset_phrases);
-                let selected = self
-                    .vocab_presets
-                    .iter()
-                    .find(|preset| preset.id == id)
-                    .cloned();
-                self.spawn(async move {
-                    match operation.as_str() {
-                        "apply" => {
-                            let preset = selected.ok_or_else(|| {
-                                BackendError::new(
-                                    openless_core::BackendErrorCode::Cancelled,
-                                    tr_l10n(lang, "status.preset_gone"),
-                                )
-                            })?;
-                            for phrase in preset.phrases {
-                                backend.add_vocabulary(
-                                    phrase,
-                                    Some(fmt_l10n(lang, "status.from_preset", &[&preset.name])),
-                                )?;
-                            }
-                        }
-                        "create" => {
-                            let mut phrases = phrases_text
-                                .split([',', '，', '\n'])
-                                .map(str::trim)
-                                .filter(|phrase| !phrase.is_empty())
-                                .map(ToOwned::to_owned)
-                                .collect::<Vec<_>>();
-                            phrases.sort();
-                            phrases.dedup();
-                            let mut store = backend.list_vocabulary_presets()?;
-                            store.custom.push(openless_core::VocabPreset {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                name: name.trim().to_string(),
-                                phrases,
-                            });
-                            backend.save_vocabulary_presets(&store)?;
-                        }
-                        "delete" => {
-                            let mut store = backend.list_vocabulary_presets()?;
-                            store.custom.retain(|preset| preset.id != id);
-                            backend.save_vocabulary_presets(&store)?;
-                        }
-                        "disable" => {
-                            let mut store = backend.list_vocabulary_presets()?;
-                            if !store.disabled_builtin_preset_ids.contains(&id) {
-                                store.disabled_builtin_preset_ids.push(id);
-                            }
-                            backend.save_vocabulary_presets(&store)?;
-                        }
-                        "enable" => {
-                            let mut store = backend.list_vocabulary_presets()?;
-                            store
-                                .disabled_builtin_preset_ids
-                                .retain(|preset_id| preset_id != &id);
-                            backend.save_vocabulary_presets(&store)?;
-                        }
-                        _ => unreachable!(),
-                    }
-                    Ok(tr_l10n(lang, "status.preset_updated").to_string())
-                });
-            }
-            ui.separator();
-            ui.heading(tr_l10n(lang, "head.custom_vocab"));
-            ui.horizontal(|ui| {
-                ui.label(tr_l10n(lang, "lbl.phrase"));
-                ui.text_edit_singleline(&mut self.vocabulary_phrase);
-                ui.label(tr_l10n(lang, "lbl.note"));
-                ui.text_edit_singleline(&mut self.vocabulary_note);
-                if ui.button(tr_l10n(lang, "btn.add")).clicked()
-                    && !self.vocabulary_phrase.trim().is_empty()
-                {
-                    if let Some(backend) = self.backend() {
-                        let phrase = std::mem::take(&mut self.vocabulary_phrase);
-                        let note = std::mem::take(&mut self.vocabulary_note);
-                        self.spawn(async move {
-                            backend.add_vocabulary(
-                                phrase,
-                                (!note.trim().is_empty()).then_some(note),
-                            )?;
-                            Ok(tr_l10n(lang, "status.vocab_saved").to_string())
-                        });
-                    }
-                }
-            });
-            let mut vocabulary_action = None;
-            for entry in &self.vocabulary {
-                ui.horizontal(|ui| {
-                    let mut enabled = entry.enabled;
-                    if ui.checkbox(&mut enabled, "").changed() {
-                        vocabulary_action = Some((entry.id.clone(), Some(enabled)));
-                    }
-                    ui.label(egui::RichText::new(&entry.phrase).strong());
-                    if let Some(note) = &entry.note {
-                        ui.label(note);
-                    }
-                    ui.label(fmt_l10n(lang, "lbl.hits", &[&entry.hits]));
-                    if ui.small_button(tr_l10n(lang, "btn.delete")).clicked() {
-                        vocabulary_action = Some((entry.id.clone(), None));
-                    }
-                });
-            }
-            if let (Some(backend), Some((id, enabled))) = (self.backend(), vocabulary_action) {
-                self.spawn(async move {
-                    if let Some(enabled) = enabled {
-                        backend.set_vocabulary_enabled(&id, enabled)?;
-                    } else {
-                        backend.remove_vocabulary(&id)?;
-                    }
-                    Ok(tr_l10n(lang, "status.vocab_updated").to_string())
-                });
-            }
-
-            ui.separator();
-            ui.heading(tr_l10n(lang, "head.correction_rules"));
-            ui.horizontal(|ui| {
-                ui.text_edit_singleline(&mut self.correction_pattern);
-                ui.label("→");
-                ui.text_edit_singleline(&mut self.correction_replacement);
-                if ui.button(tr_l10n(lang, "btn.add_rule")).clicked()
-                    && !self.correction_pattern.trim().is_empty()
-                    && !self.correction_replacement.trim().is_empty()
-                {
-                    if let Some(backend) = self.backend() {
-                        let pattern = std::mem::take(&mut self.correction_pattern);
-                        let replacement = std::mem::take(&mut self.correction_replacement);
-                        self.spawn(async move {
-                            backend.add_correction_rule(pattern, replacement)?;
-                            Ok(tr_l10n(lang, "status.correction_saved").to_string())
-                        });
-                    }
-                }
-            });
-            let mut correction_action = None;
-            for rule in &self.correction_rules {
-                ui.horizontal(|ui| {
-                    let mut enabled = rule.enabled;
-                    if ui.checkbox(&mut enabled, "").changed() {
-                        correction_action = Some((rule.id.clone(), Some(enabled)));
-                    }
-                    ui.label(format!("{} → {}", rule.pattern, rule.replacement));
-                    ui.label(format!("{:?}", rule.source));
-                    if ui.small_button(tr_l10n(lang, "btn.delete")).clicked() {
-                        correction_action = Some((rule.id.clone(), None));
-                    }
-                });
-            }
-            if let (Some(backend), Some((id, enabled))) = (self.backend(), correction_action) {
-                self.spawn(async move {
-                    if let Some(enabled) = enabled {
-                        backend.set_correction_rule_enabled(&id, enabled)?;
-                    } else {
-                        backend.remove_correction_rule(&id)?;
-                    }
-                    Ok(tr_l10n(lang, "status.correction_updated").to_string())
-                });
-            }
-        }
-
-        fn styles_ui(&mut self, ui: &mut egui::Ui) {
-            let lang = self.lang;
-            ui.label(tr_l10n(lang, "lbl.style_note"));
-            ui.group(|ui| {
-                ui.strong(tr_l10n(lang, "lbl.direct_hotkey"));
-                let previous_id = self.style_hotkey_pack_id.clone();
-                egui::ComboBox::from_id_salt("style-hotkey-pack")
-                    .selected_text(
-                        self.style_packs
-                            .iter()
-                            .find(|pack| pack.id == self.style_hotkey_pack_id)
-                            .map(|pack| pack.name.as_str())
-                            .unwrap_or_else(|| tr_l10n(lang, "lbl.choose_style")),
-                    )
-                    .show_ui(ui, |ui| {
-                        for pack in &self.style_packs {
-                            ui.selectable_value(
-                                &mut self.style_hotkey_pack_id,
-                                pack.id.clone(),
-                                &pack.name,
-                            );
-                        }
-                    });
-                if previous_id != self.style_hotkey_pack_id {
-                    let binding = self.preferences.as_ref().and_then(|preferences| {
-                        preferences
-                            .style_pack_hotkeys
-                            .iter()
-                            .find(|hotkey| hotkey.pack_id == self.style_hotkey_pack_id)
-                            .map(|hotkey| hotkey.binding.clone())
-                    });
-                    self.style_hotkey_primary = binding
-                        .as_ref()
-                        .map(|binding| binding.primary.clone())
-                        .unwrap_or_default();
-                    self.style_hotkey_modifiers = binding
-                        .map(|binding| binding.modifiers.join("+"))
-                        .unwrap_or_default();
-                }
-                ui.horizontal(|ui| {
-                    ui.label(tr_l10n(lang, "lbl.primary"));
-                    ui.text_edit_singleline(&mut self.style_hotkey_primary);
-                    ui.label(tr_l10n(lang, "lbl.modifiers"));
-                    ui.text_edit_singleline(&mut self.style_hotkey_modifiers);
-                });
-                let save = ui
-                    .add_enabled(
-                        !self.style_hotkey_pack_id.is_empty()
-                            && !self.style_hotkey_primary.trim().is_empty(),
-                        egui::Button::new(tr_l10n(lang, "btn.save_direct_hotkey")),
-                    )
-                    .clicked();
-                let remove = ui
-                    .add_enabled(
-                        !self.style_hotkey_pack_id.is_empty(),
-                        egui::Button::new(tr_l10n(lang, "btn.remove_direct_hotkey")),
-                    )
-                    .clicked();
-                if save || remove {
-                    if let (Some(native), Some(mut preferences), Some(snapshot)) =
-                        (&self.native, self.preferences.clone(), &self.snapshot)
-                    {
-                        let pack_id = self.style_hotkey_pack_id.clone();
-                        let desired = save.then(|| openless_core::shared_types::ShortcutBinding {
-                            primary: self.style_hotkey_primary.trim().to_string(),
-                            modifiers: self
-                                .style_hotkey_modifiers
-                                .split('+')
-                                .map(str::trim)
-                                .filter(|modifier| !modifier.is_empty())
-                                .map(ToOwned::to_owned)
-                                .collect(),
-                        });
-                        set_style_pack_hotkey(&mut preferences, &pack_id, desired.clone());
-                        let host = native.host_arc();
-                        let revision = snapshot.preferences_revision;
-                        self.spawn(async move {
-                            tokio::task::spawn_blocking(move || {
-                                match host.update_settings_strict(preferences, revision) {
-                                    Err(error)
-                                        if error.code == openless_core::BackendErrorCode::Busy =>
-                                    {
-                                        let mut latest = host.backend().get_preferences();
-                                        set_style_pack_hotkey(&mut latest, &pack_id, desired);
-                                        let revision = host.snapshot().preferences_revision;
-                                        host.update_settings_strict(latest, revision)
-                                    }
-                                    result => result,
-                                }
-                            })
-                            .await
-                            .map_err(|error| {
-                                BackendError::new(
-                                    openless_core::BackendErrorCode::Internal,
-                                    error.to_string(),
-                                )
-                            })??;
-                            Ok(tr_l10n(lang, "status.style_hotkey_saved").to_string())
-                        });
-                    }
-                }
-            });
-            ui.horizontal(|ui| {
-                if ui.button(tr_l10n(lang, "btn.new_style")).clicked() {
-                    self.style_editor = Some(openless_core::StylePack {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        name: tr_l10n(lang, "lbl.new_style_default").to_string(),
-                        ..Default::default()
-                    });
-                }
-                if ui.button(tr_l10n(lang, "btn.import_zip")).clicked() {
-                    if let Some(backend) = self.backend() {
-                        self.spawn(async move {
-                            let path = tokio::task::spawn_blocking(|| {
-                                rfd::FileDialog::new()
-                                    .add_filter("OpenLess style pack", &["zip"])
-                                    .pick_file()
-                            })
-                            .await
-                            .map_err(|error| {
-                                BackendError::new(
-                                    openless_core::BackendErrorCode::Internal,
-                                    error.to_string(),
-                                )
-                            })?
-                            .ok_or_else(|| {
-                                BackendError::new(
-                                    openless_core::BackendErrorCode::Cancelled,
-                                    tr_l10n(lang, "dialog.style_import_cancelled"),
-                                )
-                            })?;
-                            let pack = tokio::task::spawn_blocking(move || {
-                                backend.import_style_pack_path(&path)
-                            })
-                            .await
-                            .map_err(|error| {
-                                BackendError::new(
-                                    openless_core::BackendErrorCode::Internal,
-                                    error.to_string(),
-                                )
-                            })??;
-                            Ok(fmt_l10n(lang, "status.style_imported", &[&pack.name]))
-                        });
-                    }
-                }
-            });
-            if let Some(editor) = self.style_editor.as_mut() {
-                ui.group(|ui| {
-                    ui.heading(tr_l10n(lang, "head.style_pack_editor"));
-                    ui.horizontal(|ui| {
-                        ui.label(tr_l10n(lang, "lbl.name"));
-                        ui.text_edit_singleline(&mut editor.name);
-                        ui.label(tr_l10n(lang, "lbl.version"));
-                        ui.text_edit_singleline(&mut editor.version);
-                    });
-                    ui.label(tr_l10n(lang, "lbl.description"));
-                    ui.text_edit_multiline(&mut editor.description);
-                    egui::ComboBox::from_label(tr_l10n(lang, "lbl.base_mode"))
-                        .selected_text(editor.base_mode.display_name())
-                        .show_ui(ui, |ui| {
-                            for mode in [
-                                openless_core::PolishMode::Raw,
-                                openless_core::PolishMode::Light,
-                                openless_core::PolishMode::Structured,
-                                openless_core::PolishMode::Formal,
-                            ] {
-                                ui.selectable_value(
-                                    &mut editor.base_mode,
-                                    mode,
-                                    mode.display_name(),
-                                );
-                            }
-                        });
-                    ui.label(tr_l10n(lang, "lbl.dictation_prompt"));
-                    ui.add(egui::TextEdit::multiline(&mut editor.prompt).desired_rows(6));
-                    ui.label(tr_l10n(lang, "lbl.selection_prompt"));
-                    ui.add(egui::TextEdit::multiline(&mut editor.selection_prompt).desired_rows(4));
-                });
-                let mut save = false;
-                let mut cancel = false;
-                ui.horizontal(|ui| {
-                    save = ui.button(tr_l10n(lang, "btn.save_style")).clicked();
-                    cancel = ui.button(tr_l10n(lang, "btn.cancel_edit")).clicked();
-                });
-                if cancel {
-                    self.style_editor = None;
-                } else if save {
-                    let pack = self.style_editor.take().expect("editor exists");
-                    if let Some(backend) = self.backend() {
-                        let exists = self.style_packs.iter().any(|item| item.id == pack.id);
-                        self.spawn(async move {
-                            let saved = if exists {
-                                backend.update_style_pack(pack)?
-                            } else {
-                                backend.create_style_pack(pack)?
-                            };
-                            Ok(fmt_l10n(lang, "status.style_saved", &[&saved.name]))
-                        });
-                    }
-                }
-                ui.separator();
-            }
-            let mut action: Option<(String, &'static str, bool)> = None;
-            for pack in self.style_packs.clone() {
-                egui::Frame::group(ui.style()).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.heading(&pack.name);
-                        if pack.active {
-                            ui.label(
-                                egui::RichText::new(tr_l10n(lang, "lbl.current"))
-                                    .color(theme::BLUE),
-                            );
-                        }
-                        ui.label(format!("{:?} · {:?}", pack.kind, pack.base_mode));
-                    });
-                    ui.label(&pack.description);
-                    if let Some(author) = &pack.author {
-                        ui.label(fmt_l10n(
-                            lang,
-                            "lbl.author_version",
-                            &[author, &pack.version],
-                        ));
-                    }
-                    ui.horizontal(|ui| {
-                        if !pack.active && ui.button(tr_l10n(lang, "btn.set_current")).clicked() {
-                            action = Some((pack.id.clone(), "activate", true));
-                        }
-                        let mut enabled = pack.enabled;
-                        if ui
-                            .checkbox(&mut enabled, tr_l10n(lang, "btn.enable_label"))
-                            .changed()
-                        {
-                            action = Some((pack.id.clone(), "enabled", enabled));
-                        }
-                        if ui.button(tr_l10n(lang, "btn.preview_runtime")).clicked() {
-                            if let Some(backend) = self.backend() {
-                                let diagnostics = backend.preview_style_pack_runtime(&pack);
-                                self.status = fmt_l10n(
-                                    lang,
-                                    "status.style_preview",
-                                    &[
-                                        &diagnostics.pack_name,
-                                        &diagnostics.single_turn_prompt_chars,
-                                        &diagnostics.multi_turn_prompt_chars,
-                                        &diagnostics.hotwords.len(),
-                                    ],
-                                );
-                            }
-                        }
-                        if pack.kind == openless_core::StylePackKind::Imported
-                            && ui.button(tr_l10n(lang, "btn.edit")).clicked()
-                        {
-                            self.style_editor = Some(pack.clone());
-                        }
-                        if pack.kind == openless_core::StylePackKind::Imported
-                            && ui.button(tr_l10n(lang, "btn.delete")).clicked()
-                        {
-                            action = Some((pack.id.clone(), "delete", false));
-                        }
-                        if pack.kind == openless_core::StylePackKind::Builtin
-                            && ui.button(tr_l10n(lang, "btn.reset_builtin")).clicked()
-                        {
-                            action = Some((pack.id.clone(), "reset", false));
-                        }
-                        if ui.button(tr_l10n(lang, "btn.export_zip")).clicked() {
-                            action = Some((pack.id.clone(), "export", false));
-                        }
-                    });
-                });
-                ui.add_space(8.0);
-            }
-            if let (Some(backend), Some((id, operation, value))) = (self.backend(), action) {
-                self.spawn(async move {
-                    match operation {
-                        "activate" => {
-                            backend.activate_style_pack(&id)?;
-                        }
-                        "enabled" => {
-                            backend.set_style_pack_enabled(&id, value)?;
-                        }
-                        "delete" => {
-                            backend.remove_style_pack(&id)?;
-                        }
-                        "reset" => {
-                            backend.reset_builtin_style_pack(&id)?;
-                        }
-                        "export" => {
-                            let bytes = backend.export_style_pack_bytes(&id)?;
-                            let destination = tokio::task::spawn_blocking(move || {
-                                rfd::FileDialog::new()
-                                    .add_filter("OpenLess style pack", &["zip"])
-                                    .set_file_name(format!("openless-style-{id}.zip"))
-                                    .save_file()
-                            })
-                            .await
-                            .map_err(|error| {
-                                BackendError::new(
-                                    openless_core::BackendErrorCode::Internal,
-                                    error.to_string(),
-                                )
-                            })?
-                            .ok_or_else(|| {
-                                BackendError::new(
-                                    openless_core::BackendErrorCode::Cancelled,
-                                    tr_l10n(lang, "dialog.style_export_cancelled"),
-                                )
-                            })?;
-                            tokio::task::spawn_blocking(move || {
-                                openless_linux_egui::atomic_save(&destination, &bytes)
-                            })
-                            .await
-                            .map_err(|error| {
-                                BackendError::new(
-                                    openless_core::BackendErrorCode::Internal,
-                                    error.to_string(),
-                                )
-                            })?
-                            .map_err(|error| {
-                                BackendError::new(
-                                    openless_core::BackendErrorCode::Platform,
-                                    error.to_string(),
-                                )
-                            })?;
-                        }
-                        _ => unreachable!(),
-                    }
-                    Ok(tr_l10n(lang, "status.style_updated").to_string())
-                });
-            }
-        }
-
-        fn marketplace_ui(&mut self, ui: &mut egui::Ui) {
-            let lang = self.lang;
-            ui.horizontal(|ui| {
-                ui.text_edit_singleline(&mut self.marketplace_query);
-                if ui.button(tr_l10n(lang, "btn.search_refresh")).clicked() {
-                    self.load_marketplace();
-                }
-                if ui.button(tr_l10n(lang, "btn.github_login")).clicked() {
-                    if let Some(backend) = self.backend() {
-                        let tx = self.tx.clone();
-                        self.tokio.spawn(async move {
-                            let result = backend
-                                .services()
-                                .marketplace
-                                .start_device_flow()
-                                .await
-                                .map_err(|error| error.to_string());
-                            let _ = tx.send(UiResult::MarketplaceFlow(result));
-                        });
-                    }
-                }
-                if ui.button(tr_l10n(lang, "btn.logout")).clicked() {
-                    if let Some(backend) = self.backend() {
-                        self.spawn(async move {
-                            backend.services().marketplace.logout().await?;
-                            Ok(tr_l10n(lang, "status.logout_done").to_string())
-                        });
-                    }
-                }
-                if ui.button(tr_l10n(lang, "btn.my_publish_like")).clicked() {
-                    self.load_marketplace_mine();
-                }
-            });
-            if let Some(flow) = self.marketplace_flow.clone() {
-                ui.horizontal(|ui| {
-                    ui.label(fmt_l10n(lang, "lbl.device_code", &[&flow.user_code]));
-                    if ui.button(tr_l10n(lang, "btn.open_github")).clicked() {
-                        let url = flow.verification_uri.clone();
-                        std::thread::spawn(move || {
-                            if let Err(error) = open_external(&url) {
-                                eprintln!("OpenLess GitHub login URL failed: {error}");
-                            }
-                        });
-                    }
-                    if ui.button(tr_l10n(lang, "btn.check_auth")).clicked() {
-                        if let Some(backend) = self.backend() {
-                            let tx = self.tx.clone();
-                            let flow_id = flow.flow_id.clone();
-                            self.tokio.spawn(async move {
-                                let result = backend
-                                    .services()
-                                    .marketplace
-                                    .poll_device_flow(flow_id)
-                                    .await
-                                    .map_err(|error| error.to_string());
-                                let _ = tx.send(UiResult::MarketplaceAuthPoll(result));
-                            });
-                        }
-                    }
-                });
-            }
-            if self.marketplace_items.is_empty() {
-                ui.label(tr_l10n(lang, "marketplace.not_loaded"));
-                return;
-            }
-            if let Some(detail) = &self.marketplace_detail {
-                ui.group(|ui| {
-                    ui.heading(fmt_l10n(
-                        lang,
-                        "head.marketplace_detail",
-                        &[&detail.summary.name],
-                    ));
-                    ui.label(fmt_l10n(lang, "lbl.status_colon", &[&detail.state]));
-                    ui.label(&detail.prompt);
-                });
-            }
-            if !self.marketplace_my_packs.is_empty() || !self.marketplace_my_likes.is_empty() {
-                ui.group(|ui| {
-                    ui.heading(tr_l10n(lang, "head.marketplace_mine"));
-                    ui.label(fmt_l10n(
-                        lang,
-                        "lbl.liked",
-                        &[&self.marketplace_my_likes.len()],
-                    ));
-                    for pack in &self.marketplace_my_packs {
-                        ui.label(format!("{} · {}", pack.summary.name, pack.state));
-                    }
-                });
-            }
-            let mut action: Option<(String, &'static str)> = None;
-            for pack in &self.marketplace_items {
-                egui::Frame::group(ui.style()).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.heading(&pack.name);
-                        ui.label(format!("@{} · {}", pack.author_login, pack.version));
-                    });
-                    ui.label(&pack.description);
-                    ui.label(fmt_l10n(
-                        lang,
-                        "lbl.like_dl",
-                        &[&pack.like_count, &pack.download_count, &pack.base_mode],
-                    ));
-                    ui.horizontal(|ui| {
-                        if ui.button(tr_l10n(lang, "btn.install")).clicked() {
-                            action = Some((pack.id.clone(), "install"));
-                        }
-                        if ui.button(tr_l10n(lang, "btn.toggle_like")).clicked() {
-                            action = Some((pack.id.clone(), "like"));
-                        }
-                        if ui.button(tr_l10n(lang, "btn.detail")).clicked() {
-                            action = Some((pack.id.clone(), "detail"));
-                        }
-                        if ui.button(tr_l10n(lang, "btn.download_zip")).clicked() {
-                            action = Some((pack.id.clone(), "download"));
-                        }
-                    });
-                });
-                ui.add_space(8.0);
-            }
-            if let (Some(backend), Some((id, operation))) = (self.backend(), action) {
-                let tx = self.tx.clone();
-                self.tokio.spawn(async move {
-                    match operation {
-                        "install" => {
-                            let result = backend
-                                .services()
-                                .marketplace
-                                .install(id)
-                                .await
-                                .map(|pack| {
-                                    fmt_l10n(lang, "status.marketplace_installed", &[&pack.name])
-                                })
-                                .map_err(|error| error.to_string());
-                            let _ =
-                                tx.send(UiResult::Message(result.unwrap_or_else(|error| error)));
-                        }
-                        "like" => {
-                            let result = backend.services().marketplace.toggle_like(id).await;
-                            let message = result
-                                .map(|result| {
-                                    fmt_l10n(lang, "status.marketplace_like", &[&result.like_count])
-                                })
-                                .unwrap_or_else(|error| error.to_string());
-                            let _ = tx.send(UiResult::Message(message));
-                        }
-                        "detail" => {
-                            let result = backend
-                                .services()
-                                .marketplace
-                                .detail(id)
-                                .await
-                                .map_err(|error| error.to_string());
-                            let _ = tx.send(UiResult::MarketplaceDetail(result));
-                        }
-                        "download" => {
-                            let result = async {
-                                let bytes = backend
-                                    .services()
-                                    .marketplace
-                                    .download_archive(id.clone())
-                                    .await?;
-                                let destination = tokio::task::spawn_blocking(move || {
-                                    rfd::FileDialog::new()
-                                        .add_filter("OpenLess style pack", &["zip"])
-                                        .set_file_name(format!("openless-marketplace-{id}.zip"))
-                                        .save_file()
-                                })
-                                .await
-                                .map_err(|error| {
-                                    BackendError::new(
-                                        openless_core::BackendErrorCode::Internal,
-                                        error.to_string(),
-                                    )
-                                })?
-                                .ok_or_else(|| {
-                                    BackendError::new(
-                                        openless_core::BackendErrorCode::Cancelled,
-                                        tr_l10n(lang, "dialog.marketplace_zip_cancelled"),
-                                    )
-                                })?;
-                                tokio::task::spawn_blocking(move || {
-                                    openless_linux_egui::atomic_save(&destination, &bytes)
-                                })
-                                .await
-                                .map_err(|error| {
-                                    BackendError::new(
-                                        openless_core::BackendErrorCode::Internal,
-                                        error.to_string(),
-                                    )
-                                })?
-                                .map_err(|error| {
-                                    BackendError::new(
-                                        openless_core::BackendErrorCode::Platform,
-                                        error.to_string(),
-                                    )
-                                })?;
-                                Ok::<_, BackendError>(
-                                    tr_l10n(lang, "status.marketplace_zip_saved").to_string(),
-                                )
-                            }
-                            .await
-                            .unwrap_or_else(|error| error.to_string());
-                            let _ = tx.send(UiResult::Message(result));
-                        }
-                        _ => unreachable!(),
-                    }
-                });
-            }
-            ui.separator();
-            ui.heading(tr_l10n(lang, "head.publish_local"));
-            let mut local_action: Option<(String, Option<String>, &'static str)> = None;
-            for pack in self
-                .style_packs
-                .iter()
-                .filter(|pack| pack.kind == openless_core::StylePackKind::Imported)
-            {
-                ui.horizontal(|ui| {
-                    ui.label(&pack.name);
-                    if ui.button(tr_l10n(lang, "btn.upload_update")).clicked() {
-                        local_action =
-                            Some((pack.id.clone(), pack.origin_pack_id.clone(), "upload"));
-                    }
-                });
-            }
-            for pack in &self.marketplace_my_packs {
-                ui.horizontal(|ui| {
-                    ui.label(fmt_l10n(lang, "lbl.published", &[&pack.summary.name]));
-                    if ui.button(tr_l10n(lang, "btn.delete_publish")).clicked() {
-                        local_action = Some((pack.summary.id.clone(), None, "delete"));
-                    }
-                });
-            }
-            if let (Some(backend), Some((id, origin, operation))) = (self.backend(), local_action) {
-                self.spawn(async move {
-                    match operation {
-                        "upload" => {
-                            let result = backend.services().marketplace.upload(id, origin).await?;
-                            Ok(fmt_l10n(
-                                lang,
-                                "status.marketplace_published",
-                                &[&result.state, &result.message],
-                            ))
-                        }
-                        "delete" => {
-                            backend.services().marketplace.delete(id).await?;
-                            Ok(tr_l10n(lang, "status.marketplace_deleted").to_string())
-                        }
-                        _ => unreachable!(),
-                    }
-                });
-            }
-        }
-
-        fn history_ui(&mut self, ui: &mut egui::Ui) {
-            let lang = self.lang;
-            ui.heading(tr_l10n(lang, "nav.history"));
-            ui.horizontal(|ui| {
-                ui.label(tr_l10n(lang, "lbl.search"));
-                ui.text_edit_singleline(&mut self.history_search);
-                if ui.button(tr_l10n(lang, "btn.clear_all")).clicked() {
-                    if let Some(backend) = self.backend() {
-                        self.spawn(async move {
-                            backend.clear_history()?;
-                            Ok(tr_l10n(lang, "status.history_cleared").to_string())
-                        });
-                    }
-                }
-            });
-            let Some(backend) = self.backend() else {
-                return;
-            };
-            match backend.list_history() {
-                Ok(history) if history.is_empty() => {
-                    ui.label(tr_l10n(lang, "history.empty"));
-                }
-                Ok(history) => {
-                    let query = self.history_search.trim().to_lowercase();
-                    let mut action: Option<(String, &'static str, String)> = None;
-                    for item in history
-                        .into_iter()
-                        .rev()
-                        .filter(|item| {
-                            query.is_empty()
-                                || item.final_text.to_lowercase().contains(&query)
-                                || item.raw_transcript.to_lowercase().contains(&query)
-                        })
-                        .take(100)
-                    {
-                        let delivery = match item.insert_status {
-                            HistoryInsertStatus::Inserted => tr_l10n(lang, "history.inserted"),
-                            HistoryInsertStatus::CopiedFallback => {
-                                tr_l10n(lang, "history.copied_fallback")
-                            }
-                            HistoryInsertStatus::PasteSent => tr_l10n(lang, "history.paste_sent"),
-                            HistoryInsertStatus::Failed => tr_l10n(lang, "history.failed"),
-                            HistoryInsertStatus::NotRequested => {
-                                tr_l10n(lang, "history.not_requested")
-                            }
-                        };
-                        egui::Frame::group(ui.style()).show(ui, |ui| {
-                            ui.label(format!("{} · {}", item.created_at, delivery));
-                            ui.label(&item.final_text);
-                            ui.horizontal(|ui| {
-                                if ui.small_button(tr_l10n(lang, "btn.copy")).clicked() {
-                                    action =
-                                        Some((item.id.clone(), "copy", item.final_text.clone()));
-                                }
-                                if ui.small_button(tr_l10n(lang, "btn.repolish")).clicked() {
-                                    action = Some((
-                                        item.id.clone(),
-                                        "repolish",
-                                        item.raw_transcript.clone(),
-                                    ));
-                                }
-                                if item.has_audio_recording == Some(true) {
-                                    if ui
-                                        .small_button(tr_l10n(lang, "btn.play_recording"))
-                                        .clicked()
-                                    {
-                                        action = Some((item.id.clone(), "play", String::new()));
-                                    }
-                                    if ui
-                                        .small_button(tr_l10n(lang, "btn.export_recording"))
-                                        .clicked()
-                                    {
-                                        action = Some((item.id.clone(), "export", String::new()));
-                                    }
-                                    if ui.small_button(tr_l10n(lang, "btn.retranscribe")).clicked()
-                                    {
-                                        action =
-                                            Some((item.id.clone(), "retranscribe", String::new()));
-                                    }
-                                }
-                                if ui.small_button(tr_l10n(lang, "btn.delete")).clicked() {
-                                    action = Some((item.id.clone(), "delete", String::new()));
-                                }
-                            });
-                        });
-                        ui.add_space(6.0);
-                    }
-                    if let Some((id, operation, text)) = action {
-                        match operation {
-                            "copy" => match fcitx5_copy_to_clipboard(&text) {
-                                Ok(()) => {
-                                    self.status = tr_l10n(lang, "status.history_copied").to_string()
-                                }
-                                Err(error) => {
-                                    self.status = fmt_l10n(lang, "status.copy_failed", &[&error])
-                                }
-                            },
-                            "repolish" => {
-                                let service = Arc::clone(&backend.services().auxiliary);
-                                self.spawn(async move {
-                                    let polished = service
-                                        .repolish(openless_core::RepolishRequest {
-                                            raw_text: text,
-                                            style_pack_id: None,
-                                            front_app: None,
-                                        })
-                                        .await?;
-                                    Ok(fmt_l10n(lang, "status.repolish_done", &[&polished]))
-                                });
-                            }
-                            "delete" => self.spawn(async move {
-                                backend.delete_history(&id)?;
-                                Ok(tr_l10n(lang, "status.history_deleted").to_string())
-                            }),
-                            "play" => {
-                                let data_dir = backend.config().data_dir.clone();
-                                self.spawn(async move {
-                                    let path = openless_linux_egui::recording_path(&data_dir, &id)
-                                        .map_err(|error| {
-                                            BackendError::new(
-                                                openless_core::BackendErrorCode::Persistence,
-                                                error.to_string(),
-                                            )
-                                        })?;
-                                    tokio::task::spawn_blocking(move || {
-                                        openless_linux_egui::open_local_file(&path)
-                                    })
-                                    .await
-                                    .map_err(|error| {
-                                        BackendError::new(
-                                            openless_core::BackendErrorCode::Internal,
-                                            error.to_string(),
-                                        )
-                                    })?
-                                    .map_err(|error| {
-                                        BackendError::new(
-                                            openless_core::BackendErrorCode::Platform,
-                                            error.to_string(),
-                                        )
-                                    })?;
-                                    Ok(tr_l10n(lang, "status.opened_player").to_string())
-                                });
-                            }
-                            "export" => {
-                                let data_dir = backend.config().data_dir.clone();
-                                self.spawn(async move {
-                                    let file_name = format!("openless-recording-{id}.wav");
-                                    let destination = tokio::task::spawn_blocking(move || {
-                                        rfd::FileDialog::new()
-                                            .add_filter("WAV audio", &["wav"])
-                                            .set_file_name(file_name)
-                                            .save_file()
-                                    })
-                                    .await
-                                    .map_err(|error| {
-                                        BackendError::new(
-                                            openless_core::BackendErrorCode::Internal,
-                                            error.to_string(),
-                                        )
-                                    })?
-                                    .ok_or_else(|| {
-                                        BackendError::new(
-                                            openless_core::BackendErrorCode::Cancelled,
-                                            tr_l10n(lang, "dialog.recording_export_cancelled"),
-                                        )
-                                    })?;
-                                    let wav = tokio::task::spawn_blocking(move || {
-                                        openless_linux_egui::read_recording_wav(&data_dir, &id)
-                                    })
-                                    .await
-                                    .map_err(|error| {
-                                        BackendError::new(
-                                            openless_core::BackendErrorCode::Internal,
-                                            error.to_string(),
-                                        )
-                                    })?
-                                    .map_err(|error| {
-                                        BackendError::new(
-                                            openless_core::BackendErrorCode::Persistence,
-                                            error.to_string(),
-                                        )
-                                    })?;
-                                    let saved = tokio::task::spawn_blocking(move || {
-                                        openless_linux_egui::atomic_save(&destination, &wav)
-                                    })
-                                    .await
-                                    .map_err(|error| {
-                                        BackendError::new(
-                                            openless_core::BackendErrorCode::Internal,
-                                            error.to_string(),
-                                        )
-                                    })?
-                                    .map_err(|error| {
-                                        BackendError::new(
-                                            openless_core::BackendErrorCode::Platform,
-                                            error.to_string(),
-                                        )
-                                    })?;
-                                    Ok(fmt_l10n(
-                                        lang,
-                                        "status.recording_exported",
-                                        &[&saved.display()],
-                                    ))
-                                });
-                            }
-                            "retranscribe" => {
-                                let data_dir = backend.config().data_dir.clone();
-                                self.spawn(async move {
-                                    let recording_id = id.clone();
-                                    let wav = tokio::task::spawn_blocking(move || {
-                                        openless_linux_egui::read_recording_wav(
-                                            &data_dir,
-                                            &recording_id,
-                                        )
-                                    })
-                                    .await
-                                    .map_err(|error| {
-                                        BackendError::new(
-                                            openless_core::BackendErrorCode::Internal,
-                                            error.to_string(),
-                                        )
-                                    })?
-                                    .map_err(|error| {
-                                        BackendError::new(
-                                            openless_core::BackendErrorCode::Persistence,
-                                            error.to_string(),
-                                        )
-                                    })?;
-                                    let pcm = openless_linux_egui::recording_pcm(&wav)
-                                        .map_err(|error| {
-                                            BackendError::new(
-                                                openless_core::BackendErrorCode::Persistence,
-                                                error.to_string(),
-                                            )
-                                        })?
-                                        .to_vec();
-                                    let started = std::time::Instant::now();
-                                    let result = backend
-                                        .services()
-                                        .auxiliary
-                                        .retranscribe_pcm(pcm)
-                                        .await
-                                        .map_err(|failure| failure.error)?;
-                                    let entry = backend.apply_history_retranscription(
-                                        &id,
-                                        result.text,
-                                        &result.asr,
-                                        started.elapsed().as_millis() as u64,
-                                    )?;
-                                    Ok(fmt_l10n(lang, "status.retranscribed", &[&entry.final_text]))
-                                });
-                            }
-                            _ => unreachable!(),
-                        }
-                    }
-                }
-                Err(error) => {
-                    ui.label(error.to_string());
-                }
-            }
-        }
-
         // ── Frontend bridge ─────────────────────────────────────────────────
 
         /// Sync backend state into the frontend view model each frame before
@@ -4235,6 +2142,10 @@ mod linux_app {
             let overview_err = self.overview_error();
             let backend = self.backend();
             let lang = self.lang;
+            let permissions = self.permission_snapshot();
+            // 文本型设置行只在偏好载入 / 外部变更时回灌一次，避免把输入中的
+            // 内容每帧弹回旧值。
+            let hydrate_text = std::mem::replace(&mut self.hydrate_text_fields, false);
 
             let vm = &mut self.frontend_vm;
 
@@ -4318,24 +2229,184 @@ mod linux_app {
                 s.start_minimized = prefs.start_minimized;
                 s.auto_update = prefs.auto_update_check;
                 s.remote_input = prefs.remote_input_enabled;
-                s.remote_port = prefs.remote_input_port.to_string();
+                if hydrate_text {
+                    s.remote_port = prefs.remote_input_port.to_string();
+                }
                 s.activity_heatmap = prefs.show_overview_activity_heatmap;
                 s.theme = match prefs.theme_mode {
                     openless_core::shared_types::ThemeMode::System => 0,
                     openless_core::shared_types::ThemeMode::Light => 1,
                     openless_core::shared_types::ThemeMode::Dark => 2,
                 };
-                s.recording_enabled = true;
-                s.realtime_mode = matches!(
-                    prefs.hotkey.mode,
-                    openless_core::shared_types::HotkeyMode::Hold
+                vm.translation_working_languages = prefs.working_languages.clone();
+                vm.translation_target_language = prefs.translation_target_language.clone();
+                // Tauri offers 切换式 / 按住说话 / 自动识别 — the legacy DoubleClick
+                // value stays untouched in the store, it just has no chip here.
+                s.recording_mode = match prefs.hotkey.mode {
+                    openless_core::shared_types::HotkeyMode::Hold => 1,
+                    openless_core::shared_types::HotkeyMode::Auto => 2,
+                    _ => 0,
+                };
+                s.restore_clipboard = prefs.restore_clipboard_after_paste;
+                // Tauri 只提供 Ctrl+V / Ctrl+Shift+V 两项。
+                s.paste_shortcut = match prefs.paste_shortcut {
+                    openless_core::shared_types::PasteShortcut::CtrlShiftV => 1,
+                    _ => 0,
+                };
+                s.silence_auto_stop = prefs.silence_auto_stop_enabled;
+                s.silence_seconds =
+                    prefs.silence_auto_stop_seconds.round().clamp(1.0, 5.0) as usize;
+                s.microphone_name = prefs.microphone_device_name.clone();
+                s.microphone_options = self
+                    .microphones
+                    .iter()
+                    .map(|device| device.name.clone())
+                    .collect();
+                s.mute_while_recording = prefs.mute_during_recording;
+                s.audio_cue = prefs.audio_cue_on_record;
+                s.launch_at_login = prefs.launch_at_login;
+                s.streaming_save_clipboard = prefs.streaming_insert_save_clipboard;
+                s.record_audio_for_debug = prefs.record_audio_for_debug;
+                if hydrate_text {
+                    s.history_max_entries = prefs
+                        .history_max_entries
+                        .map(|value| value.to_string())
+                        .unwrap_or_default();
+                    s.retention_days = prefs.history_retention_days.to_string();
+                    s.polish_context_window = prefs.polish_context_window_minutes.to_string();
+                    s.audio_recording_max_entries = prefs
+                        .audio_recording_max_entries
+                        .map(|value| value.to_string())
+                        .unwrap_or_default();
+                }
+                s.remote_default_mode = usize::from(prefs.remote_input_default_mode == "hold");
+                s.system_proxy = prefs.use_system_proxy;
+                s.multimodal = prefs.multimodal_pipeline_enabled;
+                s.less_computer = prefs.coding_agent_enabled;
+                s.coding_agent_provider = match prefs.coding_agent_provider.as_str() {
+                    "opencode-cli" => 1,
+                    "codex-cli" => 2,
+                    "dsh-cli" => 3,
+                    _ => 0,
+                };
+                s.coding_agent_permission = match prefs.coding_agent_permission_mode.as_str() {
+                    "plan" => 1,
+                    "default" => 2,
+                    "bypassPermissions" => 3,
+                    _ => 0,
+                };
+                if hydrate_text {
+                    s.coding_agent_model = prefs.coding_agent_model.clone().unwrap_or_default();
+                    s.coding_agent_workdir = prefs.coding_agent_workdir.clone().unwrap_or_default();
+                    s.coding_agent_exe = prefs.coding_agent_exe.clone().unwrap_or_default();
+                }
+                s.selection_polish_delivery = match prefs.selection_polish_output_mode {
+                    openless_core::shared_types::SelectionPolishOutputMode::DirectReplace => 0,
+                    openless_core::shared_types::SelectionPolishOutputMode::PreviewConfirm => 1,
+                };
+                s.beta_channel = matches!(
+                    prefs.update_channel,
+                    openless_core::shared_types::UpdateChannel::Beta
                 );
-                s.restore_clipboard = true;
-                s.remember_history = true;
-                // Linux: no local model support.
-                s.local_model = false;
-                s.selection_voice = false;
+                // 多模态 / 平台能力：决定 AI 服务页的视图与更新控件。
+                // 远程输入的实时状态：配对码 / 访问网址 / 证书指纹。
+                if let Some((status, pin)) = &self.remote_access {
+                    vm.remote_running = status.running;
+                    vm.remote_pin = pin.clone();
+                    vm.remote_urls = status.urls.clone();
+                    vm.remote_cert_fingerprint = status.ca_fingerprint_sha256.clone();
+                } else {
+                    vm.remote_running = false;
+                    vm.remote_pin = String::new();
+                    vm.remote_urls = Vec::new();
+                    vm.remote_cert_fingerprint = None;
+                }
+                // 必配服务的状态点由 `load_service_configured` 异步刷新。
+                vm.service_configured = self.service_configured;
+                vm.multimodal_view = prefs.multimodal_pipeline_enabled;
+                vm.pipeline_multimodal =
+                    prefs.pipeline_mode == openless_core::shared_types::PipelineMode::Multimodal;
+                // Linux 宿主没有本地推理引擎。
+                vm.supports_local_asr = false;
+                vm.auto_update_capable = self.update_support.supports_auto_update();
+                vm.permissions = permissions;
+                vm.selection_polish_hotkey = prefs
+                    .selection_polish_hotkey
+                    .as_ref()
+                    .map(|binding| binding.display_label())
+                    .unwrap_or_default();
+                // 风格包直选：只展示已经录过的快捷键（录制器尚未实现）。
+                s.style_pack_hotkeys = prefs
+                    .style_pack_hotkeys
+                    .iter()
+                    .map(|entry| frontend::view_model::StylePackHotkeyRow {
+                        name: self
+                            .style_packs
+                            .iter()
+                            .find(|pack| pack.id == entry.pack_id)
+                            .map(|pack| pack.name.clone())
+                            .unwrap_or_else(|| entry.pack_id.clone()),
+                        hotkey: entry.binding.display_label(),
+                    })
+                    .collect();
             }
+
+            // AI services tab: provider picker plus the cached channel list.
+            vm.channel_providers = openless_core::provider_rules::provider_descriptors(
+                provider_kind(self.settings_channel_kind),
+            )
+            .into_iter()
+            .map(|descriptor| frontend::view_model::SettingsChannelProvider {
+                provider_type: descriptor.provider_type.as_str().to_string(),
+                label: localized_provider_label(
+                    lang,
+                    self.settings_channel_kind,
+                    descriptor.provider_type.as_str(),
+                ),
+            })
+            .collect();
+            vm.channels_loading = self.settings_channels_loading;
+            let active_channel = self
+                .settings_channels
+                .iter()
+                .position(|channel| channel.enabled)
+                .unwrap_or(usize::MAX);
+            vm.channels = self
+                .settings_channels
+                .iter()
+                .enumerate()
+                .map(|(index, channel)| frontend::view_model::SettingsChannel {
+                    name: channel.name.clone(),
+                    provider: localized_provider_label(
+                        lang,
+                        self.settings_channel_kind,
+                        &channel.provider_type,
+                    ),
+                    model: channel.model.clone(),
+                    is_active: index == active_channel,
+                    enabled: channel.enabled,
+                    last_check: match (
+                        channel.last_ok,
+                        channel.last_latency_ms,
+                        channel.last_error.as_deref(),
+                    ) {
+                        (Some(true), Some(ms), _) => Some(format!(
+                            "{} · {}",
+                            tr_l10n(lang, "settings.channels.passed"),
+                            fmt_l10n(lang, "settings.channels.elapsed", &[&ms]),
+                        )),
+                        (Some(true), None, _) => {
+                            Some(tr_l10n(lang, "settings.channels.passed").to_string())
+                        }
+                        (Some(false), _, error) => Some(fmt_l10n(
+                            lang,
+                            "settings.channels.failed",
+                            &[&error.unwrap_or_default()],
+                        )),
+                        _ => None,
+                    },
+                })
+                .collect();
 
             // History: wire from Core when backend is available.
             if let Some(backend) = backend {
@@ -4406,35 +2477,45 @@ mod linux_app {
                 }
             }
 
-            // Vocabulary: wire from existing data.
-            if !self.vocabulary.is_empty() {
-                vm.vocab_unsupported = false;
-                vm.vocab_entries = self
-                    .vocabulary
-                    .iter()
-                    .map(|entry| frontend::view_model::VocabEntry {
-                        phrase: entry.phrase.clone(),
-                        hits: entry.hits as usize,
-                        enabled: entry.enabled,
-                        learned: false,
-                    })
-                    .collect();
+            // In-app playback progress (dropped once the clip finishes).
+            if self
+                .history_clip
+                .as_ref()
+                .is_some_and(|(_, player)| player.is_finished())
+            {
+                self.history_clip = None;
             }
+            vm.history_playback = self.history_clip.as_ref().map(|(id, player)| {
+                frontend::view_model::HistoryPlayback {
+                    id: id.clone(),
+                    position_ms: player.position_ms(),
+                    total_ms: player.total_ms(),
+                }
+            });
 
-            // Correction rules: wire from existing data.
-            if !self.correction_rules.is_empty() {
-                vm.vocab_unsupported = false;
-                vm.vocab_rules = self
-                    .correction_rules
-                    .iter()
-                    .map(|rule| frontend::view_model::CorrectionRule {
-                        pattern: rule.pattern.clone(),
-                        replacement: rule.replacement.clone(),
-                        enabled: rule.enabled,
-                        learned: false,
-                    })
-                    .collect();
-            }
+            // Vocabulary + correction rules: the library path is always wired, so
+            // an empty store is an empty list — never an "unsupported" page.
+            vm.vocab_unsupported = false;
+            vm.vocab_entries = self
+                .vocabulary
+                .iter()
+                .map(|entry| frontend::view_model::VocabEntry {
+                    phrase: entry.phrase.clone(),
+                    hits: entry.hits as usize,
+                    enabled: entry.enabled,
+                    learned: false,
+                })
+                .collect();
+            vm.vocab_rules = self
+                .correction_rules
+                .iter()
+                .map(|rule| frontend::view_model::CorrectionRule {
+                    pattern: rule.pattern.clone(),
+                    replacement: rule.replacement.clone(),
+                    enabled: rule.enabled,
+                    learned: false,
+                })
+                .collect();
             vm.vocab_saved_presets = self
                 .vocab_presets
                 .iter()
@@ -4444,22 +2525,24 @@ mod linux_app {
                 })
                 .collect();
 
-            // Style packs: wire from existing data.
-            if !self.style_packs.is_empty() {
-                vm.style_unsupported = false;
-                vm.style_packs = self
-                    .style_packs
-                    .iter()
-                    .map(|pack| frontend::view_model::StylePack {
-                        name: pack.name.clone(),
-                        description: pack.description.clone(),
-                        tags: vec![pack.base_mode.display_name().to_string()],
-                        accent: theme::BLUE,
-                        is_builtin: pack.kind == openless_core::StylePackKind::Builtin,
-                        is_active: pack.active,
-                    })
-                    .collect();
-            }
+            // Style packs: wired too; an empty list is a valid state.
+            vm.style_unsupported = false;
+            vm.style_packs = self
+                .style_packs
+                .iter()
+                .map(|pack| frontend::view_model::StylePack {
+                    name: pack.name.clone(),
+                    description: pack.description.clone(),
+                    // Localized mode label (Core's display_name is zh-only).
+                    tags: vec![polish_mode_label(lang, pack.base_mode).to_string()],
+                    is_builtin: pack.kind == openless_core::StylePackKind::Builtin,
+                    is_active: pack.active,
+                    selection_active: self
+                        .preferences
+                        .as_ref()
+                        .is_some_and(|prefs| prefs.selection_polish_style_pack_id == pack.id),
+                })
+                .collect();
 
             // Translation and selection-ask are always wired through Core; the
             // pages only render state that is already loaded.
@@ -4483,7 +2566,7 @@ mod linux_app {
                         tags: item.tags.clone(),
                         likes: item.like_count as u32,
                         downloads: item.download_count as u32,
-                        is_new: false,
+                        liked: self.marketplace_my_likes.contains(&item.id),
                     })
                     .collect();
             }
@@ -4503,6 +2586,26 @@ mod linux_app {
         }
 
         /// Apply a settings toggle from the frontend to the live preferences.
+        /// 隐私分区的真实状态：Linux 没有系统级授权弹窗，能列出的设备 / 已启动的
+        /// 热键适配器就是「已授权」，macOS 才有的辅助功能 / 本地网络一律「不适用」。
+        fn permission_snapshot(&self) -> frontend::view_model::SettingsPermissions {
+            use frontend::view_model::PermissionState;
+            frontend::view_model::SettingsPermissions {
+                microphone: if self.microphones.is_empty() {
+                    PermissionState::Unknown
+                } else {
+                    PermissionState::Granted
+                },
+                accessibility: PermissionState::Unsupported,
+                network: PermissionState::Unsupported,
+                hotkey: if self.native.is_some() {
+                    PermissionState::Granted
+                } else {
+                    PermissionState::Unknown
+                },
+            }
+        }
+
         fn apply_settings_toggle(&mut self, field: frontend::view_model::SettingsField) {
             let Some(preferences) = self.preferences.as_mut() else {
                 return;
@@ -4529,48 +2632,68 @@ mod linux_app {
                         !preferences.show_overview_activity_heatmap;
                     self.settings_dirty.appearance = true;
                 }
-                frontend::view_model::SettingsField::RealtimeMode => {
-                    preferences.hotkey.mode = match preferences.hotkey.mode {
-                        openless_core::shared_types::HotkeyMode::Hold => {
-                            openless_core::shared_types::HotkeyMode::Toggle
-                        }
-                        _ => openless_core::shared_types::HotkeyMode::Hold,
-                    };
+                frontend::view_model::SettingsField::RestoreClipboard => {
+                    preferences.restore_clipboard_after_paste =
+                        !preferences.restore_clipboard_after_paste;
                     self.settings_dirty.recording = true;
                 }
-                frontend::view_model::SettingsField::RecordingEnabled => {
+                frontend::view_model::SettingsField::SystemProxy => {
+                    preferences.use_system_proxy = !preferences.use_system_proxy;
+                    self.settings_dirty.appearance = true;
+                }
+                frontend::view_model::SettingsField::Multimodal => {
+                    preferences.multimodal_pipeline_enabled =
+                        !preferences.multimodal_pipeline_enabled;
+                    self.settings_dirty.appearance = true;
+                }
+                frontend::view_model::SettingsField::LessComputer => {
+                    preferences.coding_agent_enabled = !preferences.coding_agent_enabled;
+                    self.settings_dirty.appearance = true;
+                }
+                frontend::view_model::SettingsField::SilenceAutoStop => {
+                    preferences.silence_auto_stop_enabled = !preferences.silence_auto_stop_enabled;
                     self.settings_dirty.recording = true;
-                    // Toggle recording enabled state — no-op on preferences directly,
-                    // but marks dirty so save will apply.
                 }
-                frontend::view_model::SettingsField::RestoreClipboard
-                | frontend::view_model::SettingsField::StackedLayout
-                | frontend::view_model::SettingsField::ConservativeLayout
-                | frontend::view_model::SettingsField::SystemProxy
-                | frontend::view_model::SettingsField::RememberHistory
-                | frontend::view_model::SettingsField::RecordAudio
-                | frontend::view_model::SettingsField::LessComputer
-                | frontend::view_model::SettingsField::Multimodal
-                | frontend::view_model::SettingsField::BetaChannel => {
-                    self.frontend_vm.settings_notice =
-                        Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                frontend::view_model::SettingsField::AudioCue => {
+                    preferences.audio_cue_on_record = !preferences.audio_cue_on_record;
+                    self.settings_dirty.recording = true;
                 }
-                frontend::view_model::SettingsField::SelectionAssistant => {
-                    self.frontend_vm.settings_notice =
-                        Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                frontend::view_model::SettingsField::MuteWhileRecording => {
+                    preferences.mute_during_recording = !preferences.mute_during_recording;
+                    self.settings_dirty.recording = true;
                 }
-                frontend::view_model::SettingsField::SelectionVoice => {
-                    self.frontend_vm.settings_notice =
-                        Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                frontend::view_model::SettingsField::RecordAudioForDebug => {
+                    preferences.record_audio_for_debug = !preferences.record_audio_for_debug;
+                    self.settings_dirty.recording = true;
                 }
-                frontend::view_model::SettingsField::LocalModel => {
-                    // Linux does not support local model inference.
-                    self.frontend_vm.settings_notice =
-                        Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                frontend::view_model::SettingsField::StreamingSaveClipboard => {
+                    preferences.streaming_insert_save_clipboard =
+                        !preferences.streaming_insert_save_clipboard;
+                    self.settings_dirty.streaming_insert = true;
                 }
-                frontend::view_model::SettingsField::MarketplaceEnabled => {
-                    self.frontend_vm.marketplace_unsupported =
-                        !self.frontend_vm.marketplace_unsupported;
+                frontend::view_model::SettingsField::LaunchAtLogin => {
+                    preferences.launch_at_login = !preferences.launch_at_login;
+                    self.settings_dirty.launch_at_login = true;
+                }
+                frontend::view_model::SettingsField::BetaChannel => {
+                    // The Beta toggle is the same knob as the update channel.
+                    if let Some(preferences) = self.preferences.as_mut() {
+                        preferences.update_channel = if preferences.update_channel
+                            == openless_core::shared_types::UpdateChannel::Beta
+                        {
+                            openless_core::shared_types::UpdateChannel::Stable
+                        } else {
+                            openless_core::shared_types::UpdateChannel::Beta
+                        };
+                        self.settings_dirty.update_channel = true;
+                    }
+                    self.frontend_vm.settings.beta_channel = self
+                        .preferences
+                        .as_ref()
+                        .map(|prefs| {
+                            prefs.update_channel == openless_core::shared_types::UpdateChannel::Beta
+                        })
+                        .unwrap_or(false);
                 }
             }
             self.save_settings_if_dirty();
@@ -4609,12 +2732,74 @@ mod linux_app {
                     self.apply_locale_pref(pref);
                     self.frontend_vm.settings.language = index;
                 }
-                frontend::view_model::SettingsComboField::Provider
-                | frontend::view_model::SettingsComboField::Retention
-                | frontend::view_model::SettingsComboField::Microphone
-                | frontend::view_model::SettingsComboField::RecordingMode => {
-                    self.frontend_vm.settings_notice =
-                        Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                frontend::view_model::SettingsComboField::RecordingMode => {
+                    // Tauri 的三档：切换式 / 按住说话 / 自动识别。
+                    preferences.hotkey.mode = match index {
+                        1 => openless_core::shared_types::HotkeyMode::Hold,
+                        2 => openless_core::shared_types::HotkeyMode::Auto,
+                        _ => openless_core::shared_types::HotkeyMode::Toggle,
+                    };
+                    self.settings_dirty.recording = true;
+                }
+                frontend::view_model::SettingsComboField::CodingAgentProvider => {
+                    preferences.coding_agent_provider = match index {
+                        1 => "opencode-cli",
+                        2 => "codex-cli",
+                        3 => "dsh-cli",
+                        _ => "claude-code-cli",
+                    }
+                    .to_string();
+                    self.settings_dirty.coding_agent_enabled = true;
+                }
+                frontend::view_model::SettingsComboField::CodingAgentPermission => {
+                    preferences.coding_agent_permission_mode = match index {
+                        1 => "plan",
+                        2 => "default",
+                        3 => "bypassPermissions",
+                        _ => "acceptEdits",
+                    }
+                    .to_string();
+                    self.settings_dirty.coding_agent_enabled = true;
+                }
+                frontend::view_model::SettingsComboField::SelectionPolishDelivery => {
+                    preferences.selection_polish_output_mode = match index {
+                        1 => openless_core::shared_types::SelectionPolishOutputMode::PreviewConfirm,
+                        _ => openless_core::shared_types::SelectionPolishOutputMode::DirectReplace,
+                    };
+                    self.settings_dirty.recording = true;
+                }
+                frontend::view_model::SettingsComboField::SilenceSeconds => {
+                    preferences.silence_auto_stop_seconds = index as f32 + 1.0;
+                    self.settings_dirty.recording = true;
+                }
+                frontend::view_model::SettingsComboField::Microphone => {
+                    preferences.microphone_device_name = if index == 0 {
+                        String::new()
+                    } else {
+                        self.frontend_vm
+                            .settings
+                            .microphone_options
+                            .get(index - 1)
+                            .cloned()
+                            .unwrap_or_default()
+                    };
+                    self.settings_dirty.microphone = true;
+                }
+                frontend::view_model::SettingsComboField::PasteShortcut => {
+                    preferences.paste_shortcut = match index {
+                        1 => openless_core::shared_types::PasteShortcut::CtrlShiftV,
+                        2 => openless_core::shared_types::PasteShortcut::ShiftInsert,
+                        _ => openless_core::shared_types::PasteShortcut::CtrlV,
+                    };
+                    self.settings_dirty.recording = true;
+                }
+                frontend::view_model::SettingsComboField::RemoteDefaultMode => {
+                    preferences.remote_input_default_mode = if index == 1 {
+                        "hold".to_string()
+                    } else {
+                        "toggle".to_string()
+                    };
+                    self.settings_dirty.remote_input_enabled = true;
                 }
             }
             self.save_settings_if_dirty();
@@ -4637,17 +2822,62 @@ mod linux_app {
                         self.frontend_vm.settings.remote_port = text;
                     }
                 }
-                frontend::view_model::SettingsTextField::ApiKey => {
-                    self.frontend_vm.settings.api_key = text;
+                frontend::view_model::SettingsTextField::RetentionDays => {
+                    let parsed = text.trim().parse::<u32>().unwrap_or(0).min(365);
+                    preferences.history_retention_days = parsed;
+                    self.settings_dirty.recording = true;
+                    self.frontend_vm.settings.retention_days = parsed.to_string();
                 }
-                frontend::view_model::SettingsTextField::Endpoint => {
-                    self.frontend_vm.settings.endpoint = text;
+                frontend::view_model::SettingsTextField::PolishContextWindow => {
+                    let parsed = text.trim().parse::<u32>().unwrap_or(0).min(60);
+                    preferences.polish_context_window_minutes = parsed;
+                    self.settings_dirty.recording = true;
+                    self.frontend_vm.settings.polish_context_window = parsed.to_string();
                 }
-                frontend::view_model::SettingsTextField::Model => {
-                    self.frontend_vm.settings.model = text;
+                frontend::view_model::SettingsTextField::AudioRecordingMaxEntries => {
+                    preferences.audio_recording_max_entries = text
+                        .trim()
+                        .parse::<u32>()
+                        .ok()
+                        .map(|value| value.clamp(1, 200));
+                    self.settings_dirty.recording = true;
+                    self.frontend_vm.settings.audio_recording_max_entries = text;
                 }
-                frontend::view_model::SettingsTextField::ClaudePrompt => {
-                    self.frontend_vm.settings.claude_prompt = text;
+                frontend::view_model::SettingsTextField::CodingAgentModel => {
+                    preferences.coding_agent_model = if text.trim().is_empty() {
+                        None
+                    } else {
+                        Some(text.trim().to_string())
+                    };
+                    self.settings_dirty.coding_agent_enabled = true;
+                    self.frontend_vm.settings.coding_agent_model = text;
+                }
+                frontend::view_model::SettingsTextField::CodingAgentWorkdir => {
+                    preferences.coding_agent_workdir = if text.trim().is_empty() {
+                        None
+                    } else {
+                        Some(text.trim().to_string())
+                    };
+                    self.settings_dirty.coding_agent_enabled = true;
+                    self.frontend_vm.settings.coding_agent_workdir = text;
+                }
+                frontend::view_model::SettingsTextField::CodingAgentExe => {
+                    preferences.coding_agent_exe = if text.trim().is_empty() {
+                        None
+                    } else {
+                        Some(text.trim().to_string())
+                    };
+                    self.settings_dirty.coding_agent_enabled = true;
+                    self.frontend_vm.settings.coding_agent_exe = text;
+                }
+                frontend::view_model::SettingsTextField::HistoryMaxEntries => {
+                    preferences.history_max_entries = text
+                        .trim()
+                        .parse::<u32>()
+                        .ok()
+                        .map(|value| value.clamp(5, 200));
+                    self.settings_dirty.recording = true;
+                    self.frontend_vm.settings.history_max_entries = text;
                 }
             }
             self.save_settings_if_dirty();
@@ -4656,19 +2886,6 @@ mod linux_app {
         /// Apply a settings action button from the frontend.
         fn apply_settings_action(&mut self, field: frontend::view_model::SettingsActionField) {
             match field {
-                frontend::view_model::SettingsActionField::ConnectionTest => {
-                    self.frontend_vm.settings_notice =
-                        Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
-                }
-                frontend::view_model::SettingsActionField::ClearHistory => {
-                    if let Some(backend) = self.backend() {
-                        let lang = self.lang;
-                        self.spawn(async move {
-                            backend.clear_history()?;
-                            Ok(tr_l10n(lang, "status.history_cleared").to_string())
-                        });
-                    }
-                }
                 frontend::view_model::SettingsActionField::ExportDiagnostics => {
                     if let Some(backend) = self.backend() {
                         let source = openless_linux_egui::log_path(&backend.config().data_dir);
@@ -4713,6 +2930,36 @@ mod linux_app {
                         });
                     }
                 }
+                frontend::view_model::SettingsActionField::CheckBetaUpdate => {
+                    self.request_update_check(openless_core::shared_types::UpdateChannel::Beta);
+                }
+                frontend::view_model::SettingsActionField::CopyCertFingerprint => {
+                    let fingerprint = self
+                        .remote_access
+                        .as_ref()
+                        .and_then(|(status, _)| status.ca_fingerprint_sha256.clone());
+                    match fingerprint {
+                        Some(fingerprint) => match fcitx5_copy_to_clipboard(&fingerprint) {
+                            Ok(()) => {
+                                self.frontend_vm.settings_notice =
+                                    Some(tr_l10n(self.lang, "status.copied").to_string());
+                            }
+                            Err(error) => {
+                                self.frontend_vm.settings_notice =
+                                    Some(fmt_l10n(self.lang, "status.copy_failed", &[&error]));
+                            }
+                        },
+                        None => {
+                            self.frontend_vm.settings_notice = Some(
+                                tr_l10n(
+                                    self.lang,
+                                    "settings.remote_input.cert_fingerprint_unavailable",
+                                )
+                                .to_string(),
+                            );
+                        }
+                    }
+                }
                 frontend::view_model::SettingsActionField::CheckUpdate => {
                     let channel = self
                         .preferences
@@ -4740,18 +2987,13 @@ mod linux_app {
                                 Some(tr_l10n(self.lang, "status.copied").to_string());
                         }
                         Err(error) => {
-                            self.frontend_vm.settings_notice = Some(format!("复制失败: {error}"));
+                            self.frontend_vm.settings_notice = Some(fmt_l10n(
+                                self.lang,
+                                "status.copy_failed",
+                                &[&error.to_string()],
+                            ));
                         }
                     }
-                }
-                frontend::view_model::SettingsActionField::ModelManagement
-                | frontend::view_model::SettingsActionField::ExtensionManagement
-                | frontend::view_model::SettingsActionField::Permissions
-                | frontend::view_model::SettingsActionField::ClaudeDetect
-                | frontend::view_model::SettingsActionField::ClaudeConsole
-                | frontend::view_model::SettingsActionField::ClaudeRunTest => {
-                    self.frontend_vm.settings_notice =
-                        Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
                 }
             }
         }
@@ -4827,6 +3069,11 @@ mod linux_app {
                         self.frontend_vm.settings_open = !self.frontend_vm.settings_open;
                         if self.frontend_vm.settings_open {
                             self.frontend_vm.active_page = frontend::view_model::Page::Settings;
+                            // 每次打开设置都刷新「必配服务」状态点。
+                            self.load_service_configured();
+                            if self.settings_channels.is_empty() {
+                                self.load_settings_channels();
+                            }
                         }
                     }
                     frontend::view_model::FrontendAction::CloseSettings => {
@@ -4871,14 +3118,13 @@ mod linux_app {
                         self.load_marketplace_mine();
                     }
                     frontend::view_model::FrontendAction::MarketplaceSearch(query) => {
-                        self.marketplace_query = query;
+                        self.marketplace_query = query.clone();
+                        // Echo it back so the field never reverts while typing.
+                        self.frontend_vm.marketplace_query = query;
                         self.load_marketplace();
                     }
                     frontend::view_model::FrontendAction::MarketplaceCloseDetail => {
                         self.frontend_vm.marketplace_selected = None;
-                    }
-                    frontend::view_model::FrontendAction::MarketplaceDetail(index) => {
-                        self.frontend_vm.marketplace_selected = Some(index);
                     }
                     frontend::view_model::FrontendAction::MarketplaceInstall(index) => {
                         if let Some(item) = self.marketplace_items.get(index) {
@@ -4964,7 +3210,25 @@ mod linux_app {
                         if let Some(item) = self.marketplace_items.get(index) {
                             if let Some(backend) = self.backend() {
                                 let id = item.id.clone();
+                                // Optimistic flip so the star reacts immediately.
+                                let was_liked = self.marketplace_my_likes.contains(&id);
+                                if was_liked {
+                                    self.marketplace_my_likes.retain(|liked| liked != &id);
+                                } else {
+                                    self.marketplace_my_likes.push(id.clone());
+                                }
+                                if let Some(pack) =
+                                    self.frontend_vm.marketplace_packs.get_mut(index)
+                                {
+                                    pack.liked = !was_liked;
+                                    pack.likes = if was_liked {
+                                        pack.likes.saturating_sub(1)
+                                    } else {
+                                        pack.likes.saturating_add(1)
+                                    };
+                                }
                                 let lang = self.lang;
+                                let restore_id = id.clone();
                                 self.spawn(async move {
                                     let result =
                                         backend.services().marketplace.toggle_like(id).await?;
@@ -4974,6 +3238,7 @@ mod linux_app {
                                         &[&result.like_count],
                                     ))
                                 });
+                                let _ = restore_id;
                             }
                         }
                     }
@@ -4985,9 +3250,6 @@ mod linux_app {
                         self.frontend_vm.history_loading = true;
                         self.frontend_vm.history_error = None;
                         self.frontend_vm.history_confirm = None;
-                    }
-                    frontend::view_model::FrontendAction::HistorySearch(query) => {
-                        self.frontend_vm.history_query = query;
                     }
                     frontend::view_model::FrontendAction::HistorySelect(index) => {
                         self.frontend_vm.history_selected = index;
@@ -5031,37 +3293,30 @@ mod linux_app {
                         }
                     }
                     frontend::view_model::FrontendAction::HistoryPlay(index) => {
+                        let Some(entry) = self.frontend_vm.history_entries.get(index) else {
+                            return;
+                        };
+                        let id = entry.id.clone();
+                        // Same clip again -> stop; otherwise start the new one.
+                        let same = self
+                            .history_clip
+                            .as_ref()
+                            .is_some_and(|(playing, _)| playing == &id);
+                        self.history_clip = None;
+                        if same {
+                            return;
+                        }
                         if let Some(backend) = self.backend() {
-                            if let Some(entry) = self.frontend_vm.history_entries.get(index) {
-                                let id = entry.id.clone();
-                                let data_dir = backend.config().data_dir.clone();
-                                let lang = self.lang;
-                                self.spawn(async move {
-                                    let path = openless_linux_egui::recording_path(&data_dir, &id)
-                                        .map_err(|error| {
-                                            BackendError::new(
-                                                openless_core::BackendErrorCode::Persistence,
-                                                error.to_string(),
-                                            )
-                                        })?;
-                                    tokio::task::spawn_blocking(move || {
-                                        openless_linux_egui::open_local_file(&path)
-                                    })
-                                    .await
-                                    .map_err(|error| {
-                                        BackendError::new(
-                                            openless_core::BackendErrorCode::Internal,
-                                            error.to_string(),
-                                        )
-                                    })?
-                                    .map_err(|error| {
-                                        BackendError::new(
-                                            openless_core::BackendErrorCode::Platform,
-                                            error.to_string(),
-                                        )
-                                    })?;
-                                    Ok(tr_l10n(lang, "status.opened_player").to_string())
-                                });
+                            let data_dir = backend.config().data_dir.clone();
+                            match openless_linux_egui::read_recording_wav(&data_dir, &id)
+                                .and_then(|wav| {
+                                    openless_linux_egui::recording_pcm(&wav).map(|pcm| pcm.to_vec())
+                                })
+                                .map_err(|error| error.to_string())
+                                .and_then(|pcm| openless_linux_egui::ClipPlayer::play(&pcm))
+                            {
+                                Ok(player) => self.history_clip = Some((id, player)),
+                                Err(error) => self.status = error,
                             }
                         }
                     }
@@ -5305,15 +3560,24 @@ mod linux_app {
                         }
                     }
                     frontend::view_model::FrontendAction::StyleActivate(index) => {
-                        if let Some(backend) = self.backend() {
-                            if let Some(pack) = self.style_packs.get(index) {
-                                let id = pack.id.clone();
-                                let lang = self.lang;
-                                self.spawn(async move {
-                                    backend.activate_style_pack(&id)?;
-                                    Ok(tr_l10n(lang, "status.style_updated").to_string())
-                                });
+                        let Some(pack) = self.style_packs.get(index) else {
+                            return;
+                        };
+                        let id = pack.id.clone();
+                        if self.frontend_vm.style_selection_workflow {
+                            // Selection polish keeps its own active pack
+                            // (`prefs.selection_polish_style_pack_id`).
+                            if let Some(preferences) = self.preferences.as_mut() {
+                                preferences.selection_polish_style_pack_id = id;
+                                self.settings_dirty.appearance = true;
                             }
+                            self.save_settings_if_dirty();
+                        } else if let Some(backend) = self.backend() {
+                            let lang = self.lang;
+                            self.spawn(async move {
+                                backend.activate_style_pack(&id)?;
+                                Ok(tr_l10n(lang, "status.style_updated").to_string())
+                            });
                         }
                     }
                     frontend::view_model::FrontendAction::StyleExport(index) => {
@@ -5443,13 +3707,28 @@ mod linux_app {
                     frontend::view_model::FrontendAction::SelectionAskToggleHistory => {
                         self.frontend_vm.qa_save_history = !self.frontend_vm.qa_save_history;
                     }
-                    frontend::view_model::FrontendAction::TranslationToggleLanguage(_) => {
-                        self.frontend_vm.settings_notice =
-                            Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                    frontend::view_model::FrontendAction::TranslationToggleLanguage(language) => {
+                        if let Some(preferences) = self.preferences.as_mut() {
+                            match preferences
+                                .working_languages
+                                .iter()
+                                .position(|value| value == &language)
+                            {
+                                Some(index) => {
+                                    preferences.working_languages.remove(index);
+                                }
+                                None => preferences.working_languages.push(language),
+                            }
+                            self.settings_dirty.appearance = true;
+                        }
+                        self.save_settings_if_dirty();
                     }
-                    frontend::view_model::FrontendAction::TranslationSetTarget(_) => {
-                        self.frontend_vm.settings_notice =
-                            Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                    frontend::view_model::FrontendAction::TranslationSetTarget(language) => {
+                        if let Some(preferences) = self.preferences.as_mut() {
+                            preferences.translation_target_language = language;
+                            self.settings_dirty.appearance = true;
+                        }
+                        self.save_settings_if_dirty();
                     }
                     frontend::view_model::FrontendAction::SettingsToggle(field) => {
                         self.apply_settings_toggle(field);
@@ -5466,8 +3745,102 @@ mod linux_app {
                     frontend::view_model::FrontendAction::SettingsSection(section) => {
                         self.frontend_vm.settings_section = section;
                     }
-                    frontend::view_model::FrontendAction::SettingsNotice(msg) => {
-                        self.frontend_vm.settings_notice = Some(msg);
+                    frontend::view_model::FrontendAction::SettingsServicesView(view) => {
+                        self.frontend_vm.services_view = view.min(3);
+                        let kind = if view == 1 {
+                            openless_core::ChannelKind::Asr
+                        } else {
+                            openless_core::ChannelKind::Llm
+                        };
+                        if self.settings_channel_kind != kind {
+                            self.settings_channel_kind = kind;
+                            self.load_settings_channels();
+                            self.load_service_configured();
+                        } else if self.settings_channels.is_empty() {
+                            self.load_settings_channels();
+                            self.load_service_configured();
+                        }
+                    }
+                    frontend::view_model::FrontendAction::SettingsChannelFormOpen(open) => {
+                        self.frontend_vm.channel_form_open = open;
+                        if open {
+                            self.frontend_vm.channel_form_name.clear();
+                            self.frontend_vm.channel_provider_index = 0;
+                        }
+                    }
+                    frontend::view_model::FrontendAction::SettingsChannelProvider(index) => {
+                        self.frontend_vm.channel_provider_index = index;
+                    }
+                    frontend::view_model::FrontendAction::SettingsChannelName(name) => {
+                        self.frontend_vm.channel_form_name = name;
+                    }
+                    frontend::view_model::FrontendAction::SettingsChannelCreate => {
+                        let kind = self.settings_channel_kind;
+                        let provider_type = self
+                            .frontend_vm
+                            .channel_providers
+                            .get(self.frontend_vm.channel_provider_index)
+                            .map(|provider| provider.provider_type.clone());
+                        let name = self.frontend_vm.channel_form_name.trim().to_string();
+                        if let (Some(backend), Some(provider_type)) =
+                            (self.backend(), provider_type)
+                        {
+                            let lang = self.lang;
+                            self.spawn(async move {
+                                backend.create_channel(kind, provider_type, name).await?;
+                                Ok(tr_l10n(lang, "status.channel_created").to_string())
+                            });
+                            self.frontend_vm.channel_form_open = false;
+                            self.load_settings_channels();
+                            self.load_service_configured();
+                        }
+                    }
+                    frontend::view_model::FrontendAction::SettingsChannelToggle(index) => {
+                        let kind = self.settings_channel_kind;
+                        let target = self
+                            .settings_channels
+                            .get(index)
+                            .map(|channel| (channel.id.clone(), channel.enabled));
+                        if let (Some(backend), Some((id, enabled))) = (self.backend(), target) {
+                            let lang = self.lang;
+                            self.spawn(async move {
+                                backend.set_channel_enabled(kind, id, !enabled).await?;
+                                Ok(tr_l10n(lang, "status.channel_enabled").to_string())
+                            });
+                            self.load_settings_channels();
+                            self.load_service_configured();
+                        }
+                    }
+                    frontend::view_model::FrontendAction::SettingsChannelValidate(index) => {
+                        let kind = self.settings_channel_kind;
+                        let id = self
+                            .settings_channels
+                            .get(index)
+                            .map(|channel| channel.id.clone());
+                        if let (Some(backend), Some(id)) = (self.backend(), id) {
+                            let lang = self.lang;
+                            self.spawn(async move {
+                                validate_provider_channel(lang, backend, kind, id).await
+                            });
+                            self.load_settings_channels();
+                            self.load_service_configured();
+                        }
+                    }
+                    frontend::view_model::FrontendAction::SettingsChannelDelete(index) => {
+                        let kind = self.settings_channel_kind;
+                        let id = self
+                            .settings_channels
+                            .get(index)
+                            .map(|channel| channel.id.clone());
+                        if let (Some(backend), Some(id)) = (self.backend(), id) {
+                            let lang = self.lang;
+                            self.spawn(async move {
+                                backend.delete_channel(kind, id).await?;
+                                Ok(tr_l10n(lang, "status.channel_deleted").to_string())
+                            });
+                            self.load_settings_channels();
+                            self.load_service_configured();
+                        }
                     }
                     frontend::view_model::FrontendAction::MarketplaceDetail(index) => {
                         self.frontend_vm.marketplace_selected = Some(index);
@@ -5566,16 +3939,6 @@ mod linux_app {
 
     /// Map a concrete UI language to its display-name catalog key, shown in
     /// that language's own native script regardless of the current UI language.
-    fn locale_key(lang: Lang) -> &'static str {
-        match lang {
-            Lang::ZhCn => "lang.zh-CN",
-            Lang::ZhTw => "lang.zh-TW",
-            Lang::En => "lang.en",
-            Lang::Ja => "lang.ja",
-            Lang::Ko => "lang.ko",
-        }
-    }
-
     fn overview_activity_day(day: DailyActivity) -> frontend::view_model::OverviewActivityDay {
         frontend::view_model::OverviewActivityDay {
             date: day.date,
@@ -5640,17 +4003,35 @@ mod linux_app {
         }
     }
 
+    /// Localized provider name from `settings.providers.presets.<label_key>`.
+    /// Falls back to the raw label id when the catalog has no entry, so a
+    /// missing translation never leaks an i18n key into the UI.
+    fn localized_provider_label(
+        lang: Lang,
+        kind: openless_core::ChannelKind,
+        provider_type: &str,
+    ) -> String {
+        let label_key = provider_label_key(kind, provider_type);
+        let key = format!("settings.providers.presets.{label_key}");
+        let text = fmt_l10n(lang, &key, &[]);
+        if text == key {
+            label_key
+        } else {
+            text
+        }
+    }
+
+    /// i18n lookup id for a provider type (falls back to the raw type id).
+    fn provider_label_key(kind: openless_core::ChannelKind, provider_type: &str) -> String {
+        openless_core::provider_rules::provider_descriptor(provider_kind(kind), provider_type)
+            .map(|descriptor| descriptor.label_key)
+            .unwrap_or_else(|| provider_type.to_string())
+    }
+
     fn model_account(kind: openless_core::ChannelKind) -> &'static str {
         match kind {
             openless_core::ChannelKind::Asr => openless_core::credentials::ASR_MODEL_ACCOUNT,
             openless_core::ChannelKind::Llm => openless_core::credentials::LLM_MODEL_ACCOUNT,
-        }
-    }
-
-    fn api_key_account(kind: openless_core::ChannelKind) -> &'static str {
-        match kind {
-            openless_core::ChannelKind::Asr => openless_core::credentials::ASR_API_KEY_ACCOUNT,
-            openless_core::ChannelKind::Llm => openless_core::credentials::LLM_API_KEY_ACCOUNT,
         }
     }
 
@@ -5664,35 +4045,6 @@ mod linux_app {
             Some(channel_id.to_string()),
             account,
         )
-    }
-
-    fn provider_descriptor_label(descriptor: &openless_core::ProviderDescriptor) -> String {
-        format!(
-            "{} ({})",
-            descriptor.label_key,
-            descriptor.provider_type.as_str()
-        )
-    }
-
-    fn auth_requirement_label(
-        lang: Lang,
-        requirement: openless_core::AuthRequirement,
-    ) -> &'static str {
-        let key = match requirement {
-            openless_core::AuthRequirement::None => "auth.none",
-            openless_core::AuthRequirement::ApiKey => "auth.api_key",
-            openless_core::AuthRequirement::EndpointModelOptionalApiKey => {
-                "auth.endpoint_model_optional"
-            }
-            openless_core::AuthRequirement::ApiKeyUnlessCustomEndpoint => {
-                "auth.api_key_unless_custom"
-            }
-            openless_core::AuthRequirement::Volcengine => "auth.volcengine",
-            openless_core::AuthRequirement::Xfyun => "auth.xfyun",
-            openless_core::AuthRequirement::OAuth => "auth.oauth",
-            openless_core::AuthRequirement::TencentCloud => "auth.api_key",
-        };
-        tr_l10n(lang, key)
     }
 
     fn provider_channel_descriptor(
@@ -5784,257 +4136,6 @@ mod linux_app {
         })
     }
 
-    fn secret_edit(ui: &mut egui::Ui, label: &str, value: &mut String) {
-        ui.horizontal(|ui| {
-            ui.label(label);
-            ui.add(egui::TextEdit::singleline(value).password(true));
-        });
-    }
-
-    fn provider_fields_ui(ui: &mut egui::Ui, lang: Lang, editor: &mut ProviderEditor) {
-        // This match chooses which input controls to render; it does not decide
-        // whether credentials are sufficient. ProviderService validates the
-        // descriptor's AuthRequirement again before any protocol request.
-        match editor.descriptor.auth_requirement {
-            openless_core::AuthRequirement::None => {
-                ui.label(tr_l10n(lang, "providers.no_cloud_note"));
-            }
-            openless_core::AuthRequirement::OAuth => {
-                ui.label(tr_l10n(lang, "providers.oauth_note"));
-            }
-            openless_core::AuthRequirement::Volcengine => {
-                egui::ComboBox::from_id_salt("volcengine-auth-mode")
-                    .selected_text(&editor.auth_mode)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut editor.auth_mode,
-                            "app_id_token".to_string(),
-                            "APP ID + Access Token",
-                        );
-                        ui.selectable_value(
-                            &mut editor.auth_mode,
-                            "api_key".to_string(),
-                            "API Key",
-                        );
-                    });
-                if editor.auth_mode == "api_key" {
-                    secret_edit(ui, "API Key", &mut editor.primary_secret);
-                } else {
-                    secret_edit(ui, "APP ID", &mut editor.primary_secret);
-                    secret_edit(ui, "Access Token", &mut editor.secondary_secret);
-                }
-                ui.horizontal(|ui| {
-                    ui.label("Resource ID");
-                    ui.text_edit_singleline(&mut editor.resource_id);
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Model");
-                    ui.text_edit_singleline(&mut editor.model);
-                });
-            }
-            openless_core::AuthRequirement::Xfyun => {
-                secret_edit(ui, "AppID", &mut editor.primary_secret);
-                secret_edit(ui, "API Key", &mut editor.secondary_secret);
-            }
-            _ => {
-                secret_edit(
-                    ui,
-                    tr_l10n(lang, "providers.api_key_hint"),
-                    &mut editor.primary_secret,
-                );
-                ui.horizontal(|ui| {
-                    ui.label("Endpoint");
-                    ui.text_edit_singleline(&mut editor.endpoint);
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Model");
-                    ui.text_edit_singleline(&mut editor.model);
-                });
-            }
-        }
-    }
-
-    async fn write_or_remove_provider_value(
-        backend: &openless_core::OpenLessBackend,
-        kind: openless_core::ChannelKind,
-        channel_id: &str,
-        account: &str,
-        value: &str,
-    ) -> Result<(), BackendError> {
-        let key = provider_credential_key(kind, channel_id, account)?;
-        if value.trim().is_empty() {
-            backend.remove_credential(key).await?;
-        } else {
-            backend
-                .set_credential(key, openless_core::SecretValue::new(value.trim()))
-                .await?;
-        }
-        Ok(())
-    }
-
-    async fn write_secret_if_entered(
-        backend: &openless_core::OpenLessBackend,
-        kind: openless_core::ChannelKind,
-        channel_id: &str,
-        account: &str,
-        value: &str,
-    ) -> Result<(), BackendError> {
-        let value = value.trim();
-        if value.is_empty() {
-            return Ok(());
-        }
-        backend
-            .set_credential(
-                provider_credential_key(kind, channel_id, account)?,
-                openless_core::SecretValue::new(value),
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn save_provider_editor(
-        backend: Arc<openless_core::OpenLessBackend>,
-        editor: ProviderEditor,
-    ) -> Result<(), BackendError> {
-        // Account names are the stable credential wire schema exported by
-        // Core. Defaults and required/optional semantics stay in the selected
-        // ProviderDescriptor and ProviderService, never in this Host form.
-        let channel_id = editor.channel.id.as_str();
-        backend
-            .rename_channel(editor.kind, channel_id.to_string(), editor.name)
-            .await?;
-        match editor.descriptor.auth_requirement {
-            openless_core::AuthRequirement::None | openless_core::AuthRequirement::OAuth => {}
-            openless_core::AuthRequirement::Volcengine => {
-                write_or_remove_provider_value(
-                    &backend,
-                    editor.kind,
-                    channel_id,
-                    openless_core::credentials::VOLCENGINE_AUTH_MODE_ACCOUNT,
-                    &editor.auth_mode,
-                )
-                .await?;
-                write_or_remove_provider_value(
-                    &backend,
-                    editor.kind,
-                    channel_id,
-                    openless_core::credentials::VOLCENGINE_RESOURCE_ID_ACCOUNT,
-                    &editor.resource_id,
-                )
-                .await?;
-                write_or_remove_provider_value(
-                    &backend,
-                    editor.kind,
-                    channel_id,
-                    model_account(editor.kind),
-                    &editor.model,
-                )
-                .await?;
-                if editor.auth_mode == "api_key" {
-                    write_secret_if_entered(
-                        &backend,
-                        editor.kind,
-                        channel_id,
-                        openless_core::credentials::VOLCENGINE_API_KEY_ACCOUNT,
-                        &editor.primary_secret,
-                    )
-                    .await?;
-                } else {
-                    write_secret_if_entered(
-                        &backend,
-                        editor.kind,
-                        channel_id,
-                        openless_core::credentials::VOLCENGINE_APP_KEY_ACCOUNT,
-                        &editor.primary_secret,
-                    )
-                    .await?;
-                    write_secret_if_entered(
-                        &backend,
-                        editor.kind,
-                        channel_id,
-                        openless_core::credentials::VOLCENGINE_ACCESS_KEY_ACCOUNT,
-                        &editor.secondary_secret,
-                    )
-                    .await?;
-                }
-            }
-            openless_core::AuthRequirement::Xfyun => {
-                write_secret_if_entered(
-                    &backend,
-                    editor.kind,
-                    channel_id,
-                    openless_core::credentials::XFYUN_APP_ID_ACCOUNT,
-                    &editor.primary_secret,
-                )
-                .await?;
-                write_secret_if_entered(
-                    &backend,
-                    editor.kind,
-                    channel_id,
-                    openless_core::credentials::XFYUN_API_KEY_ACCOUNT,
-                    &editor.secondary_secret,
-                )
-                .await?;
-            }
-            _ => {
-                write_or_remove_provider_value(
-                    &backend,
-                    editor.kind,
-                    channel_id,
-                    endpoint_account(editor.kind),
-                    &editor.endpoint,
-                )
-                .await?;
-                write_or_remove_provider_value(
-                    &backend,
-                    editor.kind,
-                    channel_id,
-                    model_account(editor.kind),
-                    &editor.model,
-                )
-                .await?;
-                write_secret_if_entered(
-                    &backend,
-                    editor.kind,
-                    channel_id,
-                    api_key_account(editor.kind),
-                    &editor.primary_secret,
-                )
-                .await?;
-            }
-        }
-        Ok(())
-    }
-
-    async fn clear_provider_secrets(
-        backend: Arc<openless_core::OpenLessBackend>,
-        editor: &ProviderEditor,
-    ) -> Result<(), BackendError> {
-        let accounts: &[&str] = match editor.descriptor.auth_requirement {
-            openless_core::AuthRequirement::None | openless_core::AuthRequirement::OAuth => &[],
-            openless_core::AuthRequirement::Volcengine => &[
-                openless_core::credentials::VOLCENGINE_APP_KEY_ACCOUNT,
-                openless_core::credentials::VOLCENGINE_ACCESS_KEY_ACCOUNT,
-                openless_core::credentials::VOLCENGINE_API_KEY_ACCOUNT,
-            ],
-            openless_core::AuthRequirement::Xfyun => &[
-                openless_core::credentials::XFYUN_APP_ID_ACCOUNT,
-                openless_core::credentials::XFYUN_API_KEY_ACCOUNT,
-            ],
-            _ => &[api_key_account(editor.kind)],
-        };
-        for account in accounts {
-            backend
-                .remove_credential(provider_credential_key(
-                    editor.kind,
-                    &editor.channel.id,
-                    account,
-                )?)
-                .await?;
-        }
-        Ok(())
-    }
-
     async fn validate_provider_channel(
         lang: Lang,
         backend: Arc<openless_core::OpenLessBackend>,
@@ -6071,82 +4172,6 @@ mod linux_app {
                     .await;
                 Err(error)
             }
-        }
-    }
-
-    fn shortcut_editor(
-        ui: &mut egui::Ui,
-        label: &str,
-        binding: &mut openless_core::shared_types::ShortcutBinding,
-    ) -> bool {
-        let mut changed = false;
-        ui.horizontal(|ui| {
-            ui.label(label);
-            changed |= ui.text_edit_singleline(&mut binding.primary).changed();
-            for (modifier, caption) in [
-                ("ctrl", "Ctrl"),
-                ("alt", "Alt"),
-                ("shift", "Shift"),
-                ("super", "Super"),
-            ] {
-                let mut enabled = binding
-                    .modifiers
-                    .iter()
-                    .any(|value| value.eq_ignore_ascii_case(modifier));
-                if ui.checkbox(&mut enabled, caption).changed() {
-                    changed = true;
-                    binding
-                        .modifiers
-                        .retain(|value| !value.eq_ignore_ascii_case(modifier));
-                    if enabled {
-                        binding.modifiers.push(modifier.to_string());
-                    }
-                }
-            }
-        });
-        changed
-    }
-
-    fn optional_shortcut_editor(
-        ui: &mut egui::Ui,
-        lang: Lang,
-        label: &str,
-        binding: &mut Option<openless_core::shared_types::ShortcutBinding>,
-        default_primary: &str,
-    ) -> bool {
-        let mut enabled = binding.is_some();
-        let mut changed = ui
-            .checkbox(&mut enabled, fmt_l10n(lang, "hotkey.enable", &[&label]))
-            .changed();
-        if enabled && binding.is_none() {
-            *binding = Some(openless_core::shared_types::ShortcutBinding {
-                primary: default_primary.to_string(),
-                modifiers: vec!["ctrl".into(), "shift".into()],
-            });
-        } else if !enabled && binding.is_some() {
-            *binding = None;
-        }
-        if let Some(binding) = binding {
-            changed |= shortcut_editor(ui, label, binding);
-        }
-        changed
-    }
-
-    fn set_style_pack_hotkey(
-        preferences: &mut UserPreferences,
-        pack_id: &str,
-        binding: Option<openless_core::shared_types::ShortcutBinding>,
-    ) {
-        preferences
-            .style_pack_hotkeys
-            .retain(|hotkey| hotkey.pack_id != pack_id);
-        if let Some(binding) = binding {
-            preferences
-                .style_pack_hotkeys
-                .push(openless_core::shared_types::StylePackHotkey {
-                    pack_id: pack_id.to_string(),
-                    binding,
-                });
         }
     }
 
@@ -6765,6 +4790,82 @@ mod linux_app {
             }),
         )
         .map_err(|error| error.to_string())
+    }
+
+    fn set_style_pack_hotkey(
+        preferences: &mut UserPreferences,
+        pack_id: &str,
+        binding: Option<openless_core::shared_types::ShortcutBinding>,
+    ) {
+        preferences
+            .style_pack_hotkeys
+            .retain(|hotkey| hotkey.pack_id != pack_id);
+        if let Some(binding) = binding {
+            preferences
+                .style_pack_hotkeys
+                .push(openless_core::shared_types::StylePackHotkey {
+                    pack_id: pack_id.to_string(),
+                    binding,
+                });
+        }
+    }
+
+    fn shortcut_editor(
+        ui: &mut egui::Ui,
+        label: &str,
+        binding: &mut openless_core::shared_types::ShortcutBinding,
+    ) -> bool {
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            ui.label(label);
+            changed |= ui.text_edit_singleline(&mut binding.primary).changed();
+            for (modifier, caption) in [
+                ("ctrl", "Ctrl"),
+                ("alt", "Alt"),
+                ("shift", "Shift"),
+                ("super", "Super"),
+            ] {
+                let mut enabled = binding
+                    .modifiers
+                    .iter()
+                    .any(|value| value.eq_ignore_ascii_case(modifier));
+                if ui.checkbox(&mut enabled, caption).changed() {
+                    changed = true;
+                    binding
+                        .modifiers
+                        .retain(|value| !value.eq_ignore_ascii_case(modifier));
+                    if enabled {
+                        binding.modifiers.push(modifier.to_string());
+                    }
+                }
+            }
+        });
+        changed
+    }
+
+    fn optional_shortcut_editor(
+        ui: &mut egui::Ui,
+        lang: Lang,
+        label: &str,
+        binding: &mut Option<openless_core::shared_types::ShortcutBinding>,
+        default_primary: &str,
+    ) -> bool {
+        let mut enabled = binding.is_some();
+        let mut changed = ui
+            .checkbox(&mut enabled, fmt_l10n(lang, "hotkey.enable", &[&label]))
+            .changed();
+        if enabled && binding.is_none() {
+            *binding = Some(openless_core::shared_types::ShortcutBinding {
+                primary: default_primary.to_string(),
+                modifiers: vec!["ctrl".into(), "shift".into()],
+            });
+        } else if !enabled && binding.is_some() {
+            *binding = None;
+        }
+        if let Some(binding) = binding {
+            changed |= shortcut_editor(ui, label, binding);
+        }
+        changed
     }
 
     #[cfg(test)]

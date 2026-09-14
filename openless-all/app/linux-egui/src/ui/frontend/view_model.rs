@@ -47,8 +47,6 @@ pub enum FrontendAction {
     MarketplaceInstall(usize),
     /// Toggle marketplace pack like.
     MarketplaceToggleLike(usize),
-    /// History search query changed.
-    HistorySearch(String),
     /// Select a history entry (index into `history_entries`).
     HistorySelect(usize),
     /// Re-read the history list from Core.
@@ -123,8 +121,23 @@ pub enum FrontendAction {
     SettingsAction(SettingsActionField),
     /// Settings section changed.
     SettingsSection(SettingsSection),
-    /// Settings notice message.
-    SettingsNotice(String),
+    /// AI-services sub-tab (0 = LLM, 1 = ASR, 2 = local models, 3 = connections).
+    SettingsServicesView(usize),
+    /// Enable/disable a channel (index into `settings.channels`).
+    SettingsChannelToggle(usize),
+    /// Validate a channel (index into `settings.channels`).
+    SettingsChannelValidate(usize),
+    /// Delete a channel (index into `settings.channels`).
+    SettingsChannelDelete(usize),
+    /// Open/close the "add channel" form.
+    SettingsChannelFormOpen(bool),
+    /// Provider picked in the add-channel form.
+    SettingsChannelProvider(usize),
+    /// Channel name typed in the add-channel form.
+    SettingsChannelName(String),
+    /// Create the channel described by the form.
+    SettingsChannelCreate,
+    /// Re-read channels for the current AI-services view.
     /// Overview: re-read credentials / history / activity from Core.
     OverviewRefresh,
     /// Overview: period toggle (0 = last 7 days, 1 = last 30 days).
@@ -162,10 +175,61 @@ pub struct MarketplacePack {
     pub tags: Vec<String>,
     pub likes: u32,
     pub downloads: u32,
-    pub is_new: bool,
+    /// Whether the signed-in user has liked this pack (`me/likes`).
+    pub liked: bool,
 }
 
 // ── Settings types ──────────────────────────────────────────────────────────
+
+/// Host permission state, mirroring the Tauri permission rows. Linux has no
+/// OS permission prompts, so most of these stay `Unsupported` — but the value
+/// now comes from the host snapshot instead of a hardcoded label.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PermissionState {
+    #[default]
+    Unknown,
+    Granted,
+    Unsupported,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SettingsPermissions {
+    pub microphone: PermissionState,
+    pub accessibility: PermissionState,
+    pub hotkey: PermissionState,
+    pub network: PermissionState,
+}
+
+/// One 风格包直选 row (style pack name + its hotkey chip).
+#[derive(Clone, Debug, Default)]
+pub struct StylePackHotkeyRow {
+    pub name: String,
+    pub hotkey: String,
+}
+
+/// One credential channel shown in the AI-services settings tab.
+#[derive(Clone, Debug, Default)]
+pub struct SettingsChannel {
+    pub name: String,
+    /// Model / endpoint summary shown under the channel name.
+    pub model: String,
+    /// Provider descriptor label (already localized by the host).
+    pub provider: String,
+    /// True for the channel currently serving requests.
+    pub is_active: bool,
+    pub enabled: bool,
+    /// Human-readable result of the last validation, if any.
+    pub last_check: Option<String>,
+}
+
+/// Provider kinds available when creating a channel.
+#[derive(Clone, Debug, Default)]
+pub struct SettingsChannelProvider {
+    /// Provider type id sent back to Core.
+    pub provider_type: String,
+    /// Localized label shown in the picker.
+    pub label: String,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsSection {
@@ -180,23 +244,19 @@ pub enum SettingsSection {
 
 #[derive(Clone, Copy, Debug)]
 pub enum SettingsField {
-    RecordingEnabled,
-    RealtimeMode,
     StreamingInsert,
+    StreamingSaveClipboard,
     RestoreClipboard,
     StartMinimized,
+    LaunchAtLogin,
     AutoUpdate,
     RemoteInput,
-    SelectionAssistant,
-    SelectionVoice,
-    StackedLayout,
-    ConservativeLayout,
+    SilenceAutoStop,
+    AudioCue,
+    MuteWhileRecording,
+    RecordAudioForDebug,
     ActivityHeatmap,
     SystemProxy,
-    LocalModel,
-    MarketplaceEnabled,
-    RememberHistory,
-    RecordAudio,
     LessComputer,
     Multimodal,
     BetaChannel,
@@ -204,35 +264,42 @@ pub enum SettingsField {
 
 #[derive(Clone, Copy, Debug)]
 pub enum SettingsComboField {
-    Provider,
     Language,
     Theme,
-    Retention,
     Microphone,
     RecordingMode,
+    SilenceSeconds,
+    PasteShortcut,
+    RemoteDefaultMode,
+    /// 选区润色交付方式：0 = 直接替换，1 = 预览确认。
+    SelectionPolishDelivery,
+    /// Less Computer 的 Agent 后端（0 = Claude Code, 1 = OpenCode, 2 = Codex, 3 = dsh）。
+    CodingAgentProvider,
+    /// Less Computer 权限模式（0 = 放行, 1 = 只读/计划, 2 = 默认, 3 = 完全放行）。
+    CodingAgentPermission,
 }
 
 #[derive(Clone, Debug)]
 pub enum SettingsTextField {
-    ApiKey,
-    Endpoint,
-    Model,
     RemotePort,
-    ClaudePrompt,
+    HistoryMaxEntries,
+    /// 历史保留天数（0 = 永久）。
+    RetentionDays,
+    /// 润色上下文窗口（分钟，0 = 关闭）。
+    PolishContextWindow,
+    /// 调试录音最多保留条数。
+    AudioRecordingMaxEntries,
+    CodingAgentModel,
+    CodingAgentWorkdir,
+    CodingAgentExe,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum SettingsActionField {
-    ConnectionTest,
-    ModelManagement,
-    ExtensionManagement,
-    Permissions,
-    ClearHistory,
-    ClaudeDetect,
-    ClaudeConsole,
-    ClaudeRunTest,
     ExportDiagnostics,
     CheckUpdate,
+    CheckBetaUpdate,
+    CopyCertFingerprint,
     OpenGitHub,
     OpenHelp,
     OpenReleaseNotes,
@@ -278,6 +345,14 @@ pub enum HistoryInsertStatus {
     Failed,
 }
 
+/// In-app playback state for the entry currently being played.
+#[derive(Clone, Debug)]
+pub struct HistoryPlayback {
+    pub id: String,
+    pub position_ms: u64,
+    pub total_ms: u64,
+}
+
 /// A pending destructive action that needs an in-window confirmation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HistoryConfirm {
@@ -316,9 +391,11 @@ pub struct StylePack {
     pub name: String,
     pub description: String,
     pub tags: Vec<String>,
-    pub accent: egui::Color32,
     pub is_builtin: bool,
+    /// Active pack for the dictation / ASR workflow.
     pub is_active: bool,
+    /// Active pack for the selection-polish workflow (`prefs.selection_polish_style_pack_id`).
+    pub selection_active: bool,
 }
 
 // ── Overview types ──────────────────────────────────────────────────────────
@@ -413,6 +490,8 @@ pub struct FrontendViewModel {
     pub history_error: Option<String>,
     /// Set while a destructive action awaits confirmation (clear-all / delete).
     pub history_confirm: Option<HistoryConfirm>,
+    /// In-app playback progress for one history entry.
+    pub history_playback: Option<HistoryPlayback>,
 
     // Vocab
     pub vocab_entries: Vec<VocabEntry>,
@@ -428,9 +507,6 @@ pub struct FrontendViewModel {
     pub vocab_selected_presets: Vec<usize>,
     pub vocab_editing_preset: Option<usize>,
     pub vocab_saved_presets: Vec<SavedVocabPreset>,
-    pub vocab_presets_open: bool,
-    pub vocab_corrections_open: bool,
-    pub vocab_entries_open: bool,
     pub vocab_error: Option<String>,
     pub vocab_unsupported: bool,
 
@@ -448,15 +524,44 @@ pub struct FrontendViewModel {
     pub marketplace_sort: MarketplaceSort,
     pub marketplace_packs: Vec<MarketplacePack>,
     pub marketplace_selected: Option<usize>,
-    pub marketplace_liked: Vec<usize>,
     pub marketplace_notice: Option<String>,
     pub marketplace_loading: bool,
     pub marketplace_unsupported: bool,
 
     // Settings
     pub settings_section: SettingsSection,
+    /// AI-services sub-tab (0 = LLM, 1 = ASR, 2 = local models, 3 = connections,
+    /// 4 = 多模态). `ServiceView` decides which of these are shown.
+    pub services_view: usize,
+    /// Whether the host has an enabled channel for LLM / ASR (drives the
+    /// required-service status dots on the AI-services tabs).
+    pub service_configured: [bool; 2],
+    /// The host has no local inference engine (Linux) → hide the local-model
+    /// tab, exactly like the Tauri app gates on `supports_local_asr`.
+    pub supports_local_asr: bool,
+    /// Multimodal pipeline is enabled → the 多模态 view joins the tab strip.
+    pub multimodal_view: bool,
+    /// The host can self-update (AppImage) → beta-channel / check-update rows.
+    pub auto_update_capable: bool,
+    /// Real host permission snapshot for 隐私与数据（不再写死「已授权」）。
+    pub permissions: SettingsPermissions,
+    /// 远程输入服务正在监听 → 显示配对码 / 访问网址 / 证书指纹。
+    pub remote_running: bool,
+    pub remote_pin: String,
+    pub remote_urls: Vec<String>,
+    pub remote_cert_fingerprint: Option<String>,
+    /// Channels of the active AI-services kind.
+    pub channels: Vec<SettingsChannel>,
+    /// Provider kinds offered by the add-channel form.
+    pub channel_providers: Vec<SettingsChannelProvider>,
+    pub channels_loading: bool,
+    pub channel_form_open: bool,
+    pub channel_form_name: String,
+    pub channel_provider_index: usize,
     /// Rail search query in the settings modal.
     pub settings_query: String,
+    /// Expanded drill-in row in the 实验与扩展 section (`usize::MAX` = none).
+    pub advanced_open: usize,
     pub settings_notice: Option<String>,
     pub settings: SettingsFields,
 
@@ -480,6 +585,16 @@ pub struct FrontendViewModel {
     pub qa_hotkey: String,
     /// Display label for the translation modifier shortcut.
     pub translation_hotkey: String,
+    /// Display label for the switch-style shortcut.
+    pub switch_style_hotkey: String,
+    /// Display label for the open-app shortcut.
+    pub open_app_hotkey: String,
+    /// Display label for the Less Computer voice shortcut.
+    pub coding_agent_hotkey: String,
+    /// Display label for the selection-polish shortcut.
+    pub selection_polish_hotkey: String,
+    /// Pipeline mode is 多模态 → the task strip hides the legacy LLM/ASR views.
+    pub pipeline_multimodal: bool,
 }
 
 impl Default for FrontendViewModel {
@@ -501,6 +616,7 @@ impl Default for FrontendViewModel {
             history_loading: true,
             history_error: None,
             history_confirm: None,
+            history_playback: None,
             vocab_entries: Vec::new(),
             vocab_rules: Vec::new(),
             vocab_filter: 0,
@@ -513,9 +629,6 @@ impl Default for FrontendViewModel {
             vocab_selected_presets: Vec::new(),
             vocab_editing_preset: None,
             vocab_saved_presets: Vec::new(),
-            vocab_presets_open: false,
-            vocab_corrections_open: false,
-            vocab_entries_open: true,
             vocab_error: None,
             vocab_unsupported: true,
             style_packs: Vec::new(),
@@ -529,12 +642,19 @@ impl Default for FrontendViewModel {
             marketplace_sort: MarketplaceSort::Popular,
             marketplace_packs: Vec::new(),
             marketplace_selected: None,
-            marketplace_liked: Vec::new(),
             marketplace_notice: None,
             marketplace_loading: true,
             marketplace_unsupported: true,
             settings_section: SettingsSection::General,
+            services_view: 0,
+            channels: Vec::new(),
+            channel_providers: Vec::new(),
+            channels_loading: false,
+            channel_form_open: false,
+            channel_form_name: String::new(),
+            channel_provider_index: 0,
             settings_query: String::new(),
+            advanced_open: usize::MAX,
             settings_notice: None,
             settings: SettingsFields::default(),
             qa_save_history: false,
@@ -545,9 +665,23 @@ impl Default for FrontendViewModel {
             translation_unsupported: true,
             version: env!("CARGO_PKG_VERSION").to_string(),
             status: String::new(),
+            selection_polish_hotkey: String::new(),
+            pipeline_multimodal: false,
+            remote_running: false,
+            remote_pin: String::new(),
+            remote_urls: Vec::new(),
+            remote_cert_fingerprint: None,
+            service_configured: [false; 2],
+            supports_local_asr: false,
+            multimodal_view: false,
+            auto_update_capable: false,
+            permissions: SettingsPermissions::default(),
             dictation_hotkey: String::new(),
             qa_hotkey: String::new(),
             translation_hotkey: String::new(),
+            switch_style_hotkey: String::new(),
+            open_app_hotkey: String::new(),
+            coding_agent_hotkey: String::new(),
         }
     }
 }
@@ -556,71 +690,90 @@ impl Default for FrontendViewModel {
 /// mock data. All values come from the host.
 #[derive(Clone, Debug)]
 pub struct SettingsFields {
-    pub recording_enabled: bool,
-    pub realtime_mode: bool,
+    /// 0 = toggle, 1 = hold, 2 = double click, 3 = auto.
+    pub recording_mode: usize,
     pub streaming_insert: bool,
+    pub streaming_save_clipboard: bool,
     pub restore_clipboard: bool,
     pub start_minimized: bool,
+    pub launch_at_login: bool,
     pub auto_update: bool,
     pub remote_input: bool,
-    pub selection_assistant: bool,
-    pub selection_voice: bool,
-    pub stacked_layout: bool,
-    pub conservative_layout: bool,
+    pub remote_default_mode: usize,
+    pub silence_auto_stop: bool,
+    pub silence_seconds: usize,
+    pub microphone_name: String,
+    pub microphone_options: Vec<String>,
+    pub mute_while_recording: bool,
+    pub audio_cue: bool,
+    pub record_audio_for_debug: bool,
+    pub history_max_entries: String,
+    /// 风格包直选快捷键（只读展示，录制器尚未实现）。
+    pub style_pack_hotkeys: Vec<StylePackHotkeyRow>,
+    /// 润色上下文窗口分钟数（0 = 只用当前这条转写）。
+    pub polish_context_window: String,
+    /// 调试录音最多保留条数。
+    pub audio_recording_max_entries: String,
+    pub paste_shortcut: usize,
+    /// 选区润色交付方式：0 = 直接替换，1 = 预览确认。
+    pub selection_polish_delivery: usize,
     pub activity_heatmap: bool,
     pub system_proxy: bool,
-    pub local_model: bool,
-    pub marketplace_enabled: bool,
-    pub remember_history: bool,
-    pub record_audio: bool,
     pub less_computer: bool,
+    /// Less Computer（Coding Agent）配置，全部直连 `coding_agent_*` 偏好。
+    pub coding_agent_provider: usize,
+    pub coding_agent_permission: usize,
+    pub coding_agent_model: String,
+    pub coding_agent_workdir: String,
+    pub coding_agent_exe: String,
     pub multimodal: bool,
     pub beta_channel: bool,
-    pub claude_expanded: bool,
-    pub provider: usize,
     pub language: usize,
     pub theme: usize,
-    pub retention: usize,
-    pub api_key: String,
-    pub endpoint: String,
-    pub model: String,
+    /// 历史保留天数（0 = 永久，输入框）。
+    pub retention_days: String,
     pub remote_port: String,
-    pub claude_prompt: String,
 }
 
 impl Default for SettingsFields {
     fn default() -> Self {
         Self {
-            recording_enabled: false,
-            realtime_mode: false,
+            recording_mode: 0,
             streaming_insert: false,
+            streaming_save_clipboard: false,
             restore_clipboard: false,
             start_minimized: false,
+            launch_at_login: false,
             auto_update: false,
             remote_input: false,
-            selection_assistant: false,
-            selection_voice: false,
-            stacked_layout: false,
-            conservative_layout: false,
-            activity_heatmap: false,
+            remote_default_mode: 0,
+            silence_auto_stop: false,
+            silence_seconds: 2,
+            microphone_name: String::new(),
+            microphone_options: Vec::new(),
+            mute_while_recording: false,
+            audio_cue: false,
+            record_audio_for_debug: false,
+            history_max_entries: String::new(),
+            style_pack_hotkeys: Vec::new(),
+            polish_context_window: String::new(),
+            audio_recording_max_entries: String::new(),
+            paste_shortcut: 0,
+            selection_polish_delivery: 0,
+            activity_heatmap: true,
             system_proxy: false,
-            local_model: false,
-            marketplace_enabled: false,
-            remember_history: false,
-            record_audio: false,
             less_computer: false,
+            coding_agent_provider: 0,
+            coding_agent_permission: 0,
+            coding_agent_model: String::new(),
+            coding_agent_workdir: String::new(),
+            coding_agent_exe: String::new(),
             multimodal: false,
             beta_channel: false,
-            claude_expanded: false,
-            provider: 0,
             language: 0,
             theme: 0,
-            retention: 0,
-            api_key: String::new(),
-            endpoint: String::new(),
-            model: String::new(),
+            retention_days: "0".to_string(),
             remote_port: String::new(),
-            claude_prompt: String::new(),
         }
     }
 }

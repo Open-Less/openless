@@ -7,6 +7,7 @@
 mod audio;
 mod audio_cue;
 mod audio_mute;
+mod audio_player;
 mod backend;
 mod capabilities;
 mod coding_agent;
@@ -34,6 +35,7 @@ mod updater;
 pub use audio::LinuxCpalRecorder;
 pub use audio_cue::{play_cue_start, play_cue_stop, CueTone};
 pub use audio_mute::AudioMuteGuard;
+pub use audio_player::ClipPlayer;
 pub use backend::{LinuxBackendBuilder, LinuxBackendRuntime};
 pub use capabilities::{LinuxCapabilitySnapshot, LinuxDesktopSession, LinuxPlatformApi};
 pub use credentials::LinuxCredentialStore;

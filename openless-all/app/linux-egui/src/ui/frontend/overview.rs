@@ -45,11 +45,42 @@ const MONO: f32 = 12.0;
 
 // ── Entry point ─────────────────────────────────────────────────────────────
 
+/// Minimum height the single-screen dashboard needs before it starts
+/// scrolling: header + stats row + chart row + heatmap.
+const OVERVIEW_MIN_HEIGHT: f32 = 600.0;
+
 pub fn page(ui: &mut egui::Ui, vm: &FrontendViewModel, actions: &mut Vec<FrontendAction>) {
     let width = (ui.available_width() - 24.0).max(1.0);
     ui.set_min_width(width);
     ui.set_max_width(width);
+
+    // Single-screen by default, but a short window must still be reachable:
+    // scroll the whole dashboard instead of clipping it.
+    if ui.available_height() < OVERVIEW_MIN_HEIGHT {
+        egui::ScrollArea::vertical()
+            .id_salt("openless-overview-scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_min_width(width);
+                ui.set_max_width(width);
+                body(ui, width, vm, actions, OVERVIEW_MIN_HEIGHT);
+            });
+        return;
+    }
+    body(ui, width, vm, actions, 0.0);
+}
+
+/// One dashboard layout. `forced_total` > 0 lays the page out for a scroll
+/// container of that height instead of the current viewport.
+fn body(
+    ui: &mut egui::Ui,
+    width: f32,
+    vm: &FrontendViewModel,
+    actions: &mut Vec<FrontendAction>,
+    forced_total: f32,
+) {
     let lang = vm.lang;
+    let start_y = ui.cursor().min.y;
 
     header(ui, width, lang, actions);
 
@@ -98,7 +129,11 @@ pub fn page(ui: &mut egui::Ui, vm: &FrontendViewModel, actions: &mut Vec<Fronten
     // (and below `HEATMAP_MIN_HEIGHT` it is dropped) so nothing overflows.
     // It is only shown when the preference is on and there is activity to draw
     // (matching the Tauri `showOverviewActivityHeatmap` gate).
-    let available = ui.available_height().max(0.0);
+    let available = if forced_total > 0.0 {
+        (forced_total - (ui.cursor().min.y - start_y)).max(BOTTOM_MIN_HEIGHT)
+    } else {
+        ui.available_height().max(0.0)
+    };
     let heatmap_cols = heatmap_columns(summary.heatmap_year, summary.heatmap.len());
     let ideal_heatmap = heatmap_card_height(width, heatmap_cols);
     let mut heatmap_height = ideal_heatmap;

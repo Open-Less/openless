@@ -5,7 +5,7 @@
 //! can be reviewed or removed like any other rule.
 
 use eframe::egui;
-use openless_linux_egui::{fmt_l10n, tr_l10n, Lang};
+use openless_linux_egui::{fmt_l10n, tr_l10n};
 
 use super::layout;
 use super::pages::correction_chip;

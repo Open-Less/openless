@@ -330,12 +330,19 @@ pub fn sidebar(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Ve
         .fixed_pos(body.min)
         .show(ctx, |ui| {
             ui.set_min_size(egui::vec2(SIDEBAR_WIDTH, body.height()));
+            // Constrain the max size too: without it `available_height()` is the
+            // whole screen and the pinned settings row lands off-window.
+            ui.set_max_size(egui::vec2(SIDEBAR_WIDTH, body.height()));
             ui.set_clip_rect(egui::Rect::from_min_size(
                 body.min,
                 egui::vec2(SIDEBAR_WIDTH, body.height()),
             ));
+            // Paint the exact sidebar rect: `ui.max_rect()` can be the whole
+            // screen, which pushed the rounded bottom-left corner off-window.
+            let sidebar_rect =
+                egui::Rect::from_min_size(body.min, egui::vec2(SIDEBAR_WIDTH, body.height()));
             ui.painter().rect_filled(
-                ui.max_rect(),
+                sidebar_rect,
                 egui::CornerRadius {
                     nw: 0,
                     ne: 0,
@@ -375,99 +382,114 @@ pub fn sidebar(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Ve
                                 .color(theme::INK_4),
                         );
                     });
-                    ui.add_space(14.0);
-                    nav(
-                        ui,
-                        vm,
-                        "nav.overview",
-                        NavTarget::Page(Page::Overview),
-                        IconName::Overview,
-                        actions,
-                    );
-                    nav(
-                        ui,
-                        vm,
-                        "nav.history",
-                        NavTarget::Page(Page::History),
-                        IconName::History,
-                        actions,
-                    );
-                    nav(
-                        ui,
-                        vm,
-                        "nav.vocab",
-                        NavTarget::Page(Page::Vocab),
-                        IconName::Vocab,
-                        actions,
+                    ui.add_space(12.0);
+                    // The nav scrolls when the window is short so the pinned
+                    // settings row stays reachable.
+                    const PINNED_SETTINGS_HEIGHT: f32 = 46.0;
+                    let nav_height = (ui.available_height() - PINNED_SETTINGS_HEIGHT).max(80.0);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(SIDEBAR_WIDTH - 20.0, nav_height),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            egui::ScrollArea::vertical()
+                                .id_salt("openless-sidebar-nav")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    ui.set_width(SIDEBAR_WIDTH - 20.0);
+                                    nav(
+                                        ui,
+                                        vm,
+                                        "nav.overview",
+                                        NavTarget::Page(Page::Overview),
+                                        IconName::Overview,
+                                        actions,
+                                    );
+                                    nav(
+                                        ui,
+                                        vm,
+                                        "nav.history",
+                                        NavTarget::Page(Page::History),
+                                        IconName::History,
+                                        actions,
+                                    );
+                                    nav(
+                                        ui,
+                                        vm,
+                                        "nav.vocab",
+                                        NavTarget::Page(Page::Vocab),
+                                        IconName::Vocab,
+                                        actions,
+                                    );
+                                    ui.add_space(4.0);
+                                    group(
+                                        ui,
+                                        vm,
+                                        "nav.group_style",
+                                        IconName::Style,
+                                        vm.style_open,
+                                        FrontendAction::SidebarToggleStyle,
+                                        actions,
+                                    );
+                                    if vm.style_open {
+                                        subnav(
+                                            ui,
+                                            vm,
+                                            "nav.polish_mode",
+                                            NavTarget::Page(Page::Style),
+                                            actions,
+                                        );
+                                        subnav(
+                                            ui,
+                                            vm,
+                                            "nav.marketplace",
+                                            NavTarget::Page(Page::Marketplace),
+                                            actions,
+                                        );
+                                    }
+                                    group(
+                                        ui,
+                                        vm,
+                                        "nav.group_tools",
+                                        IconName::SelectionAsk,
+                                        vm.tools_open,
+                                        FrontendAction::SidebarToggleTools,
+                                        actions,
+                                    );
+                                    if vm.tools_open {
+                                        subnav(
+                                            ui,
+                                            vm,
+                                            "nav.translation",
+                                            NavTarget::Page(Page::Translation),
+                                            actions,
+                                        );
+                                        subnav(
+                                            ui,
+                                            vm,
+                                            "nav.selection_ask",
+                                            NavTarget::Page(Page::SelectionAsk),
+                                            actions,
+                                        );
+                                        subnav(
+                                            ui,
+                                            vm,
+                                            "nav.corrections",
+                                            NavTarget::Page(Page::Corrections),
+                                            actions,
+                                        );
+                                    }
+                                });
+                        },
                     );
                     ui.add_space(4.0);
-                    group(
+                    nav_with_icon(
                         ui,
                         vm,
-                        "nav.group_style",
-                        IconName::Style,
-                        vm.style_open,
-                        FrontendAction::SidebarToggleStyle,
+                        "nav.settings",
+                        NavTarget::Page(Page::Settings),
+                        IconName::Settings,
                         actions,
                     );
-                    if vm.style_open {
-                        subnav(
-                            ui,
-                            vm,
-                            "nav.polish_mode",
-                            NavTarget::Page(Page::Style),
-                            actions,
-                        );
-                        subnav(
-                            ui,
-                            vm,
-                            "nav.marketplace",
-                            NavTarget::Page(Page::Marketplace),
-                            actions,
-                        );
-                    }
-                    group(
-                        ui,
-                        vm,
-                        "nav.group_tools",
-                        IconName::SelectionAsk,
-                        vm.tools_open,
-                        FrontendAction::SidebarToggleTools,
-                        actions,
-                    );
-                    if vm.tools_open {
-                        subnav(
-                            ui,
-                            vm,
-                            "nav.translation",
-                            NavTarget::Page(Page::Translation),
-                            actions,
-                        );
-                        subnav(
-                            ui,
-                            vm,
-                            "nav.selection_ask",
-                            NavTarget::Page(Page::SelectionAsk),
-                            actions,
-                        );
-                        subnav(
-                            ui,
-                            vm,
-                            "nav.corrections",
-                            NavTarget::Page(Page::Corrections),
-                            actions,
-                        );
-                    }
-                    ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                        nav_with_icon(
-                            ui,
-                            vm,
-                            "nav.settings",
-                            NavTarget::Page(Page::Settings),
-                            IconName::Settings,
-                            actions,
-                        );
-                    });
                 });
         });
 }
@@ -480,17 +502,20 @@ enum NavTarget {
 
 fn nav_active(vm: &FrontendViewModel, target: NavTarget) -> bool {
     match target {
+        // Settings is an overlay: it highlights while open instead of owning a page.
+        NavTarget::Page(Page::Settings) => vm.settings_open,
         NavTarget::Page(page) => vm.active_page == page,
     }
 }
 
 fn nav_click(target: NavTarget, actions: &mut Vec<FrontendAction>) {
     match target {
+        NavTarget::Page(Page::Settings) => {
+            // Keep the current page rendered behind the modal.
+            actions.push(FrontendAction::ToggleSettings);
+        }
         NavTarget::Page(page) => {
             actions.push(FrontendAction::Navigate(page));
-            if page == Page::Settings {
-                actions.push(FrontendAction::ToggleSettings);
-            }
         }
     }
 }
@@ -651,122 +676,6 @@ pub fn content_panel(ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::U
 
 // ── Shared helpers ──────────────────────────────────────────────────────────
 
-pub fn icon_text_button(
-    ui: &mut egui::Ui,
-    label: &str,
-    icon: IconName,
-    width: f32,
-) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::click());
-    let hovered = response.hovered();
-    ui.painter().rect_filled(
-        rect,
-        egui::CornerRadius::same(8),
-        if hovered {
-            theme::SURFACE_2
-        } else {
-            theme::SURFACE
-        },
-    );
-    ui.painter().rect_stroke(
-        rect,
-        egui::CornerRadius::same(8),
-        egui::Stroke::new(0.8, theme::LINE),
-        egui::StrokeKind::Inside,
-    );
-    let icon_center = egui::pos2(rect.left() + 16.0, rect.center().y);
-    icons::draw_icon(ui, icon_center, icon, theme::INK_3);
-    ui.painter().text(
-        egui::pos2(rect.left() + 28.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        egui::FontId::proportional(11.5),
-        theme::INK_2,
-    );
-    response
-}
-
-pub fn text_chevron_button(ui: &mut egui::Ui, label: &str, width: f32) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::click());
-    ui.painter().rect_filled(
-        rect,
-        egui::CornerRadius::same(8),
-        if response.hovered() {
-            theme::SURFACE_2
-        } else {
-            theme::SURFACE
-        },
-    );
-    ui.painter().rect_stroke(
-        rect,
-        egui::CornerRadius::same(8),
-        egui::Stroke::new(0.8, theme::LINE),
-        egui::StrokeKind::Inside,
-    );
-    ui.painter().text(
-        egui::pos2(rect.left() + 12.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        egui::FontId::proportional(12.0),
-        theme::INK_2,
-    );
-    icons::draw_icon(
-        ui,
-        egui::pos2(rect.right() - 14.0, rect.center().y),
-        IconName::ChevronDown,
-        theme::INK_3,
-    );
-    response
-}
-
-pub fn small_pill(
-    ui: &mut egui::Ui,
-    text: &str,
-    fill: egui::Color32,
-    border: egui::Color32,
-    color: egui::Color32,
-) -> egui::Response {
-    let width = (text.chars().count() as f32 * 10.0 + 16.0).max(42.0);
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 22.0), egui::Sense::hover());
-    ui.painter()
-        .rect_filled(rect, egui::CornerRadius::same(9), fill);
-    ui.painter().rect_stroke(
-        rect,
-        egui::CornerRadius::same(9),
-        egui::Stroke::new(0.7, border),
-        egui::StrokeKind::Inside,
-    );
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        text,
-        egui::FontId::proportional(10.5),
-        color,
-    );
-    response
-}
-
-pub fn card_at(ui: &mut egui::Ui, rect: egui::Rect, contents: impl FnOnce(&mut egui::Ui)) {
-    ui.painter()
-        .rect_filled(rect, egui::CornerRadius::same(14), theme::SURFACE);
-    ui.painter().rect_stroke(
-        rect,
-        egui::CornerRadius::same(14),
-        egui::Stroke::new(1.0, theme::LINE),
-        egui::StrokeKind::Inside,
-    );
-    let inner = rect.shrink(17.0);
-    ui.scope_builder(
-        egui::UiBuilder::new()
-            .max_rect(inner)
-            .layout(egui::Layout::top_down(egui::Align::Min)),
-        |ui| {
-            ui.set_clip_rect(ui.clip_rect().intersect(rect));
-            contents(ui);
-        },
-    );
-}
-
 /// A stable per-card salt derived from its position, so child widget ids stay
 /// unique across the cards on a page without threading a name through.
 pub fn card_salt(rect: egui::Rect) -> (i32, i32) {
@@ -795,27 +704,6 @@ pub fn fixed_ui<R>(
     );
     child.set_clip_rect(child.clip_rect().intersect(rect));
     contents(&mut child)
-}
-
-pub fn tag(ui: &egui::Ui, pos: egui::Pos2, text: &str, blue: bool) {
-    let width = (text.chars().count() as f32 * 10.0 + 16.0).max(48.0);
-    let rect = egui::Rect::from_min_size(pos, egui::vec2(width, 20.0));
-    ui.painter().rect_filled(
-        rect,
-        egui::CornerRadius::same(9),
-        if blue {
-            theme::BLUE_SOFT
-        } else {
-            theme::SURFACE_2
-        },
-    );
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        text,
-        egui::FontId::proportional(10.0),
-        if blue { theme::BLUE } else { theme::INK_3 },
-    );
 }
 
 pub fn soft_separator(ui: &mut egui::Ui) {
@@ -850,8 +738,6 @@ pub fn text_width(ui: &egui::Ui, text: &str, size: f32) -> f32 {
 pub enum ButtonKind {
     /// Transparent fill, hairline border, ink text (the default toolbar look).
     Ghost,
-    /// Filled with `SURFACE_2`, no border.
-    Soft,
     /// Filled with the accent blue, white text.
     Blue,
 }
@@ -882,7 +768,6 @@ pub fn action_button(
             Some(egui::Stroke::new(0.8, theme::LINE)),
             theme::INK_2,
         ),
-        ButtonKind::Soft => (theme::SURFACE_2, None, theme::INK_2),
         ButtonKind::Blue => (
             if response.hovered() {
                 theme::BLUE.linear_multiply(0.92)
@@ -1055,13 +940,9 @@ pub fn segmented(
     selected: usize,
 ) -> Option<usize> {
     let painter = ui.painter().with_clip_rect(rect);
-    painter.rect_filled(rect, egui::CornerRadius::same(8), theme::SURFACE_2);
-    painter.rect_stroke(
-        rect,
-        egui::CornerRadius::same(8),
-        egui::Stroke::new(0.5, theme::LINE),
-        egui::StrokeKind::Inside,
-    );
+    // Tauri track: rgba(0,0,0,0.04) with a 2px inset; the active chip is a white
+    // surface with a hairline + soft shadow, the label stays ink-colored.
+    painter.rect_filled(rect, egui::CornerRadius::same(8), theme::SEGMENTED_TRACK);
     let mut x = rect.left() + 2.0;
     let mut clicked = None;
     for (index, option) in options.iter().enumerate() {
@@ -1079,9 +960,19 @@ pub fn segmented(
         let response = ui.interact(option_rect, id, egui::Sense::click());
         let is_selected = index == selected;
         if is_selected {
-            painter.rect_filled(option_rect, egui::CornerRadius::same(6), theme::BLUE);
-        } else if response.hovered() {
             painter.rect_filled(option_rect, egui::CornerRadius::same(6), theme::SURFACE);
+            painter.rect_stroke(
+                option_rect,
+                egui::CornerRadius::same(6),
+                egui::Stroke::new(0.5, theme::LINE),
+                egui::StrokeKind::Inside,
+            );
+        } else if response.hovered() {
+            painter.rect_filled(
+                option_rect,
+                egui::CornerRadius::same(6),
+                egui::Color32::from_white_alpha(140),
+            );
         }
         painter.text(
             option_rect.center(),
@@ -1089,7 +980,7 @@ pub fn segmented(
             option,
             egui::FontId::proportional(12.0),
             if is_selected {
-                egui::Color32::WHITE
+                theme::INK
             } else {
                 theme::INK_3
             },
@@ -1101,7 +992,8 @@ pub fn segmented(
     }
     clicked
 }
-
+/// A segmented button group (the Tauri `ol-seg` control). Returns the index the
+/// user clicked. Every segment is a real button, not a text label.
 /// A labelled section block: title plus optional smaller description line.
 pub fn section_title(ui: &mut egui::Ui, width: f32, title: &str, desc: Option<&str>) {
     let height = if desc.is_some() { 40.0 } else { 20.0 };

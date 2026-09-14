@@ -6,21 +6,6 @@
 use chrono::{Datelike, Timelike};
 use openless_linux_egui::{fmt_l10n, Lang};
 
-/// Integer with thousands separators (`1234` → `1,234`). Matches the grouping
-/// used by every locale this UI ships.
-pub fn number(value: u64) -> String {
-    let raw = value.to_string();
-    let bytes = raw.as_bytes();
-    let mut out = String::with_capacity(raw.len() + raw.len() / 3);
-    for (index, byte) in bytes.iter().enumerate() {
-        if index > 0 && (bytes.len() - index) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(*byte as char);
-    }
-    out
-}
-
 /// Recording length as shown on history rows and the `录音 …` label.
 /// `—` for unknown/zero, seconds below a minute, minutes above.
 pub fn history_duration(ms: Option<u64>, lang: Lang) -> String {

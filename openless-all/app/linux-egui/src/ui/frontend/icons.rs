@@ -7,7 +7,6 @@ pub enum IconName {
     Vocab,
     Style,
     SelectionAsk,
-    Translation,
     Settings,
     Mic,
     Sparkle,
@@ -20,7 +19,7 @@ pub enum IconName {
     Refresh,
     Download,
     Play,
-    ChevronDown,
+    Stop,
 }
 
 /// Draw an icon centred at `center` with the given `color`.
@@ -145,12 +144,19 @@ pub fn draw_icon(ui: &egui::Ui, center: egui::Pos2, icon: IconName, color: egui:
                 stroke,
             ));
         }
-        IconName::ChevronDown => {
+        IconName::Stop => {
             let s = 0.54;
             let stroke = egui::Stroke::new(1.0, color);
             let pt = |x: f32, y: f32| center + egui::vec2((x - 12.0) * s, (y - 12.0) * s);
             p.add(egui::Shape::line(
-                [pt(6.0, 9.0), pt(12.0, 15.0), pt(18.0, 9.0)].to_vec(),
+                [
+                    pt(6.0, 6.0),
+                    pt(18.0, 6.0),
+                    pt(18.0, 18.0),
+                    pt(6.0, 18.0),
+                    pt(6.0, 6.0),
+                ]
+                .to_vec(),
                 stroke,
             ));
         }
@@ -240,29 +246,6 @@ pub fn draw_icon(ui: &egui::Ui, center: egui::Pos2, icon: IconName, color: egui:
                 ],
                 stroke,
             );
-        }
-        IconName::Translation => {
-            p.circle_stroke(center, 6.7, stroke);
-            p.line_segment(
-                [
-                    center + egui::vec2(-6.7, 0.0),
-                    center + egui::vec2(6.7, 0.0),
-                ],
-                stroke,
-            );
-            for sign in [-1.0, 1.0] {
-                p.add(egui::Shape::line(
-                    [
-                        center + egui::vec2(0.0, -6.7),
-                        center + egui::vec2(sign * 2.8, -4.0),
-                        center + egui::vec2(sign * 3.3, 0.0),
-                        center + egui::vec2(sign * 2.8, 4.0),
-                        center + egui::vec2(0.0, 6.7),
-                    ]
-                    .to_vec(),
-                    stroke,
-                ));
-            }
         }
         IconName::Mic => {
             p.rect_stroke(
