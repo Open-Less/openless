@@ -52,6 +52,18 @@ pub use fcitx5::{
     FcitxPluginInstallPlan, FcitxPluginStatus,
 };
 pub use host_actions::LinuxHostActions;
+
+/// Apply one QA/selection-voice edit through the same fcitx5 selection target
+/// the `SelectionApi` uses. `session_id` is the selection-voice session the host
+/// registered via `rekey_selection_target`, i.e. the Core's apply ticket
+/// `session_id`. Returns `Cancelled` when the selection changed meanwhile.
+pub fn apply_selection_voice_target(
+    session_id: &str,
+    source: &str,
+    replacement: &str,
+) -> Result<(), openless_core::BackendError> {
+    fcitx5::apply_selection_target(session_id, source, replacement)
+}
 pub use hotkeys::{Fcitx5HotkeyListener, LinuxHotkeyEvent};
 pub use i18n::{fmt_catalog as fmt_l10n, tr_catalog as tr_l10n, Lang, LocalePref, LANGS};
 pub use logging::{export_error_log, init_file_logger, log_path};

@@ -98,6 +98,33 @@ mod linux_app {
         last_error: Option<String>,
     }
 
+    /// 追问编辑态：Core 只在变化时下发 `Some(..)`，所以逐字段合并。
+    #[derive(Clone, Copy, Debug, Default)]
+    struct QaEditFlags {
+        instruction_mode: bool,
+        apply_available: bool,
+        revert_available: bool,
+    }
+
+    /// 固定（图钉）后不再响应宿主的自动收起；✕/Esc 仍照常关闭。
+    fn qa_hides_on_host_action(pinned: bool) -> bool {
+        !pinned
+    }
+
+    impl QaEditFlags {
+        fn merge(&mut self, state: &openless_core::QaStateEvent) {
+            if let Some(value) = state.edit_instruction_mode {
+                self.instruction_mode = value;
+            }
+            if let Some(value) = state.edit_apply_available {
+                self.apply_available = value;
+            }
+            if let Some(value) = state.edit_revert_available {
+                self.revert_available = value;
+            }
+        }
+    }
+
     #[derive(Default, Clone, Copy)]
     struct SettingsDirty {
         streaming_insert: bool,
@@ -484,6 +511,10 @@ mod linux_app {
         less_computer_session: Option<openless_core::SessionId>,
         pending_approval: Option<(String, String)>,
         qa_visible: bool,
+        /// 划词追问的图钉：固定后 `HostAction::HideQa` 不再收起窗口。
+        qa_pinned: bool,
+        /// 追问「编辑指令」三态（Core `QaStateEvent` 的部分更新）。
+        qa_edit: QaEditFlags,
         qa_input: String,
         qa_state: Option<QaStateEvent>,
         selection_preview_visible: bool,
@@ -594,6 +625,8 @@ mod linux_app {
                         less_computer_session: None,
                         pending_approval: None,
                         qa_visible: false,
+                        qa_pinned: false,
+                        qa_edit: QaEditFlags::default(),
                         qa_input: String::new(),
                         qa_state: None,
                         selection_preview_visible: false,
@@ -685,6 +718,8 @@ mod linux_app {
                     less_computer_session: None,
                     pending_approval: None,
                     qa_visible: false,
+                    qa_pinned: false,
+                    qa_edit: QaEditFlags::default(),
                     qa_input: String::new(),
                     qa_state: None,
                     selection_preview_visible: false,
@@ -852,8 +887,73 @@ mod linux_app {
                     selection_preview: state.selection_preview,
                     streaming_answer: state.chunk.unwrap_or_default(),
                     error: state.error,
+                    edit_instruction_mode: self.qa_edit.instruction_mode,
+                    edit_apply_available: self.qa_edit.apply_available,
+                    edit_revert_available: self.qa_edit.revert_available,
+                    pinned: self.qa_pinned,
+                    viewer_login: self.marketplace_login(),
                 },
             );
+        }
+
+        /// 当前 GitHub 登录名（设置里登录后写入偏好），用于追问头像。
+        fn marketplace_login(&self) -> String {
+            self.preferences
+                .as_ref()
+                .map(|prefs| prefs.marketplace_dev_login.trim().to_string())
+                .unwrap_or_default()
+        }
+
+        /// 「预览并确认插入」：沿用 Tauri `confirm_selection_voice_preview` 的
+        /// 四步（取 owner → 取预览文本 → 开 apply ticket → 原生落字 → finish），
+        /// Linux 的原生落字走 fcitx5 选区替换。
+        fn spawn_qa_edit_apply(
+            &self,
+            backend: std::sync::Arc<openless_core::OpenLessBackend>,
+            qa_session: openless_core::SessionId,
+        ) {
+            let lang = self.lang;
+            self.spawn(async move {
+                let unavailable = || {
+                    BackendError::new(
+                        openless_core::BackendErrorCode::InvalidState,
+                        "qa edit unavailable",
+                    )
+                };
+                let services = backend.services();
+                let snapshot = services.qa.snapshot().await?;
+                let owner = snapshot.conversation_id.ok_or_else(unavailable)?;
+                let preview = services
+                    .selection_voice
+                    .preview(Some(owner))
+                    .await?
+                    .ok_or_else(unavailable)?;
+                let text = preview.text.trim().to_string();
+                if text.is_empty() {
+                    return Err(unavailable());
+                }
+                let ticket = services
+                    .qa
+                    .begin_edit_preview_apply(qa_session, text)
+                    .await?;
+                let outcome = match openless_linux_egui::apply_selection_voice_target(
+                    &ticket.session_id.to_string(),
+                    &ticket.source_text,
+                    &ticket.replacement_text,
+                ) {
+                    Ok(()) => openless_core::SelectionVoiceApplyOutcome::Inserted,
+                    Err(_) => openless_core::SelectionVoiceApplyOutcome::Failed,
+                };
+                let _ = services
+                    .selection_voice
+                    .finish_preview_apply(ticket.ticket_id, outcome)
+                    .await;
+                if outcome.may_have_applied() {
+                    // 只剩「这一轮已经落字」的收尾：结束后再允许新一轮。
+                    let _ = services.qa.dismiss_session(qa_session).await;
+                }
+                Ok(tr_l10n(lang, "selection.replaced").to_string())
+            });
         }
 
         fn show_selection_popup(&mut self) {
@@ -913,6 +1013,7 @@ mod linux_app {
                     phase: format!("{:?}", snapshot.phase),
                     text,
                     audio_level: Some(snapshot.level),
+                    translation_active: snapshot.translation_active,
                 },
             );
         }
@@ -988,6 +1089,78 @@ mod linux_app {
                                 backend.services().qa.dismiss().await?;
                                 Ok(tr_l10n(lang, "qa.closed").to_string())
                             });
+                        }
+                    }
+                    PopupSupervisorEvent::Message(PopupToHost::SetPinned {
+                        session_id,
+                        pinned,
+                        ..
+                    }) if self
+                        .qa_state
+                        .as_ref()
+                        .and_then(|state| state.session_id.as_deref())
+                        == Some(session_id.as_str()) =>
+                    {
+                        self.qa_pinned = pinned;
+                        self.show_qa_popup();
+                    }
+                    PopupSupervisorEvent::Message(PopupToHost::SetEditInstructionMode {
+                        session_id,
+                        enabled,
+                        ..
+                    }) if self
+                        .qa_state
+                        .as_ref()
+                        .and_then(|state| state.session_id.as_deref())
+                        == Some(session_id.as_str()) =>
+                    {
+                        if let Some(backend) = self.backend() {
+                            self.spawn(async move {
+                                backend
+                                    .services()
+                                    .qa
+                                    .set_edit_instruction_mode(enabled)
+                                    .await?;
+                                Ok(String::new())
+                            });
+                        }
+                    }
+                    PopupSupervisorEvent::Message(PopupToHost::RevertEdit {
+                        session_id, ..
+                    }) if self
+                        .qa_state
+                        .as_ref()
+                        .and_then(|state| state.session_id.as_deref())
+                        == Some(session_id.as_str()) =>
+                    {
+                        if let Ok(qa_session) = session_id.parse::<uuid::Uuid>() {
+                            let qa_session = openless_core::SessionId::from_uuid(qa_session);
+                            if let Some(backend) = self.backend() {
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    backend
+                                        .services()
+                                        .qa
+                                        .revert_edit_preview(qa_session)
+                                        .await?;
+                                    Ok(tr_l10n(lang, "selection.reverted").to_string())
+                                });
+                            }
+                        }
+                    }
+                    PopupSupervisorEvent::Message(PopupToHost::ApplyEdit {
+                        session_id, ..
+                    }) if self
+                        .qa_state
+                        .as_ref()
+                        .and_then(|state| state.session_id.as_deref())
+                        == Some(session_id.as_str()) =>
+                    {
+                        if let Ok(qa_session) = session_id.parse::<uuid::Uuid>() {
+                            let qa_session = openless_core::SessionId::from_uuid(qa_session);
+                            if let Some(backend) = self.backend() {
+                                self.spawn_qa_edit_apply(backend, qa_session);
+                            }
                         }
                     }
                     PopupSupervisorEvent::Message(PopupToHost::ConfirmPreview {
@@ -1072,7 +1245,11 @@ mod linux_app {
                     PopupSupervisorEvent::Message(
                         PopupToHost::SubmitQa { .. }
                         | PopupToHost::ToggleQaRecording { .. }
-                        | PopupToHost::DismissQa { .. },
+                        | PopupToHost::DismissQa { .. }
+                        | PopupToHost::SetPinned { .. }
+                        | PopupToHost::SetEditInstructionMode { .. }
+                        | PopupToHost::ApplyEdit { .. }
+                        | PopupToHost::RevertEdit { .. },
                     ) => {
                         self.status = tr_l10n(lang, "popup.ignore_late_qa").to_string();
                     }
@@ -1535,6 +1712,7 @@ mod linux_app {
                                 phase: format!("{:?}", state.phase),
                                 text: state.message.unwrap_or_default(),
                                 audio_level: Some(state.level),
+                                translation_active: state.translation_active,
                             },
                         );
                     }
@@ -1649,6 +1827,7 @@ mod linux_app {
                     self.load_library()
                 }
                 BackendEventKind::QaState(state) => {
+                    self.qa_edit.merge(&state);
                     if state.kind == QaStateKind::AnswerDelta {
                         if let Some(current) = self
                             .qa_state
@@ -1700,6 +1879,11 @@ mod linux_app {
                                 selection_preview: state.selection_preview,
                                 streaming_answer: state.chunk.unwrap_or_default(),
                                 error: state.error,
+                                edit_instruction_mode: self.qa_edit.instruction_mode,
+                                edit_apply_available: self.qa_edit.apply_available,
+                                edit_revert_available: self.qa_edit.revert_available,
+                                pinned: self.qa_pinned,
+                                viewer_login: self.marketplace_login(),
                             },
                         );
                     }
@@ -1811,6 +1995,9 @@ mod linux_app {
                             self.show_qa_popup();
                         }
                         HostAction::HideQa => {
+                            if !qa_hides_on_host_action(self.qa_pinned) {
+                                continue;
+                            }
                             self.qa_visible = false;
                             let session_id = self
                                 .qa_state
@@ -4502,6 +4689,108 @@ mod linux_app {
         }
     }
 
+    /// 划词追问头像：登录名变化时后台取 `github.com/{login}.png`，解码后上传成
+    /// egui 贴图（Tauri `UserAvatar`）。取图失败保持 GitHub 图标兜底。
+    #[derive(Default)]
+    struct QaAvatar {
+        login: String,
+        texture: Option<egui::TextureHandle>,
+        pending: Option<mpsc::Receiver<Result<egui::ColorImage, String>>>,
+    }
+
+    impl QaAvatar {
+        fn sync(&mut self, ctx: &egui::Context, login: &str) {
+            if login != self.login {
+                self.login = login.to_string();
+                self.texture = None;
+                self.pending = None;
+                if !login.trim().is_empty() {
+                    self.pending = Some(spawn_github_avatar_fetch(login.trim().to_string()));
+                }
+            }
+            let Some(receiver) = self.pending.as_ref() else {
+                return;
+            };
+            match receiver.try_recv() {
+                Ok(Ok(image)) => {
+                    self.texture = Some(ctx.load_texture(
+                        "openless-qa-user-avatar",
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    ));
+                    self.pending = None;
+                }
+                Ok(Err(error)) => {
+                    log::debug!("avatar unavailable: {error}");
+                    self.pending = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    // 取图在别的线程：保持重绘直到结果回来。
+                    ctx.request_repaint_after(std::time::Duration::from_millis(150));
+                }
+                Err(mpsc::TryRecvError::Disconnected) => self.pending = None,
+            }
+        }
+    }
+
+    fn spawn_github_avatar_fetch(
+        login: String,
+    ) -> mpsc::Receiver<Result<egui::ColorImage, String>> {
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("openless-avatar".into())
+            .spawn(move || {
+                let _ = tx.send(fetch_github_avatar(&login));
+            })
+            .ok();
+        rx
+    }
+
+    /// GitHub 公开头像接口（无需登录；Tauri 用的是同一个 URL 形状）。
+    fn fetch_github_avatar(login: &str) -> Result<egui::ColorImage, String> {
+        let encoded: String = login
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                    character.to_string()
+                } else {
+                    let mut buffer = [0u8; 4];
+                    character
+                        .encode_utf8(&mut buffer)
+                        .bytes()
+                        .map(|byte| format!("%{byte:02X}"))
+                        .collect()
+                }
+            })
+            .collect();
+        let url = format!("https://github.com/{encoded}.png?size=64");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| error.to_string())?;
+        let bytes = runtime.block_on(async {
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(8))
+                .build()
+                .map_err(|error| error.to_string())?;
+            let response = client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|error| error.to_string())?;
+            if !response.status().is_success() {
+                return Err(format!("avatar http {}", response.status()));
+            }
+            response.bytes().await.map_err(|error| error.to_string())
+        })?;
+        let decoded = image::load_from_memory(&bytes).map_err(|error| error.to_string())?;
+        let rgba = decoded.to_rgba8();
+        Ok(egui::ColorImage::from_rgba_unmultiplied(
+            [rgba.width() as usize, rgba.height() as usize],
+            rgba.as_raw(),
+        ))
+    }
+
     struct NativePopupApp {
         kind: PopupKind,
         state: PopupState,
@@ -4511,6 +4800,7 @@ mod linux_app {
         outgoing_sequence: u64,
         ready_sent: bool,
         preview_focus_requested: bool,
+        avatar: QaAvatar,
         lang: Lang,
     }
 
@@ -4598,6 +4888,10 @@ mod linux_app {
                 return;
             }
             let lang = self.lang;
+            // 只有「有动画」的状态需要 30fps 连续重绘：录音音量条、思考光环/光点、
+            // 头像取图中。静止或隐藏时降到 10fps（stdin 轮询延迟 ≤100ms，肉眼无感），
+            // 避免透明置顶窗口长期白跑帧。
+            let mut animated = false;
             match self.kind {
                 PopupKind::Preview => {
                     let first_frame = !self.preview_focus_requested;
@@ -4628,11 +4922,19 @@ mod linux_app {
                     }
                 }
                 PopupKind::Qa => {
+                    self.avatar.sync(ctx, &self.state.qa.viewer_login);
+                    let qa_phase = self.state.qa.phase.to_ascii_lowercase();
+                    animated = self.avatar.pending.is_some()
+                        || matches!(
+                            qa_phase.as_str(),
+                            "loading" | "thinking" | "recording" | "answerdelta"
+                        );
                     let action = frontend::popups::selection_ask(
                         ctx,
                         &self.state.qa,
                         &mut self.qa_input,
                         lang,
+                        self.avatar.texture.as_ref(),
                     );
                     match action {
                         frontend::popups::QaAction::Dismiss => self.dismiss(ctx),
@@ -4640,6 +4942,48 @@ mod linux_app {
                             if let Some(session_id) = self.session_id() {
                                 let sequence = self.next_sequence();
                                 self.send(PopupToHost::ToggleQaRecording {
+                                    version: POPUP_PROTOCOL_VERSION,
+                                    session_id,
+                                    sequence,
+                                });
+                            }
+                        }
+                        frontend::popups::QaAction::SetPinned(pinned) => {
+                            if let Some(session_id) = self.session_id() {
+                                let sequence = self.next_sequence();
+                                self.send(PopupToHost::SetPinned {
+                                    version: POPUP_PROTOCOL_VERSION,
+                                    session_id,
+                                    sequence,
+                                    pinned,
+                                });
+                            }
+                        }
+                        frontend::popups::QaAction::SetEditInstructionMode(enabled) => {
+                            if let Some(session_id) = self.session_id() {
+                                let sequence = self.next_sequence();
+                                self.send(PopupToHost::SetEditInstructionMode {
+                                    version: POPUP_PROTOCOL_VERSION,
+                                    session_id,
+                                    sequence,
+                                    enabled,
+                                });
+                            }
+                        }
+                        frontend::popups::QaAction::ApplyEdit => {
+                            if let Some(session_id) = self.session_id() {
+                                let sequence = self.next_sequence();
+                                self.send(PopupToHost::ApplyEdit {
+                                    version: POPUP_PROTOCOL_VERSION,
+                                    session_id,
+                                    sequence,
+                                });
+                            }
+                        }
+                        frontend::popups::QaAction::RevertEdit => {
+                            if let Some(session_id) = self.session_id() {
+                                let sequence = self.next_sequence();
+                                self.send(PopupToHost::RevertEdit {
                                     version: POPUP_PROTOCOL_VERSION,
                                     session_id,
                                     sequence,
@@ -4661,6 +5005,11 @@ mod linux_app {
                     }
                 }
                 PopupKind::Capsule => {
+                    let capsule_phase = self.state.capsule.phase.to_ascii_lowercase();
+                    animated = matches!(
+                        capsule_phase.as_str(),
+                        "starting" | "recording" | "transcribing" | "polishing" | "inserting"
+                    );
                     let action =
                         frontend::popups::dictation_capsule(ctx, &self.state.capsule, lang);
                     let message = match action {
@@ -4705,7 +5054,11 @@ mod linux_app {
                     }
                 }
             }
-            ctx.request_repaint_after(Duration::from_millis(33));
+            ctx.request_repaint_after(Duration::from_millis(if self.state.visible && animated {
+                33
+            } else {
+                100
+            }));
         }
     }
 
@@ -4757,7 +5110,9 @@ mod linux_app {
         let size = match kind {
             PopupKind::Qa => [520.0, 520.0],
             PopupKind::Preview => [480.0, 320.0],
-            PopupKind::Capsule => [200.0, 58.0],
+            // 经典药丸 176×42 + 16px 下边距 + 8px 间距 + 「正在翻译」徽章
+            // （Tauri `getCapsuleHostMetrics(.., 'classic')` 的 100 高度）。
+            PopupKind::Capsule => [200.0, 100.0],
         };
         let transparent = matches!(kind, PopupKind::Capsule);
         let options = eframe::NativeOptions {
@@ -4784,6 +5139,7 @@ mod linux_app {
                     outgoing_sequence: 0,
                     ready_sent: false,
                     preview_focus_requested: false,
+                    avatar: QaAvatar::default(),
                     // The popup is a separate process, so it re-reads the
                     // persisted UI-locale preference rather than sharing state.
                     lang: load_locale_pref().resolve(),
@@ -4953,6 +5309,36 @@ mod linux_app {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn pinned_qa_ignores_the_automatic_hide_action() {
+            assert!(qa_hides_on_host_action(false));
+            assert!(!qa_hides_on_host_action(true));
+        }
+
+        #[test]
+        fn qa_edit_flags_merge_partial_core_updates() {
+            let mut flags = QaEditFlags::default();
+            // Core 只在变化时下发 Some(..)：未下发的字段必须保持原值。
+            let mut event = openless_core::QaStateEvent::simple(openless_core::QaStateKind::Idle);
+            event.edit_apply_available = Some(true);
+            flags.merge(&event);
+            assert!(flags.apply_available);
+            assert!(!flags.instruction_mode);
+            assert!(!flags.revert_available);
+
+            event.edit_instruction_mode = Some(true);
+            event.edit_revert_available = Some(true);
+            flags.merge(&event);
+            assert!(flags.instruction_mode);
+            assert!(flags.revert_available);
+            assert!(flags.apply_available);
+
+            event.edit_apply_available = Some(false);
+            flags.merge(&event);
+            assert!(!flags.apply_available);
+            assert!(flags.revert_available);
+        }
 
         #[test]
         fn continuation_turn_keeps_receiving_output_and_approval() {

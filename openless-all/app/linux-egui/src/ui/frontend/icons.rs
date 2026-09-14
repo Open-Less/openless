@@ -26,6 +26,8 @@ pub enum IconName {
     Close,
     Check,
     Send,
+    /// 划词追问头部的图钉（固定 / 取消固定）。
+    Pin,
     Chat,
     Github,
 }
@@ -460,6 +462,17 @@ pub fn draw_icon(ui: &egui::Ui, center: egui::Pos2, icon: IconName, color: egui:
                     center + egui::vec2(-4.0, 8.5),
                 ]
                 .to_vec(),
+                stroke,
+            ));
+        }
+        IconName::Pin => {
+            p.circle_stroke(center + egui::vec2(0.0, -3.0), 3.4, stroke);
+            p.add(egui::Shape::line(
+                [point(-4.6, -6.6), point(4.6, -6.6)].to_vec(),
+                stroke,
+            ));
+            p.add(egui::Shape::line(
+                [point(0.0, 0.4), point(0.0, 7.0)].to_vec(),
                 stroke,
             ));
         }

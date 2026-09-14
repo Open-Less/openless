@@ -18,7 +18,7 @@ use tokio::process::Command;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc as tokio_mpsc;
 
-pub const POPUP_PROTOCOL_VERSION: u16 = 2;
+pub const POPUP_PROTOCOL_VERSION: u16 = 3;
 pub const MAX_JSONL_LINE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +74,21 @@ pub enum HostToPopup {
         streaming_answer: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        /// 「编辑指令」勾选框状态（Core `QaSnapshot.edit_instruction_mode`）。
+        #[serde(default)]
+        edit_instruction_mode: bool,
+        /// 预览可用：底部出现「预览并确认插入」。
+        #[serde(default)]
+        edit_apply_available: bool,
+        /// 可一键回退：额外出现「保留上一版本」。
+        #[serde(default)]
+        edit_revert_available: bool,
+        /// 固定（不自动关闭）。Tauri `qa.pinTooltip` / `qa.unpinTooltip`。
+        #[serde(default)]
+        pinned: bool,
+        /// GitHub 登录名，用于 `https://github.com/{login}.png` 头像。
+        #[serde(default)]
+        viewer_login: String,
     },
     Capsule {
         version: u16,
@@ -84,6 +99,9 @@ pub enum HostToPopup {
         text: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         audio_level: Option<f32>,
+        /// 正在翻译：药丸上方显示「正在翻译」徽章（Tauri `capsule.translating`）。
+        #[serde(default)]
+        translation_active: bool,
     },
     Hide {
         version: u16,
@@ -192,6 +210,32 @@ pub enum PopupToHost {
         session_id: String,
         sequence: u64,
     },
+    /// 划词追问头部图钉：固定后宿主不再自动收起（Tauri `qa.pinTooltip`）。
+    SetPinned {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+        pinned: bool,
+    },
+    /// 输入组左下角「编辑指令」勾选框。
+    SetEditInstructionMode {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+        enabled: bool,
+    },
+    /// 「预览并确认插入」：把编辑结果写回选区（Tauri `qa.editApplyReplace`）。
+    ApplyEdit {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+    },
+    /// 「保留上一版本」：回退这一轮的编辑预览（Tauri `qa.editRevertPrevious`）。
+    RevertEdit {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+    },
 }
 
 impl PopupToHost {
@@ -205,7 +249,11 @@ impl PopupToHost {
             | Self::DismissQa { version, .. }
             | Self::DismissCapsule { version, .. }
             | Self::CancelDictation { version, .. }
-            | Self::StopDictation { version, .. } => *version,
+            | Self::StopDictation { version, .. }
+            | Self::SetPinned { version, .. }
+            | Self::SetEditInstructionMode { version, .. }
+            | Self::ApplyEdit { version, .. }
+            | Self::RevertEdit { version, .. } => *version,
         }
     }
 
@@ -219,7 +267,11 @@ impl PopupToHost {
             | Self::DismissQa { session_id, .. }
             | Self::DismissCapsule { session_id, .. }
             | Self::CancelDictation { session_id, .. }
-            | Self::StopDictation { session_id, .. } => session_id,
+            | Self::StopDictation { session_id, .. }
+            | Self::SetPinned { session_id, .. }
+            | Self::SetEditInstructionMode { session_id, .. }
+            | Self::ApplyEdit { session_id, .. }
+            | Self::RevertEdit { session_id, .. } => session_id,
         }
     }
 
@@ -233,7 +285,11 @@ impl PopupToHost {
             | Self::DismissQa { sequence, .. }
             | Self::DismissCapsule { sequence, .. }
             | Self::CancelDictation { sequence, .. }
-            | Self::StopDictation { sequence, .. } => *sequence,
+            | Self::StopDictation { sequence, .. }
+            | Self::SetPinned { sequence, .. }
+            | Self::SetEditInstructionMode { sequence, .. }
+            | Self::ApplyEdit { sequence, .. }
+            | Self::RevertEdit { sequence, .. } => *sequence,
         }
     }
 
@@ -241,9 +297,13 @@ impl PopupToHost {
         match self {
             Self::Ready { kind, .. } => *kind,
             Self::ConfirmPreview { .. } | Self::CancelPreview { .. } => PopupKind::Preview,
-            Self::SubmitQa { .. } | Self::ToggleQaRecording { .. } | Self::DismissQa { .. } => {
-                PopupKind::Qa
-            }
+            Self::SubmitQa { .. }
+            | Self::ToggleQaRecording { .. }
+            | Self::DismissQa { .. }
+            | Self::SetPinned { .. }
+            | Self::SetEditInstructionMode { .. }
+            | Self::ApplyEdit { .. }
+            | Self::RevertEdit { .. } => PopupKind::Qa,
             Self::DismissCapsule { .. }
             | Self::CancelDictation { .. }
             | Self::StopDictation { .. } => PopupKind::Capsule,
@@ -474,6 +534,11 @@ pub struct QaPopupState {
     pub selection_preview: Option<String>,
     pub streaming_answer: String,
     pub error: Option<String>,
+    pub edit_instruction_mode: bool,
+    pub edit_apply_available: bool,
+    pub edit_revert_available: bool,
+    pub pinned: bool,
+    pub viewer_login: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -481,6 +546,7 @@ pub struct CapsulePopupState {
     pub phase: String,
     pub text: String,
     pub audio_level: Option<f32>,
+    pub translation_active: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -543,6 +609,11 @@ impl PopupState {
                 selection_preview,
                 streaming_answer,
                 error,
+                edit_instruction_mode,
+                edit_apply_available,
+                edit_revert_available,
+                pinned,
+                viewer_login,
                 ..
             } => {
                 self.qa = QaPopupState {
@@ -551,6 +622,11 @@ impl PopupState {
                     selection_preview,
                     streaming_answer,
                     error,
+                    edit_instruction_mode,
+                    edit_apply_available,
+                    edit_revert_available,
+                    pinned,
+                    viewer_login,
                 };
                 self.visible = true;
             }
@@ -558,12 +634,14 @@ impl PopupState {
                 phase,
                 text,
                 audio_level,
+                translation_active,
                 ..
             } => {
                 self.capsule = CapsulePopupState {
                     phase,
                     text,
                     audio_level,
+                    translation_active,
                 };
                 self.visible = true;
             }
@@ -891,6 +969,93 @@ mod tests {
             sequence: 7,
             text,
             source: "原文 \\\\ source".to_owned(),
+        }
+    }
+
+    #[test]
+    fn qa_snapshot_carries_pin_and_edit_state() {
+        let message = HostToPopup::QaSnapshot {
+            version: POPUP_PROTOCOL_VERSION,
+            session_id: "qa".to_owned(),
+            sequence: 11,
+            phase: "IDLE".to_owned(),
+            messages: Vec::new(),
+            selection_preview: None,
+            streaming_answer: String::new(),
+            error: None,
+            edit_instruction_mode: true,
+            edit_apply_available: true,
+            edit_revert_available: false,
+            pinned: true,
+            viewer_login: "octocat".to_owned(),
+        };
+        let mut state = PopupState::default();
+        assert_eq!(state.apply(message.clone()), ApplyOutcome::Applied);
+        assert!(state.qa.edit_instruction_mode);
+        assert!(state.qa.edit_apply_available);
+        assert!(!state.qa.edit_revert_available);
+        assert!(state.qa.pinned);
+        assert_eq!(state.qa.viewer_login, "octocat");
+
+        // 老宿主（协议 v2）没有这些字段时保持默认值，而不是解析失败。
+        let legacy = r#"{"type":"qa_snapshot","version":2,"session_id":"qa","sequence":12,"phase":"IDLE","messages":[],"streaming_answer":""}"#;
+        let legacy: HostToPopup = serde_json::from_str(legacy).expect("legacy snapshot");
+        let mut state = PopupState::default();
+        assert_eq!(state.apply(legacy), ApplyOutcome::Applied);
+        assert!(!state.qa.pinned);
+        assert!(state.qa.viewer_login.is_empty());
+    }
+
+    #[test]
+    fn capsule_carries_translation_active() {
+        let message = HostToPopup::Capsule {
+            version: POPUP_PROTOCOL_VERSION,
+            session_id: "dictation".to_owned(),
+            sequence: 3,
+            phase: "Recording".to_owned(),
+            text: String::new(),
+            audio_level: Some(0.5),
+            translation_active: true,
+        };
+        let mut state = PopupState::default();
+        assert_eq!(state.apply(message), ApplyOutcome::Applied);
+        assert!(state.capsule.translation_active);
+    }
+
+    #[test]
+    fn qa_actions_are_scoped_to_the_qa_popup_and_accepted_once() {
+        for message in [
+            PopupToHost::SetPinned {
+                version: POPUP_PROTOCOL_VERSION,
+                session_id: "qa".to_owned(),
+                sequence: 1,
+                pinned: true,
+            },
+            PopupToHost::SetEditInstructionMode {
+                version: POPUP_PROTOCOL_VERSION,
+                session_id: "qa".to_owned(),
+                sequence: 2,
+                enabled: true,
+            },
+            PopupToHost::ApplyEdit {
+                version: POPUP_PROTOCOL_VERSION,
+                session_id: "qa".to_owned(),
+                sequence: 3,
+            },
+            PopupToHost::RevertEdit {
+                version: POPUP_PROTOCOL_VERSION,
+                session_id: "qa".to_owned(),
+                sequence: 4,
+            },
+        ] {
+            assert_eq!(message.kind(), PopupKind::Qa);
+            let mut guard = PopupActionGuard::default();
+            assert!(guard.accept(PopupKind::Qa, &message, "qa"));
+            // 同一个 sequence 不能重复执行。
+            assert!(!guard.accept(PopupKind::Qa, &message, "qa"));
+            // 其它弹窗进程的同一 sequence 不受影响（各自独立）。
+            let mut capsule = PopupActionGuard::default();
+            assert!(!capsule.accept(PopupKind::Capsule, &message, "qa"));
         }
     }
 

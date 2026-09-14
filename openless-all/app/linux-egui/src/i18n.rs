@@ -5138,6 +5138,54 @@ pub const CATALOG: &[Msg] = &[
             "선택 영역 다듬기 미리보기",
         ),
     },
+    Msg {
+        key: "capsule.translating",
+        text: row("正在翻译", "正在翻譯", "Translating", "翻訳中", "번역 중"),
+    },
+    Msg {
+        key: "qa.edit_apply_replace",
+        text: row(
+            "预览并确认插入",
+            "確認並替換選區",
+            "Preview and confirm insert",
+            "プレビューして挿入を確認",
+            "미리보기 후 삽입 확인",
+        ),
+    },
+    Msg {
+        key: "qa.edit_instruction_mode",
+        text: row(
+            "编辑指令",
+            "編輯指令",
+            "Edit instruction",
+            "編集指示",
+            "편집 지시",
+        ),
+    },
+    Msg {
+        key: "qa.edit_revert_previous",
+        text: row(
+            "保留上一版本",
+            "保留上一版本",
+            "Keep previous version",
+            "前のバージョンを保持",
+            "이전 버전 유지",
+        ),
+    },
+    Msg {
+        key: "qa.pin_tooltip",
+        text: row(
+            "固定（不自动关闭）",
+            "固定（不自動關閉）",
+            "Pin (stay open)",
+            "ピン留め（自動で閉じない）",
+            "고정(자동으로 닫히지 않음)",
+        ),
+    },
+    Msg {
+        key: "qa.unpin_tooltip",
+        text: row("取消固定", "取消固定", "Unpin", "ピン留めを解除", "고정 해제"),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

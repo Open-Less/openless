@@ -38,6 +38,14 @@ pub enum QaAction {
     Submit(String),
     /// 麦克风按钮 → the host sends `ToggleQaRecording`.
     ToggleRecording,
+    /// 图钉 → the host sends `SetPinned`（固定后不再自动收起）。
+    SetPinned(bool),
+    /// 「编辑指令」勾选框 → the host sends `SetEditInstructionMode`.
+    SetEditInstructionMode(bool),
+    /// 「预览并确认插入」→ the host sends `ApplyEdit`.
+    ApplyEdit,
+    /// 「保留上一版本」→ the host sends `RevertEdit`.
+    RevertEdit,
 }
 
 /// Result of rendering the dictation capsule.
@@ -61,6 +69,10 @@ const PILL_WIDTH: f32 = 176.0;
 const PILL_HEIGHT: f32 = 42.0;
 /// Round icon buttons in the capsule / composer.
 const ROUND_BUTTON: f32 = 28.0;
+/// Tauri `getCapsuleHostMetrics(.., 'classic').bottomInset`。
+const CAPSULE_BOTTOM_INSET: f32 = 16.0;
+/// 徽章与药丸之间的间距（Tauri `badgeGap`）。
+const CAPSULE_BADGE_GAP: f32 = 8.0;
 
 // ── 选区润色预览 ────────────────────────────────────────────────────────────
 
@@ -201,6 +213,7 @@ pub fn selection_ask(
     state: &QaPopupState,
     composer: &mut String,
     lang: Lang,
+    avatar: Option<&egui::TextureHandle>,
 ) -> QaAction {
     let mut action = QaAction::None;
     let phase = state.phase.to_ascii_lowercase();
@@ -247,6 +260,24 @@ pub fn selection_ask(
                                 {
                                     action = QaAction::Dismiss;
                                 }
+                                // 图钉：固定后宿主不再自动收起（Tauri 的
+                                // qa.pinTooltip / qa.unpinTooltip）。
+                                let pin_color = if state.pinned {
+                                    theme::BLUE
+                                } else {
+                                    theme::INK_4
+                                };
+                                let pin_tooltip = if state.pinned {
+                                    tr_l10n(lang, "qa.unpin_tooltip")
+                                } else {
+                                    tr_l10n(lang, "qa.pin_tooltip")
+                                };
+                                if icon_button(ui, icons::IconName::Pin, pin_color)
+                                    .on_hover_text(pin_tooltip)
+                                    .clicked()
+                                {
+                                    action = QaAction::SetPinned(!state.pinned);
+                                }
                             });
                         })
                         .response
@@ -258,7 +289,18 @@ pub fn selection_ask(
             hairline(ui, theme::LINE_SOFT);
 
             // ── CardContent ──────────────────────────────────────────────
-            let footer_height = CARD_SPACING * 2.0 + COMPOSER_HEIGHT + 12.0;
+            // 底部高度必须把新增的「编辑指令」勾选框与「保留上一版本 / 预览并确认
+            // 插入」按钮算进去，否则线程区会把它们挤出窗口底部。
+            let edit_block = if state.edit_apply_available && phase == "idle" {
+                (if state.edit_revert_available {
+                    38.0
+                } else {
+                    0.0
+                }) + 38.0
+            } else {
+                0.0
+            };
+            let footer_height = CARD_SPACING * 2.0 + COMPOSER_HEIGHT + 12.0 + 22.0 + edit_block;
             let content_height = (ui.available_height() - footer_height).max(80.0);
             let has_thread = !state.messages.is_empty()
                 || !state.streaming_answer.is_empty()
@@ -279,7 +321,7 @@ pub fn selection_ask(
                             .show(ui, |ui| {
                                 let width = ui.available_width();
                                 for message in &state.messages {
-                                    message_row(ui, message, width, lang);
+                                    message_row(ui, message, width, lang, avatar);
                                     ui.add_space(10.0);
                                 }
                                 if !state.streaming_answer.is_empty() {
@@ -323,12 +365,76 @@ pub fn selection_ask(
                 .inner_margin(egui::Margin::symmetric(CARD_SPACING as i8, 12))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
+                    // 编辑结果：底部出现「保留上一版本 / 预览并确认插入」
+                    // （只在轮到 idle 且预览可用时）。
+                    if state.edit_apply_available && phase == "idle" {
+                        if state.edit_revert_available {
+                            if wide_button(ui, tr_l10n(lang, "qa.edit_revert_previous")) {
+                                action = QaAction::RevertEdit;
+                            }
+                            ui.add_space(6.0);
+                        }
+                        if wide_button_primary(
+                            ui,
+                            tr_l10n(lang, "qa.edit_apply_replace"),
+                            icons::IconName::Check,
+                        ) {
+                            action = QaAction::ApplyEdit;
+                        }
+                        ui.add_space(8.0);
+                    }
                     if recording {
                         if let Some(selection) = &state.selection_preview {
                             selection_chip(ui, selection, lang);
                             ui.add_space(8.0);
                         }
                     }
+                    // 「编辑指令」勾选框（Tauri Composer 左下角，busy 时禁用）。
+                    let busy = thinking || recording;
+                    let checkbox_label = tr_l10n(lang, "qa.edit_instruction_mode");
+                    let (checkbox_rect, checkbox_response) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), 20.0),
+                        if busy {
+                            egui::Sense::hover()
+                        } else {
+                            egui::Sense::click()
+                        },
+                    );
+                    let box_rect = egui::Rect::from_center_size(
+                        egui::pos2(checkbox_rect.left() + 7.0, checkbox_rect.center().y),
+                        egui::vec2(14.0, 14.0),
+                    );
+                    let checked = state.edit_instruction_mode;
+                    ui.painter().rect_filled(
+                        box_rect,
+                        egui::CornerRadius::same(3),
+                        if checked { theme::INK } else { theme::SURFACE },
+                    );
+                    ui.painter().rect_stroke(
+                        box_rect,
+                        egui::CornerRadius::same(3),
+                        egui::Stroke::new(0.8, theme::LINE_STRONG),
+                        egui::StrokeKind::Inside,
+                    );
+                    if checked {
+                        icons::draw_icon(
+                            ui,
+                            box_rect.center(),
+                            icons::IconName::Check,
+                            theme::SURFACE,
+                        );
+                    }
+                    ui.painter().text(
+                        egui::pos2(box_rect.right() + 6.0, checkbox_rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        checkbox_label,
+                        egui::FontId::proportional(11.5),
+                        if busy { theme::INK_4 } else { theme::INK_3 },
+                    );
+                    if checkbox_response.clicked() && !busy {
+                        action = QaAction::SetEditInstructionMode(!checked);
+                    }
+                    ui.add_space(2.0);
                     let width = ui.available_width();
                     let (rect, _) = ui.allocate_exact_size(
                         egui::vec2(width, COMPOSER_HEIGHT),
@@ -485,7 +591,13 @@ fn empty_state(ui: &mut egui::Ui, lang: Lang, height: f32) {
 }
 
 /// 一条对话消息：用户右侧深色气泡（带选区引用块）+ 头像；助手左侧头像 + Markdown。
-fn message_row(ui: &mut egui::Ui, message: &PopupChatMessage, width: f32, lang: Lang) {
+fn message_row(
+    ui: &mut egui::Ui,
+    message: &PopupChatMessage,
+    width: f32,
+    lang: Lang,
+    avatar: Option<&egui::TextureHandle>,
+) {
     if message.role.eq_ignore_ascii_case("user") {
         let selection = message
             .selection_text
@@ -493,7 +605,7 @@ fn message_row(ui: &mut egui::Ui, message: &PopupChatMessage, width: f32, lang: 
             .map(|text| truncate(text, 120))
             .filter(|text| !text.is_empty() && *text != message.content);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-            user_avatar(ui);
+            user_avatar(ui, avatar);
             ui.add_space(8.0);
             let max_width = (width - 56.0).max(120.0) * 0.8;
             ui.allocate_ui_with_layout(
@@ -563,14 +675,91 @@ fn destructive_bubble(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
         .show(ui, contents);
 }
 
-fn user_avatar(ui: &mut egui::Ui) {
+/// 用户头像：已登录 GitHub 时画真实头像（`github.com/{login}.png`，圆形裁切），
+/// 未登录 / 取图失败回落 GitHub 图标（Tauri `UserAvatar`）。
+fn user_avatar(ui: &mut egui::Ui, avatar: Option<&egui::TextureHandle>) {
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(ROUND_BUTTON + 4.0, ROUND_BUTTON + 4.0),
         egui::Sense::hover(),
     );
+    let radius = (ROUND_BUTTON + 4.0) / 2.0;
+    match avatar {
+        Some(texture) => {
+            textured_circle(ui, rect.center(), radius, texture);
+        }
+        None => {
+            ui.painter()
+                .circle_filled(rect.center(), radius, theme::SURFACE_2);
+            icons::draw_icon(ui, rect.center(), icons::IconName::Github, theme::INK_2);
+        }
+    }
+}
+
+/// 把一张方形贴图画成圆形：以中心为扇形顶点、UV 按圆周比例展开。
+fn textured_circle(ui: &egui::Ui, center: egui::Pos2, radius: f32, texture: &egui::TextureHandle) {
+    const SEGMENTS: usize = 48;
+    let mut mesh = egui::Mesh::with_texture(texture.id());
+    mesh.vertices.push(egui::epaint::Vertex {
+        pos: center,
+        uv: egui::pos2(0.5, 0.5),
+        color: egui::Color32::WHITE,
+    });
+    for index in 0..=SEGMENTS {
+        let angle = index as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+        let pos = center + egui::vec2(angle.cos(), angle.sin()) * radius;
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos,
+            uv: egui::pos2(0.5 + angle.cos() * 0.5, 0.5 + angle.sin() * 0.5),
+            color: egui::Color32::WHITE,
+        });
+        if index > 0 {
+            mesh.indices
+                .extend_from_slice(&[0, index as u32, index as u32 + 1]);
+        }
+    }
+    ui.painter().add(egui::Shape::mesh(mesh));
+}
+
+/// 输入区上方的整宽次级按钮（Tauri `Button variant="outline"`）。
+fn wide_button(ui: &mut egui::Ui, label: &str) -> bool {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 32.0), egui::Sense::click());
+    let fill = if response.hovered() {
+        theme::SURFACE_2
+    } else {
+        theme::SURFACE
+    };
     ui.painter()
-        .circle_filled(rect.center(), (ROUND_BUTTON + 4.0) / 2.0, theme::SURFACE_2);
-    icons::draw_icon(ui, rect.center(), icons::IconName::Github, theme::INK_2);
+        .rect_filled(rect, egui::CornerRadius::same(8), fill);
+    ui.painter().rect_stroke(
+        rect,
+        egui::CornerRadius::same(8),
+        egui::Stroke::new(0.5, theme::LINE),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(13.0),
+        theme::INK_2,
+    );
+    response.clicked()
+}
+
+/// 输入区上方的整宽主按钮（Tauri `Button`，带 ✓）。
+fn wide_button_primary(ui: &mut egui::Ui, label: &str, icon: icons::IconName) -> bool {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 32.0), egui::Sense::click());
+    let fill = if response.hovered() {
+        theme::INK_2
+    } else {
+        theme::INK
+    };
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(8), fill);
+    icon_text(ui, rect, Some(icon), label, theme::SURFACE);
+    response.clicked()
 }
 
 /// 助手头像：深色圆底 + 旋转的思考光点（Tauri 的 `OrbAvatar`）。
@@ -701,6 +890,43 @@ fn hairline(ui: &mut egui::Ui, color: egui::Color32) {
 
 // ── 录音胶囊 ────────────────────────────────────────────────────────────────
 
+/// 药丸上方的「正在翻译」徽章（Tauri `ClassicCapsule` 的 `capsule.translating`）：
+/// 蓝点 + 蓝字、圆角胶囊、`--ol-capsule-badge-bg` 底、`--ol-capsule-badge-border` 边。
+fn translating_badge(ui: &mut egui::Ui, pill: egui::Rect, lang: Lang) {
+    let label = tr_l10n(lang, "capsule.translating");
+    let text_width = layout::text_width(ui, label, 10.5);
+    let width = text_width + 5.0 + 5.0 + 20.0;
+    let height = 19.0;
+    let rect = egui::Rect::from_center_size(
+        egui::pos2(
+            pill.center().x,
+            pill.top() - CAPSULE_BADGE_GAP - height / 2.0,
+        ),
+        egui::vec2(width, height),
+    );
+    let painter = ui.painter();
+    painter.rect_filled(
+        rect,
+        egui::CornerRadius::same((height / 2.0) as u8),
+        theme::CAPSULE_BADGE_BG,
+    );
+    painter.rect_stroke(
+        rect,
+        egui::CornerRadius::same((height / 2.0) as u8),
+        egui::Stroke::new(0.5, theme::CAPSULE_BADGE_BORDER),
+        egui::StrokeKind::Inside,
+    );
+    let dot = egui::pos2(rect.left() + 10.0, rect.center().y);
+    painter.circle_filled(dot, 2.5, theme::BLUE);
+    painter.text(
+        egui::pos2(dot.x + 5.0 + 2.5, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(10.5),
+        theme::BLUE,
+    );
+}
+
 /// 录音胶囊：经典药丸（Tauri `ClassicPill`）—— 左 ✕、中间状态、右 ✓。
 pub fn dictation_capsule(
     ctx: &egui::Context,
@@ -712,8 +938,19 @@ pub fn dictation_capsule(
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
         .show(ctx, |ui| {
-            let (rect, _) =
-                ui.allocate_exact_size(egui::vec2(PILL_WIDTH, PILL_HEIGHT), egui::Sense::hover());
+            // Tauri 经典药丸宿主：窗口高 100，药丸水平居中、距底 16，徽章再上移 8。
+            let available = ui.available_rect_before_wrap();
+            let rect = egui::Rect::from_min_size(
+                egui::pos2(
+                    available.center().x - PILL_WIDTH / 2.0,
+                    available.bottom() - CAPSULE_BOTTOM_INSET - PILL_HEIGHT,
+                ),
+                egui::vec2(PILL_WIDTH, PILL_HEIGHT),
+            );
+            let _ = ui.allocate_rect(rect, egui::Sense::hover());
+            if state.translation_active {
+                translating_badge(ui, rect, lang);
+            }
             ui.painter().rect_filled(
                 rect,
                 egui::CornerRadius::same((PILL_HEIGHT / 2.0) as u8),
@@ -1193,7 +1430,7 @@ mod tests {
         };
         let mut composer = String::new();
         let painted = run(egui::vec2(520.0, 520.0), |ctx| {
-            selection_ask(ctx, &empty, &mut composer, Lang::ZhCn);
+            selection_ask(ctx, &empty, &mut composer, Lang::ZhCn, None);
             String::new()
         });
         for expected in [
@@ -1226,10 +1463,15 @@ mod tests {
             selection_preview: Some("selected source".to_string()),
             streaming_answer: String::new(),
             error: Some("network error".to_string()),
+            edit_instruction_mode: false,
+            edit_apply_available: false,
+            edit_revert_available: false,
+            pinned: false,
+            viewer_login: String::new(),
         };
         let mut composer = String::new();
         let painted = run(egui::vec2(520.0, 520.0), |ctx| {
-            selection_ask(ctx, &thread, &mut composer, Lang::ZhCn);
+            selection_ask(ctx, &thread, &mut composer, Lang::ZhCn, None);
             String::new()
         });
         assert!(has(&painted, "how should I read this?"), "{painted}");
@@ -1250,7 +1492,7 @@ mod tests {
         };
         let mut composer = String::new();
         let painted = run(egui::vec2(520.0, 520.0), |ctx| {
-            selection_ask(ctx, &state, &mut composer, Lang::ZhCn);
+            selection_ask(ctx, &state, &mut composer, Lang::ZhCn, None);
             String::new()
         });
         assert!(
@@ -1264,11 +1506,154 @@ mod tests {
     }
 
     #[test]
+    fn capsule_shows_the_translating_badge_only_when_translating() {
+        let badge = tr_l10n(Lang::ZhCn, "capsule.translating");
+        let idle = CapsulePopupState {
+            phase: "Recording".to_string(),
+            audio_level: Some(0.3),
+            translation_active: false,
+            ..Default::default()
+        };
+        let painted = run(egui::vec2(200.0, 100.0), |ctx| {
+            dictation_capsule(ctx, &idle, Lang::ZhCn);
+            String::new()
+        });
+        assert!(
+            !has(&painted, badge),
+            "badge must stay hidden while translating is off: {painted}"
+        );
+
+        let translating = CapsulePopupState {
+            translation_active: true,
+            ..idle
+        };
+        let painted = run(egui::vec2(200.0, 100.0), |ctx| {
+            dictation_capsule(ctx, &translating, Lang::ZhCn);
+            String::new()
+        });
+        assert!(has(&painted, badge), "{painted}");
+    }
+
+    #[test]
+    fn qa_panel_shows_edit_affordances_only_when_the_host_reports_them() {
+        let hidden = QaPopupState {
+            phase: "idle".to_string(),
+            ..Default::default()
+        };
+        let mut composer = String::new();
+        let painted = run(egui::vec2(520.0, 520.0), |ctx| {
+            selection_ask(ctx, &hidden, &mut composer, Lang::ZhCn, None);
+            String::new()
+        });
+        assert!(!has(&painted, tr_l10n(Lang::ZhCn, "qa.edit_apply_replace")));
+        assert!(!has(
+            &painted,
+            tr_l10n(Lang::ZhCn, "qa.edit_revert_previous")
+        ));
+
+        let ready = QaPopupState {
+            phase: "idle".to_string(),
+            edit_apply_available: true,
+            edit_revert_available: true,
+            ..Default::default()
+        };
+        let painted = run(egui::vec2(520.0, 520.0), |ctx| {
+            selection_ask(ctx, &ready, &mut composer, Lang::ZhCn, None);
+            String::new()
+        });
+        assert!(
+            has(&painted, tr_l10n(Lang::ZhCn, "qa.edit_apply_replace")),
+            "{painted}"
+        );
+        assert!(
+            has(&painted, tr_l10n(Lang::ZhCn, "qa.edit_revert_previous")),
+            "{painted}"
+        );
+        // 「编辑指令」勾选框常驻在输入组左下角。
+        assert!(
+            has(&painted, tr_l10n(Lang::ZhCn, "qa.edit_instruction_mode")),
+            "{painted}"
+        );
+
+        // 只有可回退时才出现「保留上一版本」。
+        let apply_only = QaPopupState {
+            phase: "idle".to_string(),
+            edit_apply_available: true,
+            ..Default::default()
+        };
+        let painted = run(egui::vec2(520.0, 520.0), |ctx| {
+            selection_ask(ctx, &apply_only, &mut composer, Lang::ZhCn, None);
+            String::new()
+        });
+        assert!(
+            has(&painted, tr_l10n(Lang::ZhCn, "qa.edit_apply_replace")),
+            "{painted}"
+        );
+        assert!(!has(
+            &painted,
+            tr_l10n(Lang::ZhCn, "qa.edit_revert_previous")
+        ));
+    }
+
+    #[test]
+    fn qa_panel_paints_the_pin_affordance_in_both_states() {
+        // 图钉是无文字的图标按钮：这里断言两种状态都能整帧渲染（含 tooltip 绑定），
+        // 动作本身由 popup.rs 的协议测试覆盖。
+        for pinned in [false, true] {
+            let state = QaPopupState {
+                phase: "idle".to_string(),
+                pinned,
+                ..Default::default()
+            };
+            let mut composer = String::new();
+            let painted = run(egui::vec2(520.0, 520.0), |ctx| {
+                selection_ask(ctx, &state, &mut composer, Lang::ZhCn, None);
+                String::new()
+            });
+            assert!(
+                has(&painted, tr_l10n(Lang::ZhCn, "qa.empty_title")),
+                "pinned={pinned}\n{painted}"
+            );
+        }
+    }
+
+    #[test]
+    fn qa_panel_renders_the_github_avatar_texture_when_present() {
+        let ctx = egui::Context::default();
+        let image = egui::ColorImage::new([2, 2], vec![egui::Color32::RED; 4]);
+        let texture = ctx.load_texture("test-avatar", image, egui::TextureOptions::LINEAR);
+        let state = QaPopupState {
+            phase: "idle".to_string(),
+            messages: vec![PopupChatMessage {
+                role: "user".to_string(),
+                content: "hello".to_string(),
+                selection_text: None,
+            }],
+            ..Default::default()
+        };
+        let mut composer = String::new();
+        let mut painted = String::new();
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(520.0, 520.0),
+                )),
+                ..Default::default()
+            });
+            selection_ask(&ctx, &state, &mut composer, Lang::ZhCn, Some(&texture));
+            painted = painted_text(&ctx.end_pass());
+        }
+        assert!(has(&painted, "hello"), "{painted}");
+    }
+
+    #[test]
     fn capsule_paints_state_specific_content() {
         let recording = CapsulePopupState {
             phase: "Recording".to_string(),
             text: String::new(),
             audio_level: Some(0.4),
+            translation_active: false,
         };
         let painted = run(egui::vec2(200.0, 60.0), |ctx| {
             dictation_capsule(ctx, &recording, Lang::ZhCn);
@@ -1296,6 +1681,7 @@ mod tests {
             phase: "Completed".to_string(),
             text: inserted_message(Lang::ZhCn, 12),
             audio_level: None,
+            translation_active: false,
         };
         let painted = run(egui::vec2(200.0, 60.0), |ctx| {
             dictation_capsule(ctx, &done, Lang::ZhCn);
@@ -1307,6 +1693,7 @@ mod tests {
             phase: "Failed".to_string(),
             text: String::new(),
             audio_level: None,
+            translation_active: false,
         };
         let painted = run(egui::vec2(200.0, 60.0), |ctx| {
             dictation_capsule(ctx, &failed, Lang::ZhCn);
