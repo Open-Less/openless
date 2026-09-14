@@ -4930,6 +4930,88 @@ pub const CATALOG: &[Msg] = &[
         key: "common.experimental",
         text: row("实验性", "實驗性", "Experimental", "実験的", "실험적"),
     },
+    Msg {
+        key: "hotkey.mode_auto_suffix",
+        text: row(
+            "（自动识别）",
+            "（自動識別）",
+            " (auto-detect)",
+            "（自動判別）",
+            "(자동 인식)",
+        ),
+    },
+    Msg {
+        key: "hotkey.mode_hold_suffix",
+        text: row(
+            "（按住说话）",
+            "（按住說話）",
+            " (push-to-talk)",
+            "（押し続けて話す）",
+            "(눌러서 말하기)",
+        ),
+    },
+    Msg {
+        key: "hotkey.mode_toggle_suffix",
+        text: row(
+            "（开始 / 停止）",
+            "（開始 / 停止）",
+            " (start / stop)",
+            "（開始 / 停止）",
+            "(시작 / 정지)",
+        ),
+    },
+    Msg {
+        key: "settings.coding_agent.voice_hotkey_desc",
+        text: row(
+            "按住说话、松开执行。支持 Ctrl/Option/Fn 等单键。功能说明参见「高级」设置页。",
+            "按住說話、放開執行。支援 Ctrl/Option/Fn 等單鍵。功能說明參見「進階」設定頁。",
+            "Hold to talk, release to run. Supports Ctrl/Option/Fn single keys. See the Advanced settings page for what it does.",
+            "押して話す、離して実行。Ctrl/Option/Fn などの単キー対応。機能の説明は「詳細」設定ページを参照。",
+            "누르고 말하고 놓으면 실행. Ctrl/Option/Fn 단일 키 지원. 기능 설명은 「고급」 설정 페이지 참조.",
+        ),
+    },
+    Msg {
+        key: "settings.recording.combo_conflict",
+        text: row(
+            "该快捷键组合不可用",
+            "此快捷鍵組合不可用",
+            "This shortcut combination is not available",
+            "このショートカットの組み合わせは使用できません",
+            "이 단축키 조합은 사용할 수 없습니다",
+        ),
+    },
+    Msg {
+        key: "settings.recording.combo_record_btn",
+        text: row(
+            "录制快捷键",
+            "錄製快捷鍵",
+            "Record shortcut",
+            "ショートカットを記録",
+            "단축키 녹화",
+        ),
+    },
+    Msg {
+        key: "settings.recording.combo_record_hint",
+        text: row(
+            "请按下快捷键组合…",
+            "請按下快捷鍵組合…",
+            "Press your shortcut combination…",
+            "ショートカットの組み合わせを押してください…",
+            "단축키 조합을 눌러 주세요…",
+        ),
+    },
+    Msg {
+        key: "settings.shortcuts.disable",
+        text: row("停用", "停用", "Disable", "無効化", "비활성화"),
+    },
+    Msg {
+        key: "settings.shortcuts.style_pack_disabled_suffix",
+        text: row("（已停用）", "（已停用）", " (disabled)", "（無効）", " (비활성화됨)"),
+    },
+    Msg {
+        key: "settings.shortcuts.style_pack_remove",
+        text: row("移除", "移除", "Remove", "削除", "제거"),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

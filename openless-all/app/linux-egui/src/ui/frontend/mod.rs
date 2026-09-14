@@ -685,6 +685,203 @@ mod tests {
         }
     }
 
+    /// 渲染设置页并把这一帧画出的文字按行返回。
+    fn painted_settings_lines(
+        section: super::view_model::SettingsSection,
+        vm: &mut FrontendViewModel,
+    ) -> Vec<String> {
+        let ctx = egui::Context::default();
+        let mut lines = Vec::new();
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(viewport()),
+                ..Default::default()
+            });
+            let mut actions = Vec::new();
+            vm.lang = openless_linux_egui::Lang::ZhCn;
+            vm.active_page = Page::Settings;
+            vm.settings_open = true;
+            vm.settings_section = section;
+            render(&ctx, vm, &mut actions);
+            lines = painted_text(&ctx.end_pass())
+                .lines()
+                .map(|line| line.trim().to_string())
+                .filter(|line| !line.is_empty())
+                .collect();
+        }
+        lines
+    }
+
+    #[test]
+    fn shortcut_menu_reveals_record_and_disable() {
+        let zh = openless_linux_egui::Lang::ZhCn;
+        let record = openless_linux_egui::tr_l10n(zh, "settings.recording.combo_record_btn");
+        let disable = openless_linux_egui::tr_l10n(zh, "settings.shortcuts.disable");
+        let mut vm = FrontendViewModel {
+            shortcut_menu: Some(super::view_model::ShortcutField::Qa),
+            ..Default::default()
+        };
+        let open = painted_settings_lines(super::view_model::SettingsSection::Shortcuts, &mut vm);
+        assert!(
+            open.iter().any(|line| line == record),
+            "the record button must be painted"
+        );
+        assert!(
+            open.iter().any(|line| line == disable),
+            "the disable button must be painted"
+        );
+        // 收起菜单后两个按钮都要消失。
+        vm.shortcut_menu = None;
+        let closed = painted_settings_lines(super::view_model::SettingsSection::Shortcuts, &mut vm);
+        assert!(!closed.iter().any(|line| line == record));
+        assert!(!closed.iter().any(|line| line == disable));
+    }
+
+    #[test]
+    fn shortcut_rows_follow_the_video_order() {
+        let zh = openless_linux_egui::Lang::ZhCn;
+        let mut vm = FrontendViewModel {
+            dictation_hotkey: "Alt+Z".to_string(),
+            ..Default::default()
+        };
+        let lines = painted_settings_lines(super::view_model::SettingsSection::Shortcuts, &mut vm);
+        let index_of = |key: &'static str| {
+            let label = openless_linux_egui::tr_l10n(zh, key);
+            lines
+                .iter()
+                .position(|line| line == label)
+                .unwrap_or_else(|| panic!("{key} ({label:?}) not painted in {lines:?}"))
+        };
+        let start = index_of("settings.shortcuts.start_stop");
+        let translation = index_of("hotkey.translation");
+        let qa = index_of("selection_ask.hotkey_title");
+        let switch_style = index_of("settings.shortcuts.switch_style");
+        let style_pack = index_of("settings.shortcuts.style_pack_title");
+        let open_app = index_of("settings.shortcuts.open_app");
+        let cancel = index_of("settings.shortcuts.cancel");
+        assert!(
+            start < translation
+                && translation < qa
+                && qa < switch_style
+                && switch_style < style_pack
+                && style_pack < open_app
+                && open_app < cancel,
+            "shortcut rows must keep the Tauri order, painted: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn recording_captures_the_pressed_combination() {
+        use super::view_model::{FrontendAction, ShortcutField};
+        let ctx = egui::Context::default();
+        let zh = openless_linux_egui::Lang::ZhCn;
+        let mut vm = FrontendViewModel {
+            lang: zh,
+            active_page: Page::Settings,
+            settings_open: true,
+            settings_section: super::view_model::SettingsSection::Shortcuts,
+            shortcut_recording: Some(ShortcutField::Qa),
+            ..Default::default()
+        };
+        let mut captured = None;
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(viewport()),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::K,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers {
+                        ctrl: true,
+                        shift: true,
+                        ..Default::default()
+                    },
+                }],
+                ..Default::default()
+            });
+            let mut actions = Vec::new();
+            render(&ctx, &mut vm, &mut actions);
+            let _ = ctx.end_pass();
+            for action in actions {
+                if let FrontendAction::ShortcutCaptured(field, primary, modifiers) = action {
+                    captured = Some((field, primary, modifiers));
+                }
+            }
+        }
+        let (field, primary, modifiers) = captured.expect("a captured binding");
+        assert_eq!(field, ShortcutField::Qa);
+        assert_eq!(primary, "K");
+        assert!(modifiers.contains(&"ctrl".to_string()));
+        assert!(modifiers.contains(&"shift".to_string()));
+    }
+
+    #[test]
+    fn style_pack_hotkey_rows_render_their_pack_and_keycaps() {
+        let zh = openless_linux_egui::Lang::ZhCn;
+        let mut vm = FrontendViewModel::default();
+        vm.style_packs = vec![
+            super::view_model::StylePack {
+                id: "builtin-polish".into(),
+                name: "Polish".into(),
+                description: String::new(),
+                tags: Vec::new(),
+                is_builtin: true,
+                enabled: true,
+                is_active: true,
+                selection_active: false,
+            },
+            super::view_model::StylePack {
+                id: "custom-legal".into(),
+                name: "Legal".into(),
+                description: String::new(),
+                tags: Vec::new(),
+                is_builtin: false,
+                enabled: false,
+                is_active: false,
+                selection_active: false,
+            },
+        ];
+        vm.settings.style_pack_hotkeys = vec![super::view_model::StylePackHotkeyRow {
+            pack_id: "custom-legal".into(),
+            name: "Legal".into(),
+            hotkey: "Ctrl+Shift+L".into(),
+        }];
+        let lines = painted_settings_lines(super::view_model::SettingsSection::Shortcuts, &mut vm);
+        // 停用中的风格包在下拉里带「（已停用）」后缀（Tauri `stylePackDisabledSuffix`）。
+        let disabled = format!(
+            "Legal{}",
+            openless_linux_egui::tr_l10n(zh, "settings.shortcuts.style_pack_disabled_suffix")
+        );
+        assert!(
+            lines.iter().any(|line| line == &disabled),
+            "disabled pack suffix must be shown, painted: {lines:?}"
+        );
+        // 键帽逐键渲染。
+        assert!(lines.iter().any(|line| line == "Ctrl"), "modifier keycap");
+        assert!(lines.iter().any(|line| line == "Shift"), "modifier keycap");
+        assert!(lines.iter().any(|line| line == "L"), "primary keycap");
+    }
+
+    #[test]
+    fn style_pack_add_button_opens_the_draft_row() {
+        use super::view_model::SettingsSection;
+        let zh = openless_linux_egui::Lang::ZhCn;
+        let add = format!(
+            "+ {}",
+            openless_linux_egui::tr_l10n(zh, "settings.shortcuts.style_pack_add")
+        );
+        let mut vm = FrontendViewModel::default();
+        let closed = painted_settings_lines(SettingsSection::Shortcuts, &mut vm);
+        assert!(closed.iter().any(|line| line == &add), "add button shows");
+        vm.style_hotkey_draft_open = true;
+        let open = painted_settings_lines(SettingsSection::Shortcuts, &mut vm);
+        assert!(
+            !open.iter().any(|line| line == &add),
+            "add button hides while drafting"
+        );
+    }
+
     #[test]
     fn ai_service_tabs_follow_the_host_capabilities() {
         // Tauri gates the local-model view on `supports_local_asr`; the Linux
@@ -945,6 +1142,8 @@ mod tests {
         let ctx = egui::Context::default();
         let zh = openless_linux_egui::Lang::ZhCn;
         let pack = |name: &str, is_active: bool| super::view_model::StylePack {
+            id: format!("pack-{name}"),
+            enabled: true,
             name: name.to_string(),
             description: "sample description".to_string(),
             tags: vec!["light".to_string()],

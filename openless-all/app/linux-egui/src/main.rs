@@ -2339,16 +2339,24 @@ mod linux_app {
                 s.style_pack_hotkeys = prefs
                     .style_pack_hotkeys
                     .iter()
-                    .map(|entry| frontend::view_model::StylePackHotkeyRow {
-                        name: self
+                    .map(|entry| {
+                        let pack = self
                             .style_packs
                             .iter()
-                            .find(|pack| pack.id == entry.pack_id)
-                            .map(|pack| pack.name.clone())
-                            .unwrap_or_else(|| entry.pack_id.clone()),
-                        hotkey: entry.binding.display_label(),
+                            .find(|pack| pack.id == entry.pack_id);
+                        frontend::view_model::StylePackHotkeyRow {
+                            pack_id: entry.pack_id.clone(),
+                            name: pack
+                                .map(|pack| pack.name.clone())
+                                .unwrap_or_else(|| entry.pack_id.clone()),
+                            hotkey: entry.binding.display_label(),
+                        }
                     })
                     .collect();
+                // 草稿行的默认风格包：第一个还没绑定快捷键的（Tauri 的「＋添加」下拉）。
+                if vm.style_hotkey_draft_pack >= vm.style_packs.len() {
+                    vm.style_hotkey_draft_pack = vm.style_packs.len().saturating_sub(1);
+                }
             }
 
             // AI services tab: provider picker plus the cached channel list.
@@ -2531,11 +2539,13 @@ mod linux_app {
                 .style_packs
                 .iter()
                 .map(|pack| frontend::view_model::StylePack {
+                    id: pack.id.clone(),
                     name: pack.name.clone(),
                     description: pack.description.clone(),
                     // Localized mode label (Core's display_name is zh-only).
                     tags: vec![polish_mode_label(lang, pack.base_mode).to_string()],
                     is_builtin: pack.kind == openless_core::StylePackKind::Builtin,
+                    enabled: pack.enabled,
                     is_active: pack.active,
                     selection_active: self
                         .preferences
@@ -2802,6 +2812,160 @@ mod linux_app {
                     self.settings_dirty.remote_input_enabled = true;
                 }
             }
+            self.save_settings_if_dirty();
+        }
+
+        /// 快捷键录入完成：写入对应偏好，并以 strict 模式保存以便立即应用热键副作用。
+        fn apply_shortcut_captured(
+            &mut self,
+            field: frontend::view_model::ShortcutField,
+            primary: String,
+            modifiers: Vec<String>,
+        ) {
+            let binding = openless_core::shared_types::ShortcutBinding { primary, modifiers };
+            if let Err(error) = openless_core::validate_shortcut_binding(&binding) {
+                self.frontend_vm.settings_notice = Some(fmt_l10n(
+                    self.lang,
+                    "settings.recording.combo_conflict",
+                    &[&error.to_string()],
+                ));
+                self.frontend_vm.shortcut_recording = None;
+                return;
+            }
+            let draft_pack_id = self
+                .frontend_vm
+                .style_packs
+                .get(self.frontend_vm.style_hotkey_draft_pack)
+                .map(|pack| pack.id.clone());
+            let Some(preferences) = self.preferences.as_mut() else {
+                return;
+            };
+            use frontend::view_model::ShortcutField;
+            match field {
+                ShortcutField::Dictation => preferences.dictation_hotkey = binding,
+                ShortcutField::Translation => preferences.translation_hotkey = binding,
+                ShortcutField::Qa => preferences.qa_hotkey = Some(binding),
+                ShortcutField::SwitchStyle => preferences.switch_style_hotkey = Some(binding),
+                ShortcutField::OpenApp => preferences.open_app_hotkey = Some(binding),
+                ShortcutField::CodingAgentVoice => {
+                    preferences.coding_agent_voice_hotkey = Some(binding);
+                    // 「按住说话」有了触发键，Agent 也就该启用（Tauri 同样顺带打开）。
+                    preferences.coding_agent_enabled = true;
+                }
+                ShortcutField::SelectionPolish => {
+                    preferences.selection_polish_hotkey = Some(binding)
+                }
+                ShortcutField::StylePack(index) => {
+                    if let Some(row) = preferences.style_pack_hotkeys.get_mut(index) {
+                        row.binding = binding;
+                    }
+                }
+                ShortcutField::StyleDraft => {
+                    if let Some(pack_id) = draft_pack_id {
+                        preferences
+                            .style_pack_hotkeys
+                            .retain(|entry| entry.pack_id != pack_id);
+                        preferences.style_pack_hotkeys.push(
+                            openless_core::shared_types::StylePackHotkey { pack_id, binding },
+                        );
+                        self.frontend_vm.style_hotkey_draft_open = false;
+                    }
+                }
+            }
+            self.settings_dirty.hotkeys = true;
+            self.frontend_vm.shortcut_recording = None;
+            self.frontend_vm.shortcut_menu = None;
+            self.save_settings_if_dirty();
+        }
+
+        /// 停用某个快捷键绑定（核心录音快捷键没有停用，UI 里也不给按钮）。
+        fn apply_shortcut_disable(&mut self, field: frontend::view_model::ShortcutField) {
+            let Some(preferences) = self.preferences.as_mut() else {
+                return;
+            };
+            use frontend::view_model::ShortcutField;
+            match field {
+                ShortcutField::Qa => preferences.qa_hotkey = None,
+                ShortcutField::SwitchStyle => preferences.switch_style_hotkey = None,
+                ShortcutField::OpenApp => preferences.open_app_hotkey = None,
+                ShortcutField::CodingAgentVoice => preferences.coding_agent_voice_hotkey = None,
+                ShortcutField::SelectionPolish => preferences.selection_polish_hotkey = None,
+                ShortcutField::StylePack(index) => {
+                    if let Some(row) = preferences.style_pack_hotkeys.get(index) {
+                        let pack_id = row.pack_id.clone();
+                        preferences
+                            .style_pack_hotkeys
+                            .retain(|entry| entry.pack_id != pack_id);
+                    }
+                }
+                // 录音/翻译必须保留一个绑定；草稿行还没有内容。
+                ShortcutField::Dictation
+                | ShortcutField::Translation
+                | ShortcutField::StyleDraft => {
+                    return;
+                }
+            }
+            self.settings_dirty.hotkeys = true;
+            self.frontend_vm.shortcut_menu = None;
+            self.save_settings_if_dirty();
+        }
+
+        fn apply_style_hotkey_remove(&mut self, index: usize) {
+            let pack_id = self
+                .frontend_vm
+                .settings
+                .style_pack_hotkeys
+                .get(index)
+                .map(|row| row.pack_id.clone());
+            let Some(pack_id) = pack_id else {
+                return;
+            };
+            if let Some(preferences) = self.preferences.as_mut() {
+                preferences
+                    .style_pack_hotkeys
+                    .retain(|entry| entry.pack_id != pack_id);
+            }
+            self.settings_dirty.hotkeys = true;
+            self.frontend_vm.shortcut_menu = None;
+            self.save_settings_if_dirty();
+        }
+
+        /// 换绑到另一个风格包（目标包已有绑定时忽略，与 Tauri 的下拉置灰同义）。
+        fn apply_style_hotkey_repack(&mut self, index: usize, pack_index: usize) {
+            let pack_id = self
+                .frontend_vm
+                .settings
+                .style_pack_hotkeys
+                .get(index)
+                .map(|row| row.pack_id.clone());
+            let target = self
+                .frontend_vm
+                .style_packs
+                .get(pack_index)
+                .map(|pack| pack.id.clone());
+            let (Some(current), Some(target)) = (pack_id, target) else {
+                return;
+            };
+            if current == target {
+                return;
+            }
+            if let Some(preferences) = self.preferences.as_mut() {
+                if preferences
+                    .style_pack_hotkeys
+                    .iter()
+                    .any(|entry| entry.pack_id == target)
+                {
+                    return;
+                }
+                if let Some(entry) = preferences
+                    .style_pack_hotkeys
+                    .iter_mut()
+                    .find(|entry| entry.pack_id == current)
+                {
+                    entry.pack_id = target;
+                }
+            }
+            self.settings_dirty.hotkeys = true;
             self.save_settings_if_dirty();
         }
 
@@ -3794,6 +3958,59 @@ mod linux_app {
                             self.load_settings_channels();
                             self.load_service_configured();
                         }
+                    }
+                    frontend::view_model::FrontendAction::ShortcutMenu(field) => {
+                        self.frontend_vm.shortcut_menu = field;
+                        if field.is_some() {
+                            // 打开菜单即退出录制（Tauri 点「录制快捷键」时同时收起菜单）。
+                            self.frontend_vm.shortcut_recording = None;
+                        }
+                    }
+                    frontend::view_model::FrontendAction::ShortcutRecording(field) => {
+                        self.frontend_vm.shortcut_recording = field;
+                        if field.is_some() {
+                            self.frontend_vm.shortcut_menu = None;
+                        }
+                        self.frontend_vm.settings_notice = None;
+                    }
+                    frontend::view_model::FrontendAction::ShortcutCaptured(
+                        field,
+                        primary,
+                        modifiers,
+                    ) => {
+                        self.apply_shortcut_captured(field, primary, modifiers);
+                    }
+                    frontend::view_model::FrontendAction::ShortcutDisable(field) => {
+                        self.apply_shortcut_disable(field);
+                    }
+                    frontend::view_model::FrontendAction::StyleHotkeyDraft(open) => {
+                        self.frontend_vm.style_hotkey_draft_open = open;
+                        if open {
+                            let used: Vec<String> = self
+                                .frontend_vm
+                                .settings
+                                .style_pack_hotkeys
+                                .iter()
+                                .map(|row| row.pack_id.clone())
+                                .collect();
+                            self.frontend_vm.style_hotkey_draft_pack = self
+                                .frontend_vm
+                                .style_packs
+                                .iter()
+                                .position(|pack| !used.contains(&pack.id))
+                                .unwrap_or(0);
+                        } else {
+                            self.frontend_vm.shortcut_recording = None;
+                        }
+                    }
+                    frontend::view_model::FrontendAction::StyleHotkeyDraftPack(index) => {
+                        self.frontend_vm.style_hotkey_draft_pack = index;
+                    }
+                    frontend::view_model::FrontendAction::StyleHotkeyRemove(index) => {
+                        self.apply_style_hotkey_remove(index);
+                    }
+                    frontend::view_model::FrontendAction::StyleHotkeyRepack(index, pack_index) => {
+                        self.apply_style_hotkey_repack(index, pack_index);
                     }
                     frontend::view_model::FrontendAction::SettingsChannelToggle(index) => {
                         let kind = self.settings_channel_kind;

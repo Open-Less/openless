@@ -137,6 +137,19 @@ pub enum FrontendAction {
     SettingsChannelName(String),
     /// Create the channel described by the form.
     SettingsChannelCreate,
+    /// 快捷键行的交互：展开/收起编辑菜单（`None` 收起全部）。
+    ShortcutMenu(Option<ShortcutField>),
+    /// 进入录制态（`None` = 取消录制）。
+    ShortcutRecording(Option<ShortcutField>),
+    /// 录入完成：主键 + 修饰键写回该绑定。
+    ShortcutCaptured(ShortcutField, String, Vec<String>),
+    /// 停用该绑定（核心录音快捷键不可停用，见 `ShortcutField::Dictation`）。
+    ShortcutDisable(ShortcutField),
+    /// 风格直达：开关草稿行 / 选择风格包 / 移除整行。
+    StyleHotkeyDraft(bool),
+    StyleHotkeyDraftPack(usize),
+    StyleHotkeyRemove(usize),
+    StyleHotkeyRepack(usize, usize),
     /// Re-read channels for the current AI-services view.
     /// Overview: re-read credentials / history / activity from Core.
     OverviewRefresh,
@@ -203,8 +216,26 @@ pub struct SettingsPermissions {
 /// One 风格包直选 row (style pack name + its hotkey chip).
 #[derive(Clone, Debug, Default)]
 pub struct StylePackHotkeyRow {
+    pub pack_id: String,
+    /// 风格包显示名；风格包列表里找不到该 id 时用作下拉的回退文案。
     pub name: String,
     pub hotkey: String,
+}
+
+/// One editable shortcut row in 快捷键与选区. `StylePack(index)` addresses an
+/// existing entry of [`SettingsFields::style_pack_hotkeys`]; `StyleDraft` is the
+/// 「＋ 添加风格快捷键」row before it is committed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShortcutField {
+    Dictation,
+    Translation,
+    Qa,
+    SwitchStyle,
+    OpenApp,
+    CodingAgentVoice,
+    SelectionPolish,
+    StylePack(usize),
+    StyleDraft,
 }
 
 /// One credential channel shown in the AI-services settings tab.
@@ -388,10 +419,12 @@ pub struct HistoryEntry {
 
 #[derive(Clone, Debug)]
 pub struct StylePack {
+    pub id: String,
     pub name: String,
     pub description: String,
     pub tags: Vec<String>,
     pub is_builtin: bool,
+    pub enabled: bool,
     /// Active pack for the dictation / ASR workflow.
     pub is_active: bool,
     /// Active pack for the selection-polish workflow (`prefs.selection_polish_style_pack_id`).
@@ -543,6 +576,14 @@ pub struct FrontendViewModel {
     pub multimodal_view: bool,
     /// The host can self-update (AppImage) → beta-channel / check-update rows.
     pub auto_update_capable: bool,
+    /// 展开编辑菜单的快捷键行（`None` = 都收起）。
+    pub shortcut_menu: Option<ShortcutField>,
+    /// 正在录入按键的快捷键行（`None` = 未在录入）。
+    pub shortcut_recording: Option<ShortcutField>,
+    /// 「＋ 添加风格快捷键」草稿行是否打开。
+    pub style_hotkey_draft_open: bool,
+    /// 草稿行选中的风格包（`FrontendViewModel::style_packs` 索引）。
+    pub style_hotkey_draft_pack: usize,
     /// Real host permission snapshot for 隐私与数据（不再写死「已授权」）。
     pub permissions: SettingsPermissions,
     /// 远程输入服务正在监听 → 显示配对码 / 访问网址 / 证书指纹。
@@ -675,6 +716,10 @@ impl Default for FrontendViewModel {
             supports_local_asr: false,
             multimodal_view: false,
             auto_update_capable: false,
+            shortcut_menu: None,
+            shortcut_recording: None,
+            style_hotkey_draft_open: false,
+            style_hotkey_draft_pack: 0,
             permissions: SettingsPermissions::default(),
             dictation_hotkey: String::new(),
             qa_hotkey: String::new(),
@@ -708,7 +753,7 @@ pub struct SettingsFields {
     pub audio_cue: bool,
     pub record_audio_for_debug: bool,
     pub history_max_entries: String,
-    /// 风格包直选快捷键（只读展示，录制器尚未实现）。
+    /// 风格直达快捷键（可录制/停用/移除）。
     pub style_pack_hotkeys: Vec<StylePackHotkeyRow>,
     /// 润色上下文窗口分钟数（0 = 只用当前这条转写）。
     pub polish_context_window: String,

@@ -740,6 +740,8 @@ pub enum ButtonKind {
     Ghost,
     /// Filled with the accent blue, white text.
     Blue,
+    /// Greyed-out button that swallows clicks (Tauri's 置灰 停用).
+    Disabled,
 }
 
 /// A bordered button drawn into an exact rectangle, with an optional leading
@@ -776,6 +778,11 @@ pub fn action_button(
             },
             None,
             egui::Color32::WHITE,
+        ),
+        ButtonKind::Disabled => (
+            egui::Color32::TRANSPARENT,
+            Some(egui::Stroke::new(0.5, theme::LINE_SOFT)),
+            theme::INK_4.linear_multiply(0.6),
         ),
     };
     let painter = ui.painter().with_clip_rect(rect);
