@@ -18,7 +18,7 @@ use tokio::process::Command;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc as tokio_mpsc;
 
-pub const POPUP_PROTOCOL_VERSION: u16 = 1;
+pub const POPUP_PROTOCOL_VERSION: u16 = 2;
 pub const MAX_JSONL_LINE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -180,6 +180,18 @@ pub enum PopupToHost {
         session_id: String,
         sequence: u64,
     },
+    /// 胶囊上的 ✕：放弃这次听写（Tauri `cancelDictation`）。
+    CancelDictation {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+    },
+    /// 胶囊上的 ✓：结束录音并落字（Tauri `stopDictation`）。
+    StopDictation {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+    },
 }
 
 impl PopupToHost {
@@ -191,7 +203,9 @@ impl PopupToHost {
             | Self::SubmitQa { version, .. }
             | Self::ToggleQaRecording { version, .. }
             | Self::DismissQa { version, .. }
-            | Self::DismissCapsule { version, .. } => *version,
+            | Self::DismissCapsule { version, .. }
+            | Self::CancelDictation { version, .. }
+            | Self::StopDictation { version, .. } => *version,
         }
     }
 
@@ -203,7 +217,9 @@ impl PopupToHost {
             | Self::SubmitQa { session_id, .. }
             | Self::ToggleQaRecording { session_id, .. }
             | Self::DismissQa { session_id, .. }
-            | Self::DismissCapsule { session_id, .. } => session_id,
+            | Self::DismissCapsule { session_id, .. }
+            | Self::CancelDictation { session_id, .. }
+            | Self::StopDictation { session_id, .. } => session_id,
         }
     }
 
@@ -215,7 +231,9 @@ impl PopupToHost {
             | Self::SubmitQa { sequence, .. }
             | Self::ToggleQaRecording { sequence, .. }
             | Self::DismissQa { sequence, .. }
-            | Self::DismissCapsule { sequence, .. } => *sequence,
+            | Self::DismissCapsule { sequence, .. }
+            | Self::CancelDictation { sequence, .. }
+            | Self::StopDictation { sequence, .. } => *sequence,
         }
     }
 
@@ -226,7 +244,9 @@ impl PopupToHost {
             Self::SubmitQa { .. } | Self::ToggleQaRecording { .. } | Self::DismissQa { .. } => {
                 PopupKind::Qa
             }
-            Self::DismissCapsule { .. } => PopupKind::Capsule,
+            Self::DismissCapsule { .. }
+            | Self::CancelDictation { .. }
+            | Self::StopDictation { .. } => PopupKind::Capsule,
         }
     }
 }

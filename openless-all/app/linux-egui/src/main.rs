@@ -888,6 +888,22 @@ mod linux_app {
             let Some(session_id) = snapshot.session_id else {
                 return;
             };
+            // 终态文案：Core 的 message 常常是内部状态词（`inserted`）或空，
+            // 胶囊需要可直接展示的本地化文案，所以在这里补齐。
+            let lang = self.lang;
+            let text = match snapshot.message.as_deref() {
+                Some(message) if !message.trim().is_empty() && message != "inserted" => {
+                    message.to_string()
+                }
+                _ => match snapshot.phase {
+                    DictationPhase::Completed => {
+                        frontend::popups::inserted_message(lang, self.transcript.chars().count())
+                    }
+                    DictationPhase::Cancelled => tr_l10n(lang, "capsule.cancelled").to_string(),
+                    DictationPhase::Failed => tr_l10n(lang, "capsule.error").to_string(),
+                    _ => String::new(),
+                },
+            };
             self.send_popup(
                 PopupKind::Capsule,
                 HostToPopup::Capsule {
@@ -895,7 +911,7 @@ mod linux_app {
                     session_id: session_id.to_string(),
                     sequence: self.last_event_sequence.saturating_mul(2),
                     phase: format!("{:?}", snapshot.phase),
-                    text: snapshot.message.unwrap_or_default(),
+                    text,
                     audio_level: Some(snapshot.level),
                 },
             );
@@ -1025,6 +1041,32 @@ mod linux_app {
                     PopupSupervisorEvent::Message(PopupToHost::DismissCapsule { .. }) => {
                         if let Some(snapshot) = self.snapshot.as_mut() {
                             snapshot.dictation.message = None;
+                        }
+                    }
+                    PopupSupervisorEvent::Message(PopupToHost::CancelDictation { .. }) => {
+                        // 胶囊 ✕：放弃这次听写。
+                        let session = self
+                            .snapshot
+                            .as_ref()
+                            .and_then(|snapshot| snapshot.dictation.session_id);
+                        if let (Some(backend), Some(session)) = (self.backend(), session) {
+                            self.spawn(async move {
+                                backend.cancel_dictation(Some(session)).await?;
+                                Ok(String::new())
+                            });
+                        }
+                    }
+                    PopupSupervisorEvent::Message(PopupToHost::StopDictation { .. }) => {
+                        // 胶囊 ✓：结束录音并落字。
+                        let session = self
+                            .snapshot
+                            .as_ref()
+                            .and_then(|snapshot| snapshot.dictation.session_id);
+                        if let (Some(backend), Some(session)) = (self.backend(), session) {
+                            self.spawn(async move {
+                                backend.stop_dictation_session(session).await?;
+                                Ok(String::new())
+                            });
                         }
                     }
                     PopupSupervisorEvent::Message(
@@ -4517,179 +4559,6 @@ mod linux_app {
         }
     }
 
-    fn popup_heading(ui: &mut egui::Ui, title: &str) {
-        let response = ui
-            .horizontal(|ui| ui.heading(title))
-            .response
-            .interact(egui::Sense::drag());
-        if response.drag_started() {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-        }
-    }
-
-    /// Lightweight Markdown renderer ported from #997. It intentionally covers
-    /// the structures emitted by QA without introducing a WebView dependency.
-    fn render_popup_markdown(ui: &mut egui::Ui, markdown: &str) {
-        let mut code = String::new();
-        let mut in_code = false;
-        for line in markdown.lines() {
-            let trimmed = line.trim();
-            if trimmed.starts_with("```") {
-                if in_code {
-                    render_popup_code(ui, code.trim_end());
-                    code.clear();
-                }
-                in_code = !in_code;
-                continue;
-            }
-            if in_code {
-                code.push_str(line);
-                code.push('\n');
-                continue;
-            }
-            if trimmed.is_empty() {
-                ui.add_space(4.0);
-                continue;
-            }
-            let (text, size, strong, italics, bullet) =
-                if let Some(value) = trimmed.strip_prefix("### ") {
-                    (value, 14.0, true, false, false)
-                } else if let Some(value) = trimmed.strip_prefix("## ") {
-                    (value, 15.0, true, false, false)
-                } else if let Some(value) = trimmed.strip_prefix("# ") {
-                    (value, 16.0, true, false, false)
-                } else if let Some(value) = trimmed.strip_prefix("> ") {
-                    (value, 13.0, false, true, false)
-                } else if let Some(value) = trimmed
-                    .strip_prefix("- ")
-                    .or_else(|| trimmed.strip_prefix("* "))
-                {
-                    (value, 13.0, false, false, true)
-                } else {
-                    (trimmed, 13.0, false, false, false)
-                };
-            let display = if bullet {
-                format!("• {text}")
-            } else {
-                text.to_string()
-            };
-            render_popup_inline(ui, &display, size, strong, italics);
-        }
-        if in_code && !code.is_empty() {
-            render_popup_code(ui, code.trim_end());
-        }
-    }
-
-    fn render_popup_code(ui: &mut egui::Ui, code: &str) {
-        egui::Frame::new()
-            .fill(theme::SURFACE_2)
-            .corner_radius(egui::CornerRadius::same(6))
-            .inner_margin(egui::Margin::symmetric(8, 6))
-            .show(ui, |ui| {
-                ui.add(egui::Label::new(egui::RichText::new(code).monospace().size(12.0)).wrap());
-            });
-    }
-
-    fn render_popup_inline(
-        ui: &mut egui::Ui,
-        text: &str,
-        size: f32,
-        base_strong: bool,
-        base_italics: bool,
-    ) {
-        let mut job = egui::text::LayoutJob::default();
-        job.wrap.max_width = ui.available_width();
-        let mut rest = text;
-        while !rest.is_empty() {
-            let mut matched = false;
-            for (open, close, strong, italics, monospace) in [
-                ("**", "**", true, false, false),
-                ("__", "__", true, false, false),
-                ("`", "`", false, false, true),
-                ("*", "*", false, true, false),
-                ("_", "_", false, true, false),
-            ] {
-                if let Some(after_open) = rest.strip_prefix(open) {
-                    if let Some(end) = after_open.find(close) {
-                        append_popup_text(
-                            &mut job,
-                            &after_open[..end],
-                            size,
-                            base_strong || strong,
-                            base_italics || italics,
-                            monospace,
-                            ui,
-                        );
-                        rest = &after_open[end + close.len()..];
-                        matched = true;
-                        break;
-                    }
-                }
-            }
-            if matched {
-                continue;
-            }
-            let next = ["**", "__", "`", "*", "_"]
-                .iter()
-                .filter_map(|marker| rest.find(marker))
-                .min()
-                .unwrap_or(rest.len());
-            let length = if next == 0 {
-                rest.chars().next().map(char::len_utf8).unwrap_or(0)
-            } else {
-                next
-            };
-            append_popup_text(
-                &mut job,
-                &rest[..length],
-                size,
-                base_strong,
-                base_italics,
-                false,
-                ui,
-            );
-            rest = &rest[length..];
-        }
-        ui.add(egui::Label::new(job).wrap());
-    }
-
-    fn append_popup_text(
-        job: &mut egui::text::LayoutJob,
-        text: &str,
-        size: f32,
-        strong: bool,
-        italics: bool,
-        monospace: bool,
-        ui: &egui::Ui,
-    ) {
-        job.append(
-            text,
-            0.0,
-            egui::TextFormat {
-                font_id: egui::FontId::new(
-                    size,
-                    if monospace {
-                        egui::FontFamily::Monospace
-                    } else {
-                        egui::FontFamily::Proportional
-                    },
-                ),
-                color: if strong {
-                    ui.visuals().strong_text_color()
-                } else {
-                    ui.visuals().text_color()
-                },
-                background: if monospace {
-                    theme::SURFACE_2
-                } else {
-                    egui::Color32::TRANSPARENT
-                },
-                italics,
-                ..Default::default()
-            },
-        );
-    }
-
     impl eframe::App for NativePopupApp {
         fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
             while let Ok(message) = self.incoming.try_recv() {
@@ -4729,121 +4598,113 @@ mod linux_app {
                 return;
             }
             let lang = self.lang;
-            egui::CentralPanel::default()
-                .frame(
-                    egui::Frame::NONE
-                        .fill(theme::SURFACE)
-                        .corner_radius(egui::CornerRadius::same(12))
-                        .inner_margin(egui::Margin::same(18)),
-                )
-                .show(ctx, |ui| match self.kind {
-                    PopupKind::Preview => {
-                        popup_heading(ui, tr_l10n(lang, "heading.insert_preview"));
-                        ui.label(&self.state.preview.source);
-                        let editor = ui.add(
-                            egui::TextEdit::multiline(&mut self.state.preview.text)
-                                .desired_rows(6)
-                                .desired_width(f32::INFINITY),
-                        );
-                        if !self.preview_focus_requested {
-                            editor.request_focus();
-                            self.preview_focus_requested = true;
-                        }
-                        ui.horizontal(|ui| {
-                            if ui.button(tr_l10n(lang, "btn.cancel")).clicked() {
-                                self.dismiss(ctx);
-                            }
-                            if ui.button(tr_l10n(lang, "btn.insert")).clicked() {
-                                if let Some(session_id) = self.session_id() {
-                                    let sequence = self.next_sequence();
-                                    self.send(PopupToHost::ConfirmPreview {
-                                        version: POPUP_PROTOCOL_VERSION,
-                                        session_id,
-                                        sequence,
-                                        text: self.state.preview.text.clone(),
-                                    });
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                                }
-                            }
-                        });
+            match self.kind {
+                PopupKind::Preview => {
+                    let first_frame = !self.preview_focus_requested;
+                    let action = frontend::popups::selection_preview(
+                        ctx,
+                        &mut self.state.preview,
+                        first_frame,
+                        lang,
+                    );
+                    if first_frame {
+                        self.preview_focus_requested = true;
                     }
-                    PopupKind::Qa => {
-                        popup_heading(ui, tr_l10n(lang, "heading.qa_preview"));
-                        if let Some(selection) = &self.state.qa.selection_preview {
-                            ui.label(egui::RichText::new(selection).italics().color(theme::INK_3));
+                    match action {
+                        frontend::popups::PreviewAction::Cancel => self.dismiss(ctx),
+                        frontend::popups::PreviewAction::Confirm(text) => {
+                            if let Some(session_id) = self.session_id() {
+                                let sequence = self.next_sequence();
+                                self.send(PopupToHost::ConfirmPreview {
+                                    version: POPUP_PROTOCOL_VERSION,
+                                    session_id,
+                                    sequence,
+                                    text,
+                                });
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
                         }
-                        egui::ScrollArea::vertical()
-                            .max_height(300.0)
-                            .show(ui, |ui| {
-                                for message in &self.state.qa.messages {
-                                    ui.label(egui::RichText::new(&message.role).strong());
-                                    render_popup_markdown(ui, &message.content);
-                                }
-                                if !self.state.qa.streaming_answer.is_empty() {
-                                    render_popup_markdown(ui, &self.state.qa.streaming_answer);
-                                }
-                                if let Some(error) = &self.state.qa.error {
-                                    ui.colored_label(egui::Color32::RED, error);
-                                }
-                            });
-                        let input = ui.text_edit_singleline(&mut self.qa_input);
-                        ui.horizontal(|ui| {
-                            if ui.button(tr_l10n(lang, "btn.close")).clicked() {
-                                self.dismiss(ctx);
-                            }
-                            if ui
-                                .button(if self.state.qa.phase == "Recording" {
-                                    tr_l10n(lang, "btn.stop_recording")
-                                } else {
-                                    tr_l10n(lang, "btn.voice_ask")
-                                })
-                                .clicked()
-                            {
-                                if let Some(session_id) = self.session_id() {
-                                    let sequence = self.next_sequence();
-                                    self.send(PopupToHost::ToggleQaRecording {
-                                        version: POPUP_PROTOCOL_VERSION,
-                                        session_id,
-                                        sequence,
-                                    });
-                                }
-                            }
-                            let submit = ui.button(tr_l10n(lang, "btn.send")).clicked()
-                                || (input.lost_focus()
-                                    && ui.input(|state| state.key_pressed(egui::Key::Enter)));
-                            if submit && !self.qa_input.trim().is_empty() {
-                                if let Some(session_id) = self.session_id() {
-                                    let sequence = self.next_sequence();
-                                    let text = std::mem::take(&mut self.qa_input);
-                                    self.send(PopupToHost::SubmitQa {
-                                        version: POPUP_PROTOCOL_VERSION,
-                                        session_id,
-                                        sequence,
-                                        text,
-                                    });
-                                }
-                            }
-                        });
+                        frontend::popups::PreviewAction::None => {}
                     }
-                    PopupKind::Capsule => {
-                        let response = ui
-                            .horizontal(|ui| {
-                                ui.spinner();
-                                ui.strong(&self.state.capsule.phase);
+                }
+                PopupKind::Qa => {
+                    let action = frontend::popups::selection_ask(
+                        ctx,
+                        &self.state.qa,
+                        &mut self.qa_input,
+                        lang,
+                    );
+                    match action {
+                        frontend::popups::QaAction::Dismiss => self.dismiss(ctx),
+                        frontend::popups::QaAction::ToggleRecording => {
+                            if let Some(session_id) = self.session_id() {
+                                let sequence = self.next_sequence();
+                                self.send(PopupToHost::ToggleQaRecording {
+                                    version: POPUP_PROTOCOL_VERSION,
+                                    session_id,
+                                    sequence,
+                                });
+                            }
+                        }
+                        frontend::popups::QaAction::Submit(text) => {
+                            if let Some(session_id) = self.session_id() {
+                                let sequence = self.next_sequence();
+                                self.send(PopupToHost::SubmitQa {
+                                    version: POPUP_PROTOCOL_VERSION,
+                                    session_id,
+                                    sequence,
+                                    text,
+                                });
+                            }
+                        }
+                        frontend::popups::QaAction::None => {}
+                    }
+                }
+                PopupKind::Capsule => {
+                    let action =
+                        frontend::popups::dictation_capsule(ctx, &self.state.capsule, lang);
+                    let message = match action {
+                        frontend::popups::CapsuleAction::Cancel => {
+                            Some(PopupToHost::CancelDictation {
+                                version: POPUP_PROTOCOL_VERSION,
+                                session_id: String::new(),
+                                sequence: 0,
                             })
-                            .response
-                            .interact(egui::Sense::drag());
-                        if response.drag_started() {
-                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
                         }
-                        if !self.state.capsule.text.is_empty() {
-                            ui.label(&self.state.capsule.text);
+                        frontend::popups::CapsuleAction::Confirm => {
+                            Some(PopupToHost::StopDictation {
+                                version: POPUP_PROTOCOL_VERSION,
+                                session_id: String::new(),
+                                sequence: 0,
+                            })
                         }
-                        if let Some(level) = self.state.capsule.audio_level {
-                            ui.add(egui::ProgressBar::new(level.clamp(0.0, 1.0)));
+                        frontend::popups::CapsuleAction::None => None,
+                    };
+                    if let Some(mut message) = message {
+                        if let Some(session_id) = self.session_id() {
+                            let sequence = self.next_sequence();
+                            match &mut message {
+                                PopupToHost::CancelDictation {
+                                    session_id: id,
+                                    sequence: seq,
+                                    ..
+                                }
+                                | PopupToHost::StopDictation {
+                                    session_id: id,
+                                    sequence: seq,
+                                    ..
+                                } => {
+                                    *id = session_id;
+                                    *seq = sequence;
+                                }
+                                _ => {}
+                            }
+                            self.send(message);
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         }
                     }
-                });
+                }
+            }
             ctx.request_repaint_after(Duration::from_millis(33));
         }
     }
@@ -4891,17 +4752,21 @@ mod linux_app {
                 }
             })
             .map_err(|error| error.to_string())?;
+        // 胶囊窗口贴着药丸尺寸（Tauri 经典药丸 176×42），并用透明背景让圆角
+        // 真正透出桌面；QA / 预览是实心卡片窗口。
         let size = match kind {
             PopupKind::Qa => [520.0, 520.0],
-            PopupKind::Preview => [480.0, 300.0],
-            PopupKind::Capsule => [340.0, 112.0],
+            PopupKind::Preview => [480.0, 320.0],
+            PopupKind::Capsule => [200.0, 58.0],
         };
+        let transparent = matches!(kind, PopupKind::Capsule);
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
                 .with_title("OpenLess")
                 .with_inner_size(size)
                 .with_decorations(false)
                 .with_always_on_top()
+                .with_transparent(transparent)
                 .with_visible(false),
             ..Default::default()
         };

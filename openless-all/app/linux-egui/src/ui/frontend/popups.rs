@@ -1,0 +1,1320 @@
+//! Three auxiliary windows: the dictation capsule, the selection-ask panel and
+//! the selection-polish preview.
+//!
+//! Like the page layer this module is a pure renderer: it reads the popup
+//! snapshot and returns at most one action, which the popup host translates into
+//! a `PopupToHost` message. Layout, spacing, colours and copy mirror the Tauri
+//! windows — `src/components/Capsule.tsx` (classic pill), `src/pages/QaPanel.tsx`
+//! (shadcn chat card) and `src/pages/SelectionPolishPreview.tsx`.
+//!
+//! The chat panel renders in the shadcn zinc palette, which maps onto the theme
+//! tokens: white [`theme::SURFACE`], [`theme::INK`] foreground, [`theme::SURFACE_2`]
+//! muted fill, [`theme::INK_3`] muted text, [`theme::LINE`] border.
+
+use eframe::egui;
+
+use super::{icons, layout, theme};
+use openless_linux_egui::{
+    fmt_l10n, tr_l10n, CapsulePopupState, Lang, PopupChatMessage, PreviewPopupState, QaPopupState,
+};
+
+/// Result of rendering the selection-polish preview.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PreviewAction {
+    None,
+    /// ✕ / 取消 → the host sends `CancelPreview`.
+    Cancel,
+    /// ✓ 确认并替换 → the host sends `ConfirmPreview` with the edited text.
+    Confirm(String),
+}
+
+/// Result of rendering the selection-ask panel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum QaAction {
+    None,
+    /// ✕ → the host sends `DismissQa`.
+    Dismiss,
+    /// Enter / 发送 → the host sends `SubmitQa`.
+    Submit(String),
+    /// 麦克风按钮 → the host sends `ToggleQaRecording`.
+    ToggleRecording,
+}
+
+/// Result of rendering the dictation capsule.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CapsuleAction {
+    None,
+    /// ✕ → the host cancels the dictation.
+    Cancel,
+    /// ✓ → the host stops the dictation and inserts.
+    Confirm,
+}
+
+/// Tauri preview window padding (`padding: 18`).
+const PREVIEW_PADDING: f32 = 18.0;
+/// The QA card uses `--card-spacing` (14px) for its header/footer gutters.
+const CARD_SPACING: f32 = 14.0;
+/// Composer row height (Tauri `InputGroup`).
+const COMPOSER_HEIGHT: f32 = 40.0;
+/// Classic capsule pill metrics (Tauri `CLASSIC_PILL_METRICS`).
+const PILL_WIDTH: f32 = 176.0;
+const PILL_HEIGHT: f32 = 42.0;
+/// Round icon buttons in the capsule / composer.
+const ROUND_BUTTON: f32 = 28.0;
+
+// ── 选区润色预览 ────────────────────────────────────────────────────────────
+
+/// 选区润色预览：标题 + 副标题 + ✕、可编辑结果框、原文摘要、取消 / 确认并替换。
+pub fn selection_preview(
+    ctx: &egui::Context,
+    state: &mut PreviewPopupState,
+    first_frame: bool,
+    lang: Lang,
+) -> PreviewAction {
+    let mut action = PreviewAction::None;
+    egui::CentralPanel::default()
+        .frame(
+            egui::Frame::NONE
+                .fill(theme::SURFACE)
+                .corner_radius(egui::CornerRadius::same(14))
+                .stroke(egui::Stroke::new(0.5, theme::LINE))
+                .inner_margin(egui::Margin::same(PREVIEW_PADDING as i8)),
+        )
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(
+                        egui::RichText::new(tr_l10n(lang, "selection.polish_preview.title"))
+                            .size(16.0)
+                            .strong()
+                            .color(theme::INK),
+                    );
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(tr_l10n(lang, "selection.polish_preview.subtitle"))
+                            .size(12.0)
+                            .color(theme::INK_4),
+                    );
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    if icon_button(ui, icons::IconName::Close, theme::INK_3).clicked() {
+                        action = PreviewAction::Cancel;
+                    }
+                });
+            });
+            ui.add_space(12.0);
+
+            // 可编辑结果框：撑满剩余高度（Tauri `flex: 1; min-height: 150`）。
+            let footer_height = 48.0;
+            let source_height = if state.source.is_empty() { 0.0 } else { 50.0 };
+            let editor_height = (ui.available_height() - footer_height - source_height).max(150.0);
+            let width = ui.available_width();
+            egui::Frame::new()
+                .fill(theme::CONTENT_BG)
+                .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
+                .corner_radius(egui::CornerRadius::same(9))
+                .inner_margin(egui::Margin::same(12))
+                .show(ui, |ui| {
+                    ui.set_min_size(egui::vec2(width - 24.0, editor_height - 24.0));
+                    let response = ui.add_sized(
+                        egui::vec2(width - 24.0, editor_height - 24.0),
+                        egui::TextEdit::multiline(&mut state.text)
+                            .frame(false)
+                            .text_color(theme::INK)
+                            .font(egui::FontId::proportional(14.0)),
+                    );
+                    if first_frame {
+                        response.request_focus();
+                    }
+                });
+
+            if !state.source.is_empty() {
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{}{}",
+                        tr_l10n(lang, "selection.polish_preview.source_prefix"),
+                        truncate(&state.source, 200)
+                    ))
+                    .size(11.0)
+                    .color(theme::INK_4),
+                );
+            }
+            ui.add_space(14.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let confirm = tr_l10n(lang, "selection.polish_preview.confirm_replace");
+                let confirm_width = layout::text_width(ui, confirm, 13.0) + 46.0;
+                let (rect, response) =
+                    ui.allocate_exact_size(egui::vec2(confirm_width, 34.0), egui::Sense::click());
+                let fill = if response.hovered() {
+                    theme::BLUE.gamma_multiply(0.9)
+                } else {
+                    theme::BLUE
+                };
+                ui.painter()
+                    .rect_filled(rect, egui::CornerRadius::same(7), fill);
+                icon_text(
+                    ui,
+                    rect,
+                    Some(icons::IconName::Check),
+                    confirm,
+                    theme::SURFACE,
+                );
+                if response.clicked() {
+                    action = PreviewAction::Confirm(state.text.clone());
+                }
+                ui.add_space(8.0);
+                let cancel = tr_l10n(lang, "selection.polish_preview.cancel");
+                let cancel_width = layout::text_width(ui, cancel, 13.0) + 30.0;
+                let (rect, response) =
+                    ui.allocate_exact_size(egui::vec2(cancel_width, 34.0), egui::Sense::click());
+                ui.painter().rect_filled(
+                    rect,
+                    egui::CornerRadius::same(7),
+                    if response.hovered() {
+                        theme::SURFACE_2
+                    } else {
+                        theme::SURFACE
+                    },
+                );
+                ui.painter().rect_stroke(
+                    rect,
+                    egui::CornerRadius::same(7),
+                    egui::Stroke::new(0.5, theme::LINE_STRONG),
+                    egui::StrokeKind::Inside,
+                );
+                icon_text(ui, rect, None, cancel, theme::INK_2);
+                if response.clicked() {
+                    action = PreviewAction::Cancel;
+                }
+            });
+        });
+    action
+}
+
+// ── 划词追问 ────────────────────────────────────────────────────────────────
+
+/// 划词追问面板：卡片头（标题 + 副行 + ✕）、消息流（空状态 / 对话 / 思考中 /
+/// 出错）、底部输入组（选区条 + 输入框 + 麦克风 + 发送）。
+pub fn selection_ask(
+    ctx: &egui::Context,
+    state: &QaPopupState,
+    composer: &mut String,
+    lang: Lang,
+) -> QaAction {
+    let mut action = QaAction::None;
+    let phase = state.phase.to_ascii_lowercase();
+    let recording = phase == "recording";
+    // Tauri 在 loading / thinking / awaiting_approval 以及流式增量期间都保持
+    // 「思考中」：转圈不停，但已经有流式正文时不再重复显示思考行。
+    let thinking = matches!(
+        phase.as_str(),
+        "loading" | "thinking" | "awaiting_approval" | "answerdelta" | "answer"
+    );
+    let thinking_row = thinking && state.streaming_answer.is_empty();
+    egui::CentralPanel::default()
+        .frame(
+            egui::Frame::NONE
+                .fill(theme::SURFACE)
+                .corner_radius(egui::CornerRadius::same(14))
+                .stroke(egui::Stroke::new(0.5, theme::LINE)),
+        )
+        .show(ctx, |ui| {
+            // ── CardHeader：整条可拖，✕ 在右 ─────────────────────────────
+            egui::Frame::NONE
+                .inner_margin(egui::Margin::symmetric(CARD_SPACING as i8, 12))
+                .show(ui, |ui| {
+                    let row = ui
+                        .horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                ui.label(
+                                    egui::RichText::new(tr_l10n(lang, "qa.title"))
+                                        .size(16.0)
+                                        .strong()
+                                        .color(theme::INK),
+                                );
+                                ui.add_space(2.0);
+                                ui.label(
+                                    egui::RichText::new(tr_l10n(lang, "qa.header_hint"))
+                                        .size(12.0)
+                                        .color(theme::INK_4),
+                                );
+                            });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                                if icon_button(ui, icons::IconName::Close, theme::INK_3)
+                                    .on_hover_text(tr_l10n(lang, "qa.close_tooltip"))
+                                    .clicked()
+                                {
+                                    action = QaAction::Dismiss;
+                                }
+                            });
+                        })
+                        .response
+                        .interact(egui::Sense::drag());
+                    if row.drag_started() {
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                    }
+                });
+            hairline(ui, theme::LINE_SOFT);
+
+            // ── CardContent ──────────────────────────────────────────────
+            let footer_height = CARD_SPACING * 2.0 + COMPOSER_HEIGHT + 12.0;
+            let content_height = (ui.available_height() - footer_height).max(80.0);
+            let has_thread = !state.messages.is_empty()
+                || !state.streaming_answer.is_empty()
+                || thinking
+                || state.error.is_some();
+            egui::Frame::NONE
+                .inner_margin(egui::Margin::symmetric(CARD_SPACING as i8, 0))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    if !has_thread {
+                        empty_state(ui, lang, content_height);
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .id_salt("openless-qa-thread")
+                            .max_height(content_height)
+                            .auto_shrink([false, false])
+                            .stick_to_bottom(true)
+                            .show(ui, |ui| {
+                                let width = ui.available_width();
+                                for message in &state.messages {
+                                    message_row(ui, message, width, lang);
+                                    ui.add_space(10.0);
+                                }
+                                if !state.streaming_answer.is_empty() {
+                                    assistant_row(ui, |ui| {
+                                        render_markdown(ui, &state.streaming_answer)
+                                    });
+                                    ui.add_space(10.0);
+                                }
+                                if thinking_row {
+                                    assistant_row(ui, |ui| {
+                                        ui.label(
+                                            egui::RichText::new(tr_l10n(lang, "qa.thinking"))
+                                                .size(12.0)
+                                                .color(theme::INK_3),
+                                        );
+                                    });
+                                    ui.add_space(10.0);
+                                }
+                                if let Some(error) = &state.error {
+                                    destructive_bubble(ui, |ui| {
+                                        ui.label(
+                                            egui::RichText::new(error).size(14.0).color(theme::ERR),
+                                        );
+                                        ui.add_space(4.0);
+                                        ui.label(
+                                            egui::RichText::new(tr_l10n(
+                                                lang,
+                                                "qa.error_retry_hint",
+                                            ))
+                                            .size(11.5)
+                                            .color(theme::ERR.gamma_multiply(0.7)),
+                                        );
+                                    });
+                                }
+                            });
+                    }
+                });
+
+            // ── CardFooter：选区条 + 输入组 ──────────────────────────────
+            egui::Frame::NONE
+                .inner_margin(egui::Margin::symmetric(CARD_SPACING as i8, 12))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    if recording {
+                        if let Some(selection) = &state.selection_preview {
+                            selection_chip(ui, selection, lang);
+                            ui.add_space(8.0);
+                        }
+                    }
+                    let width = ui.available_width();
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(width, COMPOSER_HEIGHT),
+                        egui::Sense::hover(),
+                    );
+                    ui.painter()
+                        .rect_filled(rect, egui::CornerRadius::same(12), theme::SURFACE);
+                    ui.painter().rect_stroke(
+                        rect,
+                        egui::CornerRadius::same(12),
+                        egui::Stroke::new(0.5, theme::LINE_STRONG),
+                        egui::StrokeKind::Inside,
+                    );
+                    // olchat-ring：录音红光 / 思考黑光绕输入组转圈。
+                    if recording || thinking {
+                        spinner_ring(ui, rect, if recording { theme::ERR } else { theme::INK });
+                    }
+                    let inner = rect.shrink2(egui::vec2(10.0, 6.0));
+                    let mic_rect = egui::Rect::from_center_size(
+                        egui::pos2(inner.right() - ROUND_BUTTON / 2.0, rect.center().y),
+                        egui::vec2(ROUND_BUTTON, ROUND_BUTTON),
+                    );
+                    let send_rect = egui::Rect::from_center_size(
+                        egui::pos2(inner.right() - ROUND_BUTTON * 1.5 - 4.0, rect.center().y),
+                        egui::vec2(ROUND_BUTTON, ROUND_BUTTON),
+                    );
+                    let input_rect = egui::Rect::from_min_max(
+                        inner.min,
+                        egui::pos2(send_rect.left() - 6.0, inner.bottom()),
+                    );
+                    let mut child = ui.new_child(
+                        egui::UiBuilder::new()
+                            .id_salt("openless-qa-composer")
+                            .max_rect(input_rect)
+                            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                    );
+                    child.set_clip_rect(child.clip_rect().intersect(input_rect));
+                    let response = child.add(
+                        egui::TextEdit::singleline(composer)
+                            .id(egui::Id::new("openless-qa-composer-input"))
+                            .frame(false)
+                            .text_color(theme::INK)
+                            .font(egui::FontId::proportional(13.5))
+                            .hint_text(tr_l10n(lang, "qa.composer_placeholder"))
+                            .desired_width(input_rect.width()),
+                    );
+                    if response.lost_focus()
+                        && ui.input(|input| input.key_pressed(egui::Key::Enter))
+                        && !composer.trim().is_empty()
+                    {
+                        action = QaAction::Submit(std::mem::take(composer));
+                    }
+                    let mic = ui.interact(
+                        mic_rect,
+                        ui.id().with("openless-qa-mic"),
+                        egui::Sense::click(),
+                    );
+                    if recording {
+                        ui.painter().circle_filled(
+                            mic_rect.center(),
+                            ROUND_BUTTON / 2.0,
+                            theme::ERR,
+                        );
+                    } else if mic.hovered() {
+                        ui.painter().circle_filled(
+                            mic_rect.center(),
+                            ROUND_BUTTON / 2.0,
+                            theme::SURFACE_2,
+                        );
+                    }
+                    icons::draw_icon(
+                        ui,
+                        mic_rect.center(),
+                        if recording {
+                            icons::IconName::Stop
+                        } else {
+                            icons::IconName::Mic
+                        },
+                        if recording {
+                            theme::SURFACE
+                        } else {
+                            theme::INK_2
+                        },
+                    );
+                    if mic.clicked() && !thinking {
+                        action = QaAction::ToggleRecording;
+                    }
+                    let can_send = !composer.trim().is_empty() && !thinking;
+                    let send = ui.interact(
+                        send_rect,
+                        ui.id().with("openless-qa-send"),
+                        egui::Sense::click(),
+                    );
+                    ui.painter().circle_filled(
+                        send_rect.center(),
+                        ROUND_BUTTON / 2.0,
+                        if can_send {
+                            theme::INK
+                        } else {
+                            theme::SURFACE_2
+                        },
+                    );
+                    icons::draw_icon(
+                        ui,
+                        send_rect.center(),
+                        icons::IconName::Send,
+                        if can_send {
+                            theme::SURFACE
+                        } else {
+                            theme::INK_4
+                        },
+                    );
+                    if send.clicked() && can_send {
+                        action = QaAction::Submit(std::mem::take(composer));
+                    }
+                });
+        });
+    action
+}
+
+/// 空状态：居中图标 + 标题 + 说明（Tauri `<Empty>`）。
+fn empty_state(ui: &mut egui::Ui, lang: Lang, height: f32) {
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::hover(),
+    );
+    let center = rect.center();
+    icons::draw_icon(
+        ui,
+        egui::pos2(center.x, center.y - 48.0),
+        icons::IconName::Chat,
+        theme::INK_4,
+    );
+    ui.painter().text(
+        egui::pos2(center.x, center.y - 14.0),
+        egui::Align2::CENTER_CENTER,
+        tr_l10n(lang, "qa.empty_title"),
+        egui::FontId::proportional(14.0),
+        theme::INK,
+    );
+    let galley = layout::text_galley(
+        ui,
+        tr_l10n(lang, "qa.empty_desc"),
+        theme::INK_4,
+        12.0,
+        (rect.width() - 48.0).min(300.0),
+        4,
+    );
+    ui.painter().galley(
+        egui::pos2(center.x - galley.rect.width() / 2.0, center.y + 6.0),
+        galley,
+        theme::INK_4,
+    );
+}
+
+/// 一条对话消息：用户右侧深色气泡（带选区引用块）+ 头像；助手左侧头像 + Markdown。
+fn message_row(ui: &mut egui::Ui, message: &PopupChatMessage, width: f32, lang: Lang) {
+    if message.role.eq_ignore_ascii_case("user") {
+        let selection = message
+            .selection_text
+            .as_deref()
+            .map(|text| truncate(text, 120))
+            .filter(|text| !text.is_empty() && *text != message.content);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            user_avatar(ui);
+            ui.add_space(8.0);
+            let max_width = (width - 56.0).max(120.0) * 0.8;
+            ui.allocate_ui_with_layout(
+                egui::vec2(max_width, 0.0),
+                egui::Layout::top_down(egui::Align::Max),
+                |ui| {
+                    if let Some(selection) = selection {
+                        bubble(ui, theme::SURFACE_2, theme::INK_3, |ui| {
+                            ui.label(
+                                egui::RichText::new(format!("“{selection}”"))
+                                    .size(12.0)
+                                    .italics()
+                                    .color(theme::INK_3),
+                            );
+                        });
+                        ui.add_space(4.0);
+                    }
+                    bubble(ui, theme::INK, theme::SURFACE, |ui| {
+                        ui.label(
+                            egui::RichText::new(&message.content)
+                                .size(14.0)
+                                .color(theme::SURFACE),
+                        );
+                    });
+                },
+            );
+        });
+        let _ = lang;
+        return;
+    }
+    assistant_row(ui, |ui| render_markdown(ui, &message.content));
+}
+
+/// 助手行：深色思考头像 + 内容（内容由调用方渲染在头像右侧）。
+fn assistant_row(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal_top(|ui| {
+        ai_avatar(ui);
+        ui.add_space(8.0);
+        ui.vertical(|ui| {
+            ui.set_max_width((ui.available_width() - 4.0).max(80.0));
+            contents(ui);
+        });
+    });
+}
+
+/// 一个聊天气泡：`rounded-3xl` = 24px，padding 12/10。
+fn bubble(
+    ui: &mut egui::Ui,
+    fill: egui::Color32,
+    ink: egui::Color32,
+    contents: impl FnOnce(&mut egui::Ui),
+) {
+    let _ = ink;
+    egui::Frame::new()
+        .fill(fill)
+        .corner_radius(egui::CornerRadius::same(18))
+        .inner_margin(egui::Margin::symmetric(12, 10))
+        .show(ui, contents);
+}
+
+/// 出错气泡（Tauri `variant="destructive"`）：红底红字。
+fn destructive_bubble(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::new()
+        .fill(theme::DANGER_SOFT)
+        .corner_radius(egui::CornerRadius::same(18))
+        .inner_margin(egui::Margin::symmetric(12, 10))
+        .show(ui, contents);
+}
+
+fn user_avatar(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ROUND_BUTTON + 4.0, ROUND_BUTTON + 4.0),
+        egui::Sense::hover(),
+    );
+    ui.painter()
+        .circle_filled(rect.center(), (ROUND_BUTTON + 4.0) / 2.0, theme::SURFACE_2);
+    icons::draw_icon(ui, rect.center(), icons::IconName::Github, theme::INK_2);
+}
+
+/// 助手头像：深色圆底 + 旋转的思考光点（Tauri 的 `OrbAvatar`）。
+fn ai_avatar(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ROUND_BUTTON + 4.0, ROUND_BUTTON + 4.0),
+        egui::Sense::hover(),
+    );
+    let radius = (ROUND_BUTTON + 4.0) / 2.0;
+    ui.painter()
+        .circle_filled(rect.center(), radius, theme::INK);
+    let time = ui.input(|input| input.time) as f32;
+    let mut previous: Option<egui::Pos2> = None;
+    for step in 0..14 {
+        let angle = time * 1.6 + step as f32 * std::f32::consts::TAU / 14.0;
+        let alpha = (30.0 + 225.0 * (step as f32 / 13.0)).min(255.0) as u8;
+        let point = rect.center() + egui::vec2(angle.cos(), angle.sin()) * (radius * 0.42);
+        if let Some(previous) = previous {
+            ui.painter().line_segment(
+                [previous, point],
+                egui::Stroke::new(
+                    2.0,
+                    egui::Color32::from_rgba_unmultiplied(150, 185, 255, alpha),
+                ),
+            );
+        }
+        previous = Some(point);
+    }
+    ui.painter().circle_filled(
+        rect.center(),
+        2.6,
+        egui::Color32::from_rgba_unmultiplied(150, 185, 255, 235),
+    );
+}
+
+/// 录音时的选区上下文条（Tauri `SelectionChip`）。
+fn selection_chip(ui: &mut egui::Ui, text: &str, lang: Lang) {
+    egui::Frame::new()
+        .fill(theme::SURFACE_2)
+        .corner_radius(egui::CornerRadius::same(12))
+        .inner_margin(egui::Margin::symmetric(12, 6))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(tr_l10n(lang, "qa.selection_preview"))
+                        .size(11.5)
+                        .color(theme::INK_3),
+                );
+                ui.label(
+                    egui::RichText::new(truncate(text, 60))
+                        .size(11.5)
+                        .color(theme::INK_2),
+                );
+            });
+        });
+}
+
+/// 输入组外圈：Tauri 用 conic-gradient 假 border，这里按圆角矩形周长采样做出
+/// 同样的「转圈高光」（egui 没有锥形渐变）。
+fn spinner_ring(ui: &egui::Ui, rect: egui::Rect, color: egui::Color32) {
+    let time = ui.input(|input| input.time) as f32;
+    let points = rounded_rect_points(rect.expand(2.0), 10.0, 64);
+    let head = (time * 1.1).rem_euclid(1.0);
+    for (index, window) in points.windows(2).enumerate() {
+        let phase = index as f32 / points.len() as f32;
+        let distance = (phase - head).rem_euclid(1.0);
+        let intensity = if distance < 0.22 {
+            1.0 - distance / 0.22
+        } else {
+            0.0
+        };
+        let alpha = (38.0 + intensity * 217.0).min(255.0) as u8;
+        ui.painter().line_segment(
+            [window[0], window[1]],
+            egui::Stroke::new(
+                2.0,
+                egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha),
+            ),
+        );
+    }
+}
+
+/// 圆角矩形的周长采样点（顺时针，从右下角弧开始）。
+fn rounded_rect_points(rect: egui::Rect, radius: f32, segments: usize) -> Vec<egui::Pos2> {
+    let radius = radius.min(rect.width() / 2.0).min(rect.height() / 2.0);
+    let corners = [
+        (rect.right() - radius, rect.bottom() - radius, 0.0_f32),
+        (
+            rect.left() + radius,
+            rect.bottom() - radius,
+            std::f32::consts::FRAC_PI_2,
+        ),
+        (
+            rect.left() + radius,
+            rect.top() + radius,
+            std::f32::consts::PI,
+        ),
+        (
+            rect.right() - radius,
+            rect.top() + radius,
+            3.0 * std::f32::consts::FRAC_PI_2,
+        ),
+    ];
+    let per_corner = (segments / 4).max(2);
+    let mut points = Vec::with_capacity(per_corner * 4);
+    for (center_x, center_y, start) in corners {
+        for step in 0..=per_corner {
+            let angle = start + std::f32::consts::FRAC_PI_2 * (step as f32 / per_corner as f32);
+            points.push(egui::pos2(
+                center_x + radius * angle.cos(),
+                center_y + radius * angle.sin(),
+            ));
+        }
+    }
+    points
+}
+
+fn hairline(ui: &mut egui::Ui, color: egui::Color32) {
+    let rect = ui
+        .allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover())
+        .0;
+    ui.painter().line_segment(
+        [rect.left_center(), rect.right_center()],
+        egui::Stroke::new(0.5, color),
+    );
+}
+
+// ── 录音胶囊 ────────────────────────────────────────────────────────────────
+
+/// 录音胶囊：经典药丸（Tauri `ClassicPill`）—— 左 ✕、中间状态、右 ✓。
+pub fn dictation_capsule(
+    ctx: &egui::Context,
+    state: &CapsulePopupState,
+    lang: Lang,
+) -> CapsuleAction {
+    let mut action = CapsuleAction::None;
+    let phase = state.phase.to_ascii_lowercase();
+    egui::CentralPanel::default()
+        .frame(egui::Frame::NONE)
+        .show(ctx, |ui| {
+            let (rect, _) =
+                ui.allocate_exact_size(egui::vec2(PILL_WIDTH, PILL_HEIGHT), egui::Sense::hover());
+            ui.painter().rect_filled(
+                rect,
+                egui::CornerRadius::same((PILL_HEIGHT / 2.0) as u8),
+                theme::SURFACE,
+            );
+            ui.painter().rect_stroke(
+                rect,
+                egui::CornerRadius::same((PILL_HEIGHT / 2.0) as u8),
+                egui::Stroke::new(1.0, theme::LINE),
+                egui::StrokeKind::Inside,
+            );
+            let cancel_rect = egui::Rect::from_center_size(
+                egui::pos2(rect.left() + 8.0 + ROUND_BUTTON / 2.0, rect.center().y),
+                egui::vec2(ROUND_BUTTON, ROUND_BUTTON),
+            );
+            let cancel = ui.interact(
+                cancel_rect,
+                ui.id().with("openless-capsule-cancel"),
+                egui::Sense::click(),
+            );
+            round_button(
+                ui,
+                cancel_rect,
+                icons::IconName::Close,
+                cancel.hovered(),
+                theme::INK_2,
+            );
+            if cancel.clicked() {
+                action = CapsuleAction::Cancel;
+            }
+            let confirm_rect = egui::Rect::from_center_size(
+                egui::pos2(rect.right() - 8.0 - ROUND_BUTTON / 2.0, rect.center().y),
+                egui::vec2(ROUND_BUTTON, ROUND_BUTTON),
+            );
+            let confirm = ui.interact(
+                confirm_rect,
+                ui.id().with("openless-capsule-confirm"),
+                egui::Sense::click(),
+            );
+            round_button(
+                ui,
+                confirm_rect,
+                icons::IconName::Check,
+                confirm.hovered(),
+                theme::INK_2,
+            );
+            if confirm.clicked() {
+                action = CapsuleAction::Confirm;
+            }
+            let center = egui::Rect::from_min_max(
+                egui::pos2(cancel_rect.right() + 4.0, rect.top() + 4.0),
+                egui::pos2(confirm_rect.left() - 4.0, rect.bottom() - 4.0),
+            );
+            let processing = matches!(
+                phase.as_str(),
+                "starting" | "transcribing" | "polishing" | "inserting"
+            );
+            if phase == "recording" {
+                audio_bars(ui, center, state.audio_level.unwrap_or_default());
+            } else if state.text.is_empty() {
+                let label = if processing {
+                    tr_l10n(lang, "capsule.thinking")
+                } else if phase == "cancelled" {
+                    tr_l10n(lang, "capsule.cancelled")
+                } else if phase == "failed" {
+                    tr_l10n(lang, "capsule.error")
+                } else {
+                    tr_l10n(lang, "capsule.thinking")
+                };
+                let size = if processing { 17.0 } else { 11.0 };
+                ui.painter().text(
+                    center.center(),
+                    egui::Align2::CENTER_CENTER,
+                    label,
+                    egui::FontId::proportional(size),
+                    if phase == "failed" {
+                        theme::ERR
+                    } else {
+                        theme::INK
+                    },
+                );
+            } else {
+                // 11px/500 单行居中，超长省略（Tauri `getCapsuleMessageLayout`）。
+                let galley =
+                    layout::text_galley(ui, &state.text, theme::INK_2, 11.0, center.width(), 1);
+                ui.painter().galley(
+                    egui::pos2(
+                        center.center().x - galley.rect.width() / 2.0,
+                        center.center().y - galley.rect.height() / 2.0,
+                    ),
+                    galley,
+                    theme::INK_2,
+                );
+            }
+        });
+    action
+}
+
+/// 28×28 圆形按钮（Tauri `CircleButton`）。
+fn round_button(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    icon: icons::IconName,
+    hovered: bool,
+    ink: egui::Color32,
+) {
+    ui.painter().circle_filled(
+        rect.center(),
+        rect.width() / 2.0,
+        if hovered {
+            theme::SURFACE_2.gamma_multiply(1.06)
+        } else {
+            theme::SURFACE_2
+        },
+    );
+    ui.painter().circle_stroke(
+        rect.center(),
+        rect.width() / 2.0,
+        egui::Stroke::new(0.8, theme::LINE),
+    );
+    icons::draw_icon(ui, rect.center(), icon, ink);
+}
+
+/// 音量条：Tauri `AudioBars`（5 根 3px 竖条，包络 0.55/0.85/1/0.85/0.55，
+/// 过静音门限后按 0.42 次幂提亮）。
+fn audio_bars(ui: &egui::Ui, rect: egui::Rect, level: f32) {
+    const ENVELOPE: [f32; 5] = [0.55, 0.85, 1.0, 0.85, 0.55];
+    const BASE: f32 = 2.0;
+    const MAX: f32 = 24.0;
+    let voice = level.clamp(0.0, 1.0);
+    let gated = ((voice - 0.012) / (0.34 - 0.012)).clamp(0.0, 1.0);
+    let eased = gated * gated * (3.0 - 2.0 * gated);
+    let visual = eased.powf(0.42);
+    let bar_width = 3.0;
+    let gap = 3.0;
+    let total = ENVELOPE.len() as f32 * bar_width + (ENVELOPE.len() - 1) as f32 * gap;
+    let mut x = rect.center().x - total / 2.0;
+    for envelope in ENVELOPE {
+        let height = BASE + (MAX - BASE) * visual * envelope;
+        ui.painter().rect_filled(
+            egui::Rect::from_center_size(
+                egui::pos2(x + bar_width / 2.0, rect.center().y),
+                egui::vec2(bar_width, height),
+            ),
+            egui::CornerRadius::same(2),
+            theme::INK_2,
+        );
+        x += bar_width + gap;
+    }
+}
+
+// ── 共享小件 ────────────────────────────────────────────────────────────────
+
+/// 30×30 无底色图标按钮（Tauri `size-icon-sm` ghost）。
+fn icon_button(ui: &mut egui::Ui, icon: icons::IconName, color: egui::Color32) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::click());
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(7), theme::SURFACE_2);
+    }
+    icons::draw_icon(ui, rect.center(), icon, color);
+    response
+}
+
+/// 在矩形内居中画「[图标] 文字」。
+fn icon_text(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    icon: Option<icons::IconName>,
+    text: &str,
+    color: egui::Color32,
+) {
+    let text_width = layout::text_width(ui, text, 13.0);
+    let icon_width = if icon.is_some() { 16.0 } else { 0.0 };
+    let gap = if icon.is_some() { 6.0 } else { 0.0 };
+    let start = rect.center().x - (text_width + gap + icon_width) / 2.0;
+    if let Some(icon) = icon {
+        icons::draw_icon(
+            ui,
+            egui::pos2(start + icon_width / 2.0, rect.center().y),
+            icon,
+            color,
+        );
+    }
+    ui.painter().text(
+        egui::pos2(start + icon_width + gap, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        text,
+        egui::FontId::proportional(13.0),
+        color,
+    );
+}
+
+/// 极简 Markdown：标题 / 列表 / 代码块 / `**粗体**` / `*斜体*` / `` `等宽` ``。
+/// 覆盖 Tauri `AssistantMarkdown` 会产出的块级结构；不做表格与引用块。
+pub fn render_markdown(ui: &mut egui::Ui, markdown: &str) {
+    let mut code = String::new();
+    let mut in_code = false;
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            if in_code {
+                code_block(ui, code.trim_end());
+                code.clear();
+            }
+            in_code = !in_code;
+            continue;
+        }
+        if in_code {
+            code.push_str(line);
+            code.push('\n');
+            continue;
+        }
+        if trimmed.is_empty() {
+            ui.add_space(6.0);
+            continue;
+        }
+        let (text, size, strong, bullet) = if let Some(value) = trimmed.strip_prefix("### ") {
+            (value, 14.0, true, false)
+        } else if let Some(value) = trimmed.strip_prefix("## ") {
+            (value, 15.0, true, false)
+        } else if let Some(value) = trimmed.strip_prefix("# ") {
+            (value, 16.0, true, false)
+        } else if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
+            (&trimmed[2..], 14.0, false, true)
+        } else {
+            (trimmed, 14.0, false, false)
+        };
+        if bullet {
+            ui.horizontal_top(|ui| {
+                ui.add_space(2.0);
+                ui.label(egui::RichText::new("•").size(size).color(theme::INK_3));
+                ui.label(inline_job(ui, text, size, strong));
+            });
+        } else {
+            ui.label(inline_job(ui, text, size, strong));
+        }
+    }
+    if !code.is_empty() {
+        code_block(ui, code.trim_end());
+    }
+}
+
+fn inline_job(ui: &egui::Ui, text: &str, size: f32, strong: bool) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = ui.available_width().max(40.0);
+    append_inline(&mut job, text, size, strong, false, false);
+    job
+}
+
+/// 行内样式：`**粗体**`、`*斜体*`、`` `等宽` ``。
+fn append_inline(
+    job: &mut egui::text::LayoutJob,
+    text: &str,
+    size: f32,
+    strong: bool,
+    italics: bool,
+    monospace: bool,
+) {
+    let mut rest = text;
+    while !rest.is_empty() {
+        let mut matched = false;
+        for (open, close, next_strong, next_italics, next_monospace) in [
+            ("**", "**", true, italics, monospace),
+            ("`", "`", strong, italics, true),
+            ("*", "*", strong, true, monospace),
+            ("_", "_", strong, true, monospace),
+        ] {
+            if let Some(after_open) = rest.strip_prefix(open) {
+                if let Some(end) = after_open.find(close) {
+                    append_span(
+                        job,
+                        &after_open[..end],
+                        size,
+                        next_strong,
+                        next_italics,
+                        next_monospace,
+                    );
+                    rest = &after_open[end + close.len()..];
+                    matched = true;
+                    break;
+                }
+            }
+        }
+        if matched {
+            continue;
+        }
+        let next = ["**", "*", "`", "_"]
+            .iter()
+            .filter_map(|marker| rest.find(marker))
+            .min()
+            .unwrap_or(rest.len());
+        let length = if next == 0 {
+            rest.chars().next().map(char::len_utf8).unwrap_or(0)
+        } else {
+            next
+        };
+        append_span(job, &rest[..length], size, strong, italics, monospace);
+        rest = &rest[length..];
+    }
+}
+
+fn append_span(
+    job: &mut egui::text::LayoutJob,
+    text: &str,
+    size: f32,
+    strong: bool,
+    italics: bool,
+    monospace: bool,
+) {
+    job.append(
+        text,
+        0.0,
+        egui::TextFormat {
+            font_id: egui::FontId::new(
+                size,
+                if monospace {
+                    egui::FontFamily::Monospace
+                } else {
+                    egui::FontFamily::Proportional
+                },
+            ),
+            color: if strong { theme::INK } else { theme::INK_2 },
+            background: if monospace {
+                theme::SURFACE_2
+            } else {
+                egui::Color32::TRANSPARENT
+            },
+            italics,
+            ..Default::default()
+        },
+    );
+}
+
+fn code_block(ui: &mut egui::Ui, code: &str) {
+    egui::Frame::new()
+        .fill(theme::SURFACE_2)
+        .corner_radius(egui::CornerRadius::same(8))
+        .inner_margin(egui::Margin::same(10))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(code)
+                    .monospace()
+                    .size(12.5)
+                    .color(theme::INK_2),
+            );
+        });
+}
+
+fn truncate(text: &str, max: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= max {
+        return text.to_string();
+    }
+    let mut out: String = chars[..max].iter().collect();
+    out.push('…');
+    out
+}
+
+/// 格式化「已插入 N」文案（宿主在 Completed 阶段缺少 Core message 时使用）。
+pub fn inserted_message(lang: Lang, chars: usize) -> String {
+    fmt_l10n(lang, "capsule.inserted", &[&chars])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use openless_linux_egui::PopupChatMessage;
+
+    fn painted_text(output: &egui::FullOutput) -> String {
+        let mut text = String::new();
+        for clipped in output.shapes.iter() {
+            collect(&clipped.shape, &mut text);
+        }
+        text
+    }
+
+    fn collect(shape: &egui::Shape, out: &mut String) {
+        match shape {
+            egui::Shape::Text(text) => {
+                for row in &text.galley.rows {
+                    for glyph in &row.glyphs {
+                        if glyph.chr != '\0' {
+                            out.push(glyph.chr);
+                        }
+                    }
+                    out.push('\n');
+                }
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Glyphs are collected row by row, so wrapped copy contains newlines.
+    /// Compare whitespace-insensitively.
+    fn flat(text: &str) -> String {
+        text.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    /// Whether the painted output contains `needle`, ignoring line wrapping.
+    fn has(painted: &str, needle: &str) -> bool {
+        flat(painted).contains(&flat(needle))
+    }
+
+    /// Render one popup for two frames (egui sizes some widgets lazily) and
+    /// return everything it painted.
+    fn run(size: egui::Vec2, mut render: impl FnMut(&egui::Context) -> String) -> String {
+        let ctx = egui::Context::default();
+        let mut painted = String::new();
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                ..Default::default()
+            });
+            let _ = render(&ctx);
+            painted = painted_text(&ctx.end_pass());
+        }
+        painted
+    }
+
+    #[test]
+    fn polish_preview_paints_header_source_and_actions() {
+        let mut state = PreviewPopupState {
+            text: "polished text".to_string(),
+            source: "source paragraph".to_string(),
+        };
+        let painted = run(egui::vec2(480.0, 300.0), |ctx| {
+            let action = selection_preview(ctx, &mut state, false, Lang::ZhCn);
+            assert_eq!(action, PreviewAction::None);
+            String::new()
+        });
+        for expected in [
+            tr_l10n(Lang::ZhCn, "selection.polish_preview.title"),
+            tr_l10n(Lang::ZhCn, "selection.polish_preview.subtitle"),
+            tr_l10n(Lang::ZhCn, "selection.polish_preview.confirm_replace"),
+            tr_l10n(Lang::ZhCn, "selection.polish_preview.cancel"),
+            tr_l10n(Lang::ZhCn, "selection.polish_preview.source_prefix"),
+        ] {
+            assert!(
+                has(&painted, expected),
+                "preview must paint {expected:?}\n{painted}"
+            );
+        }
+    }
+
+    #[test]
+    fn polish_preview_confirm_returns_edited_text() {
+        let ctx = egui::Context::default();
+        let mut state = PreviewPopupState {
+            text: "edited result".to_string(),
+            source: String::new(),
+        };
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(480.0, 300.0),
+            )),
+            ..Default::default()
+        });
+        // 直接走一次渲染，确认没有输入时不会误报动作。
+        let action = selection_preview(&ctx, &mut state, true, Lang::ZhCn);
+        let _ = ctx.end_pass();
+        assert_eq!(action, PreviewAction::None);
+        assert!(state.text == "edited result");
+    }
+
+    #[test]
+    fn ask_panel_paints_empty_state_then_thread() {
+        let empty = QaPopupState {
+            phase: "idle".to_string(),
+            ..Default::default()
+        };
+        let mut composer = String::new();
+        let painted = run(egui::vec2(520.0, 520.0), |ctx| {
+            selection_ask(ctx, &empty, &mut composer, Lang::ZhCn);
+            String::new()
+        });
+        for expected in [
+            tr_l10n(Lang::ZhCn, "qa.title"),
+            tr_l10n(Lang::ZhCn, "qa.header_hint"),
+            tr_l10n(Lang::ZhCn, "qa.empty_title"),
+            tr_l10n(Lang::ZhCn, "qa.empty_desc"),
+            tr_l10n(Lang::ZhCn, "qa.composer_placeholder"),
+        ] {
+            assert!(
+                has(&painted, expected),
+                "empty ask panel must paint {expected:?}\n{painted}"
+            );
+        }
+
+        let thread = QaPopupState {
+            phase: "thinking".to_string(),
+            messages: vec![
+                PopupChatMessage {
+                    role: "user".to_string(),
+                    content: "how should I read this?".to_string(),
+                    selection_text: Some("selected source".to_string()),
+                },
+                PopupChatMessage {
+                    role: "assistant".to_string(),
+                    content: "**key point** here.".to_string(),
+                    selection_text: None,
+                },
+            ],
+            selection_preview: Some("selected source".to_string()),
+            streaming_answer: String::new(),
+            error: Some("network error".to_string()),
+        };
+        let mut composer = String::new();
+        let painted = run(egui::vec2(520.0, 520.0), |ctx| {
+            selection_ask(ctx, &thread, &mut composer, Lang::ZhCn);
+            String::new()
+        });
+        assert!(has(&painted, "how should I read this?"), "{painted}");
+        assert!(has(&painted, "selected source"), "{painted}");
+        assert!(has(&painted, "network error"), "{painted}");
+        assert!(
+            has(&painted, tr_l10n(Lang::ZhCn, "qa.thinking")),
+            "{painted}"
+        );
+    }
+
+    #[test]
+    fn ask_panel_recording_shows_selection_chip_and_ring() {
+        let state = QaPopupState {
+            phase: "recording".to_string(),
+            selection_preview: Some("selection shown while recording".to_string()),
+            ..Default::default()
+        };
+        let mut composer = String::new();
+        let painted = run(egui::vec2(520.0, 520.0), |ctx| {
+            selection_ask(ctx, &state, &mut composer, Lang::ZhCn);
+            String::new()
+        });
+        assert!(
+            has(&painted, tr_l10n(Lang::ZhCn, "qa.selection_preview")),
+            "{painted}"
+        );
+        assert!(
+            has(&painted, "selection shown while recording"),
+            "{painted}"
+        );
+    }
+
+    #[test]
+    fn capsule_paints_state_specific_content() {
+        let recording = CapsulePopupState {
+            phase: "Recording".to_string(),
+            text: String::new(),
+            audio_level: Some(0.4),
+        };
+        let painted = run(egui::vec2(200.0, 60.0), |ctx| {
+            dictation_capsule(ctx, &recording, Lang::ZhCn);
+            String::new()
+        });
+        assert!(
+            !painted.contains(tr_l10n(Lang::ZhCn, "capsule.thinking")),
+            "recording capsule shows level bars, not the thinking label: {painted}"
+        );
+
+        let transcribing = CapsulePopupState {
+            phase: "Transcribing".to_string(),
+            ..Default::default()
+        };
+        let painted = run(egui::vec2(200.0, 60.0), |ctx| {
+            dictation_capsule(ctx, &transcribing, Lang::ZhCn);
+            String::new()
+        });
+        assert!(
+            has(&painted, tr_l10n(Lang::ZhCn, "capsule.thinking")),
+            "{painted}"
+        );
+
+        let done = CapsulePopupState {
+            phase: "Completed".to_string(),
+            text: inserted_message(Lang::ZhCn, 12),
+            audio_level: None,
+        };
+        let painted = run(egui::vec2(200.0, 60.0), |ctx| {
+            dictation_capsule(ctx, &done, Lang::ZhCn);
+            String::new()
+        });
+        assert!(has(&painted, "12"), "{painted}");
+
+        let failed = CapsulePopupState {
+            phase: "Failed".to_string(),
+            text: String::new(),
+            audio_level: None,
+        };
+        let painted = run(egui::vec2(200.0, 60.0), |ctx| {
+            dictation_capsule(ctx, &failed, Lang::ZhCn);
+            String::new()
+        });
+        assert!(
+            has(&painted, tr_l10n(Lang::ZhCn, "capsule.error")),
+            "{painted}"
+        );
+    }
+}

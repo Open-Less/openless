@@ -1,5 +1,7 @@
 use eframe::egui;
 
+use super::theme;
+
 #[derive(Clone, Copy)]
 pub enum IconName {
     Overview,
@@ -20,12 +22,20 @@ pub enum IconName {
     Download,
     Play,
     Stop,
+    /// 浮窗用：关闭 ✕、确认 ✓、发送 ↑、空状态对话气泡、用户头像占位。
+    Close,
+    Check,
+    Send,
+    Chat,
+    Github,
 }
 
 /// Draw an icon centred at `center` with the given `color`.
 pub fn draw_icon(ui: &egui::Ui, center: egui::Pos2, icon: IconName, color: egui::Color32) {
     let p = ui.painter();
     let stroke = egui::Stroke::new(1.25, color);
+    // 与中心点的相对坐标（各 arm 若需要不同缩放会在内部自行 shadow）。
+    let point = |x: f32, y: f32| center + egui::vec2(x, y);
     match icon {
         IconName::Overview => {
             let s = 2.0 / 3.0;
@@ -412,6 +422,50 @@ pub fn draw_icon(ui: &egui::Ui, center: egui::Pos2, icon: IconName, color: egui:
                 ],
                 stroke,
             );
+        }
+        IconName::Close => {
+            p.line_segment([point(-4.5, -4.5), point(4.5, 4.5)], stroke);
+            p.line_segment([point(4.5, -4.5), point(-4.5, 4.5)], stroke);
+        }
+        IconName::Check => {
+            p.add(egui::Shape::line(
+                [point(-5.0, 0.5), point(-1.5, 4.0), point(5.0, -4.0)].to_vec(),
+                egui::Stroke::new(1.6, color),
+            ));
+        }
+        IconName::Send => {
+            p.add(egui::Shape::line(
+                [point(0.0, -5.5), point(0.0, 5.5)].to_vec(),
+                egui::Stroke::new(1.6, color),
+            ));
+            p.add(egui::Shape::line(
+                [point(-4.0, -1.5), point(0.0, -5.5), point(4.0, -1.5)].to_vec(),
+                egui::Stroke::new(1.6, color),
+            ));
+        }
+        IconName::Chat => {
+            p.rect_stroke(
+                egui::Rect::from_center_size(
+                    center + egui::vec2(0.0, -1.0),
+                    egui::vec2(18.0, 13.0),
+                ),
+                egui::CornerRadius::same(4),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            p.add(egui::Shape::line(
+                [
+                    center + egui::vec2(-3.0, 5.5),
+                    center + egui::vec2(-1.0, 5.5),
+                    center + egui::vec2(-4.0, 8.5),
+                ]
+                .to_vec(),
+                stroke,
+            ));
+        }
+        IconName::Github => {
+            p.circle_filled(center, 7.0, color.gamma_multiply(0.75));
+            p.circle_filled(center + egui::vec2(0.0, 3.0), 3.4, theme::SURFACE_2);
         }
         IconName::Copy => {
             p.rect_stroke(

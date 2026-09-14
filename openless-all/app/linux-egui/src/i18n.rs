@@ -5012,6 +5012,132 @@ pub const CATALOG: &[Msg] = &[
         key: "settings.shortcuts.style_pack_remove",
         text: row("移除", "移除", "Remove", "削除", "제거"),
     },
+    Msg {
+        key: "capsule.cancelled",
+        text: row("已取消", "已取消", "Cancelled", "キャンセルしました", "취소됨"),
+    },
+    Msg {
+        key: "capsule.error",
+        text: row(
+            "出错了",
+            "出錯了",
+            "Something went wrong",
+            "エラーが発生しました",
+            "오류 발생",
+        ),
+    },
+    Msg {
+        key: "capsule.inserted",
+        text: row("已插入 {}", "已插入 {}", "Inserted {}", "{} 文字を入力しました", "{}자 입력됨"),
+    },
+    Msg {
+        key: "capsule.thinking",
+        text: row("thinking", "thinking", "thinking", "thinking", "thinking"),
+    },
+    Msg {
+        key: "qa.close_tooltip",
+        text: row("关闭", "關閉", "Close", "閉じる", "닫기"),
+    },
+    Msg {
+        key: "qa.composer_placeholder",
+        text: row(
+            "输入问题，Enter 发送",
+            "輸入問題，Enter 發送",
+            "Type a question. Enter to send",
+            "質問を入力。Enter で送信",
+            "질문을 입력하세요. Enter로 보내기",
+        ),
+    },
+    Msg {
+        key: "qa.empty_desc",
+        text: row(
+            "选中任意文字后开始追问，或直接在下方输入问题。回答会显示在这里，可以连续多轮。",
+            "選中任意文字後開始追問，或直接在下方輸入問題。回答會顯示在這裏，可以連續多輪。",
+            "Select any text to ask about it, or just type your question below. Answers appear here — ask as many follow-ups as you like.",
+            "テキストを選択して質問するか、下に直接入力してください。回答はここに表示され、続けて質問できます。",
+            "텍스트를 선택해 질문하거나 아래에 직접 입력하세요. 답변이 여기에 표시되며 계속 이어서 질문할 수 있습니다.",
+        ),
+    },
+    Msg {
+        key: "qa.empty_title",
+        text: row(
+            "有什么可以帮你？",
+            "有什麼可以幫你？",
+            "How can I help?",
+            "ご用件は？",
+            "무엇을 도와드릴까요?",
+        ),
+    },
+    Msg {
+        key: "qa.error_retry_hint",
+        text: row(
+            "请再试一次。",
+            "請再試一次。",
+            "Please try again.",
+            "もう一度お試しください。",
+            "다시 시도해 주세요.",
+        ),
+    },
+    Msg {
+        key: "qa.header_hint",
+        text: row("随时提问", "隨時提問", "Ask anytime", "いつでも質問", "언제든 질문하세요"),
+    },
+    Msg {
+        key: "qa.selection_preview",
+        text: row(
+            "基于选中文本：",
+            "基於選中文本：",
+            "From selected text:",
+            "選択テキスト：",
+            "선택된 텍스트 기반:",
+        ),
+    },
+    Msg {
+        key: "qa.thinking",
+        text: row("思考中…", "思考中…", "Thinking…", "思考中…", "생각 중…"),
+    },
+    Msg {
+        key: "qa.title",
+        text: row("划词追问", "劃詞追問", "Ask", "質問", "질문"),
+    },
+    Msg {
+        key: "selection.polish_preview.cancel",
+        text: row("取消", "取消", "Cancel", "キャンセル", "취소"),
+    },
+    Msg {
+        key: "selection.polish_preview.confirm_replace",
+        text: row(
+            "确认并替换",
+            "確認並替換",
+            "Confirm & replace",
+            "確認して置き換え",
+            "확인 후 교체",
+        ),
+    },
+    Msg {
+        key: "selection.polish_preview.source_prefix",
+        text: row("原文：", "原文：", "Original: ", "原文：", "원문: "),
+    },
+    Msg {
+        key: "selection.polish_preview.subtitle",
+        text: row(
+            "可直接编辑；点击确认后才会替换原选区。",
+            "可直接編輯；點擊確認後才會替換原選區。",
+            "Editable; the original selection is replaced only after you confirm.",
+            "編集可能です。確認後はじめて元の選択範囲を置き換えます。",
+            "편집 가능합니다. 확인을 클릭한 뒤에만 원래 선택 영역을 교체합니다.",
+        ),
+    },
+    Msg {
+        key: "selection.polish_preview.title",
+        text: row(
+            "选区润色预览",
+            "選區潤色預覽",
+            "Selection Polish Preview",
+            "選択範囲の推敲プレビュー",
+            "선택 영역 다듬기 미리보기",
+        ),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

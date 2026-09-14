@@ -6,6 +6,7 @@ pub mod layout;
 pub mod marketplace;
 pub mod overview;
 pub mod pages;
+pub mod popups;
 pub mod selection_ask;
 pub mod settings;
 pub mod style;

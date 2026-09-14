@@ -88,7 +88,6 @@ fn toolbar(ui: &mut egui::Ui, width: f32, vm: &mut FrontendViewModel) {
     let count_text = fmt_l10n(lang, "translation.selected_languages", &[&count]);
     let count_width = layout::text_width(ui, &count_text, 11.5) + 4.0;
     let (row, _) = ui.allocate_exact_size(egui::vec2(width, 34.0), egui::Sense::hover());
-    let field_width = (row.width() - count_width - 12.0).max(120.0);
     egui::Frame::new()
         .fill(theme::SURFACE_2)
         .stroke(egui::Stroke::new(0.8, theme::LINE))
