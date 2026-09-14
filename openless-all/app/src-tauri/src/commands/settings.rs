@@ -279,7 +279,7 @@ pub async fn set_settings(
 pub async fn set_settings(
     coord: CoordinatorState<'_>,
     mut prefs: UserPreferences,
-) -> Result<(), String> {
+) -> Result<UserPreferences, String> {
     let previous = coord.backend().get_preferences();
     let packs = coord
         .backend()
@@ -298,7 +298,12 @@ pub async fn set_settings(
     }
     #[cfg(target_os = "android")]
     coord.apply_android_overlay_settings_change(&previous, &prefs);
-    Ok(())
+    // Do not emit "prefs:changed" here directly: coord.backend().update_settings()
+    // (called via persist_settings_preserving_update_channel above) already fires
+    // a BackendEventKind::PreferencesChanged event that tauri_events.rs relays to
+    // every webview, including Android's (mobile_runtime.rs wires up
+    // tauri_events::start()). An inline emit here would just double-broadcast.
+    Ok(prefs)
 }
 
 #[cfg(test)]
