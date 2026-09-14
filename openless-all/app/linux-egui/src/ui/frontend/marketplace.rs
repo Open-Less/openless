@@ -156,7 +156,7 @@ pub fn marketplace_page(
         egui::Frame::new()
             .fill(theme::SURFACE)
             .stroke(egui::Stroke::new(1.0, theme::LINE))
-            .corner_radius(egui::CornerRadius::same(12))
+            .corner_radius(egui::CornerRadius::same(14))
             .inner_margin(egui::Margin::same(28))
             .show(ui, |ui| {
                 ui.vertical_centered(|ui| {
@@ -201,7 +201,7 @@ pub fn marketplace_page(
         egui::Frame::new()
             .fill(theme::SURFACE)
             .stroke(egui::Stroke::new(1.0, theme::LINE))
-            .corner_radius(egui::CornerRadius::same(12))
+            .corner_radius(egui::CornerRadius::same(14))
             .inner_margin(egui::Margin::same(28))
             .show(ui, |ui| {
                 ui.vertical_centered(|ui| {
@@ -276,10 +276,10 @@ fn marketplace_card(
         theme::SURFACE
     };
     ui.painter()
-        .rect_filled(rect, egui::CornerRadius::same(12), fill);
+        .rect_filled(rect, egui::CornerRadius::same(14), fill);
     ui.painter().rect_stroke(
         rect,
-        egui::CornerRadius::same(12),
+        egui::CornerRadius::same(14),
         egui::Stroke::new(1.0, theme::LINE),
         egui::StrokeKind::Inside,
     );
@@ -402,7 +402,7 @@ fn marketplace_detail(
             sw: 14,
             se: 14,
         },
-        egui::Color32::from_rgba_unmultiplied(0, 0, 0, 56),
+        theme::OVERLAY,
     );
     // Input capture
     egui::Area::new(egui::Id::new("marketplace-detail-backdrop-input"))

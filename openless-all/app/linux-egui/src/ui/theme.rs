@@ -15,6 +15,24 @@ pub const INK_2: egui::Color32 = egui::Color32::from_rgb(63, 63, 70);
 pub const INK_3: egui::Color32 = egui::Color32::from_rgb(113, 113, 122);
 pub const INK_4: egui::Color32 = egui::Color32::from_rgb(161, 161, 170);
 pub const OK: egui::Color32 = egui::Color32::from_rgb(22, 163, 74);
+/// Tauri `--ol-line-soft`: 设置行之间的分隔线（比 `--ol-line` 更淡）。
+pub const LINE_SOFT: egui::Color32 = egui::Color32::from_rgb(244, 244, 245);
+/// Tauri `--ol-line-strong`: 输入框 / 次级按钮的描边。
+pub const LINE_STRONG: egui::Color32 = egui::Color32::from_rgb(212, 212, 216);
+/// Tauri `--ol-settings-rail-bg`: 设置弹窗左侧导航底色。
+pub const RAIL_BG: egui::Color32 = egui::Color32::from_rgb(240, 240, 241);
+/// Tauri `--ol-settings-content-bg`: 设置弹窗内容区底色（卡片是白色的）。
+pub const CONTENT_BG: egui::Color32 = egui::Color32::from_rgb(247, 247, 248);
+/// Tauri `--ol-nav-hover-bg`: 侧栏/导航项悬停底色。
+pub const NAV_HOVER: egui::Color32 = egui::Color32::from_rgba_premultiplied(0, 0, 0, 10);
+/// Tauri `--ol-toggle-off-bg`: 关闭态开关轨道。
+pub const TOGGLE_OFF: egui::Color32 = egui::Color32::from_rgba_premultiplied(0, 0, 0, 38);
+/// Tauri `--ol-overlay-bg`: 设置/市场遮罩。
+pub const OVERLAY: egui::Color32 = egui::Color32::from_rgba_premultiplied(5, 5, 7, 82);
+/// Tauri `--ol-err` 的淡底：红框提示卡。
+pub const DANGER_SOFT: egui::Color32 = egui::Color32::from_rgba_premultiplied(37, 11, 11, 18);
+/// Tauri `--ol-warn-soft`: 警告卡底色。
+pub const WARN_SOFT: egui::Color32 = egui::Color32::from_rgb(255, 247, 237);
 /// Tauri `--ol-warn`: 已配置但非必选的提示色。
 pub const WARN: egui::Color32 = egui::Color32::from_rgb(217, 119, 6);
 /// Tauri `--ol-err`: used by the denied permission state.

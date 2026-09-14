@@ -8,7 +8,7 @@ use super::view_model::{
     SettingsSection, SettingsTextField,
 };
 
-const RAIL_WIDTH: f32 = 198.0;
+const RAIL_WIDTH: f32 = 214.0;
 const SIDEBAR_RAIL_INPUT: f32 = 150.0;
 
 #[derive(Clone, Copy)]
@@ -76,8 +76,8 @@ pub fn settings_overlay(
     // Mask the content area (not the sidebar/titlebar) and centre the card in
     // it — the same backdrop the marketplace detail uses.
     let size = egui::vec2(
-        (body.width() - 40.0).max(320.0).min(900.0),
-        (body.height() - 40.0).max(280.0).min(650.0),
+        (body.width() - 40.0).max(320.0).min(960.0),
+        (body.height() - 40.0).max(280.0).min(680.0),
     );
     let center_offset = body.center() - ctx.content_rect().center();
 
@@ -93,7 +93,7 @@ pub fn settings_overlay(
             sw: 14,
             se: 14,
         },
-        egui::Color32::from_black_alpha(56),
+        theme::OVERLAY,
     );
     // Input capture so the page behind cannot be clicked while the modal is up.
     egui::Area::new(egui::Id::new("openless-settings-backdrop-input"))
@@ -115,14 +115,15 @@ pub fn settings_overlay(
         .show(ctx, |ui| {
             ui.set_clip_rect(body.intersect(ui.clip_rect()));
             egui::Frame::new()
-                .fill(theme::SURFACE)
-                .stroke(egui::Stroke::new(1.0, theme::LINE))
+                // Tauri `--ol-settings-content-bg`：整块弹窗是浅灰底，卡片才是白色。
+                .fill(theme::CONTENT_BG)
+                .stroke(egui::Stroke::new(0.5, theme::LINE))
                 .corner_radius(egui::CornerRadius::same(14))
                 .shadow(egui::Shadow {
-                    offset: [0, 12],
-                    blur: 28,
+                    offset: [0, 18],
+                    blur: 32,
                     spread: 0,
-                    color: egui::Color32::from_black_alpha(42),
+                    color: egui::Color32::from_black_alpha(96),
                 })
                 .show(ui, |ui| {
                     ui.set_min_size(size);
@@ -136,7 +137,7 @@ pub fn settings_overlay(
                             ui.horizontal(|ui| {
                                 ui.label(
                                     egui::RichText::new(tr_l10n(lang, "nav.settings"))
-                                        .size(20.0)
+                                        .size(21.0)
                                         .strong()
                                         .color(theme::INK),
                                 );
@@ -206,15 +207,23 @@ pub fn settings_overlay(
 
 fn rail(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
     let lang = vm.lang;
-    egui::Frame::NONE
-        .inner_margin(egui::Margin::symmetric(12, 14))
+    // Tauri `.ol-settings-surface aside`: 214px 宽的独立底色条带（左侧跟随弹窗圆角）。
+    egui::Frame::new()
+        .fill(theme::RAIL_BG)
+        .corner_radius(egui::CornerRadius {
+            nw: 14,
+            sw: 14,
+            ne: 0,
+            se: 0,
+        })
+        .inner_margin(egui::Margin::symmetric(12, 16))
         .show(ui, |ui| {
             // Section search, like the Tauri rail.
             egui::Frame::new()
-                .fill(theme::SURFACE_2)
-                .stroke(egui::Stroke::new(0.8, theme::LINE))
+                .fill(theme::SURFACE)
+                .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
                 .corner_radius(egui::CornerRadius::same(8))
-                .inner_margin(egui::Margin::symmetric(10, 4))
+                .inner_margin(egui::Margin::symmetric(10, 5))
                 .show(ui, |ui| {
                     ui.set_width(SIDEBAR_RAIL_INPUT);
                     let width = ui.available_width().max(40.0);
@@ -285,17 +294,22 @@ fn rail(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronten
 fn rail_item(ui: &mut egui::Ui, label: &str, icon: SettingsIcon, active: bool) -> egui::Response {
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
+    // Tauri：激活项是 --ol-blue-soft 底 + --ol-blue 字（滑动块），悬停是
+    // --ol-nav-hover-bg + --ol-ink。
     if active {
         ui.painter()
-            .rect_filled(rect, egui::CornerRadius::same(8), theme::SURFACE_2);
+            .rect_filled(rect, egui::CornerRadius::same(8), theme::BLUE_SOFT);
     } else if response.hovered() {
-        ui.painter().rect_filled(
-            rect,
-            egui::CornerRadius::same(8),
-            egui::Color32::from_rgba_unmultiplied(244, 244, 245, 150),
-        );
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(8), theme::NAV_HOVER);
     }
-    let color = if active { theme::INK } else { theme::INK_3 };
+    let color = if active {
+        theme::BLUE
+    } else if response.hovered() {
+        theme::INK
+    } else {
+        theme::INK_2
+    };
     let icon_center = egui::pos2(rect.left() + 17.0, rect.center().y);
     draw_rail_icon(ui, icon_center, icon, color);
     ui.painter().text(
@@ -453,8 +467,13 @@ fn panel(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
         .inner_margin(egui::Margin::symmetric(24, 16))
         .show(ui, |ui| {
             {
+                // 控件（下拉/输入框/按钮）统一成 Tauri 的 SelectLite / inputStyle：
+                // 白底、0.5px --ol-line-strong 描边、r8、高 30。
                 let style = ui.style_mut();
                 style.visuals.menu_corner_radius = egui::CornerRadius::same(10);
+                style.visuals.extreme_bg_color = theme::SURFACE;
+                style.spacing.interact_size.y = 30.0;
+                style.spacing.button_padding = egui::vec2(9.0, 5.0);
                 for widget in [
                     &mut style.visuals.widgets.inactive,
                     &mut style.visuals.widgets.hovered,
@@ -462,7 +481,9 @@ fn panel(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
                     &mut style.visuals.widgets.open,
                 ] {
                     widget.corner_radius = egui::CornerRadius::same(8);
-                    widget.bg_stroke = egui::Stroke::new(1.0, theme::LINE);
+                    widget.bg_stroke = egui::Stroke::new(0.5, theme::LINE_STRONG);
+                    widget.bg_fill = theme::SURFACE;
+                    widget.weak_bg_fill = theme::SURFACE;
                 }
             }
             // 实验与扩展的下钻页把标题换成子页标题，并在左侧给出返回箭头
@@ -511,7 +532,7 @@ fn panel(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
                 } else {
                     ui.label(
                         egui::RichText::new(vm.settings_section.label(lang))
-                            .size(20.0)
+                            .size(21.0)
                             .strong()
                             .color(theme::INK),
                     );
@@ -523,7 +544,7 @@ fn panel(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
                     Some((_, description)) => description,
                     None => vm.settings_section.description(lang),
                 })
-                .size(12.0)
+                .size(13.0)
                 .color(theme::INK_3),
             );
             if let Some(notice) = &vm.settings_notice {
@@ -1357,6 +1378,28 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
     if vm.advanced_open < rows.len() {
         let (icon, title, description) = rows[vm.advanced_open];
         let _ = icon;
+        // 多模态管线是实验性功能：Tauri 用 `ExperimentalSectionTitle`（标题 + 徽章
+        // + 悬停说明），所以它不用普通卡片。
+        if vm.advanced_open == 1 {
+            experimental_card(
+                ui,
+                title,
+                tr_l10n(lang, "common.experimental"),
+                description,
+                |ui| {
+                    toggle_row(
+                        ui,
+                        tr_l10n(lang, "settings.advanced.multimodal_pipeline_label"),
+                        tr_l10n(lang, "settings.advanced.multimodal_pipeline_hint"),
+                        vm.settings.multimodal,
+                        || {
+                            actions.push(FrontendAction::SettingsToggle(SettingsField::Multimodal));
+                        },
+                    );
+                },
+            );
+            return;
+        }
         card(ui, title, description, |ui| match vm.advanced_open {
             0 => {
                 toggle_row(
@@ -1368,6 +1411,10 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                         actions.push(FrontendAction::SettingsToggle(SettingsField::LessComputer));
                     },
                 );
+                // Tauri `CodingAgentSection`：后端 / 模型等高级项只在启用后展开。
+                if !vm.settings.less_computer {
+                    return;
+                }
                 combo_index_row(
                     ui,
                     tr_l10n(lang, "settings.coding_agent.provider"),
@@ -1442,17 +1489,7 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                     },
                 );
             }
-            1 => {
-                toggle_row(
-                    ui,
-                    tr_l10n(lang, "settings.advanced.multimodal_pipeline_label"),
-                    tr_l10n(lang, "settings.advanced.multimodal_pipeline_hint"),
-                    vm.settings.multimodal,
-                    || {
-                        actions.push(FrontendAction::SettingsToggle(SettingsField::Multimodal));
-                    },
-                );
-            }
+            1 => {}
             _ => {
                 toggle_row(
                     ui,
@@ -1853,11 +1890,11 @@ fn link_row(
     row(ui, label, |ui| {
         if ui
             .add(
-                egui::Button::new(egui::RichText::new(button).size(11.5))
-                    .fill(theme::SURFACE_2)
-                    .stroke(egui::Stroke::new(0.8, theme::LINE))
-                    .corner_radius(egui::CornerRadius::same(8))
-                    .min_size(egui::vec2(0.0, 26.0)),
+                egui::Button::new(egui::RichText::new(button).size(12.0).color(theme::INK_2))
+                    .fill(theme::SURFACE)
+                    .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
+                    .corner_radius(egui::CornerRadius::same(6))
+                    .min_size(egui::vec2(0.0, 28.0)),
             )
             .clicked()
         {
@@ -1874,16 +1911,61 @@ fn link_row(
 fn card(ui: &mut egui::Ui, title: &str, hint: &str, contents: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::new()
         .fill(theme::SURFACE)
-        .stroke(egui::Stroke::new(1.0, theme::LINE))
-        .corner_radius(egui::CornerRadius::same(12))
-        .inner_margin(egui::Margin::symmetric(18, 16))
+        .stroke(egui::Stroke::new(0.5, theme::LINE))
+        .corner_radius(egui::CornerRadius::same(14))
+        .inner_margin(egui::Margin::symmetric(18, 18))
         .show(ui, |ui| {
             if !title.is_empty() {
                 card_title(ui, title, hint);
             }
             contents(ui);
         });
-    ui.add_space(10.0);
+    ui.add_space(16.0);
+}
+
+/// A card whose title carries the 「实验性」 badge (Tauri
+/// `ExperimentalSectionTitle`): title + blue-soft pill + hover hint.
+fn experimental_card(
+    ui: &mut egui::Ui,
+    title: &str,
+    badge: &str,
+    hint: &str,
+    contents: impl FnOnce(&mut egui::Ui),
+) {
+    egui::Frame::new()
+        .fill(theme::SURFACE)
+        .stroke(egui::Stroke::new(0.5, theme::LINE))
+        .corner_radius(egui::CornerRadius::same(14))
+        .inner_margin(egui::Margin::symmetric(18, 18))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(title)
+                        .size(13.0)
+                        .strong()
+                        .color(theme::INK),
+                );
+                let (rect, response) = ui.allocate_exact_size(
+                    egui::vec2(layout::text_width(ui, badge, 10.0) + 12.0, 16.0),
+                    egui::Sense::hover(),
+                );
+                ui.painter()
+                    .rect_filled(rect, egui::CornerRadius::same(8), theme::BLUE_SOFT);
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    badge,
+                    egui::FontId::proportional(10.0),
+                    theme::BLUE,
+                );
+                if !hint.is_empty() {
+                    let _ = response.on_hover_text(hint);
+                }
+            });
+            ui.add_space(6.0);
+            contents(ui);
+        });
+    ui.add_space(16.0);
 }
 
 /// A collapsible card group (Tauri wraps 插入与剪贴板 / 启动 in a `Collapsible`).
@@ -1893,9 +1975,9 @@ fn card_group(ui: &mut egui::Ui, title: &str, contents: impl FnOnce(&mut egui::U
     let mut open = ui.data(|data| data.get_temp::<bool>(id).unwrap_or(true));
     egui::Frame::new()
         .fill(theme::SURFACE)
-        .stroke(egui::Stroke::new(1.0, theme::LINE))
-        .corner_radius(egui::CornerRadius::same(12))
-        .inner_margin(egui::Margin::symmetric(18, 16))
+        .stroke(egui::Stroke::new(0.5, theme::LINE))
+        .corner_radius(egui::CornerRadius::same(14))
+        .inner_margin(egui::Margin::symmetric(18, 18))
         .show(ui, |ui| {
             let (rect, response) = ui
                 .allocate_exact_size(egui::vec2(ui.available_width(), 20.0), egui::Sense::click());
@@ -1903,7 +1985,7 @@ fn card_group(ui: &mut egui::Ui, title: &str, contents: impl FnOnce(&mut egui::U
                 egui::pos2(rect.left(), rect.center().y),
                 egui::Align2::LEFT_CENTER,
                 title,
-                egui::FontId::proportional(13.5),
+                egui::FontId::proportional(13.0),
                 theme::INK,
             );
             let chevron = egui::pos2(rect.right() - 8.0, rect.center().y);
@@ -1926,7 +2008,7 @@ fn card_group(ui: &mut egui::Ui, title: &str, contents: impl FnOnce(&mut egui::U
             }
         });
     ui.data_mut(|data| data.insert_temp(id, open));
-    ui.add_space(10.0);
+    ui.add_space(16.0);
 }
 
 /// A card whose header carries an action on the right (AI-services lists).
@@ -1939,14 +2021,14 @@ fn card_header(
 ) {
     egui::Frame::new()
         .fill(theme::SURFACE)
-        .stroke(egui::Stroke::new(1.0, theme::LINE))
-        .corner_radius(egui::CornerRadius::same(12))
-        .inner_margin(egui::Margin::symmetric(18, 16))
+        .stroke(egui::Stroke::new(0.5, theme::LINE))
+        .corner_radius(egui::CornerRadius::same(14))
+        .inner_margin(egui::Margin::symmetric(18, 18))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(title)
-                        .size(13.5)
+                        .size(13.0)
                         .strong()
                         .color(theme::INK),
                 );
@@ -1955,10 +2037,10 @@ fn card_header(
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), action);
             });
-            ui.add_space(4.0);
+            ui.add_space(6.0);
             contents(ui);
         });
-    ui.add_space(10.0);
+    ui.add_space(16.0);
 }
 
 /// The AI-services tab strip: Tauri uses underline tabs (active = blue label +
@@ -2032,7 +2114,7 @@ fn card_title(ui: &mut egui::Ui, title: &str, hint: &str) {
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(title)
-                .size(13.5)
+                .size(13.0)
                 .strong()
                 .color(theme::INK),
         );
@@ -2040,19 +2122,23 @@ fn card_title(ui: &mut egui::Ui, title: &str, hint: &str) {
             help_dot(ui, hint);
         }
     });
+    ui.add_space(6.0);
 }
 
 /// The small 「?」 Tauri renders next to a setting label: hover for the full
 /// explanation instead of spending a permanent paragraph on it.
 fn help_dot(ui: &mut egui::Ui, hint: &str) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(15.0, 15.0), egui::Sense::hover());
-    ui.painter()
-        .circle_stroke(rect.center(), 6.5, egui::Stroke::new(0.7, theme::LINE));
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+    ui.painter().circle_stroke(
+        rect.center(),
+        7.5,
+        egui::Stroke::new(0.5, theme::LINE_STRONG),
+    );
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
         "?",
-        egui::FontId::proportional(9.5),
+        egui::FontId::proportional(10.0),
         theme::INK_4,
     );
     response.on_hover_text(hint)
@@ -2233,9 +2319,9 @@ fn row(ui: &mut egui::Ui, label: &str, control: impl FnOnce(&mut egui::Ui)) {
 
 fn row_desc(ui: &mut egui::Ui, label: &str, desc: &str, control: impl FnOnce(&mut egui::Ui)) {
     ui.horizontal(|ui| {
-        ui.set_min_height(38.0);
+        ui.set_min_height(46.0);
         if !label.is_empty() {
-            ui.label(egui::RichText::new(label).size(13.5).color(theme::INK));
+            ui.label(egui::RichText::new(label).size(14.0).color(theme::INK));
         }
         if !desc.is_empty() {
             help_dot(ui, desc);
@@ -2248,6 +2334,6 @@ fn row_desc(ui: &mut egui::Ui, label: &str, desc: &str, control: impl FnOnce(&mu
         .0;
     ui.painter().line_segment(
         [rect.left_center(), rect.right_center()],
-        egui::Stroke::new(0.5, theme::LINE),
+        egui::Stroke::new(0.5, theme::LINE_SOFT),
     );
 }

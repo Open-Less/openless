@@ -4926,6 +4926,10 @@ pub const CATALOG: &[Msg] = &[
             "비우면 임시 디렉터리에서 실행",
         ),
     },
+    Msg {
+        key: "common.experimental",
+        text: row("实验性", "實驗性", "Experimental", "実験的", "실험적"),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

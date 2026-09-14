@@ -509,7 +509,7 @@ fn word_chip(ui: &mut egui::Ui, entry: &VocabEntry, selected: bool) -> ChipActio
         if entry.enabled && entry.hits > 0 {
             theme::BLUE
         } else {
-            egui::Color32::from_rgba_unmultiplied(0, 0, 0, 15)
+            theme::TOGGLE_OFF
         },
     );
     painter.galley(
@@ -833,15 +833,12 @@ fn presets(
 
 fn error_banner(ui: &mut egui::Ui, width: f32, message: &str) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 36.0), egui::Sense::hover());
-    ui.painter().rect_filled(
-        rect,
-        egui::CornerRadius::same(10),
-        egui::Color32::from_rgba_unmultiplied(239, 68, 68, 18),
-    );
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(10), theme::DANGER_SOFT);
     ui.painter().rect_stroke(
         rect,
         egui::CornerRadius::same(10),
-        egui::Stroke::new(0.5, egui::Color32::from_rgba_unmultiplied(239, 68, 68, 56)),
+        egui::Stroke::new(0.5, theme::ERR),
         egui::StrokeKind::Inside,
     );
     ui.painter().text(
@@ -849,7 +846,7 @@ fn error_banner(ui: &mut egui::Ui, width: f32, message: &str) {
         egui::Align2::LEFT_CENTER,
         message,
         egui::FontId::proportional(12.0),
-        egui::Color32::from_rgb(239, 68, 68),
+        theme::ERR,
     );
 }
 

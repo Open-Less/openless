@@ -404,18 +404,15 @@ fn target_language(
         if redundant {
             ui.add_space(10.0);
             egui::Frame::new()
-                .fill(egui::Color32::from_rgba_unmultiplied(217, 119, 6, 20))
-                .stroke(egui::Stroke::new(
-                    0.5,
-                    egui::Color32::from_rgba_unmultiplied(217, 119, 6, 62),
-                ))
+                .fill(theme::WARN_SOFT)
+                .stroke(egui::Stroke::new(0.5, theme::WARN))
                 .corner_radius(egui::CornerRadius::same(10))
                 .inner_margin(egui::Margin::symmetric(12, 8))
                 .show(ui, |ui| {
                     ui.label(
                         egui::RichText::new(tr_l10n(lang, "translation.target_same_as_working"))
                             .size(11.5)
-                            .color(egui::Color32::from_rgb(180, 103, 10)),
+                            .color(theme::WARN),
                     );
                 });
         }

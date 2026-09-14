@@ -38,12 +38,12 @@ const LIST_WIDTH: f32 = 300.0;
 const STACK_WIDTH: f32 = 760.0;
 const CARD_PADDING: f32 = 20.0;
 const DETAIL_PADDING: f32 = 12.0;
-const LINE_SOFT: egui::Color32 = egui::Color32::from_rgb(242, 242, 244);
+const LINE_SOFT: egui::Color32 = theme::LINE_SOFT;
 const MONO_SMALL: f32 = 11.0;
 
 /// Faint hover wash for unselected rows.
 fn hover_fill() -> egui::Color32 {
-    egui::Color32::from_rgba_unmultiplied(244, 244, 245, 170)
+    theme::SURFACE_2
 }
 
 // ── Entry point ─────────────────────────────────────────────────────────────

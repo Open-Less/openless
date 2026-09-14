@@ -579,7 +579,7 @@ fn editor_overlay(
             sw: 14,
             se: 14,
         },
-        egui::Color32::from_black_alpha(56),
+        theme::OVERLAY,
     );
     egui::Area::new(egui::Id::new("openless-style-editor-backdrop-input"))
         .order(egui::Order::Foreground)

@@ -845,11 +845,12 @@ pub fn page_header(
 
 /// Paint the standard card background (white, hairline border, 14pt radius).
 pub fn paint_card(painter: &egui::Painter, rect: egui::Rect) {
+    // Tauri `Card`: --ol-r-lg 圆角 + 0.5px --ol-line 边框 + --ol-shadow-sm。
     painter.rect_filled(rect, egui::CornerRadius::same(14), theme::SURFACE);
     painter.rect_stroke(
         rect,
         egui::CornerRadius::same(14),
-        egui::Stroke::new(1.0, theme::LINE),
+        egui::Stroke::new(0.5, theme::LINE),
         egui::StrokeKind::Inside,
     );
 }
@@ -874,11 +875,8 @@ pub fn toggle(
     id_salt: impl std::hash::Hash,
 ) -> egui::Response {
     let response = ui.interact(rect, ui.id().with(id_salt), egui::Sense::click());
-    let track = if on {
-        theme::BLUE
-    } else {
-        egui::Color32::from_rgb(184, 184, 187)
-    };
+    // Tauri `Toggle`: 开启 --ol-blue，关闭 --ol-toggle-off-bg。
+    let track = if on { theme::BLUE } else { theme::TOGGLE_OFF };
     ui.painter()
         .rect_filled(rect, egui::CornerRadius::same(10), track);
     let knob_x = if on {

@@ -87,11 +87,7 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
         });
         if let Some(error) = vm.vocab_error.clone() {
             ui.add_space(8.0);
-            ui.label(
-                egui::RichText::new(error)
-                    .size(11.5)
-                    .color(egui::Color32::from_rgb(185, 28, 28)),
-            );
+            ui.label(egui::RichText::new(error).size(11.5).color(theme::ERR));
         }
     });
 

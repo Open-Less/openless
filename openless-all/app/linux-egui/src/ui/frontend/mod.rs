@@ -651,6 +651,41 @@ mod tests {
     }
 
     #[test]
+    fn less_computer_rows_follow_the_enable_toggle() {
+        // Tauri `CodingAgentSection` shows 后端/权限/模型等配置行 only while the
+        // feature is enabled; a disabled section is just the toggle.
+        let ctx = egui::Context::default();
+        let zh = openless_linux_egui::Lang::ZhCn;
+        let provider = openless_linux_egui::tr_l10n(zh, "settings.coding_agent.provider");
+        for (enabled, expected) in [(false, false), (true, true)] {
+            let mut vm = FrontendViewModel {
+                lang: zh,
+                active_page: Page::Settings,
+                settings_open: true,
+                settings_section: super::view_model::SettingsSection::Advanced,
+                advanced_open: 0,
+                ..Default::default()
+            };
+            vm.settings.less_computer = enabled;
+            let mut painted = String::new();
+            for _ in 0..2 {
+                ctx.begin_pass(egui::RawInput {
+                    screen_rect: Some(viewport()),
+                    ..Default::default()
+                });
+                let mut actions = Vec::new();
+                render(&ctx, &mut vm, &mut actions);
+                painted = painted_text(&ctx.end_pass());
+            }
+            assert_eq!(
+                painted.lines().any(|line| line.trim() == provider),
+                expected,
+                "Less Computer config rows must follow the enable toggle"
+            );
+        }
+    }
+
+    #[test]
     fn ai_service_tabs_follow_the_host_capabilities() {
         // Tauri gates the local-model view on `supports_local_asr`; the Linux
         // host reports false, so the tab (and its "not supported" card) must

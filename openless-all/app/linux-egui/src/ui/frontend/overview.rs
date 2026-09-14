@@ -40,7 +40,7 @@ const PROVIDER_CARD_HEIGHT: f32 = 104.0;
 const CARD_PADDING: f32 = 14.0;
 const BOTTOM_MIN_HEIGHT: f32 = 170.0;
 const HEATMAP_MIN_HEIGHT: f32 = 90.0;
-const LINE_SOFT: egui::Color32 = egui::Color32::from_rgb(242, 242, 244);
+const LINE_SOFT: egui::Color32 = theme::LINE_SOFT;
 const MONO: f32 = 12.0;
 
 // ── Entry point ─────────────────────────────────────────────────────────────
