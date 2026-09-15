@@ -2,7 +2,10 @@
 
 use std::sync::{Arc, Weak};
 
-use super::{emit_capsule, schedule_capsule_idle, Coordinator, Inner, CAPSULE_AUTO_HIDE_DELAY_MS};
+use super::{
+    emit_capsule, hide_core_capsule_if_current, schedule_capsule_idle, Coordinator, Inner,
+    CAPSULE_AUTO_HIDE_DELAY_MS,
+};
 use crate::coordinator_state::SessionId;
 use crate::selection::SelectionInsertionTarget;
 use crate::types::{CapsuleState, InsertStatus};
