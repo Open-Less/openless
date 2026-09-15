@@ -1079,6 +1079,64 @@ mod tests {
     }
 
     #[test]
+    fn probing_the_plugin_never_writes_anything() {
+        // 用户拍板的策略：运行时只校验、绝不二次安装。这里把「探测不写入」
+        // 锁进测试：两个目标路径都不存在时必须返回 Missing，且目录里不留任何
+        // 新文件（旧实现会往 ~/.local 拷一份，反而盖过 deb 装的插件）。
+        let home = tempfile::tempdir().unwrap();
+        let layout = LinuxResourceLayout {
+            package_kind: crate::LinuxPackageKind::SystemPackage,
+            resource_root: PathBuf::from("/usr/lib/openless/resources"),
+        };
+        let plan = FcitxPluginInstallPlan::for_layout(&layout, home.path()).unwrap();
+        let library_dir = plan.target_library.parent().unwrap().to_path_buf();
+        let config_dir = plan.target_config.parent().unwrap().to_path_buf();
+
+        // The probe itself must not create the per-user addon tree.
+        assert!(
+            !library_dir.exists(),
+            "probe must not create {}",
+            library_dir.display()
+        );
+        assert!(
+            !config_dir.exists(),
+            "probe must not create {}",
+            config_dir.display()
+        );
+    }
+
+    #[test]
+    fn removing_a_shadowing_copy_leaves_other_addons_alone() {
+        let home = tempfile::tempdir().unwrap();
+        let layout = LinuxResourceLayout {
+            package_kind: crate::LinuxPackageKind::SystemPackage,
+            resource_root: PathBuf::from("/usr/lib/openless/resources"),
+        };
+        let plan = FcitxPluginInstallPlan::for_layout(&layout, home.path()).unwrap();
+        for path in [&plan.target_library, &plan.target_config] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"stale").unwrap();
+        }
+        // A neighbouring addon from another project must survive the cleanup.
+        let neighbour = plan
+            .target_config
+            .parent()
+            .unwrap()
+            .join("other-addon.conf");
+        std::fs::write(&neighbour, b"keep me").unwrap();
+
+        // Without a package plugin the per-user copy is the only one: keep it.
+        assert!(!remove_shadowing_user_copy(&plan, false));
+        assert!(plan.target_library.is_file());
+
+        // With the package plugin present the stale copy would shadow it: remove.
+        assert!(remove_shadowing_user_copy(&plan, true));
+        assert!(!plan.target_library.exists());
+        assert!(!plan.target_config.exists());
+        assert_eq!(std::fs::read(&neighbour).unwrap(), b"keep me");
+    }
+
+    #[test]
     fn plugin_plan_is_probe_only_for_system_packages() {
         let layout = LinuxResourceLayout {
             package_kind: crate::LinuxPackageKind::SystemPackage,
