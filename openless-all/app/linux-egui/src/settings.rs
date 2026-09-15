@@ -162,7 +162,8 @@ fn production_autostart() -> Result<crate::AutostartManager, String> {
 
 impl LinuxSettingsEffects for Fcitx5SettingsEffects {
     fn apply_hotkeys(&self, target: &HotkeyRuntimeTarget) -> Result<(), BackendError> {
-        // 一行摘要，用户可据此确认「到底注册了哪些键」以及哪些被拒绝。
+        // 一行摘要，用户可据此确认「到底注册了哪些键」；修饰键触发显示为
+        // modifier(LeftControl) 这样的形态。
         log::info!(
             "[fcitx] hotkey registration: {}",
             registration_summary(target)
@@ -185,7 +186,7 @@ impl LinuxSettingsEffects for Fcitx5SettingsEffects {
         let mut style_pack_hotkeys = Vec::with_capacity(target.style_packs.len());
         for hotkey in &target.style_packs {
             let (symbol, states) = registerable_raw(&hotkey.binding)?;
-            // symbol 0 = 被判为不可注册（裸修饰键/空键），直接不报给插件。
+            // symbol 0 = 没有可注册的键（空绑定），不报给插件。
             if symbol == 0 {
                 continue;
             }
@@ -245,11 +246,10 @@ fn tolerate_optional_fcitx_method(result: Result<(), BackendError>) -> Result<()
 }
 
 fn apply_dictation_hotkey(binding: &ShortcutBinding) -> Result<(), BackendError> {
-    if is_bare_modifier_binding(binding) {
-        warn_bare_modifier("dictation", &binding.primary);
-        // 清掉可能存在的旧注册：脏数据不能继续吞键。
-        return crate::fcitx5::set_raw_hotkey("SetHotkeyRaw", 0, 0);
-    }
+    // 「按住某个修饰键说话」是 Core 允许的形态（macOS 默认就是它）。
+    // Linux 侧的限制不在注册，而在**吞键**：插件只对非修饰键
+    // `filterAndAccept()`，按住期间若又按下别的键则判定为组合键并放弃触发
+    // （见 hotkey_match.h 的 shouldConsume）。所以这里照常注册。
     if let Some(trigger) = legacy_modifier_trigger(binding) {
         let symbol = modifier_trigger_keysym(trigger)?;
         return crate::fcitx5::set_raw_hotkey("SetHotkeyRaw", symbol, 0);
@@ -265,23 +265,17 @@ fn apply_action_hotkey(
     crate::fcitx5::set_raw_hotkey(method, raw.0, raw.1)
 }
 
-/// Convert a binding into the `(keysym, states)` pair fcitx5 should grab, or
-/// `(0, 0)` when the binding must not be registered at all.
+/// Convert a binding into the `(keysym, states)` pair fcitx5 should grab.
 ///
-/// A modifier-only binding (`Shift`, `LeftControl`, …) is the dangerous case:
-/// fcitx5's addon matches `sym == registered && states == registered` and calls
-/// `filterAndAccept()`, so the modifier never reaches any application — typing
-/// uppercase (Shift+letter) or any Ctrl/Alt combination stops working system
-/// wide. Those bindings are refused instead of registered.
+/// Modifier-only bindings (`LeftControl`, `Shift`, …) are registered as such:
+/// the plugin never consumes a modifier key, so "hold this key to talk" works
+/// without taking the modifier away from every other application.
 pub(crate) fn registerable_raw(binding: &ShortcutBinding) -> Result<(u32, u32), BackendError> {
-    if is_bare_modifier_binding(binding) {
-        warn_bare_modifier("hotkey", &binding.primary);
-        return Ok((0, 0));
-    }
     shortcut_to_raw(binding)
 }
 
-/// True for `primary` = a bare modifier with no other modifier held.
+/// True for `primary` = a bare modifier with no other modifier held. Used by the
+/// registration summary so a modifier trigger is visible as such in the log.
 pub fn is_bare_modifier_binding(binding: &ShortcutBinding) -> bool {
     if !binding.modifiers.is_empty() {
         return false;
@@ -310,19 +304,14 @@ pub fn is_bare_modifier_binding(binding: &ShortcutBinding) -> bool {
     )
 }
 
-fn warn_bare_modifier(field: &str, primary: &str) {
-    log::warn!(
-        "[fcitx] refusing to register the modifier-only {field} hotkey '{primary}': a bare modifier grab would swallow that key for every application; pick a real key combination instead"
-    );
-}
-
 /// One-line summary of what the next [`apply_hotkeys`] will register.
 pub(crate) fn registration_summary(target: &HotkeyRuntimeTarget) -> String {
     fn describe(binding: Option<&ShortcutBinding>) -> String {
         match binding {
             None => "-".to_string(),
             Some(binding) if is_bare_modifier_binding(binding) => {
-                format!("refused(modifier-only {})", binding.primary)
+                // 修饰键触发：注册的是修饰键本身，插件按住期间不吞键。
+                format!("modifier({})", binding.primary)
             }
             Some(binding) => {
                 let mut parts: Vec<String> = binding
@@ -527,17 +516,16 @@ mod tests {
     }
 
     #[test]
-    fn modifier_only_bindings_are_never_registered() {
-        // 这些是用户机器上真实出现过的脏数据/默认值：注册进去会让插件吞掉
-        // 该修饰键（Shift+字母打不出大写、Ctrl 组合失效）。
-        for primary in [
-            "LeftControl",
-            "RightControl",
-            "LeftShift",
-            "Shift",
-            "Alt",
-            "Super",
-            "LeftCommand",
+    fn modifier_only_bindings_register_the_modifier_keysym() {
+        // 「按住某个修饰键说话」是 Core 允许的形态（macOS 默认就是它）。Linux
+        // 侧的限制从注册挪到了插件：只观察不吞键（hotkey_match.h::shouldConsume）。
+        for (primary, keysym) in [
+            ("LeftControl", 0xffe3_u32),
+            ("RightControl", 0xffe4),
+            ("LeftShift", 0xffe1),
+            ("RightShift", 0xffe2),
+            ("LeftAlt", 0xffe9),
+            ("LeftSuper", 0xffeb),
         ] {
             let binding = ShortcutBinding {
                 primary: primary.into(),
@@ -547,8 +535,18 @@ mod tests {
                 is_bare_modifier_binding(&binding),
                 "{primary} must be recognised as modifier-only"
             );
-            assert_eq!(registerable_raw(&binding).unwrap(), (0, 0), "{primary}");
+            assert_eq!(
+                registerable_raw(&binding).unwrap(),
+                (keysym, 0),
+                "{primary} must register its own keysym with no modifier bits"
+            );
         }
+        // Core 里 primary 就是 "shift" 的形态也照常注册。
+        let shift = ShortcutBinding {
+            primary: "Shift".into(),
+            modifiers: Vec::new(),
+        };
+        assert_eq!(registerable_raw(&shift).unwrap(), (0xffe1, 0));
         // 真实组合键照常注册。
         let qa = ShortcutBinding {
             primary: ":".into(),
@@ -576,7 +574,7 @@ mod tests {
     }
 
     #[test]
-    fn registration_summary_flags_refused_bindings() {
+    fn registration_summary_shows_modifier_triggers() {
         let target = HotkeyRuntimeTarget {
             dictation: ShortcutBinding {
                 primary: "A".into(),
@@ -608,7 +606,7 @@ mod tests {
         assert!(summary.contains("dictation=alt+A"), "{summary}");
         assert!(summary.contains("qa=ctrl+shift+:"), "{summary}");
         assert!(
-            summary.contains("less_computer=refused(modifier-only LeftControl)"),
+            summary.contains("less_computer=modifier(LeftControl)"),
             "{summary}"
         );
     }

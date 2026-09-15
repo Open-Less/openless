@@ -85,6 +85,123 @@ fn system_plugin_available() -> bool {
         .any(|dir| dir.join("libopenless.so").is_file())
 }
 
+/// Path of the installed addon library the running fcitx5 would load: the user
+/// install wins over the system one because fcitx5 searches it first.
+fn installed_plugin_library(plan: &FcitxPluginInstallPlan) -> Option<PathBuf> {
+    if plan.target_library.is_file() {
+        return Some(plan.target_library.clone());
+    }
+    let mut library_dirs = vec![
+        PathBuf::from("/usr/lib64/fcitx5"),
+        PathBuf::from("/usr/lib/fcitx5"),
+        PathBuf::from("/usr/local/lib/fcitx5"),
+    ];
+    if let Ok(entries) = std::fs::read_dir("/usr/lib") {
+        library_dirs.extend(entries.flatten().map(|entry| entry.path().join("fcitx5")));
+    }
+    library_dirs
+        .into_iter()
+        .map(|dir| dir.join("libopenless.so"))
+        .find(|candidate| candidate.is_file())
+}
+
+/// `/proc/stat` -> `btime` (boot time as a UNIX timestamp in seconds).
+pub(crate) fn parse_boot_time(proc_stat: &str) -> Option<u64> {
+    proc_stat.lines().find_map(|line| {
+        line.strip_prefix("btime ")
+            .and_then(|value| value.trim().parse::<u64>().ok())
+    })
+}
+
+/// `/proc/<pid>/stat` -> process start time in clock ticks since boot.
+///
+/// The second field is the executable name in parentheses and may contain
+/// spaces, so split after the last ')' before counting fields.
+pub(crate) fn parse_process_start_ticks(proc_pid_stat: &str) -> Option<u64> {
+    let after_comm = proc_pid_stat.rsplit_once(')')?.1;
+    let mut fields = after_comm.split_whitespace();
+    // After the comm field, state is field 3; starttime is field 22 => the 20th
+    // field of the remaining slice.
+    fields.nth(19)?.parse::<u64>().ok()
+}
+
+/// USER_HZ for /proc values is 100 on Linux regardless of the kernel HZ.
+const PROC_CLOCK_TICKS: u64 = 100;
+
+/// True when the installed addon library is newer than the running fcitx5, i.e.
+/// a package upgrade replaced the .so while the daemon still holds the old
+/// image. Without a restart the new matching rules never take effect.
+pub(crate) fn plugin_is_newer_than_running_fcitx5(
+    plugin_modified: u64,
+    boot_time: u64,
+    process_start_ticks: u64,
+) -> bool {
+    let process_started = boot_time + process_start_ticks / PROC_CLOCK_TICKS;
+    // One second of slack: both timestamps are second-resolution.
+    plugin_modified > process_started.saturating_add(1)
+}
+
+/// Restart fcitx5 when the installed addon is newer than the running daemon so
+/// an upgraded plugin is actually loaded. Returns true when fcitx5 was replaced.
+pub fn reload_fcitx5_if_plugin_updated(plan: &FcitxPluginInstallPlan) -> bool {
+    let Some(library) = installed_plugin_library(plan) else {
+        return false;
+    };
+    let Some(modified) = std::fs::metadata(&library)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs())
+    else {
+        return false;
+    };
+    let (Some(proc_stat), Some(pid)) = (
+        std::fs::read_to_string("/proc/stat").ok(),
+        fcitx5_process_id(),
+    ) else {
+        return false;
+    };
+    let Some(proc_pid_stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok() else {
+        return false;
+    };
+    let (Some(boot_time), Some(start_ticks)) = (
+        parse_boot_time(&proc_stat),
+        parse_process_start_ticks(&proc_pid_stat),
+    ) else {
+        return false;
+    };
+    if !plugin_is_newer_than_running_fcitx5(modified, boot_time, start_ticks) {
+        return false;
+    }
+    log::info!(
+        "[fcitx] addon {} is newer than the running fcitx5; restarting it to load the update",
+        library.display()
+    );
+    reload_running_fcitx5()
+}
+
+/// PID of the running fcitx5, by scanning /proc for the process name.
+#[cfg(target_os = "linux")]
+fn fcitx5_process_id() -> Option<u32> {
+    for entry in std::fs::read_dir("/proc").ok()?.flatten() {
+        let name = entry.file_name();
+        let pid = name.to_string_lossy().parse::<u32>().ok();
+        let Some(pid) = pid else { continue };
+        let Ok(comm) = std::fs::read_to_string(entry.path().join("comm")) else {
+            continue;
+        };
+        if comm.trim() == "fcitx5" {
+            return Some(pid);
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+fn fcitx5_process_id() -> Option<u32> {
+    None
+}
+
 #[derive(Debug, Clone)]
 pub struct Fcitx5TextInserter {
     clipboard_fallback: bool,
@@ -722,6 +839,52 @@ fn platform_error(message: String) -> BackendError {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn boot_time_and_process_start_are_parsed_from_proc() {
+        let stat = "cpu  1 2 3\nbtime 1700000000\nprocesses 42\n";
+        assert_eq!(parse_boot_time(stat), Some(1_700_000_000));
+        assert_eq!(parse_boot_time("cpu 1 2 3\n"), None);
+
+        // Field 2 is the comm in parentheses and may contain spaces/parens; the
+        // 22nd field (starttime) sits 20 fields after it. Line copied from a real
+        // /proc/<pid>/stat of this machine (starttime = 284037).
+        let pid_stat = "38066 (bash) S 32218 38066 38066 0 -1 4194304 245 0 0 0 0 0 0 0 20 0 1 0 284037 10760192 917 18446744073709551615 93845596229632";
+        assert_eq!(parse_process_start_ticks(pid_stat), Some(284037));
+        // A comm containing a closing parenthesis must not shift the fields.
+        let paren_comm =
+            "999 (fcitx5 (5.1)) S 1 999 999 0 -1 4194304 1 0 0 0 0 0 0 0 20 0 1 0 77777 13";
+        assert_eq!(parse_process_start_ticks(paren_comm), Some(77777));
+        assert_eq!(parse_process_start_ticks(""), None);
+        assert_eq!(parse_process_start_ticks("1 (short) S 1"), None);
+    }
+
+    #[test]
+    fn a_plugin_newer_than_the_running_fcitx5_asks_for_a_restart() {
+        // fcitx5 started at boot + 2500 ticks (25 s).
+        let boot = 1_700_000_000;
+        let started = 2500;
+        // Plugin written before the daemon started: nothing to do.
+        assert!(!plugin_is_newer_than_running_fcitx5(
+            boot + 10,
+            boot,
+            started
+        ));
+        // Same second (the daemon read the file it just got): nothing to do.
+        assert!(!plugin_is_newer_than_running_fcitx5(
+            boot + 25,
+            boot,
+            started
+        ));
+        // Plugin replaced by a package upgrade while the daemon kept running.
+        assert!(plugin_is_newer_than_running_fcitx5(
+            boot + 600,
+            boot,
+            started
+        ));
+    }
+
     use super::*;
 
     #[test]

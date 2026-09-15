@@ -3129,22 +3129,8 @@ mod linux_app {
                 self.frontend_vm.shortcut_recording = None;
                 return;
             }
-            // Core 允许「单个修饰键」作为触发键（macOS 按住说话用），但 Linux 的
-            // fcitx5 插件只能靠吞掉该修饰键来实现，会连带废掉系统里所有以它开头的
-            // 输入（Shift+字母打不出大写）。这里直接拒绝，并给出可见理由。
-            if openless_linux_egui::is_bare_modifier_binding(&binding) {
-                log::warn!(
-                    "[settings] rejecting recorded modifier-only shortcut '{}': it would be registered with fcitx5 and swallow that modifier system-wide",
-                    binding.primary
-                );
-                self.frontend_vm.settings_notice = Some(fmt_l10n(
-                    self.lang,
-                    "settings.recording.combo_conflict",
-                    &[&binding.primary],
-                ));
-                self.frontend_vm.shortcut_recording = None;
-                return;
-            }
+            // 修饰键触发（按住说话）照常保存：插件只观察不吞修饰键，
+            // 按住期间若又按了别的键就判定为组合键、放弃触发。
             let draft_pack_id = self
                 .frontend_vm
                 .style_packs
@@ -4280,6 +4266,7 @@ mod linux_app {
                         }
                     }
                     frontend::view_model::FrontendAction::ShortcutRecording(field) => {
+                        self.frontend_vm.shortcut_pending_modifier = None;
                         self.frontend_vm.shortcut_recording = field;
                         if field.is_some() {
                             self.frontend_vm.shortcut_menu = None;
@@ -4756,6 +4743,9 @@ mod linux_app {
         let plan =
             FcitxPluginInstallPlan::for_layout(&layout, home).map_err(|error| error.to_string())?;
         let status = ensure_fcitx5_plugin_installed(&plan).map_err(|error| error.to_string())?;
+        // 安装包升级会替换 libopenless.so，但运行中的 fcitx5 仍持有旧映像 ——
+        // 不重启它，新的热键匹配规则就不会生效。只在插件确实更新过时重启。
+        openless_linux_egui::reload_fcitx5_if_plugin_updated(&plan);
         reconcile_fcitx5_install(status)
     }
 

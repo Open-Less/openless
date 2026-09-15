@@ -601,6 +601,8 @@ pub struct FrontendViewModel {
     pub channel_provider_index: usize,
     /// Rail search query in the settings modal.
     pub settings_query: String,
+    /// 录制中的裸修饰键挂起状态（egui 没有修饰键 Key 事件，只能跨帧判断）。
+    pub shortcut_pending_modifier: Option<String>,
     /// Expanded drill-in row in the 实验与扩展 section (`usize::MAX` = none).
     pub advanced_open: usize,
     pub settings_notice: Option<String>,
@@ -695,6 +697,7 @@ impl Default for FrontendViewModel {
             channel_form_name: String::new(),
             channel_provider_index: 0,
             settings_query: String::new(),
+            shortcut_pending_modifier: None,
             advanced_open: usize::MAX,
             settings_notice: None,
             settings: SettingsFields::default(),

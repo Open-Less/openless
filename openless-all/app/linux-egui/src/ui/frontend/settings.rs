@@ -1134,17 +1134,23 @@ fn recording_panel(
         actions.push(FrontendAction::ShortcutRecording(None));
         return;
     }
-    if let Some((primary, modifiers)) = captured_binding(ui) {
+    if let Some((primary, modifiers)) = captured_binding(ui, &mut vm.shortcut_pending_modifier) {
         actions.push(FrontendAction::ShortcutCaptured(field, primary, modifiers));
     }
 }
 
 /// 读本帧按下的第一个「真键」+ 当时按住的修饰键，转成 Core 的
 /// `ShortcutBinding` 形式（primary + modifiers）。
-fn captured_binding(ui: &egui::Ui) -> Option<(String, Vec<String>)> {
+///
+/// 修饰键自身在 egui 里没有 Key 事件（`Key` 枚举只有 `Colon`/`Semicolon` 这类
+/// 具体键，修饰键只在 `Modifiers` 里），所以「按住某个修饰键当热键」只能跨帧判断：
+/// 按住期间没有按下任何真键 → 松开时记为修饰键触发。`pending` 就是这份挂起状态。
+/// egui 分不清左右修饰键，因此统一记左侧名（Core 的 legacy trigger 表接受
+/// LeftControl/LeftShift/LeftAlt/LeftSuper）。
+fn captured_binding(ui: &egui::Ui, pending: &mut Option<String>) -> Option<(String, Vec<String>)> {
     // 用按键事件自带的修饰键（RawInput.modifiers 在某些输入法/后端下会滞后），
     // 并跳过 egui 合成的剪贴板命令与 Escape（后者由调用方当取消处理）。
-    let (key, modifiers) = ui.input(|input| {
+    if let Some((key, modifiers)) = ui.input(|input| {
         input.events.iter().find_map(|event| match event {
             egui::Event::Key {
                 key,
@@ -1161,8 +1167,31 @@ fn captured_binding(ui: &egui::Ui) -> Option<(String, Vec<String>)> {
             }
             _ => None,
         })
-    })?;
-    let primary = shortcut_primary(key)?;
+    }) {
+        // 按下真键 = 组合键，之前挂起的修饰键作废。
+        *pending = None;
+        let primary = shortcut_primary(key)?;
+        return Some((primary, modifier_tags(modifiers)));
+    }
+
+    let modifiers = ui.input(|input| input.modifiers);
+    match bare_modifier_name(modifiers) {
+        Some(name) => {
+            if pending.is_none() {
+                *pending = Some(name.to_string());
+            }
+            None
+        }
+        None if modifiers.any() => {
+            // 多个修饰键同按：不当作修饰键热键（松手也不触发）。
+            *pending = None;
+            None
+        }
+        None => pending.take().map(|name| (name, Vec::new())),
+    }
+}
+
+fn modifier_tags(modifiers: egui::Modifiers) -> Vec<String> {
     let mut tags: Vec<String> = Vec::new();
     if modifiers.ctrl || modifiers.command {
         tags.push("ctrl".to_string());
@@ -1176,7 +1205,31 @@ fn captured_binding(ui: &egui::Ui) -> Option<(String, Vec<String>)> {
     if modifiers.mac_cmd {
         tags.push("super".to_string());
     }
-    Some((primary, tags))
+    tags
+}
+
+/// 恰好按住「一个类别」的修饰键时返回它的 Core 主键名，否则 `None`。
+/// 顺序 ctrl → alt → shift → super：egui 在 Linux 上把 Ctrl 同时标成
+/// `command`，所以先判 ctrl。
+fn bare_modifier_name(modifiers: egui::Modifiers) -> Option<&'static str> {
+    let categories = [
+        modifiers.ctrl || modifiers.command,
+        modifiers.alt,
+        modifiers.shift,
+        modifiers.mac_cmd,
+    ];
+    if categories.iter().filter(|held| **held).count() != 1 {
+        return None;
+    }
+    if categories[0] {
+        Some("LeftControl")
+    } else if categories[1] {
+        Some("LeftAlt")
+    } else if categories[2] {
+        Some("LeftShift")
+    } else {
+        Some("LeftSuper")
+    }
 }
 
 /// egui 的物理键 → Core 认可的主键名（见 `shortcut_types::validate_primary`）。

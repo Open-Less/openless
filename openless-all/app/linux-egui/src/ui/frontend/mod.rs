@@ -773,6 +773,85 @@ mod tests {
     }
 
     #[test]
+    fn recording_captures_a_bare_modifier_after_release() {
+        // egui 没有修饰键的 Key 事件，所以「按住修饰键当热键」只能跨帧判断：
+        // 第一帧按住 Ctrl、第二帧松开且期间没有其它键 → 记为 LeftControl。
+        use super::view_model::{FrontendAction, ShortcutField};
+        let ctx = egui::Context::default();
+        let zh = openless_linux_egui::Lang::ZhCn;
+        let mut vm = FrontendViewModel {
+            lang: zh,
+            active_page: Page::Settings,
+            settings_open: true,
+            settings_section: super::view_model::SettingsSection::Shortcuts,
+            shortcut_recording: Some(ShortcutField::CodingAgentVoice),
+            ..Default::default()
+        };
+        let held = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            ..Default::default()
+        };
+        let mut captured = Vec::new();
+        for modifiers in [held, held, egui::Modifiers::default()] {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(viewport()),
+                modifiers,
+                ..Default::default()
+            });
+            let mut actions = Vec::new();
+            render(&ctx, &mut vm, &mut actions);
+            let _ = ctx.end_pass();
+            for action in actions {
+                if let FrontendAction::ShortcutCaptured(field, primary, modifiers) = action {
+                    captured.push((field, primary, modifiers));
+                }
+            }
+        }
+        assert_eq!(captured.len(), 1, "exactly one capture after the release");
+        assert_eq!(captured[0].0, ShortcutField::CodingAgentVoice);
+        assert_eq!(captured[0].1, "LeftControl");
+        assert!(captured[0].2.is_empty(), "a bare modifier carries no tags");
+    }
+
+    #[test]
+    fn recording_ignores_a_modifier_combination_without_a_key() {
+        // Ctrl+Shift 同按后松手：不是有效的裸修饰键触发，不能录进去。
+        use super::view_model::{FrontendAction, ShortcutField};
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: openless_linux_egui::Lang::ZhCn,
+            active_page: Page::Settings,
+            settings_open: true,
+            settings_section: super::view_model::SettingsSection::Shortcuts,
+            shortcut_recording: Some(ShortcutField::Qa),
+            ..Default::default()
+        };
+        let both = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            shift: true,
+            ..Default::default()
+        };
+        let mut captured = Vec::new();
+        for modifiers in [both, both, egui::Modifiers::default()] {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(viewport()),
+                modifiers,
+                ..Default::default()
+            });
+            let mut actions = Vec::new();
+            render(&ctx, &mut vm, &mut actions);
+            let _ = ctx.end_pass();
+            captured.extend(actions.into_iter().filter_map(|action| match action {
+                FrontendAction::ShortcutCaptured(..) => Some(()),
+                _ => None,
+            }));
+        }
+        assert!(captured.is_empty(), "no capture for a modifier chord");
+    }
+
+    #[test]
     fn recording_captures_the_pressed_combination() {
         use super::view_model::{FrontendAction, ShortcutField};
         let ctx = egui::Context::default();

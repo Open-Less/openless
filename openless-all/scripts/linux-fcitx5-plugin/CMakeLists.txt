@@ -41,6 +41,13 @@ if(BUILD_TESTING)
     target_include_directories(input_target_contract PRIVATE "${FCITX5_MODULE_INCLUDE_DIR}")
     target_link_libraries(input_target_contract PRIVATE Fcitx5::Core Fcitx5::Utils Fcitx5::Module::Clipboard)
     add_test(NAME input_target_contract COMMAND input_target_contract)
+
+    # Pure hotkey-matching contract: Shift+symbol / letter folding and the
+    # "never consume a bare modifier" rule (the Ctrl+Shift+; regression).
+    add_executable(hotkey_match_contract hotkey_match_contract.cpp)
+    target_compile_options(hotkey_match_contract PRIVATE -UNDEBUG)
+    target_link_libraries(hotkey_match_contract PRIVATE Fcitx5::Utils)
+    add_test(NAME hotkey_match_contract COMMAND hotkey_match_contract)
 endif()
 
 # Install the plugin .so to fcitx5 addon dir
