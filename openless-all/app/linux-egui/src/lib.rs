@@ -20,6 +20,7 @@ mod i18n;
 mod logging;
 mod marketplace;
 mod popup;
+mod popup_layer;
 mod popup_window;
 mod qa;
 mod recordings;
@@ -75,6 +76,11 @@ pub use popup::{
     PopupToHost, PreviewPopupState, ProtocolError as PopupProtocolError,
     ProtocolErrorKind as PopupProtocolErrorKind, QaPopupState, MAX_JSONL_LINE_BYTES,
     POPUP_PROTOCOL_VERSION,
+};
+pub use popup_layer::{
+    capsule_geometry, choose_capsule_path, detect_capsule_path, has_layer_shell, pointer_events,
+    probe_layer_shell, run_layer_capsule, CapsuleGeometry, CapsulePath, LayerFrame,
+    CONFIGURE_TIMEOUT, LAYER_NAMESPACE, LAYER_SHELL_GLOBAL, MAX_FRAME_PAUSE,
 };
 #[cfg(all(target_os = "linux", feature = "x11-overlay"))]
 pub use popup_window::X11Overlay;

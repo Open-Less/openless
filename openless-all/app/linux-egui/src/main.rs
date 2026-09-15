@@ -5020,13 +5020,13 @@ mod linux_app {
         }
     }
 
-    impl eframe::App for NativePopupApp {
-        fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-            // Overlay placement first: it must run before the window is shown so
-            // the compositor never gives the capsule the keyboard.
-            if let Some(overlay) = self.overlay.as_mut() {
-                overlay.place(ctx, self.state.visible);
-            }
+    impl NativePopupApp {
+        /// Drain every host message queued since the last frame. `ctx` is
+        /// `None` on the layer-shell path, which has no viewport to command:
+        /// visibility and shutdown are handled by the runner instead.
+        ///
+        /// Returns true when the process should exit.
+        fn pump(&mut self, ctx: Option<&egui::Context>) -> bool {
             while let Ok(message) = self.incoming.try_recv() {
                 if message
                     .content_kind()
@@ -5040,25 +5040,111 @@ mod linux_app {
                 let shutdown = matches!(message, HostToPopup::Shutdown { .. });
                 let outcome = self.state.apply(message);
                 if outcome == openless_linux_egui::PopupApplyOutcome::Applied {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.state.visible));
+                    if let Some(ctx) = ctx {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.state.visible));
+                    }
                 }
                 if shutdown || self.state.shutdown_requested {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    return;
+                    if let Some(ctx) = ctx {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    return true;
                 }
             }
-            if !self.ready_sent {
-                if let Some(session_id) = self.session_id() {
-                    let sequence = self.next_sequence();
-                    self.send(PopupToHost::Ready {
-                        version: POPUP_PROTOCOL_VERSION,
-                        session_id,
-                        sequence,
-                        kind: self.kind,
-                    });
-                    self.ready_sent = true;
+            false
+        }
+
+        /// Tell the host which session this window is serving. The host drops
+        /// every message that carries another session id, so this must happen
+        /// before the first content arrives.
+        fn send_ready_if_needed(&mut self) {
+            if self.ready_sent {
+                return;
+            }
+            if let Some(session_id) = self.session_id() {
+                let sequence = self.next_sequence();
+                self.send(PopupToHost::Ready {
+                    version: POPUP_PROTOCOL_VERSION,
+                    session_id,
+                    sequence,
+                    kind: self.kind,
+                });
+                self.ready_sent = true;
+            }
+        }
+
+        /// One capsule frame on a layer surface: same view, same protocol and
+        /// same send / exit rules as the eframe window, minus viewport
+        /// commands (a layer surface is sized by the compositor).
+        fn layer_frame(
+            &mut self,
+            ctx: &egui::Context,
+            raw: egui::RawInput,
+            first: bool,
+        ) -> openless_linux_egui::LayerFrame {
+            if first {
+                theme::install(ctx);
+            }
+            let mut exit = self.pump(None);
+            self.send_ready_if_needed();
+            let animated = matches!(
+                self.state.capsule.phase.to_ascii_lowercase().as_str(),
+                "starting" | "recording" | "transcribing" | "polishing" | "inserting"
+            );
+            let capsule = self.state.capsule.clone();
+            let lang = self.lang;
+            let mut action = frontend::popups::CapsuleAction::None;
+            let output = ctx.run(raw, |ctx| {
+                action = frontend::popups::dictation_capsule(ctx, &capsule, lang);
+            });
+            match action {
+                frontend::popups::CapsuleAction::None => {}
+                frontend::popups::CapsuleAction::Cancel
+                | frontend::popups::CapsuleAction::Confirm => {
+                    if let Some(session_id) = self.session_id() {
+                        let sequence = self.next_sequence();
+                        let message = if matches!(action, frontend::popups::CapsuleAction::Cancel) {
+                            PopupToHost::CancelDictation {
+                                version: POPUP_PROTOCOL_VERSION,
+                                session_id,
+                                sequence,
+                            }
+                        } else {
+                            PopupToHost::StopDictation {
+                                version: POPUP_PROTOCOL_VERSION,
+                                session_id,
+                                sequence,
+                            }
+                        };
+                        self.send(message);
+                    }
+                    exit = true;
                 }
             }
+            openless_linux_egui::LayerFrame {
+                output,
+                exit,
+                // Same cadence as the windowed popup: animate fast, idle slowly.
+                repaint_after: Duration::from_millis(if self.state.visible && animated {
+                    33
+                } else {
+                    100
+                }),
+            }
+        }
+    }
+
+    impl eframe::App for NativePopupApp {
+        fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+            // Overlay placement first: it must run before the window is shown so
+            // the compositor never gives the capsule the keyboard.
+            if let Some(overlay) = self.overlay.as_mut() {
+                overlay.place(ctx, self.state.visible);
+            }
+            if self.pump(Some(ctx)) {
+                return;
+            }
+            self.send_ready_if_needed();
             if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
                 self.dismiss(ctx);
                 return;
@@ -5253,7 +5339,9 @@ mod linux_app {
         }
     }
 
-    fn run_popup_process(kind: PopupKind) -> Result<(), String> {
+    /// stdin/stdout JSONL plumbing shared by the eframe popup window and the
+    /// layer-shell capsule: both talk to the host through the same protocol.
+    fn popup_stdio() -> Result<(mpsc::Receiver<HostToPopup>, mpsc::Sender<PopupToHost>), String> {
         let (tx, rx) = mpsc::sync_channel(256);
         std::thread::Builder::new()
             .name("openless-popup-input".into())
@@ -5281,6 +5369,92 @@ mod linux_app {
                 }
             })
             .map_err(|error| error.to_string())?;
+        Ok((rx, outgoing_tx))
+    }
+
+    /// 胶囊在实现了 `zwlr_layer_shell_v1` 的合成器上跑原生 layer surface
+    /// （贴底居中、键盘焦点不可能、不占工作区）；协议缺失、EGL 起不来或
+    /// configure 超时都会返回 Err，由调用方回退到 XWayland 叠加层。
+    fn run_capsule_layer_process() -> Result<(), String> {
+        let geometry = openless_linux_egui::capsule_geometry(
+            openless_linux_egui::CAPSULE_WINDOW_SIZE.0,
+            openless_linux_egui::CAPSULE_WINDOW_SIZE.1,
+            openless_linux_egui::CAPSULE_BOTTOM_GAP,
+        );
+        // The host pipe is opened lazily, on the first frame the runner asks
+        // for: the runner only calls back once the layer surface is configured
+        // and EGL is live, so a preflight failure leaves stdin untouched for the
+        // XWayland fallback. `started` records that the pipe is in use, which
+        // makes a late failure fatal instead of a (broken) second attempt.
+        let mut app: Option<NativePopupApp> = None;
+        let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let started_in_frame = Arc::clone(&started);
+        let result = openless_linux_egui::run_layer_capsule(geometry, move |ctx, raw, first| {
+            if app.is_none() {
+                match popup_stdio() {
+                    Ok((incoming, outgoing)) => {
+                        started_in_frame.store(true, std::sync::atomic::Ordering::SeqCst);
+                        app = Some(NativePopupApp {
+                            kind: PopupKind::Capsule,
+                            state: PopupState::default(),
+                            incoming,
+                            outgoing,
+                            qa_input: String::new(),
+                            outgoing_sequence: 0,
+                            ready_sent: false,
+                            preview_focus_requested: false,
+                            avatar: QaAvatar::default(),
+                            lang: load_locale_pref().resolve(),
+                            overlay: None,
+                        });
+                    }
+                    Err(error) => {
+                        log::error!("popup pipe unavailable: {error}");
+                        let output = ctx.run(raw, |_| {});
+                        return openless_linux_egui::LayerFrame {
+                            output,
+                            exit: true,
+                            repaint_after: std::time::Duration::from_millis(0),
+                        };
+                    }
+                }
+            }
+            let app = app.as_mut().expect("popup app is created above");
+            app.layer_frame(ctx, raw, first)
+        });
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) if started.load(std::sync::atomic::Ordering::SeqCst) => {
+                // The capsule was already on screen: the host pipe is in use, so
+                // there is nothing to fall back to. Report and let it die.
+                Err(format!(
+                    "layer-shell capsule stopped after startup: {error}"
+                ))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn run_popup_process(kind: PopupKind) -> Result<(), String> {
+        // 胶囊优先走原生 layer surface；不可用时（无该协议 / EGL 失败 /
+        // configure 超时）安静回退到下面那条 XWayland 叠加层路径。
+        if kind == PopupKind::Capsule
+            && openless_linux_egui::detect_capsule_path()
+                == openless_linux_egui::CapsulePath::LayerShell
+        {
+            match run_capsule_layer_process() {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    eprintln!(
+                        "OpenLess capsule: layer-shell unavailable ({error}); using the XWayland overlay"
+                    );
+                    log::warn!(
+                        "layer-shell capsule unavailable ({error}); falling back to the XWayland overlay"
+                    );
+                }
+            }
+        }
+        let (rx, outgoing_tx) = popup_stdio()?;
         // 胶囊窗口贴着药丸尺寸（Tauri 经典药丸 176×42），并用透明背景让圆角
         // 真正透出桌面；QA / 预览是实心卡片窗口。
         let size = match kind {
