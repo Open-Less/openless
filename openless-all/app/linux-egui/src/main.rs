@@ -4803,9 +4803,8 @@ mod linux_app {
     mod popup_overlay {
         use super::*;
         use openless_linux_egui::{
-            place_overlay, OverlayEnvironment, OverlayPlacement, X11Overlay, CAPSULE_BOTTOM_GAP,
-            CAPSULE_WINDOW_SIZE, PREVIEW_BOTTOM_GAP, PREVIEW_WINDOW_SIZE, QA_BOTTOM_GAP,
-            QA_WINDOW_SIZE,
+            place_overlay, popup_position, popup_size, OverlayEnvironment, OverlayPlacement,
+            X11Overlay,
         };
 
         pub struct PopupOverlay {
@@ -4861,30 +4860,16 @@ mod linux_app {
 
             /// Position handed to `ViewportBuilder::with_position`, so the pill
             /// is already in place the first time it is shown.
-            /// Window size + bottom gap for this popup kind. Tauri places the
-            /// capsule 12px above the work-area bottom (`EDGE_GAP`) and the
-            /// selection-ask panel above where the pill sits.
-            fn metrics(&self) -> ((u32, u32), i32) {
-                match self.kind {
-                    PopupKind::Capsule => (CAPSULE_WINDOW_SIZE, CAPSULE_BOTTOM_GAP),
-                    PopupKind::Qa => (QA_WINDOW_SIZE, QA_BOTTOM_GAP),
-                    PopupKind::Preview => (PREVIEW_WINDOW_SIZE, PREVIEW_BOTTOM_GAP),
-                }
-            }
-
             pub fn initial_position(&self) -> Option<(i32, i32)> {
-                let (size, gap) = self.metrics();
-                self.environment.position_for(size, gap)
+                popup_position(&self.environment, self.kind)
             }
 
             fn apply(&mut self, reason: &str) -> OverlayPlacement {
-                let (size, gap) = self.metrics();
                 let placement = place_overlay(
                     &mut self.connection,
                     std::process::id(),
                     &self.environment,
-                    size,
-                    gap,
+                    self.kind,
                 );
                 if placement.applied() {
                     log::info!(
@@ -4900,6 +4885,23 @@ mod linux_app {
                         placement.warnings
                     );
                 }
+                // Milestone line for real-machine verification: the popup
+                // process installs no logger, but it inherits stderr from the
+                // host, so this is the one place the fallback is observable
+                // (`journalctl --user -f | grep 'OpenLess capsule'`).
+                eprintln!(
+                    "OpenLess capsule: x11 {reason} window={:?} matched={} moved_to={:?} \
+focus_was_stolen={} focus_restored={} warnings={:?}",
+                    placement.window,
+                    placement
+                        .matched
+                        .map(openless_linux_egui::WindowMatch::as_str)
+                        .unwrap_or("none"),
+                    placement.moved_to,
+                    placement.focus_was_stolen,
+                    placement.focus_restored,
+                    placement.warnings
+                );
                 placement
             }
 
@@ -5375,7 +5377,7 @@ mod linux_app {
     /// 胶囊在实现了 `zwlr_layer_shell_v1` 的合成器上跑原生 layer surface
     /// （贴底居中、键盘焦点不可能、不占工作区）；协议缺失、EGL 起不来或
     /// configure 超时都会返回 Err，由调用方回退到 XWayland 叠加层。
-    fn run_capsule_layer_process() -> Result<(), String> {
+    fn run_capsule_layer_process() -> Result<(), LayerCapsuleFailure> {
         let geometry = openless_linux_egui::capsule_geometry(
             openless_linux_egui::CAPSULE_WINDOW_SIZE.0,
             openless_linux_egui::CAPSULE_WINDOW_SIZE.1,
@@ -5426,13 +5428,25 @@ mod linux_app {
             Ok(()) => Ok(()),
             Err(error) if started.load(std::sync::atomic::Ordering::SeqCst) => {
                 // The capsule was already on screen: the host pipe is in use, so
-                // there is nothing to fall back to. Report and let it die.
-                Err(format!(
-                    "layer-shell capsule stopped after startup: {error}"
-                ))
+                // there is nothing to fall back to (a second window would fight
+                // this process for the same stdin). Report and let it die.
+                Err(LayerCapsuleFailure {
+                    message: format!("layer-shell capsule stopped after startup: {error}"),
+                    started: true,
+                })
             }
-            Err(error) => Err(error),
+            Err(error) => Err(LayerCapsuleFailure {
+                message: error,
+                started: false,
+            }),
         }
+    }
+
+    /// Why the layer-shell capsule gave up, plus whether it had already taken
+    /// over the host pipe — a live capsule cannot fall back to a second window.
+    struct LayerCapsuleFailure {
+        message: String,
+        started: bool,
     }
 
     fn run_popup_process(kind: PopupKind) -> Result<(), String> {
@@ -5444,12 +5458,15 @@ mod linux_app {
         {
             match run_capsule_layer_process() {
                 Ok(()) => return Ok(()),
-                Err(error) => {
+                Err(failure) if failure.started => return Err(failure.message),
+                Err(failure) => {
                     eprintln!(
-                        "OpenLess capsule: layer-shell unavailable ({error}); using the XWayland overlay"
+                        "OpenLess capsule: layer-shell unavailable ({}); using the XWayland overlay",
+                        failure.message
                     );
                     log::warn!(
-                        "layer-shell capsule unavailable ({error}); falling back to the XWayland overlay"
+                        "layer-shell capsule unavailable ({}); falling back to the XWayland overlay",
+                        failure.message
                     );
                 }
             }
@@ -5471,10 +5488,21 @@ mod linux_app {
             ],
         };
         let transparent = matches!(kind, PopupKind::Capsule);
-        // 胶囊跑在 XWayland 上（见 `popup::force_x11_for`）：先读一次 X11 几何，
-        // 这样窗口可以在**创建时**就落在工作区底部居中，并且映射前就把
-        // WM_HINTS.input 关掉——kwin 不会再把焦点给它。
-        let overlay = PopupOverlay::probe(kind);
+        // 三条路径的优先级（`popup_layer::choose_capsule_path`）：
+        //   1. 合成器有 zwlr_layer_shell_v1 → 走原生 layer surface（已在上面 return）
+        //   2. 否且有 X 服务器 → XWayland + 下面的 X11 叠加层（本分支）
+        //   3. 两者都没有 → 普通无边框窗口，位置/焦点交给合成器
+        // 胶囊只在第 2 条路径里做 X11 处理：先读一次几何，让窗口在**创建时**就落
+        // 在工作区底部居中，并在映射前把 WM_HINTS.input 关掉（kwin 不会再给它焦点）。
+        // 面板窗（QA/预览）需要键盘输入，只借 `with_position` 定位。
+        let capsule_on_x11 = kind == PopupKind::Capsule
+            && openless_linux_egui::detect_capsule_path()
+                == openless_linux_egui::CapsulePath::X11Overlay;
+        let overlay = if kind == PopupKind::Capsule && !capsule_on_x11 {
+            None
+        } else {
+            PopupOverlay::probe(kind)
+        };
         let initial_position = overlay
             .as_ref()
             .and_then(|overlay| overlay.initial_position());

@@ -34,13 +34,39 @@ pub const CAPSULE_WINDOW_SIZE: (u32, u32) = (200, 100);
 pub const CAPSULE_BOTTOM_GAP: i32 = 12;
 /// Selection-ask panel size (the chat panel).
 pub const QA_WINDOW_SIZE: (u32, u32) = (520, 520);
-/// Selection-ask panel bottom gap: where the capsule pill would sit plus
-/// Tauri's `QA_WINDOW_GAP_TO_CAPSULE` (8), so the panel clears the pill.
-pub const QA_BOTTOM_GAP: i32 = 42 + 8;
 /// Polish-preview panel size.
 pub const PREVIEW_WINDOW_SIZE: (u32, u32) = (480, 320);
-/// Polish-preview bottom gap: centred a little above the capsule.
-pub const PREVIEW_BOTTOM_GAP: i32 = 120;
+
+/// Window size for one popup kind, in X11 pixels.
+pub fn popup_size(kind: crate::popup::PopupKind) -> (u32, u32) {
+    use crate::popup::PopupKind;
+    match kind {
+        PopupKind::Capsule => CAPSULE_WINDOW_SIZE,
+        PopupKind::Qa => QA_WINDOW_SIZE,
+        PopupKind::Preview => PREVIEW_WINDOW_SIZE,
+    }
+}
+
+/// Where one popup is placed inside the work area.
+///
+/// The capsule hugs the bottom edge, centred: it is the transient overlay the
+/// eyes track while dictating, and Tauri's `position_capsule_bottom_center_*`
+/// puts it there too. The selection-ask panel and the polish preview are
+/// **centred** instead of stacked above the pill — Tauri shows both as centred
+/// cards, and stacking would overlap: a 520px panel sitting 50px above the
+/// work-area bottom runs into the 100px capsule strip that starts 112px above
+/// it.
+pub fn popup_position(
+    environment: &OverlayEnvironment,
+    kind: crate::popup::PopupKind,
+) -> Option<(i32, i32)> {
+    use crate::popup::PopupKind;
+    match kind {
+        PopupKind::Capsule => environment.position_for(CAPSULE_WINDOW_SIZE, CAPSULE_BOTTOM_GAP),
+        PopupKind::Qa => environment.centred_for(QA_WINDOW_SIZE),
+        PopupKind::Preview => environment.centred_for(PREVIEW_WINDOW_SIZE),
+    }
+}
 
 /// A rectangle in root-window coordinates (pixels).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,6 +100,13 @@ pub fn clamp_to_area(x: i32, y: i32, window: (u32, u32), area: X11Rect) -> (i32,
     let max_x = (area.x + area.width as i32 - window.0 as i32).max(area.x);
     let max_y = (area.y + area.height as i32 - window.1 as i32).max(area.y);
     (x.clamp(area.x, max_x), y.clamp(area.y, max_y))
+}
+
+/// Centre the window in `area` (both axes), then pull it back inside.
+pub fn centered(area: X11Rect, window: (u32, u32)) -> (i32, i32) {
+    let x = area.x + (area.width.saturating_sub(window.0) / 2) as i32;
+    let y = area.y + (area.height.saturating_sub(window.1) / 2) as i32;
+    clamp_to_area(x, y, window, area)
 }
 
 /// Search the monitor list for the one holding `point` (Tauri follows the
@@ -119,6 +152,11 @@ impl OverlayEnvironment {
     pub fn position_for(&self, window: (u32, u32), bottom_gap: i32) -> Option<(i32, i32)> {
         self.placement_area()
             .map(|area| bottom_center(area, window, bottom_gap))
+    }
+
+    /// Centre `window` in the same area `position_for` uses.
+    pub fn centred_for(&self, window: (u32, u32)) -> Option<(i32, i32)> {
+        self.placement_area().map(|area| centered(area, window))
     }
 }
 
@@ -275,8 +313,7 @@ pub fn place_overlay(
     x11: &mut dyn OverlayX11,
     pid: u32,
     environment: &OverlayEnvironment,
-    window_size: (u32, u32),
-    bottom_gap: i32,
+    kind: crate::popup::PopupKind,
 ) -> OverlayPlacement {
     let mut placement = OverlayPlacement::default();
     let (window, matched) = match x11.find_own_window(pid) {
@@ -317,7 +354,7 @@ pub fn place_overlay(
             .warnings
             .push(format!("overlay states failed: {error}"));
     }
-    if let Some(position) = environment.position_for(window_size, bottom_gap) {
+    if let Some(position) = popup_position(environment, kind) {
         match x11.move_window(window, position) {
             Ok(()) => placement.moved_to = Some(position),
             Err(error) => placement.warnings.push(format!("move failed: {error}")),
@@ -777,6 +814,7 @@ pub fn x11_available(display: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::popup::PopupKind;
 
     fn monitor(x: i32, y: i32, width: u32, height: u32) -> X11Rect {
         X11Rect {
@@ -931,6 +969,67 @@ mod tests {
         }
     }
 
+    #[test]
+    fn popup_size_maps_every_kind() {
+        assert_eq!(popup_size(PopupKind::Capsule), CAPSULE_WINDOW_SIZE);
+        assert_eq!(popup_size(PopupKind::Qa), QA_WINDOW_SIZE);
+        assert_eq!(popup_size(PopupKind::Preview), PREVIEW_WINDOW_SIZE);
+    }
+
+    /// The capsule hugs the bottom edge of the work area, centred.
+    #[test]
+    fn popup_position_puts_the_capsule_at_the_bottom_centre() {
+        assert_eq!(
+            popup_position(&environment(), PopupKind::Capsule),
+            Some((860, 968))
+        );
+    }
+
+    /// The panels are centred dialogs, and centring is what keeps them from
+    /// running into the capsule strip: a 520px panel 50px above the bottom edge
+    /// would start at y=510 and end at 1030, i.e. inside the pill's 968..1068.
+    #[test]
+    fn popup_position_centres_the_panels_clear_of_the_capsule() {
+        assert_eq!(
+            popup_position(&environment(), PopupKind::Qa),
+            Some((700, 280))
+        );
+        assert_eq!(
+            popup_position(&environment(), PopupKind::Preview),
+            Some((720, 380))
+        );
+        let area = monitor(0, 0, 1920, 1080);
+        let (_, capsule_y) = bottom_center(area, CAPSULE_WINDOW_SIZE, CAPSULE_BOTTOM_GAP);
+        for kind in [PopupKind::Qa, PopupKind::Preview] {
+            let (_, y) = popup_position(&environment(), kind).expect("centred");
+            let height = popup_size(kind).1 as i32;
+            assert!(
+                y + height <= capsule_y,
+                "{kind:?} overlaps the capsule strip: {}..{} vs {}",
+                y,
+                y + height,
+                capsule_y
+            );
+        }
+    }
+
+    /// A work area smaller than the window keeps the window at its origin
+    /// instead of producing a negative position.
+    #[test]
+    fn popup_position_keeps_an_oversized_panel_inside_a_tiny_area() {
+        let environment = OverlayEnvironment {
+            work_area: Some(monitor(0, 0, 400, 300)),
+            monitors: vec![monitor(0, 0, 400, 300)],
+            cursor: None,
+            active_window: None,
+        };
+        assert_eq!(popup_position(&environment, PopupKind::Qa), Some((0, 0)),);
+        assert_eq!(
+            popup_position(&environment, PopupKind::Capsule),
+            Some((100, 188)),
+        );
+    }
+
     /// A capsule that did take the keyboard: everything is asserted on one
     /// request sequence, including the order (input hint + window type +
     /// position hint before the EWMH states and the move).
@@ -941,7 +1040,7 @@ mod tests {
             current_active: Some(0x2a),
             ..Default::default()
         };
-        let placement = place_overlay(&mut x11, 4242, &environment(), (200, 100), 12);
+        let placement = place_overlay(&mut x11, 4242, &environment(), PopupKind::Capsule);
         assert_eq!(
             x11.calls,
             vec![
@@ -971,7 +1070,7 @@ mod tests {
             fail_input: true,
             ..Default::default()
         };
-        let placement = place_overlay(&mut x11, 1, &environment(), (200, 100), 12);
+        let placement = place_overlay(&mut x11, 1, &environment(), PopupKind::Capsule);
         assert!(placement.applied());
         assert_eq!(placement.moved_to, Some((860, 968)));
         assert_eq!(placement.warnings, vec!["input hint failed: nope"]);
@@ -980,7 +1079,7 @@ mod tests {
     #[test]
     fn place_overlay_reports_a_missing_window() {
         let mut x11 = FakeX11::default();
-        let placement = place_overlay(&mut x11, 7, &environment(), (200, 100), 12);
+        let placement = place_overlay(&mut x11, 7, &environment(), PopupKind::Capsule);
         assert!(!placement.applied());
         assert_eq!(placement.warnings, vec!["own X11 window not found yet"]);
         assert_eq!(x11.calls, vec!["find(7)"]);
@@ -994,7 +1093,7 @@ mod tests {
         };
         let mut environment = environment();
         environment.active_window = Some(0x40);
-        let placement = place_overlay(&mut x11, 1, &environment, (200, 100), 12);
+        let placement = place_overlay(&mut x11, 1, &environment, PopupKind::Capsule);
         assert!(!placement.focus_was_stolen);
         assert!(!placement.focus_restored);
         assert!(!x11.calls.iter().any(|call| call.starts_with("focus(")));
@@ -1009,7 +1108,7 @@ mod tests {
             current_active: Some(0x99),
             ..Default::default()
         };
-        let placement = place_overlay(&mut x11, 1, &environment(), (200, 100), 12);
+        let placement = place_overlay(&mut x11, 1, &environment(), PopupKind::Capsule);
         assert!(placement.applied());
         assert!(placement.focus_was_stolen == false);
         assert!(placement.focus_restored == false);

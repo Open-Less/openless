@@ -93,10 +93,48 @@ pub fn choose_capsule_path(
     CapsulePath::PlainWindow
 }
 
-/// Decide how this process should host the capsule: probe the live session and
-/// apply [`choose_capsule_path`]. Never fails; a missing session, a failed
-/// connection or an absent global all end up on the fallback path.
+/// Environment variable that pins the capsule host, for verification on a
+/// machine whose compositor would otherwise win the choice (e.g. a KWin session
+/// where only the X11 fallback is under test).
+pub const CAPSULE_PATH_ENV: &str = "OPENLESS_CAPSULE_PATH";
+
+/// Parse [`CAPSULE_PATH_ENV`]. Unknown or empty values are ignored so a typo
+/// cannot leave the capsule without a window.
+pub fn capsule_path_override(value: Option<&str>) -> Option<CapsulePath> {
+    match value?.trim().to_ascii_lowercase().as_str() {
+        "layer" | "layer-shell" | "layer_shell" => Some(CapsulePath::LayerShell),
+        "x11" | "xwayland" => Some(CapsulePath::X11Overlay),
+        "plain" | "none" => Some(CapsulePath::PlainWindow),
+        _ => None,
+    }
+}
+
+/// Whether the compositor offers `zwlr_layer_shell_v1`, memoised: the capsule is
+/// launched once per dictation and probing opens a Wayland connection.
+///
+/// [`CAPSULE_PATH_ENV`] wins over the probe, and both this and
+/// [`detect_capsule_path`] read it, so the parent (which decides the child's
+/// backend) and the child (which decides how to host the window) always agree.
+pub fn layer_shell_available() -> bool {
+    static CACHE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CACHE.get_or_init(|| {
+        if let Some(forced) = capsule_path_override(std::env::var(CAPSULE_PATH_ENV).ok().as_deref())
+        {
+            return forced == CapsulePath::LayerShell;
+        }
+        probe_layer_shell(std::env::var("WAYLAND_DISPLAY").ok().as_deref())
+    })
+}
+
+/// Decide how this process should host the capsule: an explicit override wins,
+/// otherwise probe the live session and apply [`choose_capsule_path`]. Never
+/// fails; a missing session, a failed connection or an absent global all end up
+/// on the fallback path.
 pub fn detect_capsule_path() -> CapsulePath {
+    if let Some(forced) = capsule_path_override(std::env::var(CAPSULE_PATH_ENV).ok().as_deref()) {
+        log::info!("capsule path forced by {CAPSULE_PATH_ENV}: {forced:?}");
+        return forced;
+    }
     let wayland = std::env::var("WAYLAND_DISPLAY").ok();
     let x11 = std::env::var("DISPLAY").ok();
     if !wayland_display_available(wayland.as_deref()) {
@@ -116,13 +154,15 @@ pub fn detect_capsule_path() -> CapsulePath {
 /// usable Wayland connection.
 fn probe_globals() -> Result<Vec<String>, String> {
     let connection = Connection::connect_to_env().map_err(|error| format!("wayland: {error}"))?;
-    let (_globals, mut queue) = registry_queue_init::<LayerState>(&connection)
+    // `registry_queue_init` already round-trips the registry and hands back the
+    // `GlobalList` it collected. Dispatching a second time into our own state
+    // collects nothing (the global events are already consumed), which would
+    // make every compositor look like it lacks layer-shell.
+    let (globals, _queue) = registry_queue_init::<LayerState>(&connection)
         .map_err(|error| format!("wayland registry: {error}"))?;
-    let mut state = LayerState::default();
-    queue
-        .roundtrip(&mut state)
-        .map_err(|error| format!("wayland roundtrip: {error}"))?;
-    Ok(state.globals)
+    Ok(globals
+        .contents()
+        .with_list(|list| list.iter().map(|global| global.interface.clone()).collect()))
 }
 
 /// Layer-surface geometry: the surface is a fixed-size child of the compositor,
@@ -223,7 +263,6 @@ pub fn probe_layer_shell(wayland_display: Option<&str>) -> bool {
 /// events collected between frames.
 #[derive(Default)]
 struct LayerState {
-    globals: Vec<String>,
     compositor: Option<wl_compositor::WlCompositor>,
     layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
     seat: Option<wl_seat::WlSeat>,
@@ -290,7 +329,6 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for LayerState {
         else {
             return;
         };
-        state.globals.push(interface.clone());
         match interface.as_str() {
             "wl_compositor" => {
                 state.compositor = Some(registry.bind(name, version.min(4), qh, ()));
@@ -542,15 +580,48 @@ pub type FrameCallback = dyn FnMut(&egui::Context, egui::RawInput, bool) -> Laye
 /// created here; the caller installs fonts/visuals on the first frame (egui's
 /// built-in fonts are enough for the pill, but a host font setup should run
 /// once).
+/// Bind the registry objects this module needs from the list
+/// `registry_queue_init` collected.
+///
+/// The global events are consumed during `registry_queue_init`, so a later
+/// `roundtrip` into our own state never sees them: binding through the returned
+/// `GlobalList` is the only way the compositor, layer-shell and seat objects
+/// exist at all.
+fn bind_globals(
+    globals: &wayland_client::globals::GlobalList,
+    qh: &QueueHandle<LayerState>,
+) -> LayerState {
+    let registry = globals.registry();
+    let mut state = LayerState::default();
+    for global in globals.contents().clone_list() {
+        match global.interface.as_str() {
+            "wl_compositor" => {
+                state.compositor = Some(registry.bind(global.name, global.version.min(4), qh, ()));
+            }
+            // Layer shell is at version 4 in the widest-deployed compositors and
+            // 5 in KWin 6.7; everything this module sets exists since version 1.
+            LAYER_SHELL_GLOBAL => {
+                state.layer_shell = Some(registry.bind(global.name, global.version.min(4), qh, ()));
+            }
+            "wl_seat" => {
+                state.seat = Some(registry.bind(global.name, global.version.min(7), qh, ()));
+            }
+            _ => {}
+        }
+    }
+    state
+}
+
 pub fn run_layer_capsule<F>(geometry: CapsuleGeometry, mut frame: F) -> Result<(), String>
 where
     F: FnMut(&egui::Context, egui::RawInput, bool) -> LayerFrame,
 {
     let connection = Connection::connect_to_env().map_err(|error| format!("wayland: {error}"))?;
-    let (_globals, mut queue) = registry_queue_init::<LayerState>(&connection)
+    let (globals, mut queue) = registry_queue_init::<LayerState>(&connection)
         .map_err(|error| format!("wayland registry: {error}"))?;
     let qh = queue.handle();
-    let mut state = LayerState::default();
+    let mut state = bind_globals(&globals, &qh);
+    // One roundtrip so the seat capabilities arrive and the pointer exists.
     queue
         .roundtrip(&mut state)
         .map_err(|error| format!("wayland roundtrip: {error}"))?;
@@ -693,6 +764,81 @@ mod tests {
         assert!(!wayland_display_available(Some("   ")));
         assert!(!wayland_display_available(None));
         assert!(wayland_display_available(Some("wayland-0")));
+    }
+
+    /// 真机验证用：在一台真的连着合成器的机器上跑
+    /// `cargo test -p openless-linux-egui -- --ignored --nocapture capsule_decision`
+    /// 就能看到这台机器实际会走哪条路径。
+    #[test]
+    #[ignore = "requires a live Wayland / X11 session"]
+    fn capsule_decision_on_this_machine() {
+        let wayland = std::env::var("WAYLAND_DISPLAY").ok();
+        let x11 = std::env::var("DISPLAY").ok();
+        let globals = probe_globals();
+        println!("WAYLAND_DISPLAY={wayland:?} DISPLAY={x11:?}");
+        match &globals {
+            Ok(globals) => println!(
+                "globals with layer-shell: {}",
+                globals
+                    .iter()
+                    .filter(|g| g.as_str() == LAYER_SHELL_GLOBAL)
+                    .count()
+            ),
+            Err(error) => println!("globals unavailable: {error}"),
+        }
+        println!(
+            "probe_layer_shell={} layer_shell_available={} detect_capsule_path={:?}",
+            probe_layer_shell(wayland.as_deref()),
+            layer_shell_available(),
+            detect_capsule_path()
+        );
+    }
+
+    #[test]
+    fn capsule_path_override_parses_the_documented_values() {
+        assert_eq!(
+            capsule_path_override(Some("layer")),
+            Some(CapsulePath::LayerShell)
+        );
+        assert_eq!(
+            capsule_path_override(Some(" Layer-Shell ")),
+            Some(CapsulePath::LayerShell)
+        );
+        assert_eq!(
+            capsule_path_override(Some("x11")),
+            Some(CapsulePath::X11Overlay)
+        );
+        assert_eq!(
+            capsule_path_override(Some("XWayland")),
+            Some(CapsulePath::X11Overlay)
+        );
+        assert_eq!(
+            capsule_path_override(Some("plain")),
+            Some(CapsulePath::PlainWindow)
+        );
+        // A typo must never take the capsule off every path.
+        assert_eq!(capsule_path_override(Some("")), None);
+        assert_eq!(capsule_path_override(Some("layerish")), None);
+        assert_eq!(capsule_path_override(None), None);
+    }
+
+    /// The parent picks the child's backend from the same override the child
+    /// uses to pick its window, so the two can never disagree: an override of
+    /// `layer` is the only one that must keep the Wayland connection alive.
+    #[test]
+    fn the_override_keeps_the_parent_and_child_in_agreement() {
+        for (value, layer_shell, path) in [
+            ("layer", true, CapsulePath::LayerShell),
+            ("x11", false, CapsulePath::X11Overlay),
+            ("plain", false, CapsulePath::PlainWindow),
+        ] {
+            let forced = capsule_path_override(Some(value));
+            assert_eq!(forced, Some(path), "override {value}");
+            // What `layer_shell_available` returns for that override…
+            assert_eq!(forced == Some(CapsulePath::LayerShell), layer_shell);
+            // …and what the child derives from the same value.
+            assert_eq!(forced, Some(path));
+        }
     }
 
     #[test]
