@@ -79,9 +79,10 @@ pub use popup::{
 #[cfg(all(target_os = "linux", feature = "x11-overlay"))]
 pub use popup_window::X11Overlay;
 pub use popup_window::{
-    bottom_center, clamp_to_area, monitor_containing, place_overlay, x11_available,
-    OverlayEnvironment, OverlayPlacement, OverlayX11, X11Rect, CAPSULE_BOTTOM_GAP,
-    CAPSULE_WINDOW_SIZE, PREVIEW_BOTTOM_GAP, PREVIEW_WINDOW_SIZE, QA_BOTTOM_GAP, QA_WINDOW_SIZE,
+    bottom_center, clamp_to_area, monitor_containing, place_overlay, select_overlay_window,
+    x11_available, OverlayEnvironment, OverlayPlacement, OverlayX11, WindowCandidate, WindowMatch,
+    X11Rect, CAPSULE_BOTTOM_GAP, CAPSULE_WINDOW_SIZE, PREVIEW_BOTTOM_GAP, PREVIEW_WINDOW_SIZE,
+    QA_BOTTOM_GAP, QA_WINDOW_SIZE,
 };
 
 pub use recordings::{read_recording_wav, recording_path, recording_pcm, RecordingError};

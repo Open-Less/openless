@@ -4888,9 +4888,14 @@ mod linux_app {
                 );
                 if placement.applied() {
                     log::info!(
-                        "capsule x11 ({reason}): window={:?} moved_to={:?} focus_restored={} warnings={:?}",
+                        "capsule x11 ({reason}): window={:?} matched={} moved_to={:?} focus_was_stolen={} focus_restored={} warnings={:?}",
                         placement.window,
+                        placement
+                            .matched
+                            .map(openless_linux_egui::WindowMatch::as_str)
+                            .unwrap_or("none"),
                         placement.moved_to,
+                        placement.focus_was_stolen,
                         placement.focus_restored,
                         placement.warnings
                     );
