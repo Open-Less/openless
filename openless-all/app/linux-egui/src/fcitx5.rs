@@ -226,7 +226,10 @@ pub(crate) fn plugin_library_search_dirs(usr_lib_subdirs: &[String]) -> Vec<Path
     }
     push(PathBuf::from("/usr/lib/fcitx5"));
     push(PathBuf::from("/usr/lib64/fcitx5"));
-    push(PathBuf::from("/usr/local/lib/fcitx5"));
+    // /usr/local is deliberately *not* a package path: anything there is a
+    // leftover manual install that dpkg never replaces. Treating it as "the
+    // packaged plugin" made every start believe the addon had changed and
+    // kept a stale build live; `report_stale_manual_plugin` removes it instead.
     dirs
 }
 
@@ -290,11 +293,26 @@ fn report_stale_manual_plugin(installed: &Path, installed_fingerprint: &str) {
         return;
     }
     match std::fs::remove_file(&library) {
-        Ok(()) => log::warn!(
-            "[fcitx] removed the stale manual addon {} — the packaged plugin {} wins",
-            library.display(),
-            installed.display()
-        ),
+        Ok(()) => {
+            log::warn!(
+                "[fcitx] removed the stale manual addon {} — the packaged plugin {} wins",
+                library.display(),
+                installed.display()
+            );
+            // The addon conf in the same prefix shadows the packaged one; with
+            // the library gone fcitx5 would fail to load `openless` at all, so
+            // drop it as well (only ever our own file).
+            match std::fs::remove_file(&config) {
+                Ok(()) => log::warn!("[fcitx] removed the stale manual addon config {}", config.display()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => log::warn!(
+                    "[fcitx] could not remove {}: {error}; sudo rm -f {} {}",
+                    config.display(),
+                    library.display(),
+                    config.display()
+                ),
+            }
+        }
         Err(error) => log::warn!(
             "[fcitx] the manual addon {} (fingerprint {}) differs from the packaged plugin \
              and is not replaced by the package manager; remove it with: sudo rm -f {} {} ({error})",
@@ -383,22 +401,24 @@ pub fn reload_fcitx5_if_plugin_updated(plan: &FcitxPluginInstallPlan, data_dir: 
             .unwrap_or("<none>"),
         newer,
     );
-    let Some(reason) = reload_reason(
+    let reason = reload_reason(
         marker.as_deref(),
         &current,
         newer,
         daemon_holds_installed_copy,
-    ) else {
-        return false;
-    };
-    // Record the fingerprint *before* asking for the restart: a daemon that
-    // never comes back must not make the next start repeat the decision.
+    );
+    // Record the fingerprint *before* asking for the restart (and also when no
+    // restart is needed): a daemon that never comes back, or a start that had
+    // nothing to do, must not make the next start repeat the decision.
     if let Some(parent) = fingerprint_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     if let Err(error) = std::fs::write(&fingerprint_path, &current) {
         log::warn!("[fcitx] could not record the plugin fingerprint: {error}");
     }
+    let Some(reason) = reason else {
+        return false;
+    };
     log::info!("[fcitx] restarting fcitx5 to load the addon update ({reason:?})");
     reload_running_fcitx5()
 }
@@ -1200,17 +1220,19 @@ mod tests {
     #[test]
     fn the_packaged_addon_is_searched_before_a_manual_install() {
         let dirs = plugin_library_search_dirs(&["x86_64-linux-gnu".to_string()]);
+        // A manual /usr/local install is never treated as a package path; it is
+        // cleaned up separately, otherwise every start thinks the addon changed.
+        assert!(
+            !dirs.contains(&PathBuf::from("/usr/local/lib/fcitx5")),
+            "a manual install must not masquerade as the packaged addon: {dirs:?}"
+        );
         let multiarch = dirs
             .iter()
             .position(|dir| dir == Path::new("/usr/lib/x86_64-linux-gnu/fcitx5"))
             .expect("multiarch addon dir");
-        let manual = dirs
-            .iter()
-            .position(|dir| dir == Path::new("/usr/local/lib/fcitx5"))
-            .expect("manual addon dir");
         assert!(
-            multiarch < manual,
-            "the package copy must win over a manual /usr/local install: {dirs:?}"
+            multiarch == 0,
+            "the multiarch package dir must be searched first: {dirs:?}"
         );
         // No duplicate entries when /usr/lib scans repeat a prefix.
         let twice = plugin_library_search_dirs(&[

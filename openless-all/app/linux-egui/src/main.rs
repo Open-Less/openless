@@ -4825,11 +4825,17 @@ mod linux_app {
     /// A ready addon lets startup continue down the normal fcitx5 DBus path —
     /// never a global-hotkey fallback — and only a genuinely missing plugin
     /// aborts startup.
+    /// 插件缺失/未就绪 **绝不是** 启动失败：主窗口必须照常出现，只是全局热键
+    /// 暂时不可用。早先这里 `Err(...)?` 会把整个启动打断，表现就是「主窗口不显示」。
     fn reconcile_fcitx5_install(status: FcitxPluginStatus) -> Result<(), String> {
         match status {
             FcitxPluginStatus::Ready => Ok(()),
             FcitxPluginStatus::Missing => {
-                Err("未找到 OpenLess fcitx5 插件；请重新安装当前软件包".to_string())
+                log::warn!(
+                    "[fcitx] no OpenLess fcitx5 addon found in the package paths; \
+                     global hotkeys stay unavailable until the package is reinstalled"
+                );
+                Ok(())
             }
         }
     }
@@ -6186,13 +6192,13 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             assert!(reconcile_fcitx5_install(FcitxPluginStatus::Ready).is_ok());
         }
 
+        /// 插件缺失只影响全局热键，**绝不能** 让启动失败 —— 早先这里返回 Err 并
+        /// 用 `?` 中断启动，用户看到的就是「主窗口不显示」。
         #[test]
-        fn missing_install_aborts_without_reloading() {
-            let error = reconcile_fcitx5_install(FcitxPluginStatus::Missing)
-                .expect_err("a missing plugin must abort startup");
+        fn missing_install_still_starts_the_window() {
             assert!(
-                error.contains("OpenLess fcitx5 插件"),
-                "unexpected Missing message: {error}"
+                reconcile_fcitx5_install(FcitxPluginStatus::Missing).is_ok(),
+                "a missing fcitx5 addon must never abort startup"
             );
         }
 
