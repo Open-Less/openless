@@ -20,6 +20,7 @@ mod i18n;
 mod logging;
 mod marketplace;
 mod popup;
+mod popup_window;
 mod qa;
 mod recordings;
 mod remote_input;
@@ -68,12 +69,21 @@ pub use hotkeys::{Fcitx5HotkeyListener, LinuxHotkeyEvent};
 pub use i18n::{fmt_catalog as fmt_l10n, tr_catalog as tr_l10n, Lang, LocalePref, LANGS};
 pub use logging::{export_error_log, init_file_logger, log_path};
 pub use popup::{
-    read_jsonl, run_popup, write_jsonl, ApplyOutcome as PopupApplyOutcome, CapsulePopupState,
-    HostToPopup, PopupActionGuard, PopupChatMessage, PopupKind, PopupSendError, PopupState,
-    PopupSupervisor, PopupSupervisorEvent, PopupToHost, PreviewPopupState,
-    ProtocolError as PopupProtocolError, ProtocolErrorKind as PopupProtocolErrorKind, QaPopupState,
-    MAX_JSONL_LINE_BYTES, POPUP_PROTOCOL_VERSION,
+    force_x11_for, popup_command, read_jsonl, run_popup, write_jsonl,
+    ApplyOutcome as PopupApplyOutcome, CapsulePopupState, HostToPopup, PopupActionGuard,
+    PopupChatMessage, PopupKind, PopupSendError, PopupState, PopupSupervisor, PopupSupervisorEvent,
+    PopupToHost, PreviewPopupState, ProtocolError as PopupProtocolError,
+    ProtocolErrorKind as PopupProtocolErrorKind, QaPopupState, MAX_JSONL_LINE_BYTES,
+    POPUP_PROTOCOL_VERSION,
 };
+#[cfg(all(target_os = "linux", feature = "x11-overlay"))]
+pub use popup_window::X11Overlay;
+pub use popup_window::{
+    bottom_center, clamp_to_area, monitor_containing, place_overlay, x11_available,
+    OverlayEnvironment, OverlayPlacement, OverlayX11, X11Rect, CAPSULE_BOTTOM_GAP,
+    CAPSULE_WINDOW_SIZE, PREVIEW_BOTTOM_GAP, PREVIEW_WINDOW_SIZE, QA_BOTTOM_GAP, QA_WINDOW_SIZE,
+};
+
 pub use recordings::{read_recording_wav, recording_path, recording_pcm, RecordingError};
 pub use resources::{
     LinuxPackageKind, LinuxResourceLayout, LinuxResourceResolver, FCITX_PLUGIN_CONFIG,

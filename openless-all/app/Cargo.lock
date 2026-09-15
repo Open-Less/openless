@@ -3437,6 +3437,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "uuid",
+ "x11rb",
  "x509-parser",
 ]
 

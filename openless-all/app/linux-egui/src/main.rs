@@ -4791,6 +4791,170 @@ mod linux_app {
         ))
     }
 
+    /// X11 overlay placement for the capsule popup.
+    ///
+    /// The capsule must land at the bottom centre of the work area and must
+    /// never take the keyboard: on macOS Tauri gets the same guarantee from
+    /// `orderFrontRegardless` ("visible but not the key window"). Under XWayland
+    /// the equivalent is `WM_HINTS.input = False`, which is why the capsule is
+    /// launched with the Wayland backend removed (see
+    /// [`openless_linux_egui::popup_command`]).
+    #[cfg(all(target_os = "linux", feature = "x11-overlay"))]
+    mod popup_overlay {
+        use super::*;
+        use openless_linux_egui::{
+            place_overlay, OverlayEnvironment, OverlayPlacement, X11Overlay, CAPSULE_BOTTOM_GAP,
+            CAPSULE_WINDOW_SIZE, PREVIEW_BOTTOM_GAP, PREVIEW_WINDOW_SIZE, QA_BOTTOM_GAP,
+            QA_WINDOW_SIZE,
+        };
+
+        pub struct PopupOverlay {
+            kind: PopupKind,
+            connection: X11Overlay,
+            environment: OverlayEnvironment,
+            /// The pre-map pass (hints + geometry) ran.
+            placed: bool,
+            /// The post-map pass (EWMH states, once the window is managed).
+            reasserted: bool,
+            attempts: u8,
+        }
+
+        impl PopupOverlay {
+            pub fn probe(kind: PopupKind) -> Option<Self> {
+                // 纯 Wayland（没有 XWayland）时不做任何 X11 处理，按原行为跑。
+                if !openless_linux_egui::x11_available(std::env::var("DISPLAY").ok().as_deref()) {
+                    log::debug!("popup x11: no DISPLAY, keeping the compositor placement");
+                    return None;
+                }
+                let connection = match X11Overlay::connect() {
+                    Ok(connection) => connection,
+                    Err(error) => {
+                        log::warn!(
+                            "capsule x11: connect failed, staying with the compositor: {error}"
+                        );
+                        return None;
+                    }
+                };
+                let environment = match connection.probe() {
+                    Ok(environment) => environment,
+                    Err(error) => {
+                        log::warn!("capsule x11: geometry probe failed: {error}");
+                        OverlayEnvironment::default()
+                    }
+                };
+                log::info!(
+                    "capsule x11: work_area={:?} monitors={} cursor={:?} active_window={:?}",
+                    environment.work_area,
+                    environment.monitors.len(),
+                    environment.cursor,
+                    environment.active_window
+                );
+                Some(Self {
+                    kind,
+                    connection,
+                    environment,
+                    placed: false,
+                    reasserted: false,
+                    attempts: 0,
+                })
+            }
+
+            /// Position handed to `ViewportBuilder::with_position`, so the pill
+            /// is already in place the first time it is shown.
+            /// Window size + bottom gap for this popup kind. Tauri places the
+            /// capsule 12px above the work-area bottom (`EDGE_GAP`) and the
+            /// selection-ask panel above where the pill sits.
+            fn metrics(&self) -> ((u32, u32), i32) {
+                match self.kind {
+                    PopupKind::Capsule => (CAPSULE_WINDOW_SIZE, CAPSULE_BOTTOM_GAP),
+                    PopupKind::Qa => (QA_WINDOW_SIZE, QA_BOTTOM_GAP),
+                    PopupKind::Preview => (PREVIEW_WINDOW_SIZE, PREVIEW_BOTTOM_GAP),
+                }
+            }
+
+            pub fn initial_position(&self) -> Option<(i32, i32)> {
+                let (size, gap) = self.metrics();
+                self.environment.position_for(size, gap)
+            }
+
+            fn apply(&mut self, reason: &str) -> OverlayPlacement {
+                let (size, gap) = self.metrics();
+                let placement = place_overlay(
+                    &mut self.connection,
+                    std::process::id(),
+                    &self.environment,
+                    size,
+                    gap,
+                );
+                if placement.applied() {
+                    log::info!(
+                        "capsule x11 ({reason}): window={:?} moved_to={:?} focus_restored={} warnings={:?}",
+                        placement.window,
+                        placement.moved_to,
+                        placement.focus_restored,
+                        placement.warnings
+                    );
+                }
+                placement
+            }
+
+            pub fn place(&mut self, ctx: &egui::Context, visible: bool) {
+                // 只有胶囊需要「永不聚焦 + 置顶 + 不进任务栏」；两个面板要键盘输入，
+                // 位置已经由 `with_position` 在创建时给过，X11 变更一概不做。
+                if self.kind != PopupKind::Capsule {
+                    self.placed = true;
+                    return;
+                }
+                if !self.placed {
+                    self.attempts = self.attempts.saturating_add(1);
+                    if self.apply("pre-map").applied() {
+                        self.placed = true;
+                    } else if self.attempts >= 100 {
+                        // The window never showed up in the tree: stop asking but
+                        // keep the pill working with the compositor's placement.
+                        log::warn!(
+                            "capsule x11: own window not found, keeping the compositor placement"
+                        );
+                        self.placed = true;
+                    } else {
+                        // The window is created a frame or two after the app
+                        // starts; try again on the next tick.
+                        ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                    }
+                    return;
+                }
+                if visible && !self.reasserted {
+                    // Now that the window is managed, (re)assert above +
+                    // skip-taskbar and the geometry the manager may have moved.
+                    self.reasserted = true;
+                    self.apply("post-map");
+                }
+            }
+        }
+    }
+
+    /// Pure Wayland build: the capsule keeps the compositor's placement.
+    #[cfg(not(all(target_os = "linux", feature = "x11-overlay")))]
+    mod popup_overlay {
+        use super::*;
+
+        pub struct PopupOverlay;
+
+        impl PopupOverlay {
+            pub fn probe(_kind: PopupKind) -> Option<Self> {
+                None
+            }
+
+            pub fn initial_position(&self) -> Option<(i32, i32)> {
+                None
+            }
+
+            pub fn place(&mut self, _ctx: &egui::Context, _visible: bool) {}
+        }
+    }
+
+    use popup_overlay::PopupOverlay;
+
     struct NativePopupApp {
         kind: PopupKind,
         state: PopupState,
@@ -4802,6 +4966,8 @@ mod linux_app {
         preview_focus_requested: bool,
         avatar: QaAvatar,
         lang: Lang,
+        /// X11 overlay placement for the capsule (bottom-centre, never focus).
+        overlay: Option<PopupOverlay>,
     }
 
     impl NativePopupApp {
@@ -4851,6 +5017,11 @@ mod linux_app {
 
     impl eframe::App for NativePopupApp {
         fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+            // Overlay placement first: it must run before the window is shown so
+            // the compositor never gives the capsule the keyboard.
+            if let Some(overlay) = self.overlay.as_mut() {
+                overlay.place(ctx, self.state.visible);
+            }
             while let Ok(message) = self.incoming.try_recv() {
                 if message
                     .content_kind()
@@ -5109,20 +5280,42 @@ mod linux_app {
         // 真正透出桌面；QA / 预览是实心卡片窗口。
         let size = match kind {
             PopupKind::Qa => [520.0, 520.0],
-            PopupKind::Preview => [480.0, 320.0],
+            PopupKind::Preview => [
+                openless_linux_egui::PREVIEW_WINDOW_SIZE.0 as f32,
+                openless_linux_egui::PREVIEW_WINDOW_SIZE.1 as f32,
+            ],
             // 经典药丸 176×42 + 16px 下边距 + 8px 间距 + 「正在翻译」徽章
             // （Tauri `getCapsuleHostMetrics(.., 'classic')` 的 100 高度）。
-            PopupKind::Capsule => [200.0, 100.0],
+            PopupKind::Capsule => [
+                openless_linux_egui::CAPSULE_WINDOW_SIZE.0 as f32,
+                openless_linux_egui::CAPSULE_WINDOW_SIZE.1 as f32,
+            ],
         };
         let transparent = matches!(kind, PopupKind::Capsule);
+        // 胶囊跑在 XWayland 上（见 `popup::force_x11_for`）：先读一次 X11 几何，
+        // 这样窗口可以在**创建时**就落在工作区底部居中，并且映射前就把
+        // WM_HINTS.input 关掉——kwin 不会再把焦点给它。
+        let overlay = PopupOverlay::probe(kind);
+        let initial_position = overlay
+            .as_ref()
+            .and_then(|overlay| overlay.initial_position());
+        let mut viewport = egui::ViewportBuilder::default()
+            .with_title("OpenLess")
+            .with_inner_size(size)
+            .with_decorations(false)
+            .with_always_on_top()
+            .with_transparent(transparent)
+            .with_visible(false);
+        if let Some(position) = initial_position {
+            viewport = viewport.with_position([position.0 as f32, position.1 as f32]);
+        }
+        if kind == PopupKind::Capsule {
+            // 不主动要激活：Wayland 下由合成器决定，X11 下就是「可见但不是 key
+            // window」，与 Tauri 的 `orderFrontRegardless` 同语义。
+            viewport = viewport.with_active(false);
+        }
         let options = eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default()
-                .with_title("OpenLess")
-                .with_inner_size(size)
-                .with_decorations(false)
-                .with_always_on_top()
-                .with_transparent(transparent)
-                .with_visible(false),
+            viewport,
             ..Default::default()
         };
         eframe::run_native(
@@ -5143,6 +5336,7 @@ mod linux_app {
                     // The popup is a separate process, so it re-reads the
                     // persisted UI-locale preference rather than sharing state.
                     lang: load_locale_pref().resolve(),
+                    overlay,
                 }))
             }),
         )

@@ -23,6 +23,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 
+[features]
+default = ["x11-overlay"]
+# The capsule runs under XWayland so it can be placed at the bottom centre of
+# the work area and told never to take the keyboard. Without this feature the
+# capsule falls back to the compositor's own placement (pure Wayland).
+x11-overlay = ["dep:x11rb"]
+
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus = "0.9"
 keyring = { version = "3.6.3", default-features = false, features = ["linux-native-sync-persistent", "crypto-rust"] }
@@ -32,6 +39,7 @@ egui = "=0.33.3"
 eframe = { version = "=0.33.3", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 libc = "0.2"
+x11rb = { version = "0.13.2", optional = true }
 axum = { version = "0.7", default-features = false, features = ["ws", "http1", "tokio"] }
 hyper-util = { version = "0.1", features = ["tokio", "server-auto", "server", "http1"] }
 local-ip-address = "0.6"

@@ -697,6 +697,34 @@ enum SupervisorCommand {
     Shutdown,
 }
 
+/// Whether this popup must run on X11 (XWayland counts).
+///
+/// The recording capsule is a pure overlay: it must sit at the bottom centre of
+/// the work area and must never take the keyboard away from the app the user is
+/// dictating into. xdg-shell offers neither, so the capsule is launched with
+/// `WAYLAND_DISPLAY` removed and winit falls back to X11, where the overlay can
+/// place itself and set `WM_HINTS.input = FALSE`. The selection-ask panel and
+/// the polish preview keep their Wayland windows because they do take typing.
+pub fn force_x11_for(kind: PopupKind, display: Option<&str>) -> bool {
+    kind == PopupKind::Capsule && display.is_some_and(|value| !value.trim().is_empty())
+}
+
+/// Build the popup child command, including the backend choice above.
+pub fn popup_command(
+    executable: impl AsRef<Path>,
+    kind: PopupKind,
+    display: Option<&str>,
+) -> Command {
+    let mut command = Command::new(executable.as_ref());
+    command.arg("--openless-egui-popup").arg(kind.argument());
+    if force_x11_for(kind, display) {
+        // winit prefers Wayland whenever `WAYLAND_DISPLAY` is set.
+        command.env_remove("WAYLAND_DISPLAY");
+        command.env_remove("WAYLAND_SOCKET");
+    }
+    command
+}
+
 /// Non-blocking handle held by the main egui application.
 pub struct PopupSupervisor {
     commands: tokio_mpsc::Sender<SupervisorCommand>,
@@ -705,9 +733,8 @@ pub struct PopupSupervisor {
 
 impl PopupSupervisor {
     pub fn spawn(runtime: &Handle, executable: impl AsRef<Path>, kind: PopupKind) -> Self {
-        let mut command = Command::new(executable.as_ref());
-        command.arg("--openless-egui-popup").arg(kind.argument());
-        Self::spawn_command(runtime, command)
+        let display = std::env::var("DISPLAY").ok();
+        Self::spawn_command(runtime, popup_command(executable, kind, display.as_deref()))
     }
 
     /// Low-level construction seam used by tests and alternative launchers.
@@ -958,6 +985,55 @@ where
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn only_the_capsule_is_pushed_onto_xwayland() {
+        assert!(force_x11_for(PopupKind::Capsule, Some(":0")));
+        assert!(!force_x11_for(PopupKind::Capsule, None));
+        assert!(!force_x11_for(PopupKind::Capsule, Some("  ")));
+        // The panels take keyboard input, so they keep their Wayland windows.
+        assert!(!force_x11_for(PopupKind::Qa, Some(":0")));
+        assert!(!force_x11_for(PopupKind::Preview, Some(":0")));
+    }
+
+    #[test]
+    fn capsule_command_drops_the_wayland_backend() {
+        let command = popup_command(
+            "/usr/bin/openless-linux-egui",
+            PopupKind::Capsule,
+            Some(":0"),
+        );
+        let envs: Vec<(String, Option<String>)> = command
+            .as_std()
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        assert!(envs.contains(&("WAYLAND_DISPLAY".to_string(), None)));
+        assert!(envs.contains(&("WAYLAND_SOCKET".to_string(), None)));
+        let args: Vec<String> = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, vec!["--openless-egui-popup", "--capsule"]);
+    }
+
+    #[test]
+    fn qa_command_keeps_the_wayland_backend() {
+        let command = popup_command("/usr/bin/openless-linux-egui", PopupKind::Qa, Some(":0"));
+        assert_eq!(command.as_std().get_envs().count(), 0);
+    }
+
+    #[test]
+    fn capsule_command_keeps_wayland_without_an_x_server() {
+        let command = popup_command("/usr/bin/openless-linux-egui", PopupKind::Capsule, None);
+        assert_eq!(command.as_std().get_envs().count(), 0);
+    }
     use super::*;
     use std::io::Cursor;
     use std::time::{Duration, Instant};
