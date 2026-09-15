@@ -192,6 +192,18 @@ impl LinuxSettingsEffects for Fcitx5SettingsEffects {
             }
             style_pack_hotkeys.push((hotkey.pack_id.clone(), symbol, states));
         }
+        if style_pack_hotkeys.is_empty() {
+            log::info!("[fcitx] registered SetStylePackHotkeys 0 entries");
+        } else {
+            for (pack_id, symbol, states) in &style_pack_hotkeys {
+                log::info!(
+                    "[fcitx] registered SetStylePackHotkeys pack={} sym=0x{:x} states=0x{:x}",
+                    pack_id,
+                    symbol,
+                    states
+                );
+            }
+        }
         tolerate_optional_fcitx_method(crate::fcitx5::set_style_pack_hotkeys(style_pack_hotkeys))?;
         let (symbol, states) = target
             .coding_agent_voice
@@ -202,7 +214,9 @@ impl LinuxSettingsEffects for Fcitx5SettingsEffects {
             .map(registerable_raw)
             .transpose()?
             .unwrap_or((0, 0));
-        tolerate_optional_fcitx_method(crate::fcitx5::set_less_computer_hotkey_raw(symbol, states))
+        let result = crate::fcitx5::set_less_computer_hotkey_raw(symbol, states);
+        log_registration_result("SetLessComputerHotkeyRaw", (symbol, states), &result);
+        tolerate_optional_fcitx_method(result)
     }
 
     fn set_active_asr_provider(&self, provider_id: &str) -> Result<(), BackendError> {
@@ -252,9 +266,18 @@ fn apply_dictation_hotkey(binding: &ShortcutBinding) -> Result<(), BackendError>
     // （见 hotkey_match.h 的 shouldConsume）。所以这里照常注册。
     if let Some(trigger) = legacy_modifier_trigger(binding) {
         let symbol = modifier_trigger_keysym(trigger)?;
-        return crate::fcitx5::set_raw_hotkey("SetHotkeyRaw", symbol, 0);
+        let result = crate::fcitx5::set_raw_hotkey("SetHotkeyRaw", symbol, 0);
+        log_registration_result("SetHotkeyRaw", (symbol, 0), &result);
+        return result;
     }
-    crate::fcitx5::set_custom_dictation_trigger(&binding_to_fcitx_key(binding))
+    let key = binding_to_fcitx_key(binding);
+    log::info!(
+        "[fcitx] registered SetCustomDictationTrigger key={} sym=0x{:x} states=0x{:x}",
+        key,
+        shortcut_to_raw(binding).map(|raw| raw.0).unwrap_or(0),
+        shortcut_to_raw(binding).map(|raw| raw.1).unwrap_or(0)
+    );
+    crate::fcitx5::set_custom_dictation_trigger(&key)
 }
 
 fn apply_action_hotkey(
@@ -262,7 +285,32 @@ fn apply_action_hotkey(
     binding: Option<&ShortcutBinding>,
 ) -> Result<(), BackendError> {
     let raw = binding.map(registerable_raw).transpose()?.unwrap_or((0, 0));
-    crate::fcitx5::set_raw_hotkey(method, raw.0, raw.1)
+    let result = crate::fcitx5::set_raw_hotkey(method, raw.0, raw.1);
+    log_registration_result(method, raw, &result);
+    result
+}
+
+/// Record the exact `(sym, states)` pair handed to the addon and whether the
+/// call landed. A registration that silently failed (unknown method on an older
+/// addon, bad arguments) used to be swallowed by
+/// [`tolerate_optional_fcitx_method`], so "the hotkey does nothing" had no
+/// visible cause anywhere — this line is that cause.
+fn log_registration_result(method: &str, raw: (u32, u32), result: &Result<(), BackendError>) {
+    match result {
+        Ok(()) => log::info!(
+            "[fcitx] registered {} sym=0x{:x} states=0x{:x}",
+            method,
+            raw.0,
+            raw.1
+        ),
+        Err(error) => log::warn!(
+            "[fcitx] registration FAILED {} sym=0x{:x} states=0x{:x}: {}",
+            method,
+            raw.0,
+            raw.1,
+            error.message
+        ),
+    }
 }
 
 /// Convert a binding into the `(keysym, states)` pair fcitx5 should grab.
@@ -618,6 +666,19 @@ mod tests {
             modifiers: vec!["ctrl".into()],
         };
         assert_eq!(shortcut_to_raw(&shortcut).unwrap(), (b'/' as u32, 5));
+    }
+
+    #[test]
+    fn qa_default_binding_registers_the_base_key_with_ctrl_shift() {
+        // Core 的默认 QA 绑定写的是 ":"，宿主必须把它折算成**物理键** `;`(0x3b)
+        // + Ctrl|Shift(0x5)：插件侧按下时收到的是 level-applied 的 ':'(0x3a)，
+        // 靠 hotkey_match.h 的 base/shifted 折叠才算命中。真机取证：
+        //   registered SetQaHotkeyRaw sym=0x3b states=0x5
+        let qa = ShortcutBinding {
+            primary: ":".into(),
+            modifiers: vec!["ctrl".into(), "shift".into()],
+        };
+        assert_eq!(shortcut_to_raw(&qa).unwrap(), (b';' as u32, 0x5));
     }
 
     #[test]

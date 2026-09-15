@@ -23,6 +23,13 @@ namespace openless_hotkeys {
 
 constexpr uint32_t kShiftBit = 0x01;
 
+/// The only modifier bits fcitx5 keeps after `Key::normalize()` (see
+/// fcitx-utils/keysym.h: Shift 1<<0, Ctrl 1<<2, Alt 1<<3, Super 1<<6).
+/// CapsLock (1<<1), NumLock (1<<4), Hyper/Mod3, Mod5 and the Gtk virtual
+/// Super2/Hyper2/Meta bits are *not* part of a shortcut's identity: they ride
+/// along on every key event and must not decide whether a hotkey fires.
+constexpr uint32_t kModifierMask = 0x01u | 0x04u | 0x08u | 0x40u;
+
 /// X11 modifier keysyms (Shift_L … Hyper_R) plus CapsLock/ShiftLock.
 inline bool isModifierSym(uint32_t sym) { return sym >= 0xffe1 && sym <= 0xffee; }
 
@@ -70,14 +77,21 @@ inline bool symMatches(uint32_t eventSym, uint32_t registeredSym) {
     return isShiftPair(event, registered);
 }
 
-/// The modifier mask must match exactly.
+/// The four modifier bits must match exactly; every other state bit is noise.
 ///
 /// Measured: for a *symbol* key fcitx keeps the Shift bit in `states` and only
 /// `Key::normalize()` drops it, while for letters it uppercases the symbol and
 /// keeps the bit. Tolerating a differing Shift bit here would make Ctrl+; fire
 /// a Ctrl+Shift+; binding, which is worse than the edge case it would cover.
+///
+/// Measured (CapsLock): with CapsLock on, every event carries `0x02` in
+/// `states`, so `Ctrl+Shift+;` arrived as 0x07 while the binding was registered
+/// as 0x05 — an exact comparison never fired for *any* shortcut, and the
+/// near-miss logger (which filtered on the same equality) stayed silent too.
+/// Masking to the modifier bits keeps Lock/NumLock/Mod3/Mod5 out of the
+/// decision while leaving Shift, Ctrl, Alt and Super exact.
 inline bool statesMatch(uint32_t eventStates, uint32_t registeredStates) {
-    return eventStates == registeredStates;
+    return (eventStates & kModifierMask) == (registeredStates & kModifierMask);
 }
 
 inline bool matches(uint32_t eventSym, uint32_t eventStates,

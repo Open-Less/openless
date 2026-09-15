@@ -77,6 +77,33 @@ int main() {
            "Enter does not match with a different modifier set");
     expect(matches(';', kCtrl, 0, 0) == false, "unregistered slot never matches");
 
+    // 7. Lock / virtual state bits are not part of a shortcut's identity.
+    //    Measured: with CapsLock on, every key event carried 0x02 on top of the
+    //    real modifiers, so the exact comparison this replaced never fired for
+    //    *any* binding (the QA shortcut was the visible casualty) — and the
+    //    near-miss logger filtered on the same equality, so it stayed silent
+    //    and the failure looked like "the key never arrived".
+    static constexpr uint32_t kCapsLock = 0x02;
+    static constexpr uint32_t kNumLock = 0x10;
+    static constexpr uint32_t kMod3 = 0x20;
+    static constexpr uint32_t kMod5 = 0x80;
+    expect(matches(':', kCtrl | kShift | kCapsLock, ';', kCtrl | kShift),
+           "Ctrl+Shift+; still fires while CapsLock is on");
+    expect(matches(':', kCtrl | kShift | kNumLock | kMod3 | kMod5, ';', kCtrl | kShift),
+           "NumLock/Hyper/Mod5 on the event do not block the binding");
+    expect(matches('A', kAlt | kCapsLock, 'a', kAlt),
+           "Alt+A still fires while CapsLock is on");
+    expect(matches(':', kCtrl | kCapsLock, ';', kCtrl | kShift) == false,
+           "CapsLock does not let Ctrl+; fire the Ctrl+Shift+; binding");
+    expect(matches(0xffe3, kCapsLock, 0xffe3, 0),
+           "a bare modifier binding ignores lock bits");
+    expect(openless_hotkeys::statesMatch(kCtrl | kShift | kCapsLock, kCtrl | kShift),
+           "statesMatch masks lock bits on both sides");
+    expect(openless_hotkeys::statesMatch(kCapsLock, 0),
+           "lock bits alone never change the modifier set");
+    expect(openless_hotkeys::statesMatch(kCtrl | kShift, kCtrl) == false,
+           "statesMatch still distinguishes real modifiers");
+
     std::printf("hotkey_match contract passed\n");
     return 0;
 }

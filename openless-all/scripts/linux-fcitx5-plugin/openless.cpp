@@ -37,6 +37,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <tuple>
@@ -141,7 +143,11 @@ public:
                         savedIc_ = keyEvent.inputContext();
                     }
                     auto sym = static_cast<uint32_t>(keyEvent.key().sym());
-                    auto states = static_cast<uint32_t>(keyEvent.key().states());
+                    // 只保留 ctrl/alt/shift/super（与 fcitx 的 Key::normalize() 一致）。
+                    // CapsLock 开着时每个事件都会多带 0x02，下面那些直接比较 states 的
+                    // 分支（自定义组合键 / triggerKeyList_ / 合并键）会全部失效。
+                    auto states = static_cast<uint32_t>(keyEvent.key().states()) &
+                                  openless_hotkeys::kModifierMask;
                     bool isPress = !keyEvent.isRelease();
 
                     // 命中判定统一走 hotkey_match.h：字母大小写折叠 + US 布局
@@ -159,6 +165,12 @@ public:
                         }
                     };
                     if (isPress) {
+                        if (hotkeyTraceEnabled()) {
+                            FCITX_LOGC(openless, Info)
+                                << "[trace] key sym=0x" << std::hex << sym
+                                << std::dec << " states=0x" << std::hex << states
+                                << std::dec;
+                        }
                         logHotkeyNearMiss(sym, states);
                     }
 
@@ -951,7 +963,11 @@ private:
         }
         const auto now = std::chrono::steady_clock::now();
         for (const auto &entry : entries) {
-            if (entry.sym == 0 || entry.states != states) {
+            // 事件 states 已屏蔽到修饰位，已注册值同样屏蔽后再比，否则 CapsLock
+            // 开着时这里会 continue 掉每一条，近失日志永远不会打（就是这么丢的）。
+            if (entry.sym == 0 ||
+                (entry.states & openless_hotkeys::kModifierMask) !=
+                    (states & openless_hotkeys::kModifierMask)) {
                 continue;
             }
             if (openless_hotkeys::symMatches(sym, entry.sym)) {
@@ -961,7 +977,9 @@ private:
                 return;
             }
             lastNearMissLog_ = now;
-            FCITX_LOGC(openless, Debug)
+            // Info 而不是 Debug：fcitx5 默认级别是 Info，写 Debug 等于永远看不到
+            // （这正是「按了没反应、日志里也什么都没有」的原因之一）。已限速 1 次/秒。
+            FCITX_LOGC(openless, Info)
                 << "hotkey near miss: " << entry.name
                 << " registered sym=0x" << std::hex << entry.sym << std::dec
                 << " states=0x" << std::hex << entry.states << std::dec
@@ -969,6 +987,41 @@ private:
                 << " states=0x" << std::hex << states;
             return;
         }
+    }
+
+    /// 逐键诊断开关：环境变量 OPENLESS_HOTKEY_TRACE=1，或建一个标记文件
+    /// ~/.config/fcitx5/openless-hotkey-trace（改完 5 秒内生效，无需重启 fcitx5）。
+    /// 打开后每次按键都会打一行 (sym, states)，用来回答「按这个键插件到底看到了什么」。
+    static bool hotkeyTraceEnabled() {
+        static std::chrono::steady_clock::time_point checked{};
+        static bool enabled = false;
+        const auto now = std::chrono::steady_clock::now();
+        if (checked.time_since_epoch().count() != 0 &&
+            now - checked < std::chrono::seconds(5)) {
+            return enabled;
+        }
+        checked = now;
+        const char *env = std::getenv("OPENLESS_HOTKEY_TRACE");
+        if (env != nullptr && env[0] != '\0' && std::string(env) != "0") {
+            enabled = true;
+            return enabled;
+        }
+        std::filesystem::path flag;
+        const char *configHome = std::getenv("XDG_CONFIG_HOME");
+        if (configHome != nullptr && configHome[0] != '\0') {
+            flag = std::filesystem::path(configHome) / "fcitx5" / "openless-hotkey-trace";
+        } else {
+            const char *home = std::getenv("HOME");
+            if (home == nullptr || home[0] == '\0') {
+                enabled = false;
+                return enabled;
+            }
+            flag = std::filesystem::path(home) / ".config" / "fcitx5" /
+                   "openless-hotkey-trace";
+        }
+        std::error_code error;
+        enabled = std::filesystem::exists(flag, error);
+        return enabled;
     }
 
     void resetDictationTriggerState() {
