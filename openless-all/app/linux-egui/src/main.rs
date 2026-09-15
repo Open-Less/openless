@@ -4809,8 +4809,14 @@ mod linux_app {
             FcitxPluginInstallPlan::for_layout(&layout, home).map_err(|error| error.to_string())?;
         let status = ensure_fcitx5_plugin_installed(&plan).map_err(|error| error.to_string())?;
         // 安装包升级会替换 libopenless.so，但运行中的 fcitx5 仍持有旧映像 ——
-        // 不重启它，新的热键匹配规则就不会生效。只在插件确实更新过时重启。
-        openless_linux_egui::reload_fcitx5_if_plugin_updated(&plan, &config.data_dir);
+        // 不重启它，新的热键匹配规则就不会生效。只在插件确实更新过时重启，
+        // 并且**绝不放在启动关键路径上**：`fcitx5 -r` 会变成常驻的守护进程，
+        // 早先在这里等它直接导致主窗口出不来。现在丢到后台线程，启动只做纯计算。
+        let reload_plan = plan.clone();
+        let reload_data_dir = config.data_dir.clone();
+        std::thread::spawn(move || {
+            openless_linux_egui::reload_fcitx5_if_plugin_updated(&reload_plan, &reload_data_dir);
+        });
         reconcile_fcitx5_install(status)
     }
 

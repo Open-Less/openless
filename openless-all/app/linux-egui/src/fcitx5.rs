@@ -18,6 +18,15 @@ pub(crate) const OBJECT_PATH: &str = "/openless";
 pub(crate) const INTERFACE: &str = "org.fcitx.Fcitx.OpenLess1";
 #[cfg(target_os = "linux")]
 const TIMEOUT: Duration = Duration::from_secs(3);
+/// fcitx5's own management interface. `Restart` makes the daemon replace
+/// itself in place: the call returns immediately and nothing of ours is
+/// inherited, unlike the `fcitx5 -r` command (see `reload_running_fcitx5`).
+#[cfg(target_os = "linux")]
+pub(crate) const CONTROLLER_PATH: &str = "/controller";
+#[cfg(target_os = "linux")]
+pub(crate) const CONTROLLER_INTERFACE: &str = "org.fcitx.Fcitx.Controller1";
+#[cfg(target_os = "linux")]
+const CONTROLLER_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FcitxPluginInstallPlan {
@@ -124,6 +133,10 @@ pub(crate) enum ReloadReason {
     /// Same content, but the file is newer than the running daemon (a package
     /// upgrade replaced the image the daemon still holds).
     NewerThanDaemon,
+    /// The daemon has a *different* library mapped (a stale manual install, or
+    /// the pre-upgrade package image). Restarting is the only way to make it
+    /// pick up the copy we ship.
+    DaemonHoldsOtherCopy,
 }
 
 /// Whether the running fcitx5 must be restarted.
@@ -135,7 +148,11 @@ pub(crate) fn reload_reason(
     marker: Option<&str>,
     current: &str,
     newer_than_daemon: bool,
+    daemon_holds_installed_copy: bool,
 ) -> Option<ReloadReason> {
+    if !daemon_holds_installed_copy {
+        return Some(ReloadReason::DaemonHoldsOtherCopy);
+    }
     if marker != Some(current) {
         return Some(ReloadReason::ContentChanged);
     }
@@ -190,20 +207,103 @@ fn installed_plugin_library(plan: &FcitxPluginInstallPlan) -> Option<PathBuf> {
     }
 }
 
+/// Addon-library search order, mirroring how fcitx5 resolves `Library=`.
+///
+/// The packaging prefix (Debian multiarch, e.g. `/usr/lib/x86_64-linux-gnu`)
+/// comes first because that is where the .deb/.rpm puts the plugin and what
+/// package upgrades replace. A manually installed `/usr/local` copy is last on
+/// purpose: it is never upgraded by the package manager, so treating it as
+/// "the packaged plugin" made every start believe the plugin had changed.
+pub(crate) fn plugin_library_search_dirs(usr_lib_subdirs: &[String]) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut push = |dir: PathBuf| {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    };
+    for subdir in usr_lib_subdirs {
+        push(PathBuf::from("/usr/lib").join(subdir).join("fcitx5"));
+    }
+    push(PathBuf::from("/usr/lib/fcitx5"));
+    push(PathBuf::from("/usr/lib64/fcitx5"));
+    push(PathBuf::from("/usr/local/lib/fcitx5"));
+    dirs
+}
+
+/// Sub-directory names of `/usr/lib` (the multiarch triples).
+fn usr_lib_subdirs() -> Vec<String> {
+    std::fs::read_dir("/usr/lib")
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| entry.path().is_dir())
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The package's addon library, found through the same directories fcitx5 uses.
 fn system_plugin_library() -> Option<PathBuf> {
-    let mut library_dirs = vec![
-        PathBuf::from("/usr/lib64/fcitx5"),
-        PathBuf::from("/usr/lib/fcitx5"),
-        PathBuf::from("/usr/local/lib/fcitx5"),
-    ];
-    if let Ok(entries) = std::fs::read_dir("/usr/lib") {
-        library_dirs.extend(entries.flatten().map(|entry| entry.path().join("fcitx5")));
-    }
-    library_dirs
+    plugin_library_search_dirs(&usr_lib_subdirs())
         .into_iter()
         .map(|dir| dir.join("libopenless.so"))
         .find(|candidate| candidate.is_file())
+}
+
+/// Which `libopenless.so` the running daemon actually mapped, read from
+/// `/proc/<pid>/maps`. This is the authoritative answer to "what is live".
+pub(crate) fn parse_maps_plugin_path(maps: &str) -> Option<PathBuf> {
+    maps.lines().find_map(|line| {
+        let path = line.split_whitespace().last()?;
+        path.ends_with("/libopenless.so")
+            .then(|| PathBuf::from(path))
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn running_daemon_plugin() -> Option<PathBuf> {
+    let pid = fcitx5_process_id()?;
+    let maps = std::fs::read_to_string(format!("/proc/{pid}/maps")).ok()?;
+    parse_maps_plugin_path(&maps)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn running_daemon_plugin() -> Option<PathBuf> {
+    None
+}
+
+/// Point out (and drop when we may) an OpenLess plugin left behind by an older
+/// manual install under `/usr/local`: dpkg never replaces it, it can shadow the
+/// packaged copy for fcitx5, and it makes fingerprint checks ambiguous.
+/// Only our own `libopenless.so` / `openless.conf` are ever touched.
+fn report_stale_manual_plugin(installed: &Path, installed_fingerprint: &str) {
+    let library = PathBuf::from("/usr/local/lib/fcitx5/libopenless.so");
+    let config = PathBuf::from("/usr/local/share/fcitx5/addon/openless.conf");
+    if library == installed || !library.is_file() {
+        return;
+    }
+    let Some(fingerprint) = file_fingerprint(&library) else {
+        return;
+    };
+    if fingerprint == installed_fingerprint {
+        return;
+    }
+    match std::fs::remove_file(&library) {
+        Ok(()) => log::warn!(
+            "[fcitx] removed the stale manual addon {} — the packaged plugin {} wins",
+            library.display(),
+            installed.display()
+        ),
+        Err(error) => log::warn!(
+            "[fcitx] the manual addon {} (fingerprint {}) differs from the packaged plugin \
+             and is not replaced by the package manager; remove it with: sudo rm -f {} {} ({error})",
+            library.display(),
+            &fingerprint[..fingerprint.len().min(12)],
+            library.display(),
+            config.display()
+        ),
+    }
 }
 
 /// `/proc/stat` -> `btime` (boot time as a UNIX timestamp in seconds).
@@ -261,30 +361,46 @@ pub fn reload_fcitx5_if_plugin_updated(plan: &FcitxPluginInstallPlan, data_dir: 
         .map(|text| text.trim().to_string())
         .filter(|text| !text.is_empty());
     let newer = plugin_written_after_running_daemon(&library);
+    // Judge the copy fcitx5 actually mapped: a leftover manual install in a
+    // legacy prefix is never replaced by the package manager.
+    let loaded = running_daemon_plugin();
+    let daemon_loaded = loaded.as_deref();
+    report_stale_manual_plugin(&library, &current);
+    let daemon_holds_installed_copy = match daemon_loaded {
+        Some(loaded) => file_fingerprint(loaded).as_deref() == Some(current.as_str()),
+        None => true,
+    };
     log::info!(
-        "[fcitx] addon {} fingerprint={} recorded={} newer_than_daemon={}",
+        "[fcitx] addon {} fingerprint={} loaded={} recorded={} newer_than_daemon={}",
         library.display(),
         &current[..current.len().min(12)],
+        daemon_loaded
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "<not running>".to_string()),
         marker
             .as_deref()
             .map(|value| &value[..value.len().min(12)])
             .unwrap_or("<none>"),
         newer,
     );
-    let Some(reason) = reload_reason(marker.as_deref(), &current, newer) else {
+    let Some(reason) = reload_reason(
+        marker.as_deref(),
+        &current,
+        newer,
+        daemon_holds_installed_copy,
+    ) else {
         return false;
     };
-    log::info!("[fcitx] restarting fcitx5 to load the addon update ({reason:?})");
-    let reloaded = reload_running_fcitx5();
-    // Record the fingerprint even when the daemon was not running: the next
-    // start loads the file itself, and the marker keeps the check exact.
+    // Record the fingerprint *before* asking for the restart: a daemon that
+    // never comes back must not make the next start repeat the decision.
     if let Some(parent) = fingerprint_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     if let Err(error) = std::fs::write(&fingerprint_path, &current) {
         log::warn!("[fcitx] could not record the plugin fingerprint: {error}");
     }
-    reloaded
+    log::info!("[fcitx] restarting fcitx5 to load the addon update ({reason:?})");
+    reload_running_fcitx5()
 }
 
 /// Whether the addon file is newer than the running fcitx5 process.
@@ -892,17 +1008,63 @@ pub fn reload_running_fcitx5() -> bool {
     if !fcitx5_name_has_owner() {
         return false;
     }
-    match std::process::Command::new("fcitx5").arg("-r").status() {
-        Ok(status) if status.success() => {
-            log::info!("[fcitx] reloaded fcitx5 after addon update");
-            true
-        }
-        Ok(status) => {
-            log::warn!("[fcitx] fcitx5 -r failed with status {status}");
+    if restart_fcitx5_via_dbus() {
+        log::info!("[fcitx] reloaded fcitx5 after addon update");
+        return true;
+    }
+    spawn_detached_fcitx5_restart()
+}
+
+/// `org.fcitx.Fcitx.Controller1.Restart` on `/controller`: the daemon replaces
+/// itself, the call returns as soon as the method is dispatched, and nothing of
+/// ours is inherited.
+#[cfg(target_os = "linux")]
+pub(crate) fn restart_fcitx5_via_dbus() -> bool {
+    use dbus::blocking::BlockingSender;
+    let Ok(connection) = dbus::blocking::Connection::new_session() else {
+        return false;
+    };
+    let Ok(message) = dbus::Message::new_method_call(
+        DESTINATION,
+        CONTROLLER_PATH,
+        CONTROLLER_INTERFACE,
+        "Restart",
+    ) else {
+        return false;
+    };
+    match connection.send_with_reply_and_block(message, CONTROLLER_TIMEOUT) {
+        Ok(_) => true,
+        Err(error) => {
+            log::warn!(
+                "[fcitx] D-Bus Restart unavailable ({error}); falling back to a detached fcitx5 -r"
+            );
             false
         }
+    }
+}
+
+/// Last resort when the controller interface is missing: spawn `fcitx5 -r`
+/// fully detached. `fcitx5 -r` *becomes* the daemon and keeps running in the
+/// foreground, so `.status()`/`.wait()` would block the caller forever — the
+/// child is deliberately dropped instead.
+#[cfg(target_os = "linux")]
+fn spawn_detached_fcitx5_restart() -> bool {
+    use std::process::Stdio;
+    match std::process::Command::new("fcitx5")
+        .arg("-r")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => {
+            let pid = child.id();
+            drop(child);
+            log::info!("[fcitx] spawned a detached fcitx5 -r (pid {pid})");
+            true
+        }
         Err(error) => {
-            log::warn!("[fcitx] could not run fcitx5 -r: {error}");
+            log::warn!("[fcitx] could not spawn fcitx5 -r: {error}");
             false
         }
     }
@@ -1023,6 +1185,61 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_daemon_holding_another_copy_always_asks_for_a_restart() {
+        // Even with a matching fingerprint, a daemon that mapped a different
+        // libopenless.so (stale manual /usr/local install, pre-upgrade image)
+        // keeps the old matching rules until it is restarted.
+        assert_eq!(
+            reload_reason(Some("abc"), "abc", false, false),
+            Some(ReloadReason::DaemonHoldsOtherCopy)
+        );
+        // Steady state: nothing mapped differently, fingerprint recorded.
+        assert_eq!(reload_reason(Some("abc"), "abc", false, true), None);
+    }
+
+    #[test]
+    fn the_packaged_addon_is_searched_before_a_manual_install() {
+        let dirs = plugin_library_search_dirs(&["x86_64-linux-gnu".to_string()]);
+        let multiarch = dirs
+            .iter()
+            .position(|dir| dir == Path::new("/usr/lib/x86_64-linux-gnu/fcitx5"))
+            .expect("multiarch addon dir");
+        let manual = dirs
+            .iter()
+            .position(|dir| dir == Path::new("/usr/local/lib/fcitx5"))
+            .expect("manual addon dir");
+        assert!(
+            multiarch < manual,
+            "the package copy must win over a manual /usr/local install: {dirs:?}"
+        );
+        // No duplicate entries when /usr/lib scans repeat a prefix.
+        let twice = plugin_library_search_dirs(&[
+            "x86_64-linux-gnu".to_string(),
+            "x86_64-linux-gnu".to_string(),
+        ]);
+        assert_eq!(twice, dirs);
+    }
+
+    #[test]
+    fn the_daemon_maps_the_plugin_we_read_from_proc() {
+        let maps = "7f00-8000 r-xp 00000000 08:01 42 /usr/lib/fcitx5/libother.so
+\
+                    8000-9000 r-xp 00000000 08:01 43 /usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so
+";
+        assert_eq!(
+            parse_maps_plugin_path(maps),
+            Some(PathBuf::from(
+                "/usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so"
+            ))
+        );
+        assert_eq!(parse_maps_plugin_path(""), None);
+        assert_eq!(
+            parse_maps_plugin_path("1-2 r-xp 0 00:00 0 /usr/lib/fcitx5/libopenless.so.old"),
+            None
+        );
+    }
+
+    #[test]
     fn the_package_plugin_wins_over_a_per_user_copy() {
         let system = Path::new("/usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so");
         let user = Path::new("/home/u/.local/lib/fcitx5/libopenless.so");
@@ -1060,20 +1277,20 @@ mod tests {
     fn reload_is_driven_by_content_before_mtime() {
         // Same content, daemon older than the file: mtime still asks for a reload.
         assert_eq!(
-            reload_reason(Some("abc"), "abc", true),
+            reload_reason(Some("abc"), "abc", true, true),
             Some(ReloadReason::NewerThanDaemon)
         );
         // Same content, daemon newer: nothing to do (steady state every start).
-        assert_eq!(reload_reason(Some("abc"), "abc", false), None);
+        assert_eq!(reload_reason(Some("abc"), "abc", false, true), None);
         // Different content: reload regardless of timestamps (downgrades, files
         // restored from a backup, same-second package upgrades).
         assert_eq!(
-            reload_reason(Some("abc"), "def", false),
+            reload_reason(Some("abc"), "def", false, true),
             Some(ReloadReason::ContentChanged)
         );
         // Unknown baseline (first run of this check): reload once, then exact.
         assert_eq!(
-            reload_reason(None, "abc", false),
+            reload_reason(None, "abc", false, true),
             Some(ReloadReason::ContentChanged)
         );
     }
