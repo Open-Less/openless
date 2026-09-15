@@ -1410,7 +1410,15 @@ fn style_pack_hotkey_block(
         let menu_open = vm.shortcut_menu == Some(ShortcutField::StylePack(index));
         ui.horizontal(|ui| {
             ui.set_min_height(40.0);
-            style_pack_picker(ui, &packs, &row.pack_id, &row.name, index, actions, lang);
+            style_pack_picker(
+                ui,
+                &packs,
+                &row.pack_id,
+                &row.name,
+                Some(index),
+                actions,
+                lang,
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if recording {
                     recording_panel(ui, vm, actions, ShortcutField::StylePack(index));
@@ -1476,11 +1484,10 @@ fn style_pack_hotkey_block(
             .get(vm.style_hotkey_draft_pack)
             .map(|pack| pack.id.clone())
             .unwrap_or_default();
-        let draft_pack = vm.style_hotkey_draft_pack;
         let draft_recording = vm.shortcut_recording == Some(ShortcutField::StyleDraft);
         ui.horizontal(|ui| {
             ui.set_min_height(40.0);
-            style_pack_picker(ui, &packs, &draft_id, "", draft_pack, actions, lang);
+            style_pack_picker(ui, &packs, &draft_id, "", None, actions, lang);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let (rect, _) =
                     ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
@@ -1550,6 +1557,18 @@ fn style_pack_hotkey_block(
     ui.add_space(4.0);
 }
 
+/// 选择器变更后要发的动作。
+///
+/// `row` 是已有风格包行的下标；草稿行（`None`）只能改「待新建的包」，绝不能写成
+/// `StyleHotkeyRepack`——那会把**别的**已有行的包换掉（曾经的真 bug：草稿行选包
+/// 会重绑第一行的风格包，而 `StyleHotkeyDraftPack` 从未被构造）。
+fn style_pack_pick_action(row: Option<usize>, next: usize) -> FrontendAction {
+    match row {
+        Some(index) => FrontendAction::StyleHotkeyRepack(index, next),
+        None => FrontendAction::StyleHotkeyDraftPack(next),
+    }
+}
+
 /// 风格包选择器（Tauri 的 `SelectLite`）：显示名 +「（已停用）」后缀，整表替换。
 #[allow(clippy::too_many_arguments)]
 fn style_pack_picker(
@@ -1557,7 +1576,7 @@ fn style_pack_picker(
     packs: &[StylePack],
     current_pack_id: &str,
     fallback_name: &str,
-    index: usize,
+    row: Option<usize>,
     actions: &mut Vec<FrontendAction>,
     lang: Lang,
 ) {
@@ -1580,7 +1599,12 @@ fn style_pack_picker(
         .position(|pack| pack.id == current_pack_id)
         .unwrap_or(0);
     let mut next = selected;
-    egui::ComboBox::from_id_salt(("style-pack-hotkey", index))
+    // 草稿行的选择器也要有稳定且互不冲突的 id。
+    let picker_salt = match row {
+        Some(index) => format!("style-pack-hotkey-{index}"),
+        None => "style-pack-hotkey-draft".to_string(),
+    };
+    egui::ComboBox::from_id_salt(picker_salt)
         .width(170.0)
         .selected_text(
             options
@@ -1600,7 +1624,7 @@ fn style_pack_picker(
             }
         });
     if next != selected {
-        actions.push(FrontendAction::StyleHotkeyRepack(index, next));
+        actions.push(style_pack_pick_action(row, next));
     }
 }
 
@@ -2949,4 +2973,24 @@ fn row_desc(ui: &mut egui::Ui, label: &str, desc: &str, control: impl FnOnce(&mu
         [rect.left_center(), rect.right_center()],
         egui::Stroke::new(0.5, theme::LINE_SOFT),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn style_pack_draft_selection_only_touches_the_draft() {
+        // 草稿行的选择器必须走 StyleHotkeyDraftPack：以前传的是 draft_pack 下标，
+        // 于是「＋ 添加风格快捷键 → 选另一个包」会把**已有行**的包换掉，而
+        // StyleHotkeyDraftPack 从未被构造（编译告警）。
+        assert!(matches!(
+            style_pack_pick_action(None, 3),
+            FrontendAction::StyleHotkeyDraftPack(3)
+        ));
+        assert!(matches!(
+            style_pack_pick_action(Some(2), 3),
+            FrontendAction::StyleHotkeyRepack(2, 3)
+        ));
+    }
 }

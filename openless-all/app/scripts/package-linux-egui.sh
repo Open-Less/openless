@@ -39,13 +39,15 @@ for bus in /run/user/[0-9]*/bus; do
   runuser -u "$user" -- env \
     XDG_RUNTIME_DIR="$runtime_dir" \
     DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" \
-    timeout 5s fcitx5 -r >/dev/null 2>&1 || true
+    timeout 5s dbus-send --session --dest=org.fcitx.Fcitx5 --type=method_call /controller org.fcitx.Fcitx.Controller1.Restart >/dev/null 2>&1 || true
 done
 exit 0
 EOF
 chmod 0755 "$POST_INSTALL"
 
 # 卸载同样要重启 fcitx5：文件被删掉后，运行中的输入法仍持有旧插件的映像。
+# 用 D-Bus 的 controller Restart（立即返回），**不要**用 `fcitx5 -r`：它会替换 daemon
+# 并一直前台运行，导致 postinst/postrm 每次都要等满 timeout（安装卡顿），还会被 kill 掉新 daemon。
 POST_REMOVE="$TARGET_DIR/openless-fcitx5-postrm"
 sed 's/Package installation runs as root/Package removal runs as root/' \
   "$POST_INSTALL" > "$POST_REMOVE"
@@ -136,7 +138,7 @@ for bus in /run/user/[0-9]*/bus; do
   runtime_dir=\${bus%/bus}; uid=\${runtime_dir##*/}
   [ "\$uid" != 0 ] || continue
   user=\$(getent passwd "\$uid" | cut -d: -f1)
-  [ -n "\$user" ] && timeout 5s runuser -u "\$user" -- env XDG_RUNTIME_DIR="\$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=\$bus" fcitx5 -r >/dev/null 2>&1 || true
+  [ -n "\$user" ] && timeout 5s runuser -u "\$user" -- env XDG_RUNTIME_DIR="\$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=\$bus" dbus-send --session --dest=org.fcitx.Fcitx5 --type=method_call /controller org.fcitx.Fcitx.Controller1.Restart >/dev/null 2>&1 || true
 done
 exit 0
 %post
@@ -146,7 +148,7 @@ for bus in /run/user/[0-9]*/bus; do
   runtime_dir=\${bus%/bus}; uid=\${runtime_dir##*/}
   [ "\$uid" != 0 ] || continue
   user=\$(getent passwd "\$uid" | cut -d: -f1)
-  [ -n "\$user" ] && timeout 5s runuser -u "\$user" -- env XDG_RUNTIME_DIR="\$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=\$bus" fcitx5 -r >/dev/null 2>&1 || true
+  [ -n "\$user" ] && timeout 5s runuser -u "\$user" -- env XDG_RUNTIME_DIR="\$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=\$bus" dbus-send --session --dest=org.fcitx.Fcitx5 --type=method_call /controller org.fcitx.Fcitx.Controller1.Restart >/dev/null 2>&1 || true
 done
 exit 0
 EOF

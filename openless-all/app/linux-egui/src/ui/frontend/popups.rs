@@ -991,55 +991,29 @@ pub fn dictation_capsule(
             if state.translation_active {
                 translating_badge(ui, rect, lang);
             }
+            // Tauri 的经典药丸只有「1px 中性描边」+「随音量轻微放大」两件事
+            // （Capsule.tsx 的 ClassicPill：border 1px var(--ol-capsule-pill-border)、
+            // transform scale(1 + ambient * 0.018)），**没有**任何外圈扫光/描边颜色变化。
+            // 所以这里不再把录音相位画成红圈（那是本仓自己加的，用户报「有一个红边」）；
+            // 运动感只保留药丸中心的音量波形。
+            let ambient = if phase == "recording" {
+                state.audio_level.unwrap_or(0.0).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let pill =
+                egui::Rect::from_center_size(rect.center(), rect.size() * (1.0 + ambient * 0.018));
             ui.painter().rect_filled(
-                rect,
+                pill,
                 egui::CornerRadius::same((PILL_HEIGHT / 2.0) as u8),
                 theme::SURFACE,
             );
             ui.painter().rect_stroke(
-                rect,
+                pill,
                 egui::CornerRadius::same((PILL_HEIGHT / 2.0) as u8),
                 egui::Stroke::new(1.0, theme::LINE),
                 egui::StrokeKind::Inside,
             );
-            // 录音=红光、思考=黑光，绕药丸一圈（GPU 圆角矩形扫光；速度也不同）。
-            let thinking = matches!(
-                phase.as_str(),
-                "starting" | "transcribing" | "polishing" | "inserting"
-            );
-            if phase == "recording" || thinking {
-                let tint = if phase == "recording" {
-                    color_to_f32(theme::ERR)
-                } else {
-                    color_to_f32(theme::INK)
-                };
-                let drive = siri_gl::SiriDrive {
-                    level: 0.0,
-                    resolved: if phase == "recording" { 1.0 } else { 0.0 },
-                    speed: if phase == "recording" { 1.0 } else { 1.45 },
-                    warming: false,
-                };
-                let dt = ui.input(|input| input.stable_dt);
-                let clock = siri_gl::tick(ui.ctx(), "capsule-ring", drive, dt);
-                let glow = siri_gl::SiriGlow::ring(
-                    clock.time,
-                    PILL_HEIGHT / 2.0,
-                    if phase == "recording" { 2.2 } else { 1.6 },
-                    if phase == "recording" { 1.5 } else { 2.1 },
-                )
-                .with_tint(tint);
-                if !siri_gl::paint(ui, rect.expand(3.0), glow) {
-                    spinner_ring(
-                        ui,
-                        rect,
-                        if phase == "recording" {
-                            theme::ERR
-                        } else {
-                            theme::INK
-                        },
-                    );
-                }
-            }
             let cancel_rect = egui::Rect::from_center_size(
                 egui::pos2(rect.left() + 8.0 + ROUND_BUTTON / 2.0, rect.center().y),
                 egui::vec2(ROUND_BUTTON, ROUND_BUTTON),
@@ -1621,9 +1595,13 @@ mod tests {
         );
     }
 
-    /// The recording capsule must take the GPU glow path: one `PaintCallback`
-    /// for the wave plus one for the red perimeter ring, two for thinking
-    /// (orb + ink ring) and none once the capsule reaches a terminal state.
+    /// 录音/思考只排队**药丸中心**的 GPU 视觉（录音=声波，思考=流体圆点），
+    /// 终态一个都没有。
+    ///
+    /// 以前这里是 2：录音还会多排一个**外圈红扫光**、思考多一个黑扫光。Tauri 的
+    /// 经典药丸只有 1px 中性描边（Capsule.tsx 的 `border: 1px
+    /// var(--ol-capsule-pill-border)`），没有外圈扫光——用户报「语音输入弹窗有一个
+    /// 红边」就是它。所以数字固定成 1/1/0，谁再把外圈加回来这里就会红。
     #[test]
     fn capsule_queues_the_gpu_glow_per_state() {
         // The GPU state is process-global; take the shared test guard.
@@ -1652,16 +1630,16 @@ mod tests {
                 audio_level: Some(0.2),
                 ..Default::default()
             }),
-            2,
-            "recording = siri wave + red ring"
+            1,
+            "recording = siri wave only, no perimeter ring"
         );
         assert_eq!(
             callbacks(CapsulePopupState {
                 phase: "transcribing".into(),
                 ..Default::default()
             }),
-            2,
-            "thinking = orb + ink ring"
+            1,
+            "thinking = orb only, no perimeter ring"
         );
         assert_eq!(
             callbacks(CapsulePopupState {
@@ -1814,6 +1792,101 @@ mod tests {
             painted = painted_text(&ctx.end_pass());
         }
         assert!(has(&painted, "hello"), "{painted}");
+    }
+
+    /// Every fill / stroke colour the frame painted, so a test can assert the
+    /// classic pill never grows a coloured outline again.
+    fn painted_colors(shape: &egui::Shape, out: &mut Vec<egui::Color32>) {
+        match shape {
+            egui::Shape::Rect(rect) => {
+                out.push(rect.fill);
+                out.push(rect.stroke.color);
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    painted_colors(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Render one capsule frame and collect the colours plus callback count.
+    fn capsule_frame(state: &CapsulePopupState) -> (Vec<egui::Color32>, usize) {
+        let _guard = super::siri_gl::gpu_state_guard();
+        let ctx = egui::Context::default();
+        let mut colors = Vec::new();
+        let mut callbacks = 0;
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(200.0, 100.0),
+                )),
+                ..Default::default()
+            });
+            let _ = dictation_capsule(&ctx, state, Lang::ZhCn);
+            let output = ctx.end_pass();
+            colors.clear();
+            callbacks = 0;
+            for clipped in &output.shapes {
+                painted_colors(&clipped.shape, &mut colors);
+                if matches!(clipped.shape, egui::Shape::Callback(_)) {
+                    callbacks += 1;
+                }
+            }
+        }
+        (colors, callbacks)
+    }
+
+    /// Whether a colour reads as the OpenLess error red (the old ring tint).
+    fn is_reddish(color: egui::Color32) -> bool {
+        color.a() > 40 && color.r() > 150 && color.g() < 110 && color.b() < 110
+    }
+
+    #[test]
+    fn recording_capsule_paints_no_coloured_outline() {
+        // Tauri 的经典药丸只有 1px 中性描边（Capsule.tsx：border 1px
+        // var(--ol-capsule-pill-border)），录音时只把药丸随音量放大 1.8%。
+        // 外圈红/黑扫光是本仓自己加的，用户报「语音输入弹窗有一个红边」——
+        // 这条测试锁死它不许回来。
+        for phase in ["Recording", "Transcribing", "Polishing"] {
+            let state = CapsulePopupState {
+                phase: phase.to_string(),
+                text: String::new(),
+                audio_level: Some(0.6),
+                translation_active: false,
+            };
+            let (colors, _) = capsule_frame(&state);
+            let reddish: Vec<_> = colors
+                .iter()
+                .copied()
+                .filter(|color| is_reddish(*color))
+                .collect();
+            assert!(
+                reddish.is_empty(),
+                "{phase} capsule must not paint a red outline, found {reddish:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn recording_capsule_keeps_its_centre_visual() {
+        // 去掉外圈之后，录音相位的运动感来自药丸中心（GPU 波形，失败时回退成
+        // Tauri 的 5 根音量竖条）——两者至少有一个必须在。
+        let state = CapsulePopupState {
+            phase: "Recording".to_string(),
+            text: String::new(),
+            audio_level: Some(0.6),
+            translation_active: false,
+        };
+        let (colors, callbacks) = capsule_frame(&state);
+        // 音量竖条是 3px 宽的小圆角矩形：数一下细长条形的填充个数。
+        let fills = colors.iter().filter(|color| color.a() > 0).count();
+        assert!(
+            callbacks > 0 || fills >= 6,
+            "recording capsule must keep the centre visual (callbacks={callbacks}, fills={fills})"
+        );
     }
 
     #[test]

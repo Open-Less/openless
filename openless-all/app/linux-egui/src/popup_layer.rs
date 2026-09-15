@@ -487,7 +487,7 @@ impl GlSurface {
         let display_ptr = connection.backend().display_ptr().cast::<c_void>();
         // `ObjectId::as_ptr` hands back the underlying `wl_proxy`, which is the
         // same C object as the `wl_surface` glutin wants.
-        let surface_ptr = unsafe { wl_surface.id().as_ptr() }.cast::<c_void>();
+        let surface_ptr = wl_surface.id().as_ptr().cast::<c_void>();
 
         let raw_display = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
             NonNull::new(display_ptr).ok_or("null wayland display")?,
@@ -565,11 +565,6 @@ impl GlSurface {
 }
 
 // ── runner ──────────────────────────────────────────────────────────────────
-
-/// Frame callback. Receives the egui context, a fresh `RawInput` (viewport plus
-/// the pointer events seen since the last frame) and whether this is the first
-/// frame, and returns the painted output plus the loop's next timer.
-pub type FrameCallback = dyn FnMut(&egui::Context, egui::RawInput, bool) -> LayerFrame;
 
 /// Host the capsule on a `wlr-layer-shell` surface until `frame` asks to exit or
 /// the compositor closes it.
