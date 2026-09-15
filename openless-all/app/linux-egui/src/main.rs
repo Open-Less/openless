@@ -23,9 +23,9 @@ mod linux_app {
         QaStateKind, SelectionPhase, SelectionSnapshot, TranscriptAccumulator, UserPreferences,
     };
     use openless_linux_egui::{
-        capsule_hide_delay, capsule_hide_is_still_current, capsule_outcome, fmt_l10n,
-        load_locale_pref, normalize_stop_result, phase_shows_capsule, save_locale_pref, tr_l10n,
-        CapsuleOutcome, Lang, LocalePref,
+        capsule_hide_delay, capsule_hide_is_still_current, capsule_needs_fallback_dismissal,
+        capsule_outcome, fmt_l10n, load_locale_pref, normalize_stop_result, phase_shows_capsule,
+        save_locale_pref, tr_l10n, CapsuleOutcome, Lang, LocalePref,
     };
     use openless_linux_egui::{
         drain_events, ensure_fcitx5_plugin_installed, fcitx5_copy_to_clipboard, notify,
@@ -551,6 +551,10 @@ mod linux_app {
         preview_popup: Option<PopupSupervisor>,
         capsule_popup: Option<PopupSupervisor>,
         popup_action_guard: PopupActionGuard,
+        /// 当前胶囊展示的会话 id（用于「会话消失但没收到终态」的兜底收起）。
+        capsule_session: Option<String>,
+        /// 已经为哪个会话排过收起计时，避免重复计时。
+        capsule_dismissal_scheduled: Option<String>,
         tray: Option<openless_linux_egui::LinuxTray>,
         exit_requested: bool,
         update_support: LinuxUpdateSupport,
@@ -663,6 +667,8 @@ mod linux_app {
                         preview_popup: None,
                         capsule_popup: None,
                         popup_action_guard: PopupActionGuard::default(),
+                        capsule_session: None,
+                        capsule_dismissal_scheduled: None,
                         tray,
                         exit_requested: false,
                         update_support,
@@ -756,6 +762,8 @@ mod linux_app {
                     preview_popup: None,
                     capsule_popup: None,
                     popup_action_guard: PopupActionGuard::default(),
+                    capsule_session: None,
+                    capsule_dismissal_scheduled: None,
                     tray,
                     exit_requested: false,
                     update_support,
@@ -819,6 +827,10 @@ mod linux_app {
 
         fn send_popup(&mut self, kind: PopupKind, message: HostToPopup) {
             let lang = self.lang;
+            // 记录胶囊当前承载的会话：兜底收起要靠它判断「会话是否还在快照里」。
+            if let HostToPopup::Capsule { session_id, .. } = &message {
+                self.capsule_session = Some(session_id.clone());
+            }
             let retry = message.clone();
             if let Some(supervisor) = self.popup_slot(kind) {
                 if let Err(error) = supervisor.try_send(message) {
@@ -1022,10 +1034,19 @@ mod linux_app {
 
         /// 终态后按 Tauri Host 的时序自动收起胶囊：成功/失败停留 2 秒、
         /// 取消立刻；进行中的相位不收。
-        fn schedule_capsule_dismissal(&self, session_id: &str, phase: DictationPhase) {
+        fn schedule_capsule_dismissal(&mut self, session_id: &str, phase: DictationPhase) {
+            // 诊断链路用（低噪声：一次听写一条）：这条日志缺失 = 终态事件没到宿主。
             let Some(delay) = capsule_hide_delay(phase) else {
+                log::debug!("capsule: no dismissal for session {session_id} in {phase:?}");
+                // 会话又回到进行中相位：旧计时作废。
+                self.capsule_dismissal_scheduled = None;
                 return;
             };
+            self.capsule_dismissal_scheduled = Some(session_id.to_string());
+            log::info!(
+                "capsule: dismissal scheduled in {}ms for session {session_id} ({phase:?})",
+                delay.as_millis()
+            );
             let session_id = session_id.to_string();
             let tx = self.tx.clone();
             self.tokio.spawn(async move {
@@ -1038,10 +1059,15 @@ mod linux_app {
         /// layer surface 没有隐藏语义（只能销毁表面），所以统一结束弹窗进程：
         /// 下一次录音会在按热键那一刻按需重新拉起，用户看不到延迟。
         fn dismiss_capsule(&mut self) {
+            let had_process = self.popup_slot(PopupKind::Capsule).is_some();
             if let Some(supervisor) = self.popup_slot(PopupKind::Capsule).as_ref() {
                 let _ = supervisor.request_shutdown();
             }
             *self.popup_slot(PopupKind::Capsule) = None;
+            self.capsule_session = None;
+            self.capsule_dismissal_scheduled = None;
+            // 这条日志缺失 = 收起决定没走到「结束弹窗进程」这一环。
+            log::info!("capsule: dismissal applied (popup process was running: {had_process})");
         }
 
         fn poll_popup_supervisors(&mut self) {
@@ -1731,11 +1757,21 @@ mod linux_app {
                         self.transcript.clear();
                         self.transcript_session = state.session_id;
                     }
-                    self.status = fmt_l10n(
-                        lang,
-                        "status.dictation_phase",
-                        &[&format!("{:?}", state.phase)],
-                    );
+                    // 终态不写状态栏：`Failed` / `Completed` / `Cancelled` 是 Core 的
+                    // 内部词，用户已经能从胶囊看到本地化文案（Tauri 也只在那里显示）。
+                    if capsule_hide_delay(state.phase).is_some() {
+                        log::debug!(
+                            "dictation terminal phase {:?} (session {:?})",
+                            state.phase,
+                            state.session_id
+                        );
+                    } else {
+                        self.status = fmt_l10n(
+                            lang,
+                            "status.dictation_phase",
+                            &[&format!("{:?}", state.phase)],
+                        );
+                    }
                     if let Some(session_id) = state.session_id {
                         // 上一轮胶囊被自动收起后进程已经不在了：进行中的相位必须按需
                         // 重新拉起，否则 send_popup 会因为没有 supervisor 而静默丢弃；
@@ -2141,6 +2177,11 @@ mod linux_app {
                             .unwrap_or(DictationPhase::Idle);
                         if capsule_hide_is_still_current(current.as_deref(), &session_id, phase) {
                             self.dismiss_capsule();
+                        } else {
+                            log::info!(
+                                "capsule: dismissal skipped for session {session_id} — \
+                                 a newer session is active (snapshot {current:?}, {phase:?})"
+                            );
                         }
                     }
                     UiResult::Remote(Ok(remote)) => self.remote_access = Some(remote),
@@ -2405,6 +2446,30 @@ mod linux_app {
             if let Some(backend) = self.backend() {
                 self.snapshot = Some(backend.snapshot());
             }
+            self.reconcile_capsule_liveness();
+        }
+
+        /// 兜底：Core 有错误路径只 reset 会话、不发布终态事件，宿主就永远等不到
+        /// 「终态 → 收起」，药丸会一直贴在屏上。这里每帧按快照判断会话是否已经
+        /// 消失，消失且没排过收起就补一次（时长按失败终态，文案仍由胶囊自己决定）。
+        fn reconcile_capsule_liveness(&mut self) {
+            let live = self
+                .snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.dictation.session_id)
+                .map(|session_id| session_id.to_string());
+            let Some(session) = capsule_needs_fallback_dismissal(
+                self.capsule_session.as_deref(),
+                live.as_deref(),
+                self.capsule_dismissal_scheduled.as_deref(),
+            ) else {
+                return;
+            };
+            log::info!(
+                "capsule: session {session} vanished without a terminal event — \
+                 scheduling the fallback dismissal"
+            );
+            self.schedule_capsule_dismissal(&session, DictationPhase::Failed);
         }
 
         /// Apply a newly chosen UI locale immediately: persist it as Linux-UI
@@ -5102,7 +5167,25 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         ///
         /// Returns true when the process should exit.
         fn pump(&mut self, ctx: Option<&egui::Context>) -> bool {
-            while let Ok(message) = self.incoming.try_recv() {
+            loop {
+                let message = match self.incoming.try_recv() {
+                    Ok(message) => message,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        // 宿主进程没了（stdin 到 EOF → 读线程结束 → 发送端析构）。
+                        // 之前这里把 Empty 和 Disconnected 一起当成「没有消息」，
+                        // 于是胶囊会在宿主崩溃/被杀后永久贴在屏幕上（layer surface
+                        // 不能隐藏，只能随进程销毁）。宿主不在了就该自己退场。
+                        log::warn!(
+                            "openless popup ({:?}): host pipe closed — closing the popup",
+                            self.kind
+                        );
+                        if let Some(ctx) = ctx {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                        return true;
+                    }
+                };
                 if message
                     .content_kind()
                     .is_some_and(|message_kind| message_kind != self.kind)
@@ -5126,7 +5209,6 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                     return true;
                 }
             }
-            false
         }
 
         /// Tell the host which session this window is serving. The host drops
@@ -5783,6 +5865,69 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        /// 最小可用的弹窗实例：只为了驱动 `pump` 这条退出链路。
+        fn popup_app(kind: PopupKind, incoming: mpsc::Receiver<HostToPopup>) -> NativePopupApp {
+            let (outgoing, _outgoing_rx) = mpsc::channel();
+            NativePopupApp {
+                kind,
+                state: PopupState::default(),
+                incoming,
+                outgoing,
+                qa_input: String::new(),
+                outgoing_sequence: 0,
+                ready_sent: false,
+                preview_focus_requested: false,
+                avatar: QaAvatar::default(),
+                lang: Lang::ZhCn,
+                overlay: None,
+            }
+        }
+
+        #[test]
+        fn a_closed_host_pipe_exits_the_popup() {
+            // 宿主进程崩溃/被杀时 stdin 到 EOF、发送端析构。以前 Empty 与
+            // Disconnected 被一起当成「没有消息」，胶囊就会永久贴在屏幕上
+            // （真机验证过：layer surface 不会自己消失，只能随进程销毁）。
+            let (tx, rx) = mpsc::channel();
+            let mut app = popup_app(PopupKind::Capsule, rx);
+            drop(tx);
+            assert!(app.pump(None), "a closed host pipe must end the popup");
+        }
+
+        #[test]
+        fn a_live_host_pipe_keeps_the_popup_running() {
+            let (tx, rx) = mpsc::channel();
+            let mut app = popup_app(PopupKind::Capsule, rx);
+            tx.send(HostToPopup::Capsule {
+                version: POPUP_PROTOCOL_VERSION,
+                session_id: "s1".into(),
+                sequence: 1,
+                phase: "Recording".into(),
+                text: String::new(),
+                audio_level: Some(0.2),
+                translation_active: false,
+            })
+            .expect("channel is open");
+            assert!(!app.pump(None), "a progress frame must not exit");
+            // 宿主仍然活着（发送端还在）→ 不能因为消息读空就退出。
+            assert!(!app.pump(None));
+            drop(tx);
+            assert!(app.pump(None), "losing the host must exit");
+        }
+
+        #[test]
+        fn a_shutdown_frame_exits_the_popup() {
+            let (tx, rx) = mpsc::channel();
+            let mut app = popup_app(PopupKind::Capsule, rx);
+            tx.send(HostToPopup::Shutdown {
+                version: POPUP_PROTOCOL_VERSION,
+                session_id: "s1".into(),
+                sequence: 2,
+            })
+            .expect("channel is open");
+            assert!(app.pump(None), "the host shutdown must end the popup");
+        }
 
         #[test]
         fn pinned_qa_ignores_the_automatic_hide_action() {

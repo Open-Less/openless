@@ -75,15 +75,53 @@ pub fn capsule_hide_delay(phase: DictationPhase) -> Option<Duration> {
     }
 }
 
-/// 延时到点时是否还该收起：同一会话、且仍停在终态。
+/// 延时到点时是否还该收起。
 ///
-/// 用户在这 2 秒里又按了录音 → 会话变了 → 不能把新胶囊一起关掉。
+/// 判据是「这个会话已经不再进行」而不是「快照仍停在终态」：Core 在终态事件之后
+/// **立刻** `reset_dictation_session()`（见 `api.rs` 的
+/// `mark_dictation_failed(..); reset_dictation_session(..); return Err(..)`），
+/// 整个 `DictationStateSnapshot` 被重置成 `Idle` 且 `session_id` 清空。
+/// 所以 2 秒后回看快照，`current_session` 是 `None` —— 早先要求
+/// `current_session == Some(scheduled)` 的写法让**报错路径永远收不回胶囊**。
+///
+/// 保留的防护：用户在这 2 秒里又按了录音 → 快照里是**另一个**会话 id → 不收；
+/// 同一会话又回到进行中相位（理论上不会，兜底）→ 不收。
 pub fn capsule_hide_is_still_current(
     current_session: Option<&str>,
     scheduled_session: &str,
     phase: DictationPhase,
 ) -> bool {
-    current_session == Some(scheduled_session) && capsule_hide_delay(phase).is_some()
+    match current_session {
+        // Core 已经收尾（终态后重置，或根本没有会话语义）→ 正是该收起的时候。
+        None => true,
+        Some(current) if current == scheduled_session => !phase_shows_capsule(phase),
+        // 另一个会话正在进行 → 不能把新胶囊一起关掉。
+        Some(_) => false,
+    }
+}
+
+/// 快照里会话已经消失、而宿主从未安排收起时，该补收的会话 id。
+///
+/// Core 只有**部分**错误路径会先 `mark_dictation_failed`（发布终态事件）再 reset；
+/// 另一些（例如转写阶段的空音频）**只 reset 不发布**，宿主就永远等不到终态，
+/// 药丸会一直贴在屏幕上。这里按快照自身判断「会话已经没了」，补一次收起。
+///
+/// 返回 `Some(session)` = 该为这个会话安排收起；`None` = 什么都不用做。
+pub fn capsule_needs_fallback_dismissal(
+    capsule_session: Option<&str>,
+    live_session: Option<&str>,
+    already_scheduled: Option<&str>,
+) -> Option<String> {
+    let capsule_session = capsule_session?;
+    // 同一会话仍在跑：等它自己的终态。
+    if live_session == Some(capsule_session) {
+        return None;
+    }
+    // 已经为它安排过收起（事件路径已经处理）：别重复计时。
+    if already_scheduled == Some(capsule_session) {
+        return None;
+    }
+    Some(capsule_session.to_string())
 }
 
 /// 这个相位是否需要胶囊在屏幕上：只有进行中的相位才该按需拉起弹窗。
@@ -229,22 +267,100 @@ mod tests {
             "s1",
             DictationPhase::Completed
         ));
-        assert!(!capsule_hide_is_still_current(
-            None,
-            "s1",
-            DictationPhase::Completed
-        ));
-        // 同一会话又回到录音/转写 → 也不收。
+        // 同一会话又回到进行中相位 → 也不收。
         assert!(!capsule_hide_is_still_current(
             Some("s1"),
             "s1",
             DictationPhase::Recording
         ));
-        assert!(!capsule_hide_is_still_current(
-            Some("s1"),
-            "s1",
+    }
+
+    #[test]
+    fn a_session_that_vanishes_without_a_terminal_event_still_hides_the_capsule() {
+        // Core 有些错误路径只 reset、不发布终态事件（转写阶段空音频就是），
+        // 宿主必须自己发现「胶囊的会话已经不在快照里」并补一次收起。
+        assert_eq!(
+            capsule_needs_fallback_dismissal(Some("s1"), None, None),
+            Some("s1".to_string())
+        );
+        // 会话仍在跑 → 等它自己的终态。
+        assert_eq!(
+            capsule_needs_fallback_dismissal(Some("s1"), Some("s1"), None),
+            None
+        );
+        // 事件路径已经安排过 → 不重复计时。
+        assert_eq!(
+            capsule_needs_fallback_dismissal(Some("s1"), None, Some("s1")),
+            None
+        );
+        // 新会话顶掉了旧会话（旧胶囊复用同一进程）→ 旧会话该收。
+        assert_eq!(
+            capsule_needs_fallback_dismissal(Some("s1"), Some("s2"), None),
+            Some("s1".to_string())
+        );
+        // 根本没有胶囊在屏上 → 什么都不做。
+        assert_eq!(capsule_needs_fallback_dismissal(None, None, None), None);
+    }
+
+    #[test]
+    fn a_vanished_session_hides_the_capsule_through_the_fallback_path() {
+        // 兜底链路的端到端判据：会话消失（无终态事件）→ 取兜底会话 → 按失败终态
+        // 的时长 → 到点时判据为真 → 收起。
+        let session = capsule_needs_fallback_dismissal(Some("s1"), None, None)
+            .expect("a vanished session must be picked up");
+        assert_eq!(
+            capsule_hide_delay(DictationPhase::Failed),
+            Some(Duration::from_millis(CAPSULE_AUTO_HIDE_DELAY_MS))
+        );
+        assert!(capsule_hide_is_still_current(
+            None,
+            &session,
             DictationPhase::Idle
         ));
+    }
+
+    #[test]
+    fn the_failure_path_ends_with_a_dismissal() {
+        // 串起报错路径的四环（不看实现，看行为）：
+        // 1) 失败是终态 → 2 秒后收起；
+        // 2) 这 2 秒里 Core 已经把快照 reset 成 Idle、session_id 清空；
+        // 3) 到点时的判据必须为真 → 真的收起；
+        // 4) 但若这 2 秒里用户又按了录音（新会话）→ 不收，新胶囊活着。
+        assert_eq!(
+            capsule_hide_delay(DictationPhase::Failed),
+            Some(Duration::from_millis(CAPSULE_AUTO_HIDE_DELAY_MS))
+        );
+        assert!(capsule_hide_is_still_current(
+            None,
+            "session",
+            DictationPhase::Idle
+        ));
+        assert!(!capsule_hide_is_still_current(
+            Some("next"),
+            "session",
+            DictationPhase::Starting
+        ));
+    }
+
+    #[test]
+    fn the_core_reset_after_a_terminal_phase_still_dismisses_the_capsule() {
+        // 真实链路：Core 的失败路径是
+        // `mark_dictation_failed(..); reset_dictation_session(..); return Err(..)`，
+        // 后者把整个快照重置成 Idle 并清空 session_id。2 秒后回看快照只剩
+        // `None` —— 这正是「报错弹窗收不回」的原因，必须仍然收起。
+        for phase in [
+            DictationPhase::Idle,
+            DictationPhase::Completed,
+            DictationPhase::Failed,
+            DictationPhase::Cancelled,
+        ] {
+            assert!(
+                capsule_hide_is_still_current(None, "s1", phase),
+                "a finished session ({phase:?}) must still hide the capsule"
+            );
+            // 同一 id 但相位已经落回 Idle：同样属于「不再进行」。
+            assert!(capsule_hide_is_still_current(Some("s1"), "s1", phase));
+        }
     }
 
     #[test]

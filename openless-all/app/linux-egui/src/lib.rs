@@ -47,9 +47,9 @@ pub use desktop::{
     DesktopError, Notification,
 };
 pub use dictation_feedback::{
-    capsule_hide_delay, capsule_hide_is_still_current, capsule_outcome, is_backend_error_code,
-    is_expected_stop_error, normalize_stop_result, phase_shows_capsule, CapsuleOutcome,
-    CAPSULE_AUTO_HIDE_DELAY_MS,
+    capsule_hide_delay, capsule_hide_is_still_current, capsule_needs_fallback_dismissal,
+    capsule_outcome, is_backend_error_code, is_expected_stop_error, normalize_stop_result,
+    phase_shows_capsule, CapsuleOutcome, CAPSULE_AUTO_HIDE_DELAY_MS,
 };
 pub use fcitx5::{
     available as fcitx5_available, commit_text as fcitx5_commit_text,
