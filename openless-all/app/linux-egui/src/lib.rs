@@ -13,6 +13,7 @@ mod capabilities;
 mod coding_agent;
 mod credentials;
 mod desktop;
+mod dictation_feedback;
 mod fcitx5;
 mod host_actions;
 mod hotkeys;
@@ -44,6 +45,11 @@ pub use credentials::LinuxCredentialStore;
 pub use desktop::{
     atomic_save, notify, open_external, open_local_file, validate_save_path, AutostartManager,
     DesktopError, Notification,
+};
+pub use dictation_feedback::{
+    capsule_hide_delay, capsule_hide_is_still_current, capsule_outcome, is_backend_error_code,
+    is_expected_stop_error, normalize_stop_result, phase_shows_capsule, CapsuleOutcome,
+    CAPSULE_AUTO_HIDE_DELAY_MS,
 };
 pub use fcitx5::{
     available as fcitx5_available, commit_text as fcitx5_commit_text,

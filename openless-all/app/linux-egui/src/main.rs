@@ -23,6 +23,11 @@ mod linux_app {
         QaStateKind, SelectionPhase, SelectionSnapshot, TranscriptAccumulator, UserPreferences,
     };
     use openless_linux_egui::{
+        capsule_hide_delay, capsule_hide_is_still_current, capsule_outcome, fmt_l10n,
+        load_locale_pref, normalize_stop_result, phase_shows_capsule, save_locale_pref, tr_l10n,
+        CapsuleOutcome, Lang, LocalePref,
+    };
+    use openless_linux_egui::{
         drain_events, ensure_fcitx5_plugin_installed, fcitx5_copy_to_clipboard, notify,
         open_external, write_jsonl, EventDrainOutcome, Fcitx5HotkeyListener,
         FcitxPluginInstallPlan, FcitxPluginStatus, HostToPopup, LinuxBackendBuilder,
@@ -32,12 +37,13 @@ mod linux_app {
         SingleInstanceBroker, SingleInstanceRole, UpdateManifest, UpdateSchedule,
         POPUP_PROTOCOL_VERSION,
     };
-    use openless_linux_egui::{
-        fmt_l10n, load_locale_pref, save_locale_pref, tr_l10n, Lang, LocalePref,
-    };
 
     enum UiResult {
         Message(String),
+        /// 终态在屏上停留结束：胶囊可以收起了（handler 会再核对会话与相位）。
+        CapsuleDismissDue {
+            session_id: String,
+        },
         Remote(Result<(openless_core::RemoteInputStatus, String), String>),
         Providers(Result<ProviderPanel, String>),
         /// Credential channels for the settings modal's AI-services tab.
@@ -988,21 +994,16 @@ mod linux_app {
             let Some(session_id) = snapshot.session_id else {
                 return;
             };
-            // 终态文案：Core 的 message 常常是内部状态词（`inserted`）或空，
-            // 胶囊需要可直接展示的本地化文案，所以在这里补齐。
+            // 终态文案：Core 在失败时只给错误码名（`InvalidArgument`），成功时可能给
+            // 内部状态词（`inserted`），都不能直接显示；分类规则在 dictation_feedback。
             let lang = self.lang;
-            let text = match snapshot.message.as_deref() {
-                Some(message) if !message.trim().is_empty() && message != "inserted" => {
-                    message.to_string()
+            let text = match capsule_outcome(snapshot.phase, snapshot.message.as_deref()) {
+                CapsuleOutcome::Inserted => {
+                    frontend::popups::inserted_message(lang, self.transcript.chars().count())
                 }
-                _ => match snapshot.phase {
-                    DictationPhase::Completed => {
-                        frontend::popups::inserted_message(lang, self.transcript.chars().count())
-                    }
-                    DictationPhase::Cancelled => tr_l10n(lang, "capsule.cancelled").to_string(),
-                    DictationPhase::Failed => tr_l10n(lang, "capsule.error").to_string(),
-                    _ => String::new(),
-                },
+                CapsuleOutcome::Cancelled => tr_l10n(lang, "capsule.cancelled").to_string(),
+                CapsuleOutcome::Failed => tr_l10n(lang, "capsule.error").to_string(),
+                CapsuleOutcome::Progress(text) => text,
             };
             self.send_popup(
                 PopupKind::Capsule,
@@ -1016,6 +1017,31 @@ mod linux_app {
                     translation_active: snapshot.translation_active,
                 },
             );
+            self.schedule_capsule_dismissal(&session_id.to_string(), snapshot.phase);
+        }
+
+        /// 终态后按 Tauri Host 的时序自动收起胶囊：成功/失败停留 2 秒、
+        /// 取消立刻；进行中的相位不收。
+        fn schedule_capsule_dismissal(&self, session_id: &str, phase: DictationPhase) {
+            let Some(delay) = capsule_hide_delay(phase) else {
+                return;
+            };
+            let session_id = session_id.to_string();
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                tokio::time::sleep(delay).await;
+                let _ = tx.send(UiResult::CapsuleDismissDue { session_id });
+            });
+        }
+
+        /// 收起胶囊。三条窗口路径里只有 eframe 的两条支持「隐藏但保留进程」，
+        /// layer surface 没有隐藏语义（只能销毁表面），所以统一结束弹窗进程：
+        /// 下一次录音会在按热键那一刻按需重新拉起，用户看不到延迟。
+        fn dismiss_capsule(&mut self) {
+            if let Some(supervisor) = self.popup_slot(PopupKind::Capsule).as_ref() {
+                let _ = supervisor.request_shutdown();
+            }
+            *self.popup_slot(PopupKind::Capsule) = None;
         }
 
         fn poll_popup_supervisors(&mut self) {
@@ -1224,7 +1250,11 @@ mod linux_app {
                             .and_then(|snapshot| snapshot.dictation.session_id);
                         if let (Some(backend), Some(session)) = (self.backend(), session) {
                             self.spawn(async move {
-                                backend.cancel_dictation(Some(session)).await?;
+                                // 连点两次 ✕、会话已收尾之类的错误是预期内的，
+                                // 归一掉，不要再弹成失败。
+                                normalize_stop_result(
+                                    backend.cancel_dictation(Some(session)).await,
+                                )?;
                                 Ok(String::new())
                             });
                         }
@@ -1237,7 +1267,11 @@ mod linux_app {
                             .and_then(|snapshot| snapshot.dictation.session_id);
                         if let (Some(backend), Some(session)) = (self.backend(), session) {
                             self.spawn(async move {
-                                backend.stop_dictation_session(session).await?;
+                                // 没说话（空音频 → InvalidArgument）也是预期内的终态：
+                                // 胶囊会显示本地化文案并自动收起，这里不再报错误。
+                                normalize_stop_result(
+                                    backend.stop_dictation_session(session).await,
+                                )?;
                                 Ok(String::new())
                             });
                         }
@@ -1703,6 +1737,18 @@ mod linux_app {
                         &[&format!("{:?}", state.phase)],
                     );
                     if let Some(session_id) = state.session_id {
+                        // 上一轮胶囊被自动收起后进程已经不在了：进行中的相位必须按需
+                        // 重新拉起，否则 send_popup 会因为没有 supervisor 而静默丢弃；
+                        // 终态则不拉，免得把刚收起的药丸又喊回来。
+                        if phase_shows_capsule(state.phase) {
+                            self.ensure_popup(PopupKind::Capsule);
+                        }
+                        // 进行中的 message 也要过一遍分类：Core 偶尔把内部错误码
+                        // 写在这里，不能当成文案直接显示。
+                        let text = match capsule_outcome(state.phase, state.message.as_deref()) {
+                            CapsuleOutcome::Progress(text) => text,
+                            _ => String::new(),
+                        };
                         self.send_popup(
                             PopupKind::Capsule,
                             HostToPopup::Capsule {
@@ -1710,11 +1756,13 @@ mod linux_app {
                                 session_id: session_id.to_string(),
                                 sequence: event_sequence.saturating_mul(2),
                                 phase: format!("{:?}", state.phase),
-                                text: state.message.unwrap_or_default(),
+                                text,
                                 audio_level: Some(state.level),
                                 translation_active: state.translation_active,
                             },
                         );
+                        // 终态：按 Tauri 时序安排自动收起，否则药丸会一直贴在屏幕上。
+                        self.schedule_capsule_dismissal(&session_id.to_string(), state.phase);
                     }
                 }
                 BackendEventKind::TranscriptDelta(delta)
@@ -1739,10 +1787,14 @@ mod linux_app {
                         self.spawn(async move {
                             match request.action {
                                 openless_core::RecordingControlAction::Stop => {
-                                    backend.stop_dictation_session(request.session_id).await?;
+                                    normalize_stop_result(
+                                        backend.stop_dictation_session(request.session_id).await,
+                                    )?;
                                 }
                                 openless_core::RecordingControlAction::Cancel => {
-                                    backend.cancel_dictation(Some(request.session_id)).await?;
+                                    normalize_stop_result(
+                                        backend.cancel_dictation(Some(request.session_id)).await,
+                                    )?;
                                 }
                             }
                             Ok(tr_l10n(lang, "status.auto_stopped").to_string())
@@ -2076,6 +2128,21 @@ mod linux_app {
             while let Ok(result) = self.rx.try_recv() {
                 match result {
                     UiResult::Message(message) => self.status = message,
+                    UiResult::CapsuleDismissDue { session_id } => {
+                        let current = self
+                            .snapshot
+                            .as_ref()
+                            .and_then(|snapshot| snapshot.dictation.session_id)
+                            .map(|id| id.to_string());
+                        let phase = self
+                            .snapshot
+                            .as_ref()
+                            .map(|snapshot| snapshot.dictation.phase)
+                            .unwrap_or(DictationPhase::Idle);
+                        if capsule_hide_is_still_current(current.as_deref(), &session_id, phase) {
+                            self.dismiss_capsule();
+                        }
+                    }
                     UiResult::Remote(Ok(remote)) => self.remote_access = Some(remote),
                     UiResult::Remote(Err(error)) => self.status = error,
                     UiResult::Providers(Ok(panel)) => {
@@ -4820,8 +4887,7 @@ mod linux_app {
     mod popup_overlay {
         use super::*;
         use openless_linux_egui::{
-            place_overlay, popup_position, popup_size, OverlayEnvironment, OverlayPlacement,
-            X11Overlay,
+            place_overlay, popup_position, OverlayEnvironment, OverlayPlacement, X11Overlay,
         };
 
         pub struct PopupOverlay {

@@ -1302,6 +1302,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shutdown_ends_the_popup_process_so_nothing_is_left_on_screen() {
+        // 自动收起（听写终态 2 秒/取消立即）靠的是结束弹窗进程：胶囊的
+        // layer surface 只能随进程销毁，进程留着就会有一颗药丸永远贴屏。
+        let mut command = Command::new("/bin/sh");
+        command.arg("-c").arg("sleep 30");
+        let supervisor = PopupSupervisor::spawn_command(&Handle::current(), command);
+        supervisor
+            .request_shutdown()
+            .expect("a fresh supervisor accepts shutdown");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match supervisor.try_recv() {
+                Ok(PopupSupervisorEvent::Exited { crashed, .. }) => {
+                    assert!(!crashed, "a requested shutdown must not look like a crash");
+                    break;
+                }
+                Ok(_) | Err(mpsc::TryRecvError::Empty) if Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                result => panic!("popup process survived shutdown: {result:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn supervisor_reaps_a_crashed_child() {
         let mut command = Command::new("/bin/sh");
         command.arg("-c").arg("exit 17");
