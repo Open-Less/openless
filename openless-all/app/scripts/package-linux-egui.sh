@@ -45,6 +45,19 @@ exit 0
 EOF
 chmod 0755 "$POST_INSTALL"
 
+# 卸载同样要重启 fcitx5：文件被删掉后，运行中的输入法仍持有旧插件的映像。
+POST_REMOVE="$TARGET_DIR/openless-fcitx5-postrm"
+sed 's/Package installation runs as root/Package removal runs as root/' \
+  "$POST_INSTALL" > "$POST_REMOVE"
+chmod 0755 "$POST_REMOVE"
+
+# 插件指纹清单：装完包后一条命令就能核对「系统里的插件 == 包里的插件」。
+PLUGIN_SHA=$(sha256sum "$PLUGIN_ROOT/libopenless.so" | awk '{print $1}')
+PLUGIN_MANIFEST="$TARGET_DIR/openless-fcitx5-manifest"
+cat > "$PLUGIN_MANIFEST" <<EOF
+openless $VERSION fcitx5-addon-sha256 $PLUGIN_SHA
+EOF
+
 stage_common() {
   local root=$1
   install -Dm755 "$BINARY" "$root/usr/bin/openless"
@@ -75,6 +88,9 @@ Depends: fcitx5, fcitx5-module-dbus, libdbus-1-3, libasound2, libpipewire-0.3-0,
 Homepage: https://github.com/Open-Less/openless
 EOF
 install -m755 "$POST_INSTALL" "$DEB_ROOT/DEBIAN/postinst"
+install -m755 "$POST_REMOVE" "$DEB_ROOT/DEBIAN/postrm"
+install -Dm644 "$PLUGIN_MANIFEST" \
+  "$DEB_ROOT/usr/share/openless/fcitx5-addon.sha256"
 dpkg-deb --build --root-owner-group "$DEB_ROOT" \
   "$OUTPUT/OpenLess-Linux-egui-${VERSION}-${ARCH}.deb"
 
@@ -85,6 +101,8 @@ install -Dm755 "$PLUGIN_ROOT/libopenless.so" \
   "$RPM_ROOT/usr/lib64/fcitx5/libopenless.so"
 install -Dm644 "$PLUGIN_ROOT/openless.conf" \
   "$RPM_ROOT/usr/share/fcitx5/addon/openless.conf"
+install -Dm644 "$PLUGIN_MANIFEST" \
+  "$RPM_ROOT/usr/share/openless/fcitx5-addon.sha256"
 RPM_TOP="$TARGET_DIR/rpmbuild"
 RPM_VERSION=${VERSION,,}
 RPM_VERSION=${RPM_VERSION//-/.}
@@ -111,6 +129,16 @@ mkdir -p %{buildroot}
 cp -a . %{buildroot}/
 %files
 /
+%postun
+set +e
+for bus in /run/user/[0-9]*/bus; do
+  [ -S "\$bus" ] || continue
+  runtime_dir=\${bus%/bus}; uid=\${runtime_dir##*/}
+  [ "\$uid" != 0 ] || continue
+  user=\$(getent passwd "\$uid" | cut -d: -f1)
+  [ -n "\$user" ] && timeout 5s runuser -u "\$user" -- env XDG_RUNTIME_DIR="\$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=\$bus" fcitx5 -r >/dev/null 2>&1 || true
+done
+exit 0
 %post
 set +e
 for bus in /run/user/[0-9]*/bus; do

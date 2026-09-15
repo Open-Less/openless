@@ -87,10 +87,111 @@ fn system_plugin_available() -> bool {
 
 /// Path of the installed addon library the running fcitx5 would load: the user
 /// install wins over the system one because fcitx5 searches it first.
-fn installed_plugin_library(plan: &FcitxPluginInstallPlan) -> Option<PathBuf> {
-    if plan.target_library.is_file() {
-        return Some(plan.target_library.clone());
+/// Which copy of the addon fcitx5 will actually load.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PluginSource {
+    /// The package's `/usr/.../fcitx5/libopenless.so`.
+    System,
+    /// A per-user copy in `~/.local/` (manual install / AppImage).
+    User,
+    None,
+}
+
+/// The package copy wins over a per-user copy. fcitx5 searches the user addon
+/// directory first, so a leftover `~/.local` copy from an older manual install
+/// would otherwise keep shadowing every package upgrade forever.
+pub(crate) fn resolve_plugin_source(system: Option<&Path>, user: &Path) -> PluginSource {
+    if system.is_some() {
+        PluginSource::System
+    } else if user.is_file() {
+        PluginSource::User
+    } else {
+        PluginSource::None
     }
+}
+
+/// A per-user copy is stale when the package already provides the addon and the
+/// per-user files are still there to shadow it.
+pub(crate) fn shadows_package_plugin(system_present: bool, user_library: &Path) -> bool {
+    system_present && user_library.is_file()
+}
+
+/// Reasons fcitx5 has to be restarted before a plugin change takes effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReloadReason {
+    /// The installed plugin's content differs from the one we last loaded.
+    ContentChanged,
+    /// Same content, but the file is newer than the running daemon (a package
+    /// upgrade replaced the image the daemon still holds).
+    NewerThanDaemon,
+}
+
+/// Whether the running fcitx5 must be restarted.
+///
+/// `marker` is the fingerprint of the plugin content recorded the last time the
+/// host looked at it; a missing marker means "unknown baseline" and is treated
+/// as a change (one restart, then the marker exists and the check is exact).
+pub(crate) fn reload_reason(
+    marker: Option<&str>,
+    current: &str,
+    newer_than_daemon: bool,
+) -> Option<ReloadReason> {
+    if marker != Some(current) {
+        return Some(ReloadReason::ContentChanged);
+    }
+    if newer_than_daemon {
+        return Some(ReloadReason::NewerThanDaemon);
+    }
+    None
+}
+
+/// Where the fingerprint of the plugin content last handed to fcitx5 lives.
+pub fn plugin_fingerprint_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("fcitx5-plugin.sha256")
+}
+
+/// sha256 of a file, or `None` when it cannot be read.
+pub(crate) fn file_fingerprint(path: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path).ok()?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Some(format!("{:x}", hasher.finalize()))
+}
+
+/// Drop a per-user copy that would shadow the package's addon, so a package
+/// upgrade always wins. Best effort: a failure is a warning, never fatal.
+fn remove_shadowing_user_copy(plan: &FcitxPluginInstallPlan, system_present: bool) -> bool {
+    if !shadows_package_plugin(system_present, &plan.target_library) {
+        return false;
+    }
+    log::warn!(
+        "[fcitx] removing the per-user addon copy {} — the package provides a newer \
+         plugin and fcitx5 loads the user copy first",
+        plan.target_library.display()
+    );
+    let mut removed = false;
+    for path in [&plan.target_library, &plan.target_config] {
+        match std::fs::remove_file(path) {
+            Ok(()) => removed = true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => log::warn!("[fcitx] could not remove {}: {error}", path.display()),
+        }
+    }
+    removed
+}
+
+fn installed_plugin_library(plan: &FcitxPluginInstallPlan) -> Option<PathBuf> {
+    let system = system_plugin_library();
+    match resolve_plugin_source(system.as_deref(), &plan.target_library) {
+        PluginSource::System => system,
+        PluginSource::User => Some(plan.target_library.clone()),
+        PluginSource::None => None,
+    }
+}
+
+/// The package's addon library, found through the same directories fcitx5 uses.
+fn system_plugin_library() -> Option<PathBuf> {
     let mut library_dirs = vec![
         PathBuf::from("/usr/lib64/fcitx5"),
         PathBuf::from("/usr/lib/fcitx5"),
@@ -143,11 +244,52 @@ pub(crate) fn plugin_is_newer_than_running_fcitx5(
 
 /// Restart fcitx5 when the installed addon is newer than the running daemon so
 /// an upgraded plugin is actually loaded. Returns true when fcitx5 was replaced.
-pub fn reload_fcitx5_if_plugin_updated(plan: &FcitxPluginInstallPlan) -> bool {
+pub fn reload_fcitx5_if_plugin_updated(plan: &FcitxPluginInstallPlan, data_dir: &Path) -> bool {
+    let system = system_plugin_library();
+    // A leftover per-user copy shadows the package plugin in fcitx5's search
+    // order, so drop it first and judge the package's copy.
+    remove_shadowing_user_copy(plan, system.is_some());
     let Some(library) = installed_plugin_library(plan) else {
         return false;
     };
-    let Some(modified) = std::fs::metadata(&library)
+    let Some(current) = file_fingerprint(&library) else {
+        return false;
+    };
+    let fingerprint_path = plugin_fingerprint_path(data_dir);
+    let marker = std::fs::read_to_string(&fingerprint_path)
+        .ok()
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty());
+    let newer = plugin_written_after_running_daemon(&library);
+    log::info!(
+        "[fcitx] addon {} fingerprint={} recorded={} newer_than_daemon={}",
+        library.display(),
+        &current[..current.len().min(12)],
+        marker
+            .as_deref()
+            .map(|value| &value[..value.len().min(12)])
+            .unwrap_or("<none>"),
+        newer,
+    );
+    let Some(reason) = reload_reason(marker.as_deref(), &current, newer) else {
+        return false;
+    };
+    log::info!("[fcitx] restarting fcitx5 to load the addon update ({reason:?})");
+    let reloaded = reload_running_fcitx5();
+    // Record the fingerprint even when the daemon was not running: the next
+    // start loads the file itself, and the marker keeps the check exact.
+    if let Some(parent) = fingerprint_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(error) = std::fs::write(&fingerprint_path, &current) {
+        log::warn!("[fcitx] could not record the plugin fingerprint: {error}");
+    }
+    reloaded
+}
+
+/// Whether the addon file is newer than the running fcitx5 process.
+fn plugin_written_after_running_daemon(library: &Path) -> bool {
+    let Some(modified) = std::fs::metadata(library)
         .and_then(|metadata| metadata.modified())
         .ok()
         .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
@@ -170,14 +312,7 @@ pub fn reload_fcitx5_if_plugin_updated(plan: &FcitxPluginInstallPlan) -> bool {
     ) else {
         return false;
     };
-    if !plugin_is_newer_than_running_fcitx5(modified, boot_time, start_ticks) {
-        return false;
-    }
-    log::info!(
-        "[fcitx] addon {} is newer than the running fcitx5; restarting it to load the update",
-        library.display()
-    );
-    reload_running_fcitx5()
+    plugin_is_newer_than_running_fcitx5(modified, boot_time, start_ticks)
 }
 
 /// PID of the running fcitx5, by scanning /proc for the process name.
@@ -886,6 +1021,62 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn the_package_plugin_wins_over_a_per_user_copy() {
+        let system = Path::new("/usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so");
+        let user = Path::new("/home/u/.local/lib/fcitx5/libopenless.so");
+        assert_eq!(
+            resolve_plugin_source(Some(system), user),
+            PluginSource::System
+        );
+        // No package plugin: fall back to the per-user copy (AppImage/manual).
+        let missing = Path::new("/definitely/not/here/libopenless.so");
+        assert_eq!(
+            resolve_plugin_source(None, &PathBuf::from("/tmp/x")),
+            PluginSource::None
+        );
+        assert!(!missing.is_file());
+        // The decision itself must not depend on the user copy existing.
+        assert_eq!(
+            resolve_plugin_source(None, Path::new("/definitely/not/here")),
+            PluginSource::None
+        );
+    }
+
+    #[test]
+    fn a_per_user_copy_only_shadows_when_the_package_has_the_addon() {
+        let user = Path::new("/home/u/.local/lib/fcitx5/libopenless.so");
+        assert!(!shadows_package_plugin(false, user));
+        // Presence of the package copy plus an existing user file is the case
+        // that used to keep an upgraded package plugin from ever loading.
+        assert!(shadows_package_plugin(
+            true,
+            Path::new("/usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so")
+        ));
+    }
+
+    #[test]
+    fn reload_is_driven_by_content_before_mtime() {
+        // Same content, daemon older than the file: mtime still asks for a reload.
+        assert_eq!(
+            reload_reason(Some("abc"), "abc", true),
+            Some(ReloadReason::NewerThanDaemon)
+        );
+        // Same content, daemon newer: nothing to do (steady state every start).
+        assert_eq!(reload_reason(Some("abc"), "abc", false), None);
+        // Different content: reload regardless of timestamps (downgrades, files
+        // restored from a backup, same-second package upgrades).
+        assert_eq!(
+            reload_reason(Some("abc"), "def", false),
+            Some(ReloadReason::ContentChanged)
+        );
+        // Unknown baseline (first run of this check): reload once, then exact.
+        assert_eq!(
+            reload_reason(None, "abc", false),
+            Some(ReloadReason::ContentChanged)
+        );
+    }
 
     #[test]
     fn plugin_plan_is_probe_only_for_system_packages() {

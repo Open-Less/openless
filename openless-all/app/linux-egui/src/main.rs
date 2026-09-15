@@ -4810,7 +4810,7 @@ mod linux_app {
         let status = ensure_fcitx5_plugin_installed(&plan).map_err(|error| error.to_string())?;
         // 安装包升级会替换 libopenless.so，但运行中的 fcitx5 仍持有旧映像 ——
         // 不重启它，新的热键匹配规则就不会生效。只在插件确实更新过时重启。
-        openless_linux_egui::reload_fcitx5_if_plugin_updated(&plan);
+        openless_linux_egui::reload_fcitx5_if_plugin_updated(&plan, &config.data_dir);
         reconcile_fcitx5_install(status)
     }
 
