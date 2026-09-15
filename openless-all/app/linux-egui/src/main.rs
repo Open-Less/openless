@@ -1991,6 +1991,7 @@ mod linux_app {
                             );
                         }
                         HostAction::ShowQa => {
+                            log::info!("[hotkey] QA panel show requested by the host action");
                             self.qa_visible = true;
                             self.show_qa_popup();
                         }
@@ -3057,6 +3058,22 @@ mod linux_app {
                     self.lang,
                     "settings.recording.combo_conflict",
                     &[&error.to_string()],
+                ));
+                self.frontend_vm.shortcut_recording = None;
+                return;
+            }
+            // Core 允许「单个修饰键」作为触发键（macOS 按住说话用），但 Linux 的
+            // fcitx5 插件只能靠吞掉该修饰键来实现，会连带废掉系统里所有以它开头的
+            // 输入（Shift+字母打不出大写）。这里直接拒绝，并给出可见理由。
+            if openless_linux_egui::is_bare_modifier_binding(&binding) {
+                log::warn!(
+                    "[settings] rejecting recorded modifier-only shortcut '{}': it would be registered with fcitx5 and swallow that modifier system-wide",
+                    binding.primary
+                );
+                self.frontend_vm.settings_notice = Some(fmt_l10n(
+                    self.lang,
+                    "settings.recording.combo_conflict",
+                    &[&binding.primary],
                 ));
                 self.frontend_vm.shortcut_recording = None;
                 return;

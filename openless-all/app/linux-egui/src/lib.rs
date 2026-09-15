@@ -99,7 +99,7 @@ pub use resources::{
 };
 pub use runtime::{LinuxNativeRuntime, LinuxRuntimePumpResult};
 pub use selection::LinuxSelectionRuntime;
-pub use settings::{LinuxSettingsEffects, LinuxSettingsRuntime};
+pub use settings::{is_bare_modifier_binding, LinuxSettingsEffects, LinuxSettingsRuntime};
 pub use single_instance::{
     LinuxLaunchIntent, SingleInstanceBroker, SingleInstanceGuard, SingleInstanceRole,
 };
@@ -408,11 +408,15 @@ impl LinuxHost {
                 .dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Combined { press_id, at })
                 .await
                 .map(Some),
-            LinuxHotkeyEvent::QaPressed => self
-                .backend
-                .dispatch_cli_intent(CliIntent::ToggleQa)
-                .await
-                .map(Some),
+            LinuxHotkeyEvent::QaPressed => {
+                // 用户报「选区助手快捷键打不开」时，这一行 + 宿主的 ShowQa/HideQa
+                // 日志能直接区分「键没到」和「到了但被隐藏」。
+                log::info!("[hotkey] selection-ask hotkey pressed; toggling the QA panel");
+                self.backend
+                    .dispatch_cli_intent(CliIntent::ToggleQa)
+                    .await
+                    .map(Some)
+            }
             LinuxHotkeyEvent::SelectionPolishPressed => {
                 let preferences = self.backend.get_preferences();
                 let style_pack = self
