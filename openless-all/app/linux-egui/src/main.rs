@@ -1639,8 +1639,7 @@ mod linux_app {
             for command in commands {
                 match command {
                     openless_linux_egui::TrayCommand::ShowMain => {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                        show_main_window(ctx);
                     }
                     openless_linux_egui::TrayCommand::ActivatePreviousStyle => {
                         if let Some(backend) = self.backend() {
@@ -2032,9 +2031,11 @@ mod linux_app {
                 for action in actions {
                     match action {
                         HostAction::ShowMain | HostAction::ShowLessComputer => {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                            show_main_window(ctx);
                         }
                         HostAction::FocusMain => {
+                            // 只把焦点还回来：不强行把用户已经隐藏/最小化的窗口翻出来。
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                         }
                         HostAction::Notify(message) => {
@@ -3625,11 +3626,15 @@ mod linux_app {
                         self.frontend_vm.tools_open = !self.frontend_vm.tools_open;
                     }
                     frontend::view_model::FrontendAction::WindowClose => {
-                        // Closing the window is an explicit quit: without this the
-                        // tray handler below would only hide it, which reads as a
-                        // dead close button.
-                        self.exit_requested = true;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        // 关闭键 = 退回托盘继续跑（与 Tauri 一致）；只有托盘菜单
+                        // 的「退出」（TrayCommand::Quit）才真的结束进程。
+                        match window_close_action(self.exit_requested, self.tray.is_some()) {
+                            WindowCloseAction::HideToTray => hide_main_window(ctx),
+                            WindowCloseAction::Quit => {
+                                self.exit_requested = true;
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
+                        }
                     }
                     frontend::view_model::FrontendAction::WindowMaximize => {
                         let maximized =
@@ -4448,6 +4453,61 @@ mod linux_app {
         }
     }
 
+    /// 点关闭键的去向（Tauri 对齐：关窗 = 退回托盘，进程继续跑）。
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum WindowCloseAction {
+        /// 隐藏窗口，托盘图标继续驻留。
+        HideToTray,
+        /// 用户明确退出（托盘「退出」菜单），或没有托盘可退。
+        Quit,
+    }
+
+    /// 没有任何唤起路径时隐藏窗口会变成「进程还在但打不开」，所以没有托盘就必须退出。
+    fn window_close_action(exit_requested: bool, tray_available: bool) -> WindowCloseAction {
+        if exit_requested || !tray_available {
+            WindowCloseAction::Quit
+        } else {
+            WindowCloseAction::HideToTray
+        }
+    }
+
+    /// 从托盘/单实例意图唤起主窗口时要按序下发的视口命令。
+    ///
+    /// 先 `Minimized(false)`：窗口若是在最小化状态下被隐藏的，只发 `Visible(true)`
+    /// 会把它以「最小化可见」的形态还给窗口管理器（任务栏里仍是收起的）。
+    /// 最后才 `Focus`，否则焦点会落在旧目标上。
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum ShowMainStep {
+        Unminimize,
+        Show,
+        Focus,
+    }
+
+    const SHOW_MAIN_SEQUENCE: [ShowMainStep; 3] = [
+        ShowMainStep::Unminimize,
+        ShowMainStep::Show,
+        ShowMainStep::Focus,
+    ];
+
+    fn show_main_step_command(step: ShowMainStep) -> egui::ViewportCommand {
+        match step {
+            ShowMainStep::Unminimize => egui::ViewportCommand::Minimized(false),
+            ShowMainStep::Show => egui::ViewportCommand::Visible(true),
+            ShowMainStep::Focus => egui::ViewportCommand::Focus,
+        }
+    }
+
+    fn show_main_window(ctx: &egui::Context) {
+        for step in SHOW_MAIN_SEQUENCE {
+            ctx.send_viewport_cmd(show_main_step_command(step));
+        }
+    }
+
+    fn hide_main_window(ctx: &egui::Context) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+    }
+
     impl eframe::App for OpenLessEguiApp {
         fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
             egui::Color32::TRANSPARENT.to_normalized_gamma_f32()
@@ -4483,11 +4543,11 @@ mod linux_app {
                 self.request_update_check(channel);
             }
             if ctx.input(|input| input.viewport().close_requested())
-                && !self.exit_requested
-                && self.tray.is_some()
+                && window_close_action(self.exit_requested, self.tray.is_some())
+                    == WindowCloseAction::HideToTray
             {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                // 关窗只是退回托盘：托盘「退出」才是真的结束进程。
+                hide_main_window(ctx);
             }
             if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
                 let lang = self.lang;
@@ -5884,6 +5944,44 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn closing_the_window_hides_to_tray_instead_of_quitting() {
+            // 有托盘：关窗只隐藏，进程和托盘图标继续驻留（Tauri 行为）。
+            assert_eq!(
+                window_close_action(false, true),
+                WindowCloseAction::HideToTray
+            );
+            // 托盘菜单「退出」：明确退出。
+            assert_eq!(window_close_action(true, true), WindowCloseAction::Quit);
+            // 没有托盘就没有重新打开的入口，隐藏等于让进程失联。
+            assert_eq!(window_close_action(false, false), WindowCloseAction::Quit);
+        }
+
+        #[test]
+        fn showing_the_main_window_restores_the_taskbar_entry() {
+            // 顺序即语义：先取消最小化（否则任务栏里仍是收起的），再显示，最后聚焦。
+            assert_eq!(
+                SHOW_MAIN_SEQUENCE,
+                [
+                    ShowMainStep::Unminimize,
+                    ShowMainStep::Show,
+                    ShowMainStep::Focus
+                ]
+            );
+            assert_eq!(
+                show_main_step_command(ShowMainStep::Unminimize),
+                egui::ViewportCommand::Minimized(false)
+            );
+            assert_eq!(
+                show_main_step_command(ShowMainStep::Show),
+                egui::ViewportCommand::Visible(true)
+            );
+            assert_eq!(
+                show_main_step_command(ShowMainStep::Focus),
+                egui::ViewportCommand::Focus
+            );
+        }
 
         /// 最小可用的弹窗实例：只为了驱动 `pump` 这条退出链路。
         fn popup_app(kind: PopupKind, incoming: mpsc::Receiver<HostToPopup>) -> NativePopupApp {

@@ -1391,4 +1391,263 @@ mod tests {
             PathBuf::from("/home/test/.local/share/fcitx5/addon/openless.conf")
         );
     }
+    #[test]
+    fn quick_phrase_key_is_detected_and_released_for_a_semicolon_hotkey() {
+        // 用户机器上的真实配置（~/.config/fcitx5/conf/pinyin.conf）。
+        let config = "[Pinyin]\nQuickPhraseKey=semicolon\nOtherKey=ctrl+space\n";
+        assert_eq!(engine_reserved_keys(config), vec!["semicolon".to_string()]);
+        // `Ctrl+Shift+;` 在前端记成 `:`，`;` 与 `:` 是同一个物理键。
+        assert!(fcitx_key_aliases(":").contains(&"semicolon".to_string()));
+        assert!(fcitx_key_aliases(";").contains(&"semicolon".to_string()));
+        let (rewritten, previous) =
+            release_engine_reserved_key(config, &fcitx_key_aliases(":")).expect("conflict");
+        assert_eq!(previous, "semicolon");
+        assert_eq!(
+            rewritten,
+            "[Pinyin]\nQuickPhraseKey=\nOtherKey=ctrl+space\n"
+        );
+    }
+
+    #[test]
+    fn an_unrelated_engine_key_leaves_the_config_alone() {
+        // 引擎占用的是别的键：不能动用户的配置。
+        assert_eq!(
+            release_engine_reserved_key(
+                "[Pinyin]\nQuickPhraseKey=grave\n",
+                &fcitx_key_aliases(";")
+            ),
+            None
+        );
+        // 引擎什么都没占用。
+        assert_eq!(
+            release_engine_reserved_key("[Pinyin]\n", &fcitx_key_aliases(";")),
+            None
+        );
+        // `QuickPhraseKey=None` 是「关闭」，不算占用。
+        assert!(engine_reserved_keys("[Pinyin]\nQuickPhraseKey=None\n").is_empty());
+        // 非单字符主键（LeftControl 之类的修饰键触发）没有键名别名。
+        assert!(fcitx_key_aliases("LeftControl").contains(&"leftcontrol".to_string()));
+    }
+
+    #[test]
+    fn releasing_the_conflicting_key_rewrites_the_engine_config_once() {
+        let home = tempfile::tempdir().expect("temp home");
+        let config_dir = home.path().join(".config/fcitx5/conf");
+        std::fs::create_dir_all(&config_dir).expect("config dir");
+        let pinyin_conf = config_dir.join("pinyin.conf");
+        std::fs::write(
+            &pinyin_conf,
+            "# 双拼方案\nShuangpinProfile=Ziranma\nQuickPhraseKey=semicolon\n",
+        )
+        .expect("seed config");
+
+        let reloaded = std::cell::Cell::new(0);
+        let reload = |_: &str| {
+            reloaded.set(reloaded.get() + 1);
+            true
+        };
+        // `Ctrl+Shift+;` 在前端记成 `:`：两条都要能命中同一个物理键的占用。
+        assert!(release_engine_key_conflict_in(home.path(), ":", &reload));
+        let rewritten = std::fs::read_to_string(&pinyin_conf).expect("config readable");
+        assert!(rewritten.contains("QuickPhraseKey=\n"));
+        assert!(!rewritten.contains("QuickPhraseKey=semicolon"));
+        // 用户原有内容（注释、双拼方案）必须原样保留。
+        assert!(rewritten.contains("ShuangpinProfile=Ziranma"));
+        let backup = std::fs::read_to_string(config_dir.join("pinyin.conf.openless-backup"))
+            .expect("backup");
+        assert!(backup.contains("QuickPhraseKey=semicolon"));
+        assert_eq!(reloaded.get(), 1);
+
+        // 第二次进来已经没有冲突：不再改写、不再重载，备份也不会被覆盖。
+        assert!(!release_engine_key_conflict_in(home.path(), ":", &reload));
+        assert_eq!(reloaded.get(), 1);
+    }
+
+    #[test]
+    fn a_missing_engine_config_is_not_created() {
+        let home = tempfile::tempdir().expect("temp home");
+        assert!(!release_engine_key_conflict_in(home.path(), ";", &|_| true));
+        assert!(!home.path().join(".config/fcitx5/conf/pinyin.conf").exists());
+    }
+}
+
+/// fcitx5 引擎把某个键声明成了自己的「快速短语」触发键（`QuickPhraseKey`）。
+///
+/// 这个键在**到达 addon 事件过滤器之前**就被引擎消费，所以拿它当热键主键的绑定
+/// 永远收不到按键（实测：插件逐键 trace 里能看到字母键，却完全没有 `;`）。
+/// 返回值是配置里声明的键名列表（例如 `["semicolon"]`）。
+pub fn engine_reserved_keys(config: &str) -> Vec<String> {
+    config
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            if key.trim() != "QuickPhraseKey" {
+                return None;
+            }
+            let value = value.trim();
+            if value.is_empty() || value.eq_ignore_ascii_case("none") {
+                return None;
+            }
+            Some(value.to_string())
+        })
+        .collect()
+}
+
+/// 把热键主键换算成 fcitx 键名，供 [`engine_reserved_keys`] 比对。
+///
+/// 前端把 Shift 折进 keysym（`Ctrl+Shift+;` 记成 `:`），所以 `;` 与 `:` 都指向
+/// 同一个物理键 `semicolon`。
+pub fn fcitx_key_aliases(base: &str) -> Vec<String> {
+    let trimmed = base.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    let mut aliases = Vec::new();
+    let lowercase = trimmed.to_ascii_lowercase();
+    if lowercase.chars().count() == 1 {
+        if let Some(name) = fcitx_punctuation_name(trimmed.chars().next().unwrap_or_default()) {
+            aliases.push(name.to_string());
+        }
+    }
+    aliases.push(lowercase);
+    aliases.sort();
+    aliases.dedup();
+    aliases
+}
+
+fn fcitx_punctuation_name(character: char) -> Option<&'static str> {
+    Some(match character {
+        ';' | ':' => "semicolon",
+        ',' | '<' => "comma",
+        '.' | '>' => "period",
+        '/' | '?' => "slash",
+        '\'' | '"' => "apostrophe",
+        '[' | '{' => "bracketleft",
+        ']' | '}' => "bracketright",
+        '-' | '_' => "minus",
+        '=' | '+' => "equal",
+        '\\' | '|' => "backslash",
+        '`' | '~' => "grave",
+        _ => return None,
+    })
+}
+
+/// 当 `aliases` 里的键名被引擎占用时，改写配置把 `QuickPhraseKey` 置空，
+/// 返回 `(改写后的配置, 被释放的原值)`；没有冲突时返回 `None`。
+pub fn release_engine_reserved_key(config: &str, aliases: &[String]) -> Option<(String, String)> {
+    let reserved = engine_reserved_keys(config);
+    let occupied = reserved
+        .iter()
+        .find(|key| aliases.iter().any(|alias| alias.eq_ignore_ascii_case(key)))?;
+    let mut rewritten = String::with_capacity(config.len());
+    for line in config.lines() {
+        let is_target = line
+            .split_once('=')
+            .is_some_and(|(key, _)| key.trim() == "QuickPhraseKey");
+        if is_target {
+            rewritten.push_str("QuickPhraseKey=");
+            rewritten.push('\n');
+        } else {
+            rewritten.push_str(line);
+            rewritten.push('\n');
+        }
+    }
+    Some((rewritten, occupied.clone()))
+}
+
+/// 释放被输入法引擎占用的热键主键；返回是否真的改了配置。
+///
+/// 只动我们自己的用户配置 `~/.config/fcitx5/conf/pinyin.conf`，并且**先备份**
+/// （`pinyin.conf.openless-backup`，只在备份不存在时写），改完通过
+/// `Controller1.ReloadAddonConfig` 让拼音重新加载。用户想还原时把备份拷回去即可。
+pub fn release_engine_key_conflict(base_key: &str) -> bool {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return false;
+    };
+    release_engine_key_conflict_in(&home, base_key, &reload_addon_config)
+}
+
+/// [`release_engine_key_conflict`] 的可注入版本：`home` 与「让引擎重载配置」这两件
+/// 外部依赖显式传入，便于用临时目录断言「改了哪个文件、备份在哪、什么时候不该动」。
+pub fn release_engine_key_conflict_in(
+    home: &Path,
+    base_key: &str,
+    reload: &dyn Fn(&str) -> bool,
+) -> bool {
+    let aliases = fcitx_key_aliases(base_key);
+    if aliases.is_empty() {
+        return false;
+    }
+    let config_path = home.join(".config/fcitx5/conf/pinyin.conf");
+    let Ok(config) = std::fs::read_to_string(&config_path) else {
+        return false;
+    };
+    let Some((rewritten, previous)) = release_engine_reserved_key(&config, &aliases) else {
+        return false;
+    };
+    let backup_path = config_path.with_extension("conf.openless-backup");
+    if !backup_path.exists() {
+        if let Err(error) = std::fs::copy(&config_path, &backup_path) {
+            log::warn!(
+                "[fcitx] cannot back up {} before releasing its quick-phrase key: {error}",
+                config_path.display()
+            );
+            return false;
+        }
+    }
+    if let Err(error) = std::fs::write(&config_path, rewritten) {
+        log::warn!(
+            "[fcitx] cannot release the quick-phrase key in {}: {error}",
+            config_path.display()
+        );
+        return false;
+    }
+    if reload("pinyin") {
+        log::info!(
+            "[fcitx] released the input method's {} reservation ({}) so the hotkey reaches the \
+             addon; original config backed up at {}",
+            previous,
+            config_path.display(),
+            backup_path.display()
+        );
+    } else {
+        log::warn!(
+            "[fcitx] cleared QuickPhraseKey={previous} in {}; restart the input method for it to \
+             take effect (backup: {})",
+            config_path.display(),
+            backup_path.display()
+        );
+    }
+    true
+}
+
+/// `org.fcitx.Fcitx.Controller1.ReloadAddonConfig(s)` on `/controller`: the
+/// engine re-reads its own config file so the released key takes effect now.
+#[cfg(target_os = "linux")]
+pub(crate) fn reload_addon_config(addon: &str) -> bool {
+    use dbus::blocking::BlockingSender;
+    let Ok(connection) = dbus::blocking::Connection::new_session() else {
+        return false;
+    };
+    let Ok(message) = dbus::Message::new_method_call(
+        DESTINATION,
+        CONTROLLER_PATH,
+        CONTROLLER_INTERFACE,
+        "ReloadAddonConfig",
+    )
+    .map(|message| message.append1(addon)) else {
+        return false;
+    };
+    match connection.send_with_reply_and_block(message, CONTROLLER_TIMEOUT) {
+        Ok(_) => true,
+        Err(error) => {
+            log::warn!("[fcitx] D-Bus ReloadAddonConfig({addon}) failed: {error}");
+            false
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn reload_addon_config(_addon: &str) -> bool {
+    false
 }
