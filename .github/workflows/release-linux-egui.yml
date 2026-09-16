@@ -26,7 +26,13 @@ permissions:
 
 jobs:
   build-linux-egui:
-    runs-on: ubuntu-22.04
+    # 跟 ci.yml 的 linux-core-contract 用同一个镜像，理由也一样：cpal 的 PipeWire
+    # 后端需要 24.04 自带的 PipeWire/libspa ABI，22.04 的头文件编译不过
+    # libspa 0.10.x（缺 spa_meta_first 等字段——
+    # "spa_video_info_raw has no field named flags" 就是这个）。
+    # 这条工作流以前从没跑过，所以从没拿到 ci.yml 早就打上的这个修正；
+    # 一旦冷缓存重编 libspa 就会在编译阶段直接挂掉（实测 2026-09-16 run 35120587777）。
+    runs-on: ubuntu-24.04
     env:
       RELEASE_TAG: ${{ inputs.release_tag }}
     steps:
