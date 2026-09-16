@@ -550,28 +550,29 @@ jobs:
             openless-all/app/src-tauri/target/release/bundle/msi/*.msi.sig
             openless-all/app/src-tauri/target/release/bundle/latest-*.json
 
-  # ── Linux 侧（egui 原生宿主）：作为四平台之一，与 Tauri 三层同 run 并发 ──
+  # ── Linux 侧（egui 原生宿主）：四平台之一，与 Tauri 三层同 run **并发** ──
   # 复用 release-linux-egui.yml（它声明了 workflow_call）：推 v*-egui 就出 deb/rpm，
   # 版本串由本层传递的 tag 推导（不在被调用工作流里自己拼 tag）。
-  # 手动 dispatch 时四平台都构建（测试路径），便于一条 run 里拿到完整产物。
-  # needs: build 而不是并行：-tauri tag 下 release 由 build 里的 leader job
-  # （darwin/aarch64）用 softprops 创建，同一 run 里两个 job 不能抢着建同一个 release。
-  # 历史 -tauri tag 不进这里（保持旧行为）。
-  # 非 tag 的 dispatch 传空字符串：对端只上传 Actions artifact，完全不碰 release。
+  # 故意不写 needs: build —— 四个平台要同时开始编，而不是 Linux 等 macOS/Windows 编完。
+  # 代价：两个 job 不能同时建同一个 release。所以传 attach_release: false，Linux 资产
+  # 交给末尾的 bundle-all-artifacts（它 needs 四者、权限也是 contents: write）写。
+  # 手动 dispatch 时四平台都构建（测试路径），release_tag 为空、对端不碰 release。
+  # 历史 -tauri tag 不进这里（保持旧行为：只跑 Tauri 三平台）。
   release-linux-egui:
     name: Linux egui packages (deb + rpm)
-    needs: build
-    if: ${{ always() && !cancelled() && (github.event_name == 'workflow_dispatch' || endsWith(github.ref, '-egui')) }}
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || endsWith(github.ref, '-egui')) }}
     permissions:
       contents: write
     uses: ./.github/workflows/release-linux-egui.yml
     with:
       release_tag: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+      attach_release: false
 
-  # ── 把本次发布的四个平台产物打成一个 zip ──
+  # ── 把本次发布的四个平台产物打成一个 zip 并统一挂 release ──
   # needs 覆盖四平台（build 的 3 个 matrix 腿 + Linux egui），聚合两边的 artifact：
   # dmg/msi/exe 与签名、上传组件 manifest，加 Linux deb/rpm。保留各产物目录里自带
   # 的校验和文件，并在 zip 根部附一份覆盖全部文件的 SHA256SUMS。
+  # 它同时也是 Linux 资产的 release 写入点（见上面 egui job 的 attach_release: false）。
   # tag 推送时挂到同一个 release（名字带 tag，例如
   # OpenLess-v2.0.0-Beta.1-egui-all-artifacts.zip）；dispatch 时只作为 Actions
   # artifact，方便离线核对产物清单。
@@ -641,6 +642,22 @@ jobs:
           # 为空时保留既有 release body，不会覆盖 leader 写入的 prelude/notes。
           prerelease: ${{ env.OPENLESS_RELEASE_CHANNEL == 'beta' }}
           files: ${{ env.BUNDLE_ZIP }}
+          # zip 由上一个步骤硬门禁过（test -s），所以这里 unmatched 只能是真出错。
+          fail_on_unmatched_files: true
+
+      # Linux deb/rpm 由聚合层代传：egui job 与 Tauri 三层并发，两边抢建同一个
+      # release 会有竞态，所以 egui job 只上传 Actions artifact（attach_release:
+      # false），由这条最后一个 job 统一挂上去。
+      - name: Attach the Linux packages to the release
+        if: >-
+          startsWith(github.ref, 'refs/tags/v')
+          && hashFiles('bundle/openless-linux-egui-x86_64/*') != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ env.OPENLESS_RELEASE_CHANNEL == 'beta' }}
+          files: bundle/openless-linux-egui-x86_64/*
           fail_on_unmatched_files: true
 
   # ── 正式版发布后，自动更新 Homebrew cask ──

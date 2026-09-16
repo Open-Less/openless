@@ -16,11 +16,22 @@ on:
         description: "Existing v* tag whose Linux egui assets to build/upload (e.g. v2.0.0-Beta.1-egui); blank only uploads Actions artifacts"
         required: false
         type: string
+      attach_release:
+        description: "Upload the built packages to the release named by release_tag (ignored when release_tag is blank)"
+        required: false
+        default: true
+        type: boolean
   workflow_call:
     inputs:
       release_tag:
         required: false
         type: string
+      # 编排层（release-tauri.yml）传 false：四个平台并发跑，谁都不能在建 release
+      # 的同一秒里抢写，所以 Linux 资产的 release 上传统一交给聚合层（bundle job）。
+      attach_release:
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -207,7 +218,7 @@ jobs:
           if-no-files-found: error
 
       - name: Create / update the release with Linux egui assets
-        if: inputs.release_tag != ''
+        if: inputs.release_tag != '' && inputs.attach_release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
