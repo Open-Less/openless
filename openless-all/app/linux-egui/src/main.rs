@@ -5751,8 +5751,19 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             // per-user fcitx5 search path. Do that before opening the DBus
             // listener: otherwise the first run can wait forever for signals
             // from a plugin fcitx5 has never loaded.
-            ensure_fcitx5_ready(&config)?;
-            let hotkeys = Fcitx5HotkeyListener::start().map_err(|error| error.to_string())?;
+            // fcitx5 只是「全局热键」这一条能力：它缺席、插件过旧、DBus 不通
+            // 都**不能**拖死后端与主窗口（否则用户看到的就是「跟后端完全没连上」）。
+            if let Err(error) = ensure_fcitx5_ready(&config) {
+                log::warn!("[fcitx] addon readiness check failed, continuing without it: {error}");
+            }
+            let hotkeys = match Fcitx5HotkeyListener::start() {
+                Ok(listener) => Some(listener),
+                Err(error) => {
+                    // fcitx5 没在跑 / DBus 不通：热键暂时不可用，其余功能照常。
+                    log::warn!("[fcitx] hotkey listener unavailable, continuing: {error}");
+                    None
+                }
+            };
             let backend = {
                 // Construction captures the existing executor for cpal/native
                 // callbacks. The GUI thread leaves its context before block_on;
@@ -5764,11 +5775,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                     .map_err(|error| error.to_string())?
             };
             tokio
-                .block_on(LinuxNativeRuntime::start(
-                    backend,
-                    Some(broker),
-                    Some(hotkeys),
-                ))
+                .block_on(LinuxNativeRuntime::start(backend, Some(broker), hotkeys))
                 .map_err(|error| error.to_string())
         })();
         let options = eframe::NativeOptions {
