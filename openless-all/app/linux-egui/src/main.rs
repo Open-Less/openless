@@ -489,6 +489,13 @@ mod linux_app {
         Failed(String),
     }
 
+    /// 后台唤醒间隔：任何窗口状态下都必须继续唤醒（最小化、被遮挡、托盘隐藏都
+    /// 要能响应全局热键），所以只有一个常量 —— 写成函数是为了让「不可见时也不能
+    /// 停」这条约束有测试守着，而不是散落在 update 里。
+    pub fn background_wake_interval() -> std::time::Duration {
+        std::time::Duration::from_millis(250)
+    }
+
     pub struct OpenLessEguiApp {
         tokio: Arc<tokio::runtime::Runtime>,
         native: Option<LinuxNativeRuntime>,
@@ -560,6 +567,12 @@ mod linux_app {
         update_support: LinuxUpdateSupport,
         update_schedule: UpdateSchedule,
         update_started: std::time::Instant,
+        /// 后台唤醒任务是否已启动（保证窗口不可见时事件泵仍在跑）。
+        background_waker_started: bool,
+        /// 上次打「泵心跳」日志的时间。
+        last_pump_heartbeat: std::time::Instant,
+        /// 塌缩隐藏前的窗口尺寸（Wayland 隐藏/恢复要原样还原，不能写死尺寸）。
+        main_window_restore_size: Option<egui::Vec2>,
         update_manifest: Option<UpdateManifest>,
         update_busy: bool,
         update_progress: Option<openless_linux_egui::DownloadProgress>,
@@ -674,6 +687,9 @@ mod linux_app {
                         update_support,
                         update_schedule: UpdateSchedule::new(Duration::ZERO),
                         update_started: std::time::Instant::now(),
+                        background_waker_started: false,
+                        last_pump_heartbeat: std::time::Instant::now(),
+                        main_window_restore_size: None,
                         update_manifest: None,
                         update_busy: false,
                         update_progress: None,
@@ -769,6 +785,9 @@ mod linux_app {
                     update_support,
                     update_schedule: UpdateSchedule::new(Duration::ZERO),
                     update_started: std::time::Instant::now(),
+                    background_waker_started: false,
+                    last_pump_heartbeat: std::time::Instant::now(),
+                    main_window_restore_size: None,
                     update_manifest: None,
                     update_busy: false,
                     update_progress: None,
@@ -1639,7 +1658,7 @@ mod linux_app {
             for command in commands {
                 match command {
                     openless_linux_egui::TrayCommand::ShowMain => {
-                        show_main_window(ctx);
+                        show_main_window(ctx, &mut self.main_window_restore_size);
                     }
                     openless_linux_egui::TrayCommand::ActivatePreviousStyle => {
                         if let Some(backend) = self.backend() {
@@ -2000,6 +2019,52 @@ mod linux_app {
             }
         }
 
+        /// `update()` 是唯一 drain 原生事件（热键、单实例拉起意图）的地方，而
+        /// 最小化/隐藏的窗口会让 eframe 的定时重绘停摆 —— 那样按热键什么都不会
+        /// 发生（胶囊、QA 面板都不弹）。这里必须用**真线程**：`self.tokio` 是
+        /// current-thread 运行时，`spawn` 的任务只在别处 `block_on` 时才被推进，
+        /// 当作后台泵用就是「写完看着对、最小化后照样死」（实测心跳会在窗口
+        /// 收走的那一刻停）。线程只做一件事：`request_repaint()` 把事件循环戳醒。
+        fn ensure_background_waker(&mut self, ctx: &egui::Context) {
+            if self.background_waker_started {
+                return;
+            }
+            self.background_waker_started = true;
+            let ctx = ctx.clone();
+            let interval = background_wake_interval();
+            std::thread::Builder::new()
+                .name("openless-event-pump".to_string())
+                .spawn(move || loop {
+                    std::thread::sleep(interval);
+                    ctx.request_repaint();
+                })
+                .map(|_| ())
+                .unwrap_or_else(|error| {
+                    log::error!("[pump] background waker thread failed to start: {error}");
+                });
+        }
+
+        /// 泵心跳：窗口不可见时如果这条日志停了，就说明事件循环真的没在跑
+        /// （这正是「最小化后热键不响应」的判据），用户/支持可以直接看日志确认。
+        fn log_pump_heartbeat(&mut self, ctx: &egui::Context) {
+            if self.last_pump_heartbeat.elapsed() < std::time::Duration::from_secs(10) {
+                return;
+            }
+            self.last_pump_heartbeat = std::time::Instant::now();
+            // 只看「窗口是否真的在屏幕外」这一类信号，避免把遮挡误报成故障。
+            let (minimized, focused) = ctx.input(|input| {
+                let viewport = input.viewport();
+                (viewport.minimized, viewport.focused)
+            });
+            log::info!(
+                "[pump] heartbeat minimized={:?} focused={:?} tray={} recording={}",
+                minimized,
+                focused,
+                self.tray.is_some(),
+                self.recording_phase_active,
+            );
+        }
+
         fn poll(&mut self, ctx: &egui::Context) {
             let lang = self.lang;
             if let Some(native) = &self.native {
@@ -2031,7 +2096,7 @@ mod linux_app {
                 for action in actions {
                     match action {
                         HostAction::ShowMain | HostAction::ShowLessComputer => {
-                            show_main_window(ctx);
+                            show_main_window(ctx, &mut self.main_window_restore_size);
                         }
                         HostAction::FocusMain => {
                             // 只把焦点还回来：不强行把用户已经隐藏/最小化的窗口翻出来。
@@ -3629,8 +3694,15 @@ mod linux_app {
                         // 关闭键 = 退回托盘继续跑（与 Tauri 一致）；只有托盘菜单
                         // 的「退出」（TrayCommand::Quit）才真的结束进程。
                         match window_close_action(self.exit_requested, self.tray.is_some()) {
-                            WindowCloseAction::HideToTray => hide_main_window(ctx),
+                            WindowCloseAction::HideToTray => {
+                                hide_main_window(ctx, &mut self.main_window_restore_size)
+                            }
                             WindowCloseAction::Quit => {
+                                log::info!(
+                                    "[window] close button → quit (exit_requested={} tray={})",
+                                    self.exit_requested,
+                                    self.tray.is_some()
+                                );
                                 self.exit_requested = true;
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             }
@@ -4489,6 +4561,14 @@ mod linux_app {
         ShowMainStep::Focus,
     ];
 
+    /// 主窗口的最小内尺寸（与创建时的 `with_min_inner_size` 同源）。
+    /// Wayland 上隐藏窗口时要临时放开它，否则 960x640 会把「塌缩到 1x1」夹回去。
+    const MAIN_WINDOW_MIN_INNER_SIZE: egui::Vec2 = egui::vec2(960.0, 640.0);
+
+    /// 塌缩隐藏用的尺寸。不是 0：surface 保持映射才有 frame callback，
+    /// eframe 的 `update()` 才会继续跑（否则热键、托盘唤起全都不响应）。
+    const MAIN_WINDOW_COLLAPSED_SIZE: egui::Vec2 = egui::vec2(1.0, 1.0);
+
     fn show_main_step_command(step: ShowMainStep) -> egui::ViewportCommand {
         match step {
             ShowMainStep::Unminimize => egui::ViewportCommand::Minimized(false),
@@ -4497,15 +4577,80 @@ mod linux_app {
         }
     }
 
-    fn show_main_window(ctx: &egui::Context) {
+    /// 从托盘/单实例意图/宿主动作唤起主窗口。
+    ///
+    /// Wayland 下先还原尺寸与最小尺寸约束（隐藏时把它们放开了），再走
+    /// 取消最小化 → 显示 → 聚焦。X11 的 `Visible(true)` 本身就够，但不影响。
+    fn show_main_window(ctx: &egui::Context, restore_size: &mut Option<egui::Vec2>) {
+        log::info!("[window] show main window (unminimize → show → focus)");
+        if main_window_is_wayland() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(
+                MAIN_WINDOW_MIN_INNER_SIZE,
+            ));
+            if let Some(size) = restore_size.take() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+            }
+        }
         for step in SHOW_MAIN_SEQUENCE {
             ctx.send_viewport_cmd(show_main_step_command(step));
         }
     }
 
-    fn hide_main_window(ctx: &egui::Context) {
+    /// 隐藏主窗口（关闭键 / 窗口管理器关闭请求都走这里）。
+    ///
+    /// winit 在原生 Wayland 上 `set_visible` 是空实现（winit-0.30
+    /// `platform_impl/linux/wayland/window/mod.rs`：“Not possible on Wayland”），
+    /// 所以 Wayland 下 `Visible(false)` 等于什么都没做。最小化虽然受支持，
+    /// 但会让 surface 拿不到 frame callback：eframe 的 `update()` 停摆，热键、
+    /// 托盘、单实例唤起全部不响应（实测：最小化后心跳日志停掉、按热键没反应、
+    /// 重新启动也拉不回来）。所以 Wayland 上隐藏 = **塌缩到 1x1 并保持映射**：
+    /// 窗口事实上看不见了，而事件循环照常跑，上面三条都能用。X11 仍用真 unmap。
+    fn hide_main_window(ctx: &egui::Context, restore_size: &mut Option<egui::Vec2>) {
+        // 这条日志是「点关闭键没反应」的第一判据：有它 = 决策跑到了，「窗口却还在」
+        // 就是平台层（例如 winit 在 Wayland 上的 set_visible 是空实现）。
+        log::info!(
+            "[window] hide to tray: {} (tray keeps the process alive)",
+            if main_window_is_wayland() {
+                "collapse to 1x1 — winit cannot unmap a window on Wayland"
+            } else {
+                "unmap"
+            }
+        );
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        if main_window_is_wayland() {
+            // 记住用户当前的窗口尺寸，恢复时还原（不能写死 1240x800）。
+            let size = ctx
+                .input(|input| input.viewport().inner_rect.map(|rect| rect.size()))
+                .or(*restore_size)
+                .unwrap_or(egui::vec2(1240.0, 800.0));
+            *restore_size = Some(size);
+            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(
+                MAIN_WINDOW_COLLAPSED_SIZE,
+            ));
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(MAIN_WINDOW_COLLAPSED_SIZE));
+        } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
+    }
+
+    /// 主窗口是否跑在原生 Wayland 上。判定照抄 winit 自己的选择顺序
+    /// （`WAYLAND_DISPLAY` / `WAYLAND_SOCKET` 非空 → Wayland），因为
+    /// `set_visible` 的行为差异就是后端差异。
+    fn window_backend_is_wayland(
+        wayland_display: Option<&str>,
+        wayland_socket: Option<&str>,
+    ) -> bool {
+        [wayland_display, wayland_socket]
+            .into_iter()
+            .flatten()
+            .any(|value| !value.is_empty())
+    }
+
+    fn main_window_is_wayland() -> bool {
+        window_backend_is_wayland(
+            std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
+            std::env::var("WAYLAND_SOCKET").ok().as_deref(),
+        )
     }
 
     impl eframe::App for OpenLessEguiApp {
@@ -4547,7 +4692,7 @@ mod linux_app {
                     == WindowCloseAction::HideToTray
             {
                 // 关窗只是退回托盘：托盘「退出」才是真的结束进程。
-                hide_main_window(ctx);
+                hide_main_window(ctx, &mut self.main_window_restore_size);
             }
             if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
                 let lang = self.lang;
@@ -4566,6 +4711,9 @@ mod linux_app {
             let mut actions = Vec::new();
             frontend::render(ctx, &mut self.frontend_vm, &mut actions);
             self.apply_frontend_actions(actions, ctx);
+
+            self.ensure_background_waker(ctx);
+            self.log_pump_heartbeat(ctx);
 
             ctx.request_repaint_after(Duration::from_millis(50));
         }
@@ -5842,7 +5990,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             viewport: egui::ViewportBuilder::default()
                 .with_title("OpenLess")
                 .with_inner_size([1240.0, 800.0])
-                .with_min_inner_size([960.0, 640.0])
+                .with_min_inner_size(MAIN_WINDOW_MIN_INNER_SIZE)
                 .with_decorations(false)
                 .with_transparent(true)
                 .with_resizable(true)
@@ -6290,6 +6438,32 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             );
             assert!(!merged.show_overview_activity_heatmap);
             assert_eq!(merged.remote_input_port, 9443);
+        }
+
+        #[test]
+        /// 「窗口不可见时事件泵也必须继续跑」这条约束的守卫：唤醒间隔必须存在且
+        /// 足够小（热键要跟手），并且**不因窗口状态而变成 None**（那就等于最小化
+        /// 后不再唤醒 → 胶囊/QA 都不弹）。
+        fn background_waker_keeps_ticking_regardless_of_window_state() {
+            let interval = super::background_wake_interval();
+            assert!(interval > std::time::Duration::ZERO);
+            assert!(
+                interval <= std::time::Duration::from_millis(500),
+                "唤醒间隔过长会让热键明显延迟：{interval:?}"
+            );
+        }
+
+        #[test]
+        /// 隐藏主窗口的手段完全取决于 winit 跑在哪个后端上（`hide_main_window`）：
+        /// Wayland 的 `set_visible` 是空实现，只能最小化；X11 才是真 unmap。
+        fn the_main_window_hides_by_minimising_only_on_wayland() {
+            assert!(super::window_backend_is_wayland(Some("wayland-0"), None));
+            assert!(super::window_backend_is_wayland(None, Some("wayland-1")));
+            assert!(!super::window_backend_is_wayland(None, None));
+            assert!(
+                !super::window_backend_is_wayland(Some(""), Some("")),
+                "empty variables count as unset, matching winit's own backend choice"
+            );
         }
 
         #[test]

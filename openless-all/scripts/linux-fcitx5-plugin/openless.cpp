@@ -962,15 +962,23 @@ private:
             entries.push_back({"style_pack", packSym, packStates});
         }
         const auto now = std::chrono::steady_clock::now();
+        // 近失只看「除 Shift 外的修饰位」是否一致，理由有两个：
+        //   1. 屏蔽掉 CapsLock 之类的锁定位，否则开着 CapsLock 时这里会 continue
+        //      掉每一条，近失日志永远不会打（就是这么丢的）；
+        //   2. Shift 位可能被前端折进符号里（见 hotkey_match.h 的 `matches`）。
+        // 再用「符号是同一物理键」把「用户按了别的键」滤掉（按 Ctrl+C 不会因为
+        // 存在 Ctrl+Shift+S 绑定而刷日志）。
+        const uint32_t looseMask = openless_hotkeys::kModifierMask & ~openless_hotkeys::kShiftBit;
         for (const auto &entry : entries) {
-            // 事件 states 已屏蔽到修饰位，已注册值同样屏蔽后再比，否则 CapsLock
-            // 开着时这里会 continue 掉每一条，近失日志永远不会打（就是这么丢的）。
             if (entry.sym == 0 ||
-                (entry.states & openless_hotkeys::kModifierMask) !=
-                    (states & openless_hotkeys::kModifierMask)) {
+                (entry.states & looseMask) != (states & looseMask)) {
                 continue;
             }
-            if (openless_hotkeys::symMatches(sym, entry.sym)) {
+            if (openless_hotkeys::matches(sym, states, entry.sym, entry.states)) {
+                continue;
+            }
+            if (!openless_hotkeys::symMatches(sym, entry.sym) &&
+                !openless_hotkeys::isShiftPair(sym, entry.sym)) {
                 continue;
             }
             if (now - lastNearMissLog_ < std::chrono::seconds(1)) {

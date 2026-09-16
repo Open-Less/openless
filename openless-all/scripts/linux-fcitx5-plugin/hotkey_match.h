@@ -79,10 +79,12 @@ inline bool symMatches(uint32_t eventSym, uint32_t registeredSym) {
 
 /// The four modifier bits must match exactly; every other state bit is noise.
 ///
-/// Measured: for a *symbol* key fcitx keeps the Shift bit in `states` and only
-/// `Key::normalize()` drops it, while for letters it uppercases the symbol and
-/// keeps the bit. Tolerating a differing Shift bit here would make Ctrl+; fire
-/// a Ctrl+Shift+; binding, which is worse than the edge case it would cover.
+/// Measured (trace, KDE/Wayland + this addon): whether Shift shows up in
+/// `states` depends on the key kind — letters keep it (`Ctrl+Shift+S` arrives
+/// as sym=0x53 states=0x05), symbols do not (`Ctrl+Shift+;` arrives as
+/// sym=0x3a states=0x04, Shift folded into the level-applied symbol).
+/// `matches` therefore treats the Shift bit as part of the identity only when
+/// the symbol itself cannot distinguish the two (see `matches`).
 ///
 /// Measured (CapsLock): with CapsLock on, every event carries `0x02` in
 /// `states`, so `Ctrl+Shift+;` arrived as 0x07 while the binding was registered
@@ -94,13 +96,42 @@ inline bool statesMatch(uint32_t eventStates, uint32_t registeredStates) {
     return (eventStates & kModifierMask) == (registeredStates & kModifierMask);
 }
 
+/// Match a binding across both frontend conventions for Shift.
+///
+/// Measured on this desktop (plugin trace enabled, injected and real keys):
+///   Ctrl+Shift+S -> sym=0x53 ('S') states=0x05  (Shift is in `states`)
+///   Ctrl+Shift+; -> sym=0x3a (':') states=0x04  (Shift folded into the symbol)
+/// The registration for `Ctrl+Shift+;` is sym=0x3b states=0x05, so a plain
+/// `symMatches && statesMatch` never fired — the shortcut was dead while the
+/// key *was* reaching the addon. Rules here:
+///   * same symbol → every modifier bit must match (this is what keeps letter
+///     bindings, and unshifted symbol bindings, exact);
+///   * base/shifted symbol pair → only meaningful when the *binding* asks for
+///     Shift; the event's Shift bit is then ignored, because the level-applied
+///     symbol already carries that information. A binding that does not ask for
+///     Shift is never satisfied by the shifted symbol, so Ctrl+; and
+///     Ctrl+Shift+; stay distinguishable in both directions.
 inline bool matches(uint32_t eventSym, uint32_t eventStates,
                     uint32_t registeredSym, uint32_t registeredStates) {
     if (registeredSym == 0) {
         return false;
     }
-    return symMatches(eventSym, registeredSym) &&
-           statesMatch(eventStates, registeredStates);
+    const uint32_t event = foldSym(eventSym);
+    const uint32_t registered = foldSym(registeredSym);
+    if (event == registered) {
+        return statesMatch(eventStates, registeredStates);
+    }
+    if (isModifierSym(event) || isModifierSym(registered)) {
+        return false;
+    }
+    if (!isShiftPair(event, registered)) {
+        return false;
+    }
+    if ((registeredStates & kShiftBit) == 0) {
+        return false;
+    }
+    const uint32_t mask = kModifierMask & ~kShiftBit;
+    return (eventStates & mask) == (registeredStates & mask);
 }
 
 /// A matched binding whose primary key is a modifier must never be consumed:

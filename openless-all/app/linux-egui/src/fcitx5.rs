@@ -1437,7 +1437,7 @@ mod tests {
         let pinyin_conf = config_dir.join("pinyin.conf");
         std::fs::write(
             &pinyin_conf,
-            "# 双拼方案\nShuangpinProfile=Ziranma\nQuickPhraseKey=semicolon\n",
+            "# shuangpin profile: Ziranma\nShuangpinProfile=Ziranma\nQuickPhraseKey=semicolon\n",
         )
         .expect("seed config");
 

@@ -14,6 +14,10 @@ using openless_hotkeys::symMatches;
 static constexpr uint32_t kCtrl = 0x04;
 static constexpr uint32_t kAlt = 0x08;
 static constexpr uint32_t kShift = 0x01;
+static constexpr uint32_t kCapsLock = 0x02;
+static constexpr uint32_t kNumLock = 0x10;
+static constexpr uint32_t kMod3 = 0x20;
+static constexpr uint32_t kMod5 = 0x80;
 
 static void expect(bool actual, const char *what) {
     if (!actual) {
@@ -30,8 +34,18 @@ int main() {
            "Ctrl+Shift+: matches registered ;+Ctrl+Shift (level-applied frontend)");
     expect(matches(';', kCtrl | kShift, ';', kCtrl | kShift),
            "Ctrl+Shift+; matches registered ;+Ctrl+Shift (unfolded frontend)");
-    expect(matches(':', kCtrl, ';', kCtrl | kShift) == false,
-           "Ctrl+: does not fire the Ctrl+Shift+; binding");
+    // Measured on the real desktop (plugin trace, KDE/Wayland): pressing
+    // Ctrl+Shift+; delivers sym=0x3a (':') with states=0x04 — the Shift bit is
+    // NOT in `states` because the frontend folded it into the symbol. This is
+    // the case the shortcut was dying on, so it must match.
+    expect(matches(':', kCtrl, ';', kCtrl | kShift),
+           "Ctrl+Shift+; arrives as ':' with only Ctrl held (measured) and fires");
+    expect(matches(':', kCtrl | kCapsLock, ';', kCtrl | kShift),
+           "the same arrival still fires while CapsLock rides along");
+    // The mirror direction stays strict: the shifted symbol must never satisfy
+    // a binding that does not ask for Shift, otherwise Ctrl+; would steal it.
+    expect(matches(':', kCtrl, ';', kCtrl) == false,
+           "Ctrl+Shift+; does not fire a Ctrl+; binding");
     expect(matches(';', kCtrl, ';', kCtrl | kShift) == false,
            "Ctrl+; does not fire the Ctrl+Shift+; binding");
 
@@ -83,17 +97,13 @@ int main() {
     //    *any* binding (the QA shortcut was the visible casualty) — and the
     //    near-miss logger filtered on the same equality, so it stayed silent
     //    and the failure looked like "the key never arrived".
-    static constexpr uint32_t kCapsLock = 0x02;
-    static constexpr uint32_t kNumLock = 0x10;
-    static constexpr uint32_t kMod3 = 0x20;
-    static constexpr uint32_t kMod5 = 0x80;
     expect(matches(':', kCtrl | kShift | kCapsLock, ';', kCtrl | kShift),
            "Ctrl+Shift+; still fires while CapsLock is on");
     expect(matches(':', kCtrl | kShift | kNumLock | kMod3 | kMod5, ';', kCtrl | kShift),
            "NumLock/Hyper/Mod5 on the event do not block the binding");
     expect(matches('A', kAlt | kCapsLock, 'a', kAlt),
            "Alt+A still fires while CapsLock is on");
-    expect(matches(':', kCtrl | kCapsLock, ';', kCtrl | kShift) == false,
+    expect(matches(';', kCtrl | kCapsLock, ';', kCtrl | kShift) == false,
            "CapsLock does not let Ctrl+; fire the Ctrl+Shift+; binding");
     expect(matches(0xffe3, kCapsLock, 0xffe3, 0),
            "a bare modifier binding ignores lock bits");
