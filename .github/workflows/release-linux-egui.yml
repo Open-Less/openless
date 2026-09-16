@@ -1,13 +1,18 @@
 name: Release Linux egui
 
 # This workflow deliberately has no automatic tag trigger until real Ubuntu
-# audio, focus/input, install, upgrade, and rollback evidence is recorded. It is
-# already reusable by a release orchestrator: pass release_tag to upload verified packages.
+# audio, focus/input, install, upgrade, and rollback evidence is recorded, so it
+# never fires on its own. It is the Linux half of the shared cross-platform
+# pipeline: release-tauri.yml calls it through workflow_call on every v*-egui tag
+# push (that tag suffix is the only externally visible egui marker) and passes
+# release_tag, so the same run also produces the aggregated zip bundle. Tags with
+# the Tauri suffix never enter here. It can also be dispatched standalone
+# (blank release_tag = Actions artifacts only).
 on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing GitHub release tag to receive Linux assets; blank only uploads Actions artifacts
+        description: "Existing v* release tag for Linux egui assets (e.g. v2.0.0-Beta.1-egui); blank only uploads Actions artifacts"
         required: false
         type: string
   workflow_call:
@@ -28,6 +33,39 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: false
+
+      # 这个 gate 必须排在编译之前：它只依赖 checkout 与 gh，几秒就能出结论。
+      # 历史教训：它原来在依赖安装 + fcitx5 插件构建 + 全量测试之后（第 8 步），
+      # 一个不合规的 release_tag 会白烧掉 4.5 分钟 runner 才报错。
+      - name: Validate release target and UI gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RELEASE_TAG:-}" ]; then
+            echo "release_tag is empty: only uploading Actions artifacts, no release is touched"
+            exit 0
+          fi
+          case "$RELEASE_TAG" in
+            v*) ;;
+            *)
+              echo "::error::release_tag '$RELEASE_TAG' must be an existing v* tag (e.g. v2.0.0-Beta.1-egui); leave it blank to only upload Actions artifacts"
+              exit 1
+              ;;
+          esac
+          if grep -q 'openless-linux-egui host stub' openless-all/app/linux-egui/src/main.rs; then
+            echo "::error::The egui UI stub cannot be uploaded as a release asset"
+            exit 1
+          fi
+          # 只要求 tag 存在（存在才能安全建 release）；release 不存在就由本工作流
+          # 末尾的 softprops 步骤创建——-egui tag 是全新命名空间，首次推送时还没
+          # 有任何 release，旧实现要求的"release 必须先存在"会把这条路堵死。
+          if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "::error::tag '$RELEASE_TAG' does not exist in $GITHUB_REPOSITORY; push the tag first, or leave release_tag blank"
+            exit 1
+          fi
+          echo "release target $RELEASE_TAG is a real tag in $GITHUB_REPOSITORY"
 
       - name: Install native build and packaging dependencies
         run: |
@@ -88,28 +126,6 @@ jobs:
           ./scripts/check-core-runtime-seam.ps1
           ./scripts/check-linux-public-surface.ps1
 
-      - name: Validate release target and UI gate
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          if [ -z "${RELEASE_TAG:-}" ]; then
-            exit 0
-          fi
-          case "$RELEASE_TAG" in
-            v*) ;;
-            *)
-              echo "::error::release_tag must name an existing v* release"
-              exit 1
-              ;;
-          esac
-          if grep -q 'openless-linux-egui host stub' openless-all/app/linux-egui/src/main.rs; then
-            echo "::error::The egui UI stub cannot be uploaded as a release asset"
-            exit 1
-          fi
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
-
       - name: Validate Linux desktop metadata
         run: |
           desktop-file-validate openless-all/app/linux-egui/packaging/openless.desktop
@@ -126,6 +142,8 @@ jobs:
         run: |
           if [ -n "${RELEASE_TAG:-}" ]; then
             VERSION=${RELEASE_TAG#v}
+            # egui 产物统一用 -egui tag 后缀；$%-tauri 只保留为历史 tag 的兼容写法。
+            VERSION=${VERSION%-egui}
             VERSION=${VERSION%-tauri}
           else
             VERSION=$(node -p "require('./package.json').version")
@@ -179,10 +197,16 @@ jobs:
           path: openless-all/app/target/linux-egui-packages/*
           if-no-files-found: error
 
-      - name: Upload Linux egui assets to existing release
+      - name: Create / update the release with Linux egui assets
         if: inputs.release_tag != ''
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
+          # 不传 name/body_path：release 不存在时用默认标题（tag 名本身带 -egui
+          # 后缀，不会误标成 Tauri），已存在时保留 leader 写好的标题与 body。
+          draft: false
+          # -egui tag 是一个独立命名空间，beta 渠道必须自己判：否则首次为
+          # v*-Beta.N-egui 建 release 时会默认成正式版，把预发布包推给正式版用户。
+          prerelease: ${{ endsWith(inputs.release_tag, '-beta-egui') || contains(inputs.release_tag, '-Beta.') }}
           files: openless-all/app/target/linux-egui-packages/*
           fail_on_unmatched_files: true

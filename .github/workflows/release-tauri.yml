@@ -1,13 +1,18 @@
-name: Release Tauri (cross-platform)
+name: Release cross-platform (Tauri + Linux egui)
 # meta: ensure Actions indexes this workflow on forks (no behavior change).
-# 触发条件：
-#   - 推 v*.*.*-tauri 形式的 tag（与老 Swift 版的 vX.Y.Z 区分开,不冲突）
-#   - 手动 dispatch（用于测试构建,不发版）
+#
+# 这是**唯一一条**发版流水线，按 tag 后缀决定构建哪些平台（两侧共用末尾的聚合 zip job）：
+#   - 推 v*.*.*-tauri 形式的 tag → macOS arm64/x64 .dmg + Windows x64 .msi/.exe
+#   - 推 v*.*.*-egui  形式的 tag → Linux deb/rpm（调 release-linux-egui.yml，egui 原生宿主）
+#   - 手动 dispatch（测试构建，不发版）→ 两侧都构建
+# 两条 tag 命名空间互不干扰，也跟老 Swift 版的 vX.Y.Z 区分开。
+# 为什么不共用同一个 tag：同一次发布里 Linux egui 与 Tauri 三条平台各自独立出包，
+# 用后缀让「哪个 tag 该出哪些产物」在 tag 本身就能看清；两边都会挂上对应的
+# OpenLess-<tag>-all-artifacts.zip。
 #
 # 输出：
-#   macOS arm64/x64 .dmg + Windows x64 .msi/.exe，自动作为 GitHub Release 资产上传。
-#   Linux egui 由 release-linux-egui.yml 独立构建；本工作流不编译 Linux/Tauri。
-#
+#   构建好的安装包自动作为 GitHub Release 资产上传（tag 推送时）。
+
 # macOS 分发：
 #   - 配好 APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / APPLE_ID /
 #     APPLE_PASSWORD / APPLE_TEAM_ID 后，Tauri 会做 Developer ID 签名和公证。
@@ -20,6 +25,7 @@ on:
   push:
     tags:
       - 'v*-tauri'
+      - 'v*-egui'
   workflow_dispatch:
 
 # 同一 tag 重复推送只跑最新一次；workflow_dispatch 用 run_id 隔离避免互相取消。
@@ -29,6 +35,9 @@ concurrency:
 
 jobs:
   build:
+    # Tauri 三平台只在 -tauri tag（或手动 dispatch）上构建：推 -egui tag 时
+    # 这条 job 整体跳过，由 release-linux-egui 出 Linux deb/rpm。
+    if: ${{ github.event_name == 'workflow_dispatch' || endsWith(github.ref, '-tauri') }}
     permissions:
       contents: write
     strategy:
@@ -523,6 +532,98 @@ jobs:
             openless-all/app/src-tauri/target/release/bundle/msi/*.msi
             openless-all/app/src-tauri/target/release/bundle/msi/*.msi.sig
             openless-all/app/src-tauri/target/release/bundle/latest-*.json
+
+  # ── Linux 侧（egui 原生宿主）：由 -egui tag 触发，与 Tauri 侧同一条流水线 ──
+  # 复用 release-linux-egui.yml（它声明了 workflow_call）：推 v*-egui 就出 deb/rpm，
+  # 不再需要另外手动 dispatch 一条独立工作流（历史上从没被接上，也从没跑成功过）。
+  # 手动 dispatch 时两侧都构建（测试路径），便于一条 run 里拿到完整产物。
+  # needs: build 是硬约束而不是图省事：-tauri tag 下 release 由 build 里的 leader job
+  # （darwin/aarch64）用 softprops 创建，同一 run 里两个 job 不能抢着建同一个 release；
+  # -egui tag 下 build 被跳过，release 由被调用工作流自己创建。
+  # 非 tag 的 dispatch 传空字符串：对端只上传 Actions artifact，完全不碰 release。
+  release-linux-egui:
+    name: Linux egui packages (deb + rpm)
+    needs: build
+    if: ${{ always() && !cancelled() && (github.event_name == 'workflow_dispatch' || endsWith(github.ref, '-egui')) }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-linux-egui.yml
+    with:
+      release_tag: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+
+  # ── 把本次发布的所有最终产物打成一个 zip ──
+  # 两侧共用：-tauri tag 装的是 dmg/msi/exe 与签名、上传组件 manifest；
+  # -egui tag 装的是 deb/rpm。保留各产物目录里自带的校验和文件，并在 zip 根部
+  # 附一份覆盖全部文件的 SHA256SUMS。
+  # tag 推送时额外挂到同一个 release 上；dispatch 时只作为 Actions artifact，
+  # 方便离线核对产物清单。
+  bundle-all-artifacts:
+    name: Bundle every artifact (zip)
+    needs: [build, release-linux-egui]
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      # 与 build job 同一套渠道判定：beta release 必须保持 prerelease=true，
+      # 否则这个只挂 zip 的 job 会把它「升格」成正式版并推送给所有用户。
+      OPENLESS_RELEASE_CHANNEL: ${{ (endsWith(github.ref_name, '-beta-tauri') || endsWith(github.ref_name, '-beta-egui') || contains(github.ref_name, '-Beta.')) && 'beta' || 'stable' }}
+      # dispatch 不是 tag 时 github.ref_name 是分支名（含 `/`，不能进文件名）；
+      # tag 推送时 zip 名自带对应后缀，例如 OpenLess-v2.0.0-Beta.1-egui-all-artifacts.zip。
+      BUNDLE_ZIP: OpenLess-${{ github.ref_type == 'tag' && github.ref_name || format('run-{0}', github.run_number) }}-all-artifacts.zip
+    steps:
+      - name: Download every artifact of this run
+        uses: actions/download-artifact@v4
+        with:
+          # merge-multiple 保持默认（false）：每个 artifact 落在以自己名字命名的
+          # 子目录里，既不会互相覆盖（各平台都有 latest-*.json / SHA256SUMS），
+          # 也能在 zip 里看出文件属于哪个产物。
+          path: bundle
+
+      - name: Inventory and global checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d bundle
+          find bundle -type f | sort
+          test -n "$(find bundle -type f -print -quit)"
+          # 全局校验和（相对路径，解压到哪都能校验）；各平台自带的校验和文件原样
+          # 保留，也一并进这份全局清单，只排除本步骤自己写的根级那份。
+          ( cd bundle && find . -type f ! -path './SHA256SUMS' -print0 | sort -z | xargs -0 sha256sum ) > bundle/SHA256SUMS
+          # 立刻回验：SHA256SUMS 里是相对路径，在 bundle 目录里就能整套校验。
+          ( cd bundle && sha256sum -c SHA256SUMS >/dev/null )
+          wc -l < bundle/SHA256SUMS
+
+      - name: Zip every artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v zip >/dev/null || sudo apt-get install -y zip
+          command -v unzip >/dev/null || sudo apt-get install -y unzip
+          ( cd bundle && zip -r -q "../$BUNDLE_ZIP" . )
+          test -s "$BUNDLE_ZIP"
+          unzip -l "$BUNDLE_ZIP" | tail -3
+
+      - name: Upload the bundle as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.ref_type == 'tag' && format('{0}-all-artifacts', github.ref_name) || format('openless-run-{0}-all-artifacts', github.run_number) }}
+          path: ${{ env.BUNDLE_ZIP }}
+          if-no-files-found: error
+          # 重跑同一个 run 时 v4 默认拒绝同名 artifact；发版重跑是常规操作。
+          overwrite: true
+
+      - name: Attach the bundle to the release
+        if: startsWith(github.ref, 'refs/tags/v') && (endsWith(github.ref, '-tauri') || endsWith(github.ref, '-egui'))
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          # 与 build job 的 leader 一致：不传 body_path/name，softprops 在 body
+          # 为空时保留既有 release body，不会覆盖 leader 写入的 prelude/notes。
+          prerelease: ${{ env.OPENLESS_RELEASE_CHANNEL == 'beta' }}
+          files: ${{ env.BUNDLE_ZIP }}
+          fail_on_unmatched_files: true
 
   # ── 正式版发布后，自动更新 Homebrew cask ──
   # 为什么放进这条流水线，而不是单独的 `release: published` 工作流：softprops 用默认
