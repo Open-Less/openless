@@ -2,17 +2,18 @@ name: Release Linux egui
 
 # This workflow deliberately has no automatic tag trigger until real Ubuntu
 # audio, focus/input, install, upgrade, and rollback evidence is recorded, so it
-# never fires on its own. It is the Linux half of the shared cross-platform
-# pipeline: release-tauri.yml calls it through workflow_call on every v*-egui tag
-# push (that tag suffix is the only externally visible egui marker) and passes
-# release_tag, so the same run also produces the aggregated zip bundle. Tags with
-# the Tauri suffix never enter here. It can also be dispatched standalone
-# (blank release_tag = Actions artifacts only).
+# never fires on its own. It is the Linux leg of the shared cross-platform
+# pipeline: release-tauri.yml calls it through workflow_call for a v*-egui tag,
+# in the same run as the three macOS/Windows legs, and passes release_tag — the
+# version string here is derived from that input, never from a locally invented
+# tag. Linux artifacts carry an explicit egui marker
+# (OpenLess-Linux-egui-<ver>-<arch>.deb/.rpm, SHA256SUMS-egui). It can also be
+# dispatched standalone (blank release_tag = Actions artifacts only).
 on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Existing v* release tag for Linux egui assets (e.g. v2.0.0-Beta.1-egui); blank only uploads Actions artifacts"
+        description: "Existing v* tag whose Linux egui assets to build/upload (e.g. v2.0.0-Beta.1-egui); blank only uploads Actions artifacts"
         required: false
         type: string
   workflow_call:
@@ -186,15 +187,17 @@ jobs:
           test "$(find "$OUTPUT" -maxdepth 1 -name '*.deb' | wc -l)" -eq 1
           test "$(find "$OUTPUT" -maxdepth 1 -name '*.rpm' | wc -l)" -eq 1
           test "$(find "$OUTPUT" -maxdepth 1 -name '*.AppImage' | wc -l)" -eq 0
-          ( cd "$OUTPUT" && sha256sum ./*.deb ./*.rpm > SHA256SUMS )
-          test "$(wc -l < "$OUTPUT/SHA256SUMS")" -eq 2
-          cat "$OUTPUT/SHA256SUMS"
+          # 文件名带 egui 标识：同一次发布里四个平台的产物会进同一个聚合 zip，
+          # 不带标识的 SHA256SUMS 会与其它平台/聚合层那份混淆。
+          ( cd "$OUTPUT" && sha256sum ./*.deb ./*.rpm > SHA256SUMS-egui )
+          test "$(wc -l < "$OUTPUT/SHA256SUMS-egui")" -eq 2
+          cat "$OUTPUT/SHA256SUMS-egui"
 
       - name: Verify Linux release checksums
         working-directory: openless-all/app
         run: |
-          test -s target/linux-egui-packages/SHA256SUMS
-          ( cd target/linux-egui-packages && sha256sum -c SHA256SUMS >/dev/null )
+          test -s target/linux-egui-packages/SHA256SUMS-egui
+          ( cd target/linux-egui-packages && sha256sum -c SHA256SUMS-egui >/dev/null )
 
       - name: Upload Linux egui workflow artifacts
         uses: actions/upload-artifact@v4

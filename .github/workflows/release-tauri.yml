@@ -1,17 +1,30 @@
 name: Release cross-platform (Tauri + Linux egui)
 # meta: ensure Actions indexes this workflow on forks (no behavior change).
 #
-# 这是**唯一一条**发版流水线，按 tag 后缀决定构建哪些平台（两侧共用末尾的聚合 zip job）：
-#   - 推 v*.*.*-tauri 形式的 tag → macOS arm64/x64 .dmg + Windows x64 .msi/.exe
-#   - 推 v*.*.*-egui  形式的 tag → Linux deb/rpm（调 release-linux-egui.yml，egui 原生宿主）
-#   - 手动 dispatch（测试构建，不发版）→ 两侧都构建
-# 两条 tag 命名空间互不干扰，也跟老 Swift 版的 vX.Y.Z 区分开。
-# 为什么不共用同一个 tag：同一次发布里 Linux egui 与 Tauri 三条平台各自独立出包，
-# 用后缀让「哪个 tag 该出哪些产物」在 tag 本身就能看清；两边都会挂上对应的
-# OpenLess-<tag>-all-artifacts.zip。
+# 这是**唯一一条**发版流水线：一次 tag 推送、同一个 run 里四个平台并发构建，
+# 所有产物堆在同一个 GitHub Release 下。
 #
-# 输出：
-#   构建好的安装包自动作为 GitHub Release 资产上传（tag 推送时）。
+# tag 约定（当前）：v<version>-egui，例如 v2.0.0-Beta.1-egui。
+#   → macOS arm64 .dmg + macOS x64 .dmg + Windows x64 .msi/.exe + Linux deb/rpm
+#     （Linux 走 release-linux-egui.yml，经 workflow_call 调用，tag 由本层传入）
+#   → 末尾的 bundle-all-artifacts 把它们 + SHA256SUMS 打成一个
+#     OpenLess-<tag>-all-artifacts.zip 挂到同一个 release。
+#   → 后缀是「本次发布同时覆盖 Linux egui」的标记，不是平台分发开关；
+#     Linux 产物名自带 egui 标识（OpenLess-Linux-egui-<ver>-<arch>.deb/.rpm），
+#     与桌面包区分。
+#
+# 历史 tag 兼容：v<version>-tauri（含 -beta-tauri / -Beta.N-tauri）仍然可用，
+#   保持旧行为：只出 Tauri 三平台（不跑 Linux egui job）。已发布的 v*-tauri
+#   release 不受影响；把发布迁移到 -egui 后需要注意的外部引用列在下面。
+#
+# 迁到 -egui tag 后仍需跟进的仓库外部引用（不在本工作流范围内，见报告）：
+#   - Casks/openless.rb 的下载 URL 写死了 v#{version}-tauri
+#   - README.md / README.zh.md 的维护者发布清单只写了 v<version>-tauri
+#   - scripts/bump-version.sh 结尾提示的 tag 命令只拼了 -tauri
+#   - android-apk.yml 只在 v*-tauri 上触发（APK 因此不在 -egui 发布里）
+# 保留旧名不删是为了能让历史 -egui/-tauri release 重跑时行为可预测。
+#
+# 手动 dispatch（测试构建，不发版）→ 四平台都构建，release 相关步骤全部跳过。
 
 # macOS 分发：
 #   - 配好 APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / APPLE_ID /
@@ -37,7 +50,7 @@ jobs:
   build:
     # Tauri 三平台只在 -tauri tag（或手动 dispatch）上构建：推 -egui tag 时
     # 这条 job 整体跳过，由 release-linux-egui 出 Linux deb/rpm。
-    if: ${{ github.event_name == 'workflow_dispatch' || endsWith(github.ref, '-tauri') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || endsWith(github.ref, '-tauri') || endsWith(github.ref, '-egui') }}
     permissions:
       contents: write
     strategy:
@@ -67,7 +80,9 @@ jobs:
       #   v<v>-tauri       → stable 渠道（正式版，文件名沿用旧约定，向后兼容）
       # workflow_dispatch / 非 tag 触发时 github.ref_name 不是 tag 字符串，
       # endsWith 返回 false，回退为 stable，不改变现有 dispatch 行为。
-      OPENLESS_RELEASE_CHANNEL: ${{ (endsWith(github.ref_name, '-beta-tauri') || contains(github.ref_name, '-Beta.')) && 'beta' || 'stable' }}
+      # -egui 是新约定的 tag：四平台全跑。历史 -tauri tag 保持只跑 Tauri 三平台，
+      # 所以这条 job 的 if 里仍带上 -tauri。
+      OPENLESS_RELEASE_CHANNEL: ${{ (endsWith(github.ref_name, '-beta-tauri') || endsWith(github.ref_name, '-beta-egui') || contains(github.ref_name, '-Beta.')) && 'beta' || 'stable' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -104,7 +119,7 @@ jobs:
         run: npm ci
 
       - name: Check updater signing availability
-        if: startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -115,7 +130,7 @@ jobs:
           fi
 
       - name: Check Apple signing availability
-        if: startsWith(matrix.platform, 'macos') && startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
+        if: startsWith(matrix.platform, 'macos') && startsWith(github.ref, 'refs/tags/v')
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -478,7 +493,7 @@ jobs:
       # existing release body 不动,避免每个 matrix job 都 append 一遍同样的 prelude
       # 导致 release notes 重复 N 次。
       - name: Prepare release body prelude
-        if: matrix.updater-target == 'darwin' && matrix.updater-arch == 'aarch64' && startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
+        if: matrix.updater-target == 'darwin' && matrix.updater-arch == 'aarch64' && startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           cat > "$RUNNER_TEMP/release-body.md" << 'EOF'
@@ -505,7 +520,9 @@ jobs:
           echo "OPENLESS_RELEASE_BODY_PATH=$RUNNER_TEMP/release-body.md" >> "$GITHUB_ENV"
 
       - name: Create / update release
-        if: startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
+        # 任何 v* tag（-egui / -tauri）都要把三平台桌面包挂上同一个 release：
+        # 四平台共事一个 tag 是当前约定，Linux deb/rpm 由 release-linux-egui job 上传。
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
@@ -533,13 +550,13 @@ jobs:
             openless-all/app/src-tauri/target/release/bundle/msi/*.msi.sig
             openless-all/app/src-tauri/target/release/bundle/latest-*.json
 
-  # ── Linux 侧（egui 原生宿主）：由 -egui tag 触发，与 Tauri 侧同一条流水线 ──
+  # ── Linux 侧（egui 原生宿主）：作为四平台之一，与 Tauri 三层同 run 并发 ──
   # 复用 release-linux-egui.yml（它声明了 workflow_call）：推 v*-egui 就出 deb/rpm，
-  # 不再需要另外手动 dispatch 一条独立工作流（历史上从没被接上，也从没跑成功过）。
-  # 手动 dispatch 时两侧都构建（测试路径），便于一条 run 里拿到完整产物。
-  # needs: build 是硬约束而不是图省事：-tauri tag 下 release 由 build 里的 leader job
-  # （darwin/aarch64）用 softprops 创建，同一 run 里两个 job 不能抢着建同一个 release；
-  # -egui tag 下 build 被跳过，release 由被调用工作流自己创建。
+  # 版本串由本层传递的 tag 推导（不在被调用工作流里自己拼 tag）。
+  # 手动 dispatch 时四平台都构建（测试路径），便于一条 run 里拿到完整产物。
+  # needs: build 而不是并行：-tauri tag 下 release 由 build 里的 leader job
+  # （darwin/aarch64）用 softprops 创建，同一 run 里两个 job 不能抢着建同一个 release。
+  # 历史 -tauri tag 不进这里（保持旧行为）。
   # 非 tag 的 dispatch 传空字符串：对端只上传 Actions artifact，完全不碰 release。
   release-linux-egui:
     name: Linux egui packages (deb + rpm)
@@ -551,12 +568,13 @@ jobs:
     with:
       release_tag: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
 
-  # ── 把本次发布的所有最终产物打成一个 zip ──
-  # 两侧共用：-tauri tag 装的是 dmg/msi/exe 与签名、上传组件 manifest；
-  # -egui tag 装的是 deb/rpm。保留各产物目录里自带的校验和文件，并在 zip 根部
-  # 附一份覆盖全部文件的 SHA256SUMS。
-  # tag 推送时额外挂到同一个 release 上；dispatch 时只作为 Actions artifact，
-  # 方便离线核对产物清单。
+  # ── 把本次发布的四个平台产物打成一个 zip ──
+  # needs 覆盖四平台（build 的 3 个 matrix 腿 + Linux egui），聚合两边的 artifact：
+  # dmg/msi/exe 与签名、上传组件 manifest，加 Linux deb/rpm。保留各产物目录里自带
+  # 的校验和文件，并在 zip 根部附一份覆盖全部文件的 SHA256SUMS。
+  # tag 推送时挂到同一个 release（名字带 tag，例如
+  # OpenLess-v2.0.0-Beta.1-egui-all-artifacts.zip）；dispatch 时只作为 Actions
+  # artifact，方便离线核对产物清单。
   bundle-all-artifacts:
     name: Bundle every artifact (zip)
     needs: [build, release-linux-egui]
@@ -614,7 +632,7 @@ jobs:
           overwrite: true
 
       - name: Attach the bundle to the release
-        if: startsWith(github.ref, 'refs/tags/v') && (endsWith(github.ref, '-tauri') || endsWith(github.ref, '-egui'))
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
