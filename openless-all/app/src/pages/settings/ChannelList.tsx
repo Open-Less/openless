@@ -17,6 +17,7 @@ import { Icon } from '../../components/Icon';
 import { Modal } from '../../components/ui/Modal';
 import { SelectLite } from '../../components/ui/SelectLite';
 import { detectOS, type OS } from '../../components/WindowChrome';
+import { testLocalAsrChannel } from '../../lib/localAsr';
 import {
   createChannel,
   deleteChannel,
@@ -61,6 +62,7 @@ interface PresetOption {
   id: string;
   nameKey: string;
   defaultEndpoint?: string;
+  endpointPresets?: ProviderDescriptor['endpointPresets'];
   defaultModel?: string;
   authRequirement?: ProviderDescriptor['authRequirement'];
   staticModels?: string[];
@@ -81,6 +83,7 @@ export function presetsFor(
     id: descriptor.providerType,
     nameKey: descriptor.labelKey,
     defaultEndpoint: descriptor.defaultEndpoint ?? undefined,
+    endpointPresets: descriptor.endpointPresets,
     defaultModel: descriptor.defaultModel ?? undefined,
     authRequirement: descriptor.authRequirement,
     staticModels: descriptor.staticModels,
@@ -140,6 +143,12 @@ function modelAccountFor(kind: ChannelKind): string {
   return kind === 'llm' ? 'ark.model_id' : 'asr.model';
 }
 
+function failedOpMessage(error: unknown, fallback: string): string {
+  const detail = error instanceof Error ? error.message : String(error);
+  const trimmed = detail.trim();
+  return trimmed || fallback;
+}
+
 /**
  * 把后端的错误串压成按钮上放得下的短标签，且要**能指导行动**：
  * 401 是 key 不对、429 是被限流等会儿再说、超时是网络——用户看到才知道该改什么。
@@ -166,6 +175,31 @@ function shortErrorLabel(raw: string | null, t: ReturnType<typeof useTranslation
 
 /** 一天以前的验证结果只能算"旧消息"，褪色表示不保证现在还有效。 */
 const STALE_TEST_SECONDS = 24 * 60 * 60;
+
+type ChannelTestMode = 'provider' | 'local-model' | 'unavailable';
+
+const LOCAL_MODEL_CHANNEL_PROVIDERS = new Set([
+  'local-qwen3',
+  'local-qwen3-mlx',
+  'local-qwen3-c',
+  'local-whisper',
+]);
+
+export function channelTestMode(
+  kind: ChannelKind,
+  providerType: string,
+  validationProbe: string | undefined,
+): ChannelTestMode {
+  if (kind !== 'asr') return 'provider';
+  if (LOCAL_MODEL_CHANNEL_PROVIDERS.has(providerType)) return 'local-model';
+  if (
+    providerType === 'apple-speech' &&
+    (validationProbe == null || validationProbe === 'unsupported')
+  ) {
+    return 'unavailable';
+  }
+  return 'provider';
+}
 
 function relativeTime(at: number, t: ReturnType<typeof useTranslation>['t']): string {
   const seconds = Math.max(0, Math.floor(Date.now() / 1000) - at);
@@ -264,7 +298,8 @@ export function ChannelList({
       await refresh();
     } catch (error) {
       console.error('[channels] create failed', error);
-      emitSaved('failed', t('common.operationFailed'));
+      const message = failedOpMessage(error, t('common.operationFailed'));
+      emitSaved('failed', message);
     } finally {
       setCreatingBusy(false);
     }
@@ -282,17 +317,26 @@ export function ChannelList({
   const activeId = channels.find((c) => c.enabled)?.id ?? null;
 
   // ── 卡片上的验证 ──
-  // 只在用户点的时候跑：验证是**真实的 API 调用**（LLM 走一次真的润色请求、ASR 会传
-  // 一段静音音频上去）。做成打开设置就全部自动验一遍的话，等于每次开设置都按卡片数
-  // 烧一遍额度，还容易把自己撞进限流。
+  // 只在用户点的时候跑：验证是**真实的调用**（LLM 走一次真的润色请求、云端 ASR
+  // 传一段静音音频、本地 ASR 加载并转写内置音频）。做成打开设置就全部自动验一遍的话，
+  // 等于每次开设置都按卡片数烧一遍额度，还容易把自己撞进限流。
   const [testingIds, setTestingIds] = useState<Record<string, boolean>>({});
 
   const runTest = async (channel: Channel) => {
     if (testingIds[channel.id]) return;
+    const mode = channelTestMode(
+      kind,
+      channel.providerType,
+      descriptors.find((item) => item.providerType === channel.providerType)?.validationProbe,
+    );
+    if (mode === 'unavailable') return;
     setTestingIds((prev) => ({ ...prev, [channel.id]: true }));
     const started = performance.now();
     try {
-      const result = await validateProviderCredentials(kind, channel.id);
+      const result =
+        mode === 'local-model'
+          ? await testLocalAsrChannel(channel.id).then(() => ({ ok: true }))
+          : await validateProviderCredentials(kind, channel.id);
       const latency = Math.round(performance.now() - started);
       await recordChannelTest(
         kind,
@@ -586,9 +630,9 @@ export function ChannelList({
           const providerLabel = presetLabel(kind, channel.providerType, t, descriptors);
           const label = channel.name.trim() || providerLabel;
           const model = models[channel.id] ?? '';
-          const localEngine =
-            descriptors.find((item) => item.providerType === channel.providerType)
-              ?.authRequirement === 'none';
+          const descriptor = descriptors.find((item) => item.providerType === channel.providerType);
+          const localEngine = descriptor?.authRequirement === 'none';
+          const testMode = channelTestMode(kind, channel.providerType, descriptor?.validationProbe);
           return (
             <div
               key={channel.id}
@@ -695,6 +739,7 @@ export function ChannelList({
                   <ChannelTestResult
                     channel={channel}
                     testing={Boolean(testingIds[channel.id])}
+                    unavailable={testMode === 'unavailable'}
                     t={t}
                   />
                 </div>
@@ -710,17 +755,19 @@ export function ChannelList({
                   width: preferenceStack ? '100%' : undefined,
                 }}
               >
-                <Btn
-                  size="sm"
-                  disabled={Boolean(testingIds[channel.id])}
-                  onClick={() => void runTest(channel)}
-                >
-                  {t(
-                    testingIds[channel.id]
-                      ? 'settings.channels.verifying'
-                      : 'settings.channels.verify',
-                  )}
-                </Btn>
+                {testMode !== 'unavailable' && (
+                  <Btn
+                    size="sm"
+                    disabled={Boolean(testingIds[channel.id])}
+                    onClick={() => void runTest(channel)}
+                  >
+                    {t(
+                      testingIds[channel.id]
+                        ? 'settings.channels.verifying'
+                        : 'settings.channels.verify',
+                    )}
+                  </Btn>
+                )}
                 <button
                   type="button"
                   role="switch"
@@ -791,10 +838,12 @@ export function ChannelList({
 function ChannelTestResult({
   channel,
   testing,
+  unavailable,
   t,
 }: {
   channel: Channel;
   testing: boolean;
+  unavailable: boolean;
   t: ReturnType<typeof useTranslation>['t'];
 }) {
   const last = channel.lastTest;
@@ -815,8 +864,12 @@ function ChannelTestResult({
         color: 'var(--ol-ink-3)',
       }}
     >
-      <span>{t('settings.channels.lastCheck')}</span>
-      {testing ? (
+      <span>
+        {t(
+          unavailable ? 'settings.channels.verificationUnavailable' : 'settings.channels.lastCheck',
+        )}
+      </span>
+      {unavailable ? null : testing ? (
         <span>{t('settings.channels.verifying')}</span>
       ) : !last ? (
         <span>{t('settings.channels.notVerified')}</span>

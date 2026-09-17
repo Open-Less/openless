@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import {
   listProviderModels,
+  openExternal,
   listProviderDescriptors,
   readCredential,
   recordChannelTest,
@@ -143,6 +144,7 @@ export const LLM_LABELS = [
   ['stepfun', 'stepfun'],
   ['opencode', 'opencode'],
   ['tencentTokenHub', 'tencentTokenHub'],
+  ['lmstudio', 'lmstudio'],
   ['custom', 'customChatCompletions'],
   ['custom_responses', 'customResponses'],
   ['custom_messages', 'customMessages'],
@@ -153,6 +155,28 @@ const ASR_DEFAULT_RESOURCE_ID = 'volc.seedasr.sauc.duration';
 
 /** 模型预设下拉里的「自定义模型…」哨兵值：选中即切回输入框手输。 */
 const CUSTOM_MODEL_OPTION_VALUE = '__custom_model__';
+
+function matchesEndpointPreset(value: string, endpoint: string): boolean {
+  try {
+    const current = new URL(value.trim());
+    const preset = new URL(endpoint);
+    const basePath = (path: string) =>
+      path
+        .replace(/\/$/, '')
+        .replace(/\/(chat\/completions|responses|messages|models)$/, '')
+        .replace(/\/v3$/, '');
+    return (
+      current.origin === preset.origin &&
+      !current.search &&
+      !current.hash &&
+      !current.username &&
+      !current.password &&
+      basePath(current.pathname) === basePath(preset.pathname)
+    );
+  } catch {
+    return false;
+  }
+}
 
 /**
  * 一张渠道卡片的凭据字段区（编辑弹窗的主体）。
@@ -177,6 +201,7 @@ export function ChannelCredentialFields({
       ProviderDescriptor,
       | 'authRequirement'
       | 'defaultEndpoint'
+      | 'endpointPresets'
       | 'defaultModel'
       | 'staticModels'
       | 'defaultRequestFormat'
@@ -190,6 +215,7 @@ export function ChannelCredentialFields({
 }) {
   const { t } = useTranslation();
   const { prefs, updatePrefs } = useHotkeySettings();
+  const [llmEndpoint, setLlmEndpoint] = useState('');
   const [llmModelRevision, setLlmModelRevision] = useState(0);
   const [configRevision, setConfigRevision] = useState(0);
   const [orcarouterCatalogRevision, setOrcarouterCatalogRevision] = useState(0);
@@ -211,16 +237,42 @@ export function ChannelCredentialFields({
     'app_id_token',
   );
 
+  const providerForm = useContext(ProviderFormContext);
+  const formTrack = providerForm?.track;
+  const trackVolcengineSetting = useCallback(
+    (account: string, blocked: boolean) => {
+      trackField(account, blocked);
+      formTrack?.(account, blocked);
+    },
+    [trackField, formTrack],
+  );
+  const [volcengineService, setVolcengineService] = useState('standard');
+  const onAsrMutation = () => {
+    onUserMutation?.();
+    setConfigRevision((value) => value + 1);
+  };
+
   useEffect(() => {
-    if (providerType === 'volcengine') {
-      readCredential('volcengine.auth_mode', channelId)
-        .then((v) => {
-          if (v === 'api_key') setVolcengineAuthMode('api_key');
-          else setVolcengineAuthMode('app_id_token');
-        })
-        .catch(() => setVolcengineAuthMode('app_id_token'));
-    }
-  }, [providerType, channelId]);
+    if (providerType !== 'volcengine') return;
+    let cancelled = false;
+    trackField('volcengine.config', true);
+    Promise.all([
+      readCredential('volcengine.service', channelId),
+      readCredential('volcengine.auth_mode', channelId),
+    ])
+      .then(([service, mode]) => {
+        if (cancelled) return;
+        setVolcengineService(service || 'standard');
+        setVolcengineAuthMode(mode === 'api_key' ? 'api_key' : 'app_id_token');
+        trackField('volcengine.config', false);
+      })
+      .catch(() => {
+        if (!cancelled) emitSaved('failed', t('common.operationFailed'));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [providerType, channelId, trackField, t]);
 
   useEffect(() => {
     if (!unifiedBailian) setBailianModel('');
@@ -248,6 +300,9 @@ export function ChannelCredentialFields({
   if (kind === 'llm') {
     const defaultEndpoint = descriptor?.defaultEndpoint;
     const defaultModel = descriptor?.defaultModel;
+    const modelsUrl = descriptor.endpointPresets?.find((preset) =>
+      matchesEndpointPreset(llmEndpoint || defaultEndpoint || '', preset.endpoint),
+    )?.modelsUrl;
     const codexOAuthSelected = descriptor?.authRequirement === 'o_auth';
     return (
       <>
@@ -284,7 +339,11 @@ export function ChannelCredentialFields({
           <>
             <CredentialField
               key={`${channelId}:api_key`}
-              label={t('settings.providers.apiKeyLabel')}
+              label={t(
+                descriptor.authRequirement === 'endpoint_model_optional_api_key'
+                  ? 'settings.providers.apiKeyOptionalLabel'
+                  : 'settings.providers.apiKeyLabel',
+              )}
               account="ark.api_key"
               provider={channelId}
               mono
@@ -296,6 +355,21 @@ export function ChannelCredentialFields({
               key={`${channelId}:endpoint`}
               label={t('settings.providers.baseUrlLabel')}
               account="ark.endpoint"
+              onValueChange={setLlmEndpoint}
+              endpointPresets={
+                providerType === 'ark' && defaultEndpoint && descriptor.endpointPresets?.length
+                  ? {
+                      label: t('settings.providers.volcengineServiceLabel'),
+                      options: [
+                        { value: defaultEndpoint, label: t('settings.providers.presets.ark') },
+                        ...descriptor.endpointPresets.map(({ name, endpoint }) => ({
+                          value: endpoint,
+                          label: name,
+                        })),
+                      ],
+                    }
+                  : undefined
+              }
               provider={channelId}
               placeholder={defaultEndpoint || 'https://your-endpoint/v1'}
               defaultValue={defaultEndpoint || undefined}
@@ -323,7 +397,9 @@ export function ChannelCredentialFields({
           <ChannelSectionHeading
             icon="settings"
             title={t('settings.channels.modelTitle')}
-            description={t('settings.channels.modelHint')}
+            description={t(
+              modelsUrl ? 'settings.providers.planModelsHint' : 'settings.channels.modelHint',
+            )}
           />
         </div>
         {providerType === 'orcarouter' ? (
@@ -381,6 +457,7 @@ export function ChannelCredentialFields({
           }
           kind="llm"
           modelAccount="ark.model_id"
+          modelsUrl={modelsUrl}
           provider={channelId}
           onModelSelected={() => setLlmModelRevision((v) => v + 1)}
           onTested={onTested}
@@ -395,40 +472,86 @@ export function ChannelCredentialFields({
   const defaultModel = descriptor?.defaultModel;
 
   if (descriptor?.authRequirement === 'volcengine') {
+    const agentPlan = volcengineService === 'agent_plan';
+    const configBlocked = blockedFields['volcengine.config'] !== false;
+    const activeAccounts = [
+      'volcengine.service',
+      'volcengine.auth_mode',
+      'volcengine.resource_id',
+      ...(!agentPlan && volcengineAuthMode === 'app_id_token'
+        ? ['volcengine.app_key', 'volcengine.access_key']
+        : ['volcengine.api_key']),
+    ];
+    const blocked = configBlocked || activeAccounts.some((account) => blockedFields[account]);
     return (
       <>
-        <ChannelFormRow label={t('settings.providers.volcengineAuthModeLabel')}>
+        <ChannelFormRow label={t('settings.providers.volcengineServiceLabel')}>
           <SelectLite
-            value={volcengineAuthMode}
-            onChange={async (v) => {
-              onUserMutation?.();
-              const mode = v as 'app_id_token' | 'api_key';
-              const prev = volcengineAuthMode;
-              setVolcengineAuthMode(mode);
+            value={volcengineService}
+            disabled={blocked}
+            onChange={async (service) => {
+              onAsrMutation();
+              const previous = volcengineService;
+              setVolcengineService(service);
+              trackVolcengineSetting('volcengine.service', true);
               try {
-                await setCredential('volcengine.auth_mode', mode, channelId);
+                await setCredential('volcengine.service', service, channelId);
+                onTested?.();
               } catch (error) {
-                // 写入失败必须回滚 UI 并提示：否则模式看着已切换、重启后却静默回退，
-                // 配合独立 API Key 槽会造成「Key 存在但模式不对」的混乱。
-                console.error('[settings] failed to save volcengine auth mode', error);
-                setVolcengineAuthMode(prev);
+                console.error('[settings] failed to save volcengine service', error);
+                setVolcengineService(previous);
                 emitSaved('failed', t('common.operationFailed'));
+              } finally {
+                trackVolcengineSetting('volcengine.service', false);
               }
             }}
             options={[
-              {
-                value: 'app_id_token',
-                label: t('settings.providers.volcengineAuthModeAppIdToken'),
-              },
-              { value: 'api_key', label: t('settings.providers.volcengineAuthModeApiKey') },
+              { value: 'standard', label: t('settings.providers.volcengineServiceStandard') },
+              { value: 'agent_plan', label: 'Agent Plan' },
             ]}
-            ariaLabel={t('settings.providers.volcengineAuthModeLabel')}
+            ariaLabel={t('settings.providers.volcengineServiceLabel')}
             style={{ ...inputStyle, width: '100%', maxWidth: '100%', height: 38 }}
           />
         </ChannelFormRow>
+        {!agentPlan && (
+          <ChannelFormRow label={t('settings.providers.volcengineAuthModeLabel')}>
+            <SelectLite
+              value={volcengineAuthMode}
+              disabled={blocked}
+              onChange={async (v) => {
+                onAsrMutation();
+                const mode = v as 'app_id_token' | 'api_key';
+                const prev = volcengineAuthMode;
+                setVolcengineAuthMode(mode);
+                trackVolcengineSetting('volcengine.auth_mode', true);
+                try {
+                  await setCredential('volcengine.auth_mode', mode, channelId);
+                  onTested?.();
+                } catch (error) {
+                  // 写入失败必须回滚 UI 并提示：否则模式看着已切换、重启后却静默回退，
+                  // 配合独立 API Key 槽会造成「Key 存在但模式不对」的混乱。
+                  console.error('[settings] failed to save volcengine auth mode', error);
+                  setVolcengineAuthMode(prev);
+                  emitSaved('failed', t('common.operationFailed'));
+                } finally {
+                  trackVolcengineSetting('volcengine.auth_mode', false);
+                }
+              }}
+              options={[
+                {
+                  value: 'app_id_token',
+                  label: t('settings.providers.volcengineAuthModeAppIdToken'),
+                },
+                { value: 'api_key', label: t('settings.providers.volcengineAuthModeApiKey') },
+              ]}
+              ariaLabel={t('settings.providers.volcengineAuthModeLabel')}
+              style={{ ...inputStyle, width: '100%', maxWidth: '100%', height: 38 }}
+            />
+          </ChannelFormRow>
+        )}
         {/* 两种模式使用各自独立的凭据槽位：旧版 Access Token（volcengine.access_key）
-            与方舟 API Key（volcengine.api_key）互不预填，切换模式不会残留混淆。 */}
-        {volcengineAuthMode === 'app_id_token' ? (
+            与 ASR API Key（volcengine.api_key，普通服务 API Key 鉴权或 Agent Plan 使用）互不预填。 */}
+        {!agentPlan && volcengineAuthMode === 'app_id_token' ? (
           <>
             <CredentialField
               key={`${channelId}:app_key`}
@@ -437,7 +560,8 @@ export function ChannelCredentialFields({
               provider={channelId}
               mono
               mask
-              onUserMutation={onUserMutation}
+              onUserMutation={onAsrMutation}
+              onBlockedChange={trackField}
             />
             <CredentialField
               key={`${channelId}:access_key`}
@@ -446,7 +570,8 @@ export function ChannelCredentialFields({
               provider={channelId}
               mono
               mask
-              onUserMutation={onUserMutation}
+              onUserMutation={onAsrMutation}
+              onBlockedChange={trackField}
             />
           </>
         ) : (
@@ -457,7 +582,8 @@ export function ChannelCredentialFields({
             provider={channelId}
             mono
             mask
-            onUserMutation={onUserMutation}
+            onUserMutation={onAsrMutation}
+            onBlockedChange={trackField}
           />
         )}
         <div style={channelSectionStyle}>
@@ -469,16 +595,21 @@ export function ChannelCredentialFields({
           account="volcengine.resource_id"
           provider={channelId}
           mono
-          onUserMutation={onUserMutation}
+          onUserMutation={onAsrMutation}
+          onBlockedChange={trackField}
           placeholder={ASR_DEFAULT_RESOURCE_ID}
           defaultValue={ASR_DEFAULT_RESOURCE_ID}
         />
         <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
-          {volcengineAuthMode === 'api_key'
-            ? t('settings.providers.volcengineApiKeyNote')
-            : t('settings.providers.volcengineMappingNote')}
+          {agentPlan
+            ? t('settings.providers.volcengineAgentPlanNote')
+            : volcengineAuthMode === 'api_key'
+              ? t('settings.providers.volcengineApiKeyNote')
+              : t('settings.providers.volcengineMappingNote')}
         </div>
         <ProviderTools
+          key={configRevision}
+          disabled={blocked}
           kind="asr"
           modelAccount="asr.model"
           provider={channelId}
@@ -1154,6 +1285,7 @@ function ProviderTools({
   onModelSelected,
   onTested,
   onUserMutation,
+  modelsUrl,
   showFetchModels = true,
   disabled = false,
 }: {
@@ -1163,6 +1295,7 @@ function ProviderTools({
   onModelSelected: () => void;
   onTested?: () => void;
   onUserMutation?: () => void;
+  modelsUrl?: string;
   showFetchModels?: boolean;
   disabled?: boolean;
 }) {
@@ -1312,16 +1445,18 @@ function ProviderTools({
             <button
               className="ol-channel-fetch-models"
               type="button"
-              onClick={loadModels}
+              onClick={modelsUrl ? () => void openExternal(modelsUrl) : loadModels}
               style={miniBtnStyle}
               disabled={disabled || status === 'loading'}
             >
-              <Icon name="refresh" size={14} />
-              {status === 'loading' && operation === 'models'
-                ? t('settings.providers.loadingModels')
-                : t('settings.providers.fetchModels')}
+              <Icon name={modelsUrl ? 'external' : 'refresh'} size={14} />
+              {modelsUrl
+                ? t('settings.providers.viewModels')
+                : status === 'loading' && operation === 'models'
+                  ? t('settings.providers.loadingModels')
+                  : t('settings.providers.fetchModels')}
             </button>
-            {models.length > 0 && (
+            {!modelsUrl && models.length > 0 && (
               <SelectLite
                 value={selectedModel}
                 onChange={applyModel}
@@ -1370,6 +1505,7 @@ function ProviderTools({
 function providerErrorMessage(error: unknown, t: ReturnType<typeof useTranslation>['t']): string {
   const message = error instanceof Error ? error.message : String(error);
   for (const code of [
+    'volcengineServiceInvalid',
     'llmRequestFormatInvalid',
     'llmThinkingModeInvalid',
     'llmTokenLimitInvalid',
@@ -1434,6 +1570,8 @@ interface CredentialFieldProps {
   onUserMutation?: () => void;
   /** 提供则渲染为下拉（预设选择）代替输入框；当前值不在预设里时附加为自定义项。 */
   options?: SelectOption[];
+  /** 地址预设与手填共用同一个字段及保存队列。 */
+  endpointPresets?: { label: string; options: SelectOption[] };
 }
 
 function CredentialField({
@@ -1448,6 +1586,7 @@ function CredentialField({
   onValueChange,
   onUserMutation,
   options,
+  endpointPresets,
   onBlockedChange,
 }: CredentialFieldProps) {
   const fieldId = useId();
@@ -1633,137 +1772,172 @@ function CredentialField({
     (account === 'ark.endpoint' || account === 'asr.endpoint' || account === 'omni.endpoint') &&
     value.trim().toLowerCase().startsWith('http://');
 
+  const presetValue =
+    endpointPresets?.options.find((option) => {
+      return matchesEndpointPreset(value || defaultValue || '', option.value);
+    })?.value || '';
+
   return (
-    <ChannelFormRow label={label} htmlFor={options && !customModelMode ? undefined : fieldId}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 5, width: '100%', minWidth: 0 }}>
+    <>
+      {endpointPresets && (
+        <ChannelFormRow label={endpointPresets.label}>
+          <SelectLite
+            value={presetValue}
+            options={endpointPresets.options}
+            placeholder={loaded ? t('settings.providers.presets.custom') : t('common.loading')}
+            disabled={disabled || status === 'readError'}
+            ariaLabel={endpointPresets.label}
+            onChange={(next) => {
+              if (debounceRef.current) {
+                clearTimeout(debounceRef.current);
+                debounceRef.current = null;
+              }
+              markMutation();
+              setValue(next);
+              onValueChange?.(next);
+              setDirty(true);
+              void save(next, true);
+            }}
+            style={{ ...inputStyle, width: '100%', maxWidth: '100%', height: 38 }}
+          />
+        </ChannelFormRow>
+      )}
+      <ChannelFormRow label={label} htmlFor={options && !customModelMode ? undefined : fieldId}>
         <div
-          style={{
-            display: 'flex',
-            gap: 6,
-            alignItems: 'center',
-            width: '100%',
-            flexWrap: 'nowrap',
-          }}
+          style={{ display: 'flex', flexDirection: 'column', gap: 5, width: '100%', minWidth: 0 }}
         >
-          {options && !customModelMode ? (
-            <SelectLite
-              value={value}
-              onChange={(v) => {
-                // 「自定义模型…」逃生口：切回输入框手输任意模型名。
-                if (v === CUSTOM_MODEL_OPTION_VALUE) {
-                  setCustomModelMode(true);
-                  return;
-                }
-                markMutation();
-                setValue(v);
-                onValueChange?.(v);
-                if (!loaded) return;
-                setDirty(true);
-                void save(v, true);
-              }}
-              options={[
-                ...(value && !options.some((o) => o.value === value)
-                  ? [{ value, label: value }]
-                  : []),
-                ...options,
-                {
-                  value: CUSTOM_MODEL_OPTION_VALUE,
-                  label: t('settings.providers.customModelLabel', 'Custom model…'),
-                },
-              ]}
-              placeholder={loaded ? placeholder : t('common.loading')}
-              disabled={disabled}
-              ariaLabel={label}
-              style={{
-                flex: 1,
-                height: 38,
-                minWidth: 0,
-                maxWidth: '100%',
-                fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit',
-              }}
-            />
-          ) : (
-            <input
-              id={fieldId}
-              type={inputType}
-              value={value}
-              placeholder={loaded ? placeholder : t('common.loading')}
-              onChange={handleChange}
-              onBlur={onBlur}
-              disabled={disabled}
-              style={{
-                ...inputStyle,
-                flex: 1,
-                height: 38,
-                minWidth: 0,
-                maxWidth: '100%',
-                fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit',
-              }}
-            />
-          )}
-          {options && customModelMode && (
-            <button
-              onClick={() => setCustomModelMode(false)}
-              title={t('settings.providers.presetListLabel', 'Back to presets')}
-              style={iconBtnStyle}
-              disabled={disabled}
-            >
-              <Icon name="chevDown" size={13} />
-            </button>
-          )}
-          {defaultValue && !value && loaded && (
-            <button
-              onClick={fillDefault}
-              title={t('settings.providers.fillDefault')}
-              style={iconBtnStyle}
-              disabled={!loaded}
-            >
-              <Icon name="check" size={13} />
-            </button>
-          )}
-          {mask && (
-            <button
-              onClick={() => setRevealed((r) => !r)}
-              title={revealed ? t('common.hide') : t('common.show')}
-              style={iconBtnStyle}
-              disabled={disabled}
-            >
-              <Icon name="eye" size={14} />
-            </button>
-          )}
-          <button
-            onClick={onCopy}
-            title={t('common.copy')}
-            style={iconBtnStyle}
-            disabled={!value || disabled}
+          <div
+            style={{
+              display: 'flex',
+              gap: 6,
+              alignItems: 'center',
+              width: '100%',
+              flexWrap: 'nowrap',
+            }}
           >
-            <Icon name="copy" size={14} />
-          </button>
-          {/* readError 是字段无法读取的持续错误，留在原位提示用户该字段不可用；
+            {options && !customModelMode ? (
+              <SelectLite
+                value={value}
+                onChange={(v) => {
+                  // 「自定义模型…」逃生口：切回输入框手输任意模型名。
+                  if (v === CUSTOM_MODEL_OPTION_VALUE) {
+                    setCustomModelMode(true);
+                    return;
+                  }
+                  markMutation();
+                  setValue(v);
+                  onValueChange?.(v);
+                  if (!loaded) return;
+                  setDirty(true);
+                  void save(v, true);
+                }}
+                options={[
+                  ...(value && !options.some((o) => o.value === value)
+                    ? [{ value, label: value }]
+                    : []),
+                  ...options,
+                  {
+                    value: CUSTOM_MODEL_OPTION_VALUE,
+                    label: t('settings.providers.customModelLabel', 'Custom model…'),
+                  },
+                ]}
+                placeholder={loaded ? placeholder : t('common.loading')}
+                disabled={disabled}
+                ariaLabel={label}
+                style={{
+                  flex: 1,
+                  height: 38,
+                  minWidth: 0,
+                  maxWidth: '100%',
+                  fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit',
+                }}
+              />
+            ) : (
+              <input
+                id={fieldId}
+                type={inputType}
+                value={value}
+                placeholder={loaded ? placeholder : t('common.loading')}
+                onChange={handleChange}
+                onBlur={onBlur}
+                disabled={disabled}
+                readOnly={!!endpointPresets && !!presetValue}
+                style={{
+                  ...inputStyle,
+                  flex: 1,
+                  height: 38,
+                  minWidth: 0,
+                  maxWidth: '100%',
+                  fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit',
+                }}
+              />
+            )}
+            {options && customModelMode && (
+              <button
+                onClick={() => setCustomModelMode(false)}
+                title={t('settings.providers.presetListLabel', 'Back to presets')}
+                style={iconBtnStyle}
+                disabled={disabled}
+              >
+                <Icon name="chevDown" size={13} />
+              </button>
+            )}
+            {defaultValue && !value && loaded && (
+              <button
+                onClick={fillDefault}
+                title={t('settings.providers.fillDefault')}
+                style={iconBtnStyle}
+                disabled={!loaded}
+              >
+                <Icon name="check" size={13} />
+              </button>
+            )}
+            {mask && (
+              <button
+                onClick={() => setRevealed((r) => !r)}
+                title={revealed ? t('common.hide') : t('common.show')}
+                style={iconBtnStyle}
+                disabled={disabled}
+              >
+                <Icon name="eye" size={14} />
+              </button>
+            )}
+            <button
+              onClick={onCopy}
+              title={t('common.copy')}
+              style={iconBtnStyle}
+              disabled={!value || disabled}
+            >
+              <Icon name="copy" size={14} />
+            </button>
+            {/* readError 是字段无法读取的持续错误，留在原位提示用户该字段不可用；
               其它瞬态状态（saving / saved / saveError / copied / copyError）都通过
               emitSaved 发到右上角统一 toast，不再内联占位。 */}
-          {status === 'readError' && (
-            <span
-              style={{
-                fontSize: 11,
-                color: 'var(--ol-warn)',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {t('settings.providers.readFailed')}
+            {status === 'readError' && (
+              <span
+                style={{
+                  fontSize: 11,
+                  color: 'var(--ol-warn)',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {t('settings.providers.readFailed')}
+              </span>
+            )}
+          </div>
+          {trailing && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
+              {trailing}
+            </div>
+          )}
+          {showInsecureEndpointWarning && (
+            <span style={{ fontSize: 11, color: 'var(--ol-warn)', lineHeight: 1.45 }}>
+              {t('settings.providers.endpointHttpWarning')}
             </span>
           )}
         </div>
-        {trailing && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>{trailing}</div>
-        )}
-        {showInsecureEndpointWarning && (
-          <span style={{ fontSize: 11, color: 'var(--ol-warn)', lineHeight: 1.45 }}>
-            {t('settings.providers.endpointHttpWarning')}
-          </span>
-        )}
-      </div>
-    </ChannelFormRow>
+      </ChannelFormRow>
+    </>
   );
 }
 

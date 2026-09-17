@@ -37,9 +37,7 @@ impl openless_core::credentials::CredentialMetadataStore for SystemCredentialMet
         'static,
         Result<openless_core::CredentialMetadata, openless_core::BackendError>,
     > {
-        run_credential_task(|| {
-            CredentialsVault::load_metadata().map_err(credential_persistence_error)
-        })
+        run_credential_task(|| after_vault_attempt(CredentialsVault::load_metadata()))
     }
 
     fn save_metadata(
@@ -57,8 +55,7 @@ impl openless_core::credentials::CredentialMetadataStore for SystemCredentialMet
         channel_id: String,
     ) -> futures_util::future::BoxFuture<'static, Result<bool, openless_core::BackendError>> {
         run_credential_task(move || {
-            CredentialsVault::channel_has_secrets(kind, &channel_id)
-                .map_err(credential_persistence_error)
+            after_vault_attempt(CredentialsVault::channel_has_secrets(kind, &channel_id))
         })
     }
 }
@@ -115,7 +112,9 @@ impl openless_core::CredentialStore for SystemCredentialStore {
         Result<CredentialsStatus, openless_core::BackendError>,
     > {
         let model_store = self.model_store.clone();
-        run_credential_task(move || credentials_status(preferences, model_store.as_deref()))
+        run_credential_task(move || {
+            after_vault_backend(credentials_status(preferences, model_store.as_deref()))
+        })
     }
 
     fn read(
@@ -126,7 +125,9 @@ impl openless_core::CredentialStore for SystemCredentialStore {
         Result<Option<openless_core::SecretValue>, openless_core::BackendError>,
     > {
         run_credential_task(move || {
-            read_vault_credential(&key).map(|value| value.map(openless_core::SecretValue::new))
+            after_vault_backend(
+                read_vault_credential(&key).map(|value| value.map(openless_core::SecretValue::new)),
+            )
         })
     }
 
@@ -421,8 +422,35 @@ fn invalid_credential_key(key: &openless_core::CredentialKey) -> openless_core::
 fn credential_persistence_error(error: anyhow::Error) -> openless_core::BackendError {
     openless_core::BackendError::new(
         openless_core::BackendErrorCode::Persistence,
-        format!("credential vault operation failed: {error}"),
+        format!("credential vault operation failed: {error:#}"),
     )
+}
+
+fn require_readable_vault() -> Result<(), openless_core::BackendError> {
+    match CredentialsVault::last_read_error() {
+        Some(error) => Err(openless_core::BackendError::new(
+            openless_core::BackendErrorCode::Persistence,
+            format!("无法读取已保存的凭据：{error}"),
+        )),
+        None => Ok(()),
+    }
+}
+
+/// Call after a real vault load/retry. Surfaces the recorded Keystore chain
+/// instead of a generic English anyhow mapping, and never short-circuits first.
+fn after_vault_attempt<T>(
+    result: Result<T, anyhow::Error>,
+) -> Result<T, openless_core::BackendError> {
+    after_vault_backend(result.map_err(credential_persistence_error))
+}
+
+fn after_vault_backend<T>(
+    result: Result<T, openless_core::BackendError>,
+) -> Result<T, openless_core::BackendError> {
+    if CredentialsVault::last_read_error().is_some() {
+        require_readable_vault()?;
+    }
+    result
 }
 
 #[tauri::command]
@@ -535,6 +563,7 @@ fn credential_configuration(
         asr_api_key: configured(&snap.asr_api_key),
         asr_endpoint: configured(&snap.asr_endpoint),
         asr_model: configured(&snap.asr_model),
+        volcengine_service: snap.volcengine_service.clone(),
         volcengine_auth_mode: snap.volcengine_auth_mode.clone(),
         volcengine_app_key: configured(&snap.volcengine_app_key),
         volcengine_access_key: configured(&snap.volcengine_access_key),
@@ -547,11 +576,11 @@ fn credential_configuration(
         tencent_cloud_secret_key: configured(&snap.tencent_cloud_secret_key),
         llm_api_key: configured(&snap.ark_api_key),
         llm_endpoint: llm_endpoint.is_some(),
-        llm_endpoint_matches_default: llm_endpoint.is_some_and(|endpoint| {
-            openless_core::provider_rules::default_llm_endpoint(llm_provider).is_some_and(
-                |default| openless_core::provider_rules::equivalent_endpoint(endpoint, default),
-            )
-        }),
+        llm_api_key_required: openless_core::provider_rules::api_key_required(
+            openless_core::ProviderKind::Llm,
+            llm_provider,
+            llm_endpoint,
+        ),
         llm_model: configured(&snap.ark_model_id),
         codex_oauth,
         omni_api_key: configured(&snap.omni_api_key),
@@ -801,6 +830,7 @@ fn account_provider_kind(account: CredentialAccount) -> CredentialProviderKind {
         CredentialAccount::VolcengineAppKey
         | CredentialAccount::VolcengineAccessKey
         | CredentialAccount::VolcengineResourceId
+        | CredentialAccount::VolcengineService
         | CredentialAccount::VolcengineAuthMode
         | CredentialAccount::VolcengineApiKey
         | CredentialAccount::AsrApiKey
@@ -832,6 +862,7 @@ fn parse_account(s: &str) -> Result<CredentialAccount, String> {
         "volcengine.app_key" => Ok(CredentialAccount::VolcengineAppKey),
         "volcengine.access_key" => Ok(CredentialAccount::VolcengineAccessKey),
         "volcengine.resource_id" => Ok(CredentialAccount::VolcengineResourceId),
+        "volcengine.service" => Ok(CredentialAccount::VolcengineService),
         "volcengine.auth_mode" => Ok(CredentialAccount::VolcengineAuthMode),
         "volcengine.api_key" => Ok(CredentialAccount::VolcengineApiKey),
         "ark.api_key" => Ok(CredentialAccount::ArkApiKey),

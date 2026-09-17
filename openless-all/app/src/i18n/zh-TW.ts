@@ -673,6 +673,10 @@ export const zhTW: typeof zhCN = {
       dictationPromptHint:
         '用於錄音轉寫後的 ASR 文本；這裡可以寫口語整理、ASR 錯字糾正和專有名詞還原規則。',
       selectionPromptFallback: '尚未配置書面潤色 Prompt；將使用安全預設規則。',
+      voiceEditPromptTitle: '選區語音編輯 Prompt（EditPlan）',
+      voiceEditPromptHint:
+        '僅用於選區語音「編輯」路徑產生 EditPlan。留空則回退到設定裡的自訂提示詞或內建預設。',
+      voiceEditPromptPlaceholder: '留空 = 使用設定自訂或內建預設',
       selectionActivated: '已將「{{name}}」用於選區潤色',
       selectionActivateFailed: '選區潤色風格切換失敗：{{err}}',
       selectionChars: '{{count}} 字元',
@@ -863,6 +867,15 @@ export const zhTW: typeof zhCN = {
         '開啟後預設用服務配置的模型判斷問句 vs 編輯；模型不可用或解析失敗時回退到問句啟發式。',
       editKeywords: '額外問句線索',
       editKeywordsDesc: '關閉自動判斷時生效；每行一個，指令含則視為提問，否則仍按問句啟發式判定。',
+      editPlanFormat: '編輯方案格式',
+      editPlanFormatDesc: '模型優先按所選格式輸出 EditPlan；解析失敗時再嘗試另一種格式。',
+      editPlanFormatXml: 'XML',
+      editPlanFormatJson: 'JSON',
+      editSystemPrompt: '編輯方案系統提示詞',
+      editSystemPromptDesc:
+        '覆蓋風格包 / 內建預設的 EditPlan system prompt。留空則按「自訂 → 風格包 → 內建預設」回退。',
+      editSystemPromptPlaceholder: '留空 = 使用風格包或內建預設',
+      editSystemPromptReset: '恢復預設',
     },
     selectionPolish: {
       title: '選區潤色',
@@ -1127,6 +1140,7 @@ export const zhTW: typeof zhCN = {
       lastCheck: '上次驗證',
       verifying: '正在驗證…',
       notVerified: '尚未驗證',
+      verificationUnavailable: '此渠道暫不支援驗證',
       passed: '驗證通過',
       failed: '驗證失敗 · {{reason}}',
       elapsed: '耗時 {{ms}} ms',
@@ -1194,6 +1208,7 @@ export const zhTW: typeof zhCN = {
       pipelineIsolationNotice:
         '兩種模式使用完全獨立的憑證設定。切換模式不會刪除另一套設定，只是暫時停用；切回即恢復。',
       presets: {
+        lmstudio: 'LM Studio',
         ark: 'ARK（火山方舟）',
         deepseek: 'DeepSeek',
         siliconflow: '硅基流動',
@@ -1260,6 +1275,11 @@ export const zhTW: typeof zhCN = {
       volcengineAccessKeyLabel: 'Access Token',
       volcengineApiKeyLabel: 'API Key',
       volcengineResourceIdLabel: 'Resource ID',
+      volcengineServiceLabel: '服務',
+      volcengineServiceStandard: '一般服務',
+      volcengineAgentPlanNote:
+        '使用 Agent Plan 專屬 API Key；僅支援豆包串流 ASR。預設 Resource ID 為 volc.seedasr.sauc.duration。一般服務與套餐密鑰不同，建議分別建立渠道。',
+      volcengineServiceInvalid: '服務設定無效，請重新選擇一般服務或 Agent Plan。',
       volcengineAuthModeLabel: '鑑權模式',
       volcengineAuthModeAppIdToken: '舊版應用（APP ID + Access Token）',
       volcengineAuthModeApiKey: '新版控制台 API Key',
@@ -1294,6 +1314,7 @@ export const zhTW: typeof zhCN = {
       fillDefault: '填入默認值',
       readFailed: '讀取失敗',
       apiKeyLabel: 'API 密鑰',
+      apiKeyOptionalLabel: 'API 密鑰（選填）',
       baseUrlLabel: '接口地址',
       modelLabel: '模型',
       customModelLabel: '自訂模型…',
@@ -1343,6 +1364,8 @@ export const zhTW: typeof zhCN = {
       toolsDesc: '先保存上方配置，再驗證當前模型連通性或拉取模型；失敗時仍可手動填寫模型 ID。',
       validate: '驗證',
       validating: '驗證中…',
+      planModelsHint: '開啟方案控制台，複製支援的文字模型 ID 並填入模型欄位。',
+      viewModels: '查看支援的模型',
       fetchModels: '拉取模型',
       loadingModels: '拉取模型中…',
       modelMissing: '未配置模型，請先填寫模型 ID。',
@@ -2008,7 +2031,8 @@ export const zhTW: typeof zhCN = {
     loadNow: '立即加載',
     releaseNow: '立即釋放',
     keepLoadedLabel: '保持加載多久',
-    keepLoadedDesc: '決定 Qwen3-ASR 用完後多久從內存釋放，避免長期佔用內存。',
+    keepLoadedDesc:
+      '決定目前本地 ASR 引擎在下次轉寫後保持載入多久；「不釋放」會持續駐留至手動釋放或退出。',
     keepImmediate: '說完話立即釋放',
     keep1min: '上次使用後 1 分鐘',
     keep5min: '上次使用後 5 分鐘（默認）',

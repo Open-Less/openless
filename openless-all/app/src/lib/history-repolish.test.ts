@@ -24,6 +24,7 @@ function pack(
     kind,
     baseMode,
     selectionPrompt: '',
+    voiceEditPrompt: '',
     prompt: '',
     examples: [],
     tags: [],

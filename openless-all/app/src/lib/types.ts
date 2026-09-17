@@ -255,6 +255,8 @@ export type SelectionPolishOutputMode = 'directReplace' | 'previewConfirm';
 
 export type SelectionVoiceIntentMode = 'prompt' | 'auto' | 'manual' | 'heuristic';
 export type SelectionVoiceManualIntent = 'question' | 'edit';
+/** Preferred EditPlan serialization when parsing selection-voice model output. */
+export type EditPlanFormat = 'xml' | 'json';
 
 export interface CustomStylePrompts {
   raw: string;
@@ -288,6 +290,8 @@ export interface StylePack {
   baseMode: PolishMode;
   /** For selected written text. Empty values in legacy packs use a safe backend default. */
   selectionPrompt: string;
+  /** Selection-voice EditPlan system prompt. Empty = prefs custom / built-in default. */
+  voiceEditPrompt: string;
   prompt: string;
   examples: StylePackExample[];
   tags: string[];
@@ -404,6 +408,10 @@ export interface UserPreferences {
   selectionVoiceManualIntent: SelectionVoiceManualIntent;
   /** heuristic 模式下命中即走编辑分支的关键词。 */
   selectionVoiceEditKeywords: string[];
+  /** 选区语音 EditPlan 输出格式优先级（默认 xml）。 */
+  selectionVoiceEditPlanFormat: EditPlanFormat;
+  /** 自定义选区语音 EditPlan system prompt；空串 = 风格包 / 内置默认。 */
+  selectionVoiceEditSystemPrompt: string;
   /** 是否把 Q&A 历史写到本地存档。详见 issue #118。 */
   qaSaveHistory: boolean;
   /** 自定义录音组合键。当 hotkey.trigger == 'custom' 时使用。null = 未设置。 */
@@ -445,7 +453,7 @@ export interface UserPreferences {
   /** 本地模型下载源镜像（'huggingface' / 'hf-mirror'）。 */
   localAsrMirror: string;
   /** 本地 ASR 引擎在内存中的保留时长（秒）。0 = 说完话即释放；
-   *  300 = 默认 5 分钟；86400 ≈ 不释放（保持加载）。 */
+   *  300 = 默认 5 分钟；86400 = 不自动释放（保持加载）。 */
   localAsrKeepLoadedSecs: number;
   /** Windows Foundry Local Whisper 当前激活的模型 alias。 */
   foundryLocalAsrModel: string;

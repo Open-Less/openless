@@ -98,6 +98,7 @@ pub struct DictationPolishContext {
     pub working_languages: Vec<String>,
     pub translation_target_language: String,
     pub translation_active: bool,
+    pub edit_plan_input: bool,
     pub chinese_script_preference: ChineseScriptPreference,
     pub output_language_preference: OutputLanguagePreference,
     pub llm_thinking_enabled: bool,
@@ -273,6 +274,7 @@ impl DictationContext {
                 working_languages: preferences.working_languages.clone(),
                 translation_target_language,
                 translation_active,
+                edit_plan_input: false,
                 chinese_script_preference: preferences.chinese_script_preference,
                 output_language_preference: preferences.output_language_preference,
                 llm_thinking_enabled: preferences.llm_thinking_enabled,
@@ -309,7 +311,7 @@ impl DictationContext {
         } else {
             self.polish.style_system_prompt.clone()
         };
-        crate::prompt_compose::compose_polish_prompts(
+        crate::prompt_compose::compose_polish_prompts_for_input(
             raw_text,
             self.polish.mode,
             &self.polish.hotwords,
@@ -320,6 +322,7 @@ impl DictationContext {
             self.polish.front_app.as_deref(),
             self.polish.cursor_context.as_deref(),
             !self.polish.prior_turns.is_empty(),
+            self.polish.edit_plan_input,
         )
     }
 

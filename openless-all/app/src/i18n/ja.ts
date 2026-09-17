@@ -686,6 +686,10 @@ export const ja: typeof zhCN = {
       dictationPromptHint:
         '録音の書き起こし後のASRテキスト用。口語整理、ASR誤字修正、固有名詞の復元ルールをここに書けます。',
       selectionPromptFallback: '書面推敲プロンプトが未設定です。安全なデフォルトを使用します。',
+      voiceEditPromptTitle: '選択範囲の音声編集プロンプト（EditPlan）',
+      voiceEditPromptHint:
+        '選択範囲の音声「編集」で EditPlan を生成するときだけ使います。空なら設定のカスタムまたは内蔵デフォルトにフォールバック。',
+      voiceEditPromptPlaceholder: '空 = 設定カスタムまたは内蔵デフォルト',
       selectionActivated: '「{{name}}」を選択範囲の推敲に設定しました',
       selectionActivateFailed: '選択範囲の推敲スタイル切替に失敗：{{err}}',
       selectionChars: '{{count}} 文字',
@@ -881,6 +885,16 @@ export const ja: typeof zhCN = {
       editKeywords: '追加の疑問手がかり',
       editKeywordsDesc:
         '自動判定オフ時のみ。1行1語で質問扱い。なければ？/疑問語ヒューリスティック。',
+      editPlanFormat: '編集プラン形式',
+      editPlanFormatDesc:
+        'モデルはこの形式の EditPlan を優先出力。解析失敗時はもう一方を試します。',
+      editPlanFormatXml: 'XML',
+      editPlanFormatJson: 'JSON',
+      editSystemPrompt: '編集プランのシステムプロンプト',
+      editSystemPromptDesc:
+        'スタイルパック / 内蔵デフォルトの EditPlan システムプロンプトを上書き。空なら カスタム → パック → 内蔵 の順でフォールバック。',
+      editSystemPromptPlaceholder: '空 = スタイルパックまたは内蔵デフォルト',
+      editSystemPromptReset: 'デフォルトに戻す',
     },
     selectionPolish: {
       title: '選択範囲の推敲',
@@ -1167,6 +1181,7 @@ export const ja: typeof zhCN = {
       lastCheck: '前回の接続確認',
       verifying: '確認中…',
       notVerified: '未確認',
+      verificationUnavailable: 'このチャンネルは確認に対応していません',
       passed: '確認に成功',
       failed: '確認に失敗 · {{reason}}',
       elapsed: '所要時間 {{ms}} ms',
@@ -1240,6 +1255,7 @@ export const ja: typeof zhCN = {
       pipelineIsolationNotice:
         '2つのモードは完全に独立した認証情報を使用します。切り替えてももう一方の設定は削除されず、切り戻せば復元されます。',
       presets: {
+        lmstudio: 'LM Studio',
         ark: 'ARK（Volcengine Ark）',
         deepseek: 'DeepSeek',
         siliconflow: 'SiliconFlow',
@@ -1307,6 +1323,12 @@ export const ja: typeof zhCN = {
       volcengineAccessKeyLabel: 'Access Token',
       volcengineApiKeyLabel: 'API Key',
       volcengineResourceIdLabel: 'Resource ID',
+      volcengineServiceLabel: 'サービス',
+      volcengineServiceStandard: '通常サービス',
+      volcengineAgentPlanNote:
+        '豆包ストリーミング ASR 用の Agent Plan 専用 API キーを使用します。既定の Resource ID: volc.seedasr.sauc.duration。通常サービスとはキーが異なるため、別のチャネルを作成してください。',
+      volcengineServiceInvalid:
+        'サービス設定が無効です。通常サービスまたは Agent Plan を選択してください。',
       volcengineAuthModeLabel: '認証モード',
       volcengineAuthModeAppIdToken: 'レガシーアプリ（APP ID + Access Token）',
       volcengineAuthModeApiKey: '新版コンソール API Key',
@@ -1344,6 +1366,7 @@ export const ja: typeof zhCN = {
       fillDefault: 'デフォルト値を入力',
       readFailed: '読み込み失敗',
       apiKeyLabel: 'API キー',
+      apiKeyOptionalLabel: 'API キー（任意）',
       baseUrlLabel: 'エンドポイント',
       modelLabel: 'モデル',
       customModelLabel: 'カスタムモデル…',
@@ -1398,6 +1421,9 @@ export const ja: typeof zhCN = {
         '上記の設定を保存してから、現在のモデル接続性を検証またはモデル一覧を取得します。失敗してもモデル ID を手動入力できます。',
       validate: '検証',
       validating: '検証中…',
+      planModelsHint:
+        'プランのコンソールで対応するテキストモデル ID をコピーし、モデル欄に入力してください。',
+      viewModels: '対応モデルを確認',
       fetchModels: 'モデル一覧',
       loadingModels: 'モデル取得中…',
       modelMissing: 'モデルが未設定です。先にモデル ID を入力してください。',
@@ -2110,7 +2136,7 @@ export const ja: typeof zhCN = {
     releaseNow: '今すぐ解放',
     keepLoadedLabel: 'ロード保持時間',
     keepLoadedDesc:
-      'ローカル ASR を使用後、何分でメモリから解放するかを決定。1+ GB の RAM 占有を回避。',
+      '現在のローカル ASR を次回の文字起こし後に保持する時間を指定します。「解放しない」は手動解放または終了まで保持します。',
     keepImmediate: '使用直後に解放',
     keep1min: '最終使用から 1 分',
     keep5min: '最終使用から 5 分（既定）',

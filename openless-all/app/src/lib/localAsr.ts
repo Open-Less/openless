@@ -104,9 +104,18 @@ export interface FoundryLocalAsrStatus {
   runtimeSource: FoundryRuntimeSource;
   activeModel: string;
   loadedModelId: string | null;
+  keepLoadedSecs: number;
   endpoint: string | null;
   error: string | null;
 }
+
+export const LOCAL_ASR_KEEP_LOADED_OPTIONS = [
+  { seconds: 0, labelKey: 'localAsr.keepImmediate' },
+  { seconds: 60, labelKey: 'localAsr.keep1min' },
+  { seconds: 300, labelKey: 'localAsr.keep5min' },
+  { seconds: 1800, labelKey: 'localAsr.keep30min' },
+  { seconds: 86400, labelKey: 'localAsr.keepForever' },
+] as const;
 
 export const FOUNDRY_LOCAL_ASR_MODEL_ALIASES = [
   'whisper-small',
@@ -356,6 +365,19 @@ export function testLocalAsrModel(modelId: string): Promise<LocalAsrTestResult> 
   }));
 }
 
+/** 验证设置页中的本地渠道，不改变全局当前渠道。 */
+export function testLocalAsrChannel(channelId: string): Promise<LocalAsrTestResult> {
+  return invokeOrMock('local_asr_test_channel', { channelId }, () => ({
+    backend: 'mock',
+    modelId: 'mock-local-model',
+    expectedText: 'Hello. This is a test of the Voxtrail speech-to-text system.',
+    transcribedText: '(浏览器 dev mock，实际推理需要在 Tauri 应用内)',
+    audioMs: 3000,
+    loadMs: 0,
+    transcribeMs: 0,
+  }));
+}
+
 export interface LocalAsrEngineStatus {
   loaded: boolean;
   modelId: string | null;
@@ -390,6 +412,7 @@ export function getFoundryLocalAsrStatus(): Promise<FoundryLocalAsrStatus> {
     runtimeSource: 'auto',
     activeModel: 'whisper-small',
     loadedModelId: null,
+    keepLoadedSecs: 300,
     endpoint: null,
     error: null,
   }));
@@ -409,6 +432,10 @@ export function setFoundryLocalAsrLanguageHint(languageHint: string): Promise<vo
 
 export function setFoundryLocalRuntimeSource(source: string): Promise<void> {
   return invokeOrMock('foundry_local_asr_set_runtime_source', { source }, () => undefined);
+}
+
+export function setFoundryLocalAsrKeepLoadedSecs(seconds: number): Promise<void> {
+  return invokeOrMock('foundry_local_asr_set_keep_loaded_secs', { seconds }, () => undefined);
 }
 
 export function prepareFoundryLocalAsr(modelAlias: string): Promise<string> {

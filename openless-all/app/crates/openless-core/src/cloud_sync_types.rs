@@ -86,6 +86,8 @@ pub struct SyncStylePack {
     pub kind: SyncStylePackKind,
     pub base_mode: PolishMode,
     pub selection_prompt: String,
+    #[serde(default)]
+    pub voice_edit_prompt: String,
     pub prompt: String,
     pub examples: Vec<SyncStylePackExample>,
     pub tags: Vec<String>,

@@ -470,6 +470,7 @@ mod linux_app {
         name: String,
         endpoint: String,
         model: String,
+        volcengine_service: String,
         auth_mode: String,
         resource_id: String,
         // Secret inputs are intentionally write-only. Loading an editor never
@@ -2740,11 +2741,13 @@ mod linux_app {
                 // 远程输入的实时状态：配对码 / 访问网址 / 证书指纹。
                 if let Some((status, pin)) = &self.remote_access {
                     vm.remote_running = status.running;
+                    vm.remote_urls_stale = status.urls_stale;
                     vm.remote_pin = pin.clone();
                     vm.remote_urls = status.urls.clone();
                     vm.remote_cert_fingerprint = status.ca_fingerprint_sha256.clone();
                 } else {
                     vm.remote_running = false;
+                    vm.remote_urls_stale = false;
                     vm.remote_pin = String::new();
                     vm.remote_urls = Vec::new();
                     vm.remote_cert_fingerprint = None;
@@ -4926,6 +4929,19 @@ mod linux_app {
             .await?
             .or_else(|| descriptor.default_model.clone())
             .unwrap_or_default();
+        let volcengine_service =
+            if descriptor.auth_requirement == openless_core::AuthRequirement::Volcengine {
+                read_provider_value(
+                    &backend,
+                    kind,
+                    &channel.id,
+                    openless_core::credentials::VOLCENGINE_SERVICE_ACCOUNT,
+                )
+                .await?
+                .unwrap_or_else(|| "standard".to_string())
+            } else {
+                String::new()
+            };
         let (auth_mode, resource_id) =
             if descriptor.auth_requirement == openless_core::AuthRequirement::Volcengine {
                 (
@@ -4956,6 +4972,7 @@ mod linux_app {
             descriptor,
             endpoint,
             model,
+            volcengine_service,
             auth_mode,
             resource_id,
             primary_secret: String::new(),

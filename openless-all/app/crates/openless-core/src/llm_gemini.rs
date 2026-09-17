@@ -21,8 +21,8 @@ use base64::Engine;
 use serde_json::{json, Value};
 
 use crate::polish::{
-    clean_polish_output, compose_polish_prompts, compose_qa_system_prompt,
-    compose_translate_prompts, llm_error_from_reqwest, safe_str_slice, LLMError,
+    clean_polish_output, compose_qa_system_prompt, compose_translate_prompts,
+    llm_error_from_reqwest, safe_str_slice, LLMError,
 };
 use crate::shared_types::{ChineseScriptPreference, OutputLanguagePreference, QaChatMessage};
 use crate::types::PolishMode;
@@ -102,8 +102,9 @@ impl GeminiProvider {
         front_app: Option<&str>,
         cursor_context: Option<&str>,
         prior_turns: &[(String, String)],
+        edit_plan_input: bool,
     ) -> Result<String, LLMError> {
-        let (system_prompt, user_prompt) = compose_polish_prompts(
+        let (system_prompt, user_prompt) = crate::prompt_compose::compose_polish_prompts_for_input(
             raw_text,
             mode,
             hotwords,
@@ -114,6 +115,7 @@ impl GeminiProvider {
             front_app,
             cursor_context,
             !prior_turns.is_empty(),
+            edit_plan_input,
         );
 
         let contents = build_polish_history_contents(prior_turns, &user_prompt);
@@ -176,6 +178,7 @@ impl GeminiProvider {
         front_app: Option<&str>,
         cursor_context: Option<&str>,
         prior_turns: &[(String, String)],
+        edit_plan_input: bool,
         on_delta: F,
         should_cancel: C,
     ) -> Result<String, LLMError>
@@ -183,7 +186,7 @@ impl GeminiProvider {
         F: Fn(&str) + Send + Sync,
         C: Fn() -> bool + Send + Sync,
     {
-        let (system_prompt, user_prompt) = compose_polish_prompts(
+        let (system_prompt, user_prompt) = crate::prompt_compose::compose_polish_prompts_for_input(
             raw_text,
             mode,
             hotwords,
@@ -194,6 +197,7 @@ impl GeminiProvider {
             front_app,
             cursor_context,
             !prior_turns.is_empty(),
+            edit_plan_input,
         );
         let body = self.build_generate_body(
             &system_prompt,

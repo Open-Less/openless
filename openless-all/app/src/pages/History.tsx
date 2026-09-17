@@ -22,6 +22,7 @@ import {
   packDisplayName,
   resolveRepolishRetryPackIdWithFallback,
 } from '../lib/history-repolish';
+import { canRetranscribeHistoryEntry } from '../lib/history-retranscribe';
 import { useMobileLayout } from '../lib/useMobileLayout';
 import type { DictationSession, PolishMode, StylePack } from '../lib/types';
 import { countCodePoints } from '../lib/unicode';
@@ -83,6 +84,10 @@ export function History() {
   const [justCopiedRaw, setJustCopiedRaw] = useState(false);
   // 「重新转录」进行中：禁用按钮 + 显示「转录中…」，避免重复点击发起多次 ASR。
   const [retranscribing, setRetranscribing] = useState(false);
+  const [retranscriptionResult, setRetranscriptionResult] = useState<{
+    sessionId: string;
+    text: string;
+  } | null>(null);
   // 录音文件 lazily-detected missing 状态：retention / 条数 cap 清理后磁盘上 wav
   // 可能已被删，但 history 条目 hasAudioRecording 仍写 true。任一组件
   // （播放 / 导出）首次 IPC 拿到 'recording not found' 时把 id 加进来，
@@ -300,23 +305,30 @@ export function History() {
     }
   };
 
-  // 对一条「转录失败 / 没识别到语音」的历史用当前 ASR provider 重新转录（issue #613）。
-  // 后端读 recordings/<id>.wav → 重转 → 原地回写该条 rawTranscript/finalText、清 errorCode，
-  // 返回整条记录；前端据此局部刷新。失败保留 + 自动重试已让这些条目的录音留得住，这里给
-  // 持久失败（重试也没救回来）一个手动重转入口。
+  // 失败记录沿用 #613 的原地修复；已经插入过文字的完成 / 润色失败记录只显示临时结果，
+  // 避免把事后重转文本伪装成当时实际插入的历史事实。
   const onRetranscribe = async () => {
-    if (!item || !item.hasAudioRecording) return;
+    if (!item || !canRetranscribeHistoryEntry(item)) return;
+    const sessionId = item.id;
     setRetranscribing(true);
+    setRetranscriptionResult(null);
     setActionError(null);
     try {
-      const updated = await retranscribeRecording(item.id);
-      setItems((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+      const result = await retranscribeRecording(sessionId);
+      if (result.updatedEntry) {
+        const updatedEntry = result.updatedEntry;
+        setItems((prev) =>
+          prev.map((entry) => (entry.id === updatedEntry.id ? updatedEntry : entry)),
+        );
+      } else {
+        setRetranscriptionResult({ sessionId, text: result.text });
+      }
     } catch (error) {
       console.error('[history] retranscribe failed', error);
       const msg = errorMessage(error);
       // wav 已被 retention / 条数 cap 清理：隐藏入口，不报错（用户没干错事）。
       if (msg.includes('recording not found') || msg.includes('not found')) {
-        markAudioMissing(item.id);
+        markAudioMissing(sessionId);
         return;
       }
       setActionError(t('history.retranscribeFailed', { err: msg }));
@@ -604,21 +616,17 @@ export function History() {
                         {t('history.exportRecording')}
                       </Btn>
                     )}
-                    {item.hasAudioRecording &&
-                      !audioMissingIds.has(item.id) &&
-                      item.pipelineMode !== 'multimodal' &&
-                      (item.errorCode === 'transcribeFailed' ||
-                        item.errorCode === 'emptyTranscript') && (
-                        <Btn
-                          icon="refresh"
-                          variant="ghost"
-                          size="sm"
-                          disabled={retranscribing}
-                          onClick={() => void onRetranscribe()}
-                        >
-                          {retranscribing ? t('history.retranscribing') : t('history.retranscribe')}
-                        </Btn>
-                      )}
+                    {canRetranscribeHistoryEntry(item) && !audioMissingIds.has(item.id) && (
+                      <Btn
+                        icon="refresh"
+                        variant="ghost"
+                        size="sm"
+                        disabled={retranscribing}
+                        onClick={() => void onRetranscribe()}
+                      >
+                        {retranscribing ? t('history.retranscribing') : t('history.retranscribe')}
+                      </Btn>
+                    )}
                     <Btn icon="trash" variant="ghost" size="sm" onClick={onDelete}>
                       {t('common.delete')}
                     </Btn>
@@ -634,6 +642,14 @@ export function History() {
                     onMissing={() => markAudioMissing(item.id)}
                     key={`audio-${item.id}`}
                   />
+                )}
+                {retranscriptionResult?.sessionId === item.id && (
+                  <div style={{ marginBottom: 14 }}>
+                    <HistoryResultCard
+                      title={t('history.retranscribe')}
+                      text={retranscriptionResult.text}
+                    />
+                  </div>
                 )}
                 {/* 流水线明细：识别 / 润色 / 插入 三步各占一行 —— 左列步骤名、中列
                   provider·model（或插入目标），右列该步耗时/状态。旧历史没有模型与
@@ -912,8 +928,8 @@ interface RepolishResult {
  * 结果只在本次查看时显示，不写回历史条目：历史的 finalText 是「当时真的插进去的那段
  * 文字」，是一条事实记录，不该被事后试算覆盖。面板顶部的说明也把这点直说了。
  *
- * 注意这里只重跑润色，不重跑识别 —— 成功听写的录音在插入后就删了（隐私设计），
- * 原文是唯一还在的输入。真正的「重新转录」入口仍只对留有录音的失败条目开放。
+ * 注意这里只重跑润色，不重跑识别 —— 没有归档录音的历史只能使用原文。
+ * 「重新转录」入口对所有仍留有录音的传统 ASR 条目开放。
  */
 function RepolishPanel({
   session,
@@ -1101,7 +1117,7 @@ function RepolishPanel({
       {results.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1fr 1fr', gap: 12 }}>
           {results.map((result) => (
-            <RepolishResultCard key={result.key} title={result.title} text={result.text} />
+            <HistoryResultCard key={result.key} title={result.title} text={result.text} />
           ))}
         </div>
       )}
@@ -1109,7 +1125,7 @@ function RepolishPanel({
   );
 }
 
-function RepolishResultCard({ title, text }: { title: string; text: string }) {
+function HistoryResultCard({ title, text }: { title: string; text: string }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
 
@@ -1120,7 +1136,7 @@ function RepolishResultCard({ title, text }: { title: string; text: string }) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     } catch (error) {
-      console.error('[history] failed to copy repolish result', error);
+      console.error('[history] failed to copy result', error);
     }
   };
 

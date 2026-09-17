@@ -176,6 +176,7 @@ impl StylePackStore {
         slot.author = normalized_optional(incoming.author);
         slot.version = normalized_version(&incoming.version);
         slot.selection_prompt = incoming.selection_prompt;
+        slot.voice_edit_prompt = incoming.voice_edit_prompt;
         slot.prompt = incoming.prompt;
         slot.examples = normalized_examples(incoming.examples);
         slot.tags = normalized_tags(&incoming.tags);
@@ -460,6 +461,7 @@ impl StylePackStore {
             kind: StylePackKind::Imported,
             base_mode: manifest.base_mode,
             selection_prompt: manifest.selection_prompt.unwrap_or_default(),
+            voice_edit_prompt: manifest.voice_edit_prompt.unwrap_or_default(),
             prompt: parsed.prompt,
             examples: normalized_examples(parsed.examples),
             tags: normalized_tags(&manifest.tags),
@@ -509,6 +511,8 @@ impl StylePackStore {
             base_mode: pack.base_mode,
             selection_prompt: (!pack.selection_prompt.trim().is_empty())
                 .then(|| pack.selection_prompt.clone()),
+            voice_edit_prompt: (!pack.voice_edit_prompt.trim().is_empty())
+                .then(|| pack.voice_edit_prompt.clone()),
             tags: pack.tags.clone(),
             prompt_file: "prompt.md".into(),
             examples_file: "examples.json".into(),
@@ -967,6 +971,30 @@ mod tests {
             BackendErrorCode::InvalidArgument
         );
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn update_preserves_voice_edit_prompt() {
+        let store = StylePackStore::in_memory();
+        let created = store
+            .create(StylePack {
+                name: "voice-edit".into(),
+                prompt: "dictation".into(),
+                selection_prompt: "selection".into(),
+                voice_edit_prompt: "edit-plan-v1".into(),
+                ..StylePack::default()
+            })
+            .unwrap();
+        let mut next = created.clone();
+        next.voice_edit_prompt = "edit-plan-v2".into();
+        next.selection_prompt = "selection-2".into();
+        let updated = store.update(next).unwrap();
+        assert_eq!(updated.voice_edit_prompt, "edit-plan-v2");
+        assert_eq!(updated.selection_prompt, "selection-2");
+        assert_eq!(
+            store.get(&created.id).unwrap().voice_edit_prompt,
+            "edit-plan-v2"
+        );
     }
 
     #[test]

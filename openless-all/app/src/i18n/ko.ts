@@ -684,6 +684,10 @@ export const ko: typeof zhCN = {
         '녹음 후 받아쓰기한 ASR 텍스트용. 구어 정리, ASR 오타 수정, 고유명사 복원 규칙을 여기에 작성하세요.',
       selectionPromptFallback:
         '서면 다듬기 프롬프트가 아직 설정되지 않았습니다. 안전한 기본값을 사용합니다.',
+      voiceEditPromptTitle: '선택 영역 음성 편집 프롬프트(EditPlan)',
+      voiceEditPromptHint:
+        '선택 영역 음성 「편집」 경로에서 EditPlan을 생성할 때만 사용합니다. 비우면 설정의 사용자 지정 또는 내장 기본값으로 폴백합니다.',
+      voiceEditPromptPlaceholder: '비움 = 설정 사용자 지정 또는 내장 기본값',
       selectionActivated: '선택 영역 다듬기에 "{{name}}"을(를) 설정했습니다',
       selectionActivateFailed: '선택 영역 다듬기 스타일 전환 실패: {{err}}',
       selectionChars: '{{count}}자',
@@ -878,6 +882,16 @@ export const ko: typeof zhCN = {
         '켜면 설정된 모델이 질문/편집을 판별합니다. 모델 실패 시에만 의문사 휴리스틱으로 폴백합니다.',
       editKeywords: '추가 의문 단서',
       editKeywordsDesc: '자동 판별 끔일 때만. 한 줄에 하나면 질문. 없으면 ?/의문사 휴리스틱.',
+      editPlanFormat: '편집 계획 형식',
+      editPlanFormatDesc:
+        '모델이 선택한 형식으로 EditPlan을 우선 출력합니다. 파싱 실패 시 다른 형식을 시도합니다.',
+      editPlanFormatXml: 'XML',
+      editPlanFormatJson: 'JSON',
+      editSystemPrompt: '편집 계획 시스템 프롬프트',
+      editSystemPromptDesc:
+        '스타일 팩 / 내장 기본 EditPlan 시스템 프롬프트를 덮어씁니다. 비우면 사용자 지정 → 팩 → 내장 순으로 폴백합니다.',
+      editSystemPromptPlaceholder: '비움 = 스타일 팩 또는 내장 기본값',
+      editSystemPromptReset: '기본값으로 재설정',
     },
     selectionPolish: {
       title: '선택 영역 다듬기',
@@ -1159,6 +1173,7 @@ export const ko: typeof zhCN = {
       lastCheck: '마지막 확인',
       verifying: '확인 중…',
       notVerified: '아직 확인하지 않음',
+      verificationUnavailable: '이 채널은 확인을 지원하지 않습니다',
       passed: '확인 성공',
       failed: '확인 실패 · {{reason}}',
       elapsed: '소요 시간 {{ms}} ms',
@@ -1232,6 +1247,7 @@ export const ko: typeof zhCN = {
       pipelineIsolationNotice:
         '두 모드는 완전히 분리된 자격 증명을 사용합니다. 전환해도 다른 쪽 설정은 삭제되지 않으며, 다시 전환하면 복원됩니다.',
       presets: {
+        lmstudio: 'LM Studio',
         ark: 'ARK (Volcengine Ark)',
         deepseek: 'DeepSeek',
         siliconflow: 'SiliconFlow',
@@ -1299,6 +1315,12 @@ export const ko: typeof zhCN = {
       volcengineAccessKeyLabel: 'Access Token',
       volcengineApiKeyLabel: 'API Key',
       volcengineResourceIdLabel: 'Resource ID',
+      volcengineServiceLabel: '서비스',
+      volcengineServiceStandard: '일반 서비스',
+      volcengineAgentPlanNote:
+        'Doubao 스트리밍 ASR용 Agent Plan 전용 API 키를 사용하세요. 기본 Resource ID: volc.seedasr.sauc.duration. 일반 서비스와 키가 다르므로 별도 채널을 사용하세요.',
+      volcengineServiceInvalid:
+        '잘못된 서비스 설정입니다. 일반 서비스 또는 Agent Plan을 다시 선택하세요.',
       volcengineAuthModeLabel: '인증 모드',
       volcengineAuthModeAppIdToken: '레거시 앱 (APP ID + Access Token)',
       volcengineAuthModeApiKey: '새 콘솔 API Key',
@@ -1335,6 +1357,7 @@ export const ko: typeof zhCN = {
       fillDefault: '기본값 입력',
       readFailed: '읽기 실패',
       apiKeyLabel: 'API 키',
+      apiKeyOptionalLabel: 'API 키 (선택 사항)',
       baseUrlLabel: '엔드포인트',
       modelLabel: '모델',
       customModelLabel: '사용자 정의 모델…',
@@ -1390,6 +1413,8 @@ export const ko: typeof zhCN = {
         '위 설정을 먼저 저장한 후 현재 모델 연결성을 검증하거나 모델을 가져오세요. 실패해도 모델 ID 를 수동 입력할 수 있습니다.',
       validate: '검증',
       validating: '검증 중…',
+      planModelsHint: '요금제 콘솔에서 지원되는 텍스트 모델 ID를 복사해 모델 필드에 입력하세요.',
+      viewModels: '지원 모델 보기',
       fetchModels: '모델 가져오기',
       loadingModels: '모델 가져오는 중…',
       modelMissing: '모델이 설정되지 않았습니다. 먼저 모델 ID 를 입력해 주세요.',
@@ -2093,7 +2118,7 @@ export const ko: typeof zhCN = {
     releaseNow: '지금 해제',
     keepLoadedLabel: '로드 유지 시간',
     keepLoadedDesc:
-      '로컬 ASR 사용 후 메모리에서 해제되기까지의 시간을 결정. 1+ GB RAM 장기 점유 회피.',
+      '현재 로컬 ASR 엔진을 다음 전사 후 얼마나 유지할지 정합니다. 해제하지 않음은 수동 해제 또는 종료까지 유지합니다.',
     keepImmediate: '말하기 직후 해제',
     keep1min: '마지막 사용 후 1분',
     keep5min: '마지막 사용 후 5분(기본)',

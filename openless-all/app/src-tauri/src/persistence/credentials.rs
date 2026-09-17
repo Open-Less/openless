@@ -99,18 +99,65 @@ fn android_marketplace_legacy_scrubbed() -> &'static Mutex<bool> {
 /// Failed reads remain retryable and must not become a cached empty configuration.
 /// External Keychain edits take effect on the next app launch.
 static CREDENTIALS_CACHE: OnceLock<Mutex<Option<CredsRoot>>> = OnceLock::new();
+static LAST_VAULT_READ_ERROR: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+static LAST_VAULT_READ_ERROR_LOGGED: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 
 fn credentials_cache() -> &'static Mutex<Option<CredsRoot>> {
     CREDENTIALS_CACHE.get_or_init(|| Mutex::new(None))
 }
 
+fn last_vault_read_error_slot() -> &'static Mutex<Option<String>> {
+    LAST_VAULT_READ_ERROR.get_or_init(|| Mutex::new(None))
+}
+
+fn last_vault_read_error_logged_slot() -> &'static Mutex<Option<String>> {
+    LAST_VAULT_READ_ERROR_LOGGED.get_or_init(|| Mutex::new(None))
+}
+
 fn store_credentials_cache(root: &CredsRoot) {
     *credentials_cache().lock() = Some(root.clone());
+    clear_vault_read_error();
+}
+
+fn record_vault_read_failure(error: &anyhow::Error) {
+    let chain = format!("{error:#}");
+    *last_vault_read_error_slot().lock() = Some(chain.clone());
+    let mut logged = last_vault_read_error_logged_slot().lock();
+    if logged.as_deref() != Some(chain.as_str()) {
+        log::warn!("[vault] credential read failed: {chain}");
+        *logged = Some(chain);
+    }
+}
+
+/// Mutations must not persist an empty default over an unreadable envelope.
+/// Returning `Err` lets Core surface Persistence after a real Keystore retry.
+#[cfg(any(target_os = "android", test))]
+fn android_credentials_root_for_update(
+    loader: impl FnOnce() -> Result<Option<CredsRoot>>,
+) -> Result<CredsRoot> {
+    match loader() {
+        Ok(loaded) => {
+            let root = loaded.unwrap_or_default();
+            clear_vault_read_error();
+            store_credentials_cache(&root);
+            Ok(root)
+        }
+        Err(error) => {
+            record_vault_read_failure(&error);
+            Err(error)
+        }
+    }
+}
+
+fn clear_vault_read_error() {
+    *last_vault_read_error_slot().lock() = None;
+    *last_vault_read_error_logged_slot().lock() = None;
 }
 
 #[cfg(test)]
 fn reset_credentials_cache_for_tests() {
     *credentials_cache().lock() = None;
+    clear_vault_read_error();
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
@@ -325,8 +372,10 @@ struct CredsAsrEntry {
     resourceId: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     authMode: Option<String>,
-    /// 方舟（Ark）API Key —— 仅 `api_key` 鉴权模式使用，与旧版 Access Token 槽位
-    /// (`accessKey`) 隔离，避免两模式切换时残留凭据互相污染。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    volcengineService: Option<String>,
+    /// ASR API Key —— 普通服务 API Key 鉴权或 Agent Plan 使用，与旧版 Access Token 槽位
+    /// (`accessKey`) 隔离，避免不同鉴权方式的凭据互相污染。
     #[serde(skip_serializing_if = "Option::is_none")]
     volcengineApiKey: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -374,6 +423,7 @@ impl CredsAsrEntry {
             && self.appKey.as_deref().unwrap_or("").is_empty()
             && self.accessKey.as_deref().unwrap_or("").is_empty()
             && self.resourceId.as_deref().unwrap_or("").is_empty()
+            && self.volcengineService.as_deref().unwrap_or("").is_empty()
             && self.authMode.as_deref().unwrap_or("").is_empty()
             && self.volcengineApiKey.as_deref().unwrap_or("").is_empty()
             && self.vocabularyId.as_deref().unwrap_or("").is_empty()
@@ -1465,6 +1515,7 @@ fn load_credentials_into_cache_with(
     match loader() {
         Ok(root) => {
             let root = root.unwrap_or_default();
+            clear_vault_read_error();
             store_credentials_cache(&root);
             root
         }
@@ -1472,7 +1523,7 @@ fn load_credentials_into_cache_with(
             // Do not cache the fallback. In particular, a failed legacy-token
             // scrub must be retried by the next startup/getter call rather than
             // hidden for the rest of the process.
-            log::warn!("[vault] credential read failed: {e}");
+            record_vault_read_failure(&e);
             CredsRoot::default()
         }
     }
@@ -1523,12 +1574,7 @@ fn load_credentials_for_update_raw() -> Result<CredsRoot> {
 
     #[cfg(target_os = "android")]
     {
-        let root = match load_android_credentials()? {
-            Some(root) => root,
-            None => CredsRoot::default(),
-        };
-        store_credentials_cache(&root);
-        return Ok(root);
+        return android_credentials_root_for_update(load_android_credentials);
     }
 
     #[cfg(not(target_os = "android"))]
@@ -1537,6 +1583,7 @@ fn load_credentials_for_update_raw() -> Result<CredsRoot> {
             // 同 load_credentials：不再每次 update 都尝试 delete legacy keyring
             // entries，避免反复触发 macOS Keychain ACL 弹窗。
             remove_legacy_credentials_file_best_effort();
+            clear_vault_read_error();
             store_credentials_cache(&root);
             Ok(root)
         }
@@ -1545,11 +1592,15 @@ fn load_credentials_for_update_raw() -> Result<CredsRoot> {
             // save_credentials，cache 会被刷新；如果只返回 default root（没 legacy），
             // 我们这里再显式 cache 一次防御性补一下。
             let root = migrate_legacy_sources_for_update()?;
+            clear_vault_read_error();
             store_credentials_cache(&root);
             Ok(root)
         }
         // 错误路径不缓存 —— 同 load_credentials 注释；让下次读重试 keyring。
-        Err(e) => Err(e),
+        Err(e) => {
+            record_vault_read_failure(&e);
+            Err(e)
+        }
     }
 }
 
@@ -1650,6 +1701,7 @@ fn lookup_account(root: &CredsRoot, account: CredentialAccount) -> Option<String
         }
         CredentialAccount::VolcengineAccessKey => asr.and_then(|e| pick(&e.accessKey)),
         CredentialAccount::VolcengineResourceId => asr.and_then(|e| pick(&e.resourceId)),
+        CredentialAccount::VolcengineService => asr.and_then(|e| pick(&e.volcengineService)),
         CredentialAccount::VolcengineAuthMode => asr.and_then(|e| pick(&e.authMode)),
         CredentialAccount::VolcengineApiKey => asr.and_then(|e| pick(&e.volcengineApiKey)),
         CredentialAccount::ArkApiKey => llm.and_then(|e| pick(&e.apiKey)),
@@ -1727,6 +1779,10 @@ fn write_account(root: &mut CredsRoot, account: CredentialAccount, value: Option
         CredentialAccount::VolcengineResourceId => {
             let entry = root.providers.asr.entry(asr_id).or_default();
             entry.resourceId = normalized;
+        }
+        CredentialAccount::VolcengineService => {
+            let entry = root.providers.asr.entry(asr_id).or_default();
+            entry.volcengineService = normalized;
         }
         CredentialAccount::VolcengineAuthMode => {
             let entry = root.providers.asr.entry(asr_id).or_default();
@@ -1808,8 +1864,9 @@ pub enum CredentialAccount {
     VolcengineAppKey,
     VolcengineAccessKey,
     VolcengineResourceId,
+    VolcengineService,
     VolcengineAuthMode,
-    /// 方舟（Ark）语音模型 API Key（`api_key` 鉴权模式使用，独立于旧版 Access Token 槽位）。
+    /// ASR API Key（普通服务 API Key 鉴权或 Agent Plan 使用，独立于旧版 Access Token 槽位）。
     VolcengineApiKey,
     ArkApiKey,
     ArkModelId,
@@ -1851,6 +1908,7 @@ impl CredentialAccount {
             CredentialAccount::VolcengineAppKey => "volcengine.app_key",
             CredentialAccount::VolcengineAccessKey => "volcengine.access_key",
             CredentialAccount::VolcengineResourceId => "volcengine.resource_id",
+            CredentialAccount::VolcengineService => "volcengine.service",
             CredentialAccount::VolcengineAuthMode => "volcengine.auth_mode",
             CredentialAccount::VolcengineApiKey => "volcengine.api_key",
             CredentialAccount::ArkApiKey => "ark.api_key",
@@ -1877,6 +1935,7 @@ impl CredentialAccount {
             CredentialAccount::VolcengineAppKey,
             CredentialAccount::VolcengineAccessKey,
             CredentialAccount::VolcengineResourceId,
+            CredentialAccount::VolcengineService,
             CredentialAccount::VolcengineAuthMode,
             CredentialAccount::VolcengineApiKey,
             CredentialAccount::ArkApiKey,
@@ -1905,6 +1964,7 @@ pub struct CredentialsSnapshot {
     pub volcengine_app_key: Option<String>,
     pub volcengine_access_key: Option<String>,
     pub volcengine_resource_id: Option<String>,
+    pub volcengine_service: Option<String>,
     pub volcengine_auth_mode: Option<String>,
     pub volcengine_api_key: Option<String>,
     pub asr_api_key: Option<String>,
@@ -1962,6 +2022,7 @@ fn credentials_snapshot(root: &CredsRoot, include_omni: bool) -> CredentialsSnap
         volcengine_app_key: lookup_account(root, CredentialAccount::VolcengineAppKey),
         volcengine_access_key: lookup_account(root, CredentialAccount::VolcengineAccessKey),
         volcengine_resource_id: lookup_account(root, CredentialAccount::VolcengineResourceId),
+        volcengine_service: lookup_account(root, CredentialAccount::VolcengineService),
         volcengine_auth_mode: lookup_account(root, CredentialAccount::VolcengineAuthMode),
         volcengine_api_key: lookup_account(root, CredentialAccount::VolcengineApiKey),
         asr_api_key: lookup_account(root, CredentialAccount::AsrApiKey),
@@ -2120,6 +2181,13 @@ pub struct CredentialsVault;
 impl CredentialsVault {
     /// 系统凭据库 service name；macOS 下对应 Keychain service。
     pub const SERVICE_NAME: &'static str = "com.openless.app";
+
+    /// Last envelope/keyring read failure, if this process has not successfully
+    /// loaded credentials since. Distinguishes "vault unreadable" from
+    /// "user has not configured a provider" (empty default is volcengine).
+    pub fn last_read_error() -> Option<String> {
+        last_vault_read_error_slot().lock().clone()
+    }
 
     pub fn load_metadata() -> Result<openless_core::CredentialMetadata> {
         let _guard = credentials_lock().lock();
@@ -2589,15 +2657,15 @@ mod tests {
     #[cfg(not(windows))]
     use super::load_android_credentials_from_source_with_crypto;
     use super::{
-        android_persistable_credentials, chunk_json_payload, credentials_cache,
-        get_android_marketplace_token_at, load_android_credentials_from_path,
+        android_credentials_root_for_update, android_persistable_credentials, chunk_json_payload,
+        credentials_cache, get_android_marketplace_token_at, load_android_credentials_from_path,
         load_android_credentials_from_path_with_crypto, load_credentials_into_cache_with,
         lookup_account, lookup_marketplace_github_token, lookup_omni_account,
         omni_extra_headers_json, omni_temperature_string, parse_extra_headers_json,
         parse_llm_temperature, reset_credentials_cache_for_tests,
         set_llm_extra_headers_for_provider_in_root, set_llm_temperature_for_provider_in_root,
         write_account, write_marketplace_github_token, write_omni_account, CredentialAccount,
-        CredsAsrEntry, CredsLlmEntry, CredsRoot, MarketplaceGithubToken,
+        CredentialsVault, CredsAsrEntry, CredsLlmEntry, CredsRoot, MarketplaceGithubToken,
         KEYRING_CHUNK_MAX_UTF16_UNITS,
     };
     use anyhow::anyhow;
@@ -3300,11 +3368,24 @@ mod tests {
 
     #[test]
     fn android_startup_failure_does_not_cache_default_or_suppress_retry() {
+        use anyhow::Context;
         reset_credentials_cache_for_tests();
-        let first =
-            load_credentials_into_cache_with(|| Err(anyhow!("injected startup scrub failure")));
+        let first = load_credentials_into_cache_with(|| {
+            Err(anyhow!("injected startup scrub failure")
+                .context("read Android credential envelope"))
+        });
         assert!(lookup_marketplace_github_token(&first).is_none());
         assert!(credentials_cache().lock().is_none());
+        let first_error =
+            CredentialsVault::last_read_error().expect("vault error should be recorded");
+        assert!(
+            first_error.contains("injected startup scrub failure"),
+            "error chain should include the inner cause, got {first_error}"
+        );
+        assert!(
+            first_error.contains("read Android credential envelope"),
+            "error chain should include the outer context, got {first_error}"
+        );
 
         let dir =
             std::env::temp_dir().join(format!("openless-android-startup-{}", uuid::Uuid::new_v4()));
@@ -3314,9 +3395,36 @@ mod tests {
 
         assert!(lookup_marketplace_github_token(&second).is_none());
         assert!(credentials_cache().lock().is_some());
+        assert!(
+            CredentialsVault::last_read_error().is_none(),
+            "successful read must clear the last vault error"
+        );
         assert_android_secret_unrecoverable(&path, "gho_legacy_startup_secret");
         *credentials_cache().lock() = Some(CredsRoot::default());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn android_for_update_path_retries_and_does_not_cache_on_envelope_error() {
+        use anyhow::Context;
+        reset_credentials_cache_for_tests();
+        let err = android_credentials_root_for_update(|| {
+            Err(anyhow!("temporarily unavailable")
+                .context("Android credential authentication or key operation failed")
+                .context("read Android credential envelope"))
+        })
+        .expect_err("mutations must not receive a default root to persist");
+        assert!(credentials_cache().lock().is_none());
+        let error = CredentialsVault::last_read_error().expect("vault error should be recorded");
+        assert!(
+            error.contains("temporarily unavailable"),
+            "error chain should include the Keystore kind, got {error}"
+        );
+        let chain = format!("{err:#}");
+        assert!(
+            chain.contains("temporarily unavailable"),
+            "returned error should include the Keystore kind, got {chain}"
+        );
     }
 
     #[test]

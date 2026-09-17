@@ -64,6 +64,7 @@ pub const ASR_ADVANCED_CONFIG_ACCOUNT: &str = "asr.advanced_config";
 pub const VOLCENGINE_APP_KEY_ACCOUNT: &str = "volcengine.app_key";
 pub const VOLCENGINE_ACCESS_KEY_ACCOUNT: &str = "volcengine.access_key";
 pub const VOLCENGINE_RESOURCE_ID_ACCOUNT: &str = "volcengine.resource_id";
+pub const VOLCENGINE_SERVICE_ACCOUNT: &str = "volcengine.service";
 pub const VOLCENGINE_AUTH_MODE_ACCOUNT: &str = "volcengine.auth_mode";
 pub const VOLCENGINE_API_KEY_ACCOUNT: &str = "volcengine.api_key";
 pub const XFYUN_APP_ID_ACCOUNT: &str = "xfyun.app_id";

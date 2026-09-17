@@ -68,6 +68,7 @@ const LLM_PROVIDER_TYPES: &[(&str, &str)] = &[
     ("stepfun", "stepfun"),
     ("opencode", "opencode"),
     ("tencentTokenHub", "tencentTokenHub"),
+    ("lmstudio", "lmstudio"),
     ("custom", "customChatCompletions"),
     ("custom_responses", "customResponses"),
     ("custom_messages", "customMessages"),
@@ -137,17 +138,50 @@ pub enum ValidationProbe {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProviderEndpointPreset {
+    pub name: String,
+    pub endpoint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderDescriptor {
     pub kind: ProviderKind,
     pub provider_type: ProviderType,
     pub label_key: String,
     pub default_endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub endpoint_presets: Vec<ProviderEndpointPreset>,
     pub default_model: Option<String>,
     pub auth_requirement: AuthRequirement,
     pub validation_probe: ValidationProbe,
     pub static_models: Vec<String>,
     pub default_request_format: Option<crate::llm_protocol::LlmRequestFormat>,
     pub supported_request_formats: Vec<crate::llm_protocol::LlmRequestFormat>,
+}
+
+/// Match a service preset without treating custom URL credentials or parameters as presets.
+pub fn matches_endpoint_preset(endpoint: &str, preset: &str) -> bool {
+    let (Ok(current), Ok(preset)) = (url::Url::parse(endpoint.trim()), url::Url::parse(preset))
+    else {
+        return false;
+    };
+    let base_path = |path: &str| {
+        let path = path.trim_end_matches('/');
+        let path = ["/chat/completions", "/responses", "/messages", "/models"]
+            .iter()
+            .find_map(|suffix| path.strip_suffix(suffix))
+            .unwrap_or(path);
+        path.strip_suffix("/v3").unwrap_or(path).to_string()
+    };
+    current.origin() == preset.origin()
+        && current.query().is_none()
+        && current.fragment().is_none()
+        && current.username().is_empty()
+        && current.password().is_none()
+        && base_path(current.path()) == base_path(preset.path())
 }
 
 pub fn provider_descriptors(kind: ProviderKind) -> Vec<ProviderDescriptor> {
@@ -223,6 +257,7 @@ fn provider_descriptor_with_label(
             match id.as_str() {
                 crate::polish::CODEX_OAUTH_PROVIDER_ID => AuthRequirement::OAuth,
                 "gemini" => AuthRequirement::ApiKey,
+                "lmstudio" => AuthRequirement::EndpointModelOptionalApiKey,
                 _ => AuthRequirement::ApiKeyUnlessCustomEndpoint,
             },
             ValidationProbe::LlmText,
@@ -249,6 +284,29 @@ fn provider_descriptor_with_label(
         provider_type,
         label_key: label_key.to_string(),
         default_endpoint: default_endpoint.map(str::to_string),
+        endpoint_presets: if kind == ProviderKind::Llm && id == "ark" {
+            [
+                (
+                    "Agent Plan",
+                    "https://ark.cn-beijing.volces.com/api/plan/v3",
+                    "https://console.volcengine.com/ark/subscription/agent-plan",
+                ),
+                (
+                    "Coding Plan",
+                    "https://ark.cn-beijing.volces.com/api/coding/v3",
+                    "https://console.volcengine.com/ark/subscription/coding-plan",
+                ),
+            ]
+            .into_iter()
+            .map(|(name, endpoint, models_url)| ProviderEndpointPreset {
+                name: name.to_string(),
+                endpoint: endpoint.to_string(),
+                models_url: Some(models_url.to_string()),
+            })
+            .collect()
+        } else {
+            Vec::new()
+        },
         default_model: default_model.map(str::to_string),
         auth_requirement,
         validation_probe,
@@ -333,6 +391,7 @@ pub struct CredentialConfiguration {
     pub asr_api_key: bool,
     pub asr_endpoint: bool,
     pub asr_model: bool,
+    pub volcengine_service: Option<String>,
     pub volcengine_auth_mode: Option<String>,
     pub volcengine_app_key: bool,
     pub volcengine_access_key: bool,
@@ -345,7 +404,7 @@ pub struct CredentialConfiguration {
     pub tencent_cloud_secret_key: bool,
     pub llm_api_key: bool,
     pub llm_endpoint: bool,
-    pub llm_endpoint_matches_default: bool,
+    pub llm_api_key_required: bool,
     pub llm_model: bool,
     pub codex_oauth: bool,
     pub omni_api_key: bool,
@@ -358,12 +417,21 @@ pub fn volcengine_configured(configuration: &CredentialConfiguration) -> bool {
 
     // resource id 不是配置门槛：留空时运行时回落默认资源
     //（见 VolcengineCredentials::resolve_resource_id），认证只取决于密钥本身。
-    match configuration
-        .volcengine_auth_mode
-        .as_deref()
-        .map(VolcengineAuthMode::parse)
-        .unwrap_or(VolcengineAuthMode::AppIdToken)
-    {
+    let Ok(service) = crate::asr::volcengine::VolcengineService::parse(
+        configuration
+            .volcengine_service
+            .as_deref()
+            .unwrap_or_default(),
+    ) else {
+        return false;
+    };
+    match service.auth_mode(
+        configuration
+            .volcengine_auth_mode
+            .as_deref()
+            .map(VolcengineAuthMode::parse)
+            .unwrap_or(VolcengineAuthMode::AppIdToken),
+    ) {
         VolcengineAuthMode::AppIdToken => {
             configuration.volcengine_app_key && configuration.volcengine_access_key
         }
@@ -421,8 +489,7 @@ pub fn auth_requirement_satisfied(
         AuthRequirement::ApiKeyUnlessCustomEndpoint => {
             endpoint
                 && model
-                && (api_key
-                    || (configuration.llm_endpoint && !configuration.llm_endpoint_matches_default))
+                && (api_key || (configuration.llm_endpoint && !configuration.llm_api_key_required))
         }
         AuthRequirement::Volcengine => volcengine_configured(configuration),
         AuthRequirement::Xfyun => configuration.xfyun_app_id && configuration.xfyun_api_key,
@@ -457,6 +524,10 @@ pub fn api_key_required(
                 .default_endpoint
                 .as_deref()
                 .is_some_and(|default| equivalent_endpoint(endpoint, default))
+                || descriptor
+                    .endpoint_presets
+                    .iter()
+                    .any(|preset| matches_endpoint_preset(endpoint, &preset.endpoint))
         }
         _ => true,
     }
@@ -532,6 +603,7 @@ pub fn default_llm_endpoint(provider_type: &str) -> Option<&'static str> {
         "minimax" => Some("https://api.minimaxi.com/v1"),
         "stepfun" => Some("https://api.stepfun.com/v1"),
         "tencentTokenHub" => Some("https://tokenhub.tencentmaas.com/v1"),
+        "lmstudio" => Some("http://localhost:1234/v1"),
         _ => None,
     }
 }
@@ -976,6 +1048,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn service_presets_match_equivalent_urls_but_preserve_custom_urls() {
+        let preset = "https://ark.cn-beijing.volces.com/api/plan/v3";
+        for endpoint in [
+            preset,
+            "https://ARK.CN-BEIJING.VOLCES.COM:443/api/plan/v3",
+            "https://ark.cn-beijing.volces.com/api/plan/messages",
+        ] {
+            assert!(matches_endpoint_preset(endpoint, preset));
+        }
+        for endpoint in [
+            "https://ark.cn-beijing.volces.com/api/plan/v3?tenant=1",
+            "https://ark.cn-beijing.volces.com/api/plan/v3#custom",
+            "https://user@ark.cn-beijing.volces.com/api/plan/v3",
+            "http://ark.cn-beijing.volces.com/api/plan/v3",
+            "https://ark.cn-beijing.volces.com/api/coding/v3",
+            "invalid",
+        ] {
+            assert!(!matches_endpoint_preset(endpoint, preset));
+        }
+    }
+
+    #[test]
     fn routes_bailian_and_stepfun_models() {
         assert_eq!(
             resolve_effective_asr_provider(BAILIAN_PROVIDER_ID, "fun-asr-realtime").unwrap(),
@@ -1049,7 +1143,7 @@ mod tests {
         let mut configuration = CredentialConfiguration {
             asr_api_key: true,
             llm_endpoint: true,
-            llm_endpoint_matches_default: true,
+            llm_api_key_required: true,
             llm_model: true,
             omni_api_key: true,
             omni_model: true,
@@ -1060,7 +1154,7 @@ mod tests {
         configuration.llm_api_key = true;
         assert!(llm_configured("openrouterFree", &configuration));
         configuration.llm_api_key = false;
-        configuration.llm_endpoint_matches_default = false;
+        configuration.llm_api_key_required = false;
         assert!(llm_configured("openrouterFree", &configuration));
         assert!(omni_configured("gemini", &configuration));
 
@@ -1116,7 +1210,7 @@ mod tests {
         ));
         let mut configuration = CredentialConfiguration {
             llm_endpoint: true,
-            llm_endpoint_matches_default: true,
+            llm_api_key_required: true,
             llm_model: true,
             ..CredentialConfiguration::default()
         };
@@ -1217,6 +1311,54 @@ mod tests {
     }
 
     #[test]
+    fn ark_official_endpoints_require_keys_but_custom_endpoints_do_not() {
+        for endpoint in [
+            "https://ark.cn-beijing.volces.com/api/plan/messages",
+            "https://ark.cn-beijing.volces.com/api/coding/messages",
+        ] {
+            assert!(
+                api_key_required(ProviderKind::Llm, "ark", Some(endpoint)),
+                "{endpoint}"
+            );
+        }
+        for endpoint in [
+            "https://ark.cn-beijing.volces.com/api/v3",
+            "https://ark.cn-beijing.volces.com/api/plan/v3",
+            "https://ark.cn-beijing.volces.com/api/coding/v3",
+            "http://127.0.0.1:8080/v1",
+        ] {
+            let required = !endpoint.starts_with("http://127.0.0.1");
+            for suffix in ["", "/", "/chat/completions/", "/responses", "/messages/"] {
+                let endpoint = format!("{endpoint}{suffix}");
+                assert_eq!(
+                    api_key_required(ProviderKind::Llm, "ark", Some(&endpoint)),
+                    required,
+                    "{endpoint}"
+                );
+                for key in [None, Some(""), Some(" \t\n"), Some("fixture-key")] {
+                    let has_key = key.is_some_and(|value: &str| !value.trim().is_empty());
+                    let configuration = CredentialConfiguration {
+                        llm_api_key: has_key,
+                        llm_endpoint: true,
+                        llm_api_key_required: api_key_required(
+                            ProviderKind::Llm,
+                            "ark",
+                            Some(&endpoint),
+                        ),
+                        llm_model: true,
+                        ..CredentialConfiguration::default()
+                    };
+                    assert_eq!(
+                        llm_configured("ark", &configuration),
+                        has_key || !required,
+                        "{endpoint}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn custom_llm_auth_depends_on_the_effective_endpoint() {
         assert!(!api_key_required(
             ProviderKind::Llm,
@@ -1258,6 +1400,34 @@ mod tests {
             .flat_map(provider_descriptors)
             .collect::<Vec<_>>();
         assert_eq!(fixture, actual);
+    }
+
+    #[test]
+    fn lmstudio_requires_a_model_but_not_an_api_key() {
+        let descriptor = provider_descriptor(ProviderKind::Llm, "lmstudio").unwrap();
+        assert_eq!(
+            descriptor.default_endpoint.as_deref(),
+            Some("http://localhost:1234/v1")
+        );
+        assert!(descriptor.default_model.is_none());
+        assert_eq!(
+            descriptor.auth_requirement,
+            AuthRequirement::EndpointModelOptionalApiKey
+        );
+        assert_eq!(descriptor.validation_probe, ValidationProbe::LlmText);
+        assert!(crate::cloud_providers::SHARED_CLOUD_LLM_PROVIDER_TYPES.contains(&"lmstudio"));
+        assert!(provider_descriptor(ProviderKind::Omni, "lmstudio").is_none());
+        for endpoint in [
+            None,
+            Some("http://localhost:1234/v1"),
+            Some("https://gateway.example/v1"),
+        ] {
+            assert!(!api_key_required(ProviderKind::Llm, "lmstudio", endpoint));
+        }
+        let mut configuration = CredentialConfiguration::default();
+        assert!(!llm_configured("lmstudio", &configuration));
+        configuration.llm_model = true;
+        assert!(llm_configured("lmstudio", &configuration));
     }
 
     #[test]

@@ -14,6 +14,10 @@ const paths = {
   rustStore: new URL('../src-tauri/src/persistence/android_credentials.rs', import.meta.url),
   credentials: new URL('../src-tauri/src/persistence/credentials.rs', import.meta.url),
   jni: new URL('../src-tauri/src/android/jni.rs', import.meta.url),
+  credentialCommands: new URL('../src-tauri/src/commands/credentials.rs', import.meta.url),
+  coreApi: new URL('../crates/openless-core/src/api.rs', import.meta.url),
+  mobileRuntime: new URL('../src-tauri/src/mobile_runtime.rs', import.meta.url),
+  channelList: new URL('../src/pages/settings/ChannelList.tsx', import.meta.url),
   copyScript: new URL('./copy-android-scaffolding.mjs', import.meta.url),
   ci: new URL('../../../.github/workflows/ci.yml', import.meta.url),
 };
@@ -37,18 +41,35 @@ function requirePattern(source, pattern, message) {
   }
 }
 
-const [cipher, vault, unitTest, instrumentedTest, rustStore, credentials, jni, copyScript, ci] =
-  await Promise.all([
-    requiredSource('pure AES-GCM codec', paths.cipher),
-    requiredSource('Android Keystore bridge', paths.vault),
-    requiredSource('JVM cipher tests', paths.unitTest),
-    requiredSource('Android Keystore instrumentation tests', paths.instrumentedTest),
-    requiredSource('Rust Android credential store', paths.rustStore),
-    requiredSource('credentials integration', paths.credentials),
-    requiredSource('JNI bridge', paths.jni),
-    requiredSource('Android scaffolding copier', paths.copyScript),
-    requiredSource('PR CI workflow', paths.ci),
-  ]);
+const [
+  cipher,
+  vault,
+  unitTest,
+  instrumentedTest,
+  rustStore,
+  credentials,
+  jni,
+  credentialCommands,
+  coreApi,
+  mobileRuntime,
+  channelList,
+  copyScript,
+  ci,
+] = await Promise.all([
+  requiredSource('pure AES-GCM codec', paths.cipher),
+  requiredSource('Android Keystore bridge', paths.vault),
+  requiredSource('JVM cipher tests', paths.unitTest),
+  requiredSource('Android Keystore instrumentation tests', paths.instrumentedTest),
+  requiredSource('Rust Android credential store', paths.rustStore),
+  requiredSource('credentials integration', paths.credentials),
+  requiredSource('JNI bridge', paths.jni),
+  requiredSource('credential commands', paths.credentialCommands),
+  requiredSource('Core API', paths.coreApi),
+  requiredSource('mobile runtime', paths.mobileRuntime),
+  requiredSource('channel list', paths.channelList),
+  requiredSource('Android scaffolding copier', paths.copyScript),
+  requiredSource('PR CI workflow', paths.ci),
+]);
 
 requirePattern(cipher, /AES\/GCM\/NoPadding/, 'cipher must use AES/GCM/NoPadding');
 requirePattern(cipher, /NONCE_BYTES\s*=\s*12/, 'cipher must require a 12-byte nonce');
@@ -79,6 +100,16 @@ if (
 for (const pattern of [
   /is\s+KeyPermanentlyInvalidatedException\s*->\s*CREDENTIAL_STATUS_KEY_MISSING/,
   /else\s*->\s*CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE/,
+  /fun\s+credentialStatusForCipherKeyFailure/,
+  /is\s+UserNotAuthenticatedException\s*->\s*CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE/,
+  /com\.openless\.app\.credentials\.v3/,
+  /com\.openless\.app\.credentials\.v2/,
+  /runOnMain/,
+  /class SoftwareAesCredentialStore/,
+  /credentials\.sw\.key/,
+  /SecretKeySpec/,
+  /FileOutputStream/,
+  /\.fd\.sync\(\)/,
 ]) {
   requirePattern(vault, pattern, `Keystore failure classifier is missing ${pattern}`);
 }
@@ -93,15 +124,54 @@ for (const pattern of [
   /tamperedCiphertext/,
   /tamperedAad/,
   /unrecoverableKeyExceptionRemainsRetryable/,
+  /invalidKeyExceptionIsTreatedAsUnrecoverable/,
+  /softwareAesRoundTripWithoutAndroidKeyStore/,
+  /softwareAesMissingKeyIsReportedAsMissing/,
+  /openFallbackPrefersSuccessAndNeverDowngradesARecoverableFailureToMissing/,
 ]) {
   requirePattern(unitTest, pattern, `JVM crypto tests are missing ${pattern}`);
 }
-for (const pattern of [/assertNull\([^)]*\.encoded/, /deletedKey/, /tamperedCiphertext/]) {
+for (const pattern of [
+  /assertNull\([^)]*\.encoded/,
+  /deletedKey/,
+  /tamperedCiphertext/,
+  /publicFacadeReadsBeta1V2Envelope/,
+  /softwareKeyCreatedBeforeEnvelopeCommitDoesNotHideV2Envelope/,
+]) {
   requirePattern(
     instrumentedTest,
     pattern,
     `Android Keystore instrumentation tests are missing ${pattern}`,
   );
+}
+
+for (const pattern of [/recreate\s*=\s*true/, /deleteEntryQuiet/]) {
+  if (pattern.test(vault)) {
+    throw new Error(`credential sealing must not destructively rotate a live key: ${pattern}`);
+  }
+}
+
+const diagnosticSources = [
+  vault,
+  rustStore,
+  credentials,
+  jni,
+  credentialCommands,
+  coreApi,
+  mobileRuntime,
+  channelList,
+].join('\n');
+for (const pattern of [
+  /#region agent log/,
+  /\[agent-dbg\]/,
+  /f73b06/,
+  /hypothesisId/,
+  /debug-f73b06\.log/,
+  /127\.0\.0\.1:7807/,
+]) {
+  if (pattern.test(diagnosticSources)) {
+    throw new Error(`one-off agent diagnostic must not ship: ${pattern}`);
+  }
 }
 
 for (const pattern of [

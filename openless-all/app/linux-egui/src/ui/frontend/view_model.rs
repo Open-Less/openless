@@ -588,6 +588,9 @@ pub struct FrontendViewModel {
     pub permissions: SettingsPermissions,
     /// 远程输入服务正在监听 → 显示配对码 / 访问网址 / 证书指纹。
     pub remote_running: bool,
+    /// 服务报出的地址已过期：继续展示旧网址会诱导用户在错误的地址上配对，
+    /// 因此与 Core 的 `RemoteInputStatus::urls_stale` 一起决定是否展示连接细节。
+    pub remote_urls_stale: bool,
     pub remote_pin: String,
     pub remote_urls: Vec<String>,
     pub remote_cert_fingerprint: Option<String>,
@@ -712,6 +715,7 @@ impl Default for FrontendViewModel {
             selection_polish_hotkey: String::new(),
             pipeline_multimodal: false,
             remote_running: false,
+            remote_urls_stale: false,
             remote_pin: String::new(),
             remote_urls: Vec::new(),
             remote_cert_fingerprint: None,

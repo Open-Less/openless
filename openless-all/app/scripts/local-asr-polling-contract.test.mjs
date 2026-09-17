@@ -81,6 +81,22 @@ for (const contract of [
   }
 }
 
+for (const contract of [
+  'setFoundryLocalAsrKeepLoadedSecs',
+  'foundryStatus?.keepLoadedSecs ?? 300',
+]) {
+  if (!source.includes(contract)) {
+    throw new Error(`Foundry keep-loaded UI contract is missing: ${contract}`);
+  }
+}
+
+const keepLoadedOptionUses = source.match(/options=\{keepLoadedOptions\}/g) ?? [];
+if (keepLoadedOptionUses.length !== 2) {
+  throw new Error(
+    `Generic and Foundry keep-loaded selectors must share the options, found ${keepLoadedOptionUses.length}`,
+  );
+}
+
 console.log(
   'LocalAsr keeps one refresh poller, pauses it for the download dialog, and preserves stable JSX component types',
 );

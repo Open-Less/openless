@@ -38,6 +38,7 @@ pub struct FoundryStatusWire {
     pub runtime_source: String,
     pub active_model: String,
     pub loaded_model_id: Option<String>,
+    pub keep_loaded_secs: u32,
     pub endpoint: Option<String>,
     pub error: Option<String>,
 }
@@ -51,6 +52,7 @@ impl From<openless_core::LocalAsrRuntimeStatus> for FoundryStatusWire {
             runtime_source: status.runtime_source.unwrap_or_default().as_str().into(),
             active_model: status.active_model,
             loaded_model_id: status.model_id,
+            keep_loaded_secs: status.keep_loaded_secs,
             endpoint: status.endpoint,
             error: status.error,
         }
@@ -136,6 +138,19 @@ pub async fn foundry_local_asr_set_runtime_source(
         .services()
         .local_asr
         .set_foundry_runtime_source(FoundryRuntimeSource::from_legacy(&source))
+        .await
+        .map_err(core_error)
+}
+
+#[tauri::command]
+pub async fn foundry_local_asr_set_keep_loaded_secs(
+    backend: CoreState<'_>,
+    seconds: u32,
+) -> Result<(), String> {
+    backend
+        .services()
+        .local_asr
+        .set_keep_loaded_secs(LocalAsrRuntime::Foundry, seconds)
         .await
         .map_err(core_error)
 }
@@ -248,6 +263,7 @@ mod wire_contract_tests {
                 "runtimeSource": "ort-nightly",
                 "activeModel": "whisper-small",
                 "loadedModelId": null,
+                "keepLoadedSecs": 300,
                 "endpoint": null,
                 "error": null,
             })

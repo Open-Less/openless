@@ -33,6 +33,8 @@ serde_json = "1"
 semver = "1"
 # OpenRouter ASR 把音频以标准 base64（带 padding）放进 JSON body（issue #582）。
 base64 = "0.22"
+# Android in-app updater and host tests for Tauri-wrapped minisign pubkey/signature.
+minisign-verify = "0.2"
 sha2 = "0.10"
 # 讯飞 RTASR/IFASR 签名：signa = Base64(HmacSHA1(MD5(appid + ts), apiKey))。
 md-5 = "0.10"
@@ -120,7 +122,6 @@ features = ["linux-native-sync-persistent", "crypto-rust"]
 jni = "0.21"
 ndk-context = "0.1"
 tao = "0.35"
-minisign-verify = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.5"

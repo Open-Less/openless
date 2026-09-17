@@ -41,6 +41,8 @@ pub(super) struct StylePackArchiveManifest {
     pub(super) base_mode: PolishMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) selection_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) voice_edit_prompt: Option<String>,
     pub(super) tags: Vec<String>,
     pub(super) prompt_file: String,
     pub(super) examples_file: String,

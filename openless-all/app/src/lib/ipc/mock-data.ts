@@ -77,6 +77,8 @@ export let mockSettings: UserPreferences = {
   selectionVoiceIntentMode: 'prompt',
   selectionVoiceManualIntent: 'question',
   selectionVoiceEditKeywords: ['翻译', '改成', '替换', '批量', '格式'],
+  selectionVoiceEditPlanFormat: 'xml',
+  selectionVoiceEditSystemPrompt: '',
   chineseScriptPreference: 'auto',
   outputLanguagePreference: 'auto',
   qaSaveHistory: false,
@@ -367,6 +369,7 @@ export function makeMockStylePack(
     kind,
     baseMode,
     selectionPrompt: mockSelectionPrompts[baseMode],
+    voiceEditPrompt: '',
     prompt,
     examples: mockBuiltinExamples[baseMode].map((example) => ({
       ...example,

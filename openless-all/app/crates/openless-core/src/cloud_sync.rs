@@ -455,6 +455,7 @@ fn validated_native_packs(payload: &CloudSyncPayload) -> Result<Vec<StylePack>, 
                 kind: pack.kind,
                 base_mode: pack.base_mode,
                 selection_prompt: pack.selection_prompt.clone(),
+                voice_edit_prompt: pack.voice_edit_prompt.clone(),
                 prompt: pack.prompt.clone(),
                 examples: pack
                     .examples
@@ -490,6 +491,7 @@ fn to_wire_pack(pack: &StylePack, icon_png_base64: Option<String>) -> SyncStyleP
         kind: pack.kind,
         base_mode: pack.base_mode,
         selection_prompt: pack.selection_prompt.clone(),
+        voice_edit_prompt: pack.voice_edit_prompt.clone(),
         prompt: pack.prompt.clone(),
         examples: pack
             .examples

@@ -55,7 +55,7 @@ if ($backendSource -match 'qa_runtime:\s*None' -or
     exit 1
 }
 
-$installer = $mainSource.IndexOf('ensure_fcitx5_ready(&config)?')
+$installer = $mainSource.IndexOf('ensure_fcitx5_ready(&config)')
 $listener = $mainSource.IndexOf('Fcitx5HotkeyListener::start')
 if ($installer -lt 0 -or $listener -lt 0 -or $installer -gt $listener) {
     Write-Error "Linux AppImage fcitx5 installation must run before the hotkey listener"

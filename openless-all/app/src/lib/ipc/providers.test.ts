@@ -1,4 +1,19 @@
 import { listProviderDescriptors, type ProviderKind } from './providers';
+import generated from './provider-descriptors.generated.json';
+
+const preview = generated.llm.find((descriptor) => descriptor.providerType === 'lmstudio');
+const lmstudio = (await listProviderDescriptors('llm')).find(
+  (descriptor) => descriptor.providerType === 'lmstudio',
+);
+if (
+  !preview ||
+  !lmstudio ||
+  Object.entries(lmstudio).some(
+    ([key, value]) =>
+      JSON.stringify(value) !== JSON.stringify(preview[key as keyof typeof preview]),
+  )
+)
+  throw new Error('LM Studio preview snapshots must agree');
 
 for (const kind of ['asr', 'llm', 'omni'] as ProviderKind[]) {
   const descriptors = await listProviderDescriptors(kind);

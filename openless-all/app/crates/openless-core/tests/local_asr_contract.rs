@@ -5,8 +5,8 @@ use openless_core::{
     ChannelMutation, ChannelMutationResult, ChannelSummary, CredentialKey, CredentialStore,
     CredentialsStatus, FoundryRuntimeSource, InMemoryCredentialStore, LocalAsrActivationRequest,
     LocalAsrMirror, LocalAsrRuntime, LocalAsrRuntimeLease, LocalAsrRuntimeStatus, LocalAsrSettings,
-    LocalAsrTarget, ModelRuntimeAdapter, ModelStore, ModelStoreConfig, NativeModelState,
-    OpenLessBackend, PreferencesStore, ProviderSlot, SecretValue,
+    LocalAsrTarget, LocalAsrTestResult, ModelRuntimeAdapter, ModelStore, ModelStoreConfig,
+    NativeModelState, OpenLessBackend, PreferencesStore, ProviderSlot, SecretValue,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -69,6 +69,7 @@ fn public_local_asr_preferences_keep_legacy_normalization_semantics() {
 #[derive(Default)]
 struct RecordingLocalAsrRuntime {
     invalidated: Mutex<Vec<LocalAsrRuntime>>,
+    invalidated_release_schedules: Mutex<Vec<LocalAsrRuntime>>,
     fail_release: std::sync::atomic::AtomicBool,
     fail_prepare: std::sync::atomic::AtomicBool,
     fail_preload: std::sync::atomic::AtomicBool,
@@ -79,11 +80,38 @@ struct RecordingLocalAsrRuntime {
     operations: Mutex<Vec<String>>,
     during_prepare: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     loaded_models: Arc<Mutex<std::collections::HashMap<LocalAsrTarget, u64>>>,
+    test_transcript: Mutex<String>,
+    tested_providers: Mutex<Vec<String>>,
 }
 
 impl ModelRuntimeAdapter for RecordingLocalAsrRuntime {
     fn engine_available(&self, _: LocalAsrRuntime) -> bool {
         true
+    }
+
+    fn test_model_for_provider(
+        &self,
+        target: LocalAsrTarget,
+        _model_dir: PathBuf,
+        provider_type: String,
+    ) -> BoxFuture<'static, Result<LocalAsrTestResult, BackendError>> {
+        let transcribed_text = self.test_transcript.lock().unwrap().clone();
+        self.tested_providers
+            .lock()
+            .unwrap()
+            .push(provider_type.clone());
+        Box::pin(async move {
+            Ok(LocalAsrTestResult {
+                target,
+                backend: provider_type,
+                expected_text: "Hello. This is a test of the Voxtrail speech-to-text system."
+                    .into(),
+                transcribed_text,
+                audio_ms: 3_000,
+                load_ms: 10,
+                transcribe_ms: 20,
+            })
+        })
     }
 
     fn runtime_status(
@@ -332,6 +360,13 @@ impl ModelRuntimeAdapter for RecordingLocalAsrRuntime {
     fn invalidate_route(&self, runtime: LocalAsrRuntime) {
         self.invalidated.lock().unwrap().push(runtime);
     }
+
+    fn invalidate_scheduled_release(&self, runtime: LocalAsrRuntime) {
+        self.invalidated_release_schedules
+            .lock()
+            .unwrap()
+            .push(runtime);
+    }
 }
 
 #[derive(Default)]
@@ -451,6 +486,62 @@ fn local_asr_backend_with_credentials(
     )
     .unwrap();
     (data_dir, runtime, backend)
+}
+
+#[tokio::test]
+async fn channel_test_requires_a_non_blank_transcript() {
+    let (data_dir, runtime, backend) = local_asr_backend();
+    let target = LocalAsrTarget::parse(LocalAsrRuntime::Generic, "qwen3-asr-0.6b").unwrap();
+    let model_dir = data_dir.join("models").join(target.model_id());
+    std::fs::create_dir_all(&model_dir).unwrap();
+    std::fs::write(
+        model_dir.join(openless_core::MODEL_READY_SENTINEL),
+        b"ready",
+    )
+    .unwrap();
+    backend
+        .services()
+        .local_asr
+        .set_active_model(target)
+        .await
+        .unwrap();
+    let channel_id = backend
+        .create_channel(
+            ChannelKind::Asr,
+            "local-qwen3-c".into(),
+            "Local Qwen".into(),
+        )
+        .await
+        .unwrap();
+
+    for transcript in ["", " \n\t"] {
+        *runtime.test_transcript.lock().unwrap() = transcript.into();
+        let error = backend
+            .services()
+            .local_asr
+            .test_channel(channel_id.clone())
+            .await
+            .expect_err("blank channel-test transcripts must fail");
+        assert_eq!(error.code, BackendErrorCode::Provider);
+        assert_eq!(
+            error.message,
+            "transcription provider returned an empty transcript"
+        );
+    }
+
+    *runtime.test_transcript.lock().unwrap() = "Hello from the local model".into();
+    let result = backend
+        .services()
+        .local_asr
+        .test_channel(channel_id)
+        .await
+        .unwrap();
+    assert_eq!(result.transcribed_text, "Hello from the local model");
+    assert_eq!(
+        runtime.tested_providers.lock().unwrap().as_slice(),
+        ["local-qwen3-c", "local-qwen3-c", "local-qwen3-c"]
+    );
+    let _ = std::fs::remove_dir_all(data_dir);
 }
 
 #[tokio::test]
@@ -1458,6 +1549,8 @@ async fn backend_local_asr_service_owns_preferences_and_change_events() {
     assert_eq!(preferences.sherpa_onnx_language_hint, "zh-hans");
     assert_eq!(preferences.foundry_local_runtime_source, "ort-nightly");
     assert_eq!(preferences.foundry_local_asr_keep_loaded_secs, 42);
+    assert_eq!(preferences.local_asr_keep_loaded_secs, 300);
+    assert_eq!(preferences.sherpa_onnx_keep_loaded_secs, 300);
     assert_eq!(
         runtime.invalidated.lock().unwrap().as_slice(),
         [LocalAsrRuntime::Foundry, LocalAsrRuntime::Foundry]
@@ -1468,6 +1561,53 @@ async fn backend_local_asr_service_owns_preferences_and_change_events() {
         event.kind,
         BackendEventKind::PreferencesChanged(_)
     ));
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn foundry_never_release_invalidates_only_the_pending_finite_schedule() {
+    let (data_dir, runtime, backend) = local_asr_backend();
+
+    for seconds in [0, 60, 300, 1_800] {
+        backend
+            .services()
+            .local_asr
+            .set_keep_loaded_secs(LocalAsrRuntime::Foundry, seconds)
+            .await
+            .unwrap();
+    }
+    assert!(runtime
+        .invalidated_release_schedules
+        .lock()
+        .unwrap()
+        .is_empty());
+
+    backend
+        .services()
+        .local_asr
+        .set_keep_loaded_secs(
+            LocalAsrRuntime::Foundry,
+            openless_core::LOCAL_ASR_KEEP_LOADED_FOREVER_SECS,
+        )
+        .await
+        .unwrap();
+
+    let preferences = backend.get_preferences();
+    assert_eq!(
+        preferences.foundry_local_asr_keep_loaded_secs,
+        openless_core::LOCAL_ASR_KEEP_LOADED_FOREVER_SECS
+    );
+    assert_eq!(preferences.local_asr_keep_loaded_secs, 300);
+    assert_eq!(preferences.sherpa_onnx_keep_loaded_secs, 300);
+    assert_eq!(
+        runtime
+            .invalidated_release_schedules
+            .lock()
+            .unwrap()
+            .as_slice(),
+        [LocalAsrRuntime::Foundry]
+    );
+
     let _ = std::fs::remove_dir_all(data_dir);
 }
 

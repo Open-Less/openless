@@ -718,6 +718,10 @@ export const fr: typeof zhCN = {
         'Pour les transcriptions après dictée. Définissez ici les règles de nettoyage du langage oral, de correction des erreurs ASR et de restauration des termes.',
       selectionPromptFallback:
         'Aucune instruction pour le texte écrit ; une configuration sûre par défaut sera utilisée.',
+      voiceEditPromptTitle: 'Invite d’édition vocale de sélection (EditPlan)',
+      voiceEditPromptHint:
+        'Utilisée uniquement pour générer un EditPlan via l’édition vocale. Vide = invite personnalisée des réglages ou valeur intégrée.',
+      voiceEditPromptPlaceholder: 'Vide = réglages personnalisés ou valeur intégrée',
       selectionActivated: '« {{name}} » sera utilisé pour améliorer les sélections.',
       selectionActivateFailed: 'Impossible de changer le style de sélection : {{err}}',
       selectionChars: '{{count}} caractères',
@@ -920,6 +924,16 @@ export const fr: typeof zhCN = {
       editKeywords: 'Indices de question supplémentaires',
       editKeywordsDesc:
         'Uniquement lorsque la détection automatique est désactivée. Un indice par ligne force le mode Question ; sinon, « ? » et les mots interrogatifs servent d’indices.',
+      editPlanFormat: 'Format du plan d’édition',
+      editPlanFormatDesc:
+        'Le modèle privilégie ce format EditPlan ; en cas d’échec d’analyse, l’autre format est tenté.',
+      editPlanFormatXml: 'XML',
+      editPlanFormatJson: 'JSON',
+      editSystemPrompt: 'Invite système du plan d’édition',
+      editSystemPromptDesc:
+        'Remplace l’invite système EditPlan du pack / intégrée. Vide = personnalisé → pack → intégré.',
+      editSystemPromptPlaceholder: 'Vide = pack de style ou valeur intégrée',
+      editSystemPromptReset: 'Réinitialiser',
     },
     selectionPolish: {
       title: 'Amélioration de la sélection',
@@ -1216,6 +1230,7 @@ export const fr: typeof zhCN = {
       lastCheck: 'Dernière vérification',
       verifying: 'Vérification…',
       notVerified: 'Pas encore vérifié',
+      verificationUnavailable: 'La vérification n’est pas disponible pour ce canal',
       passed: 'Vérification réussie',
       failed: 'Échec de la vérification · {{reason}}',
       elapsed: 'Durée : {{ms}} ms',
@@ -1295,6 +1310,7 @@ export const fr: typeof zhCN = {
       pipelineIsolationNotice:
         'Les deux modes conservent des identifiants distincts. Changer de mode garde l’autre configuration sans l’utiliser ; elle est restaurée à votre retour.',
       presets: {
+        lmstudio: 'LM Studio',
         opencode: 'OpenCode Zen',
         tencentTokenHub: 'TokenHub Tencent Cloud',
         customChatCompletions: 'Personnalisé · Chat Completions',
@@ -1362,6 +1378,12 @@ export const fr: typeof zhCN = {
       volcengineAccessKeyLabel: 'Access Token',
       volcengineApiKeyLabel: 'Clé API',
       volcengineResourceIdLabel: 'Resource ID',
+      volcengineServiceLabel: 'Service',
+      volcengineServiceStandard: 'Service standard',
+      volcengineAgentPlanNote:
+        'Utilisez une clé API dédiée à Agent Plan pour la reconnaissance vocale en streaming Doubao. Resource ID par défaut : volc.seedasr.sauc.duration. Les clés sont différentes ; utilisez des canaux séparés.',
+      volcengineServiceInvalid:
+        'Configuration du service invalide. Sélectionnez à nouveau le service standard ou Agent Plan.',
       volcengineAuthModeLabel: 'Mode d’authentification',
       volcengineAuthModeAppIdToken: 'Ancienne application (APP ID + Access Token)',
       volcengineAuthModeApiKey: 'Clé API (nouvelle console)',
@@ -1400,6 +1422,7 @@ export const fr: typeof zhCN = {
       fillDefault: 'Renseigner la valeur par défaut',
       readFailed: 'Échec de la lecture',
       apiKeyLabel: 'Clé API',
+      apiKeyOptionalLabel: 'Clé API (facultative)',
       baseUrlLabel: 'URL de base',
       modelLabel: 'Modèle',
       customModelLabel: 'Modèle personnalisé…',
@@ -1454,6 +1477,9 @@ export const fr: typeof zhCN = {
         'Enregistrez les champs ci-dessus, puis vérifiez le modèle choisi ou récupérez les modèles disponibles. Vous pouvez saisir un modèle manuellement si la récupération échoue.',
       validate: 'Vérifier',
       validating: 'Vérification…',
+      planModelsHint:
+        'Ouvrez la console du forfait, copiez un ID de modèle de texte pris en charge et collez-le dans le champ du modèle.',
+      viewModels: 'Voir les modèles pris en charge',
       fetchModels: 'Récupérer les modèles',
       loadingModels: 'Récupération des modèles…',
       modelMissing: 'Aucun modèle configuré. Saisissez d’abord un ID de modèle.',
@@ -2219,7 +2245,7 @@ export const fr: typeof zhCN = {
     releaseNow: 'Libérer maintenant',
     keepLoadedLabel: 'Conserver en mémoire pendant',
     keepLoadedDesc:
-      'Durée pendant laquelle Qwen3-ASR reste en mémoire après sa dernière utilisation avant d’être libéré.',
+      'Durée de chargement du moteur ASR local actuel après la prochaine transcription ; « Ne jamais libérer » le conserve jusqu’à une libération manuelle ou la fermeture.',
     keepImmediate: 'Libérer immédiatement',
     keep1min: '1 minute après la dernière utilisation',
     keep5min: '5 minutes après la dernière utilisation (par défaut)',

@@ -713,6 +713,10 @@ export const de: typeof zhCN = {
         'Für ASR-Text nach dem Diktat. Lege hier Regeln für gesprochene Sprache, Erkennungsfehler und die Wiederherstellung von Fachbegriffen fest.',
       selectionPromptFallback:
         'Noch kein Prompt für geschriebenen Text eingerichtet. Eine sichere Standardeinstellung wird verwendet.',
+      voiceEditPromptTitle: 'Prompt für Sprachbearbeitung der Auswahl (EditPlan)',
+      voiceEditPromptHint:
+        'Nur für den EditPlan der Auswahl-Sprachbearbeitung. Leer = benutzerdefinierter Prompt aus den Einstellungen oder Standard.',
+      voiceEditPromptPlaceholder: 'Leer = Einstellungen oder Standard',
       selectionActivated: '„{{name}}“ für die Überarbeitung von Textauswahl festgelegt.',
       selectionActivateFailed: 'Stil für Textauswahl konnte nicht gewechselt werden: {{err}}',
       selectionChars: '{{count}} Zeichen',
@@ -913,6 +917,16 @@ export const de: typeof zhCN = {
       editKeywords: 'Weitere Hinweise auf Fragen',
       editKeywordsDesc:
         'Nur bei deaktivierter automatischer Erkennung. Ein Hinweis pro Zeile erzwingt den Fragemodus. Ansonsten wird anhand von „?“ und Fragewörtern entschieden.',
+      editPlanFormat: 'Format des Bearbeitungsplans',
+      editPlanFormatDesc:
+        'Das Modell bevorzugt dieses EditPlan-Format. Bei Parse-Fehlern wird das andere Format versucht.',
+      editPlanFormatXml: 'XML',
+      editPlanFormatJson: 'JSON',
+      editSystemPrompt: 'Systemprompt für Bearbeitungspläne',
+      editSystemPromptDesc:
+        'Überschreibt den EditPlan-Systemprompt aus Stilpaket / Standard. Leer = Benutzerdefiniert → Paket → Standard.',
+      editSystemPromptPlaceholder: 'Leer = Stilpaket oder Standard',
+      editSystemPromptReset: 'Auf Standard zurücksetzen',
     },
     selectionPolish: {
       title: 'Textauswahl überarbeiten',
@@ -1208,6 +1222,7 @@ export const de: typeof zhCN = {
       lastCheck: 'Letzte Prüfung',
       verifying: 'Wird geprüft…',
       notVerified: 'Noch nicht geprüft',
+      verificationUnavailable: 'Die Prüfung wird für diesen Kanal nicht unterstützt',
       passed: 'Prüfung bestanden',
       failed: 'Prüfung fehlgeschlagen · {{reason}}',
       elapsed: 'Dauer: {{ms}} ms',
@@ -1286,6 +1301,7 @@ export const de: typeof zhCN = {
       pipelineIsolationNotice:
         'Die beiden Modi speichern ihre Zugangsdaten vollständig getrennt. Beim Wechsel bleiben die Daten des anderen Modus gespeichert und werden beim Zurückwechseln wieder verwendet.',
       presets: {
+        lmstudio: 'LM Studio',
         opencode: 'OpenCode Zen',
         tencentTokenHub: 'Tencent Cloud TokenHub',
         customChatCompletions: 'Benutzerdefiniert · Chat Completions',
@@ -1353,6 +1369,12 @@ export const de: typeof zhCN = {
       volcengineAccessKeyLabel: 'Access Token',
       volcengineApiKeyLabel: 'API-Schlüssel',
       volcengineResourceIdLabel: 'Ressourcen-ID',
+      volcengineServiceLabel: 'Dienst',
+      volcengineServiceStandard: 'Standarddienst',
+      volcengineAgentPlanNote:
+        'Verwende einen eigenen Agent-Plan-API-Schlüssel für Doubao Streaming-ASR. Standard-Resource-ID: volc.seedasr.sauc.duration. Standard- und Planschlüssel unterscheiden sich; verwende getrennte Kanäle.',
+      volcengineServiceInvalid:
+        'Ungültige Dienstkonfiguration. Wähle Standarddienst oder Agent Plan erneut.',
       volcengineAuthModeLabel: 'Anmeldemethode',
       volcengineAuthModeAppIdToken: 'Bisherige App-Anmeldung (APP ID + Access Token)',
       volcengineAuthModeApiKey: 'API-Schlüssel (neue Konsole)',
@@ -1392,6 +1414,7 @@ export const de: typeof zhCN = {
       fillDefault: 'Standardwert eintragen',
       readFailed: 'Lesen fehlgeschlagen',
       apiKeyLabel: 'API-Schlüssel',
+      apiKeyOptionalLabel: 'API-Schlüssel (optional)',
       baseUrlLabel: 'Basis-URL',
       modelLabel: 'Modell',
       customModelLabel: 'Eigenes Modell…',
@@ -1443,6 +1466,9 @@ export const de: typeof zhCN = {
         'Speichere die Felder oben und prüfe anschließend das gewählte Modell oder rufe Modelle ab. Falls das Abrufen fehlschlägt, bleibt die manuelle Eingabe möglich.',
       validate: 'Prüfen',
       validating: 'Wird geprüft…',
+      planModelsHint:
+        'Öffnen Sie die Tarifkonsole, kopieren Sie eine unterstützte Textmodell-ID und tragen Sie sie im Modellfeld ein.',
+      viewModels: 'Unterstützte Modelle ansehen',
       fetchModels: 'Modelle abrufen',
       loadingModels: 'Modelle werden abgerufen…',
       modelMissing: 'Kein Modell eingerichtet. Gib zuerst eine Modell-ID ein.',
@@ -2209,7 +2235,7 @@ export const de: typeof zhCN = {
     releaseNow: 'Jetzt entladen',
     keepLoadedLabel: 'Geladen halten für',
     keepLoadedDesc:
-      'Wie lange Qwen3-ASR nach der letzten Verwendung im Arbeitsspeicher bleibt, bevor es entladen wird.',
+      'Wie lange die aktuelle lokale ASR-Engine nach der nächsten Transkription geladen bleibt; „Nie entladen“ gilt bis zum manuellen Entladen oder Beenden.',
     keepImmediate: 'Sofort entladen',
     keep1min: '1 Minute nach letzter Verwendung',
     keep5min: '5 Minuten nach letzter Verwendung (Standard)',

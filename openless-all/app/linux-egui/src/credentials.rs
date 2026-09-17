@@ -349,6 +349,29 @@ impl CredentialStore for LinuxCredentialStore {
                 let _ = auth_mode_key;
                 None
             };
+            let service_key = CredentialKey::new(
+                CredentialNamespace::Asr,
+                Some(volcengine_provider.to_string()),
+                openless_core::credentials::VOLCENGINE_SERVICE_ACCOUNT,
+            )?;
+            #[cfg(target_os = "linux")]
+            let volcengine_service = if has(
+                CredentialNamespace::Asr,
+                volcengine_provider,
+                openless_core::credentials::VOLCENGINE_SERVICE_ACCOUNT,
+            ) {
+                tokio::task::spawn_blocking(move || read_secret(&service_key))
+                    .await
+                    .map_err(join_error)??
+                    .map(SecretValue::into_exposed)
+            } else {
+                None
+            };
+            #[cfg(not(target_os = "linux"))]
+            let volcengine_service = {
+                let _ = service_key;
+                None
+            };
             let configuration = openless_core::provider_rules::CredentialConfiguration {
                 asr_api_key: has(
                     CredentialNamespace::Asr,
@@ -365,6 +388,7 @@ impl CredentialStore for LinuxCredentialStore {
                     &active_asr_provider,
                     ASR_MODEL_ACCOUNT,
                 ),
+                volcengine_service,
                 volcengine_auth_mode,
                 volcengine_app_key: has(
                     CredentialNamespace::Asr,
@@ -419,12 +443,11 @@ impl CredentialStore for LinuxCredentialStore {
                 llm_endpoint: llm_endpoint
                     .as_deref()
                     .is_some_and(|value| !value.trim().is_empty()),
-                llm_endpoint_matches_default: llm_endpoint.as_deref().is_some_and(|endpoint| {
-                    openless_core::provider_rules::default_llm_endpoint(&llm_provider_type)
-                        .is_some_and(|default| {
-                            openless_core::provider_rules::equivalent_endpoint(endpoint, default)
-                        })
-                }),
+                llm_api_key_required: openless_core::provider_rules::api_key_required(
+                    openless_core::ProviderKind::Llm,
+                    &llm_provider_type,
+                    llm_endpoint.as_deref(),
+                ),
                 llm_model: has(
                     CredentialNamespace::Llm,
                     &active_llm_provider,

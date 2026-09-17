@@ -54,6 +54,52 @@ pub fn format_manifest_error(status: u16, url: &str) -> String {
     }
 }
 
+/// Unwrap a Tauri updater blob into minisign text.
+///
+/// `plugins.updater.pubkey` and `.sig` files store the minisign file as
+/// standard Base64. Desktop `tauri-plugin-updater` base64-decodes first, then
+/// calls `PublicKey::decode` / `Signature::decode`. Passing the wrapped pubkey
+/// to `PublicKey::from_base64` fails with "Invalid encoding in minisign data"
+/// because that API expects the 42-byte key line, not the 114-byte file.
+pub fn decode_tauri_minisign_text(encoded: &str) -> Result<String, String> {
+    let trimmed = encoded.trim();
+    if trimmed.is_empty() {
+        return Err("empty minisign blob".to_string());
+    }
+    if trimmed.starts_with("untrusted comment:") {
+        return Ok(trimmed.to_string());
+    }
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(trimmed)
+        .map_err(|e| format!("decode minisign blob: {e}"))?;
+    String::from_utf8(bytes).map_err(|e| format!("minisign blob is not UTF-8: {e}"))
+}
+
+pub fn parse_updater_public_key(pubkey_b64: &str) -> Result<minisign_verify::PublicKey, String> {
+    let text = decode_tauri_minisign_text(pubkey_b64)?;
+    minisign_verify::PublicKey::decode(&text).map_err(|e| format!("parse updater pubkey: {e}"))
+}
+
+pub fn parse_updater_signature(signature: &str) -> Result<minisign_verify::Signature, String> {
+    let text = decode_tauri_minisign_text(signature)?;
+    minisign_verify::Signature::decode(&text).map_err(|e| format!("decode signature: {e}"))
+}
+
+/// Verify APK bytes against a Tauri updater signature (prehashed, same as desktop).
+pub fn verify_updater_signature(
+    data: &[u8],
+    signature: &str,
+    pubkey_b64: &str,
+) -> Result<(), String> {
+    let public_key = parse_updater_public_key(pubkey_b64)?;
+    let signature = parse_updater_signature(signature)?;
+    public_key
+        .verify(data, &signature, true)
+        .map_err(|e| format!("signature verify failed: {e}"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,5 +197,49 @@ mod tests {
             .and_then(|v| v.as_str())
             .expect("plugins.updater.pubkey in tauri.conf.json");
         assert_eq!(conf_pubkey, UPDATER_PUBKEY_B64);
+    }
+
+    #[test]
+    fn updater_pubkey_decodes_to_minisign_file() {
+        let text = decode_tauri_minisign_text(UPDATER_PUBKEY_B64).expect("decode pubkey");
+        assert!(
+            text.starts_with("untrusted comment: minisign public key:"),
+            "decoded={text:?}"
+        );
+        let key_line = text.lines().nth(1).expect("minisign pubkey has a key line");
+        assert!(
+            key_line.starts_with("RW"),
+            "key line should be the minisign RW blob, got {key_line}"
+        );
+    }
+
+    #[test]
+    fn wrapped_updater_pubkey_is_not_a_raw_42_byte_key() {
+        let err = minisign_verify::PublicKey::from_base64(UPDATER_PUBKEY_B64)
+            .expect_err("Tauri-wrapped pubkey must not parse as a raw 42-byte key");
+        assert!(
+            err.to_string().contains("Invalid encoding"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn updater_pubkey_parses_after_tauri_unwrap() {
+        parse_updater_public_key(UPDATER_PUBKEY_B64)
+            .expect("Tauri-wrapped pubkey must parse after unwrap");
+    }
+
+    #[test]
+    fn decode_tauri_minisign_text_passthrough_raw_file() {
+        let raw = "untrusted comment: minisign public key: ABC\nRWABC";
+        assert_eq!(decode_tauri_minisign_text(&format!("{raw}\n")).unwrap(), raw);
+        assert_eq!(decode_tauri_minisign_text(raw).unwrap(), raw);
+    }
+
+    #[test]
+    fn decode_tauri_minisign_text_rejects_garbage() {
+        assert!(decode_tauri_minisign_text("%%%not-base64%%%").is_err());
+        assert!(decode_tauri_minisign_text("").is_err());
+        assert!(decode_tauri_minisign_text("   ").is_err());
     }
 }

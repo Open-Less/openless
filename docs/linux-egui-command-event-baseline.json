@@ -63,6 +63,7 @@
     "foundry_local_asr_release",
     "foundry_local_asr_reveal_model_dir",
     "foundry_local_asr_set_language_hint",
+    "foundry_local_asr_set_keep_loaded_secs",
     "foundry_local_asr_set_model",
     "foundry_local_asr_set_runtime_source",
     "foundry_local_asr_status",

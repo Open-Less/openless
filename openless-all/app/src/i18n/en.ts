@@ -698,6 +698,10 @@ export const en: typeof zhCN = {
         'For ASR text after dictation; write spoken-language cleanup, ASR typo fixes and term restoration rules here.',
       selectionPromptFallback:
         'No written polish prompt configured yet; a safe default will be used.',
+      voiceEditPromptTitle: 'Selection voice edit prompt (EditPlan)',
+      voiceEditPromptHint:
+        'Used only by selection-voice Edit to generate an EditPlan. Leave empty to fall back to settings custom prompt or the built-in default.',
+      voiceEditPromptPlaceholder: 'Empty = use settings custom or built-in default',
       selectionActivated: 'Set "{{name}}" for selection polish.',
       selectionActivateFailed: 'Failed to switch selection polish style: {{err}}',
       selectionChars: '{{count}} chars',
@@ -894,6 +898,16 @@ export const en: typeof zhCN = {
       editKeywords: 'Extra question cues',
       editKeywordsDesc:
         'Only when auto-classify is off; one cue per line forces Ask; otherwise use ? / question-word heuristics.',
+      editPlanFormat: 'Edit plan format',
+      editPlanFormatDesc:
+        'Prefer this EditPlan format from the model; if parsing fails, try the other format.',
+      editPlanFormatXml: 'XML',
+      editPlanFormatJson: 'JSON',
+      editSystemPrompt: 'Edit plan system prompt',
+      editSystemPromptDesc:
+        'Overrides the style-pack / built-in EditPlan system prompt. Leave empty to fall back: custom → pack → built-in.',
+      editSystemPromptPlaceholder: 'Empty = use style pack or built-in default',
+      editSystemPromptReset: 'Reset to default',
     },
     selectionPolish: {
       title: 'Selection Polish',
@@ -1179,6 +1193,7 @@ export const en: typeof zhCN = {
       lastCheck: 'Last check',
       verifying: 'Checking…',
       notVerified: 'Not checked yet',
+      verificationUnavailable: 'Verification is not supported for this channel',
       passed: 'Check passed',
       failed: 'Check failed · {{reason}}',
       elapsed: 'Took {{ms}} ms',
@@ -1270,6 +1285,7 @@ export const en: typeof zhCN = {
         stepfun: 'StepFun',
         opencode: 'OpenCode Zen',
         tencentTokenHub: 'Tencent Cloud TokenHub',
+        lmstudio: 'LM Studio',
         customChatCompletions: 'Custom · Chat Completions',
         customResponses: 'Custom · Responses',
         customMessages: 'Custom · Messages',
@@ -1320,6 +1336,12 @@ export const en: typeof zhCN = {
       volcengineAccessKeyLabel: 'Access Token',
       volcengineApiKeyLabel: 'API Key',
       volcengineResourceIdLabel: 'Resource ID',
+      volcengineServiceLabel: 'Service',
+      volcengineServiceStandard: 'Standard service',
+      volcengineAgentPlanNote:
+        'Use a dedicated Agent Plan API key for Doubao streaming ASR. Default Resource ID: volc.seedasr.sauc.duration. Standard and plan keys differ; use separate channels for each service.',
+      volcengineServiceInvalid:
+        'Invalid service configuration. Select Standard service or Agent Plan again.',
       volcengineAuthModeLabel: 'Auth mode',
       volcengineAuthModeAppIdToken: 'Legacy app (APP ID + Access Token)',
       volcengineAuthModeApiKey: 'API Key (new console)',
@@ -1357,6 +1379,7 @@ export const en: typeof zhCN = {
       fillDefault: 'Fill default value',
       readFailed: 'Read failed',
       apiKeyLabel: 'API Key',
+      apiKeyOptionalLabel: 'API Key (optional)',
       baseUrlLabel: 'Base URL',
       modelLabel: 'Model',
       customModelLabel: 'Custom model\u2026',
@@ -1413,6 +1436,9 @@ export const en: typeof zhCN = {
         'Save the fields above, then validate the selected model or fetch models. Manual model input remains available if fetching fails.',
       validate: 'Validate',
       validating: 'Validating…',
+      planModelsHint:
+        'Open the plan console, copy a supported text model ID, and enter it in the model field.',
+      viewModels: 'View supported models',
       fetchModels: 'Fetch models',
       loadingModels: 'Fetching models…',
       modelMissing: 'No model is configured. Please enter a model ID first.',
@@ -2141,7 +2167,8 @@ export const en: typeof zhCN = {
     loadNow: 'Load now',
     releaseNow: 'Release now',
     keepLoadedLabel: 'Keep loaded for',
-    keepLoadedDesc: 'How long Qwen3-ASR stays in memory after the last use, before being freed.',
+    keepLoadedDesc:
+      'How long the current local ASR engine stays loaded after the next transcription; Never release keeps it loaded until manual release or exit.',
     keepImmediate: 'Release immediately',
     keep1min: '1 minute after last use',
     keep5min: '5 minutes after last use (default)',

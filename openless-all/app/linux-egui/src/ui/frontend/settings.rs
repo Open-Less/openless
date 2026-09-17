@@ -845,8 +845,14 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     ));
                 },
             );
-            // 只有服务在跑时才有配对码/网址/证书指纹可展示。
-            if vm.remote_running {
+            // 连接细节（配对码 / 网址 / 证书指纹）只在服务真的在监听、且地址未过期时
+            // 展示：过期地址可能指向别的主机，展示它等于诱导用户在错误地址上配对。
+            let cert_state = remote_cert_fingerprint_state(
+                vm.remote_running,
+                vm.remote_urls_stale,
+                vm.remote_cert_fingerprint.as_deref(),
+            );
+            if vm.remote_running && !vm.remote_urls_stale {
                 if !vm.remote_pin.is_empty() {
                     text_row(
                         ui,
@@ -863,7 +869,7 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                         &vm.remote_urls.join(" · "),
                     );
                 }
-                if let Some(fingerprint) = vm.remote_cert_fingerprint.clone() {
+                if matches!(cert_state, RemoteCertFingerprintState::Available) {
                     action_row(
                         ui,
                         tr_l10n(lang, "settings.remote_input.cert_fingerprint_label"),
@@ -873,14 +879,52 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                         actions,
                     );
                     ui.label(
-                        egui::RichText::new(fingerprint)
+                        egui::RichText::new(vm.remote_cert_fingerprint.clone().unwrap_or_default())
                             .size(10.5)
                             .color(theme::INK_4),
+                    );
+                } else {
+                    // 拿不到可核验的完整指纹时必须显式告警：静默省略会让人以为
+                    // 「不用核对证书也能连」。
+                    ui.colored_label(
+                        theme::WARN,
+                        tr_l10n(lang, "settings.remote_input.cert_fingerprint_unavailable"),
                     );
                 }
             }
         },
     );
+}
+
+/// 证书指纹的展示决定（对齐 Tauri `RemoteInputSection`）：服务未监听或地址已过期
+/// 时整块连接细节都不展示；服务在监听但没有可核验的完整指纹时必须显式告警。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RemoteCertFingerprintState {
+    /// 没有可展示的连接细节。
+    Hidden,
+    /// 在监听但拿不到完整指纹 → 必须显式告警。
+    Unavailable,
+    /// 有完整指纹 → 展示并可复制。
+    Available,
+}
+
+fn remote_cert_fingerprint_state(
+    running: bool,
+    urls_stale: bool,
+    fingerprint: Option<&str>,
+) -> RemoteCertFingerprintState {
+    if !running || urls_stale {
+        return RemoteCertFingerprintState::Hidden;
+    }
+    match fingerprint {
+        Some(value) if is_complete_sha256(value) => RemoteCertFingerprintState::Available,
+        _ => RemoteCertFingerprintState::Unavailable,
+    }
+}
+
+/// 完整 SHA-256 指纹 = 64 个十六进制字符；截断/非十六进制的值不能当作可核验指纹。
+fn is_complete_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
@@ -2992,5 +3036,36 @@ mod tests {
             style_pack_pick_action(Some(2), 3),
             FrontendAction::StyleHotkeyRepack(2, 3)
         ));
+    }
+
+    #[test]
+    fn remote_certificate_details_hide_when_stopped_or_stale_and_warn_without_a_full_fingerprint() {
+        let fingerprint = "ab".repeat(32);
+        assert_eq!(
+            remote_cert_fingerprint_state(true, false, Some(&fingerprint)),
+            RemoteCertFingerprintState::Available
+        );
+        // 服务没在跑 / 地址已过期 → 配对码与旧地址都不能展示。
+        assert_eq!(
+            remote_cert_fingerprint_state(false, false, Some(&fingerprint)),
+            RemoteCertFingerprintState::Hidden
+        );
+        assert_eq!(
+            remote_cert_fingerprint_state(true, true, Some(&fingerprint)),
+            RemoteCertFingerprintState::Hidden
+        );
+        // 在监听但指纹缺失 / 被截断 / 不是十六进制 → 必须走「不可用」告警。
+        assert_eq!(
+            remote_cert_fingerprint_state(true, false, None),
+            RemoteCertFingerprintState::Unavailable
+        );
+        assert_eq!(
+            remote_cert_fingerprint_state(true, false, Some("ab")),
+            RemoteCertFingerprintState::Unavailable
+        );
+        assert_eq!(
+            remote_cert_fingerprint_state(true, false, Some(&"zz".repeat(32))),
+            RemoteCertFingerprintState::Unavailable
+        );
     }
 }

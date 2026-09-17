@@ -118,6 +118,9 @@ pub struct StylePack {
     pub base_mode: PolishMode,
     /// 书面选区的独立 Prompt。旧风格包没有该字段时为空，由运行时回退到安全默认值。
     pub selection_prompt: String,
+    /// 选区语音编辑 EditPlan system prompt。空串 = 回退到用户 prefs / 内置默认（issue #1076）。
+    #[serde(default)]
+    pub voice_edit_prompt: String,
     pub prompt: String,
     pub examples: Vec<StylePackExample>,
     pub tags: Vec<String>,
@@ -142,6 +145,8 @@ pub struct StylePack {
 pub enum StylePromptKind {
     DictationAsr,
     Selection,
+    /// 选区语音编辑 EditPlan；空字段由调用方回退到默认 prompt。
+    VoiceEdit,
 }
 
 pub fn style_pack_prompt(pack: &StylePack, kind: StylePromptKind) -> String {
@@ -154,6 +159,7 @@ pub fn style_pack_prompt(pack: &StylePack, kind: StylePromptKind) -> String {
                 pack.selection_prompt.clone()
             }
         }
+        StylePromptKind::VoiceEdit => pack.voice_edit_prompt.clone(),
     }
 }
 
@@ -247,6 +253,7 @@ impl Default for StylePack {
             kind: StylePackKind::Imported,
             base_mode: PolishMode::Light,
             selection_prompt: String::new(),
+            voice_edit_prompt: String::new(),
             prompt: String::new(),
             examples: Vec::new(),
             tags: Vec::new(),
@@ -320,6 +327,7 @@ pub fn builtin_style_pack_for_mode(mode: PolishMode) -> StylePack {
             kind: StylePackKind::Builtin,
             base_mode: PolishMode::Raw,
             selection_prompt: default_selection_polish_style_prompt_for_mode(PolishMode::Raw),
+            voice_edit_prompt: String::new(),
             prompt: default_raw_style_system_prompt(),
             examples: vec![StylePackExample {
                 title: Some("最小整理".into()),
@@ -346,6 +354,7 @@ pub fn builtin_style_pack_for_mode(mode: PolishMode) -> StylePack {
             kind: StylePackKind::Builtin,
             base_mode: PolishMode::Light,
             selection_prompt: default_selection_polish_style_prompt_for_mode(PolishMode::Light),
+            voice_edit_prompt: String::new(),
             prompt: default_light_style_system_prompt(),
             examples: vec![
                 StylePackExample {
@@ -384,6 +393,7 @@ pub fn builtin_style_pack_for_mode(mode: PolishMode) -> StylePack {
             kind: StylePackKind::Builtin,
             base_mode: PolishMode::Structured,
             selection_prompt: default_selection_polish_style_prompt_for_mode(PolishMode::Structured),
+            voice_edit_prompt: String::new(),
             prompt: default_structured_style_system_prompt(),
             examples: vec![
                 StylePackExample {
@@ -422,6 +432,7 @@ pub fn builtin_style_pack_for_mode(mode: PolishMode) -> StylePack {
             kind: StylePackKind::Builtin,
             base_mode: PolishMode::Formal,
             selection_prompt: default_selection_polish_style_prompt_for_mode(PolishMode::Formal),
+            voice_edit_prompt: String::new(),
             prompt: default_formal_style_system_prompt(),
             examples: vec![
                 StylePackExample {
