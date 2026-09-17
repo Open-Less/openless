@@ -6,9 +6,9 @@ name: Release Linux egui
 # pipeline: release-tauri.yml calls it through workflow_call for a v*-egui tag,
 # in the same run as the three macOS/Windows legs, and passes release_tag — the
 # version string here is derived from that input, never from a locally invented
-# tag. Linux artifacts carry an explicit egui marker
-# (OpenLess-Linux-egui-<ver>-<arch>.deb/.rpm, SHA256SUMS-egui). It can also be
-# dispatched standalone (blank release_tag = Actions artifacts only).
+# tag. Linux artifacts are named OpenLess-Linux-egui-<ver>-<arch>.deb/.rpm and
+# carry the packaging script's own SHA256SUMS. It can also be dispatched
+# standalone (blank release_tag = Actions artifacts only).
 on:
   workflow_dispatch:
     inputs:
@@ -44,6 +44,10 @@ jobs:
     # "spa_video_info_raw has no field named flags" 就是这个）。
     # 这条工作流以前从没跑过，所以从没拿到 ci.yml 早就打上的这个修正；
     # 一旦冷缓存重编 libspa 就会在编译阶段直接挂掉（实测 2026-09-16 run 35120587777）。
+    #
+    # ⚠ 分发基线（用户已确认，不要改回 22.04）：产出的 deb/rpm 需要 glibc ≥ 2.39，
+    #   支持范围是 Ubuntu 24.04+ 一类的新发行版；Ubuntu 22.04 / Debian 12 不在
+    #   支持范围内。要覆盖它们必须在依赖层解决 libspa/PipeWire 版本，而不是换 runner。
     runs-on: ubuntu-24.04
     env:
       RELEASE_TAG: ${{ inputs.release_tag }}
@@ -198,17 +202,17 @@ jobs:
           test "$(find "$OUTPUT" -maxdepth 1 -name '*.deb' | wc -l)" -eq 1
           test "$(find "$OUTPUT" -maxdepth 1 -name '*.rpm' | wc -l)" -eq 1
           test "$(find "$OUTPUT" -maxdepth 1 -name '*.AppImage' | wc -l)" -eq 0
-          # 文件名带 egui 标识：同一次发布里四个平台的产物会进同一个聚合 zip，
-          # 不带标识的 SHA256SUMS 会与其它平台/聚合层那份混淆。
-          ( cd "$OUTPUT" && sha256sum ./*.deb ./*.rpm > SHA256SUMS-egui )
-          test "$(wc -l < "$OUTPUT/SHA256SUMS-egui")" -eq 2
-          cat "$OUTPUT/SHA256SUMS-egui"
+          # 保持打包脚本/本地流程一致的命名（不改名）：聚合 zip 只装 Linux 产物，
+          # 不会与其它平台那份撞名。
+          ( cd "$OUTPUT" && sha256sum ./*.deb ./*.rpm > SHA256SUMS )
+          test "$(wc -l < "$OUTPUT/SHA256SUMS")" -eq 2
+          cat "$OUTPUT/SHA256SUMS"
 
       - name: Verify Linux release checksums
         working-directory: openless-all/app
         run: |
-          test -s target/linux-egui-packages/SHA256SUMS-egui
-          ( cd target/linux-egui-packages && sha256sum -c SHA256SUMS-egui >/dev/null )
+          test -s target/linux-egui-packages/SHA256SUMS
+          ( cd target/linux-egui-packages && sha256sum -c SHA256SUMS >/dev/null )
 
       - name: Upload Linux egui workflow artifacts
         uses: actions/upload-artifact@v4

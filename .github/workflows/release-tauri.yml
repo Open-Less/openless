@@ -7,8 +7,9 @@ name: Release cross-platform (Tauri + Linux egui)
 # tag 约定（当前）：v<version>-egui，例如 v2.0.0-Beta.1-egui。
 #   → macOS arm64 .dmg + macOS x64 .dmg + Windows x64 .msi/.exe + Linux deb/rpm
 #     （Linux 走 release-linux-egui.yml，经 workflow_call 调用，tag 由本层传入）
-#   → 末尾的 bundle-all-artifacts 把它们 + SHA256SUMS 打成一个
-#     OpenLess-<tag>-all-artifacts.zip 挂到同一个 release。
+#   → 末尾的 bundle-all-artifacts 把 **Linux 平台的各个产物**（deb + rpm + 打包脚本
+#     自带的 SHA256SUMS）打成 OpenLess-<tag>-all-artifacts.zip 挂到同一个 release；
+#     macOS/Windows 的 dmg/msi/exe 各自作为独立 release 资产，不进这个 zip。
 #   → 后缀是「本次发布同时覆盖 Linux egui」的标记，不是平台分发开关；
 #     Linux 产物名自带 egui 标识（OpenLess-Linux-egui-<ver>-<arch>.deb/.rpm），
 #     与桌面包区分。
@@ -568,16 +569,17 @@ jobs:
       release_tag: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
       attach_release: false
 
-  # ── 把本次发布的四个平台产物打成一个 zip 并统一挂 release ──
-  # needs 覆盖四平台（build 的 3 个 matrix 腿 + Linux egui），聚合两边的 artifact：
-  # dmg/msi/exe 与签名、上传组件 manifest，加 Linux deb/rpm。保留各产物目录里自带
-  # 的校验和文件，并在 zip 根部附一份覆盖全部文件的 SHA256SUMS。
-  # 它同时也是 Linux 资产的 release 写入点（见上面 egui job 的 attach_release: false）。
-  # tag 推送时挂到同一个 release（名字带 tag，例如
-  # OpenLess-v2.0.0-Beta.1-egui-all-artifacts.zip）；dispatch 时只作为 Actions
-  # artifact，方便离线核对产物清单。
+  # ── 把 Linux 平台的全部产物打成一个 zip，并统一挂 release ──
+  # "all-artifacts" 指 **Linux 平台自己的各个产物文件**（deb + rpm + 它自带的校验和
+  # 文件），不是全平台：macOS/Windows 的 dmg/msi/exe 各自作为独立 release 资产由
+  # build job 上传，不进这个 zip。
+  # needs 保留 [build, release-linux-egui]：不是要等桌面包，而是要让这条 job 成为
+  # Linux 资产的唯一 release 写入点（egui job 传 attach_release: false，两边并发时
+  # 不能抢建同一个 release）。
+  # zip 名带 tag，例如 OpenLess-v2.0.0-Beta.1-egui-all-artifacts.zip；dispatch 时
+  # 只作为 Actions artifact。
   bundle-all-artifacts:
-    name: Bundle every artifact (zip)
+    name: Bundle Linux artifacts (zip)
     needs: [build, release-linux-egui]
     if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
@@ -585,43 +587,44 @@ jobs:
       contents: write
     env:
       # 与 build job 同一套渠道判定：beta release 必须保持 prerelease=true，
-      # 否则这个只挂 zip 的 job 会把它「升格」成正式版并推送给所有用户。
+      # 否则这个只挂 Linux 资产的 job 会把它「升格」成正式版并推送给所有用户。
       OPENLESS_RELEASE_CHANNEL: ${{ (endsWith(github.ref_name, '-beta-tauri') || endsWith(github.ref_name, '-beta-egui') || contains(github.ref_name, '-Beta.')) && 'beta' || 'stable' }}
       # dispatch 不是 tag 时 github.ref_name 是分支名（含 `/`，不能进文件名）；
       # tag 推送时 zip 名自带对应后缀，例如 OpenLess-v2.0.0-Beta.1-egui-all-artifacts.zip。
       BUNDLE_ZIP: OpenLess-${{ github.ref_type == 'tag' && github.ref_name || format('run-{0}', github.run_number) }}-all-artifacts.zip
     steps:
-      - name: Download every artifact of this run
+      - name: Download the Linux egui artifact
         uses: actions/download-artifact@v4
         with:
-          # merge-multiple 保持默认（false）：每个 artifact 落在以自己名字命名的
-          # 子目录里，既不会互相覆盖（各平台都有 latest-*.json / SHA256SUMS），
-          # 也能在 zip 里看出文件属于哪个产物。
+          # 只要 Linux 那个 artifact，下来就是 deb/rpm/SHA256SUMS 三个文件平铺在 bundle/。
+          # egui job 失败时这里会报 "no artifacts found"→ 整条 job 失败，这是想要的：
+          # Linux 平台是这条 job 存在的理由，不能静默产出一个空壳 zip。
+          name: openless-linux-egui-x86_64
           path: bundle
 
-      - name: Inventory and global checksums
+      - name: Inventory and verify the Linux checksum file
         shell: bash
         run: |
           set -euo pipefail
           test -d bundle
           find bundle -type f | sort
-          test -n "$(find bundle -type f -print -quit)"
-          # 全局校验和（相对路径，解压到哪都能校验）；各平台自带的校验和文件原样
-          # 保留，也一并进这份全局清单，只排除本步骤自己写的根级那份。
-          ( cd bundle && find . -type f ! -path './SHA256SUMS' -print0 | sort -z | xargs -0 sha256sum ) > bundle/SHA256SUMS
-          # 立刻回验：SHA256SUMS 里是相对路径，在 bundle 目录里就能整套校验。
+          # 只装 Linux 产物，不再造一层汇总校验和：打包脚本自带的 SHA256SUMS 就是权威。
+          test -s bundle/SHA256SUMS
+          test "$(find bundle -maxdepth 1 -name '*.deb' | wc -l)" -eq 1
+          test "$(find bundle -maxdepth 1 -name '*.rpm' | wc -l)" -eq 1
           ( cd bundle && sha256sum -c SHA256SUMS >/dev/null )
-          wc -l < bundle/SHA256SUMS
 
-      - name: Zip every artifact
+      - name: Zip the Linux artifacts
         shell: bash
         run: |
           set -euo pipefail
           command -v zip >/dev/null || sudo apt-get install -y zip
           command -v unzip >/dev/null || sudo apt-get install -y unzip
-          ( cd bundle && zip -r -q "../$BUNDLE_ZIP" . )
+          # 直接打 bundle 里的文件（不带子目录前缀），zip 里就是原始文件名：
+          # OpenLess-Linux-egui-<ver>-x86_64.deb / .rpm / SHA256SUMS
+          ( cd bundle && zip -q "../$BUNDLE_ZIP" ./*.deb ./*.rpm ./*SHA256SUMS )
           test -s "$BUNDLE_ZIP"
-          unzip -l "$BUNDLE_ZIP" | tail -3
+          unzip -l "$BUNDLE_ZIP" | tail -8
 
       - name: Upload the bundle as a workflow artifact
         uses: actions/upload-artifact@v4
@@ -645,19 +648,22 @@ jobs:
           # zip 由上一个步骤硬门禁过（test -s），所以这里 unmatched 只能是真出错。
           fail_on_unmatched_files: true
 
-      # Linux deb/rpm 由聚合层代传：egui job 与 Tauri 三层并发，两边抢建同一个
+      # Linux deb/rpm 由这条 job 代传：egui job 与 Tauri 三层并发，两边抢建同一个
       # release 会有竞态，所以 egui job 只上传 Actions artifact（attach_release:
-      # false），由这条最后一个 job 统一挂上去。
+      # false），由这里统一挂上去（zip 之外也保留裸 deb/rpm，方便直接下载）。
       - name: Attach the Linux packages to the release
         if: >-
           startsWith(github.ref, 'refs/tags/v')
-          && hashFiles('bundle/openless-linux-egui-x86_64/*') != ''
+          && hashFiles('bundle/*.deb') != ''
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           draft: false
           prerelease: ${{ env.OPENLESS_RELEASE_CHANNEL == 'beta' }}
-          files: bundle/openless-linux-egui-x86_64/*
+          files: |
+            bundle/*.deb
+            bundle/*.rpm
+            bundle/SHA256SUMS
           fail_on_unmatched_files: true
 
   # ── 正式版发布后，自动更新 Homebrew cask ──
