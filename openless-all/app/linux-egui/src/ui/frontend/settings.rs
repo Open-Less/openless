@@ -1929,8 +1929,19 @@ fn services(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                             );
                         } else {
                             for (index, channel) in vm.channels.iter().enumerate() {
-                                channel_row(ui, channel, index, lang, actions);
+                                channel_row(
+                                    ui,
+                                    channel,
+                                    index,
+                                    &vm.channel_providers,
+                                    lang,
+                                    actions,
+                                );
                             }
+                        }
+                        if let Some(editor) = &vm.provider_editor {
+                            ui.add_space(8.0);
+                            provider_editor_panel(ui, editor, lang, actions);
                         }
                         if vm.channel_form_open {
                             ui.add_space(8.0);
@@ -2422,6 +2433,7 @@ fn channel_row(
     ui: &mut egui::Ui,
     channel: &super::view_model::SettingsChannel,
     index: usize,
+    providers: &[super::view_model::SettingsChannelProvider],
     lang: Lang,
     actions: &mut Vec<FrontendAction>,
 ) {
@@ -2472,6 +2484,64 @@ fn channel_row(
             );
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // 编辑入口：选中渠道后由宿主向 Core 读回该渠道的描述符与凭据形态。
+            if ui
+                .add(
+                    egui::Button::new(
+                        egui::RichText::new(tr_l10n(lang, "btn.edit")).size(11.0),
+                    )
+                    .fill(theme::SURFACE_2)
+                    .stroke(egui::Stroke::new(0.8, theme::LINE))
+                    .corner_radius(egui::CornerRadius::same(8))
+                    .min_size(egui::vec2(0.0, 24.0)),
+                )
+                .clicked()
+            {
+                actions.push(FrontendAction::SettingsChannelSelect(index));
+            }
+            for (label, delta) in [("↑", -1isize), ("↓", 1isize)] {
+                if ui
+                    .add(
+                        egui::Button::new(egui::RichText::new(label).size(11.0))
+                            .fill(theme::SURFACE_2)
+                            .stroke(egui::Stroke::new(0.8, theme::LINE))
+                            .corner_radius(egui::CornerRadius::same(8))
+                            .min_size(egui::vec2(22.0, 24.0)),
+                    )
+                    .clicked()
+                {
+                    actions.push(FrontendAction::SettingsChannelMove { index, delta });
+                }
+            }
+            // 渠道的 provider 类型就是 Core 的 `set_channel_provider_type`：
+            // 换类型等于换描述符，因此比编辑表单更早生效。
+            if !providers.is_empty() {
+                let selected = providers
+                    .iter()
+                    .position(|provider| provider.provider_type == channel.provider_type)
+                    .unwrap_or(0);
+                let mut picked = selected;
+                egui::ComboBox::from_id_salt(("settings-channel-provider", index))
+                    .selected_text(&channel.provider)
+                    .width(150.0)
+                    .show_ui(ui, |ui| {
+                        for (option_index, provider) in providers.iter().enumerate() {
+                            if ui
+                                .selectable_label(option_index == selected, &provider.label)
+                                .clicked()
+                            {
+                                picked = option_index;
+                                ui.close();
+                            }
+                        }
+                    });
+                if picked != selected {
+                    actions.push(FrontendAction::SettingsChannelProviderType {
+                        index,
+                        provider_type: providers[picked].provider_type.clone(),
+                    });
+                }
+            }
             if ui
                 .add(
                     egui::Button::new(

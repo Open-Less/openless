@@ -490,6 +490,56 @@ mod linux_app {
         Failed(String),
     }
 
+    /// Draft of the open provider editor. It is the single source of truth for
+    /// the editor fields: pages push their input back here as actions and the
+    /// mirror writes it out each frame, so re-reading the channel list never
+    /// clobbers what the user is typing.
+    struct ProviderEditorForm {
+        channel_id: String,
+        provider_type: String,
+        label: String,
+        auth: frontend::view_model::SettingsProviderAuth,
+        name: String,
+        endpoint: String,
+        model: String,
+        resource_id: String,
+        auth_mode: String,
+        // Write-only secret drafts: they start empty on every load and are
+        // cleared as soon as they have been handed to Core.
+        primary_secret: String,
+        secondary_secret: String,
+        models: Vec<String>,
+        models_loading: bool,
+    }
+
+    impl ProviderEditorForm {
+        fn from_editor(editor: &ProviderEditor, lang: Lang) -> Self {
+            Self {
+                channel_id: editor.channel.id.clone(),
+                provider_type: editor.descriptor.provider_type.as_str().to_string(),
+                label: localized_provider_label(
+                    lang,
+                    editor.kind,
+                    editor.descriptor.provider_type.as_str(),
+                ),
+                auth: settings_provider_auth(editor.descriptor.auth_requirement),
+                name: editor.name.clone(),
+                endpoint: editor.endpoint.clone(),
+                model: editor.model.clone(),
+                resource_id: editor.resource_id.clone(),
+                auth_mode: if editor.auth_mode.is_empty() {
+                    "app_id_token".to_string()
+                } else {
+                    editor.auth_mode.clone()
+                },
+                primary_secret: String::new(),
+                secondary_secret: String::new(),
+                models: Vec::new(),
+                models_loading: false,
+            }
+        }
+    }
+
     /// 后台唤醒间隔：任何窗口状态下都必须继续唤醒（最小化、被遮挡、托盘隐藏都
     /// 要能响应全局热键），所以只有一个常量 —— 写成函数是为了让「不可见时也不能
     /// 停」这条约束有测试守着，而不是散落在 update 里。
@@ -539,6 +589,8 @@ mod linux_app {
         providers: ProvidersState,
         selected_channel_id: Option<String>,
         provider_editor: ProviderEditorState,
+        /// Draft mirrored into the view model while the editor is open.
+        provider_editor_form: Option<ProviderEditorForm>,
         provider_models: Vec<String>,
         new_provider_type: String,
         new_channel_name: String,
@@ -661,6 +713,7 @@ mod linux_app {
                         providers: ProvidersState::Loading,
                         selected_channel_id: None,
                         provider_editor: ProviderEditorState::Idle,
+                        provider_editor_form: None,
                         provider_models: Vec::new(),
                         new_provider_type: String::new(),
                         new_channel_name: String::new(),
@@ -759,6 +812,7 @@ mod linux_app {
                     providers: ProvidersState::Loading,
                     selected_channel_id: None,
                     provider_editor: ProviderEditorState::Idle,
+                    provider_editor_form: None,
                     provider_models: Vec::new(),
                     new_provider_type: String::new(),
                     new_channel_name: String::new(),
@@ -1695,6 +1749,84 @@ mod linux_app {
             }
         }
 
+        /// Payload Core needs for the current draft. Returns `None` while no
+        /// channel editor is loaded, so a stale frame cannot rename or re-\n        /// credential the wrong channel.
+        fn editor_from_form(&self) -> Option<ProviderEditor> {
+            let form = self.provider_editor_form.as_ref()?;
+            let ProviderEditorState::Loaded(loaded) = &self.provider_editor else {
+                return None;
+            };
+            if loaded.channel.id != form.channel_id {
+                return None;
+            }
+            let mut editor = (**loaded).clone();
+            editor.name = form.name.clone();
+            editor.endpoint = form.endpoint.clone();
+            editor.model = form.model.clone();
+            editor.resource_id = form.resource_id.clone();
+            editor.auth_mode = form.auth_mode.clone();
+            editor.primary_secret = form.primary_secret.clone();
+            editor.secondary_secret = form.secondary_secret.clone();
+            Some(editor)
+        }
+
+        /// Open a channel's provider editor. The descriptor comes from Core's
+        /// provider rules, so the UI never invents a field shape; without one
+        /// the editor stays closed instead of guessing.
+        fn open_provider_editor(&mut self, index: usize) {
+            let Some(channel_id) = self
+                .settings_channels
+                .get(index)
+                .map(|channel| channel.id.clone())
+            else {
+                return;
+            };
+            let panel = match &self.providers {
+                ProvidersState::Loaded(panel) => panel.clone(),
+                _ => return,
+            };
+            let Some((channel, descriptor)) = provider_channel_descriptor(&panel, &channel_id) else {
+                return;
+            };
+            let kind = panel.kind;
+            self.selected_channel_id = Some(channel_id.clone());
+            self.provider_editor = ProviderEditorState::Loading { kind, channel_id };
+            self.provider_editor_form = None;
+            self.load_provider_editor(kind, channel, descriptor);
+        }
+
+        fn close_provider_editor(&mut self) {
+            self.provider_editor = ProviderEditorState::Idle;
+            self.provider_editor_form = None;
+            self.frontend_vm.provider_editor = None;
+        }
+
+        /// Core owns the model catalog; the host only forwards the request.
+        fn request_provider_models(&self, kind: openless_core::ChannelKind, channel_id: String) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let result = backend
+                    .services()
+                    .provider
+                    .list_models(openless_core::ProviderRequest {
+                        kind: provider_kind(kind),
+                        thinking_enabled: false,
+                        channel_id: Some(channel_id.clone()),
+                    })
+                    .await
+                    .map(|models| models.models)
+                    .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::ProviderModels {
+                    kind,
+                    channel_id,
+                    result,
+                });
+            });
+        }
+
         fn load_provider_editor(
             &self,
             kind: openless_core::ChannelKind,
@@ -2288,14 +2420,25 @@ mod linux_app {
                         self.providers = ProvidersState::Loaded(panel.clone());
                         self.provider_models.clear();
                         if let Some(channel_id) = selected {
-                            if let Some((channel, descriptor)) =
-                                provider_channel_descriptor(&panel, &channel_id)
-                            {
-                                self.provider_editor = ProviderEditorState::Loading {
-                                    kind: panel.kind,
-                                    channel_id,
-                                };
-                                self.load_provider_editor(panel.kind, channel, descriptor);
+                            // A refresh (enable toggle, save, validation) must not
+                            // throw away the editor draft the user is editing: only
+                            // a different channel re-reads the descriptor.
+                            let already_loaded = matches!(
+                                &self.provider_editor,
+                                ProviderEditorState::Loaded(editor)
+                                    if editor.channel.id == channel_id
+                            );
+                            if !already_loaded {
+                                if let Some((channel, descriptor)) =
+                                    provider_channel_descriptor(&panel, &channel_id)
+                                {
+                                    self.provider_editor = ProviderEditorState::Loading {
+                                        kind: panel.kind,
+                                        channel_id,
+                                    };
+                                    self.provider_editor_form = None;
+                                    self.load_provider_editor(panel.kind, channel, descriptor);
+                                }
                             }
                         } else {
                             self.provider_editor = ProviderEditorState::Idle;
@@ -2320,11 +2463,14 @@ mod linux_app {
                                 // Reads race with channel switching and mutation
                                 // refreshes. Only the still-selected channel may install
                                 // its editor, otherwise late credential data is ignored.
+                                self.provider_editor_form =
+                                    Some(ProviderEditorForm::from_editor(&editor, self.lang));
                                 self.provider_editor =
                                     ProviderEditorState::Loaded(Box::new(editor));
                             }
                             Err(error) => {
                                 self.provider_editor = ProviderEditorState::Failed(error.clone());
+                                self.provider_editor_form = None;
                                 self.status = error;
                             }
                         }
@@ -2344,9 +2490,19 @@ mod linux_app {
                                         "status.provider_models_loaded",
                                         &[&models.len()],
                                     );
+                                    if let Some(form) = self.provider_editor_form.as_mut() {
+                                        form.models = models.clone();
+                                        form.models_loading = false;
+                                    }
                                     self.provider_models = models;
                                 }
-                                Err(error) => self.status = error,
+                                Err(error) => {
+                                    if let Some(form) = self.provider_editor_form.as_mut() {
+                                        form.models.clear();
+                                        form.models_loading = false;
+                                    }
+                                    self.status = error;
+                                }
                             }
                         }
                     }
@@ -2821,6 +2977,7 @@ mod linux_app {
                         self.settings_channel_kind,
                         &channel.provider_type,
                     ),
+                    provider_type: channel.provider_type.clone(),
                     model: channel.model.clone(),
                     is_active: index == active_channel,
                     enabled: channel.enabled,
@@ -2846,6 +3003,25 @@ mod linux_app {
                     },
                 })
                 .collect();
+
+            // Provider editor: mirrored from the host draft each frame. The page
+            // stays a pure renderer; Core still owns the credential schema.
+            vm.provider_editor = self.provider_editor_form.as_ref().map(|form| {
+                frontend::view_model::SettingsProviderEditor {
+                    channel_id: form.channel_id.clone(),
+                    provider: form.label.clone(),
+                    provider_type: form.provider_type.clone(),
+                    name: form.name.clone(),
+                    endpoint: form.endpoint.clone(),
+                    model: form.model.clone(),
+                    resource_id: form.resource_id.clone(),
+                    auth_mode: form.auth_mode.clone(),
+                    auth: form.auth,
+                    models: form.models.clone(),
+                    models_loading: form.models_loading,
+                    busy: matches!(self.provider_editor, ProviderEditorState::Loading { .. }),
+                }
+            });
 
             // History: wire from Core when backend is available.
             if let Some(backend) = backend {
@@ -4378,6 +4554,10 @@ mod linux_app {
                         };
                         if self.settings_channel_kind != kind {
                             self.settings_channel_kind = kind;
+                            // The editor belongs to one channel kind: switching the
+                            // AI-services tab must not carry it across.
+                            self.close_provider_editor();
+                            self.selected_channel_id = None;
                             self.load_settings_channels();
                             self.load_service_configured();
                         } else if self.settings_channels.is_empty() {
@@ -4472,6 +4652,130 @@ mod linux_app {
                     }
                     frontend::view_model::FrontendAction::StyleHotkeyRepack(index, pack_index) => {
                         self.apply_style_hotkey_repack(index, pack_index);
+                    }
+                    frontend::view_model::FrontendAction::SettingsChannelSelect(index) => {
+                        self.open_provider_editor(index);
+                    }
+                    frontend::view_model::FrontendAction::SettingsChannelMove { index, delta } => {
+                        let kind = self.settings_channel_kind;
+                        let mut ids: Vec<String> = self
+                            .settings_channels
+                            .iter()
+                            .map(|channel| channel.id.clone())
+                            .collect();
+                        let target = index as isize + delta;
+                        if target >= 0 && (target as usize) < ids.len() {
+                            ids.swap(index, target as usize);
+                            if let Some(backend) = self.backend() {
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    backend.reorder_channels(kind, ids).await?;
+                                    Ok(tr_l10n(lang, "status.channel_reordered").to_string())
+                                });
+                                self.load_settings_channels();
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::SettingsChannelProviderType {
+                        index,
+                        provider_type,
+                    } => {
+                        let kind = self.settings_channel_kind;
+                        let id = self
+                            .settings_channels
+                            .get(index)
+                            .map(|channel| channel.id.clone());
+                        if let (Some(backend), Some(id)) = (self.backend(), id) {
+                            let lang = self.lang;
+                            self.spawn(async move {
+                                backend
+                                    .set_channel_provider_type(kind, id, provider_type)
+                                    .await?;
+                                Ok(tr_l10n(lang, "status.provider_type_updated").to_string())
+                            });
+                            // The descriptor changed with the provider type: the
+                            // editor must re-read it instead of keeping old fields.
+                            self.close_provider_editor();
+                            self.selected_channel_id = None;
+                            self.load_settings_channels();
+                            self.load_providers(kind);
+                        }
+                    }
+                    frontend::view_model::FrontendAction::SettingsProviderField(field, value) => {
+                        if let Some(form) = self.provider_editor_form.as_mut() {
+                            match field {
+                                frontend::view_model::SettingsProviderField::Name => form.name = value,
+                                frontend::view_model::SettingsProviderField::Endpoint => {
+                                    form.endpoint = value
+                                }
+                                frontend::view_model::SettingsProviderField::Model => {
+                                    form.model = value
+                                }
+                                frontend::view_model::SettingsProviderField::ResourceId => {
+                                    form.resource_id = value
+                                }
+                                frontend::view_model::SettingsProviderField::AuthMode => {
+                                    form.auth_mode = value
+                                }
+                                frontend::view_model::SettingsProviderField::PrimarySecret => {
+                                    form.primary_secret = value
+                                }
+                                frontend::view_model::SettingsProviderField::SecondarySecret => {
+                                    form.secondary_secret = value
+                                }
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::SettingsProviderSave => {
+                        if let Some(editor) = self.editor_from_form() {
+                            if let Some(backend) = self.backend() {
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    save_provider_editor(backend, editor).await?;
+                                    Ok(tr_l10n(lang, "status.channel_saved").to_string())
+                                });
+                                // Secrets are write-only: drop the drafts once Core
+                                // has them so they are not kept in egui state.
+                                if let Some(form) = self.provider_editor_form.as_mut() {
+                                    form.primary_secret.clear();
+                                    form.secondary_secret.clear();
+                                }
+                                self.load_settings_channels();
+                                self.load_service_configured();
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::SettingsProviderClearSecrets => {
+                        if let Some(editor) = self.editor_from_form() {
+                            if let Some(backend) = self.backend() {
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    clear_provider_secrets(Arc::clone(&backend), &editor).await?;
+                                    Ok(tr_l10n(lang, "status.secret_cleared").to_string())
+                                });
+                                if let Some(form) = self.provider_editor_form.as_mut() {
+                                    form.primary_secret.clear();
+                                    form.secondary_secret.clear();
+                                }
+                                self.load_service_configured();
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::SettingsProviderModels => {
+                        let kind = self.settings_channel_kind;
+                        let channel_id = self
+                            .provider_editor_form
+                            .as_ref()
+                            .map(|form| form.channel_id.clone());
+                        if let (Some(form), Some(channel_id)) =
+                            (self.provider_editor_form.as_mut(), channel_id)
+                        {
+                            form.models_loading = true;
+                            self.request_provider_models(kind, channel_id);
+                        }
+                    }
+                    frontend::view_model::FrontendAction::SettingsProviderClose => {
+                        self.close_provider_editor();
                     }
                     frontend::view_model::FrontendAction::SettingsChannelToggle(index) => {
                         let kind = self.settings_channel_kind;
@@ -4865,6 +5169,32 @@ mod linux_app {
         }
     }
 
+    fn api_key_account(kind: openless_core::ChannelKind) -> &'static str {
+        match kind {
+            openless_core::ChannelKind::Asr => openless_core::credentials::ASR_API_KEY_ACCOUNT,
+            openless_core::ChannelKind::Llm => openless_core::credentials::LLM_API_KEY_ACCOUNT,
+        }
+    }
+
+    /// Core's `AuthRequirement` decides which inputs the editor renders. The
+    /// host maps it to a render hint and keeps validating through Core.
+    fn settings_provider_auth(
+        requirement: openless_core::AuthRequirement,
+    ) -> frontend::view_model::SettingsProviderAuth {
+        use frontend::view_model::SettingsProviderAuth as Ui;
+        use openless_core::AuthRequirement as Core;
+        match requirement {
+            Core::None => Ui::None,
+            Core::Volcengine => Ui::Volcengine,
+            Core::Xfyun => Ui::Xfyun,
+            Core::OAuth => Ui::OAuth,
+            Core::TencentCloud => Ui::Other,
+            Core::ApiKey | Core::EndpointModelOptionalApiKey | Core::ApiKeyUnlessCustomEndpoint => {
+                Ui::ApiKey
+            }
+        }
+    }
+
     fn provider_credential_key(
         kind: openless_core::ChannelKind,
         channel_id: &str,
@@ -4913,6 +5243,201 @@ mod linux_app {
             .read_credential(provider_credential_key(kind, channel_id, account)?)
             .await
             .map(|value| value.map(openless_core::SecretValue::into_exposed))
+    }
+
+    /// Write a non-secret value (endpoint/model/resource id/auth mode), or drop
+    /// it when the field was cleared: an empty string must not be stored as a
+    /// credential that then reads back as "configured".
+    async fn write_or_remove_provider_value(
+        backend: &openless_core::OpenLessBackend,
+        kind: openless_core::ChannelKind,
+        channel_id: &str,
+        account: &str,
+        value: &str,
+    ) -> Result<(), BackendError> {
+        let key = provider_credential_key(kind, channel_id, account)?;
+        if value.trim().is_empty() {
+            backend.remove_credential(key).await?;
+        } else {
+            backend
+                .set_credential(key, openless_core::SecretValue::new(value.trim()))
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Secrets are write-only: an empty input means "keep the stored key", not
+    /// "erase it" — erasing has its own explicit action.
+    async fn write_secret_if_entered(
+        backend: &openless_core::OpenLessBackend,
+        kind: openless_core::ChannelKind,
+        channel_id: &str,
+        account: &str,
+        value: &str,
+    ) -> Result<(), BackendError> {
+        let value = value.trim();
+        if value.is_empty() {
+            return Ok(());
+        }
+        backend
+            .set_credential(
+                provider_credential_key(kind, channel_id, account)?,
+                openless_core::SecretValue::new(value),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Persist the editor through Core: rename, then the credential schema that
+    /// matches the selected `ProviderDescriptor`. Account names are Core's wire
+    /// schema; which of them is required stays in Core, never in this form.
+    async fn save_provider_editor(
+        backend: Arc<openless_core::OpenLessBackend>,
+        editor: ProviderEditor,
+    ) -> Result<(), BackendError> {
+        let channel_id = editor.channel.id.as_str();
+        backend
+            .rename_channel(editor.kind, channel_id.to_string(), editor.name)
+            .await?;
+        match editor.descriptor.auth_requirement {
+            openless_core::AuthRequirement::None | openless_core::AuthRequirement::OAuth => {}
+            openless_core::AuthRequirement::Volcengine => {
+                write_or_remove_provider_value(
+                    &backend,
+                    editor.kind,
+                    channel_id,
+                    openless_core::credentials::VOLCENGINE_AUTH_MODE_ACCOUNT,
+                    &editor.auth_mode,
+                )
+                .await?;
+                write_or_remove_provider_value(
+                    &backend,
+                    editor.kind,
+                    channel_id,
+                    openless_core::credentials::VOLCENGINE_RESOURCE_ID_ACCOUNT,
+                    &editor.resource_id,
+                )
+                .await?;
+                write_or_remove_provider_value(
+                    &backend,
+                    editor.kind,
+                    channel_id,
+                    openless_core::credentials::VOLCENGINE_SERVICE_ACCOUNT,
+                    &editor.volcengine_service,
+                )
+                .await?;
+                write_or_remove_provider_value(
+                    &backend,
+                    editor.kind,
+                    channel_id,
+                    model_account(editor.kind),
+                    &editor.model,
+                )
+                .await?;
+                if editor.auth_mode == "api_key" {
+                    write_secret_if_entered(
+                        &backend,
+                        editor.kind,
+                        channel_id,
+                        openless_core::credentials::VOLCENGINE_API_KEY_ACCOUNT,
+                        &editor.primary_secret,
+                    )
+                    .await?;
+                } else {
+                    write_secret_if_entered(
+                        &backend,
+                        editor.kind,
+                        channel_id,
+                        openless_core::credentials::VOLCENGINE_APP_KEY_ACCOUNT,
+                        &editor.primary_secret,
+                    )
+                    .await?;
+                    write_secret_if_entered(
+                        &backend,
+                        editor.kind,
+                        channel_id,
+                        openless_core::credentials::VOLCENGINE_ACCESS_KEY_ACCOUNT,
+                        &editor.secondary_secret,
+                    )
+                    .await?;
+                }
+            }
+            openless_core::AuthRequirement::Xfyun => {
+                write_secret_if_entered(
+                    &backend,
+                    editor.kind,
+                    channel_id,
+                    openless_core::credentials::XFYUN_APP_ID_ACCOUNT,
+                    &editor.primary_secret,
+                )
+                .await?;
+                write_secret_if_entered(
+                    &backend,
+                    editor.kind,
+                    channel_id,
+                    openless_core::credentials::XFYUN_API_KEY_ACCOUNT,
+                    &editor.secondary_secret,
+                )
+                .await?;
+            }
+            _ => {
+                write_or_remove_provider_value(
+                    &backend,
+                    editor.kind,
+                    channel_id,
+                    endpoint_account(editor.kind),
+                    &editor.endpoint,
+                )
+                .await?;
+                write_or_remove_provider_value(
+                    &backend,
+                    editor.kind,
+                    channel_id,
+                    model_account(editor.kind),
+                    &editor.model,
+                )
+                .await?;
+                write_secret_if_entered(
+                    &backend,
+                    editor.kind,
+                    channel_id,
+                    api_key_account(editor.kind),
+                    &editor.primary_secret,
+                )
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Drop every credential of the selected descriptor shape for one channel.
+    async fn clear_provider_secrets(
+        backend: Arc<openless_core::OpenLessBackend>,
+        editor: &ProviderEditor,
+    ) -> Result<(), BackendError> {
+        let accounts: &[&str] = match editor.descriptor.auth_requirement {
+            openless_core::AuthRequirement::None | openless_core::AuthRequirement::OAuth => &[],
+            openless_core::AuthRequirement::Volcengine => &[
+                openless_core::credentials::VOLCENGINE_APP_KEY_ACCOUNT,
+                openless_core::credentials::VOLCENGINE_ACCESS_KEY_ACCOUNT,
+                openless_core::credentials::VOLCENGINE_API_KEY_ACCOUNT,
+            ],
+            openless_core::AuthRequirement::Xfyun => &[
+                openless_core::credentials::XFYUN_APP_ID_ACCOUNT,
+                openless_core::credentials::XFYUN_API_KEY_ACCOUNT,
+            ],
+            _ => &[api_key_account(editor.kind)],
+        };
+        for account in accounts {
+            backend
+                .remove_credential(provider_credential_key(
+                    editor.kind,
+                    &editor.channel.id,
+                    account,
+                )?)
+                .await?;
+        }
+        Ok(())
     }
 
     async fn load_provider_editor(

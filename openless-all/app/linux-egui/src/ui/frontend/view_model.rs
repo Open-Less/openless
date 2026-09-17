@@ -137,6 +137,22 @@ pub enum FrontendAction {
     SettingsChannelName(String),
     /// Create the channel described by the form.
     SettingsChannelCreate,
+    /// Select a channel and open its provider editor (index into `channels`).
+    SettingsChannelSelect(usize),
+    /// Move a channel up/down; Core's `reorder_channels` owns the order.
+    SettingsChannelMove { index: usize, delta: isize },
+    /// Switch a channel to another provider type (Core's `set_channel_provider_type`).
+    SettingsChannelProviderType { index: usize, provider_type: String },
+    /// Provider editor field edited.
+    SettingsProviderField(SettingsProviderField, String),
+    /// Save the editor: rename + endpoint/model + credentials through Core.
+    SettingsProviderSave,
+    /// Drop the channel's stored secrets (Core's `remove_credential`).
+    SettingsProviderClearSecrets,
+    /// Ask Core for the provider's model list (Core's `provider.list_models`).
+    SettingsProviderModels,
+    /// Close the provider editor.
+    SettingsProviderClose,
     /// 快捷键行的交互：展开/收起编辑菜单（`None` 收起全部）。
     ShortcutMenu(Option<ShortcutField>),
     /// 进入录制态（`None` = 取消录制）。
@@ -246,11 +262,65 @@ pub struct SettingsChannel {
     pub model: String,
     /// Provider descriptor label (already localized by the host).
     pub provider: String,
+    /// Provider type id, used to offer the provider switch without a round trip.
+    pub provider_type: String,
     /// True for the channel currently serving requests.
     pub is_active: bool,
     pub enabled: bool,
     /// Human-readable result of the last validation, if any.
     pub last_check: Option<String>,
+}
+
+/// A field of the provider editor. Secret fields are write-only: opening an
+/// editor never reads an existing key back into egui state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsProviderField {
+    Name,
+    Endpoint,
+    Model,
+    ResourceId,
+    AuthMode,
+    PrimarySecret,
+    SecondarySecret,
+}
+
+/// Which inputs the editor renders. Core's `AuthRequirement` decides this;
+/// the UI never judges whether the credentials are sufficient — ProviderService
+/// re-checks the descriptor before any protocol request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsProviderAuth {
+    /// No credentials (local models).
+    None,
+    /// OAuth is driven by Core; the editor only explains it.
+    OAuth,
+    /// Volcengine: APP ID + Access Token, or API Key + Resource ID.
+    Volcengine,
+    /// Xfyun: AppID + API Key.
+    Xfyun,
+    /// Another Core-defined shape (Tencent Cloud and friends).
+    Other,
+    /// Endpoint + Model + API Key.
+    ApiKey,
+}
+
+/// The open channel editor. Hydrated once per load from Core, then driven by
+/// the host-side draft so typing is never clobbered by a re-read.
+#[derive(Clone, Debug)]
+pub struct SettingsProviderEditor {
+    pub channel_id: String,
+    /// Localized provider label (read-only).
+    pub provider: String,
+    pub provider_type: String,
+    pub name: String,
+    pub endpoint: String,
+    pub model: String,
+    pub resource_id: String,
+    pub auth_mode: String,
+    pub auth: SettingsProviderAuth,
+    /// Result of `provider.list_models`.
+    pub models: Vec<String>,
+    pub models_loading: bool,
+    pub busy: bool,
 }
 
 /// Provider kinds available when creating a channel.
@@ -602,6 +672,8 @@ pub struct FrontendViewModel {
     pub channel_form_open: bool,
     pub channel_form_name: String,
     pub channel_provider_index: usize,
+    /// Open provider editor, or `None` when the channel list is the whole view.
+    pub provider_editor: Option<SettingsProviderEditor>,
     /// Rail search query in the settings modal.
     pub settings_query: String,
     /// 录制中的裸修饰键挂起状态（egui 没有修饰键 Key 事件，只能跨帧判断）。
@@ -699,6 +771,7 @@ impl Default for FrontendViewModel {
             channel_form_open: false,
             channel_form_name: String::new(),
             channel_provider_index: 0,
+            provider_editor: None,
             settings_query: String::new(),
             shortcut_pending_modifier: None,
             advanced_open: usize::MAX,
