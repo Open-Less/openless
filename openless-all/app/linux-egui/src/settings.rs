@@ -169,12 +169,10 @@ impl LinuxSettingsEffects for Fcitx5SettingsEffects {
             registration_summary(target)
         );
         apply_dictation_hotkey(&target.dictation)?;
-        // 输入法引擎会把某个键留给自己（fcitx5 拼音的 `QuickPhraseKey=semicolon`）。
-        // 引擎在 addon 事件过滤器之前就消费了它，于是把分号当热键主键的绑定永远
-        // 收不到按键（实测 trace 里能看到字母键，却没有 `;`）。先让引擎放开它。
-        if let Some(qa) = target.qa.as_ref() {
-            crate::fcitx5::release_engine_key_conflict(&qa.primary);
-        }
+        // 宿主只把热键注册给插件，**从不改动输入法自己的配置**。曾短暂加过
+        // 「检测到引擎占用主键就去清空拼音的快速短语触发键」，实测证明那是假象：
+        // fcitx 的 `Key::check` 要求修饰位精确相等，分号与 `Ctrl+Shift+;` 并不
+        // 冲突（见 tests/fcitx5_config_contract.rs 锁死的不变量）。
         apply_action_hotkey("SetQaHotkeyRaw", target.qa.as_ref())?;
         apply_action_hotkey(
             "SetSelectionPolishHotkeyRaw",
