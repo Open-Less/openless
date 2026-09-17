@@ -103,4 +103,32 @@ assert.ok(!/src-tauri/.test(packageScript), 'package script must not reference s
 assert.ok(!/src-tauri/.test(releaseWorkflow), 'release workflow must not reference src-tauri');
 assert.ok(!/\btauri\b|\bwry\b/.test(packageScript), 'package script must not invoke Tauri tooling');
 
+// 10. 发版编排里的 Linux 腿必须是**内联的普通 job**（用户要求：Actions 页面上与
+//     三个平台平级，不能是可复用工作流那种嵌套折叠显示），而且手动安装 zip 必须
+//     在同一个 job 里产出（不是单独的 bundle job）。
+const orchestratedWorkflow = await readFile(
+  join(repoRoot, '.github/workflows/release-tauri.yml'),
+  'utf8',
+);
+assert.ok(!orchestratedWorkflow.includes('uses: ./.github/workflows/release-linux-egui.yml'),
+  'Linux leg must be inlined so Actions does not nest it under a called workflow');
+assert.ok(orchestratedWorkflow.includes('name: Linux egui packages (deb + rpm + manual zip)'),
+  'orchestrator must carry the inlined Linux job');
+assert.ok(!/bundle-manual-install/.test(orchestratedWorkflow),
+  'the manual zip must be built inside the Linux job, not a separate bundle job');
+
+// 两份副本的关键门禁必须一致，否则内联版会悄悄漂移成弱门禁。
+for (const gate of [
+  'test "$(find "$OUTPUT" -maxdepth 1 -name \'*.deb\' | wc -l)" -eq 1',
+  'test "$(find "$OUTPUT" -maxdepth 1 -name \'*.rpm\' | wc -l)" -eq 1',
+  "! ldd target/release/openless-linux-egui | grep -q 'not found'",
+  'openless-all/app/scripts/linux-egui-manual-install.sh',
+  'bash -n manual/install.sh',
+  'usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so',
+  'dpkg-deb -x',
+]) {
+  assert.ok(orchestratedWorkflow.includes(gate),
+    `inlined Linux job must keep the same gate as the standalone entry: ${gate}`);
+}
+
 console.log('linux-egui-release-contract.test.mjs passed');

@@ -6,9 +6,11 @@ name: Release cross-platform (Tauri + Linux egui)
 #
 # tag 约定（当前）：v<version>-egui，例如 v2.0.0-Beta.1-egui。
 #   → macOS arm64 .dmg + macOS x64 .dmg + Windows x64 .msi/.exe + Linux deb/rpm
-#     （Linux 走 release-linux-egui.yml，经 workflow_call 调用，tag 由本层传入）
-#   → 末尾的 bundle-all-artifacts 把 **Linux 平台的各个产物**（deb + rpm + 打包脚本
-#     自带的 SHA256SUMS）打成 OpenLess-<tag>-all-artifacts.zip 挂到同一个 release；
+#     （Linux 步骤**内联**在本文件里、与三个平台平级并发：不用 workflow_call，
+#      否则 Actions 页面会把 Linux 渲染成嵌套折叠的一层）
+#   → linux-egui job 在**同一个 job 内**完成 deb/rpm 打包 + 手动安装 zip 组装：
+#     zip 装的是散装安装树（usr/...）+ install.sh + 针对散装文件重算的 SHA256SUMS，
+#     **不含 deb/rpm**（能装包的人直接下 release 里的 deb/rpm 资产，那两份仍保留）；
 #     macOS/Windows 的 dmg/msi/exe 各自作为独立 release 资产，不进这个 zip。
 #   → 后缀是「本次发布同时覆盖 Linux egui」的标记，不是平台分发开关；
 #     Linux 产物名自带 egui 标识（OpenLess-Linux-egui-<ver>-<arch>.deb/.rpm），
@@ -85,7 +87,7 @@ jobs:
       # 所以这条 job 的 if 里仍带上 -tauri。
       OPENLESS_RELEASE_CHANNEL: ${{ (endsWith(github.ref_name, '-beta-tauri') || endsWith(github.ref_name, '-beta-egui') || contains(github.ref_name, '-Beta.')) && 'beta' || 'stable' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           # MLX 子模块只在 macOS 发布构建需要。
           submodules: ${{ startsWith(matrix.platform, 'macos') && 'recursive' || 'false' }}
@@ -94,7 +96,7 @@ jobs:
         if: ${{ !startsWith(matrix.platform, 'macos') }}
         run: node openless-all/app/scripts/ci-disable-macos-qwen3.mjs
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -449,7 +451,7 @@ jobs:
 
       - name: Upload macOS artifacts
         if: startsWith(matrix.platform, 'macos')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openless-macos-${{ matrix.updater-arch }}
           path: |
@@ -458,7 +460,7 @@ jobs:
 
       - name: Upload macOS updater artifacts
         if: startsWith(matrix.platform, 'macos') && env.TAURI_SIGNING_PRIVATE_KEY != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openless-macos-${{ matrix.updater-arch }}-updater
           path: |
@@ -469,7 +471,7 @@ jobs:
 
       - name: Upload Windows artifacts
         if: matrix.platform == 'windows-latest'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openless-windows-x64
           path: |
@@ -479,7 +481,7 @@ jobs:
 
       - name: Upload Windows updater artifacts
         if: matrix.platform == 'windows-latest' && env.TAURI_SIGNING_PRIVATE_KEY != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openless-windows-x64-updater
           path: |
@@ -552,90 +554,218 @@ jobs:
             openless-all/app/src-tauri/target/release/bundle/latest-*.json
 
   # ── Linux 侧（egui 原生宿主）：四平台之一，与 Tauri 三层同 run **并发** ──
-  # 复用 release-linux-egui.yml（它声明了 workflow_call）：推 v*-egui 就出 deb/rpm，
-  # 版本串由本层传递的 tag 推导（不在被调用工作流里自己拼 tag）。
+  # 这里把原 release-linux-egui.yml 的步骤**内联**成与 build 平级的普通 job，而不是
+  # `uses:` 调用它：GitHub 会把可复用工作流渲染成嵌套可折叠的一层，Linux 在 Actions
+  # 页面上就不与三个平台平级（用户明确不接受这种显示）。
+  # release-linux-egui.yml 仍然保留，作为「只出 Linux 包」的单独手动入口；
+  # ⚠ 两份步骤必须保持一致：scripts/linux-egui-release-contract.test.mjs 同时断言
+  #   两份里的关键门禁字符串，改这里时必须同步改那边（漂移会让契约测试失败）。
+  #
+  # deb/rpm 打包与「手动安装」zip 组装都在**同一个 job** 里完成（用户要求合并）：
+  #   编译插件 → 编译宿主 → 打 deb/rpm → 校验包内容与 ELF 依赖 → 校验和 →
+  #   解出散装 payload → 加 install.sh + 重算 SHA256SUMS → 打 manual zip（不含 deb/rpm）
+  #   → 硬门禁 → 上传 artifact → 附到 release。
   # 故意不写 needs: build —— 四个平台要同时开始编，而不是 Linux 等 macOS/Windows 编完。
-  # 代价：两个 job 不能同时建同一个 release。所以传 attach_release: false，Linux 资产
-  # 交给末尾的 bundle-all-artifacts（它 needs 四者、权限也是 contents: write）写。
-  # 手动 dispatch 时四平台都构建（测试路径），release_tag 为空、对端不碰 release。
-  # 历史 -tauri tag 不进这里（保持旧行为：只跑 Tauri 三平台）。
-  release-linux-egui:
-    name: Linux egui packages (deb + rpm)
+  # 竞态：Linux 与 Tauri 三层会同时往同一个 release 写资产。softprops/action-gh-release
+  # 是 create-or-update，但**首次建立** release 时并发的 create 会撞 422 already_exists；
+  # 所以下面先幂等地确保 release 存在（gh release view || gh release create），
+  # 再让它只做 attach/update，避免同一秒抢建。
+  linux-egui:
+    name: Linux egui packages (deb + rpm + manual zip)
     if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || endsWith(github.ref, '-egui')) }}
-    permissions:
-      contents: write
-    uses: ./.github/workflows/release-linux-egui.yml
-    with:
-      release_tag: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
-      attach_release: false
-
-  # ── Linux 的「手动安装」包：散装文件打成一个 zip，给装不了 deb/rpm 的发行版 ──
-  # 语义：zip 里是**可直接手动安装的 payload** —— 从 deb 解出的安装树（usr/...）、
-  # install.sh、以及针对这些散装文件重算的 SHA256SUMS。**不含 deb/rpm**：能装包的
-  # 人直接取 release 下的 deb/rpm 资产（那两份仍然保留，不在这个 zip 里）。
-  # needs 保留 [build, release-linux-egui]：不是要等桌面包，而是要让这条 job 成为
-  # Linux 资产的唯一 release 写入点（egui job 传 attach_release: false，两边并发时
-  # 不能抢建同一个 release）。
-  # zip 名自解释：OpenLess-Linux-egui-<tag 或 run>-x86_64-manual.zip；dispatch 时只
-  # 作为 Actions artifact。
-  bundle-manual-install:
-    name: Bundle Linux manual install (zip)
-    needs: [build, release-linux-egui]
-    if: ${{ always() && !cancelled() }}
-    runs-on: ubuntu-latest
+    # 跟 ci.yml 的 linux-core-contract 用同一个镜像，理由也一样：cpal 的 PipeWire
+    # 后端需要 24.04 自带的 PipeWire/libspa ABI，22.04 的头文件编译不过 libspa 0.10.x。
+    # ⚠ 分发基线（用户已确认，不要改回 22.04）：产出的 deb/rpm 需要 glibc ≥ 2.39，
+    #   支持 Ubuntu 24.04+ 一类的新发行版；22.04 / Debian 12 不在范围内。
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     env:
+      # dispatch 时 ref_name 是分支名（含 `/`，不能进文件名）；tag 推送时传 tag，
+      # 且 tag 名自带 -egui 后缀，Linux 资产不会和桌面包撞名。
+      RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
       # 与 build job 同一套渠道判定：beta release 必须保持 prerelease=true，
-      # 否则这个只挂 Linux 资产的 job 会把它「升格」成正式版并推送给所有用户。
+      # 否则这个 job 会把它「升格」成正式版并推送给所有用户。
       OPENLESS_RELEASE_CHANNEL: ${{ (endsWith(github.ref_name, '-beta-tauri') || endsWith(github.ref_name, '-beta-egui') || contains(github.ref_name, '-Beta.')) && 'beta' || 'stable' }}
-      # dispatch 不是 tag 时 github.ref_name 是分支名（含 `/`，不能进文件名）；
-      # tag 推送时 zip 名自带 tag，例如 OpenLess-Linux-egui-v2.0.0-Beta.1-egui-x86_64-manual.zip。
       MANUAL_ZIP: OpenLess-Linux-egui-${{ github.ref_type == 'tag' && github.ref_name || format('run-{0}', github.run_number) }}-x86_64-manual.zip
     steps:
-      # 手动安装脚本随仓库版本走（不在 workflow 里内联），所以这条 job 需要 checkout：
-      # tag 推送时拿到的就是该 tag 的脚本，不会和 payload 的版本脱节。
-      - name: Checkout the manual install script
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          # 只要脚本本身，浅克隆足够；这里不构建任何东西。
-          fetch-depth: 1
+          submodules: false
 
-      - name: Download the Linux egui artifact
-        uses: actions/download-artifact@v4
-        with:
-          # 只要 Linux 那个 artifact，下来就是 deb/rpm/SHA256SUMS 三个文件平铺在 bundle/。
-          # egui job 失败时这里会报 "no artifacts found"→ 整条 job 失败，这是想要的：
-          # Linux 平台是这条 job 存在的理由，不能静默产出一个空壳 zip。
-          name: openless-linux-egui-x86_64
-          path: bundle
-
-      - name: Inventory and verify the Linux checksum file
+      # 这个 gate 必须排在编译之前：它只依赖 checkout 与 gh，几秒就能出结论。
+      # 历史教训：它原来在依赖安装 + 插件构建 + 全量测试之后，一个不合规的
+      # release_tag 会白烧掉 4.5 分钟 runner 才报错。
+      - name: Validate release target and UI gate
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test -d bundle
-          find bundle -type f | sort
-          # 只装 Linux 产物，不再造一层汇总校验和：打包脚本自带的 SHA256SUMS 就是权威。
-          test -s bundle/SHA256SUMS
-          test "$(find bundle -maxdepth 1 -name '*.deb' | wc -l)" -eq 1
-          test "$(find bundle -maxdepth 1 -name '*.rpm' | wc -l)" -eq 1
-          ( cd bundle && sha256sum -c SHA256SUMS >/dev/null )
+          if [ -z "${RELEASE_TAG:-}" ]; then
+            echo "release_tag is empty: only uploading Actions artifacts, no release is touched"
+            exit 0
+          fi
+          case "$RELEASE_TAG" in
+            v*) ;;
+            *)
+              echo "::error::release target '$RELEASE_TAG' must be an existing v* tag (e.g. v2.0.0-Beta.1-egui); leave it blank to only upload Actions artifacts"
+              exit 1
+              ;;
+          esac
+          if grep -q 'openless-linux-egui host stub' openless-all/app/linux-egui/src/main.rs; then
+            echo "::error::The egui UI stub cannot be uploaded as a release asset"
+            exit 1
+          fi
+          if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "::error::tag '$RELEASE_TAG' does not exist in $GITHUB_REPOSITORY; push the tag first, or leave release_tag blank"
+            exit 1
+          fi
+          echo "release target $RELEASE_TAG is a real tag in $GITHUB_REPOSITORY"
 
+      - name: Install native build and packaging dependencies
+        run: |
+          sudo add-apt-repository -y universe || true
+          sudo apt-get update
+          sudo apt-get install -y \
+            appstream \
+            build-essential \
+            cmake \
+            desktop-file-utils \
+            fcitx5-modules-dev \
+            libasound2-dev \
+            libdbus-1-dev \
+            libpipewire-0.3-dev \
+            libpulse-dev \
+            libfcitx5config-dev \
+            libfcitx5core-dev \
+            libfcitx5utils-dev \
+            libssl-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxkbcommon-dev \
+            pkg-config \
+            ripgrep \
+            rpm \
+            unzip \
+            zip \
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'openless-all/app -> target'
+
+      - name: Build fcitx5 plugin
+        working-directory: openless-all/scripts/linux-fcitx5-plugin
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+          test -s build/libopenless.so
+          test -s build/openless.conf
+
+      - name: Verify framework-independent Linux contract
+        working-directory: openless-all/app
+        shell: pwsh
+        run: |
+          cargo test --locked -p openless-core
+          cargo clippy --locked -p openless-core --all-targets
+          cargo test --locked -p openless-linux-egui --all-targets
+          node scripts/linux-egui-tauri-free-contract.test.mjs
+          node scripts/linux-egui-release-contract.test.mjs
+          ./scripts/check-core-deps.ps1
+          ./scripts/check-core-deps.ps1 openless-linux-egui
+          ./scripts/check-core-secret-surface.ps1
+          ./scripts/check-core-test-isolation.ps1
+          ./scripts/check-core-runtime-seam.ps1
+          ./scripts/check-linux-public-surface.ps1
+
+      - name: Validate Linux desktop metadata
+        run: |
+          desktop-file-validate openless-all/app/linux-egui/packaging/openless.desktop
+          appstreamcli validate --no-net openless-all/app/linux-egui/packaging/top.openless.OpenLess.metainfo.xml
+
+      - name: Build Linux egui host
+        working-directory: openless-all/app
+        run: cargo build --locked --release -p openless-linux-egui
+
+      - name: Resolve package version
+        id: version
+        shell: bash
+        working-directory: openless-all/app
+        run: |
+          if [ -n "${RELEASE_TAG:-}" ]; then
+            VERSION=${RELEASE_TAG#v}
+            # egui 产物统一用 -egui tag 后缀；-tauri 只保留为历史 tag 的兼容写法。
+            VERSION=${VERSION%-egui}
+            VERSION=${VERSION%-tauri}
+          else
+            VERSION=$(node -p "require('./package.json').version")
+          fi
+          test -n "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Package deb and rpm without Tauri
+        working-directory: openless-all/app
+        env:
+          OPENLESS_LINUX_VERSION: ${{ steps.version.outputs.version }}
+          OPENLESS_LINUX_ARCH: x86_64
+        run: bash scripts/package-linux-egui.sh
+
+      - name: Verify package contents and ELF dependencies
+        working-directory: openless-all/app
+        run: |
+          OUTPUT=target/linux-egui-packages
+          test "$(find "$OUTPUT" -maxdepth 1 -name '*.deb' | wc -l)" -eq 1
+          test "$(find "$OUTPUT" -maxdepth 1 -name '*.rpm' | wc -l)" -eq 1
+          test "$(find "$OUTPUT" -maxdepth 1 -name '*.AppImage' | wc -l)" -eq 0
+          ! ldd target/release/openless-linux-egui | grep -q 'not found'
+          ! ldd target/release/openless-linux-egui | grep -Eqi 'webkit|wry|tauri'
+          dpkg-deb -c "$OUTPUT"/*.deb | grep -q 'usr/bin/openless'
+          dpkg-deb -c "$OUTPUT"/*.deb | grep -q 'fcitx5/libopenless.so'
+          rpm -qlp "$OUTPUT"/*.rpm | grep -q '/usr/bin/openless'
+          rpm -qlp "$OUTPUT"/*.rpm | grep -q '/usr/lib64/fcitx5/libopenless.so'
+
+      - name: Generate release checksums
+        working-directory: openless-all/app
+        run: |
+          set -euo pipefail
+          OUTPUT=target/linux-egui-packages
+          test "$(find "$OUTPUT" -maxdepth 1 -name '*.deb' | wc -l)" -eq 1
+          test "$(find "$OUTPUT" -maxdepth 1 -name '*.rpm' | wc -l)" -eq 1
+          test "$(find "$OUTPUT" -maxdepth 1 -name '*.AppImage' | wc -l)" -eq 0
+          ( cd "$OUTPUT" && sha256sum ./*.deb ./*.rpm > SHA256SUMS )
+          test "$(wc -l < "$OUTPUT/SHA256SUMS")" -eq 2
+          cat "$OUTPUT/SHA256SUMS"
+
+      - name: Verify Linux release checksums
+        working-directory: openless-all/app
+        run: |
+          test -s target/linux-egui-packages/SHA256SUMS
+          ( cd target/linux-egui-packages && sha256sum -c SHA256SUMS >/dev/null )
+
+      # ── 手动安装包（散装文件）：给用不了 deb/rpm 的发行版 ──
+      # zip 根 = install.sh + SHA256SUMS + usr/... 安装树；**不含 deb/rpm**（能装包的
+      # 人直接下 release 里的 deb/rpm 资产，那两份仍然保留）。
       - name: Build the manual-install payload
         shell: bash
         run: |
           set -euo pipefail
-          deb=$(find bundle -maxdepth 1 -name '*.deb' | head -1)
+          OUT=openless-all/app/target/linux-egui-packages
+          deb=$(find "$OUT" -maxdepth 1 -name '*.deb' | head -1)
           test -n "$deb"
           mkdir -p manual
-          # 用 dpkg-deb -x 解开 deb，直接得到精确的安装树：不自己抄文件清单，
-          # payload 就不会和 deb 漂移（下一步还会逐项对比）。
+          # 用 dpkg-deb -x 解出精确安装树：不自己抄文件清单，payload 就不会和 deb 漂移
+          # （下一步会逐项对比）。
           dpkg-deb -x "$deb" manual
           cp openless-all/app/scripts/linux-egui-manual-install.sh manual/install.sh
           chmod +x manual/install.sh
           bash -n manual/install.sh
-          # 散装 payload 的校验和：覆盖 install.sh 与所有安装文件；不再复用针对
+          # 散装 payload 自己的校验和：覆盖 install.sh 与所有安装文件；不复用针对
           # deb/rpm 的那份 SHA256SUMS。
           ( cd manual && find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS )
           ( cd manual && sha256sum -c SHA256SUMS >/dev/null )
@@ -649,60 +779,64 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          command -v zip >/dev/null || sudo apt-get install -y zip
-          command -v unzip >/dev/null || sudo apt-get install -y unzip
-          # 从 manual/ 内部打包：zip 里是 install.sh、SHA256SUMS 与 usr/... 目录树，
+          # 从 manual/ 内部打包：zip 里就是 install.sh、SHA256SUMS 与 usr/... 目录树，
           # 用户解压后直接 `sudo ./install.sh`。
           ( cd manual && zip -q -r "../$MANUAL_ZIP" . )
           test -s "$MANUAL_ZIP"
           unzip -Z1 "$MANUAL_ZIP"
-          # 硬门禁：这里绝不能出现 deb/rpm（能装包的人直接下 release 资产）。
+          # 硬门禁：绝不能出现 deb/rpm。
           test "$(unzip -Z1 "$MANUAL_ZIP" | grep -cE '\.(deb|rpm)$' || true)" -eq 0
           for f in install.sh SHA256SUMS usr/bin/openless usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so; do
             unzip -Z1 "$MANUAL_ZIP" | grep -qx "$f"
           done
+          # 解压后校验和必须过（证明 zip 没有损坏 payload）。
           ( cd "$RUNNER_TEMP" && rm -rf manual-check && mkdir manual-check && cd manual-check \
             && unzip -q "$GITHUB_WORKSPACE/$MANUAL_ZIP" && sha256sum -c SHA256SUMS >/dev/null )
+          # 收进打包输出目录：这样下面一个 artifact 就能同时带上 deb/rpm/校验和/zip。
+          cp "$MANUAL_ZIP" openless-all/app/target/linux-egui-packages/
 
-      - name: Upload the manual bundle as a workflow artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload Linux egui workflow artifacts
+        uses: actions/upload-artifact@v7
         with:
-          name: ${{ github.ref_type == 'tag' && format('{0}-manual-install', github.ref_name) || format('openless-run-{0}-manual-install', github.run_number) }}
-          path: ${{ env.MANUAL_ZIP }}
+          name: openless-linux-egui-x86_64
+          path: openless-all/app/target/linux-egui-packages/*
           if-no-files-found: error
           # 重跑同一个 run 时 v4 默认拒绝同名 artifact；发版重跑是常规操作。
           overwrite: true
 
-      - name: Attach the manual bundle to the release
+      # 竞态处理：先幂等地保证 release 存在（并发的 create 会撞 422 already_exists），
+      # 之后 softprops 只做 attach/update。标题与 body 留给 build job 的 leader 写。
+      - name: Ensure the release exists before attaching Linux assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $RELEASE_TAG already exists"
+            exit 0
+          fi
+          args=(--repo "$GITHUB_REPOSITORY" --verify-tag --title "OpenLess $RELEASE_TAG")
+          if [ "${OPENLESS_RELEASE_CHANNEL:-stable}" = "beta" ]; then
+            args+=(--prerelease)
+          fi
+          # 与并发的 Tauri job 同时创建时必有一方拿到 422，这里吞掉即可：
+          # 只要最终 release 存在，后面的 attach 就成立。
+          gh release create "$RELEASE_TAG" "${args[@]}" \
+            --notes "Linux egui assets: deb/rpm + manual install bundle" \
+            || gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+
+      - name: Attach Linux assets (deb/rpm + manual zip) to the release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           draft: false
-          # 与 build job 的 leader 一致：不传 body_path/name，softprops 在 body
-          # 为空时保留既有 release body，不会覆盖 leader 写入的 prelude/notes。
+          # 不传 name/body_path：release 不存在时用 tag 名作标题（tag 自带 -egui 后缀，
+          # 不会误标成 Tauri）；已存在时保留 leader 写好的标题与 body。
           prerelease: ${{ env.OPENLESS_RELEASE_CHANNEL == 'beta' }}
-          files: ${{ env.MANUAL_ZIP }}
-          # zip 由上一个步骤硬门禁过（test -s + 无 deb/rpm + 解压后校验和），
-          # unmatched 只能是真出错。
-          fail_on_unmatched_files: true
-
-      # Linux deb/rpm 由这条 job 代传：egui job 与 Tauri 三层并发，两边抢建同一个
-      # release 会有竞态，所以 egui job 只上传 Actions artifact（attach_release:
-      # false），由这里统一挂上去（zip 之外也保留裸 deb/rpm，方便直接下载）。
-      - name: Attach the Linux packages to the release
-        if: >-
-          startsWith(github.ref, 'refs/tags/v')
-          && hashFiles('bundle/*.deb') != ''
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          draft: false
-          prerelease: ${{ env.OPENLESS_RELEASE_CHANNEL == 'beta' }}
-          files: |
-            bundle/*.deb
-            bundle/*.rpm
-            bundle/SHA256SUMS
+          files: openless-all/app/target/linux-egui-packages/*
           fail_on_unmatched_files: true
 
   # ── 正式版发布后，自动更新 Homebrew cask ──
@@ -726,7 +860,7 @@ jobs:
       && !contains(github.ref_name, '-Beta.')
     steps:
       - name: Checkout default branch (cask 住在这里)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.repository.default_branch }}
           token: ${{ secrets.GITHUB_TOKEN }}
