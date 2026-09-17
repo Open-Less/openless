@@ -3714,7 +3714,23 @@ mod linux_app {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
                     }
                     frontend::view_model::FrontendAction::WindowMinimize => {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                        match minimize_action(self.tray.is_some()) {
+                            MinimizeAction::HideToTray => {
+                                // eframe 只在 RedrawRequested 里调用 update()，而最小化
+                                // 的 surface 拿不到 frame callback；winit 在 Wayland 上
+                                // 又拒绝取消最小化。一旦真最小化，热键消费、弹窗拉起、
+                                // 托盘回写就全部停摆且无法恢复，所以有托盘时按退回托盘
+                                // 处理（塌缩隐藏的事件循环照常跑）。
+                                log::info!(
+                                    "[window] minimize → hide to tray (a minimized window \
+                                     stops the egui loop and cannot be unminimized on Wayland)"
+                                );
+                                hide_main_window(ctx, &mut self.main_window_restore_size)
+                            }
+                            MinimizeAction::Minimize => {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                            }
+                        }
                     }
                     frontend::view_model::FrontendAction::MarketplaceRefresh => {
                         self.load_marketplace();
@@ -4540,6 +4556,27 @@ mod linux_app {
             WindowCloseAction::Quit
         } else {
             WindowCloseAction::HideToTray
+        }
+    }
+
+    /// 最小化键的走向。
+    ///
+    /// 有托盘时退回托盘：最小化会让 eframe 停止调用 `update()`（最小化的
+    /// surface 不再收到 frame callback），而 winit 在 Wayland 上又明确拒绝
+    /// 取消最小化（`set_minimized(false)` 直接 warn 返回），窗口一旦最小化，
+    /// 热键消费与弹窗拉起就永久停摆。没有托盘不能隐藏，否则用户没有办法把
+    /// 窗口找回来，只能保持真正的窗口管理器最小化。
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum MinimizeAction {
+        HideToTray,
+        Minimize,
+    }
+
+    fn minimize_action(tray_available: bool) -> MinimizeAction {
+        if tray_available {
+            MinimizeAction::HideToTray
+        } else {
+            MinimizeAction::Minimize
         }
     }
 
@@ -6104,6 +6141,16 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             assert_eq!(window_close_action(true, true), WindowCloseAction::Quit);
             // 没有托盘就没有重新打开的入口，隐藏等于让进程失联。
             assert_eq!(window_close_action(false, false), WindowCloseAction::Quit);
+        }
+
+        #[test]
+        fn the_minimize_button_hides_to_tray_while_a_tray_icon_exists() {
+            // 最小化会让 eframe 停止调用 update()（最小化的 surface 不再收到
+            // frame callback），而 winit 在 Wayland 上无法取消最小化，因此有托盘
+            // 时按退回托盘处理，热键消费与弹窗拉起才不会被永久停掉。
+            assert_eq!(minimize_action(true), MinimizeAction::HideToTray);
+            // 没有托盘就不能隐藏：否则窗口再也找不回来。
+            assert_eq!(minimize_action(false), MinimizeAction::Minimize);
         }
 
         #[test]
