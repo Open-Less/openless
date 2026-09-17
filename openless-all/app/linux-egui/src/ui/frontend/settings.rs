@@ -4,8 +4,9 @@ use openless_linux_egui::{fmt_l10n, tr_l10n, Lang};
 use super::layout;
 use super::theme;
 use super::view_model::{
-    FrontendAction, FrontendViewModel, SettingsActionField, SettingsComboField, SettingsField,
-    SettingsSection, SettingsTextField, ShortcutField, StylePack,
+    FrontendAction, FrontendViewModel, SettingsActionField, SettingsChannelProvider,
+    SettingsComboField, SettingsField, SettingsProviderAuth, SettingsProviderEditor,
+    SettingsProviderField, SettingsSection, SettingsTextField, ShortcutField, StylePack,
 };
 
 const RAIL_WIDTH: f32 = 214.0;
@@ -2433,7 +2434,7 @@ fn channel_row(
     ui: &mut egui::Ui,
     channel: &super::view_model::SettingsChannel,
     index: usize,
-    providers: &[super::view_model::SettingsChannelProvider],
+    providers: &[SettingsChannelProvider],
     lang: Lang,
     actions: &mut Vec<FrontendAction>,
 ) {
@@ -2487,13 +2488,11 @@ fn channel_row(
             // 编辑入口：选中渠道后由宿主向 Core 读回该渠道的描述符与凭据形态。
             if ui
                 .add(
-                    egui::Button::new(
-                        egui::RichText::new(tr_l10n(lang, "btn.edit")).size(11.0),
-                    )
-                    .fill(theme::SURFACE_2)
-                    .stroke(egui::Stroke::new(0.8, theme::LINE))
-                    .corner_radius(egui::CornerRadius::same(8))
-                    .min_size(egui::vec2(0.0, 24.0)),
+                    egui::Button::new(egui::RichText::new(tr_l10n(lang, "btn.edit")).size(11.0))
+                        .fill(theme::SURFACE_2)
+                        .stroke(egui::Stroke::new(0.8, theme::LINE))
+                        .corner_radius(egui::CornerRadius::same(8))
+                        .min_size(egui::vec2(0.0, 24.0)),
                 )
                 .clicked()
             {
@@ -2542,6 +2541,23 @@ fn channel_row(
                     });
                 }
             }
+            // 当前生效的渠道由 Core 记录：界面只读「哪个是当前」（is_active），
+            // 并通过 Core 切换，不自己判定谁该生效。
+            if !channel.is_active
+                && ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new(tr_l10n(lang, "btn.activate")).size(11.0),
+                        )
+                        .fill(theme::SURFACE_2)
+                        .stroke(egui::Stroke::new(0.8, theme::LINE))
+                        .corner_radius(egui::CornerRadius::same(8))
+                        .min_size(egui::vec2(0.0, 24.0)),
+                    )
+                    .clicked()
+            {
+                actions.push(FrontendAction::SettingsChannelActivate(index));
+            }
             if ui
                 .add(
                     egui::Button::new(
@@ -2586,6 +2602,290 @@ fn channel_row(
 }
 
 /// Provider + name form used by "add channel".
+/// One editor text row. The pushed value is the post-edit text: pushing the
+/// pre-edit copy would make the host write the old value straight back into the
+/// field on every keystroke.
+fn provider_field(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &str,
+    field: SettingsProviderField,
+    password: bool,
+    actions: &mut Vec<FrontendAction>,
+) {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(label).size(11.5).color(theme::INK_3));
+        let mut draft = value.to_string();
+        let mut edit = egui::TextEdit::singleline(&mut draft).desired_width(220.0);
+        if password {
+            edit = edit.password(true);
+        }
+        if ui.add(edit).changed() {
+            actions.push(FrontendAction::SettingsProviderField(field, draft));
+        }
+    });
+}
+
+fn provider_small_button(ui: &mut egui::Ui, lang: Lang, key: &'static str, primary: bool) -> bool {
+    let text = egui::RichText::new(tr_l10n(lang, key)).size(11.5);
+    let button = if primary {
+        egui::Button::new(text.color(theme::SURFACE)).fill(theme::INK)
+    } else {
+        egui::Button::new(text).fill(theme::SURFACE_2)
+    };
+    ui.add(
+        button
+            .stroke(if primary {
+                egui::Stroke::NONE
+            } else {
+                egui::Stroke::new(0.8, theme::LINE)
+            })
+            .corner_radius(egui::CornerRadius::same(8))
+            .min_size(egui::vec2(0.0, 26.0)),
+    )
+    .clicked()
+}
+
+/// Channel editor. Core's `AuthRequirement` decides which inputs exist, and every
+/// write goes back through Core's provider/credential API: the UI never owns
+/// endpoints, defaults or credential semantics. Secret inputs are write-only —
+/// opening an editor never shows a stored key.
+fn provider_editor_panel(
+    ui: &mut egui::Ui,
+    editor: &SettingsProviderEditor,
+    lang: Lang,
+    actions: &mut Vec<FrontendAction>,
+) {
+    egui::Frame::new()
+        .fill(theme::SURFACE_2)
+        .corner_radius(egui::CornerRadius::same(10))
+        .inner_margin(egui::Margin::symmetric(12, 10))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(&editor.provider)
+                        .strong()
+                        .size(12.0)
+                        .color(theme::INK),
+                );
+                ui.label(
+                    egui::RichText::new(tr_l10n(lang, "providers.editing"))
+                        .size(10.5)
+                        .color(theme::INK_4),
+                );
+                if editor.busy {
+                    ui.label(
+                        egui::RichText::new(tr_l10n(lang, "common.loading"))
+                            .size(10.5)
+                            .color(theme::INK_4),
+                    );
+                }
+            });
+            provider_field(
+                ui,
+                tr_l10n(lang, "providers.name"),
+                &editor.name,
+                SettingsProviderField::Name,
+                false,
+                actions,
+            );
+            ui.label(
+                egui::RichText::new(tr_l10n(lang, "providers.credentials"))
+                    .size(11.0)
+                    .color(theme::INK_4),
+            );
+            match editor.auth {
+                SettingsProviderAuth::None => {
+                    ui.label(
+                        egui::RichText::new(tr_l10n(lang, "providers.no_cloud_note"))
+                            .size(11.0)
+                            .color(theme::INK_4),
+                    );
+                }
+                SettingsProviderAuth::OAuth => {
+                    ui.label(
+                        egui::RichText::new(tr_l10n(lang, "providers.oauth_note"))
+                            .size(11.0)
+                            .color(theme::INK_4),
+                    );
+                }
+                SettingsProviderAuth::Volcengine => {
+                    let mut mode = editor.auth_mode.clone();
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Auth").size(11.5).color(theme::INK_3));
+                        egui::ComboBox::from_id_salt("settings-provider-auth-mode")
+                            .selected_text(&mode)
+                            .show_ui(ui, |ui| {
+                                for option in ["app_id_token", "api_key"] {
+                                    if ui.selectable_label(mode == option, option).clicked() {
+                                        mode = option.to_string();
+                                        ui.close();
+                                    }
+                                }
+                            });
+                    });
+                    if mode != editor.auth_mode {
+                        actions.push(FrontendAction::SettingsProviderField(
+                            SettingsProviderField::AuthMode,
+                            mode.clone(),
+                        ));
+                    }
+                    if mode == "api_key" {
+                        provider_field(
+                            ui,
+                            "API Key",
+                            &editor.primary_secret,
+                            SettingsProviderField::PrimarySecret,
+                            true,
+                            actions,
+                        );
+                    } else {
+                        provider_field(
+                            ui,
+                            "APP ID",
+                            &editor.primary_secret,
+                            SettingsProviderField::PrimarySecret,
+                            true,
+                            actions,
+                        );
+                        provider_field(
+                            ui,
+                            "Access Token",
+                            &editor.secondary_secret,
+                            SettingsProviderField::SecondarySecret,
+                            true,
+                            actions,
+                        );
+                    }
+                    provider_field(
+                        ui,
+                        "Resource ID",
+                        &editor.resource_id,
+                        SettingsProviderField::ResourceId,
+                        false,
+                        actions,
+                    );
+                    provider_field(
+                        ui,
+                        "Model",
+                        &editor.model,
+                        SettingsProviderField::Model,
+                        false,
+                        actions,
+                    );
+                }
+                SettingsProviderAuth::Xfyun => {
+                    provider_field(
+                        ui,
+                        "AppID",
+                        &editor.primary_secret,
+                        SettingsProviderField::PrimarySecret,
+                        true,
+                        actions,
+                    );
+                    provider_field(
+                        ui,
+                        "API Key",
+                        &editor.secondary_secret,
+                        SettingsProviderField::SecondarySecret,
+                        true,
+                        actions,
+                    );
+                    provider_field(
+                        ui,
+                        "Model",
+                        &editor.model,
+                        SettingsProviderField::Model,
+                        false,
+                        actions,
+                    );
+                }
+                SettingsProviderAuth::Other => {
+                    ui.label(
+                        egui::RichText::new(tr_l10n(lang, "providers.core_note"))
+                            .size(11.0)
+                            .color(theme::INK_4),
+                    );
+                    provider_field(
+                        ui,
+                        "Model",
+                        &editor.model,
+                        SettingsProviderField::Model,
+                        false,
+                        actions,
+                    );
+                }
+                SettingsProviderAuth::ApiKey => {
+                    provider_field(
+                        ui,
+                        tr_l10n(lang, "providers.api_key_hint"),
+                        &editor.primary_secret,
+                        SettingsProviderField::PrimarySecret,
+                        true,
+                        actions,
+                    );
+                    provider_field(
+                        ui,
+                        "Endpoint",
+                        &editor.endpoint,
+                        SettingsProviderField::Endpoint,
+                        false,
+                        actions,
+                    );
+                    provider_field(
+                        ui,
+                        "Model",
+                        &editor.model,
+                        SettingsProviderField::Model,
+                        false,
+                        actions,
+                    );
+                }
+            }
+            ui.horizontal(|ui| {
+                if provider_small_button(ui, lang, "btn.list_models", false) {
+                    actions.push(FrontendAction::SettingsProviderModels);
+                }
+                if editor.models_loading {
+                    ui.label(
+                        egui::RichText::new(tr_l10n(lang, "common.loading"))
+                            .size(10.5)
+                            .color(theme::INK_4),
+                    );
+                }
+            });
+            if !editor.models.is_empty() {
+                ui.label(
+                    egui::RichText::new(tr_l10n(lang, "providers.model_list"))
+                        .size(11.0)
+                        .color(theme::INK_3),
+                );
+                ui.horizontal_wrapped(|ui| {
+                    for model in &editor.models {
+                        if ui.selectable_label(editor.model == *model, model).clicked() {
+                            actions.push(FrontendAction::SettingsProviderField(
+                                SettingsProviderField::Model,
+                                model.clone(),
+                            ));
+                        }
+                    }
+                });
+            }
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if provider_small_button(ui, lang, "btn.save_fields", true) {
+                    actions.push(FrontendAction::SettingsProviderSave);
+                }
+                if provider_small_button(ui, lang, "btn.clear_secret", false) {
+                    actions.push(FrontendAction::SettingsProviderClearSecrets);
+                }
+                if provider_small_button(ui, lang, "btn.close", false) {
+                    actions.push(FrontendAction::SettingsProviderClose);
+                }
+            });
+        });
+}
+
 fn add_channel_form(
     ui: &mut egui::Ui,
     vm: &mut FrontendViewModel,
@@ -2615,7 +2915,8 @@ fn add_channel_form(
         if new_selection != selected {
             actions.push(FrontendAction::SettingsChannelProvider(new_selection));
         }
-        let name = vm.channel_form_name.clone();
+        // 推的是编辑后的值：推编辑前的拷贝会让宿主把旧值写回字段，每敲一个字
+        // 就被回灌一次（渠道名、下划线搜索框都踩过这个坑）。
         let response = ui.add(
             egui::TextEdit::singleline(&mut vm.channel_form_name)
                 .id(egui::Id::new("openless-settings-channel-name"))
@@ -2624,7 +2925,9 @@ fn add_channel_form(
                 .desired_width(200.0),
         );
         if response.changed() {
-            actions.push(FrontendAction::SettingsChannelName(name));
+            actions.push(FrontendAction::SettingsChannelName(
+                vm.channel_form_name.clone(),
+            ));
         }
         if ui
             .add(
@@ -3092,6 +3395,49 @@ fn row_desc(ui: &mut egui::Ui, label: &str, desc: &str, control: impl FnOnce(&mu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_editor_renders_every_auth_shape() {
+        // 描述符决定渲染哪组字段：六种形态都必须能画出来，且静态渲染不得产生任何
+        // 动作（否则每帧都会往宿主推重复的写入）。
+        let shapes = [
+            SettingsProviderAuth::None,
+            SettingsProviderAuth::OAuth,
+            SettingsProviderAuth::Volcengine,
+            SettingsProviderAuth::Xfyun,
+            SettingsProviderAuth::Other,
+            SettingsProviderAuth::ApiKey,
+        ];
+        for auth in shapes {
+            let editor = SettingsProviderEditor {
+                channel_id: "channel".to_string(),
+                provider: "volcengine".to_string(),
+                provider_type: "volcengine".to_string(),
+                name: "main".to_string(),
+                endpoint: "https://example.invalid".to_string(),
+                model: "model".to_string(),
+                resource_id: "resource".to_string(),
+                auth_mode: "app_id_token".to_string(),
+                auth,
+                primary_secret: String::new(),
+                secondary_secret: String::new(),
+                models: vec!["m1".to_string()],
+                models_loading: false,
+                busy: false,
+            };
+            let mut actions = Vec::new();
+            let ctx = egui::Context::default();
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    provider_editor_panel(ui, &editor, Lang::ZhCn, &mut actions);
+                });
+            });
+            assert!(
+                actions.is_empty(),
+                "渲染 {auth:?} 形态的编辑器时不应产生动作"
+            );
+        }
+    }
 
     #[test]
     fn style_pack_draft_selection_only_touches_the_draft() {

@@ -1785,7 +1785,8 @@ mod linux_app {
                 ProvidersState::Loaded(panel) => panel.clone(),
                 _ => return,
             };
-            let Some((channel, descriptor)) = provider_channel_descriptor(&panel, &channel_id) else {
+            let Some((channel, descriptor)) = provider_channel_descriptor(&panel, &channel_id)
+            else {
                 return;
             };
             let kind = panel.kind;
@@ -3017,6 +3018,8 @@ mod linux_app {
                     resource_id: form.resource_id.clone(),
                     auth_mode: form.auth_mode.clone(),
                     auth: form.auth,
+                    primary_secret: form.primary_secret.clone(),
+                    secondary_secret: form.secondary_secret.clone(),
                     models: form.models.clone(),
                     models_loading: form.models_loading,
                     busy: matches!(self.provider_editor, ProviderEditorState::Loading { .. }),
@@ -4701,10 +4704,28 @@ mod linux_app {
                             self.load_providers(kind);
                         }
                     }
+                    frontend::view_model::FrontendAction::SettingsChannelActivate(index) => {
+                        let kind = self.settings_channel_kind;
+                        let id = self
+                            .settings_channels
+                            .get(index)
+                            .map(|channel| channel.id.clone());
+                        if let (Some(backend), Some(id)) = (self.backend(), id) {
+                            let lang = self.lang;
+                            self.spawn(async move {
+                                backend.set_active_provider(provider_slot(kind), id).await?;
+                                Ok(tr_l10n(lang, "status.channel_active").to_string())
+                            });
+                            self.load_settings_channels();
+                            self.load_service_configured();
+                        }
+                    }
                     frontend::view_model::FrontendAction::SettingsProviderField(field, value) => {
                         if let Some(form) = self.provider_editor_form.as_mut() {
                             match field {
-                                frontend::view_model::SettingsProviderField::Name => form.name = value,
+                                frontend::view_model::SettingsProviderField::Name => {
+                                    form.name = value
+                                }
                                 frontend::view_model::SettingsProviderField::Endpoint => {
                                     form.endpoint = value
                                 }

@@ -140,9 +140,17 @@ pub enum FrontendAction {
     /// Select a channel and open its provider editor (index into `channels`).
     SettingsChannelSelect(usize),
     /// Move a channel up/down; Core's `reorder_channels` owns the order.
-    SettingsChannelMove { index: usize, delta: isize },
+    SettingsChannelMove {
+        index: usize,
+        delta: isize,
+    },
     /// Switch a channel to another provider type (Core's `set_channel_provider_type`).
-    SettingsChannelProviderType { index: usize, provider_type: String },
+    SettingsChannelProviderType {
+        index: usize,
+        provider_type: String,
+    },
+    /// Make a channel the active provider (Core's `set_active_provider`).
+    SettingsChannelActivate(usize),
     /// Provider editor field edited.
     SettingsProviderField(SettingsProviderField, String),
     /// Save the editor: rename + endpoint/model + credentials through Core.
@@ -317,6 +325,10 @@ pub struct SettingsProviderEditor {
     pub resource_id: String,
     pub auth_mode: String,
     pub auth: SettingsProviderAuth,
+    // Write-only secret drafts: they are empty on load and cleared once Core has
+    // them, so a stored key never reaches egui state.
+    pub primary_secret: String,
+    pub secondary_secret: String,
     /// Result of `provider.list_models`.
     pub models: Vec<String>,
     pub models_loading: bool,
