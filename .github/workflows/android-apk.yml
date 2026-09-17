@@ -1,19 +1,26 @@
 name: Android APK (debug)
 
-# Triggers:
-#   - push v*-tauri tag → signed release APK + minisign + updater manifest → GitHub Release
-#   - workflow_dispatch → signed release APK when ANDROID_KEYSTORE_* secrets exist
-#     (overlay install + user data preserved); otherwise unsigned debug APK (annotated, non-blocking)
+# 统一发布语义（与 release-tauri.yml 一致）：任何发布标签 `v*` 都出全平台产物，
+# `-tauri` / `-egui` 只是**命名约定**，不再是「只构建哪一半」的开关。
+#   - push v* tag → 签名 release APK + minisign + updater manifest → GitHub Release
+#     （安卓是独立 workflow，所以它与 Tauri/Linux 那次 run 并行，但资产落在**同一个
+#      release** 上：release-tauri.yml 里没有 android job，也不必往里塞一套 JDK/Gradle。）
+#   - workflow_dispatch → 有 ANDROID_KEYSTORE_* 就出签名 release APK（覆盖安装、保数据）；
+#     否则出未签名 debug APK（annotated，非阻塞）—— 该 fallback 语义保持不变。
+#
+# 为什么要 Android 单独一条 workflow 而不是 matrix 里的一腿：它用的是另一套工具链
+# （JDK + Android SDK + Gradle），塞进 Tauri 的 matrix 会让每一步都长满 `if:` 分支。
 #
 # Scope: full overlay/accessibility APK for ADB testing and tag releases.
 
 on:
   push:
     tags:
-      - 'v*-tauri'
+      - 'v*'
   workflow_dispatch:
 
 # 同一 tag 重复推送只跑最新一次；workflow_dispatch 用 run_id 隔离避免互相取消。
+# 这条 group 带 workflow 名，所以不会和 release-tauri.yml 的 run 互相取消。
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'push' }}
@@ -27,9 +34,9 @@ jobs:
       CI: true
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      OPENLESS_RELEASE_CHANNEL: ${{ (endsWith(github.ref_name, '-beta-tauri') || contains(github.ref_name, '-Beta.')) && 'beta' || 'stable' }}
+      OPENLESS_RELEASE_CHANNEL: ${{ (endsWith(github.ref_name, '-beta-tauri') || endsWith(github.ref_name, '-beta-egui') || contains(github.ref_name, '-Beta.')) && 'beta' || 'stable' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           # Android 不使用本地 Qwen3/Whisper C 子模块。
           submodules: false
@@ -48,8 +55,9 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
+          # 任意发布标签都算 tag release（统一语义）：不再要求 -tauri 后缀。
           is_tag=false
-          if [[ "${{ github.ref }}" == refs/tags/v* ]] && [[ "${{ github.ref_name }}" == *-tauri ]]; then
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
             is_tag=true
           fi
           echo "is_tag_release=$is_tag" >> "$GITHUB_OUTPUT"
@@ -144,7 +152,7 @@ jobs:
             exit "$sdkmanager_exit"
           fi
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -377,28 +385,28 @@ jobs:
           echo "EOF" >> "$GITHUB_OUTPUT"
 
       - name: Upload Android APK artifact (arm64-v8a)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.mode.outputs.mode == 'release' && 'openless-android-release-arm64-v8a' || 'openless-android-debug-arm64-v8a' }}
           path: ${{ steps.apk.outputs.arm64_v8a_path }}
           if-no-files-found: error
 
       - name: Upload Android APK artifact (armeabi-v7a)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.mode.outputs.mode == 'release' && 'openless-android-release-armeabi-v7a' || 'openless-android-debug-armeabi-v7a' }}
           path: ${{ steps.apk.outputs.armeabi_v7a_path }}
           if-no-files-found: error
 
       - name: Upload Android APK artifact (x86)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.mode.outputs.mode == 'release' && 'openless-android-release-x86' || 'openless-android-debug-x86' }}
           path: ${{ steps.apk.outputs.x86_path }}
           if-no-files-found: error
 
       - name: Upload Android APK artifact (x86_64)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.mode.outputs.mode == 'release' && 'openless-android-release-x86_64' || 'openless-android-debug-x86_64' }}
           path: ${{ steps.apk.outputs.x86_64_path }}

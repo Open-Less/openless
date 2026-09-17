@@ -4,10 +4,14 @@ name: Release cross-platform (Tauri + Linux egui)
 # 这是**唯一一条**发版流水线：一次 tag 推送、同一个 run 里四个平台并发构建，
 # 所有产物堆在同一个 GitHub Release 下。
 #
-# tag 约定（当前）：v<version>-egui，例如 v2.0.0-Beta.1-egui。
+# tag 约定（统一语义）：任何发布标签 `v*` 都构建并发布**全部**平台，例如
+#   v2.0.0-Beta.1-egui / v2.0.0-tauri。`-tauri` / `-egui` 只是**命名约定**
+#   （影响产物名与版本串），不再是「只构建哪一半」的开关。
 #   → macOS arm64 .dmg + macOS x64 .dmg + Windows x64 .msi/.exe + Linux deb/rpm
 #     （Linux 步骤**内联**在本文件里、与三个平台平级并发：不用 workflow_call，
 #      否则 Actions 页面会把 Linux 渲染成嵌套折叠的一层）
+#   → 安卓 APK 由 android-apk.yml **并行**跑（另一套工具链：JDK/SDK/Gradle），
+#     同样对 `v*` 触发，资产挂到**同一个 release**上。
 #   → linux-egui job 在**同一个 job 内**完成 deb/rpm 打包 + 手动安装 zip 组装：
 #     zip 装的是散装安装树（usr/...）+ install.sh + 针对散装文件重算的 SHA256SUMS，
 #     **不含 deb/rpm**（能装包的人直接下 release 里的 deb/rpm 资产，那两份仍保留）；
@@ -39,9 +43,12 @@ name: Release cross-platform (Tauri + Linux egui)
 
 on:
   push:
+    # 统一语义：任何发布标签都构建**全部**平台（Tauri 三平台 + Linux egui + 安卓）。
+    # `-tauri` / `-egui` 只是命名约定（产物名/版本串沿用），不再决定构建哪一半。
+    # 安卓不在本文件里：它用另一套工具链（JDK/Android SDK/Gradle），由
+    # android-apk.yml 并行跑，资产落到同一个 release 上。
     tags:
-      - 'v*-tauri'
-      - 'v*-egui'
+      - 'v*'
   workflow_dispatch:
 
 # 同一 tag 重复推送只跑最新一次；workflow_dispatch 用 run_id 隔离避免互相取消。
@@ -51,9 +58,8 @@ concurrency:
 
 jobs:
   build:
-    # Tauri 三平台只在 -tauri tag（或手动 dispatch）上构建：推 -egui tag 时
-    # 这条 job 整体跳过，由 release-linux-egui 出 Linux deb/rpm。
-    if: ${{ github.event_name == 'workflow_dispatch' || endsWith(github.ref, '-tauri') || endsWith(github.ref, '-egui') }}
+    # 统一发布语义：任何发布标签（或手动 dispatch）都跑 Tauri 三平台。
+    if: ${{ !cancelled() }}
     permissions:
       contents: write
     strategy:
@@ -572,7 +578,8 @@ jobs:
   # 再让它只做 attach/update，避免同一秒抢建。
   linux-egui:
     name: Linux egui packages (deb + rpm + manual zip)
-    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || endsWith(github.ref, '-egui')) }}
+    # 统一发布语义：任何发布标签（或手动 dispatch）都跑 Linux egui，不给它单独开关。
+    if: ${{ !cancelled() }}
     # 跟 ci.yml 的 linux-core-contract 用同一个镜像，理由也一样：cpal 的 PipeWire
     # 后端需要 24.04 自带的 PipeWire/libspa ABI，22.04 的头文件编译不过 libspa 0.10.x。
     # ⚠ 分发基线（用户已确认，不要改回 22.04）：产出的 deb/rpm 需要 glibc ≥ 2.39，
@@ -847,6 +854,12 @@ jobs:
   #
   # 仅正式版：v*-tauri 且非 -beta-tauri。beta 不碰 Homebrew，避免把预发布版推给
   # `brew install --cask openless` 的用户。cask 文件在默认分支（beta）上，提交回该分支。
+  #
+  # ⚠ 统一发布语义下的影响（任何 v* 标签都出全平台产物）：这条 job 的 if 仍只认
+  #   「稳定的 -tauri 标签」，所以推 v2.0.0-Beta.1-egui（或任何非 -tauri 后缀）时
+  #   全平台产物照常发布，但 Homebrew cask **不会**更新 —— 这是刻意的分发边界
+  #   （用户决定：cask 只跟 -tauri 正式版）。要让 brew 用户拿到新版，发一个不带
+  #   Beta、后缀 -tauri 的标签即可，那时本 job 照旧自动更新 cask。
   update-homebrew-cask:
     name: Update Homebrew cask (stable only)
     needs: build

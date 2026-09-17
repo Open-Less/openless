@@ -131,4 +131,26 @@ for (const gate of [
     `inlined Linux job must keep the same gate as the standalone entry: ${gate}`);
 }
 
+// 11. 统一发布语义：任何 v* 发布标签都要出全平台产物（Tauri 三平台 + Linux egui
+//     + 安卓），后缀只作命名约定，不能再当「只构建一半」的开关。
+const androidWorkflow = await readFile(
+  join(repoRoot, '.github/workflows/android-apk.yml'),
+  'utf8',
+);
+assert.ok(/tags:\s*\n\s*- 'v\*'/.test(orchestratedWorkflow),
+  'release pipeline must trigger on every v* release tag');
+assert.ok(/tags:\s*\n\s*- 'v\*'/.test(androidWorkflow),
+  'android workflow must trigger on every v* release tag');
+assert.ok(!/endsWith\(github\.ref, '-egui'\)/.test(orchestratedWorkflow),
+  'release jobs must not gate on the -egui suffix any more');
+assert.ok(androidWorkflow.includes('softprops/action-gh-release'),
+  'android assets must land on the same GitHub release as the desktop builds');
+// build 与 linux 两个 job 都必须对任何发布标签无条件运行（不再按后缀分流）。
+const ungatedJobs = (orchestratedWorkflow.match(/if: \$\{\{ !cancelled\(\) \}\}/g) || []).length;
+assert.ok(ungatedJobs >= 2,
+  'build and linux jobs must run for every release tag instead of gating on -tauri/-egui');
+// Homebrew cask 仍只跟稳定的 -tauri 正式版：这是刻意的分发边界，不能被顺手放开。
+assert.ok(orchestratedWorkflow.includes("endsWith(github.ref, '-tauri')"),
+  'Homebrew cask must keep updating only for stable -tauri tags');
+
 console.log('linux-egui-release-contract.test.mjs passed');
