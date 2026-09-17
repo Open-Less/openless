@@ -1285,14 +1285,22 @@ mod tests {
 
     #[test]
     fn a_per_user_copy_only_shadows_when_the_package_has_the_addon() {
-        let user = Path::new("/home/u/.local/lib/fcitx5/libopenless.so");
-        assert!(!shadows_package_plugin(false, user));
+        // Both branches need a real per-user file, but never a real *package*
+        // file: asserting on `/usr/lib/.../libopenless.so` only held on a
+        // machine that had the deb installed and failed on clean CI runners.
+        let home = tempfile::tempdir().expect("temp home");
+        let user = home.path().join(".local/lib/fcitx5/libopenless.so");
+        assert!(!shadows_package_plugin(true, &user));
+        assert!(!shadows_package_plugin(false, &user));
+        std::fs::create_dir_all(user.parent().expect("user addon dir"))
+            .expect("create user addon dir");
+        std::fs::write(&user, b"stale per-user copy").expect("write user addon");
         // Presence of the package copy plus an existing user file is the case
         // that used to keep an upgraded package plugin from ever loading.
-        assert!(shadows_package_plugin(
-            true,
-            Path::new("/usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so")
-        ));
+        assert!(shadows_package_plugin(true, &user));
+        // Without a package copy there is nothing to shadow: the per-user file
+        // is the AppImage/manual plugin fcitx5 is meant to load.
+        assert!(!shadows_package_plugin(false, &user));
     }
 
     #[test]
