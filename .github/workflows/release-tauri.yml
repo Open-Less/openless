@@ -569,17 +569,17 @@ jobs:
       release_tag: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
       attach_release: false
 
-  # ── 把 Linux 平台的全部产物打成一个 zip，并统一挂 release ──
-  # "all-artifacts" 指 **Linux 平台自己的各个产物文件**（deb + rpm + 它自带的校验和
-  # 文件），不是全平台：macOS/Windows 的 dmg/msi/exe 各自作为独立 release 资产由
-  # build job 上传，不进这个 zip。
+  # ── Linux 的「手动安装」包：散装文件打成一个 zip，给装不了 deb/rpm 的发行版 ──
+  # 语义：zip 里是**可直接手动安装的 payload** —— 从 deb 解出的安装树（usr/...）、
+  # install.sh、以及针对这些散装文件重算的 SHA256SUMS。**不含 deb/rpm**：能装包的
+  # 人直接取 release 下的 deb/rpm 资产（那两份仍然保留，不在这个 zip 里）。
   # needs 保留 [build, release-linux-egui]：不是要等桌面包，而是要让这条 job 成为
   # Linux 资产的唯一 release 写入点（egui job 传 attach_release: false，两边并发时
   # 不能抢建同一个 release）。
-  # zip 名带 tag，例如 OpenLess-v2.0.0-Beta.1-egui-all-artifacts.zip；dispatch 时
-  # 只作为 Actions artifact。
-  bundle-all-artifacts:
-    name: Bundle Linux artifacts (zip)
+  # zip 名自解释：OpenLess-Linux-egui-<tag 或 run>-x86_64-manual.zip；dispatch 时只
+  # 作为 Actions artifact。
+  bundle-manual-install:
+    name: Bundle Linux manual install (zip)
     needs: [build, release-linux-egui]
     if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
@@ -590,9 +590,17 @@ jobs:
       # 否则这个只挂 Linux 资产的 job 会把它「升格」成正式版并推送给所有用户。
       OPENLESS_RELEASE_CHANNEL: ${{ (endsWith(github.ref_name, '-beta-tauri') || endsWith(github.ref_name, '-beta-egui') || contains(github.ref_name, '-Beta.')) && 'beta' || 'stable' }}
       # dispatch 不是 tag 时 github.ref_name 是分支名（含 `/`，不能进文件名）；
-      # tag 推送时 zip 名自带对应后缀，例如 OpenLess-v2.0.0-Beta.1-egui-all-artifacts.zip。
-      BUNDLE_ZIP: OpenLess-${{ github.ref_type == 'tag' && github.ref_name || format('run-{0}', github.run_number) }}-all-artifacts.zip
+      # tag 推送时 zip 名自带 tag，例如 OpenLess-Linux-egui-v2.0.0-Beta.1-egui-x86_64-manual.zip。
+      MANUAL_ZIP: OpenLess-Linux-egui-${{ github.ref_type == 'tag' && github.ref_name || format('run-{0}', github.run_number) }}-x86_64-manual.zip
     steps:
+      # 手动安装脚本随仓库版本走（不在 workflow 里内联），所以这条 job 需要 checkout：
+      # tag 推送时拿到的就是该 tag 的脚本，不会和 payload 的版本脱节。
+      - name: Checkout the manual install script
+        uses: actions/checkout@v4
+        with:
+          # 只要脚本本身，浅克隆足够；这里不构建任何东西。
+          fetch-depth: 1
+
       - name: Download the Linux egui artifact
         uses: actions/download-artifact@v4
         with:
@@ -614,28 +622,58 @@ jobs:
           test "$(find bundle -maxdepth 1 -name '*.rpm' | wc -l)" -eq 1
           ( cd bundle && sha256sum -c SHA256SUMS >/dev/null )
 
-      - name: Zip the Linux artifacts
+      - name: Build the manual-install payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb=$(find bundle -maxdepth 1 -name '*.deb' | head -1)
+          test -n "$deb"
+          mkdir -p manual
+          # 用 dpkg-deb -x 解开 deb，直接得到精确的安装树：不自己抄文件清单，
+          # payload 就不会和 deb 漂移（下一步还会逐项对比）。
+          dpkg-deb -x "$deb" manual
+          cp openless-all/app/scripts/linux-egui-manual-install.sh manual/install.sh
+          chmod +x manual/install.sh
+          bash -n manual/install.sh
+          # 散装 payload 的校验和：覆盖 install.sh 与所有安装文件；不再复用针对
+          # deb/rpm 的那份 SHA256SUMS。
+          ( cd manual && find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS )
+          ( cd manual && sha256sum -c SHA256SUMS >/dev/null )
+          # 逐项对比：散装文件必须与 deb 的内容清单完全一致（漏文件最难发现）。
+          dpkg-deb -c "$deb" | awk '$1 !~ /^d/ {print $NF}' | sed 's|^\./||' | LC_ALL=C sort > "$RUNNER_TEMP/deb-files.txt"
+          ( cd manual && find usr -type f | LC_ALL=C sort ) > "$RUNNER_TEMP/payload-files.txt"
+          diff -u "$RUNNER_TEMP/deb-files.txt" "$RUNNER_TEMP/payload-files.txt"
+          find manual -type f | LC_ALL=C sort
+
+      - name: Zip the manual-install payload
         shell: bash
         run: |
           set -euo pipefail
           command -v zip >/dev/null || sudo apt-get install -y zip
           command -v unzip >/dev/null || sudo apt-get install -y unzip
-          # 直接打 bundle 里的文件（不带子目录前缀），zip 里就是原始文件名：
-          # OpenLess-Linux-egui-<ver>-x86_64.deb / .rpm / SHA256SUMS
-          ( cd bundle && zip -q "../$BUNDLE_ZIP" ./*.deb ./*.rpm ./*SHA256SUMS )
-          test -s "$BUNDLE_ZIP"
-          unzip -l "$BUNDLE_ZIP" | tail -8
+          # 从 manual/ 内部打包：zip 里是 install.sh、SHA256SUMS 与 usr/... 目录树，
+          # 用户解压后直接 `sudo ./install.sh`。
+          ( cd manual && zip -q -r "../$MANUAL_ZIP" . )
+          test -s "$MANUAL_ZIP"
+          unzip -Z1 "$MANUAL_ZIP"
+          # 硬门禁：这里绝不能出现 deb/rpm（能装包的人直接下 release 资产）。
+          test "$(unzip -Z1 "$MANUAL_ZIP" | grep -cE '\.(deb|rpm)$' || true)" -eq 0
+          for f in install.sh SHA256SUMS usr/bin/openless usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so; do
+            unzip -Z1 "$MANUAL_ZIP" | grep -qx "$f"
+          done
+          ( cd "$RUNNER_TEMP" && rm -rf manual-check && mkdir manual-check && cd manual-check \
+            && unzip -q "$GITHUB_WORKSPACE/$MANUAL_ZIP" && sha256sum -c SHA256SUMS >/dev/null )
 
-      - name: Upload the bundle as a workflow artifact
+      - name: Upload the manual bundle as a workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.ref_type == 'tag' && format('{0}-all-artifacts', github.ref_name) || format('openless-run-{0}-all-artifacts', github.run_number) }}
-          path: ${{ env.BUNDLE_ZIP }}
+          name: ${{ github.ref_type == 'tag' && format('{0}-manual-install', github.ref_name) || format('openless-run-{0}-manual-install', github.run_number) }}
+          path: ${{ env.MANUAL_ZIP }}
           if-no-files-found: error
           # 重跑同一个 run 时 v4 默认拒绝同名 artifact；发版重跑是常规操作。
           overwrite: true
 
-      - name: Attach the bundle to the release
+      - name: Attach the manual bundle to the release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
@@ -644,8 +682,9 @@ jobs:
           # 与 build job 的 leader 一致：不传 body_path/name，softprops 在 body
           # 为空时保留既有 release body，不会覆盖 leader 写入的 prelude/notes。
           prerelease: ${{ env.OPENLESS_RELEASE_CHANNEL == 'beta' }}
-          files: ${{ env.BUNDLE_ZIP }}
-          # zip 由上一个步骤硬门禁过（test -s），所以这里 unmatched 只能是真出错。
+          files: ${{ env.MANUAL_ZIP }}
+          # zip 由上一个步骤硬门禁过（test -s + 无 deb/rpm + 解压后校验和），
+          # unmatched 只能是真出错。
           fail_on_unmatched_files: true
 
       # Linux deb/rpm 由这条 job 代传：egui job 与 Tauri 三层并发，两边抢建同一个
