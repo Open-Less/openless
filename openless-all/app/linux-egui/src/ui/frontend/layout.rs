@@ -965,11 +965,22 @@ pub fn segmented(
         let response = ui.interact(option_rect, id, egui::Sense::click());
         let is_selected = index == selected;
         if is_selected {
-            painter.rect_filled(option_rect, egui::CornerRadius::same(6), theme::SURFACE);
+            // Tauri `--ol-segmented-active-shadow` = `0 1px 2px rgba(0,0,0,0.06), 0 0 0 0.5px rgba(0,0,0,0.06)`：
+            // 选中片是白底、无描边，靠向下 1px 的浅投影 + 0.5px 细环从轨道上"浮"起来。
+            painter.rect_filled(
+                option_rect.expand(1.0).translate(egui::vec2(0.0, 1.0)),
+                egui::CornerRadius::same(7),
+                theme::SEGMENTED_ACTIVE_SHADOW,
+            );
+            painter.rect_filled(
+                option_rect,
+                egui::CornerRadius::same(6),
+                theme::SEGMENTED_ACTIVE_BG,
+            );
             painter.rect_stroke(
                 option_rect,
                 egui::CornerRadius::same(6),
-                egui::Stroke::new(0.5, theme::LINE),
+                egui::Stroke::new(0.5, theme::SEGMENTED_ACTIVE_RING),
                 egui::StrokeKind::Inside,
             );
         } else if response.hovered() {
@@ -983,7 +994,7 @@ pub fn segmented(
             option_rect.center(),
             egui::Align2::CENTER_CENTER,
             option,
-            egui::FontId::proportional(12.0),
+            theme::medium_font(12.0),
             if is_selected {
                 theme::INK
             } else {
@@ -999,6 +1010,56 @@ pub fn segmented(
 }
 /// A segmented button group (the Tauri `ol-seg` control). Returns the index the
 /// user clicked. Every segment is a real button, not a text label.
+/// Tauri `inputStyle`（`src/pages/settings/shared.tsx:243-256`）：高度 32、字号 13.5、
+/// 左右 padding 10、radius 8、底色 `--ol-select-trigger-bg`（= `--ol-control-solid`）、
+/// 最大宽度 360。所有设置页的文本输入都走这里，不再逐处写尺寸。
+pub const INPUT_HEIGHT: f32 = 32.0;
+pub const INPUT_FONT_SIZE: f32 = 13.5;
+pub const INPUT_MAX_WIDTH: f32 = 360.0;
+
+/// A single-line text input styled like the Tauri settings rows.
+///
+/// `password` maps to Tauri's `type="password"`（密钥/令牌字段）。
+pub fn text_input(
+    ui: &mut egui::Ui,
+    value: &mut String,
+    id: egui::Id,
+    hint: &str,
+    width: f32,
+    password: bool,
+) -> egui::Response {
+    let width = width.clamp(80.0, INPUT_MAX_WIDTH);
+    let (outer, _) = ui.allocate_exact_size(egui::vec2(width, INPUT_HEIGHT), egui::Sense::hover());
+    ui.painter()
+        .rect_filled(outer, egui::CornerRadius::same(8), theme::SURFACE);
+    ui.painter().rect_stroke(
+        outer,
+        egui::CornerRadius::same(8),
+        egui::Stroke::new(0.5, theme::LINE_STRONG),
+        egui::StrokeKind::Inside,
+    );
+    // padding 0/10：左右缩进 10，纵向留 1 抵消 0.5px 描边，文字由 vertical_align 居中。
+    let inner = outer.shrink2(egui::vec2(10.0, 1.0));
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt(id)
+            .max_rect(inner)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    let mut edit = egui::TextEdit::singleline(value)
+        .id(id)
+        .hint_text(hint)
+        .font(egui::FontId::proportional(INPUT_FONT_SIZE))
+        .text_color(theme::INK)
+        .frame(false)
+        .desired_width(inner.width())
+        .vertical_align(egui::Align::Center);
+    if password {
+        edit = edit.password(true);
+    }
+    child.add(edit)
+}
+
 /// A labelled section block: title plus optional smaller description line.
 pub fn section_title(ui: &mut egui::Ui, width: f32, title: &str, desc: Option<&str>) {
     let height = if desc.is_some() { 40.0 } else { 20.0 };
@@ -1100,4 +1161,28 @@ pub fn unsupported_page(ui: &mut egui::Ui, lang: openless_linux_egui::Lang, titl
                 );
             });
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_input_metrics_match_the_tauri_input_style() {
+        // Tauri `inputStyle`（settings/shared.tsx:243-256）：height 32 / fontSize 13.5 /
+        // padding 0 10 / maxWidth 360。这些取值被设置页所有文本输入共用，改动必须是有意的。
+        assert_eq!(INPUT_HEIGHT, 32.0);
+        assert_eq!(INPUT_FONT_SIZE, 13.5);
+        assert_eq!(INPUT_MAX_WIDTH, 360.0);
+    }
+
+    #[test]
+    fn the_selected_segment_uses_the_tauri_shadow_tokens() {
+        // Tauri `--ol-segmented-active-shadow` 的两段：细环 + 向下 1px 的浅投影。
+        // 选中片没有描边（border: 0），所以环不能等于普通的 --ol-line。
+        assert_ne!(theme::SEGMENTED_ACTIVE_RING, theme::LINE);
+        assert_eq!(theme::SEGMENTED_ACTIVE_BG, theme::SURFACE);
+        assert!(theme::SEGMENTED_ACTIVE_SHADOW.a() > 0);
+        assert!(theme::SEGMENTED_ACTIVE_SHADOW.a() < theme::SEGMENTED_ACTIVE_RING.a());
+    }
 }

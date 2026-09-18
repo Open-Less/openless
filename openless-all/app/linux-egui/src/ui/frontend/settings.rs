@@ -253,6 +253,9 @@ fn rail(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronten
                 SettingsSection::Advanced,
                 SettingsSection::About,
             ] {
+                if !rail_section_visible(section, vm.hotkeys_supported) {
+                    continue;
+                }
                 let label = section.label(lang);
                 if !query.is_empty() && !label.to_lowercase().contains(&query) {
                     continue;
@@ -290,6 +293,12 @@ fn rail(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronten
                 }
             }
         });
+}
+
+/// Tauri `visibleSettingsSections(supportsDesktopHotkey)`：没有桌面热键后端时
+/// 整个「快捷键」分区不出现（其余分区与平台无关）。
+fn rail_section_visible(section: SettingsSection, hotkeys_supported: bool) -> bool {
+    section != SettingsSection::Shortcuts || hotkeys_supported
 }
 
 fn rail_item(ui: &mut egui::Ui, label: &str, icon: SettingsIcon, active: bool) -> egui::Response {
@@ -1070,7 +1079,11 @@ fn shortcut_row(
     let menu_open = vm.shortcut_menu == Some(row.field);
     ui.horizontal(|ui| {
         ui.set_min_height(46.0);
-        ui.label(egui::RichText::new(row.label).size(14.0).color(theme::INK));
+        ui.label(
+            egui::RichText::new(row.label)
+                .font(theme::medium_font(14.0))
+                .color(theme::INK),
+        );
         if !row.desc.is_empty() {
             help_dot(ui, row.desc);
         }
@@ -2616,11 +2629,8 @@ fn provider_field(
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(label).size(11.5).color(theme::INK_3));
         let mut draft = value.to_string();
-        let mut edit = egui::TextEdit::singleline(&mut draft).desired_width(220.0);
-        if password {
-            edit = edit.password(true);
-        }
-        if ui.add(edit).changed() {
+        let id = egui::Id::new(("openless-settings-provider-field", format!("{field:?}")));
+        if layout::text_input(ui, &mut draft, id, "", 220.0, password).changed() {
             actions.push(FrontendAction::SettingsProviderField(field, draft));
         }
     });
@@ -2917,12 +2927,13 @@ fn add_channel_form(
         }
         // 推的是编辑后的值：推编辑前的拷贝会让宿主把旧值写回字段，每敲一个字
         // 就被回灌一次（渠道名、下划线搜索框都踩过这个坑）。
-        let response = ui.add(
-            egui::TextEdit::singleline(&mut vm.channel_form_name)
-                .id(egui::Id::new("openless-settings-channel-name"))
-                .hint_text(tr_l10n(lang, "settings.channels.name_placeholder"))
-                .text_color(theme::INK)
-                .desired_width(200.0),
+        let response = layout::text_input(
+            ui,
+            &mut vm.channel_form_name,
+            egui::Id::new("openless-settings-channel-name"),
+            tr_l10n(lang, "settings.channels.name_placeholder"),
+            200.0,
+            false,
         );
         if response.changed() {
             actions.push(FrontendAction::SettingsChannelName(
@@ -3301,12 +3312,13 @@ fn text_edit_row(
     on_change: impl FnOnce(),
 ) {
     row_desc(ui, label, desc, |ui| {
-        let response = ui.add(
-            egui::TextEdit::singleline(value)
-                .id(egui::Id::new(("openless-settings-text", label)))
-                .hint_text(hint)
-                .text_color(theme::INK)
-                .desired_width(ui.available_width().min(300.0)),
+        let response = layout::text_input(
+            ui,
+            value,
+            egui::Id::new(("openless-settings-text", label)),
+            hint,
+            ui.available_width().min(300.0),
+            false,
         );
         if response.changed() {
             on_change();
@@ -3387,7 +3399,11 @@ fn row_desc(ui: &mut egui::Ui, label: &str, desc: &str, control: impl FnOnce(&mu
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
                 if !label.is_empty() {
-                    ui.label(egui::RichText::new(label).size(14.0).color(theme::INK));
+                    ui.label(
+                        egui::RichText::new(label)
+                            .font(theme::medium_font(14.0))
+                            .color(theme::INK),
+                    );
                 }
                 if !desc.is_empty() {
                     help_dot(ui, desc);
@@ -3409,6 +3425,26 @@ fn row_desc(ui: &mut egui::Ui, label: &str, desc: &str, control: impl FnOnce(&mu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_shortcut_section_hides_without_a_hotkey_backend() {
+        // Tauri 的 `visibleSettingsSections` 只在 supportsDesktopHotkey 为真时才列出
+        // 「快捷键」；没有 fcitx5 监听器时要跟着隐藏，否则用户会进到一个改不动任何
+        // 东西的分区。其余分区的可见性不受该能力影响。
+        for section in [
+            SettingsSection::General,
+            SettingsSection::Services,
+            SettingsSection::Appearance,
+            SettingsSection::Privacy,
+            SettingsSection::Advanced,
+            SettingsSection::About,
+        ] {
+            assert!(rail_section_visible(section, false));
+            assert!(rail_section_visible(section, true));
+        }
+        assert!(rail_section_visible(SettingsSection::Shortcuts, true));
+        assert!(!rail_section_visible(SettingsSection::Shortcuts, false));
+    }
 
     #[test]
     fn provider_editor_renders_every_auth_shape() {

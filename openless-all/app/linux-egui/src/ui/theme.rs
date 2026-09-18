@@ -9,6 +9,14 @@ pub const SURFACE: egui::Color32 = egui::Color32::WHITE;
 pub const SURFACE_2: egui::Color32 = egui::Color32::from_rgb(244, 244, 245);
 /// Tauri `--ol-segmented-bg`: the segmented-control track.
 pub const SEGMENTED_TRACK: egui::Color32 = egui::Color32::from_rgba_premultiplied(10, 10, 10, 10);
+/// Tauri `--ol-segmented-active-bg`: the selected chip is a plain white surface.
+pub const SEGMENTED_ACTIVE_BG: egui::Color32 = SURFACE;
+/// Tauri `--ol-segmented-active-shadow` 第二段 `0 0 0 0.5px rgba(0,0,0,0.06)`：
+/// 选中片以细环代替描边（Tauri 的选中片 `border: 0`）。
+pub const SEGMENTED_ACTIVE_RING: egui::Color32 = egui::Color32::from_black_alpha(15);
+/// Tauri `--ol-segmented-active-shadow` 第一段 `0 1px 2px rgba(0,0,0,0.06)`。
+/// egui 没有高斯模糊的矩形阴影，用向下偏移 1px 的淡色圆角矩形近似同一种"浮起"观感。
+pub const SEGMENTED_ACTIVE_SHADOW: egui::Color32 = egui::Color32::from_black_alpha(10);
 pub const LINE: egui::Color32 = egui::Color32::from_rgb(228, 228, 231);
 pub const INK: egui::Color32 = egui::Color32::from_rgb(9, 9, 11);
 pub const INK_2: egui::Color32 = egui::Color32::from_rgb(63, 63, 70);
@@ -41,6 +49,26 @@ pub const CAPSULE_BADGE_BG: egui::Color32 = egui::Color32::from_rgb(250, 250, 25
 pub const CAPSULE_BADGE_BORDER: egui::Color32 =
     egui::Color32::from_rgba_premultiplied(9, 24, 58, 64);
 pub const ERR: egui::Color32 = egui::Color32::from_rgb(220, 38, 38);
+
+/// Font key of the registered Medium face (see [`medium_font`]).
+const MEDIUM_FACE: &str = "openless-medium";
+/// Named font family holding the Medium face plus the regular chain as fallback.
+pub const MEDIUM_FAMILY: &str = "openless-medium-family";
+
+static MEDIUM_AVAILABLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Font for Tauri's `font-weight: 500` labels (setting rows).
+///
+/// Uses the fontconfig-resolved Medium face when the desktop ships one; otherwise
+/// falls back to the regular proportional face. The fallback is deliberate: egui
+/// cannot synthesise a weight, and faking it would misreport the alignment.
+pub fn medium_font(size: f32) -> egui::FontId {
+    if MEDIUM_AVAILABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        egui::FontId::new(size, egui::FontFamily::Name(MEDIUM_FAMILY.into()))
+    } else {
+        egui::FontId::proportional(size)
+    }
+}
 
 /// Resolve the file + face index fontconfig would pick for `query`.
 ///
@@ -151,6 +179,40 @@ pub fn install(ctx: &egui::Context) {
             .or_default()
             .insert(0, name.clone());
     }
+
+    // Tauri 的 `SettingRow` 标签是 `font-weight: 500`。egui 不能选可变字体的字重轴，
+    // 所以去 fontconfig 要一个真正的 Medium 面（例如 Noto Sans CJK Medium）单独注册
+    // 成一个命名族；桌面没有 500 面时退回 Proportional（见 `medium_font`）。
+    let regular_face = fontconfig_match("sans-serif");
+    let medium_face = fontconfig_match("sans-serif:weight=medium");
+    if let Some((path, index)) = medium_face {
+        if regular_face.as_ref() != Some(&(path.clone(), index)) {
+            if let Ok(bytes) = std::fs::read(&path) {
+                fonts.font_data.insert(
+                    MEDIUM_FACE.to_owned(),
+                    egui::FontData {
+                        font: bytes.into(),
+                        index,
+                        tweak: Default::default(),
+                    }
+                    .into(),
+                );
+                let mut chain = vec![MEDIUM_FACE.to_owned()];
+                chain.extend(
+                    fonts
+                        .families
+                        .get(&egui::FontFamily::Proportional)
+                        .cloned()
+                        .unwrap_or_default(),
+                );
+                fonts
+                    .families
+                    .insert(egui::FontFamily::Name(MEDIUM_FAMILY.into()), chain);
+                MEDIUM_AVAILABLE.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
+
     ctx.set_fonts(fonts);
 
     apply_visuals(ctx, openless_core::shared_types::ThemeMode::System);

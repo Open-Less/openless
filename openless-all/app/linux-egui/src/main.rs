@@ -2933,6 +2933,12 @@ mod linux_app {
                     prefs.pipeline_mode == openless_core::shared_types::PipelineMode::Multimodal;
                 // Linux 宿主没有本地推理引擎。
                 vm.supports_local_asr = false;
+                // 热键后端是否真的起来了：没有 fcitx5 监听器时隐藏「快捷键」分区，
+                // 与 Tauri 的 `visibleSettingsSections(supportsDesktopHotkey)` 一致。
+                vm.hotkeys_supported = self
+                    .native
+                    .as_ref()
+                    .is_some_and(LinuxNativeRuntime::hotkeys_available);
                 vm.auto_update_capable = self.update_support.supports_auto_update();
                 vm.permissions = permissions;
                 vm.selection_polish_hotkey = prefs

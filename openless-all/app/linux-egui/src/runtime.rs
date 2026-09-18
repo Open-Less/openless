@@ -98,6 +98,15 @@ impl LinuxNativeRuntime {
         &self.host_actions
     }
 
+    /// Whether the fcitx5 global-hotkey listener came up.
+    ///
+    /// Tauri hides the 「快捷键」 settings section when the platform has no
+    /// desktop hotkey (`visibleSettingsSections(supportsDesktopHotkey)`); the
+    /// egui rail needs the same honest answer instead of always showing it.
+    pub fn hotkeys_available(&self) -> bool {
+        self.hotkeys.is_some()
+    }
+
     pub fn drain_native_events(
         &self,
     ) -> (

@@ -662,6 +662,12 @@ pub struct FrontendViewModel {
     pub multimodal_view: bool,
     /// The host can self-update (AppImage) → beta-channel / check-update rows.
     pub auto_update_capable: bool,
+    /// The platform has a working desktop hotkey backend (fcitx5 listener up).
+    /// Tauri's `visibleSettingsSections(supportsDesktopHotkey)` hides the
+    /// 「快捷键」 section when there is none; the rail follows the same rule.
+    /// Defaults to true so pure-rendering callers (and the common case where the
+    /// host did start the listener) keep the section visible.
+    pub hotkeys_supported: bool,
     /// 展开编辑菜单的快捷键行（`None` = 都收起）。
     pub shortcut_menu: Option<ShortcutField>,
     /// 正在录入按键的快捷键行（`None` = 未在录入）。
@@ -813,6 +819,7 @@ impl Default for FrontendViewModel {
             supports_local_asr: false,
             multimodal_view: false,
             auto_update_capable: false,
+            hotkeys_supported: true,
             shortcut_menu: None,
             shortcut_recording: None,
             style_hotkey_draft_open: false,
