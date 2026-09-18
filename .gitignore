@@ -3,6 +3,7 @@
 build/
 .swiftpm/
 *.xcodeproj
+!/openless-all/app/ios/OpenLess.xcodeproj/
 Package.resolved
 xcuserdata/
 DerivedData/

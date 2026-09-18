@@ -1,0 +1,378 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+		00000000000000000000001D /* OpenLessApp.swift */ = {isa = PBXBuildFile; fileRef = 00000000000000000000001C /* OpenLessApp.swift */; };
+		00000000000000000000001F /* AppModel.swift */ = {isa = PBXBuildFile; fileRef = 00000000000000000000001E /* AppModel.swift */; };
+		000000000000000000000021 /* LocalStore.swift */ = {isa = PBXBuildFile; fileRef = 000000000000000000000020 /* LocalStore.swift */; };
+		000000000000000000000023 /* KeychainStore.swift */ = {isa = PBXBuildFile; fileRef = 000000000000000000000022 /* KeychainStore.swift */; };
+		000000000000000000000025 /* CloudClient.swift */ = {isa = PBXBuildFile; fileRef = 000000000000000000000024 /* CloudClient.swift */; };
+		000000000000000000000027 /* AudioCapture.swift */ = {isa = PBXBuildFile; fileRef = 000000000000000000000026 /* AudioCapture.swift */; };
+		000000000000000000000029 /* Components.swift */ = {isa = PBXBuildFile; fileRef = 000000000000000000000028 /* Components.swift */; };
+		00000000000000000000002B /* DictationView.swift */ = {isa = PBXBuildFile; fileRef = 00000000000000000000002A /* DictationView.swift */; };
+		00000000000000000000002D /* HistoryView.swift */ = {isa = PBXBuildFile; fileRef = 00000000000000000000002C /* HistoryView.swift */; };
+		00000000000000000000002F /* LibraryView.swift */ = {isa = PBXBuildFile; fileRef = 00000000000000000000002E /* LibraryView.swift */; };
+		000000000000000000000031 /* SettingsView.swift */ = {isa = PBXBuildFile; fileRef = 000000000000000000000030 /* SettingsView.swift */; };
+		000000000000000000000033 /* KeyboardGuideView.swift */ = {isa = PBXBuildFile; fileRef = 000000000000000000000032 /* KeyboardGuideView.swift */; };
+		000000000000000000000035 /* Models.swift */ = {isa = PBXBuildFile; fileRef = 000000000000000000000034 /* Models.swift */; };
+		000000000000000000000036 /* Models.swift */ = {isa = PBXBuildFile; fileRef = 000000000000000000000034 /* Models.swift */; };
+		000000000000000000000038 /* KeyboardStore.swift */ = {isa = PBXBuildFile; fileRef = 000000000000000000000037 /* KeyboardStore.swift */; };
+		000000000000000000000039 /* KeyboardStore.swift */ = {isa = PBXBuildFile; fileRef = 000000000000000000000037 /* KeyboardStore.swift */; };
+		00000000000000000000003B /* KeyboardViewController.swift */ = {isa = PBXBuildFile; fileRef = 00000000000000000000003A /* KeyboardViewController.swift */; };
+		00000000000000000000003D /* Assets.xcassets */ = {isa = PBXBuildFile; fileRef = 00000000000000000000003C /* Assets.xcassets */; };
+		00000000000000000000003F /* PrivacyInfo.xcprivacy */ = {isa = PBXBuildFile; fileRef = 00000000000000000000003E /* PrivacyInfo.xcprivacy */; };
+		000000000000000000000041 /* PrivacyInfo.xcprivacy */ = {isa = PBXBuildFile; fileRef = 000000000000000000000040 /* PrivacyInfo.xcprivacy */; };
+		000000000000000000000047 /* OpenLessKeyboard.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 000000000000000000000007; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		00000000000000000000001C /* OpenLessApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OpenLessApp.swift"; sourceTree = "<group>"; };
+		00000000000000000000001E /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppModel.swift"; sourceTree = "<group>"; };
+		000000000000000000000020 /* LocalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LocalStore.swift"; sourceTree = "<group>"; };
+		000000000000000000000022 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "KeychainStore.swift"; sourceTree = "<group>"; };
+		000000000000000000000024 /* CloudClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CloudClient.swift"; sourceTree = "<group>"; };
+		000000000000000000000026 /* AudioCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AudioCapture.swift"; sourceTree = "<group>"; };
+		000000000000000000000028 /* Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Components.swift"; sourceTree = "<group>"; };
+		00000000000000000000002A /* DictationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DictationView.swift"; sourceTree = "<group>"; };
+		00000000000000000000002C /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HistoryView.swift"; sourceTree = "<group>"; };
+		00000000000000000000002E /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LibraryView.swift"; sourceTree = "<group>"; };
+		000000000000000000000030 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsView.swift"; sourceTree = "<group>"; };
+		000000000000000000000032 /* KeyboardGuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "KeyboardGuideView.swift"; sourceTree = "<group>"; };
+		000000000000000000000034 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Models.swift"; sourceTree = "<group>"; };
+		000000000000000000000037 /* KeyboardStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "KeyboardStore.swift"; sourceTree = "<group>"; };
+		00000000000000000000003A /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "KeyboardViewController.swift"; sourceTree = "<group>"; };
+		00000000000000000000003C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Assets.xcassets"; sourceTree = "<group>"; };
+		00000000000000000000003E /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = "PrivacyInfo.xcprivacy"; sourceTree = "<group>"; };
+		000000000000000000000040 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = "PrivacyInfo.xcprivacy"; sourceTree = "<group>"; };
+		000000000000000000000042 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info.plist"; sourceTree = "<group>"; };
+		000000000000000000000043 /* OpenLess.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "OpenLess.entitlements"; sourceTree = "<group>"; };
+		000000000000000000000044 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info.plist"; sourceTree = "<group>"; };
+		000000000000000000000045 /* OpenLessKeyboard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "OpenLessKeyboard.entitlements"; sourceTree = "<group>"; };
+		000000000000000000000046 /* Project.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Project.xcconfig"; sourceTree = "<group>"; };
+		000000000000000000000006 /* OpenLess.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OpenLess.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		000000000000000000000007 /* OpenLessKeyboard.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = OpenLessKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		00000000000000000000000B /* App Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				00000000000000000000001D /* OpenLessApp.swift */,
+				00000000000000000000001F /* AppModel.swift */,
+				000000000000000000000021 /* LocalStore.swift */,
+				000000000000000000000023 /* KeychainStore.swift */,
+				000000000000000000000025 /* CloudClient.swift */,
+				000000000000000000000027 /* AudioCapture.swift */,
+				000000000000000000000029 /* Components.swift */,
+				00000000000000000000002B /* DictationView.swift */,
+				00000000000000000000002D /* HistoryView.swift */,
+				00000000000000000000002F /* LibraryView.swift */,
+				000000000000000000000031 /* SettingsView.swift */,
+				000000000000000000000033 /* KeyboardGuideView.swift */,
+				000000000000000000000035 /* Models.swift */,
+				000000000000000000000038 /* KeyboardStore.swift */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		00000000000000000000000C /* Keyboard Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				000000000000000000000036 /* Models.swift */,
+				000000000000000000000039 /* KeyboardStore.swift */,
+				00000000000000000000003B /* KeyboardViewController.swift */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		00000000000000000000000D /* App Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				00000000000000000000003D /* Assets.xcassets */,
+				00000000000000000000003F /* PrivacyInfo.xcprivacy */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		00000000000000000000000E /* Keyboard Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				000000000000000000000041 /* PrivacyInfo.xcprivacy */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		00000000000000000000000F /* App Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		000000000000000000000010 /* Keyboard Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		000000000000000000000011 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			name = "Embed App Extensions";
+			files = (
+				000000000000000000000047 /* OpenLessKeyboard.appex */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		000000000000000000000014 /* OpenLess */ = {
+			isa = PBXGroup;
+			children = (
+				000000000000000000000015 /* App */,
+				000000000000000000000016 /* Services */,
+				000000000000000000000017 /* Views */,
+				000000000000000000000018 /* Resources */,
+				000000000000000000000042 /* Info.plist */,
+				000000000000000000000043 /* OpenLess.entitlements */,
+			);
+			path = OpenLess;
+			sourceTree = "<group>";
+		};
+		000000000000000000000015 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				00000000000000000000001C /* OpenLessApp.swift */,
+				00000000000000000000001E /* AppModel.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		000000000000000000000016 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				000000000000000000000020 /* LocalStore.swift */,
+				000000000000000000000022 /* KeychainStore.swift */,
+				000000000000000000000024 /* CloudClient.swift */,
+				000000000000000000000026 /* AudioCapture.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		000000000000000000000017 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				000000000000000000000028 /* Components.swift */,
+				00000000000000000000002A /* DictationView.swift */,
+				00000000000000000000002C /* HistoryView.swift */,
+				00000000000000000000002E /* LibraryView.swift */,
+				000000000000000000000030 /* SettingsView.swift */,
+				000000000000000000000032 /* KeyboardGuideView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		000000000000000000000018 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				00000000000000000000003C /* Assets.xcassets */,
+				00000000000000000000003E /* PrivacyInfo.xcprivacy */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		000000000000000000000019 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				000000000000000000000034 /* Models.swift */,
+				000000000000000000000037 /* KeyboardStore.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		00000000000000000000001A /* Keyboard */ = {
+			isa = PBXGroup;
+			children = (
+				00000000000000000000003A /* KeyboardViewController.swift */,
+				000000000000000000000040 /* PrivacyInfo.xcprivacy */,
+				000000000000000000000044 /* Info.plist */,
+				000000000000000000000045 /* OpenLessKeyboard.entitlements */,
+			);
+			path = Keyboard;
+			sourceTree = "<group>";
+		};
+		00000000000000000000001B /* Configuration */ = {
+			isa = PBXGroup;
+			children = (
+				000000000000000000000046 /* Project.xcconfig */,
+			);
+			path = Configuration;
+			sourceTree = "<group>";
+		};
+		000000000000000000000002 /* Root */ = {
+			isa = PBXGroup;
+			children = (000000000000000000000014, 000000000000000000000019, 00000000000000000000001A, 00000000000000000000001B, 000000000000000000000003, );
+			sourceTree = "<group>";
+		};
+		000000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (000000000000000000000006, 000000000000000000000007, );
+			name = Products;
+			sourceTree = "<group>";
+		};
+		000000000000000000000012 /* Keyboard Proxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000001;
+			proxyType = 1;
+			remoteGlobalIDString = 000000000000000000000005;
+			remoteInfo = OpenLessKeyboard;
+		};
+		000000000000000000000013 /* Keyboard Dependency */ = {
+			isa = PBXTargetDependency;
+			target = 000000000000000000000005;
+			targetProxy = 000000000000000000000012;
+		};
+		000000000000000000000004 /* OpenLess */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 000000000000000000000009;
+			buildPhases = (00000000000000000000000B, 00000000000000000000000F, 00000000000000000000000D, 000000000000000000000011, );
+			buildRules = ();
+			dependencies = (000000000000000000000013, );
+			name = OpenLess;
+			productName = OpenLess;
+			productReference = 000000000000000000000006;
+			productType = "com.apple.product-type.application";
+		};
+		000000000000000000000005 /* OpenLessKeyboard */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 00000000000000000000000A;
+			buildPhases = (00000000000000000000000C, 000000000000000000000010, 00000000000000000000000E, );
+			buildRules = ();
+			dependencies = ();
+			name = OpenLessKeyboard;
+			productName = OpenLessKeyboard;
+			productReference = 000000000000000000000007;
+			productType = "com.apple.product-type.app-extension";
+		};
+		000000000000000000000048 /* Project Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 000000000000000000000046;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				SDKROOT = iphoneos;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				DEBUG_INFORMATION_FORMAT = "dwarf";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				ENABLE_TESTABILITY = YES;
+				ONLY_ACTIVE_ARCH = YES;
+			};
+			name = Debug;
+		};
+		000000000000000000000049 /* App Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				PRODUCT_NAME = OpenLess;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(OPENLESS_BUNDLE_ID)";
+				INFOPLIST_FILE = OpenLess/Info.plist;
+				CODE_SIGN_ENTITLEMENTS = OpenLess/OpenLess.entitlements;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", );
+			};
+			name = Debug;
+		};
+		00000000000000000000004A /* Keyboard Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				PRODUCT_NAME = OpenLessKeyboard;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(OPENLESS_BUNDLE_ID).keyboard";
+				INFOPLIST_FILE = Keyboard/Info.plist;
+				CODE_SIGN_ENTITLEMENTS = Keyboard/OpenLessKeyboard.entitlements;
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				SKIP_INSTALL = YES;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks", );
+			};
+			name = Debug;
+		};
+		00000000000000000000004B /* Project Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 000000000000000000000046;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				SDKROOT = iphoneos;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited)";
+			};
+			name = Release;
+		};
+		00000000000000000000004C /* App Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				PRODUCT_NAME = OpenLess;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(OPENLESS_BUNDLE_ID)";
+				INFOPLIST_FILE = OpenLess/Info.plist;
+				CODE_SIGN_ENTITLEMENTS = OpenLess/OpenLess.entitlements;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", );
+			};
+			name = Release;
+		};
+		00000000000000000000004D /* Keyboard Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				PRODUCT_NAME = OpenLessKeyboard;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(OPENLESS_BUNDLE_ID).keyboard";
+				INFOPLIST_FILE = Keyboard/Info.plist;
+				CODE_SIGN_ENTITLEMENTS = Keyboard/OpenLessKeyboard.entitlements;
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				SKIP_INSTALL = YES;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks", );
+			};
+			name = Release;
+		};
+		000000000000000000000008 /* Project Configurations */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (000000000000000000000048, 00000000000000000000004B, );
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		000000000000000000000009 /* OpenLess Configurations */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (000000000000000000000049, 00000000000000000000004C, );
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		00000000000000000000000A /* OpenLessKeyboard Configurations */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (00000000000000000000004A, 00000000000000000000004D, );
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		000000000000000000000001 /* Project */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					000000000000000000000004 = {CreatedOnToolsVersion = 16.0; SystemCapabilities = {com.apple.ApplicationGroups.iOS = {enabled = 1; }; }; };
+					000000000000000000000005 = {CreatedOnToolsVersion = 16.0; SystemCapabilities = {com.apple.ApplicationGroups.iOS = {enabled = 1; }; }; };
+				};
+			};
+			buildConfigurationList = 000000000000000000000008;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = zh_CN;
+			hasScannedForEncodings = 0;
+			knownRegions = (zh_CN, Base, );
+			mainGroup = 000000000000000000000002;
+			productRefGroup = 000000000000000000000003;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (000000000000000000000004, 000000000000000000000005, );
+		};
+	};
+	rootObject = 000000000000000000000001 /* Project */;
+}
