@@ -1202,8 +1202,6 @@ mod tests {
         ));
     }
 
-    use super::*;
-
     #[test]
     fn a_daemon_holding_another_copy_always_asks_for_a_restart() {
         // Even with a matching fingerprint, a daemon that mapped a different

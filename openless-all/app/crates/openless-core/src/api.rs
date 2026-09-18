@@ -8687,7 +8687,10 @@ mod tests {
         )
         .unwrap();
         let first = backend.start().await.expect("first start must not fail");
-        let second = backend.start().await.expect("handshake start must not fail");
+        let second = backend
+            .start()
+            .await
+            .expect("handshake start must not fail");
         assert!(first.backend.running);
         assert!(second.backend.running);
         let _ = data_dir;

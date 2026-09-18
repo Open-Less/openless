@@ -13,6 +13,9 @@ mod linux_app {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use crate::ui::bridge::{
+        self, HostToWindow, UiBridgeClient, UiBridgeHost, WindowToHost, UI_BRIDGE_VERSION,
+    };
     use crate::ui::frontend::{self, view_model::FrontendViewModel};
     use crate::ui::{shell, theme};
     use chrono::Datelike;
@@ -540,13 +543,6 @@ mod linux_app {
         }
     }
 
-    /// 后台唤醒间隔：任何窗口状态下都必须继续唤醒（最小化、被遮挡、托盘隐藏都
-    /// 要能响应全局热键），所以只有一个常量 —— 写成函数是为了让「不可见时也不能
-    /// 停」这条约束有测试守着，而不是散落在 update 里。
-    pub fn background_wake_interval() -> std::time::Duration {
-        std::time::Duration::from_millis(250)
-    }
-
     pub struct OpenLessEguiApp {
         tokio: Arc<tokio::runtime::Runtime>,
         native: Option<LinuxNativeRuntime>,
@@ -620,17 +616,23 @@ mod linux_app {
         update_support: LinuxUpdateSupport,
         update_schedule: UpdateSchedule,
         update_started: std::time::Instant,
-        /// 后台唤醒任务是否已启动（保证窗口不可见时事件泵仍在跑）。
-        background_waker_started: bool,
         /// 上次打「泵心跳」日志的时间。
         last_pump_heartbeat: std::time::Instant,
-        /// 无窗口宿主模式：进程里没有 eframe 窗口，事件泵、托盘与弹窗由
-        /// `run_headless` 的循环驱动（关窗后由它接管后台就靠这个）。
-        headless: bool,
-        /// 无窗口宿主收到「显示主窗口」请求：主循环据此拉起窗口进程后自己退出。
-        window_requested: bool,
-        /// 塌缩隐藏前的窗口尺寸（Wayland 隐藏/恢复要原样还原，不能写死尺寸）。
-        main_window_restore_size: Option<egui::Vec2>,
+        /// 用户是否希望主窗口开着。窗口本体在独立的 UI 进程里，宿主只负责
+        /// 拉起来、看着它退出、再按需重拉。
+        window_should_be_open: bool,
+        /// 当前 UI 窗口进程；它退出后置空（窗口与任务栏条目随之消失）。
+        ui_window: Option<std::process::Child>,
+        /// 上次拉起 UI 进程的时刻：防抖，连续点托盘菜单不会拉出两个窗口。
+        ui_window_spawned_at: Option<std::time::Instant>,
+        /// 上一次发给 UI 的快照指纹；内容没变就不重复发。
+        last_snapshot_fingerprint: Option<u64>,
+        /// 上一次发快照的时间（长连接保活）。
+        last_snapshot_at: std::time::Instant,
+        /// 本帧从 UI 收到、待宿主执行的动作（按到达顺序）。
+        pending_ui_actions: Vec<frontend::view_model::FrontendAction>,
+        /// 本帧从 UI 收到、待回包的延迟探针序号。
+        pending_ui_pongs: Vec<u64>,
         update_manifest: Option<UpdateManifest>,
         update_busy: bool,
         update_progress: Option<openless_linux_egui::DownloadProgress>,
@@ -665,7 +667,7 @@ mod linux_app {
             native: Result<LinuxNativeRuntime, String>,
             tray: Option<openless_linux_egui::LinuxTray>,
             update_support: LinuxUpdateSupport,
-            headless: bool,
+            window_should_be_open: bool,
         ) -> Self {
             let (tx, rx) = mpsc::channel();
             let locale_pref = load_locale_pref();
@@ -747,11 +749,14 @@ mod linux_app {
                         update_support,
                         update_schedule: UpdateSchedule::new(Duration::ZERO),
                         update_started: std::time::Instant::now(),
-                        background_waker_started: false,
                         last_pump_heartbeat: std::time::Instant::now(),
-                        headless,
-                        window_requested: false,
-                        main_window_restore_size: None,
+                        window_should_be_open,
+                        ui_window: None,
+                        ui_window_spawned_at: None,
+                        last_snapshot_fingerprint: None,
+                        last_snapshot_at: std::time::Instant::now(),
+                        pending_ui_actions: Vec::new(),
+                        pending_ui_pongs: Vec::new(),
                         update_manifest: None,
                         update_busy: false,
                         update_progress: None,
@@ -848,11 +853,14 @@ mod linux_app {
                     update_support,
                     update_schedule: UpdateSchedule::new(Duration::ZERO),
                     update_started: std::time::Instant::now(),
-                    background_waker_started: false,
                     last_pump_heartbeat: std::time::Instant::now(),
-                    headless,
-                    window_requested: false,
-                    main_window_restore_size: None,
+                    window_should_be_open,
+                    ui_window: None,
+                    ui_window_spawned_at: None,
+                    last_snapshot_fingerprint: None,
+                    last_snapshot_at: std::time::Instant::now(),
+                    pending_ui_actions: Vec::new(),
+                    pending_ui_pongs: Vec::new(),
                     update_manifest: None,
                     update_busy: false,
                     update_progress: None,
@@ -1710,7 +1718,7 @@ mod linux_app {
             });
         }
 
-        fn drain_tray(&mut self, ctx: &egui::Context) {
+        fn drain_tray(&mut self, _ctx: &egui::Context) {
             let lang = self.lang;
             let mut commands = Vec::new();
             if let Some(tray) = &self.tray {
@@ -1723,7 +1731,8 @@ mod linux_app {
             for command in commands {
                 match command {
                     openless_linux_egui::TrayCommand::ShowMain => {
-                        self.request_main_window(ctx);
+                        // 托盘是用户的显式动作：拉起窗口进程（已有窗口时由它自己抬起）。
+                        self.request_main_window();
                     }
                     openless_linux_egui::TrayCommand::ActivatePreviousStyle => {
                         if let Some(backend) = self.backend() {
@@ -1752,8 +1761,8 @@ mod linux_app {
                         }
                     }
                     openless_linux_egui::TrayCommand::Quit => {
+                        // 宿主退出前会给 UI 发 Shutdown（见 `run_host` 收尾）。
                         self.exit_requested = true;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 }
             }
@@ -2169,52 +2178,39 @@ mod linux_app {
         /// current-thread 运行时，`spawn` 的任务只在别处 `block_on` 时才被推进，
         /// 当作后台泵用就是「写完看着对、最小化后照样死」（实测心跳会在窗口
         /// 收走的那一刻停）。线程只做一件事：`request_repaint()` 把事件循环戳醒。
-        fn ensure_background_waker(&mut self, ctx: &egui::Context) {
-            if self.background_waker_started {
-                return;
-            }
-            self.background_waker_started = true;
-            let ctx = ctx.clone();
-            let interval = background_wake_interval();
-            std::thread::Builder::new()
-                .name("openless-event-pump".to_string())
-                .spawn(move || loop {
-                    std::thread::sleep(interval);
-                    ctx.request_repaint();
-                })
-                .map(|_| ())
-                .unwrap_or_else(|error| {
-                    log::error!("[pump] background waker thread failed to start: {error}");
-                });
-        }
-
-        /// 泵心跳：窗口不可见时如果这条日志停了，就说明事件循环真的没在跑
-        /// （这正是「最小化后热键不响应」的判据），用户/支持可以直接看日志确认。
+        /// 泵心跳：宿主循环每 10s 一条。窗口关掉之后这条心跳**不能**停 ——
+        /// 停了就说明热键消费与弹窗拉起也没在跑（这正是当初「关窗后热键失效」
+        /// 的判据），用户/支持可以直接看日志确认。
         fn log_pump_heartbeat(&mut self, ctx: &egui::Context) {
             if self.last_pump_heartbeat.elapsed() < std::time::Duration::from_secs(10) {
                 return;
             }
             self.last_pump_heartbeat = std::time::Instant::now();
-            // 只看「窗口是否真的在屏幕外」这一类信号，避免把遮挡误报成故障。
-            let (minimized, focused) = ctx.input(|input| {
-                let viewport = input.viewport();
-                (viewport.minimized, viewport.focused)
-            });
+            // 宿主没有窗口，所以心跳只看「窗口进程还在不在」——
+            // 这正是关窗后必须继续为 true 的那一项能力。
+            let _ = ctx;
             log::info!(
-                "[pump] heartbeat minimized={:?} focused={:?} tray={} recording={}",
-                minimized,
-                focused,
+                "[pump] heartbeat window_process={} window_wanted={} tray={} recording={}",
+                self.ui_window.is_some(),
+                self.window_should_be_open,
                 self.tray.is_some(),
                 self.recording_phase_active,
             );
         }
 
-        fn poll(&mut self, ctx: &egui::Context) {
+        // 宿主没有窗口：ctx 只为保持调用形状（事件泵不再依赖任何视口状态）。
+        fn poll(&mut self, _ctx: &egui::Context) {
             let lang = self.lang;
+            // 用户再次启动应用（桌面图标 / 命令行 / 单实例转发）是**显式**的
+            // 打开窗口意图；Core 的 HostAction::ShowMain 不能拿来当这个用
+            // （弹窗流程里也会发，会让弹一次面板冒出一个主窗口）。
+            let mut launch_intent_window_requested = false;
             if let Some(native) = &self.native {
                 let (launch_intents, hotkey_events, errors) = native.drain_native_events();
                 let host = native.host_arc();
                 for intent in launch_intents {
+                    log::info!("[ui-host] launch intent from the user: {intent:?}");
+                    launch_intent_window_requested = true;
                     let host = Arc::clone(&host);
                     self.spawn(async move {
                         host.dispatch_launch_intent(intent).await?;
@@ -2241,22 +2237,13 @@ mod linux_app {
                     match action {
                         HostAction::ShowMain | HostAction::ShowLessComputer => {
                             // Core 的 ShowMain 是「把主窗口推到前面」的提示（弹窗流程里也会发），
-                            // 不是用户动作：无窗口宿主不因此拉起窗口进程，否则弹一次面板
-                            // 就可能冒出一个主窗口。真正的用户动作是托盘「显示主窗口」，
-                            // 它走 `request_main_window()`。
-                            if !self.headless {
-                                show_main_window(ctx, &mut self.main_window_restore_size);
-                            }
+                            // 不是用户动作：宿主不因此拉起窗口进程，否则弹一次面板就可能
+                            // 冒出一个主窗口。真正的用户动作是托盘「显示主窗口」。
                         }
                         HostAction::FocusMain => {
-                            // 只把焦点还回来：不强行把用户已经隐藏/最小化的窗口翻出来。
-                            // 无窗口宿主没有窗口可聚焦，也不因此拉起窗口进程：
-                            // FocusMain 是「把焦点给已有窗口」，弹窗场景里也会发，
-                            // 把它当成「用户想打开主窗口」会让弹窗一出现就冒出主窗口。
-                            if !self.headless {
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                            }
+                            // 宿主没有窗口可聚焦；已有窗口的聚焦由 UI 进程自己处理。
+                            // 这里刻意什么都不做：把它当成「用户想打开主窗口」会让
+                            // 弹窗一出现就冒出主窗口。
                         }
                         HostAction::Notify(message) => {
                             self.status = message.clone();
@@ -2336,6 +2323,9 @@ mod linux_app {
                         }
                     }
                 }
+            }
+            if launch_intent_window_requested {
+                self.request_main_window();
             }
             self.poll_popup_supervisors();
             let mut events = Vec::new();
@@ -2772,6 +2762,12 @@ mod linux_app {
             vm.status = self.status.clone();
             vm.version = env!("OPENLESS_APP_VERSION").to_string();
             vm.lang = lang;
+            // UI 进程没有 Core 偏好，明暗主题必须随视图模型一起过去。
+            vm.theme_mode = self
+                .preferences
+                .as_ref()
+                .map(|preferences| preferences.theme_mode)
+                .unwrap_or_default();
             if let Some(prefs) = &self.preferences {
                 vm.dictation_hotkey = prefs.dictation_hotkey.display_label();
                 vm.qa_hotkey = prefs
@@ -3840,7 +3836,9 @@ mod linux_app {
         fn apply_frontend_actions(
             &mut self,
             actions: Vec<frontend::view_model::FrontendAction>,
-            ctx: &egui::Context,
+            // 宿主没有窗口：窗口类动作由 UI 进程就地处理，这里保留参数是为了
+            // 让调用点保持「渲染层 → 动作 → 宿主」的形状。
+            _ctx: &egui::Context,
         ) {
             for action in actions {
                 match action {
@@ -3893,34 +3891,12 @@ mod linux_app {
                     frontend::view_model::FrontendAction::SidebarToggleTools => {
                         self.frontend_vm.tools_open = !self.frontend_vm.tools_open;
                     }
-                    frontend::view_model::FrontendAction::WindowClose => {
-                        // 关闭键 = 真正把窗口进程退掉，后台交给无窗口宿主（与 Tauri 的
-                        // 「关窗后台常驻」观感一致）；托盘菜单的「退出」才结束整个应用。
-                        self.apply_window_close(ctx);
-                    }
-                    frontend::view_model::FrontendAction::WindowMaximize => {
-                        let maximized =
-                            ctx.input(|input| input.viewport().maximized.unwrap_or(false));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
-                    }
-                    frontend::view_model::FrontendAction::WindowMinimize => {
-                        match minimize_action(self.tray.is_some()) {
-                            MinimizeAction::HideToTray => {
-                                // eframe 只在 RedrawRequested 里调用 update()，而最小化
-                                // 的 surface 拿不到 frame callback；winit 在 Wayland 上
-                                // 又拒绝取消最小化。一旦真最小化，热键消费、弹窗拉起、
-                                // 托盘回写就全部停摆且无法恢复，所以有托盘时按退回托盘
-                                // 处理（无会话时交给无窗口宿主：窗口真的从任务栏消失）。
-                                log::info!(
-                                    "[window] minimize → close-to-background (a minimized window \
-                                     stops the egui loop and cannot be unminimized on Wayland)"
-                                );
-                                self.apply_window_close(ctx);
-                            }
-                            MinimizeAction::Minimize => {
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-                            }
-                        }
+                    frontend::view_model::FrontendAction::WindowClose
+                    | frontend::view_model::FrontendAction::WindowMinimize
+                    | frontend::view_model::FrontendAction::WindowMaximize => {
+                        // 窗口控制由 UI 进程就地处理（只有它有窗口）；宿主收到说明
+                        // 某个 UI 分支忘了拦，记一条即可，不影响任何状态。
+                        log::debug!("[ui-host] window action reached the host: {action:?}");
                     }
                     frontend::view_model::FrontendAction::MarketplaceRefresh => {
                         self.load_marketplace();
@@ -4877,83 +4853,17 @@ mod linux_app {
         }
     }
 
-    /// 点关闭键的去向（Tauri 对齐：关窗 = 退回托盘，进程继续跑）。
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum WindowCloseAction {
-        /// 隐藏窗口，托盘图标继续驻留（会话进行中，换进程会丢掉这次会话）。
-        HideToTray,
-        /// 退出带窗口的进程并把后台交给无窗口宿主：窗口（以及它在任务栏/窗口
-        /// 列表里的条目）真的消失，而热键、弹窗、托盘继续工作。
-        ExitToHeadless,
-        /// 用户明确退出（托盘「退出」菜单），或没有托盘可退。
-        Quit,
-    }
+    /// UI 窗口进程的地址开关。
+    const UI_CLIENT_FLAG: &str = "--ui-client";
+    const UI_SOCKET_FLAG: &str = "--ui-socket";
 
-    /// 关窗策略。
-    ///
-    /// - 用户明确退出 / 没有托盘：只能退出（没有唤起路径时，隐藏会变成
-    ///   「进程还在但打不开」）。
-    /// - 会话进行中：退回托盘。`ExitToHeadless` 靠新进程重开后端，会丢掉
-    ///   这次录音/问答。
-    /// - 其余情况：交给无窗口宿主。Wayland 下 winit 的 `set_visible(false)` 是空
-    ///   实现，「隐藏」只能把窗口塌缩到 1x1 —— 它仍是已映射的 toplevel，任务栏
-    ///   照样给它一个条目；只有窗口进程真的退出，条目才会消失。
-    fn window_close_action(
-        exit_requested: bool,
-        tray_available: bool,
-        session_active: bool,
-    ) -> WindowCloseAction {
-        if exit_requested || !tray_available {
-            WindowCloseAction::Quit
-        } else if session_active {
-            WindowCloseAction::HideToTray
-        } else {
-            WindowCloseAction::ExitToHeadless
+    /// 解析 `--ui-client --ui-socket <path>`。普通启动（宿主）返回 `None`。
+    fn ui_client_socket(args: &[String]) -> Option<std::path::PathBuf> {
+        if !args.iter().any(|arg| arg == UI_CLIENT_FLAG) {
+            return None;
         }
-    }
-
-    /// 进程形态切换的目标。
-    ///
-    /// 程序只有一份，但有两种形态：带窗口的（用户交互）与无窗口的宿主
-    /// （后端 + 热键 + 弹窗 + 托盘）。关窗切到无窗口宿主，托盘「显示主窗口」
-    /// 切回带窗口。切换用同可执行文件的新进程完成、旧进程随即退出，所以
-    /// 任何时刻只有一个进程持有 Core 后端与单实例锁。
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum HandoffMode {
-        Headless,
-        Windowed,
-    }
-
-    const HEADLESS_FLAG: &str = "--headless";
-    const TAKEOVER_FLAG: &str = "--takeover";
-
-    /// 新进程等待接管单实例锁的上限。旧进程退出通常在 1s 内，给足余量；
-    /// 超时也不死锁 —— 新进程降级为无单实例锁启动，保证托盘/窗口还能用。
-    const HANDOFF_TAKEOVER_TIMEOUT: Duration = Duration::from_secs(15);
-    const HANDOFF_TAKEOVER_RETRY: Duration = Duration::from_millis(150);
-
-    fn handoff_args(mode: HandoffMode) -> Vec<&'static str> {
-        match mode {
-            HandoffMode::Headless => vec![HEADLESS_FLAG, TAKEOVER_FLAG],
-            HandoffMode::Windowed => vec![TAKEOVER_FLAG],
-        }
-    }
-
-    /// 拉起同可执行文件的另一种形态。新进程带 `--takeover`：它会等本进程
-    /// 释放单实例锁后再接管，而不是像普通启动那样把意图转发给正在退出的
-    /// 本进程、自己随即退出。
-    fn spawn_handoff_process(mode: HandoffMode) -> Result<(), String> {
-        let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-        let mut command = std::process::Command::new(executable);
-        command
-            .args(handoff_args(mode))
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        command
-            .spawn()
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+        let index = args.iter().position(|arg| arg == UI_SOCKET_FLAG)?;
+        args.get(index + 1).map(std::path::PathBuf::from)
     }
 
     /// 单实例锁的获取结果。
@@ -4961,237 +4871,50 @@ mod linux_app {
         Primary(SingleInstanceBroker),
         /// 已有实例接管了本次启动意图，本进程应当直接退出。
         Forwarded,
-        /// 接管超时后的降级启动：没有单实例锁也要起来。
-        Degraded,
     }
 
-    /// 常规启动抢锁（抢不到就把意图转发给已有实例）；`--takeover` 是形态切换
-    /// 留下的请求，此时不能转发（对方正在退出），只能等它释放锁。
+    /// 常规启动抢锁（抢不到就把意图转发给已有实例 —— 由它把主窗口推出来）。
     fn acquire_broker(
         runtime_dir: &std::path::Path,
         args: &[String],
-        takeover: bool,
     ) -> Result<BrokerAcquisition, String> {
         let lock = runtime_dir.join("openless.lock");
         let socket = runtime_dir.join("openless.sock");
-        let acquire = || {
-            SingleInstanceBroker::acquire_or_forward(
-                &lock,
-                &socket,
-                LinuxLaunchIntent::from_args(args),
-            )
-        };
-        if !takeover {
-            return match acquire().map_err(|error| error.to_string())? {
-                SingleInstanceRole::Primary(broker) => Ok(BrokerAcquisition::Primary(broker)),
-                SingleInstanceRole::Forwarded => Ok(BrokerAcquisition::Forwarded),
-            };
-        }
-        let deadline = std::time::Instant::now() + HANDOFF_TAKEOVER_TIMEOUT;
-        loop {
-            match acquire() {
-                Ok(SingleInstanceRole::Primary(broker)) => {
-                    return Ok(BrokerAcquisition::Primary(broker))
-                }
-                Ok(SingleInstanceRole::Forwarded) => {
-                    // 上一个形态还在收尾：继续等它把锁让出来。
-                }
-                Err(error) => {
-                    // 交接期的 socket 错误（Connection reset / 锁正在释放）是常态，
-                    // 不是致命错误：重试到超时为止，否则一次交接就可能整个失败。
-                    eprintln!("[single-instance] takeover retry after error: {error}");
-                }
-            }
-            if std::time::Instant::now() >= deadline {
-                eprintln!(
-                    "[single-instance] takeover timed out after {:?}; continuing without the broker",
-                    HANDOFF_TAKEOVER_TIMEOUT
-                );
-                return Ok(BrokerAcquisition::Degraded);
-            }
-            std::thread::sleep(HANDOFF_TAKEOVER_RETRY);
+        match SingleInstanceBroker::acquire_or_forward(
+            &lock,
+            &socket,
+            LinuxLaunchIntent::from_args(args),
+        )
+        .map_err(|error| error.to_string())?
+        {
+            SingleInstanceRole::Primary(broker) => Ok(BrokerAcquisition::Primary(broker)),
+            SingleInstanceRole::Forwarded => Ok(BrokerAcquisition::Forwarded),
         }
     }
 
-    /// 最小化键的走向。
-    ///
-    /// 有托盘时退回托盘：最小化会让 eframe 停止调用 `update()`（最小化的
-    /// surface 不再收到 frame callback），而 winit 在 Wayland 上又明确拒绝
-    /// 取消最小化（`set_minimized(false)` 直接 warn 返回），窗口一旦最小化，
-    /// 热键消费与弹窗拉起就永久停摆。没有托盘不能隐藏，否则用户没有办法把
-    /// 窗口找回来，只能保持真正的窗口管理器最小化。
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum MinimizeAction {
-        HideToTray,
-        Minimize,
-    }
-
-    fn minimize_action(tray_available: bool) -> MinimizeAction {
-        if tray_available {
-            MinimizeAction::HideToTray
-        } else {
-            MinimizeAction::Minimize
-        }
-    }
-
-    /// 从托盘/单实例意图唤起主窗口时要按序下发的视口命令。
-    ///
-    /// 先 `Minimized(false)`：窗口若是在最小化状态下被隐藏的，只发 `Visible(true)`
-    /// 会把它以「最小化可见」的形态还给窗口管理器（任务栏里仍是收起的）。
-    /// 最后才 `Focus`，否则焦点会落在旧目标上。
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum ShowMainStep {
-        Unminimize,
-        Show,
-        Focus,
-    }
-
-    const SHOW_MAIN_SEQUENCE: [ShowMainStep; 3] = [
-        ShowMainStep::Unminimize,
-        ShowMainStep::Show,
-        ShowMainStep::Focus,
-    ];
-
-    /// 主窗口的最小内尺寸（与创建时的 `with_min_inner_size` 同源）。
-    /// Wayland 上隐藏窗口时要临时放开它，否则 960x640 会把「塌缩到 1x1」夹回去。
+    /// 主窗口的最小内尺寸（UI 进程创建窗口时用它，和 `with_min_inner_size` 同源）。
     const MAIN_WINDOW_MIN_INNER_SIZE: egui::Vec2 = egui::vec2(960.0, 640.0);
 
-    /// 塌缩隐藏用的尺寸。不是 0：surface 保持映射才有 frame callback，
-    /// eframe 的 `update()` 才会继续跑（否则热键、托盘唤起全都不响应）。
-    const MAIN_WINDOW_COLLAPSED_SIZE: egui::Vec2 = egui::vec2(1.0, 1.0);
+    /// 主窗口的初始尺寸。
+    const MAIN_WINDOW_INNER_SIZE: [f32; 2] = [1240.0, 800.0];
 
-    fn show_main_step_command(step: ShowMainStep) -> egui::ViewportCommand {
-        match step {
-            ShowMainStep::Unminimize => egui::ViewportCommand::Minimized(false),
-            ShowMainStep::Show => egui::ViewportCommand::Visible(true),
-            ShowMainStep::Focus => egui::ViewportCommand::Focus,
+    /// 视图模型载荷指纹（FNV-1a 64）。够快，用来判断「要不要重发快照」：
+    /// 内容没变就不发，UI 慢的时候也不会被无意义的帧糊住。
+    fn snapshot_fingerprint(payload: &[u8]) -> u64 {
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for byte in payload {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
         }
-    }
-
-    /// 从托盘/单实例意图/宿主动作唤起主窗口。
-    ///
-    /// Wayland 下先还原尺寸与最小尺寸约束（隐藏时把它们放开了），再走
-    /// 取消最小化 → 显示 → 聚焦。X11 的 `Visible(true)` 本身就够，但不影响。
-    fn show_main_window(ctx: &egui::Context, restore_size: &mut Option<egui::Vec2>) {
-        log::info!("[window] show main window (unminimize → show → focus)");
-        if main_window_is_wayland() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(
-                MAIN_WINDOW_MIN_INNER_SIZE,
-            ));
-            if let Some(size) = restore_size.take() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
-            }
-        }
-        for step in SHOW_MAIN_SEQUENCE {
-            ctx.send_viewport_cmd(show_main_step_command(step));
-        }
-    }
-
-    /// 隐藏主窗口（关闭键 / 窗口管理器关闭请求都走这里）。
-    ///
-    /// winit 在原生 Wayland 上 `set_visible` 是空实现（winit-0.30
-    /// `platform_impl/linux/wayland/window/mod.rs`：“Not possible on Wayland”），
-    /// 所以 Wayland 下 `Visible(false)` 等于什么都没做。最小化虽然受支持，
-    /// 但会让 surface 拿不到 frame callback：eframe 的 `update()` 停摆，热键、
-    /// 托盘、单实例唤起全部不响应（实测：最小化后心跳日志停掉、按热键没反应、
-    /// 重新启动也拉不回来）。所以 Wayland 上隐藏 = **塌缩到 1x1 并保持映射**：
-    /// 窗口事实上看不见了，而事件循环照常跑，上面三条都能用。X11 仍用真 unmap。
-    fn hide_main_window(ctx: &egui::Context, restore_size: &mut Option<egui::Vec2>) {
-        // 这条日志是「点关闭键没反应」的第一判据：有它 = 决策跑到了，「窗口却还在」
-        // 就是平台层（例如 winit 在 Wayland 上的 set_visible 是空实现）。
-        log::info!(
-            "[window] hide to tray: {} (tray keeps the process alive)",
-            if main_window_is_wayland() {
-                "collapse to 1x1 — winit cannot unmap a window on Wayland"
-            } else {
-                "unmap"
-            }
-        );
-        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-        if main_window_is_wayland() {
-            // 记住用户当前的窗口尺寸，恢复时还原（不能写死 1240x800）。
-            let size = ctx
-                .input(|input| input.viewport().inner_rect.map(|rect| rect.size()))
-                .or(*restore_size)
-                .unwrap_or(egui::vec2(1240.0, 800.0));
-            *restore_size = Some(size);
-            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(
-                MAIN_WINDOW_COLLAPSED_SIZE,
-            ));
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(MAIN_WINDOW_COLLAPSED_SIZE));
-        } else {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-        }
-    }
-
-    /// 主窗口是否跑在原生 Wayland 上。判定照抄 winit 自己的选择顺序
-    /// （`WAYLAND_DISPLAY` / `WAYLAND_SOCKET` 非空 → Wayland），因为
-    /// `set_visible` 的行为差异就是后端差异。
-    fn window_backend_is_wayland(
-        wayland_display: Option<&str>,
-        wayland_socket: Option<&str>,
-    ) -> bool {
-        [wayland_display, wayland_socket]
-            .into_iter()
-            .flatten()
-            .any(|value| !value.is_empty())
-    }
-
-    fn main_window_is_wayland() -> bool {
-        window_backend_is_wayland(
-            std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
-            std::env::var("WAYLAND_SOCKET").ok().as_deref(),
-        )
-    }
-
-    impl eframe::App for OpenLessEguiApp {
-        fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-            egui::Color32::TRANSPARENT.to_normalized_gamma_f32()
-        }
-
-        fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-            self.tick(ctx);
-            theme::apply_visuals(
-                ctx,
-                self.preferences
-                    .as_ref()
-                    .map(|preferences| preferences.theme_mode)
-                    .unwrap_or_default(),
-            );
-            if ctx.input(|input| input.viewport().close_requested()) {
-                self.apply_window_close(ctx);
-            }
-            if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-                let lang = self.lang;
-                if let Some(backend) = self.backend() {
-                    self.spawn(async move {
-                        backend.cancel_active_voice_session(None).await?;
-                        Ok(tr_l10n(lang, "voice.cancelled").to_string())
-                    });
-                }
-            }
-
-            // Build the view model from current backend state, then render the
-            // production frontend. Actions are collected and dispatched to
-            // existing Core / backend methods.
-            self.sync_view_model();
-            let mut actions = Vec::new();
-            frontend::render(ctx, &mut self.frontend_vm, &mut actions);
-            self.apply_frontend_actions(actions, ctx);
-
-            self.ensure_background_waker(ctx);
-            self.log_pump_heartbeat(ctx);
-
-            ctx.request_repaint_after(Duration::from_millis(50));
-        }
+        hash
     }
 
     impl OpenLessEguiApp {
         /// 与渲染无关的宿主心跳：原生事件、托盘命令、自动更新检查、泵心跳日志。
         ///
-        /// eframe 的 `update()` 与无窗口宿主的 `run_headless()` 循环都调它，
-        /// 所以热键消费与弹窗拉起不再依赖「窗口是否在绘制」：窗口被隐藏、最小化
-        /// 或压根不存在时，后台照样收键、照样把弹窗进程拉起来。
+        /// 宿主循环（`run_host`）每 50ms 调它一次。窗口是独立进程，所以热键消费
+        /// 与弹窗拉起完全不依赖「窗口是否在绘制」——窗口关掉、最小化、压根没开，
+        /// 后台照样收键、照样把弹窗进程拉起来。
         fn tick(&mut self, ctx: &egui::Context) {
             self.poll(ctx);
             self.drain_tray(ctx);
@@ -5217,62 +4940,133 @@ mod linux_app {
             self.log_pump_heartbeat(ctx);
         }
 
-        /// 显示主窗口：有窗口时下发视口命令，无窗口宿主则记下请求，
-        /// 由 `run_headless()` 拉起窗口进程后自己退出。
-        fn request_main_window(&mut self, ctx: &egui::Context) {
-            if self.headless {
-                self.window_requested = true;
-            } else {
-                show_main_window(ctx, &mut self.main_window_restore_size);
+        /// 「显示主窗口」：宿主只记意图，由 `run_host` 拉起/抬起 UI 窗口进程。
+        fn request_main_window(&mut self) {
+            self.window_should_be_open = true;
+        }
+
+        /// UI 窗口进程是否还活着（顺带回收已经退出的子进程）。
+        fn ui_window_alive(&mut self) -> bool {
+            let Some(child) = self.ui_window.as_mut() else {
+                return false;
+            };
+            match child.try_wait() {
+                Ok(None) => true,
+                Ok(Some(status)) => {
+                    log::info!("[ui-host] UI window process exited ({status}); host keeps running");
+                    self.ui_window = None;
+                    false
+                }
+                Err(error) => {
+                    log::warn!("[ui-host] UI window process wait failed: {error}");
+                    self.ui_window = None;
+                    false
+                }
             }
         }
 
-        /// 当前有没有「切进程会丢」的进行中会话。
-        fn active_session(&self) -> bool {
-            self.recording_phase_active || self.qa_visible || self.selection_preview_visible
+        /// 拉起 UI 窗口进程。
+        ///
+        /// 时序：调用方保证宿主已经 bind 好桥 socket（UI 进程连不上就直接报错退出，
+        /// 不会自己抢单实例锁或打开数据目录）。
+        fn spawn_ui_window(&mut self, socket: &std::path::Path) -> Result<(), String> {
+            let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+            let mut command = std::process::Command::new(executable);
+            command
+                .arg(UI_CLIENT_FLAG)
+                .arg(UI_SOCKET_FLAG)
+                .arg(socket)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                // 让 panic / winit 警告走宿主自己的 stderr（终端或 journal），
+                // 否则「窗口没起来」会变成一条无声的失败。
+                .stderr(std::process::Stdio::inherit());
+            let child = command.spawn().map_err(|error| error.to_string())?;
+            log::info!(
+                "[ui-host] spawned UI window process pid={} socket={}",
+                child.id(),
+                socket.display()
+            );
+            self.ui_window = Some(child);
+            self.ui_window_spawned_at = Some(std::time::Instant::now());
+            Ok(())
         }
 
-        /// 关窗决定（系统关闭键、自绘关闭键与最小化键共用）。
-        fn close_action(&self) -> WindowCloseAction {
-            window_close_action(
-                self.exit_requested,
-                self.tray.is_some(),
-                self.active_session(),
-            )
-        }
-
-        /// 执行关窗：无托盘或用户明确退出就真退出；有托盘且没有进行中的会话时
-        /// 交给无窗口宿主（窗口进程退出 = 任务栏/窗口列表里的条目真的消失，
-        /// 而不是缩成 1x1 假装隐藏）；会话进行中退回托盘，避免新进程重开后端
-        /// 把这次会话丢掉。
-        fn apply_window_close(&mut self, ctx: &egui::Context) {
-            match self.close_action() {
-                WindowCloseAction::HideToTray => {
-                    hide_main_window(ctx, &mut self.main_window_restore_size)
+        /// 窗口当前是否需要一个 UI 进程：用户想开着，而且现在没有活着的窗口。
+        /// 刚拉起的 800ms 内不重复拉起，避免连点托盘菜单拉出两个窗口。
+        fn should_spawn_ui_window(&mut self) -> bool {
+            if !self.window_should_be_open {
+                return false;
+            }
+            if self.ui_window_alive() {
+                return false;
+            }
+            if let Some(spawned_at) = self.ui_window_spawned_at {
+                if spawned_at.elapsed() < Duration::from_millis(800) {
+                    return false;
                 }
-                WindowCloseAction::ExitToHeadless => {
-                    match spawn_handoff_process(HandoffMode::Headless) {
-                        Ok(()) => {
-                            log::info!(
-                                "[window] close: handing the host over to a headless process"
-                            );
-                            self.exit_requested = true;
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
-                        Err(error) => {
+            }
+            true
+        }
+
+        /// 处理 UI 进程发来的消息（含断连语义）。
+        ///
+        /// 时序：`Bye`/断开只把窗口标记为关闭，**不动**后端、会话与弹窗；
+        /// 没有托盘时则连宿主一起退出 —— 否则用户再也找不到这个进程。
+        fn apply_window_messages(&mut self, messages: Vec<WindowToHost>, tray_available: bool) {
+            for message in messages {
+                match message {
+                    WindowToHost::Hello { version } => {
+                        if version != UI_BRIDGE_VERSION {
                             log::warn!(
-                                "[window] headless handoff failed ({error}); hiding instead"
+                                "[ui-host] UI window speaks protocol {version}, host speaks {UI_BRIDGE_VERSION}"
                             );
-                            hide_main_window(ctx, &mut self.main_window_restore_size);
+                        } else {
+                            log::info!("[ui-host] UI window handshake ok (protocol {version})");
                         }
                     }
-                }
-                WindowCloseAction::Quit => {
-                    log::info!("[window] close: quitting");
-                    self.exit_requested = true;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    WindowToHost::Action { sequence, action } => {
+                        log::debug!("[ui-host] UI action #{sequence}: {action:?}");
+                        self.pending_ui_actions.push(action);
+                    }
+                    WindowToHost::Ping { sequence } => {
+                        self.pending_ui_pongs.push(sequence);
+                    }
+                    WindowToHost::Bye => {
+                        log::info!("[ui-host] UI window said goodbye; host keeps running");
+                        self.window_should_be_open = false;
+                    }
                 }
             }
+            if !self.window_should_be_open && !tray_available {
+                // 没有托盘就没有重新打开的入口，窗口退出等于应用退出。
+                log::info!("[ui-host] no tray to reopen the window; exiting with it");
+                self.exit_requested = true;
+            }
+        }
+
+        /// 把当前视图模型发给 UI 进程：内容变过、或距上次超过 2s（保活）才发。
+        fn publish_view_model(&mut self, bridge: &mut UiBridgeHost) {
+            if !bridge.is_connected() {
+                // UI 不在：清掉指纹，等它回来时无条件发一份完整快照。
+                self.last_snapshot_fingerprint = None;
+                return;
+            }
+            let payload = match serde_json::to_vec(&self.frontend_vm) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    log::warn!("[ui-host] view model serialization failed: {error}");
+                    return;
+                }
+            };
+            let fingerprint = snapshot_fingerprint(&payload);
+            let keepalive = self.last_snapshot_at.elapsed() >= Duration::from_secs(2);
+            if Some(fingerprint) == self.last_snapshot_fingerprint && !keepalive {
+                return;
+            }
+            self.last_snapshot_fingerprint = Some(fingerprint);
+            self.last_snapshot_at = std::time::Instant::now();
+            bridge.send_snapshot_encoded(&payload);
         }
     }
 
@@ -5767,16 +5561,24 @@ mod linux_app {
         }
     }
 
+    /// OpenLess 数据目录。宿主写数据，UI 进程只用它定位日志文件。
+    fn openless_data_dir() -> Result<std::path::PathBuf, String> {
+        std::env::var_os("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(|home| std::path::PathBuf::from(home).join(".local/share"))
+            })
+            .map(|base| base.join("OpenLess"))
+            .ok_or_else(|| "HOME/XDG_DATA_HOME is unavailable".to_string())
+    }
+
     fn backend_config(
         tray_available: bool,
         updater_available: bool,
     ) -> Result<BackendConfig, String> {
         let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-        let data_dir = std::env::var_os("XDG_DATA_HOME")
-            .map(std::path::PathBuf::from)
-            .or_else(|| home.as_ref().map(|home| home.join(".local/share")))
-            .ok_or_else(|| "HOME/XDG_DATA_HOME is unavailable".to_string())?
-            .join("OpenLess");
+        let data_dir = openless_data_dir()?;
         let cache_dir = std::env::var_os("XDG_CACHE_HOME")
             .map(std::path::PathBuf::from)
             .or_else(|| home.as_ref().map(|home| home.join(".cache")))
@@ -6723,35 +6525,300 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
     /// 因此真的消失（Wayland 下 winit 无法隐藏窗口，只有真退出窗口进程才算数），
     /// 而热键、弹窗、托盘继续工作。托盘「显示主窗口」时再拉起带窗口的进程，
     /// 本进程退出，把单实例锁让出去。
-    fn run_headless(
+    /// 宿主主循环的节拍。50ms：UI 动作最坏等一个节拍再进行，加上 UI 侧 30ms
+    /// 的重绘间隔，端到端仍在 100ms 预算内。
+    const HOST_TICK_INTERVAL: Duration = Duration::from_millis(50);
+
+    /// 常驻宿主的运行循环：**本进程没有窗口**。
+    ///
+    /// 它持有后端 / 数据目录 / 单实例锁 / 热键监听 / 托盘 / 弹窗监督器，并通过
+    /// `UiBridgeHost` 与独立的 UI 窗口进程通信。时序：
+    /// 1. 单实例锁（`run()` 里已拿到）→ 托盘与热键（native）→ **bind 桥 socket**；
+    /// 2. socket 就绪后才拉 UI 进程，UI 连不上宿主就直接报错退出；
+    /// 3. 每轮先收 UI 消息、再跑宿主心跳、再按需拉窗口、最后推视图模型；
+    /// 4. 退出前先给 UI 发 `Shutdown`，再由 `run()` 的 drop 释放单实例锁。
+    fn run_host(
+        runtime_dir: &std::path::Path,
         tokio: Arc<tokio::runtime::Runtime>,
         native: Result<LinuxNativeRuntime, String>,
         tray: Option<openless_linux_egui::LinuxTray>,
         update_support: LinuxUpdateSupport,
+        start_minimized: bool,
     ) -> Result<(), String> {
+        let socket = bridge::ui_socket_path(runtime_dir);
+        let mut ui_bridge = UiBridgeHost::bind(socket.clone())
+            .map_err(|error| format!("UI bridge bind failed: {error}"))?;
+        let tray_available = tray.is_some();
+        // 没有托盘时必须开窗，否则关掉就再也找不回来。
+        let window_should_be_open = !start_minimized || !tray_available;
         let ctx = egui::Context::default();
-        let mut app = OpenLessEguiApp::new(tokio, native, tray, update_support, true);
-        log::info!("[window] headless host started (no window in this process)");
+        let mut app =
+            OpenLessEguiApp::new(tokio, native, tray, update_support, window_should_be_open);
+        log::info!(
+            "[ui-host] host started (no window in this process); bridge={} window_should_be_open={window_should_be_open} tray={tray_available}",
+            ui_bridge.path().display()
+        );
         loop {
+            ui_bridge.accept_pending();
+            let messages = ui_bridge.drain();
+            if !messages.is_empty() {
+                app.apply_window_messages(messages, tray_available);
+            }
             app.tick(&ctx);
-            if app.window_requested {
-                log::info!("[window] headless host handing over to a windowed process");
-                match spawn_handoff_process(HandoffMode::Windowed) {
-                    Ok(()) => break,
-                    Err(error) => {
-                        // 拉不起来就继续以无窗口方式驻留，不要陷入重启—失败循环。
-                        log::warn!("[window] windowed handoff failed ({error}); staying headless");
-                        app.window_requested = false;
-                    }
+            if app.should_spawn_ui_window() {
+                if let Err(error) = app.spawn_ui_window(&socket) {
+                    log::warn!("[ui-host] cannot start the UI window: {error}");
                 }
             }
+            let actions = std::mem::take(&mut app.pending_ui_actions);
+            if !actions.is_empty() {
+                app.apply_frontend_actions(actions, &ctx);
+            }
+            for sequence in std::mem::take(&mut app.pending_ui_pongs) {
+                ui_bridge.send(HostToWindow::Pong { sequence });
+            }
+            app.sync_view_model();
+            app.publish_view_model(&mut ui_bridge);
             if app.exit_requested {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::thread::sleep(HOST_TICK_INTERVAL);
         }
-        log::info!("[window] headless host exiting");
+        log::info!("[ui-host] host exiting; asking the UI window to close");
+        ui_bridge.shutdown();
         Ok(())
+    }
+
+    /// UI 窗口进程入口：只渲染。
+    ///
+    /// 它不构造 Core 后端、不打开数据目录、不抢单实例锁、不注册托盘与热键 ——
+    /// 关掉它等于「关掉一个窗口」，宿主与所有后台能力原地不动。
+    fn run_ui_client(socket: std::path::PathBuf) -> Result<(), String> {
+        // UI 进程不复用宿主的日志器对象，但写到同一个文件里，
+        // 排查「窗口进程怎么没了」时两端日志在同一处。
+        if let Ok(data_dir) = openless_data_dir() {
+            if let Err(error) = openless_linux_egui::init_file_logger(&data_dir) {
+                eprintln!("OpenLess UI window logger unavailable: {error}");
+            }
+        }
+        let client = UiBridgeClient::connect(&socket)?;
+        log::info!(
+            "[ui-client] connected to the host bridge at {}",
+            socket.display()
+        );
+        let options = eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default()
+                .with_title("OpenLess")
+                .with_inner_size(MAIN_WINDOW_INNER_SIZE)
+                .with_min_inner_size(MAIN_WINDOW_MIN_INNER_SIZE)
+                .with_decorations(false)
+                .with_transparent(true)
+                .with_resizable(true)
+                .with_visible(true),
+            ..Default::default()
+        };
+        eframe::run_native(
+            "OpenLess",
+            options,
+            Box::new(move |cc| {
+                theme::install(&cc.egui_ctx);
+                Ok(Box::new(UiClientApp::new(client)))
+            }),
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    /// 诊断开关：`OPENLESS_UI_DEBUG=1` 时 UI 进程把指针点击与动作记进日志。
+    /// 用来分辨「按钮没反应」是没收到指针事件，还是动作没能送到宿主。
+    fn ui_debug_enabled() -> bool {
+        std::env::var("OPENLESS_UI_DEBUG").is_ok_and(|value| value == "1")
+    }
+
+    /// 是否采纳这一份快照：序号必须**严格递增**（重复、乱序、回退统统丢弃），
+    /// 否则 UI 会把新状态画成旧状态。
+    fn snapshot_supersedes(last_sequence: u64, sequence: u64) -> bool {
+        sequence > last_sequence
+    }
+
+    /// UI 进程侧的 eframe 应用：收快照 → 渲染 → 把动作发回宿主。
+    struct UiClientApp {
+        client: UiBridgeClient,
+        view_model: FrontendViewModel,
+        /// 已采纳的最大快照序号。
+        last_sequence: u64,
+        /// 已发出的动作序号（宿主可据此看出重复或丢失）。
+        action_sequence: u64,
+        ping_sequence: u64,
+        ping_sent_at: Option<std::time::Instant>,
+        last_ping_at: std::time::Instant,
+        latency_samples: Vec<u128>,
+        exited: bool,
+    }
+
+    impl UiClientApp {
+        fn new(client: UiBridgeClient) -> Self {
+            Self {
+                client,
+                view_model: FrontendViewModel::default(),
+                last_sequence: 0,
+                action_sequence: 0,
+                ping_sequence: 0,
+                ping_sent_at: None,
+                last_ping_at: std::time::Instant::now(),
+                latency_samples: Vec::new(),
+                exited: false,
+            }
+        }
+
+        /// 收宿主的帧。快照按序号采纳；`Shutdown` 与断连都表示「宿主走了」，
+        /// 此时 UI 必须自己退出（没有宿主就没有数据可渲染）。
+        fn drain_host(&mut self, ctx: &egui::Context) {
+            loop {
+                match self.client.try_recv() {
+                    Ok(HostToWindow::Ready { version }) => {
+                        log::info!("[ui-client] host ready (protocol {version})");
+                    }
+                    Ok(HostToWindow::Snapshot {
+                        sequence,
+                        view_model,
+                    }) => {
+                        if snapshot_supersedes(self.last_sequence, sequence) {
+                            self.last_sequence = sequence;
+                            self.view_model = *view_model;
+                        } else {
+                            log::debug!("[ui-client] dropped stale snapshot #{sequence}");
+                        }
+                    }
+                    Ok(HostToWindow::Pong { sequence }) => {
+                        if let Some(sent_at) = self.ping_sent_at.take() {
+                            let rtt = sent_at.elapsed().as_millis();
+                            self.latency_samples.push(rtt);
+                            if self.latency_samples.len() >= 20 {
+                                let count = self.latency_samples.len();
+                                let max = self.latency_samples.iter().copied().max().unwrap_or(0);
+                                let sum: u128 = self.latency_samples.iter().sum();
+                                log::info!(
+                                    "[ui-client] ipc round-trip avg={}ms max={max}ms over {count} probes (last #{sequence})",
+                                    sum / count as u128
+                                );
+                                self.latency_samples.clear();
+                            }
+                        }
+                    }
+                    Ok(HostToWindow::Shutdown) => {
+                        log::info!("[ui-client] host asked to shut down; closing the window");
+                        self.exited = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        log::warn!("[ui-client] host connection lost; closing the window");
+                        self.exited = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        break;
+                    }
+                }
+            }
+        }
+
+        fn ping_if_due(&mut self) {
+            if self.last_ping_at.elapsed() < Duration::from_secs(2) {
+                return;
+            }
+            self.last_ping_at = std::time::Instant::now();
+            self.ping_sequence += 1;
+            self.ping_sent_at = Some(std::time::Instant::now());
+            let _ = self.client.send(WindowToHost::Ping {
+                sequence: self.ping_sequence,
+            });
+        }
+
+        /// 关窗 = 本进程退出。宿主仍在，会话、录音、弹窗都不受影响。
+        fn request_exit(&mut self, ctx: &egui::Context, reason: &str) {
+            if self.exited {
+                return;
+            }
+            log::info!("[ui-client] {reason}: exiting the window process (host keeps running)");
+            self.exited = true;
+            let _ = self.client.send(WindowToHost::Bye);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+
+        /// 把渲染层产生的动作分发出去：窗口控制就地处理，其余发给宿主。
+        fn dispatch(
+            &mut self,
+            actions: Vec<frontend::view_model::FrontendAction>,
+            ctx: &egui::Context,
+        ) {
+            for action in actions {
+                match action {
+                    frontend::view_model::FrontendAction::WindowClose => {
+                        self.request_exit(ctx, "close button");
+                    }
+                    frontend::view_model::FrontendAction::WindowMinimize => {
+                        // 最小化在 Wayland 上是单向门（winit 明确拒绝取消最小化），
+                        // 而宿主已经接管热键与弹窗，所以按「关窗回托盘」处理：
+                        // 窗口进程退出，任务栏条目消失，托盘随时能再开一个。
+                        self.request_exit(ctx, "minimize button");
+                    }
+                    frontend::view_model::FrontendAction::WindowMaximize => {
+                        let maximized =
+                            ctx.input(|input| input.viewport().maximized.unwrap_or(false));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                    }
+                    other => {
+                        self.action_sequence += 1;
+                        if let Err(error) = self.client.send(WindowToHost::Action {
+                            sequence: self.action_sequence,
+                            action: other,
+                        }) {
+                            log::warn!("[ui-client] cannot forward action to the host: {error}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    impl Drop for UiClientApp {
+        fn drop(&mut self) {
+            // 关窗即退出：告别帧让宿主立刻作废窗口句柄，收尾读写线程
+            // 以免宿主一直等到 EOF。
+            let _ = self.client.send(WindowToHost::Bye);
+            self.client.shutdown();
+        }
+    }
+
+    impl eframe::App for UiClientApp {
+        fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+            egui::Color32::TRANSPARENT.to_normalized_gamma_f32()
+        }
+
+        fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+            self.drain_host(ctx);
+            theme::apply_visuals(ctx, self.view_model.theme_mode);
+            if ctx.input(|input| input.viewport().close_requested()) {
+                self.request_exit(ctx, "window manager close request");
+            }
+            if self.exited {
+                return;
+            }
+            if ui_debug_enabled() {
+                let (pointer, clicked) =
+                    ctx.input(|input| (input.pointer.interact_pos(), input.pointer.any_click()));
+                if clicked {
+                    log::info!("[ui-client] pointer click at {pointer:?}");
+                }
+            }
+            let mut actions = Vec::new();
+            frontend::render(ctx, &mut self.view_model, &mut actions);
+            if ui_debug_enabled() && !actions.is_empty() {
+                log::info!("[ui-client] actions from the renderer: {actions:?}");
+            }
+            self.dispatch(actions, ctx);
+            self.ping_if_due();
+            ctx.request_repaint_after(Duration::from_millis(30));
+        }
     }
 
     pub fn run() -> Result<(), String> {
@@ -6759,9 +6826,11 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         if let Some(kind) = popup_kind(&args) {
             return run_popup_process(kind);
         }
+        if let Some(socket) = ui_client_socket(&args) {
+            // UI 窗口进程：只渲染，不碰后端、数据目录、单实例锁与热键。
+            return run_ui_client(socket);
+        }
         let start_minimized = args.iter().any(|arg| arg == "--minimized");
-        let headless = args.iter().any(|arg| arg == HEADLESS_FLAG);
-        let takeover = args.iter().any(|arg| arg == TAKEOVER_FLAG);
         let tokio = Arc::new(tokio::runtime::Runtime::new().map_err(|error| error.to_string())?);
         let kind = package_kind();
         let update_support = LinuxUpdateSupport::initialize(kind);
@@ -6781,10 +6850,9 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         // 常态启动时托盘先于能力快照存在；形态切换（--takeover）时旧进程可能还
         // 占着托盘名，所以接管到单实例锁之后再重试一次。
         let mut tray = openless_linux_egui::LinuxTray::start().ok();
-        let broker = match acquire_broker(&runtime_dir, &args, takeover)? {
+        let broker = match acquire_broker(&runtime_dir, &args)? {
             BrokerAcquisition::Primary(broker) => Some(broker),
             BrokerAcquisition::Forwarded => return Ok(()),
-            BrokerAcquisition::Degraded => None,
         };
         if tray.is_none() {
             tray = openless_linux_egui::LinuxTray::start().ok();
@@ -6826,35 +6894,16 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 .block_on(LinuxNativeRuntime::start(backend, broker, hotkeys))
                 .map_err(|error| error.to_string())
         })();
-        if headless {
-            return run_headless(tokio, native, tray, update_support);
-        }
-        let options = eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default()
-                .with_title("OpenLess")
-                .with_inner_size([1240.0, 800.0])
-                .with_min_inner_size(MAIN_WINDOW_MIN_INNER_SIZE)
-                .with_decorations(false)
-                .with_transparent(true)
-                .with_resizable(true)
-                .with_visible(!start_minimized || !tray_available),
-            ..Default::default()
-        };
-        eframe::run_native(
-            "OpenLess",
-            options,
-            Box::new(move |cc| {
-                theme::install(&cc.egui_ctx);
-                Ok(Box::new(OpenLessEguiApp::new(
-                    tokio,
-                    native,
-                    tray,
-                    update_support,
-                    false,
-                )))
-            }),
-        )
-        .map_err(|error| error.to_string())
+        // 常驻宿主：本进程不再创建窗口，窗口交给独立的 UI 进程。
+        run_host(
+            &runtime_dir,
+            tokio,
+            native,
+            tray,
+            update_support,
+            start_minimized,
+        )?;
+        Ok(())
     }
 
     fn set_style_pack_hotkey(
@@ -6938,52 +6987,101 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         use super::*;
 
         #[test]
-        fn closing_the_window_hands_the_host_over_to_a_windowless_process() {
-            // 有托盘且没有进行中的会话：切到无窗口宿主 —— 窗口进程真退出，
-            // 任务栏/窗口列表里的条目才会真的消失（Wayland 无法隐藏窗口）。
+        fn the_ui_client_flag_carries_the_bridge_socket() {
+            let args = vec![
+                "openless".to_string(),
+                UI_CLIENT_FLAG.to_string(),
+                UI_SOCKET_FLAG.to_string(),
+                "/run/user/1000/openless-ui.sock".to_string(),
+            ];
             assert_eq!(
-                window_close_action(false, true, false),
-                WindowCloseAction::ExitToHeadless
+                ui_client_socket(&args),
+                Some(std::path::PathBuf::from("/run/user/1000/openless-ui.sock"))
             );
-            // 会话进行中不换进程：新进程重开后端会丢掉这次录音/问答。
-            assert_eq!(
-                window_close_action(false, true, true),
-                WindowCloseAction::HideToTray
-            );
-            // 托盘菜单「退出」：明确退出。
-            assert_eq!(
-                window_close_action(true, true, false),
-                WindowCloseAction::Quit
-            );
-            // 没有托盘就没有重新打开的入口，隐藏等于让进程失联。
-            assert_eq!(
-                window_close_action(false, false, false),
-                WindowCloseAction::Quit
-            );
+            // 普通启动（宿主）不是 UI 进程。
+            assert_eq!(ui_client_socket(&["openless".to_string()]), None);
+            // 带了开关却没给路径：当作普通启动，不要装作是 UI 进程。
+            assert_eq!(ui_client_socket(&[UI_CLIENT_FLAG.to_string()]), None);
         }
 
         #[test]
-        fn handoff_args_describe_the_process_shape() {
-            // 两种形态切换都要带 --takeover：新进程等旧进程释放单实例锁后接管，
-            // 而不是被转发后直接退出。
-            assert_eq!(
-                handoff_args(HandoffMode::Headless),
-                vec!["--headless", "--takeover"]
-            );
-            assert_eq!(handoff_args(HandoffMode::Windowed), vec!["--takeover"]);
+        fn stale_snapshots_never_replace_newer_state() {
+            // 严格递增才采纳：重复、乱序、回退的快照都必须丢掉，
+            // 否则 UI 会把新状态画成旧状态。
+            assert!(snapshot_supersedes(0, 1));
+            assert!(snapshot_supersedes(7, 8));
+            assert!(!snapshot_supersedes(7, 7), "duplicate must be dropped");
+            assert!(!snapshot_supersedes(7, 3), "out-of-order must be dropped");
         }
 
         #[test]
-        fn a_windowless_host_asks_for_a_windowed_process_instead_of_a_viewport_command() {
-            let ctx = egui::Context::default();
-            let mut headless = fixture_app(true);
-            headless.request_main_window(&ctx);
-            // 无窗口宿主：没有窗口可以显示/聚焦，只能让主循环拉起窗口进程。
-            assert!(headless.window_requested);
+        fn the_snapshot_fingerprint_notices_any_change() {
+            let a = br#"{"active_page":"Overview"}"#.to_vec();
+            let b = br#"{"active_page":"History"}"#.to_vec();
+            assert_eq!(snapshot_fingerprint(&a), snapshot_fingerprint(&a));
+            assert_ne!(snapshot_fingerprint(&a), snapshot_fingerprint(&b));
+        }
 
-            let mut windowed = fixture_app(false);
-            windowed.request_main_window(&ctx);
-            assert!(!windowed.window_requested);
+        #[test]
+        fn the_host_keeps_running_when_the_window_says_goodbye() {
+            let mut app = fixture_app(true);
+            app.apply_window_messages(vec![WindowToHost::Bye], true);
+            // 关窗只关窗口：宿主不退出、后端与会话不动。
+            assert!(!app.window_should_be_open);
+            assert!(!app.exit_requested);
+        }
+
+        #[test]
+        fn a_window_is_reopened_only_when_the_user_asks_for_it() {
+            let mut app = fixture_app(false);
+            // 用户已经关窗：宿主不会自己把窗口拉回来。
+            app.pending_ui_actions
+                .push(frontend::view_model::FrontendAction::Navigate(
+                    frontend::view_model::Page::History,
+                ));
+            assert!(!app.should_spawn_ui_window());
+            // 托盘「显示主窗口」是显式意图，必须重新拉起一个窗口进程。
+            app.request_main_window();
+            assert!(app.window_should_be_open);
+            assert!(app.should_spawn_ui_window());
+        }
+
+        #[test]
+        fn a_freshly_spawned_window_is_not_spawned_twice() {
+            let mut app = fixture_app(false);
+            app.request_main_window();
+            // 模拟「刚拉起过」：防抖窗口内不得再拉第二个窗口进程。
+            app.ui_window_spawned_at = Some(std::time::Instant::now());
+            assert!(!app.should_spawn_ui_window());
+            // 防抖过期且没有活着的子进程时，允许重拉。
+            app.ui_window_spawned_at = Some(std::time::Instant::now() - Duration::from_secs(5));
+            assert!(app.should_spawn_ui_window());
+        }
+
+        #[test]
+        fn a_host_without_a_tray_exits_with_its_only_window() {
+            // 没有托盘就没有重新打开的入口：窗口退出后宿主必须跟着退出，
+            // 否则用户留下一个看得见进程、点不开窗口的僵尸。
+            let mut app = fixture_app(false);
+            app.apply_window_messages(vec![WindowToHost::Bye], false);
+            assert!(app.exit_requested);
+        }
+
+        #[test]
+        fn the_host_actions_that_used_to_raise_a_window_no_longer_do() {
+            // Core 的 ShowMain/FocusMain 在弹窗流程里也会发，宿主若照做就会
+            // 「弹一次面板冒出一个主窗口」，所以它们必须不改变窗口意图。
+            let mut app = fixture_app(true);
+            app.apply_window_messages(
+                vec![WindowToHost::Action {
+                    sequence: 1,
+                    action: frontend::view_model::FrontendAction::WindowClose,
+                }],
+                true,
+            );
+            // 窗口控制由 UI 进程处理；即便漏到宿主，也只是入队后由
+            // apply_frontend_actions 记一条日志，不改变窗口意图。
+            assert!(app.window_should_be_open);
         }
 
         #[test]
@@ -6994,10 +7092,9 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             let mut app = fixture_app(true);
             app.tick(&ctx);
             app.tick(&ctx);
-            assert!(!app.window_requested);
         }
 
-        fn fixture_app(headless: bool) -> OpenLessEguiApp {
+        fn fixture_app(window_should_be_open: bool) -> OpenLessEguiApp {
             OpenLessEguiApp::new(
                 Arc::new(tokio::runtime::Runtime::new().unwrap()),
                 Err("fixture".into()),
@@ -7005,43 +7102,8 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 LinuxUpdateSupport::ManualOnly {
                     releases_url: openless_linux_egui::RELEASES_URL,
                 },
-                headless,
+                window_should_be_open,
             )
-        }
-
-        #[test]
-        fn the_minimize_button_hides_to_tray_while_a_tray_icon_exists() {
-            // 最小化会让 eframe 停止调用 update()（最小化的 surface 不再收到
-            // frame callback），而 winit 在 Wayland 上无法取消最小化，因此有托盘
-            // 时按退回托盘处理，热键消费与弹窗拉起才不会被永久停掉。
-            assert_eq!(minimize_action(true), MinimizeAction::HideToTray);
-            // 没有托盘就不能隐藏：否则窗口再也找不回来。
-            assert_eq!(minimize_action(false), MinimizeAction::Minimize);
-        }
-
-        #[test]
-        fn showing_the_main_window_restores_the_taskbar_entry() {
-            // 顺序即语义：先取消最小化（否则任务栏里仍是收起的），再显示，最后聚焦。
-            assert_eq!(
-                SHOW_MAIN_SEQUENCE,
-                [
-                    ShowMainStep::Unminimize,
-                    ShowMainStep::Show,
-                    ShowMainStep::Focus
-                ]
-            );
-            assert_eq!(
-                show_main_step_command(ShowMainStep::Unminimize),
-                egui::ViewportCommand::Minimized(false)
-            );
-            assert_eq!(
-                show_main_step_command(ShowMainStep::Show),
-                egui::ViewportCommand::Visible(true)
-            );
-            assert_eq!(
-                show_main_step_command(ShowMainStep::Focus),
-                egui::ViewportCommand::Focus
-            );
         }
 
         /// 最小可用的弹窗实例：只为了驱动 `pump` 这条退出链路。
@@ -7353,32 +7415,6 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             );
             assert!(!merged.show_overview_activity_heatmap);
             assert_eq!(merged.remote_input_port, 9443);
-        }
-
-        #[test]
-        /// 「窗口不可见时事件泵也必须继续跑」这条约束的守卫：唤醒间隔必须存在且
-        /// 足够小（热键要跟手），并且**不因窗口状态而变成 None**（那就等于最小化
-        /// 后不再唤醒 → 胶囊/QA 都不弹）。
-        fn background_waker_keeps_ticking_regardless_of_window_state() {
-            let interval = super::background_wake_interval();
-            assert!(interval > std::time::Duration::ZERO);
-            assert!(
-                interval <= std::time::Duration::from_millis(500),
-                "唤醒间隔过长会让热键明显延迟：{interval:?}"
-            );
-        }
-
-        #[test]
-        /// 隐藏主窗口的手段完全取决于 winit 跑在哪个后端上（`hide_main_window`）：
-        /// Wayland 的 `set_visible` 是空实现，只能最小化；X11 才是真 unmap。
-        fn the_main_window_hides_by_minimising_only_on_wayland() {
-            assert!(super::window_backend_is_wayland(Some("wayland-0"), None));
-            assert!(super::window_backend_is_wayland(None, Some("wayland-1")));
-            assert!(!super::window_backend_is_wayland(None, None));
-            assert!(
-                !super::window_backend_is_wayland(Some(""), Some("")),
-                "empty variables count as unset, matching winit's own backend choice"
-            );
         }
 
         #[test]

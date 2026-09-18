@@ -2,7 +2,7 @@ use openless_linux_egui::Lang;
 
 // ── Page / Tab ──────────────────────────────────────────────────────────────
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Page {
     #[default]
     Overview,
@@ -21,7 +21,7 @@ pub enum Page {
 /// Every user interaction the frontend can produce. The host
 /// (`OpenLessEguiApp`) drains these actions and dispatches them to existing
 /// Core / backend methods without duplicating the Core state machine.
-#[derive(Clone, Debug)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub enum FrontendAction {
     /// Navigate to a different page.
     Navigate(Page),
@@ -194,7 +194,7 @@ pub enum FrontendAction {
 
 // ── Marketplace types ───────────────────────────────────────────────────────
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MarketplaceSort {
     #[default]
     Popular,
@@ -202,7 +202,7 @@ pub enum MarketplaceSort {
     Liked,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct MarketplacePack {
     pub name: String,
     pub version: String,
@@ -221,7 +221,7 @@ pub struct MarketplacePack {
 /// Host permission state, mirroring the Tauri permission rows. Linux has no
 /// OS permission prompts, so most of these stay `Unsupported` — but the value
 /// now comes from the host snapshot instead of a hardcoded label.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PermissionState {
     #[default]
     Unknown,
@@ -229,7 +229,7 @@ pub enum PermissionState {
     Unsupported,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug, Default)]
 pub struct SettingsPermissions {
     pub microphone: PermissionState,
     pub accessibility: PermissionState,
@@ -238,7 +238,7 @@ pub struct SettingsPermissions {
 }
 
 /// One 风格包直选 row (style pack name + its hotkey chip).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug, Default)]
 pub struct StylePackHotkeyRow {
     pub pack_id: String,
     /// 风格包显示名；风格包列表里找不到该 id 时用作下拉的回退文案。
@@ -249,7 +249,7 @@ pub struct StylePackHotkeyRow {
 /// One editable shortcut row in 快捷键与选区. `StylePack(index)` addresses an
 /// existing entry of [`SettingsFields::style_pack_hotkeys`]; `StyleDraft` is the
 /// 「＋ 添加风格快捷键」row before it is committed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug, PartialEq, Eq)]
 pub enum ShortcutField {
     Dictation,
     Translation,
@@ -263,7 +263,7 @@ pub enum ShortcutField {
 }
 
 /// One credential channel shown in the AI-services settings tab.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug, Default)]
 pub struct SettingsChannel {
     pub name: String,
     /// Model / endpoint summary shown under the channel name.
@@ -281,7 +281,7 @@ pub struct SettingsChannel {
 
 /// A field of the provider editor. Secret fields are write-only: opening an
 /// editor never reads an existing key back into egui state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsProviderField {
     Name,
     Endpoint,
@@ -295,7 +295,7 @@ pub enum SettingsProviderField {
 /// Which inputs the editor renders. Core's `AuthRequirement` decides this;
 /// the UI never judges whether the credentials are sufficient — ProviderService
 /// re-checks the descriptor before any protocol request.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsProviderAuth {
     /// No credentials (local models).
     None,
@@ -313,7 +313,7 @@ pub enum SettingsProviderAuth {
 
 /// The open channel editor. Hydrated once per load from Core, then driven by
 /// the host-side draft so typing is never clobbered by a re-read.
-#[derive(Clone, Debug)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct SettingsProviderEditor {
     pub channel_id: String,
     /// Localized provider label (read-only).
@@ -336,7 +336,7 @@ pub struct SettingsProviderEditor {
 }
 
 /// Provider kinds available when creating a channel.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug, Default)]
 pub struct SettingsChannelProvider {
     /// Provider type id sent back to Core.
     pub provider_type: String,
@@ -344,7 +344,7 @@ pub struct SettingsChannelProvider {
     pub label: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsSection {
     General,
     Shortcuts,
@@ -355,7 +355,7 @@ pub enum SettingsSection {
     About,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug)]
 pub enum SettingsField {
     StreamingInsert,
     StreamingSaveClipboard,
@@ -375,7 +375,7 @@ pub enum SettingsField {
     BetaChannel,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug)]
 pub enum SettingsComboField {
     Language,
     Theme,
@@ -392,7 +392,7 @@ pub enum SettingsComboField {
     CodingAgentPermission,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub enum SettingsTextField {
     RemotePort,
     HistoryMaxEntries,
@@ -407,7 +407,7 @@ pub enum SettingsTextField {
     CodingAgentExe,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug)]
 pub enum SettingsActionField {
     ExportDiagnostics,
     CheckUpdate,
@@ -422,7 +422,7 @@ pub enum SettingsActionField {
 
 // ── Vocab types ─────────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct VocabEntry {
     pub phrase: String,
     pub hits: usize,
@@ -430,7 +430,7 @@ pub struct VocabEntry {
     pub learned: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct CorrectionRule {
     pub pattern: String,
     pub replacement: String,
@@ -438,7 +438,7 @@ pub struct CorrectionRule {
     pub learned: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct SavedVocabPreset {
     pub name: String,
     pub phrases: String,
@@ -448,7 +448,7 @@ pub struct SavedVocabPreset {
 
 /// Insert outcome, mirrored from Core's `HistoryInsertStatus` into a plain
 /// frontend enum so the page never has to depend on Core types.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug, Default, PartialEq, Eq)]
 pub enum HistoryInsertStatus {
     #[default]
     NotRequested,
@@ -459,7 +459,7 @@ pub enum HistoryInsertStatus {
 }
 
 /// In-app playback state for the entry currently being played.
-#[derive(Clone, Debug)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct HistoryPlayback {
     pub id: String,
     pub position_ms: u64,
@@ -467,14 +467,14 @@ pub struct HistoryPlayback {
 }
 
 /// A pending destructive action that needs an in-window confirmation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug, PartialEq, Eq)]
 pub enum HistoryConfirm {
     Clear,
     Delete(usize),
 }
 
 /// One history row plus everything the detail panel shows.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug, Default)]
 pub struct HistoryEntry {
     pub id: String,
     pub created_at: String,
@@ -499,7 +499,7 @@ pub struct HistoryEntry {
 
 // ── Style types ─────────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct StylePack {
     pub id: String,
     pub name: String,
@@ -516,7 +516,7 @@ pub struct StylePack {
 // ── Overview types ──────────────────────────────────────────────────────────
 
 /// Polish mode shown as the mode pill on a "recent" row.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OverviewMode {
     #[default]
     Raw,
@@ -527,7 +527,7 @@ pub enum OverviewMode {
 
 /// One calendar day of activity (chronological inside
 /// [`OverviewSummary::activity_daily`]).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug, Default)]
 pub struct OverviewActivityDay {
     /// `YYYY-MM-DD` in the host's local timezone.
     pub date: String,
@@ -537,13 +537,13 @@ pub struct OverviewActivityDay {
 }
 
 /// One day of the annual activity heatmap (`YYYY-MM-DD` + dictation count).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug, Default)]
 pub struct OverviewHeatmapDay {
     pub date: String,
     pub count: u32,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug, Default)]
 pub struct OverviewSummary {
     pub asr_provider: String,
     pub llm_provider: String,
@@ -565,7 +565,7 @@ pub struct OverviewSummary {
     pub heatmap: Vec<OverviewHeatmapDay>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug, Default)]
 pub struct OverviewRecentEntry {
     pub created_at: String,
     pub final_text: String,
@@ -579,7 +579,7 @@ pub struct OverviewRecentEntry {
 /// Pure display state for the egui frontend. Contains no mock data — every
 /// field is populated by the host (`OpenLessEguiApp`) from Core / backend
 /// sources. Unwired fields show empty / Loading / Unsupported states.
-#[derive(Clone, Debug)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct FrontendViewModel {
     pub active_page: Page,
     pub style_open: bool,
@@ -588,7 +588,11 @@ pub struct FrontendViewModel {
 
     /// Resolved UI language, injected by the host each frame so the pure
     /// renderer can look up localized strings without touching global state.
+    #[serde(with = "lang_tag")]
     pub lang: Lang,
+
+    /// 明暗主题（Core 偏好）。宿主注入，UI 进程按它决定配色。
+    pub theme_mode: openless_core::shared_types::ThemeMode,
 
     // Overview
     pub overview_loading: bool,
@@ -731,6 +735,7 @@ impl Default for FrontendViewModel {
     fn default() -> Self {
         Self {
             lang: Lang::ZhCn,
+            theme_mode: openless_core::shared_types::ThemeMode::System,
             active_page: Page::Overview,
             style_open: true,
             tools_open: true,
@@ -825,7 +830,7 @@ impl Default for FrontendViewModel {
 
 /// Mirror of the egui-frontend `SettingsState` fields, but with no default
 /// mock data. All values come from the host.
-#[derive(Clone, Debug)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct SettingsFields {
     /// 0 = toggle, 1 = hold, 2 = double click, 3 = auto.
     pub recording_mode: usize,
@@ -912,5 +917,21 @@ impl Default for SettingsFields {
             retention_days: "0".to_string(),
             remote_port: String::new(),
         }
+    }
+}
+
+/// `Lang` 定义在 `i18n.rs`（由同步脚本生成，禁止手改），所以按语言标签序列化，
+/// 而不是给它加 serde derive。跨进程传视图模型时用得上。
+mod lang_tag {
+    use openless_linux_egui::Lang;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(lang: &Lang, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(lang.tag())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Lang, D::Error> {
+        let tag = String::deserialize(deserializer)?;
+        Lang::parse(&tag).ok_or_else(|| serde::de::Error::custom(format!("unknown lang tag {tag}")))
     }
 }
