@@ -2,7 +2,10 @@
 
 use std::sync::{Arc, Weak};
 
-use super::{emit_capsule, schedule_capsule_idle, Coordinator, Inner, CAPSULE_AUTO_HIDE_DELAY_MS};
+use super::{
+    emit_capsule, hide_core_capsule_if_current, schedule_capsule_idle, Coordinator, Inner,
+    CAPSULE_AUTO_HIDE_DELAY_MS,
+};
 use crate::coordinator_state::SessionId;
 use crate::selection::SelectionInsertionTarget;
 use crate::types::{CapsuleState, InsertStatus};
@@ -423,9 +426,8 @@ async fn end_selection_voice_session(
         .mark_processing(session_id)
         .await
         .map_err(core_error)?;
-    // 结束录音后熄灭胶囊；预览模式才打开华词面板，直接覆盖则静默处理。
-    emit_capsule(inner, CapsuleState::Idle, 0.0, 0, None, None);
-    schedule_capsule_idle(inner, 0);
+    // 松开只结束录音；识别指令、润色和替换完成之前仍展示思考动画。
+    let processing_epoch = emit_capsule(inner, CapsuleState::Transcribing, 0.0, 0, None, None);
     let workflow: Result<EndWorkflowOutcome, String> = async {
         let capture = inner
             .selection_voice_capture
@@ -475,7 +477,7 @@ async fn end_selection_voice_session(
             .process_transcript(session_id, transcript)
             .await
             .map_err(core_error)?;
-        continue_selection_voice_disposition(inner, disposition).await
+        continue_selection_voice_disposition(inner, disposition, processing_epoch).await
     }
     .await;
 
@@ -520,6 +522,7 @@ enum EndWorkflowOutcome {
 async fn continue_selection_voice_disposition(
     inner: &Arc<Inner>,
     disposition: SelectionVoiceDisposition,
+    processing_epoch: u64,
 ) -> Result<EndWorkflowOutcome, String> {
     let route = inner
         .backend
@@ -530,14 +533,19 @@ async fn continue_selection_voice_disposition(
         .map_err(core_error)?;
     match route {
         SelectionVoiceRoute::AwaitingIntent { .. } => {
+            hide_core_capsule_if_current(inner, processing_epoch);
             inner.host.show_selection_voice_intent_prompt();
             Ok(EndWorkflowOutcome::AwaitingIntent)
         }
         SelectionVoiceRoute::QuestionCompleted { session_id } => {
             clear_host_session(inner, session_id);
+            hide_core_capsule_if_current(inner, processing_epoch);
             Ok(EndWorkflowOutcome::Finished)
         }
-        SelectionVoiceRoute::EditConversationOpened { .. } => Ok(EndWorkflowOutcome::Finished),
+        SelectionVoiceRoute::EditConversationOpened { .. } => {
+            hide_core_capsule_if_current(inner, processing_epoch);
+            Ok(EndWorkflowOutcome::Finished)
+        }
         SelectionVoiceRoute::ReadyToApply { preview } => {
             let coordinator = Coordinator {
                 inner: Arc::clone(inner),
@@ -557,9 +565,12 @@ impl Coordinator {
         disposition: SelectionVoiceDisposition,
     ) -> Result<(), String> {
         self.inner.host.hide_selection_voice_intent_prompt();
-        let result = continue_selection_voice_disposition(&self.inner, disposition)
-            .await
-            .map(|_| ());
+        let processing_epoch =
+            emit_capsule(&self.inner, CapsuleState::Polishing, 0.0, 0, None, None);
+        let result =
+            continue_selection_voice_disposition(&self.inner, disposition, processing_epoch)
+                .await
+                .map(|_| ());
         if let Err(error) = &result {
             let _ = self
                 .inner

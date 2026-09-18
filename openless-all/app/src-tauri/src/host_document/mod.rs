@@ -22,11 +22,14 @@
 //!
 //! ## 本里程碑的范围
 //!
-//! 模块可用但**不接产品链路** —— 只有一个 debug 命令 `debug_read_cursor_context`
-//! 在调它。接进润色 prompt 是下一步的事，那里才引入用户可见的开关（默认关）。
+//! 文档上下文读取由显式的上下文入口调用。`KeyboardDelivery` 另供 macOS 流式输入
+//! 确认完成时机：它复用相同的焦点/权限闸门，只读选区范围，不读取宿主正文。
 
 #[cfg(target_os = "macos")]
 mod macos;
+
+#[cfg(target_os = "macos")]
+pub(crate) use macos::KeyboardDelivery;
 
 // `minimal_edit` 目前只有 macOS 的观察回调在用，非 macOS 构建下没有消费方。
 #[allow(unused_imports)]

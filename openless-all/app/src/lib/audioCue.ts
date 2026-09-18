@@ -57,6 +57,13 @@ let stopSeq = 0;
 // resume 期间录音已结束（发生过 stop）时，只有当「请求 → resume 完成」耗时超过这个阈值
 // 才判定真迟到并丢弃；阈值内仍补响一声——快速点一下录音（resume 没跑完就已结束）也该有反馈。
 const DEFERRED_CUE_LATE_THRESHOLD_MS = 400;
+const RESUME_TIMEOUT_MS = 250;
+let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+
+function clearRecoveryTimer(): void {
+  clearTimeout(recoveryTimer);
+  recoveryTimer = undefined;
+}
 
 // 无 performance（理论兜底，Tauri WebView 里恒有）时回退 0：elapsedMs 恒为 0、永不判迟到，
 // 即宁可补播一声也不丢音——与"修复丢音"的初衷一致的安全方向。
@@ -158,9 +165,9 @@ function getContext(): AudioContext | null {
 // 其上的 activeVoices，并尽力 close 释放底层音频资源。已 closed / close 失败都忽略。
 function discardContext(ctx: AudioContext): void {
   if (sharedCtx === ctx) {
+    stopVoices();
     sharedCtx = null;
   }
-  activeVoices = [];
   try {
     void ctx.close().catch(() => undefined);
   } catch {
@@ -244,58 +251,87 @@ export function primeAudioCue(): void {
   const ctx = getContext();
   if (!ctx) return;
   if (audioContextActionForState(ctx.state) === 'resume') {
-    ctx.resume().catch(() => undefined);
+    try {
+      void ctx.resume().catch(() => undefined);
+    } catch {
+      discardContext(ctx);
+    }
   }
 }
 
 /** 播放「开始录音」提示音。无 Web Audio 或被挂起且无法恢复时静默降级。 */
 export function playRecordStartCue(): void {
-  playRecordStartCueOnce(true);
-}
-
-// allowRecreate 把「丢弃坏死 ctx 并重试」限制为最多一次，避免在唤不醒的 ctx 上无限递归。
-function playRecordStartCueOnce(allowRecreate: boolean): void {
-  const ctx = getContext();
-  if (!ctx) return;
-
-  // ctx 已 running 直接排期；closed 已在 getContext 重建。其余（suspended / WebKit 非标准
-  // interrupted / 未知态）必须先 resume 再排期，不能在 resume 未完成时就用冻结的 currentTime。
-  if (audioContextActionForState(ctx.state) !== 'resume') {
-    scheduleCueVoices(ctx);
-    return;
-  }
-
+  clearRecoveryTimer();
   const myPlay = ++playSeq;
   const stopAtRequest = stopSeq;
   const requestedAt = nowMs();
+  const shouldPlay = () =>
+    shouldPlayDeferredCue({
+      superseded: myPlay !== playSeq,
+      stoppedWhileWaiting: stopSeq !== stopAtRequest,
+      elapsedMs: nowMs() - requestedAt,
+      lateThresholdMs: DEFERRED_CUE_LATE_THRESHOLD_MS,
+    });
+  playRecordStartCueOnce(true, myPlay, shouldPlay);
+}
 
-  // resume 完成（成功或被拒）后统一决策：排期 / 丢弃重建重试 / 放弃。
+// allowRecreate 把「丢弃坏死 ctx 并重试」限制为最多一次，避免在唤不醒的 ctx 上无限递归。
+function playRecordStartCueOnce(
+  allowRecreate: boolean,
+  myPlay: number,
+  shouldPlay: () => boolean,
+): void {
+  const ctx = getContext();
+  if (!ctx) return;
+
+  const recover = () => {
+    if (myPlay !== playSeq || sharedCtx !== ctx) return;
+    discardContext(ctx);
+    if (allowRecreate && shouldPlay()) playRecordStartCueOnce(false, myPlay, shouldPlay);
+  };
+  const schedule = () => {
+    const startedAt = ctx.currentTime;
+    scheduleCueVoices(ctx);
+    // 部分音频中断仍报告 running，但音频时钟已经冻结；下一次按键前主动淘汰它。
+    recoveryTimer = setTimeout(
+      () => {
+        if (ctx.currentTime <= startedAt) recover();
+      },
+      cueTotalDurationMs(recordStartCueTones()) + 50,
+    );
+  };
+
+  if (audioContextActionForState(ctx.state) !== 'resume') {
+    schedule();
+    return;
+  }
+
+  // resume 可能永不 settle。超时也进入恢复路径；迟到的 Promise 不能再操作旧 context。
+  let settled = false;
   const settle = (runningAfterResume: boolean): void => {
+    if (settled || myPlay !== playSeq || sharedCtx !== ctx) return;
+    settled = true;
+    clearRecoveryTimer();
     const action = cueActionAfterResume({
       runningAfterResume,
-      // 被更新一轮播放接管就让位；期间录音已停且 resume 真迟到才丢弃；否则照常补响——
-      // 快速点一下录音（resume 没跑完就已结束）也该有提示音。
-      shouldPlay: shouldPlayDeferredCue({
-        superseded: myPlay !== playSeq,
-        stoppedWhileWaiting: stopSeq !== stopAtRequest,
-        elapsedMs: nowMs() - requestedAt,
-        lateThresholdMs: DEFERRED_CUE_LATE_THRESHOLD_MS,
-      }),
+      shouldPlay: shouldPlay(),
       allowRecreate,
     });
     if (action === 'schedule') {
-      scheduleCueVoices(ctx);
-    } else if (action === 'recreate-retry') {
-      // resume 被拒、或 resolve 了但 ctx 仍非 running（被音频会话抢占后卡死）——「用久了没
-      // 声音」的根因。丢弃这个唤不醒的 ctx，用全新 ctx 重试一次，让共享 ctx 自愈。
-      discardContext(ctx);
-      playRecordStartCueOnce(false);
+      schedule();
+    } else if (!runningAfterResume) {
+      // 即使本次已迟到，也要清掉坏 context，让下一次录音可以恢复。
+      recover();
     }
-    // 'drop'：被接管 / 真迟到 / 重试后仍唤不醒——静默放弃。
   };
 
-  ctx
-    .resume()
-    .then(() => settle(ctx.state === 'running'))
-    .catch(() => settle(false));
+  recoveryTimer = setTimeout(() => settle(false), RESUME_TIMEOUT_MS);
+  try {
+    void ctx.resume().then(
+      () => settle(ctx.state === 'running'),
+      () => settle(false),
+    );
+  } catch {
+    settle(false);
+  }
 }
