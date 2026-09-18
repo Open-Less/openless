@@ -333,7 +333,9 @@ mod tests {
         // 两张证书的名称完全相同，描述文件的名称和标识也可以照抄。
         assert_eq!(
             parse_cert(&original.trust_cert).unwrap().distinguished_name,
-            parse_cert(&replacement.trust_cert).unwrap().distinguished_name
+            parse_cert(&replacement.trust_cert)
+                .unwrap()
+                .distinguished_name
         );
         let encode = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
         let substituted = mobileconfig(&original.trust_cert).replace(
@@ -361,7 +363,11 @@ mod tests {
             fingerprint_sha256(&actual_certificate),
             replacement.ca_fingerprint_sha256
         );
-        assert!(!verify_server(&replacement, &original.trust_cert, "localhost"));
+        assert!(!verify_server(
+            &replacement,
+            &original.trust_cert,
+            "localhost"
+        ));
         assert_ne!(
             original.ca_fingerprint_sha256,
             fingerprint_sha256(&stored(original_dir.path()).leaf_cert)

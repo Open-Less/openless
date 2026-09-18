@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 const source = readFileSync(
-  new URL('../src-tauri/src/remote_server/assets/app.js', import.meta.url),
+  new URL('../assets/remote-input/app.js', import.meta.url),
   'utf8',
 );
 const prefix = source.slice(0, source.indexOf('  // 极简插值：'));

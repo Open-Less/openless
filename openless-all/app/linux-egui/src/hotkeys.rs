@@ -64,6 +64,12 @@ pub enum LinuxHotkeyEvent {
     QaPressed,
     SelectionPolishPressed,
     TranslationPressed,
+    SwitchStylePressed,
+    OpenAppPressed,
+    StylePackPressed {
+        symbol: u32,
+        states: u32,
+    },
 }
 
 pub struct Fcitx5HotkeyListener {
@@ -325,6 +331,11 @@ fn event_from_signal(
         ("QaShortcutEvent", true) => Some(LinuxHotkeyEvent::QaPressed),
         ("SelectionPolishEvent", true) => Some(LinuxHotkeyEvent::SelectionPolishPressed),
         ("TranslationModifierEvent", true) => Some(LinuxHotkeyEvent::TranslationPressed),
+        ("SwitchStyleEvent", true) => Some(LinuxHotkeyEvent::SwitchStylePressed),
+        ("OpenAppEvent", true) => Some(LinuxHotkeyEvent::OpenAppPressed),
+        ("StylePackHotkeyEvent", true) => {
+            Some(LinuxHotkeyEvent::StylePackPressed { symbol, states })
+        }
         _ => None,
     }
 }
@@ -374,6 +385,21 @@ mod tests {
         assert_eq!(
             event_from_signal("QaShortcutEvent", 0, 0, true, at, &press_ids),
             Some(LinuxHotkeyEvent::QaPressed)
+        );
+        assert_eq!(
+            event_from_signal("SwitchStyleEvent", 11, 12, true, at, &press_ids),
+            Some(LinuxHotkeyEvent::SwitchStylePressed)
+        );
+        assert_eq!(
+            event_from_signal("OpenAppEvent", 13, 14, true, at, &press_ids),
+            Some(LinuxHotkeyEvent::OpenAppPressed)
+        );
+        assert_eq!(
+            event_from_signal("StylePackHotkeyEvent", 15, 16, true, at, &press_ids),
+            Some(LinuxHotkeyEvent::StylePackPressed {
+                symbol: 15,
+                states: 16,
+            })
         );
         let less_pressed = event_from_signal("LessComputerKeyEvent", 3, 4, true, at, &press_ids)
             .expect("Less Computer press");

@@ -3,7 +3,8 @@ name: CI
 # 多平台跨语言质量门禁。release-tauri.yml 是发版流水线（仅打包构建），这里负责
 # 在合并前快速验证两件事：
 #   1. 全部前端/契约测试与 vite bundle 通过（捕获行为、合同及跨 locale 类型 drift）
-#   2. Tauri 后端在 macOS / Windows、移动端在 Android 编译；Linux 只测试共享 core。
+#   2. Tauri 后端在 macOS / Windows、移动端在 Android 编译；Linux 同时验证共享 Core
+#      与独立 egui host，且不拉取本地 Qwen ASR 或 Tauri/WebKit 依赖。
 # 跑 build-mac.sh / windows-package-msvc.ps1 / Tauri bundle 太重；只跑轻量 cargo check + vite build。
 
 on:
@@ -166,8 +167,10 @@ jobs:
             --no-daemon
 
   linux-core-contract:
-    name: Linux core tests
-    runs-on: ubuntu-22.04
+    name: Linux core and egui host tests
+    # cpal's PipeWire backend needs the PipeWire/libspa ABI shipped by 24.04.
+    # 22.04 headers fail to compile libspa 0.10.x (missing spa_meta_first etc.).
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: openless-all/app
@@ -182,8 +185,42 @@ jobs:
         with:
           workspaces: 'openless-all/app -> target'
 
+      - name: Install Linux egui build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            libasound2-dev \
+            libdbus-1-dev \
+            libpipewire-0.3-dev \
+            libssl-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxkbcommon-dev \
+            pkg-config \
+            ripgrep
+
       - name: Test Core
-        run: cargo test --locked -p openless-core
+        run: |
+          cargo test --locked -p openless-core
+          cargo clippy --locked -p openless-core --all-targets
+
+      - name: Test Linux egui host without local Qwen ASR
+        run: |
+          cargo test --locked -p openless-linux-egui --all-targets
+          cargo check --locked -p openless-linux-egui --all-targets
+          node scripts/linux-egui-tauri-free-contract.test.mjs
+          node scripts/linux-egui-release-contract.test.mjs
+
+      - name: Enforce Linux dependency boundaries
+        shell: pwsh
+        run: |
+          ./scripts/check-core-deps.ps1
+          ./scripts/check-core-deps.ps1 openless-linux-egui
+          ./scripts/check-core-secret-surface.ps1
+          ./scripts/check-core-test-isolation.ps1
+          ./scripts/check-core-runtime-seam.ps1
+          ./scripts/check-linux-public-surface.ps1
 
       - name: Test remote input TLS identity and Unix key permissions
         run: cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --test remote_tls

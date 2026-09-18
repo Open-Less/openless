@@ -20,6 +20,7 @@
  *    SetAuxDown(s: text)                 — 在候选词列表下方显示状态文本
  *    ClearAuxDown()                      — 清除候选词列表下方文本
  *    GetSelectionText() -> s             — 读取当前 PRIMARY 选区文本（由 clipboard addon 维护）
+ *    SetClipboardText(s: text) -> b      — 通过 clipboard addon 写入 CLIPBOARD
  *    CaptureSelectionTarget(s: ticket) -> s — 捕获选区和原输入上下文
  *    ApplySelectionTarget(sss: ticket, source, replacement) -> b — 校验后替换
  *    RevertSelectionTarget(s: ticket) -> b — 校验光标前文本后撤销替换
@@ -34,8 +35,13 @@
  *    TranslationModifierEvent(uub: sym, states, isPress) — 翻译修饰键按下/抬起
  */
 
+#include <algorithm>
+#include <chrono>
+#include <cstdlib>
+#include <filesystem>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -47,6 +53,8 @@
 #include <fcitx-utils/handlertable.h>
 #include <fcitx-utils/i18n.h>
 #include <fcitx-utils/key.h>
+
+#include "hotkey_match.h"
 #include <fcitx-utils/log.h>
 #include <fcitx-utils/utf8.h>
 #include <fcitx/addonfactory.h>
@@ -87,6 +95,10 @@ public:
           translationRawStates_(0),
           lessComputerRawSym_(0),
           lessComputerRawStates_(0),
+          switchStyleRawSym_(0),
+          switchStyleRawStates_(0),
+          openAppRawSym_(0),
+          openAppRawStates_(0),
           hasCustomDictationKey_(false),
           dictationTriggerHeld_(false),
           dictationTriggerCombined_(false),
@@ -131,17 +143,45 @@ public:
                         savedIc_ = keyEvent.inputContext();
                     }
                     auto sym = static_cast<uint32_t>(keyEvent.key().sym());
-                    auto states = static_cast<uint32_t>(keyEvent.key().states());
+                    // 只保留 ctrl/alt/shift/super（与 fcitx 的 Key::normalize() 一致）。
+                    // CapsLock 开着时每个事件都会多带 0x02，下面那些直接比较 states 的
+                    // 分支（自定义组合键 / triggerKeyList_ / 合并键）会全部失效。
+                    auto states = static_cast<uint32_t>(keyEvent.key().states()) &
+                                  openless_hotkeys::kModifierMask;
                     bool isPress = !keyEvent.isRelease();
 
-                    if (lessComputerRawSym_ != 0 && sym == lessComputerRawSym_ &&
-                        states == lessComputerRawStates_) {
+                    // 命中判定统一走 hotkey_match.h：字母大小写折叠 + US 布局
+                    // base/shifted 视为同一物理键（前端把 Shift 折进 keysym）。
+                    const auto hit = [&](uint32_t registeredSym,
+                                         uint32_t registeredStates) {
+                        return openless_hotkeys::matches(
+                            sym, states, registeredSym, registeredStates);
+                    };
+                    // 只有非修饰键才允许吞掉事件。吞掉 Shift_L/Ctrl_L 会让该修饰键
+                    // 在整个桌面消失（Shift+字母打不出大写就是这么来的）。
+                    const auto consume = [&](uint32_t registeredSym) {
+                        if (openless_hotkeys::shouldConsume(registeredSym)) {
+                            keyEvent.filterAndAccept();
+                        }
+                    };
+                    if (isPress) {
+                        if (hotkeyTraceEnabled()) {
+                            FCITX_LOGC(openless, Info)
+                                << "[trace] key sym=0x" << std::hex << sym
+                                << std::dec << " states=0x" << std::hex << states
+                                << std::dec;
+                        }
+                        logHotkeyNearMiss(sym, states);
+                    }
+
+                    if (lessComputerRawSym_ != 0 &&
+                        hit(lessComputerRawSym_, lessComputerRawStates_)) {
                         lessComputerTriggerHeld_ = isPress;
                         if (isPress) {
                             lessComputerTriggerCombined_ = false;
                         }
                         lessComputerKeyEvent(sym, states, isPress);
-                        keyEvent.filterAndAccept();
+                        consume(lessComputerRawSym_);
                         return;
                     }
                     if (isPress && lessComputerTriggerHeld_ && !isModifierKeySym(sym) &&
@@ -151,26 +191,31 @@ public:
                     }
 
                     // 自定义组合键：Alt 状态下字母 sym 可能大写（A vs a），归一化比较
-                    if (hasCustomDictationKey_ && states == static_cast<uint32_t>(customDictationKey_.states()) &&
-                        (sym == static_cast<uint32_t>(customDictationKey_.sym()) ||
-                         (sym >= 65 && sym <= 90 && sym + 32 == static_cast<uint32_t>(customDictationKey_.sym())) ||
-                         (sym >= 97 && sym <= 122 && sym - 32 == static_cast<uint32_t>(customDictationKey_.sym())))) {
+                    if (hasCustomDictationKey_ &&
+                        hit(static_cast<uint32_t>(customDictationKey_.sym()),
+                            static_cast<uint32_t>(customDictationKey_.states()))) {
                         FCITX_LOGC(openless, Debug)
                             << "Custom dictation: sym=" << sym << " states=" << states;
+                        if (isModifierKeySym(
+                                static_cast<uint32_t>(customDictationKey_.sym()))) {
+                            dictationTriggerHeld_ = isPress;
+                            if (isPress) {
+                                dictationTriggerCombined_ = false;
+                            }
+                        }
                         dictationKeyEvent(
                             static_cast<uint32_t>(customDictationKey_.sym()),
                             static_cast<uint32_t>(customDictationKey_.states()),
                             isPress);
-                        keyEvent.filterAndAccept();
+                        consume(static_cast<uint32_t>(customDictationKey_.sym()));
                         return;
                     }
                     if ((triggerRawSym_ != 0 &&
-                         keyEvent.key().check(Key(static_cast<KeySym>(triggerRawSym_),
-                                                   static_cast<KeyStates>(triggerRawStates_)))) ||
+                         hit(triggerRawSym_, triggerRawStates_)) ||
                         (triggerRawSym_ == 0 && [&]() {
                             for (const auto &hk : triggerKeyList_) {
-                                if (sym == static_cast<uint32_t>(hk.sym()) &&
-                                    states == static_cast<uint32_t>(hk.states()))
+                                if (hit(static_cast<uint32_t>(hk.sym()),
+                                        static_cast<uint32_t>(hk.states())))
                                     return true;
                             }
                             return false;
@@ -198,7 +243,7 @@ public:
                         FCITX_LOGC(openless, Debug)
                             << "Dictation hotkey sym=" << dsym;
                         dictationKeyEvent(dsym, dstates, isPress);
-                        keyEvent.filterAndAccept();
+                        consume(dsym);
                         return;
                     }
                     if (isPress && dictationTriggerHeld_ && !isModifierKeySym(sym) &&
@@ -208,29 +253,28 @@ public:
                         dictationTriggerCombined_ = true;
                         dictationKeyCombined(sym, states, true);
                     }
-                    if (qaRawSym_ != 0 && sym == qaRawSym_ &&
-                        states == qaRawStates_) {
+                    if (qaRawSym_ != 0 && hit(qaRawSym_, qaRawStates_)) {
                         if (isPress) selectionIc_ = keyEvent.inputContext();
                         FCITX_LOGC(openless, Debug)
-                            << "QA shortcut";
+                            << "QA shortcut sym=0x" << std::hex << sym << std::dec
+                            << " states=0x" << std::hex << states;
                         qaShortcutEvent(qaRawSym_, qaRawStates_, isPress);
-                        keyEvent.filterAndAccept();
+                        consume(qaRawSym_);
                         return;
                     }
                     if (selectionPolishRawSym_ != 0 &&
-                        sym == selectionPolishRawSym_ &&
-                        states == selectionPolishRawStates_) {
+                        hit(selectionPolishRawSym_, selectionPolishRawStates_)) {
                         if (isPress) selectionIc_ = keyEvent.inputContext();
                         FCITX_LOGC(openless, Debug)
                             << "Selection polish shortcut";
                         selectionPolishEvent(selectionPolishRawSym_,
                                              selectionPolishRawStates_, isPress);
-                        keyEvent.filterAndAccept();
+                        consume(selectionPolishRawSym_);
                         return;
                     }
                     bool translationMatched = false;
-                    if (translationRawSym_ != 0 && sym == translationRawSym_ &&
-                        states == translationRawStates_)
+                    if (translationRawSym_ != 0 &&
+                        hit(translationRawSym_, translationRawStates_))
                         translationMatched = true;
                     if (translationRawSym_ != 0 &&
                         (sym == 0xffe1 || sym == 0xffe2))
@@ -239,6 +283,25 @@ public:
                         FCITX_LOGC(openless, Debug)
                             << "Translation modifier: sym=" << sym;
                         translationModifierEvent(sym, states, isPress);
+                    }
+                    if (switchStyleRawSym_ != 0 &&
+                        hit(switchStyleRawSym_, switchStyleRawStates_)) {
+                        switchStyleEvent(sym, states, isPress);
+                        consume(switchStyleRawSym_);
+                        return;
+                    }
+                    if (openAppRawSym_ != 0 &&
+                        hit(openAppRawSym_, openAppRawStates_)) {
+                        openAppEvent(sym, states, isPress);
+                        consume(openAppRawSym_);
+                        return;
+                    }
+                    for (const auto &[packId, packSym, packStates] : stylePackHotkeys_) {
+                        if (packSym != 0 && hit(packSym, packStates)) {
+                            stylePackHotkeyEvent(sym, states, isPress);
+                            consume(packSym);
+                            return;
+                        }
                     }
                 }));
 
@@ -658,6 +721,37 @@ public:
         safeSaveAsIni(raw, configFile());
     }
 
+    void setSwitchStyleHotkeyRaw(uint32_t sym, uint32_t states) {
+        switchStyleRawSym_ = sym;
+        switchStyleRawStates_ = states;
+        persistRawHotkey("SwitchStyle", sym, states);
+    }
+
+    void setOpenAppHotkeyRaw(uint32_t sym, uint32_t states) {
+        openAppRawSym_ = sym;
+        openAppRawStates_ = states;
+        persistRawHotkey("OpenApp", sym, states);
+    }
+
+    void setStylePackHotkeys(
+        const std::vector<dbus::DBusStruct<std::string, uint32_t, uint32_t>> &bindings) {
+        stylePackHotkeys_.clear();
+        stylePackHotkeys_.reserve(bindings.size());
+        for (const auto &binding : bindings) {
+            stylePackHotkeys_.push_back(binding.data());
+        }
+        RawConfig raw;
+        readAsIni(raw, configFile());
+        raw.setValueByPath("StylePackHotkeyCount", std::to_string(bindings.size()));
+        for (size_t index = 0; index < stylePackHotkeys_.size(); ++index) {
+            const auto prefix = "StylePackHotkey" + std::to_string(index);
+            raw.setValueByPath(prefix + "Id", std::get<0>(stylePackHotkeys_[index]));
+            raw.setValueByPath(prefix + "Sym", std::to_string(std::get<1>(stylePackHotkeys_[index])));
+            raw.setValueByPath(prefix + "States", std::to_string(std::get<2>(stylePackHotkeys_[index])));
+        }
+        safeSaveAsIni(raw, configFile());
+    }
+
     /// 读取当前 PRIMARY 选区文本。空字符串表示无选区或 clipboard addon 不可用。
     std::string getSelectionText() {
         auto *clipboard = instance_->addonManager().addon("clipboard");
@@ -672,6 +766,17 @@ public:
         FCITX_LOGC(openless, Debug)
             << "GetSelectionText: " << text.size() << " chars";
         return text;
+    }
+
+    bool setClipboardText(const std::string &text) {
+        auto *clipboard = instance_->addonManager().addon("clipboard");
+        if (!clipboard) {
+            FCITX_LOGC(openless, Debug)
+                << "SetClipboardText: clipboard addon not loaded";
+            return false;
+        }
+        clipboard->call<IClipboard::setClipboard>("openless", text);
+        return true;
     }
 
     FCITX_OBJECT_VTABLE_METHOD(commitText, "CommitText", "s", "b");
@@ -692,7 +797,11 @@ public:
     FCITX_OBJECT_VTABLE_METHOD(setSelectionPolishHotkeyRaw, "SetSelectionPolishHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setTranslationHotkeyRaw, "SetTranslationHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setLessComputerHotkeyRaw, "SetLessComputerHotkeyRaw", "uu", "");
+    FCITX_OBJECT_VTABLE_METHOD(setSwitchStyleHotkeyRaw, "SetSwitchStyleHotkeyRaw", "uu", "");
+    FCITX_OBJECT_VTABLE_METHOD(setOpenAppHotkeyRaw, "SetOpenAppHotkeyRaw", "uu", "");
+    FCITX_OBJECT_VTABLE_METHOD(setStylePackHotkeys, "SetStylePackHotkeys", "a(suu)", "");
     FCITX_OBJECT_VTABLE_METHOD(getSelectionText, "GetSelectionText", "", "s");
+    FCITX_OBJECT_VTABLE_METHOD(setClipboardText, "SetClipboardText", "s", "b");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyEvent, "DictationKeyEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyCombined, "DictationKeyCombined", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(lessComputerKeyEvent, "LessComputerKeyEvent", "uub");
@@ -700,6 +809,9 @@ public:
     FCITX_OBJECT_VTABLE_SIGNAL(qaShortcutEvent, "QaShortcutEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(selectionPolishEvent, "SelectionPolishEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(translationModifierEvent, "TranslationModifierEvent", "uub");
+    FCITX_OBJECT_VTABLE_SIGNAL(switchStyleEvent, "SwitchStyleEvent", "uub");
+    FCITX_OBJECT_VTABLE_SIGNAL(openAppEvent, "OpenAppEvent", "uub");
+    FCITX_OBJECT_VTABLE_SIGNAL(stylePackHotkeyEvent, "StylePackHotkeyEvent", "uub");
 
     Instance *instance() { return instance_; }
 
@@ -748,6 +860,24 @@ public:
         {
             auto *v = raw.valueByPath("LessComputerRawStates");
             lessComputerRawStates_ = v ? std::stoul(*v, nullptr, 0) : 0;
+        }
+        loadRawHotkey(raw, "SwitchStyle", switchStyleRawSym_, switchStyleRawStates_);
+        loadRawHotkey(raw, "OpenApp", openAppRawSym_, openAppRawStates_);
+        stylePackHotkeys_.clear();
+        if (auto *countValue = raw.valueByPath("StylePackHotkeyCount")) {
+            const auto count = std::min<size_t>(
+                std::stoul(*countValue, nullptr, 0), 128);
+            for (size_t index = 0; index < count; ++index) {
+                const auto prefix = "StylePackHotkey" + std::to_string(index);
+                auto *id = raw.valueByPath(prefix + "Id");
+                auto *sym = raw.valueByPath(prefix + "Sym");
+                auto *states = raw.valueByPath(prefix + "States");
+                if (id && sym && states && !id->empty()) {
+                    stylePackHotkeys_.emplace_back(
+                        *id, std::stoul(*sym, nullptr, 0),
+                        std::stoul(*states, nullptr, 0));
+                }
+            }
         }
         lessComputerTriggerHeld_ = false;
         lessComputerTriggerCombined_ = false;
@@ -802,7 +932,104 @@ private:
         // X11 modifier keysyms.  CapsLock is included to match the desktop hook's
         // treatment of lock keys: pressing it alongside a trigger must not abort
         // dictation as if it were a printable companion key.
-        return sym >= 0xffe1 && sym <= 0xffee;
+        return openless_hotkeys::isModifierSym(sym);
+    }
+
+    /// 诊断用：打印「修饰位与某个已注册热键一致、但键不同」的按键。
+    /// Ctrl+Shift+; 过去正是因为前端把 level 折进 keysym（到达 ':' 而注册的是 ';'）
+    /// 而永远匹配不上；这条日志让同类问题不必再靠猜。
+    void logHotkeyNearMiss(uint32_t sym, uint32_t states) {
+        struct Entry {
+            const char *name;
+            uint32_t sym;
+            uint32_t states;
+        };
+        std::vector<Entry> entries = {
+            {"dictation_raw", triggerRawSym_, triggerRawStates_},
+            {"qa", qaRawSym_, qaRawStates_},
+            {"selection_polish", selectionPolishRawSym_, selectionPolishRawStates_},
+            {"translation", translationRawSym_, translationRawStates_},
+            {"switch_style", switchStyleRawSym_, switchStyleRawStates_},
+            {"open_app", openAppRawSym_, openAppRawStates_},
+            {"less_computer", lessComputerRawSym_, lessComputerRawStates_},
+        };
+        if (hasCustomDictationKey_) {
+            entries.push_back({"dictation_custom",
+                               static_cast<uint32_t>(customDictationKey_.sym()),
+                               static_cast<uint32_t>(customDictationKey_.states())});
+        }
+        for (const auto &[packId, packSym, packStates] : stylePackHotkeys_) {
+            entries.push_back({"style_pack", packSym, packStates});
+        }
+        const auto now = std::chrono::steady_clock::now();
+        // 近失只看「除 Shift 外的修饰位」是否一致，理由有两个：
+        //   1. 屏蔽掉 CapsLock 之类的锁定位，否则开着 CapsLock 时这里会 continue
+        //      掉每一条，近失日志永远不会打（就是这么丢的）；
+        //   2. Shift 位可能被前端折进符号里（见 hotkey_match.h 的 `matches`）。
+        // 再用「符号是同一物理键」把「用户按了别的键」滤掉（按 Ctrl+C 不会因为
+        // 存在 Ctrl+Shift+S 绑定而刷日志）。
+        const uint32_t looseMask = openless_hotkeys::kModifierMask & ~openless_hotkeys::kShiftBit;
+        for (const auto &entry : entries) {
+            if (entry.sym == 0 ||
+                (entry.states & looseMask) != (states & looseMask)) {
+                continue;
+            }
+            if (openless_hotkeys::matches(sym, states, entry.sym, entry.states)) {
+                continue;
+            }
+            if (!openless_hotkeys::symMatches(sym, entry.sym) &&
+                !openless_hotkeys::isShiftPair(sym, entry.sym)) {
+                continue;
+            }
+            if (now - lastNearMissLog_ < std::chrono::seconds(1)) {
+                return;
+            }
+            lastNearMissLog_ = now;
+            // Info 而不是 Debug：fcitx5 默认级别是 Info，写 Debug 等于永远看不到
+            // （这正是「按了没反应、日志里也什么都没有」的原因之一）。已限速 1 次/秒。
+            FCITX_LOGC(openless, Info)
+                << "hotkey near miss: " << entry.name
+                << " registered sym=0x" << std::hex << entry.sym << std::dec
+                << " states=0x" << std::hex << entry.states << std::dec
+                << " but the key arrived as sym=0x" << std::hex << sym << std::dec
+                << " states=0x" << std::hex << states;
+            return;
+        }
+    }
+
+    /// 逐键诊断开关：环境变量 OPENLESS_HOTKEY_TRACE=1，或建一个标记文件
+    /// ~/.config/fcitx5/openless-hotkey-trace（改完 5 秒内生效，无需重启 fcitx5）。
+    /// 打开后每次按键都会打一行 (sym, states)，用来回答「按这个键插件到底看到了什么」。
+    static bool hotkeyTraceEnabled() {
+        static std::chrono::steady_clock::time_point checked{};
+        static bool enabled = false;
+        const auto now = std::chrono::steady_clock::now();
+        if (checked.time_since_epoch().count() != 0 &&
+            now - checked < std::chrono::seconds(5)) {
+            return enabled;
+        }
+        checked = now;
+        const char *env = std::getenv("OPENLESS_HOTKEY_TRACE");
+        if (env != nullptr && env[0] != '\0' && std::string(env) != "0") {
+            enabled = true;
+            return enabled;
+        }
+        std::filesystem::path flag;
+        const char *configHome = std::getenv("XDG_CONFIG_HOME");
+        if (configHome != nullptr && configHome[0] != '\0') {
+            flag = std::filesystem::path(configHome) / "fcitx5" / "openless-hotkey-trace";
+        } else {
+            const char *home = std::getenv("HOME");
+            if (home == nullptr || home[0] == '\0') {
+                enabled = false;
+                return enabled;
+            }
+            flag = std::filesystem::path(home) / ".config" / "fcitx5" /
+                   "openless-hotkey-trace";
+        }
+        std::error_code error;
+        enabled = std::filesystem::exists(flag, error);
+        return enabled;
     }
 
     void resetDictationTriggerState() {
@@ -812,6 +1039,23 @@ private:
 
     void rebuildTriggerKeys() {
         triggerKeyList_ = config_.triggerKey.value();
+    }
+
+    void persistRawHotkey(const std::string &name, uint32_t sym,
+                          uint32_t states) {
+        RawConfig raw;
+        readAsIni(raw, configFile());
+        raw.setValueByPath(name + "RawSym", std::to_string(sym));
+        raw.setValueByPath(name + "RawStates", std::to_string(states));
+        safeSaveAsIni(raw, configFile());
+    }
+
+    static void loadRawHotkey(RawConfig &raw, const std::string &name,
+                              uint32_t &sym, uint32_t &states) {
+        auto *symValue = raw.valueByPath(name + "RawSym");
+        auto *statesValue = raw.valueByPath(name + "RawStates");
+        sym = symValue ? std::stoul(*symValue, nullptr, 0) : 0;
+        states = statesValue ? std::stoul(*statesValue, nullptr, 0) : 0;
     }
 
     Instance *instance_;
@@ -827,12 +1071,19 @@ private:
     uint32_t translationRawStates_;
     uint32_t lessComputerRawSym_;
     uint32_t lessComputerRawStates_;
+    uint32_t switchStyleRawSym_;
+    uint32_t switchStyleRawStates_;
+    uint32_t openAppRawSym_;
+    uint32_t openAppRawStates_;
+    std::vector<std::tuple<std::string, uint32_t, uint32_t>> stylePackHotkeys_;
     Key customDictationKey_;
     bool hasCustomDictationKey_;
     bool dictationTriggerHeld_;
     bool dictationTriggerCombined_;
     bool lessComputerTriggerHeld_;
     bool lessComputerTriggerCombined_;
+    /// 近似未命中诊断日志的限速时间戳（见 logHotkeyNearMiss）。
+    std::chrono::steady_clock::time_point lastNearMissLog_{};
     /// 快捷键按下时保存的输入上下文指针，用于 commitText 在失焦后仍能提交文字。
     /// 事件处理线程和 DBus 处理线程都是 fcitx5 主事件循环，无竞态。
     /// 通过 InputContextDestroyed 事件监听 IC 销毁时自动清空指针。

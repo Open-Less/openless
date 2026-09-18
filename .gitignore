@@ -34,6 +34,9 @@ video-materials/
 node_modules/
 dist/
 target/
+# Explicitly ignore local cache symlinks as well as generated target directories.
+/openless-all/app/target
+/openless-all/egui-frontend/target
 # 本地从 CI / Actions 下载的 APK 及解压目录（非源码）
 ci-artifacts/
 *.apk

@@ -29,7 +29,7 @@ impl LinuxCapabilitySnapshot {
         x11_display: Option<&str>,
         fcitx5_ready: bool,
         tray_available: bool,
-        package_kind: LinuxPackageKind,
+        _package_kind: LinuxPackageKind,
     ) -> Self {
         let session = if wayland_display.is_some_and(|value| !value.trim().is_empty()) {
             LinuxDesktopSession::Wayland
@@ -48,10 +48,16 @@ impl LinuxCapabilitySnapshot {
                 supports_tray: desktop && tray_available,
                 supports_overlay: session == LinuxDesktopSession::X11,
                 supports_ime_input: desktop && fcitx5_ready,
-                supports_local_asr: desktop,
+                // Linux ships no local inference engine (Generic/Qwen, MLX or
+                // Foundry). Report false on every desktop session so the UI and
+                // downstream gate on the honest answer.
+                supports_local_asr: false,
                 supports_local_qwen3_mlx: false,
                 supports_in_app_dictation: false,
-                supports_auto_update: package_kind == LinuxPackageKind::AppImage,
+                // AppImage detection alone is not an updater capability. Keep
+                // this false until transport and a pinned minisign verifier
+                // have both initialized successfully.
+                supports_auto_update: false,
             },
             permissions: PermissionSnapshot {
                 microphone: if desktop {
@@ -64,16 +70,23 @@ impl LinuxCapabilitySnapshot {
         }
     }
 
-    pub fn detect(tray_available: bool, package_kind: LinuxPackageKind) -> Self {
+    pub fn detect(
+        tray_available: bool,
+        package_kind: LinuxPackageKind,
+        updater_available: bool,
+    ) -> Self {
         let wayland = std::env::var("WAYLAND_DISPLAY").ok();
         let x11 = std::env::var("DISPLAY").ok();
-        Self::from_environment(
+        let mut snapshot = Self::from_environment(
             wayland.as_deref(),
             x11.as_deref(),
             fcitx5_available(),
             tray_available,
             package_kind,
-        )
+        );
+        snapshot.capabilities.supports_auto_update =
+            package_kind == LinuxPackageKind::AppImage && updater_available;
+        snapshot
     }
 }
 
@@ -192,12 +205,10 @@ impl PlatformApi for LinuxPlatformApi {
 
 #[cfg(target_os = "linux")]
 fn enumerate_microphones() -> Result<Vec<MicrophoneDevice>, BackendError> {
-    use cpal::traits::{DeviceTrait, HostTrait};
+    use cpal::traits::HostTrait;
 
     let host = cpal::default_host();
-    let default_name = host
-        .default_input_device()
-        .and_then(|device| device.name().ok());
+    let default_name = host.default_input_device().map(|device| device.to_string());
     let devices = host.input_devices().map_err(|error| {
         BackendError::new(
             BackendErrorCode::Platform,
@@ -207,12 +218,7 @@ fn enumerate_microphones() -> Result<Vec<MicrophoneDevice>, BackendError> {
     devices
         .enumerate()
         .map(|(index, device)| {
-            let name = device.name().map_err(|error| {
-                BackendError::new(
-                    BackendErrorCode::Platform,
-                    format!("failed to read Linux microphone name: {error}"),
-                )
-            })?;
+            let name = device.to_string();
             Ok(MicrophoneDevice {
                 id: format!("cpal:{index}:{name}"),
                 is_default: default_name.as_deref() == Some(name.as_str()),
@@ -237,7 +243,8 @@ mod tests {
         );
         assert_eq!(x11.session, LinuxDesktopSession::X11);
         assert!(x11.capabilities.supports_overlay);
-        assert!(x11.capabilities.supports_auto_update);
+        assert!(!x11.capabilities.supports_local_asr);
+        assert!(!x11.capabilities.supports_auto_update);
 
         let wayland = LinuxCapabilitySnapshot::from_environment(
             Some("wayland-0"),

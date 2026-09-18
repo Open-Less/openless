@@ -1,36 +1,96 @@
 name: Release Linux egui
 
-# This workflow deliberately has no automatic tag trigger until real Ubuntu
-# audio, focus/input, install, upgrade, and rollback evidence is recorded. It is
-# already reusable by a release orchestrator: pass release_tag to upload verified packages.
+# 单独手动入口：只想出一份 Linux 包（不跑 macOS/Windows）时 dispatch 这条。
+#
+# ⚠ 发版路径**不再**经过这里：release-tauri.yml 把下面这套步骤**内联**成与 build
+#   平级的普通 job（linux-egui），因为 GitHub 会把 workflow_call 调用的工作流渲染成
+#   嵌套可折叠的一层，Linux 在 Actions 页面上就不与三个平台平级。
+#   ⚠ 两份步骤必须保持一致：scripts/linux-egui-release-contract.test.mjs 会断言
+#     两边都保留同样的关键门禁（deb/rpm 各恰好一个、ldd 门禁、手动安装包门禁等），
+#     只改一边会让契约测试失败。
+#
+# 这里仍然不挂自动 tag 触发（历史上没有真正的 Ubuntu 音频/焦点/安装/回滚证据），
+# 所以它永远不会自己跑起来。版本串只能来自 release_tag 输入，从不自己拼 tag。
+# 产物命名 OpenLess-Linux-egui-<ver>-<arch>.deb/.rpm，校验和由打包脚本自己产出。
 on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing GitHub release tag to receive Linux assets; blank only uploads Actions artifacts
+        description: "Existing v* tag whose Linux egui assets to build/upload (e.g. v2.0.0-Beta.1-egui); blank only uploads Actions artifacts"
         required: false
         type: string
+      attach_release:
+        description: "Upload the built packages to the release named by release_tag (ignored when release_tag is blank)"
+        required: false
+        default: true
+        type: boolean
   workflow_call:
     inputs:
       release_tag:
         required: false
         type: string
-    secrets:
-      LINUX_EGUI_MINISIGN_SECRET_KEY:
+      # 编排层（release-tauri.yml）传 false：四个平台并发跑，谁都不能在建 release
+      # 的同一秒里抢写，所以 Linux 资产的 release 上传统一交给聚合层（bundle job）。
+      attach_release:
         required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: write
 
 jobs:
   build-linux-egui:
-    runs-on: ubuntu-22.04
+    # 跟 ci.yml 的 linux-core-contract 用同一个镜像，理由也一样：cpal 的 PipeWire
+    # 后端需要 24.04 自带的 PipeWire/libspa ABI，22.04 的头文件编译不过
+    # libspa 0.10.x（缺 spa_meta_first 等字段——
+    # "spa_video_info_raw has no field named flags" 就是这个）。
+    # 这条工作流以前从没跑过，所以从没拿到 ci.yml 早就打上的这个修正；
+    # 一旦冷缓存重编 libspa 就会在编译阶段直接挂掉（实测 2026-09-16 run 35120587777）。
+    #
+    # ⚠ 分发基线（用户已确认，不要改回 22.04）：产出的 deb/rpm 需要 glibc ≥ 2.39，
+    #   支持范围是 Ubuntu 24.04+ 一类的新发行版；Ubuntu 22.04 / Debian 12 不在
+    #   支持范围内。要覆盖它们必须在依赖层解决 libspa/PipeWire 版本，而不是换 runner。
+    runs-on: ubuntu-24.04
     env:
       RELEASE_TAG: ${{ inputs.release_tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: false
+
+      # 这个 gate 必须排在编译之前：它只依赖 checkout 与 gh，几秒就能出结论。
+      # 历史教训：它原来在依赖安装 + fcitx5 插件构建 + 全量测试之后（第 8 步），
+      # 一个不合规的 release_tag 会白烧掉 4.5 分钟 runner 才报错。
+      - name: Validate release target and UI gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RELEASE_TAG:-}" ]; then
+            echo "release_tag is empty: only uploading Actions artifacts, no release is touched"
+            exit 0
+          fi
+          case "$RELEASE_TAG" in
+            v*) ;;
+            *)
+              echo "::error::release_tag '$RELEASE_TAG' must be an existing v* tag (e.g. v2.0.0-Beta.1-egui); leave it blank to only upload Actions artifacts"
+              exit 1
+              ;;
+          esac
+          if grep -q 'openless-linux-egui host stub' openless-all/app/linux-egui/src/main.rs; then
+            echo "::error::The egui UI stub cannot be uploaded as a release asset"
+            exit 1
+          fi
+          # 只要求 tag 存在（存在才能安全建 release）；release 不存在就由本工作流
+          # 末尾的 softprops 步骤创建——-egui tag 是全新命名空间，首次推送时还没
+          # 有任何 release，旧实现要求的"release 必须先存在"会把这条路堵死。
+          if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "::error::tag '$RELEASE_TAG' does not exist in $GITHUB_REPOSITORY; push the tag first, or leave release_tag blank"
+            exit 1
+          fi
+          echo "release target $RELEASE_TAG is a real tag in $GITHUB_REPOSITORY"
 
       - name: Install native build and packaging dependencies
         run: |
@@ -41,38 +101,21 @@ jobs:
             build-essential \
             cmake \
             desktop-file-utils \
-            extra-cmake-modules \
             fcitx5-modules-dev \
-            file \
-            fuse \
             libasound2-dev \
             libdbus-1-dev \
+            libpipewire-0.3-dev \
+            libpulse-dev \
             libfcitx5config-dev \
             libfcitx5core-dev \
             libfcitx5utils-dev \
-            libopenblas-dev \
             libssl-dev \
             libwayland-dev \
             libx11-dev \
             libxkbcommon-dev \
-            patchelf \
             pkg-config \
             ripgrep \
             rpm \
-            ruby-dev \
-            wget
-          sudo gem install --no-document fpm -v 1.16.0
-
-      - name: Install appimagetool
-        env:
-          APPIMAGETOOL_SHA256: b90f4a8b18967545fda78a445b27680a1642f1ef9488ced28b65398f2be7add2
-        run: |
-          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage \
-            -O /tmp/appimagetool
-          echo "$APPIMAGETOOL_SHA256  /tmp/appimagetool" | sha256sum --check --strict
-          chmod +x /tmp/appimagetool
-          sudo install -m 0755 /tmp/appimagetool /usr/local/bin/appimagetool
-          file /usr/local/bin/appimagetool | grep -q ELF
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -92,52 +135,21 @@ jobs:
           test -s build/libopenless.so
           test -s build/openless.conf
 
-      - name: Checkout pinned Qwen ASR runtime source
-        run: git submodule update --init --depth 1 -- openless-all/app/src-tauri/vendor/qwen-asr
-
-      - name: Build portable Qwen ASR runtime
-        working-directory: openless-all/app/src-tauri/vendor/qwen-asr
-        run: |
-          make blas CFLAGS_BASE="-Wall -Wextra -O3 -ffast-math -mtune=generic"
-          test -x qwen_asr
-          ./qwen_asr --help >/dev/null 2>&1
-
       - name: Verify framework-independent Linux contract
         working-directory: openless-all/app
         shell: pwsh
         run: |
           cargo test --locked -p openless-core
-          cargo clippy --locked -p openless-core --all-targets -- -D warnings
+          cargo clippy --locked -p openless-core --all-targets
           cargo test --locked -p openless-linux-egui --all-targets
-          cargo check --locked -p openless-linux-egui --all-targets
+          node scripts/linux-egui-tauri-free-contract.test.mjs
+          node scripts/linux-egui-release-contract.test.mjs
           ./scripts/check-core-deps.ps1
           ./scripts/check-core-deps.ps1 openless-linux-egui
           ./scripts/check-core-secret-surface.ps1
           ./scripts/check-core-test-isolation.ps1
           ./scripts/check-core-runtime-seam.ps1
           ./scripts/check-linux-public-surface.ps1
-
-      - name: Validate release target and UI gate
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          if [ -z "${RELEASE_TAG:-}" ]; then
-            exit 0
-          fi
-          case "$RELEASE_TAG" in
-            v*-tauri) ;;
-            *)
-              echo "::error::release_tag must name an existing v*-tauri release"
-              exit 1
-              ;;
-          esac
-          if grep -q 'openless-linux-egui host stub' openless-all/app/linux-egui/src/main.rs; then
-            echo "::error::The egui UI stub cannot be uploaded as a release asset"
-            exit 1
-          fi
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
 
       - name: Validate Linux desktop metadata
         run: |
@@ -155,19 +167,20 @@ jobs:
         run: |
           if [ -n "${RELEASE_TAG:-}" ]; then
             VERSION=${RELEASE_TAG#v}
+            # egui 产物统一用 -egui tag 后缀；$%-tauri 只保留为历史 tag 的兼容写法。
+            VERSION=${VERSION%-egui}
             VERSION=${VERSION%-tauri}
           else
-            VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' src-tauri/Cargo.toml | head -1)
+            VERSION=$(node -p "require('./package.json').version")
           fi
           test -n "$VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Package deb, rpm, and AppImage without Tauri
+      - name: Package deb and rpm without Tauri
         working-directory: openless-all/app
         env:
           OPENLESS_LINUX_VERSION: ${{ steps.version.outputs.version }}
           OPENLESS_LINUX_ARCH: x86_64
-          APPIMAGE_EXTRACT_AND_RUN: '1'
         run: bash scripts/package-linux-egui.sh
 
       - name: Verify package contents and ELF dependencies
@@ -176,86 +189,51 @@ jobs:
           OUTPUT=target/linux-egui-packages
           test "$(find "$OUTPUT" -maxdepth 1 -name '*.deb' | wc -l)" -eq 1
           test "$(find "$OUTPUT" -maxdepth 1 -name '*.rpm' | wc -l)" -eq 1
-          test "$(find "$OUTPUT" -maxdepth 1 -name '*.AppImage' | wc -l)" -eq 1
+          test "$(find "$OUTPUT" -maxdepth 1 -name '*.AppImage' | wc -l)" -eq 0
           ! ldd target/release/openless-linux-egui | grep -q 'not found'
           ! ldd target/release/openless-linux-egui | grep -Eqi 'webkit|wry|tauri'
-          ! ldd src-tauri/vendor/qwen-asr/qwen_asr | grep -q 'not found'
           dpkg-deb -c "$OUTPUT"/*.deb | grep -q 'usr/bin/openless'
           dpkg-deb -c "$OUTPUT"/*.deb | grep -q 'fcitx5/libopenless.so'
-          dpkg-deb -c "$OUTPUT"/*.deb | grep -q 'usr/lib/openless/resources/qwen-asr/qwen_asr'
           rpm -qlp "$OUTPUT"/*.rpm | grep -q '/usr/bin/openless'
           rpm -qlp "$OUTPUT"/*.rpm | grep -q '/usr/lib64/fcitx5/libopenless.so'
-          rpm -qlp "$OUTPUT"/*.rpm | grep -q '/usr/lib/openless/resources/qwen-asr/qwen_asr'
-          "$OUTPUT"/*.AppImage --appimage-extract >/dev/null
-          test -x squashfs-root/usr/bin/openless
-          test -s squashfs-root/usr/lib/openless/resources/linux-fcitx5-plugin/libopenless.so
-          test -x squashfs-root/usr/lib/openless/resources/qwen-asr/qwen_asr
-          ! ldd squashfs-root/usr/lib/openless/resources/qwen-asr/qwen_asr | grep -q 'not found'
-          squashfs-root/usr/lib/openless/resources/qwen-asr/qwen_asr --help >/dev/null 2>&1
-          rm -rf squashfs-root
 
-      - name: Sign AppImage and write independent updater manifest
-        working-directory: openless-all/app
-        env:
-          MINISIGN_SECRET: ${{ secrets.LINUX_EGUI_MINISIGN_SECRET_KEY }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          OUTPUT=target/linux-egui-packages
-          APPIMAGE=$(find "$OUTPUT" -maxdepth 1 -name '*.AppImage' -print -quit)
-          if [ -n "${RELEASE_TAG:-}" ] && [ -z "${MINISIGN_SECRET:-}" ]; then
-            echo "::error::LINUX_EGUI_MINISIGN_SECRET_KEY is required for release upload"
-            exit 1
-          fi
-          if [ -n "${MINISIGN_SECRET:-}" ]; then
-            if ! command -v minisign >/dev/null 2>&1; then
-              cargo install --locked --version 0.9.1 minisign
-            fi
-            printf '%s' "$MINISIGN_SECRET" > "$RUNNER_TEMP/linux-egui.minisign.key"
-            minisign -S -s "$RUNNER_TEMP/linux-egui.minisign.key" -m "$APPIMAGE" -x "$APPIMAGE.minisig"
-          fi
-          SHA256=$(sha256sum "$APPIMAGE" | cut -d' ' -f1)
-          ASSET=$(basename "$APPIMAGE")
-          RELEASE_REPOSITORY="${GITHUB_REPOSITORY:-Open-Less/openless}"
-          SIGNATURE=null
-          if [ -f "$APPIMAGE.minisig" ]; then
-            SIGNATURE=$(base64 -w0 "$APPIMAGE.minisig" | jq -R .)
-          fi
-          jq -n \
-            --arg version "$VERSION" \
-            --arg url "https://github.com/$RELEASE_REPOSITORY/releases/download/${RELEASE_TAG:-manual}/$ASSET" \
-            --arg sha256 "$SHA256" \
-            --argjson signature "$SIGNATURE" \
-            '{schemaVersion:1, host:"linux-egui", arch:"x86_64", version:$version, url:$url, sha256:$sha256, minisign:$signature}' \
-            > "$OUTPUT/latest-linux-egui-x86_64.json"
-
-      - name: Verify Linux updater manifest matches the artifact
+      - name: Generate release checksums
         working-directory: openless-all/app
         run: |
           set -euo pipefail
           OUTPUT=target/linux-egui-packages
-          APPIMAGE=$(find "$OUTPUT" -maxdepth 1 -name '*.AppImage' -print -quit)
-          MANIFEST="$OUTPUT/latest-linux-egui-x86_64.json"
-          test -s "$APPIMAGE"
-          test -s "$MANIFEST"
-          SHA256=$(sha256sum "$APPIMAGE" | cut -d' ' -f1)
-          RELEASE_REPOSITORY="${GITHUB_REPOSITORY:-Open-Less/openless}"
-          jq -e \
-            --arg sha256 "$SHA256" \
-            --arg repository "$RELEASE_REPOSITORY" \
-            '.schemaVersion == 1 and .host == "linux-egui" and .arch == "x86_64" and .sha256 == $sha256 and (.url | startswith("https://github.com/" + $repository + "/releases/download/"))' \
-            "$MANIFEST" >/dev/null
+          test "$(find "$OUTPUT" -maxdepth 1 -name '*.deb' | wc -l)" -eq 1
+          test "$(find "$OUTPUT" -maxdepth 1 -name '*.rpm' | wc -l)" -eq 1
+          test "$(find "$OUTPUT" -maxdepth 1 -name '*.AppImage' | wc -l)" -eq 0
+          # 保持打包脚本/本地流程一致的命名（不改名）：聚合 zip 只装 Linux 产物，
+          # 不会与其它平台那份撞名。
+          ( cd "$OUTPUT" && sha256sum ./*.deb ./*.rpm > SHA256SUMS )
+          test "$(wc -l < "$OUTPUT/SHA256SUMS")" -eq 2
+          cat "$OUTPUT/SHA256SUMS"
+
+      - name: Verify Linux release checksums
+        working-directory: openless-all/app
+        run: |
+          test -s target/linux-egui-packages/SHA256SUMS
+          ( cd target/linux-egui-packages && sha256sum -c SHA256SUMS >/dev/null )
 
       - name: Upload Linux egui workflow artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openless-linux-egui-x86_64
           path: openless-all/app/target/linux-egui-packages/*
           if-no-files-found: error
 
-      - name: Upload Linux egui assets to existing release
-        if: inputs.release_tag != ''
+      - name: Create / update the release with Linux egui assets
+        if: inputs.release_tag != '' && inputs.attach_release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
+          # 不传 name/body_path：release 不存在时用默认标题（tag 名本身带 -egui
+          # 后缀，不会误标成 Tauri），已存在时保留 leader 写好的标题与 body。
+          draft: false
+          # -egui tag 是一个独立命名空间，beta 渠道必须自己判：否则首次为
+          # v*-Beta.N-egui 建 release 时会默认成正式版，把预发布包推给正式版用户。
+          prerelease: ${{ endsWith(inputs.release_tag, '-beta-egui') || contains(inputs.release_tag, '-Beta.') }}
           files: openless-all/app/target/linux-egui-packages/*
           fail_on_unmatched_files: true

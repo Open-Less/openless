@@ -282,7 +282,7 @@ pub trait LocalAsrApi: Send + Sync {
     fn delete_model(&self, target: LocalAsrTarget) -> BoxFuture<'static, Result<(), BackendError>>;
     fn cleanup_incomplete(
         &self,
-        target: LocalAsrTarget,
+        _target: LocalAsrTarget,
     ) -> BoxFuture<'static, Result<(), BackendError>> {
         unsupported("local ASR incomplete download cleanup")
     }
