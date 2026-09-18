@@ -1235,6 +1235,7 @@ export const zhCN = {
         asrSiliconflow: '硅基流动 SenseVoice',
         asrStepfun: '阶跃星辰 StepAudio',
         asrZhipu: '智谱 GLM-ASR',
+        asrMinimax: 'MiniMax ASR',
         asrGroq: 'Groq Whisper-large-v3',
         asrWhisper: 'OpenAI Whisper（兼容）',
         asrOpenrouter: 'OpenRouter Whisper',
