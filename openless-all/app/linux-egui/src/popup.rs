@@ -18,7 +18,7 @@ use tokio::process::Command;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc as tokio_mpsc;
 
-pub const POPUP_PROTOCOL_VERSION: u16 = 3;
+pub const POPUP_PROTOCOL_VERSION: u16 = 4;
 pub const MAX_JSONL_LINE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,6 +27,7 @@ pub enum PopupKind {
     Qa,
     Preview,
     Capsule,
+    LessComputer,
 }
 
 impl PopupKind {
@@ -35,8 +36,31 @@ impl PopupKind {
             Self::Qa => "--qa",
             Self::Preview => "--preview",
             Self::Capsule => "--capsule",
+            Self::LessComputer => "--less-computer",
         }
     }
+}
+
+/// One rendered Less Computer turn entry.
+///
+/// Mirrors Core's `LessComputerEventKind` presentation: the panel prints the
+/// entries in order and never re-derives product intent, so a new Core event
+/// variant only needs a host-side translation into `kind` + display text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LessComputerEntry {
+    /// `user` / `assistant` / `tool` / `compaction` / `error` / `note`.
+    pub kind: String,
+    #[serde(default)]
+    pub text: String,
+}
+
+/// A blocked command waiting for the user's decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LessComputerApproval {
+    pub token: String,
+    pub command: String,
+    #[serde(default)]
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,6 +132,22 @@ pub enum HostToPopup {
         session_id: String,
         sequence: u64,
     },
+    /// Less Computer 面板状态（Tauri `LessComputerPanel.tsx`）。
+    ///
+    /// `entries` 是已发生的事件序列（用户指令 / 工具 / 压缩 / 助手正文 / 错误），
+    /// `working` 表示本轮尚未终结，`approval` 是等待用户批准的阻塞命令。
+    LessComputer {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+        entries: Vec<LessComputerEntry>,
+        #[serde(default)]
+        working: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        approval: Option<LessComputerApproval>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     Shutdown {
         version: u16,
         session_id: String,
@@ -121,6 +161,7 @@ impl HostToPopup {
             Self::Preview { version, .. }
             | Self::QaSnapshot { version, .. }
             | Self::Capsule { version, .. }
+            | Self::LessComputer { version, .. }
             | Self::Hide { version, .. }
             | Self::Shutdown { version, .. } => *version,
         }
@@ -131,6 +172,7 @@ impl HostToPopup {
             Self::Preview { session_id, .. }
             | Self::QaSnapshot { session_id, .. }
             | Self::Capsule { session_id, .. }
+            | Self::LessComputer { session_id, .. }
             | Self::Hide { session_id, .. }
             | Self::Shutdown { session_id, .. } => session_id,
         }
@@ -141,6 +183,7 @@ impl HostToPopup {
             Self::Preview { sequence, .. }
             | Self::QaSnapshot { sequence, .. }
             | Self::Capsule { sequence, .. }
+            | Self::LessComputer { sequence, .. }
             | Self::Hide { sequence, .. }
             | Self::Shutdown { sequence, .. } => *sequence,
         }
@@ -151,6 +194,7 @@ impl HostToPopup {
             Self::Preview { .. } => Some(PopupKind::Preview),
             Self::QaSnapshot { .. } => Some(PopupKind::Qa),
             Self::Capsule { .. } => Some(PopupKind::Capsule),
+            Self::LessComputer { .. } => Some(PopupKind::LessComputer),
             Self::Hide { .. } | Self::Shutdown { .. } => None,
         }
     }
@@ -236,6 +280,33 @@ pub enum PopupToHost {
         session_id: String,
         sequence: u64,
     },
+    /// Less Computer 输入框：提交一条指令（Tauri `lessComputerSubmitText`）。
+    SubmitLessComputer {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+        text: String,
+    },
+    /// 批准/拒绝被阻塞的命令（Tauri `lessComputerApprove`）。
+    ApproveLessComputer {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+        token: String,
+        approved: bool,
+    },
+    /// 停止当前这一轮（Esc / 关闭时的收尾，Tauri `less_computer_window_dismiss`）。
+    CancelLessComputer {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+    },
+    /// ✕：只收起面板，不动已完成的对话（Tauri `cancel()` / `minimize()` 语义）。
+    DismissLessComputer {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+    },
 }
 
 impl PopupToHost {
@@ -253,7 +324,11 @@ impl PopupToHost {
             | Self::SetPinned { version, .. }
             | Self::SetEditInstructionMode { version, .. }
             | Self::ApplyEdit { version, .. }
-            | Self::RevertEdit { version, .. } => *version,
+            | Self::RevertEdit { version, .. }
+            | Self::SubmitLessComputer { version, .. }
+            | Self::ApproveLessComputer { version, .. }
+            | Self::CancelLessComputer { version, .. }
+            | Self::DismissLessComputer { version, .. } => *version,
         }
     }
 
@@ -271,7 +346,11 @@ impl PopupToHost {
             | Self::SetPinned { session_id, .. }
             | Self::SetEditInstructionMode { session_id, .. }
             | Self::ApplyEdit { session_id, .. }
-            | Self::RevertEdit { session_id, .. } => session_id,
+            | Self::RevertEdit { session_id, .. }
+            | Self::SubmitLessComputer { session_id, .. }
+            | Self::ApproveLessComputer { session_id, .. }
+            | Self::CancelLessComputer { session_id, .. }
+            | Self::DismissLessComputer { session_id, .. } => session_id,
         }
     }
 
@@ -289,7 +368,11 @@ impl PopupToHost {
             | Self::SetPinned { sequence, .. }
             | Self::SetEditInstructionMode { sequence, .. }
             | Self::ApplyEdit { sequence, .. }
-            | Self::RevertEdit { sequence, .. } => *sequence,
+            | Self::RevertEdit { sequence, .. }
+            | Self::SubmitLessComputer { sequence, .. }
+            | Self::ApproveLessComputer { sequence, .. }
+            | Self::CancelLessComputer { sequence, .. }
+            | Self::DismissLessComputer { sequence, .. } => *sequence,
         }
     }
 
@@ -307,6 +390,10 @@ impl PopupToHost {
             Self::DismissCapsule { .. }
             | Self::CancelDictation { .. }
             | Self::StopDictation { .. } => PopupKind::Capsule,
+            Self::SubmitLessComputer { .. }
+            | Self::ApproveLessComputer { .. }
+            | Self::CancelLessComputer { .. }
+            | Self::DismissLessComputer { .. } => PopupKind::LessComputer,
         }
     }
 }
@@ -324,6 +411,7 @@ pub struct PopupActionGuard {
     qa: PopupActionSlot,
     preview: PopupActionSlot,
     capsule: PopupActionSlot,
+    less_computer: PopupActionSlot,
 }
 
 impl PopupActionGuard {
@@ -332,6 +420,7 @@ impl PopupActionGuard {
             PopupKind::Qa => &mut self.qa,
             PopupKind::Preview => &mut self.preview,
             PopupKind::Capsule => &mut self.capsule,
+            PopupKind::LessComputer => &mut self.less_computer,
         }
     }
 
@@ -549,6 +638,14 @@ pub struct CapsulePopupState {
     pub translation_active: bool,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LessComputerPopupState {
+    pub entries: Vec<LessComputerEntry>,
+    pub working: bool,
+    pub approval: Option<LessComputerApproval>,
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PopupState {
     pub session_id: Option<String>,
@@ -558,6 +655,7 @@ pub struct PopupState {
     pub preview: PreviewPopupState,
     pub qa: QaPopupState,
     pub capsule: CapsulePopupState,
+    pub less_computer: LessComputerPopupState,
     retired_sessions: HashSet<String>,
 }
 
@@ -585,6 +683,7 @@ impl PopupState {
                     HostToPopup::Preview { .. }
                         | HostToPopup::QaSnapshot { .. }
                         | HostToPopup::Capsule { .. }
+                        | HostToPopup::LessComputer { .. }
                 );
                 if !starts_session || self.retired_sessions.contains(&session_id) {
                     return ApplyOutcome::Stale;
@@ -642,6 +741,21 @@ impl PopupState {
                     text,
                     audio_level,
                     translation_active,
+                };
+                self.visible = true;
+            }
+            HostToPopup::LessComputer {
+                entries,
+                working,
+                approval,
+                error,
+                ..
+            } => {
+                self.less_computer = LessComputerPopupState {
+                    entries,
+                    working,
+                    approval,
+                    error,
                 };
                 self.visible = true;
             }
@@ -1003,6 +1117,79 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn less_computer_snapshot(sequence: u64, text: &str) -> HostToPopup {
+        HostToPopup::LessComputer {
+            version: POPUP_PROTOCOL_VERSION,
+            session_id: "session".to_string(),
+            sequence,
+            entries: vec![LessComputerEntry {
+                kind: "assistant".to_string(),
+                text: text.to_string(),
+            }],
+            working: true,
+            approval: None,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn less_computer_snapshots_drive_the_panel_state() {
+        // 面板只呈现宿主序列：应用快照后要能看到条目、working 与可见性。
+        let mut state = PopupState::default();
+        assert_eq!(
+            state.apply(less_computer_snapshot(1, "first")),
+            ApplyOutcome::Applied
+        );
+        assert!(state.visible);
+        assert!(state.less_computer.working);
+        assert_eq!(state.less_computer.entries[0].text, "first");
+
+        // 单调序号：迟到的旧帧不得覆盖新正文。
+        assert_eq!(
+            state.apply(less_computer_snapshot(2, "first+second")),
+            ApplyOutcome::Applied
+        );
+        assert_eq!(state.less_computer.entries[0].text, "first+second");
+        assert_eq!(
+            state.apply(less_computer_snapshot(1, "stale")),
+            ApplyOutcome::Stale
+        );
+        assert_eq!(state.less_computer.entries[0].text, "first+second");
+
+        // Hide 只收起面板，不动对话内容（✕ 的语义）。
+        assert_eq!(
+            state.apply(HostToPopup::Hide {
+                version: POPUP_PROTOCOL_VERSION,
+                session_id: "session".to_string(),
+                sequence: 3,
+            }),
+            ApplyOutcome::Applied
+        );
+        assert!(!state.visible);
+        assert_eq!(state.less_computer.entries[0].text, "first+second");
+    }
+
+    #[test]
+    fn less_computer_actions_are_routed_to_their_kind() {
+        let submit = PopupToHost::SubmitLessComputer {
+            version: POPUP_PROTOCOL_VERSION,
+            session_id: "session".to_string(),
+            sequence: 1,
+            text: "open the editor".to_string(),
+        };
+        assert_eq!(submit.kind(), PopupKind::LessComputer);
+        assert_eq!(PopupKind::LessComputer.argument(), "--less-computer");
+        let approve = PopupToHost::ApproveLessComputer {
+            version: POPUP_PROTOCOL_VERSION,
+            session_id: "session".to_string(),
+            sequence: 2,
+            token: "token".to_string(),
+            approved: false,
+        };
+        assert_eq!(approve.kind(), PopupKind::LessComputer);
+    }
 
     #[test]
     fn only_the_capsule_without_layer_shell_is_pushed_onto_xwayland() {

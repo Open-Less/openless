@@ -569,6 +569,13 @@ mod linux_app {
         less_computer_output: String,
         less_computer_turn_start: usize,
         less_computer_session: Option<openless_core::SessionId>,
+        /// Less Computer 面板要呈现的事件序列。宿主是唯一所有者，弹窗进程只负责画；
+        /// 每次重连都收到完整序列，窗口进程重启不丢历史。
+        less_computer_entries: Vec<openless_linux_egui::LessComputerEntry>,
+        /// 本轮尚未终结（面板显示「执行中…」）。
+        less_computer_working: bool,
+        /// 已展示过的面板是否还在（托起面板时只推状态，不重复拉起进程）。
+        less_computer_popup: Option<PopupSupervisor>,
         pending_approval: Option<(String, String)>,
         qa_visible: bool,
         /// 划词追问的图钉：固定后 `HostAction::HideQa` 不再收起窗口。
@@ -707,6 +714,9 @@ mod linux_app {
                         less_computer_output: String::new(),
                         less_computer_turn_start: 0,
                         less_computer_session: None,
+                        less_computer_entries: Vec::new(),
+                        less_computer_working: false,
+                        less_computer_popup: None,
                         pending_approval: None,
                         qa_visible: false,
                         qa_pinned: false,
@@ -811,6 +821,9 @@ mod linux_app {
                     less_computer_output: String::new(),
                     less_computer_turn_start: 0,
                     less_computer_session: None,
+                    less_computer_entries: Vec::new(),
+                    less_computer_working: false,
+                    less_computer_popup: None,
                     pending_approval: None,
                     qa_visible: false,
                     qa_pinned: false,
@@ -899,6 +912,7 @@ mod linux_app {
                 PopupKind::Qa => &mut self.qa_popup,
                 PopupKind::Preview => &mut self.preview_popup,
                 PopupKind::Capsule => &mut self.capsule_popup,
+                PopupKind::LessComputer => &mut self.less_computer_popup,
             }
         }
 
@@ -953,6 +967,46 @@ mod linux_app {
             );
         }
 
+        /// Less Computer 面板的当前快照：宿主是事件序列的唯一所有者，弹窗进程
+        /// 每次重连都收到完整序列（重开窗口不丢历史）。
+        fn less_computer_snapshot(&self, lang: Lang) -> HostToPopup {
+            let approval = self.pending_approval.as_ref().map(|(token, command)| {
+                openless_linux_egui::LessComputerApproval {
+                    token: token.clone(),
+                    command: command.clone(),
+                    reason: tr_l10n(lang, "less_computer.approval_rerun_warning").to_string(),
+                }
+            });
+            HostToPopup::LessComputer {
+                version: POPUP_PROTOCOL_VERSION,
+                session_id: self
+                    .less_computer_session
+                    .map(|session| session.to_string())
+                    .unwrap_or_else(|| "less-computer".to_string()),
+                sequence: self.last_event_sequence.saturating_mul(2),
+                entries: self.less_computer_entries.clone(),
+                working: self.less_computer_working,
+                approval,
+                error: None,
+            }
+        }
+
+        fn show_less_computer_popup(&mut self) {
+            self.ensure_popup(PopupKind::LessComputer);
+            let message = self.less_computer_snapshot(self.lang);
+            self.send_popup(PopupKind::LessComputer, message);
+        }
+
+        /// ✕ 只收起面板：不动已完成的对话，也不结束进程。
+        fn hide_less_computer_popup(&mut self) {
+            let session_id = self
+                .less_computer_session
+                .map(|session| session.to_string())
+                .unwrap_or_else(|| "less-computer".to_string());
+            let sequence = self.last_event_sequence.saturating_mul(2).saturating_add(1);
+            self.hide_popup(PopupKind::LessComputer, session_id, sequence);
+        }
+
         fn expected_popup_session(&self, kind: PopupKind) -> Option<String> {
             match kind {
                 PopupKind::Qa => self
@@ -968,6 +1022,9 @@ mod linux_app {
                     .snapshot
                     .as_ref()
                     .and_then(|snapshot| snapshot.dictation.session_id)
+                    .map(|session_id| session_id.to_string()),
+                PopupKind::LessComputer => self
+                    .less_computer_session
                     .map(|session_id| session_id.to_string()),
             }
         }
@@ -1354,6 +1411,7 @@ mod linux_app {
                         PopupKind::Qa => self.show_qa_popup(),
                         PopupKind::Preview => self.show_selection_popup(),
                         PopupKind::Capsule => self.show_capsule_popup(),
+                        PopupKind::LessComputer => self.show_less_computer_popup(),
                     },
                     PopupSupervisorEvent::Message(PopupToHost::DismissCapsule { .. }) => {
                         if let Some(snapshot) = self.snapshot.as_mut() {
@@ -1394,6 +1452,56 @@ mod linux_app {
                             });
                         }
                     }
+                    PopupSupervisorEvent::Message(PopupToHost::SubmitLessComputer {
+                        session_id,
+                        text,
+                        ..
+                    }) if self
+                        .less_computer_session
+                        .map(|session| session.to_string())
+                        .as_deref()
+                        == Some(session_id.as_str()) =>
+                    {
+                        if let Some(backend) = self.backend() {
+                            // Core 自己解析 provider / 模型 / 权限 / workdir；
+                            // 宿主只负责把用户文本交给它（Tauri `lessComputerSubmitText`）。
+                            self.spawn(async move {
+                                backend.submit_less_computer(text).await?;
+                                Ok(String::new())
+                            });
+                        }
+                    }
+                    PopupSupervisorEvent::Message(PopupToHost::ApproveLessComputer {
+                        token,
+                        approved,
+                        ..
+                    }) => {
+                        let backend = self.backend();
+                        self.spawn(async move {
+                            if let Some(backend) = backend {
+                                backend
+                                    .services()
+                                    .less_computer
+                                    .approve(token, approved)
+                                    .await?;
+                            }
+                            Ok(String::new())
+                        });
+                    }
+                    PopupSupervisorEvent::Message(PopupToHost::CancelLessComputer { .. }) => {
+                        let session = self.less_computer_session;
+                        let backend = self.backend();
+                        self.spawn(async move {
+                            if let Some(backend) = backend {
+                                backend.cancel_less_computer(session).await?;
+                            }
+                            Ok(String::new())
+                        });
+                    }
+                    PopupSupervisorEvent::Message(PopupToHost::DismissLessComputer { .. }) => {
+                        // 只收起面板：已完成的一轮保留在宿主状态里，下次打开仍在。
+                        self.hide_less_computer_popup();
+                    }
                     PopupSupervisorEvent::Message(
                         PopupToHost::SubmitQa { .. }
                         | PopupToHost::ToggleQaRecording { .. }
@@ -1401,7 +1509,8 @@ mod linux_app {
                         | PopupToHost::SetPinned { .. }
                         | PopupToHost::SetEditInstructionMode { .. }
                         | PopupToHost::ApplyEdit { .. }
-                        | PopupToHost::RevertEdit { .. },
+                        | PopupToHost::RevertEdit { .. }
+                        | PopupToHost::SubmitLessComputer { .. },
                     ) => {
                         self.status = tr_l10n(lang, "popup.ignore_late_qa").to_string();
                     }
@@ -2025,6 +2134,14 @@ mod linux_app {
                         }
                         self.less_computer_turn_start = self.less_computer_output.len();
                         self.less_computer_input = text.clone();
+                        if *fresh {
+                            self.less_computer_entries.clear();
+                        }
+                        self.less_computer_entries
+                            .push(openless_linux_egui::LessComputerEntry {
+                                kind: "user".to_string(),
+                                text: text.clone(),
+                            });
                     } else if session_id != self.less_computer_session {
                         return;
                     }
@@ -2034,23 +2151,64 @@ mod linux_app {
                         LessComputerEventKind::User { .. } => {}
                         LessComputerEventKind::Started => {
                             self.status = tr_l10n(lang, "status.less_running").to_string();
+                            self.less_computer_working = true;
                         }
                         LessComputerEventKind::Delta { text } => {
                             self.less_computer_output.push_str(&text);
+                            append_assistant_entry(&mut self.less_computer_entries, &text);
                         }
                         LessComputerEventKind::Tool { name } => {
                             self.status = fmt_l10n(lang, "status.less_tool", &[&name]);
+                            self.less_computer_entries.push(
+                                openless_linux_egui::LessComputerEntry {
+                                    kind: "tool".to_string(),
+                                    // 行内标记的文案在宿主侧本地化：面板只画文本。
+                                    text: fmt_l10n(lang, "less_computer.tool", &[&name]),
+                                },
+                            );
                         }
                         LessComputerEventKind::Compaction => {
                             self.status = tr_l10n(lang, "status.less_compacted").to_string();
+                            self.less_computer_entries.push(
+                                openless_linux_egui::LessComputerEntry {
+                                    kind: "compaction".to_string(),
+                                    text: tr_l10n(lang, "less_computer.compaction").to_string(),
+                                },
+                            );
                         }
-                        LessComputerEventKind::Completed { text, .. } => {
+                        LessComputerEventKind::Completed { text, cost_usd } => {
                             // A terminal is authoritative even for final-only
                             // providers or after a missed partial event.
                             self.less_computer_output
                                 .truncate(self.less_computer_turn_start);
                             self.less_computer_output.push_str(&text);
                             self.pending_approval = None;
+                            self.less_computer_working = false;
+                            // 终局正文替换掉流式累积的那条助手条目。
+                            match self
+                                .less_computer_entries
+                                .iter_mut()
+                                .rev()
+                                .find(|entry| entry.kind == "assistant")
+                            {
+                                Some(entry) => entry.text = text.clone(),
+                                None => self.less_computer_entries.push(
+                                    openless_linux_egui::LessComputerEntry {
+                                        kind: "assistant".to_string(),
+                                        text: text.clone(),
+                                    },
+                                ),
+                            }
+                            if let Some(cost) = cost_usd {
+                                let cost_text =
+                                    fmt_l10n(lang, "less_computer.cost", &[&format!("{cost:.3}")]);
+                                self.less_computer_entries.push(
+                                    openless_linux_egui::LessComputerEntry {
+                                        kind: "note".to_string(),
+                                        text: cost_text,
+                                    },
+                                );
+                            }
                             self.status = tr_l10n(lang, "less_computer.done").to_string();
                         }
                         LessComputerEventKind::Approval { token, command, .. } => {
@@ -2059,10 +2217,18 @@ mod linux_app {
                         }
                         LessComputerEventKind::Error { message } => {
                             self.pending_approval = None;
+                            self.less_computer_working = false;
+                            self.less_computer_entries.push(
+                                openless_linux_egui::LessComputerEntry {
+                                    kind: "error".to_string(),
+                                    text: message.clone(),
+                                },
+                            );
                             self.status = message;
                         }
                         LessComputerEventKind::Cancelled => {
                             self.pending_approval = None;
+                            self.less_computer_working = false;
                             self.status = tr_l10n(lang, "less_computer.cancelled").to_string();
                         }
                     }
@@ -2235,10 +2401,16 @@ mod linux_app {
                 // back through sequenced Core events handled above.
                 for action in actions {
                     match action {
-                        HostAction::ShowMain | HostAction::ShowLessComputer => {
+                        HostAction::ShowMain => {
                             // Core 的 ShowMain 是「把主窗口推到前面」的提示（弹窗流程里也会发），
                             // 不是用户动作：宿主不因此拉起窗口进程，否则弹一次面板就可能
                             // 冒出一个主窗口。真正的用户动作是托盘「显示主窗口」。
+                        }
+                        HostAction::ShowLessComputer => {
+                            // Core 在每次 Less Computer 轮次开始前发这个动作（Tauri 里
+                            // 它显示 `less-computer` 窗口）。宿主是序列所有者，这里
+                            // 拉起/刷新面板即可。
+                            self.show_less_computer_popup();
                         }
                         HostAction::FocusMain => {
                             // 宿主没有窗口可聚焦；已有窗口的聚焦由 UI 进程自己处理。
@@ -5926,6 +6098,8 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         incoming: mpsc::Receiver<HostToPopup>,
         outgoing: mpsc::Sender<PopupToHost>,
         qa_input: String,
+        /// Less Computer 面板的输入框（与 QA 的 composer 各自独立）。
+        less_computer_input: String,
         outgoing_sequence: u64,
         ready_sent: bool,
         preview_focus_requested: bool,
@@ -5970,6 +6144,11 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                     sequence,
                 },
                 PopupKind::Capsule => PopupToHost::DismissCapsule {
+                    version,
+                    session_id,
+                    sequence,
+                },
+                PopupKind::LessComputer => PopupToHost::DismissLessComputer {
                     version,
                     session_id,
                     sequence,
@@ -6243,6 +6422,64 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                         frontend::popups::QaAction::None => {}
                     }
                 }
+                PopupKind::LessComputer => {
+                    // 运行中的一轮需要连续重绘（「执行中…」标记 + 滚动到底）。
+                    animated = self.state.less_computer.working;
+                    let action = frontend::popups::less_computer(
+                        ctx,
+                        &self.state.less_computer,
+                        &mut self.less_computer_input,
+                        lang,
+                    );
+                    match action {
+                        frontend::popups::LessComputerAction::None => {}
+                        frontend::popups::LessComputerAction::Dismiss => {
+                            if let Some(session_id) = self.session_id() {
+                                let sequence = self.next_sequence();
+                                self.send(PopupToHost::DismissLessComputer {
+                                    version: POPUP_PROTOCOL_VERSION,
+                                    session_id,
+                                    sequence,
+                                });
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
+                        }
+                        frontend::popups::LessComputerAction::Cancel => {
+                            if let Some(session_id) = self.session_id() {
+                                let sequence = self.next_sequence();
+                                self.send(PopupToHost::CancelLessComputer {
+                                    version: POPUP_PROTOCOL_VERSION,
+                                    session_id,
+                                    sequence,
+                                });
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
+                        }
+                        frontend::popups::LessComputerAction::Submit(text) => {
+                            if let Some(session_id) = self.session_id() {
+                                let sequence = self.next_sequence();
+                                self.send(PopupToHost::SubmitLessComputer {
+                                    version: POPUP_PROTOCOL_VERSION,
+                                    session_id,
+                                    sequence,
+                                    text,
+                                });
+                            }
+                        }
+                        frontend::popups::LessComputerAction::Approve { token, approved } => {
+                            if let Some(session_id) = self.session_id() {
+                                let sequence = self.next_sequence();
+                                self.send(PopupToHost::ApproveLessComputer {
+                                    version: POPUP_PROTOCOL_VERSION,
+                                    session_id,
+                                    sequence,
+                                    token,
+                                    approved,
+                                });
+                            }
+                        }
+                    }
+                }
                 PopupKind::Capsule => {
                     let capsule_phase = self.state.capsule.phase.to_ascii_lowercase();
                     animated = matches!(
@@ -6311,8 +6548,26 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             Some(PopupKind::Preview)
         } else if args.iter().any(|arg| arg == "--capsule") {
             Some(PopupKind::Capsule)
+        } else if args.iter().any(|arg| arg == "--less-computer") {
+            Some(PopupKind::LessComputer)
         } else {
             None
+        }
+    }
+
+    /// Append a streaming delta to the trailing assistant entry, creating it on
+    /// the first delta of a turn. Keeps one assistant bubble per turn instead of
+    /// one per delta, matching the Tauri panel's message list.
+    fn append_assistant_entry(
+        entries: &mut Vec<openless_linux_egui::LessComputerEntry>,
+        delta: &str,
+    ) {
+        match entries.last_mut() {
+            Some(entry) if entry.kind == "assistant" => entry.text.push_str(delta),
+            _ => entries.push(openless_linux_egui::LessComputerEntry {
+                kind: "assistant".to_string(),
+                text: delta.to_string(),
+            }),
         }
     }
 
@@ -6377,6 +6632,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                             incoming,
                             outgoing,
                             qa_input: String::new(),
+                            less_computer_input: String::new(),
                             outgoing_sequence: 0,
                             ready_sent: false,
                             preview_focus_requested: false,
@@ -6450,7 +6706,15 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         // 胶囊窗口贴着药丸尺寸（Tauri 经典药丸 176×42），并用透明背景让圆角
         // 真正透出桌面；QA / 预览是实心卡片窗口。
         let size = match kind {
-            PopupKind::Qa => [520.0, 520.0],
+            // 面板尺寸一律取自共享常量（Tauri：qa/less-computer 420×540）。
+            PopupKind::Qa => [
+                openless_linux_egui::QA_WINDOW_SIZE.0 as f32,
+                openless_linux_egui::QA_WINDOW_SIZE.1 as f32,
+            ],
+            PopupKind::LessComputer => [
+                openless_linux_egui::LESS_COMPUTER_WINDOW_SIZE.0 as f32,
+                openless_linux_egui::LESS_COMPUTER_WINDOW_SIZE.1 as f32,
+            ],
             PopupKind::Preview => [
                 openless_linux_egui::PREVIEW_WINDOW_SIZE.0 as f32,
                 openless_linux_egui::PREVIEW_WINDOW_SIZE.1 as f32,
@@ -6522,6 +6786,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                     incoming: rx,
                     outgoing: outgoing_tx,
                     qa_input: String::new(),
+                    less_computer_input: String::new(),
                     outgoing_sequence: 0,
                     ready_sent: false,
                     preview_focus_requested: false,
@@ -7123,6 +7388,25 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             )
         }
 
+        #[test]
+        fn assistant_deltas_accumulate_into_one_entry_per_turn() {
+            // 一个轮次里流式增量只应形成一条助手条目；工具标记之后的新增量属于
+            // 新一轮正文，要另起一条（否则工具行会被并进正文里）。
+            let mut entries = Vec::new();
+            append_assistant_entry(&mut entries, "he");
+            append_assistant_entry(&mut entries, "llo");
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].kind, "assistant");
+            assert_eq!(entries[0].text, "hello");
+            entries.push(openless_linux_egui::LessComputerEntry {
+                kind: "tool".to_string(),
+                text: "Used bash".to_string(),
+            });
+            append_assistant_entry(&mut entries, "done");
+            assert_eq!(entries.len(), 3);
+            assert_eq!(entries[2].text, "done");
+        }
+
         /// 最小可用的弹窗实例：只为了驱动 `pump` 这条退出链路。
         fn popup_app(kind: PopupKind, incoming: mpsc::Receiver<HostToPopup>) -> NativePopupApp {
             let (outgoing, _outgoing_rx) = mpsc::channel();
@@ -7132,6 +7416,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 incoming,
                 outgoing,
                 qa_input: String::new(),
+                less_computer_input: String::new(),
                 outgoing_sequence: 0,
                 ready_sent: false,
                 preview_focus_requested: false,

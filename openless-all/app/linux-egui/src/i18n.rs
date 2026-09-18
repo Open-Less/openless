@@ -5186,6 +5186,90 @@ pub const CATALOG: &[Msg] = &[
         key: "qa.unpin_tooltip",
         text: row("取消固定", "取消固定", "Unpin", "ピン留めを解除", "고정 해제"),
     },
+    Msg {
+        key: "less_computer.approval_rerun_warning",
+        text: row(
+            "注意：批准后将在已被修改的工作区上重新运行，可能对不可重入操作产生副作用",
+            "注意：批准後將在已被修改的工作區上重新執行，可能對不可重入操作產生副作用",
+            "Note: approving re-runs on an already-modified workspace and may have side effects on non-idempotent operations.",
+            "注意：承認すると、すでに変更されたワークスペース上で再実行され、冪等でない操作に副作用が生じる可能性があります。",
+            "주의: 승인하면 이미 수정된 작업 공간에서 다시 실행되어 멱등하지 않은 작업에 부작용이 생길 수 있습니다.",
+        ),
+    },
+    Msg {
+        key: "less_computer.approval_title",
+        text: row(
+            "执行被拦截的命令？",
+            "執行被攔截的指令？",
+            "Run blocked command?",
+            "ブロックされたコマンドを実行？",
+            "차단된 명령을 실행할까요?",
+        ),
+    },
+    Msg {
+        key: "less_computer.approve",
+        text: row("允许", "允許", "Approve", "許可", "허용"),
+    },
+    Msg {
+        key: "less_computer.compaction",
+        text: row(
+            "上下文已压缩",
+            "上下文已壓縮",
+            "Context compacted",
+            "コンテキストを圧縮しました",
+            "컨텍스트가 압축되었습니다",
+        ),
+    },
+    Msg {
+        key: "less_computer.cost",
+        text: row("${}", "${}", "${}", "${}", "${}"),
+    },
+    Msg {
+        key: "less_computer.deny",
+        text: row("拒绝", "拒絕", "Deny", "拒否", "거부"),
+    },
+    Msg {
+        key: "less_computer.input_placeholder",
+        text: row(
+            "输入指令，Enter 发送",
+            "輸入指令，Enter 傳送",
+            "Type a command, Enter to send",
+            "指示を入力、Enter で送信",
+            "명령을 입력하고 Enter로 전송",
+        ),
+    },
+    Msg {
+        key: "less_computer.send",
+        text: row("发送", "傳送", "Send", "送信", "전송"),
+    },
+    Msg {
+        key: "less_computer.subtitle",
+        text: row(
+            "想让电脑做什么？",
+            "想讓電腦做什麼？",
+            "What should your computer do?",
+            "コンピュータに何をさせますか？",
+            "컴퓨터로 무엇을 할까요?",
+        ),
+    },
+    Msg {
+        key: "less_computer.title",
+        text: row(
+            "Less Computer",
+            "Less Computer",
+            "Less Computer",
+            "Less Computer",
+            "Less Computer",
+        ),
+    },
+    Msg {
+        key: "less_computer.tool",
+        text: row("调用了 {}", "呼叫了 {}", "Used {}", "{} を使用", "{} 사용"),
+    },
+    Msg {
+        key: "less_computer.working",
+        text: row("正在操控电脑…", "正在操控電腦…", "Operating…", "操作中…", "조작 중…"),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

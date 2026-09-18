@@ -34,6 +34,9 @@ pub const CAPSULE_WINDOW_SIZE: (u32, u32) = (200, 100);
 pub const CAPSULE_BOTTOM_GAP: i32 = 12;
 /// Selection-ask panel size (the chat panel) — Tauri `qa` window is 420×540.
 pub const QA_WINDOW_SIZE: (u32, u32) = (420, 540);
+/// Less Computer panel size — Tauri `less-computer` is 420×540, the same
+/// footprint as the selection-ask panel.
+pub const LESS_COMPUTER_WINDOW_SIZE: (u32, u32) = (420, 540);
 /// Polish-preview panel size — Tauri `selection-polish-preview` is 640×440.
 pub const PREVIEW_WINDOW_SIZE: (u32, u32) = (640, 440);
 /// Smallest the user may resize the polish preview to — Tauri `minWidth/minHeight`.
@@ -45,6 +48,7 @@ pub fn popup_size(kind: crate::popup::PopupKind) -> (u32, u32) {
     match kind {
         PopupKind::Capsule => CAPSULE_WINDOW_SIZE,
         PopupKind::Qa => QA_WINDOW_SIZE,
+        PopupKind::LessComputer => LESS_COMPUTER_WINDOW_SIZE,
         PopupKind::Preview => PREVIEW_WINDOW_SIZE,
     }
 }
@@ -66,6 +70,7 @@ pub fn popup_position(
     match kind {
         PopupKind::Capsule => environment.position_for(CAPSULE_WINDOW_SIZE, CAPSULE_BOTTOM_GAP),
         PopupKind::Qa => environment.centred_for(QA_WINDOW_SIZE),
+        PopupKind::LessComputer => environment.centred_for(LESS_COMPUTER_WINDOW_SIZE),
         PopupKind::Preview => environment.centred_for(PREVIEW_WINDOW_SIZE),
     }
 }
@@ -976,6 +981,12 @@ mod tests {
         assert_eq!(popup_size(PopupKind::Capsule), CAPSULE_WINDOW_SIZE);
         assert_eq!(popup_size(PopupKind::Qa), QA_WINDOW_SIZE);
         assert_eq!(popup_size(PopupKind::Preview), PREVIEW_WINDOW_SIZE);
+        // Tauri 的 `less-computer` 窗口与 qa 同为 420×540。
+        assert_eq!(
+            popup_size(PopupKind::LessComputer),
+            LESS_COMPUTER_WINDOW_SIZE
+        );
+        assert_eq!(LESS_COMPUTER_WINDOW_SIZE, (420, 540));
     }
 
     /// The capsule hugs the bottom edge of the work area, centred.

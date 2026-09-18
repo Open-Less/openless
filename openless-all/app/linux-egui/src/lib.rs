@@ -78,9 +78,10 @@ pub use i18n::{fmt_catalog as fmt_l10n, tr_catalog as tr_l10n, Lang, LocalePref,
 pub use logging::{export_error_log, init_file_logger, log_path};
 pub use popup::{
     force_x11_for, popup_command, read_jsonl, run_popup, write_jsonl,
-    ApplyOutcome as PopupApplyOutcome, CapsulePopupState, HostToPopup, PopupActionGuard,
-    PopupChatMessage, PopupKind, PopupSendError, PopupState, PopupSupervisor, PopupSupervisorEvent,
-    PopupToHost, PreviewPopupState, ProtocolError as PopupProtocolError,
+    ApplyOutcome as PopupApplyOutcome, CapsulePopupState, HostToPopup, LessComputerApproval,
+    LessComputerEntry, LessComputerPopupState, PopupActionGuard, PopupChatMessage, PopupKind,
+    PopupSendError, PopupState, PopupSupervisor, PopupSupervisorEvent, PopupToHost,
+    PreviewPopupState, ProtocolError as PopupProtocolError,
     ProtocolErrorKind as PopupProtocolErrorKind, QaPopupState, MAX_JSONL_LINE_BYTES,
     POPUP_PROTOCOL_VERSION,
 };
@@ -96,7 +97,7 @@ pub use popup_window::{
     bottom_center, clamp_to_area, monitor_containing, place_overlay, popup_position, popup_size,
     select_overlay_window, x11_available, OverlayEnvironment, OverlayPlacement, OverlayX11,
     WindowCandidate, WindowMatch, X11Rect, CAPSULE_BOTTOM_GAP, CAPSULE_WINDOW_SIZE,
-    PREVIEW_MIN_SIZE, PREVIEW_WINDOW_SIZE, QA_WINDOW_SIZE,
+    LESS_COMPUTER_WINDOW_SIZE, PREVIEW_MIN_SIZE, PREVIEW_WINDOW_SIZE, QA_WINDOW_SIZE,
 };
 
 pub use recordings::{read_recording_wav, recording_path, recording_pcm, RecordingError};
