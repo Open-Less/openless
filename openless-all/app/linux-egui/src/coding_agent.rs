@@ -14,6 +14,45 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 #[derive(Default)]
 pub(crate) struct LinuxCodingAgentProcessAdapter;
 
+fn resolve_bundled_pi(request: &mut AgentCommand) -> Result<bool, openless_core::BackendError> {
+    if request.executable != "openless-pi" {
+        return Ok(false);
+    }
+    let directory = crate::resources::LinuxResourceLayout::detect(None)?
+        .resource_root
+        .join("pi-backend");
+    #[cfg(debug_assertions)]
+    let directory = {
+        let development =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src-tauri/resources/pi-backend");
+        if development.join("runtime/index.mjs").is_file() {
+            development
+        } else {
+            directory
+        }
+    };
+    let node = directory.join("node");
+    let computer = directory.join("openless-computer");
+    let runtime = directory.join("runtime/index.mjs");
+    for path in [&node, &computer, &runtime] {
+        if !path.is_file() {
+            return Err(openless_core::BackendError::new(
+                openless_core::BackendErrorCode::Unsupported,
+                format!("内置 PI 后端文件缺失：{}；请重新安装，开发环境请运行 node scripts/prepare-pi-backend.mjs", path.display()),
+            ));
+        }
+    }
+    request.executable = node.to_string_lossy().into_owned();
+    request
+        .argv
+        .insert(0, runtime.to_string_lossy().into_owned());
+    request.env.insert(
+        "OPENLESS_COMPUTER_BIN".into(),
+        computer.to_string_lossy().into_owned(),
+    );
+    Ok(true)
+}
+
 struct TemporaryWorkspace(PathBuf);
 
 impl Drop for TemporaryWorkspace {
@@ -145,8 +184,9 @@ impl CodingAgentProcessAdapter for LinuxCodingAgentProcessAdapter {
                 });
             }
             let _workspace = materialize(&mut request)?;
+            let bundled_pi = resolve_bundled_pi(&mut request)?;
             let mut command = tokio::process::Command::new(&request.executable);
-            if !augment_path(&mut command, &cancel).await {
+            if !bundled_pi && !augment_path(&mut command, &cancel).await {
                 return Ok(ProcessExit {
                     code: None,
                     success: false,

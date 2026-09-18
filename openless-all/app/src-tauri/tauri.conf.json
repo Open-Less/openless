@@ -4,8 +4,8 @@
   "version": "2.0.0-Beta.1",
   "identifier": "com.openless.app",
   "build": {
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run check:macos-metal-toolchain && npm run build",
+    "beforeDevCommand": "node scripts/prepare-pi-backend.mjs && npm run dev",
+    "beforeBuildCommand": "node scripts/prepare-pi-backend.mjs && npm run check:macos-metal-toolchain && npm run build",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../dist"
   },

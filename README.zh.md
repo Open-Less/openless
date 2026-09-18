@@ -268,6 +268,12 @@ OpenLess 只做一件事:**把语音变成可用的书面文字(尤其是 AI 提
 
 完整的终端用户指南见 [USAGE.md](USAGE.md)。
 
+## Less Computer 内置 PI
+
+桌面版新增随应用打包的 PI 后端，包含独立运行时和 Computer 原生工具，无需另外安装 PI、Node.js 或 Computer MCP。启用 Less Computer 并配置支持图像的模型后，即可通过文字或语音进行截图、点击、滚动和输入。支持 Windows、macOS 与 Linux X11；macOS 需授予系统权限，Wayland 暂不支持桌面控制。
+
+模型配置、权限模式、构建命令与平台限制见 [Less Computer PI 使用说明](docs/less-computer-pi.md)。已有外部 CLI 后端可继续使用。
+
 ## 从源码构建(开发者)
 
 活跃 workspace 位于 `openless-all/app/`：`crates/openless-core` 是框架无关后端，`src-tauri` 承载 macOS/Windows/Android，`linux-egui` 包含 Linux 原生 UI 与平台 Adapter。源码构建 Tauri 前需初始化子模块：即使不编译对应平台代码，Cargo 仍会解析 manifest 中的本地 path 依赖，其中包括 `src-tauri/vendor/` 下的 macOS ASR 引擎，如 [`Open-Less/qwen-asr`](https://github.com/Open-Less/qwen-asr)。根 Core/Linux workspace 排除了 `src-tauri`，其独立检查不解析 Tauri manifest，也不要求这些子模块。阅读入口为 [docs/index.md](docs/index.md)、[架构](docs/architecture.md)和[目录结构](docs/structure.md)。

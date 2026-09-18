@@ -34,6 +34,9 @@ video-materials/
 node_modules/
 dist/
 target/
+# Local build caches and diagnostic logs.
+/openless-all/app/.cache/
+/openless-all/app/*.log
 # 本地从 CI / Actions 下载的 APK 及解压目录（非源码）
 ci-artifacts/
 *.apk
@@ -115,6 +118,10 @@ CapsWriter
 
 .reasonix
 /.codex
+
+# Generated self-contained PI desktop payload and downloaded build archives.
+openless-all/app/.cache/pi-backend/
+openless-all/app/src-tauri/resources/pi-backend/
 
 # Mimosa 安全钩子运行状态（不属版本库）
 .mimosa/

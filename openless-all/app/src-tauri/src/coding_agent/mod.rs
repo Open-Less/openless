@@ -19,6 +19,67 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 #[derive(Default)]
 pub struct TauriCodingAgentProcessAdapter;
 
+/// Resolve the bundled backend from the application installation, never PATH.
+/// Development builds use the same payload that the packaging hook prepares.
+fn bundled_pi_directory() -> Result<PathBuf, openless_core::BackendError> {
+    #[cfg(mobile)]
+    return Err(openless_core::BackendError::new(
+        openless_core::BackendErrorCode::Unsupported,
+        "内置 PI Computer 后端目前需要 macOS、Windows 或 Linux 桌面系统",
+    ));
+    #[cfg(not(mobile))]
+    {
+        #[cfg(debug_assertions)]
+        {
+            let development =
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/pi-backend");
+            if development.join("runtime/index.mjs").is_file() {
+                return Ok(development);
+            }
+        }
+        let executable = std::env::current_exe().map_err(platform_error)?;
+        let directory = executable
+            .parent()
+            .ok_or_else(|| invalid("application executable has no parent directory"))?;
+        #[cfg(target_os = "macos")]
+        let directory = directory.join("../Resources/pi-backend");
+        #[cfg(not(target_os = "macos"))]
+        let directory = directory.join("pi-backend");
+        Ok(directory)
+    }
+}
+
+fn resolve_bundled_pi(request: &mut AgentCommand) -> Result<bool, openless_core::BackendError> {
+    if request.executable != "openless-pi" {
+        return Ok(false);
+    }
+    let directory = bundled_pi_directory()?;
+    let node = directory.join(if cfg!(windows) { "node.exe" } else { "node" });
+    let computer = directory.join(if cfg!(windows) {
+        "openless-computer.exe"
+    } else {
+        "openless-computer"
+    });
+    let runtime = directory.join("runtime/index.mjs");
+    for path in [&node, &computer, &runtime] {
+        if !path.is_file() {
+            return Err(openless_core::BackendError::new(
+                openless_core::BackendErrorCode::Unsupported,
+                format!("内置 PI 后端文件缺失：{}；请重新安装，开发环境请运行 node scripts/prepare-pi-backend.mjs", path.display()),
+            ));
+        }
+    }
+    request.executable = node.to_string_lossy().into_owned();
+    request
+        .argv
+        .insert(0, runtime.to_string_lossy().into_owned());
+    request.env.insert(
+        "OPENLESS_COMPUTER_BIN".into(),
+        computer.to_string_lossy().into_owned(),
+    );
+    Ok(true)
+}
+
 struct TemporaryWorkspace(PathBuf);
 
 impl Drop for TemporaryWorkspace {
@@ -155,11 +216,12 @@ impl CodingAgentProcessAdapter for TauriCodingAgentProcessAdapter {
                 });
             }
             let _workspace = materialize_temporary_files(&mut request)?;
+            let bundled_pi = resolve_bundled_pi(&mut request)?;
             #[cfg(windows)]
             let mut command = tokio::process::Command::new(windows_executable(&request));
             #[cfg(not(windows))]
             let mut command = tokio::process::Command::new(&request.executable);
-            if !augment_path(&mut command, &cancel).await {
+            if !bundled_pi && !augment_path(&mut command, &cancel).await {
                 return Ok(ProcessExit {
                     code: None,
                     success: false,

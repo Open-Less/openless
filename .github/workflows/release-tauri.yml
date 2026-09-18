@@ -71,7 +71,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "22.23.2"
           cache: npm
           cache-dependency-path: 'openless-all/app/package-lock.json'
 
@@ -93,6 +93,10 @@ jobs:
       - name: Install npm deps
         working-directory: 'openless-all/app'
         run: npm ci
+
+      - name: Verify PI packaging contract
+        working-directory: 'openless-all/app'
+        run: node --test scripts/prepare-pi-backend.test.mjs
 
       - name: Check updater signing availability
         if: startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
