@@ -1055,6 +1055,18 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
         replacement_text: &str,
         reactivate: bool,
     ) -> Result<InsertOutcome, BackendError> {
+        #[cfg(target_os = "macos")]
+        if reactivate {
+            let app = self.app.lock().clone().ok_or_else(|| {
+                BackendError::new(BackendErrorCode::InvalidState, "Tauri AppHandle is not bound yet")
+            })?;
+            if !crate::resign_selection_polish_preview_key_for_apply(&app) {
+                return Err(BackendError::new(
+                    BackendErrorCode::Platform,
+                    "selectionPolishTargetUnavailable",
+                ));
+            }
+        }
         if reactivate && !crate::selection::reactivate_selection_insertion_target(target) {
             return Err(BackendError::new(
                 BackendErrorCode::Platform,
@@ -1074,6 +1086,16 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
                 crate::selection::SelectionInsertionTargetValidation::Valid => unreachable!(),
             };
             return Err(BackendError::new(error_code, code));
+        }
+        // 贴上前一刻的最终防线：validate 的 simulate_copy 兜底期间前台焦点
+        // 可能跳走（对方恰好暴露相同文本时文本比对会放行），这里再核一次
+        // 捕获时的前台应用是否仍是前台，不是就拒绝。
+        #[cfg(target_os = "macos")]
+        if !crate::selection::selection_target_still_front(target) {
+            return Err(BackendError::new(
+                BackendErrorCode::Cancelled,
+                "selectionPolishTargetChanged",
+            ));
         }
         let preferences = self.preferences()?;
         map_insert_status(crate::insertion::TextInserter::new().insert(

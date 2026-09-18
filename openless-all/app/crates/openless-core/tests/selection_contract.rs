@@ -26,7 +26,7 @@ struct RecordingSelectionRuntime {
     capture: SelectionCapture,
     applied: Arc<Mutex<Vec<(SessionId, String, String)>>>,
     apply_outcome: InsertOutcome,
-    apply_error: Option<BackendError>,
+    apply_error: Arc<Mutex<Option<BackendError>>>,
     apply_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     reverted: Arc<Mutex<Vec<SessionId>>>,
     revert_outcome: Option<InsertOutcome>,
@@ -42,7 +42,7 @@ impl RecordingSelectionRuntime {
             },
             applied: Arc::new(Mutex::new(Vec::new())),
             apply_outcome: InsertOutcome::Inserted,
-            apply_error: None,
+            apply_error: Arc::new(Mutex::new(None)),
             apply_gate: None,
             reverted: Arc::new(Mutex::new(Vec::new())),
             revert_outcome: None,
@@ -50,9 +50,13 @@ impl RecordingSelectionRuntime {
         }
     }
 
-    fn with_apply_error(mut self, error: BackendError) -> Self {
-        self.apply_error = Some(error);
+    fn with_apply_error(self, error: BackendError) -> Self {
+        *self.apply_error.lock().expect("apply error lock poisoned") = Some(error);
         self
+    }
+
+    fn release_apply_error(&self) {
+        *self.apply_error.lock().expect("apply error lock poisoned") = None;
     }
 
     fn with_revert_outcome(mut self, outcome: InsertOutcome) -> Self {
@@ -96,10 +100,14 @@ impl SelectionRuntimeAdapter for RecordingSelectionRuntime {
     ) -> BoxFuture<'static, Result<InsertOutcome, BackendError>> {
         let applied = Arc::clone(&self.applied);
         let outcome = self.apply_outcome;
-        let error = self.apply_error.clone();
+        let error_slot = Arc::clone(&self.apply_error);
         let gate = self.apply_gate.clone();
         Box::pin(async move {
-            if let Some(error) = error {
+            if let Some(error) = error_slot
+                .lock()
+                .expect("apply error lock poisoned")
+                .clone()
+            {
                 return Err(error);
             }
             applied.lock().expect("runtime lock poisoned").push((
@@ -633,7 +641,7 @@ async fn shutdown_cancels_an_active_selection_and_hides_its_preview() {
 }
 
 #[tokio::test]
-async fn failed_preview_apply_hides_the_preview_and_releases_the_target() {
+async fn transient_platform_failure_keeps_the_preview_retryable() {
     let runtime = RecordingSelectionRuntime::new("source text").with_apply_error(
         BackendError::new(BackendErrorCode::Platform, "fixture apply failed"),
     );
@@ -668,8 +676,87 @@ async fn failed_preview_apply_hides_the_preview_and_releases_the_target() {
         .await
         .expect_err("platform failure must be returned");
 
+    // 瞬时平台错误（焦点恢复/目标复核抖动）：错误返回、预览窗保持、
+    // session 回到 Preview 可直接重试——不能隐藏窗口把用户晾在「点了没反应」。
     assert_eq!(error.code, BackendErrorCode::Platform);
-    assert_eq!(runtime.cancel_count(), 1);
+    assert_eq!(runtime.cancel_count(), 0);
+    assert_eq!(host.actions(), vec![HostAction::ShowSelectionPreview]);
+    assert_eq!(
+        backend
+            .services()
+            .selection
+            .snapshot()
+            .await
+            .expect("selection snapshot should remain readable")
+            .phase,
+        SelectionPhase::Preview
+    );
+
+    // 目标重新可用时重试应成功完成。
+    runtime.release_apply_error();
+    backend
+        .services()
+        .selection
+        .confirm(session_id, None)
+        .await
+        .expect("retry after a transient platform failure should apply");
+    assert_eq!(
+        backend
+            .services()
+            .selection
+            .snapshot()
+            .await
+            .expect("selection snapshot should remain readable")
+            .phase,
+        SelectionPhase::Completed
+    );
+
+    backend.shutdown().await.expect("backend should stop");
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn stale_preview_apply_settles_the_session_and_hides_the_preview() {
+    // apply 报「目标已失效」类错误（Cancelled 语义）时 session 必须结算，
+    // 预览隐藏、不允许无限重试一个已经不存在的目标。
+    let runtime = RecordingSelectionRuntime::new("source text").with_apply_error(
+        BackendError::new(
+            BackendErrorCode::Cancelled,
+            "selection target is no longer active",
+        ),
+    );
+    let host = openless_core::testing::RecordingHostActions::default();
+    let (backend, data_dir) = backend_with_selection_parts_and_host(
+        runtime.clone(),
+        Arc::new(openless_core::testing::FixtureTextPolisher::successful(
+            "polished preview",
+        )),
+        Arc::new(UnsupportedCredentialStore),
+        Arc::new(host.clone()),
+    );
+    backend.start().await.expect("backend should start");
+    let mut preferences = backend.get_preferences();
+    preferences.selection_polish_output_mode = SelectionPolishOutputMode::PreviewConfirm;
+    write_preferences(&backend, preferences);
+    let session_id = backend
+        .services()
+        .selection
+        .begin_polish(SelectionPolishRequest {
+            selected_text: None,
+            mode: PolishMode::Light,
+            instruction: None,
+        })
+        .await
+        .expect("selection polish should produce a preview");
+
+    let error = backend
+        .services()
+        .selection
+        .confirm(session_id, None)
+        .await
+        .expect_err("stale target must be returned");
+
+    assert_eq!(error.code, BackendErrorCode::Cancelled);
     assert_eq!(
         host.actions(),
         vec![
