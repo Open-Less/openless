@@ -2824,7 +2824,7 @@ fn ensure_selection_polish_preview_window<R: tauri::Runtime>(
         "selection-polish-preview",
         WebviewUrl::App("index.html?window=selection-polish-preview".into()),
     )
-    .title("OpenLess 选区润色预览")
+    .title("OpenLess 選區潤色預覽")
     .inner_size(640.0, 440.0)
     .min_inner_size(480.0, 320.0)
     .resizable(true)
@@ -2879,7 +2879,7 @@ fn ensure_selection_voice_intent_prompt_window<R: tauri::Runtime>(
         "selection-voice-intent",
         WebviewUrl::App("index.html?window=selection-voice-intent".into()),
     )
-    .title("OpenLess 选区语音")
+    .title("OpenLess 選區語音")
     .inner_size(420.0, 280.0)
     .min_inner_size(360.0, 240.0)
     .resizable(true)
