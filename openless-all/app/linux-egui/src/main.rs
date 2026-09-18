@@ -6490,6 +6490,17 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             // window」，与 Tauri 的 `orderFrontRegardless` 同语义。
             viewport = viewport.with_active(false);
         }
+        if kind == PopupKind::Preview {
+            // Tauri `selection-polish-preview`：可缩放 + 显式抢焦点，因为用户要就地
+            // 编辑润色后的文本（键盘输入必须落在本窗口）。
+            viewport = viewport
+                .with_resizable(true)
+                .with_min_inner_size([
+                    openless_linux_egui::PREVIEW_MIN_SIZE.0 as f32,
+                    openless_linux_egui::PREVIEW_MIN_SIZE.1 as f32,
+                ])
+                .with_active(true);
+        }
         let options = eframe::NativeOptions {
             viewport,
             ..Default::default()

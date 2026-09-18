@@ -3199,8 +3199,9 @@ fn service_tabs(
 fn card_title(ui: &mut egui::Ui, title: &str, hint: &str) {
     ui.horizontal(|ui| {
         ui.label(
+            // Tauri `SectionTitle`: font-size 14 / font-weight 600。
             egui::RichText::new(title)
-                .size(13.0)
+                .size(14.0)
                 .strong()
                 .color(theme::INK),
         );
@@ -3372,16 +3373,29 @@ fn row(ui: &mut egui::Ui, label: &str, control: impl FnOnce(&mut egui::Ui)) {
 }
 
 fn row_desc(ui: &mut egui::Ui, label: &str, desc: &str, control: impl FnOnce(&mut egui::Ui)) {
+    // Tauri `SettingRow` 是 grid `minmax(0,200px) minmax(0,1fr)` + gap 16，控件在第二列里
+    // **左对齐**（`justify-content: flex-start`），所以每一行的控件起点都固定在同一 x，
+    // 而不是各自贴右边缘 —— 贴右会让不同宽度的控件彼此错开。
+    const LABEL_COLUMN: f32 = 200.0;
+    const COLUMN_GAP: f32 = 16.0;
     ui.horizontal(|ui| {
         ui.set_min_height(46.0);
-        if !label.is_empty() {
-            ui.label(egui::RichText::new(label).size(14.0).color(theme::INK));
-        }
-        if !desc.is_empty() {
-            help_dot(ui, desc);
-        }
-        // Controls hug the right edge, like the Tauri settings rows.
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), control);
+        // 窄窗口下标签列最多占一半宽度，避免控件列被挤没。
+        let label_width = LABEL_COLUMN.min(ui.available_width() * 0.5);
+        ui.allocate_ui_with_layout(
+            egui::vec2(label_width, 0.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                if !label.is_empty() {
+                    ui.label(egui::RichText::new(label).size(14.0).color(theme::INK));
+                }
+                if !desc.is_empty() {
+                    help_dot(ui, desc);
+                }
+            },
+        );
+        ui.add_space(COLUMN_GAP);
+        control(ui);
     });
     let rect = ui
         .allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover())

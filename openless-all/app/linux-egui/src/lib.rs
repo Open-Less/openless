@@ -96,7 +96,7 @@ pub use popup_window::{
     bottom_center, clamp_to_area, monitor_containing, place_overlay, popup_position, popup_size,
     select_overlay_window, x11_available, OverlayEnvironment, OverlayPlacement, OverlayX11,
     WindowCandidate, WindowMatch, X11Rect, CAPSULE_BOTTOM_GAP, CAPSULE_WINDOW_SIZE,
-    PREVIEW_WINDOW_SIZE, QA_WINDOW_SIZE,
+    PREVIEW_MIN_SIZE, PREVIEW_WINDOW_SIZE, QA_WINDOW_SIZE,
 };
 
 pub use recordings::{read_recording_wav, recording_path, recording_pcm, RecordingError};

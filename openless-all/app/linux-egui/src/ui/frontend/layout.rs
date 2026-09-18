@@ -1008,7 +1008,8 @@ pub fn section_title(ui: &mut egui::Ui, width: f32, title: &str, desc: Option<&s
         egui::pos2(rect.left(), rect.top()),
         egui::Align2::LEFT_TOP,
         title,
-        egui::FontId::proportional(13.0),
+        // Tauri `SectionTitle`: 14 / 600。
+        egui::FontId::proportional(14.0),
         theme::INK,
     );
     if let Some(desc) = desc {

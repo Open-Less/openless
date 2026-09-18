@@ -32,10 +32,12 @@ pub const CAPSULE_WINDOW_SIZE: (u32, u32) = (200, 100);
 /// Gap between the capsule pill and the bottom of the work area — Tauri's
 /// `EDGE_GAP` for the classic / siri capsule styles.
 pub const CAPSULE_BOTTOM_GAP: i32 = 12;
-/// Selection-ask panel size (the chat panel).
-pub const QA_WINDOW_SIZE: (u32, u32) = (520, 520);
-/// Polish-preview panel size.
-pub const PREVIEW_WINDOW_SIZE: (u32, u32) = (480, 320);
+/// Selection-ask panel size (the chat panel) — Tauri `qa` window is 420×540.
+pub const QA_WINDOW_SIZE: (u32, u32) = (420, 540);
+/// Polish-preview panel size — Tauri `selection-polish-preview` is 640×440.
+pub const PREVIEW_WINDOW_SIZE: (u32, u32) = (640, 440);
+/// Smallest the user may resize the polish preview to — Tauri `minWidth/minHeight`.
+pub const PREVIEW_MIN_SIZE: (u32, u32) = (480, 320);
 
 /// Window size for one popup kind, in X11 pixels.
 pub fn popup_size(kind: crate::popup::PopupKind) -> (u32, u32) {
@@ -986,17 +988,19 @@ mod tests {
     }
 
     /// The panels are centred dialogs, and centring is what keeps them from
-    /// running into the capsule strip: a 520px panel 50px above the bottom edge
-    /// would start at y=510 and end at 1030, i.e. inside the pill's 968..1068.
+    /// running into the capsule strip: a 540px panel 50px above the bottom edge
+    /// would start at y=490 and end at 1030, i.e. inside the pill's 968..1068.
     #[test]
     fn popup_position_centres_the_panels_clear_of_the_capsule() {
+        // 尺寸取自 Tauri：qa 420×540、selection-polish-preview 640×440，
+        // 居中于 1920×1080 工作区。
         assert_eq!(
             popup_position(&environment(), PopupKind::Qa),
-            Some((700, 280))
+            Some((750, 270))
         );
         assert_eq!(
             popup_position(&environment(), PopupKind::Preview),
-            Some((720, 380))
+            Some((640, 320))
         );
         let area = monitor(0, 0, 1920, 1080);
         let (_, capsule_y) = bottom_center(area, CAPSULE_WINDOW_SIZE, CAPSULE_BOTTOM_GAP);
