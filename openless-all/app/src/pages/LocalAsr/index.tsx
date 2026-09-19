@@ -3,7 +3,7 @@
 // 功能：
 //  - 顶部：当前激活模型 + 镜像源切换
 //  - 模型列表：每行模型 = 真实尺寸 / 进度 / [下载|取消|删除|设为默认]
-//  - 真实尺寸通过 fetchLocalAsrRemoteInfo 实时从 HuggingFace API 拉，**不硬编码**
+//  - 真实尺寸通过 fetchLocalAsrRemoteInfo 实时从所选模型源拉，**不硬编码**
 //  - 监听 `local-asr-download-progress` 事件实时刷新进度
 //  - Win 端引擎不可用时禁用下载按钮，提示见 issue #256
 
@@ -65,6 +65,7 @@ import {
   type HfModelCard,
   type LocalAsrDownloadProgress,
   type LocalAsrEngineStatus,
+  type LocalAsrMirror,
   type LocalAsrModelStatus,
   type LocalAsrSettings,
   type LocalAsrTestResult,
@@ -110,6 +111,15 @@ import type { RemoteSize } from './types';
 const OS = detectOS();
 const IS_WINDOWS = OS === 'win';
 const IS_QWEN_PLATFORM = OS === 'mac' || OS === 'linux';
+
+function effectiveModelMirror(modelId: string, mirror: string): LocalAsrMirror {
+  if (mirror === 'modelscope' && !modelId.startsWith('qwen3-asr-')) return 'huggingface';
+  return mirror as LocalAsrMirror;
+}
+
+function effectiveSherpaMirror(mirror: string): string {
+  return mirror === 'modelscope' ? 'huggingface' : mirror;
+}
 
 interface LocalAsrProps {
   /// `embedded=true` 表示作为子组件嵌入「高级」设置页（Settings → Advanced）；
@@ -468,13 +478,15 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         void refreshSherpaCatalog();
         void refreshSherpaModelDir(selectedSherpaAlias);
         void Promise.all(
-          SHERPA_ONNX_ASR_MODELS.map((m) => ensureSherpaRemoteSize(m.alias, s.mirror)),
+          SHERPA_ONNX_ASR_MODELS.map((m) =>
+            ensureSherpaRemoteSize(m.alias, effectiveSherpaMirror(s.mirror)),
+          ),
         );
       }
       // 拉远端真实尺寸（每个模型一次，结果留缓存）
       void Promise.all(
         supportedModels.map(async (m) => {
-          await ensureRemoteSize(m.id, s.mirror);
+          await ensureRemoteSize(m.id, effectiveModelMirror(m.id, s.mirror));
         }),
       );
     } catch (e) {
@@ -646,10 +658,15 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     if (!settings) return;
     setRemoteSizes({});
     setSherpaRemoteSizes({});
-    void Promise.all(models.map((m) => ensureRemoteSize(m.id, settings.mirror)));
+    setHfCards({});
+    void Promise.all(
+      models.map((m) => ensureRemoteSize(m.id, effectiveModelMirror(m.id, settings.mirror))),
+    );
     if (IS_WINDOWS) {
       void Promise.all(
-        SHERPA_ONNX_ASR_MODELS.map((m) => ensureSherpaRemoteSize(m.alias, settings.mirror)),
+        SHERPA_ONNX_ASR_MODELS.map((m) =>
+          ensureSherpaRemoteSize(m.alias, effectiveSherpaMirror(settings.mirror)),
+        ),
       );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -662,7 +679,10 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     if (!downloadDialogOpen || !selectedModelId || !settings) return;
     const entry = allSidebarEntries.find((e) => e.id === selectedModelId);
     if (!entry?.repo) return;
-    void ensureHfCard(selectedModelId, settings.mirror);
+    void ensureHfCard(
+      selectedModelId,
+      effectiveModelMirror(selectedModelId, settings.mirror),
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [downloadDialogOpen, selectedModelId, settings?.mirror]);
 
@@ -1250,7 +1270,10 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     }));
     try {
       setError(null);
-      await downloadSherpaOnnxAsrModel(modelAlias, settings?.mirror);
+      await downloadSherpaOnnxAsrModel(
+        modelAlias,
+        effectiveSherpaMirror(settings?.mirror ?? 'huggingface'),
+      );
       await activateSherpaProvider(modelAlias);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -1306,7 +1329,10 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
       },
     }));
     try {
-      await downloadLocalAsrModel(modelId, settings?.mirror);
+      await downloadLocalAsrModel(
+        modelId,
+        effectiveModelMirror(modelId, settings?.mirror ?? 'huggingface'),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setProgress((prev) => {
@@ -1530,7 +1556,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   const selectedSherpaUsesReleaseArchive = selectedSherpaAlias === 'qwen3-asr-0.6b-int8';
   const selectedSherpaMirrorValue = selectedSherpaUsesReleaseArchive
     ? 'github-release'
-    : (settings?.mirror ?? 'huggingface');
+    : effectiveSherpaMirror(settings?.mirror ?? 'huggingface');
   const selectedSherpaCatalog = sherpaCatalog.find((model) => model.alias === selectedSherpaAlias);
   const selectedSherpaDisplayName =
     selectedSherpaCatalog?.displayName ?? t(selectedSherpaModel.labelKey);
@@ -1956,11 +1982,12 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                     fileCount={selectedEntryRemote?.fileCount ?? null}
                     mirrorLabel={
                       selectedEntry?.engine === 'qwen3' || selectedEntry?.engine === 'whisper'
-                        ? settings?.mirror === 'hf-mirror'
-                          ? 'hf-mirror'
-                          : 'huggingface'
+                        ? effectiveModelMirror(
+                            selectedEntry.id,
+                            settings?.mirror ?? 'huggingface',
+                          )
                         : selectedEntry?.engine === 'sherpa'
-                          ? (settings?.mirror ?? 'huggingface')
+                          ? effectiveSherpaMirror(settings?.mirror ?? 'huggingface')
                           : undefined
                     }
                     progress={selectedEntryProgress}
@@ -2090,6 +2117,10 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                       {
                         value: 'hf-mirror',
                         label: t('localAsr.mirrorHfMirror'),
+                      },
+                      {
+                        value: 'modelscope',
+                        label: t('localAsr.mirrorModelscope'),
                       },
                     ]}
                     style={{ fontSize: 13, height: 31, minWidth: 200 }}
@@ -2320,7 +2351,12 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
             catalogReloadRequestedRef.current = true;
             setDownloadDialog(false);
           }}
-          onRetryCard={(id) => void ensureHfCard(id, settings?.mirror ?? 'huggingface')}
+          onRetryCard={(id) =>
+            void ensureHfCard(
+              id,
+              effectiveModelMirror(id, settings?.mirror ?? 'huggingface'),
+            )
+          }
           hfCardOf={(id) => {
             const state = hfCards[id];
             if (!state) return null;

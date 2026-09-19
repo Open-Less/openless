@@ -4,7 +4,7 @@
 // 事件：local-asr-download-progress / local-asr-token
 //
 // 注意：模型文件清单与尺寸不在此处硬编码 —— 通过
-// `fetchLocalAsrRemoteInfo()` 实时从 HuggingFace tree API 拉取。
+// `fetchLocalAsrRemoteInfo()` 实时从所选模型源拉取。
 
 import { invokeOrMock } from './ipc';
 import type { OS } from '../components/WindowChrome';
@@ -15,7 +15,7 @@ export function isLocalAsrModelSupportedOnOs(modelId: string, os: OS): boolean {
   return true;
 }
 
-export type LocalAsrMirror = 'huggingface' | 'hf-mirror';
+export type LocalAsrMirror = 'huggingface' | 'hf-mirror' | 'modelscope';
 
 export interface LocalAsrSettings {
   providerId: string;

@@ -2106,9 +2106,10 @@ export const ja: typeof zhCN = {
     groupOther: 'その他',
     mirrorLabel: 'ダウンロードミラー',
     mirrorDesc:
-      '公式ソースは海外ネットワークで安定。hf-mirror.com は中国コミュニティ運営のミラー。',
+      'HuggingFace、コミュニティミラー、対応モデルの ModelScope 公式リポジトリを選択できます。',
     mirrorHuggingface: 'HuggingFace 公式 (huggingface.co)',
     mirrorHfMirror: '中国ミラー (hf-mirror.com)',
+    mirrorModelscope: 'ModelScope 公式 (modelscope.cn)',
     activeBadge: '使用中',
     downloadedBadge: 'ダウンロード済み',
     notDownloadedBadge: '未ダウンロード',
