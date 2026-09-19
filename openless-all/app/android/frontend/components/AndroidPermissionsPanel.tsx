@@ -21,8 +21,7 @@ import type {
   AndroidAccessibilityStatus,
   AndroidInsertStrategy,
   AndroidOverlayActivationMode,
-  AndroidOverlayCancelSwipeDirection,
-  AndroidOverlayLeftSwipeAction,
+  AndroidOverlayGestureAction,
   AndroidOverlayStatus,
   AndroidOverlayTrigger,
   AndroidPreferenceKey,
@@ -39,6 +38,7 @@ function pickAndroidPrefs(settings: UserPreferences): AndroidPrefsSlice {
     androidOverlayActivationMode: settings.androidOverlayActivationMode,
     androidOverlayLeftSwipeAction: settings.androidOverlayLeftSwipeAction,
     androidOverlayCancelSwipeDirection: settings.androidOverlayCancelSwipeDirection,
+    androidOverlayGestureActions: settings.androidOverlayGestureActions,
     androidOverlaySizeDp: settings.androidOverlaySizeDp,
   };
 }
@@ -619,72 +619,64 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
               </span>
             </div>
           </SettingRow>
-          <SettingRow label={t('settings.permissions.androidOverlayLeftSwipeActionLabel')}>
+          <SettingRow
+            label={t(
+              'settings.permissions.androidOverlayGestureActionsLabel',
+              'Overlay swipe actions',
+            )}
+            desc={t(
+              'settings.permissions.androidOverlayGestureActionsDesc',
+              'These actions apply while recording. A normal tap finishes ordinary dictation; a Quick note swipe keeps the audio permanently.',
+            )}
+          >
             <div
               style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 6,
-                alignItems: colAlign,
+                display: 'grid',
+                gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                gap: 8,
                 width: '100%',
               }}
             >
-              <select
-                value={androidPrefs?.androidOverlayLeftSwipeAction ?? 'translation'}
-                onChange={(event) => {
-                  void updateAndroidPref(
-                    'androidOverlayLeftSwipeAction',
-                    event.target.value as AndroidOverlayLeftSwipeAction,
-                  );
-                }}
-                style={selectStyle}
-              >
-                <option value="translation">
-                  {t('settings.permissions.androidOverlayLeftSwipeAction.translation')}
-                </option>
-                <option value="style_pack">
-                  {t('settings.permissions.androidOverlayLeftSwipeAction.style_pack')}
-                </option>
-              </select>
-              <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: hintAlign }}>
-                {t(
-                  `settings.permissions.androidOverlayLeftSwipeActionHint.${androidPrefs?.androidOverlayLeftSwipeAction ?? 'translation'}`,
-                )}
-              </span>
-            </div>
-          </SettingRow>
-          <SettingRow label={t('settings.permissions.androidOverlayCancelSwipeDirectionLabel')}>
-            <div
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 6,
-                alignItems: colAlign,
-                width: '100%',
-              }}
-            >
-              <select
-                value={androidPrefs?.androidOverlayCancelSwipeDirection ?? 'up'}
-                onChange={(event) => {
-                  void updateAndroidPref(
-                    'androidOverlayCancelSwipeDirection',
-                    event.target.value as AndroidOverlayCancelSwipeDirection,
-                  );
-                }}
-                style={selectStyle}
-              >
-                <option value="up">
-                  {t('settings.permissions.androidOverlayCancelSwipeDirection.up')}
-                </option>
-                <option value="down">
-                  {t('settings.permissions.androidOverlayCancelSwipeDirection.down')}
-                </option>
-              </select>
-              <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: hintAlign }}>
-                {t(
-                  `settings.permissions.androidOverlayCancelSwipeDirectionHint.${androidPrefs?.androidOverlayCancelSwipeDirection ?? 'up'}`,
-                )}
-              </span>
+              {(['up', 'down', 'left', 'right'] as const).map((direction) => (
+                <label
+                  key={direction}
+                  style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}
+                >
+                  <span style={{ fontSize: 11, color: 'var(--ol-ink-3)' }}>
+                    {t(
+                      `settings.permissions.androidOverlayGestureDirection.${direction}`,
+                      direction,
+                    )}
+                  </span>
+                  <select
+                    value={androidPrefs?.androidOverlayGestureActions?.[direction] ?? 'none'}
+                    onChange={(event) => {
+                      const actions = androidPrefs?.androidOverlayGestureActions ?? {
+                        up: 'cancel',
+                        down: 'none',
+                        left: 'translation',
+                        right: 'qa',
+                      };
+                      void updateAndroidPref('androidOverlayGestureActions', {
+                        ...actions,
+                        [direction]: event.target.value as AndroidOverlayGestureAction,
+                      });
+                    }}
+                    style={selectStyle}
+                  >
+                    {(
+                      ['none', 'quick_note', 'translation', 'style_pack', 'cancel', 'qa'] as const
+                    ).map((action) => (
+                      <option key={action} value={action}>
+                        {t(
+                          `settings.permissions.androidOverlayGestureAction.${action}`,
+                          action,
+                        )}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ))}
             </div>
           </SettingRow>
           <SettingRow label={t('settings.permissions.androidOverlaySizeLabel')}>

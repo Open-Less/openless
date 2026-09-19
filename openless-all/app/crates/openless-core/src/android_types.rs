@@ -49,6 +49,38 @@ pub enum AndroidOverlayCancelSwipeDirection {
     Down,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AndroidOverlayGestureAction {
+    #[default]
+    None,
+    QuickNote,
+    Translation,
+    StylePack,
+    Cancel,
+    Qa,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AndroidOverlayGestureActions {
+    pub up: AndroidOverlayGestureAction,
+    pub down: AndroidOverlayGestureAction,
+    pub left: AndroidOverlayGestureAction,
+    pub right: AndroidOverlayGestureAction,
+}
+
+impl Default for AndroidOverlayGestureActions {
+    fn default() -> Self {
+        Self {
+            up: AndroidOverlayGestureAction::Cancel,
+            down: AndroidOverlayGestureAction::None,
+            left: AndroidOverlayGestureAction::Translation,
+            right: AndroidOverlayGestureAction::Qa,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum AndroidAccessibilityState {
@@ -140,6 +172,10 @@ pub fn default_android_overlay_left_swipe_action() -> AndroidOverlayLeftSwipeAct
 
 pub fn default_android_overlay_cancel_swipe_direction() -> AndroidOverlayCancelSwipeDirection {
     AndroidOverlayCancelSwipeDirection::Up
+}
+
+pub fn default_android_overlay_gesture_actions() -> AndroidOverlayGestureActions {
+    AndroidOverlayGestureActions::default()
 }
 
 pub fn default_android_overlay_size_dp() -> u32 {

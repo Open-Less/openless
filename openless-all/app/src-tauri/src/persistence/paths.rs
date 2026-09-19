@@ -64,6 +64,14 @@ pub fn recordings_root() -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// Permanent quick-note archives live outside the ordinary debug-recording
+/// directory so the normal WAV count/retention prune can never remove them.
+pub fn quick_note_recordings_root() -> Result<PathBuf> {
+    let dir = data_dir()?.join("quick-notes").join("recordings");
+    ensure_dir(&dir)?;
+    Ok(dir)
+}
+
 /// 双重 cap 清理 `recordings/*.wav`：
 /// - `retention_days > 0` → 把超过 N 天的删掉（沿用 history 的 retention 逻辑）。
 /// - `max_entries == Some(n)` → 按 mtime 倒序保留最新的 n 条（clamp 到 1..=HISTORY_CAP）；
@@ -137,6 +145,10 @@ pub fn prune_recordings(retention_days: u32, max_entries: Option<u32>) -> Result
 /// 决定文件是否被写过）。前端用 `read_audio_recording` IPC 读字节流喂 HTMLAudio。
 pub fn recording_path_for_session(session_id: &str) -> Result<PathBuf> {
     Ok(recordings_root()?.join(format!("{session_id}.wav")))
+}
+
+pub fn quick_note_recording_path_for_session(session_id: &str) -> Result<PathBuf> {
+    Ok(quick_note_recordings_root()?.join(format!("{session_id}.wav")))
 }
 
 /// Foundry Local 下载与缓存根目录。DLL 和模型都不打进安装包，和 Qwen3-ASR

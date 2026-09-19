@@ -15,6 +15,7 @@ import { Style } from '../pages/Style';
 import { Marketplace } from '../pages/Marketplace';
 import { Translation } from '../pages/Translation';
 import { SelectionAsk } from '../pages/SelectionAsk';
+import { QuickNote } from '../pages/QuickNote';
 import { Corrections } from '../pages/Corrections';
 import { APP_VERSION_LABEL, IS_BETA_BUILD } from '../lib/appVersion';
 import {
@@ -39,7 +40,7 @@ import { useMobileLayout, useConservativeLayout } from '../lib/useMobileLayout';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { useAppState, type AppTab } from '../state/useAppState';
 
-const MORE_TAB_IDS: AppTab[] = ['vocab', 'translation', 'selectionAsk', 'corrections'];
+const MORE_TAB_IDS: AppTab[] = ['vocab', 'translation', 'selectionAsk', 'quickNote', 'corrections'];
 const STYLE_TAB_IDS: AppTab[] = ['style', 'marketplace'];
 
 /** Reserve the native traffic-light strip before the sidebar's version row. */
@@ -55,6 +56,7 @@ const PAGE_CMP: Record<Exclude<AppTab, 'localAsr'>, ComponentType> = {
   marketplace: Marketplace,
   translation: Translation,
   selectionAsk: SelectionAsk,
+  quickNote: QuickNote,
   corrections: Corrections,
 };
 
@@ -77,7 +79,12 @@ const NAV_TREE: NavNode[] = [
     kind: 'group',
     key: 'tools',
     icon: 'selectionAsk',
-    children: [{ id: 'translation' }, { id: 'selectionAsk' }, { id: 'corrections' }],
+    children: [
+      { id: 'translation' },
+      { id: 'selectionAsk' },
+      { id: 'quickNote' },
+      { id: 'corrections' },
+    ],
   },
 ];
 

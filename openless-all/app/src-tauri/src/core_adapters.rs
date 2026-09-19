@@ -953,6 +953,7 @@ impl TauriLocalAsrRuntimeAdapter {
             ))
         })
     }
+
 }
 
 #[derive(Clone)]
@@ -2423,14 +2424,14 @@ struct TauriActiveRecording {
 }
 
 struct TauriRecordingArchive {
-    path: PathBuf,
+    path: Arc<Mutex<PathBuf>>,
     available: Arc<AtomicBool>,
 }
 
 impl TauriRecordingArchive {
     fn new(path: PathBuf, available: bool) -> Self {
         Self {
-            path,
+            path: Arc::new(Mutex::new(path)),
             available: Arc::new(AtomicBool::new(available)),
         }
     }
@@ -2442,7 +2443,7 @@ impl RecordingArchive for TauriRecordingArchive {
     }
 
     fn read_pcm(&self) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
-        let path = self.path.clone();
+        let path = self.path.lock().clone();
         Box::pin(async move {
             let wav = tokio::fs::read(&path).await.map_err(|error| {
                 BackendError::new(
@@ -2465,7 +2466,7 @@ impl RecordingArchive for TauriRecordingArchive {
     }
 
     fn discard(&self) -> BoxFuture<'static, Result<(), BackendError>> {
-        let path = self.path.clone();
+        let path = self.path.lock().clone();
         let available = Arc::clone(&self.available);
         Box::pin(async move {
             if !available.load(Ordering::Acquire) {
@@ -2491,6 +2492,60 @@ impl RecordingArchive for TauriRecordingArchive {
                     ))
                 }
             }
+        })
+    }
+
+    fn promote_to_quick_note(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+        let path = Arc::clone(&self.path);
+        Box::pin(async move {
+            let current = path.lock().clone();
+            let Some(file_name) = current.file_name().map(|name| name.to_owned()) else {
+                return Err(BackendError::new(
+                    BackendErrorCode::Persistence,
+                    "quick-note archive has no file name",
+                ));
+            };
+            let target = crate::persistence::quick_note_recordings_root()
+                .map_err(|error| BackendError::new(BackendErrorCode::Persistence, error.to_string()))?
+                .join(file_name);
+            if current == target {
+                return Ok(());
+            }
+            tokio::fs::rename(&current, &target).await.map_err(|error| {
+                BackendError::new(
+                    BackendErrorCode::Persistence,
+                    format!("promote quick-note recording archive: {error}"),
+                )
+            })?;
+            *path.lock() = target;
+            Ok(())
+        })
+    }
+
+    fn demote_to_ordinary_recording(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+        let path = Arc::clone(&self.path);
+        Box::pin(async move {
+            let current = path.lock().clone();
+            let Some(file_name) = current.file_name().map(|name| name.to_owned()) else {
+                return Err(BackendError::new(
+                    BackendErrorCode::Persistence,
+                    "recording archive has no file name",
+                ));
+            };
+            let target = crate::persistence::recordings_root()
+                .map_err(|error| BackendError::new(BackendErrorCode::Persistence, error.to_string()))?
+                .join(file_name);
+            if current == target {
+                return Ok(());
+            }
+            tokio::fs::rename(&current, &target).await.map_err(|error| {
+                BackendError::new(
+                    BackendErrorCode::Persistence,
+                    format!("move recording archive to ordinary storage: {error}"),
+                )
+            })?;
+            *path.lock() = target;
+            Ok(())
         })
     }
 }
@@ -2566,17 +2621,33 @@ impl AudioRecorder for TauriAudioRecorder {
                     preview.stop();
                 }
             }
-            // QA/划词语音沿用1.x不落盘语义；不要先创建WAV，再依赖停止时删除。
+            let permanent_archive = !matches!(
+                context.output_target,
+                openless_core::DictationOutputTarget::ForegroundApp
+            );
+            // Undecided Android captures use the permanent quick-note spool
+            // until the terminal tap/gesture classifies the session.
             let archive_path = context
                 .recording
                 .archive_enabled
-                .then(|| crate::persistence::recording_path_for_session(&session_id.to_string()))
+                .then(|| {
+                    if permanent_archive {
+                        crate::persistence::quick_note_recording_path_for_session(
+                            &session_id.to_string(),
+                        )
+                    } else {
+                        crate::persistence::recording_path_for_session(&session_id.to_string())
+                    }
+                })
                 .transpose();
             let microphone = context.recording.microphone_device_name.clone();
             let recording_plan = context.recording.clone();
+            let prune_recordings_before_capture = recording_plan.archive_enabled
+                && (!recording_plan.archive_required
+                    || context.output_target == openless_core::DictationOutputTarget::Undecided);
             let fault_progress = Arc::clone(&progress);
             let (recording, runtime_errors) = tauri::async_runtime::spawn_blocking(move || {
-                if recording_plan.archive_enabled {
+                if prune_recordings_before_capture {
                     if let Err(error) = crate::persistence::prune_recordings(
                         recording_plan.retention_days,
                         recording_plan.max_entries,
@@ -2612,6 +2683,16 @@ impl AudioRecorder for TauriAudioRecorder {
                         return Err(map_recorder_error(error));
                     }
                 };
+                if recording_plan.archive_required && !archive_active {
+                    recorder.stop();
+                    if let Some(path) = &archive_path {
+                        let _ = std::fs::remove_file(path);
+                    }
+                    return Err(BackendError::new(
+                        BackendErrorCode::Persistence,
+                        "速记录音文件无法创建，已阻止开始录音以避免丢失内容",
+                    ));
+                }
                 let recording = Box::new(TauriActiveRecording {
                     recorder: Some(recorder),
                     archive: archive_path

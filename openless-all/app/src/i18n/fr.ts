@@ -171,6 +171,7 @@ export const fr: typeof zhCN = {
     marketplace: 'Catalogue',
     translation: 'Traduction',
     selectionAsk: 'Questions',
+    quickNote: 'Notes vocales',
     corrections: 'Corrections',
     polishMode: 'Mode de rédaction',
     group: {
@@ -304,6 +305,7 @@ export const fr: typeof zhCN = {
         'Traduction : maintenez Maj pendant que vous parlez pour insérer le texte dans une autre langue',
       selectionAsk:
         'Questions sur la sélection : sélectionnez du texte, puis posez une question à voix haute',
+      quickNote: 'Notes vocales : conservez l’audio et relisez la transcription',
       settings: 'Préférences : raccourcis, fournisseurs, confidentialité et mises à jour',
     },
     footer: {
@@ -510,14 +512,24 @@ export const fr: typeof zhCN = {
     clearFailed: 'Impossible d’effacer l’historique : {{err}}',
     deleteFailed: 'Impossible de supprimer l’entrée : {{err}}',
     copyFailed: 'Impossible de copier : {{err}}',
+    actionMenu: 'Actions d’enregistrement',
     playRecording: 'Lire l’enregistrement',
     audioLoading: 'Chargement…',
     audioDecodeFailed: 'Impossible de décoder l’audio : {{err}}',
     exportRecording: 'Exporter l’enregistrement',
     exportFailed: 'Échec de l’exportation : {{err}}',
+    chooseSaveDirectory: 'Choisir l’emplacement des fichiers transcrits',
+    saveDirectoryPrompt: 'Saisir le dossier des fichiers transcrits',
+    saveDirectory: 'Définir l’emplacement des fichiers transcrits',
+    changeSaveDirectory: 'Modifier l’emplacement des fichiers transcrits',
+    resetSaveDirectory: 'Utiliser l’emplacement par défaut',
+    defaultSaveDirectory: 'Choisir à chaque export',
+    saveDirectoryFailed: 'Impossible de modifier l’emplacement : {{err}}',
     retranscribe: 'Retranscrire',
     retranscribing: 'Transcription…',
     retranscribeFailed: 'Échec de la nouvelle transcription : {{err}}',
+    showRaw: 'Afficher la transcription brute',
+    hideRaw: 'Masquer la transcription brute',
     rawLabel: 'Brut',
     rawEmpty: '(vide)',
     selectHint: 'Sélectionnez une entrée à gauche pour afficher ses détails.',
@@ -533,6 +545,7 @@ export const fr: typeof zhCN = {
     inserted: 'Inséré',
     pasteSent: 'Collage envoyé',
     copiedFallback: 'Copié (utilisez {{shortcut}})',
+    notRequested: 'Insertion non demandée',
     insertFailed: 'Échec de l’insertion',
     confirmClear:
       'Supprimer les {{count}} entrées de l’historique ? Cette action est irréversible.',
@@ -904,6 +917,23 @@ export const fr: typeof zhCN = {
       title: 'Mode d’emploi',
       step2: 'Sélectionnez du texte dans une application.',
     },
+  },
+  quickNote: {
+    kicker: 'Notes vocales',
+    title: 'Notes vocales',
+    desc: 'Audio conservé durablement avec lecture, export, retranscription et réécriture.',
+    recording: 'Enregistrement…',
+    failedTitle: 'La note nécessite une intervention',
+    emptyTitle: 'Enregistrement sans titre',
+    noTranscript: 'Aucune transcription pour le moment.',
+    applyResult: 'Appliquer à la note',
+    applying: 'Application…',
+    shortcutTitle: 'Raccourci de note vocale',
+    shortcutDesc: 'Appuyez une fois pour enregistrer, puis à nouveau pour sauvegarder.',
+    showShortcut: 'Afficher le raccourci de note vocale',
+    repolishNeedsTranscript: 'Retranscrivez d’abord l’audio avant la réécriture.',
+    shareRecording: 'Partager l’audio',
+    cancelledTitle: 'Enregistrement annulé',
   },
   settings: {
     selectionWorkspace: {
@@ -1526,6 +1556,9 @@ export const fr: typeof zhCN = {
       descNoAcc:
         'Tous les raccourcis sont globaux. S’ils ne répondent pas, vérifiez l’état du raccourci global dans Autorisations.',
       startStop: 'Démarrer / arrêter l’enregistrement',
+      quickNote: 'Note rapide',
+      quickNoteDesc:
+        'Appuyez une fois pour démarrer une note audio permanente, puis une seconde fois pour la terminer.',
       cancel: 'Annuler l’enregistrement actuel',
       confirm: 'Confirmer l’insertion de la capsule',
       switchStyle: 'Passer au style précédent',
@@ -1738,6 +1771,23 @@ export const fr: typeof zhCN = {
       androidOverlayCancelSwipeDirectionHint: {
         up: 'Balayez vers le haut pendant l’enregistrement pour annuler sans transcription ni insertion.',
         down: 'Balayez vers le bas pendant l’enregistrement pour annuler sans transcription ni insertion.',
+      },
+      androidOverlayGestureActionsLabel: 'Actions de balayage de la superposition',
+      androidOverlayGestureActionsDesc:
+        'Ces actions s’appliquent pendant l’enregistrement. Un appui normal termine la dictée ; un balayage de note rapide conserve l’audio.',
+      androidOverlayGestureDirection: {
+        up: 'Haut',
+        down: 'Bas',
+        left: 'Gauche',
+        right: 'Droite',
+      },
+      androidOverlayGestureAction: {
+        none: 'Aucune action',
+        quick_note: 'Note rapide',
+        translation: 'Traduction',
+        style_pack: 'Changer de style',
+        cancel: 'Annuler',
+        qa: 'Demander',
       },
       windowsIme: {
         installed: 'Installé. La saisie vocale passe temporairement à l’IME d’OpenLess.',

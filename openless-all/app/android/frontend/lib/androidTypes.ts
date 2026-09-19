@@ -5,6 +5,20 @@ export type AndroidOverlayTrigger = 'background' | 'keyboard' | 'always';
 export type AndroidOverlayActivationMode = 'tap' | 'long_press';
 export type AndroidOverlayLeftSwipeAction = 'translation' | 'style_pack';
 export type AndroidOverlayCancelSwipeDirection = 'up' | 'down';
+export type AndroidOverlayGestureAction =
+  | 'none'
+  | 'quick_note'
+  | 'translation'
+  | 'style_pack'
+  | 'cancel'
+  | 'qa';
+
+export interface AndroidOverlayGestureActions {
+  up: AndroidOverlayGestureAction;
+  down: AndroidOverlayGestureAction;
+  left: AndroidOverlayGestureAction;
+  right: AndroidOverlayGestureAction;
+}
 
 export interface AndroidOverlayStatus {
   permission: 'granted' | 'notGranted' | 'notAndroid';
@@ -64,6 +78,7 @@ export type AndroidPreferenceKey =
   | 'androidOverlayActivationMode'
   | 'androidOverlayLeftSwipeAction'
   | 'androidOverlayCancelSwipeDirection'
+  | 'androidOverlayGestureActions'
   | 'androidOverlaySizeDp';
 
 export function normalizeAndroidOverlayTrigger(

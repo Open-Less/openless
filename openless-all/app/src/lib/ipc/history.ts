@@ -41,3 +41,15 @@ export function retranscribeRecording(sessionId: string): Promise<HistoryRetrans
     updatedEntry: null,
   })) as Promise<HistoryRetranscriptionResult>;
 }
+
+export function applyQuickNoteRepolish(
+  sessionId: string,
+  text: string,
+  stylePackId?: string,
+): Promise<DictationSession> {
+  return invokeOrMock(
+    'apply_quick_note_repolish',
+    { sessionId, text, stylePackId: stylePackId ?? null },
+    () => mockHistory[0],
+  ) as Promise<DictationSession>;
+}

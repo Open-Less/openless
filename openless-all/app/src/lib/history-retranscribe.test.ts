@@ -44,5 +44,13 @@ assert(
   }),
   'multimodal entries should not show an unsupported retranscription action',
 );
+assert(
+  canRetranscribeHistoryEntry({
+    ...archivedEntry,
+    pipelineMode: 'multimodal',
+    source: 'quick_note',
+  }),
+  'quick notes should retain retranscription even when their original pipeline was multimodal',
+);
 
 console.log('history-retranscribe: all assertions passed');

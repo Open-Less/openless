@@ -1548,6 +1548,46 @@ pub(super) fn handle_action_hotkey_pressed(inner: &Arc<Inner>, kind: ActionHotke
     match kind {
         ActionHotkeyKind::SwitchStyle => switch_to_previous_style(inner),
         ActionHotkeyKind::OpenApp => inner.host.show_main_window(),
+        ActionHotkeyKind::QuickNote => {
+            let backend = Arc::clone(&inner.backend);
+            inner.host.spawn(async move {
+                let phase = backend.snapshot().dictation.phase;
+                let result = match phase {
+                    openless_core::DictationPhase::Idle => backend
+                        .start_dictation_with_options(openless_core::DictationStartOptions {
+                            insert_text: false,
+                            output_target: openless_core::DictationOutputTarget::QuickNote,
+                            ..openless_core::DictationStartOptions::default()
+                        })
+                        .await
+                        .map(|_| ()),
+                    openless_core::DictationPhase::Starting
+                    | openless_core::DictationPhase::Recording
+                        if matches!(
+                            backend.dictation_output_target(),
+                            Some(
+                                openless_core::DictationOutputTarget::QuickNote
+                                    | openless_core::DictationOutputTarget::Undecided
+                            )
+                        ) =>
+                    {
+                        backend
+                            .stop_dictation_with_options(
+                                openless_core::DictationStopOptions {
+                                    quick_note: Some(true),
+                                    ..openless_core::DictationStopOptions::default()
+                                },
+                            )
+                            .await
+                            .map(|_| ())
+                    }
+                    _ => Ok(()),
+                };
+                if let Err(error) = result {
+                    log::warn!("[coord] quick note hotkey failed: {error}");
+                }
+            });
+        }
     }
 }
 
@@ -1629,6 +1669,7 @@ pub(super) fn action_hotkey_slot(
     match kind {
         ActionHotkeyKind::SwitchStyle => &inner.switch_style_hotkey,
         ActionHotkeyKind::OpenApp => &inner.open_app_hotkey,
+        ActionHotkeyKind::QuickNote => &inner.quick_note_hotkey,
     }
 }
 
@@ -1640,6 +1681,7 @@ pub(super) fn action_hotkey_binding(
     match kind {
         ActionHotkeyKind::SwitchStyle => target.switch_style,
         ActionHotkeyKind::OpenApp => target.open_app,
+        ActionHotkeyKind::QuickNote => target.quick_note,
     }
 }
 
@@ -1661,6 +1703,7 @@ pub(super) fn action_hotkey_bridge_thread_name(kind: ActionHotkeyKind) -> &'stat
     match kind {
         ActionHotkeyKind::SwitchStyle => "openless-switch-style-hotkey-bridge",
         ActionHotkeyKind::OpenApp => "openless-open-app-hotkey-bridge",
+        ActionHotkeyKind::QuickNote => "openless-quick-note-hotkey-bridge",
     }
 }
 
@@ -2256,6 +2299,7 @@ pub(crate) mod windows_less_computer_tests {
             translation_hotkey: Mutex::new(None),
             switch_style_hotkey: Mutex::new(None),
             open_app_hotkey: Mutex::new(None),
+            quick_note_hotkey: Mutex::new(None),
             style_pack_hotkeys: Mutex::new(std::collections::HashMap::new()),
             selection_polish_hotkey: Mutex::new(None),
             selection_voice_host: Arc::new(Mutex::new(

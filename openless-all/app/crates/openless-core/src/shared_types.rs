@@ -5,16 +5,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::android_types::{
     default_android_insert_strategy, default_android_overlay_activation_mode,
-    default_android_overlay_cancel_swipe_direction, default_android_overlay_left_swipe_action,
-    default_android_overlay_size_dp, default_android_overlay_trigger,
-    normalize_android_insert_strategy, normalize_android_overlay_size_dp,
+    default_android_overlay_cancel_swipe_direction, default_android_overlay_gesture_actions,
+    default_android_overlay_left_swipe_action, default_android_overlay_size_dp,
+    default_android_overlay_trigger, normalize_android_insert_strategy,
+    normalize_android_overlay_size_dp,
 };
 pub use crate::android_types::{
     AndroidAccessibilityDiagnosis, AndroidAccessibilityRecoveryOutcome,
     AndroidAccessibilityRecoveryResult, AndroidAccessibilityState, AndroidAccessibilityStatus,
     AndroidInsertStrategy, AndroidOverlayActivationMode, AndroidOverlayCancelSwipeDirection,
-    AndroidOverlayLeftSwipeAction, AndroidOverlayPermissionState, AndroidOverlayStatus,
-    AndroidOverlayTrigger, AndroidShizukuState, AndroidShizukuStatus,
+    AndroidOverlayGestureAction, AndroidOverlayGestureActions, AndroidOverlayLeftSwipeAction,
+    AndroidOverlayPermissionState, AndroidOverlayStatus, AndroidOverlayTrigger,
+    AndroidShizukuState, AndroidShizukuStatus,
 };
 
 pub use crate::types::{HistorySource, PolishMode};
@@ -441,6 +443,9 @@ pub struct UserPreferences {
     /// 默认 Cmd+Shift+; (macOS) / Ctrl+Shift+; (Windows)。详见 issue #118。
     #[serde(default = "default_qa_hotkey")]
     pub qa_hotkey: Option<ShortcutBinding>,
+    /// 独立的速记快捷键。None = 未配置；启用后按一次开始、再按一次结束。
+    #[serde(default)]
+    pub quick_note_hotkey: Option<ShortcutBinding>,
     /// 选区润色全局快捷键。Windows 默认右 Alt；其它平台默认关闭。
     #[serde(default = "default_selection_polish_hotkey")]
     pub selection_polish_hotkey: Option<ShortcutBinding>,
@@ -667,6 +672,9 @@ pub struct UserPreferences {
     /// 这种「文本档案多 + 录音不占盘」组合下精确控制。
     #[serde(default)]
     pub audio_recording_max_entries: Option<u32>,
+    /// 速记导出的录音文件保存目录。空字符串表示每次导出时弹出保存对话框。
+    #[serde(default)]
+    pub quick_note_export_directory: String,
     /// Style Pack Marketplace HTTP 基地址。空 = 本地开发默认 http://127.0.0.1:8090；
     /// 用户在 Settings 里填生产 URL (如 https://api.openless-marketplace.com)。
     #[serde(default)]
@@ -689,6 +697,9 @@ pub struct UserPreferences {
     /// Android: vertical swipe direction that cancels recording.
     #[serde(default = "default_android_overlay_cancel_swipe_direction")]
     pub android_overlay_cancel_swipe_direction: AndroidOverlayCancelSwipeDirection,
+    /// Android: action assigned to each overlay swipe direction.
+    #[serde(default = "default_android_overlay_gesture_actions")]
+    pub android_overlay_gesture_actions: AndroidOverlayGestureActions,
     /// Android: floating overlay control diameter in dp.
     #[serde(default = "default_android_overlay_size_dp")]
     pub android_overlay_size_dp: u32,
@@ -834,6 +845,8 @@ struct UserPreferencesWire {
     #[serde(default)]
     output_language_preference: OutputLanguagePreference,
     qa_hotkey: Option<ShortcutBinding>,
+    #[serde(default)]
+    quick_note_hotkey: Option<ShortcutBinding>,
     /// Outer `None` means the field was absent in a pre-Selection-Polish file;
     /// `Some(None)` means the user explicitly disabled it.
     #[serde(default, deserialize_with = "deserialize_selection_polish_hotkey")]
@@ -947,6 +960,8 @@ struct UserPreferencesWire {
     #[serde(default)]
     audio_recording_max_entries: Option<u32>,
     #[serde(default)]
+    quick_note_export_directory: String,
+    #[serde(default)]
     marketplace_base_url: String,
     #[serde(default)]
     marketplace_dev_login: String,
@@ -960,6 +975,8 @@ struct UserPreferencesWire {
     android_overlay_left_swipe_action: AndroidOverlayLeftSwipeAction,
     #[serde(default = "default_android_overlay_cancel_swipe_direction")]
     android_overlay_cancel_swipe_direction: AndroidOverlayCancelSwipeDirection,
+    #[serde(default)]
+    android_overlay_gesture_actions: Option<AndroidOverlayGestureActions>,
     #[serde(default = "default_android_overlay_size_dp")]
     android_overlay_size_dp: u32,
     #[serde(default)]
@@ -1045,6 +1062,7 @@ impl Default for UserPreferencesWire {
             chinese_script_preference: prefs.chinese_script_preference,
             output_language_preference: prefs.output_language_preference,
             qa_hotkey: prefs.qa_hotkey,
+            quick_note_hotkey: prefs.quick_note_hotkey,
             selection_polish_hotkey: None,
             selection_polish_style_pack_id: prefs.selection_polish_style_pack_id,
             selection_polish_output_mode: prefs.selection_polish_output_mode,
@@ -1105,6 +1123,7 @@ impl Default for UserPreferencesWire {
             history_max_entries: prefs.history_max_entries,
             record_audio_for_debug: prefs.record_audio_for_debug,
             audio_recording_max_entries: prefs.audio_recording_max_entries,
+            quick_note_export_directory: prefs.quick_note_export_directory.clone(),
             marketplace_base_url: prefs.marketplace_base_url,
             marketplace_dev_login: prefs.marketplace_dev_login,
             android_insert_strategy: prefs.android_insert_strategy,
@@ -1112,6 +1131,7 @@ impl Default for UserPreferencesWire {
             android_overlay_activation_mode: prefs.android_overlay_activation_mode,
             android_overlay_left_swipe_action: prefs.android_overlay_left_swipe_action,
             android_overlay_cancel_swipe_direction: prefs.android_overlay_cancel_swipe_direction,
+            android_overlay_gesture_actions: None,
             android_overlay_size_dp: prefs.android_overlay_size_dp,
             splash_seen_version: prefs.splash_seen_version,
         }
@@ -1161,6 +1181,33 @@ impl<'de> Deserialize<'de> for UserPreferences {
         let update_channel_explicit = wire
             .update_channel_explicit
             .unwrap_or(matches!(wire.update_channel, UpdateChannel::Beta));
+        let android_overlay_gesture_actions =
+            wire.android_overlay_gesture_actions
+                .unwrap_or_else(|| AndroidOverlayGestureActions {
+                    up: if wire.android_overlay_cancel_swipe_direction
+                        == AndroidOverlayCancelSwipeDirection::Up
+                    {
+                        AndroidOverlayGestureAction::Cancel
+                    } else {
+                        AndroidOverlayGestureAction::None
+                    },
+                    down: if wire.android_overlay_cancel_swipe_direction
+                        == AndroidOverlayCancelSwipeDirection::Down
+                    {
+                        AndroidOverlayGestureAction::Cancel
+                    } else {
+                        AndroidOverlayGestureAction::None
+                    },
+                    left: match wire.android_overlay_left_swipe_action {
+                        AndroidOverlayLeftSwipeAction::Translation => {
+                            AndroidOverlayGestureAction::Translation
+                        }
+                        AndroidOverlayLeftSwipeAction::StylePack => {
+                            AndroidOverlayGestureAction::StylePack
+                        }
+                    },
+                    right: AndroidOverlayGestureAction::Qa,
+                });
 
         Ok(Self {
             hotkey: wire.hotkey,
@@ -1210,6 +1257,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             chinese_script_preference: wire.chinese_script_preference,
             output_language_preference: wire.output_language_preference,
             qa_hotkey: wire.qa_hotkey,
+            quick_note_hotkey: wire.quick_note_hotkey,
             selection_polish_hotkey,
             selection_polish_style_pack_id: wire.selection_polish_style_pack_id,
             selection_polish_output_mode: wire.selection_polish_output_mode,
@@ -1275,6 +1323,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             history_max_entries: wire.history_max_entries,
             record_audio_for_debug: wire.record_audio_for_debug,
             audio_recording_max_entries: wire.audio_recording_max_entries,
+            quick_note_export_directory: wire.quick_note_export_directory,
             marketplace_base_url: wire.marketplace_base_url,
             marketplace_dev_login: wire.marketplace_dev_login,
             android_insert_strategy: normalize_android_insert_strategy(
@@ -1284,6 +1333,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             android_overlay_activation_mode: wire.android_overlay_activation_mode,
             android_overlay_left_swipe_action: wire.android_overlay_left_swipe_action,
             android_overlay_cancel_swipe_direction: wire.android_overlay_cancel_swipe_direction,
+            android_overlay_gesture_actions,
             android_overlay_size_dp: normalize_android_overlay_size_dp(
                 wire.android_overlay_size_dp,
             ),
@@ -1563,6 +1613,7 @@ impl Default for UserPreferences {
             chinese_script_preference: ChineseScriptPreference::Auto,
             output_language_preference: OutputLanguagePreference::Auto,
             qa_hotkey: default_qa_hotkey(),
+            quick_note_hotkey: None,
             selection_polish_hotkey: default_selection_polish_hotkey(),
             selection_polish_style_pack_id: default_active_style_pack_id(),
             selection_polish_output_mode: SelectionPolishOutputMode::default(),
@@ -1620,6 +1671,7 @@ impl Default for UserPreferences {
             history_max_entries: None,
             record_audio_for_debug: false,
             audio_recording_max_entries: None,
+            quick_note_export_directory: String::new(),
             marketplace_base_url: String::new(),
             marketplace_dev_login: String::new(),
             android_insert_strategy: default_android_insert_strategy(),
@@ -1628,6 +1680,7 @@ impl Default for UserPreferences {
             android_overlay_left_swipe_action: default_android_overlay_left_swipe_action(),
             android_overlay_cancel_swipe_direction: default_android_overlay_cancel_swipe_direction(
             ),
+            android_overlay_gesture_actions: default_android_overlay_gesture_actions(),
             android_overlay_size_dp: default_android_overlay_size_dp(),
             splash_seen_version: String::new(),
         }

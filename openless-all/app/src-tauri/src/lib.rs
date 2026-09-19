@@ -220,6 +220,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::read_audio_recording,
             commands::export_audio_recording,
             commands::retranscribe_recording,
+            commands::apply_quick_note_repolish,
             commands::marketplace_list,
             commands::marketplace_detail,
             commands::marketplace_install,
@@ -325,6 +326,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::set_translation_hotkey,
             commands::set_switch_style_hotkey,
             commands::set_open_app_hotkey,
+            commands::set_quick_note_hotkey,
             commands::set_style_pack_hotkeys,
             commands::qa_window_dismiss,
             commands::qa_toggle_recording,
@@ -468,6 +470,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::read_audio_recording,
             $crate::commands::export_audio_recording,
             $crate::commands::retranscribe_recording,
+            $crate::commands::apply_quick_note_repolish,
             $crate::commands::marketplace_list,
             $crate::commands::marketplace_detail,
             $crate::commands::marketplace_install,
@@ -885,6 +888,7 @@ fn run_desktop() {
                 coordinator.start_translation_hotkey_listener();
                 coordinator.start_switch_style_hotkey_listener();
                 coordinator.start_open_app_hotkey_listener();
+                coordinator.start_quick_note_hotkey_listener();
                 coordinator.start_style_pack_hotkey_listeners();
             }
             #[cfg(target_os = "macos")]
@@ -908,6 +912,7 @@ fn run_desktop() {
                 coordinator.stop_translation_hotkey_listener();
                 coordinator.stop_switch_style_hotkey_listener();
                 coordinator.stop_open_app_hotkey_listener();
+                coordinator.stop_quick_note_hotkey_listener();
                 coordinator.stop_style_pack_hotkey_listeners();
                 let backend = coordinator.backend();
                 tauri::async_runtime::spawn(async move {

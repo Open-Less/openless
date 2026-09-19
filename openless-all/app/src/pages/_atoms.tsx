@@ -189,6 +189,9 @@ interface BtnProps {
   variant?: BtnVariant;
   size?: BtnSize;
   icon?: string;
+  ariaLabel?: string;
+  ariaExpanded?: boolean;
+  title?: string;
   style?: CSSProperties;
   onClick?: () => void;
   disabled?: boolean;
@@ -199,6 +202,9 @@ export function Btn({
   variant = 'ghost',
   size = 'md',
   icon,
+  ariaLabel,
+  ariaExpanded,
+  title,
   style,
   onClick,
   disabled = false,
@@ -233,6 +239,9 @@ export function Btn({
     <button
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
+      aria-label={ariaLabel}
+      aria-expanded={ariaExpanded}
+      title={title}
       style={{
         display: 'inline-flex',
         alignItems: 'center',

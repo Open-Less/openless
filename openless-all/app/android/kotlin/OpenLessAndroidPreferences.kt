@@ -14,6 +14,7 @@ object OpenLessAndroidPreferences {
     private const val KEY_OVERLAY_ACTIVATION_MODE = "androidOverlayActivationMode"
     private const val KEY_OVERLAY_LEFT_SWIPE_ACTION = "androidOverlayLeftSwipeAction"
     private const val KEY_OVERLAY_CANCEL_SWIPE_DIRECTION = "androidOverlayCancelSwipeDirection"
+    private const val KEY_OVERLAY_GESTURE_ACTIONS = "androidOverlayGestureActions"
     private const val KEY_OVERLAY_SIZE_DP = "androidOverlaySizeDp"
     private const val DEFAULT_OVERLAY_SIZE_DP = 72
     private const val MIN_OVERLAY_SIZE_DP = 48
@@ -22,6 +23,8 @@ object OpenLessAndroidPreferences {
     private val VALID_OVERLAY_ACTIVATION_MODES = setOf("tap", "long_press")
     private val VALID_OVERLAY_LEFT_SWIPE_ACTIONS = setOf("translation", "style_pack")
     private val VALID_OVERLAY_CANCEL_SWIPE_DIRECTIONS = setOf("up", "down")
+    private val VALID_OVERLAY_GESTURE_ACTIONS =
+        setOf("none", "quick_note", "translation", "style_pack", "cancel", "qa")
 
     fun overlayTriggerMode(context: Context): String? {
         val value = readPreferenceString(context, KEY_OVERLAY_TRIGGER) ?: return null
@@ -52,6 +55,30 @@ object OpenLessAndroidPreferences {
         return readPreferenceString(context, KEY_OVERLAY_CANCEL_SWIPE_DIRECTION)?.takeIf {
             it in VALID_OVERLAY_CANCEL_SWIPE_DIRECTIONS
         } ?: "up"
+    }
+
+    fun overlayGestureAction(context: Context, direction: String): String {
+        for (file in preferenceFiles(context).distinctBy { it.absolutePath }) {
+            if (!file.isFile) continue
+            try {
+                val actions = JSONObject(file.readText()).optJSONObject(KEY_OVERLAY_GESTURE_ACTIONS)
+                val value = actions?.optString(direction, "")?.takeIf {
+                    it in VALID_OVERLAY_GESTURE_ACTIONS
+                }
+                if (value != null) return value
+            } catch (error: Throwable) {
+                Log.w(TAG, "read gesture actions ${file.absolutePath} failed", error)
+            }
+        }
+        val legacyLeft = overlayLeftSwipeAction(context)
+        val legacyCancel = overlayCancelSwipeDirection(context)
+        return when (direction) {
+            "up" -> if (legacyCancel == "up") "cancel" else "none"
+            "down" -> if (legacyCancel == "down") "cancel" else "none"
+            "left" -> legacyLeft
+            "right" -> "qa"
+            else -> "none"
+        }
     }
 
     fun overlaySizeDp(context: Context): Int {

@@ -71,6 +71,7 @@ export let mockSettings: UserPreferences = {
   workingLanguages: ['简体中文'],
   translationTargetLanguage: '',
   qaHotkey: defaultQaShortcut(),
+  quickNoteHotkey: null,
   selectionPolishStylePackId: 'builtin.light',
   selectionPolishOutputMode: 'directReplace',
   selectionPolishHotkey: defaultSelectionPolishShortcut(),
@@ -128,6 +129,7 @@ export let mockSettings: UserPreferences = {
   historyMaxEntries: null,
   recordAudioForDebug: false,
   audioRecordingMaxEntries: null,
+  quickNoteExportDirectory: '',
   marketplaceBaseUrl: 'https://apic.openless.top',
   marketplaceDevLogin: '',
   remoteInputEnabled: false,
@@ -139,6 +141,12 @@ export let mockSettings: UserPreferences = {
   androidOverlayActivationMode: 'tap',
   androidOverlayLeftSwipeAction: 'translation',
   androidOverlayCancelSwipeDirection: 'up',
+  androidOverlayGestureActions: {
+    up: 'cancel',
+    down: 'none',
+    left: 'translation',
+    right: 'qa',
+  },
   androidOverlaySizeDp: 72,
 };
 

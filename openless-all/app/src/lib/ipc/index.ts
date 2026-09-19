@@ -65,6 +65,7 @@ export {
   getActivityStats,
   readAudioRecording,
   retranscribeRecording,
+  applyQuickNoteRepolish,
 } from './history';
 
 // vocab
@@ -140,6 +141,7 @@ export {
   setTranslationHotkey,
   setSwitchStyleHotkey,
   setOpenAppHotkey,
+  setQuickNoteHotkey,
   setStylePackHotkeys,
   setShortcutRecordingActive,
 } from './hotkeys';

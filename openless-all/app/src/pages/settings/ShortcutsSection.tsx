@@ -16,6 +16,7 @@ import {
   setDictationHotkey,
   setOpenAppHotkey,
   setQaHotkey,
+  setQuickNoteHotkey,
   setStylePackHotkeys,
   setSwitchStyleHotkey,
   setTranslationHotkey,
@@ -149,6 +150,25 @@ export function ShortcutsSection() {
             const binding = defaultQaShortcut();
             await setQaHotkey(binding);
             await savePrefs({ ...prefs, qaHotkey: binding });
+          }}
+        />
+      </SettingRow>
+      <SettingRow
+        label={t('settings.shortcuts.quickNote', 'Quick note')}
+        desc={t(
+          'settings.shortcuts.quickNoteDesc',
+          'Press once to start a permanent audio note, and again to finish it.',
+        )}
+      >
+        <ShortcutRecorder
+          value={prefs.quickNoteHotkey}
+          onSave={async (binding) => {
+            await setQuickNoteHotkey(binding);
+            await savePrefs({ ...prefs, quickNoteHotkey: binding });
+          }}
+          onDisable={async () => {
+            await setQuickNoteHotkey(null);
+            await savePrefs({ ...prefs, quickNoteHotkey: null });
           }}
         />
       </SettingRow>

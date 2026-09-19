@@ -238,6 +238,18 @@ fn spawn_stop_dictation_with_translation(translation: bool) {
     });
 }
 
+fn spawn_stop_dictation_as_quick_note() {
+    let Some(backend) = CORE_BACKEND.get().cloned() else {
+        log::warn!("[android-native] core backend unavailable");
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = stop_core_dictation_as_quick_note(&backend).await {
+            log::warn!("[android-native] stop_quick_note failed: {error}");
+        }
+    });
+}
+
 fn spawn_cancel_dictation() {
     let Some(backend) = CORE_BACKEND.get().cloned() else {
         log::warn!("[android-native] core backend unavailable");
@@ -265,6 +277,7 @@ async fn start_core_dictation(
     backend
         .start_dictation_with_options(DictationStartOptions {
             translation_requested: translation,
+            output_target: openless_core::DictationOutputTarget::Undecided,
             ..DictationStartOptions::default()
         })
         .await
@@ -279,6 +292,18 @@ async fn stop_core_dictation(
     backend
         .stop_dictation_with_options(DictationStopOptions {
             translation_requested: translation,
+            quick_note: Some(false),
+        })
+        .await
+        .map(|_| ())
+}
+
+async fn stop_core_dictation_as_quick_note(backend: &OpenLessBackend) -> Result<(), BackendError> {
+    ensure_core_started(backend).await?;
+    backend
+        .stop_dictation_with_options(DictationStopOptions {
+            translation_requested: None,
+            quick_note: Some(true),
         })
         .await
         .map(|_| ())
@@ -386,6 +411,14 @@ mod jni_exports {
         translation: jboolean,
     ) {
         spawn_stop_dictation_with_translation(translation != 0);
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeStopDictationAsQuickNote(
+        _env: *mut JNIEnv,
+        _class: JClass,
+    ) {
+        spawn_stop_dictation_as_quick_note();
     }
 
     #[no_mangle]

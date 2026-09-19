@@ -469,6 +469,7 @@ struct Inner {
     translation_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     switch_style_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     open_app_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
+    quick_note_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     /// 风格包直达快捷键监听器（issue #759）：pack_id → 实际绑定 + monitor。
     /// 绑定元数据让 supervisor 能区分「同一 pack_id 但按键已变化」，并在任何
     /// 非事务设置路径注册失败后继续重试到实际状态与 prefs 一致。
@@ -517,6 +518,7 @@ struct Inner {
 enum ActionHotkeyKind {
     SwitchStyle,
     OpenApp,
+    QuickNote,
 }
 
 impl Coordinator {
@@ -621,6 +623,7 @@ impl Coordinator {
                 translation_hotkey: Mutex::new(None),
                 switch_style_hotkey: Mutex::new(None),
                 open_app_hotkey: Mutex::new(None),
+                quick_note_hotkey: Mutex::new(None),
                 style_pack_hotkeys: Mutex::new(std::collections::HashMap::new()),
                 #[cfg(not(mobile))]
                 selection_polish_hotkey: Mutex::new(None),
@@ -730,6 +733,7 @@ impl Coordinator {
             translation_hotkey: Mutex::new(None),
             switch_style_hotkey: Mutex::new(None),
             open_app_hotkey: Mutex::new(None),
+            quick_note_hotkey: Mutex::new(None),
             style_pack_hotkeys: Mutex::new(std::collections::HashMap::new()),
             #[cfg(not(mobile))]
             selection_polish_hotkey: Mutex::new(None),
@@ -1036,6 +1040,18 @@ impl Coordinator {
         take_action_hotkey_on_main_thread(&self.inner, ActionHotkeyKind::OpenApp);
     }
 
+    pub fn start_quick_note_hotkey_listener(&self) {
+        let inner = Arc::clone(&self.inner);
+        std::thread::Builder::new()
+            .name("openless-quick-note-hotkey-supervisor".into())
+            .spawn(move || action_hotkey_supervisor_loop(inner, ActionHotkeyKind::QuickNote))
+            .ok();
+    }
+
+    pub fn stop_quick_note_hotkey_listener(&self) {
+        take_action_hotkey_on_main_thread(&self.inner, ActionHotkeyKind::QuickNote);
+    }
+
     /// 启动风格包直达快捷键监听（issue #759）。supervisor 线程等 AppHandle 就绪后
     /// 按 prefs 全量注册，个别注册失败按 action hotkey 的节奏重试。
     pub fn start_style_pack_hotkey_listeners(&self) {
@@ -1254,6 +1270,10 @@ impl Coordinator {
 
     pub(crate) fn update_open_app_hotkey_binding(&self) {
         self.update_action_hotkey_binding(ActionHotkeyKind::OpenApp);
+    }
+
+    pub(crate) fn update_quick_note_hotkey_binding(&self) {
+        self.update_action_hotkey_binding(ActionHotkeyKind::QuickNote);
     }
 
     fn update_action_hotkey_binding(&self, kind: ActionHotkeyKind) {
@@ -1492,6 +1512,9 @@ impl Coordinator {
         }
         if previous.open_app != next.open_app {
             self.update_open_app_hotkey_binding();
+        }
+        if previous.quick_note != next.quick_note {
+            self.update_quick_note_hotkey_binding();
         }
         if previous.coding_agent_enabled != next.coding_agent_enabled
             || previous.coding_agent_voice != next.coding_agent_voice

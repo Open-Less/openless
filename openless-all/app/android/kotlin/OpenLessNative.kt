@@ -20,6 +20,8 @@ object OpenLessNative {
 
     @JvmStatic external fun nativeStopDictationWithTranslation(translation: Boolean)
 
+    @JvmStatic external fun nativeStopDictationAsQuickNote()
+
     @JvmStatic external fun nativeCancelDictation()
 
     @JvmStatic external fun nativeBackendSnapshot(): String
