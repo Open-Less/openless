@@ -32,6 +32,7 @@ const ASR_PROVIDER_TYPES: &[(&str, &str)] = &[
     ("siliconflow", "asrSiliconflow"),
     ("stepfun", "asrStepfun"),
     ("zhipu", "asrZhipu"),
+    ("minimax", "asrMinimax"),
     ("groq", "asrGroq"),
     ("whisper", "asrWhisper"),
     ("openrouter", "asrOpenrouter"),
@@ -353,6 +354,7 @@ fn static_models(kind: ProviderKind, provider_type: &str) -> &'static [&'static 
         (ProviderKind::Asr, "xiaomi-mimo-asr") => &[crate::asr::mimo::DEFAULT_MODEL],
         (ProviderKind::Asr, "bailian-fun-asr-flash") => DASHSCOPE_MODELS,
         (ProviderKind::Asr, "elevenlabs") => &[crate::asr::elevenlabs::DEFAULT_MODEL],
+        (ProviderKind::Asr, "minimax") => &["asr-1.0"],
         (ProviderKind::Llm, crate::polish::CODEX_OAUTH_PROVIDER_ID) => &[
             crate::polish::CODEX_DEFAULT_MODEL,
             "gpt-5.3-codex",
@@ -555,6 +557,7 @@ pub fn default_asr_endpoint(provider_type: &str) -> Option<&'static str> {
         "siliconflow" => Some("https://api.siliconflow.cn/v1"),
         "stepfun" => Some("https://api.stepfun.com/v1"),
         "zhipu" => Some("https://open.bigmodel.cn/api/paas/v4"),
+        "minimax" => Some("https://api.minimaxi.com/v1"),
         "groq" => Some("https://api.groq.com/openai/v1"),
         "whisper" => Some("https://api.openai.com/v1"),
         "openrouter" => Some("https://openrouter.ai/api/v1"),
@@ -574,6 +577,7 @@ pub fn default_asr_model(provider_type: &str) -> Option<&'static str> {
         "siliconflow" => Some("FunAudioLLM/SenseVoiceSmall"),
         "stepfun" => Some("stepaudio-2.5-asr"),
         "zhipu" => Some("glm-asr-2512"),
+        "minimax" => Some("asr-1.0"),
         "groq" => Some("whisper-large-v3-turbo"),
         "whisper" => Some("whisper-1"),
         "openrouter" => Some("openai/whisper-large-v3-turbo"),
@@ -787,7 +791,7 @@ pub fn is_tencent_cloud_provider(id: &str) -> bool {
 pub fn is_whisper_compatible_provider(id: &str) -> bool {
     matches!(
         id,
-        "whisper" | "siliconflow" | "zhipu" | "groq" | "openrouter" | "stepfun" | "zenmux"
+        "whisper" | "siliconflow" | "zhipu" | "groq" | "openrouter" | "stepfun" | "zenmux" | "minimax"
     ) || id == OPENAI_COMPATIBLE_ASR_PROVIDER_ID
 }
 
@@ -1257,6 +1261,26 @@ mod tests {
         );
         assert_eq!(llm.default_request_format, None);
         assert!(llm.supported_request_formats.is_empty());
+    }
+
+    #[test]
+    fn minimax_asr_supplies_defaults_and_whisper_compatibility() {
+        assert!(crate::cloud_providers::SHARED_CLOUD_ASR_PROVIDER_TYPES.contains(&"minimax"));
+        let asr = provider_descriptor(ProviderKind::Asr, "minimax").unwrap();
+        assert_eq!(asr.label_key, "asrMinimax");
+        assert_eq!(
+            asr.default_endpoint.as_deref(),
+            Some("https://api.minimaxi.com/v1")
+        );
+        assert_eq!(asr.default_model.as_deref(), Some("asr-1.0"));
+        assert_eq!(asr.static_models, vec!["asr-1.0"]);
+        assert_eq!(asr.auth_requirement, AuthRequirement::ApiKey);
+        assert_eq!(asr.validation_probe, ValidationProbe::AsrSilence);
+        assert!(is_whisper_compatible_provider("minimax"));
+        assert_eq!(
+            active_asr_provider_kind("minimax"),
+            ActiveAsrProviderKind::WhisperCompatible
+        );
     }
 
     #[test]

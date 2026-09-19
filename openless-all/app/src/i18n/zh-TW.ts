@@ -1240,6 +1240,7 @@ export const zhTW: typeof zhCN = {
         asrSiliconflow: '硅基流動 SenseVoice',
         asrStepfun: '階躍星辰 StepAudio',
         asrZhipu: '智譜 GLM-ASR',
+        asrMinimax: 'MiniMax ASR',
         asrGroq: 'Groq Whisper-large-v3',
         asrWhisper: 'OpenAI Whisper（兼容）',
         asrOpenrouter: 'OpenRouter Whisper',

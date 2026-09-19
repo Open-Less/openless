@@ -60,6 +60,7 @@ pub const SHARED_CLOUD_ASR_PROVIDER_TYPES: &[&str] = &[
     "openrouter",
     "orcarouter",
     "zenmux",
+    "minimax",
     "openai-compatible",
     "xiaomi-mimo-asr",
     "iflytek",
@@ -676,6 +677,9 @@ async fn build_cloud_transcription_session(
                 ),
             )
             .with_request_format(crate::provider_rules::whisper_request_format(provider_type));
+            if provider_type == "minimax" {
+                provider = provider.with_endpoint_path("/speech_to_text");
+            }
             if crate::provider_rules::whisper_uses_hotwords(provider_type) {
                 provider = provider.with_hotwords(context.polish.hotwords.clone());
             }

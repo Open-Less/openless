@@ -123,6 +123,20 @@
     },
     {
       "authRequirement": "api_key",
+      "defaultEndpoint": "https://api.minimaxi.com/v1",
+      "defaultModel": "asr-1.0",
+      "defaultRequestFormat": null,
+      "kind": "asr",
+      "labelKey": "asrMinimax",
+      "providerType": "minimax",
+      "staticModels": [
+        "asr-1.0"
+      ],
+      "supportedRequestFormats": [],
+      "validationProbe": "asr_silence"
+    },
+    {
+      "authRequirement": "api_key",
       "defaultEndpoint": "https://api.groq.com/openai/v1",
       "defaultModel": "whisper-large-v3-turbo",
       "defaultRequestFormat": null,
@@ -220,6 +234,18 @@
       "validationProbe": "asr_silence_allows_no_final"
     },
     {
+      "authRequirement": "tencent_cloud",
+      "defaultEndpoint": null,
+      "defaultModel": "Hy-ASR-3.0-preview",
+      "defaultRequestFormat": null,
+      "kind": "asr",
+      "labelKey": "asrTencentCloud",
+      "providerType": "tencent-cloud",
+      "staticModels": [],
+      "supportedRequestFormats": [],
+      "validationProbe": "asr_silence_allows_no_final"
+    },
+    {
       "authRequirement": "none",
       "defaultEndpoint": null,
       "defaultModel": null,
@@ -301,7 +327,7 @@
       "providerType": "apple-speech",
       "staticModels": [],
       "supportedRequestFormats": [],
-      "validationProbe": "unsupported"
+      "validationProbe": "asr_native_silence"
     }
   ],
   "llm": [
@@ -310,6 +336,18 @@
       "defaultEndpoint": "https://ark.cn-beijing.volces.com/api/v3",
       "defaultModel": "deepseek-v3-2",
       "defaultRequestFormat": "chat_completions",
+      "endpointPresets": [
+        {
+          "endpoint": "https://ark.cn-beijing.volces.com/api/plan/v3",
+          "modelsUrl": "https://console.volcengine.com/ark/subscription/agent-plan",
+          "name": "Agent Plan"
+        },
+        {
+          "endpoint": "https://ark.cn-beijing.volces.com/api/coding/v3",
+          "modelsUrl": "https://console.volcengine.com/ark/subscription/coding-plan",
+          "name": "Coding Plan"
+        }
+      ],
       "kind": "llm",
       "labelKey": "ark",
       "providerType": "ark",
@@ -556,6 +594,18 @@
         "responses",
         "messages"
       ],
+      "validationProbe": "llm_text"
+    },
+    {
+      "authRequirement": "api_key_unless_custom_endpoint",
+      "defaultEndpoint": "https://tokenhub.tencentmaas.com/v1",
+      "defaultModel": "hy3",
+      "defaultRequestFormat": null,
+      "kind": "llm",
+      "labelKey": "tencentTokenHub",
+      "providerType": "tencentTokenHub",
+      "staticModels": [],
+      "supportedRequestFormats": [],
       "validationProbe": "llm_text"
     },
     {

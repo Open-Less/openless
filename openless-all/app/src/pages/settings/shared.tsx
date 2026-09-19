@@ -262,6 +262,7 @@ export const ASR_LABELS = [
   { id: 'siliconflow', nameKey: 'asrSiliconflow' },
   { id: 'stepfun', nameKey: 'asrStepfun' },
   { id: 'zhipu', nameKey: 'asrZhipu' },
+  { id: 'minimax', nameKey: 'asrMinimax' },
   { id: 'groq', nameKey: 'asrGroq' },
   { id: 'whisper', nameKey: 'asrWhisper' },
   { id: 'openrouter', nameKey: 'asrOpenrouter' },
