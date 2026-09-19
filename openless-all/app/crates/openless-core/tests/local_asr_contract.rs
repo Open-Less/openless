@@ -45,6 +45,10 @@ fn public_local_asr_preferences_keep_legacy_normalization_semantics() {
         LocalAsrMirror::HfMirror
     );
     assert_eq!(
+        LocalAsrMirror::from_legacy("modelscope"),
+        LocalAsrMirror::Modelscope
+    );
+    assert_eq!(
         LocalAsrMirror::from_legacy("unexpected"),
         LocalAsrMirror::Huggingface
     );

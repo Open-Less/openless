@@ -2215,9 +2215,10 @@ export const fr: typeof zhCN = {
     groupOther: 'Autres',
     mirrorLabel: 'Serveur de téléchargement',
     mirrorDesc:
-      'huggingface.co est la source officielle ; hf-mirror.com est un miroir communautaire souvent plus accessible depuis la Chine continentale.',
+      'Choisissez HuggingFace, le miroir communautaire ou les dépôts ModelScope officiels pour les modèles pris en charge.',
     mirrorHuggingface: 'HuggingFace officiel (huggingface.co)',
     mirrorHfMirror: 'Miroir pour la Chine continentale (hf-mirror.com)',
+    mirrorModelscope: 'ModelScope officiel (modelscope.cn)',
     activeBadge: 'En cours d’utilisation',
     downloadedBadge: 'Téléchargé',
     notDownloadedBadge: 'Non téléchargé',

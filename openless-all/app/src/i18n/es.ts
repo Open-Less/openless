@@ -2186,9 +2186,10 @@ export const es: typeof zhCN = {
     groupOther: 'Otros',
     mirrorLabel: 'Servidor de descarga',
     mirrorDesc:
-      'huggingface.co es el origen oficial; hf-mirror.com es una réplica de la comunidad que suele funcionar mejor en China continental.',
+      'Elige HuggingFace, la réplica comunitaria o los repositorios oficiales de ModelScope para modelos compatibles.',
     mirrorHuggingface: 'HuggingFace oficial (huggingface.co)',
     mirrorHfMirror: 'Réplica para China continental (hf-mirror.com)',
+    mirrorModelscope: 'ModelScope oficial (modelscope.cn)',
     activeBadge: 'En uso',
     downloadedBadge: 'Descargado',
     notDownloadedBadge: 'Sin descargar',

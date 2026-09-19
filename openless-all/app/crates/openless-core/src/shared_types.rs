@@ -538,7 +538,7 @@ pub struct UserPreferences {
     /// 设置页测试 Whisper 时覆盖 Qwen 的模型选择。
     #[serde(default = "default_local_whisper_model")]
     pub local_whisper_active_model: String,
-    /// 本地模型下载源镜像（"huggingface" / "hf-mirror"）。
+    /// 本地模型下载源（"huggingface" / "hf-mirror" / "modelscope"）。
     #[serde(default = "default_local_asr_mirror")]
     pub local_asr_mirror: String,
     /// 本地 ASR 引擎在内存中的保留时长（秒）。0 = 说完话即释放；

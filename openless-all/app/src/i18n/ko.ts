@@ -2088,9 +2088,10 @@ export const ko: typeof zhCN = {
     groupOther: '기타',
     mirrorLabel: '다운로드 미러',
     mirrorDesc:
-      '공식 소스는 해외 네트워크에서 안정적; hf-mirror.com 은 중국 커뮤니티가 운영하는 미러.',
+      'HuggingFace, 커뮤니티 미러 또는 지원 모델의 공식 ModelScope 저장소를 선택합니다.',
     mirrorHuggingface: 'HuggingFace 공식 (huggingface.co)',
     mirrorHfMirror: '중국 미러 (hf-mirror.com)',
+    mirrorModelscope: 'ModelScope 공식 (modelscope.cn)',
     activeBadge: '사용 중',
     downloadedBadge: '다운로드됨',
     notDownloadedBadge: '다운로드되지 않음',
