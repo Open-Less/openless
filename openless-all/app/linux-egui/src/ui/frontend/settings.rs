@@ -80,7 +80,6 @@ pub fn settings_overlay(
         (body.width() - 40.0).max(320.0).min(960.0),
         (body.height() - 40.0).max(280.0).min(680.0),
     );
-    let center_offset = body.center() - ctx.content_rect().center();
 
     let backdrop_layer = egui::LayerId::new(
         egui::Order::Foreground,
@@ -111,7 +110,11 @@ pub fn settings_overlay(
 
     egui::Area::new(egui::Id::new("openless-settings-modal"))
         .order(egui::Order::Tooltip)
-        .anchor(egui::Align2::CENTER_CENTER, center_offset)
+        // 用**显式位置**而不是 anchor + offset：anchor 按上一帧的面积（含阴影偏移）
+        // 定位，实测卡片稳定落在 body_rect 垂直中心下方 19.5px，且窗口缩放的首帧
+        // 会跳一下（用户报「缩放窗口时并不是始终居中」）。直接由 body.center()
+        // 算卡片左上角，每帧都精确居中。
+        .fixed_pos(body.center() - size * 0.5)
         .constrain_to(body)
         .show(ctx, |ui| {
             ui.set_clip_rect(body.intersect(ui.clip_rect()));
@@ -129,53 +132,9 @@ pub fn settings_overlay(
                 .show(ui, |ui| {
                     ui.set_min_size(size);
                     ui.set_max_size(size);
-                    let lang = vm.lang;
-                    // Modal header: title, then the auto-save hint and close on
-                    // the right, above the rail / content split.
-                    egui::Frame::NONE
-                        .inner_margin(egui::Margin::symmetric(20, 14))
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    egui::RichText::new(tr_l10n(lang, "nav.settings"))
-                                        .size(21.0)
-                                        .strong()
-                                        .color(theme::INK),
-                                );
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        if ui
-                                            .add(
-                                                egui::Button::new(
-                                                    egui::RichText::new("×")
-                                                        .size(20.0)
-                                                        .color(theme::INK_3),
-                                                )
-                                                .fill(theme::SURFACE_2)
-                                                .stroke(egui::Stroke::new(0.7, theme::LINE))
-                                                .corner_radius(egui::CornerRadius::same(8))
-                                                .min_size(egui::vec2(28.0, 28.0)),
-                                            )
-                                            .clicked()
-                                        {
-                                            actions.push(FrontendAction::CloseSettings);
-                                        }
-                                        ui.add_space(10.0);
-                                        ui.label(
-                                            egui::RichText::new(tr_l10n(
-                                                lang,
-                                                "modal.auto_save_hint",
-                                            ))
-                                            .size(11.0)
-                                            .color(theme::INK_4),
-                                        );
-                                    },
-                                );
-                            });
-                        });
-                    ui.separator();
-                    let body_height = (size.y - 58.0).max(120.0);
+                    // Tauri SettingsModal：桌面端没有横跨两栏的标题栏——左侧栏顶端就是
+                    // 搜索框，右侧内容区顶端才是标题 + 自动保存提示 + 关闭按钮。
+                    let body_height = size.y.max(120.0);
                     ui.horizontal(|ui| {
                         ui.allocate_ui_with_layout(
                             egui::vec2(RAIL_WIDTH, body_height),
@@ -193,8 +152,11 @@ pub fn settings_overlay(
                             },
                         );
                         ui.separator();
+                        // 两列之间 egui 还会插入 item_spacing，分隔线自身也占宽：不减掉它们
+                        // 内容就比 size 宽十几像素，卡片会被撑宽、`fixed_pos` 居中就偏（实测 11px）。
+                        let gutters = ui.spacing().item_spacing.x * 3.0;
                         ui.allocate_ui_with_layout(
-                            egui::vec2((size.x - RAIL_WIDTH - 1.0).max(0.0), body_height),
+                            egui::vec2((size.x - RAIL_WIDTH - gutters).max(0.0), body_height),
                             egui::Layout::top_down(egui::Align::Min),
                             |ui| {
                                 ui.set_min_height(body_height);
@@ -547,6 +509,23 @@ fn panel(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
                             .color(theme::INK),
                     );
                 }
+                // Tauri：自动保存提示与关闭按钮属于**右栏自己的顶栏**（跟标题同一行，
+                // 不再横跨左栏）；标题占据剩余宽度，二者靠右。
+                let close = ui
+                    .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let close = close_button(ui);
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new(tr_l10n(lang, "modal.auto_save_hint"))
+                                .size(12.0)
+                                .color(theme::INK_3),
+                        );
+                        close
+                    })
+                    .inner;
+                if close {
+                    actions.push(FrontendAction::CloseSettings);
+                }
             });
             ui.add_space(4.0);
             ui.label(
@@ -605,11 +584,20 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
         tr_l10n(lang, "settings.recording.title"),
         tr_l10n(lang, "settings.recording.desc"),
         |ui| {
-            text_row(
+            // #2：这一行在 Tauri 里就是 ShortcutRecorder（可展开录制/停用），不是只读
+            // 文本——用户反馈「第一个录音快捷键那里不能展开改快捷键选项」。
+            shortcut_row(
                 ui,
-                tr_l10n(lang, "settings.recording.hotkey_label"),
-                tr_l10n(lang, "settings.recording.combo_disable_hint"),
-                &vm.dictation_hotkey,
+                vm,
+                actions,
+                &ShortcutRow {
+                    field: ShortcutField::Dictation,
+                    label: tr_l10n(lang, "settings.recording.hotkey_label"),
+                    desc: tr_l10n(lang, "settings.recording.combo_disable_hint"),
+                    value: vm.dictation_hotkey.clone(),
+                    can_disable: false,
+                    hint: recording_mode_hint(lang, vm.settings.recording_mode),
+                },
             );
             let modes = [
                 tr_l10n(lang, "settings.recording.mode_toggle"),
@@ -629,6 +617,9 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     ));
                 },
             );
+            // #6「默认录音方式下面的提示语」：录音方式这张卡片的本行说明也要真的
+            // 画出来（Tauri `modeDesc`），不能只藏在「?」里。
+            hint_line(ui, tr_l10n(lang, "settings.recording.mode_desc"));
             // 「静音后自动停止」只在切换式模式下可用（Tauri 同样只在该模式渲染）。
             if vm.settings.recording_mode == 0 {
                 toggle_row(
@@ -690,6 +681,44 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     ));
                 },
             );
+            // #3：设备列表读失败或一台设备都没有时必须说明（Tauri
+            // `microphoneLoadError`），否则「只有系统默认」看起来像功能没做。
+            if let Some(error) = vm.settings.microphone_error.clone() {
+                hint_line(
+                    ui,
+                    &fmt_l10n(lang, "settings.recording.microphone_load_error", &[&error]),
+                );
+            } else if vm.settings.microphone_options.is_empty() {
+                hint_line(ui, tr_l10n(lang, "onboarding.mic_no_device_hint"));
+            }
+            // #4：录音胶囊开关与样式（Tauri `capsuleLabel` / `capsuleStyleLabel`）。
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.recording.capsule_label"),
+                tr_l10n(lang, "settings.recording.capsule_desc"),
+                vm.settings.show_capsule,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(SettingsField::ShowCapsule));
+                },
+            );
+            let capsule_styles = [
+                tr_l10n(lang, "settings.recording.capsule_style_siri"),
+                tr_l10n(lang, "settings.recording.capsule_style_classic"),
+                tr_l10n(lang, "settings.recording.capsule_style_typeless"),
+            ];
+            combo_index_row(
+                ui,
+                tr_l10n(lang, "settings.recording.capsule_style_label"),
+                "",
+                vm.settings.capsule_style.min(2),
+                &capsule_styles,
+                |val| {
+                    actions.push(FrontendAction::SettingsCombo(
+                        SettingsComboField::CapsuleStyle,
+                        val,
+                    ));
+                },
+            );
             toggle_row(
                 ui,
                 tr_l10n(lang, "settings.recording.mute_during_recording_label"),
@@ -701,13 +730,29 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     ));
                 },
             );
-            toggle_row(
+            // #5：提示音开关旁的「试听」按钮（Tauri `audioCuePreview`）。
+            row_desc(
                 ui,
                 tr_l10n(lang, "settings.recording.audio_cue_label"),
                 tr_l10n(lang, "settings.recording.audio_cue_desc"),
-                vm.settings.audio_cue,
-                || {
-                    actions.push(FrontendAction::SettingsToggle(SettingsField::AudioCue));
+                |ui| {
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(36.0, 20.0), egui::Sense::hover());
+                    if layout::toggle(ui, rect, vm.settings.audio_cue, "audio-cue").clicked() {
+                        actions.push(FrontendAction::SettingsToggle(SettingsField::AudioCue));
+                    }
+                    ui.add_space(10.0);
+                    let preview = tr_l10n(lang, "settings.recording.audio_cue_preview");
+                    let width = layout::text_width(ui, preview, 12.0) + 24.0;
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::hover());
+                    if layout::action_button(ui, rect, preview, None, layout::ButtonKind::Ghost)
+                        .clicked()
+                    {
+                        actions.push(FrontendAction::SettingsAction(
+                            SettingsActionField::PreviewAudioCue,
+                        ));
+                    }
                 },
             );
         },
@@ -941,12 +986,7 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
     let lang = vm.lang;
     // Tauri `ShortcutsSection` 的行序：开始/停止 → 翻译 → 弹出浮窗 → 切换风格 →
     // 风格直达快捷键（子块）→ 打开 OpenLess → Less Computer → 取消本次录音。
-    let dictation_hint = match vm.settings.recording_mode {
-        1 => tr_l10n(lang, "hotkey.mode_hold_suffix"),
-        2 => tr_l10n(lang, "hotkey.mode_auto_suffix"),
-        _ => tr_l10n(lang, "hotkey.mode_toggle_suffix"),
-    }
-    .to_string();
+    let dictation_hint = recording_mode_hint(lang, vm.settings.recording_mode);
     let rows: [ShortcutRow; 6] = [
         ShortcutRow {
             field: ShortcutField::Dictation,
@@ -1687,6 +1727,24 @@ fn style_pack_picker(
 }
 
 /// 设置行下方的细线（与 `row_desc` 同款）。
+/// 录音方式在行下方的补充说明（与快捷键分区用同一组 `hotkey.mode*_suffix`）。
+fn recording_mode_hint(lang: Lang, mode: usize) -> String {
+    match mode {
+        1 => tr_l10n(lang, "hotkey.mode_hold_suffix"),
+        2 => tr_l10n(lang, "hotkey.mode_auto_suffix"),
+        _ => tr_l10n(lang, "hotkey.mode_toggle_suffix"),
+    }
+    .to_string()
+}
+
+/// 行下方的小字提示（可见文字，不靠悬停）。空串不占位。
+fn hint_line(ui: &mut egui::Ui, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    ui.label(egui::RichText::new(text).size(11.0).color(theme::INK_4));
+}
+
 fn separator_line(ui: &mut egui::Ui) {
     let rect = ui
         .allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover())
@@ -3240,6 +3298,42 @@ fn help_dot(ui: &mut egui::Ui, hint: &str) -> egui::Response {
         theme::INK_4,
     );
     response.on_hover_text(hint)
+}
+
+/// Tauri `iconButtonStyle` 的关闭按钮（28×28 / r8 / 细边），用在设置顶栏。
+fn close_button(ui: &mut egui::Ui) -> bool {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
+    let fill = if response.hovered() {
+        theme::SURFACE_2.gamma_multiply(1.06)
+    } else {
+        theme::SURFACE_2
+    };
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(8), fill);
+    ui.painter().rect_stroke(
+        rect,
+        egui::CornerRadius::same(8),
+        egui::Stroke::new(0.5, theme::LINE),
+        egui::StrokeKind::Inside,
+    );
+    let center = rect.center();
+    let stroke = egui::Stroke::new(1.3, theme::INK_3);
+    let arm = 5.0;
+    ui.painter().line_segment(
+        [
+            egui::pos2(center.x - arm, center.y - arm),
+            egui::pos2(center.x + arm, center.y + arm),
+        ],
+        stroke,
+    );
+    ui.painter().line_segment(
+        [
+            egui::pos2(center.x + arm, center.y - arm),
+            egui::pos2(center.x - arm, center.y + arm),
+        ],
+        stroke,
+    );
+    response.clicked()
 }
 
 fn toggle_row(ui: &mut egui::Ui, label: &str, desc: &str, value: bool, on_toggle: impl FnOnce()) {

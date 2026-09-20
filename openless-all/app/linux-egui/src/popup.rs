@@ -18,7 +18,7 @@ use tokio::process::Command;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc as tokio_mpsc;
 
-pub const POPUP_PROTOCOL_VERSION: u16 = 4;
+pub const POPUP_PROTOCOL_VERSION: u16 = 5;
 pub const MAX_JSONL_LINE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,6 +126,9 @@ pub enum HostToPopup {
         /// 正在翻译：药丸上方显示「正在翻译」徽章（Tauri `capsule.translating`）。
         #[serde(default)]
         translation_active: bool,
+        /// 胶囊样式：`siri` / `classic` / `typeless`（Tauri `capsuleStyle`）。
+        #[serde(default)]
+        style: String,
     },
     Hide {
         version: u16,
@@ -636,6 +639,8 @@ pub struct CapsulePopupState {
     pub text: String,
     pub audio_level: Option<f32>,
     pub translation_active: bool,
+    /// 胶囊样式（`siri` / `classic` / `typeless`）。
+    pub style: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -734,6 +739,7 @@ impl PopupState {
                 text,
                 audio_level,
                 translation_active,
+                style,
                 ..
             } => {
                 self.capsule = CapsulePopupState {
@@ -741,6 +747,7 @@ impl PopupState {
                     text,
                     audio_level,
                     translation_active,
+                    style,
                 };
                 self.visible = true;
             }
@@ -1315,7 +1322,7 @@ mod tests {
     }
 
     #[test]
-    fn capsule_carries_translation_active() {
+    fn capsule_carries_translation_active_and_style() {
         let message = HostToPopup::Capsule {
             version: POPUP_PROTOCOL_VERSION,
             session_id: "dictation".to_owned(),
@@ -1324,10 +1331,25 @@ mod tests {
             text: String::new(),
             audio_level: Some(0.5),
             translation_active: true,
+            style: "typeless".to_owned(),
         };
         let mut state = PopupState::default();
         assert_eq!(state.apply(message), ApplyOutcome::Applied);
         assert!(state.capsule.translation_active);
+        assert_eq!(
+            state.capsule.style, "typeless",
+            "the capsule style must travel with the frame to the popup process"
+        );
+    }
+
+    #[test]
+    fn a_legacy_capsule_frame_without_a_style_still_applies() {
+        // 协议 v4 的帧没有 style 字段：必须按默认（siri）应用，而不是整帧丢弃。
+        let legacy = r#"{"type":"capsule","version":4,"session_id":"dictation","sequence":7,"phase":"Recording","text":"","audio_level":0.3,"translation_active":false}"#;
+        let legacy: HostToPopup = serde_json::from_str(legacy).expect("legacy capsule frame");
+        let mut state = PopupState::default();
+        assert_eq!(state.apply(legacy), ApplyOutcome::Applied);
+        assert_eq!(state.capsule.style, "");
     }
 
     #[test]

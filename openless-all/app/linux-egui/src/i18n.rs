@@ -5270,6 +5270,90 @@ pub const CATALOG: &[Msg] = &[
         key: "less_computer.working",
         text: row("正在操控电脑…", "正在操控電腦…", "Operating…", "操作中…", "조작 중…"),
     },
+    Msg {
+        key: "onboarding.mic_no_device_hint",
+        text: row(
+            "未检测到麦克风，请连接并启用麦克风后重试。",
+            "未偵測到麥克風，請連接並啟用麥克風後重試。",
+            "No microphone detected. Connect and enable a microphone, then retry.",
+            "マイクが検出されません。マイクを接続して有効にしてから、もう一度お試しください。",
+            "마이크가 감지되지 않습니다. 마이크를 연결하고 활성화한 후 다시 시도하세요.",
+        ),
+    },
+    Msg {
+        key: "settings.recording.audio_cue_preview",
+        text: row("试听", "試聽", "Preview", "試聴", "미리듣기"),
+    },
+    Msg {
+        key: "settings.recording.capsule_desc",
+        text: row(
+            "录音 / 转写时显示屏幕底部胶囊。",
+            "錄音 / 轉寫時在屏幕底部顯示半透明膠囊。",
+            "Show a translucent capsule at the bottom of the screen while recording.",
+            "録音 / 転写中、画面下部に半透明のカプセルを表示。",
+            "녹음 / 전사 중 화면 하단에 반투명 캡슐을 표시합니다.",
+        ),
+    },
+    Msg {
+        key: "settings.recording.capsule_label",
+        text: row(
+            "录音胶囊",
+            "錄音膠囊",
+            "Recording capsule",
+            "録音カプセル",
+            "녹음 캡슐",
+        ),
+    },
+    Msg {
+        key: "settings.recording.capsule_style_classic",
+        text: row(
+            "Openless 默认风格",
+            "Openless 預設風格",
+            "OpenLess default style",
+            "Openless デフォルトスタイル",
+            "Openless 기본 스타일",
+        ),
+    },
+    Msg {
+        key: "settings.recording.capsule_style_label",
+        text: row(
+            "胶囊样式",
+            "膠囊樣式",
+            "Capsule style",
+            "カプセルスタイル",
+            "캡슐 스타일",
+        ),
+    },
+    Msg {
+        key: "settings.recording.capsule_style_siri",
+        text: row(
+            "流光 Siri 风格",
+            "流光 Siri 風格",
+            "Shimmer Siri style",
+            "光条 Siri スタイル",
+            "시리 광선 스타일",
+        ),
+    },
+    Msg {
+        key: "settings.recording.capsule_style_typeless",
+        text: row(
+            "Typeless 传统风格",
+            "Typeless 傳統風格",
+            "Typeless compact style",
+            "Typeless コンパクトスタイル",
+            "Typeless 컴팩트 스타일",
+        ),
+    },
+    Msg {
+        key: "settings.recording.microphone_load_error",
+        text: row(
+            "麦克风列表读取失败：{}",
+            "麥克風列表讀取失敗：{}",
+            "Failed to load microphones: {}",
+            "マイクの読み込みに失敗：{}",
+            "마이크 로드 실패: {}",
+        ),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

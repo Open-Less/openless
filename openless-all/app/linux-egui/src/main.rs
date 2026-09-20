@@ -560,6 +560,8 @@ mod linux_app {
         hydrate_text_fields: bool,
         overview: OverviewState,
         microphones: Vec<openless_core::MicrophoneDevice>,
+        /// 麦克风枚举失败的原因（设置页据此显示 `microphoneLoadError`）。
+        microphone_error: Option<String>,
         transcript: String,
         transcript_state: TranscriptAccumulator,
         transcript_session: Option<openless_core::SessionId>,
@@ -705,6 +707,7 @@ mod linux_app {
                         hydrate_text_fields: true,
                         overview: OverviewState::Loading,
                         microphones: Vec::new(),
+                        microphone_error: None,
                         transcript: String::new(),
                         transcript_state: TranscriptAccumulator::default(),
                         transcript_session: None,
@@ -812,6 +815,7 @@ mod linux_app {
                     service_configured: [false; 2],
                     overview: OverviewState::Loading,
                     microphones: Vec::new(),
+                    microphone_error: None,
                     transcript: String::new(),
                     transcript_state: TranscriptAccumulator::default(),
                     transcript_session: None,
@@ -1143,7 +1147,28 @@ mod linux_app {
             );
         }
 
+        /// 胶囊是否允许显示（Tauri `showCapsule`；隐藏时提示音仍会响）。
+        fn capsule_enabled(&self) -> bool {
+            self.preferences
+                .as_ref()
+                .map(|prefs| prefs.show_capsule)
+                .unwrap_or(true)
+        }
+
+        /// 胶囊样式标签：协议里传字符串，弹窗进程不需要 Core 的类型。
+        fn capsule_style_tag(&self) -> String {
+            match self.preferences.as_ref().map(|prefs| prefs.capsule_style) {
+                Some(openless_core::shared_types::CapsuleStyle::Classic) => "classic",
+                Some(openless_core::shared_types::CapsuleStyle::Typeless) => "typeless",
+                _ => "siri",
+            }
+            .to_string()
+        }
+
         fn show_capsule_popup(&mut self) {
+            if !self.capsule_enabled() {
+                return;
+            }
             self.ensure_popup(PopupKind::Capsule);
             let Some(snapshot) = self
                 .snapshot
@@ -1166,6 +1191,7 @@ mod linux_app {
                 CapsuleOutcome::Failed => tr_l10n(lang, "capsule.error").to_string(),
                 CapsuleOutcome::Progress(text) => text,
             };
+            let style = self.capsule_style_tag();
             self.send_popup(
                 PopupKind::Capsule,
                 HostToPopup::Capsule {
@@ -1176,6 +1202,7 @@ mod linux_app {
                     text,
                     audio_level: Some(snapshot.level),
                     translation_active: snapshot.translation_active,
+                    style,
                 },
             );
             self.schedule_capsule_dismissal(&session_id.to_string(), snapshot.phase);
@@ -2056,7 +2083,7 @@ mod linux_app {
                         // 上一轮胶囊被自动收起后进程已经不在了：进行中的相位必须按需
                         // 重新拉起，否则 send_popup 会因为没有 supervisor 而静默丢弃；
                         // 终态则不拉，免得把刚收起的药丸又喊回来。
-                        if phase_shows_capsule(state.phase) {
+                        if phase_shows_capsule(state.phase) && self.capsule_enabled() {
                             self.ensure_popup(PopupKind::Capsule);
                         }
                         // 进行中的 message 也要过一遍分类：Core 偶尔把内部错误码
@@ -2065,6 +2092,7 @@ mod linux_app {
                             CapsuleOutcome::Progress(text) => text,
                             _ => String::new(),
                         };
+                        let style = self.capsule_style_tag();
                         self.send_popup(
                             PopupKind::Capsule,
                             HostToPopup::Capsule {
@@ -2075,6 +2103,7 @@ mod linux_app {
                                 text,
                                 audio_level: Some(state.level),
                                 translation_active: state.translation_active,
+                                style,
                             },
                         );
                         // 终态：按 Tauri 时序安排自动收起，否则药丸会一直贴在屏幕上。
@@ -2797,6 +2826,7 @@ mod linux_app {
                     }
                     UiResult::MarketplaceMine(Err(error)) => self.status = error,
                     UiResult::Microphones(Ok(devices)) => {
+                        self.microphone_error = None;
                         self.microphones = devices.clone();
                         let selected = self
                             .preferences
@@ -2818,7 +2848,10 @@ mod linux_app {
                             }
                         }
                     }
-                    UiResult::Microphones(Err(error)) => self.status = error,
+                    UiResult::Microphones(Err(error)) => {
+                        self.microphone_error = Some(error.clone());
+                        self.status = error;
+                    }
                     UiResult::Overview(Ok(data)) => self.overview = OverviewState::Loaded(data),
                     UiResult::Overview(Err(error)) => {
                         self.status = error.clone();
@@ -3037,6 +3070,14 @@ mod linux_app {
                     .iter()
                     .map(|device| device.name.clone())
                     .collect();
+                s.microphone_error = self.microphone_error.clone();
+                // 胶囊开关与样式（Tauri `showCapsule` / `capsuleStyle`）。
+                s.show_capsule = prefs.show_capsule;
+                s.capsule_style = match prefs.capsule_style {
+                    openless_core::shared_types::CapsuleStyle::Classic => 1,
+                    openless_core::shared_types::CapsuleStyle::Typeless => 2,
+                    openless_core::shared_types::CapsuleStyle::Siri => 0,
+                };
                 s.mute_while_recording = prefs.mute_during_recording;
                 s.audio_cue = prefs.audio_cue_on_record;
                 s.launch_at_login = prefs.launch_at_login;
@@ -3473,6 +3514,14 @@ mod linux_app {
                     preferences.audio_cue_on_record = !preferences.audio_cue_on_record;
                     self.settings_dirty.recording = true;
                 }
+                frontend::view_model::SettingsField::ShowCapsule => {
+                    preferences.show_capsule = !preferences.show_capsule;
+                    self.settings_dirty.recording = true;
+                    // 关掉就要立刻收起，否则药丸会留在屏幕上直到下一次录音。
+                    if !preferences.show_capsule {
+                        self.dismiss_capsule();
+                    }
+                }
                 frontend::view_model::SettingsField::MuteWhileRecording => {
                     preferences.mute_during_recording = !preferences.mute_during_recording;
                     self.settings_dirty.recording = true;
@@ -3585,6 +3634,14 @@ mod linux_app {
                 }
                 frontend::view_model::SettingsComboField::SilenceSeconds => {
                     preferences.silence_auto_stop_seconds = index as f32 + 1.0;
+                    self.settings_dirty.recording = true;
+                }
+                frontend::view_model::SettingsComboField::CapsuleStyle => {
+                    preferences.capsule_style = match index {
+                        1 => openless_core::shared_types::CapsuleStyle::Classic,
+                        2 => openless_core::shared_types::CapsuleStyle::Typeless,
+                        _ => openless_core::shared_types::CapsuleStyle::Siri,
+                    };
                     self.settings_dirty.recording = true;
                 }
                 frontend::view_model::SettingsComboField::Microphone => {
@@ -3939,6 +3996,10 @@ mod linux_app {
                         .unwrap_or_default();
                     self.request_update_check(channel);
                 }
+                frontend::view_model::SettingsActionField::PreviewAudioCue => {
+                    // 与真实录音开始时同一段合成提示音（Tauri `playRecordStartCue`）。
+                    openless_linux_egui::play_cue_start();
+                }
                 frontend::view_model::SettingsActionField::OpenGitHub => {
                     let _ = open_external("https://github.com/earendil-works/openless");
                 }
@@ -4044,6 +4105,9 @@ mod linux_app {
                             self.frontend_vm.active_page = frontend::view_model::Page::Settings;
                             // 每次打开设置都刷新「必配服务」状态点。
                             self.load_service_configured();
+                            // 也重新枚举麦克风：设备可能在启动后才插上（Tauri 在
+                            // 下拉打开时同样重查）。
+                            self.load_microphones();
                             if self.settings_channels.is_empty() {
                                 self.load_settings_channels();
                             }
@@ -6847,6 +6911,14 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 app.apply_window_messages(messages, tray_available);
             }
             app.tick(&ctx);
+            // TEMP(verify): 截图核对用的临时开关，验证完删除。
+            if std::env::var("OPENLESS_OPEN_SETTINGS").is_ok_and(|value| value == "1")
+                && !app.frontend_vm.settings_open
+            {
+                app.frontend_vm.settings_open = true;
+                app.frontend_vm.active_page = frontend::view_model::Page::Settings;
+                app.load_microphones();
+            }
             if app.should_spawn_ui_window() {
                 if let Err(error) = app.spawn_ui_window(&socket) {
                     log::warn!("[ui-host] cannot start the UI window: {error}");
@@ -6891,7 +6963,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
                 .with_title("OpenLess")
-                .with_inner_size(MAIN_WINDOW_INNER_SIZE)
+                .with_inner_size(temp_window_size().unwrap_or(MAIN_WINDOW_INNER_SIZE))
                 .with_min_inner_size(MAIN_WINDOW_MIN_INNER_SIZE)
                 .with_decorations(false)
                 .with_transparent(true)
@@ -6908,6 +6980,13 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             }),
         )
         .map_err(|error| error.to_string())
+    }
+
+    /// TEMP(verify): `OPENLESS_WINDOW_SIZE=WxH` 覆盖窗口尺寸，用于截图核对居中。
+    fn temp_window_size() -> Option<[f32; 2]> {
+        let value = std::env::var("OPENLESS_WINDOW_SIZE").ok()?;
+        let (width, height) = value.split_once('x')?;
+        Some([width.trim().parse().ok()?, height.trim().parse().ok()?])
     }
 
     /// 诊断开关：`OPENLESS_UI_DEBUG=1` 时 UI 进程把指针点击与动作记进日志。
@@ -7449,6 +7528,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 text: String::new(),
                 audio_level: Some(0.2),
                 translation_active: false,
+                style: "siri".into(),
             })
             .expect("channel is open");
             assert!(!app.pump(None), "a progress frame must not exit");

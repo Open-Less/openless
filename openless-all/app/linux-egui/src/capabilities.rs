@@ -205,7 +205,7 @@ impl PlatformApi for LinuxPlatformApi {
 
 #[cfg(target_os = "linux")]
 fn enumerate_microphones() -> Result<Vec<MicrophoneDevice>, BackendError> {
-    use cpal::traits::HostTrait;
+    use cpal::traits::{DeviceTrait, HostTrait};
 
     let host = cpal::default_host();
     let default_name = host.default_input_device().map(|device| device.to_string());
@@ -215,17 +215,91 @@ fn enumerate_microphones() -> Result<Vec<MicrophoneDevice>, BackendError> {
             format!("failed to enumerate Linux microphones: {error}"),
         )
     })?;
-    devices
-        .enumerate()
-        .map(|(index, device)| {
-            let name = device.to_string();
-            Ok(MicrophoneDevice {
-                id: format!("cpal:{index}:{name}"),
-                is_default: default_name.as_deref() == Some(name.as_str()),
-                name,
-            })
-        })
-        .collect()
+    let mut out: Vec<MicrophoneDevice> = Vec::new();
+    for (index, device) in devices.enumerate() {
+        let name = device.to_string();
+        let channels = device
+            .default_input_config()
+            .map(|config| config.channels())
+            .unwrap_or(0);
+        if !selectable_microphone(&name, channels) {
+            continue;
+        }
+        // 同一个设备会以多条节点出现（例如「内置音频 Pro」出现两次）。
+        if out.iter().any(|existing| existing.name == name) {
+            continue;
+        }
+        out.push(MicrophoneDevice {
+            id: format!("cpal:{index}:{name}"),
+            is_default: default_name.as_deref() == Some(name.as_str()),
+            name,
+        });
+    }
+    Ok(out)
+}
+
+/// cpal 的 PipeWire 后端把**所有节点**都当成输入设备：输出监听（`sink-*`、
+/// `*.monitor`）、合成默认节点、以及 HDMI/环绕监听都会出现在 `input_devices()` 里，
+/// 同名设备还会重复出现。原样透传会让设置页的「首选麦克风」变成一个装满噪声的
+/// 下拉框（用户反馈「没有首选麦克风功能」），所以这里按可识别特征过滤：
+///
+/// * 合成节点（`default_input` / `default_sink` / `unknown`）——界面里已经有
+///   「系统默认」这一项；
+/// * PulseAudio/PipeWire 的 sink 与 monitor 命名；
+/// * 声道数 > 2 的节点（HDMI 与环绕监听），真实麦克风是 1 或 2 声道。取不到配置时
+///   保留（0 声道），宁可多列也不误删用户真正的麦克风。
+#[cfg(target_os = "linux")]
+fn selectable_microphone(name: &str, channels: u16) -> bool {
+    let lowered = name.trim().to_ascii_lowercase();
+    if lowered.is_empty() || lowered == "unknown" {
+        return false;
+    }
+    if lowered == "default_input" || lowered == "default_sink" {
+        return false;
+    }
+    if lowered.starts_with("sink-") || lowered.starts_with("sink_") || lowered.ends_with(".monitor")
+    {
+        return false;
+    }
+    channels <= 2
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod microphone_filter_tests {
+    use super::selectable_microphone;
+
+    #[test]
+    fn non_capture_nodes_are_not_offered_as_microphones() {
+        // 实测（本机 PipeWire）：这 5 个都出现在 cpal 的 input_devices() 里。
+        for junk in [
+            "default_sink",
+            "default_input",
+            "sink-sunshine-stereo",
+            "sink-sunshine-surround71",
+            "unknown",
+        ] {
+            assert!(
+                !selectable_microphone(junk, 2),
+                "{junk} is not a selectable microphone"
+            );
+        }
+        // HDMI/环绕监听是 6/8 声道。
+        assert!(!selectable_microphone(
+            "TU116 High Definition Audio Controller Pro 9",
+            8
+        ));
+        assert!(!selectable_microphone(
+            "TU116 High Definition Audio Controller Pro",
+            6
+        ));
+        // 真实设备保留（含非 ASCII 描述名与取不到配置的兜底）。
+        assert!(selectable_microphone(
+            "\u{5185}\u{7f6e}\u{97f3}\u{9891} Pro",
+            2
+        ));
+        assert!(selectable_microphone("USB microphone", 1));
+        assert!(selectable_microphone("Scarlett Solo", 0));
+    }
 }
 
 #[cfg(test)]

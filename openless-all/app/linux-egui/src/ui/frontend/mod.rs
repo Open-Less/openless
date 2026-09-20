@@ -1279,4 +1279,154 @@ mod tests {
             painted.contains("first") && painted.contains("second") && painted.contains("third")
         );
     }
+
+    /// 用户报告「缩放窗口时并不是始终居中」：模态卡片此前用 `Area::anchor`
+    /// 定位，垂直方向稳定偏下 19.5px，且卡片被内容撑宽 22px（横向偏 11px）。
+    /// 现在位置由 `body.center()` 显式算出，两种偏差都必须消失，并且**改变窗口
+    /// 尺寸后的第一帧**就要居中（不能靠后续帧收敛）。
+    #[test]
+    fn the_settings_modal_stays_centred_across_window_resizes() {
+        let ctx = egui::Context::default();
+        let zh = openless_linux_egui::Lang::ZhCn;
+        let mut vm = FrontendViewModel {
+            lang: zh,
+            active_page: Page::Settings,
+            settings_open: true,
+            ..Default::default()
+        };
+        for (width, height) in [
+            (1240.0, 800.0),
+            (900.0, 620.0),
+            (1600.0, 1000.0),
+            (1100.0, 900.0),
+        ] {
+            let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height));
+            // 等一帧让内容成型，下一帧断言（尺寸变化不接受「过渡帧」偏差）。
+            for _ in 0..2 {
+                ctx.begin_pass(egui::RawInput {
+                    screen_rect: Some(viewport),
+                    ..Default::default()
+                });
+                let mut actions = Vec::new();
+                render(&ctx, &mut vm, &mut actions);
+                let _ = ctx.end_pass();
+            }
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(viewport),
+                ..Default::default()
+            });
+            let mut actions = Vec::new();
+            render(&ctx, &mut vm, &mut actions);
+            let _ = ctx.end_pass();
+            let body = layout::body_rect(&ctx);
+            let modal = ctx
+                .memory(|memory| memory.area_rect(egui::Id::new("openless-settings-modal")))
+                .expect("the settings modal area must exist while the overlay is open");
+            assert!(
+                (modal.center().x - body.center().x).abs() <= 1.5,
+                "modal must be horizontally centred at {width}x{height}: modal={modal:?} body={body:?}"
+            );
+            assert!(
+                (modal.center().y - body.center().y).abs() <= 1.5,
+                "modal must be vertically centred at {width}x{height}: modal={modal:?} body={body:?}"
+            );
+            // 卡片不会被内容撑宽（撑宽就会把居中算歪）。
+            let expected_width = (body.width() - 40.0).max(320.0).min(960.0);
+            assert!(
+                (modal.width() - expected_width).abs() <= 2.0,
+                "the content must fit the requested modal width {expected_width}: {modal:?}"
+            );
+        }
+    }
+
+    /// 设置页顶部不该再有那一层「设置」标题栏：Tauri 的桌面端左栏顶端是搜索框、
+    /// 右栏顶端才是「标题 + 修改后自动保存 + 关闭」。侧栏导航里那一个「设置」仍在。
+    #[test]
+    fn the_settings_overlay_has_no_separate_title_bar() {
+        let ctx = egui::Context::default();
+        let zh = openless_linux_egui::Lang::ZhCn;
+        let settings_label = openless_linux_egui::tr_l10n(zh, "nav.settings");
+        let auto_save = openless_linux_egui::tr_l10n(zh, "modal.auto_save_hint");
+        let mut vm = FrontendViewModel {
+            lang: zh,
+            active_page: Page::Settings,
+            settings_open: true,
+            ..Default::default()
+        };
+        let mut painted = String::new();
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(viewport()),
+                ..Default::default()
+            });
+            let mut actions = Vec::new();
+            render(&ctx, &mut vm, &mut actions);
+            painted = painted_text(&ctx.end_pass());
+        }
+        // 只数「整行就是这个标签」的次数：侧栏导航那一个是正常的，多出来的那个
+        // 就是被删掉的顶栏标题（子串匹配会把「查找设置分类…」也算进去）。
+        let standalone_titles = painted
+            .lines()
+            .filter(|line| line.trim() == settings_label)
+            .count();
+        assert_eq!(
+            standalone_titles, 1,
+            "the overlay must not draw its own settings title (only the sidebar entry may say it): {painted}"
+        );
+        assert!(
+            painted.contains(openless_linux_egui::tr_l10n(zh, "modal.sections.general")),
+            "the content pane still owns the section title: {painted}"
+        );
+        assert!(
+            painted.contains(auto_save),
+            "the auto-save hint belongs to the content pane's own header row: {painted}"
+        );
+    }
+
+    /// 录音分区必须真的带上用户点名的几行：可录制的录音快捷键、首选麦克风、
+    /// 录音胶囊开关与胶囊样式、录音提示音的试听按钮。
+    #[test]
+    fn the_recording_section_renders_the_rows_the_user_asked_for() {
+        let ctx = egui::Context::default();
+        let zh = openless_linux_egui::Lang::ZhCn;
+        let mut vm = FrontendViewModel {
+            lang: zh,
+            active_page: Page::Settings,
+            settings_open: true,
+            ..Default::default()
+        };
+        vm.dictation_hotkey = "Alt+A".to_string();
+        vm.settings.microphone_options = vec!["USB microphone".to_string()];
+        let mut painted = String::new();
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(viewport()),
+                ..Default::default()
+            });
+            let mut actions = Vec::new();
+            render(&ctx, &mut vm, &mut actions);
+            painted = painted_text(&ctx.end_pass());
+        }
+        for key in [
+            "settings.recording.hotkey_label",
+            "settings.recording.microphone_label",
+            "settings.recording.capsule_label",
+            "settings.recording.capsule_style_label",
+            "settings.recording.audio_cue_label",
+            "settings.recording.audio_cue_preview",
+        ] {
+            let label = openless_linux_egui::tr_l10n(zh, key);
+            assert!(
+                painted.contains(label),
+                "missing {key} ({label}) in {painted}"
+            );
+        }
+        assert!(
+            !painted.contains(openless_linux_egui::tr_l10n(
+                zh,
+                "settings.recording.microphone_load_error"
+            )),
+            "no microphone error line may be painted without an error: {painted}"
+        );
+    }
 }

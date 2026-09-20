@@ -366,6 +366,8 @@ pub enum SettingsField {
     RemoteInput,
     SilenceAutoStop,
     AudioCue,
+    /// 录音胶囊是否显示（Tauri `showCapsule`；Linux 上同样生效）。
+    ShowCapsule,
     MuteWhileRecording,
     RecordAudioForDebug,
     ActivityHeatmap,
@@ -380,6 +382,8 @@ pub enum SettingsComboField {
     Language,
     Theme,
     Microphone,
+    /// 胶囊样式：0 = siri（流光），1 = classic（经典药丸），2 = typeless（深色胶囊）。
+    CapsuleStyle,
     RecordingMode,
     SilenceSeconds,
     PasteShortcut,
@@ -409,6 +413,8 @@ pub enum SettingsTextField {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug)]
 pub enum SettingsActionField {
+    /// 试听录音提示音（Tauri `audioCuePreview` 按钮）。
+    PreviewAudioCue,
     ExportDiagnostics,
     CheckUpdate,
     CheckBetaUpdate,
@@ -853,8 +859,13 @@ pub struct SettingsFields {
     pub silence_seconds: usize,
     pub microphone_name: String,
     pub microphone_options: Vec<String>,
+    /// 枚举麦克风失败时的原因（Tauri `microphoneLoadError` 行）。
+    pub microphone_error: Option<String>,
     pub mute_while_recording: bool,
     pub audio_cue: bool,
+    /// 录音胶囊开关与样式（Tauri `capsuleLabel` / `capsuleStyleLabel`）。
+    pub show_capsule: bool,
+    pub capsule_style: usize,
     pub record_audio_for_debug: bool,
     pub history_max_entries: String,
     /// 风格直达快捷键（可录制/停用/移除）。
@@ -900,8 +911,11 @@ impl Default for SettingsFields {
             silence_seconds: 2,
             microphone_name: String::new(),
             microphone_options: Vec::new(),
+            microphone_error: None,
             mute_while_recording: false,
             audio_cue: false,
+            show_capsule: true,
+            capsule_style: 0,
             record_audio_for_debug: false,
             history_max_entries: String::new(),
             style_pack_hotkeys: Vec::new(),
