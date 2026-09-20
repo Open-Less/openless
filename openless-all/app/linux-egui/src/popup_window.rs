@@ -38,9 +38,7 @@ pub const QA_WINDOW_SIZE: (u32, u32) = (420, 540);
 /// footprint as the selection-ask panel.
 pub const LESS_COMPUTER_WINDOW_SIZE: (u32, u32) = (420, 540);
 /// Polish-preview panel size — Tauri `selection-polish-preview` is 640×440.
-pub const PREVIEW_WINDOW_SIZE: (u32, u32) = (640, 440);
 /// Smallest the user may resize the polish preview to — Tauri `minWidth/minHeight`.
-pub const PREVIEW_MIN_SIZE: (u32, u32) = (480, 320);
 
 /// Window size for one popup kind, in X11 pixels.
 pub fn popup_size(kind: crate::popup::PopupKind) -> (u32, u32) {
@@ -49,7 +47,6 @@ pub fn popup_size(kind: crate::popup::PopupKind) -> (u32, u32) {
         PopupKind::Capsule => CAPSULE_WINDOW_SIZE,
         PopupKind::Qa => QA_WINDOW_SIZE,
         PopupKind::LessComputer => LESS_COMPUTER_WINDOW_SIZE,
-        PopupKind::Preview => PREVIEW_WINDOW_SIZE,
     }
 }
 
@@ -71,7 +68,6 @@ pub fn popup_position(
         PopupKind::Capsule => environment.position_for(CAPSULE_WINDOW_SIZE, CAPSULE_BOTTOM_GAP),
         PopupKind::Qa => environment.centred_for(QA_WINDOW_SIZE),
         PopupKind::LessComputer => environment.centred_for(LESS_COMPUTER_WINDOW_SIZE),
-        PopupKind::Preview => environment.centred_for(PREVIEW_WINDOW_SIZE),
     }
 }
 
@@ -980,7 +976,6 @@ mod tests {
     fn popup_size_maps_every_kind() {
         assert_eq!(popup_size(PopupKind::Capsule), CAPSULE_WINDOW_SIZE);
         assert_eq!(popup_size(PopupKind::Qa), QA_WINDOW_SIZE);
-        assert_eq!(popup_size(PopupKind::Preview), PREVIEW_WINDOW_SIZE);
         // Tauri 的 `less-computer` 窗口与 qa 同为 420×540。
         assert_eq!(
             popup_size(PopupKind::LessComputer),
@@ -1003,19 +998,15 @@ mod tests {
     /// would start at y=490 and end at 1030, i.e. inside the pill's 968..1068.
     #[test]
     fn popup_position_centres_the_panels_clear_of_the_capsule() {
-        // 尺寸取自 Tauri：qa 420×540、selection-polish-preview 640×440，
+        // 尺寸取自 Tauri：qa 420×540（润色结果已并入这个面板，不再有独立预览窗口），
         // 居中于 1920×1080 工作区。
         assert_eq!(
             popup_position(&environment(), PopupKind::Qa),
             Some((750, 270))
         );
-        assert_eq!(
-            popup_position(&environment(), PopupKind::Preview),
-            Some((640, 320))
-        );
         let area = monitor(0, 0, 1920, 1080);
         let (_, capsule_y) = bottom_center(area, CAPSULE_WINDOW_SIZE, CAPSULE_BOTTOM_GAP);
-        for kind in [PopupKind::Qa, PopupKind::Preview] {
+        for kind in [PopupKind::Qa] {
             let (_, y) = popup_position(&environment(), kind).expect("centred");
             let height = popup_size(kind).1 as i32;
             assert!(

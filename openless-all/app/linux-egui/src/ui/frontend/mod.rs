@@ -1517,10 +1517,7 @@ mod tests {
             painted = painted_text(&ctx.end_pass());
             states.push(painted.contains("GROUPCONTENT"));
         }
-        assert!(
-            states[0],
-            "collapsible groups start expanded, like Tauri"
-        );
+        assert!(states[0], "collapsible groups start expanded, like Tauri");
         assert_eq!(
             states[3], false,
             "the group must collapse after its header is clicked: states={states:?}"
@@ -1566,6 +1563,9 @@ mod tests {
                 }
             }
         }
-        assert!(started, "pressing the titlebar must emit ViewportCommand::StartDrag");
+        assert!(
+            started,
+            "pressing the titlebar must emit ViewportCommand::StartDrag"
+        );
     }
 }

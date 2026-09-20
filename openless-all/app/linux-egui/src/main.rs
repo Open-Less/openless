@@ -613,7 +613,6 @@ mod linux_app {
         vocab_preset_phrases: String,
         history_search: String,
         qa_popup: Option<PopupSupervisor>,
-        preview_popup: Option<PopupSupervisor>,
         capsule_popup: Option<PopupSupervisor>,
         popup_action_guard: PopupActionGuard,
         /// 当前胶囊展示的会话 id（用于「会话消失但没收到终态」的兜底收起）。
@@ -752,7 +751,6 @@ mod linux_app {
                         vocab_preset_phrases: String::new(),
                         history_search: String::new(),
                         qa_popup: None,
-                        preview_popup: None,
                         capsule_popup: None,
                         popup_action_guard: PopupActionGuard::default(),
                         capsule_session: None,
@@ -860,7 +858,6 @@ mod linux_app {
                     vocab_preset_phrases: String::new(),
                     history_search: String::new(),
                     qa_popup: None,
-                    preview_popup: None,
                     capsule_popup: None,
                     popup_action_guard: PopupActionGuard::default(),
                     capsule_session: None,
@@ -914,7 +911,6 @@ mod linux_app {
         fn popup_slot(&mut self, kind: PopupKind) -> &mut Option<PopupSupervisor> {
             match kind {
                 PopupKind::Qa => &mut self.qa_popup,
-                PopupKind::Preview => &mut self.preview_popup,
                 PopupKind::Capsule => &mut self.capsule_popup,
                 PopupKind::LessComputer => &mut self.less_computer_popup,
             }
@@ -1017,11 +1013,6 @@ mod linux_app {
                     .qa_state
                     .as_ref()
                     .map(|state| state.session_id.clone().unwrap_or_else(|| "qa".to_string())),
-                PopupKind::Preview => self
-                    .selection
-                    .as_ref()
-                    .and_then(|selection| selection.session_id)
-                    .map(|session_id| session_id.to_string()),
                 PopupKind::Capsule => self
                     .snapshot
                     .as_ref()
@@ -1127,8 +1118,10 @@ mod linux_app {
             });
         }
 
+        /// 润色结果：**不再有独立预览窗口**，一律送进选区助手面板的「润色结果」模式
+        /// （用户确认的设计：选区只保留一个弹窗）。
         fn show_selection_popup(&mut self) {
-            self.ensure_popup(PopupKind::Preview);
+            self.ensure_popup(PopupKind::Qa);
             let Some(selection) = self.selection.clone() else {
                 return;
             };
@@ -1136,8 +1129,8 @@ mod linux_app {
                 return;
             };
             self.send_popup(
-                PopupKind::Preview,
-                HostToPopup::Preview {
+                PopupKind::Qa,
+                HostToPopup::PolishPreview {
                     version: POPUP_PROTOCOL_VERSION,
                     session_id: session_id.to_string(),
                     sequence: self.last_event_sequence.saturating_mul(2),
@@ -1249,7 +1242,7 @@ mod linux_app {
         fn poll_popup_supervisors(&mut self) {
             let lang = self.lang;
             let mut events = Vec::new();
-            for kind in [PopupKind::Qa, PopupKind::Preview, PopupKind::Capsule] {
+            for kind in [PopupKind::Qa, PopupKind::Capsule] {
                 if let Some(supervisor) = self.popup_slot(kind) {
                     while let Ok(event) = supervisor.try_recv() {
                         events.push((kind, event));
@@ -1391,12 +1384,14 @@ mod linux_app {
                             }
                         }
                     }
-                    PopupSupervisorEvent::Message(PopupToHost::ConfirmPreview {
+                    PopupSupervisorEvent::Message(PopupToHost::ConfirmPolish {
                         session_id,
                         text,
                         ..
                     }) => match session_id.parse::<uuid::Uuid>() {
                         Ok(session_id) => {
+                            // 润色结束：选区助手面板回到提问模式（同一个弹窗）。
+                            self.selection_preview_visible = false;
                             let session_id = openless_core::SessionId::from_uuid(session_id);
                             if let Some(backend) = self.backend() {
                                 self.spawn(async move {
@@ -1413,11 +1408,12 @@ mod linux_app {
                             self.status = fmt_l10n(lang, "popup.session_invalid", &[&error])
                         }
                     },
-                    PopupSupervisorEvent::Message(PopupToHost::CancelPreview {
-                        session_id,
-                        ..
+                    PopupSupervisorEvent::Message(PopupToHost::CancelPolish {
+                        session_id, ..
                     }) => match session_id.parse::<uuid::Uuid>() {
                         Ok(session_id) => {
+                            // 取消润色：同样退出润色模式。
+                            self.selection_preview_visible = false;
                             let session_id = openless_core::SessionId::from_uuid(session_id);
                             if let Some(backend) = self.backend() {
                                 self.spawn(async move {
@@ -1435,8 +1431,14 @@ mod linux_app {
                         }
                     },
                     PopupSupervisorEvent::Message(PopupToHost::Ready { .. }) => match kind {
-                        PopupKind::Qa => self.show_qa_popup(),
-                        PopupKind::Preview => self.show_selection_popup(),
+                        PopupKind::Qa => {
+                            // 选区助手面板既可能是提问模式，也可能是润色结果模式。
+                            if self.selection_preview_visible {
+                                self.show_selection_popup();
+                            } else {
+                                self.show_qa_popup();
+                            }
+                        }
                         PopupKind::Capsule => self.show_capsule_popup(),
                         PopupKind::LessComputer => self.show_less_computer_popup(),
                     },
@@ -1556,9 +1558,6 @@ mod linux_app {
                         if crashed {
                             match kind {
                                 PopupKind::Qa if self.qa_visible => self.show_qa_popup(),
-                                PopupKind::Preview if self.selection_preview_visible => {
-                                    self.show_selection_popup();
-                                }
                                 PopupKind::Capsule
                                     if self.snapshot.as_ref().is_some_and(|snapshot| {
                                         snapshot.dictation.phase != DictationPhase::Idle
@@ -2348,9 +2347,11 @@ mod linux_app {
                         self.selection_preview_visible = true;
                     }
                     if let Some(session_id) = snapshot.session_id {
+                        // 选区助手面板：润色结果以「润色模式」帧送进去。
+                        self.ensure_popup(PopupKind::Qa);
                         self.send_popup(
-                            PopupKind::Preview,
-                            HostToPopup::Preview {
+                            PopupKind::Qa,
+                            HostToPopup::PolishPreview {
                                 version: POPUP_PROTOCOL_VERSION,
                                 session_id: session_id.to_string(),
                                 sequence: event_sequence.saturating_mul(2),
@@ -2470,6 +2471,8 @@ mod linux_app {
                             self.status = tr_l10n(lang, "status.request_restart").to_string();
                         }
                         HostAction::ShowSelectionPreview => {
+                            // 核心仍照旧发这个动作；现在它只负责把**选区助手面板**
+                            // 拉到「润色结果」模式（独立预览窗口已下线）。
                             self.selection_preview_visible = true;
                             self.show_selection_popup();
                         }
@@ -2481,8 +2484,9 @@ mod linux_app {
                                 .and_then(|selection| selection.session_id)
                                 .map(|id| id.to_string())
                                 .unwrap_or_else(|| "selection".to_string());
+                            // 润色模式下线：关闭选区助手面板（与提问模式同一个弹窗）。
                             self.hide_popup(
-                                PopupKind::Preview,
+                                PopupKind::Qa,
                                 session_id,
                                 self.last_event_sequence.saturating_mul(2).saturating_add(1),
                             );
@@ -6202,11 +6206,6 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                     session_id,
                     sequence,
                 },
-                PopupKind::Preview => PopupToHost::CancelPreview {
-                    version,
-                    session_id,
-                    sequence,
-                },
                 PopupKind::Capsule => PopupToHost::DismissCapsule {
                     version,
                     session_id,
@@ -6255,7 +6254,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 {
                     continue;
                 }
-                if matches!(message, HostToPopup::Preview { .. }) {
+                if matches!(message, HostToPopup::PolishPreview { .. }) {
                     self.preview_focus_requested = false;
                 }
                 let shutdown = matches!(message, HostToPopup::Shutdown { .. });
@@ -6375,34 +6374,6 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             // 避免透明置顶窗口长期白跑帧。
             let mut animated = false;
             match self.kind {
-                PopupKind::Preview => {
-                    let first_frame = !self.preview_focus_requested;
-                    let action = frontend::popups::selection_preview(
-                        ctx,
-                        &mut self.state.preview,
-                        first_frame,
-                        lang,
-                    );
-                    if first_frame {
-                        self.preview_focus_requested = true;
-                    }
-                    match action {
-                        frontend::popups::PreviewAction::Cancel => self.dismiss(ctx),
-                        frontend::popups::PreviewAction::Confirm(text) => {
-                            if let Some(session_id) = self.session_id() {
-                                let sequence = self.next_sequence();
-                                self.send(PopupToHost::ConfirmPreview {
-                                    version: POPUP_PROTOCOL_VERSION,
-                                    session_id,
-                                    sequence,
-                                    text,
-                                });
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                            }
-                        }
-                        frontend::popups::PreviewAction::None => {}
-                    }
-                }
                 PopupKind::Qa => {
                     self.avatar.sync(ctx, &self.state.qa.viewer_login);
                     let qa_phase = self.state.qa.phase.to_ascii_lowercase();
@@ -6420,6 +6391,29 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                     );
                     match action {
                         frontend::popups::QaAction::Dismiss => self.dismiss(ctx),
+                        frontend::popups::QaAction::ConfirmPolish(text) => {
+                            if let Some(session_id) = self.session_id() {
+                                let sequence = self.next_sequence();
+                                self.send(PopupToHost::ConfirmPolish {
+                                    version: POPUP_PROTOCOL_VERSION,
+                                    session_id,
+                                    sequence,
+                                    text,
+                                });
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
+                        }
+                        frontend::popups::QaAction::CancelPolish => {
+                            if let Some(session_id) = self.session_id() {
+                                let sequence = self.next_sequence();
+                                self.send(PopupToHost::CancelPolish {
+                                    version: POPUP_PROTOCOL_VERSION,
+                                    session_id,
+                                    sequence,
+                                });
+                            }
+                            self.dismiss(ctx);
+                        }
                         frontend::popups::QaAction::ToggleRecording => {
                             if let Some(session_id) = self.session_id() {
                                 let sequence = self.next_sequence();
@@ -6608,8 +6602,6 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         }
         if args.iter().any(|arg| arg == "--qa") {
             Some(PopupKind::Qa)
-        } else if args.iter().any(|arg| arg == "--preview") {
-            Some(PopupKind::Preview)
         } else if args.iter().any(|arg| arg == "--capsule") {
             Some(PopupKind::Capsule)
         } else if args.iter().any(|arg| arg == "--less-computer") {
@@ -6779,10 +6771,6 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 openless_linux_egui::LESS_COMPUTER_WINDOW_SIZE.0 as f32,
                 openless_linux_egui::LESS_COMPUTER_WINDOW_SIZE.1 as f32,
             ],
-            PopupKind::Preview => [
-                openless_linux_egui::PREVIEW_WINDOW_SIZE.0 as f32,
-                openless_linux_egui::PREVIEW_WINDOW_SIZE.1 as f32,
-            ],
             // 经典药丸 176×42 + 16px 下边距 + 8px 间距 + 「正在翻译」徽章
             // （Tauri `getCapsuleHostMetrics(.., 'classic')` 的 100 高度）。
             PopupKind::Capsule => [
@@ -6823,17 +6811,6 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             // 不主动要激活：Wayland 下由合成器决定，X11 下就是「可见但不是 key
             // window」，与 Tauri 的 `orderFrontRegardless` 同语义。
             viewport = viewport.with_active(false);
-        }
-        if kind == PopupKind::Preview {
-            // Tauri `selection-polish-preview`：可缩放 + 显式抢焦点，因为用户要就地
-            // 编辑润色后的文本（键盘输入必须落在本窗口）。
-            viewport = viewport
-                .with_resizable(true)
-                .with_min_inner_size([
-                    openless_linux_egui::PREVIEW_MIN_SIZE.0 as f32,
-                    openless_linux_egui::PREVIEW_MIN_SIZE.1 as f32,
-                ])
-                .with_active(true);
         }
         let options = eframe::NativeOptions {
             viewport,

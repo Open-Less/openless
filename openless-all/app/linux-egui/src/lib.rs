@@ -81,9 +81,8 @@ pub use popup::{
     ApplyOutcome as PopupApplyOutcome, CapsulePopupState, HostToPopup, LessComputerApproval,
     LessComputerEntry, LessComputerPopupState, PopupActionGuard, PopupChatMessage, PopupKind,
     PopupSendError, PopupState, PopupSupervisor, PopupSupervisorEvent, PopupToHost,
-    PreviewPopupState, ProtocolError as PopupProtocolError,
-    ProtocolErrorKind as PopupProtocolErrorKind, QaPopupState, MAX_JSONL_LINE_BYTES,
-    POPUP_PROTOCOL_VERSION,
+    ProtocolError as PopupProtocolError, ProtocolErrorKind as PopupProtocolErrorKind,
+    QaPolishState, QaPopupState, MAX_JSONL_LINE_BYTES, POPUP_PROTOCOL_VERSION,
 };
 pub use popup_layer::{
     capsule_geometry, capsule_path_override, choose_capsule_path, detect_capsule_path,
@@ -97,7 +96,7 @@ pub use popup_window::{
     bottom_center, clamp_to_area, monitor_containing, place_overlay, popup_position, popup_size,
     select_overlay_window, x11_available, OverlayEnvironment, OverlayPlacement, OverlayX11,
     WindowCandidate, WindowMatch, X11Rect, CAPSULE_BOTTOM_GAP, CAPSULE_WINDOW_SIZE,
-    LESS_COMPUTER_WINDOW_SIZE, PREVIEW_MIN_SIZE, PREVIEW_WINDOW_SIZE, QA_WINDOW_SIZE,
+    LESS_COMPUTER_WINDOW_SIZE, QA_WINDOW_SIZE,
 };
 
 pub use recordings::{read_recording_wav, recording_path, recording_pcm, RecordingError};

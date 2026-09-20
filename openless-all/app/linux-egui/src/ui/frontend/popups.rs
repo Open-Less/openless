@@ -16,7 +16,7 @@ use eframe::egui;
 use super::{icons, layout, siri_gl, theme};
 use openless_linux_egui::{
     fmt_l10n, tr_l10n, CapsulePopupState, Lang, LessComputerPopupState, PopupChatMessage,
-    PreviewPopupState, QaPopupState,
+    QaPolishState, QaPopupState,
 };
 
 /// Result of rendering the selection-polish preview.
@@ -37,6 +37,10 @@ pub enum QaAction {
     Dismiss,
     /// Enter / 发送 → the host sends `SubmitQa`.
     Submit(String),
+    /// 润色结果模式：✓ 确认并替换 → 宿主发 `ConfirmPolish`。
+    ConfirmPolish(String),
+    /// 润色结果模式：取消 → 宿主发 `CancelPolish`。
+    CancelPolish,
     /// 麦克风按钮 → the host sends `ToggleQaRecording`.
     ToggleRecording,
     /// 图钉 → the host sends `SetPinned`（固定后不再自动收起）。
@@ -87,22 +91,18 @@ const CAPSULE_BADGE_GAP: f32 = 8.0;
 // ── 选区润色预览 ────────────────────────────────────────────────────────────
 
 /// 选区润色预览：标题 + 副标题 + ✕、可编辑结果框、原文摘要、取消 / 确认并替换。
-pub fn selection_preview(
-    ctx: &egui::Context,
-    state: &mut PreviewPopupState,
+/// 润色结果模式（原独立预览窗口的**同一套视觉**，现在画在选区助手面板里）。
+///
+/// 参数与返回值和面板内的对话模式对齐：返回 `PreviewAction` 由调用方翻译成面板动作。
+pub fn polish_result_mode(
+    ui: &mut egui::Ui,
+    state: &mut QaPolishState,
     first_frame: bool,
     lang: Lang,
 ) -> PreviewAction {
     let mut action = PreviewAction::None;
-    egui::CentralPanel::default()
-        .frame(
-            egui::Frame::NONE
-                .fill(theme::SURFACE)
-                .corner_radius(egui::CornerRadius::same(14))
-                .stroke(egui::Stroke::new(0.5, theme::LINE))
-                .inner_margin(egui::Margin::same(PREVIEW_PADDING as i8)),
-        )
-        .show(ctx, |ui| {
+    {
+        {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.label(
@@ -210,7 +210,8 @@ pub fn selection_preview(
                     action = PreviewAction::Cancel;
                 }
             });
-        });
+        }
+    }
     action
 }
 
@@ -246,6 +247,17 @@ pub fn selection_ask(
             // 首帧只编译不绘制地把三个程序编译好（进程内只排一次），
             // 免得录音/思考的第一帧才发现要编译——那是按热键后「慢一拍」的来源。
             siri_gl::warm_up(ui);
+            // ── 润色结果模式：同一个面板，第二套 UI（原独立预览窗口的同一套视觉）。
+            if let Some(polish) = state.polish.as_ref() {
+                let mut owned = polish.clone();
+                let preview = polish_result_mode(ui, &mut owned, composer.is_empty(), lang);
+                action = match preview {
+                    PreviewAction::None => QaAction::None,
+                    PreviewAction::Cancel => QaAction::CancelPolish,
+                    PreviewAction::Confirm(text) => QaAction::ConfirmPolish(text),
+                };
+                return;
+            }
             // ── CardHeader：整条可拖，✕ 在右 ─────────────────────────────
             egui::Frame::NONE
                 .inner_margin(egui::Margin::symmetric(CARD_SPACING as i8, 12))
@@ -1528,15 +1540,40 @@ mod tests {
         painted
     }
 
+    /// 在给定尺寸里跑一帧 Ui 并取回返回值（面板内的「模式渲染」用得上）。
+    fn run_ui<T>(size: egui::Vec2, mut render: impl FnMut(&mut egui::Ui) -> T) -> T {
+        let _guard = super::siri_gl::gpu_state_guard();
+        let ctx = egui::Context::default();
+        let mut result = None;
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                ..Default::default()
+            });
+            egui::CentralPanel::default().show(&ctx, |ui| {
+                result = Some(render(ui));
+            });
+            let _ = ctx.end_pass();
+        }
+        result.expect("the closure must run at least once")
+    }
+
+    /// 合并后：润色结果就画在**选区助手面板**里（同一弹窗的第二套 UI），
+    /// 原独立预览窗口的文案与动作必须一模一样地出现。
     #[test]
-    fn polish_preview_paints_header_source_and_actions() {
-        let mut state = PreviewPopupState {
-            text: "polished text".to_string(),
-            source: "source paragraph".to_string(),
+    fn the_polish_result_renders_inside_the_ask_panel() {
+        let state = QaPopupState {
+            phase: "idle".to_string(),
+            polish: Some(QaPolishState {
+                text: "polished text".to_string(),
+                source: "source paragraph".to_string(),
+            }),
+            ..Default::default()
         };
-        let painted = run(egui::vec2(480.0, 300.0), |ctx| {
-            let action = selection_preview(ctx, &mut state, false, Lang::ZhCn);
-            assert_eq!(action, PreviewAction::None);
+        let mut composer = String::new();
+        let painted = run(egui::vec2(420.0, 540.0), |ctx| {
+            let action = selection_ask(ctx, &state, &mut composer, Lang::ZhCn, None);
+            assert_eq!(action, QaAction::None);
             String::new()
         });
         for expected in [
@@ -1548,30 +1585,23 @@ mod tests {
         ] {
             assert!(
                 has(&painted, expected),
-                "preview must paint {expected:?}\n{painted}"
+                "the polish mode must paint {expected:?} inside the ask panel\n{painted}"
             );
         }
     }
 
     #[test]
     fn polish_preview_confirm_returns_edited_text() {
-        let ctx = egui::Context::default();
-        let mut state = PreviewPopupState {
+        let mut state = QaPolishState {
             text: "edited result".to_string(),
             source: String::new(),
         };
-        ctx.begin_pass(egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(480.0, 300.0),
-            )),
-            ..Default::default()
+        // 没有输入时不得误报动作，也不得改动文本。
+        let action = run_ui(egui::vec2(420.0, 540.0), |ui| {
+            polish_result_mode(ui, &mut state, false, Lang::ZhCn)
         });
-        // 直接走一次渲染，确认没有输入时不会误报动作。
-        let action = selection_preview(&ctx, &mut state, true, Lang::ZhCn);
-        let _ = ctx.end_pass();
         assert_eq!(action, PreviewAction::None);
-        assert!(state.text == "edited result");
+        assert_eq!(state.text, "edited result");
     }
 
     #[test]
@@ -1599,6 +1629,7 @@ mod tests {
         }
 
         let thread = QaPopupState {
+            polish: None,
             phase: "thinking".to_string(),
             messages: vec![
                 PopupChatMessage {

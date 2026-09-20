@@ -18,14 +18,14 @@ use tokio::process::Command;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc as tokio_mpsc;
 
-pub const POPUP_PROTOCOL_VERSION: u16 = 5;
+pub const POPUP_PROTOCOL_VERSION: u16 = 6;
 pub const MAX_JSONL_LINE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PopupKind {
+    /// 选区助手面板：提问对话 + 润色结果编辑（合并后唯一的选区弹窗）。
     Qa,
-    Preview,
     Capsule,
     LessComputer,
 }
@@ -34,7 +34,6 @@ impl PopupKind {
     pub fn argument(self) -> &'static str {
         match self {
             Self::Qa => "--qa",
-            Self::Preview => "--preview",
             Self::Capsule => "--capsule",
             Self::LessComputer => "--less-computer",
         }
@@ -79,7 +78,8 @@ pub struct PopupChatMessage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostToPopup {
-    Preview {
+    /// 润色结果：送进**选区助手面板**的「润色结果」模式（不再有独立预览窗口）。
+    PolishPreview {
         version: u16,
         session_id: String,
         sequence: u64,
@@ -161,7 +161,7 @@ pub enum HostToPopup {
 impl HostToPopup {
     pub fn version(&self) -> u16 {
         match self {
-            Self::Preview { version, .. }
+            Self::PolishPreview { version, .. }
             | Self::QaSnapshot { version, .. }
             | Self::Capsule { version, .. }
             | Self::LessComputer { version, .. }
@@ -172,7 +172,7 @@ impl HostToPopup {
 
     pub fn session_id(&self) -> &str {
         match self {
-            Self::Preview { session_id, .. }
+            Self::PolishPreview { session_id, .. }
             | Self::QaSnapshot { session_id, .. }
             | Self::Capsule { session_id, .. }
             | Self::LessComputer { session_id, .. }
@@ -183,7 +183,7 @@ impl HostToPopup {
 
     pub fn sequence(&self) -> u64 {
         match self {
-            Self::Preview { sequence, .. }
+            Self::PolishPreview { sequence, .. }
             | Self::QaSnapshot { sequence, .. }
             | Self::Capsule { sequence, .. }
             | Self::LessComputer { sequence, .. }
@@ -194,7 +194,8 @@ impl HostToPopup {
 
     pub fn content_kind(&self) -> Option<PopupKind> {
         match self {
-            Self::Preview { .. } => Some(PopupKind::Preview),
+            // 润色结果现在由选区助手面板承载。
+            Self::PolishPreview { .. } => Some(PopupKind::Qa),
             Self::QaSnapshot { .. } => Some(PopupKind::Qa),
             Self::Capsule { .. } => Some(PopupKind::Capsule),
             Self::LessComputer { .. } => Some(PopupKind::LessComputer),
@@ -213,13 +214,15 @@ pub enum PopupToHost {
         sequence: u64,
         kind: PopupKind,
     },
-    ConfirmPreview {
+    /// 确认用编辑后的文本替换选区（由选区助手面板发出）。
+    ConfirmPolish {
         version: u16,
         session_id: String,
         sequence: u64,
         text: String,
     },
-    CancelPreview {
+    /// 取消本次润色（由选区助手面板发出）。
+    CancelPolish {
         version: u16,
         session_id: String,
         sequence: u64,
@@ -316,8 +319,8 @@ impl PopupToHost {
     pub fn version(&self) -> u16 {
         match self {
             Self::Ready { version, .. }
-            | Self::ConfirmPreview { version, .. }
-            | Self::CancelPreview { version, .. }
+            | Self::ConfirmPolish { version, .. }
+            | Self::CancelPolish { version, .. }
             | Self::SubmitQa { version, .. }
             | Self::ToggleQaRecording { version, .. }
             | Self::DismissQa { version, .. }
@@ -338,8 +341,8 @@ impl PopupToHost {
     pub fn session_id(&self) -> &str {
         match self {
             Self::Ready { session_id, .. }
-            | Self::ConfirmPreview { session_id, .. }
-            | Self::CancelPreview { session_id, .. }
+            | Self::ConfirmPolish { session_id, .. }
+            | Self::CancelPolish { session_id, .. }
             | Self::SubmitQa { session_id, .. }
             | Self::ToggleQaRecording { session_id, .. }
             | Self::DismissQa { session_id, .. }
@@ -360,8 +363,8 @@ impl PopupToHost {
     pub fn sequence(&self) -> u64 {
         match self {
             Self::Ready { sequence, .. }
-            | Self::ConfirmPreview { sequence, .. }
-            | Self::CancelPreview { sequence, .. }
+            | Self::ConfirmPolish { sequence, .. }
+            | Self::CancelPolish { sequence, .. }
             | Self::SubmitQa { sequence, .. }
             | Self::ToggleQaRecording { sequence, .. }
             | Self::DismissQa { sequence, .. }
@@ -382,7 +385,7 @@ impl PopupToHost {
     pub fn kind(&self) -> PopupKind {
         match self {
             Self::Ready { kind, .. } => *kind,
-            Self::ConfirmPreview { .. } | Self::CancelPreview { .. } => PopupKind::Preview,
+            Self::ConfirmPolish { .. } | Self::CancelPolish { .. } => PopupKind::Qa,
             Self::SubmitQa { .. }
             | Self::ToggleQaRecording { .. }
             | Self::DismissQa { .. }
@@ -412,7 +415,6 @@ struct PopupActionSlot {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct PopupActionGuard {
     qa: PopupActionSlot,
-    preview: PopupActionSlot,
     capsule: PopupActionSlot,
     less_computer: PopupActionSlot,
 }
@@ -421,7 +423,6 @@ impl PopupActionGuard {
     fn slot_mut(&mut self, kind: PopupKind) -> &mut PopupActionSlot {
         match kind {
             PopupKind::Qa => &mut self.qa,
-            PopupKind::Preview => &mut self.preview,
             PopupKind::Capsule => &mut self.capsule,
             PopupKind::LessComputer => &mut self.less_computer,
         }
@@ -614,7 +615,7 @@ where
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct PreviewPopupState {
+pub struct QaPolishState {
     pub text: String,
     pub source: String,
 }
@@ -627,6 +628,8 @@ pub struct QaPopupState {
     pub streaming_answer: String,
     pub error: Option<String>,
     pub edit_instruction_mode: bool,
+    /// 润色结果模式：Some = 正在编辑润色结果（替代原来的独立预览窗口）。
+    pub polish: Option<QaPolishState>,
     pub edit_apply_available: bool,
     pub edit_revert_available: bool,
     pub pinned: bool,
@@ -657,7 +660,6 @@ pub struct PopupState {
     pub last_sequence: u64,
     pub visible: bool,
     pub shutdown_requested: bool,
-    pub preview: PreviewPopupState,
     pub qa: QaPopupState,
     pub capsule: CapsulePopupState,
     pub less_computer: LessComputerPopupState,
@@ -685,7 +687,7 @@ impl PopupState {
             } else {
                 let starts_session = matches!(
                     message,
-                    HostToPopup::Preview { .. }
+                    HostToPopup::PolishPreview { .. }
                         | HostToPopup::QaSnapshot { .. }
                         | HostToPopup::Capsule { .. }
                         | HostToPopup::LessComputer { .. }
@@ -703,8 +705,9 @@ impl PopupState {
         self.session_id = Some(session_id);
         self.last_sequence = sequence;
         match message {
-            HostToPopup::Preview { text, source, .. } => {
-                self.preview = PreviewPopupState { text, source };
+            HostToPopup::PolishPreview { text, source, .. } => {
+                // 润色结果落到选区助手面板的「润色结果」模式。
+                self.qa.polish = Some(QaPolishState { text, source });
                 self.visible = true;
             }
             HostToPopup::QaSnapshot {
@@ -721,6 +724,7 @@ impl PopupState {
                 ..
             } => {
                 self.qa = QaPopupState {
+                    polish: None,
                     phase,
                     messages,
                     selection_preview,
@@ -1208,7 +1212,7 @@ mod tests {
         assert!(!force_x11_for(PopupKind::Capsule, Some(":0"), true));
         // The panels take keyboard input, so they keep their Wayland windows.
         assert!(!force_x11_for(PopupKind::Qa, Some(":0"), false));
-        assert!(!force_x11_for(PopupKind::Preview, Some(":0"), false));
+        assert!(!force_x11_for(PopupKind::Qa, Some(":0"), false));
     }
 
     #[test]
@@ -1277,8 +1281,8 @@ mod tests {
     use std::io::Cursor;
     use std::time::{Duration, Instant};
 
-    fn preview(text: String) -> HostToPopup {
-        HostToPopup::Preview {
+    fn polish_preview(text: String) -> HostToPopup {
+        HostToPopup::PolishPreview {
             version: POPUP_PROTOCOL_VERSION,
             session_id: "session-一".to_owned(),
             sequence: 7,
@@ -1391,7 +1395,7 @@ mod tests {
 
     #[test]
     fn jsonl_round_trip_escapes_quotes_backslashes_and_unicode() {
-        let expected = preview("他说：\"你好\" C:\\\\tmp\\\\文件".to_owned());
+        let expected = polish_preview("他说：\"你好\" C:\\\\tmp\\\\文件".to_owned());
         let mut bytes = Vec::new();
         write_jsonl(&mut bytes, &expected).unwrap();
         assert_eq!(bytes.last(), Some(&b'\n'));
@@ -1418,9 +1422,12 @@ mod tests {
     #[test]
     fn popup_state_rejects_late_and_cross_session_messages() {
         let mut state = PopupState::default();
-        assert_eq!(state.apply(preview("new".into())), ApplyOutcome::Applied);
-        let mut late = preview("late".into());
-        if let HostToPopup::Preview { sequence, .. } = &mut late {
+        assert_eq!(
+            state.apply(polish_preview("new".into())),
+            ApplyOutcome::Applied
+        );
+        let mut late = polish_preview("late".into());
+        if let HostToPopup::PolishPreview { sequence, .. } = &mut late {
             *sequence = 6;
         }
         assert_eq!(state.apply(late), ApplyOutcome::Stale);
@@ -1430,10 +1437,18 @@ mod tests {
             sequence: 8,
         };
         assert_eq!(state.apply(other), ApplyOutcome::Stale);
-        assert_eq!(state.preview.text, "new");
+        assert_eq!(
+            state
+                .qa
+                .polish
+                .as_ref()
+                .map(|p| p.text.clone())
+                .unwrap_or_default(),
+            "new"
+        );
 
-        let mut next_session = preview("next".into());
-        if let HostToPopup::Preview {
+        let mut next_session = polish_preview("next".into());
+        if let HostToPopup::PolishPreview {
             session_id,
             sequence,
             ..
@@ -1443,12 +1458,20 @@ mod tests {
             *sequence = 1;
         }
         assert_eq!(state.apply(next_session), ApplyOutcome::Applied);
-        let mut retired = preview("retired".into());
-        if let HostToPopup::Preview { sequence, .. } = &mut retired {
+        let mut retired = polish_preview("retired".into());
+        if let HostToPopup::PolishPreview { sequence, .. } = &mut retired {
             *sequence = 99;
         }
         assert_eq!(state.apply(retired), ApplyOutcome::Stale);
-        assert_eq!(state.preview.text, "next");
+        assert_eq!(
+            state
+                .qa
+                .polish
+                .as_ref()
+                .map(|p| p.text.clone())
+                .unwrap_or_default(),
+            "next"
+        );
     }
 
     #[test]
@@ -1469,7 +1492,7 @@ mod tests {
             sequence: 1,
         };
         assert!(!guard.accept(PopupKind::Qa, &stale, "qa-session"));
-        assert!(!guard.accept(PopupKind::Preview, &submit, "qa-session"));
+        assert!(!guard.accept(PopupKind::Qa, &submit, "qa-session"));
         assert!(!guard.accept(PopupKind::Qa, &submit, "new-session"));
     }
 
@@ -1480,19 +1503,19 @@ mod tests {
             version: POPUP_PROTOCOL_VERSION,
             session_id: "session".into(),
             sequence: 1,
-            kind: PopupKind::Preview,
+            kind: PopupKind::Qa,
         };
-        assert!(guard.accept(PopupKind::Preview, &ready, "session"));
-        assert!(!guard.accept(PopupKind::Preview, &ready, "session"));
-        guard.reset(PopupKind::Preview);
-        assert!(guard.accept(PopupKind::Preview, &ready, "session"));
+        assert!(guard.accept(PopupKind::Qa, &ready, "session"));
+        assert!(!guard.accept(PopupKind::Qa, &ready, "session"));
+        guard.reset(PopupKind::Qa);
+        assert!(guard.accept(PopupKind::Qa, &ready, "session"));
     }
 
     #[test]
     fn popup_messages_are_bound_to_their_process_kind() {
         assert_eq!(
-            preview("text".into()).content_kind(),
-            Some(PopupKind::Preview)
+            polish_preview("text".into()).content_kind(),
+            Some(PopupKind::Qa)
         );
         let hide = HostToPopup::Hide {
             version: POPUP_PROTOCOL_VERSION,
