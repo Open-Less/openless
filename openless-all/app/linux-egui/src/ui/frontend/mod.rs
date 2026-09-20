@@ -1339,6 +1339,52 @@ mod tests {
         }
     }
 
+    /// 无边框窗口的四个拖拽区必须给出对应方向的拉伸光标（否则用户看不出窗口
+    /// 能拉伸）。指针放在左边缘中部时应当得到 ResizeHorizontal。
+    #[test]
+    fn the_window_edges_show_a_resize_cursor_on_hover() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1240.0, 800.0));
+        // 拖拽区贴在**窗口**边上，而窗口是屏幕内缩 6px 的圆角表面。
+        let window = screen.shrink(6.0);
+        let probes = [
+            (
+                egui::pos2(window.left() + 2.0, window.center().y),
+                egui::CursorIcon::ResizeHorizontal,
+            ),
+            (
+                egui::pos2(window.center().x, window.bottom() - 2.0),
+                egui::CursorIcon::ResizeVertical,
+            ),
+            (
+                egui::pos2(window.right() - 4.0, window.bottom() - 4.0),
+                egui::CursorIcon::ResizeNwSe,
+            ),
+            (
+                egui::pos2(window.right() - 4.0, window.top() + 4.0),
+                egui::CursorIcon::ResizeNeSw,
+            ),
+        ];
+        for (position, expected) in probes {
+            let mut icon = egui::CursorIcon::Default;
+            for _ in 0..3 {
+                ctx.begin_pass(egui::RawInput {
+                    screen_rect: Some(screen),
+                    events: vec![egui::Event::PointerMoved(position)],
+                    ..Default::default()
+                });
+                layout::resize_handles(&ctx);
+                // 光标在 platform_output 里，而 `end_pass` 会把 output 取走，
+                // 所以要读返回值而不是 `ctx.output(...)`。
+                icon = ctx.end_pass().platform_output.cursor_icon;
+            }
+            assert_eq!(
+                icon, expected,
+                "hovering {position:?} must show {expected:?}, got {icon:?}"
+            );
+        }
+    }
+
     /// 设置页顶部不该再有那一层「设置」标题栏：Tauri 的桌面端左栏顶端是搜索框、
     /// 右栏顶端才是「标题 + 修改后自动保存 + 关闭」。侧栏导航里那一个「设置」仍在。
     #[test]

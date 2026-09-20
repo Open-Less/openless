@@ -1953,6 +1953,62 @@ mod tests {
         );
     }
 
+    /// 胶囊在 layer-shell 表面上**只有指针输入**（层表面拿不到键盘与输入法），
+    /// 所以「两个圆钮必须可点」是它唯一能用的交互。这条测试把指针按到 ✕ / ✓
+    /// 的圆心，必须分别返回 Cancel / Confirm。
+    #[test]
+    fn the_capsule_buttons_report_cancel_and_confirm() {
+        let _guard = super::siri_gl::gpu_state_guard();
+        let size = egui::vec2(460.0, 180.0);
+        // 与渲染同源的几何：药丸 176×42，水平居中、距底 16；圆钮 28、内缩 8。
+        let pill_left = size.x / 2.0 - PILL_WIDTH / 2.0;
+        let pill_right = pill_left + PILL_WIDTH;
+        let centre_y = size.y - CAPSULE_BOTTOM_INSET - PILL_HEIGHT / 2.0;
+        let cancel = egui::pos2(pill_left + 8.0 + ROUND_BUTTON / 2.0, centre_y);
+        let confirm = egui::pos2(pill_right - 8.0 - ROUND_BUTTON / 2.0, centre_y);
+        for (position, expected) in [
+            (cancel, CapsuleAction::Cancel),
+            (confirm, CapsuleAction::Confirm),
+        ] {
+            let ctx = egui::Context::default();
+            let state = CapsulePopupState {
+                phase: "Recording".to_string(),
+                audio_level: Some(0.4),
+                style: "classic".to_string(),
+                ..Default::default()
+            };
+            let mut action = CapsuleAction::None;
+            // 三帧：第一帧布局，第二帧按下，第三帧松开（egui 的点击需要成对事件）。
+            for events in [
+                vec![egui::Event::PointerMoved(position)],
+                vec![egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                }],
+                vec![egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::default(),
+                }],
+            ] {
+                ctx.begin_pass(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events,
+                    ..Default::default()
+                });
+                action = dictation_capsule(&ctx, &state, Lang::ZhCn);
+                let _ = ctx.end_pass();
+            }
+            assert_eq!(
+                action, expected,
+                "clicking {position:?} must report {expected:?}"
+            );
+        }
+    }
+
     #[test]
     fn capsule_paints_state_specific_content() {
         let recording = CapsulePopupState {

@@ -312,9 +312,30 @@ pub fn resize_handles(ctx: &egui::Context) {
             .sense(egui::Sense::drag())
             .show(ctx, |ui| ui.set_min_size(rect.size()))
             .response;
+        // 悬停到拖拽区要换成对应方向的拉伸光标：没有它用户看不出「这里能拉伸」
+        // （无边框窗口唯一的提示就是光标形状）。这里直接按指针位置判定：Area 的
+        // `hovered()` 依赖上一帧的命中信息，首帧不生效，而光标必须立刻对。
+        let hovering = ctx
+            .input(|input| input.pointer.latest_pos())
+            .is_some_and(|position| rect.contains(position));
+        if hovering {
+            ctx.set_cursor_icon(resize_cursor(direction));
+        }
+        let _ = &response;
         if response.drag_started() {
             ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
         }
+    }
+}
+
+/// 拖拽方向 → 拉伸光标。
+fn resize_cursor(direction: egui::ResizeDirection) -> egui::CursorIcon {
+    use egui::ResizeDirection as D;
+    match direction {
+        D::North | D::South => egui::CursorIcon::ResizeVertical,
+        D::East | D::West => egui::CursorIcon::ResizeHorizontal,
+        D::NorthWest | D::SouthEast => egui::CursorIcon::ResizeNwSe,
+        D::NorthEast | D::SouthWest => egui::CursorIcon::ResizeNeSw,
     }
 }
 
