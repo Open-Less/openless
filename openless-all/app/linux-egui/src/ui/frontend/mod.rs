@@ -1319,9 +1319,12 @@ mod tests {
             render(&ctx, &mut vm, &mut actions);
             let _ = ctx.end_pass();
             let body = layout::body_rect(&ctx);
+            // 卡片矩形现在由叠层自己写入 memory（Area 覆盖整个 body，面积已不等于卡片）。
             let modal = ctx
-                .memory(|memory| memory.area_rect(egui::Id::new("openless-settings-modal")))
-                .expect("the settings modal area must exist while the overlay is open");
+                .data(|data| {
+                    data.get_temp::<egui::Rect>(egui::Id::new("openless-settings-card-rect"))
+                })
+                .expect("the settings card rect must be published while the overlay is open");
             assert!(
                 (modal.center().x - body.center().x).abs() <= 1.5,
                 "modal must be horizontally centred at {width}x{height}: modal={modal:?} body={body:?}"

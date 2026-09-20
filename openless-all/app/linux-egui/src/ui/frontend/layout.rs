@@ -326,7 +326,10 @@ pub fn resize_handles(ctx: &egui::Context) {
     // interior, and would swallow every button click.
     for (index, (rect, direction)) in zones.into_iter().enumerate() {
         let response = egui::Area::new(egui::Id::new(("openless-resize", index)))
-            .order(egui::Order::Foreground)
+            // 条带要在设置遮罩（Foreground）之上：遮罩盖住了 body 范围内的外圈像素，
+            // 否则弹窗打开时拖边缘会被遮罩吃掉、窗口改不了大小（用户报「设置页面下
+            // 无法修改窗口大小」）。Tooltip 只是层级，条带本身仍只占外圈 6px/18px。
+            .order(egui::Order::Tooltip)
             .fixed_pos(rect.min)
             .default_size(rect.size())
             .sense(egui::Sense::drag())

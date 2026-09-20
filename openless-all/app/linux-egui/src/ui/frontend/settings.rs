@@ -81,17 +81,24 @@ pub fn settings_overlay(
         (body.height() - 40.0).max(280.0).min(680.0),
     );
 
-    // 遮罩与输入拦截合并到同一个 Area。之前遮罩是用 `ctx.layer_painter()` 直接建
-    // 的原生图层，它在同一 Order 里的相对位置不受控：弹窗从 Tooltip 降到
-    // Foreground 之后，这层遮罩就盖到弹窗上面了（用户看到「设置整体被一个阴影层
-    // 压住」）。改用 Area 并按创建顺序排在弹窗之前，遮罩就稳定在弹窗下面。
-    egui::Area::new(egui::Id::new("openless-settings-backdrop-input"))
+    // 遮罩、点击拦截与卡片必须是**同一个 Area**。egui 在 Area 被按下时会把它抬到同层
+    // 最上面（egui-0.33.3/src/containers/area.rs:549 的 `move_to_top`），所以遮罩只要
+    // 是独立 Area，点一下遮罩就会盖住卡片（用户报「点阴影后阴影上移、设置没法用」）。
+    // 同一个图层里先画遮罩、再画卡片，遮罩压住卡片在结构上就不可能发生。
+    let card_rect = egui::Rect::from_center_size(body.center(), size);
+    // 卡片实际落点写进 memory，供测试查询（Area 现在覆盖整个 body，面积已不等于卡片）。
+    ctx.data_mut(|data| data.insert_temp(egui::Id::new("openless-settings-card-rect"), card_rect));
+    egui::Area::new(egui::Id::new("openless-settings-modal"))
+        // 用 Foreground 而不是 Tooltip：egui 的 `ComboBox` 下拉/弹出菜单是
+        // `Order::Foreground`（egui-0.33.3/src/containers/popup.rs:150），而同层里
+        // 后创建的 Area 在上层、跨 Order 则是 Tooltip > Foreground。弹窗若占着
+        // Tooltip，设置里所有「点开才出现」的下拉都会被弹窗整个盖住（用户报
+        // 「需要点开的控件都打不开」）。
         .order(egui::Order::Foreground)
         .fixed_pos(body.min)
-        .default_size(body.size())
         .constrain(false)
-        .interactable(true)
         .show(ctx, |ui| {
+            // 先把遮罩画在本图层最底下，并把 body 上的点击吃掉（下方页面既看不到也点不到）。
             ui.painter().rect_filled(
                 body,
                 egui::CornerRadius {
@@ -102,74 +109,60 @@ pub fn settings_overlay(
                 },
                 theme::OVERLAY,
             );
-            ui.set_min_size(body.size());
-            ui.set_max_size(body.size());
-            let _ = ui.allocate_exact_size(body.size(), egui::Sense::click());
-        });
-
-    egui::Area::new(egui::Id::new("openless-settings-modal"))
-        // 用 Foreground 而不是 Tooltip：egui 的 `ComboBox` 下拉/弹出菜单是
-        // `Order::Foreground`（egui-0.33.3/src/containers/popup.rs:150），而同层里
-        // 后创建的 Area 在上层、跨 Order 则是 Tooltip > Foreground。弹窗若占着
-        // Tooltip，设置里所有「点开才出现」的下拉都会被弹窗整个盖住（用户报
-        // 「需要点开的控件都打不开」）。降到 Foreground 后：先创建的遮罩输入层仍在
-        // 其下，弹窗内部再打开的下拉因创建更晚而在其上。
-        .order(egui::Order::Foreground)
-        // 用**显式位置**而不是 anchor + offset：anchor 按上一帧的面积（含阴影偏移）
-        // 定位，实测卡片稳定落在 body_rect 垂直中心下方 19.5px，且窗口缩放的首帧
-        // 会跳一下（用户报「缩放窗口时并不是始终居中」）。直接由 body.center()
-        // 算卡片左上角，每帧都精确居中。
-        .fixed_pos(body.center() - size * 0.5)
-        .constrain_to(body)
-        .show(ctx, |ui| {
-            ui.set_clip_rect(body.intersect(ui.clip_rect()));
-            egui::Frame::new()
-                // Tauri `--ol-settings-content-bg`：整块弹窗是浅灰底，卡片才是白色。
-                .fill(theme::CONTENT_BG)
-                .stroke(egui::Stroke::new(0.5, theme::LINE))
-                .corner_radius(egui::CornerRadius::same(14))
-                .shadow(egui::Shadow {
-                    offset: [0, 18],
-                    blur: 32,
-                    spread: 0,
-                    color: egui::Color32::from_black_alpha(96),
-                })
-                .show(ui, |ui| {
-                    ui.set_min_size(size);
-                    ui.set_max_size(size);
-                    // Tauri SettingsModal：桌面端没有横跨两栏的标题栏——左侧栏顶端就是
-                    // 搜索框，右侧内容区顶端才是标题 + 自动保存提示 + 关闭按钮。
-                    let body_height = size.y.max(120.0);
-                    ui.horizontal(|ui| {
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(RAIL_WIDTH, body_height),
-                            egui::Layout::top_down(egui::Align::Min),
-                            |ui| {
-                                ui.set_min_height(body_height);
-                                ui.set_max_height(body_height);
-                                egui::ScrollArea::vertical()
-                                    .id_salt("openless-settings-rail")
-                                    .auto_shrink([false, false])
-                                    .show(ui, |ui| {
-                                        ui.set_width(RAIL_WIDTH - 20.0);
-                                        rail(ui, vm, actions);
-                                    });
-                            },
-                        );
-                        ui.separator();
-                        // 两列之间 egui 还会插入 item_spacing，分隔线自身也占宽：不减掉它们
-                        // 内容就比 size 宽十几像素，卡片会被撑宽、`fixed_pos` 居中就偏（实测 11px）。
-                        let gutters = ui.spacing().item_spacing.x * 3.0;
-                        ui.allocate_ui_with_layout(
-                            egui::vec2((size.x - RAIL_WIDTH - gutters).max(0.0), body_height),
-                            egui::Layout::top_down(egui::Align::Min),
-                            |ui| {
-                                ui.set_min_height(body_height);
-                                panel(ui, vm, actions);
-                            },
-                        );
+            let _ = ui.allocate_rect(body, egui::Sense::click());
+            // 卡片：同图层内后画 → 永远在遮罩之上。位置用**显式矩形**而不是 anchor：
+            // anchor 按上一帧面积（含阴影偏移）定位，卡片会稳定偏下 19.5px，且窗口
+            // 缩放的首帧会跳一下（用户报「缩放窗口时并不是始终居中」）。
+            ui.scope_builder(egui::UiBuilder::new().max_rect(card_rect), |ui| {
+                ui.set_clip_rect(body.intersect(ui.clip_rect()));
+                egui::Frame::new()
+                    // Tauri `--ol-settings-content-bg`：整块弹窗是浅灰底，卡片才是白色。
+                    .fill(theme::CONTENT_BG)
+                    .stroke(egui::Stroke::new(0.5, theme::LINE))
+                    .corner_radius(egui::CornerRadius::same(14))
+                    .shadow(egui::Shadow {
+                        offset: [0, 18],
+                        blur: 32,
+                        spread: 0,
+                        color: egui::Color32::from_black_alpha(96),
+                    })
+                    .show(ui, |ui| {
+                        ui.set_min_size(size);
+                        ui.set_max_size(size);
+                        // Tauri SettingsModal：桌面端没有横跨两栏的标题栏——左侧栏顶端就是
+                        // 搜索框，右侧内容区顶端才是标题 + 自动保存提示 + 关闭按钮。
+                        let body_height = size.y.max(120.0);
+                        ui.horizontal(|ui| {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(RAIL_WIDTH, body_height),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    ui.set_min_height(body_height);
+                                    ui.set_max_height(body_height);
+                                    egui::ScrollArea::vertical()
+                                        .id_salt("openless-settings-rail")
+                                        .auto_shrink([false, false])
+                                        .show(ui, |ui| {
+                                            ui.set_width(RAIL_WIDTH - 20.0);
+                                            rail(ui, vm, actions);
+                                        });
+                                },
+                            );
+                            ui.separator();
+                            // 两列之间 egui 还会插入 item_spacing，分隔线自身也占宽：不减掉它们
+                            // 内容就比 size 宽十几像素，卡片会被撑宽、`fixed_pos` 居中就偏（实测 11px）。
+                            let gutters = ui.spacing().item_spacing.x * 3.0;
+                            ui.allocate_ui_with_layout(
+                                egui::vec2((size.x - RAIL_WIDTH - gutters).max(0.0), body_height),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    ui.set_min_height(body_height);
+                                    panel(ui, vm, actions);
+                                },
+                            );
+                        });
                     });
-                });
+            });
         });
 }
 
