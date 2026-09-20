@@ -84,7 +84,7 @@ export const zhCN = {
   },
   selectionPolishPreview: {
     title: '选区润色预览',
-    subtitle: '可直接编辑；点击确认后才会替换原选区。',
+    subtitle: '只读结果；点「确认并替换」才会写回原选区。',
     cancel: '取消',
     resultLabel: '润色结果',
     sourcePrefix: '原文：',

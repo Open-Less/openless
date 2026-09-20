@@ -5118,14 +5118,14 @@ pub const CATALOG: &[Msg] = &[
         key: "selection.polish_preview.source_prefix",
         text: row("原文：", "原文：", "Original: ", "原文：", "원문: "),
     },
-    Msg {
+        Msg {
         key: "selection.polish_preview.subtitle",
         text: row(
-            "可直接编辑；点击确认后才会替换原选区。",
-            "可直接編輯；點擊確認後才會替換原選區。",
-            "Editable; the original selection is replaced only after you confirm.",
-            "編集可能です。確認後はじめて元の選択範囲を置き換えます。",
-            "편집 가능합니다. 확인을 클릭한 뒤에만 원래 선택 영역을 교체합니다.",
+            "只读结果；点「确认并替换」才会写回原选区。",
+            "唯讀結果；點「確認並替換」才會寫回原選區。",
+            "Read-only result; press “Confirm & replace” to write it back.",
+            "読み取り専用の結果です。確定すると選択範囲に書き戻します。",
+            "읽기 전용 결과입니다. 확인하면 선택 영역에 씁니다.",
         ),
     },
     Msg {

@@ -586,7 +586,9 @@ mod linux_app {
         qa_edit: QaEditFlags,
         qa_input: String,
         qa_state: Option<QaStateEvent>,
-        selection_preview_visible: bool,
+        /// 选区助手面板是否处于「润色结果」模式（独立预览窗口已下线，
+        /// 润色结果由这个面板承载：提问对话 / 润色结果是同一弹窗的两套 UI）。
+        polish_result_visible: bool,
         selection_draft: String,
         selection: Option<SelectionSnapshot>,
         remote_access: Option<(openless_core::RemoteInputStatus, String)>,
@@ -725,7 +727,7 @@ mod linux_app {
                         qa_edit: QaEditFlags::default(),
                         qa_input: String::new(),
                         qa_state: None,
-                        selection_preview_visible: false,
+                        polish_result_visible: false,
                         selection_draft: String::new(),
                         selection: None,
                         remote_access: None,
@@ -832,7 +834,7 @@ mod linux_app {
                     qa_edit: QaEditFlags::default(),
                     qa_input: String::new(),
                     qa_state: None,
-                    selection_preview_visible: false,
+                    polish_result_visible: false,
                     selection_draft: String::new(),
                     selection: None,
                     remote_access: None,
@@ -1391,7 +1393,7 @@ mod linux_app {
                     }) => match session_id.parse::<uuid::Uuid>() {
                         Ok(session_id) => {
                             // 润色结束：选区助手面板回到提问模式（同一个弹窗）。
-                            self.selection_preview_visible = false;
+                            self.polish_result_visible = false;
                             let session_id = openless_core::SessionId::from_uuid(session_id);
                             if let Some(backend) = self.backend() {
                                 self.spawn(async move {
@@ -1413,7 +1415,7 @@ mod linux_app {
                     }) => match session_id.parse::<uuid::Uuid>() {
                         Ok(session_id) => {
                             // 取消润色：同样退出润色模式。
-                            self.selection_preview_visible = false;
+                            self.polish_result_visible = false;
                             let session_id = openless_core::SessionId::from_uuid(session_id);
                             if let Some(backend) = self.backend() {
                                 self.spawn(async move {
@@ -1433,7 +1435,7 @@ mod linux_app {
                     PopupSupervisorEvent::Message(PopupToHost::Ready { .. }) => match kind {
                         PopupKind::Qa => {
                             // 选区助手面板既可能是提问模式，也可能是润色结果模式。
-                            if self.selection_preview_visible {
+                            if self.polish_result_visible {
                                 self.show_selection_popup();
                             } else {
                                 self.show_qa_popup();
@@ -2344,10 +2346,10 @@ mod linux_app {
                 BackendEventKind::SelectionStateChanged(snapshot) => {
                     if snapshot.phase == SelectionPhase::Preview {
                         self.selection_draft = snapshot.preview_text.clone().unwrap_or_default();
-                        self.selection_preview_visible = true;
+                        self.polish_result_visible = true;
                     }
                     if let Some(session_id) = snapshot.session_id {
-                        // 选区助手面板：润色结果以「润色模式」帧送进去。
+                        // 选区助手面板：润色结果以「润色结果」帧送进去。
                         self.ensure_popup(PopupKind::Qa);
                         self.send_popup(
                             PopupKind::Qa,
@@ -2471,25 +2473,29 @@ mod linux_app {
                             self.status = tr_l10n(lang, "status.request_restart").to_string();
                         }
                         HostAction::ShowSelectionPreview => {
-                            // 核心仍照旧发这个动作；现在它只负责把**选区助手面板**
+                            // 核心照旧发这个动作；现在它只负责把**选区助手面板**
                             // 拉到「润色结果」模式（独立预览窗口已下线）。
-                            self.selection_preview_visible = true;
+                            self.polish_result_visible = true;
                             self.show_selection_popup();
                         }
                         HostAction::HideSelectionPreview => {
-                            self.selection_preview_visible = false;
-                            let session_id = self
-                                .selection
-                                .as_ref()
-                                .and_then(|selection| selection.session_id)
-                                .map(|id| id.to_string())
-                                .unwrap_or_else(|| "selection".to_string());
-                            // 润色模式下线：关闭选区助手面板（与提问模式同一个弹窗）。
-                            self.hide_popup(
-                                PopupKind::Qa,
-                                session_id,
-                                self.last_event_sequence.saturating_mul(2).saturating_add(1),
-                            );
+                            // 核心在润色流程收尾（直接覆盖 / 会话结束）时照旧发这个
+                            // 动作。面板此刻若在提问对话中，不能被它关掉——只撤掉
+                            // 润色结果模式。
+                            if self.polish_result_visible {
+                                self.polish_result_visible = false;
+                                let session_id = self
+                                    .selection
+                                    .as_ref()
+                                    .and_then(|selection| selection.session_id)
+                                    .map(|id| id.to_string())
+                                    .unwrap_or_else(|| "selection".to_string());
+                                self.hide_popup(
+                                    PopupKind::Qa,
+                                    session_id,
+                                    self.last_event_sequence.saturating_mul(2).saturating_add(1),
+                                );
+                            }
                         }
                         HostAction::ShowQa => {
                             log::info!("[hotkey] QA panel show requested by the host action");
@@ -2564,7 +2570,7 @@ mod linux_app {
                         self.qa_visible = false;
                         self.selection = None;
                         self.selection_draft.clear();
-                        self.selection_preview_visible = false;
+                        self.polish_result_visible = false;
                     }
                     self.snapshot = Some(snapshot);
                     for event in replay.events {
@@ -6170,7 +6176,6 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         less_computer_input: String,
         outgoing_sequence: u64,
         ready_sent: bool,
-        preview_focus_requested: bool,
         avatar: QaAvatar,
         lang: Lang,
         /// X11 overlay placement for the capsule (bottom-centre, never focus).
@@ -6253,9 +6258,6 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                     .is_some_and(|message_kind| message_kind != self.kind)
                 {
                     continue;
-                }
-                if matches!(message, HostToPopup::PolishPreview { .. }) {
-                    self.preview_focus_requested = false;
                 }
                 let shutdown = matches!(message, HostToPopup::Shutdown { .. });
                 let outcome = self.state.apply(message);
@@ -6691,7 +6693,6 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                             less_computer_input: String::new(),
                             outgoing_sequence: 0,
                             ready_sent: false,
-                            preview_focus_requested: false,
                             avatar: QaAvatar::default(),
                             lang: load_locale_pref().resolve(),
                             overlay: None,
@@ -6830,7 +6831,6 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                     less_computer_input: String::new(),
                     outgoing_sequence: 0,
                     ready_sent: false,
-                    preview_focus_requested: false,
                     avatar: QaAvatar::default(),
                     // The popup is a separate process, so it re-reads the
                     // persisted UI-locale preference rather than sharing state.
@@ -7460,7 +7460,6 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 less_computer_input: String::new(),
                 outgoing_sequence: 0,
                 ready_sent: false,
-                preview_focus_requested: false,
                 avatar: QaAvatar::default(),
                 lang: Lang::ZhCn,
                 overlay: None,

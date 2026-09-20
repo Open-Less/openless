@@ -83,7 +83,7 @@ export const ja: typeof zhCN = {
   },
   selectionPolishPreview: {
     title: '選択範囲の推敲プレビュー',
-    subtitle: '編集可能です。確認後はじめて元の選択範囲を置き換えます。',
+    subtitle: '読み取り専用の結果です。確定すると選択範囲に書き戻します。',
     cancel: 'キャンセル',
     resultLabel: '推敲結果',
     sourcePrefix: '原文：',

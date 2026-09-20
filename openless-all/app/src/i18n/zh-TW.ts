@@ -86,7 +86,7 @@ export const zhTW: typeof zhCN = {
   },
   selectionPolishPreview: {
     title: '選區潤色預覽',
-    subtitle: '可直接編輯；點擊確認後才會替換原選區。',
+    subtitle: '唯讀結果；點「確認並替換」才會寫回原選區。',
     cancel: '取消',
     resultLabel: '潤色結果',
     sourcePrefix: '原文：',

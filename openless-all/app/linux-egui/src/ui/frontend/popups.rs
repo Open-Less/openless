@@ -19,13 +19,13 @@ use openless_linux_egui::{
     QaPolishState, QaPopupState,
 };
 
-/// Result of rendering the selection-polish preview.
+/// Result of rendering the polish-result mode inside the selection-ask panel.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PreviewAction {
+pub enum PolishResultAction {
     None,
-    /// ✕ / 取消 → the host sends `CancelPreview`.
+    /// ✕ / 取消 → the host sends `CancelPolish`.
     Cancel,
-    /// ✓ 确认并替换 → the host sends `ConfirmPreview` with the edited text.
+    /// ✓ 确认并替换（即「插入」：把结果写回原选区）→ the host sends `ConfirmPolish`.
     Confirm(String),
 }
 
@@ -63,8 +63,9 @@ pub enum CapsuleAction {
     Confirm,
 }
 
-/// Tauri preview window padding (`padding: 18`).
-const PREVIEW_PADDING: f32 = 18.0;
+/// Tauri `selection-polish-preview` 面板的边距（`padding: 18`）。
+/// **只服务旧的独立预览窗口**的常量已随窗口一起删除；合并后由选区助手
+/// 面板的 `CARD_SPACING` 承载。
 /// The QA card uses `--card-spacing` (14px) for its header/footer gutters.
 const CARD_SPACING: f32 = 14.0;
 /// Composer row height (Tauri `InputGroup`).
@@ -88,19 +89,19 @@ const TYPELESS_BUTTON_BG: egui::Color32 = egui::Color32::from_rgb(0x3f, 0x3f, 0x
 /// 徽章与药丸之间的间距（Tauri `badgeGap`）。
 const CAPSULE_BADGE_GAP: f32 = 8.0;
 
-// ── 选区润色预览 ────────────────────────────────────────────────────────────
+// ── 润色结果模式（选区助手面板内的第二套 UI） ──────────────────────────────
 
-/// 选区润色预览：标题 + 副标题 + ✕、可编辑结果框、原文摘要、取消 / 确认并替换。
-/// 润色结果模式（原独立预览窗口的**同一套视觉**，现在画在选区助手面板里）。
+/// 润色结果：标题 + 副标题 + ✕、**只读**结果框、原文摘要、取消 / 确认并替换。
 ///
-/// 参数与返回值和面板内的对话模式对齐：返回 `PreviewAction` 由调用方翻译成面板动作。
+/// 这是原先独立预览窗口 `SelectionPolishPreview.tsx` 的同一套视觉，现在画在
+/// 选区助手面板里（`HostAction::ShowSelectionPreview` 落到这里）。按用户要求，
+/// 结果**只读**（不做就地编辑）；「确认并替换」就是把结果写回原选区的「插入」。
 pub fn polish_result_mode(
     ui: &mut egui::Ui,
-    state: &mut QaPolishState,
-    first_frame: bool,
+    state: &QaPolishState,
     lang: Lang,
-) -> PreviewAction {
-    let mut action = PreviewAction::None;
+) -> PolishResultAction {
+    let mut action = PolishResultAction::None;
     {
         {
             ui.horizontal(|ui| {
@@ -120,13 +121,14 @@ pub fn polish_result_mode(
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                     if icon_button(ui, icons::IconName::Close, theme::INK_3).clicked() {
-                        action = PreviewAction::Cancel;
+                        action = PolishResultAction::Cancel;
                     }
                 });
             });
             ui.add_space(12.0);
 
-            // 可编辑结果框：撑满剩余高度（Tauri `flex: 1; min-height: 150`）。
+            // 只读结果框：撑满剩余高度（Tauri `flex: 1; min-height: 150`），
+            // 文本可选可滚动，但没有光标、不会回到宿主。
             let footer_height = 48.0;
             let source_height = if state.source.is_empty() { 0.0 } else { 50.0 };
             let editor_height = (ui.available_height() - footer_height - source_height).max(150.0);
@@ -138,16 +140,24 @@ pub fn polish_result_mode(
                 .inner_margin(egui::Margin::same(12))
                 .show(ui, |ui| {
                     ui.set_min_size(egui::vec2(width - 24.0, editor_height - 24.0));
-                    let response = ui.add_sized(
-                        egui::vec2(width - 24.0, editor_height - 24.0),
-                        egui::TextEdit::multiline(&mut state.text)
-                            .frame(false)
-                            .text_color(theme::INK)
-                            .font(egui::FontId::proportional(14.0)),
-                    );
-                    if first_frame {
-                        response.request_focus();
-                    }
+                    egui::ScrollArea::vertical()
+                        .id_salt("openless-polish-result")
+                        .auto_shrink([false, false])
+                        // 上限卡在算好的框高上：`set_min_size` 不限制上限，
+                        // 不限的话滚动区会把下面的原文摘要顶出可视区。
+                        .max_height((editor_height - 24.0).max(60.0))
+                        .show(ui, |ui| {
+                            ui.set_min_width(width - 24.0);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&state.text)
+                                        .size(14.0)
+                                        .color(theme::INK),
+                                )
+                                .wrap()
+                                .selectable(true),
+                            );
+                        });
                 });
 
             if !state.source.is_empty() {
@@ -183,7 +193,7 @@ pub fn polish_result_mode(
                     theme::SURFACE,
                 );
                 if response.clicked() {
-                    action = PreviewAction::Confirm(state.text.clone());
+                    action = PolishResultAction::Confirm(state.text.clone());
                 }
                 ui.add_space(8.0);
                 let cancel = tr_l10n(lang, "selection.polish_preview.cancel");
@@ -207,7 +217,7 @@ pub fn polish_result_mode(
                 );
                 icon_text(ui, rect, None, cancel, theme::INK_2);
                 if response.clicked() {
-                    action = PreviewAction::Cancel;
+                    action = PolishResultAction::Cancel;
                 }
             });
         }
@@ -249,12 +259,10 @@ pub fn selection_ask(
             siri_gl::warm_up(ui);
             // ── 润色结果模式：同一个面板，第二套 UI（原独立预览窗口的同一套视觉）。
             if let Some(polish) = state.polish.as_ref() {
-                let mut owned = polish.clone();
-                let preview = polish_result_mode(ui, &mut owned, composer.is_empty(), lang);
-                action = match preview {
-                    PreviewAction::None => QaAction::None,
-                    PreviewAction::Cancel => QaAction::CancelPolish,
-                    PreviewAction::Confirm(text) => QaAction::ConfirmPolish(text),
+                action = match polish_result_mode(ui, polish, lang) {
+                    PolishResultAction::None => QaAction::None,
+                    PolishResultAction::Cancel => QaAction::CancelPolish,
+                    PolishResultAction::Confirm(text) => QaAction::ConfirmPolish(text),
                 };
                 return;
             }
@@ -1540,24 +1548,6 @@ mod tests {
         painted
     }
 
-    /// 在给定尺寸里跑一帧 Ui 并取回返回值（面板内的「模式渲染」用得上）。
-    fn run_ui<T>(size: egui::Vec2, mut render: impl FnMut(&mut egui::Ui) -> T) -> T {
-        let _guard = super::siri_gl::gpu_state_guard();
-        let ctx = egui::Context::default();
-        let mut result = None;
-        for _ in 0..2 {
-            ctx.begin_pass(egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
-                ..Default::default()
-            });
-            egui::CentralPanel::default().show(&ctx, |ui| {
-                result = Some(render(ui));
-            });
-            let _ = ctx.end_pass();
-        }
-        result.expect("the closure must run at least once")
-    }
-
     /// 合并后：润色结果就画在**选区助手面板**里（同一弹窗的第二套 UI），
     /// 原独立预览窗口的文案与动作必须一模一样地出现。
     #[test]
@@ -1590,18 +1580,55 @@ mod tests {
         }
     }
 
+    /// 润色结果**只读**：签名拿的是 `&QaPolishState`（根本改不动），框里必须
+    /// 把结果原文画出来——「确认并替换」（即用户说的「插入」）写回的就是这段原文。
     #[test]
-    fn polish_preview_confirm_returns_edited_text() {
-        let mut state = QaPolishState {
-            text: "edited result".to_string(),
-            source: String::new(),
+    fn the_polish_result_is_read_only_and_paints_the_text() {
+        let state = QaPolishState {
+            text: "polished result text".to_string(),
+            source: "source paragraph".to_string(),
         };
-        // 没有输入时不得误报动作，也不得改动文本。
-        let action = run_ui(egui::vec2(420.0, 540.0), |ui| {
-            polish_result_mode(ui, &mut state, false, Lang::ZhCn)
+        let painted = run(egui::vec2(420.0, 540.0), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                assert_eq!(
+                    polish_result_mode(ui, &state, Lang::ZhCn),
+                    PolishResultAction::None
+                );
+            });
+            String::new()
         });
-        assert_eq!(action, PreviewAction::None);
-        assert_eq!(state.text, "edited result");
+        assert!(
+            has(&painted, "polished result text"),
+            "the read-only result box must paint the polished text\n{painted}"
+        );
+        assert!(
+            has(&painted, "source paragraph"),
+            "the source summary must stay visible\n{painted}"
+        );
+        assert_eq!(state.text, "polished result text");
+    }
+
+    /// 润色结果模式下，面板的其余部分（提问对话、输入框、麦克风）不得出现：
+    /// 同一个面板的两套 UI 不能同时画。
+    #[test]
+    fn the_polish_result_mode_replaces_the_ask_conversation() {
+        let state = QaPopupState {
+            phase: "idle".to_string(),
+            polish: Some(QaPolishState {
+                text: "polished text".to_string(),
+                source: String::new(),
+            }),
+            ..Default::default()
+        };
+        let mut composer = String::new();
+        let painted = run(egui::vec2(420.0, 540.0), |ctx| {
+            selection_ask(ctx, &state, &mut composer, Lang::ZhCn, None);
+            String::new()
+        });
+        assert!(
+            !has(&painted, tr_l10n(Lang::ZhCn, "qa.composer_placeholder")),
+            "the ask composer must not be painted in polish mode\n{painted}"
+        );
     }
 
     #[test]

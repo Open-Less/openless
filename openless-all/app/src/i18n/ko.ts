@@ -81,7 +81,7 @@ export const ko: typeof zhCN = {
   },
   selectionPolishPreview: {
     title: '선택 영역 다듬기 미리보기',
-    subtitle: '편집 가능합니다. 확인을 클릭한 뒤에만 원래 선택 영역을 교체합니다.',
+    subtitle: '읽기 전용 결과입니다. 확인하면 선택 영역에 씁니다.',
     cancel: '취소',
     resultLabel: '다듬기 결과',
     sourcePrefix: '원문: ',

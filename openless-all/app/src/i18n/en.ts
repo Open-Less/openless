@@ -92,7 +92,7 @@ export const en: typeof zhCN = {
   },
   selectionPolishPreview: {
     title: 'Selection Polish Preview',
-    subtitle: 'Editable; the original selection is replaced only after you confirm.',
+    subtitle: 'Read-only result; press “Confirm & replace” to write it back.',
     cancel: 'Cancel',
     resultLabel: 'Polished result',
     sourcePrefix: 'Original: ',

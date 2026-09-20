@@ -1210,8 +1210,8 @@ mod tests {
         // A compositor with zwlr_layer_shell_v1 keeps the capsule on Wayland:
         // the layer surface already gives bottom-centre placement and no focus.
         assert!(!force_x11_for(PopupKind::Capsule, Some(":0"), true));
-        // The panels take keyboard input, so they keep their Wayland windows.
-        assert!(!force_x11_for(PopupKind::Qa, Some(":0"), false));
+        // The panels take keyboard input, so they keep their Wayland windows
+        // （选区助手面板现在也承担润色结果，同样是键盘输入的窗口）。
         assert!(!force_x11_for(PopupKind::Qa, Some(":0"), false));
     }
 
