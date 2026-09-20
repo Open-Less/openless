@@ -5147,8 +5147,9 @@ mod linux_app {
     /// 主窗口的最小内尺寸（UI 进程创建窗口时用它，和 `with_min_inner_size` 同源）。
     const MAIN_WINDOW_MIN_INNER_SIZE: egui::Vec2 = egui::vec2(960.0, 640.0);
 
-    /// 主窗口的初始尺寸。
-    const MAIN_WINDOW_INNER_SIZE: [f32; 2] = [1240.0, 800.0];
+    /// 主窗口的初始尺寸。基准 = macOS（Tauri 的 main 窗口 1300×835）；
+    /// 旧的 Linux 专用窗口配置不作为依据。
+    const MAIN_WINDOW_INNER_SIZE: [f32; 2] = [1300.0, 835.0];
 
     /// 视图模型载荷指纹（FNV-1a 64）。够快，用来判断「要不要重发快照」：
     /// 内容没变就不发，UI 慢的时候也不会被无意义的帧糊住。

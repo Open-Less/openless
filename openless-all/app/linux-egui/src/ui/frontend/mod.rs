@@ -1568,4 +1568,71 @@ mod tests {
             "pressing the titlebar must emit ViewportCommand::StartDrag"
         );
     }
+
+    /// 回归排查：`StartDrag` 在 egui-winit 里带着 `window.has_focus()` 前置条件，
+    /// 未聚焦时会被丢掉（Wayland 的 `move` 又只认按下那一帧的 serial）。所以窗口
+    /// 未聚焦时按住的每一帧都得继续补发；已聚焦且没新按下时不得每帧乱发。
+    #[test]
+    fn the_titlebar_keeps_asking_while_the_window_is_unfocused() {
+        let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1240.0, 800.0));
+        let press = egui::Event::PointerButton {
+            pos: egui::pos2(600.0, 25.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::default(),
+        };
+
+        let run = |focused: Option<bool>, frames: usize| -> Vec<bool> {
+            let ctx = egui::Context::default();
+            let mut per_frame = Vec::new();
+            for frame in 0..frames {
+                // 第 1 帧先把指针移到标题栏上，第 2 帧按下，之后保持按住。
+                let events = if frame == 1 {
+                    vec![egui::Event::PointerMoved(egui::pos2(600.0, 25.0))]
+                } else if frame == 2 {
+                    vec![press.clone()]
+                } else {
+                    Vec::new()
+                };
+                let mut raw = egui::RawInput {
+                    screen_rect: Some(window),
+                    events,
+                    ..Default::default()
+                };
+                raw.viewports.insert(
+                    raw.viewport_id,
+                    egui::ViewportInfo {
+                        focused,
+                        ..Default::default()
+                    },
+                );
+                ctx.begin_pass(raw);
+                let mut actions = Vec::new();
+                layout::titlebar(&ctx, &mut actions);
+                let output = ctx.end_pass();
+                per_frame.push(output.viewport_output.values().any(|commands| {
+                    commands
+                        .commands
+                        .iter()
+                        .any(|command| matches!(command, egui::ViewportCommand::StartDrag))
+                }));
+            }
+            per_frame
+        };
+
+        // 未聚焦：按下帧之后（第 3、4 帧）必须继续补发。
+        let unfocused = run(Some(false), 5);
+        assert!(unfocused[2], "the press frame must ask for the drag");
+        assert!(
+            unfocused[3] && unfocused[4],
+            "while unfocused the titlebar must keep asking: {unfocused:?}"
+        );
+        // 已聚焦：只在按下那一帧发一次，不能每帧刷。
+        let focused = run(Some(true), 5);
+        assert!(focused[2], "the press frame must ask for the drag");
+        assert!(
+            !focused[3] && !focused[4],
+            "a focused window must not re-ask every frame: {focused:?}"
+        );
+    }
 }

@@ -119,7 +119,16 @@ pub fn titlebar(ctx: &egui::Context, actions: &mut Vec<FrontendAction>) {
             // event, so deferring to `drag_started` silently does nothing.
             let pressed_now =
                 drag.is_pointer_button_down_on() && ui.input(|input| input.pointer.any_pressed());
-            if drag.drag_started() || pressed_now {
+            // `ViewportCommand::StartDrag` 在 egui-winit 里带着 `window.has_focus()`
+            // 前置条件（egui-winit-0.33.3/src/lib.rs:1403-1409）：窗口尚未拿到键盘
+            // 焦点的那一帧请求会被**整帧丢掉**，而 Wayland 的 `move` 只认按下那一帧
+            // 的 serial——一次丢失就等于整个「按住标题栏拖」的手势失效（用户报的
+            // 「拖标题栏移不动窗口」）。窗口未聚焦时按帧补发：焦点一翻转，同一帧的
+            // 请求就会被放行。`viewport().focused` 就是 winit `has_focus()` 的同源值
+            // （egui-winit `update_viewport_info`），所以判断不会偏。
+            let unfocused = !ui.input(|input| input.viewport().focused.unwrap_or(false));
+            if drag.drag_started() || pressed_now || (drag.is_pointer_button_down_on() && unfocused)
+            {
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
             if drag.double_clicked() {
