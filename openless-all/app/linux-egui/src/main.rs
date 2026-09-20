@@ -137,6 +137,7 @@ mod linux_app {
     #[derive(Default, Clone, Copy)]
     struct SettingsDirty {
         streaming_insert: bool,
+        stable_transcription: bool,
         coding_agent_enabled: bool,
         start_minimized: bool,
         launch_at_login: bool,
@@ -153,6 +154,7 @@ mod linux_app {
     impl SettingsDirty {
         fn any(&self) -> bool {
             self.streaming_insert
+                || self.stable_transcription
                 || self.coding_agent_enabled
                 || self.start_minimized
                 || self.launch_at_login
@@ -170,6 +172,9 @@ mod linux_app {
             let mut merged = latest.clone();
             if self.streaming_insert {
                 merged.streaming_insert = draft.streaming_insert;
+            }
+            if self.stable_transcription {
+                merged.stable_transcription_enabled = draft.stable_transcription_enabled;
             }
             if self.coding_agent_enabled {
                 merged.coding_agent_enabled = draft.coding_agent_enabled;
@@ -3044,6 +3049,7 @@ mod linux_app {
             if let Some(prefs) = &self.preferences {
                 let s = &mut vm.settings;
                 s.streaming_insert = prefs.streaming_insert;
+                s.stable_transcription = prefs.stable_transcription_enabled;
                 s.start_minimized = prefs.start_minimized;
                 s.auto_update = prefs.auto_update_check;
                 s.remote_input = prefs.remote_input_enabled;
@@ -3480,6 +3486,11 @@ mod linux_app {
                 frontend::view_model::SettingsField::StreamingInsert => {
                     preferences.streaming_insert = !preferences.streaming_insert;
                     self.settings_dirty.streaming_insert = true;
+                }
+                frontend::view_model::SettingsField::StableTranscription => {
+                    preferences.stable_transcription_enabled =
+                        !preferences.stable_transcription_enabled;
+                    self.settings_dirty.stable_transcription = true;
                 }
                 frontend::view_model::SettingsField::StartMinimized => {
                     preferences.start_minimized = !preferences.start_minimized;

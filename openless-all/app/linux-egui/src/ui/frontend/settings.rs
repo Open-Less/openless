@@ -625,6 +625,19 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
             // #6「默认录音方式下面的提示语」：录音方式这张卡片的本行说明也要真的
             // 画出来（Tauri `modeDesc`），不能只藏在「?」里。
             hint_line(ui, tr_l10n(lang, "settings.recording.mode_desc"));
+            // 上游 #1082（稳定模式：先录音后识别）：录音期间不连接 ASR，停止后提交整段
+            // 音频；结果更晚，但录音不受建连延迟与网络抖动影响。
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.recording.stable_transcription_label"),
+                tr_l10n(lang, "settings.recording.stable_transcription_desc"),
+                vm.settings.stable_transcription,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::StableTranscription,
+                    ));
+                },
+            );
             // 「静音后自动停止」只在切换式模式下可用（Tauri 同样只在该模式渲染）。
             if vm.settings.recording_mode == 0 {
                 toggle_row(

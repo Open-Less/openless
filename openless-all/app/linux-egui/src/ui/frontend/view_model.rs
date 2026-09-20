@@ -358,6 +358,8 @@ pub enum SettingsSection {
 #[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug)]
 pub enum SettingsField {
     StreamingInsert,
+    /// 稳定模式（先录音后识别，上游 #1082）。
+    StableTranscription,
     StreamingSaveClipboard,
     RestoreClipboard,
     StartMinimized,
@@ -848,6 +850,8 @@ pub struct SettingsFields {
     /// 0 = toggle, 1 = hold, 2 = double click, 3 = auto.
     pub recording_mode: usize,
     pub streaming_insert: bool,
+    /// 稳定模式（先录音后识别）：上游 #1082 新增的偏好，录音期间不连接 ASR。
+    pub stable_transcription: bool,
     pub streaming_save_clipboard: bool,
     pub restore_clipboard: bool,
     pub start_minimized: bool,
@@ -900,6 +904,7 @@ impl Default for SettingsFields {
         Self {
             recording_mode: 0,
             streaming_insert: false,
+            stable_transcription: false,
             streaming_save_clipboard: false,
             restore_clipboard: false,
             start_minimized: false,

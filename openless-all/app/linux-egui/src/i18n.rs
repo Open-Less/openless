@@ -5354,6 +5354,26 @@ pub const CATALOG: &[Msg] = &[
             "마이크 로드 실패: {}",
         ),
     },
+    Msg {
+        key: "settings.recording.stable_transcription_desc",
+        text: row(
+            "开启后，录音期间不连接 ASR，停止后才提交整段音频。结果出现更晚，但录音不受建连延迟和录音期间网络抖动影响。",
+            "開啟後，錄音期間不連接 ASR，停止後才提交整段音訊。結果會較晚出現，但錄音不受連線延遲和錄音期間的網路波動影響。",
+            "When enabled, ASR connects only after recording stops and receives the complete audio. Results arrive later, but connection delays and network instability during recording cannot interrupt capture.",
+            "有効にすると、録音中は ASR に接続せず、停止後に音声全体を送信します。結果は遅くなりますが、接続遅延や録音中のネットワーク変動に録音が影響されません。",
+            "켜면 녹음 중에는 ASR에 연결하지 않고 중지한 뒤 전체 오디오를 전송합니다. 결과는 늦게 표시되지만 연결 지연이나 녹음 중 네트워크 불안정이 녹음에 영향을 주지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.recording.stable_transcription_label",
+        text: row(
+            "稳定模式（先录音后识别）",
+            "穩定模式（先錄音後辨識）",
+            "Stable mode (record, then transcribe)",
+            "安定モード（録音後に文字起こし）",
+            "안정 모드 (녹음 후 전사)",
+        ),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {
