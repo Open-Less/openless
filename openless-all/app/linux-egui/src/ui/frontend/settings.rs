@@ -109,7 +109,13 @@ pub fn settings_overlay(
         });
 
     egui::Area::new(egui::Id::new("openless-settings-modal"))
-        .order(egui::Order::Tooltip)
+        // 用 Foreground 而不是 Tooltip：egui 的 `ComboBox` 下拉/弹出菜单是
+        // `Order::Foreground`（egui-0.33.3/src/containers/popup.rs:150），而同层里
+        // 后创建的 Area 在上层、跨 Order 则是 Tooltip > Foreground。弹窗若占着
+        // Tooltip，设置里所有「点开才出现」的下拉都会被弹窗整个盖住（用户报
+        // 「需要点开的控件都打不开」）。降到 Foreground 后：先创建的遮罩输入层仍在
+        // 其下，弹窗内部再打开的下拉因创建更晚而在其上。
+        .order(egui::Order::Foreground)
         // 用**显式位置**而不是 anchor + offset：anchor 按上一帧的面积（含阴影偏移）
         // 定位，实测卡片稳定落在 body_rect 垂直中心下方 19.5px，且窗口缩放的首帧
         // 会跳一下（用户报「缩放窗口时并不是始终居中」）。直接由 body.center()
