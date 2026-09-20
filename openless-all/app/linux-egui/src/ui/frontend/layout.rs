@@ -126,9 +126,20 @@ pub fn titlebar(ctx: &egui::Context, actions: &mut Vec<FrontendAction>) {
             // 「拖标题栏移不动窗口」）。窗口未聚焦时按帧补发：焦点一翻转，同一帧的
             // 请求就会被放行。`viewport().focused` 就是 winit `has_focus()` 的同源值
             // （egui-winit `update_viewport_info`），所以判断不会偏。
-            let unfocused = !ui.input(|input| input.viewport().focused.unwrap_or(false));
-            if drag.drag_started() || pressed_now || (drag.is_pointer_button_down_on() && unfocused)
-            {
+            let focused = ui.input(|input| input.viewport().focused.unwrap_or(false));
+            let maximized = ui.input(|input| input.viewport().maximized.unwrap_or(false));
+            let holding = drag.is_pointer_button_down_on();
+            let wants_drag = drag.drag_started() || pressed_now;
+            if wants_drag && !focused {
+                // 先把键盘焦点要回来：`StartDrag` 在 egui-winit 里要求 `has_focus()`，
+                // 未聚焦时请求会被整帧丢掉（Wayland 的 `move` 只认按下那一帧的
+                // serial，丢一次整个手势就废了）。
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+            if maximized && wants_drag {
+                // Wayland 上最大化窗口不接受 move 请求（合成器直接忽略），先还原再拖。
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+            } else if wants_drag || (holding && !focused) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
             if drag.double_clicked() {
