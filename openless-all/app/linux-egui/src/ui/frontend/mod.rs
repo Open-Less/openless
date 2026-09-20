@@ -1475,4 +1475,97 @@ mod tests {
             "no microphone error line may be painted without an error: {painted}"
         );
     }
+
+    /// 回归排查：设置里可展开分组必须「点标题行即可开合」。用户报过「点不开」，
+    /// 真机（uinput 点击）与这条无头测试都表明交互是好的 —— 留着防止真回归。
+    #[test]
+    fn the_collapsible_group_header_toggles_on_click() {
+        let ctx = egui::Context::default();
+        let mut painted = String::new();
+        let mut states = Vec::new();
+        for frame in 0..4 {
+            let events = if frame == 1 {
+                vec![egui::Event::PointerMoved(egui::pos2(120.0, 30.0))]
+            } else if frame == 2 {
+                vec![egui::Event::PointerButton {
+                    pos: egui::pos2(120.0, 30.0),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                }]
+            } else if frame == 3 {
+                vec![egui::Event::PointerButton {
+                    pos: egui::pos2(120.0, 30.0),
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::default(),
+                }]
+            } else {
+                Vec::new()
+            };
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                events,
+                ..Default::default()
+            });
+            egui::CentralPanel::default().show(&ctx, |ui| {
+                super::settings::test_group_toggle(ui);
+            });
+            painted = painted_text(&ctx.end_pass());
+            states.push(painted.contains("GROUPCONTENT"));
+        }
+        assert!(
+            states[0],
+            "collapsible groups start expanded, like Tauri"
+        );
+        assert_eq!(
+            states[3], false,
+            "the group must collapse after its header is clicked: states={states:?}"
+        );
+    }
+
+    /// 回归排查：按住标题栏必须发出 `ViewportCommand::StartDrag`（窗口能被拖走）。
+    /// 用户报过「拖标题栏移不动窗口」，真机 uinput 拖拽实测窗口确实移动
+    /// （340,118 → 490,218），这条锁住发出指令那一环。
+    #[test]
+    fn the_titlebar_press_starts_a_window_drag() {
+        let ctx = egui::Context::default();
+        let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1240.0, 800.0));
+        let mut started = false;
+        for frame in 0..3 {
+            let events = if frame == 1 {
+                vec![egui::Event::PointerMoved(egui::pos2(600.0, 25.0))]
+            } else if frame == 2 {
+                vec![egui::Event::PointerButton {
+                    pos: egui::pos2(600.0, 25.0),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                }]
+            } else {
+                Vec::new()
+            };
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(window),
+                events,
+                ..Default::default()
+            });
+            let mut actions = Vec::new();
+            layout::titlebar(&ctx, &mut actions);
+            let output = ctx.end_pass();
+            for commands in output.viewport_output.values() {
+                if commands
+                    .commands
+                    .iter()
+                    .any(|command| matches!(command, egui::ViewportCommand::StartDrag))
+                {
+                    started = true;
+                }
+            }
+        }
+        assert!(started, "pressing the titlebar must emit ViewportCommand::StartDrag");
+    }
 }
