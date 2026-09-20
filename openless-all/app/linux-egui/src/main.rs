@@ -6911,14 +6911,6 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 app.apply_window_messages(messages, tray_available);
             }
             app.tick(&ctx);
-            // TEMP(verify): 截图核对用的临时开关，验证完删除。
-            if std::env::var("OPENLESS_OPEN_SETTINGS").is_ok_and(|value| value == "1")
-                && !app.frontend_vm.settings_open
-            {
-                app.frontend_vm.settings_open = true;
-                app.frontend_vm.active_page = frontend::view_model::Page::Settings;
-                app.load_microphones();
-            }
             if app.should_spawn_ui_window() {
                 if let Err(error) = app.spawn_ui_window(&socket) {
                     log::warn!("[ui-host] cannot start the UI window: {error}");
@@ -6963,7 +6955,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
                 .with_title("OpenLess")
-                .with_inner_size(temp_window_size().unwrap_or(MAIN_WINDOW_INNER_SIZE))
+                .with_inner_size(MAIN_WINDOW_INNER_SIZE)
                 .with_min_inner_size(MAIN_WINDOW_MIN_INNER_SIZE)
                 .with_decorations(false)
                 .with_transparent(true)
@@ -6980,13 +6972,6 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             }),
         )
         .map_err(|error| error.to_string())
-    }
-
-    /// TEMP(verify): `OPENLESS_WINDOW_SIZE=WxH` 覆盖窗口尺寸，用于截图核对居中。
-    fn temp_window_size() -> Option<[f32; 2]> {
-        let value = std::env::var("OPENLESS_WINDOW_SIZE").ok()?;
-        let (width, height) = value.split_once('x')?;
-        Some([width.trim().parse().ok()?, height.trim().parse().ok()?])
     }
 
     /// 诊断开关：`OPENLESS_UI_DEBUG=1` 时 UI 进程把指针点击与动作记进日志。
