@@ -81,21 +81,10 @@ pub fn settings_overlay(
         (body.height() - 40.0).max(280.0).min(680.0),
     );
 
-    let backdrop_layer = egui::LayerId::new(
-        egui::Order::Foreground,
-        egui::Id::new("openless-settings-backdrop"),
-    );
-    ctx.layer_painter(backdrop_layer).rect_filled(
-        body,
-        egui::CornerRadius {
-            nw: 0,
-            ne: 0,
-            sw: 14,
-            se: 14,
-        },
-        theme::OVERLAY,
-    );
-    // Input capture so the page behind cannot be clicked while the modal is up.
+    // 遮罩与输入拦截合并到同一个 Area。之前遮罩是用 `ctx.layer_painter()` 直接建
+    // 的原生图层，它在同一 Order 里的相对位置不受控：弹窗从 Tooltip 降到
+    // Foreground 之后，这层遮罩就盖到弹窗上面了（用户看到「设置整体被一个阴影层
+    // 压住」）。改用 Area 并按创建顺序排在弹窗之前，遮罩就稳定在弹窗下面。
     egui::Area::new(egui::Id::new("openless-settings-backdrop-input"))
         .order(egui::Order::Foreground)
         .fixed_pos(body.min)
@@ -103,6 +92,16 @@ pub fn settings_overlay(
         .constrain(false)
         .interactable(true)
         .show(ctx, |ui| {
+            ui.painter().rect_filled(
+                body,
+                egui::CornerRadius {
+                    nw: 0,
+                    ne: 0,
+                    sw: 14,
+                    se: 14,
+                },
+                theme::OVERLAY,
+            );
             ui.set_min_size(body.size());
             ui.set_max_size(body.size());
             let _ = ui.allocate_exact_size(body.size(), egui::Sense::click());
@@ -777,22 +776,6 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                 || {
                     actions.push(FrontendAction::SettingsToggle(
                         SettingsField::RestoreClipboard,
-                    ));
-                },
-            );
-            combo_index_row(
-                ui,
-                tr_l10n(lang, "settings.recording.paste_shortcut_label"),
-                tr_l10n(lang, "settings.recording.paste_shortcut_desc"),
-                vm.settings.paste_shortcut.min(1),
-                &[
-                    tr_l10n(lang, "settings.recording.paste_shortcut_ctrl_v"),
-                    tr_l10n(lang, "settings.recording.paste_shortcut_ctrl_shift_v"),
-                ],
-                |val| {
-                    actions.push(FrontendAction::SettingsCombo(
-                        SettingsComboField::PasteShortcut,
-                        val,
                     ));
                 },
             );
