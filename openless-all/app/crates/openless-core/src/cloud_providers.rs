@@ -36,8 +36,8 @@ use crate::errors::{BackendError, BackendErrorCode};
 use crate::ports::{
     ActiveRecording, AudioConsumer, AudioRecorder, DictationEngine, EngineFailure,
     EngineFailureStage, EngineProgress, EngineProgressSink, EngineResult, EngineStage,
-    PolishOutput, RecordingProgressSink, TextPolisher, TextStreamChunk, TextStreamSink,
-    TranscriptOutput, TranscriptionEngine, TranscriptionSession,
+    PolishOutput, PreparedTranscription, RecordingProgressSink, TextPolisher, TextStreamChunk,
+    TextStreamSink, TranscriptOutput, TranscriptionEngine, TranscriptionSession,
 };
 use crate::provider_rules::{
     default_asr_endpoint, default_asr_model, default_llm_endpoint, default_llm_model,
@@ -114,6 +114,68 @@ impl SharedCloudTranscriptionEngine {
     }
 }
 
+const ASR_SNAPSHOT_ACCOUNTS: &[&str] = &[
+    ASR_MODEL_ACCOUNT,
+    ASR_API_KEY_ACCOUNT,
+    ASR_ENDPOINT_ACCOUNT,
+    ASR_ADVANCED_CONFIG_ACCOUNT,
+    ASR_VOCABULARY_ID_ACCOUNT,
+    crate::credentials::VOLCENGINE_SERVICE_ACCOUNT,
+    VOLCENGINE_AUTH_MODE_ACCOUNT,
+    VOLCENGINE_APP_KEY_ACCOUNT,
+    VOLCENGINE_ACCESS_KEY_ACCOUNT,
+    VOLCENGINE_API_KEY_ACCOUNT,
+    VOLCENGINE_RESOURCE_ID_ACCOUNT,
+    XFYUN_APP_ID_ACCOUNT,
+    XFYUN_API_KEY_ACCOUNT,
+    TENCENT_CLOUD_APP_ID_ACCOUNT,
+    TENCENT_CLOUD_SECRET_ID_ACCOUNT,
+    TENCENT_CLOUD_SECRET_KEY_ACCOUNT,
+];
+
+#[derive(Clone)]
+struct CloudTranscriptionPreparation {
+    context: Arc<DictationContext>,
+    provider_type: String,
+    effective_provider: String,
+    kind: crate::provider_rules::ActiveAsrProviderKind,
+    model: String,
+    api_key: String,
+    endpoint: String,
+    advanced_config: crate::provider_rules::AdvancedAsrConfig,
+    credentials: HashMap<&'static str, Option<String>>,
+}
+
+impl CloudTranscriptionPreparation {
+    fn value(&self, account: &str) -> Option<String> {
+        self.credentials.get(account).cloned().flatten()
+    }
+}
+
+struct PreparedCloudTranscription {
+    preparation: CloudTranscriptionPreparation,
+    task_spawner: Arc<dyn TaskSpawner>,
+}
+
+impl PreparedTranscription for PreparedCloudTranscription {
+    fn start(
+        &self,
+        partials: Arc<dyn TextStreamSink>,
+    ) -> BoxFuture<'static, Result<Arc<dyn TranscriptionSession>, BackendError>> {
+        let preparation = self.preparation.clone();
+        let task_spawner = Arc::clone(&self.task_spawner);
+        Box::pin(async move {
+            let (kind, asr_call_label) =
+                build_cloud_transcription_session(&preparation, task_spawner, partials).await?;
+            Ok(Arc::new(CloudTranscriptionSession {
+                kind,
+                asr_call_label,
+                finished: AtomicBool::new(false),
+            }) as Arc<dyn TranscriptionSession>)
+        })
+    }
+}
+
 #[derive(Clone)]
 enum CloudTranscriptionSessionKind {
     Volcengine(Arc<VolcengineStreamingASR>),
@@ -135,27 +197,32 @@ struct CloudTranscriptionSession {
 }
 
 impl TranscriptionEngine for SharedCloudTranscriptionEngine {
+    fn prepare(
+        self: Arc<Self>,
+        _session_id: SessionId,
+        context: Arc<DictationContext>,
+    ) -> BoxFuture<'static, Result<Arc<dyn PreparedTranscription>, BackendError>> {
+        let credentials = Arc::clone(&self.credentials);
+        Box::pin(async move {
+            let preparation =
+                prepare_cloud_transcription(credentials.as_ref(), Arc::clone(&context)).await?;
+            Ok(Arc::new(PreparedCloudTranscription {
+                preparation,
+                task_spawner: Arc::clone(&self.task_spawner),
+            }) as Arc<dyn PreparedTranscription>)
+        })
+    }
+
     fn start(
         &self,
-        _session_id: SessionId,
+        session_id: SessionId,
         context: Arc<DictationContext>,
         partials: Arc<dyn TextStreamSink>,
     ) -> BoxFuture<'static, Result<Arc<dyn TranscriptionSession>, BackendError>> {
-        let credentials = Arc::clone(&self.credentials);
-        let task_spawner = Arc::clone(&self.task_spawner);
+        let engine = Arc::new(self.clone());
         Box::pin(async move {
-            let (kind, asr_call_label) = build_cloud_transcription_session(
-                credentials.as_ref(),
-                &context,
-                task_spawner,
-                partials,
-            )
-            .await?;
-            Ok(Arc::new(CloudTranscriptionSession {
-                kind,
-                asr_call_label,
-                finished: AtomicBool::new(false),
-            }) as Arc<dyn TranscriptionSession>)
+            let prepared = engine.prepare(session_id, context).await?;
+            prepared.start(partials).await
         })
     }
 }
@@ -299,24 +366,19 @@ where
     }
 }
 
-async fn build_cloud_transcription_session(
+async fn prepare_cloud_transcription(
     credentials: &dyn CredentialStore,
-    context: &DictationContext,
-    task_spawner: Arc<dyn TaskSpawner>,
-    partials: Arc<dyn TextStreamSink>,
-) -> Result<(CloudTranscriptionSessionKind, crate::AsrCallLabel), BackendError> {
-    use crate::asr::volcengine::VolcengineAuthMode;
-    use crate::provider_rules::{ActiveAsrProviderKind, BailianEndpointProtocol};
-
-    let channel_id = context.asr.provider_id.trim();
-    let provider_type = context.asr.provider_type.trim();
+    context: Arc<DictationContext>,
+) -> Result<CloudTranscriptionPreparation, BackendError> {
+    let channel_id = context.asr.provider_id.trim().to_string();
+    let provider_type = context.asr.provider_type.trim().to_string();
     if channel_id.is_empty() || provider_type.is_empty() {
         return Err(BackendError::new(
             BackendErrorCode::InvalidArgument,
             "ASR channel id and provider type must not be empty",
         ));
     }
-    if provider_descriptor(crate::ProviderKind::Asr, provider_type)
+    if provider_descriptor(crate::ProviderKind::Asr, &provider_type)
         .is_none_or(|descriptor| descriptor.validation_probe == ValidationProbe::Unsupported)
     {
         return Err(BackendError::new(
@@ -324,52 +386,141 @@ async fn build_cloud_transcription_session(
             "shared cloud ASR provider is not supported",
         ));
     }
-    let stored_model = read_channel_credential(
-        credentials,
-        CredentialNamespace::Asr,
-        channel_id,
-        ASR_MODEL_ACCOUNT,
-    )
-    .await?;
+    let mut values = HashMap::new();
+    for account in ASR_SNAPSHOT_ACCOUNTS {
+        values.insert(
+            *account,
+            read_channel_credential(credentials, CredentialNamespace::Asr, &channel_id, account)
+                .await?,
+        );
+    }
+    let value = |account: &str| values.get(account).cloned().flatten();
     let model = context
         .asr
         .model
         .clone()
-        .or(stored_model)
+        .or_else(|| value(ASR_MODEL_ACCOUNT))
         .unwrap_or_default();
-    let effective = crate::provider_rules::resolve_effective_asr_provider(provider_type, &model)
-        .map_err(|message| BackendError::new(BackendErrorCode::InvalidArgument, message))?;
-    let api_key = read_channel_credential(
-        credentials,
-        CredentialNamespace::Asr,
-        channel_id,
-        ASR_API_KEY_ACCOUNT,
-    )
-    .await?
-    .unwrap_or_default();
-    let endpoint = read_channel_credential(
-        credentials,
-        CredentialNamespace::Asr,
-        channel_id,
-        ASR_ENDPOINT_ACCOUNT,
-    )
-    .await?
-    .unwrap_or_default();
-    let advanced_config_raw = read_channel_credential(
-        credentials,
-        CredentialNamespace::Asr,
-        channel_id,
-        ASR_ADVANCED_CONFIG_ACCOUNT,
-    )
-    .await?;
+    let effective_provider =
+        crate::provider_rules::resolve_effective_asr_provider(&provider_type, &model)
+            .map_err(|message| BackendError::new(BackendErrorCode::InvalidArgument, message))?;
     let advanced_config = crate::provider_rules::advanced_asr_config_for(
-        provider_type,
-        advanced_config_raw.as_deref(),
+        &provider_type,
+        value(ASR_ADVANCED_CONFIG_ACCOUNT).as_deref(),
     );
+    let preparation = CloudTranscriptionPreparation {
+        context,
+        provider_type,
+        kind: crate::provider_rules::active_asr_provider_kind(&effective_provider),
+        effective_provider,
+        api_key: value(ASR_API_KEY_ACCOUNT).unwrap_or_default(),
+        endpoint: value(ASR_ENDPOINT_ACCOUNT).unwrap_or_default(),
+        advanced_config,
+        model,
+        credentials: values,
+    };
+    validate_cloud_transcription_preparation(&preparation)?;
+    Ok(preparation)
+}
 
-    let (kind, label_model) = match crate::provider_rules::active_asr_provider_kind(&effective) {
+fn validate_cloud_transcription_preparation(
+    preparation: &CloudTranscriptionPreparation,
+) -> Result<(), BackendError> {
+    use crate::asr::volcengine::VolcengineAuthMode;
+    use crate::provider_rules::ActiveAsrProviderKind;
+
+    match preparation.kind {
+        ActiveAsrProviderKind::Bailian
+        | ActiveAsrProviderKind::Qwen3Realtime
+        | ActiveAsrProviderKind::StepfunRealtime
+        | ActiveAsrProviderKind::Mimo
+        | ActiveAsrProviderKind::DashScopeMultimodal
+        | ActiveAsrProviderKind::ElevenLabs => {
+            require_configured(&preparation.api_key, "ASR API key")?;
+        }
+        ActiveAsrProviderKind::WhisperCompatible => {
+            if crate::provider_rules::api_key_required(
+                crate::ProviderKind::Asr,
+                &preparation.provider_type,
+                Some(&preparation.endpoint),
+            ) {
+                require_configured(&preparation.api_key, "ASR API key")?;
+            }
+        }
+        ActiveAsrProviderKind::Volcengine => {
+            let service = crate::asr::volcengine::VolcengineService::parse(
+                preparation
+                    .value(crate::credentials::VOLCENGINE_SERVICE_ACCOUNT)
+                    .as_deref()
+                    .unwrap_or_default(),
+            )
+            .map_err(|message| BackendError::new(BackendErrorCode::InvalidArgument, message))?;
+            let configured = preparation
+                .value(VOLCENGINE_AUTH_MODE_ACCOUNT)
+                .map(|value| VolcengineAuthMode::parse(&value))
+                .unwrap_or(VolcengineAuthMode::AppIdToken);
+            let auth_mode = service.auth_mode(configured);
+            let app_id = preparation
+                .value(VOLCENGINE_APP_KEY_ACCOUNT)
+                .unwrap_or_default();
+            let secret_account = match auth_mode {
+                VolcengineAuthMode::AppIdToken => VOLCENGINE_ACCESS_KEY_ACCOUNT,
+                VolcengineAuthMode::ApiKey => VOLCENGINE_API_KEY_ACCOUNT,
+            };
+            let secret = preparation.value(secret_account).unwrap_or_default();
+            if !auth_mode.auth_ok(&app_id, &secret) {
+                return Err(credential_missing("Volcengine credentials"));
+            }
+        }
+        ActiveAsrProviderKind::Xfyun => {
+            require_configured(
+                &preparation.value(XFYUN_APP_ID_ACCOUNT).unwrap_or_default(),
+                "Xfyun application id",
+            )?;
+            require_configured(
+                &preparation.value(XFYUN_API_KEY_ACCOUNT).unwrap_or_default(),
+                "Xfyun API key",
+            )?;
+        }
+        ActiveAsrProviderKind::TencentCloud => {
+            require_configured(
+                &preparation
+                    .value(TENCENT_CLOUD_APP_ID_ACCOUNT)
+                    .unwrap_or_default(),
+                "Tencent Cloud AppID",
+            )?;
+            require_configured(
+                &preparation
+                    .value(TENCENT_CLOUD_SECRET_ID_ACCOUNT)
+                    .unwrap_or_default(),
+                "Tencent Cloud SecretID",
+            )?;
+            require_configured(
+                &preparation
+                    .value(TENCENT_CLOUD_SECRET_KEY_ACCOUNT)
+                    .unwrap_or_default(),
+                "Tencent Cloud SecretKey",
+            )?;
+        }
+    }
+    Ok(())
+}
+
+async fn build_cloud_transcription_session(
+    preparation: &CloudTranscriptionPreparation,
+    task_spawner: Arc<dyn TaskSpawner>,
+    partials: Arc<dyn TextStreamSink>,
+) -> Result<(CloudTranscriptionSessionKind, crate::AsrCallLabel), BackendError> {
+    use crate::asr::volcengine::VolcengineAuthMode;
+    use crate::provider_rules::{ActiveAsrProviderKind, BailianEndpointProtocol};
+
+    let provider_type = preparation.provider_type.as_str();
+    let model = preparation.model.clone();
+    let api_key = preparation.api_key.clone();
+    let endpoint = preparation.endpoint.clone();
+    let context = &preparation.context;
+    let (kind, label_model) = match preparation.kind {
         ActiveAsrProviderKind::Bailian => {
-            require_configured(&api_key, "ASR API key")?;
             let stored_endpoint = non_blank_owned(endpoint)
                 .unwrap_or_else(|| crate::asr::bailian::DEFAULT_ENDPOINT.to_string());
             let endpoint = if provider_type == crate::asr::bailian::PROVIDER_ID {
@@ -383,14 +534,9 @@ async fn build_cloud_transcription_session(
             };
             let effective_model = non_blank_owned(model)
                 .unwrap_or_else(|| crate::asr::bailian::DEFAULT_MODEL.to_string());
-            let vocabulary_id = read_channel_credential(
-                credentials,
-                CredentialNamespace::Asr,
-                channel_id,
-                ASR_VOCABULARY_ID_ACCOUNT,
-            )
-            .await?
-            .and_then(non_blank_owned);
+            let vocabulary_id = preparation
+                .value(ASR_VOCABULARY_ID_ACCOUNT)
+                .and_then(non_blank_owned);
             let provider = Arc::new(BailianRealtimeASR::with_task_spawner(
                 BailianCredentials {
                     api_key,
@@ -408,7 +554,6 @@ async fn build_cloud_transcription_session(
             )
         }
         ActiveAsrProviderKind::Qwen3Realtime => {
-            require_configured(&api_key, "ASR API key")?;
             let stored_endpoint = non_blank_owned(endpoint)
                 .unwrap_or_else(|| crate::asr::qwen_realtime::DEFAULT_ENDPOINT.to_string());
             let endpoint = if provider_type == crate::asr::bailian::PROVIDER_ID {
@@ -438,7 +583,6 @@ async fn build_cloud_transcription_session(
             )
         }
         ActiveAsrProviderKind::StepfunRealtime => {
-            require_configured(&api_key, "ASR API key")?;
             let effective_model = non_blank_owned(model)
                 .unwrap_or_else(|| crate::asr::stepfun_realtime::DEFAULT_MODEL.to_string());
             let provider = Arc::new(StepfunRealtimeASR::with_task_spawner(
@@ -458,7 +602,6 @@ async fn build_cloud_transcription_session(
             )
         }
         ActiveAsrProviderKind::Mimo => {
-            require_configured(&api_key, "ASR API key")?;
             let effective_model = non_blank_owned(model)
                 .unwrap_or_else(|| default_asr_model(provider_type).unwrap().to_string());
             let endpoint = non_blank_owned(endpoint)
@@ -474,7 +617,6 @@ async fn build_cloud_transcription_session(
             )
         }
         ActiveAsrProviderKind::DashScopeMultimodal => {
-            require_configured(&api_key, "ASR API key")?;
             let model = non_blank_owned(model)
                 .unwrap_or_else(|| crate::asr::dashscope_multimodal::DEFAULT_MODEL.to_string());
             let stored_endpoint = non_blank_owned(endpoint)
@@ -502,7 +644,6 @@ async fn build_cloud_transcription_session(
             )
         }
         ActiveAsrProviderKind::ElevenLabs => {
-            require_configured(&api_key, "ASR API key")?;
             let effective_model = non_blank_owned(model)
                 .unwrap_or_else(|| crate::asr::elevenlabs::DEFAULT_MODEL.to_string());
             (
@@ -516,13 +657,6 @@ async fn build_cloud_transcription_session(
             )
         }
         ActiveAsrProviderKind::WhisperCompatible => {
-            if crate::provider_rules::api_key_required(
-                crate::ProviderKind::Asr,
-                provider_type,
-                Some(&endpoint),
-            ) {
-                require_configured(&api_key, "ASR API key")?;
-            }
             let default_endpoint = default_asr_endpoint(provider_type).unwrap_or("");
             let default_model = default_asr_model(provider_type).unwrap_or("whisper-1");
             let effective_model =
@@ -532,10 +666,13 @@ async fn build_cloud_transcription_session(
                 non_blank_owned(endpoint).unwrap_or_else(|| default_endpoint.to_string()),
                 effective_model.clone(),
                 context.asr.prompt.clone(),
-                crate::provider_rules::batch_asr_chunk_limit_ms(provider_type, advanced_config),
+                crate::provider_rules::batch_asr_chunk_limit_ms(
+                    provider_type,
+                    preparation.advanced_config,
+                ),
                 crate::provider_rules::whisper_supports_verbose_json(
                     provider_type,
-                    advanced_config,
+                    preparation.advanced_config,
                 ),
             )
             .with_request_format(crate::provider_rules::whisper_request_format(provider_type));
@@ -552,7 +689,7 @@ async fn build_cloud_transcription_session(
                 });
                 provider = provider
                     .with_language(language)
-                    .with_enable_itn(advanced_config.enable_itn);
+                    .with_enable_itn(preparation.advanced_config.enable_itn);
             }
             (
                 CloudTranscriptionSessionKind::Whisper(Arc::new(provider)),
@@ -560,57 +697,27 @@ async fn build_cloud_transcription_session(
             )
         }
         ActiveAsrProviderKind::Volcengine => {
-            let service = read_channel_credential(
-                credentials,
-                CredentialNamespace::Asr,
-                channel_id,
-                crate::credentials::VOLCENGINE_SERVICE_ACCOUNT,
-            )
-            .await?;
             let service = crate::asr::volcengine::VolcengineService::parse(
-                service.as_deref().unwrap_or_default(),
+                preparation
+                    .value(crate::credentials::VOLCENGINE_SERVICE_ACCOUNT)
+                    .as_deref()
+                    .unwrap_or_default(),
             )
             .map_err(|message| BackendError::new(BackendErrorCode::InvalidArgument, message))?;
-            let auth_mode = read_channel_credential(
-                credentials,
-                CredentialNamespace::Asr,
-                channel_id,
-                VOLCENGINE_AUTH_MODE_ACCOUNT,
-            )
-            .await?
-            .map(|value| VolcengineAuthMode::parse(&value))
-            .unwrap_or(VolcengineAuthMode::AppIdToken);
+            let auth_mode = preparation
+                .value(VOLCENGINE_AUTH_MODE_ACCOUNT)
+                .map(|value| VolcengineAuthMode::parse(&value))
+                .unwrap_or(VolcengineAuthMode::AppIdToken);
             let auth_mode = service.auth_mode(auth_mode);
-            let app_id = read_channel_credential(
-                credentials,
-                CredentialNamespace::Asr,
-                channel_id,
-                VOLCENGINE_APP_KEY_ACCOUNT,
-            )
-            .await?
-            .unwrap_or_default();
+            let app_id = preparation
+                .value(VOLCENGINE_APP_KEY_ACCOUNT)
+                .unwrap_or_default();
             let secret_account = match auth_mode {
                 VolcengineAuthMode::AppIdToken => VOLCENGINE_ACCESS_KEY_ACCOUNT,
                 VolcengineAuthMode::ApiKey => VOLCENGINE_API_KEY_ACCOUNT,
             };
-            let access_token = read_channel_credential(
-                credentials,
-                CredentialNamespace::Asr,
-                channel_id,
-                secret_account,
-            )
-            .await?
-            .unwrap_or_default();
-            if !auth_mode.auth_ok(&app_id, &access_token) {
-                return Err(credential_missing("Volcengine credentials"));
-            }
-            let resource_id = read_channel_credential(
-                credentials,
-                CredentialNamespace::Asr,
-                channel_id,
-                VOLCENGINE_RESOURCE_ID_ACCOUNT,
-            )
-            .await?;
+            let access_token = preparation.value(secret_account).unwrap_or_default();
+            let resource_id = preparation.value(VOLCENGINE_RESOURCE_ID_ACCOUNT);
             let credentials = VolcengineCredentials {
                 service,
                 auth_mode,
@@ -640,24 +747,8 @@ async fn build_cloud_transcription_session(
             (CloudTranscriptionSessionKind::Volcengine(provider), label)
         }
         ActiveAsrProviderKind::Xfyun => {
-            let app_id = read_channel_credential(
-                credentials,
-                CredentialNamespace::Asr,
-                channel_id,
-                XFYUN_APP_ID_ACCOUNT,
-            )
-            .await?
-            .unwrap_or_default();
-            let api_key = read_channel_credential(
-                credentials,
-                CredentialNamespace::Asr,
-                channel_id,
-                XFYUN_API_KEY_ACCOUNT,
-            )
-            .await?
-            .unwrap_or_default();
-            require_configured(&app_id, "Xfyun application id")?;
-            require_configured(&api_key, "Xfyun API key")?;
+            let app_id = preparation.value(XFYUN_APP_ID_ACCOUNT).unwrap_or_default();
+            let api_key = preparation.value(XFYUN_API_KEY_ACCOUNT).unwrap_or_default();
             let provider = Arc::new(XfyunStreamingASR::with_task_spawner(
                 XfyunCredentials { app_id, api_key },
                 Arc::clone(&task_spawner),
@@ -667,42 +758,17 @@ async fn build_cloud_transcription_session(
             (CloudTranscriptionSessionKind::Xfyun(provider), None)
         }
         ActiveAsrProviderKind::TencentCloud => {
-            let app_id = read_channel_credential(
-                credentials,
-                CredentialNamespace::Asr,
-                channel_id,
-                TENCENT_CLOUD_APP_ID_ACCOUNT,
-            )
-            .await?
-            .unwrap_or_default();
-            let secret_id = read_channel_credential(
-                credentials,
-                CredentialNamespace::Asr,
-                channel_id,
-                TENCENT_CLOUD_SECRET_ID_ACCOUNT,
-            )
-            .await?
-            .unwrap_or_default();
-            let secret_key = read_channel_credential(
-                credentials,
-                CredentialNamespace::Asr,
-                channel_id,
-                TENCENT_CLOUD_SECRET_KEY_ACCOUNT,
-            )
-            .await?
-            .unwrap_or_default();
-            require_configured(&app_id, "Tencent Cloud AppID")?;
-            require_configured(&secret_id, "Tencent Cloud SecretID")?;
-            require_configured(&secret_key, "Tencent Cloud SecretKey")?;
-            let model = read_channel_credential(
-                credentials,
-                CredentialNamespace::Asr,
-                channel_id,
-                ASR_MODEL_ACCOUNT,
-            )
-            .await?
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| crate::asr::tencent_cloud::DEFAULT_MODEL.to_string());
+            let app_id = preparation
+                .value(TENCENT_CLOUD_APP_ID_ACCOUNT)
+                .unwrap_or_default();
+            let secret_id = preparation
+                .value(TENCENT_CLOUD_SECRET_ID_ACCOUNT)
+                .unwrap_or_default();
+            let secret_key = preparation
+                .value(TENCENT_CLOUD_SECRET_KEY_ACCOUNT)
+                .unwrap_or_default();
+            let model = non_blank_owned(preparation.model.clone())
+                .unwrap_or_else(|| crate::asr::tencent_cloud::DEFAULT_MODEL.to_string());
             let provider = Arc::new(TencentCloudStreamingASR::with_task_spawner(
                 TencentCloudCredentials {
                     app_id,
@@ -723,7 +789,10 @@ async fn build_cloud_transcription_session(
             )
         }
     };
-    Ok((kind, crate::AsrCallLabel::new(effective, label_model)))
+    Ok((
+        kind,
+        crate::AsrCallLabel::new(preparation.effective_provider.clone(), label_model),
+    ))
 }
 
 async fn read_channel_credential(
@@ -2655,6 +2724,95 @@ mod tests {
             "xiaomi-mimo-asr"
         );
         session.cancel().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cloud_asr_preparation_freezes_channel_credentials_before_network_start() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            let header_end;
+            loop {
+                let count = socket.read(&mut chunk).await.unwrap();
+                assert!(count > 0, "client closed before sending its request");
+                request.extend_from_slice(&chunk[..count]);
+                if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                    header_end = end + 4;
+                    break;
+                }
+            }
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| line.strip_prefix("Content-Length: "))
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            while request.len() < header_end + content_length {
+                let count = socket.read(&mut chunk).await.unwrap();
+                assert!(count > 0, "client closed before sending its body");
+                request.extend_from_slice(&chunk[..count]);
+            }
+            let body = br#"{"choices":[{"message":{"content":"frozen"}}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            socket.write_all(body).await.unwrap();
+            request
+        });
+
+        let store = Arc::new(InMemoryCredentialStore::default());
+        write_channel_secret(
+            store.as_ref(),
+            CredentialNamespace::Asr,
+            "frozen-channel",
+            ASR_API_KEY_ACCOUNT,
+            "frozen-key",
+        )
+        .await;
+        write_channel_secret(
+            store.as_ref(),
+            CredentialNamespace::Asr,
+            "frozen-channel",
+            ASR_ENDPOINT_ACCOUNT,
+            &endpoint,
+        )
+        .await;
+        let engine = Arc::new(SharedCloudTranscriptionEngine::new(store.clone()));
+        let context = Arc::new(DictationContext {
+            asr: ProviderInvocation::new("frozen-channel", "xiaomi-mimo-asr"),
+            ..DictationContext::default()
+        });
+        let prepared = Arc::clone(&engine)
+            .prepare(SessionId::new(), context)
+            .await
+            .unwrap();
+        write_channel_secret(
+            store.as_ref(),
+            CredentialNamespace::Asr,
+            "frozen-channel",
+            ASR_API_KEY_ACCOUNT,
+            "changed-key",
+        )
+        .await;
+
+        let session = prepared
+            .start(Arc::new(IgnoreTextStreamSink))
+            .await
+            .unwrap();
+        session.consume_pcm_chunk(&[0, 0]);
+        assert_eq!(session.finish().await.unwrap().text, "frozen");
+        let request = String::from_utf8(server.await.unwrap())
+            .unwrap()
+            .to_ascii_lowercase();
+        assert!(request.contains("authorization: bearer frozen-key"));
+        assert!(!request.contains("changed-key"));
     }
 
     #[tokio::test]

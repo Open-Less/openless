@@ -339,6 +339,9 @@ pub struct UserPreferences {
     /// 录音期间临时静音系统输出，停止/取消/出错后恢复原静音状态。
     #[serde(default)]
     pub mute_during_recording: bool,
+    /// 录音结束后再连接当前 ASR 并提交整段 PCM。默认关闭。
+    #[serde(default)]
+    pub stable_transcription_enabled: bool,
     /// 按下录音热键进入 recording 状态时，播放一段即时合成的提示音，提醒「已开始录音」。
     /// 默认开启；可在「录音与输入」设置里关闭。提示音由 capsule 窗口用 Web Audio API 合成，
     /// 不依赖 show_capsule —— 胶囊隐藏时仍会响。
@@ -781,6 +784,8 @@ struct UserPreferencesWire {
     capsule_style: CapsuleStyle,
     #[serde(default)]
     mute_during_recording: bool,
+    #[serde(default)]
+    stable_transcription_enabled: bool,
     #[serde(default = "default_true")]
     audio_cue_on_record: bool,
     #[serde(default)]
@@ -1015,6 +1020,7 @@ impl Default for UserPreferencesWire {
             show_capsule: prefs.show_capsule,
             capsule_style: prefs.capsule_style,
             mute_during_recording: prefs.mute_during_recording,
+            stable_transcription_enabled: prefs.stable_transcription_enabled,
             audio_cue_on_record: prefs.audio_cue_on_record,
             silence_auto_stop_enabled: prefs.silence_auto_stop_enabled,
             silence_auto_stop_seconds: prefs.silence_auto_stop_seconds,
@@ -1173,6 +1179,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             show_capsule: wire.show_capsule,
             capsule_style: wire.capsule_style,
             mute_during_recording: wire.mute_during_recording,
+            stable_transcription_enabled: wire.stable_transcription_enabled,
             audio_cue_on_record: wire.audio_cue_on_record,
             silence_auto_stop_enabled: wire.silence_auto_stop_enabled,
             silence_auto_stop_seconds: wire.silence_auto_stop_seconds,
@@ -1531,6 +1538,7 @@ impl Default for UserPreferences {
             show_capsule: true,
             capsule_style: CapsuleStyle::Siri,
             mute_during_recording: false,
+            stable_transcription_enabled: false,
             audio_cue_on_record: true,
             silence_auto_stop_enabled: false,
             silence_auto_stop_seconds: default_silence_auto_stop_seconds(),
@@ -2932,6 +2940,21 @@ mod tests {
 
         let restored: UserPreferences = serde_json::from_str(&json).unwrap();
         assert!(!restored.audio_cue_on_record);
+    }
+
+    #[test]
+    fn stable_transcription_defaults_off_and_round_trips_when_enabled() {
+        let legacy: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert!(!legacy.stable_transcription_enabled);
+
+        let enabled = UserPreferences {
+            stable_transcription_enabled: true,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&enabled).unwrap();
+        assert!(json.contains("\"stableTranscriptionEnabled\":true"));
+        let restored: UserPreferences = serde_json::from_str(&json).unwrap();
+        assert!(restored.stable_transcription_enabled);
     }
 
     #[test]

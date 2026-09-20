@@ -143,6 +143,8 @@ pub struct SyncPreferences {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mute_during_recording: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub stable_transcription_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub silence_auto_stop_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub silence_auto_stop_seconds: Option<f32>,

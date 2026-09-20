@@ -1114,6 +1114,9 @@ export const es: typeof zhCN = {
       capsuleStyleLabel: 'Estilo de cápsula',
       capsuleStyleSiri: 'Estilo luminoso Siri',
       capsuleStyleClassic: 'Estilo predeterminado de OpenLess',
+      stableTranscriptionLabel: 'Modo estable (grabar y luego transcribir)',
+      stableTranscriptionDesc:
+        'Al activarlo, ASR se conecta solo después de detener la grabación y recibe el audio completo. El resultado tarda más, pero la captura no se ve afectada por retrasos de conexión ni por inestabilidad de red durante la grabación.',
       muteDuringRecordingLabel: 'Silenciar durante la grabación',
       muteDuringRecordingDesc:
         'Silencia temporalmente el sonido del sistema durante la entrada de voz para evitar el eco de los altavoces.',

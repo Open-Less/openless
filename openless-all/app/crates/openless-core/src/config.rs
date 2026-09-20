@@ -119,6 +119,20 @@ impl TaskSpawner for TokioTaskSpawner {
 pub struct UnsupportedDictationEngine;
 
 impl DictationEngine for UnsupportedDictationEngine {
+    fn prepare_transcription(
+        self: Arc<Self>,
+        _session_id: crate::types::SessionId,
+        _context: Arc<crate::dictation_context::DictationContext>,
+    ) -> BoxFuture<'static, Result<Arc<dyn crate::ports::PreparedTranscription>, BackendError>>
+    {
+        Box::pin(async {
+            Err(BackendError::new(
+                crate::errors::BackendErrorCode::Unsupported,
+                "dictation engine is not configured",
+            ))
+        })
+    }
+
     fn start(
         &self,
         _session_id: crate::types::SessionId,

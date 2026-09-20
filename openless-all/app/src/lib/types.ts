@@ -345,6 +345,8 @@ export interface UserPreferences {
   capsuleStyle: CapsuleStyle;
   /** 录音期间临时静音系统输出，停止/取消/出错后恢复原静音状态。 */
   muteDuringRecording: boolean;
+  /** 先完整录音，停止后再连接当前 ASR 并提交整段音频。默认关闭。 */
+  stableTranscriptionEnabled: boolean;
   /** 按下录音热键进入 recording 状态时，播放一段合成提示音提醒「已开始录音」。
    *  默认开启；在 capsule 窗口用 Web Audio API 合成，不依赖 showCapsule。 */
   audioCueOnRecord: boolean;

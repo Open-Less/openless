@@ -1075,6 +1075,9 @@ export const ko: typeof zhCN = {
       capsuleStyleLabel: '캡슐 스타일',
       capsuleStyleSiri: '시리 광선 스타일',
       capsuleStyleClassic: 'Openless 기본 스타일',
+      stableTranscriptionLabel: '안정 모드 (녹음 후 전사)',
+      stableTranscriptionDesc:
+        '켜면 녹음 중에는 ASR에 연결하지 않고 중지한 뒤 전체 오디오를 전송합니다. 결과는 늦게 표시되지만 연결 지연이나 녹음 중 네트워크 불안정이 녹음에 영향을 주지 않습니다.',
       muteDuringRecordingLabel: '녹음 중 음소거',
       muteDuringRecordingDesc:
         '녹음 중 시스템 출력을 일시적으로 음소거하여 스피커 에코를 방지합니다.',

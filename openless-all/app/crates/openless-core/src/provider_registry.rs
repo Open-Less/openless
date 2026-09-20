@@ -63,6 +63,19 @@ impl TranscriptionRouter {
 }
 
 impl TranscriptionEngine for TranscriptionRouter {
+    fn prepare(
+        self: Arc<Self>,
+        session_id: SessionId,
+        context: Arc<DictationContext>,
+    ) -> BoxFuture<'static, Result<Arc<dyn crate::ports::PreparedTranscription>, BackendError>>
+    {
+        let provider = match self.resolve(&context.asr.provider_type) {
+            Ok(provider) => provider,
+            Err(error) => return Box::pin(async move { Err(error) }),
+        };
+        provider.prepare(session_id, context)
+    }
+
     fn start(
         &self,
         session_id: SessionId,
@@ -323,6 +336,19 @@ impl DictationEngine for DictationEngineRouter {
             Err(error) => return Box::pin(async move { Err(error) }),
         };
         engine.start_transcription(session_id, context, partials)
+    }
+
+    fn prepare_transcription(
+        self: Arc<Self>,
+        session_id: SessionId,
+        context: Arc<DictationContext>,
+    ) -> BoxFuture<'static, Result<Arc<dyn crate::ports::PreparedTranscription>, BackendError>>
+    {
+        let engine = match self.resolve(&context) {
+            Ok(engine) => engine,
+            Err(error) => return Box::pin(async move { Err(error) }),
+        };
+        engine.prepare_transcription(session_id, context)
     }
 
     fn start_voice_capture(
@@ -753,6 +779,35 @@ mod tests {
             "llm-protocol:raw"
         );
         assert_eq!(context.llm.provider_id, "llm-channel");
+    }
+
+    #[tokio::test]
+    async fn prepared_asr_route_keeps_the_original_provider_after_replacement() {
+        let router = Arc::new(TranscriptionRouter::default());
+        router
+            .register(
+                "asr-protocol",
+                Arc::new(TaggedTranscriptionEngine("original")),
+            )
+            .unwrap();
+        let mut context =
+            context_with_providers("asr-channel", "llm", "omni", PipelineMode::Traditional);
+        context.asr.provider_type = "asr-protocol".to_string();
+        let context = Arc::new(context);
+        let prepared = Arc::clone(&router)
+            .prepare(SessionId::new(), context)
+            .await
+            .unwrap();
+
+        router
+            .register(
+                "asr-protocol",
+                Arc::new(TaggedTranscriptionEngine("replacement")),
+            )
+            .unwrap();
+        let session = prepared.start(Arc::new(NoopTextSink)).await.unwrap();
+
+        assert_eq!(session.finish().await.unwrap().text, "original");
     }
 
     #[tokio::test]

@@ -449,6 +449,15 @@ export function RecordingInputSection() {
           </SettingRow>
         )}
         <SettingRow
+          label={t('settings.recording.stableTranscriptionLabel')}
+          desc={t('settings.recording.stableTranscriptionDesc')}
+        >
+          <Toggle
+            on={prefs.stableTranscriptionEnabled}
+            onToggle={(next) => savePrefs({ ...prefs, stableTranscriptionEnabled: next })}
+          />
+        </SettingRow>
+        <SettingRow
           label={t('settings.recording.muteDuringRecordingLabel')}
           desc={t('settings.recording.muteDuringRecordingDesc')}
         >

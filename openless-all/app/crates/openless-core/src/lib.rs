@@ -174,6 +174,7 @@ pub mod contract {
         FixtureTranscriptionEngine, LinuxCapabilityFixture, RecordingHostActions,
         RecordingRemoteInputRuntime,
     };
+    pub use crate::PreparedTranscription;
     pub use crate::{
         require_backend_contract_version, ActivityDay, AudioConsumer, AudioRecorder, BackendConfig,
         BackendDependencies, BackendError, BackendErrorCode, BackendEvent, BackendEventKind,
@@ -279,6 +280,7 @@ pub use model_store::{
     ModelTransport, ModelTransportRequest, ModelTransportResponse, ReqwestModelTransport,
     MODEL_PARTIAL_INDEX, MODEL_READY_SENTINEL,
 };
+pub use ports::PreparedTranscription;
 pub use ports::{
     ActiveRecording, AudioConsumer, AudioRecorder, DictationEngine, DirectoryResourceResolver,
     EditObservationAdapter, EditObservationSink, EngineFailure, EngineFailureStage, EngineProgress,
