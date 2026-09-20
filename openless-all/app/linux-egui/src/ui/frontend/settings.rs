@@ -3516,6 +3516,14 @@ fn row_desc(ui: &mut egui::Ui, label: &str, desc: &str, control: impl FnOnce(&mu
     );
 }
 
+/// 仅供测试：直接渲染一个可折叠分组，用来验证「点标题行切换开合」。
+#[cfg(test)]
+pub(crate) fn test_group_toggle(ui: &mut egui::Ui) {
+    card_group(ui, "group-toggle-probe", |ui| {
+        ui.label("GROUPCONTENT");
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
