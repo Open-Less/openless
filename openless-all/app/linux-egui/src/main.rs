@@ -7694,8 +7694,57 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         }
     }
 
+    /// 只需要打印就退出的参数。以前 `--help` 会被当成普通启动参数，结果是
+    /// `openless --help` 把应用拉起来且不退出（用户报的 bug）。
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum EarlyExit {
+        Help,
+        Version,
+    }
+
+    /// `--help` / `--version` 的识别（纯函数，便于单测）。`--help` 优先于其它
+    /// 参数：`--openless-egui-popup --help` 也必须只打印帮助。
+    fn early_exit(args: &[String]) -> Option<EarlyExit> {
+        if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+            return Some(EarlyExit::Help);
+        }
+        if args.iter().any(|arg| arg == "--version" || arg == "-V") {
+            return Some(EarlyExit::Version);
+        }
+        None
+    }
+
+    /// 命令行帮助（英文：CLI 约定俗成，也避免往本地化目录里塞一次性文案）。
+    const USAGE: &str = "\
+OpenLess for Linux (egui frontend)
+
+Usage:
+  openless                 Launch OpenLess (tray + main window)
+  openless --minimized     Launch without showing the main window
+  openless --help, -h      Print this help and exit
+  openless --version, -V   Print the version and exit
+
+Internal flags (set by OpenLess itself, not for regular use):
+  --openless-egui-popup --qa | --capsule | --less-computer
+  --ui-client --ui-socket <path>
+";
+
     pub fn run() -> Result<(), String> {
         let args = std::env::args().collect::<Vec<_>>();
+        match early_exit(&args) {
+            Some(EarlyExit::Help) => {
+                print!("{USAGE}");
+                return Ok(());
+            }
+            Some(EarlyExit::Version) => {
+                println!(
+                    "OpenLess {}",
+                    option_env!("OPENLESS_LINUX_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
+                );
+                return Ok(());
+            }
+            None => {}
+        }
         if let Some(kind) = popup_kind(&args) {
             return run_popup_process(kind);
         }
@@ -7996,6 +8045,33 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             append_assistant_entry(&mut entries, "done");
             assert_eq!(entries.len(), 3);
             assert_eq!(entries[2].text, "done");
+        }
+
+        #[test]
+        #[test]
+        fn help_and_version_exit_before_anything_launches() {
+            let args = |extra: &str| vec!["openless".to_string(), extra.to_string()];
+            assert_eq!(
+                super::early_exit(&args("--help")),
+                Some(super::EarlyExit::Help)
+            );
+            assert_eq!(super::early_exit(&args("-h")), Some(super::EarlyExit::Help));
+            assert_eq!(
+                super::early_exit(&args("--version")),
+                Some(super::EarlyExit::Version)
+            );
+            assert_eq!(
+                super::early_exit(&args("-V")),
+                Some(super::EarlyExit::Version)
+            );
+            assert_eq!(super::early_exit(&args("--minimized")), None);
+            // `--help` 必须压过弹窗/UI-client 参数，否则帮助会被静默吞掉。
+            let popup_help = vec![
+                "openless".to_string(),
+                "--openless-egui-popup".to_string(),
+                "--help".to_string(),
+            ];
+            assert_eq!(super::early_exit(&popup_help), Some(super::EarlyExit::Help));
         }
 
         #[test]
