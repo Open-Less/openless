@@ -1,7 +1,3 @@
-#![cfg_attr(
-    target_os = "linux",
-    allow(dead_code, unused_imports, unused_variables)
-)]
 //! Dictation coordinator.
 //!
 //! Mirrors the Swift `DictationCoordinator` state machine. Single owner of

@@ -1,4 +1,3 @@
-#![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
 //! Credentials vault.
 //!
 //! 正常读写走系统凭据库；旧 plaintext JSON 只作为迁移来源。为保持多 provider
@@ -669,7 +668,7 @@ fn migrate_channels(root: &mut CredsRoot) -> bool {
 ///
 /// 只有 Windows 需要：那里的默认 ASR 是本地 Foundry，无需任何 key、装上就能用
 /// （见 `creds_default_asr`）。渠道化后列表完全由用户添加，不预置的话 Windows 新用户
-/// 开箱会一个 ASR 都没有。mac / Linux 的默认是要填 key 的云端厂商，预置一张空卡片
+/// 开箱会一个 ASR 都没有。macOS 的默认是要填 key 的云端厂商，预置一张空卡片
 /// 没有意义，交给新手引导。
 ///
 /// 靠 `version < 2` 把"全新安装"和"用户把渠道全删了"区分开：后者 version 已经是 2，
@@ -893,7 +892,7 @@ fn is_reserved_extra_header_name(name: &str) -> bool {
 }
 
 fn credentials_path() -> Result<PathBuf> {
-    // macOS / Linux: ~/.openless/credentials.json (与 Swift 同源)
+    // macOS: ~/.openless/credentials.json (与 Swift 同源)
     // Windows: %APPDATA%\OpenLess\credentials.json (Windows 没有标准 HOME 环境变量)
     #[cfg(target_os = "windows")]
     {
@@ -1275,7 +1274,7 @@ fn read_chunk_manifest(json: &str) -> Option<CredsChunkManifest> {
 /// credential set spans, the more reads per load, the higher the odds at least
 /// one trips. Retry transient errors a few times with short backoff.
 ///
-/// macOS / Linux keep the original single-shot behavior on purpose: their read
+/// macOS keeps the original single-shot behavior on purpose: its read
 /// errors are ACL denials that won't heal on retry, and the un-cached error path
 /// already retries on the next call — adding sleeps there would only slow the
 /// macOS first-launch Keychain authorization flow.

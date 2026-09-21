@@ -107,8 +107,6 @@ pub fn qwen_backend_for_provider(id: &str) -> Option<QwenBackend> {
     match id {
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         PROVIDER_ID | LOCAL_QWEN3_MLX_PROVIDER_ID => Some(QwenBackend::Mlx),
-        #[cfg(target_os = "linux")]
-        PROVIDER_ID | LOCAL_QWEN3_C_PROVIDER_ID => Some(QwenBackend::C),
         #[cfg(target_os = "macos")]
         LOCAL_QWEN3_C_PROVIDER_ID => Some(QwenBackend::C),
         #[cfg(all(target_os = "macos", not(target_arch = "aarch64")))]

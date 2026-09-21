@@ -1,4 +1,3 @@
-#![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
 //! Tauri IPC 命令入口，按设置、凭据、历史等领域拆分子模块。
 //!
 //! 子模块的命令及宏生成的伴生项通过 glob 重导出，供 `lib.rs` 的

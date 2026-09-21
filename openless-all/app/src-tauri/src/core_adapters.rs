@@ -327,12 +327,7 @@ impl openless_core::ModelRuntimeAdapter for TauriLocalAsrRuntimeAdapter {
                 {
                     true
                 }
-                #[cfg(target_os = "linux")]
-                {
-                    openless_core::LocalAsrModelId::from_wire_id(target.model_id())
-                        .is_some_and(openless_core::LocalAsrModelId::is_qwen)
-                }
-                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                #[cfg(not(target_os = "macos"))]
                 {
                     false
                 }
@@ -459,9 +454,7 @@ impl openless_core::ModelRuntimeAdapter for TauriLocalAsrRuntimeAdapter {
                         } else {
                             qwen_cache.loaded_model_id()
                         };
-                    #[cfg(target_os = "linux")]
-                    let loaded = qwen_cache.loaded_model_id();
-                    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                    #[cfg(not(target_os = "macos"))]
                     let loaded: Option<String> = None;
                     Ok(openless_core::LocalAsrRuntimeStatus {
                         runtime: settings.runtime,
@@ -1885,7 +1878,7 @@ impl TranscriptionEngine for TauriNativeTranscriptionEngine {
                         ));
                     }
                 }
-                #[cfg(target_os = "linux")]
+                #[cfg(not(target_os = "macos"))]
                 {
                     return Err(BackendError::new(
                         BackendErrorCode::Unsupported,
@@ -2841,7 +2834,7 @@ impl TauriTextInsertionSession {
 
     async fn write_chunk(&self, text: String) -> Result<InsertWriteResult, BackendError> {
         self.restore_insertion_target()?;
-        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
         {
             let chunk = text.clone();
             #[cfg(target_os = "windows")]
@@ -2861,11 +2854,6 @@ impl TauriTextInsertionSession {
                 #[cfg(target_os = "macos")]
                 let result =
                     crate::unicode_keystroke::type_unicode_chunk_with_options(&chunk, newline_mode);
-                // Linux 桌面已不再由 Tauri 提供（见 crate 根部 compile_error!），
-                // 这里给出明确的“不支持”结果，而不是引用已删除的 Linux 实现。
-                #[cfg(target_os = "linux")]
-                let result: Result<usize, crate::unicode_keystroke::TypeError> =
-                    Err(crate::unicode_keystroke::TypeError::UnsupportedPlatform);
                 match result {
                     Ok(written) => written,
                     Err(error) => error.typed_chars(),
@@ -2882,7 +2870,7 @@ impl TauriTextInsertionSession {
                 written_chars: written,
             })
         }
-        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {
             let _ = text;
             Err(BackendError::new(

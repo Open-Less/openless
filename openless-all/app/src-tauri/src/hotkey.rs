@@ -1,11 +1,9 @@
-#![cfg_attr(target_os = "linux", allow(dead_code))]
 //! 全局热键监听：发送按下 / 抬起 / 取消三类边沿事件。
 //!
 //! - macOS：原生 CGEventTap（core-foundation + core-graphics FFI），与 Swift
 //!   `OpenLessHotkey/HotkeyMonitor.swift` 同源。
 //! - Windows：原生 `WH_KEYBOARD_LL` low-level keyboard hook，保留 modifier-only
 //!   trigger（如右 Control / 右 Alt）的真实语义。
-//! - Linux：fcitx5 插件提供热键事件（DBus 信号 `DictationKeyEvent`）。
 //!
 //! 仅产出带代次和单调时间戳的原始边沿，业务语义由 openless-core 解释。
 //!
@@ -423,6 +421,29 @@ fn reset_shared_held_state(shared: &Shared) {
 }
 
 // ─────────────────────────── macOS implementation ───────────────────────────
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+mod platform {
+    //! 没有原生全局热键后端的桌面构建：安装直接失败，调用方据此给用户明确提示，
+    //! 而不是默默不工作。真实实现见 macOS（CGEventTap）与 Windows（WH_KEYBOARD_LL）。
+
+    use super::{
+        HotkeyAdapter, HotkeyBinding, HotkeyCombinedEdge, HotkeyEvent, HotkeyInstallError,
+    };
+    use std::sync::mpsc::Sender;
+
+    pub fn start_adapter(
+        _binding: HotkeyBinding,
+        _tx: Sender<HotkeyEvent>,
+        _cancel_tx: Sender<()>,
+        _combo_tx: Sender<HotkeyCombinedEdge>,
+    ) -> Result<Box<dyn HotkeyAdapter>, HotkeyInstallError> {
+        Err(HotkeyInstallError {
+            code: "hotkey_unsupported".to_string(),
+            message: "当前平台不提供原生全局热键后端".to_string(),
+        })
+    }
+}
 
 #[cfg(target_os = "macos")]
 mod platform {

@@ -1,7 +1,3 @@
-#![cfg_attr(
-    target_os = "linux",
-    allow(dead_code, unused_imports, unused_variables)
-)]
 //! OpenLess Tauri backend.
 //!
 //! Modules mirror the original Swift libraries (one purpose per file):
@@ -121,9 +117,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
-
-#[cfg(target_os = "linux")]
-use gtk::prelude::WidgetExt;
 
 const LOG_ROTATE_LIMIT_BYTES: u64 = 10 * 1024 * 1024;
 #[cfg(target_os = "macos")]
@@ -691,18 +684,6 @@ fn run_desktop() {
                 // Linux 下 tao 的鼠标穿透实现会直接解包底层 GDK 窗口；visible=false 时
                 // 窗口尚未 realize。这里只创建窗口系统资源而不 map，避免 X11 崩溃，
                 // 也不会像 show() 那样在不支持窗口定位的 Wayland 上造成启动闪窗。
-                #[cfg(target_os = "linux")]
-                let cursor_passthrough_ready = match capsule.gtk_window() {
-                    Ok(gtk_window) => {
-                        gtk_window.realize();
-                        true
-                    }
-                    Err(e) => {
-                        log::warn!("[capsule] gtk_window failed; skipping cursor passthrough: {e}");
-                        false
-                    }
-                };
-                #[cfg(not(target_os = "linux"))]
                 let cursor_passthrough_ready = true;
 
                 if cursor_passthrough_ready {
@@ -769,43 +750,6 @@ fn run_desktop() {
                 if suppress_show {
                     log::info!("[main] start_minimized=true → 跳过初始 show，等用户点托盘");
                 } else {
-                    #[cfg(target_os = "linux")]
-                    {
-                        // Workaround for Linux Wayland WebKitGTK compositing:
-                        // `visible:false` → `show()` can leave the webview surface
-                        // without a valid input region. The ±1px nudge forces
-                        // GTK size-allocate → input surface reattach.
-                        // Ref: tauri#9394, cc-switch linux_fix.rs
-                        let main_clone = main.clone();
-                        let _ = main_clone.set_focus();
-                        tauri::async_runtime::spawn(async move {
-                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                            let _ = main_clone.set_focus();
-                            if let Ok(orig) = main_clone.inner_size() {
-                                let bumped = tauri::PhysicalSize::new(
-                                    orig.width.saturating_add(1),
-                                    orig.height,
-                                );
-                                let _ = main_clone.set_size(bumped);
-                                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                                let _ = main_clone.set_size(orig);
-                                log::info!("[main] Linux nudge: focus + surface reactivation done");
-                                // Reconcile: compositor may have coalesced the two
-                                // set_size calls, leaving the window at width+1.
-                                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                                if let Ok(after) = main_clone.inner_size() {
-                                    // Only correct the ±1px nudge artifact — if the
-                                    // compositor or user resized the window significantly
-                                    // during this window, don't clobber that change.
-                                    let dw = if after.width > orig.width { after.width - orig.width } else { orig.width - after.width };
-                                    let dh = if after.height > orig.height { after.height - orig.height } else { orig.height - after.height };
-                                    if dw <= 1 && dh <= 1 && (dw > 0 || dh > 0) {
-                                        let _ = main_clone.set_size(orig);
-                                    }
-                                }
-                            }
-                        });
-                    }
                     if let Err(e) = main.show() {
                         log::warn!("[main] initial show failed: {e}");
                     }

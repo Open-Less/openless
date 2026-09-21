@@ -4,7 +4,7 @@
 //! - `type_unicode_chunk(text)` —— 阻塞地把一段文字逐 codepoint 当作键盘事件发出去，
 //!   不动剪贴板。各平台用各自的原语；返回确认成功发送的字符数。
 //! - `switch_to_ascii(app)` —— 仅 macOS 有效；切到 ABC 输入源以绕过 CJK / 日文 IME
-//!   对 Unicode 字符串事件的拦截。Windows / Linux 上是 no-op。
+//!   对 Unicode 字符串事件的拦截。Windows 上是 no-op。
 //! - `restore_input_source(app, prev)` —— 配对调用，恢复 macOS 上的原输入源。
 //!
 //! ## 平台差异
@@ -14,7 +14,6 @@
 //!   必须 `switch_to_ascii` 切到 ABC，session 结束再 `restore_input_source` 切回。
 //! - **Windows**：`SendInput(KEYEVENTF_UNICODE)` 直接发 UTF-16 scancode。TSF 不拦
 //!   Unicode 事件（与 keyboard layout / IME 解耦），所以不需要切输入法。
-//! - **Linux**：走 fcitx5 插件 commitString 直写（DBus）或剪贴板回落。
 //!
 //! ## 已知坑（macOS）
 //!
@@ -57,11 +56,6 @@ pub enum TypeError {
     #[cfg(target_os = "windows")]
     #[error("Windows SendInput failed: {0}")]
     SendInputFailed(String),
-    /// Tauri 版不再提供 Linux 桌面（egui 前端取代，见 crate 根部 compile_error!）。
-    /// 保留这个中立变体，只为让 Linux 分支有一个明确、可读的“不支持”出口，
-    /// 而不是引用已删除的 Linux 实现。
-    #[error("Linux desktop is not supported by the Tauri shell; use the egui frontend")]
-    UnsupportedPlatform,
 }
 
 impl TypeError {
@@ -421,7 +415,7 @@ mod windows_impl {
     const SENDINPUT_CHUNK_CHARS: usize = 16;
     const SENDINPUT_CHUNK_DELAY: Duration = Duration::from_millis(12);
 
-    /// Windows / Linux 上没有 input source 概念，token 留空。Send/Sync 自动派生。
+    /// Windows 上没有 input source 概念，token 留空。Send/Sync 自动派生。
     pub struct PreviousInputSource;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -295,10 +295,9 @@ fn emit_capsule_payload_locked(inner: &Arc<Inner>, payload: CapsulePayload) -> u
     // 入场帧：胶囊从不可见第一次变可见。按平时的「同步 emit + 异步 show」，前端会在窗口
     // 还隐藏时就起播 capsule-in，等窗口真 show 出来动画早已播完 → 用户看到胶囊「凭空出
     // 现」而非「滑入」。修法：入场帧把发给 capsule 窗口的事件推迟到主线程闭包里、
-    // window.show 之后再 emit，保证前端起播入场动画时窗口已可见、动画完整可见。Linux 不
-    // 走胶囊窗口（文字经 fcitx5 直接 commit），保持原同步 emit 不变。
+    // window.show 之后再 emit，保证前端起播入场动画时窗口已可见、动画完整可见。
     let was_visible = matches!(prev_state, Some(s) if !matches!(s, CapsuleState::Idle));
-    let defer_capsule_emit = visible && !was_visible && cfg!(not(target_os = "linux"));
+    let defer_capsule_emit = visible && !was_visible;
 
     // emit_capsule 会被 cpal process_callback（音频回调线程）调用 ~30 Hz —— 在该
     // 线程上调用 NSWindow / HWND API 会撞 macOS dispatch_assert_queue_fail SIGTRAP

@@ -39,7 +39,7 @@ pub struct LocalAsrSettings {
     pub mirror: String,
     pub models_base_dir: Option<String>,
     pub models_root_dir: String,
-    /// macOS/Linux 编入本地 Qwen3-ASR C 引擎；MLX 仅在 macOS 可用。
+    /// 本地 Qwen3-ASR C 引擎仅在 macOS 编入；Apple Silicon 另可用 MLX。
     pub engine_available: bool,
 }
 

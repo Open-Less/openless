@@ -1,4 +1,3 @@
-#![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
 //! 本地 Qwen3-ASR 一键"加载 + 测试"实现。
 //!
 //! 流程：
@@ -47,8 +46,6 @@ pub async fn run_test(
     if model_id.is_whisper() {
         #[cfg(target_os = "macos")]
         return run_whisper_test(model_id, model_dir).await;
-        #[cfg(target_os = "linux")]
-        anyhow::bail!("本地 Whisper 测试仅支持 macOS");
     }
     let backend =
         backend.ok_or_else(|| anyhow::anyhow!("当前系统不支持所选的本地 Qwen3-ASR 后端"))?;

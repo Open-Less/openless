@@ -1,9 +1,8 @@
-#![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
 //! 跨平台光标位置文本插入。
 //!
 //! 通用步骤：先写剪贴板（模拟失败时用户能手动粘贴）→ 模拟粘贴快捷键。
 //! - macOS：用 CoreGraphics CGEvent 直接 post Cmd+V。
-//! - Windows / Linux：用 enigo 按 `PasteShortcut` 模拟。
+//! - Windows：用 enigo 按 `PasteShortcut` 模拟。
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -128,6 +127,18 @@ impl TextInserter {
             return InsertStatus::CopiedFallback;
         }
         self.copy_fallback(text)
+    }
+
+    /// 无原生粘贴快捷键实现的桌面构建：退回剪贴板兜底，与
+    /// [`Self::insert_via_clipboard_fallback`] 同语义（典型场景：终端/无合成键平台）。
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "android")))]
+    pub fn insert(
+        &self,
+        text: &str,
+        restore_clipboard_after_paste: bool,
+        paste_shortcut: PasteShortcut,
+    ) -> InsertStatus {
+        self.insert_via_clipboard_fallback(text, restore_clipboard_after_paste, paste_shortcut)
     }
 
     /// 只写剪贴板、不模拟粘贴。用于目标控件活跃状态无法验证时的兜底路径。
