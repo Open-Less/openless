@@ -1750,7 +1750,6 @@ export const de: typeof zhCN = {
       multimodalPipelineHint:
         'Ergänzt auf der KI-Diensteseite den Schalter „Klassisch / Multimodal“. Klassisch = ASR + LLM; multimodal = ein audiotaugliches Modell. Beide Konfigurationen werden getrennt gespeichert und teilen keine Zugangsdaten.',
       streamingInsertTitle: 'Laufend einfügen',
-      streamingInsertTitleLinux: 'Laufend einfügen (experimentell)',
       streamingInsertDesc:
         'Fügt den Text Zeichen für Zeichen an der Cursorposition ein und verkürzt so die wahrgenommene Wartezeit. Sind die Voraussetzungen nicht erfüllt, wird der Text auf einmal eingefügt.',
       streamingInsertLabel: 'Laufend einfügen',
@@ -1758,8 +1757,6 @@ export const de: typeof zhCN = {
         'Wechselt die Eingabequelle vorübergehend zu ABC, damit chinesische, japanische oder koreanische Eingabemethoden die Tasten nicht abfangen. Nach der Sitzung wird die ursprüngliche Quelle wiederhergestellt.',
       streamingInsertHintWindows:
         'SendInput gibt Unicode direkt ein und umgeht TSF / IME. Ein Wechsel der Eingabemethode ist nicht erforderlich.',
-      streamingInsertHintLinux:
-        'Verwendet das fcitx5-Plugin zur Textübermittlung. Laufendes Einfügen simuliert Tasten über enigo + XTest.',
       streamingInsertSaveClipboardLabel: 'In Zwischenablage kopieren',
       streamingInsertSaveClipboardHint:
         'Kopiert nach erfolgreichem Einfügen den fertigen Text in die Zwischenablage, damit du ihn mit Cmd+V erneut einfügen kannst. Bei „Aus“ bleibt die Zwischenablage unberührt.',

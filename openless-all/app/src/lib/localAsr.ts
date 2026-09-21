@@ -11,7 +11,7 @@ import type { OS } from '../components/WindowChrome';
 
 export function isLocalAsrModelSupportedOnOs(modelId: string, os: OS): boolean {
   if (modelId.startsWith('whisper-')) return os === 'mac';
-  if (modelId.startsWith('qwen3-asr-')) return os === 'mac' || os === 'linux';
+  if (modelId.startsWith('qwen3-asr-')) return os === 'mac';
   return true;
 }
 
@@ -23,7 +23,7 @@ export interface LocalAsrSettings {
   mirror: string;
   modelsBaseDir: string | null;
   modelsRootDir: string;
-  /** macOS/Linux 编入 C 引擎；MLX 仅在 macOS 可用。 */
+  /** 桌面端只在 macOS 编入本地引擎（Apple Silicon 另可用 MLX）。 */
   engineAvailable: boolean;
 }
 

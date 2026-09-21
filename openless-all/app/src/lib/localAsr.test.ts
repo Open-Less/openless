@@ -21,11 +21,6 @@ assertEqual(
   'Qwen is available on macOS',
 );
 assertEqual(
-  isLocalAsrModelSupportedOnOs('qwen3-asr-0.6b', 'linux'),
-  true,
-  'Qwen is available on Linux',
-);
-assertEqual(
   isLocalAsrModelSupportedOnOs('whisper-large-v3-turbo', 'mac'),
   true,
   'Whisper is available on macOS',

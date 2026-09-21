@@ -1734,7 +1734,6 @@ export const es: typeof zhCN = {
       multimodalPipelineHint:
         'Añade un selector Tradicional / Multimodal a la página de proveedores de IA. Tradicional usa ASR + LLM y Multimodal usa un modelo con audio. Las configuraciones se guardan por separado y nunca comparten credenciales.',
       streamingInsertTitle: 'Inserción progresiva',
-      streamingInsertTitleLinux: 'Inserción progresiva (experimental)',
       streamingInsertDesc:
         'Inserta el texto carácter a carácter donde está el cursor para reducir la espera percibida. Si no se cumplen las condiciones, pega todo de una vez.',
       streamingInsertLabel: 'Inserción progresiva',
@@ -1742,8 +1741,6 @@ export const es: typeof zhCN = {
         'Cambia temporalmente la fuente de entrada a ABC para que los IME de chino, japonés o coreano no intercepten las teclas. Se restaura al terminar la sesión.',
       streamingInsertHintWindows:
         'SendInput Unicode escribe directamente, sin pasar por TSF / IME y sin cambiar de método de entrada.',
-      streamingInsertHintLinux:
-        'Usa el complemento fcitx5 para enviar texto; la inserción progresiva simula teclas mediante enigo + XTest.',
       streamingInsertSaveClipboardLabel: 'Copiar al portapapeles',
       streamingInsertSaveClipboardHint:
         'Después de insertar correctamente, copia el texto final al portapapeles para poder pegarlo otra vez con Cmd+V. Desactivado: no se modifica el portapapeles.',

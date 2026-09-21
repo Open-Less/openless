@@ -218,7 +218,7 @@ export type ComboBinding = ShortcutBinding;
 export type CodingAgentProviderId = 'claude-code-cli' | 'opencode-cli' | 'codex-cli' | 'dsh-cli';
 export type CodingAgentPermissionMode = 'plan' | 'default' | 'acceptEdits' | 'bypassPermissions';
 
-/** 模拟粘贴时按下的快捷键。仅 Windows/Linux 生效；macOS 走 AX 直写。
+/** 模拟粘贴时按下的快捷键。仅 Windows 生效；macOS 走 AX 直写。
  *  - ctrlV       : 标准粘贴（默认；大多数编辑器、浏览器、IDE）
  *  - ctrlShiftV  : kitty / alacritty / wezterm / gnome-terminal / foot 等终端
  *  - shiftInsert : xterm / urxvt 等老派 X11 终端
@@ -369,9 +369,9 @@ export interface UserPreferences {
   llmThinkingEnabled: boolean;
   /** 是否使用系统代理（issue #869）。默认开启；关闭后所有请求直连，境外服务（GitHub 登录/更新等）可能连不上。 */
   useSystemProxy: boolean;
-  /** 仅 Windows/Linux：粘贴成功后是否恢复用户原剪贴板。默认 true。详见 issue #111。 */
+  /** 仅 Windows：粘贴成功后是否恢复用户原剪贴板。默认 true。详见 issue #111。 */
   restoreClipboardAfterPaste: boolean;
-  /** 仅 Windows/Linux：模拟粘贴时按下的快捷键。详见 issue #360：kitty/alacritty
+  /** 仅 Windows：模拟粘贴时按下的快捷键。详见 issue #360：kitty/alacritty
    *  等终端只接受 Ctrl+Shift+V，硬编码 Ctrl+V 会被吞掉，听写文本只剩在剪贴板里。
    *  macOS 走 AX 直写不受影响。默认 'ctrlV' 与历史行为一致。 */
   pasteShortcut: PasteShortcut;

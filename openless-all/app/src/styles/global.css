@@ -9,11 +9,6 @@ body,
   overflow: hidden;
 }
 
-html[data-ol-platform='linux'],
-html[data-ol-platform='linux'] body,
-html[data-ol-platform='linux'] #root {
-  background: var(--ol-surface);
-}
 
 html[data-ol-platform='android'],
 html[data-ol-platform='android'] body,
@@ -243,13 +238,7 @@ a {
   pointer-events: none;
 }
 
-html[data-ol-platform='linux'] .ol-frost {
-  background: var(--ol-surface);
-}
 
-html[data-ol-platform='linux'] .ol-frost::before {
-  content: none;
-}
 
 html[data-ol-platform='android'] .ol-frost {
   background: var(--ol-surface);
@@ -867,7 +856,6 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   border-color: var(--ol-capsule-pill-border) !important;
 }
 
-html[data-ol-platform='linux'] .ol-capsule-pill,
 html[data-ol-platform='android'] .ol-capsule-pill {
   background: var(--ol-capsule-pill-bg) !important;
 }

@@ -26,7 +26,6 @@ for (const [locale, messages] of Object.entries(locales)) {
   }
 
   for (const [key, title] of Object.entries({
-    streamingInsertTitleLinux: messages.settings.advanced.streamingInsertTitleLinux,
     asrSherpaOnnxLocal: messages.settings.providers.presets.asrSherpaOnnxLocal,
     sherpaTitle: messages.localAsr.sherpaTitle,
   })) {

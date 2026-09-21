@@ -1697,7 +1697,6 @@ export const en: typeof zhCN = {
       multimodalPipelineHint:
         'Adds a Traditional / Multimodal switch on the AI providers page. Traditional = ASR + LLM; Multimodal = one audio-capable model. The two configurations are stored separately and never share credentials.',
       streamingInsertTitle: 'Streaming insertion',
-      streamingInsertTitleLinux: 'Streaming insertion (Experimental)',
       streamingInsertDesc:
         'Streams text to cursor character by character, reducing perceived latency. Falls back to one-shot paste when conditions are not met.',
       streamingInsertLabel: 'Streaming insertion',
@@ -1705,8 +1704,6 @@ export const en: typeof zhCN = {
         'Temporarily switches the input source to ABC so CJK IMEs cannot intercept keystrokes; restored on session end.',
       streamingInsertHintWindows:
         'SendInput Unicode types directly, bypassing TSF / IME — no input-method switching needed.',
-      streamingInsertHintLinux:
-        'Uses fcitx5 plugin for text submission; streaming insertion uses enigo + XTest for keystroke synthesis.',
       streamingInsertSaveClipboardLabel: 'Copy to clipboard',
       streamingInsertSaveClipboardHint:
         'After a successful insert, write the final text to the clipboard so Cmd+V can paste it again. Off = clipboard is never touched.',

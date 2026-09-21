@@ -452,7 +452,7 @@ function ClassicPill({
   const shadowAlpha = 0.2 + ambient * 0.1;
 
   return (
-    // 非 Linux 走假毛玻璃；Linux 禁用透明窗口后由 .ol-frost 平台规则退成不透明面。
+    // 桌面走假毛玻璃；Android 由 .ol-frost 平台规则退成不透明面。
     // 不写 backdrop-filter —— webview 模糊不了透明窗口背后的桌面（Tauri 上游限制）。
     <div
       className="ol-frost ol-capsule-pill"

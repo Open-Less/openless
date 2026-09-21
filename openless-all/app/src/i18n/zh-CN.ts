@@ -1603,12 +1603,10 @@ export const zhCN = {
       multimodalPipelineHint:
         '开启后，「服务 → AI 提供商」页出现「传统模式 / 多模态模式」切换。传统 = ASR + LLM；多模态 = 单个支持音频的模型。两套配置分开存储、绝不共享凭据。',
       streamingInsertTitle: '流式输入',
-      streamingInsertTitleLinux: '流式输入（实验性）',
       streamingInsertDesc: '逐字实时插入，降低感知延迟。不满足条件时回落到一次性粘贴。',
       streamingInsertLabel: '流式输入',
       streamingInsertHintMac: '临时切到 ABC 输入源，避免 CJK IME 拦截，会话结束后自动切回。',
       streamingInsertHintWindows: 'SendInput Unicode 直接送字符，绕过 TSF / IME，不切输入法。',
-      streamingInsertHintLinux: '通过 fcitx5 插件提交文字；流式输入使用 enigo + XTest 合成按键。',
       streamingInsertSaveClipboardLabel: '同步到剪贴板',
       streamingInsertSaveClipboardHint:
         '插入成功后把最终文本写入剪贴板，方便 Cmd+V 再次粘贴；关闭后流式过程不动剪贴板。',

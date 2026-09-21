@@ -1656,15 +1656,12 @@ export const ko: typeof zhCN = {
       multimodalPipelineHint:
         '활성화하면 「서비스 → AI 공급자」 페이지에 전통 / 멀티모달 전환이 나타납니다. 전통 = ASR + LLM, 멀티모달 = 오디오 지원 모델 1개. 두 설정은 별도로 저장되며 자격 증명을 공유하지 않습니다.',
       streamingInsertTitle: '스트리밍 입력',
-      streamingInsertTitleLinux: '스트리밍 입력 (실험적)',
       streamingInsertDesc:
         '실시간 글자별 삽입으로 체감 지연 감소. 조건 불충족 시 일괄 붙여넣기로 전환.',
       streamingInsertLabel: '스트리밍 입력',
       streamingInsertHintMac:
         '스트리밍 중 입력 소스를 ABC 로 임시 전환 (CJK IME 가로채기 방지). 세션 종료 시 자동 복원.',
       streamingInsertHintWindows: 'SendInput Unicode 로 TSF / IME 를 우회. 입력 소스 전환 불필요.',
-      streamingInsertHintLinux:
-        'fcitx5 플러그인으로 텍스트 전송. 스트리밍 입력은 enigo + XTest 키 합성 사용.',
       streamingInsertSaveClipboardLabel: '클립보드에 저장',
       streamingInsertSaveClipboardHint:
         '삽입 성공 후 최종 텍스트를 클립보드에 기록하여 Cmd+V 로 다시 붙여넣을 수 있게 합니다. 끄면 클립보드를 건드리지 않습니다.',

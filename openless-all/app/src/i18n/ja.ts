@@ -1668,7 +1668,6 @@ export const ja: typeof zhCN = {
       multimodalPipelineHint:
         '有効にすると「サービス → AI プロバイダー」ページに従来 / マルチモーダルの切り替えが表示されます。従来 = ASR + LLM、マルチモーダル = 音声対応モデル1つ。設定は別々に保存され、認証情報を共有しません。',
       streamingInsertTitle: 'ストリーミング入力',
-      streamingInsertTitleLinux: 'ストリーミング入力（実験的）',
       streamingInsertDesc:
         '逐字リアルタイム挿入で体感遅延を低減。条件不一致時はワンショット貼り付けにフォールバック。',
       streamingInsertLabel: 'ストリーミング入力',
@@ -1676,8 +1675,6 @@ export const ja: typeof zhCN = {
         'ストリーミング中は一時的に ABC 入力ソースへ切替（CJK IME による傍受を回避）。セッション終了時に自動で元へ戻ります。',
       streamingInsertHintWindows:
         'SendInput Unicode で TSF / IME を迂回。入力ソースの切替は不要です。',
-      streamingInsertHintLinux:
-        'fcitx5 プラグインで文字を送信。ストリーミング入力は enigo + XTest でキー合成。',
       streamingInsertSaveClipboardLabel: 'クリップボードに保存',
       streamingInsertSaveClipboardHint:
         '挿入成功後に最終テキストをクリップボードへ書き込み、Cmd+V で再貼付け可能にします。OFF ではクリップボードに触れません。',
