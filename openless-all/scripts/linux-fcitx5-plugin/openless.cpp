@@ -17,7 +17,9 @@
  *    SetQaHotkeyRaw(uu: sym, states)     — 直接设 QA 面板触发 sym+states
  *    SetTranslationHotkeyRaw(uu: sym, states) — 直接设翻译模式触发 sym+states
  *    SetLessComputerHotkeyRaw(uu: sym, states) — 直接设 Less Computer 触发 sym+states
- *    GetSelectionText() -> s             — 读取当前 PRIMARY 选区文本（由 clipboard addon 维护）
+ *    GetSelectionText() -> s             — 读取**当前** PRIMARY 选区文本：探针可用时以合成器为准，
+ *                                          当前选区没有 text mime 时返回空，而不是 clipboard
+ *                                          addon 里那份可能过期的缓存（见 primary_selection.h）
  *    SetClipboardText(s: text) -> b      — 通过 clipboard addon 写入 CLIPBOARD
  *    CaptureSelectionTarget(s: ticket) -> s — 捕获选区和原输入上下文
  *    ApplySelectionTarget(sss: ticket, source, replacement) -> b — 校验后替换
@@ -37,6 +39,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <tuple>
@@ -53,6 +56,7 @@
 #include <fcitx-utils/key.h>
 
 #include "hotkey_match.h"
+#include "primary_selection.h"
 #include <fcitx-utils/log.h>
 #include <fcitx-utils/utf8.h>
 #include <fcitx/addonfactory.h>
@@ -103,7 +107,8 @@ public:
           lessComputerTriggerHeld_(false),
           lessComputerTriggerCombined_(false),
           savedIc_(nullptr),
-          selectionIc_(nullptr) {
+          selectionIc_(nullptr),
+          primarySelectionReader_(openless_selection::readPrimarySelection) {
 
         // 1. 读取配置
         reloadConfig();
@@ -374,21 +379,24 @@ public:
         if (ticket.empty() || !selectionIc_) {
             return std::string();
         }
-        std::string source;
         const auto &surrounding = selectionIc_->surroundingText();
-        if (surrounding.isValid()) {
-            source = surrounding.selectedText();
-        }
-        if (source.empty()) {
-            source = getSelectionText();
-        }
-        if (source.empty()) {
+        const std::string surroundingSelected =
+            surrounding.isValid() ? surrounding.selectedText() : std::string();
+        // 选区文本以**合成器此刻的 PRIMARY** 为准；应用自己报的 surrounding 只在探针
+        // 给不出结论时兜底（规则见 primary_selection.h 的 chooseSelectionSource）。
+        // 旧实现反过来——先信 surrounding，再退到 clipboard addon 的缓存——于是
+        // “新选区没有 text mime”时会把上一次的选区文本当成当前选区。
+        const auto primary = primarySelectionReader_();
+        const auto source =
+            openless_selection::chooseSelectionSource(primary, surroundingSelected);
+        logSelectionCapture(primary, source, surroundingSelected);
+        if (source.text.empty()) {
             return std::string();
         }
         selectionTargets_[ticket] = {
-            selectionIc_, source, std::string(), surrounding.text(),
+            selectionIc_, source.text, std::string(), surrounding.text(),
             surrounding.cursor(), surrounding.anchor(), surrounding.isValid()};
-        return source;
+        return source.text;
     }
 
     bool captureDictationTarget(const std::string &ticket) {
@@ -669,20 +677,33 @@ public:
         safeSaveAsIni(raw, configFile());
     }
 
-    /// 读取当前 PRIMARY 选区文本。空字符串表示无选区或 clipboard addon 不可用。
+    /// 读当前 PRIMARY 选区文本。空字符串表示“没有可用的文本选区”。
+    ///
+    /// 探针可用时以合成器为准，并且**不再**回退到 clipboard addon 的缓存：那份缓存
+    /// 在新选区没有 text mime 时会保留上一次的文本（fcitx5 waylandclipboard.cpp 的
+    /// receiveRealData 直接 return、回调不触发），用它就是把旧选区当成当前选区。
+    /// 探针不可用（X11 会话、合成器不提供 ext-data-control）或数据没读完时，才退回
+    /// 缓存——那是本机唯一还能用的来源。
     std::string getSelectionText() {
-        auto *clipboard = instance_->addonManager().addon("clipboard");
-        if (!clipboard) {
+        using Status = openless_selection::PrimarySelectionStatus;
+        const auto primary = primarySelectionReader_();
+        if (primary.status == Status::Text) {
             FCITX_LOGC(openless, Debug)
-                << "GetSelectionText: clipboard addon not loaded";
+                << "GetSelectionText: probe read " << primary.text.size()
+                << " chars";
+            return primary.text;
+        }
+        if (primary.status == Status::NoText ||
+            primary.status == Status::NoSelection) {
+            FCITX_LOGC(openless, Debug)
+                << "GetSelectionText: no text selection (" << primary.detail
+                << ")";
             return std::string();
         }
-        // primary() 签名接收 const InputContext*，clipboard 模块实现中未使用该参数
-        // （读的是全局 primary_ 缓存），这里传 nullptr 即可。
-        std::string text = clipboard->call<IClipboard::primary>(nullptr);
-        FCITX_LOGC(openless, Debug)
-            << "GetSelectionText: " << text.size() << " chars";
-        return text;
+        FCITX_LOGC(openless, Warn)
+            << "GetSelectionText: primary probe unavailable (" << primary.detail
+            << "), falling back to the clipboard addon cache";
+        return cachedPrimarySelection();
     }
 
     bool setClipboardText(const std::string &text) {
@@ -823,6 +844,60 @@ private:
     // The native-boundary contract fixture supplies real in-process IC handles
     // without synthesizing DBus signals or touching the user's input devices.
     friend struct OpenLessInputTargetContract;
+
+    /// clipboard addon 的 PRIMARY 缓存。**可能过期**，只作为探针不可用时的兜底。
+    std::string cachedPrimarySelection() {
+        auto *clipboard = instance_->addonManager().addon("clipboard");
+        if (!clipboard) {
+            FCITX_LOGC(openless, Debug)
+                << "GetSelectionText: clipboard addon not loaded";
+            return std::string();
+        }
+        // primary() 签名接收 const InputContext*，clipboard 模块实现中未使用该参数
+        // （读的是全局 primary_ 缓存），这里传 nullptr 即可。
+        std::string text = clipboard->call<IClipboard::primary>(nullptr);
+        FCITX_LOGC(openless, Debug)
+            << "GetSelectionText: cached " << text.size() << " chars";
+        return text;
+    }
+
+    /// 选区来源诊断：一行说清“用了哪个来源、探针看到什么、与应用自报的是否一致”。
+    /// “选区文本过期”过去只能靠猜，这条日志让它可查（Debug 级，默认不打印）。
+    void logSelectionCapture(
+        const openless_selection::PrimarySelectionSnapshot &primary,
+        const openless_selection::SelectionSource &source,
+        const std::string &surroundingSelected) const {
+        const char *sameAsSurrounding = "n/a";
+        if (!surroundingSelected.empty()) {
+            sameAsSurrounding =
+                surroundingSelected == source.text ? "yes" : "no";
+        }
+        FCITX_LOGC(openless, Debug)
+            << "CaptureSelection: rule=" << source.rule
+            << " probe=" << describePrimaryStatus(primary.status)
+            << " sourceChars=" << source.text.size()
+            << " surroundingChars=" << surroundingSelected.size()
+            << " sameAsSurrounding=" << sameAsSurrounding
+            << " mimes=[" << primary.detail << "]";
+    }
+
+    static const char *describePrimaryStatus(
+        openless_selection::PrimarySelectionStatus status) {
+        using Status = openless_selection::PrimarySelectionStatus;
+        switch (status) {
+        case Status::Unsupported:
+            return "unsupported";
+        case Status::NoSelection:
+            return "no-selection";
+        case Status::NoText:
+            return "no-text-mime";
+        case Status::ReadFailed:
+            return "read-failed";
+        case Status::Text:
+            return "text";
+        }
+        return "unknown";
+    }
     struct SelectionTarget {
         InputContext *inputContext;
         std::string source;
@@ -1006,6 +1081,11 @@ private:
     /// QA/Selection 快捷键按下时的原输入上下文。该指针只能由 fcitx5 主事件循环
     /// 访问，并在 InputContextDestroyed 中与所有关联 ticket 一起失效。
     InputContext *selectionIc_;
+    /// 读一次合成器上的当前 PRIMARY 选区（见 primary_selection.h）。契约用例通过
+    /// OpenLessInputTargetContract::setPrimaryReader 注入固定结果，因此测试不依赖
+    /// 真实合成器或剪贴板内容。
+    std::function<openless_selection::PrimarySelectionSnapshot()>
+        primarySelectionReader_;
     /// Core session UUID -> Host 原生目标。map 只保存 effect 所需的句柄和回滚文本；
     /// Preview/Apply/Completed/Cancelled 状态仍由 Core 独占。
     std::unordered_map<std::string, SelectionTarget> selectionTargets_;
