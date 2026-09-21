@@ -104,35 +104,57 @@ pub fn polish_result_mode(
     lang: Lang,
 ) -> PolishResultAction {
     let mut action = PolishResultAction::None;
-    {
-        {
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    ui.label(
-                        egui::RichText::new(tr_l10n(lang, "selection.polish_preview.title"))
-                            .size(16.0)
-                            .strong()
-                            .color(theme::INK),
-                    );
-                    ui.add_space(4.0);
-                    ui.label(
-                        egui::RichText::new(tr_l10n(lang, "selection.polish_preview.subtitle"))
-                            .size(12.0)
-                            .color(theme::INK_4),
-                    );
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                    if icon_button(ui, icons::IconName::Close, theme::INK_3).clicked() {
-                        action = PolishResultAction::Cancel;
-                    }
-                });
-            });
-            ui.add_space(12.0);
+    // 与选区助手面板（`selection_ask`）共用同一套外壳：
+    //   CardHeader  = 14px 横向 / 12px 纵向留白 + 底部 hairline（整条可拖）
+    //   CardContent = 左右 14px 留白
+    //   CardFooter  = 顶部 hairline + 14px / 12px 留白
+    // 润色结果只把中间换成「只读结果 + 原文摘要」，头尾的尺寸、间距、分隔线与
+    // 选区助手完全一致 —— 不再是自己一套排版（那看着就像旧的独立预览窗口）。
+    egui::Frame::NONE
+        .inner_margin(egui::Margin::symmetric(CARD_SPACING as i8, 12))
+        .show(ui, |ui| {
+            let row = ui
+                .horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new(tr_l10n(lang, "selection.polish_preview.title"))
+                                .size(16.0)
+                                .strong()
+                                .color(theme::INK),
+                        );
+                        ui.add_space(2.0);
+                        ui.label(
+                            egui::RichText::new(tr_l10n(lang, "selection.polish_preview.subtitle"))
+                                .size(12.0)
+                                .color(theme::INK_4),
+                        );
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                        if icon_button(ui, icons::IconName::Close, theme::INK_3)
+                            .on_hover_text(tr_l10n(lang, "selection.polish_preview.cancel"))
+                            .clicked()
+                        {
+                            action = PolishResultAction::Cancel;
+                        }
+                    });
+                })
+                .response
+                .interact(egui::Sense::drag());
+            if row.drag_started() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+        });
+    hairline(ui, theme::LINE_SOFT);
 
+    // 底部固定高度：与选区助手一样是「14px / 12px 留白 + 34px 按钮」。
+    let footer_height = CARD_SPACING * 2.0 + 34.0;
+    let source_height = if state.source.is_empty() { 0.0 } else { 48.0 };
+    egui::Frame::NONE
+        .inner_margin(egui::Margin::symmetric(CARD_SPACING as i8, 0))
+        .show(ui, |ui| {
+            ui.add_space(CARD_SPACING);
             // 只读结果框：撑满剩余高度（Tauri `flex: 1; min-height: 150`），
             // 文本可选可滚动，但没有光标、不会回到宿主。
-            let footer_height = 48.0;
-            let source_height = if state.source.is_empty() { 0.0 } else { 50.0 };
             let editor_height = (ui.available_height() - footer_height - source_height).max(150.0);
             let width = ui.available_width();
             egui::Frame::new()
@@ -174,7 +196,12 @@ pub fn polish_result_mode(
                     .color(theme::INK_4),
                 );
             }
-            ui.add_space(14.0);
+        });
+
+    hairline(ui, theme::LINE_SOFT);
+    egui::Frame::NONE
+        .inner_margin(egui::Margin::symmetric(CARD_SPACING as i8, 12))
+        .show(ui, |ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let confirm = tr_l10n(lang, "selection.polish_preview.confirm_replace");
                 let confirm_width = layout::text_width(ui, confirm, 13.0) + 46.0;
@@ -222,8 +249,7 @@ pub fn polish_result_mode(
                     action = PolishResultAction::Cancel;
                 }
             });
-        }
-    }
+        });
     action
 }
 
@@ -1548,6 +1574,95 @@ mod tests {
             painted = painted_text(&ctx.end_pass());
         }
         painted
+    }
+
+    /// 与 `run` 同款流程，但把最后一帧的 `FullOutput` 交出来（要按形状断言时用）。
+    fn run_output(
+        size: egui::Vec2,
+        mut render: impl FnMut(&egui::Context) -> String,
+    ) -> egui::FullOutput {
+        let _guard = super::siri_gl::gpu_state_guard();
+        let ctx = egui::Context::default();
+        let mut last = None;
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                ..Default::default()
+            });
+            let _ = render(&ctx);
+            last = Some(ctx.end_pass());
+        }
+        last.expect("at least one pass")
+    }
+
+    /// 面板画出的分隔线（`hairline` = 一条 `LINE_SOFT` 细线），返回 (y, x0, x1)。
+    fn hairlines(output: &egui::FullOutput) -> Vec<(f32, f32, f32)> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<(f32, f32, f32)>) {
+            match shape {
+                egui::Shape::LineSegment { points, stroke }
+                    if stroke.color == theme::LINE_SOFT && stroke.width <= 1.0 =>
+                {
+                    out.push((points[0].y, points[0].x, points[1].x));
+                }
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for clipped in &output.shapes {
+            walk(&clipped.shape, &mut out);
+        }
+        out
+    }
+
+    /// 润色结果模式必须沿用选区助手面板的外壳：同一套头/尾分隔线。
+    ///
+    /// 回归背景：合并之后 egui 侧曾自己一套排版（没有分隔线、没有 14px 内容
+    /// 边距），看着就像已经下线的独立预览窗口。
+    #[test]
+    fn the_polish_result_reuses_the_selection_ask_chrome() {
+        let polish = QaPopupState {
+            phase: "idle".to_string(),
+            polish: Some(QaPolishState {
+                text: "polished text".to_string(),
+                source: "source paragraph".to_string(),
+            }),
+            ..Default::default()
+        };
+        let ask = QaPopupState {
+            phase: "idle".to_string(),
+            ..Default::default()
+        };
+        let mut polish_composer = String::new();
+        let mut ask_composer = String::new();
+        let polish_out = run_output(egui::vec2(420.0, 540.0), |ctx| {
+            selection_ask(ctx, &polish, &mut polish_composer, Lang::ZhCn, None);
+            String::new()
+        });
+        let ask_out = run_output(egui::vec2(420.0, 540.0), |ctx| {
+            selection_ask(ctx, &ask, &mut ask_composer, Lang::ZhCn, None);
+            String::new()
+        });
+        let polish_lines = hairlines(&polish_out);
+        let ask_lines = hairlines(&ask_out);
+        assert!(
+            polish_lines.len() >= 2,
+            "the polish mode must paint header + footer separators, got {:?}",
+            polish_lines
+        );
+        // 第一条（头部下方那条）必须与选区助手面板的位置与宽度一致。
+        let (py, px0, px1) = polish_lines[0];
+        let (ay, ax0, ax1) = ask_lines[0];
+        assert!(
+            (py - ay).abs() < 0.5 && (px0 - ax0).abs() < 0.5 && (px1 - ax1).abs() < 0.5,
+            "the header separator must match the selection-ask panel: polish {:?} vs ask {:?}",
+            polish_lines[0],
+            ask_lines[0]
+        );
     }
 
     /// 合并后：润色结果就画在**选区助手面板**里（同一弹窗的第二套 UI），
