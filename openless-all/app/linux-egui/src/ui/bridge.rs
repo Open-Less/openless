@@ -37,6 +37,15 @@ pub const UI_CLIENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 pub enum HostToWindow {
     /// 握手确认：UI 收到它才算真的接上，此前不渲染任何业务数据。
     Ready { version: u32 },
+    /// 本地热键匹配所需的配置。
+    ///
+    /// UI 窗口进程有焦点时 fcitx5 收不到按键（见 `crate::local_hotkeys` 的模块
+    /// 文档），所以窗口自己按这份配置匹配。宿主在窗口连上后、以及配置变化后
+    /// 各发一次；与视图模型快照分开，避免让含历史列表的大快照为几个绑定加宽。
+    Hotkeys {
+        version: u32,
+        bindings: Box<openless_core::HotkeyRuntimeTarget>,
+    },
     /// 完整视图模型快照；`sequence` 单调递增。
     Snapshot {
         sequence: u64,
@@ -59,6 +68,15 @@ pub enum WindowToHost {
     },
     /// 延迟探针。
     Ping { sequence: u64 },
+    /// 本窗口内命中的热键。
+    ///
+    /// 插件只在其聚焦的客户端注册了 text-input 时才收得到按键，我们的窗口从不
+    /// 注册 —— 所以窗口有焦点时热键只能由窗口自己认出来，作为边沿送回宿主，
+    /// 由宿主合成与插件信号等价的 `LinuxHotkeyEvent`（并按热键身份去重）。
+    Hotkey {
+        sequence: u64,
+        edge: openless_linux_egui::LocalHotkeyEdge,
+    },
     /// UI 正常退出前的告别（宿主据此立即作废句柄，不必等 EOF）。
     Bye,
 }

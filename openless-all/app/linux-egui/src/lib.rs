@@ -18,6 +18,7 @@ mod fcitx5;
 mod host_actions;
 mod hotkeys;
 mod i18n;
+pub mod local_hotkeys;
 mod logging;
 mod marketplace;
 mod popup;
@@ -75,6 +76,10 @@ pub fn apply_selection_voice_target(
 }
 pub use hotkeys::{Fcitx5HotkeyListener, LinuxHotkeyEvent};
 pub use i18n::{fmt_catalog as fmt_l10n, tr_catalog as tr_l10n, Lang, LocalePref, LANGS};
+pub use local_hotkeys::{
+    next_local_press_id, plugin_event_hotkey, style_pack_raw, HotkeyDeduplicator, LocalHotkey,
+    LocalHotkeyEdge, LocalHotkeyEdgeKind, HOTKEY_DEDUPE_WINDOW,
+};
 pub use logging::{export_error_log, init_file_logger, log_path};
 pub use popup::{
     force_x11_for, popup_command, read_jsonl, run_popup, write_jsonl,

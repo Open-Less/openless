@@ -34,10 +34,10 @@ mod linux_app {
         drain_events, ensure_fcitx5_plugin_installed, fcitx5_copy_to_clipboard, notify,
         open_external, write_jsonl, EventDrainOutcome, Fcitx5HotkeyListener,
         FcitxPluginInstallPlan, FcitxPluginStatus, HostToPopup, LinuxBackendBuilder,
-        LinuxCapabilitySnapshot, LinuxLaunchIntent, LinuxNativeRuntime, LinuxPackageKind,
-        LinuxResourceLayout, LinuxUpdateSupport, Notification, PopupActionGuard, PopupChatMessage,
-        PopupKind, PopupState, PopupSupervisor, PopupSupervisorEvent, PopupToHost,
-        SingleInstanceBroker, SingleInstanceRole, UpdateManifest, UpdateSchedule,
+        LinuxCapabilitySnapshot, LinuxHotkeyEvent, LinuxLaunchIntent, LinuxNativeRuntime,
+        LinuxPackageKind, LinuxResourceLayout, LinuxUpdateSupport, Notification, PopupActionGuard,
+        PopupChatMessage, PopupKind, PopupState, PopupSupervisor, PopupSupervisorEvent,
+        PopupToHost, SingleInstanceBroker, SingleInstanceRole, UpdateManifest, UpdateSchedule,
         POPUP_PROTOCOL_VERSION,
     };
 
@@ -548,6 +548,51 @@ mod linux_app {
         }
     }
 
+    /// 「崩溃即重开」的预算：同一个面板在 [`POPUP_RESTART_WINDOW`] 内最多重开
+    /// 这么多次。
+    ///
+    /// 面板崩溃后旧代码会立即 `show_*_popup()`，一个必崩的面板（例如渲染时
+    /// panic）就会变成“弹窗一直反复弹出”：用户看到的是面板高频重现，日志里是
+    /// 一串退出码。给重开加上预算，超了就停手并留一条可读日志。
+    const POPUP_RESTART_LIMIT: usize = 2;
+    const POPUP_RESTART_WINDOW: Duration = Duration::from_secs(60);
+    /// 面板种类数（`PopupKind` 没有 index 方法，这里只用于数组下标）。
+    const POPUP_KIND_COUNT: usize = 3;
+
+    fn popup_kind_index(kind: PopupKind) -> usize {
+        match kind {
+            PopupKind::Qa => 0,
+            PopupKind::Capsule => 1,
+            PopupKind::LessComputer => 2,
+        }
+    }
+
+    #[derive(Default, Clone, Copy)]
+    struct PopupRestartBudget {
+        attempts: usize,
+        window_start: Option<std::time::Instant>,
+    }
+
+    impl PopupRestartBudget {
+        /// 这次崩溃允许重开吗？窗口过期就重新计数。
+        fn allow(&mut self, at: std::time::Instant) -> bool {
+            match self.window_start {
+                Some(start) if at.saturating_duration_since(start) < POPUP_RESTART_WINDOW => {
+                    if self.attempts >= POPUP_RESTART_LIMIT {
+                        return false;
+                    }
+                    self.attempts += 1;
+                    true
+                }
+                _ => {
+                    self.window_start = Some(at);
+                    self.attempts = 1;
+                    true
+                }
+            }
+        }
+    }
+
     pub struct OpenLessEguiApp {
         tokio: Arc<tokio::runtime::Runtime>,
         native: Option<LinuxNativeRuntime>,
@@ -646,6 +691,17 @@ mod linux_app {
         last_snapshot_at: std::time::Instant,
         /// 本帧从 UI 收到、待宿主执行的动作（按到达顺序）。
         pending_ui_actions: Vec<frontend::view_model::FrontendAction>,
+        /// 本帧从 UI 窗口/面板收到、待处理的本地热键边沿（按到达时刻）。
+        ///
+        /// 我们自己的窗口有焦点时插件收不到按键，热键只能由窗口自己认出来
+        /// （见 `local_hotkeys` 模块文档），这里按顺序攒着与插件信号一起处理。
+        pending_local_hotkeys: Vec<(std::time::Instant, openless_linux_egui::LocalHotkeyEdge)>,
+        /// 本地边沿与插件信号之间的去重（同一个物理按键可能两个来源都报）。
+        hotkey_dedupe: openless_linux_egui::HotkeyDeduplicator,
+        /// 已在 60s 内重开过的面板次数（索引见 `popup_kind_index`）。
+        popup_restarts: [PopupRestartBudget; POPUP_KIND_COUNT],
+        /// 最近一次下发给窗口/面板的热键配置；变了才重发。
+        hotkeys_sent: Option<openless_core::HotkeyRuntimeTarget>,
         /// 本帧从 UI 收到、待回包的延迟探针序号。
         pending_ui_pongs: Vec<u64>,
         update_manifest: Option<UpdateManifest>,
@@ -785,6 +841,10 @@ mod linux_app {
                         last_snapshot_fingerprint: None,
                         last_snapshot_at: std::time::Instant::now(),
                         pending_ui_actions: Vec::new(),
+                        pending_local_hotkeys: Vec::new(),
+                        hotkey_dedupe: openless_linux_egui::HotkeyDeduplicator::default(),
+                        popup_restarts: [PopupRestartBudget::default(); POPUP_KIND_COUNT],
+                        hotkeys_sent: None,
                         pending_ui_pongs: Vec::new(),
                         update_manifest: None,
                         update_busy: false,
@@ -895,6 +955,10 @@ mod linux_app {
                     last_snapshot_fingerprint: None,
                     last_snapshot_at: std::time::Instant::now(),
                     pending_ui_actions: Vec::new(),
+                    pending_local_hotkeys: Vec::new(),
+                    hotkey_dedupe: openless_linux_egui::HotkeyDeduplicator::default(),
+                    popup_restarts: [PopupRestartBudget::default(); POPUP_KIND_COUNT],
+                    hotkeys_sent: None,
                     pending_ui_pongs: Vec::new(),
                     update_manifest: None,
                     update_busy: false,
@@ -1456,6 +1520,9 @@ mod linux_app {
                     },
                     PopupSupervisorEvent::Message(PopupToHost::Ready { .. }) => match kind {
                         PopupKind::Qa => {
+                            // 面板自己也要匹配本地热键（面板有焦点时插件收不到按键），
+                            // 所以先下发绑定，再送内容。
+                            self.send_popup_hotkeys(kind);
                             // 选区助手面板既可能是提问模式，也可能是润色结果模式。
                             if self.polish_result_visible {
                                 self.show_selection_popup();
@@ -1464,8 +1531,16 @@ mod linux_app {
                             }
                         }
                         PopupKind::Capsule => self.show_capsule_popup(),
-                        PopupKind::LessComputer => self.show_less_computer_popup(),
+                        PopupKind::LessComputer => {
+                            self.send_popup_hotkeys(kind);
+                            self.show_less_computer_popup();
+                        }
                     },
+                    PopupSupervisorEvent::Message(PopupToHost::Hotkey { edge, .. }) => {
+                        log::info!("[hotkey] local edge from the {kind:?} panel: {edge:?}");
+                        self.pending_local_hotkeys
+                            .push((std::time::Instant::now(), edge));
+                    }
                     PopupSupervisorEvent::Message(PopupToHost::DismissCapsule { .. }) => {
                         if let Some(snapshot) = self.snapshot.as_mut() {
                             snapshot.dictation.message = None;
@@ -1580,6 +1655,16 @@ mod linux_app {
                         }
                         *self.popup_slot(kind) = None;
                         if crashed {
+                            // 必崩的面板不做无限重开：预算内重开，超了就停手（否则
+                            // 用户看到的是“弹窗一直反复弹出”）。
+                            let restarts = &mut self.popup_restarts[popup_kind_index(kind)];
+                            if !restarts.allow(std::time::Instant::now()) {
+                                log::warn!(
+                                    "[popup] {kind:?} crashed {POPUP_RESTART_LIMIT} times within {}s; not restarting",
+                                    POPUP_RESTART_WINDOW.as_secs()
+                                );
+                                return;
+                            }
                             match kind {
                                 PopupKind::Qa if self.qa_visible => self.show_qa_popup(),
                                 PopupKind::Capsule
@@ -2458,6 +2543,278 @@ mod linux_app {
             );
         }
 
+        /// 当前生效的热键配置（本地匹配与去重都用它）。
+        fn hotkey_target(&self) -> Option<openless_core::HotkeyRuntimeTarget> {
+            self.preferences
+                .as_ref()
+                .map(openless_core::HotkeyRuntimeTarget::from)
+        }
+
+        /// QA 热键 = **面板显隐**。
+        ///
+        /// Tauri `coordinator/qa.rs::handle_qa_hotkey_pressed`：面板可见 →
+        /// `qa.dismiss()`，否则 `qa.show()`。egui 侧原来把 QA 热键接到 Core 的
+        /// `CliIntent::ToggleQa`，而那条是**切换录音**（`qa.toggle_recording()`）：
+        /// 于是「想打开面板」变成了「开一次录音」，用户看到的正是「选区助手弹出并
+        /// 开始录音、还停不下来」。面板显隐属宿主状态（`qa_visible`），Core 只按
+        /// ShowQa/HideQa 指令把窗口开合。
+        fn toggle_qa_panel(&mut self) {
+            let lang = self.lang;
+            if self.qa_visible {
+                // 显式收起不受图钉门禁限制（Tauri 的 HostAction::HideQa 同样无条件收窗），
+                // 图钉只管“失焦自动收起”那条路径。
+                log::info!("[hotkey] QA panel toggle: dismissing");
+                self.qa_visible = false;
+                let session_id = self
+                    .qa_state
+                    .as_ref()
+                    .and_then(|state| state.session_id.clone())
+                    .unwrap_or_else(|| "qa".to_string());
+                self.hide_popup(
+                    PopupKind::Qa,
+                    session_id,
+                    self.last_event_sequence.saturating_mul(2).saturating_add(1),
+                );
+                if let Some(backend) = self.backend() {
+                    self.spawn(async move {
+                        backend.services().qa.dismiss().await?;
+                        Ok(tr_l10n(lang, "qa.closed").to_string())
+                    });
+                }
+            } else {
+                log::info!("[hotkey] QA panel toggle: showing");
+                if let Some(backend) = self.backend() {
+                    // `show()` 只发 HostAction::ShowQa：Core 仍停在 Idle，不录音。
+                    self.spawn(async move {
+                        backend.services().qa.show().await?;
+                        Ok(String::new())
+                    });
+                }
+            }
+        }
+
+        /// 面板录音开关（Tauri `coordinator/qa.rs::handle_qa_option_edge`）。
+        fn toggle_qa_recording(&mut self) {
+            let lang = self.lang;
+            if let Some(backend) = self.backend() {
+                self.spawn(async move {
+                    backend.services().qa.toggle_recording().await?;
+                    Ok(tr_l10n(lang, "qa.recording_updated").to_string())
+                });
+            }
+        }
+
+        /// 听写是否空闲（Tauri 的 QA 门禁要求 `DictationPhase::Idle`）。
+        fn dictation_is_idle(&self) -> bool {
+            match self.snapshot.as_ref() {
+                Some(snapshot) => snapshot.dictation.phase == DictationPhase::Idle,
+                None => true,
+            }
+        }
+
+        /// 采纳一条插件热键信号？（与窗口报上来的本地边沿去重。）
+        fn accept_plugin_hotkey(&mut self, event: &LinuxHotkeyEvent) -> bool {
+            let Some(target) = self.hotkey_target() else {
+                return true;
+            };
+            match openless_linux_egui::plugin_event_hotkey(event, &target) {
+                Some(hotkey) => self
+                    .hotkey_dedupe
+                    .accept_signal(&hotkey, std::time::Instant::now()),
+                None => true,
+            }
+        }
+
+        /// 宿主自己处理掉的热键（不发往 Core）。返回 true 表示已处理。
+        fn intercept_hotkey(&mut self, event: &LinuxHotkeyEvent) -> bool {
+            match event {
+                LinuxHotkeyEvent::QaPressed => {
+                    log::info!("[hotkey] selection-ask hotkey: toggling the panel");
+                    self.toggle_qa_panel();
+                    true
+                }
+                // Tauri `coordinator/dictation_core.rs::handle_pressed_edge`：面板可见
+                // 且听写空闲时，听写热键**按下**先切面板录音，而不是开始一次听写。
+                // 这条缺失正是「选区助手里开始录音后，按语音热键完全没反应」的成因：
+                // 原来一律送 Core 听写，Core 因 QA 正忙而拒绝，界面自然没反应。
+                LinuxHotkeyEvent::DictationPressed { .. }
+                    if self.qa_visible && self.dictation_is_idle() =>
+                {
+                    log::info!(
+                        "[hotkey] dictation hotkey while the QA panel is visible: toggling QA recording"
+                    );
+                    self.toggle_qa_recording();
+                    true
+                }
+                _ => false,
+            }
+        }
+
+        /// 处理窗口/面板报上来的本地热键边沿，返回需要发往 Core 的事件。
+        ///
+        /// 与插件信号共用同一套门禁（QA 显隐、听写热键的面板录音切换），因此两条
+        /// 通路的行为逐字一致；去重保证同一个物理按键只生效一次。
+        fn apply_local_hotkey_edges(
+            &mut self,
+            edges: Vec<(std::time::Instant, openless_linux_egui::LocalHotkeyEdge)>,
+        ) -> Vec<LinuxHotkeyEvent> {
+            use openless_linux_egui::{LocalHotkey, LocalHotkeyEdgeKind};
+            let Some(target) = self.hotkey_target() else {
+                return Vec::new();
+            };
+            let mut events = Vec::new();
+            for (at, edge) in edges {
+                if !self.hotkey_dedupe.accept_local(&edge.hotkey, at) {
+                    log::debug!(
+                        "[hotkey] local {:?} ignored: a plugin signal just handled it",
+                        edge.hotkey
+                    );
+                    continue;
+                }
+                // 单发事件（翻译/切换风格/划词润色/打开应用/风格包）只在按下或
+                // 一次完整单击时触发；松开不再重复发一次。
+                let single_shot = edge.kind != LocalHotkeyEdgeKind::Released;
+                match &edge.hotkey {
+                    LocalHotkey::Qa => {
+                        log::info!("[hotkey] local selection-ask hotkey: toggling the panel");
+                        self.toggle_qa_panel();
+                    }
+                    LocalHotkey::Dictation
+                        if edge.kind == LocalHotkeyEdgeKind::Pressed
+                            && self.qa_visible
+                            && self.dictation_is_idle() =>
+                    {
+                        log::info!(
+                            "[hotkey] local dictation hotkey while the QA panel is visible: toggling QA recording"
+                        );
+                        self.toggle_qa_recording();
+                    }
+                    LocalHotkey::Dictation => events.push(match edge.kind {
+                        LocalHotkeyEdgeKind::Pressed => LinuxHotkeyEvent::DictationPressed {
+                            symbol: 0,
+                            states: 0,
+                            press_id: edge.press_id,
+                            at,
+                        },
+                        LocalHotkeyEdgeKind::Released => LinuxHotkeyEvent::DictationReleased {
+                            symbol: 0,
+                            states: 0,
+                            press_id: edge.press_id,
+                            at,
+                        },
+                        LocalHotkeyEdgeKind::Combined => LinuxHotkeyEvent::DictationCombined {
+                            symbol: 0,
+                            states: 0,
+                            press_id: edge.press_id,
+                            at,
+                        },
+                    }),
+                    LocalHotkey::LessComputer => {
+                        if !single_shot {
+                            continue;
+                        }
+                        events.push(match edge.kind {
+                            LocalHotkeyEdgeKind::Pressed => LinuxHotkeyEvent::LessComputerPressed {
+                                symbol: 0,
+                                states: 0,
+                                press_id: edge.press_id,
+                                at,
+                            },
+                            LocalHotkeyEdgeKind::Released => continue,
+                            LocalHotkeyEdgeKind::Combined => {
+                                LinuxHotkeyEvent::LessComputerCombined {
+                                    symbol: 0,
+                                    states: 0,
+                                    press_id: edge.press_id,
+                                    at,
+                                }
+                            }
+                        });
+                    }
+                    LocalHotkey::Translation => {
+                        if single_shot {
+                            events.push(LinuxHotkeyEvent::TranslationPressed);
+                        }
+                    }
+                    LocalHotkey::SwitchStyle => {
+                        if single_shot {
+                            events.push(LinuxHotkeyEvent::SwitchStylePressed);
+                        }
+                    }
+                    LocalHotkey::SelectionPolish => {
+                        if single_shot {
+                            events.push(LinuxHotkeyEvent::SelectionPolishPressed);
+                        }
+                    }
+                    LocalHotkey::OpenApp => {
+                        if single_shot {
+                            events.push(LinuxHotkeyEvent::OpenAppPressed);
+                        }
+                    }
+                    LocalHotkey::StylePack(pack_id) => {
+                        if !single_shot {
+                            continue;
+                        }
+                        // Core 按 (keysym, states) 认包，所以带上与注册插件同源的换算。
+                        if let Some((symbol, states)) =
+                            openless_linux_egui::style_pack_raw(&target, pack_id)
+                        {
+                            events.push(LinuxHotkeyEvent::StylePackPressed { symbol, states });
+                        }
+                    }
+                }
+            }
+            events
+        }
+
+        /// 把热键配置发给一个面板（面板有焦点时也要自己匹配本地热键）。
+        fn send_popup_hotkeys(&mut self, kind: PopupKind) {
+            let Some(bindings) = self.hotkey_target() else {
+                return;
+            };
+            let session_id = match kind {
+                PopupKind::Qa => self
+                    .qa_state
+                    .as_ref()
+                    .and_then(|state| state.session_id.clone())
+                    .unwrap_or_else(|| "qa".to_string()),
+                PopupKind::LessComputer => self
+                    .less_computer_session
+                    .map(|session| session.to_string())
+                    .unwrap_or_else(|| "less-computer".to_string()),
+                // 胶囊不接受键盘焦点，本地匹配对它没有意义。
+                PopupKind::Capsule => return,
+            };
+            self.send_popup(
+                kind,
+                HostToPopup::Hotkeys {
+                    version: POPUP_PROTOCOL_VERSION,
+                    session_id,
+                    sequence: self.last_event_sequence.saturating_mul(2).saturating_add(1),
+                    bindings: Box::new(bindings),
+                },
+            );
+        }
+
+        /// 配置变化后把热键下发给窗口与面板（窗口进程重启由 Hello 强制重发）。
+        fn sync_hotkey_bindings(&mut self, bridge: &mut UiBridgeHost) {
+            let Some(bindings) = self.hotkey_target() else {
+                return;
+            };
+            if self.hotkeys_sent.as_ref() == Some(&bindings) {
+                return;
+            }
+            if bridge.is_connected() {
+                bridge.send(HostToWindow::Hotkeys {
+                    version: UI_BRIDGE_VERSION,
+                    bindings: Box::new(bindings.clone()),
+                });
+            }
+            self.send_popup_hotkeys(PopupKind::Qa);
+            self.send_popup_hotkeys(PopupKind::LessComputer);
+            self.hotkeys_sent = Some(bindings);
+        }
+
         // 宿主没有窗口：ctx 只为保持调用形状（事件泵不再依赖任何视口状态）。
         fn poll(&mut self, _ctx: &egui::Context) {
             let lang = self.lang;
@@ -2468,7 +2825,22 @@ mod linux_app {
             if let Some(native) = &self.native {
                 let (launch_intents, hotkey_events, errors) = native.drain_native_events();
                 let host = native.host_arc();
+                // 原生动作先收下来：`native` 的借用到此为止，后面的 `&mut self`
+                // 调用（本地热键处理）才不会和它冲突。
+                let mut actions = Vec::new();
+                native.host_actions().drain(|action| actions.push(action));
                 for intent in launch_intents {
+                    // CLI 的 ToggleQa 与「按一次 QA 热键」等价（Tauri
+                    // `dispatch_cli_intent` 把 ToggleQa 直接转给 `handle_qa_hotkey_pressed`），
+                    // 所以它既不拉起主窗口，也不走 Core 的 ToggleQa（那条是“切换录音”）。
+                    if matches!(
+                        intent,
+                        LinuxLaunchIntent::Cli(openless_core::CliIntent::ToggleQa)
+                    ) {
+                        log::info!("[ui-host] CLI intent toggles the QA panel");
+                        self.toggle_qa_panel();
+                        continue;
+                    }
                     log::info!("[ui-host] launch intent from the user: {intent:?}");
                     launch_intent_window_requested = true;
                     let host = Arc::clone(&host);
@@ -2477,7 +2849,24 @@ mod linux_app {
                         Ok(tr_l10n(lang, "status.launch_handled").to_string())
                     });
                 }
+                // 本地边沿先于插件信号处理：它们来自我们自己的窗口（有焦点时
+                // 插件一个信号都不会发），两者共用同一张去重表。
+                let local_edges = std::mem::take(&mut self.pending_local_hotkeys);
+                for event in self.apply_local_hotkey_edges(local_edges) {
+                    let host = Arc::clone(&host);
+                    self.spawn(async move {
+                        host.dispatch_hotkey_event(event).await?;
+                        Ok(tr_l10n(lang, "status.hotkey_handled").to_string())
+                    });
+                }
                 for event in hotkey_events {
+                    if !self.accept_plugin_hotkey(&event) {
+                        log::debug!("[hotkey] plugin event ignored: a local edge just handled it");
+                        continue;
+                    }
+                    if self.intercept_hotkey(&event) {
+                        continue;
+                    }
                     let host = Arc::clone(&host);
                     self.spawn(async move {
                         host.dispatch_hotkey_event(event).await?;
@@ -2488,8 +2877,6 @@ mod linux_app {
                     self.status = error.to_string();
                 }
 
-                let mut actions = Vec::new();
-                native.host_actions().drain(|action| actions.push(action));
                 // HostAction controls only native visibility/focus/effects.
                 // QA and Selection contents and terminal ownership always come
                 // back through sequenced Core events handled above.
@@ -5358,10 +5745,18 @@ mod linux_app {
                         } else {
                             log::info!("[ui-host] UI window handshake ok (protocol {version})");
                         }
+                        // 窗口进程刚起来（可能是重启）：热键配置必须无条件重发一份，
+                        // 否则新窗口拿不到绑定，它自己就没法匹配本地热键。
+                        self.hotkeys_sent = None;
                     }
                     WindowToHost::Action { sequence, action } => {
                         log::debug!("[ui-host] UI action #{sequence}: {action:?}");
                         self.pending_ui_actions.push(action);
+                    }
+                    WindowToHost::Hotkey { sequence, edge } => {
+                        log::info!("[hotkey] local edge from the UI window #{sequence}: {edge:?}");
+                        self.pending_local_hotkeys
+                            .push((std::time::Instant::now(), edge));
                     }
                     WindowToHost::Ping { sequence } => {
                         self.pending_ui_pongs.push(sequence);
@@ -6262,6 +6657,8 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         lang: Lang,
         /// X11 overlay placement for the capsule (bottom-centre, never focus).
         overlay: Option<PopupOverlay>,
+        /// 面板有焦点时插件收不到按键，所以面板自己也要匹配本地热键。
+        hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher,
     }
 
     impl NativePopupApp {
@@ -6357,6 +6754,34 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             }
         }
 
+        /// 面板内的本地热键：命中就报给宿主，由宿主按与插件信号同一套规则处理。
+        ///
+        /// 胶囊不接受键盘焦点（layer surface 也拿不到），所以只对需要打字的面板生效。
+        fn poll_local_hotkeys(&mut self, ctx: &egui::Context) {
+            if self.kind == PopupKind::Capsule {
+                return;
+            }
+            let Some(bindings) = self.state.hotkeys.as_ref() else {
+                return;
+            };
+            let Some(edge) = self.hotkey_matcher.poll(ctx, bindings) else {
+                return;
+            };
+            if let Some(session_id) = self.session_id() {
+                let sequence = self.next_sequence();
+                log::info!(
+                    "openless popup ({:?}): local hotkey edge {edge:?}",
+                    self.kind
+                );
+                self.send(PopupToHost::Hotkey {
+                    version: POPUP_PROTOCOL_VERSION,
+                    session_id,
+                    sequence,
+                    edge,
+                });
+            }
+        }
+
         /// Tell the host which session this window is serving. The host drops
         /// every message that carries another session id, so this must happen
         /// before the first content arrives.
@@ -6448,6 +6873,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 return;
             }
             self.send_ready_if_needed();
+            self.poll_local_hotkeys(ctx);
             if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
                 self.dismiss(ctx);
                 return;
@@ -6778,6 +7204,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                             avatar: QaAvatar::default(),
                             lang: load_locale_pref().resolve(),
                             overlay: None,
+                            hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher::default(),
                         });
                     }
                     Err(error) => {
@@ -6918,6 +7345,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                     // persisted UI-locale preference rather than sharing state.
                     lang: load_locale_pref().resolve(),
                     overlay,
+                    hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher::default(),
                 }))
             }),
         )
@@ -6985,6 +7413,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 ui_bridge.send(HostToWindow::Pong { sequence });
             }
             app.sync_view_model();
+            app.sync_hotkey_bindings(&mut ui_bridge);
             app.publish_view_model(&mut ui_bridge);
             if app.exit_requested {
                 break;
@@ -7060,6 +7489,11 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         last_ping_at: std::time::Instant,
         latency_samples: Vec<u128>,
         exited: bool,
+        /// 宿主下发的本地热键配置（窗口有焦点时插件收不到按键）。
+        hotkeys: Option<openless_core::HotkeyRuntimeTarget>,
+        hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher,
+        /// 本地热键边沿的发送序号（与动作序号分开，便于日志区分）。
+        hotkey_sequence: u64,
     }
 
     impl UiClientApp {
@@ -7074,6 +7508,9 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 last_ping_at: std::time::Instant::now(),
                 latency_samples: Vec::new(),
                 exited: false,
+                hotkeys: None,
+                hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher::default(),
+                hotkey_sequence: 0,
             }
         }
 
@@ -7084,6 +7521,11 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 match self.client.try_recv() {
                     Ok(HostToWindow::Ready { version }) => {
                         log::info!("[ui-client] host ready (protocol {version})");
+                    }
+                    Ok(HostToWindow::Hotkeys { bindings, .. }) => {
+                        // 窗口有焦点时 fcitx5 收不到按键，本地匹配全靠这份配置。
+                        log::info!("[ui-client] local hotkey bindings received");
+                        self.hotkeys = Some(*bindings);
                     }
                     Ok(HostToWindow::Snapshot {
                         sequence,
@@ -7125,6 +7567,29 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                         break;
                     }
                 }
+            }
+        }
+
+        /// 本窗口内命中的热键作为边沿报给宿主。
+        ///
+        /// 只读 `InputState`（不消费事件），命中才发一帧；正在录制快捷键时跳过，
+        /// 否则用户在设置里录「Alt+A」会顺手触发一次听写。
+        fn poll_local_hotkeys(&mut self, ctx: &egui::Context) {
+            let Some(bindings) = self.hotkeys.as_ref() else {
+                return;
+            };
+            if self.view_model.shortcut_recording.is_some() {
+                return;
+            }
+            let Some(edge) = self.hotkey_matcher.poll(ctx, bindings) else {
+                return;
+            };
+            self.hotkey_sequence += 1;
+            if let Err(error) = self.client.send(WindowToHost::Hotkey {
+                sequence: self.hotkey_sequence,
+                edge,
+            }) {
+                log::warn!("[ui-client] cannot forward a local hotkey to the host: {error}");
             }
         }
 
@@ -7203,6 +7668,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
 
         fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
             self.drain_host(ctx);
+            self.poll_local_hotkeys(ctx);
             theme::apply_visuals(ctx, self.view_model.theme_mode);
             if ctx.input(|input| input.viewport().close_requested()) {
                 self.request_exit(ctx, "window manager close request");
@@ -7532,6 +7998,21 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             assert_eq!(entries[2].text, "done");
         }
 
+        #[test]
+        fn a_crashing_popup_stops_restarting_after_the_budget() {
+            let start = std::time::Instant::now();
+            let mut budget = PopupRestartBudget::default();
+            for _ in 0..POPUP_RESTART_LIMIT {
+                assert!(budget.allow(start), "预算内的重开必须放行");
+            }
+            assert!(
+                !budget.allow(start + Duration::from_secs(1)),
+                "超出预算后不再重开"
+            );
+            // 窗口过期后重新计数：偶尔崩一次的面板不该被永久关掉。
+            assert!(budget.allow(start + POPUP_RESTART_WINDOW + Duration::from_secs(1)));
+        }
+
         /// 最小可用的弹窗实例：只为了驱动 `pump` 这条退出链路。
         fn popup_app(kind: PopupKind, incoming: mpsc::Receiver<HostToPopup>) -> NativePopupApp {
             let (outgoing, _outgoing_rx) = mpsc::channel();
@@ -7547,6 +8028,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 avatar: QaAvatar::default(),
                 lang: Lang::ZhCn,
                 overlay: None,
+                hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher::default(),
             }
         }
 

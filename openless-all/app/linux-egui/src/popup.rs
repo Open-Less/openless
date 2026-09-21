@@ -18,7 +18,7 @@ use tokio::process::Command;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc as tokio_mpsc;
 
-pub const POPUP_PROTOCOL_VERSION: u16 = 6;
+pub const POPUP_PROTOCOL_VERSION: u16 = 7;
 pub const MAX_JSONL_LINE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,6 +151,16 @@ pub enum HostToPopup {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    /// 本地热键匹配所需的配置（见 `crate::local_hotkeys` 的模块文档）。
+    ///
+    /// 面板有焦点时 fcitx5 收不到按键，所以面板自己按这份配置匹配，命中后
+    /// 用 [`PopupToHost::Hotkey`] 报回宿主。
+    Hotkeys {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+        bindings: Box<openless_core::HotkeyRuntimeTarget>,
+    },
     Shutdown {
         version: u16,
         session_id: String,
@@ -165,6 +175,7 @@ impl HostToPopup {
             | Self::QaSnapshot { version, .. }
             | Self::Capsule { version, .. }
             | Self::LessComputer { version, .. }
+            | Self::Hotkeys { version, .. }
             | Self::Hide { version, .. }
             | Self::Shutdown { version, .. } => *version,
         }
@@ -176,6 +187,7 @@ impl HostToPopup {
             | Self::QaSnapshot { session_id, .. }
             | Self::Capsule { session_id, .. }
             | Self::LessComputer { session_id, .. }
+            | Self::Hotkeys { session_id, .. }
             | Self::Hide { session_id, .. }
             | Self::Shutdown { session_id, .. } => session_id,
         }
@@ -187,6 +199,7 @@ impl HostToPopup {
             | Self::QaSnapshot { sequence, .. }
             | Self::Capsule { sequence, .. }
             | Self::LessComputer { sequence, .. }
+            | Self::Hotkeys { sequence, .. }
             | Self::Hide { sequence, .. }
             | Self::Shutdown { sequence, .. } => *sequence,
         }
@@ -199,6 +212,9 @@ impl HostToPopup {
             Self::QaSnapshot { .. } => Some(PopupKind::Qa),
             Self::Capsule { .. } => Some(PopupKind::Capsule),
             Self::LessComputer { .. } => Some(PopupKind::LessComputer),
+            // 配置不属于任何一种面板内容，
+            // 不能拿它当“这个帧是给谁的”。
+            Self::Hotkeys { .. } => None,
             Self::Hide { .. } | Self::Shutdown { .. } => None,
         }
     }
@@ -213,6 +229,13 @@ pub enum PopupToHost {
         session_id: String,
         sequence: u64,
         kind: PopupKind,
+    },
+    /// 本面板内命中的热键（面板有焦点时 fcitx5 收不到按键）。
+    Hotkey {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+        edge: crate::LocalHotkeyEdge,
     },
     /// 确认用编辑后的文本替换选区（由选区助手面板发出）。
     ConfirmPolish {
@@ -319,6 +342,7 @@ impl PopupToHost {
     pub fn version(&self) -> u16 {
         match self {
             Self::Ready { version, .. }
+            | Self::Hotkey { version, .. }
             | Self::ConfirmPolish { version, .. }
             | Self::CancelPolish { version, .. }
             | Self::SubmitQa { version, .. }
@@ -341,6 +365,7 @@ impl PopupToHost {
     pub fn session_id(&self) -> &str {
         match self {
             Self::Ready { session_id, .. }
+            | Self::Hotkey { session_id, .. }
             | Self::ConfirmPolish { session_id, .. }
             | Self::CancelPolish { session_id, .. }
             | Self::SubmitQa { session_id, .. }
@@ -363,6 +388,7 @@ impl PopupToHost {
     pub fn sequence(&self) -> u64 {
         match self {
             Self::Ready { sequence, .. }
+            | Self::Hotkey { sequence, .. }
             | Self::ConfirmPolish { sequence, .. }
             | Self::CancelPolish { sequence, .. }
             | Self::SubmitQa { sequence, .. }
@@ -386,6 +412,9 @@ impl PopupToHost {
         match self {
             Self::Ready { kind, .. } => *kind,
             Self::ConfirmPolish { .. } | Self::CancelPolish { .. } => PopupKind::Qa,
+            // 本地热键边沿只由接受键盘的面板发出；`kind()` 的调用方（宿主）
+            // 已先按发消息的面板分支处理，这里给 Qa 只是让类型上有个确定值。
+            Self::Hotkey { .. } => PopupKind::Qa,
             Self::SubmitQa { .. }
             | Self::ToggleQaRecording { .. }
             | Self::DismissQa { .. }
@@ -663,6 +692,8 @@ pub struct PopupState {
     pub qa: QaPopupState,
     pub capsule: CapsulePopupState,
     pub less_computer: LessComputerPopupState,
+    /// 宿主下发的本地热键配置；没有它就不做本地匹配。
+    pub hotkeys: Option<openless_core::HotkeyRuntimeTarget>,
     retired_sessions: HashSet<String>,
 }
 
@@ -677,6 +708,12 @@ impl PopupState {
     /// Apply a host event while rejecting late messages from an old session or
     /// duplicate/out-of-order sequence numbers.
     pub fn apply(&mut self, message: HostToPopup) -> ApplyOutcome {
+        // 热键配置不是“会话内容”：它不推进会话、不参与序号排序（宿主可能在面板
+        // 刚重连、还没收到第一条内容帧时先发它），所以在这里提前收下就返回。
+        if let HostToPopup::Hotkeys { bindings, .. } = message {
+            self.hotkeys = Some(*bindings);
+            return ApplyOutcome::Applied;
+        }
         let session_id = message.session_id().to_owned();
         let sequence = message.sequence();
         if let Some(current) = self.session_id.as_deref() {
@@ -776,6 +813,8 @@ impl PopupState {
                 self.shutdown_requested = true;
                 return ApplyOutcome::Shutdown;
             }
+            // 上面已提前收下：热键配置不参与会话与序号排序。
+            HostToPopup::Hotkeys { .. } => {}
         }
         ApplyOutcome::Applied
     }
@@ -1280,6 +1319,53 @@ mod tests {
     use super::*;
     use std::io::Cursor;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn hotkey_bindings_round_trip_and_do_not_disturb_the_session_sequence() {
+        let bindings =
+            openless_core::HotkeyRuntimeTarget::from(&openless_core::UserPreferences::default());
+        let message = HostToPopup::Hotkeys {
+            version: POPUP_PROTOCOL_VERSION,
+            session_id: "qa".to_owned(),
+            sequence: 7,
+            bindings: Box::new(bindings),
+        };
+        let encoded = serde_json::to_string(&message).expect("encode hotkeys");
+        let decoded: HostToPopup = serde_json::from_str(&encoded).expect("decode hotkeys");
+        assert_eq!(decoded, message);
+
+        let mut state = PopupState::default();
+        assert_eq!(state.apply(message), ApplyOutcome::Applied);
+        assert!(state.hotkeys.is_some());
+        // 配置不是会话内容：后面的内容帧序号照常从 1 开始被采纳。
+        assert_eq!(state.session_id, None);
+        assert_eq!(state.last_sequence, 0);
+        let mut content = polish_preview("x".to_owned());
+        if let HostToPopup::PolishPreview { sequence, .. } = &mut content {
+            *sequence = 1;
+        }
+        assert_eq!(state.apply(content), ApplyOutcome::Applied);
+    }
+
+    #[test]
+    fn a_local_hotkey_edge_round_trips_from_the_popup() {
+        let message = PopupToHost::Hotkey {
+            version: POPUP_PROTOCOL_VERSION,
+            session_id: "qa".to_owned(),
+            sequence: 3,
+            edge: crate::LocalHotkeyEdge {
+                hotkey: crate::LocalHotkey::Dictation,
+                kind: crate::LocalHotkeyEdgeKind::Pressed,
+                press_id: crate::local_hotkeys::LOCAL_PRESS_ID_BASE + 1,
+            },
+        };
+        let encoded = serde_json::to_string(&message).expect("encode edge");
+        let decoded: PopupToHost = serde_json::from_str(&encoded).expect("decode edge");
+        assert_eq!(decoded, message);
+        assert_eq!(decoded.session_id(), "qa");
+        assert_eq!(decoded.sequence(), 3);
+        assert_eq!(decoded.kind(), PopupKind::Qa);
+    }
 
     fn polish_preview(text: String) -> HostToPopup {
         HostToPopup::PolishPreview {
