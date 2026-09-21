@@ -65,7 +65,7 @@ mod linux_app {
         ProviderMutation(Result<String, String>),
         Library(Result<LibraryPanel, String>),
         SettingsSaved(Box<Result<openless_core::SettingsUpdateOutcome, String>>),
-        Marketplace(Result<Vec<openless_core::MarketplaceListItem>, String>),
+        Marketplace(u64, Result<Vec<openless_core::MarketplaceListItem>, String>),
         MarketplaceLikes(Result<Vec<String>, String>),
         MarketplaceFlow(Result<openless_core::OAuthDeviceFlow, String>),
         MarketplaceAuthPoll(Result<openless_core::OAuthPollResult, String>),
@@ -662,6 +662,17 @@ mod linux_app {
         marketplace_detail: Option<openless_core::MarketplaceDetail>,
         marketplace_my_packs: Vec<openless_core::MarketplaceMyPackItem>,
         marketplace_my_likes: Vec<String>,
+        /// Monotonic id for marketplace list requests: a response from a
+        /// superseded search is dropped instead of overwriting fresher data
+        /// (same intent as the Tauri page's `reqSeqRef` guard).
+        marketplace_seq: u64,
+        /// Debounce deadline for the search box. The Tauri page waits 300ms
+        /// after the last keystroke before hitting the API; without it every
+        /// character (and every IME composition update) was its own request.
+        marketplace_search_deadline: Option<std::time::Instant>,
+        /// Likes are fetched once per session (Tauri refreshes them when the
+        /// sign-in state changes), not on every search.
+        marketplace_likes_loaded: bool,
         style_editor: Option<openless_core::StylePack>,
         style_hotkey_pack_id: String,
         style_hotkey_primary: String,
@@ -786,6 +797,9 @@ mod linux_app {
                         marketplace_detail: None,
                         marketplace_my_packs: Vec::new(),
                         marketplace_my_likes: Vec::new(),
+                        marketplace_seq: 0,
+                        marketplace_search_deadline: None,
+                        marketplace_likes_loaded: false,
                         style_editor: None,
                         style_hotkey_pack_id: String::new(),
                         style_hotkey_primary: String::new(),
@@ -893,6 +907,9 @@ mod linux_app {
                     marketplace_detail: None,
                     marketplace_my_packs: Vec::new(),
                     marketplace_my_likes: Vec::new(),
+                    marketplace_seq: 0,
+                    marketplace_search_deadline: None,
+                    marketplace_likes_loaded: false,
                     style_editor: None,
                     style_hotkey_pack_id: String::new(),
                     style_hotkey_primary: String::new(),
@@ -1732,6 +1749,16 @@ mod linux_app {
                 return;
             };
             self.marketplace_attempted = false;
+            // An explicit fetch supersedes a queued debounced search.
+            self.marketplace_search_deadline = None;
+            self.marketplace_seq = self.marketplace_seq.wrapping_add(1);
+            let seq = self.marketplace_seq;
+            // Likes only power the 「我赞过的」 filter; mirror the Tauri page by
+            // fetching them once, then reusing the cached set for every search.
+            if !self.marketplace_likes_loaded {
+                self.marketplace_likes_loaded = true;
+                self.load_marketplace_likes();
+            }
             let query = self.marketplace_query.trim().to_string();
             // The backend only ranks by popular/new; 「我赞过的」 is a filter over
             // the signed-in user's like list, exactly like the Tauri page.
@@ -1742,25 +1769,55 @@ mod linux_app {
             };
             let tx = self.tx.clone();
             self.tokio.spawn(async move {
-                let likes = backend
-                    .services()
-                    .marketplace
-                    .my_likes()
-                    .await
-                    .map_err(|error| error.to_string());
                 let result = backend
                     .services()
                     .marketplace
                     .list(openless_core::MarketplaceQuery {
                         query: (!query.is_empty()).then_some(query),
                         sort: Some(sort.to_string()),
-                        limit: Some(100),
+                        limit: Some(50),
                     })
                     .await
                     .map_err(|error| error.to_string());
-                let _ = tx.send(UiResult::MarketplaceLikes(likes));
-                let _ = tx.send(UiResult::Marketplace(result));
+                let _ = tx.send(UiResult::Marketplace(seq, result));
             });
+        }
+
+        /// Fetch the signed-in user's like ids. Kept separate from
+        /// [`Self::load_marketplace`] so searching never re-requests them.
+        fn load_marketplace_likes(&mut self) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let likes = backend
+                    .services()
+                    .marketplace
+                    .my_likes()
+                    .await
+                    .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::MarketplaceLikes(likes));
+            });
+        }
+
+        /// Same 300ms pause the Tauri marketplace page applies to its search box.
+        const MARKETPLACE_SEARCH_DEBOUNCE: Duration = Duration::from_millis(300);
+
+        fn schedule_marketplace_search(&mut self) {
+            self.marketplace_search_deadline =
+                Some(std::time::Instant::now() + Self::MARKETPLACE_SEARCH_DEBOUNCE);
+        }
+
+        /// Runs from the host tick: fires the debounced search exactly once.
+        fn poll_marketplace_search(&mut self) {
+            let Some(deadline) = self.marketplace_search_deadline else {
+                return;
+            };
+            if std::time::Instant::now() < deadline {
+                return;
+            }
+            self.load_marketplace();
         }
 
         fn load_marketplace_mine(&self) {
@@ -2778,14 +2835,25 @@ mod linux_app {
                         }
                         Err(error) => self.status = error,
                     },
-                    UiResult::Marketplace(Ok(items)) => {
-                        self.status = fmt_l10n(lang, "status.marketplace_loaded", &[&items.len()]);
-                        self.marketplace_items = items;
-                        self.marketplace_attempted = true;
-                    }
-                    UiResult::Marketplace(Err(error)) => {
-                        self.status = error;
-                        self.marketplace_attempted = true;
+                    UiResult::Marketplace(seq, result) => {
+                        // Latest request wins: a slow earlier response must not
+                        // replace the results of the query the user sees now.
+                        if seq == self.marketplace_seq {
+                            match result {
+                                Ok(items) => {
+                                    self.status = fmt_l10n(
+                                        lang,
+                                        "status.marketplace_loaded",
+                                        &[&items.len()],
+                                    );
+                                    self.marketplace_items = items;
+                                }
+                                Err(error) => self.status = error,
+                            }
+                            self.marketplace_attempted = true;
+                        } else {
+                            log::debug!("dropping stale marketplace response (seq {seq})");
+                        }
                     }
                     UiResult::MarketplaceLikes(Ok(likes)) => self.marketplace_my_likes = likes,
                     UiResult::MarketplaceLikes(Err(error)) => {
@@ -4171,7 +4239,9 @@ mod linux_app {
                         self.marketplace_query = query.clone();
                         // Echo it back so the field never reverts while typing.
                         self.frontend_vm.marketplace_query = query;
-                        self.load_marketplace();
+                        // Debounced: `poll_marketplace_search` issues the request
+                        // once typing pauses, exactly like the Tauri page.
+                        self.schedule_marketplace_search();
                     }
                     frontend::view_model::FrontendAction::MarketplaceCloseDetail => {
                         self.frontend_vm.marketplace_selected = None;
@@ -6899,6 +6969,8 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             if !messages.is_empty() {
                 app.apply_window_messages(messages, tray_available);
             }
+            // Debounced marketplace search fires from the host tick.
+            app.poll_marketplace_search();
             app.tick(&ctx);
             if app.should_spawn_ui_window() {
                 if let Err(error) = app.spawn_ui_window(&socket) {
