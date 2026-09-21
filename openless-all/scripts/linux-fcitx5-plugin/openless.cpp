@@ -17,8 +17,6 @@
  *    SetQaHotkeyRaw(uu: sym, states)     — 直接设 QA 面板触发 sym+states
  *    SetTranslationHotkeyRaw(uu: sym, states) — 直接设翻译模式触发 sym+states
  *    SetLessComputerHotkeyRaw(uu: sym, states) — 直接设 Less Computer 触发 sym+states
- *    SetAuxDown(s: text)                 — 在候选词列表下方显示状态文本
- *    ClearAuxDown()                      — 清除候选词列表下方文本
  *    GetSelectionText() -> s             — 读取当前 PRIMARY 选区文本（由 clipboard addon 维护）
  *    SetClipboardText(s: text) -> b      — 通过 clipboard addon 写入 CLIPBOARD
  *    CaptureSelectionTarget(s: ticket) -> s — 捕获选区和原输入上下文
@@ -335,38 +333,6 @@ public:
                     }
                 }));
 
-        // 5. 监听焦点切换：用户切窗口时把上次 auxDown 自动补到新 IC，
-        //    确保听写状态提示跟随焦点移动。
-        eventHandlers_.push_back(
-            instance_->watchEvent(
-                EventType::InputContextFocusIn,
-                EventWatcherPhase::Default,
-                [this](Event &event) {
-                    if (lastAuxText_.empty()) return;
-                    auto &icEvent = static_cast<InputContextEvent &>(event);
-                    auto *ic = icEvent.inputContext();
-                    if (!ic) return;
-                    instance_->flushUI();
-                    ic->inputPanel().setAuxDown(Text(lastAuxText_));
-                    ic->updatePreedit();
-                    ic->updateUserInterface(UserInterfaceComponent::InputPanel, true);
-                    instance_->flushUI();
-                }));
-
-        // 6. PostInputMethod：恢复 auxDown（fcitx5 内联模式/方向键后可能清掉）
-        eventHandlers_.push_back(
-            instance_->watchEvent(
-                EventType::InputContextKeyEvent,
-                EventWatcherPhase::PostInputMethod,
-                [this](Event &event) {
-                    if (lastAuxText_.empty()) return;
-                    auto &keyEvent = static_cast<KeyEvent &>(event);
-                    auto *ic = keyEvent.inputContext();
-                    if (!ic) return;
-                    ic->inputPanel().setAuxDown(Text(lastAuxText_));
-                    ic->updateUserInterface(UserInterfaceComponent::InputPanel, true);
-                }));
-
         FCITX_LOGC(openless, Info) << "OpenLess plugin loaded";
     }
 
@@ -531,55 +497,6 @@ public:
         selectionTargets_.erase(found);
         selectionTargets_[newTicket] = std::move(target);
         return true;
-    }
-
-    void setAuxDown(const std::string &text) {
-        // 优先用当前焦点 IC（输入面板只在焦点 IC 上渲染），
-        // 降级到 savedIc_（快捷键按下时捕获的 IC，可能已失焦但指针仍有效）。
-        InputContext *ic = nullptr;
-        auto &mgr = instance_->inputContextManager();
-        mgr.foreachFocused([&](InputContext *focusedIc) {
-            ic = focusedIc;
-            return false;
-        });
-        if (!ic) {
-            ic = savedIc_;
-        }
-        if (!ic) {
-            FCITX_LOGC(openless, Warn) << "SetStatusCandidates: no IC (focused=null, saved=null)";
-            return;
-        }
-        FCITX_LOGC(openless, Info) << "SetStatusCandidates: " << text
-                                    << " ic=" << ic << " focused=" << (ic != savedIc_ ? "current" : "saved");
-        lastAuxText_ = text;
-        // 先把事件队列里挂起的旧 UI 更新处理掉（例如前一个按键触发的面板重置），
-        // 再设置 auxDown，确保不会被待处理事件覆盖。
-        instance_->flushUI();
-        ic->inputPanel().setAuxDown(Text(text));
-        ic->updatePreedit();
-        ic->updateUserInterface(UserInterfaceComponent::InputPanel, true);
-        instance_->flushUI();
-    }
-
-    void clearAuxDown() {
-        // 无论是否有可用 IC，都要清掉缓存的状态文字，否则下一次 FocusIn
-        // 会把旧状态（如"已插入"）重放到新聚焦的窗口。
-        lastAuxText_.clear();
-        InputContext *ic = nullptr;
-        auto &mgr = instance_->inputContextManager();
-        mgr.foreachFocused([&](InputContext *focusedIc) {
-            ic = focusedIc;
-            return false;
-        });
-        if (!ic) {
-            ic = savedIc_;
-        }
-        if (!ic) return;
-        FCITX_LOGC(openless, Info) << "ClearStatusCandidates";
-        ic->inputPanel().setAuxDown(Text());
-        ic->updatePreedit();
-        ic->updateUserInterface(UserInterfaceComponent::InputPanel, true);
-        instance_->flushUI();
     }
 
     void setHotkey(const std::vector<std::string> &keys) {
@@ -788,8 +705,6 @@ public:
     FCITX_OBJECT_VTABLE_METHOD(revertSelectionTarget, "RevertSelectionTarget", "s", "b");
     FCITX_OBJECT_VTABLE_METHOD(rekeySelectionTarget, "RekeySelectionTarget", "ss", "b");
     FCITX_OBJECT_VTABLE_METHOD(cancelSelectionTarget, "CancelSelectionTarget", "s", "b");
-    FCITX_OBJECT_VTABLE_METHOD(setAuxDown, "SetAuxDown", "s", "");
-    FCITX_OBJECT_VTABLE_METHOD(clearAuxDown, "ClearAuxDown", "", "");
     FCITX_OBJECT_VTABLE_METHOD(setHotkey, "SetHotkey", "as", "");
     FCITX_OBJECT_VTABLE_METHOD(setHotkeyRaw, "SetHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setCustomDictationTrigger, "SetCustomDictationTrigger", "s", "");
@@ -1095,8 +1010,6 @@ private:
     /// Preview/Apply/Completed/Cancelled 状态仍由 Core 独占。
     std::unordered_map<std::string, SelectionTarget> selectionTargets_;
     std::unordered_map<std::string, InputContext *> dictationTargets_;
-    /// 上一次 SetAuxDown 的文本；焦点切换时用于自动补到新 IC。
-    std::string lastAuxText_;
     std::vector<std::unique_ptr<HandlerTableEntry<EventHandler>>>
         eventHandlers_;
 };
