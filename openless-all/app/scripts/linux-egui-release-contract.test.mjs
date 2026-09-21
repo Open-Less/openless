@@ -103,6 +103,38 @@ assert.ok(!/src-tauri/.test(packageScript), 'package script must not reference s
 assert.ok(!/src-tauri/.test(releaseWorkflow), 'release workflow must not reference src-tauri');
 assert.ok(!/\btauri\b|\bwry\b/.test(packageScript), 'package script must not invoke Tauri tooling');
 
+// 9b. 图标：egui 侧不能引用 src-tauri（上一条），但共享同一套图。打包脚本从 Tauri-free
+//     的 `linux-egui/packaging/icons/` 装 5 档 hicolor 尺寸；这些副本必须与共享图标源
+//     `src-tauri/icons/`（Tauri 的 macOS/Windows/Android 打包也用那份）逐字节一致，
+//     否则两份图会静默漂移。以前只装一档，而且把 512×512 的图放进了 256x256 目录。
+const iconSizeLadder = [
+  ['32x32.png', '32x32'],
+  ['64x64.png', '64x64'],
+  ['128x128.png', '128x128'],
+  ['128x128@2x.png', '256x256'],
+  ['icon.png', '512x512'],
+];
+for (const [file, hicolor] of iconSizeLadder) {
+  const copy = await readFile(
+    join(repoRoot, 'openless-all/app/linux-egui/packaging/icons', file),
+  );
+  const shared = await readFile(
+    join(repoRoot, 'openless-all/app/src-tauri/icons', file),
+  );
+  assert.ok(
+    copy.equals(shared),
+    `linux-egui packaging icon ${file} must stay byte-identical to the shared src-tauri/icons copy`,
+  );
+  assert.ok(
+    packageScript.includes(`${hicolor}:${file}`),
+    `package script must install ${file} into hicolor/${hicolor}`,
+  );
+}
+assert.ok(
+  packageScript.includes('usr/share/icons/hicolor/${spec%%:*}/apps/openless.png'),
+  'package script must install the whole hicolor ladder, not a single size',
+);
+
 // 10. 发版编排里的 Linux 腿必须是**内联的普通 job**（用户要求：Actions 页面上与
 //     三个平台平级，不能是可复用工作流那种嵌套折叠显示），而且手动安装 zip 必须
 //     在同一个 job 里产出（不是单独的 bundle job）。

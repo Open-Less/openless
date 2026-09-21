@@ -9,14 +9,27 @@ BINARY="$TARGET_DIR/release/openless-linux-egui"
 PLUGIN_ROOT="$APP_ROOT/../scripts/linux-fcitx5-plugin/build"
 PACKAGING="$APP_ROOT/linux-egui/packaging"
 OUTPUT="$TARGET_DIR/linux-egui-packages"
-ICON="$APP_ROOT/public/AppIcon.png"
+# 图标：与 Tauri 侧共用同一套画（`icon.png` 与 `public/AppIcon.png` 的 md5 相同，
+# 都是 512×512）。但本脚本必须保持 Tauri-free —— 两条契约都会检查脚本里不得出现
+# Tauri 源码树的路径名 —— 所以这里放字节相同的副本，并由 release 契约做逐字节
+# 一致性断言，保证两边共用一套素材且不会静默漂移。
+ICON_DIR="$PACKAGING/icons"
+# 图标名 → hicolor 尺寸目录 → 源文件（与 Tauri 侧的图标集逐字节一致）。
+HICOLOR_ICONS=(
+  "32x32:32x32.png"
+  "64x64:64x64.png"
+  "128x128:128x128.png"
+  "256x256:128x128@2x.png"
+  "512x512:icon.png"
+)
 
 test -x "$BINARY"
+test -d "$ICON_DIR"
+for spec in "${HICOLOR_ICONS[@]}"; do test -s "$ICON_DIR/${spec#*:}"; done
 test -s "$PLUGIN_ROOT/libopenless.so"
 test -s "$PLUGIN_ROOT/openless.conf"
 test -s "$PACKAGING/openless.desktop"
 test -s "$PACKAGING/top.openless.OpenLess.metainfo.xml"
-test -s "$ICON"
 command -v dpkg-deb >/dev/null
 command -v rpmbuild >/dev/null
 
@@ -67,7 +80,12 @@ stage_common() {
     "$root/usr/share/applications/openless.desktop"
   install -Dm644 "$PACKAGING/top.openless.OpenLess.metainfo.xml" \
     "$root/usr/share/metainfo/top.openless.OpenLess.metainfo.xml"
-  install -Dm644 "$ICON" "$root/usr/share/icons/hicolor/256x256/apps/openless.png"
+  # 多档 hicolor 尺寸：桌面环境按需选档（任务栏 32/48、菜单 64/128、大图标 256/512）。
+  # 旧的单档安装把 512×512 的图放进了 256x256 目录（那档根本不是 256px）。
+  for spec in "${HICOLOR_ICONS[@]}"; do
+    install -Dm644 "$ICON_DIR/${spec#*:}" \
+      "$root/usr/share/icons/hicolor/${spec%%:*}/apps/openless.png"
+  done
 }
 
 DEB_ROOT="$TARGET_DIR/linux-egui-deb-root"
