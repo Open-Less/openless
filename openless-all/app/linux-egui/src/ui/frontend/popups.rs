@@ -4,8 +4,9 @@
 //! Like the page layer this module is a pure renderer: it reads the popup
 //! snapshot and returns at most one action, which the popup host translates into
 //! a `PopupToHost` message. Layout, spacing, colours and copy mirror the Tauri
-//! windows — `src/components/Capsule.tsx` (classic pill), `src/pages/QaPanel.tsx`
-//! (shadcn chat card) and `src/pages/SelectionPolishPreview.tsx`.
+//! windows — `src/components/Capsule.tsx` (classic pill) and `src/pages/QaPanel.tsx`
+//! (shadcn chat card, which since the preview merge also hosts the read-only
+//! polish result mode).
 //!
 //! The chat panel renders in the shadcn zinc palette, which maps onto the theme
 //! tokens: white [`theme::SURFACE`], [`theme::INK`] foreground, [`theme::SURFACE_2`]
@@ -93,8 +94,9 @@ const CAPSULE_BADGE_GAP: f32 = 8.0;
 
 /// 润色结果：标题 + 副标题 + ✕、**只读**结果框、原文摘要、取消 / 确认并替换。
 ///
-/// 这是原先独立预览窗口 `SelectionPolishPreview.tsx` 的同一套视觉，现在画在
-/// 选区助手面板里（`HostAction::ShowSelectionPreview` 落到这里）。按用户要求，
+/// 视觉与 Tauri 选区助手面板（`src/pages/QaPanel.tsx`）一致 —— 原先那个独立
+/// 预览窗口已下线，两侧现在都把润色结果画在选区助手面板里（宿主侧的
+/// `HostAction::ShowSelectionPreview` 落到这里）。按用户要求，
 /// 结果**只读**（不做就地编辑）；「确认并替换」就是把结果写回原选区的「插入」。
 pub fn polish_result_mode(
     ui: &mut egui::Ui,

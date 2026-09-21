@@ -38,8 +38,8 @@ pub const QA_WINDOW_SIZE: (u32, u32) = (420, 540);
 /// footprint as the selection-ask panel.
 pub const LESS_COMPUTER_WINDOW_SIZE: (u32, u32) = (420, 540);
 // 旧的独立润色预览窗口（Tauri `selection-polish-preview` 640×440 / min 480×320）
-// 连同 `PREVIEW_WINDOW_SIZE`、`PREVIEW_MIN_SIZE` 一起下线：润色结果现在由选区
-// 助手面板（420×540）承载，见 `HostToPopup::PolishPreview`。
+// 连同 `PREVIEW_WINDOW_SIZE`、`PREVIEW_MIN_SIZE` 一起下线，Tauri 侧的独立窗口也已
+// 删除：润色结果现在由选区助手面板（420×540）承载，见 `HostToPopup::PolishPreview`。
 
 /// Window size for one popup kind, in X11 pixels.
 pub fn popup_size(kind: crate::popup::PopupKind) -> (u32, u32) {
