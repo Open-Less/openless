@@ -389,16 +389,14 @@ pub mod android {
         plaintext: &[u8],
         aad: &[u8],
     ) -> Result<Vec<u8>, AndroidKeystoreFailure> {
-        call_credential_vault_two_arrays("seal", plaintext, aad)
-            .map_err(classify_keystore_failure)
+        call_credential_vault_two_arrays("seal", plaintext, aad).map_err(classify_keystore_failure)
     }
 
     pub(crate) fn keystore_open(
         sealed: &[u8],
         aad: &[u8],
     ) -> Result<Vec<u8>, AndroidKeystoreFailure> {
-        call_credential_vault_two_arrays("open", sealed, aad)
-            .map_err(classify_keystore_failure)
+        call_credential_vault_two_arrays("open", sealed, aad).map_err(classify_keystore_failure)
     }
 
     pub(crate) fn keystore_delete_key() -> Result<(), AndroidKeystoreFailure> {

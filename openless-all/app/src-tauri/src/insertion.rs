@@ -39,7 +39,6 @@ impl TextInserter {
         Self
     }
 
-
     /// Windows 路径：写剪贴板 + 模拟 `paste_shortcut`。
     /// - `restore_clipboard_after_paste`：粘贴后是否恢复用户原剪贴板。
     /// - `paste_shortcut`：模拟按下的粘贴快捷键（如终端可能要 Ctrl+Shift+V）。
@@ -143,7 +142,6 @@ impl TextInserter {
         }
     }
 }
-
 
 impl Default for TextInserter {
     fn default() -> Self {

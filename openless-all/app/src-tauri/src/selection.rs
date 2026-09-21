@@ -432,8 +432,7 @@ pub(crate) fn validate_selection_insertion_target(
         return SelectionInsertionTargetValidation::Valid;
     }
 
-
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         SelectionInsertionTargetValidation::TargetUnavailable
     }
@@ -616,8 +615,7 @@ fn capture_selection_with_status_diag() -> (SelectionCaptureOutcome, SelectionCa
         }
     }
 
-
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     (
         SelectionCaptureOutcome { selection: None },
         SelectionCaptureMissReason::NoCapturePath,
@@ -820,7 +818,6 @@ fn post_copy_shortcut() -> bool {
 fn post_copy_shortcut() -> bool {
     windows_paste::send_ctrl_c().is_ok()
 }
-
 
 // ─────────────────────────── macOS AX read ───────────────────────────
 

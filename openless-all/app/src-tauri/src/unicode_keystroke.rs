@@ -57,6 +57,11 @@ pub enum TypeError {
     #[cfg(target_os = "windows")]
     #[error("Windows SendInput failed: {0}")]
     SendInputFailed(String),
+    /// Tauri 版不再提供 Linux 桌面（egui 前端取代，见 crate 根部 compile_error!）。
+    /// 保留这个中立变体，只为让 Linux 分支有一个明确、可读的“不支持”出口，
+    /// 而不是引用已删除的 Linux 实现。
+    #[error("Linux desktop is not supported by the Tauri shell; use the egui frontend")]
+    UnsupportedPlatform,
 }
 
 impl TypeError {
@@ -782,7 +787,6 @@ mod tests {
         TypeError::SendInputFailed("fail".into())
     }
 
-
     #[cfg(target_os = "windows")]
     #[test]
     fn expected_sendinput_typed_chars_includes_swallowed_carriage_return() {
@@ -848,4 +852,3 @@ pub use windows_impl::{
     restore_input_source, switch_to_ascii, type_unicode_chunk, type_unicode_chunk_with_options,
     PreviousInputSource, WindowsSendInputOptions,
 };
-

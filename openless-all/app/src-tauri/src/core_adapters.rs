@@ -2861,8 +2861,11 @@ impl TauriTextInsertionSession {
                 #[cfg(target_os = "macos")]
                 let result =
                     crate::unicode_keystroke::type_unicode_chunk_with_options(&chunk, newline_mode);
+                // Linux 桌面已不再由 Tauri 提供（见 crate 根部 compile_error!），
+                // 这里给出明确的“不支持”结果，而不是引用已删除的 Linux 实现。
                 #[cfg(target_os = "linux")]
-                let result = crate::unicode_keystroke::type_unicode_chunk(&chunk);
+                let result: Result<usize, crate::unicode_keystroke::TypeError> =
+                    Err(crate::unicode_keystroke::TypeError::UnsupportedPlatform);
                 match result {
                     Ok(written) => written,
                     Err(error) => error.typed_chars(),
