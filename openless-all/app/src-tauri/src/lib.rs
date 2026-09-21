@@ -14,6 +14,19 @@
 //! - coordinator: dictation state machine glue
 //! - commands: Tauri IPC surface
 
+// ── Linux 桌面不再由 Tauri 提供 ───────────────────────────────────────────────
+// 用户在 Linux 上已使用 egui 前端（`openless-all/app/linux-egui`），Tauri 版的 Linux
+// 桌面实现（fcitx5 插件桥 `linux_fcitx.rs`、Linux 热键/插入/选区路径、平台覆盖配置
+// `tauri.linux.conf.json`）已随本次一并删除。这里显式拦住误在 Linux 上构建 Tauri 版
+// 的情况，给出可操作的提示，而不是让人面对一堆“找不到模块”的零散错误。
+//
+// 不受影响的平台：macOS / Windows（桌面）与 Android（`target_os = "android"`）。
+#[cfg(target_os = "linux")]
+compile_error!(
+    "Tauri 版已不再支持 Linux 桌面：请使用 egui 前端 openless-all/app/linux-egui，\
+     打包用 openless-all/app/scripts/package-linux-egui.sh（deb/rpm/manual zip）。"
+);
+
 mod android;
 mod asr;
 mod audio_mute;
@@ -53,8 +66,6 @@ mod hotkey;
 #[path = "mobile_stubs/hotkey.rs"]
 mod hotkey;
 mod insertion;
-#[cfg(target_os = "linux")]
-mod linux_fcitx;
 mod llm_gemini;
 #[cfg(mobile)]
 mod mobile_runtime;
@@ -796,10 +807,6 @@ fn run_desktop() {
             // 符合 Apple HIG："在解释用途之后再弹出权限请求"。
             // 已授权用户不受影响（AXIsProcessTrusted 返回 true，引导页直接跳过）。
 
-            // AppImage / 便携版：fcitx5 插件缺了就从 bundled resources 自动安装
-            // 到 ~/.local/ 下面。不会覆盖系统已有的插件。
-            #[cfg(target_os = "linux")]
-            crate::linux_fcitx::ensure_plugin_installed(app.handle());
 
             // 菜单栏图标 — 与 Swift `MenuBarController` 同语义：
             // 左键点 → 显示/聚焦主窗口；菜单含「显示主窗口」「退出」。

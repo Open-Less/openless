@@ -11,10 +11,11 @@
 //! 截断策略：超过 4000 字符的选区只保留首 2000 + 尾 2000 + `[…truncated…]` 标记，
 //! 避免给 LLM 灌过长 context。
 //!
-//! 模块依赖：`arboard`（跨平台剪贴板）+ libc + 平台 native 框架，Linux 另依赖
-//! `linux_fcitx` 的 DBus 客户端。
+//! 模块依赖：`arboard`（跨平台剪贴板）+ libc + 平台 native 框架。
+//! Linux 桌面已改由 egui 前端（`openless-all/app/linux-egui`）承担，Tauri 版不再提供
+//! Linux 的选区读取路径。
 
-// 仅 macOS / Windows 的模拟复制路径用 sleep；Linux 走 fcitx5 DBus 直读，无 sleep。
+// 仅 macOS / Windows 的模拟复制路径用 sleep。
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::time::Duration;
 
@@ -431,23 +432,6 @@ pub(crate) fn validate_selection_insertion_target(
         return SelectionInsertionTargetValidation::Valid;
     }
 
-    #[cfg(target_os = "linux")]
-    {
-        // Linux：重读 PRIMARY selection 与捕获文本比较——用户改了选区 / 清空
-        // PRIMARY 就拒绝粘贴（fcitx CommitText 直接写焦点输入上下文，无需
-        // 恢复窗口焦点，所以这里不需要窗口级校验）。
-        let current_selection = match linux_selection::read_selected_text() {
-            linux_selection::LinuxSelectionRead::Text(text) => {
-                let trimmed = text.trim();
-                (!trimmed.is_empty()).then(|| truncate_selection(trimmed))
-            }
-            _ => None,
-        };
-        if !selection_text_matches(expected_selection, current_selection.as_deref()) {
-            return SelectionInsertionTargetValidation::SelectionChanged;
-        }
-        SelectionInsertionTargetValidation::Valid
-    }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
@@ -632,36 +616,6 @@ fn capture_selection_with_status_diag() -> (SelectionCaptureOutcome, SelectionCa
         }
     }
 
-    // 3. Linux：通过 fcitx5 DBus 读取 PRIMARY selection。
-    #[cfg(target_os = "linux")]
-    match linux_selection::read_selected_text() {
-        linux_selection::LinuxSelectionRead::Text(text) => {
-            let trimmed = text.trim();
-            log::info!(
-                "[selection] linux primary selection OK ({} chars){}",
-                trimmed.chars().count(),
-                source_app
-                    .as_deref()
-                    .map(|a| format!(" front_app={a}"))
-                    .unwrap_or_default()
-            );
-            return (
-                SelectionCaptureOutcome {
-                    selection: Some(SelectionContext {
-                        text: truncate_selection(trimmed),
-                        source_app,
-                    }),
-                },
-                SelectionCaptureMissReason::Ok,
-            );
-        }
-        linux_selection::LinuxSelectionRead::NoSelection => {
-            return (
-                SelectionCaptureOutcome { selection: None },
-                SelectionCaptureMissReason::EmptyTrimmed,
-            );
-        }
-    }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     (
@@ -867,60 +821,6 @@ fn post_copy_shortcut() -> bool {
     windows_paste::send_ctrl_c().is_ok()
 }
 
-#[cfg(target_os = "linux")]
-mod linux_selection {
-    #[derive(Debug, PartialEq, Eq)]
-    pub enum LinuxSelectionRead {
-        Text(String),
-        NoSelection,
-    }
-
-    pub fn read_selected_text() -> LinuxSelectionRead {
-        classify_selection_result(crate::linux_fcitx::get_selection_text())
-    }
-
-    fn classify_selection_result(result: Result<String, String>) -> LinuxSelectionRead {
-        match result {
-            Ok(text) => {
-                let trimmed = text.trim();
-                if trimmed.is_empty() {
-                    LinuxSelectionRead::NoSelection
-                } else {
-                    LinuxSelectionRead::Text(trimmed.to_string())
-                }
-            }
-            Err(error) => {
-                log::debug!("[selection] fcitx5 GetSelectionText unavailable: {error}");
-                LinuxSelectionRead::NoSelection
-            }
-        }
-    }
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn maps_dbus_text_to_selection() {
-            let result = classify_selection_result(Ok(" selected text ".to_string()));
-            assert_eq!(
-                result,
-                LinuxSelectionRead::Text("selected text".to_string())
-            );
-        }
-
-        #[test]
-        fn maps_empty_dbus_text_to_no_selection() {
-            let result = classify_selection_result(Ok(" \n".to_string()));
-            assert_eq!(result, LinuxSelectionRead::NoSelection);
-        }
-
-        #[test]
-        fn maps_dbus_error_to_no_selection() {
-            let result = classify_selection_result(Err("DBus unavailable".to_string()));
-            assert_eq!(result, LinuxSelectionRead::NoSelection);
-        }
-    }
-}
 
 // ─────────────────────────── macOS AX read ───────────────────────────
 

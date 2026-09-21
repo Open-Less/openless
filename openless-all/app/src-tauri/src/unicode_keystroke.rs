@@ -1,4 +1,3 @@
-#![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
 //! 跨平台 Unicode keystroke 合成（流式输入用）。
 //!
 //! 公开 API 三件套：
@@ -58,12 +57,6 @@ pub enum TypeError {
     #[cfg(target_os = "windows")]
     #[error("Windows SendInput failed: {0}")]
     SendInputFailed(String),
-    #[cfg(target_os = "linux")]
-    #[error("enigo init failed: {0}")]
-    EnigoInit(String),
-    #[cfg(target_os = "linux")]
-    #[error("enigo text input failed: {0}")]
-    EnigoText(String),
 }
 
 impl TypeError {
@@ -672,46 +665,6 @@ pub(crate) fn classify_sendinput_char(ch: char) -> SendInputCharKind {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Linux 实现（实验性）
-// ═══════════════════════════════════════════════════════════════════════════
-#[cfg(target_os = "linux")]
-mod linux_impl {
-    use super::{TisError, TypeError};
-    #[allow(unused_imports)]
-    use tauri::{AppHandle, Runtime};
-
-    pub struct PreviousInputSource;
-
-    /// 通过 fcitx5 插件一次性提交整段文字（支持中文、Wayland/X11 均可）。
-    /// 如果插件未加载返回 Err，调用方降级到剪贴板拷贝。
-    pub fn type_unicode_chunk(text: &str) -> Result<usize, TypeError> {
-        if text.is_empty() {
-            return Ok(0);
-        }
-        if crate::linux_fcitx::commit_text(text).is_ok() {
-            Ok(text.chars().count())
-        } else {
-            Err(TypeError::EnigoText(
-                "fcitx5 plugin unavailable, try clipboard fallback".into(),
-            ))
-        }
-    }
-
-    pub async fn switch_to_ascii<R: Runtime>(
-        _app: &AppHandle<R>,
-    ) -> Result<Option<PreviousInputSource>, TisError> {
-        Ok(None)
-    }
-
-    pub async fn restore_input_source<R: Runtime>(
-        _app: &AppHandle<R>,
-        _prev: Option<PreviousInputSource>,
-    ) -> Result<(), TisError> {
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::TypeError;
@@ -829,10 +782,6 @@ mod tests {
         TypeError::SendInputFailed("fail".into())
     }
 
-    #[cfg(target_os = "linux")]
-    fn platform_error() -> TypeError {
-        TypeError::EnigoText("fail".into())
-    }
 
     #[cfg(target_os = "windows")]
     #[test]
@@ -900,8 +849,3 @@ pub use windows_impl::{
     PreviousInputSource, WindowsSendInputOptions,
 };
 
-#[cfg(target_os = "linux")]
-#[allow(unused_imports)]
-pub use linux_impl::{
-    restore_input_source, switch_to_ascii, type_unicode_chunk, PreviousInputSource,
-};
