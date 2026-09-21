@@ -108,7 +108,8 @@ public:
           lessComputerTriggerCombined_(false),
           savedIc_(nullptr),
           selectionIc_(nullptr),
-          primarySelectionReader_(openless_selection::readPrimarySelection) {
+          primarySelectionReader_(openless_selection::readPrimarySelection),
+          selectionCacheReader_([this]() { return cachedPrimarySelection(); }) {
 
         // 1. 读取配置
         reloadConfig();
@@ -387,8 +388,18 @@ public:
         // 旧实现反过来——先信 surrounding，再退到 clipboard addon 的缓存——于是
         // “新选区没有 text mime”时会把上一次的选区文本当成当前选区。
         const auto primary = primarySelectionReader_();
-        const auto source =
+        auto source =
             openless_selection::chooseSelectionSource(primary, surroundingSelected);
+        if (source.text.empty() &&
+            primary.status == openless_selection::PrimarySelectionStatus::Unsupported) {
+            // 最后一级兜底：探针**不可用**（X11 会话、合成器没有 ext-data-control）
+            // 且应用自己也没报选中文本时，才用 clipboard addon 的缓存——那是本机
+            // 唯一剩下的来源，也是这次改动之前的行为（否则无 surrounding 的 XIM 类
+            // 应用在 X11 会话下会彻底拿不到选区）。
+            // 边界：探针**给出结论**时（NoText / NoSelection）绝不走这里，
+            // 否则“新选区不是文本”依旧会落到旧文本上，② 就白修了。
+            source = {selectionCacheReader_(), "clipboard-cache-fallback"};
+        }
         logSelectionCapture(primary, source, surroundingSelected);
         if (source.text.empty()) {
             return std::string();
@@ -703,7 +714,7 @@ public:
         FCITX_LOGC(openless, Warn)
             << "GetSelectionText: primary probe unavailable (" << primary.detail
             << "), falling back to the clipboard addon cache";
-        return cachedPrimarySelection();
+        return selectionCacheReader_();
     }
 
     bool setClipboardText(const std::string &text) {
@@ -1086,6 +1097,9 @@ private:
     /// 真实合成器或剪贴板内容。
     std::function<openless_selection::PrimarySelectionSnapshot()>
         primarySelectionReader_;
+    /// clipboard addon 的 PRIMARY 缓存读取，**只**作为“探针不可用”时的最后一级
+    /// 兜底（边界见 captureSelectionTarget）。契约用例注入固定值。
+    std::function<std::string()> selectionCacheReader_;
     /// Core session UUID -> Host 原生目标。map 只保存 effect 所需的句柄和回滚文本；
     /// Preview/Apply/Completed/Cancelled 状态仍由 Core 独占。
     std::unordered_map<std::string, SelectionTarget> selectionTargets_;

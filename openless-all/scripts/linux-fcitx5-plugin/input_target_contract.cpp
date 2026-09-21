@@ -47,6 +47,10 @@ struct OpenLessInputTargetContract {
         plugin.primarySelectionReader_ =
             [snapshot = std::move(snapshot)]() { return snapshot; };
     }
+    /// 注入 clipboard addon 缓存的内容（只影响“探针不可用”时的最后一级兜底）。
+    static void setSelectionCacheReader(OpenLess &plugin, std::string text) {
+        plugin.selectionCacheReader_ = [text = std::move(text)]() { return text; };
+    }
 };
 }
 
@@ -180,6 +184,38 @@ int main() {
                                        "text/plain (read timed out)"));
             assert(plugin.captureSelectionTarget("read-failed") == "baz");
             assert(plugin.cancelSelectionTarget("read-failed"));
+        }
+        // 边界 1：探针**不可用**（X11 会话 / 没有 ext-data-control）+ 应用 surrounding 也为空
+        //         → 最后一级才回退 clipboard 缓存（避免无 surrounding 的 XIM 类应用在
+        //         X11 会话下彻底拿不到选区）。
+        {
+            RecordingInputContext x11Context(instance.inputContextManager());
+            fcitx::OpenLessInputTargetContract::select(plugin, x11Context);
+            fcitx::OpenLessInputTargetContract::setPrimaryReader(
+                plugin, primarySnapshot(PrimarySelectionStatus::Unsupported, std::string(),
+                                        "WAYLAND_DISPLAY is not set"));
+            fcitx::OpenLessInputTargetContract::setSelectionCacheReader(plugin,
+                                                                        "cached primary");
+            assert(plugin.captureSelectionTarget("cache-fallback") == "cached primary");
+            assert(plugin.cancelSelectionTarget("cache-fallback"));
+            assert(plugin.getSelectionText() == "cached primary");
+        }
+        // 边界 2：探针**给出了结论**（NoSelection / NoText）→ 严格判失效，绝不碰缓存。
+        {
+            RecordingInputContext conclusive(instance.inputContextManager());
+            fcitx::OpenLessInputTargetContract::select(plugin, conclusive);
+            fcitx::OpenLessInputTargetContract::setSelectionCacheReader(plugin,
+                                                                        "cached primary");
+            fcitx::OpenLessInputTargetContract::setPrimaryReader(
+                plugin, primarySnapshot(PrimarySelectionStatus::NoSelection, std::string(),
+                                        "no primary selection"));
+            assert(plugin.captureSelectionTarget("no-selection-no-cache").empty());
+            assert(plugin.getSelectionText().empty());
+            fcitx::OpenLessInputTargetContract::setPrimaryReader(
+                plugin, primarySnapshot(PrimarySelectionStatus::NoText, std::string(),
+                                        "image/png"));
+            assert(plugin.captureSelectionTarget("no-text-no-cache").empty());
+            assert(plugin.getSelectionText().empty());
         }
         // 纯策略补充：探针读到空文本时用 surrounding（探针没能给出文本，不是"选中的不是文本"）。
         assert(openless_selection::chooseSelectionSource(
