@@ -133,8 +133,10 @@ const OPENLESS_BUNDLE_ID: &str = "com.openless.app";
 /// 让用户拖动后的位置在 hide → show 之间得以保持。详见 issue #118 v2。
 static QA_WINDOW_POSITIONED: AtomicBool = AtomicBool::new(false);
 /// 「润色结果」模式的事件名。该模式复用选区助手（qa）面板，不再有独立预览窗。
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) const SELECTION_POLISH_PREVIEW_SHOWN: &str = "selection-polish-preview:shown";
 /// 让面板自行决定退出「润色结果」模式（它可能正处在提问对话中）。
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) const SELECTION_POLISH_PREVIEW_HIDE: &str = "selection-polish-preview:hide";
 /// 是否处于「润色结果」模式。`get_selection_polish_preview` 只在它为 true 时
 /// 返回负载：面板懒创建后挂载时也会拉一次，不能把残留的快照当成新请求。
@@ -2851,6 +2853,8 @@ pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(_app: &AppHandle<
 /// 不能被润色流程的收尾动作一起关掉（与 egui 侧 `HideSelectionPreview` 一致）。
 pub(crate) fn hide_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R>) {
     clear_selection_polish_preview_pending();
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let _ = app;
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let _ = app.emit_to("qa", SELECTION_POLISH_PREVIEW_HIDE, ());
 }
