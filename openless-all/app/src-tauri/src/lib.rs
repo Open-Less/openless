@@ -132,6 +132,21 @@ const OPENLESS_BUNDLE_ID: &str = "com.openless.app";
 /// 第一次 show 时把 QA 浮窗摆到屏幕底部居中；之后的 show 不再 reposition，
 /// 让用户拖动后的位置在 hide → show 之间得以保持。详见 issue #118 v2。
 static QA_WINDOW_POSITIONED: AtomicBool = AtomicBool::new(false);
+/// 「润色结果」模式的事件名。该模式复用选区助手（qa）面板，不再有独立预览窗。
+pub(crate) const SELECTION_POLISH_PREVIEW_SHOWN: &str = "selection-polish-preview:shown";
+/// 让面板自行决定退出「润色结果」模式（它可能正处在提问对话中）。
+pub(crate) const SELECTION_POLISH_PREVIEW_HIDE: &str = "selection-polish-preview:hide";
+/// 是否处于「润色结果」模式。`get_selection_polish_preview` 只在它为 true 时
+/// 返回负载：面板懒创建后挂载时也会拉一次，不能把残留的快照当成新请求。
+static SELECTION_POLISH_PREVIEW_PENDING: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn selection_polish_preview_pending() -> bool {
+    SELECTION_POLISH_PREVIEW_PENDING.load(Ordering::SeqCst)
+}
+
+pub(crate) fn clear_selection_polish_preview_pending() {
+    SELECTION_POLISH_PREVIEW_PENDING.store(false, Ordering::SeqCst);
+}
 /// 聊天面板退场动画的世代计数：hide 先发 `chat-panel:closing` 让前端播 220ms
 /// 退场动画、240ms 后才真正 hide；期间再次 show 会推进世代，作废挂起的 hide。
 static QA_PANEL_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -2818,59 +2833,26 @@ pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     hide_chat_window_animated(app, "qa", &QA_PANEL_EPOCH);
 }
 
-/// 选区润色预览是独立、可编辑的小窗：模型结果不会直接覆盖，用户确认后才回到原选区粘贴。
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn ensure_selection_polish_preview_window<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-) -> Option<tauri::WebviewWindow<R>> {
-    if let Some(window) = app.get_webview_window("selection-polish-preview") {
-        return Some(window);
-    }
-    WebviewWindowBuilder::new(
-        app,
-        "selection-polish-preview",
-        WebviewUrl::App("index.html?window=selection-polish-preview".into()),
-    )
-    .title("OpenLess 选区润色预览")
-    .inner_size(640.0, 440.0)
-    .min_inner_size(480.0, 320.0)
-    .resizable(true)
-    .always_on_top(true)
-    .visible(false)
-    .build()
-    .map(Some)
-    .unwrap_or_else(|error| {
-        log::warn!("[selection-polish] create preview window failed: {error}");
-        None
-    })
-}
-
+/// 「润色结果」不再有独立窗口：复用选区助手（qa）面板切到润色模式。核心在
+/// 「预览确认」输出模式下照旧只发 `HostAction::ShowSelectionPreview`。
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R>) {
-    let Some(window) = ensure_selection_polish_preview_window(app) else {
-        return;
-    };
-    if let Err(error) = window.show() {
-        log::warn!("[selection-polish] show preview failed: {error}");
-        return;
-    }
-    if let Err(error) = window.set_focus() {
-        log::warn!("[selection-polish] focus preview failed: {error}");
-    }
-    let _ = app.emit_to(
-        "selection-polish-preview",
-        "selection-polish-preview:shown",
-        (),
-    );
+    SELECTION_POLISH_PREVIEW_PENDING.store(true, Ordering::SeqCst);
+    show_qa_window(app, "polish-preview");
+    // 面板可能是本次才懒创建（刚挂载，订阅还没装上）——它在挂载时也会自己
+    // 拉一次负载（见 `get_selection_polish_preview` 的 pending 门禁）。
+    let _ = app.emit_to("qa", SELECTION_POLISH_PREVIEW_SHOWN, ());
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(_app: &AppHandle<R>) {}
 
+/// 退出「润色结果」模式。是否顺带关掉面板交给前端：面板可能正处在提问对话中，
+/// 不能被润色流程的收尾动作一起关掉（与 egui 侧 `HideSelectionPreview` 一致）。
 pub(crate) fn hide_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R>) {
-    if let Some(window) = app.get_webview_window("selection-polish-preview") {
-        let _ = window.hide();
-    }
+    clear_selection_polish_preview_pending();
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let _ = app.emit_to("qa", SELECTION_POLISH_PREVIEW_HIDE, ());
 }
 
 /// 选区语音：说完后由用户选择提问或编辑。
