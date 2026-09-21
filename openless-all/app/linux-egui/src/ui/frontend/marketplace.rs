@@ -386,122 +386,149 @@ fn marketplace_detail(
     actions: &mut Vec<FrontendAction>,
 ) {
     let modal_width = (body_rect.width() - 48.0).clamp(320.0, 480.0);
-    let viewport_center = ctx.content_rect().center();
-    let body_center_offset = body_rect.center() - viewport_center;
+    // 卡片高度由内容决定（描述行数可变），没有设置弹窗那样的固定尺寸可用，所以把上一帧
+    // 实测高度记在 memory 里：首帧用估算值，实测与估算不同时请求重绘，第二帧起就是精确
+    // 居中。`...-card-rect` 里存的是本帧**实际画出**的卡片矩形。
+    let card_height_id = egui::Id::new("openless-marketplace-detail-card-height");
+    let card_height = ctx
+        .data_mut(|data| data.get_temp::<f32>(card_height_id))
+        .filter(|height| height.is_finite() && *height > 0.0)
+        .unwrap_or_else(|| (body_rect.height() - 40.0).clamp(180.0, 360.0));
+    let card_rect =
+        egui::Rect::from_center_size(body_rect.center(), egui::vec2(modal_width, card_height));
 
-    // Backdrop
-    let backdrop_layer = egui::LayerId::new(
-        egui::Order::Foreground,
-        egui::Id::new("marketplace-detail-backdrop"),
-    );
-    ctx.layer_painter(backdrop_layer).rect_filled(
-        body_rect,
-        egui::CornerRadius {
-            nw: 0,
-            ne: 0,
-            sw: 14,
-            se: 14,
-        },
-        theme::OVERLAY,
-    );
-    // Input capture
-    egui::Area::new(egui::Id::new("marketplace-detail-backdrop-input"))
+    let modal = egui::Area::new(egui::Id::new("openless-marketplace-detail-modal"))
+        // 与设置弹窗同一套层级策略：遮罩、点击拦截与卡片必须同属**一个** `Area`（同一个
+        // LayerId）。各自独立 Area 时，egui 会在按下后把被点到的 Area 抬到同层最上
+        // （`move_to_top`），遮罩一旦被抬起就会盖住卡片；同一图层里先画遮罩、再画卡片在
+        // 结构上就不可能出现。这里用 `Foreground` 而不是 `Tooltip`：弹窗若占 Tooltip，会
+        // 盖住同层弹出的下拉/菜单（跨 Order 是 Tooltip > Foreground）。
         .order(egui::Order::Foreground)
         .fixed_pos(body_rect.min)
-        .default_size(body_rect.size())
         .constrain(false)
-        .interactable(true)
         .show(ctx, |ui| {
             ui.set_min_size(body_rect.size());
-            ui.set_max_size(body_rect.size());
-            let _ = ui.allocate_exact_size(body_rect.size(), egui::Sense::click());
-        });
-
-    egui::Area::new(egui::Id::new("marketplace-detail-overlay"))
-        .order(egui::Order::Tooltip)
-        .anchor(egui::Align2::CENTER_CENTER, body_center_offset)
-        .constrain_to(body_rect)
-        .show(ctx, |ui| {
-            egui::Frame::new()
-                .fill(theme::SURFACE)
-                .stroke(egui::Stroke::new(1.0, theme::LINE))
-                .corner_radius(egui::CornerRadius::same(14))
-                .inner_margin(egui::Margin::same(20))
-                .show(ui, |ui| {
-                    ui.set_width(modal_width - 40.0);
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(&pack.name).size(18.0).strong());
-                        ui.label(
-                            egui::RichText::new(&pack.mode)
-                                .size(11.0)
-                                .color(theme::INK_3),
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.painter().rect_filled(
+                body_rect,
+                egui::CornerRadius {
+                    nw: 0,
+                    ne: 0,
+                    sw: 14,
+                    se: 14,
+                },
+                theme::OVERLAY,
+            );
+            // 点击拦截：吃掉 body 上的点击，下方页面既看不到也点不到。
+            let _ = ui.allocate_rect(body_rect, egui::Sense::click());
+            ui.scope_builder(egui::UiBuilder::new().max_rect(card_rect), |ui| {
+                ui.set_clip_rect(body_rect.intersect(ui.clip_rect()));
+                egui::Frame::new()
+                    .fill(theme::SURFACE)
+                    .stroke(egui::Stroke::new(1.0, theme::LINE))
+                    .corner_radius(egui::CornerRadius::same(14))
+                    .inner_margin(egui::Margin::same(20))
+                    .show(ui, |ui| {
+                        ui.set_width(modal_width - 40.0);
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(&pack.name).size(18.0).strong());
                             ui.label(
-                                egui::RichText::new(format!("v{}", pack.version))
-                                    .size(10.0)
-                                    .color(theme::INK_4),
+                                egui::RichText::new(&pack.mode)
+                                    .size(11.0)
+                                    .color(theme::INK_3),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!("v{}", pack.version))
+                                            .size(10.0)
+                                            .color(theme::INK_4),
+                                    );
+                                },
                             );
                         });
-                    });
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "@{}  ·  ☆ {}  ·  ↓ {}",
-                            pack.author, pack.likes, pack.downloads
-                        ))
-                        .size(11.0)
-                        .color(theme::INK_4),
-                    );
-                    ui.add_space(10.0);
-                    ui.label(
-                        egui::RichText::new(&pack.description)
-                            .size(13.0)
-                            .color(theme::INK_2),
-                    );
-                    ui.add_space(12.0);
-                    ui.add_space(14.0);
-                    ui.horizontal(|ui| {
-                        if ui
-                            .add(
-                                egui::Button::new(egui::RichText::new(if liked {
-                                    "★"
-                                } else {
-                                    "☆"
-                                }))
-                                .fill(theme::SURFACE)
-                                .stroke(egui::Stroke::new(1.0, theme::LINE))
-                                .corner_radius(egui::CornerRadius::same(8)),
-                            )
-                            .clicked()
-                        {
-                            actions.push(FrontendAction::MarketplaceToggleLike(index));
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "@{}  ·  ☆ {}  ·  ↓ {}",
+                                pack.author, pack.likes, pack.downloads
+                            ))
+                            .size(11.0)
+                            .color(theme::INK_4),
+                        );
+                        ui.add_space(10.0);
+                        ui.label(
+                            egui::RichText::new(&pack.description)
+                                .size(13.0)
+                                .color(theme::INK_2),
+                        );
+                        ui.add_space(12.0);
+                        ui.add_space(14.0);
+                        ui.horizontal(|ui| {
                             if ui
                                 .add(
-                                    egui::Button::new(tr_l10n(lang, "marketplace.install_btn"))
-                                        .fill(theme::BLUE)
-                                        .stroke(egui::Stroke::NONE)
-                                        .corner_radius(egui::CornerRadius::same(8)),
+                                    egui::Button::new(egui::RichText::new(if liked {
+                                        "★"
+                                    } else {
+                                        "☆"
+                                    }))
+                                    .fill(theme::SURFACE)
+                                    .stroke(egui::Stroke::new(1.0, theme::LINE))
+                                    .corner_radius(egui::CornerRadius::same(8)),
                                 )
                                 .clicked()
                             {
-                                actions.push(FrontendAction::MarketplaceInstall(index));
-                                actions.push(FrontendAction::MarketplaceCloseDetail);
+                                actions.push(FrontendAction::MarketplaceToggleLike(index));
                             }
-                            if ui
-                                .add(
-                                    egui::Button::new(tr_l10n(lang, "common.cancel"))
-                                        .fill(theme::SURFACE)
-                                        .stroke(egui::Stroke::new(1.0, theme::LINE))
-                                        .corner_radius(egui::CornerRadius::same(8)),
-                                )
-                                .clicked()
-                            {
-                                actions.push(FrontendAction::MarketplaceCloseDetail);
-                            }
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui
+                                        .add(
+                                            egui::Button::new(tr_l10n(
+                                                lang,
+                                                "marketplace.install_btn",
+                                            ))
+                                            .fill(theme::BLUE)
+                                            .stroke(egui::Stroke::NONE)
+                                            .corner_radius(egui::CornerRadius::same(8)),
+                                        )
+                                        .clicked()
+                                    {
+                                        actions.push(FrontendAction::MarketplaceInstall(index));
+                                        actions.push(FrontendAction::MarketplaceCloseDetail);
+                                    }
+                                    if ui
+                                        .add(
+                                            egui::Button::new(tr_l10n(lang, "common.cancel"))
+                                                .fill(theme::SURFACE)
+                                                .stroke(egui::Stroke::new(1.0, theme::LINE))
+                                                .corner_radius(egui::CornerRadius::same(8)),
+                                        )
+                                        .clicked()
+                                    {
+                                        actions.push(FrontendAction::MarketplaceCloseDetail);
+                                    }
+                                },
+                            );
                         });
-                    });
-                });
+                    })
+                    .response
+            })
+            .inner
         });
+    // 本帧实际画出的卡片矩形（Frame 无阴影，响应矩形就是卡片本体）写进 memory 供测试
+    // 查询，并让下一帧用实测高度居中。
+    let painted = modal.inner.rect;
+    if painted.height().is_finite() && painted.height() > 0.0 {
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                egui::Id::new("openless-marketplace-detail-card-rect"),
+                painted,
+            )
+        });
+        if (painted.height() - card_height).abs() > 0.5 {
+            ctx.data_mut(|data| data.insert_temp(card_height_id, painted.height()));
+            ctx.request_repaint();
+        }
+    }
 }

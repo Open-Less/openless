@@ -565,164 +565,162 @@ fn editor_overlay(
         (body.width() - 40.0).max(320.0).min(720.0),
         (body.height() - 40.0).max(240.0).min(560.0),
     );
-    let center_offset = body.center() - ctx.content_rect().center();
-
-    let backdrop_layer = egui::LayerId::new(
-        egui::Order::Foreground,
-        egui::Id::new("openless-style-editor-backdrop"),
-    );
-    ctx.layer_painter(backdrop_layer).rect_filled(
-        body,
-        egui::CornerRadius {
-            nw: 0,
-            ne: 0,
-            sw: 14,
-            se: 14,
-        },
-        theme::OVERLAY,
-    );
-    egui::Area::new(egui::Id::new("openless-style-editor-backdrop-input"))
+    // 遮罩、点击拦截与卡片必须同属**一个** `Area`（同一个 LayerId）：各自独立 Area 时，
+    // egui 会在按下后把被点到的 Area 抬到同层最上（`move_to_top`），遮罩被抬起就会盖住
+    // 卡片；同一图层里先画遮罩、再画卡片在结构上就不可能出现。这里用 `Foreground` 而不是
+    // `Tooltip`：弹窗若占 Tooltip，会盖住同层弹出的下拉/菜单（跨 Order 是 Tooltip >
+    // Foreground）。
+    let card_rect = egui::Rect::from_center_size(body.center(), size);
+    // 卡片实际落点写进 memory，供测试查询（Area 现在覆盖整个 body，面积已不等于卡片）。
+    ctx.data_mut(|data| {
+        data.insert_temp(egui::Id::new("openless-style-editor-card-rect"), card_rect)
+    });
+    egui::Area::new(egui::Id::new("openless-style-editor-modal"))
         .order(egui::Order::Foreground)
         .fixed_pos(body.min)
-        .default_size(body.size())
         .constrain(false)
-        .interactable(true)
         .show(ctx, |ui| {
             ui.set_min_size(body.size());
-            ui.set_max_size(body.size());
-            let _ = ui.allocate_exact_size(body.size(), egui::Sense::click());
-        });
-
-    egui::Area::new(egui::Id::new("openless-style-editor-modal"))
-        .order(egui::Order::Tooltip)
-        .anchor(egui::Align2::CENTER_CENTER, center_offset)
-        .constrain_to(body)
-        .show(ctx, |ui| {
-            ui.set_clip_rect(body.intersect(ui.clip_rect()));
-            egui::Frame::new()
-                .fill(theme::SURFACE)
-                .stroke(egui::Stroke::new(1.0, theme::LINE))
-                .corner_radius(egui::CornerRadius::same(14))
-                .shadow(egui::Shadow {
-                    offset: [0, 12],
-                    blur: 28,
-                    spread: 0,
-                    color: egui::Color32::from_black_alpha(42),
-                })
-                .show(ui, |ui| {
-                    ui.set_min_size(size);
-                    ui.set_max_size(size);
-                    egui::Frame::NONE
-                        .inner_margin(egui::Margin::symmetric(22, 18))
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.vertical(|ui| {
-                                    ui.label(
-                                        egui::RichText::new(tr_l10n(
-                                            lang,
-                                            "head.style_pack_editor",
-                                        ))
-                                        .size(11.0)
-                                        .color(theme::INK_4),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(&name)
-                                            .size(18.0)
-                                            .strong()
-                                            .color(theme::INK),
-                                    );
-                                });
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Min),
-                                    |ui| {
-                                        if ui
-                                            .add(
-                                                egui::Button::new(
-                                                    egui::RichText::new("×")
-                                                        .size(20.0)
-                                                        .color(theme::INK_3),
+            ui.painter().rect_filled(
+                body,
+                egui::CornerRadius {
+                    nw: 0,
+                    ne: 0,
+                    sw: 14,
+                    se: 14,
+                },
+                theme::OVERLAY,
+            );
+            // 点击拦截：吃掉 body 上的点击，下方页面既看不到也点不到。
+            let _ = ui.allocate_rect(body, egui::Sense::click());
+            ui.scope_builder(egui::UiBuilder::new().max_rect(card_rect), |ui| {
+                ui.set_clip_rect(body.intersect(ui.clip_rect()));
+                egui::Frame::new()
+                    .fill(theme::SURFACE)
+                    .stroke(egui::Stroke::new(1.0, theme::LINE))
+                    .corner_radius(egui::CornerRadius::same(14))
+                    .shadow(egui::Shadow {
+                        offset: [0, 12],
+                        blur: 28,
+                        spread: 0,
+                        color: egui::Color32::from_black_alpha(42),
+                    })
+                    .show(ui, |ui| {
+                        ui.set_min_size(size);
+                        ui.set_max_size(size);
+                        egui::Frame::NONE
+                            .inner_margin(egui::Margin::symmetric(22, 18))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.vertical(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(tr_l10n(
+                                                lang,
+                                                "head.style_pack_editor",
+                                            ))
+                                            .size(11.0)
+                                            .color(theme::INK_4),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(&name)
+                                                .size(18.0)
+                                                .strong()
+                                                .color(theme::INK),
+                                        );
+                                    });
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Min),
+                                        |ui| {
+                                            if ui
+                                                .add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new("×")
+                                                            .size(20.0)
+                                                            .color(theme::INK_3),
+                                                    )
+                                                    .fill(theme::SURFACE_2)
+                                                    .stroke(egui::Stroke::new(0.7, theme::LINE))
+                                                    .corner_radius(egui::CornerRadius::same(8))
+                                                    .min_size(egui::vec2(28.0, 28.0)),
                                                 )
-                                                .fill(theme::SURFACE_2)
-                                                .stroke(egui::Stroke::new(0.7, theme::LINE))
-                                                .corner_radius(egui::CornerRadius::same(8))
-                                                .min_size(egui::vec2(28.0, 28.0)),
-                                            )
-                                            .clicked()
-                                        {
-                                            actions.push(FrontendAction::StyleCloseEditor);
-                                        }
-                                    },
-                                );
-                            });
-                            ui.add_space(6.0);
-                            ui.label(
-                                egui::RichText::new(tr_l10n(lang, "lbl.style_note"))
-                                    .size(11.5)
-                                    .color(theme::INK_3),
-                            );
-                            ui.add_space(14.0);
-                            ui.label(
-                                egui::RichText::new(tr_l10n(
-                                    lang,
-                                    "style.pack.dictation_prompt_title",
-                                ))
-                                .size(12.0)
-                                .strong(),
-                            );
-                            ui.label(
-                                egui::RichText::new(tr_l10n(
-                                    lang,
-                                    "style.pack.dictation_prompt_hint",
-                                ))
-                                .size(11.0)
-                                .color(theme::INK_4),
-                            );
-                            ui.add_space(6.0);
-                            // Everything above the prompt plus the button row is
-                            // fixed; the prompt scrolls inside the space that is
-                            // left, so a long prompt can never grow the card.
-                            let fixed = 44.0 + 8.0 + 18.0 + 8.0 + 16.0 + 14.0 + 8.0 + 10.0 + 34.0;
-                            let editor_height = (size.y - 36.0 - fixed).max(60.0);
-                            egui::ScrollArea::vertical()
-                                .id_salt("openless-style-prompt-scroll")
-                                .max_height(editor_height)
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    let rows = (editor_height / 18.0).floor().max(3.0) as usize;
-                                    ui.add_sized(
-                                        [ui.available_width(), editor_height],
-                                        egui::TextEdit::multiline(&mut vm.style_prompt)
-                                            .desired_rows(rows)
-                                            .desired_width(f32::INFINITY),
+                                                .clicked()
+                                            {
+                                                actions.push(FrontendAction::StyleCloseEditor);
+                                            }
+                                        },
                                     );
                                 });
-                            ui.add_space(10.0);
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .add(
-                                        egui::Button::new(tr_l10n(
-                                            lang,
-                                            "style.custom_prompt_save",
-                                        ))
-                                        .fill(theme::BLUE)
-                                        .corner_radius(egui::CornerRadius::same(7)),
-                                    )
-                                    .clicked()
-                                {
-                                    let prompt = vm.style_prompt.clone();
-                                    actions.push(FrontendAction::StyleSaveEditor(prompt));
-                                    vm.style_editor_open = false;
-                                }
-                                if ui.button(tr_l10n(lang, "btn.reset_builtin")).clicked() {
-                                    // No reset action exists yet: clearing the custom
-                                    // prompt falls back to the built-in system prompt.
-                                    vm.style_prompt.clear();
-                                }
-                                if ui.button(tr_l10n(lang, "common.cancel")).clicked() {
-                                    actions.push(FrontendAction::StyleCloseEditor);
-                                }
+                                ui.add_space(6.0);
+                                ui.label(
+                                    egui::RichText::new(tr_l10n(lang, "lbl.style_note"))
+                                        .size(11.5)
+                                        .color(theme::INK_3),
+                                );
+                                ui.add_space(14.0);
+                                ui.label(
+                                    egui::RichText::new(tr_l10n(
+                                        lang,
+                                        "style.pack.dictation_prompt_title",
+                                    ))
+                                    .size(12.0)
+                                    .strong(),
+                                );
+                                ui.label(
+                                    egui::RichText::new(tr_l10n(
+                                        lang,
+                                        "style.pack.dictation_prompt_hint",
+                                    ))
+                                    .size(11.0)
+                                    .color(theme::INK_4),
+                                );
+                                ui.add_space(6.0);
+                                // Everything above the prompt plus the button row is
+                                // fixed; the prompt scrolls inside the space that is
+                                // left, so a long prompt can never grow the card.
+                                let fixed =
+                                    44.0 + 8.0 + 18.0 + 8.0 + 16.0 + 14.0 + 8.0 + 10.0 + 34.0;
+                                let editor_height = (size.y - 36.0 - fixed).max(60.0);
+                                egui::ScrollArea::vertical()
+                                    .id_salt("openless-style-prompt-scroll")
+                                    .max_height(editor_height)
+                                    .auto_shrink([false, false])
+                                    .show(ui, |ui| {
+                                        let rows = (editor_height / 18.0).floor().max(3.0) as usize;
+                                        ui.add_sized(
+                                            [ui.available_width(), editor_height],
+                                            egui::TextEdit::multiline(&mut vm.style_prompt)
+                                                .desired_rows(rows)
+                                                .desired_width(f32::INFINITY),
+                                        );
+                                    });
+                                ui.add_space(10.0);
+                                ui.horizontal(|ui| {
+                                    if ui
+                                        .add(
+                                            egui::Button::new(tr_l10n(
+                                                lang,
+                                                "style.custom_prompt_save",
+                                            ))
+                                            .fill(theme::BLUE)
+                                            .corner_radius(egui::CornerRadius::same(7)),
+                                        )
+                                        .clicked()
+                                    {
+                                        let prompt = vm.style_prompt.clone();
+                                        actions.push(FrontendAction::StyleSaveEditor(prompt));
+                                        vm.style_editor_open = false;
+                                    }
+                                    if ui.button(tr_l10n(lang, "btn.reset_builtin")).clicked() {
+                                        // No reset action exists yet: clearing the custom
+                                        // prompt falls back to the built-in system prompt.
+                                        vm.style_prompt.clear();
+                                    }
+                                    if ui.button(tr_l10n(lang, "common.cancel")).clicked() {
+                                        actions.push(FrontendAction::StyleCloseEditor);
+                                    }
+                                });
                             });
-                        });
-                });
+                    });
+            });
         });
 }

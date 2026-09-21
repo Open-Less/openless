@@ -1342,6 +1342,192 @@ mod tests {
         }
     }
 
+    /// 渲染一帧**指定 vm** 的前端（`frame()` 用的是默认 vm，遮罩类弹窗需要打开状态）。
+    fn overlay_frame(
+        ctx: &egui::Context,
+        vm: &mut FrontendViewModel,
+        events: Vec<egui::Event>,
+    ) -> Vec<FrontendAction> {
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(viewport()),
+            events,
+            ..Default::default()
+        });
+        let mut actions = Vec::new();
+        render(ctx, vm, &mut actions);
+        let _ = ctx.end_pass();
+        actions
+    }
+
+    /// 遮罩类弹窗的结构性回归（用户报「点阴影后阴影上移、设置没法用」）：
+    /// 遮罩、点击拦截与卡片必须在**同一个 `Area`**（同一个 LayerId）里，先画遮罩再画卡片。
+    /// 各自独立容器时 egui 会在按下后把被点到的那个 `move_to_top`，遮罩一旦被抬起来就会
+    /// 盖住卡片。三处弹窗（市场详情 / 风格编辑器 / 历史确认）都必须满足：
+    ///  * 卡片落在弹窗自己的图层上、且在**自己的遮罩区**里居中（三处弹窗的遮罩区
+    ///    都取自各自的页面 body，历史页的遮罩区是其页面内部分配的 body，故用
+    ///    egui memory 里的 Area 矩形作基准，而不是 `layout::body_rect`）；
+    ///  * 遮罩上的点也落在弹窗自己的图层（点击不会漏到下方页面）；
+    ///  * 点一下遮罩之后，卡片既不移位、也不会被抬起的遮罩盖住。
+    fn assert_overlay_keeps_the_card_on_top(
+        ctx: &egui::Context,
+        vm: &mut FrontendViewModel,
+        area_id: &str,
+        card_rect_key: &str,
+    ) {
+        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(area_id));
+        // Areas 用第一帧建立屏幕矩形，第二帧才可查询。
+        for _ in 0..2 {
+            overlay_frame(ctx, vm, Vec::new());
+        }
+        let body = layout::body_rect(ctx);
+        // 遮罩区就是弹窗 `Area` 自己的矩形（遮罩 + 点击拦截 + 卡片同属它）。
+        let overlay = ctx
+            .memory(|mem| mem.area_rect(egui::Id::new(area_id)))
+            .unwrap_or_else(|| panic!("{area_id} must exist while the overlay is open"));
+        let card = ctx
+            .data(|data| data.get_temp::<egui::Rect>(egui::Id::new(card_rect_key)))
+            .unwrap_or_else(|| {
+                panic!("{card_rect_key} must be published while the overlay is open")
+            });
+        assert!(card.width() > 0.0 && card.height() > 0.0, "{card:?}");
+        assert!(
+            body.contains_rect(overlay),
+            "the mask {overlay:?} must stay inside the content area {body:?}"
+        );
+        assert!(
+            overlay.contains_rect(card),
+            "the card {card:?} must sit inside its mask {overlay:?}"
+        );
+        assert!(
+            (card.center().x - overlay.center().x).abs() <= 1.5,
+            "card must be horizontally centred: {card:?} in {overlay:?}"
+        );
+        assert!(
+            (card.center().y - overlay.center().y).abs() <= 1.5,
+            "card must be vertically centred: {card:?} in {overlay:?}"
+        );
+        assert_eq!(
+            ctx.layer_id_at(card.center()),
+            Some(layer),
+            "{area_id}: the card must live in the modal's own layer"
+        );
+        // 遮罩探针：遮罩顶端内缩 6px（卡片居中，肯定不在卡片上）。
+        let mask = egui::pos2(overlay.center().x, overlay.top() + 6.0);
+        assert!(
+            !card.contains(mask) && overlay.contains(mask),
+            "probe {mask:?} must be on the mask, not on the card {card:?}"
+        );
+        assert_eq!(
+            ctx.layer_id_at(mask),
+            Some(layer),
+            "{area_id}: the mask must swallow input instead of letting it reach the page below"
+        );
+        // 点一下遮罩：遮罩被抬到卡片之上就会失败。
+        overlay_frame(
+            ctx,
+            vm,
+            vec![
+                egui::Event::PointerMoved(mask),
+                egui::Event::PointerButton {
+                    pos: mask,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        overlay_frame(
+            ctx,
+            vm,
+            vec![egui::Event::PointerButton {
+                pos: mask,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        let after = ctx
+            .data(|data| data.get_temp::<egui::Rect>(egui::Id::new(card_rect_key)))
+            .unwrap_or_else(|| panic!("{card_rect_key} must stay published"));
+        assert_eq!(
+            after, card,
+            "{area_id}: clicking the mask must not move the card"
+        );
+        assert_eq!(
+            ctx.layer_id_at(card.center()),
+            Some(layer),
+            "{area_id}: clicking the mask must not raise it above the card"
+        );
+    }
+
+    #[test]
+    fn marketplace_detail_overlay_is_one_layer() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: openless_linux_egui::Lang::ZhCn,
+            active_page: Page::Marketplace,
+            // 默认是 `loading = true` / `unsupported = true`（宿主还没送到列表），两者都会
+            // 让页面提前 return。
+            marketplace_loading: false,
+            marketplace_unsupported: false,
+            ..Default::default()
+        };
+        vm.marketplace_packs = vec![super::view_model::MarketplacePack {
+            name: "overlay-fixture".to_string(),
+            version: "1.0.0".to_string(),
+            description: "fixture for the marketplace detail overlay test".to_string(),
+            mode: "dictation".to_string(),
+            author: "tester".to_string(),
+            tags: Vec::new(),
+            likes: 1,
+            downloads: 2,
+            liked: false,
+        }];
+        vm.marketplace_selected = Some(0);
+        assert_overlay_keeps_the_card_on_top(
+            &ctx,
+            &mut vm,
+            "openless-marketplace-detail-modal",
+            "openless-marketplace-detail-card-rect",
+        );
+    }
+
+    #[test]
+    fn style_editor_overlay_is_one_layer() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: openless_linux_egui::Lang::ZhCn,
+            active_page: Page::Style,
+            // 默认是 `unsupported = true`（宿主还没报能力），那样页面会走 unsupported 分支。
+            style_unsupported: false,
+            style_editor_open: true,
+            ..Default::default()
+        };
+        assert_overlay_keeps_the_card_on_top(
+            &ctx,
+            &mut vm,
+            "openless-style-editor-modal",
+            "openless-style-editor-card-rect",
+        );
+    }
+
+    #[test]
+    fn history_confirm_overlay_is_one_layer() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: openless_linux_egui::Lang::ZhCn,
+            active_page: Page::History,
+            ..Default::default()
+        };
+        vm.history_confirm = Some(super::view_model::HistoryConfirm::Clear);
+        assert_overlay_keeps_the_card_on_top(
+            &ctx,
+            &mut vm,
+            "openless-history-confirm",
+            "openless-history-confirm-card-rect",
+        );
+    }
+
     /// 无边框窗口的四个拖拽区必须给出对应方向的拉伸光标（否则用户看不出窗口
     /// 能拉伸）。指针放在左边缘中部时应当得到 ResizeHorizontal。
     #[test]

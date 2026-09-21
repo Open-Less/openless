@@ -915,7 +915,10 @@ fn confirm_overlay(
 ) {
     egui::Area::new(egui::Id::new("openless-history-confirm"))
         .order(egui::Order::Foreground)
-        .sense(egui::Sense::hover())
+        // `click` 而不是 `hover`：遮罩必须**吃掉**点击，否则点遮罩会漏到下方页面（列表行
+        // 会在确认框打开时被选中）。Tauri 这里用的是原生 `window.confirm()`——点外面
+        // 不会关闭，所以只拦截、不关闭。
+        .sense(egui::Sense::click())
         .fixed_pos(body.min)
         .show(ctx, |ui| {
             ui.set_min_size(body.size());
@@ -930,6 +933,10 @@ fn confirm_overlay(
                 body.center(),
                 egui::vec2(body.width().min(400.0), 152.0),
             );
+            // 对话框矩形写进 memory 供测试查询（Area 覆盖整个 body，面积已不等于卡片）。
+            ctx.data_mut(|data| {
+                data.insert_temp(egui::Id::new("openless-history-confirm-card-rect"), dialog)
+            });
             paint_card(ui.painter(), dialog);
             let painter = ui.painter().with_clip_rect(dialog);
             let message = match vm.history_confirm {
