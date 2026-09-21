@@ -14,8 +14,20 @@
 //!   horizontal anchor is centred by the compositor, and the input region stays
 //!   the pill's own box instead of the whole bottom strip),
 //! * `KeyboardInteractivity::None` makes keyboard focus impossible,
-//! * `exclusive_zone(-1)` keeps the compositor from reserving space, so the
-//!   capsule never reflows other windows.
+//! * `exclusive_zone(0)` keeps the compositor from reserving space, so the
+//!   capsule never reflows other windows — which means the bottom margin has to
+//!   carry the whole offset, panel included (see the next paragraph).
+//!
+//! Two compositor semantics collide on the bottom strip. `exclusive_zone = -1`
+//! asks the compositor to place the surface clear of other exclusive zones
+//! (KWin's panel / taskbar), but not every compositor honours that request, and
+//! one that silently ignores it parks the pill inside the panel. So the runner
+//! measures the strip instead of trusting it: two throwaway layer surfaces (one
+//! asking for `-1`, one for no zone at all) report how tall the compositor
+//! thinks the usable area is, and [`capsule_bottom_margin`] turns that into
+//! `panel + gap` (compositor ignores panels) or just `gap` (compositor already
+//! keeps zone-less surfaces clear of them). The measurements land on stderr so a
+//! real-machine test can read them back.
 //!
 //! Rendering reuses the popup's existing egui view ([`crate::ui::frontend::popups::dictation_capsule`]):
 //! the runner below owns the EGL context (glutin), the `egui_glow` painter and
@@ -33,10 +45,12 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use wayland_client::protocol::{wl_compositor, wl_pointer, wl_registry, wl_seat, wl_surface};
+use wayland_client::protocol::{
+    wl_compositor, wl_output, wl_pointer, wl_registry, wl_seat, wl_surface,
+};
 use wayland_client::{
     globals::{registry_queue_init, GlobalListContents},
-    Connection, Dispatch, Proxy, QueueHandle, WEnum,
+    Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
 };
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
@@ -45,6 +59,9 @@ pub const LAYER_SHELL_GLOBAL: &str = "zwlr_layer_shell_v1";
 /// Wayland namespace of the capsule surface (shows up in compositor logs and
 /// `swaymsg -t get_tree`-style tooling).
 pub const LAYER_NAMESPACE: &str = "openless-capsule";
+/// Wayland namespace of the throwaway surfaces that measure the bottom strip
+/// before the capsule itself is mapped.
+const PROBE_NAMESPACE: &str = "openless-capsule-probe";
 /// How long to wait for the first `configure` event before giving up and
 /// falling back to the X11 overlay.
 pub const CONFIGURE_TIMEOUT: Duration = Duration::from_secs(3);
@@ -207,6 +224,64 @@ pub fn capsule_geometry(width: u32, height: u32, bottom_gap: i32) -> CapsuleGeom
     }
 }
 
+/// What the two probe surfaces reported about the bottom strip of the output.
+///
+/// Both fields are configured heights of a throwaway layer surface anchored to
+/// the bottom edge with no size opinion: `usable_height` for a surface that asks
+/// to be placed clear of other exclusive zones (`exclusive_zone = -1`), and
+/// `plus_height` for one that asks for no zone at all (`exclusive_zone = 0`).
+/// `output_height` is the output's own height from `wl_output`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PanelInsetProbe {
+    /// Full height of the output in pixels; 0 when the compositor never sent a
+    /// current mode (the decision below then falls back to `plus_height`).
+    pub output_height: i32,
+    /// Configured height of the `exclusive_zone = -1` probe.
+    pub usable_height: i32,
+    /// Configured height of the `exclusive_zone = 0` probe.
+    pub plus_height: i32,
+}
+
+impl PanelInsetProbe {
+    /// Height of whatever reserves space at the bottom (KDE panel / dock), as
+    /// the `-1` probe saw it. Zero when nothing measurable reserves space.
+    pub fn panel_height(self) -> i32 {
+        (self.effective_output_height() - self.usable_height).max(0)
+    }
+
+    /// True when even a zone-less surface is placed inside the usable area, i.e.
+    /// this compositor already keeps the capsule clear of panels on its own.
+    pub fn zero_zone_already_avoids_panels(self) -> bool {
+        let full = self.effective_output_height();
+        self.plus_height > 0 && full > 0 && self.plus_height < full
+    }
+
+    /// Output height to trust: the `wl_output` mode when the compositor sent
+    /// one, else the height a zone-less bottom surface was offered.
+    fn effective_output_height(self) -> i32 {
+        if self.output_height > 0 {
+            self.output_height
+        } else {
+            self.plus_height
+        }
+    }
+}
+
+/// Bottom margin for the capsule, in pixels.
+///
+/// The capsule reserves no exclusive zone of its own, so the margin carries the
+/// panel: `panel + gap` while the compositor parks zone-less surfaces on the bare
+/// output edge, and just `gap` when it already keeps them inside the usable
+/// area. An unmeasurable strip degrades to `gap`, the pre-measurement behaviour.
+pub fn capsule_bottom_margin(probe: PanelInsetProbe, gap: i32) -> i32 {
+    let gap = gap.max(0);
+    if probe.zero_zone_already_avoids_panels() {
+        gap
+    } else {
+        probe.panel_height() + gap
+    }
+}
+
 /// Translate pointer samples into egui events. Pure so the mapping is testable
 /// without a compositor; `pressed` carries the button state at that point.
 pub fn pointer_events(
@@ -274,6 +349,17 @@ struct LayerState {
     pressed: Vec<(egui::Pos2, egui::PointerButton, bool)>,
     pointer_left: bool,
     configure: Option<(u32, u32)>,
+    /// Configure of the throwaway probe surface, kept apart from `configure` so
+    /// the panel measurement can never be mistaken for the capsule's own size.
+    probe_configure: Option<(u32, u32)>,
+    /// True while a probe surface is the only layer surface this state owns;
+    /// its configure events are routed to `probe_configure`.
+    probe_active: bool,
+    /// First `wl_output` bound through the registry.
+    output: Option<wl_output::WlOutput>,
+    /// Size the output reported (pixels), used to size the bottom strip.
+    output_width: i32,
+    output_height: i32,
     closed: bool,
 }
 
@@ -340,6 +426,13 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for LayerState {
             }
             "wl_seat" => {
                 state.seat = Some(registry.bind(name, version.min(7), qh, ()));
+            }
+            // Only the first output is used: the capsule lives on the user's
+            // primary screen and the strip height is measured there.
+            "wl_output" => {
+                if state.output.is_none() {
+                    state.output = Some(registry.bind(name, version.min(4), qh, ()));
+                }
             }
             _ => {}
         }
@@ -435,6 +528,36 @@ impl Dispatch<wl_pointer::WlPointer, ()> for LayerState {
 
 ignore_events!(zwlr_layer_shell_v1::ZwlrLayerShellV1);
 
+impl Dispatch<wl_output::WlOutput, ()> for LayerState {
+    fn event(
+        state: &mut Self,
+        _output: &wl_output::WlOutput,
+        event: wl_output::Event,
+        _data: &(),
+        _connection: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        // `Geometry` reports millimetres and `Scale` a factor, so only the mode
+        // can size the strip in pixels; a compositor that never sends a current
+        // mode leaves this at 0 and the measurement falls back to the zone-less
+        // probe's answer.
+        if let wl_output::Event::Mode {
+            flags,
+            width,
+            height,
+            ..
+        } = event
+        {
+            if let WEnum::Value(flags) = flags {
+                if flags.contains(wl_output::Mode::Current) {
+                    state.output_width = width;
+                    state.output_height = height;
+                }
+            }
+        }
+    }
+}
+
 impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for LayerState {
     fn event(
         state: &mut Self,
@@ -451,7 +574,11 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for LayerState {
                 height,
             } => {
                 layer_surface.ack_configure(serial);
-                state.configure = Some((width, height));
+                if state.probe_active {
+                    state.probe_configure = Some((width, height));
+                } else {
+                    state.configure = Some((width, height));
+                }
             }
             zwlr_layer_surface_v1::Event::Closed => state.closed = true,
             _ => {}
@@ -601,10 +728,94 @@ fn bind_globals(
             "wl_seat" => {
                 state.seat = Some(registry.bind(global.name, global.version.min(7), qh, ()));
             }
+            // Only the first output is used: the capsule lives on the user's
+            // primary screen and the strip height is measured there.
+            "wl_output" => {
+                if state.output.is_none() {
+                    state.output = Some(registry.bind(global.name, global.version.min(4), qh, ()));
+                }
+            }
             _ => {}
         }
     }
     state
+}
+
+/// Configure a throwaway bottom-anchored layer surface and return the height the
+/// compositor offers it. `zone` is the exclusive zone the probe asks for.
+///
+/// Nothing is attached to the surface and it is destroyed again straight away:
+/// the answer is the point, not the surface.
+fn probe_bottom_height(
+    connection: &Connection,
+    queue: &mut EventQueue<LayerState>,
+    state: &mut LayerState,
+    compositor: &wl_compositor::WlCompositor,
+    layer_shell: &zwlr_layer_shell_v1::ZwlrLayerShellV1,
+    qh: &QueueHandle<LayerState>,
+    zone: i32,
+) -> i32 {
+    let wl_surface = compositor.create_surface(qh, ());
+    let probe = layer_shell.get_layer_surface(
+        &wl_surface,
+        None,
+        zwlr_layer_shell_v1::Layer::Background,
+        PROBE_NAMESPACE.to_string(),
+        qh,
+        (),
+    );
+    // Zero size asks the compositor to size the surface itself; with the three
+    // anchors below that answer is the height of the strip we care about.
+    probe.set_size(0, 0);
+    probe.set_anchor(
+        zwlr_layer_surface_v1::Anchor::Bottom
+            | zwlr_layer_surface_v1::Anchor::Left
+            | zwlr_layer_surface_v1::Anchor::Right,
+    );
+    probe.set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::None);
+    probe.set_exclusive_zone(zone);
+    wl_surface.commit();
+
+    state.probe_configure = None;
+    state.probe_active = true;
+    let deadline = Instant::now() + CONFIGURE_TIMEOUT;
+    while state.probe_configure.is_none() && !state.closed && Instant::now() < deadline {
+        // Any error here just ends the measurement: the caller falls back to the
+        // gap-only margin, which is what the capsule did before.
+        if queue.blocking_dispatch(state).is_err() {
+            break;
+        }
+    }
+    state.probe_active = false;
+    let height = state
+        .probe_configure
+        .map(|(_width, height)| height as i32)
+        .unwrap_or(0);
+    probe.destroy();
+    wl_surface.destroy();
+    let _ = connection.flush();
+    height
+}
+
+/// Measure the bottom strip with two probes: one that asks the compositor to
+/// place it clear of other exclusive zones (`-1`), one that asks for no zone at
+/// all (`0`). See [`PanelInsetProbe`] for how the answers are used.
+fn probe_panel_inset(
+    connection: &Connection,
+    queue: &mut EventQueue<LayerState>,
+    state: &mut LayerState,
+    compositor: &wl_compositor::WlCompositor,
+    layer_shell: &zwlr_layer_shell_v1::ZwlrLayerShellV1,
+    qh: &QueueHandle<LayerState>,
+) -> PanelInsetProbe {
+    let usable_height =
+        probe_bottom_height(connection, queue, state, compositor, layer_shell, qh, -1);
+    let plus_height = probe_bottom_height(connection, queue, state, compositor, layer_shell, qh, 0);
+    PanelInsetProbe {
+        output_height: state.output_height,
+        usable_height,
+        plus_height,
+    }
 }
 
 pub fn run_layer_capsule<F>(geometry: CapsuleGeometry, mut frame: F) -> Result<(), String>
@@ -629,6 +840,38 @@ where
         .clone()
         .ok_or("compositor has no zwlr_layer_shell_v1")?;
 
+    // Measure before mapping the capsule: the measurement needs the bottom
+    // strip, but it must not run while the capsule's own configure is pending.
+    let inset = probe_panel_inset(
+        &connection,
+        &mut queue,
+        &mut state,
+        &compositor,
+        &layer_shell,
+        &qh,
+    );
+    let margin_bottom = capsule_bottom_margin(inset, geometry.bottom_gap);
+    // Milestone line for real-machine verification (inherited stderr, since the
+    // popup installs no logger of its own).
+    eprintln!(
+        "OpenLess capsule: panel inset probe full={}x{} usable={} plus_zones={} panel={} \
+         zero_zone_avoids={} margin.bottom={}",
+        state.output_width.max(0),
+        inset.output_height,
+        inset.usable_height,
+        inset.plus_height,
+        inset.panel_height(),
+        inset.zero_zone_already_avoids_panels(),
+        margin_bottom
+    );
+    if inset.panel_height() == 0 {
+        eprintln!(
+            "OpenLess capsule: warning: no bottom panel measured (full={}, usable={}, \
+             plus_zones={}); keeping margin.bottom={}",
+            inset.output_height, inset.usable_height, inset.plus_height, margin_bottom
+        );
+    }
+
     let wl_surface = compositor.create_surface(&qh, ());
     let layer_surface = layer_shell.get_layer_surface(
         &wl_surface,
@@ -645,8 +888,10 @@ where
     // keeping the input region at the pill instead of the whole bottom strip.
     layer_surface.set_anchor(zwlr_layer_surface_v1::Anchor::Bottom);
     layer_surface.set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::None);
-    layer_surface.set_exclusive_zone(-1);
-    layer_surface.set_margin(0, 0, geometry.bottom_gap, 0);
+    // No zone of our own: the margin computed above already carries the panel,
+    // so the capsule never reflows other windows and never sits inside the panel.
+    layer_surface.set_exclusive_zone(0);
+    layer_surface.set_margin(0, 0, margin_bottom, 0);
     wl_surface.commit();
 
     let deadline = Instant::now() + CONFIGURE_TIMEOUT;
@@ -668,8 +913,8 @@ where
     let (configured_width, configured_height) = state.configure.unwrap_or((width, height));
     eprintln!(
         "OpenLess capsule: layer surface configured {configured_width}x{configured_height} \
-         (anchor=bottom, margin.bottom={}, keyboard-interactivity=none, exclusive-zone=-1)",
-        geometry.bottom_gap
+         (anchor=bottom, margin.bottom={margin_bottom}, keyboard-interactivity=none, \
+         exclusive-zone=0)"
     );
     let gl = GlSurface::new(&connection, &wl_surface, geometry.buffer_size())?;
     use glutin::surface::GlSurface as _;
@@ -859,6 +1104,80 @@ mod tests {
             geometry.rect_for_configure((240, 120)).size(),
             egui::vec2(240.0, 120.0)
         );
+    }
+
+    #[test]
+    fn the_capsule_margin_carries_a_panel_the_compositor_ignores() {
+        // KWin-style answer: the `-1` probe sees the panel, a zone-less probe
+        // does not, so the margin has to make up the difference.
+        let probe = PanelInsetProbe {
+            output_height: 1080,
+            usable_height: 1044,
+            plus_height: 1080,
+        };
+        assert_eq!(probe.panel_height(), 36);
+        assert!(!probe.zero_zone_already_avoids_panels());
+        assert_eq!(capsule_bottom_margin(probe, 12), 48);
+    }
+
+    #[test]
+    fn the_capsule_margin_keeps_only_the_gap_when_the_compositor_avoids_panels() {
+        // Both probes land inside the usable area: the compositor already keeps
+        // zone-less surfaces clear, so adding the panel again would lift the
+        // pill a whole panel too high.
+        let probe = PanelInsetProbe {
+            output_height: 1080,
+            usable_height: 1044,
+            plus_height: 1044,
+        };
+        assert!(probe.zero_zone_already_avoids_panels());
+        assert_eq!(capsule_bottom_margin(probe, 12), 12);
+    }
+
+    #[test]
+    fn an_unmeasurable_bottom_strip_keeps_the_plain_gap() {
+        // Nothing answered (no layer-shell answers, no output mode): the capsule
+        // keeps the behaviour it had before measuring.
+        let nothing = PanelInsetProbe::default();
+        assert_eq!(nothing.panel_height(), 0);
+        assert_eq!(capsule_bottom_margin(nothing, 12), 12);
+        // Full height from both probes: no panel to measure.
+        let no_panel = PanelInsetProbe {
+            output_height: 1080,
+            usable_height: 1080,
+            plus_height: 1080,
+        };
+        assert_eq!(no_panel.panel_height(), 0);
+        assert_eq!(capsule_bottom_margin(no_panel, 12), 12);
+    }
+
+    #[test]
+    fn an_odd_usable_height_never_pushes_the_capsule_off_screen() {
+        let oversized = PanelInsetProbe {
+            output_height: 1080,
+            usable_height: 1200,
+            plus_height: 0,
+        };
+        assert_eq!(oversized.panel_height(), 0);
+        assert_eq!(capsule_bottom_margin(oversized, 12), 12);
+        // No `wl_output` mode: the zone-less probe height stands in for it.
+        let mode_missing = PanelInsetProbe {
+            output_height: 0,
+            usable_height: 1044,
+            plus_height: 1080,
+        };
+        assert_eq!(mode_missing.panel_height(), 36);
+        assert_eq!(capsule_bottom_margin(mode_missing, 12), 48);
+    }
+
+    #[test]
+    fn a_negative_gap_is_clamped_in_the_measured_margin() {
+        let probe = PanelInsetProbe {
+            output_height: 1080,
+            usable_height: 1044,
+            plus_height: 1080,
+        };
+        assert_eq!(capsule_bottom_margin(probe, -5), 36);
     }
 
     #[test]
