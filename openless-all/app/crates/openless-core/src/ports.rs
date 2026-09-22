@@ -259,6 +259,16 @@ pub trait DictationEngine: Send + Sync + 'static {
     /// Resolve the provider-facing side before the host starts recording.
     /// Legacy implementations defer their existing provider-only start until
     /// the returned prepared session is actually started.
+    /// Spawner used for buffered-transcription background attach work. Engines
+    /// that hold the host's injected `TaskSpawner` should expose it here; the
+    /// default keeps the Tokio-backed default used by `BackendDependencies`.
+    ///
+    /// Production code must never call `tokio::spawn` directly (CI gate
+    /// `check-core-runtime-seam.ps1`), so background work goes through this.
+    fn buffered_task_spawner(&self) -> Arc<dyn crate::config::TaskSpawner> {
+        Arc::new(crate::config::TokioTaskSpawner)
+    }
+
     fn prepare_transcription(
         self: Arc<Self>,
         session_id: SessionId,
@@ -282,11 +292,12 @@ pub trait DictationEngine: Send + Sync + 'static {
         partials: Arc<dyn TextStreamSink>,
         progress: Arc<dyn RecordingProgressSink>,
     ) -> BoxFuture<'static, Result<Arc<dyn TranscriptionSession>, BackendError>> {
+        let spawner = self.buffered_task_spawner();
         let preparation = self.prepare_transcription(session_id, Arc::clone(&context));
         Box::pin(async move {
             let prepared = preparation.await?;
             Ok(crate::dictation_engine::buffered_transcription_session(
-                prepared, context, partials, progress,
+                prepared, context, partials, progress, spawner,
             ))
         })
     }

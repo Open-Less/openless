@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use futures_util::future::BoxFuture;
 
+use crate::config::{TaskSpawner, TokioTaskSpawner};
 use crate::dictation_context::DictationContext;
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::ports::{
@@ -1011,14 +1012,19 @@ pub(crate) fn buffered_transcription_session(
     context: Arc<DictationContext>,
     partials: Arc<dyn TextStreamSink>,
     progress: Arc<dyn RecordingProgressSink>,
+    task_spawner: Arc<dyn TaskSpawner>,
 ) -> Arc<dyn TranscriptionSession> {
     let partials = if context.recording.transcribe_after_stop {
         Arc::new(DiscardTextStream) as Arc<dyn TextStreamSink>
     } else {
         partials
     };
-    let buffered = Arc::new(BufferedTranscriptionSession::new(
-        prepared, partials, progress,
+    let buffered = Arc::new(BufferedTranscriptionSession::with_task_spawner(
+        prepared,
+        partials,
+        progress,
+        BUFFERED_TRANSCRIPTION_STOP_THRESHOLD_BYTES,
+        task_spawner,
     ));
     if !context.recording.transcribe_after_stop {
         buffered.attach_in_background();
@@ -1037,6 +1043,9 @@ struct BufferedTranscriptionInner {
     limit_notified: AtomicBool,
     limit_threshold_bytes: usize,
     state: Mutex<BufferedTranscriptionState>,
+    /// 背景挂接的提交器。生产代码不得直接 `tokio::spawn`（CI
+    /// `check-core-runtime-seam.ps1`），必须走注入的 `TaskSpawner`。
+    task_spawner: Arc<dyn TaskSpawner>,
 }
 
 enum BufferedTranscriptionState {
@@ -1070,6 +1079,24 @@ impl BufferedTranscriptionSession {
         progress: Arc<dyn RecordingProgressSink>,
         limit_threshold_bytes: usize,
     ) -> Self {
+        Self::with_task_spawner(
+            prepared,
+            partials,
+            progress,
+            limit_threshold_bytes,
+            Arc::new(TokioTaskSpawner),
+        )
+    }
+
+    /// 与 `new_with_limit` 相同，但后台挂接的提交器由调用方注入（宿主引擎
+    /// 持有的 `TaskSpawner`）。
+    fn with_task_spawner(
+        prepared: Arc<dyn PreparedTranscription>,
+        partials: Arc<dyn TextStreamSink>,
+        progress: Arc<dyn RecordingProgressSink>,
+        limit_threshold_bytes: usize,
+        task_spawner: Arc<dyn TaskSpawner>,
+    ) -> Self {
         Self {
             inner: Arc::new(BufferedTranscriptionInner {
                 prepared,
@@ -1078,6 +1105,7 @@ impl BufferedTranscriptionSession {
                 limit_notified: AtomicBool::new(false),
                 limit_threshold_bytes,
                 state: Mutex::new(BufferedTranscriptionState::Buffering(Vec::new())),
+                task_spawner,
             }),
         }
     }
@@ -1151,11 +1179,12 @@ impl BufferedTranscriptionSession {
 
     fn attach_in_background(&self) {
         let attaching = self.attach();
-        tokio::spawn(async move {
+        let spawner = Arc::clone(&self.inner.task_spawner);
+        spawner.spawn(Box::pin(async move {
             if let Err(error) = attaching.await {
                 log::warn!("provider-only transcription startup failed: {error}");
             }
-        });
+        }));
     }
 
     fn prepared(&self) -> Arc<dyn PreparedTranscription> {
