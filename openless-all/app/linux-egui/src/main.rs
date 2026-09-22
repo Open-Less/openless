@@ -1301,6 +1301,33 @@ mod linux_app {
             self.schedule_capsule_dismissal(&session_id.to_string(), snapshot.phase);
         }
 
+        /// 选区润色（alt+X）发现「没有选中文字」时，按产品行为弹**语音输入窗**
+        /// （胶囊）报错后退出：文案用 Tauri 的 `capsule.selectionPolish.noSelection`，
+        /// 终态 2 秒后自动收起。以前这里什么都不做，用户只看到面板空转一圈（或
+        /// 干脆没有反馈）。
+        fn show_selection_polish_capsule_error(&mut self, session_id: &str) {
+            if !self.capsule_enabled() {
+                return;
+            }
+            let lang = self.lang;
+            self.ensure_popup(PopupKind::Capsule);
+            self.capsule_session = Some(session_id.to_string());
+            self.send_popup(
+                PopupKind::Capsule,
+                HostToPopup::Capsule {
+                    version: POPUP_PROTOCOL_VERSION,
+                    session_id: session_id.to_string(),
+                    sequence: self.last_event_sequence.saturating_mul(2),
+                    phase: "failed".to_string(),
+                    text: tr_l10n(lang, "capsule.selectionPolish.noSelection").to_string(),
+                    audio_level: None,
+                    translation_active: false,
+                    style: self.capsule_style_tag(),
+                },
+            );
+            self.schedule_capsule_dismissal(session_id, DictationPhase::Failed);
+        }
+
         /// 终态后按 Tauri Host 的时序自动收起胶囊：成功/失败停留 2 秒、
         /// 取消立刻；进行中的相位不收。
         fn schedule_capsule_dismissal(&mut self, session_id: &str, phase: DictationPhase) {
@@ -2515,23 +2542,51 @@ mod linux_app {
                     }
                 }
                 BackendEventKind::SelectionStateChanged(snapshot) => {
-                    if snapshot.phase == SelectionPhase::Preview {
-                        self.selection_draft = snapshot.preview_text.clone().unwrap_or_default();
+                    let preview_text = snapshot.preview_text.clone().unwrap_or_default();
+                    let source_text = snapshot.source_text.clone().unwrap_or_default();
+                    // 只有「拿到选区」并且「润色结果非空」才把面板弹出来。以前这里只看
+                    // `phase`：起手 `Capturing` 就 `ensure_popup` + 送一帧空结果，于是按
+                    // 一下 alt+X 先冒出一个**空的**润色结果面板（用户报的「弹窗不对」），
+                    // 没有选区时更糟 —— 面板空转一圈再消失。
+                    let has_selection = !source_text.trim().is_empty();
+                    let has_preview = snapshot.phase == SelectionPhase::Preview
+                        && !preview_text.trim().is_empty();
+                    let show_preview = has_preview && has_selection;
+                    if show_preview {
+                        self.selection_draft = preview_text.clone();
                         self.polish_result_visible = true;
                     }
                     if let Some(session_id) = snapshot.session_id {
-                        // 选区助手面板：润色结果以「润色结果」帧送进去。
-                        self.ensure_popup(PopupKind::Qa);
-                        self.send_popup(
-                            PopupKind::Qa,
-                            HostToPopup::PolishPreview {
-                                version: POPUP_PROTOCOL_VERSION,
-                                session_id: session_id.to_string(),
-                                sequence: event_sequence.saturating_mul(2),
-                                text: snapshot.preview_text.clone().unwrap_or_default(),
-                                source: snapshot.source_text.clone().unwrap_or_default(),
-                            },
-                        );
+                        if show_preview {
+                            // 选区助手面板：润色结果以「润色结果」帧送进去。
+                            self.ensure_popup(PopupKind::Qa);
+                            self.send_popup(
+                                PopupKind::Qa,
+                                HostToPopup::PolishPreview {
+                                    version: POPUP_PROTOCOL_VERSION,
+                                    session_id: session_id.to_string(),
+                                    sequence: event_sequence.saturating_mul(2),
+                                    text: preview_text,
+                                    source: source_text,
+                                },
+                            );
+                        } else if !has_selection
+                            && matches!(
+                                snapshot.phase,
+                                SelectionPhase::Preview | SelectionPhase::Failed
+                            )
+                        {
+                            // 没选中文字：弹语音输入窗报错后退出，不弹面板。
+                            log::warn!(
+                                "[hotkey] selection polish had no captured selection: showing the capsule error"
+                            );
+                            self.show_selection_polish_capsule_error(&session_id.to_string());
+                        } else {
+                            log::debug!(
+                                "[hotkey] selection snapshot without a usable preview ({:?}): keeping the panel closed",
+                                snapshot.phase
+                            );
+                        }
                     }
                     self.selection = Some(snapshot);
                 }

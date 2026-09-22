@@ -5374,6 +5374,16 @@ pub const CATALOG: &[Msg] = &[
             "안정 모드 (녹음 후 전사)",
         ),
     },
+    Msg {
+        key: "capsule.selectionPolish.noSelection",
+        text: row(
+            "未选中内容",
+            "未選中內容",
+            "Nothing selected",
+            "選択されていません",
+            "선택된 내용 없음",
+        ),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {
