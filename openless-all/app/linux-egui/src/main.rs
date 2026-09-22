@@ -1209,13 +1209,25 @@ mod linux_app {
         /// 润色结果：**不再有独立预览窗口**，一律送进选区助手面板的「润色结果」模式
         /// （用户确认的设计：选区只保留一个弹窗）。
         fn show_selection_popup(&mut self) {
-            self.ensure_popup(PopupKind::Qa);
+            // 先确认有可送的润色负载，再拉起弹窗。旧实现先 `ensure_popup` 再
+            // early-return，于是「没有选区 / 没有会话」时会凭空弹出一个**空的选区
+            // 助手面板**（用户报的「alt+X 弹出错误弹窗」），还会留下
+            // `polish_result_visible` 这个脏标志。
             let Some(selection) = self.selection.clone() else {
+                log::warn!(
+                    "[hotkey] selection polish finished without a captured selection; not showing the panel"
+                );
+                self.polish_result_visible = false;
                 return;
             };
             let Some(session_id) = selection.session_id else {
+                log::warn!(
+                    "[hotkey] selection polish finished without a session id; not showing the panel"
+                );
+                self.polish_result_visible = false;
                 return;
             };
+            self.ensure_popup(PopupKind::Qa);
             self.send_popup(
                 PopupKind::Qa,
                 HostToPopup::PolishPreview {
@@ -1393,6 +1405,11 @@ mod linux_app {
                         .and_then(|state| state.session_id.as_deref())
                         == Some(session_id.as_str()) =>
                     {
+                        // 面板 ✕：立刻清掉宿主侧的可见标志，不等 Core 的 HideQa 回环
+                        // （那条被图钉门禁拦着，pinned 时不清 → 标志残留会让录音热键
+                        // 之后又把面板弹出来）。
+                        self.qa_visible = false;
+                        self.polish_result_visible = false;
                         if let Some(backend) = self.backend() {
                             self.spawn(async move {
                                 backend.services().qa.dismiss().await?;
@@ -1654,6 +1671,12 @@ mod linux_app {
                             self.status = fmt_l10n(lang, "popup.exited", &[&format!("{code:?}")]);
                         }
                         *self.popup_slot(kind) = None;
+                        if !crashed {
+                            // 面板进程正常退出（用户/合成器关掉窗口等）：宿主这边的
+                            // 可见标志必须跟着清，否则「录音热键」会被错当成
+                            // 「向选区助手提问」，把面板又弹出来。
+                            self.forget_qa_panel_visibility(kind);
+                        }
                         if crashed {
                             // 必崩的面板不做无限重开：预算内重开，超了就停手（否则
                             // 用户看到的是“弹窗一直反复弹出”）。
@@ -1663,6 +1686,7 @@ mod linux_app {
                                     "[popup] {kind:?} crashed {POPUP_RESTART_LIMIT} times within {}s; not restarting",
                                     POPUP_RESTART_WINDOW.as_secs()
                                 );
+                                self.forget_qa_panel_visibility(kind);
                                 return;
                             }
                             match kind {
@@ -2654,6 +2678,21 @@ mod linux_app {
         ///
         /// 与插件信号共用同一套门禁（QA 显隐、听写热键的面板录音切换），因此两条
         /// 通路的行为逐字一致；去重保证同一个物理按键只生效一次。
+        /// 面板进程不在了：把宿主的可见性标志清干净（只对选区助手有意义）。
+        ///
+        /// 不清的后果：`qa_visible` 残留为 true 时，下一次「录音热键」会被
+        /// `apply_local_hotkey_edges` 当成「向选区助手提问」，于是面板又被弹出来。
+        fn forget_qa_panel_visibility(&mut self, kind: PopupKind) {
+            if kind != PopupKind::Qa {
+                return;
+            }
+            if self.qa_visible || self.polish_result_visible {
+                log::info!("[hotkey] QA panel is gone: clearing qa_visible/polish_result_visible");
+            }
+            self.qa_visible = false;
+            self.polish_result_visible = false;
+        }
+
         fn apply_local_hotkey_edges(
             &mut self,
             edges: Vec<(std::time::Instant, openless_linux_egui::LocalHotkeyEdge)>,
@@ -2662,6 +2701,13 @@ mod linux_app {
             let Some(target) = self.hotkey_target() else {
                 return Vec::new();
             };
+            // 标志残留（弹窗进程已经不在了）时先清干净：否则这次「录音热键」会被
+            // 下面那条 qa_visible 分支当成「向选区助手提问」，把面板又弹出来。
+            if self.qa_visible && self.popup_slot(PopupKind::Qa).is_none() {
+                log::info!("[hotkey] stale QA panel flag (no popup process): clearing");
+                self.qa_visible = false;
+                self.polish_result_visible = false;
+            }
             let mut events = Vec::new();
             for (at, edge) in edges {
                 if !self.hotkey_dedupe.accept_local(&edge.hotkey, at) {
@@ -2682,6 +2728,7 @@ mod linux_app {
                     LocalHotkey::Dictation
                         if edge.kind == LocalHotkeyEdgeKind::Pressed
                             && self.qa_visible
+                            && self.qa_state.is_some()
                             && self.dictation_is_idle() =>
                     {
                         log::info!(
