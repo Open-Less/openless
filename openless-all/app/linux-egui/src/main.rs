@@ -62,20 +62,15 @@ mod linux_app {
             channel_id: String,
             result: Result<Vec<String>, String>,
         },
-        ProviderMutation(Result<String, String>),
         Library(Result<LibraryPanel, String>),
         SettingsSaved(Box<Result<openless_core::SettingsUpdateOutcome, String>>),
         Marketplace(u64, Result<Vec<openless_core::MarketplaceListItem>, String>),
         MarketplaceLikes(Result<Vec<String>, String>),
-        MarketplaceFlow(Result<openless_core::OAuthDeviceFlow, String>),
-        MarketplaceAuthPoll(Result<openless_core::OAuthPollResult, String>),
         MarketplaceDetail(Result<openless_core::MarketplaceDetail, String>),
         MarketplaceMine(Result<(Vec<openless_core::MarketplaceMyPackItem>, Vec<String>), String>),
         Microphones(Result<Vec<openless_core::MicrophoneDevice>, String>),
         Overview(Result<OverviewData, String>),
         UpdateCheck(Result<Option<UpdateManifest>, String>),
-        UpdateProgress(openless_linux_egui::DownloadProgress),
-        UpdateInstalled(Result<openless_linux_egui::InstalledUpdate, String>),
     }
 
     #[derive(Clone)]
@@ -274,17 +269,6 @@ mod linux_app {
         duration_ms: u64,
     }
 
-    /// Activity aggregate over a trailing calendar window. Zero days that never
-    /// recorded activity are absent from the store, so a window may cover more
-    /// calendar days than `active_days`.
-    #[derive(Clone, Debug, Default, PartialEq, Eq)]
-    struct ActivityAggregate {
-        active_days: usize,
-        segments: u64,
-        chars: u64,
-        duration_ms: u64,
-    }
-
     /// Fully derived, display-ready Overview summary (computed purely, tested).
     #[derive(Clone, Debug, Default)]
     struct OverviewSummary {
@@ -298,8 +282,6 @@ mod linux_app {
         avg_latency_ms: u64,
         history_total: usize,
         recent: Vec<RecentEntry>,
-        last_7: ActivityAggregate,
-        last_30: ActivityAggregate,
         /// Last 30 calendar days ending today, chronological (oldest first).
         /// The 7-day view slices the tail.
         activity_daily: Vec<DailyActivity>,
@@ -321,7 +303,7 @@ mod linux_app {
     enum ProvidersState {
         Loading,
         Loaded(ProviderPanel),
-        Failed(String),
+        Failed,
     }
 
     /// Trailing window (days) covered by the period chart's daily series.
@@ -342,23 +324,6 @@ mod linux_app {
         chrono::DateTime::parse_from_rfc3339(created_at)
             .ok()
             .map(|instant| instant.with_timezone(&chrono::Local).date_naive())
-    }
-
-    /// Sum one activity window's segments/chars/duration over `[today-days+1, today]`.
-    fn aggregate_window(
-        by_date: &std::collections::BTreeMap<chrono::NaiveDate, &openless_core::ActivityDay>,
-        today: chrono::NaiveDate,
-        days: i64,
-    ) -> ActivityAggregate {
-        let start = today - chrono::Duration::days(days - 1);
-        let mut aggregate = ActivityAggregate::default();
-        for (_, day) in by_date.range(start..=today) {
-            aggregate.active_days += 1;
-            aggregate.segments += u64::from(day.count);
-            aggregate.chars += day.chars;
-            aggregate.duration_ms += day.duration_ms;
-        }
-        aggregate
     }
 
     /// Build the trailing daily series ending at `today` (inclusive), oldest
@@ -462,8 +427,6 @@ mod linux_app {
             avg_latency_ms,
             history_total: data.history.len(),
             recent,
-            last_7: aggregate_window(&by_date, today, 7),
-            last_30: aggregate_window(&by_date, today, 30),
             activity_daily: build_daily_series(&by_date, today, OVERVIEW_DAILY_DAYS),
             heatmap_year: today.year(),
             heatmap: build_calendar_year_heatmap(&by_date, today.year()),
@@ -490,12 +453,9 @@ mod linux_app {
     #[derive(Clone)]
     enum ProviderEditorState {
         Idle,
-        Loading {
-            kind: openless_core::ChannelKind,
-            channel_id: String,
-        },
+        Loading,
         Loaded(Box<ProviderEditor>),
-        Failed(String),
+        Failed,
     }
 
     /// Draft of the open provider editor. It is the single source of truth for
@@ -634,7 +594,6 @@ mod linux_app {
         qa_pinned: bool,
         /// 追问「编辑指令」三态（Core `QaStateEvent` 的部分更新）。
         qa_edit: QaEditFlags,
-        qa_input: String,
         qa_state: Option<QaStateEvent>,
         /// 选区助手面板是否处于「润色结果」模式（独立预览窗口已下线，
         /// 润色结果由这个面板承载：提问对话 / 润色结果是同一弹窗的两套 UI）。
@@ -650,20 +609,12 @@ mod linux_app {
         provider_editor_form: Option<ProviderEditorForm>,
         provider_models: Vec<String>,
         new_provider_type: String,
-        new_channel_name: String,
         pending_channel_delete: Option<String>,
         vocabulary: Vec<openless_core::DictionaryEntry>,
         correction_rules: Vec<openless_core::CorrectionRule>,
         style_packs: Vec<openless_core::StylePack>,
-        vocabulary_phrase: String,
-        vocabulary_note: String,
-        correction_pattern: String,
-        correction_replacement: String,
         vocab_preset_store: openless_core::VocabPresetStore,
         vocab_presets: Vec<openless_core::VocabPreset>,
-        vocab_preset_name: String,
-        vocab_preset_phrases: String,
-        history_search: String,
         qa_popup: Option<PopupSupervisor>,
         capsule_popup: Option<PopupSupervisor>,
         popup_action_guard: PopupActionGuard,
@@ -714,7 +665,6 @@ mod linux_app {
         /// the page can leave its loading state even when the result is empty.
         marketplace_attempted: bool,
         marketplace_query: String,
-        marketplace_flow: Option<openless_core::OAuthDeviceFlow>,
         marketplace_detail: Option<openless_core::MarketplaceDetail>,
         marketplace_my_packs: Vec<openless_core::MarketplaceMyPackItem>,
         marketplace_my_likes: Vec<String>,
@@ -730,9 +680,6 @@ mod linux_app {
         /// sign-in state changes), not on every search.
         marketplace_likes_loaded: bool,
         style_editor: Option<openless_core::StylePack>,
-        style_hotkey_pack_id: String,
-        style_hotkey_primary: String,
-        style_hotkey_modifiers: String,
         status: String,
         startup_error: Option<String>,
         locale_pref: LocalePref,
@@ -797,7 +744,6 @@ mod linux_app {
                         qa_visible: false,
                         qa_pinned: false,
                         qa_edit: QaEditFlags::default(),
-                        qa_input: String::new(),
                         qa_state: None,
                         polish_result_visible: false,
                         selection_draft: String::new(),
@@ -810,20 +756,12 @@ mod linux_app {
                         provider_editor_form: None,
                         provider_models: Vec::new(),
                         new_provider_type: String::new(),
-                        new_channel_name: String::new(),
                         pending_channel_delete: None,
                         vocabulary: Vec::new(),
                         correction_rules: Vec::new(),
                         style_packs: Vec::new(),
-                        vocabulary_phrase: String::new(),
-                        vocabulary_note: String::new(),
-                        correction_pattern: String::new(),
-                        correction_replacement: String::new(),
                         vocab_preset_store: openless_core::VocabPresetStore::default(),
                         vocab_presets: Vec::new(),
-                        vocab_preset_name: String::new(),
-                        vocab_preset_phrases: String::new(),
-                        history_search: String::new(),
                         qa_popup: None,
                         capsule_popup: None,
                         popup_action_guard: PopupActionGuard::default(),
@@ -853,7 +791,6 @@ mod linux_app {
                         marketplace_items: Vec::new(),
                         marketplace_attempted: false,
                         marketplace_query: String::new(),
-                        marketplace_flow: None,
                         marketplace_detail: None,
                         marketplace_my_packs: Vec::new(),
                         marketplace_my_likes: Vec::new(),
@@ -861,9 +798,6 @@ mod linux_app {
                         marketplace_search_deadline: None,
                         marketplace_likes_loaded: false,
                         style_editor: None,
-                        style_hotkey_pack_id: String::new(),
-                        style_hotkey_primary: String::new(),
-                        style_hotkey_modifiers: String::new(),
                         status: tr_l10n(lang, "status.core_started").to_string(),
                         startup_error: None,
                         locale_pref,
@@ -911,7 +845,6 @@ mod linux_app {
                     qa_visible: false,
                     qa_pinned: false,
                     qa_edit: QaEditFlags::default(),
-                    qa_input: String::new(),
                     qa_state: None,
                     polish_result_visible: false,
                     selection_draft: String::new(),
@@ -924,20 +857,12 @@ mod linux_app {
                     provider_editor_form: None,
                     provider_models: Vec::new(),
                     new_provider_type: String::new(),
-                    new_channel_name: String::new(),
                     pending_channel_delete: None,
                     vocabulary: Vec::new(),
                     correction_rules: Vec::new(),
                     style_packs: Vec::new(),
-                    vocabulary_phrase: String::new(),
-                    vocabulary_note: String::new(),
-                    correction_pattern: String::new(),
-                    correction_replacement: String::new(),
                     vocab_preset_store: openless_core::VocabPresetStore::default(),
                     vocab_presets: Vec::new(),
-                    vocab_preset_name: String::new(),
-                    vocab_preset_phrases: String::new(),
-                    history_search: String::new(),
                     qa_popup: None,
                     capsule_popup: None,
                     popup_action_guard: PopupActionGuard::default(),
@@ -967,7 +892,6 @@ mod linux_app {
                     marketplace_items: Vec::new(),
                     marketplace_attempted: false,
                     marketplace_query: String::new(),
-                    marketplace_flow: None,
                     marketplace_detail: None,
                     marketplace_my_packs: Vec::new(),
                     marketplace_my_likes: Vec::new(),
@@ -975,9 +899,6 @@ mod linux_app {
                     marketplace_search_deadline: None,
                     marketplace_likes_loaded: false,
                     style_editor: None,
-                    style_hotkey_pack_id: String::new(),
-                    style_hotkey_primary: String::new(),
-                    style_hotkey_modifiers: String::new(),
                     status: tr_l10n(lang, "status.startup_failed").to_string(),
                     startup_error: Some(error),
                     locale_pref,
@@ -2145,7 +2066,7 @@ mod linux_app {
             };
             let kind = panel.kind;
             self.selected_channel_id = Some(channel_id.clone());
-            self.provider_editor = ProviderEditorState::Loading { kind, channel_id };
+            self.provider_editor = ProviderEditorState::Loading;
             self.provider_editor_form = None;
             self.load_provider_editor(kind, channel, descriptor);
         }
@@ -3206,10 +3127,7 @@ mod linux_app {
                                 if let Some((channel, descriptor)) =
                                     provider_channel_descriptor(&panel, &channel_id)
                                 {
-                                    self.provider_editor = ProviderEditorState::Loading {
-                                        kind: panel.kind,
-                                        channel_id,
-                                    };
+                                    self.provider_editor = ProviderEditorState::Loading;
                                     self.provider_editor_form = None;
                                     self.load_provider_editor(panel.kind, channel, descriptor);
                                 }
@@ -3219,7 +3137,7 @@ mod linux_app {
                         }
                     }
                     UiResult::Providers(Err(error)) => {
-                        self.providers = ProvidersState::Failed(error.clone());
+                        self.providers = ProvidersState::Failed;
                         self.status = error;
                     }
                     UiResult::ProviderEditor {
@@ -3243,7 +3161,7 @@ mod linux_app {
                                     ProviderEditorState::Loaded(Box::new(editor));
                             }
                             Err(error) => {
-                                self.provider_editor = ProviderEditorState::Failed(error.clone());
+                                self.provider_editor = ProviderEditorState::Failed;
                                 self.provider_editor_form = None;
                                 self.status = error;
                             }
@@ -3279,16 +3197,6 @@ mod linux_app {
                                 }
                             }
                         }
-                    }
-                    UiResult::ProviderMutation(result) => {
-                        match result {
-                            Ok(message) => self.status = message,
-                            Err(error) => self.status = error,
-                        }
-                        self.providers = ProvidersState::Loading;
-                        self.provider_editor = ProviderEditorState::Idle;
-                        self.provider_models.clear();
-                        self.load_providers(self.provider_kind);
                     }
                     UiResult::Library(Ok(library)) => {
                         self.vocabulary = library.vocabulary;
@@ -3360,27 +3268,6 @@ mod linux_app {
                         self.settings_channels_loading = false;
                         self.frontend_vm.settings_notice = Some(error);
                     }
-                    UiResult::MarketplaceFlow(Ok(flow)) => {
-                        self.status = fmt_l10n(lang, "status.device_code", &[&flow.user_code]);
-                        self.marketplace_flow = Some(flow);
-                    }
-                    UiResult::MarketplaceFlow(Err(error)) => self.status = error,
-                    UiResult::MarketplaceAuthPoll(Ok(result)) => match result {
-                        openless_core::OAuthPollResult::Authorized { login } => {
-                            self.marketplace_flow = None;
-                            self.status = fmt_l10n(lang, "status.logged_in", &[&login]);
-                        }
-                        openless_core::OAuthPollResult::Pending => {
-                            self.status = tr_l10n(lang, "status.oauth_pending").to_string();
-                        }
-                        openless_core::OAuthPollResult::SlowDown => {
-                            self.status = tr_l10n(lang, "status.oauth_slowdown").to_string();
-                        }
-                        openless_core::OAuthPollResult::Error { message } => {
-                            self.status = message;
-                        }
-                    },
-                    UiResult::MarketplaceAuthPoll(Err(error)) => self.status = error,
                     UiResult::MarketplaceDetail(Ok(detail)) => {
                         self.status =
                             fmt_l10n(lang, "status.detail_loaded", &[&detail.summary.name]);
@@ -3441,17 +3328,6 @@ mod linux_app {
                     UiResult::UpdateCheck(Err(error)) => {
                         self.update_busy = false;
                         self.status = fmt_l10n(lang, "update.check_failed", &[&error]);
-                    }
-                    UiResult::UpdateProgress(progress) => self.update_progress = Some(progress),
-                    UiResult::UpdateInstalled(Ok(installed)) => {
-                        self.update_busy = false;
-                        self.update_manifest = None;
-                        self.status =
-                            fmt_l10n(lang, "update.installed_restart", &[&installed.version]);
-                    }
-                    UiResult::UpdateInstalled(Err(error)) => {
-                        self.update_busy = false;
-                        self.status = fmt_l10n(lang, "update.install_failed", &[&error]);
                     }
                 }
             }
@@ -3831,7 +3707,7 @@ mod linux_app {
                     secondary_secret: form.secondary_secret.clone(),
                     models: form.models.clone(),
                     models_loading: form.models_loading,
-                    busy: matches!(self.provider_editor, ProviderEditorState::Loading { .. }),
+                    busy: matches!(self.provider_editor, ProviderEditorState::Loading),
                 }
             });
 
@@ -6984,7 +6860,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             // 只有「有动画」的状态需要 30fps 连续重绘：录音音量条、思考光环/光点、
             // 头像取图中。静止或隐藏时降到 10fps（stdin 轮询延迟 ≤100ms，肉眼无感），
             // 避免透明置顶窗口长期白跑帧。
-            let mut animated = false;
+            let animated;
             match self.kind {
                 PopupKind::Qa => {
                     self.avatar.sync(ctx, &self.state.qa.viewer_login);
@@ -7930,82 +7806,6 @@ Internal flags (set by OpenLess itself, not for regular use):
         Ok(())
     }
 
-    fn set_style_pack_hotkey(
-        preferences: &mut UserPreferences,
-        pack_id: &str,
-        binding: Option<openless_core::shared_types::ShortcutBinding>,
-    ) {
-        preferences
-            .style_pack_hotkeys
-            .retain(|hotkey| hotkey.pack_id != pack_id);
-        if let Some(binding) = binding {
-            preferences
-                .style_pack_hotkeys
-                .push(openless_core::shared_types::StylePackHotkey {
-                    pack_id: pack_id.to_string(),
-                    binding,
-                });
-        }
-    }
-
-    fn shortcut_editor(
-        ui: &mut egui::Ui,
-        label: &str,
-        binding: &mut openless_core::shared_types::ShortcutBinding,
-    ) -> bool {
-        let mut changed = false;
-        ui.horizontal(|ui| {
-            ui.label(label);
-            changed |= ui.text_edit_singleline(&mut binding.primary).changed();
-            for (modifier, caption) in [
-                ("ctrl", "Ctrl"),
-                ("alt", "Alt"),
-                ("shift", "Shift"),
-                ("super", "Super"),
-            ] {
-                let mut enabled = binding
-                    .modifiers
-                    .iter()
-                    .any(|value| value.eq_ignore_ascii_case(modifier));
-                if ui.checkbox(&mut enabled, caption).changed() {
-                    changed = true;
-                    binding
-                        .modifiers
-                        .retain(|value| !value.eq_ignore_ascii_case(modifier));
-                    if enabled {
-                        binding.modifiers.push(modifier.to_string());
-                    }
-                }
-            }
-        });
-        changed
-    }
-
-    fn optional_shortcut_editor(
-        ui: &mut egui::Ui,
-        lang: Lang,
-        label: &str,
-        binding: &mut Option<openless_core::shared_types::ShortcutBinding>,
-        default_primary: &str,
-    ) -> bool {
-        let mut enabled = binding.is_some();
-        let mut changed = ui
-            .checkbox(&mut enabled, fmt_l10n(lang, "hotkey.enable", &[&label]))
-            .changed();
-        if enabled && binding.is_none() {
-            *binding = Some(openless_core::shared_types::ShortcutBinding {
-                primary: default_primary.to_string(),
-                modifiers: vec!["ctrl".into(), "shift".into()],
-            });
-        } else if !enabled && binding.is_some() {
-            *binding = None;
-        }
-        if let Some(binding) = binding {
-            changed |= shortcut_editor(ui, label, binding);
-        }
-        changed
-    }
-
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -8149,7 +7949,6 @@ Internal flags (set by OpenLess itself, not for regular use):
             assert_eq!(entries[2].text, "done");
         }
 
-        #[test]
         #[test]
         fn help_and_version_exit_before_anything_launches() {
             let args = |extra: &str| vec!["openless".to_string(), extra.to_string()];
@@ -8427,6 +8226,26 @@ Internal flags (set by OpenLess itself, not for regular use):
             assert_eq!(merged.remote_input_port, 9443);
         }
 
+        /// 仅测试用：生产路径（设置页的 style-pack 快捷键行）直接改
+        /// `preferences.style_pack_hotkeys`，见 `main.rs` 的 `StyleHotkey` 分支。
+        fn set_style_pack_hotkey(
+            preferences: &mut UserPreferences,
+            pack_id: &str,
+            binding: Option<openless_core::shared_types::ShortcutBinding>,
+        ) {
+            preferences
+                .style_pack_hotkeys
+                .retain(|hotkey| hotkey.pack_id != pack_id);
+            if let Some(binding) = binding {
+                preferences
+                    .style_pack_hotkeys
+                    .push(openless_core::shared_types::StylePackHotkey {
+                        pack_id: pack_id.to_string(),
+                        binding,
+                    });
+            }
+        }
+
         #[test]
         fn style_pack_hotkey_update_preserves_other_pack_bindings() {
             let mut preferences = UserPreferences::default();
@@ -8632,12 +8451,8 @@ Internal flags (set by OpenLess itself, not for regular use):
                 today,
             );
 
-            // Last-7 window covers only Jan 15.
-            assert_eq!(summary.last_7.active_days, 1);
-            assert_eq!(summary.last_7.segments, 5);
-            // Last-30 window covers Jan 15, Jan 8 and Jan 1.
-            assert_eq!(summary.last_30.active_days, 3);
-            assert_eq!(summary.last_30.segments, 10);
+            // Last-7/last-30 aggregates were folded into the daily series:
+            // the UI slices the tail of `activity_daily` for its period chart.
 
             // The daily series is the trailing 30 days ending today.
             assert_eq!(summary.activity_daily.len(), 30);

@@ -1670,7 +1670,7 @@ mod tests {
     #[test]
     fn the_collapsible_group_header_toggles_on_click() {
         let ctx = egui::Context::default();
-        let mut painted = String::new();
+        let mut painted;
         let mut states = Vec::new();
         for frame in 0..4 {
             let events = if frame == 1 {

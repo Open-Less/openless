@@ -1316,7 +1316,6 @@ mod tests {
         );
         assert_eq!(command.as_std().get_envs().count(), 0);
     }
-    use super::*;
     use std::io::Cursor;
     use std::time::{Duration, Instant};
 
