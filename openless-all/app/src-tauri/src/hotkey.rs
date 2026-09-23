@@ -931,6 +931,7 @@ mod platform {
 
     fn handle_key_down(ctx: &CallbackContext, event: CgEventRef) {
         let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
+        crate::side_aware_combo::handle_companion_key_down();
         if keycode == ESC_KEYCODE {
             note_companion_key_down(ctx);
             send_cancel_or_log(&ctx.cancel_tx);
@@ -1570,6 +1571,7 @@ mod platform {
         }
         let pressed = matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN);
         if vk_code == VK_ESCAPE && (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) {
+            crate::side_aware_combo::handle_companion_key_down();
             note_companion_key_down(ctx);
             send_cancel_or_log(&ctx.cancel_tx);
             // 会话激活期间独占消费 Esc（返回 true → LRESULT(1) 吞掉），宿主应用收不到，
@@ -1580,6 +1582,7 @@ mod platform {
         crate::side_aware_combo::platform::dispatch_vk(vk_code, pressed);
 
         if pressed && !is_modifier_vk(vk_code) {
+            crate::side_aware_combo::handle_companion_key_down();
             note_companion_key_down(ctx);
         }
 
@@ -2153,16 +2156,17 @@ mod platform {
 
         #[test]
         fn windows_shift_side_combo_receives_pressed_via_dispatch_keyboard_event() {
-            use crate::combo_hotkey::ComboHotkeyEvent;
             use crate::side_aware_combo::SideAwareComboMonitor;
             use crate::types::ShortcutBinding;
 
             let (combo_tx, combo_rx) = mpsc::channel();
+            let (abort_tx, _abort_rx) = mpsc::channel();
             let binding = ShortcutBinding {
                 primary: "D".into(),
                 modifiers: vec!["shift-left".into()],
             };
-            let monitor = SideAwareComboMonitor::start(binding, combo_tx).expect("start monitor");
+            let monitor =
+                SideAwareComboMonitor::start(binding, combo_tx, abort_tx).expect("start monitor");
 
             let shared = shared(HotkeyTrigger::Custom);
             let (ctx, hotkey_rx) = callback_context(shared);
@@ -2172,11 +2176,59 @@ mod platform {
 
             assert!(matches!(
                 combo_rx.recv().unwrap(),
-                ComboHotkeyEvent::Pressed { .. }
+                HotkeyEvent::Pressed { .. }
             ));
             assert!(hotkey_rx
                 .try_iter()
                 .any(|evt| evt == HotkeyEvent::TranslationModifierPressed));
+
+            drop(monitor);
+        }
+
+        #[test]
+        fn windows_modifier_chord_uses_existing_companion_abort_semantics() {
+            use crate::side_aware_combo::SideAwareComboMonitor;
+            use crate::types::ShortcutBinding;
+
+            let (tx, rx) = mpsc::channel();
+            let (abort_tx, abort_rx) = mpsc::channel();
+            let binding = ShortcutBinding {
+                primary: "ModifierChord".into(),
+                modifiers: vec!["ctrl-left".into(), "cmd-left".into()],
+            };
+            let monitor =
+                SideAwareComboMonitor::start(binding, tx, abort_tx).expect("start monitor");
+
+            let shared = shared(HotkeyTrigger::Custom);
+            let (ctx, _main_rx) = callback_context(shared);
+
+            dispatch_keyboard_event(&ctx, VK_LCONTROL, WM_KEYDOWN);
+            assert!(rx.try_recv().is_err());
+            dispatch_keyboard_event(&ctx, VK_LWIN, WM_KEYDOWN);
+            let press_id = match rx.recv().unwrap() {
+                HotkeyEvent::Pressed { press_id, .. } => press_id,
+                other => panic!("expected modifier chord Pressed, got {other:?}"),
+            };
+
+            dispatch_keyboard_event(&ctx, 0x44, WM_KEYDOWN);
+            assert!(matches!(
+                abort_rx.recv().unwrap(),
+                HotkeyCombinedEdge {
+                    press_id: combined_id,
+                    ..
+                } if combined_id == press_id
+            ));
+            dispatch_keyboard_event(&ctx, 0x44, WM_KEYDOWN);
+            assert!(abort_rx.try_recv().is_err());
+
+            dispatch_keyboard_event(&ctx, VK_LWIN, WM_KEYUP);
+            assert!(matches!(
+                rx.recv().unwrap(),
+                HotkeyEvent::Released {
+                    press_id: released_id,
+                    ..
+                } if released_id == press_id
+            ));
 
             drop(monitor);
         }

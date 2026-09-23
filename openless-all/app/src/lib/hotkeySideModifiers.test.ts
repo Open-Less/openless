@@ -1,5 +1,7 @@
 import {
+  formatComboParts,
   genericModifiersFromPressedCodes,
+  MODIFIER_CHORD_PRIMARY,
   modifiersFromPressedCodes,
   shortcutFromLegacyTrigger,
   sideModifiersFromPressedCodes,
@@ -60,6 +62,15 @@ assertDeepEqual(
   modifiersFromPressedCodes(new Set(['MetaLeft', 'ShiftRight'])),
   ['super', 'shift'],
   'default recording on non-mac uses super',
+);
+
+assertDeepEqual(
+  formatComboParts({
+    primary: MODIFIER_CHORD_PRIMARY,
+    modifiers: ['ctrl-left', 'cmd-left'],
+  }),
+  ['左 Win', '左 Ctrl'],
+  'modifier chord display contains only its physical modifiers',
 );
 
 assertDeepEqual(

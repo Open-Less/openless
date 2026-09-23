@@ -8,6 +8,8 @@ import type {
   ShortcutBinding,
 } from './types';
 
+export const MODIFIER_CHORD_PRIMARY = 'ModifierChord';
+
 export function defaultQaShortcut(): ShortcutBinding {
   return {
     primary: ';',
@@ -269,7 +271,9 @@ export function formatComboParts(
     }
   }
 
-  parts.push(formatPrimary(binding.primary));
+  if (binding.primary !== MODIFIER_CHORD_PRIMARY) {
+    parts.push(formatPrimary(binding.primary));
+  }
   return parts;
 }
 

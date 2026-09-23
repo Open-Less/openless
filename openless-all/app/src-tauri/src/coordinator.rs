@@ -1080,14 +1080,15 @@ impl Coordinator {
         if crate::shortcut_binding::binding_requires_side_aware_hook(&binding) {
             take_combo_hotkey_on_main_thread(&self.inner);
             self.inner.side_aware_combo.lock().take();
-            let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
-            match crate::side_aware_combo::SideAwareComboMonitor::start(binding, tx) {
+            let (tx, rx) = mpsc::channel::<HotkeyEvent>();
+            let combo_tx = spawn_combo_abort_bridge(&self.inner, handle_trigger_combined);
+            match crate::side_aware_combo::SideAwareComboMonitor::start(binding, tx, combo_tx) {
                 Ok(monitor) => {
                     *self.inner.side_aware_combo.lock() = Some(monitor);
                     let bridge_inner = Arc::clone(&self.inner);
                     std::thread::Builder::new()
                         .name("openless-side-combo-bridge".into())
-                        .spawn(move || combo_hotkey_bridge_loop(bridge_inner, rx))
+                        .spawn(move || hotkey_bridge_loop(bridge_inner, rx))
                         .ok();
                     log::info!("[coord] side-aware combo hotkey listener installed (via update)");
                 }

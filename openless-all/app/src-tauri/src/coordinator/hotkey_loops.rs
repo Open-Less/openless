@@ -1225,14 +1225,15 @@ pub(super) fn combo_hotkey_supervisor_loop(inner: Arc<Inner>) {
             if inner.side_aware_combo.lock().is_some() {
                 return;
             }
-            let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
-            match crate::side_aware_combo::SideAwareComboMonitor::start(binding, tx) {
+            let (tx, rx) = mpsc::channel::<HotkeyEvent>();
+            let combo_tx = spawn_combo_abort_bridge(&inner, handle_trigger_combined);
+            match crate::side_aware_combo::SideAwareComboMonitor::start(binding, tx, combo_tx) {
                 Ok(monitor) => {
                     *inner.side_aware_combo.lock() = Some(monitor);
                     let inner_clone = Arc::clone(&inner);
                     std::thread::Builder::new()
                         .name("openless-side-combo-bridge".into())
-                        .spawn(move || combo_hotkey_bridge_loop(inner_clone, rx))
+                        .spawn(move || hotkey_bridge_loop(inner_clone, rx))
                         .ok();
                     return;
                 }
