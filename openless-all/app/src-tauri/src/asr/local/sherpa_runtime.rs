@@ -22,6 +22,9 @@ use crate::asr::local::sherpa::{
     SherpaPreparePhase, SherpaPrepareProgressPayload, SherpaRuntimeStatus, PROVIDER_ID,
 };
 
+const QWEN3_ASR_CHUNK_LIMIT_MS: u64 = 30_000;
+const QWEN3_ASR_MAX_NEW_TOKENS: i32 = 256;
+
 #[cfg(target_os = "windows")]
 use sherpa_onnx::{
     OfflineParaformerModelConfig, OfflineQwen3ASRModelConfig, OfflineRecognizer,
@@ -225,12 +228,16 @@ impl SherpaOnnxRuntime {
         if pcm.is_empty() {
             return Ok(String::new());
         }
-        if sherpa_target(alias)?.sherpa_execution_mode()
-            != Some(openless_core::LocalAsrExecutionMode::Offline)
-        {
+        let target = sherpa_target(alias)?;
+        if target.sherpa_execution_mode() != Some(openless_core::LocalAsrExecutionMode::Offline) {
             anyhow::bail!("sherpa-onnx model {alias} is online-only; use streaming API");
         }
         let audio_ms = pcm_duration_ms(pcm);
+        let pcm_chunks = sherpa_offline_chunks(&target, pcm)
+            .into_iter()
+            .map(|chunk| chunk.to_vec())
+            .collect::<Vec<_>>();
+        let chunk_count = pcm_chunks.len();
         let loaded_alias = self.ensure_loaded(alias, model_dir).await?;
         let loaded = self
             .state
@@ -242,7 +249,7 @@ impl SherpaOnnxRuntime {
         let started = Instant::now();
         let result = transcribe_loaded_model(
             loaded,
-            pcm.to_vec(),
+            pcm_chunks,
             language_hint.map(str::to_string),
             audio_timeout,
         )
@@ -251,9 +258,10 @@ impl SherpaOnnxRuntime {
         match &result {
             Ok(text) => {
                 log::info!(
-                    "[sherpa-asr] transcribe finished model={} audio_ms={} elapsed_ms={} text_chars={}",
+                    "[sherpa-asr] transcribe finished model={} audio_ms={} chunks={} elapsed_ms={} text_chars={}",
                     alias,
                     audio_ms,
+                    chunk_count,
                     elapsed_ms,
                     text.chars().count()
                 );
@@ -262,9 +270,10 @@ impl SherpaOnnxRuntime {
             Err(error) => {
                 let message = format!("{error:#}");
                 log::warn!(
-                    "[sherpa-asr] transcribe failed model={} audio_ms={} elapsed_ms={} error={}",
+                    "[sherpa-asr] transcribe failed model={} audio_ms={} chunks={} elapsed_ms={} error={}",
                     alias,
                     audio_ms,
+                    chunk_count,
                     elapsed_ms,
                     message
                 );
@@ -426,6 +435,15 @@ fn pcm_duration_ms(pcm: &[u8]) -> u64 {
     crate::asr::pcm::pcm_duration_ms(pcm)
 }
 
+fn sherpa_offline_chunks<'a>(
+    target: &openless_core::LocalAsrTarget,
+    pcm: &'a [u8],
+) -> Vec<&'a [u8]> {
+    let limit = (target.sherpa_family() == Some(openless_core::SherpaModelFamily::Qwen3Asr))
+        .then_some(QWEN3_ASR_CHUNK_LIMIT_MS);
+    openless_core::asr::whisper::split_pcm_by_duration(pcm, limit)
+}
+
 enum LoadedModel {
     Offline(LoadedOfflineModel),
     Online(LoadedOnlineModel),
@@ -515,6 +533,7 @@ fn create_offline_recognizer(alias: &str, dir: &Path) -> Result<OfflineRecognize
                 encoder: Some(path_to_string(&dir.join("encoder.int8.onnx"))?),
                 decoder: Some(path_to_string(&dir.join("decoder.int8.onnx"))?),
                 tokenizer: Some(path_to_string(&dir.join("tokenizer"))?),
+                max_new_tokens: QWEN3_ASR_MAX_NEW_TOKENS,
                 ..Default::default()
             };
             config.model_config.num_threads = 3;
@@ -569,25 +588,29 @@ fn path_to_string(path: &Path) -> Result<String> {
 #[cfg(target_os = "windows")]
 async fn transcribe_loaded_model(
     loaded: LoadedOfflineModel,
-    pcm: Vec<u8>,
+    pcm_chunks: Vec<Vec<u8>>,
     language_hint: Option<String>,
     audio_timeout: std::time::Duration,
 ) -> Result<String> {
     tokio::time::timeout(audio_timeout, async move {
         tokio::task::spawn_blocking(move || {
-            let samples = pcm_s16le_to_f32(&pcm)?;
-            let stream = loaded.recognizer.create_stream();
-            if let Some(language) = language_hint.as_deref().filter(|value| !value.is_empty()) {
-                if stream.has_option("language") {
-                    stream.set_option("language", language);
+            let mut texts = Vec::with_capacity(pcm_chunks.len());
+            for pcm in pcm_chunks {
+                let samples = pcm_s16le_to_f32(&pcm)?;
+                let stream = loaded.recognizer.create_stream();
+                if let Some(language) = language_hint.as_deref().filter(|value| !value.is_empty()) {
+                    if stream.has_option("language") {
+                        stream.set_option("language", language);
+                    }
                 }
+                stream.accept_waveform(16_000, &samples);
+                loaded.recognizer.decode(&stream);
+                let result = stream
+                    .get_result()
+                    .ok_or_else(|| anyhow::anyhow!("sherpa-onnx returned no result"))?;
+                texts.push(result.text);
             }
-            stream.accept_waveform(16_000, &samples);
-            loaded.recognizer.decode(&stream);
-            let result = stream
-                .get_result()
-                .ok_or_else(|| anyhow::anyhow!("sherpa-onnx returned no result"))?;
-            Ok(result.text)
+            Ok(openless_core::asr::whisper::join_transcript_chunks(&texts))
         })
         .await
         .map_err(|e| anyhow::anyhow!("sherpa-onnx transcribe join failed: {e:#}"))?
@@ -599,7 +622,7 @@ async fn transcribe_loaded_model(
 #[cfg(not(target_os = "windows"))]
 async fn transcribe_loaded_model(
     _loaded: LoadedOfflineModel,
-    _pcm: Vec<u8>,
+    _pcm_chunks: Vec<Vec<u8>>,
     _language_hint: Option<String>,
     _audio_timeout: std::time::Duration,
 ) -> Result<String> {
@@ -934,6 +957,29 @@ mod tests {
 
         assert!(result.is_err());
         assert!(format!("{:#}", result.unwrap_err()).contains("online-only"));
+    }
+
+    #[test]
+    fn only_qwen3_offline_audio_is_split_at_thirty_seconds() {
+        let qwen = sherpa_target("qwen3-asr-0.6b-int8").unwrap();
+        let thirty_seconds = vec![0; 32_000 * 30];
+        assert_eq!(
+            sherpa_offline_chunks(&qwen, &thirty_seconds),
+            vec![thirty_seconds.as_slice()]
+        );
+
+        let pcm = vec![0; 32_000 * 65];
+        let chunks = sherpa_offline_chunks(&qwen, &pcm);
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].len(), 32_000 * 30);
+        assert_eq!(chunks[1].len(), 32_000 * 30);
+        assert_eq!(chunks[2].len(), 32_000 * 5);
+
+        let sense_voice = sherpa_target("sense-voice-small-zh").unwrap();
+        assert_eq!(
+            sherpa_offline_chunks(&sense_voice, &pcm),
+            vec![pcm.as_slice()]
+        );
     }
 
     #[tokio::test]

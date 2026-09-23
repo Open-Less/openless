@@ -135,6 +135,23 @@ struct SlowAsr {
     inner: testing::FixtureTranscriptionEngine,
 }
 
+struct CountingAsr {
+    starts: Arc<AtomicUsize>,
+    inner: testing::FixtureTranscriptionEngine,
+}
+
+impl TranscriptionEngine for CountingAsr {
+    fn start(
+        &self,
+        id: SessionId,
+        context: Arc<DictationContext>,
+        sink: Arc<dyn TextStreamSink>,
+    ) -> BoxFuture<'static, Result<Arc<dyn TranscriptionSession>, BackendError>> {
+        self.starts.fetch_add(1, Ordering::SeqCst);
+        self.inner.start(id, context, sink)
+    }
+}
+
 // Model only the native archive boundary: once an archive was requested, a
 // filesystem sharing violation would make its final deletion fail. PCM remains
 // available in memory and must not depend on this optional disk side effect.
@@ -439,6 +456,105 @@ async fn qa_and_selection_voice_never_request_disk_archives() {
 }
 
 #[tokio::test]
+async fn stable_mode_is_shared_by_dictation_qa_selection_and_less_computer() {
+    for entry in ["dictation", "qa", "selection", "less"] {
+        let starts = Arc::new(AtomicUsize::new(0));
+        let (backend, path) = backend(
+            Arc::new(testing::FixtureAudioRecorder::new(
+                vec![vec![0; 320]],
+                Vec::new(),
+            )),
+            Arc::new(CountingAsr {
+                starts: Arc::clone(&starts),
+                inner: testing::FixtureTranscriptionEngine::successful("instruction", 10),
+            }),
+            Arc::new(QaRuntime::default()),
+        );
+        let mut preferences = backend.get_preferences();
+        preferences.stable_transcription_enabled = true;
+        backend
+            .update_settings(
+                preferences,
+                SettingsUpdateOptions::STRICT,
+                &NoopSettingsRuntime,
+            )
+            .unwrap();
+        backend.start().await.unwrap();
+
+        match entry {
+            "dictation" => {
+                backend
+                    .start_dictation_with_options(DictationStartOptions {
+                        insert_text: false,
+                        ..DictationStartOptions::default()
+                    })
+                    .await
+                    .unwrap();
+                assert_eq!(starts.load(Ordering::SeqCst), 0, "{entry}");
+                backend.stop_dictation().await.unwrap();
+            }
+            "qa" => {
+                backend.services().qa.toggle_recording().await.unwrap();
+                let id = backend
+                    .services()
+                    .qa
+                    .snapshot()
+                    .await
+                    .unwrap()
+                    .session_id
+                    .unwrap();
+                let capture = backend
+                    .start_qa_voice_capture(
+                        id,
+                        DictationStartOptions::default(),
+                        Arc::new(Progress),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(starts.load(Ordering::SeqCst), 0, "{entry}");
+                capture.finish().await.unwrap();
+                backend.services().qa.dismiss().await.unwrap();
+            }
+            "selection" => {
+                let id = backend
+                    .services()
+                    .selection_voice
+                    .begin(SelectionCapture {
+                        text: "selection".into(),
+                        source_app: None,
+                    })
+                    .await
+                    .unwrap();
+                let capture = backend
+                    .start_selection_voice_capture(id, Arc::new(Control))
+                    .await
+                    .unwrap();
+                assert_eq!(starts.load(Ordering::SeqCst), 0, "{entry}");
+                capture.finish().await.unwrap();
+                backend
+                    .services()
+                    .selection_voice
+                    .cancel(Some(id))
+                    .await
+                    .unwrap();
+            }
+            "less" => {
+                let capture = backend
+                    .start_less_computer_voice(SessionId::new(), Arc::new(Control))
+                    .await
+                    .unwrap();
+                assert_eq!(starts.load(Ordering::SeqCst), 0, "{entry}");
+                let _ = capture.finish().await;
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(starts.load(Ordering::SeqCst), 1, "{entry}");
+        drop(backend);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}
+
+#[tokio::test]
 async fn cli_cancel_covers_less_capture_without_expanding_to_qa() {
     let recorder = Arc::new(testing::FixtureAudioRecorder::default());
     let (backend, path) = backend(
@@ -552,7 +668,7 @@ async fn cancelled_auxiliary_capture_keeps_gate_until_native_stop_finishes() {
 }
 
 #[tokio::test]
-async fn cancellation_during_cold_asr_never_starts_the_microphone() {
+async fn cancellation_during_cold_asr_stops_the_already_started_microphone() {
     for less in [true, false] {
         let starts = Arc::new(AtomicUsize::new(0));
         let entered = Arc::new(Semaphore::new(0));
@@ -614,7 +730,7 @@ async fn cancellation_during_cold_asr_never_starts_the_microphone() {
         }
         gate.add_permits(1);
         assert!(starting.await.unwrap().is_err());
-        assert_eq!(starts.load(Ordering::SeqCst), 0);
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
         if less {
             let phases = std::iter::from_fn(|| events.try_recv().ok())
                 .filter_map(|event| match event.kind {

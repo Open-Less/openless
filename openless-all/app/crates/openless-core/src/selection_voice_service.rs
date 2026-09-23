@@ -17,7 +17,7 @@ use crate::domains::{
     SelectionVoicePhase, SelectionVoicePreview, SelectionVoicePreviewUpdate, SelectionVoiceRoute,
     SelectionVoiceSnapshot,
 };
-use crate::edit_plan::{apply_edit_plan, parse_edit_plan, EditOperation, EditPlan};
+use crate::edit_plan::{apply_edit_plan, parse_edit_plan_with_priority, EditOperation, EditPlan};
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::events::{BackendEventKind, BackendEventPublisher};
 use crate::ports::{TextPolisher, TextStreamChunk, TextStreamSink};
@@ -27,6 +27,8 @@ use crate::selection_voice_intent::{
     SelectionVoiceIntent,
 };
 use crate::shared_types::SelectionPolishOutputMode;
+use crate::style_pack_store::StylePackStore;
+use crate::style_packs::{style_pack_prompt, StylePromptKind};
 use crate::types::{
     DictationSession, HistoryChange, HistoryInsertStatus, HistorySource, PolishMode, SessionId,
     VocabularyChange,
@@ -138,6 +140,7 @@ struct SelectionVoiceWorkflow {
     preferences: Arc<PreferencesStore>,
     correction_rules: Arc<CorrectionRuleStore>,
     credential_store: Arc<dyn CredentialStore>,
+    style_packs: Arc<StylePackStore>,
     polisher: Option<Arc<dyn TextPolisher>>,
 }
 
@@ -166,6 +169,7 @@ impl SelectionVoiceService {
         correction_rules: Arc<CorrectionRuleStore>,
         activity: Arc<ActivityStore>,
         credential_store: Arc<dyn CredentialStore>,
+        style_packs: Arc<StylePackStore>,
         polisher: Option<Arc<dyn TextPolisher>>,
         voice_sessions: Arc<crate::voice_session::VoiceSessionGate>,
     ) -> Self {
@@ -187,6 +191,7 @@ impl SelectionVoiceService {
                 preferences,
                 correction_rules,
                 credential_store,
+                style_packs,
                 polisher,
             }),
             voice_sessions,
@@ -285,6 +290,7 @@ impl SelectionVoiceWorkflow {
         input: String,
         system_prompt: String,
         translation_target: Option<&str>,
+        edit_plan_input: bool,
     ) -> Result<String, BackendError> {
         let polisher = self.polisher.as_ref().ok_or_else(|| {
             BackendError::new(
@@ -328,6 +334,7 @@ impl SelectionVoiceWorkflow {
             system_prompt
         };
         context.polish.translation_active = translation_only;
+        context.polish.edit_plan_input = edit_plan_input;
         context.polish.translation_target_language = translation_target.unwrap_or_default().into();
         context.polish.hotwords.clear();
         context.polish.cursor_context = None;
@@ -363,6 +370,7 @@ impl SelectionVoiceWorkflow {
             instruction,
             crate::prompts::selection_voice_instruction_polish_prompt(),
             None,
+            false,
         )
         .await
     }
@@ -383,6 +391,7 @@ impl SelectionVoiceWorkflow {
                 instruction.to_string(),
                 crate::prompts::selection_voice_intent_classification_prompt(),
                 None,
+                false,
             )
             .await
         {
@@ -418,16 +427,22 @@ impl SelectionVoiceWorkflow {
         let input = format!(
             "<field_context></field_context>\n<draft>\n{safe_draft}\n</draft>\n\n<instruction>\n{safe_instruction}\n</instruction>"
         );
+        let pack_prompt = self
+            .style_packs
+            .get_or_default_active(&preferences.selection_polish_style_pack_id)
+            .ok()
+            .map(|pack| style_pack_prompt(&pack, StylePromptKind::VoiceEdit))
+            .unwrap_or_default();
+        let format = preferences.selection_voice_edit_plan_format;
+        let system_prompt = crate::prompts::resolve_voice_edit_system_prompt(
+            &preferences.selection_voice_edit_system_prompt,
+            &pack_prompt,
+            format,
+        );
         let raw = self
-            .model_text(
-                session_id,
-                &preferences,
-                input,
-                crate::prompts::voice_edit_system_prompt(),
-                None,
-            )
+            .model_text(session_id, &preferences, input, system_prompt, None, true)
             .await?;
-        match parse_edit_plan(&raw) {
+        match parse_edit_plan_with_priority(&raw, format) {
             Ok(plan) => Ok(plan),
             Err(error) => {
                 log::warn!(
@@ -443,7 +458,12 @@ impl SelectionVoiceWorkflow {
                             .await;
                     }
                 }
-                Err(BackendError::new(BackendErrorCode::Provider, error))
+                Err(BackendError::new(
+                    BackendErrorCode::Provider,
+                    format!(
+                        "invalid EditPlan: {error}\n\n---model_output---\n{raw}\n---end_model_output---"
+                    ),
+                ))
             }
         }
     }
@@ -462,6 +482,7 @@ impl SelectionVoiceWorkflow {
                 draft.to_string(),
                 crate::prompts::translate_system_prompt(target_language),
                 Some(target_language),
+                false,
             )
             .await?;
         let translated = clean_selection_voice_translation_output(&translated_raw);

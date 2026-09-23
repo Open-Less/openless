@@ -244,6 +244,7 @@ async fn portable_data_round_trips_without_uploading_credentials_or_device_setti
     preferences.remote_input_pin = "never-sync-device-pin".into();
     preferences.active_asr_provider = "source-only-asr".into();
     preferences.theme_mode = openless_core::shared_types::ThemeMode::Dark;
+    preferences.stable_transcription_enabled = true;
     source
         .backend
         .repositories()
@@ -268,6 +269,7 @@ async fn portable_data_round_trips_without_uploading_credentials_or_device_setti
     assert_eq!(saved.counts.corrections, 1);
     let uploaded = server.state.lock().unwrap().payload.clone().unwrap();
     let serialized = uploaded.to_string();
+    assert_eq!(uploaded["preferences"]["stableTranscriptionEnabled"], true);
     for private in [
         "cloud-fixture-token",
         "never-sync-asr-secret",
@@ -330,6 +332,7 @@ async fn portable_data_round_trips_without_uploading_credentials_or_device_setti
         Some("/private/target-workspace")
     );
     assert_eq!(preferences.remote_input_pin, "target-pin");
+    assert!(preferences.stable_transcription_enabled);
     let secret = target
         .credentials
         .read(
@@ -347,6 +350,27 @@ async fn portable_data_round_trips_without_uploading_credentials_or_device_setti
     assert_eq!(
         reopened.preferences.get().active_style_pack_id,
         "custom.cloud"
+    );
+
+    let legacy_target = Device::new(&server).await;
+    let mut local = legacy_target.backend.get_preferences();
+    local.stable_transcription_enabled = true;
+    legacy_target
+        .backend
+        .repositories()
+        .preferences
+        .set(local)
+        .unwrap();
+    server.state.lock().unwrap().payload.as_mut().unwrap()["preferences"]
+        .as_object_mut()
+        .unwrap()
+        .remove("stableTranscriptionEnabled");
+    legacy_target.backend.cloud_sync_restore().await.unwrap();
+    assert!(
+        legacy_target
+            .backend
+            .get_preferences()
+            .stable_transcription_enabled
     );
 }
 

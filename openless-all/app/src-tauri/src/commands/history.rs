@@ -203,21 +203,43 @@ fn copy_recording_to_mobile_url(
     Ok(())
 }
 
-/// 对一条「转录失败」历史条目的归档录音用**当前** ASR provider 重新转录（issue #613）。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryRetranscriptionResult {
+    text: String,
+    updated_entry: Option<DictationSession>,
+}
+
+fn should_replace_failed_history(error_code: Option<&str>) -> bool {
+    matches!(error_code, Some("transcribeFailed" | "emptyTranscript"))
+}
+
+/// 对一条有归档录音的历史条目用**当前** ASR provider 重新转录（issue #613 / #1046）。
 ///
 /// 流程：读 `recordings/<id>.wav` → 取 PCM（跳过 44 字节 WAV 头）→ 现 provider 重转
-/// → 成功则原地回写该条历史的 rawTranscript / finalText、清除 error_code，返回新文本。
+/// → 失败记录原地修复；已完成 / 润色失败记录仅返回临时结果，不覆盖历史事实。
 ///
 /// 仅重新转写音频，不调用 LLM 润色。失败时
-/// 不动历史、不删录音，把错误返回给前端提示，用户可重试。返回更新后的整条记录给前端
-/// 局部刷新。
+/// 不动历史、不删录音，把错误返回给前端提示，用户可重试。
 #[tauri::command]
 pub async fn retranscribe_recording(
     core: CoreState<'_>,
     session_id: String,
-) -> Result<DictationSession, String> {
+) -> Result<HistoryRetranscriptionResult, String> {
     if !is_valid_session_id(&session_id) {
         return Err("invalid session id".into());
+    }
+    let entry = core
+        .list_history()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|entry| entry.id == session_id)
+        .ok_or_else(|| "history entry not found".to_string())?;
+    if entry.has_audio_recording != Some(true) {
+        return Err("history entry has no archived recording".into());
+    }
+    if entry.pipeline_mode.as_deref() == Some("multimodal") {
+        return Err("multimodal history does not support retranscription".into());
     }
     let path =
         crate::persistence::recording_path_for_session(&session_id).map_err(|e| e.to_string())?;
@@ -248,6 +270,34 @@ pub async fn retranscribe_recording(
     }
     let retranscribe_ms = retranscribe_started.elapsed().as_millis() as u64;
 
-    core.apply_history_retranscription(&session_id, text, &asr_call_label, retranscribe_ms)
-        .map_err(|e| e.to_string())
+    let updated_entry = if should_replace_failed_history(entry.error_code.as_deref()) {
+        Some(
+            core.apply_history_retranscription(
+                &session_id,
+                text.clone(),
+                &asr_call_label,
+                retranscribe_ms,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+    } else {
+        None
+    };
+    Ok(HistoryRetranscriptionResult {
+        text,
+        updated_entry,
+    })
+}
+
+#[cfg(test)]
+mod retranscription_tests {
+    use super::should_replace_failed_history;
+
+    #[test]
+    fn only_failed_transcriptions_are_replaced() {
+        assert!(should_replace_failed_history(Some("transcribeFailed")));
+        assert!(should_replace_failed_history(Some("emptyTranscript")));
+        assert!(!should_replace_failed_history(Some("polishFailed")));
+        assert!(!should_replace_failed_history(None));
+    }
 }

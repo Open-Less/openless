@@ -98,6 +98,7 @@ pub struct DictationPolishContext {
     pub working_languages: Vec<String>,
     pub translation_target_language: String,
     pub translation_active: bool,
+    pub edit_plan_input: bool,
     pub chinese_script_preference: ChineseScriptPreference,
     pub output_language_preference: OutputLanguagePreference,
     pub llm_thinking_enabled: bool,
@@ -133,6 +134,8 @@ pub struct DictationInsertionContext {
 pub struct RecordingPlan {
     pub microphone_device_name: Option<String>,
     pub mute_during_recording: bool,
+    /// Buffer the whole recording and start ASR only after the recorder stops.
+    pub transcribe_after_stop: bool,
     /// Whether the Host may create an audio archive at all. QA/Selection Voice
     /// keep PCM in memory; successful-recording retention is a separate policy.
     pub archive_enabled: bool,
@@ -246,6 +249,7 @@ impl DictationContext {
             recording: RecordingPlan {
                 microphone_device_name: non_blank(&preferences.microphone_device_name),
                 mute_during_recording: preferences.mute_during_recording,
+                transcribe_after_stop: preferences.stable_transcription_enabled,
                 archive_enabled: true,
                 archive_successful_recording: preferences.record_audio_for_debug,
                 retention_days: preferences.history_retention_days,
@@ -273,6 +277,7 @@ impl DictationContext {
                 working_languages: preferences.working_languages.clone(),
                 translation_target_language,
                 translation_active,
+                edit_plan_input: false,
                 chinese_script_preference: preferences.chinese_script_preference,
                 output_language_preference: preferences.output_language_preference,
                 llm_thinking_enabled: preferences.llm_thinking_enabled,
@@ -309,7 +314,7 @@ impl DictationContext {
         } else {
             self.polish.style_system_prompt.clone()
         };
-        crate::prompt_compose::compose_polish_prompts(
+        crate::prompt_compose::compose_polish_prompts_for_input(
             raw_text,
             self.polish.mode,
             &self.polish.hotwords,
@@ -320,6 +325,7 @@ impl DictationContext {
             self.polish.front_app.as_deref(),
             self.polish.cursor_context.as_deref(),
             !self.polish.prior_turns.is_empty(),
+            self.polish.edit_plan_input,
         )
     }
 
@@ -476,6 +482,7 @@ mod tests {
             active_asr_provider: "local-qwen3".to_string(),
             active_llm_provider: "openai".to_string(),
             local_asr_active_model: "qwen3-asr-1.7b".to_string(),
+            stable_transcription_enabled: true,
             history_max_entries: Some(100),
             audio_recording_max_entries: Some(7),
             working_languages: vec!["简体中文".to_string(), "English".to_string()],
@@ -502,11 +509,13 @@ mod tests {
 
         preferences.microphone_device_name = "changed".to_string();
         preferences.active_asr_provider = "changed".to_string();
+        preferences.stable_transcription_enabled = false;
         assert_eq!(
             context.recording.microphone_device_name.as_deref(),
             Some("USB microphone")
         );
         assert_eq!(context.asr.provider_id, "local-qwen3");
+        assert!(context.recording.transcribe_after_stop);
         assert_eq!(context.asr.model.as_deref(), Some("qwen3-asr-1.7b"));
         // Audio archives have their own user-visible limit. History retention
         // may be much larger and must not silently override the recording cap.

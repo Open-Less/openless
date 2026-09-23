@@ -13,6 +13,14 @@ const MAX_OP_STRING_LEN: usize = 8_192;
 const MAX_PATTERN_LEN: usize = 512;
 const REGEX_TIMEOUT_MS: u64 = 50;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EditPlanFormat {
+    #[default]
+    Xml,
+    Json,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditPlan {
@@ -90,23 +98,34 @@ const EDIT_OPERATION_TAGS: &[&str] = &[
     "full_rewrite",
 ];
 
-/// Parse LLM edit-plan output (XML primary, JSON legacy fallback).
+/// Parse LLM edit-plan output with XML preferred (backward compatible).
 pub fn parse_edit_plan(raw: &str) -> Result<EditPlan, String> {
+    parse_edit_plan_with_priority(raw, EditPlanFormat::Xml)
+}
+
+/// Try `preferred` format first, then fall back to the other.
+pub fn parse_edit_plan_with_priority(
+    raw: &str,
+    preferred: EditPlanFormat,
+) -> Result<EditPlan, String> {
     let trimmed = raw.trim();
-    if trimmed.contains('<') {
-        match parse_edit_plan_xml(trimmed) {
-            Ok(plan) => return Ok(plan),
-            Err(xml_error) => {
-                if trimmed.contains('{') {
-                    return parse_edit_plan_json(trimmed).map_err(|json_error| {
-                        format!("invalid EditPlan XML: {xml_error}; JSON fallback: {json_error}")
-                    });
-                }
-                return Err(format!("invalid EditPlan XML: {xml_error}"));
-            }
-        }
+    let (primary, fallback) = match preferred {
+        EditPlanFormat::Xml => (
+            parse_edit_plan_xml(trimmed).map_err(|e| format!("invalid EditPlan XML: {e}")),
+            parse_edit_plan_json(trimmed),
+        ),
+        EditPlanFormat::Json => (
+            parse_edit_plan_json(trimmed),
+            parse_edit_plan_xml(trimmed).map_err(|e| format!("invalid EditPlan XML: {e}")),
+        ),
+    };
+    match primary {
+        Ok(plan) => Ok(plan),
+        Err(primary_error) => match fallback {
+            Ok(plan) => Ok(plan),
+            Err(fallback_error) => Err(format!("{primary_error}; fallback: {fallback_error}")),
+        },
     }
-    parse_edit_plan_json(trimmed)
 }
 
 pub fn parse_edit_plan_xml(raw: &str) -> Result<EditPlan, String> {
@@ -397,7 +416,17 @@ pub fn parse_edit_plan_json(raw: &str) -> Result<EditPlan, String> {
 }
 
 fn parse_edit_plan_json_candidate(raw: &str) -> Result<EditPlan, String> {
-    let json = extract_json_object(raw).unwrap_or(raw);
+    let mut last_error = None;
+    for json in extract_json_object_candidates(raw) {
+        match try_parse_edit_plan_json_str(json) {
+            Ok(plan) => return Ok(plan),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "invalid EditPlan JSON: no JSON object found".into()))
+}
+
+fn try_parse_edit_plan_json_str(json: &str) -> Result<EditPlan, String> {
     let mut value: Value =
         serde_json::from_str(json).map_err(|error| format!("invalid EditPlan JSON: {error}"))?;
     normalize_edit_plan_value(&mut value);
@@ -481,10 +510,62 @@ fn promote_alias_field(
     }
 }
 
-fn extract_json_object(raw: &str) -> Option<&str> {
-    let start = raw.find('{')?;
-    let end = raw.rfind('}')?;
-    (start <= end).then(|| &raw[start..=end])
+fn extract_json_object_candidates(raw: &str) -> Vec<&str> {
+    let mut candidates = Vec::new();
+    let bytes = raw.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            if let Some(end) = find_balanced_json_object_end(raw, i) {
+                candidates.push(&raw[i..=end]);
+                i = end + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    if candidates.is_empty() {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            candidates.push(trimmed);
+        }
+    }
+    candidates
+}
+
+fn find_balanced_json_object_end(raw: &str, start: usize) -> Option<usize> {
+    let bytes = raw.as_bytes();
+    if start >= bytes.len() || bytes[start] != b'{' {
+        return None;
+    }
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escape = false;
+    for (offset, &byte) in bytes[start..].iter().enumerate() {
+        let index = start + offset;
+        if in_string {
+            if escape {
+                escape = false;
+            } else if byte == b'\\' {
+                escape = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match byte {
+            b'"' => in_string = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 pub fn apply_edit_plan(draft: &str, plan: &EditPlan) -> Result<String, EditApplyError> {
@@ -812,5 +893,54 @@ Line two</text>
         let plan = parse_edit_plan_json(raw).unwrap();
         assert_eq!(plan.operations.len(), 1);
         assert_eq!(plan.summary.as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn json_priority_prefers_json_when_both_present() {
+        let raw = r#"{"operations":[{"type":"full_rewrite","text":"from-json"}]}
+<edit_plan><full_rewrite><text>from-xml</text></full_rewrite></edit_plan>"#;
+        let plan = parse_edit_plan_with_priority(raw, EditPlanFormat::Json).unwrap();
+        assert_eq!(
+            plan.operations[0],
+            EditOperation::FullRewrite {
+                text: "from-json".into()
+            }
+        );
+    }
+
+    #[test]
+    fn xml_priority_prefers_xml_when_both_present() {
+        let raw = r#"<edit_plan><full_rewrite><text>from-xml</text></full_rewrite></edit_plan>
+{"operations":[{"type":"full_rewrite","text":"from-json"}]}"#;
+        let plan = parse_edit_plan_with_priority(raw, EditPlanFormat::Xml).unwrap();
+        assert_eq!(
+            plan.operations[0],
+            EditOperation::FullRewrite {
+                text: "from-xml".into()
+            }
+        );
+    }
+
+    #[test]
+    fn balanced_json_extract_ignores_trailing_brace_noise() {
+        let raw = r#"prefix {"operations":[{"type":"literal_replace","find":"a","replace":"b}"}]} trailing } noise"#;
+        let plan = parse_edit_plan_json(raw).unwrap();
+        assert_eq!(
+            plan.operations[0],
+            EditOperation::LiteralReplace {
+                find: "a".into(),
+                replace: "b}".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_fenced_json_via_priority() {
+        let raw = "```json\n{\"operations\":[{\"type\":\"full_rewrite\",\"text\":\"ok\"}]}\n```";
+        let plan = parse_edit_plan_with_priority(raw, EditPlanFormat::Json).unwrap();
+        assert_eq!(
+            plan.operations[0],
+            EditOperation::FullRewrite { text: "ok".into() }
+        );
     }
 }

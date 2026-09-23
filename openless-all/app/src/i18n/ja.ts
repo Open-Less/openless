@@ -686,6 +686,10 @@ export const ja: typeof zhCN = {
       dictationPromptHint:
         '録音の書き起こし後のASRテキスト用。口語整理、ASR誤字修正、固有名詞の復元ルールをここに書けます。',
       selectionPromptFallback: '書面推敲プロンプトが未設定です。安全なデフォルトを使用します。',
+      voiceEditPromptTitle: '選択範囲の音声編集プロンプト（EditPlan）',
+      voiceEditPromptHint:
+        '選択範囲の音声「編集」で EditPlan を生成するときだけ使います。空なら設定のカスタムまたは内蔵デフォルトにフォールバック。',
+      voiceEditPromptPlaceholder: '空 = 設定カスタムまたは内蔵デフォルト',
       selectionActivated: '「{{name}}」を選択範囲の推敲に設定しました',
       selectionActivateFailed: '選択範囲の推敲スタイル切替に失敗：{{err}}',
       selectionChars: '{{count}} 文字',
@@ -881,6 +885,16 @@ export const ja: typeof zhCN = {
       editKeywords: '追加の疑問手がかり',
       editKeywordsDesc:
         '自動判定オフ時のみ。1行1語で質問扱い。なければ？/疑問語ヒューリスティック。',
+      editPlanFormat: '編集プラン形式',
+      editPlanFormatDesc:
+        'モデルはこの形式の EditPlan を優先出力。解析失敗時はもう一方を試します。',
+      editPlanFormatXml: 'XML',
+      editPlanFormatJson: 'JSON',
+      editSystemPrompt: '編集プランのシステムプロンプト',
+      editSystemPromptDesc:
+        'スタイルパック / 内蔵デフォルトの EditPlan システムプロンプトを上書き。空なら カスタム → パック → 内蔵 の順でフォールバック。',
+      editSystemPromptPlaceholder: '空 = スタイルパックまたは内蔵デフォルト',
+      editSystemPromptReset: 'デフォルトに戻す',
     },
     selectionPolish: {
       title: '選択範囲の推敲',
@@ -1069,6 +1083,9 @@ export const ja: typeof zhCN = {
       capsuleStyleLabel: 'カプセルスタイル',
       capsuleStyleSiri: '光条 Siri スタイル',
       capsuleStyleClassic: 'Openless デフォルトスタイル',
+      stableTranscriptionLabel: '安定モード（録音後に文字起こし）',
+      stableTranscriptionDesc:
+        '有効にすると、録音中は ASR に接続せず、停止後に音声全体を送信します。結果は遅くなりますが、接続遅延や録音中のネットワーク変動に録音が影響されません。',
       muteDuringRecordingLabel: '録音中はミュート',
       muteDuringRecordingDesc:
         '録音中にシステム出力を一時的にミュートし、スピーカーのエコーを防ぎます。',

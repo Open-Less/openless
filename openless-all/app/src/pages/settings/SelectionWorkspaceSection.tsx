@@ -1,6 +1,10 @@
 // 通用 → 选区助手：合并选区润色与选区语音编辑，避免用户混淆两项职责。
 
-import type { PlatformCapabilities, SelectionPolishOutputMode } from '../../lib/types';
+import type {
+  EditPlanFormat,
+  PlatformCapabilities,
+  SelectionPolishOutputMode,
+} from '../../lib/types';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { detectOS } from '../../components/WindowChrome';
@@ -24,6 +28,11 @@ const outputOptions: Array<{ value: SelectionPolishOutputMode }> = [
   { value: 'previewConfirm' },
 ];
 
+const editPlanFormatOptions: Array<{ value: EditPlanFormat }> = [
+  { value: 'xml' },
+  { value: 'json' },
+];
+
 export function SelectionWorkspaceSection() {
   const { t } = useTranslation();
   const { prefs, capability, refresh, updatePrefs } = useHotkeySettings();
@@ -45,6 +54,8 @@ export function SelectionWorkspaceSection() {
   const keywordsText = prefs.selectionVoiceEditKeywords.join('\n');
   const showVoice = os === 'win';
   const voiceEnabled = prefs.selectionVoiceEnabled;
+  const editPlanFormat = prefs.selectionVoiceEditPlanFormat ?? 'xml';
+  const editSystemPrompt = prefs.selectionVoiceEditSystemPrompt ?? '';
 
   return (
     <Card>
@@ -201,6 +212,93 @@ export function SelectionWorkspaceSection() {
                   />
                 </SettingRow>
               )}
+              <SettingRow
+                label={t('settings.selectionWorkspace.editPlanFormat')}
+                desc={t('settings.selectionWorkspace.editPlanFormatDesc')}
+              >
+                <div style={{ ...segmentedTrackStyle, flexWrap: 'wrap', gap: 4 }}>
+                  {editPlanFormatOptions.map((option) => {
+                    const selected = editPlanFormat === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() =>
+                          void updatePrefs((current) => ({
+                            ...current,
+                            selectionVoiceEditPlanFormat: option.value,
+                          }))
+                        }
+                        style={{
+                          ...chipSelectedStyle(selected),
+                          border: 0,
+                          borderRadius: 6,
+                          padding: '6px 10px',
+                          fontFamily: 'inherit',
+                          fontSize: 12,
+                          cursor: 'default',
+                          fontWeight: selected ? 600 : 500,
+                        }}
+                      >
+                        {t(
+                          `settings.selectionWorkspace.editPlanFormat${option.value === 'xml' ? 'Xml' : 'Json'}`,
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </SettingRow>
+              <SettingRow
+                label={t('settings.selectionWorkspace.editSystemPrompt')}
+                desc={t('settings.selectionWorkspace.editSystemPromptDesc')}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
+                  <textarea
+                    aria-label={t('settings.selectionWorkspace.editSystemPrompt')}
+                    value={editSystemPrompt}
+                    placeholder={t('settings.selectionWorkspace.editSystemPromptPlaceholder')}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      void updatePrefs((current) => ({
+                        ...current,
+                        selectionVoiceEditSystemPrompt: next,
+                      }));
+                    }}
+                    rows={8}
+                    style={{
+                      ...inputStyle,
+                      width: '100%',
+                      minWidth: 220,
+                      minHeight: 140,
+                      resize: 'vertical',
+                      lineHeight: 1.5,
+                      fontFamily: 'inherit',
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void updatePrefs((current) => ({
+                        ...current,
+                        selectionVoiceEditSystemPrompt: '',
+                      }))
+                    }
+                    style={{
+                      alignSelf: 'flex-start',
+                      border: '0.5px solid var(--ol-line)',
+                      borderRadius: 6,
+                      background: 'transparent',
+                      color: 'var(--ol-ink-3)',
+                      padding: '4px 10px',
+                      fontSize: 12,
+                      fontFamily: 'inherit',
+                      cursor: 'default',
+                    }}
+                  >
+                    {t('settings.selectionWorkspace.editSystemPromptReset')}
+                  </button>
+                </div>
+              </SettingRow>
             </>
           )}
         </>

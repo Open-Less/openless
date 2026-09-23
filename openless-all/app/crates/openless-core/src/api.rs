@@ -131,7 +131,6 @@ pub struct LessComputerVoiceSession {
     less_computer: Arc<dyn crate::domains::LessComputerApi>,
     request: crate::domains::LessComputerRunRequest,
     partials: Arc<VoiceTranscriptSink>,
-    received_bytes: AtomicU64,
     archive_successful_recording: bool,
 }
 
@@ -358,6 +357,22 @@ impl crate::ports::RecordingProgressSink for LessComputerRecordingProgress {
             crate::ports::RecordingEvent::Level { elapsed_ms, level } => {
                 self.publish_level(elapsed_ms, level)
             }
+            crate::ports::RecordingEvent::LimitReached => {
+                let session_id = self.session_id;
+                let less_computer = Arc::clone(&self.less_computer);
+                let control = Arc::clone(&self.control);
+                self.task_spawner.spawn(Box::pin(async move {
+                    if less_computer.capture_cancelled(session_id) {
+                        return;
+                    }
+                    if let Err(error) =
+                        control.request(session_id, crate::events::RecordingControlAction::Stop)
+                    {
+                        log::warn!("failed to stop Less Computer capture at PCM limit: {error}");
+                    }
+                }));
+                Ok(())
+            }
             crate::ports::RecordingEvent::Fatal(error) => {
                 let session_id = self.session_id;
                 let less_computer = Arc::clone(&self.less_computer);
@@ -500,6 +515,10 @@ impl crate::ports::RecordingProgressSink for QaRecordingProgress {
             crate::ports::RecordingEvent::Level { elapsed_ms, level } => {
                 self.publish_level(elapsed_ms, level)
             }
+            crate::ports::RecordingEvent::LimitReached => {
+                self.submit_terminal(QaRecordingTerminal::Stop);
+                Ok(())
+            }
             crate::ports::RecordingEvent::Fatal(error) => {
                 self.submit_terminal(QaRecordingTerminal::Fault(error));
                 Ok(())
@@ -555,6 +574,18 @@ impl crate::ports::RecordingProgressSink for SelectionVoiceRecordingProgress {
         match event {
             crate::ports::RecordingEvent::Level { elapsed_ms, level } => {
                 self.publish_level(elapsed_ms, level)
+            }
+            crate::ports::RecordingEvent::LimitReached => {
+                let session_id = self.session_id;
+                let control = Arc::clone(&self.control);
+                self.task_spawner.spawn(Box::pin(async move {
+                    if let Err(error) =
+                        control.request(session_id, crate::events::RecordingControlAction::Stop)
+                    {
+                        log::warn!("failed to stop selection voice at PCM limit: {error}");
+                    }
+                }));
+                Ok(())
             }
             crate::ports::RecordingEvent::Fatal(error) => {
                 let session_id = self.session_id;
@@ -913,19 +944,6 @@ impl LessComputerVoiceSession {
             return Err(BackendError::new(
                 BackendErrorCode::InvalidArgument,
                 "Less Computer PCM must be non-empty and contain complete 16-bit samples",
-            ));
-        }
-        const MAX_PCM_BYTES: u64 = 128 * 1024 * 1024;
-        let next = self
-            .received_bytes
-            .fetch_add(pcm.len() as u64, Ordering::AcqRel)
-            .saturating_add(pcm.len() as u64);
-        if next > MAX_PCM_BYTES {
-            self.received_bytes
-                .fetch_sub(pcm.len() as u64, Ordering::AcqRel);
-            return Err(BackendError::new(
-                BackendErrorCode::InvalidArgument,
-                "Less Computer PCM exceeds the provider limit",
             ));
         }
         self.control.transcription.consume_pcm_chunk(pcm);
@@ -1722,6 +1740,29 @@ impl EngineProgressSink for BackendEngineProgress {
                     );
                 }
             }
+            EngineProgress::RecordingLimitReached => {
+                let state = self.state.read().expect("backend state lock poisoned");
+                ensure_active_session(&state, session_id)?;
+                if !matches!(
+                    state.dictation.phase,
+                    DictationPhase::Starting | DictationPhase::Recording
+                ) {
+                    return Err(BackendError::new(
+                        BackendErrorCode::InvalidState,
+                        "recording limit arrived after recording stopped",
+                    ));
+                }
+                drop(state);
+                self.events.publish(
+                    Some(session_id),
+                    BackendEventKind::RecordingControlRequested(
+                        crate::events::RecordingControlRequest {
+                            session_id,
+                            action: crate::events::RecordingControlAction::Stop,
+                        },
+                    ),
+                );
+            }
             EngineProgress::RecordingFault(error) => {
                 let mut state = self.state.write().expect("backend state lock poisoned");
                 ensure_active_session(&state, session_id)?;
@@ -2046,6 +2087,7 @@ impl OpenLessBackend {
                 Arc::clone(&repositories.correction_rules),
                 Arc::clone(&repositories.activity),
                 Arc::clone(&deps.credential_store),
+                Arc::clone(&repositories.style_packs),
                 deps.selection_polisher.clone(),
                 Arc::clone(&voice_sessions),
             ));
@@ -2486,7 +2528,7 @@ impl OpenLessBackend {
                     session_id,
                     Arc::clone(&context),
                     Arc::clone(&partials) as Arc<dyn TextStreamSink>,
-                    recording_progress,
+                    Arc::clone(&recording_progress) as Arc<dyn crate::ports::RecordingProgressSink>,
                     resources.cancel.clone(),
                 ),
                 discard_voice_capture,
@@ -2499,10 +2541,12 @@ impl OpenLessBackend {
                     match own_voice_start(
                         &self.deps.task_spawner,
                         Arc::clone(&resources),
-                        self.deps.dictation_engine.start_transcription(
+                        Arc::clone(&self.deps.dictation_engine).start_transcription_with_progress(
                             session_id,
                             Arc::clone(&context),
                             Arc::clone(&partials) as Arc<dyn TextStreamSink>,
+                            Arc::clone(&recording_progress)
+                                as Arc<dyn crate::ports::RecordingProgressSink>,
                         ),
                         |transcription| transcription.cancel(),
                     )
@@ -2575,7 +2619,6 @@ impl OpenLessBackend {
                 less_computer: Arc::clone(&self.deps.services.less_computer),
                 request,
                 partials,
-                received_bytes: AtomicU64::new(0),
                 archive_successful_recording: context.recording.archive_successful_recording,
             })
         }
@@ -4275,6 +4318,15 @@ impl OpenLessBackend {
             .ok_or_else(|| {
                 BackendError::new(BackendErrorCode::InvalidArgument, "history entry not found")
             })?;
+        if !matches!(
+            entry.error_code.as_deref(),
+            Some("transcribeFailed" | "emptyTranscript")
+        ) {
+            return Err(BackendError::new(
+                BackendErrorCode::InvalidState,
+                "history entry is not a failed transcription",
+            ));
+        }
         entry.raw_transcript = text.clone();
         entry.final_text = text;
         entry.error_code = None;
@@ -6607,6 +6659,7 @@ mod tests {
     struct VoiceTranscription {
         pcm: Mutex<Vec<u8>>,
         cancelled: std::sync::atomic::AtomicBool,
+        starts: AtomicU64,
     }
 
     impl crate::ports::AudioConsumer for VoiceTranscription {
@@ -6650,6 +6703,7 @@ mod tests {
             _context: Arc<DictationContext>,
             _partials: Arc<dyn TextStreamSink>,
         ) -> BoxFuture<'static, Result<Arc<dyn TranscriptionSession>, BackendError>> {
+            self.0.starts.fetch_add(1, Ordering::AcqRel);
             let session: Arc<dyn TranscriptionSession> = self.0.clone();
             boxed(async move { Ok(session) })
         }
@@ -6849,6 +6903,7 @@ mod tests {
         .unwrap();
         let mut preferences = backend.get_preferences();
         preferences.coding_agent_enabled = true;
+        preferences.stable_transcription_enabled = true;
         backend.set_preferences(preferences).unwrap();
         let mut events = backend.subscribe();
 
@@ -6857,6 +6912,7 @@ mod tests {
             .start_less_computer_voice(session_id, Arc::new(FakeRecordingControl::default()))
             .await
             .unwrap();
+        assert_eq!(transcription.starts.load(Ordering::Acquire), 0);
         assert_eq!(host.actions(), vec![HostAction::ShowLessComputer]);
         assert_eq!(
             session.feed_pcm(&[]).unwrap_err().code,
@@ -6871,6 +6927,7 @@ mod tests {
 
         assert_eq!(result.session_id, session_id);
         assert_eq!(*transcription.pcm.lock().unwrap(), vec![1, 0, 2, 0]);
+        assert_eq!(transcription.starts.load(Ordering::Acquire), 1);
         assert!(runtime.request.lock().unwrap().is_some());
         let transcript_events = std::iter::from_fn(|| events.try_recv().ok())
             .filter(|event| matches!(event.kind, BackendEventKind::TranscriptDelta(_)))
@@ -6880,6 +6937,13 @@ mod tests {
             transcript_events[0].kind,
             BackendEventKind::TranscriptDelta(crate::TranscriptDelta { is_final: true, .. })
         ));
+
+        let cancelled = backend
+            .start_less_computer_voice(SessionId::new(), Arc::new(FakeRecordingControl::default()))
+            .await
+            .unwrap();
+        cancelled.cancel().await.unwrap();
+        assert_eq!(transcription.starts.load(Ordering::Acquire), 1);
     }
 
     #[tokio::test]
@@ -7178,6 +7242,15 @@ mod tests {
             ))),
         };
         use crate::ports::RecordingProgressSink;
+        progress
+            .publish(crate::ports::RecordingEvent::LimitReached)
+            .unwrap();
+        tokio::task::yield_now().await;
+        assert_eq!(
+            *control.requests.lock().unwrap(),
+            vec![(stop_session, crate::events::RecordingControlAction::Stop)]
+        );
+        control.requests.lock().unwrap().clear();
         progress.publish_level(10, 0.1).unwrap();
         progress.publish_level(20, 0.1).unwrap();
         progress.publish_level(30, 0.1).unwrap();
@@ -7265,6 +7338,22 @@ mod tests {
         assert_eq!(qa.stops.load(Ordering::Acquire), 1);
         assert_eq!(qa.cancels.load(Ordering::Acquire), 0);
         assert_eq!(qa.faults.load(Ordering::Acquire), 0);
+
+        let limit_progress = QaRecordingProgress {
+            session_id: SessionId::new(),
+            qa: Arc::clone(&qa) as Arc<dyn crate::domains::QaApi>,
+            progress: Arc::new(VoiceRecordingProgress),
+            task_spawner: Arc::new(TokioTaskSpawner),
+            started_at: std::time::Instant::now(),
+            silence: Mutex::new(None),
+            terminal: Mutex::new(QaRecordingTerminalState::default()),
+        };
+        limit_progress.arm();
+        limit_progress
+            .publish(crate::ports::RecordingEvent::LimitReached)
+            .unwrap();
+        tokio::task::yield_now().await;
+        assert_eq!(qa.stops.load(Ordering::Acquire), 2);
 
         let started_at = std::time::Instant::now();
         let no_speech = QaRecordingProgress {
@@ -7588,21 +7677,35 @@ mod tests {
 
         let mut entry = history_session("one");
         backend.append_history(entry.clone(), 30, Some(20)).unwrap();
+        let asr_call = crate::auxiliary::AsrCallLabel {
+            provider: "channel-b".into(),
+            model: Some("model-b".into()),
+        };
+        let completed_error = backend
+            .apply_history_retranscription(
+                &entry.id,
+                "must not replace history".into(),
+                &asr_call,
+                1,
+            )
+            .unwrap_err();
+        assert_eq!(completed_error.code, BackendErrorCode::InvalidState);
+
         entry.final_text = "updated".to_string();
+        entry.error_code = Some("polishFailed".to_string());
+        assert!(backend.update_history_entry(entry.clone()).unwrap());
+        let polish_error = backend
+            .apply_history_retranscription(&entry.id, "must remain a preview".into(), &asr_call, 1)
+            .unwrap_err();
+        assert_eq!(polish_error.code, BackendErrorCode::InvalidState);
+
+        entry.error_code = Some("transcribeFailed".to_string());
         assert!(backend.update_history_entry(entry.clone()).unwrap());
         assert!(!backend
             .update_history_entry(history_session("missing"))
             .unwrap());
         let retranscribed = backend
-            .apply_history_retranscription(
-                &entry.id,
-                "retranscribed".into(),
-                &crate::auxiliary::AsrCallLabel {
-                    provider: "channel-b".into(),
-                    model: Some("model-b".into()),
-                },
-                480,
-            )
+            .apply_history_retranscription(&entry.id, "retranscribed".into(), &asr_call, 480)
             .unwrap();
         assert_eq!(retranscribed.raw_transcript, "retranscribed");
         assert_eq!(retranscribed.final_text, "retranscribed");
@@ -7619,8 +7722,8 @@ mod tests {
 
         assert!(backend.list_history().unwrap().is_empty());
         assert_eq!(backend.list_activity().unwrap()[0].chars, 42);
-        assert_eq!(backend.snapshot().history_revision, 6);
-        for expected_revision in 1..=6 {
+        assert_eq!(backend.snapshot().history_revision, 7);
+        for expected_revision in 1..=7 {
             assert_eq!(
                 events.try_recv().unwrap().kind,
                 BackendEventKind::HistoryChanged(HistoryChange {
@@ -9412,6 +9515,35 @@ mod tests {
             "zero first meter must still publish readiness"
         );
         backend.cancel_dictation(None).await.unwrap();
+        backend.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn recording_limit_requests_the_normal_dictation_stop_path() {
+        let (backend, _) = backend();
+        backend.start().await.unwrap();
+        let session_id = backend.start_dictation().await.unwrap();
+        let mut events = backend.subscribe();
+
+        backend
+            .engine_progress_sink()
+            .publish(session_id, EngineProgress::RecordingLimitReached)
+            .unwrap();
+
+        let request = std::iter::from_fn(|| events.try_recv().ok()).find_map(|event| match event {
+            crate::events::BackendEvent {
+                session_id: Some(id),
+                kind: BackendEventKind::RecordingControlRequested(request),
+                ..
+            } if id == session_id => Some(request),
+            _ => None,
+        });
+        assert_eq!(
+            request.map(|request| request.action),
+            Some(crate::events::RecordingControlAction::Stop)
+        );
+
+        backend.cancel_dictation(Some(session_id)).await.unwrap();
         backend.shutdown().await.unwrap();
     }
 

@@ -684,6 +684,10 @@ export const ko: typeof zhCN = {
         '녹음 후 받아쓰기한 ASR 텍스트용. 구어 정리, ASR 오타 수정, 고유명사 복원 규칙을 여기에 작성하세요.',
       selectionPromptFallback:
         '서면 다듬기 프롬프트가 아직 설정되지 않았습니다. 안전한 기본값을 사용합니다.',
+      voiceEditPromptTitle: '선택 영역 음성 편집 프롬프트(EditPlan)',
+      voiceEditPromptHint:
+        '선택 영역 음성 「편집」 경로에서 EditPlan을 생성할 때만 사용합니다. 비우면 설정의 사용자 지정 또는 내장 기본값으로 폴백합니다.',
+      voiceEditPromptPlaceholder: '비움 = 설정 사용자 지정 또는 내장 기본값',
       selectionActivated: '선택 영역 다듬기에 "{{name}}"을(를) 설정했습니다',
       selectionActivateFailed: '선택 영역 다듬기 스타일 전환 실패: {{err}}',
       selectionChars: '{{count}}자',
@@ -878,6 +882,16 @@ export const ko: typeof zhCN = {
         '켜면 설정된 모델이 질문/편집을 판별합니다. 모델 실패 시에만 의문사 휴리스틱으로 폴백합니다.',
       editKeywords: '추가 의문 단서',
       editKeywordsDesc: '자동 판별 끔일 때만. 한 줄에 하나면 질문. 없으면 ?/의문사 휴리스틱.',
+      editPlanFormat: '편집 계획 형식',
+      editPlanFormatDesc:
+        '모델이 선택한 형식으로 EditPlan을 우선 출력합니다. 파싱 실패 시 다른 형식을 시도합니다.',
+      editPlanFormatXml: 'XML',
+      editPlanFormatJson: 'JSON',
+      editSystemPrompt: '편집 계획 시스템 프롬프트',
+      editSystemPromptDesc:
+        '스타일 팩 / 내장 기본 EditPlan 시스템 프롬프트를 덮어씁니다. 비우면 사용자 지정 → 팩 → 내장 순으로 폴백합니다.',
+      editSystemPromptPlaceholder: '비움 = 스타일 팩 또는 내장 기본값',
+      editSystemPromptReset: '기본값으로 재설정',
     },
     selectionPolish: {
       title: '선택 영역 다듬기',
@@ -1061,6 +1075,9 @@ export const ko: typeof zhCN = {
       capsuleStyleLabel: '캡슐 스타일',
       capsuleStyleSiri: '시리 광선 스타일',
       capsuleStyleClassic: 'Openless 기본 스타일',
+      stableTranscriptionLabel: '안정 모드 (녹음 후 전사)',
+      stableTranscriptionDesc:
+        '켜면 녹음 중에는 ASR에 연결하지 않고 중지한 뒤 전체 오디오를 전송합니다. 결과는 늦게 표시되지만 연결 지연이나 녹음 중 네트워크 불안정이 녹음에 영향을 주지 않습니다.',
       muteDuringRecordingLabel: '녹음 중 음소거',
       muteDuringRecordingDesc:
         '녹음 중 시스템 출력을 일시적으로 음소거하여 스피커 에코를 방지합니다.',

@@ -273,6 +273,7 @@ impl ActiveLLMProvider {
         front_app: Option<&str>,
         cursor_context: Option<&str>,
         prior_turns: &[(String, String)],
+        edit_plan_input: bool,
         on_delta: F,
         should_cancel: C,
     ) -> Result<String, LLMError>
@@ -294,6 +295,7 @@ impl ActiveLLMProvider {
                         front_app,
                         cursor_context,
                         prior_turns,
+                        edit_plan_input,
                         on_delta,
                         should_cancel,
                     )
@@ -312,6 +314,7 @@ impl ActiveLLMProvider {
                         front_app,
                         cursor_context,
                         prior_turns,
+                        edit_plan_input,
                         on_delta,
                         should_cancel,
                     )
@@ -332,6 +335,7 @@ impl ActiveLLMProvider {
         front_app: Option<&str>,
         cursor_context: Option<&str>,
         prior_turns: &[(String, String)],
+        edit_plan_input: bool,
     ) -> Result<String, LLMError> {
         match self {
             Self::OpenAI(provider) => {
@@ -347,6 +351,7 @@ impl ActiveLLMProvider {
                         front_app,
                         cursor_context,
                         prior_turns,
+                        edit_plan_input,
                     )
                     .await
             }
@@ -363,6 +368,7 @@ impl ActiveLLMProvider {
                         front_app,
                         cursor_context,
                         prior_turns,
+                        edit_plan_input,
                     )
                     .await
             }
@@ -542,8 +548,9 @@ impl OpenAICompatibleLLMProvider {
         front_app: Option<&str>,
         cursor_context: Option<&str>,
         prior_turns: &[(String, String)],
+        edit_plan_input: bool,
     ) -> Result<String, LLMError> {
-        let (system_prompt, user_prompt) = compose_polish_prompts(
+        let (system_prompt, user_prompt) = crate::prompt_compose::compose_polish_prompts_for_input(
             raw_text,
             mode,
             hotwords,
@@ -554,6 +561,7 @@ impl OpenAICompatibleLLMProvider {
             front_app,
             cursor_context,
             !prior_turns.is_empty(),
+            edit_plan_input,
         );
         log::info!(
             "[style-pack] llm polish assembled provider={} model={} mode={:?} base_prompt_chars={} effective_prompt_chars={} hotwords={} front_app={} prior_turns={}",
@@ -601,6 +609,7 @@ impl OpenAICompatibleLLMProvider {
         front_app: Option<&str>,
         cursor_context: Option<&str>,
         prior_turns: &[(String, String)],
+        edit_plan_input: bool,
         on_delta: F,
         should_cancel: C,
     ) -> Result<String, LLMError>
@@ -608,7 +617,7 @@ impl OpenAICompatibleLLMProvider {
         F: Fn(&str) + Send + Sync,
         C: Fn() -> bool + Send + Sync,
     {
-        let (system_prompt, user_prompt) = compose_polish_prompts(
+        let (system_prompt, user_prompt) = crate::prompt_compose::compose_polish_prompts_for_input(
             raw_text,
             mode,
             hotwords,
@@ -619,6 +628,7 @@ impl OpenAICompatibleLLMProvider {
             front_app,
             cursor_context,
             !prior_turns.is_empty(),
+            edit_plan_input,
         );
         let messages = build_polish_history_messages(&system_prompt, prior_turns, &user_prompt);
         log::info!(
@@ -1171,6 +1181,7 @@ impl CodexOAuthLLMProvider {
         front_app: Option<&str>,
         cursor_context: Option<&str>,
         prior_turns: &[(String, String)],
+        edit_plan_input: bool,
     ) -> Result<String, LLMError> {
         self.polish_streaming(
             raw_text,
@@ -1183,6 +1194,7 @@ impl CodexOAuthLLMProvider {
             front_app,
             cursor_context,
             prior_turns,
+            edit_plan_input,
             |_| {},
             || false,
         )
@@ -1256,6 +1268,7 @@ impl CodexOAuthLLMProvider {
         front_app: Option<&str>,
         cursor_context: Option<&str>,
         prior_turns: &[(String, String)],
+        edit_plan_input: bool,
         on_delta: F,
         should_cancel: C,
     ) -> Result<String, LLMError>
@@ -1263,7 +1276,7 @@ impl CodexOAuthLLMProvider {
         F: Fn(&str) + Send + Sync,
         C: Fn() -> bool + Send + Sync,
     {
-        let (system_prompt, user_prompt) = compose_polish_prompts(
+        let (system_prompt, user_prompt) = crate::prompt_compose::compose_polish_prompts_for_input(
             raw_text,
             mode,
             hotwords,
@@ -1274,6 +1287,7 @@ impl CodexOAuthLLMProvider {
             front_app,
             cursor_context,
             !prior_turns.is_empty(),
+            edit_plan_input,
         );
         self.codex_responses(
             build_polish_history_messages(&system_prompt, prior_turns, &user_prompt),
@@ -2229,6 +2243,7 @@ mod tests {
                 None,
                 None,
                 &[],
+                false,
                 |delta| deltas.lock().unwrap().push_str(delta),
                 || false,
             )
@@ -2476,7 +2491,8 @@ mod tests {
                             OutputLanguagePreference::Auto,
                             None,
                             None,
-                            &history
+                            &history,
+                            false,
                         )
                         .await
                         .unwrap(),
@@ -2534,6 +2550,7 @@ mod tests {
                         None,
                         None,
                         &[],
+                        false,
                         delta,
                         || false
                     )
@@ -3017,6 +3034,7 @@ mod tests {
                     None,
                     None,
                     &[],
+                    false,
                 )
                 .await
                 .unwrap();
@@ -4344,6 +4362,7 @@ mod tests {
                 None,
                 None,
                 &[],
+                false,
                 |delta| deltas.lock().unwrap().push_str(delta),
                 || false,
             )
@@ -4407,6 +4426,7 @@ mod tests {
                 None,
                 None,
                 &[],
+                false,
             )
             .await
             .unwrap();

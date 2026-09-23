@@ -88,6 +88,7 @@ const NEW_PACK_TEMPLATE_BASE: Omit<
   kind: 'imported',
   baseMode: 'light',
   selectionPrompt: NEW_PACK_SELECTION_PROMPT_TEMPLATE,
+  voiceEditPrompt: '',
   prompt: NEW_PACK_PROMPT_TEMPLATE,
   examples: [],
   tags: [],
@@ -114,6 +115,7 @@ function editableFingerprint(pack: StylePack | null): string {
     author: pack.author ?? '',
     version: pack.version,
     selectionPrompt: pack.selectionPrompt,
+    voiceEditPrompt: pack.voiceEditPrompt ?? '',
     prompt: pack.prompt,
     examples: pack.examples,
     tags: pack.tags,
@@ -642,6 +644,43 @@ export function Style() {
         style={{ ...textareaStyle, minHeight: 150 }}
       />
     </label>
+  );
+
+  const voiceEditPromptEditor = (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          flexWrap: 'wrap',
+        }}
+      >
+        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink)' }}>
+          {t('style.pack.voiceEditPromptTitle')}
+        </span>
+        <Pill tone="default" size="sm">
+          {t('style.pack.selectionChars', { count: draft?.voiceEditPrompt?.length ?? 0 })}
+        </Pill>
+      </div>
+      <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.55 }}>
+        {t('style.pack.voiceEditPromptHint')}
+      </span>
+      <textarea
+        value={draft?.voiceEditPrompt ?? ''}
+        placeholder={t('style.pack.voiceEditPromptPlaceholder')}
+        onChange={(event) => patchDraft({ voiceEditPrompt: event.target.value })}
+        style={{ ...textareaStyle, minHeight: 150 }}
+      />
+    </label>
+  );
+
+  const selectionWorkflowEditors = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {selectionPromptEditor}
+      {voiceEditPromptEditor}
+    </div>
   );
 
   const dictationPromptEditor = (
@@ -1428,7 +1467,9 @@ export function Style() {
                       </label>
                     </div>
 
-                    {workflowView === 'dictation' ? dictationPromptEditor : selectionPromptEditor}
+                    {workflowView === 'dictation'
+                      ? dictationPromptEditor
+                      : selectionWorkflowEditors}
 
                     {workflowView === 'dictation' && (
                       <Card

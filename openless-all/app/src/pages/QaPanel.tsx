@@ -478,7 +478,28 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
                     <MessageScrollerItem messageId="error" className="olchat-enter">
                       <Bubble variant="destructive">
                         <BubbleContent>
-                          <div>{errorMsg}</div>
+                          {(() => {
+                            const marker = '---model_output---';
+                            const endMarker = '---end_model_output---';
+                            const startIdx = errorMsg.indexOf(marker);
+                            if (startIdx < 0) {
+                              return <div>{errorMsg}</div>;
+                            }
+                            const main = errorMsg.slice(0, startIdx).trim();
+                            const after = errorMsg.slice(startIdx + marker.length);
+                            const endIdx = after.indexOf(endMarker);
+                            const raw = (endIdx >= 0 ? after.slice(0, endIdx) : after).trim();
+                            return (
+                              <>
+                                <div>{main || errorMsg}</div>
+                                {raw ? (
+                                  <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-black/10 p-2 text-[11px] leading-relaxed">
+                                    {raw}
+                                  </pre>
+                                ) : null}
+                              </>
+                            );
+                          })()}
                           <div className="mt-1 text-[11.5px] opacity-70">
                             {t('qa.errorRetryHint')}
                           </div>

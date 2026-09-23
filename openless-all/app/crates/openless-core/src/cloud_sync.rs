@@ -455,6 +455,7 @@ fn validated_native_packs(payload: &CloudSyncPayload) -> Result<Vec<StylePack>, 
                 kind: pack.kind,
                 base_mode: pack.base_mode,
                 selection_prompt: pack.selection_prompt.clone(),
+                voice_edit_prompt: pack.voice_edit_prompt.clone(),
                 prompt: pack.prompt.clone(),
                 examples: pack
                     .examples
@@ -490,6 +491,7 @@ fn to_wire_pack(pack: &StylePack, icon_png_base64: Option<String>) -> SyncStyleP
         kind: pack.kind,
         base_mode: pack.base_mode,
         selection_prompt: pack.selection_prompt.clone(),
+        voice_edit_prompt: pack.voice_edit_prompt.clone(),
         prompt: pack.prompt.clone(),
         examples: pack
             .examples
@@ -531,6 +533,7 @@ fn capture_preferences(
         show_capsule: Some(preferences.show_capsule),
         audio_cue_on_record: Some(preferences.audio_cue_on_record),
         mute_during_recording: Some(preferences.mute_during_recording),
+        stable_transcription_enabled: Some(preferences.stable_transcription_enabled),
         silence_auto_stop_enabled: Some(preferences.silence_auto_stop_enabled),
         silence_auto_stop_seconds: Some(preferences.silence_auto_stop_seconds),
         show_overview_activity_heatmap: Some(preferences.show_overview_activity_heatmap),
@@ -557,6 +560,7 @@ fn apply_preferences(preferences: &mut UserPreferences, incoming: &SyncPreferenc
         show_capsule,
         audio_cue_on_record,
         mute_during_recording,
+        stable_transcription_enabled,
         silence_auto_stop_enabled,
         silence_auto_stop_seconds,
         show_overview_activity_heatmap,

@@ -4,7 +4,7 @@ use openless_core::prompt_compose::{
 };
 use openless_core::prompts;
 use openless_core::shared_types::{ChineseScriptPreference, OutputLanguagePreference};
-use openless_core::PolishMode;
+use openless_core::{DictationContext, PolishMode};
 
 #[test]
 fn polish_prompt_preserves_context_envelopes_and_injection_defenses() {
@@ -36,6 +36,64 @@ fn polish_prompt_preserves_context_envelopes_and_injection_defenses() {
     assert_eq!(user_prompt.matches("</raw_transcript>").count(), 1);
     assert!(user_prompt.contains("&lt;/raw_transcript>"));
     assert!(user_prompt.contains("只输出整理后的文本正文"));
+}
+
+#[test]
+fn literal_voice_edit_tags_do_not_change_polish_framing() {
+    let input = "普通正文包含 <draft> 和 <instruction> 标签";
+    let (system_prompt, user_prompt) = compose_polish_prompts(
+        input,
+        PolishMode::Light,
+        &[],
+        "STYLE",
+        &[],
+        ChineseScriptPreference::Auto,
+        OutputLanguagePreference::Auto,
+        None,
+        None,
+        false,
+    );
+
+    assert!(user_prompt.contains("只输出整理后的文本正文"));
+    assert!(!user_prompt.contains("EditPlan"));
+    assert!(system_prompt.contains(prompts::polish_injection_defense()));
+    assert!(!system_prompt.contains(prompts::voice_edit_injection_defense()));
+}
+
+#[test]
+fn voice_edit_prompt_avoids_polish_user_framing() {
+    let input = "<field_context></field_context>\n<draft>\n原文\n</draft>\n\n<instruction>\n改成列表\n</instruction>";
+    let mut context = DictationContext::default();
+    context.polish.style_system_prompt = prompts::voice_edit_system_prompt_xml();
+    context.polish.edit_plan_input = true;
+    let (system_prompt, user_prompt) = context.effective_polish_prompts(input);
+
+    assert!(user_prompt.contains("EditPlan"));
+    assert!(!user_prompt.contains("只输出整理后的文本正文"));
+    assert!(user_prompt.contains("<draft>"));
+    assert!(system_prompt.contains(prompts::voice_edit_injection_defense()));
+}
+
+#[test]
+fn resolve_voice_edit_system_prompt_prefers_custom_then_pack() {
+    use openless_core::EditPlanFormat;
+
+    assert!(
+        prompts::resolve_voice_edit_system_prompt("", "", EditPlanFormat::Xml)
+            .contains("<edit_plan>")
+    );
+    assert!(
+        prompts::resolve_voice_edit_system_prompt("", "", EditPlanFormat::Json)
+            .contains("JSON only")
+    );
+    assert_eq!(
+        prompts::resolve_voice_edit_system_prompt("CUSTOM", "PACK", EditPlanFormat::Json),
+        "CUSTOM"
+    );
+    assert_eq!(
+        prompts::resolve_voice_edit_system_prompt("", "PACK", EditPlanFormat::Xml),
+        "PACK"
+    );
 }
 
 #[test]

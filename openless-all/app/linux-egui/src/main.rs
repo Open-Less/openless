@@ -1575,6 +1575,11 @@ mod linux_app {
             ui.heading("环境与设置");
             ui.strong("现有功能设置");
             if let Some(preferences) = self.preferences.as_mut() {
+                ui.checkbox(
+                    &mut preferences.stable_transcription_enabled,
+                    "稳定模式（先录音后识别）",
+                );
+                ui.small("录音期间不连接 ASR，停止后提交整段音频；结果更晚，但录音不受建连延迟和网络抖动影响。");
                 ui.checkbox(&mut preferences.streaming_insert, "流式插入");
                 ui.small("将转写逐步发送到原输入目标，实际结果以听写与历史反馈为准。");
                 ui.checkbox(&mut preferences.coding_agent_enabled, "启用 Less Computer");

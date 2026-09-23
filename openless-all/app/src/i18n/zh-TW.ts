@@ -547,6 +547,10 @@ export const zhTW: typeof zhCN = {
       dictationPromptTitle: '錄音 / ASR Prompt',
       dictationPromptHint: '用於錄音轉寫後的 ASR 文字；這裡可以寫口語整理、ASR 錯字糾正和專有名詞還原規則。',
       selectionPromptFallback: '尚未配置書面潤色 Prompt；將使用安全預設規則。',
+      voiceEditPromptTitle: '選區語音編輯 Prompt（EditPlan）',
+      voiceEditPromptHint:
+        '僅用於選區語音「編輯」路徑產生 EditPlan。留空則回退到設定裡的自訂提示詞或內建預設。',
+      voiceEditPromptPlaceholder: '留空 = 使用設定自訂或內建預設',
       selectionActivated: '已將「{{name}}」用於選區潤色',
       selectionActivateFailed: '選區潤色風格切換失敗：{{err}}',
       selectionChars: '{{count}} 字元',
@@ -734,6 +738,15 @@ export const zhTW: typeof zhCN = {
       autoIntentDesc: '開啟後預設用服務配置的模型判斷問句 vs 編輯；模型不可用或解析失敗時回退到問句啟發式。',
       editKeywords: '額外問句線索',
       editKeywordsDesc: '關閉自動判斷時生效；每行一個，指令含則視為提問，否則仍按問句啟發式判定。',
+      editPlanFormat: '編輯方案格式',
+      editPlanFormatDesc: '模型優先按所選格式輸出 EditPlan；解析失敗時再嘗試另一種格式。',
+      editPlanFormatXml: 'XML',
+      editPlanFormatJson: 'JSON',
+      editSystemPrompt: '編輯方案系統提示詞',
+      editSystemPromptDesc:
+        '覆蓋風格包 / 內建預設的 EditPlan system prompt。留空則按「自訂 → 風格包 → 內建預設」回退。',
+      editSystemPromptPlaceholder: '留空 = 使用風格包或內建預設',
+      editSystemPromptReset: '恢復預設',
     },
     selectionPolish: {
       title: '選區潤色',
@@ -905,6 +918,9 @@ export const zhTW: typeof zhCN = {
       capsuleStyleLabel: '膠囊樣式',
       capsuleStyleSiri: '流光 Siri 風格',
       capsuleStyleClassic: 'Openless 預設風格',
+      stableTranscriptionLabel: '穩定模式（先錄音後辨識）',
+      stableTranscriptionDesc:
+        '開啟後，錄音期間不連接 ASR，停止後才提交整段音訊。結果會較晚出現，但錄音不受連線延遲和錄音期間的網路波動影響。',
       muteDuringRecordingLabel: '錄音時靜音',
       muteDuringRecordingDesc: '錄音期間臨時靜音系統輸出，避免揚聲器迴音。',
       audioCueLabel: '錄音提示音',

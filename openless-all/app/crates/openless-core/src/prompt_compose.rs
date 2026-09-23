@@ -241,6 +241,35 @@ pub fn compose_polish_prompts(
     cursor_context: Option<&str>,
     has_prior_turns: bool,
 ) -> (String, String) {
+    compose_polish_prompts_for_input(
+        raw_text,
+        _mode,
+        hotwords,
+        style_system_prompt,
+        working_languages,
+        chinese_script_preference,
+        output_language_preference,
+        front_app,
+        cursor_context,
+        has_prior_turns,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compose_polish_prompts_for_input(
+    raw_text: &str,
+    _mode: PolishMode,
+    hotwords: &[String],
+    style_system_prompt: &str,
+    working_languages: &[String],
+    chinese_script_preference: ChineseScriptPreference,
+    output_language_preference: OutputLanguagePreference,
+    front_app: Option<&str>,
+    cursor_context: Option<&str>,
+    has_prior_turns: bool,
+    edit_plan_input: bool,
+) -> (String, String) {
     let mut system_prompt = compose_system_prompt(style_system_prompt, hotwords);
     if let Some(premise) = context_premise(
         working_languages,
@@ -261,7 +290,11 @@ pub fn compose_polish_prompts(
     system_prompt = format!(
         "{}\n\n{}",
         system_prompt,
-        prompts::polish_injection_defense()
+        if edit_plan_input {
+            prompts::voice_edit_injection_defense()
+        } else {
+            prompts::polish_injection_defense()
+        }
     );
     // 带了光标上下文才追加它那一条，理由同上：没开这个功能的用户不该被改 prompt。
     if cursor_context_block.is_some() {
@@ -280,7 +313,11 @@ pub fn compose_polish_prompts(
             prompts::polish_context_instruction()
         );
     }
-    let user_prompt = prompts::user_prompt(raw_text);
+    let user_prompt = if edit_plan_input {
+        prompts::voice_edit_user_prompt(raw_text)
+    } else {
+        prompts::user_prompt(raw_text)
+    };
     (system_prompt, user_prompt)
 }
 
@@ -480,5 +517,28 @@ mod translation_stream_tests {
         let mut stream = PolishTranslationStream::default();
         assert!(stream.push("源文正文").is_empty());
         assert!(stream.push("[[OPENLESS_TRANSLATIO").is_empty());
+    }
+
+    #[test]
+    fn voice_edit_input_uses_editplan_user_framing() {
+        let input = "<draft>\nhello\n</draft>\n\n<instruction>\n改成列表\n</instruction>";
+        let (_system, user) = compose_polish_prompts_for_input(
+            input,
+            PolishMode::Light,
+            &[],
+            "EDITPLAN SYSTEM",
+            &[],
+            ChineseScriptPreference::Auto,
+            OutputLanguagePreference::Auto,
+            None,
+            None,
+            false,
+            true,
+        );
+        assert!(user.contains("EditPlan"));
+        assert!(!user.contains("只输出整理后的文本正文"));
+        assert!(user.contains("<draft>"));
+        assert!(user.contains("<instruction>"));
+        assert!(user.contains(prompts::voice_edit_injection_defense()));
     }
 }

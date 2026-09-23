@@ -86,6 +86,8 @@ pub struct SyncStylePack {
     pub kind: SyncStylePackKind,
     pub base_mode: PolishMode,
     pub selection_prompt: String,
+    #[serde(default)]
+    pub voice_edit_prompt: String,
     pub prompt: String,
     pub examples: Vec<SyncStylePackExample>,
     pub tags: Vec<String>,
@@ -140,6 +142,8 @@ pub struct SyncPreferences {
     pub audio_cue_on_record: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mute_during_recording: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stable_transcription_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub silence_auto_stop_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

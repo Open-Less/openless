@@ -718,6 +718,10 @@ export const fr: typeof zhCN = {
         'Pour les transcriptions après dictée. Définissez ici les règles de nettoyage du langage oral, de correction des erreurs ASR et de restauration des termes.',
       selectionPromptFallback:
         'Aucune instruction pour le texte écrit ; une configuration sûre par défaut sera utilisée.',
+      voiceEditPromptTitle: 'Invite d’édition vocale de sélection (EditPlan)',
+      voiceEditPromptHint:
+        'Utilisée uniquement pour générer un EditPlan via l’édition vocale. Vide = invite personnalisée des réglages ou valeur intégrée.',
+      voiceEditPromptPlaceholder: 'Vide = réglages personnalisés ou valeur intégrée',
       selectionActivated: '« {{name}} » sera utilisé pour améliorer les sélections.',
       selectionActivateFailed: 'Impossible de changer le style de sélection : {{err}}',
       selectionChars: '{{count}} caractères',
@@ -920,6 +924,16 @@ export const fr: typeof zhCN = {
       editKeywords: 'Indices de question supplémentaires',
       editKeywordsDesc:
         'Uniquement lorsque la détection automatique est désactivée. Un indice par ligne force le mode Question ; sinon, « ? » et les mots interrogatifs servent d’indices.',
+      editPlanFormat: 'Format du plan d’édition',
+      editPlanFormatDesc:
+        'Le modèle privilégie ce format EditPlan ; en cas d’échec d’analyse, l’autre format est tenté.',
+      editPlanFormatXml: 'XML',
+      editPlanFormatJson: 'JSON',
+      editSystemPrompt: 'Invite système du plan d’édition',
+      editSystemPromptDesc:
+        'Remplace l’invite système EditPlan du pack / intégrée. Vide = personnalisé → pack → intégré.',
+      editSystemPromptPlaceholder: 'Vide = pack de style ou valeur intégrée',
+      editSystemPromptReset: 'Réinitialiser',
     },
     selectionPolish: {
       title: 'Amélioration de la sélection',
@@ -1112,6 +1126,9 @@ export const fr: typeof zhCN = {
       capsuleStyleLabel: 'Style de capsule',
       capsuleStyleSiri: 'Style lumineux Siri',
       capsuleStyleClassic: 'Style par défaut d’OpenLess',
+      stableTranscriptionLabel: 'Mode stable (enregistrer puis transcrire)',
+      stableTranscriptionDesc:
+        'Une fois activé, l’ASR se connecte après l’arrêt et reçoit l’enregistrement complet. Le résultat arrive plus tard, mais la capture n’est pas perturbée par le délai de connexion ni par les variations du réseau pendant l’enregistrement.',
       muteDuringRecordingLabel: 'Couper le son pendant l’enregistrement',
       muteDuringRecordingDesc:
         'Coupe temporairement le son système pendant la saisie vocale pour éviter l’écho des haut-parleurs.',

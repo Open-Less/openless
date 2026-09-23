@@ -671,6 +671,10 @@ export const zhCN = {
       dictationPromptHint:
         '用于录音转写后的 ASR 文本；这里可以写口语整理、ASR 错字纠正和专有名词还原规则。',
       selectionPromptFallback: '尚未配置书面润色 Prompt；将使用安全默认规则。',
+      voiceEditPromptTitle: '选区语音编辑 Prompt（EditPlan）',
+      voiceEditPromptHint:
+        '仅用于选区语音「编辑」路径生成 EditPlan。留空则回退到设置里的自定义提示词或内置默认。',
+      voiceEditPromptPlaceholder: '留空 = 使用设置自定义或内置默认',
       selectionActivated: '已将「{{name}}」用于选区润色',
       selectionActivateFailed: '选区润色风格切换失败：{{err}}',
       selectionChars: '{{count}} 字符',
@@ -862,6 +866,15 @@ export const zhCN = {
       editKeywords: '额外问句线索',
       editKeywordsDesc:
         '关闭自动判断时生效；每行一个，指令中包含则视为提问，否则仍按问句启发式（？/吗/什么…）判定。',
+      editPlanFormat: '编辑方案格式',
+      editPlanFormatDesc: '模型优先按所选格式输出 EditPlan；解析失败时再尝试另一种格式。',
+      editPlanFormatXml: 'XML',
+      editPlanFormatJson: 'JSON',
+      editSystemPrompt: '编辑方案系统提示词',
+      editSystemPromptDesc:
+        '覆盖风格包 / 内置默认的 EditPlan system prompt。留空则按「自定义 → 风格包 → 内置默认」回退。',
+      editSystemPromptPlaceholder: '留空 = 使用风格包或内置默认',
+      editSystemPromptReset: '恢复默认',
     },
     selectionPolish: {
       title: '选区润色',
@@ -1034,6 +1047,9 @@ export const zhCN = {
       capsuleStyleLabel: '胶囊样式',
       capsuleStyleSiri: '流光 Siri 风格',
       capsuleStyleClassic: 'Openless 默认风格',
+      stableTranscriptionLabel: '稳定模式（先录音后识别）',
+      stableTranscriptionDesc:
+        '开启后，录音期间不连接 ASR，停止后才提交整段音频。结果出现更晚，但录音不受建连延迟和录音期间网络抖动影响。',
       muteDuringRecordingLabel: '录音时静音',
       muteDuringRecordingDesc: '录音期间临时静音系统输出，避免扬声器回音。',
       audioCueLabel: '录音提示音',

@@ -698,6 +698,10 @@ export const en: typeof zhCN = {
         'For ASR text after dictation; write spoken-language cleanup, ASR typo fixes and term restoration rules here.',
       selectionPromptFallback:
         'No written polish prompt configured yet; a safe default will be used.',
+      voiceEditPromptTitle: 'Selection voice edit prompt (EditPlan)',
+      voiceEditPromptHint:
+        'Used only by selection-voice Edit to generate an EditPlan. Leave empty to fall back to settings custom prompt or the built-in default.',
+      voiceEditPromptPlaceholder: 'Empty = use settings custom or built-in default',
       selectionActivated: 'Set "{{name}}" for selection polish.',
       selectionActivateFailed: 'Failed to switch selection polish style: {{err}}',
       selectionChars: '{{count}} chars',
@@ -894,6 +898,16 @@ export const en: typeof zhCN = {
       editKeywords: 'Extra question cues',
       editKeywordsDesc:
         'Only when auto-classify is off; one cue per line forces Ask; otherwise use ? / question-word heuristics.',
+      editPlanFormat: 'Edit plan format',
+      editPlanFormatDesc:
+        'Prefer this EditPlan format from the model; if parsing fails, try the other format.',
+      editPlanFormatXml: 'XML',
+      editPlanFormatJson: 'JSON',
+      editSystemPrompt: 'Edit plan system prompt',
+      editSystemPromptDesc:
+        'Overrides the style-pack / built-in EditPlan system prompt. Leave empty to fall back: custom → pack → built-in.',
+      editSystemPromptPlaceholder: 'Empty = use style pack or built-in default',
+      editSystemPromptReset: 'Reset to default',
     },
     selectionPolish: {
       title: 'Selection Polish',
@@ -1081,6 +1095,9 @@ export const en: typeof zhCN = {
       capsuleStyleLabel: 'Capsule style',
       capsuleStyleSiri: 'Shimmer Siri style',
       capsuleStyleClassic: 'OpenLess default style',
+      stableTranscriptionLabel: 'Stable mode (record, then transcribe)',
+      stableTranscriptionDesc:
+        'When enabled, ASR connects only after recording stops and receives the complete audio. Results arrive later, but connection delays and network instability during recording cannot interrupt capture.',
       muteDuringRecordingLabel: 'Mute while recording',
       muteDuringRecordingDesc:
         'Temporarily mute system output during voice input to avoid speaker echo.',

@@ -1008,6 +1008,13 @@ fn compose_qa_user_content(selection_text: &str, question: &str) -> String {
 }
 
 fn public_qa_error(error: &BackendError) -> String {
+    let message = error.message.as_str();
+    if message.contains("---model_output---") || message.contains("invalid EditPlan") {
+        if message.starts_with("编辑方案解析失败") {
+            return message.to_string();
+        }
+        return format!("编辑方案解析失败\n\n{message}");
+    }
     match error.code {
         BackendErrorCode::PermissionDenied => "QA permission denied".to_string(),
         BackendErrorCode::Unsupported => "QA is unsupported by this host".to_string(),
