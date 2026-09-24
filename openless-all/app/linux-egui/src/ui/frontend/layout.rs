@@ -264,7 +264,14 @@ pub fn titlebar(ctx: &egui::Context, actions: &mut Vec<FrontendAction>) {
                     egui::StrokeKind::Inside,
                 );
             }
-            let close_stroke = egui::Stroke::new(1.0, if close_response.hovered() { theme::ERR } else { theme::INK_3 });
+            let close_stroke = egui::Stroke::new(
+                1.0,
+                if close_response.hovered() {
+                    theme::ERR
+                } else {
+                    theme::INK_3
+                },
+            );
             ui.painter().line_segment(
                 [
                     close.center() - egui::vec2(5.0, 5.0),
