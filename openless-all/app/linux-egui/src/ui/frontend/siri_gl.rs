@@ -854,7 +854,8 @@ mod tests {
     fn paint_queues_a_gpu_callback() {
         let _guard = gpu_state_guard();
         let ctx = egui::Context::default();
-        let output = ctx.run_ui(
+        let output = crate::ui::frontend::run_pass(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -891,7 +892,8 @@ mod tests {
         let ctx = egui::Context::default();
         // The GPU state is process-global, so serialise with the other GPU tests.
         let _guard = gpu_state_guard();
-        let output = ctx.run_ui(
+        let output = crate::ui::frontend::run_pass(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -941,7 +943,8 @@ mod tests {
             let ctx = egui::Context::default();
             let _guard = gpu_state_guard();
             seed();
-            let output = ctx.run_ui(
+            let output = crate::ui::frontend::run_pass(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1062,7 +1065,8 @@ mod tests {
         GPU_FAILED.store(true, Ordering::Relaxed);
         let ctx = egui::Context::default();
         let mut queued = 0;
-        let output = ctx.run_ui(
+        let output = crate::ui::frontend::run_pass(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,

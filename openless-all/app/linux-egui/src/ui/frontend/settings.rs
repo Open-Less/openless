@@ -3582,7 +3582,7 @@ mod tests {
             };
             let mut actions = Vec::new();
             let ctx = egui::Context::default();
-            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let _ = crate::ui::frontend::run_pass(&ctx, egui::RawInput::default(), |ui| {
                 provider_editor_panel(ui, &editor, Lang::ZhCn, &mut actions);
             });
             assert!(

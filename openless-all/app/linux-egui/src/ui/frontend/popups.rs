@@ -1566,7 +1566,8 @@ mod tests {
         let ctx = egui::Context::default();
         let mut painted = String::new();
         for _ in 0..2 {
-            let output = ctx.run_ui(
+            let output = crate::ui::frontend::run_pass(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     ..Default::default()
@@ -1589,7 +1590,8 @@ mod tests {
         let ctx = egui::Context::default();
         let mut last = None;
         for _ in 0..2 {
-            last = Some(ctx.run_ui(
+            last = Some(crate::ui::frontend::run_pass(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     ..Default::default()
@@ -1853,7 +1855,8 @@ mod tests {
         super::siri_gl::seed_gpu_ready_for_tests();
         let callbacks = |state: CapsulePopupState| {
             let ctx = egui::Context::default();
-            let output = ctx.run_ui(
+            let output = crate::ui::frontend::run_pass(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2028,7 +2031,8 @@ mod tests {
         let mut composer = String::new();
         let mut painted = String::new();
         for _ in 0..2 {
-            let output = ctx.run_ui(
+            let output = crate::ui::frontend::run_pass(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2069,7 +2073,8 @@ mod tests {
         let mut colors = Vec::new();
         let mut callbacks = 0;
         for _ in 0..2 {
-            let output = ctx.run_ui(
+            let output = crate::ui::frontend::run_pass(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2186,7 +2191,8 @@ mod tests {
                     modifiers: egui::Modifiers::default(),
                 }],
             ] {
-                let _ = ctx.run_ui(
+                let _ = crate::ui::frontend::run_pass(
+                    &ctx,
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                         events,

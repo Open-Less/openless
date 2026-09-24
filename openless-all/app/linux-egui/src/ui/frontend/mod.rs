@@ -95,6 +95,29 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
     });
 }
 
+/// egui 0.36 起 `FullOutput` 里的 `TexturesDelta` 必须被消费，未应用就 drop 会
+/// panic（epaint 的 Drop 守卫："Dropped TexturesDelta with N unapplied deltas"）。
+/// 生产路径由渲染器消费（`popup_layer.rs` 交给 painter / eframe 自己处理），
+/// 无头测试里没有渲染器，这里清掉即可。
+#[cfg(test)]
+pub(crate) fn run_pass(
+    ctx: &egui::Context,
+    input: egui::RawInput,
+    body: impl FnMut(&mut egui::Ui),
+) -> egui::FullOutput {
+    let mut output = ctx.run_ui(input, body);
+    output.textures_delta.clear();
+    output
+}
+
+/// 同上，用于 `begin_pass` / `end_pass` 形态的测试。
+#[cfg(test)]
+pub(crate) fn end_pass(ctx: &egui::Context) -> egui::FullOutput {
+    let mut output = ctx.end_pass();
+    output.textures_delta.clear();
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,7 +135,7 @@ mod tests {
         let mut vm = FrontendViewModel::default();
         let mut actions = Vec::new();
         render(ctx, &mut vm, &mut actions);
-        let _ = ctx.end_pass();
+        let _ = crate::ui::frontend::end_pass(&ctx);
         actions
     }
 
@@ -170,7 +193,7 @@ mod tests {
             });
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
-            let _ = ctx.end_pass();
+            let _ = crate::ui::frontend::end_pass(&ctx);
         }
 
         // One more pass whose painted text we inspect: this is the end-to-end
@@ -181,7 +204,7 @@ mod tests {
         });
         let mut actions = Vec::new();
         render(&ctx, &mut vm, &mut actions);
-        let output = ctx.end_pass();
+        let output = crate::ui::frontend::end_pass(&ctx);
         let painted = painted_text(&output);
         // Expected labels are read back from the catalog so the test cannot
         // drift from the keys the page actually uses (and stays free of raw
@@ -294,7 +317,7 @@ mod tests {
             });
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
-            let _ = ctx.end_pass();
+            let _ = crate::ui::frontend::end_pass(&ctx);
         }
         ctx.begin_pass(egui::RawInput {
             screen_rect: Some(viewport()),
@@ -302,7 +325,7 @@ mod tests {
         });
         let mut actions = Vec::new();
         render(&ctx, &mut vm, &mut actions);
-        let output = ctx.end_pass();
+        let output = crate::ui::frontend::end_pass(&ctx);
         let painted = painted_text(&output);
         let tr = |key: &'static str| openless_linux_egui::tr_l10n(zh, key);
         for key in [
@@ -350,14 +373,14 @@ mod tests {
         });
         let mut actions = Vec::new();
         render(&ctx, &mut vm, &mut actions);
-        let _ = ctx.end_pass();
+        let _ = crate::ui::frontend::end_pass(&ctx);
         ctx.begin_pass(egui::RawInput {
             screen_rect: Some(viewport()),
             ..Default::default()
         });
         let mut actions = Vec::new();
         render(&ctx, &mut vm, &mut actions);
-        let output = ctx.end_pass();
+        let output = crate::ui::frontend::end_pass(&ctx);
         let painted = painted_text(&output);
         let confirm_msg = openless_linux_egui::fmt_l10n(
             zh,
@@ -394,7 +417,7 @@ mod tests {
             });
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
-            let _ = ctx.end_pass();
+            let _ = crate::ui::frontend::end_pass(&ctx);
         }
         for step in ["a", "b", "c"] {
             ctx.memory_mut(|m| m.request_focus(id));
@@ -405,7 +428,7 @@ mod tests {
             });
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
-            let _ = ctx.end_pass();
+            let _ = crate::ui::frontend::end_pass(&ctx);
         }
         assert_eq!(
             vm.marketplace_query, "abc",
@@ -431,7 +454,7 @@ mod tests {
             });
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
-            let _ = ctx.end_pass();
+            let _ = crate::ui::frontend::end_pass(&ctx);
         }
         let mut painted = String::new();
         for step in ["7", "7"] {
@@ -443,7 +466,7 @@ mod tests {
             });
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
-            painted = painted_text(&ctx.end_pass());
+            painted = painted_text(&crate::ui::frontend::end_pass(&ctx));
         }
         assert_eq!(
             vm.settings.history_max_entries, "77",
@@ -474,7 +497,7 @@ mod tests {
             });
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
-            painted = painted_text(&ctx.end_pass());
+            painted = painted_text(&crate::ui::frontend::end_pass(&ctx));
         }
         for step in ["m", "y"] {
             ctx.memory_mut(|m| m.request_focus(id));
@@ -485,7 +508,7 @@ mod tests {
             });
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
-            painted = painted_text(&ctx.end_pass());
+            painted = painted_text(&crate::ui::frontend::end_pass(&ctx));
         }
         assert_eq!(
             vm.channel_form_name, "my",
@@ -520,7 +543,7 @@ mod tests {
                 });
                 let mut actions = Vec::new();
                 render(&ctx, &mut vm, &mut actions);
-                painted = painted_text(&ctx.end_pass());
+                painted = painted_text(&crate::ui::frontend::end_pass(&ctx));
             }
             assert!(
                 painted.contains(rail_general),
@@ -558,7 +581,7 @@ mod tests {
                 });
                 let mut actions = Vec::new();
                 render(&ctx, &mut vm, &mut actions);
-                let _ = ctx.end_pass();
+                let _ = crate::ui::frontend::end_pass(&ctx);
             }
             ctx.begin_pass(egui::RawInput {
                 screen_rect: Some(viewport()),
@@ -566,7 +589,7 @@ mod tests {
             });
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
-            let output = ctx.end_pass();
+            let output = crate::ui::frontend::end_pass(&ctx);
             let painted = painted_text(&output);
             for key in [
                 "modal.sections.general",
@@ -629,7 +652,7 @@ mod tests {
             });
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
-            let output = ctx.end_pass();
+            let output = crate::ui::frontend::end_pass(&ctx);
             painted.clear();
             for clipped in &output.shapes {
                 if let egui::Shape::Text(text) = &clipped.shape {
@@ -677,7 +700,7 @@ mod tests {
                 });
                 let mut actions = Vec::new();
                 render(&ctx, &mut vm, &mut actions);
-                painted = painted_text(&ctx.end_pass());
+                painted = painted_text(&crate::ui::frontend::end_pass(&ctx));
             }
             assert_eq!(
                 painted.lines().any(|line| line.trim() == provider),
@@ -705,7 +728,7 @@ mod tests {
             vm.settings_open = true;
             vm.settings_section = section;
             render(&ctx, vm, &mut actions);
-            lines = painted_text(&ctx.end_pass())
+            lines = painted_text(&crate::ui::frontend::end_pass(&ctx))
                 .lines()
                 .map(|line| line.trim().to_string())
                 .filter(|line| !line.is_empty())
@@ -801,7 +824,7 @@ mod tests {
             ctx.input_mut(|i| i.modifiers = modifiers);
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
-            let _ = ctx.end_pass();
+            let _ = crate::ui::frontend::end_pass(&ctx);
             for action in actions {
                 if let FrontendAction::ShortcutCaptured(field, primary, modifiers) = action {
                     captured.push((field, primary, modifiers));
@@ -842,7 +865,7 @@ mod tests {
             ctx.input_mut(|i| i.modifiers = modifiers);
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
-            let _ = ctx.end_pass();
+            let _ = crate::ui::frontend::end_pass(&ctx);
             captured.extend(actions.into_iter().filter_map(|action| match action {
                 FrontendAction::ShortcutCaptured(..) => Some(()),
                 _ => None,
@@ -883,7 +906,7 @@ mod tests {
             });
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
-            let _ = ctx.end_pass();
+            let _ = crate::ui::frontend::end_pass(&ctx);
             for action in actions {
                 if let FrontendAction::ShortcutCaptured(field, primary, modifiers) = action {
                     captured = Some((field, primary, modifiers));
@@ -988,7 +1011,7 @@ mod tests {
                 });
                 let mut actions = Vec::new();
                 render(&ctx, &mut vm, &mut actions);
-                painted = painted_text(&ctx.end_pass());
+                painted = painted_text(&crate::ui::frontend::end_pass(&ctx));
             }
             // Compare whole painted lines: the section description also mentions
             // 「本地模型」, so a substring check would always match.
@@ -1027,7 +1050,7 @@ mod tests {
                 });
                 let mut actions = Vec::new();
                 render(&ctx, &mut vm, &mut actions);
-                let output = ctx.end_pass();
+                let output = crate::ui::frontend::end_pass(&ctx);
                 painted = painted_text(&output);
             }
             assert!(
@@ -1082,7 +1105,7 @@ mod tests {
                 });
                 let mut actions = Vec::new();
                 render(&ctx, &mut vm, &mut actions);
-                output = Some(ctx.end_pass());
+                output = Some(crate::ui::frontend::end_pass(&ctx));
             }
             let output = output.expect("a frame was rendered");
             for clipped in &output.shapes {
@@ -1113,7 +1136,8 @@ mod tests {
         // over itself. `layout::fixed_ui` must not move the parent cursor even
         // when the card body paints instead of allocating.
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(
+        let _ = crate::ui::frontend::run_pass(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(viewport()),
                 ..Default::default()
@@ -1253,7 +1277,7 @@ mod tests {
             });
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
-            let _ = ctx.end_pass();
+            let _ = crate::ui::frontend::end_pass(&ctx);
         }
         ctx.begin_pass(egui::RawInput {
             screen_rect: Some(viewport()),
@@ -1261,7 +1285,7 @@ mod tests {
         });
         let mut actions = Vec::new();
         render(&ctx, &mut vm, &mut actions);
-        let output = ctx.end_pass();
+        let output = crate::ui::frontend::end_pass(&ctx);
         let painted = painted_text(&output);
 
         let current = openless_linux_egui::tr_l10n(zh, "style.pack.current");
@@ -1310,7 +1334,7 @@ mod tests {
                 });
                 let mut actions = Vec::new();
                 render(&ctx, &mut vm, &mut actions);
-                let _ = ctx.end_pass();
+                let _ = crate::ui::frontend::end_pass(&ctx);
             }
             ctx.begin_pass(egui::RawInput {
                 screen_rect: Some(viewport),
@@ -1318,7 +1342,7 @@ mod tests {
             });
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
-            let _ = ctx.end_pass();
+            let _ = crate::ui::frontend::end_pass(&ctx);
             let body = layout::body_rect(&ctx);
             // 卡片矩形现在由叠层自己写入 memory（Area 覆盖整个 body，面积已不等于卡片）。
             let modal = ctx
@@ -1356,7 +1380,7 @@ mod tests {
         });
         let mut actions = Vec::new();
         render(ctx, vm, &mut actions);
-        let _ = ctx.end_pass();
+        let _ = crate::ui::frontend::end_pass(&ctx);
         actions
     }
 
@@ -1566,7 +1590,9 @@ mod tests {
                 layout::resize_handles(&ctx);
                 // 光标在 platform_output 里，而 `end_pass` 会把 output 取走，
                 // 所以要读返回值而不是 `ctx.output(...)`。
-                icon = ctx.end_pass().platform_output.cursor_icon;
+                icon = crate::ui::frontend::end_pass(&ctx)
+                    .platform_output
+                    .cursor_icon;
             }
             assert_eq!(
                 icon, expected,
@@ -1597,7 +1623,7 @@ mod tests {
             });
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
-            painted = painted_text(&ctx.end_pass());
+            painted = painted_text(&crate::ui::frontend::end_pass(&ctx));
         }
         // 只数「整行就是这个标签」的次数：侧栏导航那一个是正常的，多出来的那个
         // 就是被删掉的顶栏标题（子串匹配会把「查找设置分类…」也算进去）。
@@ -1641,7 +1667,7 @@ mod tests {
             });
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
-            painted = painted_text(&ctx.end_pass());
+            painted = painted_text(&crate::ui::frontend::end_pass(&ctx));
         }
         for key in [
             "settings.recording.hotkey_label",
@@ -1693,7 +1719,8 @@ mod tests {
             } else {
                 Vec::new()
             };
-            let output = ctx.run_ui(
+            let output = crate::ui::frontend::run_pass(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1744,7 +1771,7 @@ mod tests {
             });
             let mut actions = Vec::new();
             layout::titlebar(&ctx, &mut actions);
-            let output = ctx.end_pass();
+            let output = crate::ui::frontend::end_pass(&ctx);
             for commands in output.viewport_output.values() {
                 if commands
                     .commands
@@ -1801,7 +1828,7 @@ mod tests {
                 ctx.begin_pass(raw);
                 let mut actions = Vec::new();
                 layout::titlebar(&ctx, &mut actions);
-                let output = ctx.end_pass();
+                let output = crate::ui::frontend::end_pass(&ctx);
                 per_frame.push(output.viewport_output.values().any(|commands| {
                     commands
                         .commands
