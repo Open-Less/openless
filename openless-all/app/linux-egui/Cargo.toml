@@ -25,9 +25,8 @@ uuid = { version = "1", features = ["v4"] }
 
 [features]
 default = ["x11-overlay"]
-# The capsule runs under XWayland so it can be placed at the bottom centre of
-# the work area and told never to take the keyboard. Without this feature the
-# capsule falls back to the compositor's own placement (pure Wayland).
+# Native X11 overlay placement for X11 sessions. Wayland sessions use native
+# layer-shell when available and never route the capsule through XWayland.
 x11-overlay = ["dep:x11rb"]
 
 [target.'cfg(target_os = "linux")'.dependencies]

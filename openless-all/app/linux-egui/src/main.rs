@@ -6513,15 +6513,15 @@ mod linux_app {
     ///
     /// The capsule must land at the bottom centre of the work area and must
     /// never take the keyboard: on macOS Tauri gets the same guarantee from
-    /// `orderFrontRegardless` ("visible but not the key window"). Under XWayland
-    /// the equivalent is `WM_HINTS.input = False`, which is why the capsule is
-    /// launched with the Wayland backend removed (see
+    /// `orderFrontRegardless` ("visible but not the key window"). In a native
+    /// X11 session the equivalent is `WM_HINTS.input = False` (see
     /// [`openless_linux_egui::popup_command`]).
     #[cfg(all(target_os = "linux", feature = "x11-overlay"))]
     mod popup_overlay {
         use super::*;
         use openless_linux_egui::{
-            place_overlay, popup_position, OverlayEnvironment, OverlayPlacement, X11Overlay,
+            place_overlay, popup_position, OverlayEnvironment, OverlayPlacement, OverlayX11,
+            X11Overlay,
         };
 
         pub struct PopupOverlay {
@@ -6533,11 +6533,13 @@ mod linux_app {
             /// The post-map pass (EWMH states, once the window is managed).
             reasserted: bool,
             attempts: u8,
+            focus_window: Option<u32>,
+            focus_watch_remaining: u8,
         }
 
         impl PopupOverlay {
             pub fn probe(kind: PopupKind) -> Option<Self> {
-                // 纯 Wayland（没有 XWayland）时不做任何 X11 处理，按原行为跑。
+                // 原生 Wayland 不做任何 X11 处理。
                 if !openless_linux_egui::x11_available(std::env::var("DISPLAY").ok().as_deref()) {
                     log::debug!("popup x11: no DISPLAY, keeping the compositor placement");
                     return None;
@@ -6572,6 +6574,8 @@ mod linux_app {
                     placed: false,
                     reasserted: false,
                     attempts: 0,
+                    focus_window: None,
+                    focus_watch_remaining: 0,
                 })
             }
 
@@ -6588,6 +6592,7 @@ mod linux_app {
                     &self.environment,
                     self.kind,
                 );
+                self.focus_window = placement.window.or(self.focus_window);
                 if placement.applied() {
                     log::info!(
                         "capsule x11 ({reason}): window={:?} matched={} moved_to={:?} focus_was_stolen={} focus_restored={} warnings={:?}",
@@ -6652,6 +6657,31 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                     // skip-taskbar and the geometry the manager may have moved.
                     self.reasserted = true;
                     self.apply("post-map");
+                    // Some X11 window managers deliver activation after the
+                    // first map notification. Watch briefly so a late focus
+                    // race cannot leave Chromium/Electron-style apps blurred.
+                    self.focus_watch_remaining = 10;
+                    ctx.request_repaint_after(std::time::Duration::from_millis(60));
+                } else if visible && self.focus_watch_remaining > 0 {
+                    if let (Some(window), Some(previous)) =
+                        (self.focus_window, self.environment.active_window)
+                    {
+                        if previous != window
+                            && matches!(self.connection.active_window(), Ok(Some(active)) if active == window)
+                        {
+                            if let Err(error) = self.connection.restore_focus(previous) {
+                                log::warn!("capsule x11: delayed focus restore failed: {error}");
+                            } else {
+                                eprintln!(
+                                    "OpenLess capsule: restored delayed focus to previous window {previous}"
+                                );
+                            }
+                        }
+                    }
+                    self.focus_watch_remaining -= 1;
+                    if self.focus_watch_remaining > 0 {
+                        ctx.request_repaint_after(std::time::Duration::from_millis(60));
+                    }
                 }
             }
         }
@@ -7212,7 +7242,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
 
     /// 胶囊在实现了 `zwlr_layer_shell_v1` 的合成器上跑原生 layer surface
     /// （贴底居中、键盘焦点不可能、不占工作区）；协议缺失、EGL 起不来或
-    /// configure 超时都会返回 Err，由调用方回退到 XWayland 叠加层。
+    /// configure 超时都会返回 Err；不会回退到普通焦点窗口或 XWayland。
     fn run_capsule_layer_process() -> Result<(), LayerCapsuleFailure> {
         let geometry = openless_linux_egui::capsule_geometry(
             openless_linux_egui::CAPSULE_WINDOW_SIZE.0,
@@ -7222,7 +7252,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         // The host pipe is opened lazily, on the first frame the runner asks
         // for: the runner only calls back once the layer surface is configured
         // and EGL is live, so a preflight failure leaves stdin untouched for the
-        // XWayland fallback. `started` records that the pipe is in use, which
+        // fallback window. `started` records that the pipe is in use, which
         // makes a late failure fatal instead of a (broken) second attempt.
         let mut app: Option<NativePopupApp> = None;
         let started = Arc::new(std::sync::atomic::AtomicBool::new(false));

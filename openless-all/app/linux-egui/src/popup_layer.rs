@@ -4,7 +4,7 @@
 //! take the keyboard — the user is dictating into another window, and a focus
 //! steal would send the insert to the wrong place. `xdg-shell` offers neither an
 //! absolute position nor a focus opt-out, so Wayland-only compositors without
-//! layer-shell get a best-effort native borderless window. Compositors that
+//! layer-shell do not show the capsule. Compositors that
 //! implement `zwlr_layer_shell_v1` — KWin 6.7+ (verified against
 //! `zwlr_layer_shell_v1` version 5), sway, Hyprland, labwc, … — can host the
 //! capsule natively instead:
@@ -68,23 +68,26 @@ pub fn wayland_display_available(display: Option<&str>) -> bool {
 pub enum CapsulePath {
     /// Native layer surface (bottom-centre, keyboard-impossible).
     LayerShell,
-    /// The existing X11/XWayland overlay in [`crate::popup_window`].
+    /// The existing native X11 overlay in [`crate::popup_window`].
     X11Overlay,
-    /// Neither is available: keep the plain borderless window and let the
-    /// compositor decide.
+    /// Wayland is active but layer-shell is unavailable. Do not use a focusable
+    /// xdg-shell toplevel or route the surface through XWayland.
     PlainWindow,
 }
 
-/// Pick the capsule host. Layer-shell wins when the compositor offers it;
-/// otherwise the X11 overlay (XWayland counts) is the only way to get a
-/// guaranteed position and focus opt-out.
+/// Pick the capsule host. Wayland uses layer-shell or no capsule; X11 is used
+/// only when the whole desktop session is native X11.
 pub fn choose_capsule_path(
     wayland_display: Option<&str>,
     x11_display: Option<&str>,
     globals: &[String],
 ) -> CapsulePath {
-    if wayland_display_available(wayland_display) && has_layer_shell(globals) {
-        return CapsulePath::LayerShell;
+    if wayland_display_available(wayland_display) {
+        return if has_layer_shell(globals) {
+            CapsulePath::LayerShell
+        } else {
+            CapsulePath::PlainWindow
+        };
     }
     if crate::popup_window::x11_available(x11_display) {
         return CapsulePath::X11Overlay;
@@ -92,9 +95,7 @@ pub fn choose_capsule_path(
     CapsulePath::PlainWindow
 }
 
-/// Environment variable that pins the capsule host, for verification on a
-/// machine whose compositor would otherwise win the choice (e.g. a KWin session
-/// where only the X11 fallback is under test).
+/// Environment variable that pins the capsule host for local diagnostics.
 pub const CAPSULE_PATH_ENV: &str = "OPENLESS_CAPSULE_PATH";
 
 /// Parse [`CAPSULE_PATH_ENV`]. Unknown or empty values are ignored so a typo
@@ -102,7 +103,7 @@ pub const CAPSULE_PATH_ENV: &str = "OPENLESS_CAPSULE_PATH";
 pub fn capsule_path_override(value: Option<&str>) -> Option<CapsulePath> {
     match value?.trim().to_ascii_lowercase().as_str() {
         "layer" | "layer-shell" | "layer_shell" => Some(CapsulePath::LayerShell),
-        "x11" | "xwayland" => Some(CapsulePath::X11Overlay),
+        "x11" => Some(CapsulePath::X11Overlay),
         "plain" | "none" => Some(CapsulePath::PlainWindow),
         _ => None,
     }
@@ -130,23 +131,31 @@ pub fn layer_shell_available() -> bool {
 /// fails; a missing session, a failed connection or an absent global all end up
 /// on the fallback path.
 pub fn detect_capsule_path() -> CapsulePath {
+    let wayland = std::env::var("WAYLAND_DISPLAY").ok();
+    let x11 = std::env::var("DISPLAY").ok();
+    if wayland_display_available(wayland.as_deref()) {
+        if let Some(forced) = capsule_path_override(std::env::var(CAPSULE_PATH_ENV).ok().as_deref())
+        {
+            if forced != CapsulePath::X11Overlay {
+                log::info!("capsule path forced by {CAPSULE_PATH_ENV}: {forced:?}");
+                return forced;
+            }
+            log::warn!("ignoring X11 capsule override in a Wayland session");
+        }
+        return match probe_globals() {
+            Ok(globals) if has_layer_shell(&globals) => CapsulePath::LayerShell,
+            Ok(_) => CapsulePath::PlainWindow,
+            Err(error) => {
+                log::warn!("layer-shell probe failed ({error}); not using XWayland");
+                CapsulePath::PlainWindow
+            }
+        };
+    }
     if let Some(forced) = capsule_path_override(std::env::var(CAPSULE_PATH_ENV).ok().as_deref()) {
         log::info!("capsule path forced by {CAPSULE_PATH_ENV}: {forced:?}");
         return forced;
     }
-    let wayland = std::env::var("WAYLAND_DISPLAY").ok();
-    let x11 = std::env::var("DISPLAY").ok();
-    if !wayland_display_available(wayland.as_deref()) {
-        return choose_capsule_path(None, x11.as_deref(), &[]);
-    }
-    let globals = match probe_globals() {
-        Ok(globals) => globals,
-        Err(error) => {
-            log::warn!("layer-shell probe failed ({error}); using the fallback overlay");
-            Vec::new()
-        }
-    };
-    choose_capsule_path(wayland.as_deref(), x11.as_deref(), &globals)
+    choose_capsule_path(None, x11.as_deref(), &[])
 }
 
 /// Interface names the compositor advertises, or an error when there is no
@@ -738,10 +747,10 @@ mod tests {
             choose_capsule_path(Some("wayland-0"), Some(":0"), &advertised),
             CapsulePath::LayerShell
         );
-        // No protocol: XWayland is the only way to pin position and focus.
+        // Wayland without layer-shell must not use the XWayland display.
         assert_eq!(
             choose_capsule_path(Some("wayland-0"), Some(":0"), &globals(&["wl_compositor"])),
-            CapsulePath::X11Overlay
+            CapsulePath::PlainWindow
         );
         // Wayland session without XWayland and without layer-shell.
         assert_eq!(
@@ -805,10 +814,7 @@ mod tests {
             capsule_path_override(Some("x11")),
             Some(CapsulePath::X11Overlay)
         );
-        assert_eq!(
-            capsule_path_override(Some("XWayland")),
-            Some(CapsulePath::X11Overlay)
-        );
+        assert_eq!(capsule_path_override(Some("XWayland")), None);
         assert_eq!(
             capsule_path_override(Some("plain")),
             Some(CapsulePath::PlainWindow)

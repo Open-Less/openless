@@ -2352,63 +2352,71 @@ fn about(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
     let lang = vm.lang;
     let icon = layout::load_app_icon(ui.ctx());
     card(ui, "", "", |ui| {
-        ui.horizontal(|ui| {
-            let (icon_rect, _) =
-                ui.allocate_exact_size(egui::vec2(56.0, 56.0), egui::Sense::hover());
-            ui.painter().rect_filled(
-                icon_rect.translate(egui::vec2(0.0, 2.0)),
-                egui::CornerRadius::same(13),
-                egui::Color32::from_black_alpha(28),
-            );
-            ui.painter()
-                .rect_filled(icon_rect, egui::CornerRadius::same(13), theme::SURFACE);
-            ui.painter().rect_stroke(
-                icon_rect,
-                egui::CornerRadius::same(13),
-                egui::Stroke::new(0.5, theme::LINE),
-                egui::StrokeKind::Inside,
-            );
-            ui.painter().image(
-                icon.id(),
-                icon_rect,
-                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                egui::Color32::WHITE,
-            );
-            ui.vertical(|ui| {
-                ui.label(egui::RichText::new("OpenLess").size(17.0).strong());
-                ui.label(
-                    egui::RichText::new(format!(
-                        "{} · v{}",
-                        tr_l10n(lang, "settings.about.tagline"),
-                        vm.version
-                    ))
-                    .size(12.0)
-                    .color(theme::INK_3),
+        let header_width = ui.available_width();
+        ui.allocate_ui_with_layout(
+            egui::vec2(header_width, 64.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |row| {
+                let (icon_rect, _) =
+                    row.allocate_exact_size(egui::vec2(56.0, 56.0), egui::Sense::hover());
+                row.painter().rect_filled(
+                    icon_rect.translate(egui::vec2(0.0, 2.0)),
+                    egui::CornerRadius::same(13),
+                    egui::Color32::from_black_alpha(28),
                 );
-            });
-            if vm.auto_update_capable {
-                if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new(tr_l10n(
-                                lang,
-                                "settings.about.check_stable_update_btn",
-                            ))
-                            .size(11.5),
-                        )
-                        .fill(theme::SURFACE_2)
-                        .stroke(egui::Stroke::new(0.8, theme::LINE))
-                        .corner_radius(egui::CornerRadius::same(8))
-                        .min_size(egui::vec2(0.0, 26.0)),
-                    )
-                    .clicked()
-                {
-                    actions.push(FrontendAction::SettingsAction(
-                        SettingsActionField::CheckUpdate,
-                    ));
+                row.painter()
+                    .rect_filled(icon_rect, egui::CornerRadius::same(13), theme::SURFACE);
+                row.painter().rect_stroke(
+                    icon_rect,
+                    egui::CornerRadius::same(13),
+                    egui::Stroke::new(0.5, theme::LINE),
+                    egui::StrokeKind::Inside,
+                );
+                row.painter().image(
+                    icon.id(),
+                    icon_rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+                row.add_space(12.0);
+                row.vertical(|ui| {
+                    ui.label(egui::RichText::new("OpenLess").size(17.0).strong());
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} · v{}",
+                            tr_l10n(lang, "settings.about.tagline"),
+                            vm.version
+                        ))
+                        .size(12.0)
+                        .color(theme::INK_3),
+                    );
+                });
+                if vm.auto_update_capable {
+                    row.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new(tr_l10n(
+                                        lang,
+                                        "settings.about.check_stable_update_btn",
+                                    ))
+                                    .size(11.5),
+                                )
+                                .fill(theme::SURFACE_2)
+                                .stroke(egui::Stroke::new(0.8, theme::LINE))
+                                .corner_radius(egui::CornerRadius::same(8))
+                                .min_size(egui::vec2(0.0, 26.0)),
+                            )
+                            .clicked()
+                        {
+                            actions.push(FrontendAction::SettingsAction(
+                                SettingsActionField::CheckUpdate,
+                            ));
+                        }
+                    });
                 }
-            }
-        });
+            },
+        );
         if let Some(notice) = &vm.settings_notice {
             ui.label(egui::RichText::new(notice).size(11.0).color(theme::BLUE));
         }
@@ -3503,7 +3511,11 @@ fn capsule_style_preview(ui: &mut egui::Ui, style: usize) {
             0 => {
                 // Match the transparent, drifting spectral ribbons used by the
                 // live Siri capsule instead of showing unrelated loading dots.
-                super::popups::paint_siri_ribbons(ui, rect, 1.35, 0.52);
+                let _ = super::siri_gl::paint(
+                    ui,
+                    rect,
+                    super::siri_gl::SiriGlow::wave(1.35, 0.52, 1.0),
+                );
             }
             1 => {
                 let pill = egui::Rect::from_center_size(rect.center(), egui::vec2(152.0, 34.0));

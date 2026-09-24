@@ -1109,62 +1109,67 @@ pub fn dictation_capsule(
                     egui::StrokeKind::Inside,
                 );
             }
-            let inset = if typeless { 7.0 } else { 8.0 };
-            let cancel_rect = egui::Rect::from_center_size(
-                egui::pos2(rect.left() + inset + button / 2.0, rect.center().y),
-                egui::vec2(button, button),
-            );
-            let cancel = ui.interact(
-                cancel_rect,
-                ui.id().with("openless-capsule-cancel"),
-                egui::Sense::click(),
-            );
-            let cancel_fill = if typeless {
-                TYPELESS_BUTTON_BG
+            // Siri is a clean, transparent listening indicator. The cancel /
+            // confirm affordances belong to the classic and Typeless capsules.
+            let center = if siri {
+                rect.shrink(3.0)
             } else {
-                theme::SURFACE_2
+                let inset = if typeless { 7.0 } else { 8.0 };
+                let cancel_rect = egui::Rect::from_center_size(
+                    egui::pos2(rect.left() + inset + button / 2.0, rect.center().y),
+                    egui::vec2(button, button),
+                );
+                let cancel = ui.interact(
+                    cancel_rect,
+                    ui.id().with("openless-capsule-cancel"),
+                    egui::Sense::click(),
+                );
+                let cancel_fill = if typeless {
+                    TYPELESS_BUTTON_BG
+                } else {
+                    theme::SURFACE_2
+                };
+                round_button(
+                    ui,
+                    cancel_rect,
+                    icons::IconName::Close,
+                    cancel.hovered(),
+                    cancel_fill,
+                    pill_ink,
+                );
+                if cancel.clicked() {
+                    action = CapsuleAction::Cancel;
+                }
+                let confirm_rect = egui::Rect::from_center_size(
+                    egui::pos2(rect.right() - inset - button / 2.0, rect.center().y),
+                    egui::vec2(button, button),
+                );
+                let confirm = ui.interact(
+                    confirm_rect,
+                    ui.id().with("openless-capsule-confirm"),
+                    egui::Sense::click(),
+                );
+                let (confirm_fill, confirm_ink) = if typeless {
+                    (TYPELESS_INK, TYPELESS_BG)
+                } else {
+                    (theme::SURFACE_2, theme::INK_2)
+                };
+                round_button(
+                    ui,
+                    confirm_rect,
+                    icons::IconName::Check,
+                    confirm.hovered(),
+                    confirm_fill,
+                    confirm_ink,
+                );
+                if confirm.clicked() {
+                    action = CapsuleAction::Confirm;
+                }
+                egui::Rect::from_min_max(
+                    egui::pos2(cancel_rect.right() + 4.0, rect.top() + 4.0),
+                    egui::pos2(confirm_rect.left() - 4.0, rect.bottom() - 4.0),
+                )
             };
-            round_button(
-                ui,
-                cancel_rect,
-                icons::IconName::Close,
-                cancel.hovered(),
-                cancel_fill,
-                pill_ink,
-            );
-            if cancel.clicked() {
-                action = CapsuleAction::Cancel;
-            }
-            let confirm_rect = egui::Rect::from_center_size(
-                egui::pos2(rect.right() - inset - button / 2.0, rect.center().y),
-                egui::vec2(button, button),
-            );
-            let confirm = ui.interact(
-                confirm_rect,
-                ui.id().with("openless-capsule-confirm"),
-                egui::Sense::click(),
-            );
-            // Tauri `.ol-typeless-confirm-bg: #fafafa` + 深色勾。
-            let (confirm_fill, confirm_ink) = if typeless {
-                (TYPELESS_INK, TYPELESS_BG)
-            } else {
-                (theme::SURFACE_2, theme::INK_2)
-            };
-            round_button(
-                ui,
-                confirm_rect,
-                icons::IconName::Check,
-                confirm.hovered(),
-                confirm_fill,
-                confirm_ink,
-            );
-            if confirm.clicked() {
-                action = CapsuleAction::Confirm;
-            }
-            let center = egui::Rect::from_min_max(
-                egui::pos2(cancel_rect.right() + 4.0, rect.top() + 4.0),
-                egui::pos2(confirm_rect.left() - 4.0, rect.bottom() - 4.0),
-            );
             let processing = matches!(
                 phase.as_str(),
                 "starting" | "transcribing" | "polishing" | "inserting"
@@ -1182,7 +1187,11 @@ pub fn dictation_capsule(
                 let dt = ui.input(|input| input.stable_dt);
                 let clock = siri_gl::tick(ui.ctx(), "capsule-siri-wave", drive, dt);
                 if siri {
-                    paint_siri_ribbons(ui, center, clock.time, clock.level);
+                    let _ = siri_gl::paint(
+                        ui,
+                        center,
+                        siri_gl::SiriGlow::wave(clock.time, clock.level, 1.0),
+                    );
                     ui.ctx()
                         .request_repaint_after(std::time::Duration::from_millis(16));
                 } else {
@@ -1321,53 +1330,6 @@ fn audio_bars(ui: &egui::Ui, rect: egui::Rect, level: f32, bar_count: usize, ink
             ink,
         );
         x += bar_width + gap;
-    }
-}
-
-/// Transparent Siri treatment: several independently drifting spectral
-/// ribbons, driven by the smoothed microphone level rather than a filled pill.
-pub(super) fn paint_siri_ribbons(ui: &egui::Ui, rect: egui::Rect, time: f32, level: f32) {
-    const SPECTRUM: [egui::Color32; 6] = [
-        egui::Color32::from_rgb(255, 93, 156),
-        egui::Color32::from_rgb(194, 111, 255),
-        egui::Color32::from_rgb(104, 126, 255),
-        egui::Color32::from_rgb(72, 203, 255),
-        egui::Color32::from_rgb(92, 239, 197),
-        egui::Color32::from_rgb(255, 191, 94),
-    ];
-    let painter = ui.painter();
-    let width = rect.width().max(1.0);
-    let amplitude = 2.0 + level.clamp(0.0, 1.0) * 10.0;
-    let samples = 48;
-    for (ribbon, color) in SPECTRUM.into_iter().enumerate() {
-        let phase = time * (1.7 + ribbon as f32 * 0.13) + ribbon as f32 * 0.91;
-        let offset = (ribbon as f32 - 2.5) * 1.4;
-        let ribbon_amplitude = amplitude * (0.62 + (ribbon % 3) as f32 * 0.16);
-        for segment in 0..samples {
-            let x0 = segment as f32 / samples as f32;
-            let x1 = (segment + 1) as f32 / samples as f32;
-            let point = |x: f32| {
-                let envelope = (std::f32::consts::PI * x).sin().powf(0.65);
-                let wave = (x * 2.0 * std::f32::consts::PI * 1.18 + phase).sin()
-                    + 0.28 * (x * 2.0 * std::f32::consts::PI * 2.3 - phase * 0.71).sin();
-                egui::pos2(
-                    rect.left() + width * x,
-                    rect.center().y + offset + wave * ribbon_amplitude * envelope * 0.48,
-                )
-            };
-            let alpha = (150.0 + 80.0 * (time * 1.6 + x0 * 7.0 + ribbon as f32).sin().abs()) as u8;
-            // Layer a broad, low-opacity spectral stroke behind the crisp
-            // filament so the transparent capsule reads as light rather than
-            // as a stack of flat colored rules.
-            painter.line_segment(
-                [point(x0), point(x1)],
-                egui::Stroke::new(6.0, color.gamma_multiply(0.12)),
-            );
-            painter.line_segment(
-                [point(x0), point(x1)],
-                egui::Stroke::new(2.0, color.gamma_multiply(alpha as f32 / 255.0)),
-            );
-        }
     }
 }
 

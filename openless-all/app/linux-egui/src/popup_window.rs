@@ -6,8 +6,8 @@
 //! insert to the wrong place. Tauri gets exactly this guarantee on macOS from
 //! `NSWindow::orderFrontRegardless` ("visible but not the key window", see
 //! the Tauri host's `show_qa_window`). Wayland's xdg-shell offers
-//! neither an absolute position nor a focus opt-out, so the capsule runs under
-//! XWayland, where:
+//! neither an absolute position nor a focus opt-out, so this X11 path is used
+//! only in a native X11 session, where:
 //!
 //! * `WM_HINTS.input = False` makes the window manager never assign focus
 //!   (pointer clicks still reach the pill's ✕ / ✓ buttons),
