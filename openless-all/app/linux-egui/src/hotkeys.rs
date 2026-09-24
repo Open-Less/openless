@@ -15,6 +15,7 @@ static NEXT_PRESS_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 struct HotkeyPressIds {
     dictation: std::sync::atomic::AtomicU64,
     less_computer: std::sync::atomic::AtomicU64,
+    qa: std::sync::atomic::AtomicBool,
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -63,7 +64,10 @@ pub enum LinuxHotkeyEvent {
     },
     QaPressed,
     SelectionPolishPressed,
-    TranslationPressed,
+    TranslationPressed {
+        symbol: u32,
+        states: u32,
+    },
     SwitchStylePressed,
     OpenAppPressed,
     StylePackPressed {
@@ -328,9 +332,22 @@ fn event_from_signal(
                 .load(std::sync::atomic::Ordering::Acquire),
             at,
         }),
-        ("QaShortcutEvent", true) => Some(LinuxHotkeyEvent::QaPressed),
+        ("QaShortcutEvent", true)
+            if !press_ids.qa.swap(true, std::sync::atomic::Ordering::AcqRel) =>
+        {
+            Some(LinuxHotkeyEvent::QaPressed)
+        }
+        ("QaShortcutEvent", true) => None,
+        ("QaShortcutEvent", false) => {
+            press_ids
+                .qa
+                .store(false, std::sync::atomic::Ordering::Release);
+            None
+        }
         ("SelectionPolishEvent", true) => Some(LinuxHotkeyEvent::SelectionPolishPressed),
-        ("TranslationModifierEvent", true) => Some(LinuxHotkeyEvent::TranslationPressed),
+        ("TranslationModifierEvent", true) => {
+            Some(LinuxHotkeyEvent::TranslationPressed { symbol, states })
+        }
         ("SwitchStyleEvent", true) => Some(LinuxHotkeyEvent::SwitchStylePressed),
         ("OpenAppEvent", true) => Some(LinuxHotkeyEvent::OpenAppPressed),
         ("StylePackHotkeyEvent", true) => {

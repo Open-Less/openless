@@ -77,8 +77,8 @@ pub fn apply_selection_voice_target(
 pub use hotkeys::{Fcitx5HotkeyListener, LinuxHotkeyEvent};
 pub use i18n::{fmt_catalog as fmt_l10n, tr_catalog as tr_l10n, Lang, LocalePref, LANGS};
 pub use local_hotkeys::{
-    next_local_press_id, plugin_event_hotkey, style_pack_raw, HotkeyDeduplicator, LocalHotkey,
-    LocalHotkeyEdge, LocalHotkeyEdgeKind, HOTKEY_DEDUPE_WINDOW,
+    next_local_press_id, plugin_event_hotkey, style_pack_raw, translation_hotkey_event,
+    HotkeyDeduplicator, LocalHotkey, LocalHotkeyEdge, LocalHotkeyEdgeKind, HOTKEY_DEDUPE_WINDOW,
 };
 pub use logging::{export_error_log, init_file_logger, log_path};
 pub use popup::{
@@ -445,7 +445,7 @@ impl LinuxHost {
                     .await?;
                 Ok(None)
             }
-            LinuxHotkeyEvent::TranslationPressed => {
+            LinuxHotkeyEvent::TranslationPressed { .. } => {
                 if self.backend.snapshot().dictation.phase == DictationPhase::Idle {
                     self.translation_pending
                         .store(true, std::sync::atomic::Ordering::Release);

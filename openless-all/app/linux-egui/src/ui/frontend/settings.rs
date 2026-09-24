@@ -2355,6 +2355,11 @@ fn about(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
         ui.horizontal(|ui| {
             let (icon_rect, _) =
                 ui.allocate_exact_size(egui::vec2(56.0, 56.0), egui::Sense::hover());
+            ui.painter().rect_filled(
+                icon_rect.translate(egui::vec2(0.0, 2.0)),
+                egui::CornerRadius::same(13),
+                egui::Color32::from_black_alpha(28),
+            );
             ui.painter()
                 .rect_filled(icon_rect, egui::CornerRadius::same(13), theme::SURFACE);
             ui.painter().rect_stroke(

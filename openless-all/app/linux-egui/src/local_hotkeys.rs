@@ -46,6 +46,8 @@ pub enum LocalHotkeyEdgeKind {
     Released,
     /// 一次完整的按下+松开：裸修饰键绑定只能在松手时判定。
     Combined,
+    /// 裸修饰键按下后又按了其他键；取消这次修饰键热键。
+    Cancelled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -188,7 +190,12 @@ pub fn plugin_event_hotkey(
         | LinuxHotkeyEvent::DictationCombined { .. } => LocalHotkey::Dictation,
         LinuxHotkeyEvent::QaPressed => LocalHotkey::Qa,
         LinuxHotkeyEvent::SelectionPolishPressed => LocalHotkey::SelectionPolish,
-        LinuxHotkeyEvent::TranslationPressed => LocalHotkey::Translation,
+        LinuxHotkeyEvent::TranslationPressed { symbol, states } => {
+            if !shortcut_event_matches(&target.translation, *symbol, *states) {
+                return None;
+            }
+            LocalHotkey::Translation
+        }
         LinuxHotkeyEvent::SwitchStylePressed => LocalHotkey::SwitchStyle,
         LinuxHotkeyEvent::OpenAppPressed => LocalHotkey::OpenApp,
         LinuxHotkeyEvent::LessComputerPressed { .. }
@@ -203,6 +210,70 @@ pub fn plugin_event_hotkey(
                 .map(|pack| LocalHotkey::StylePack(pack.pack_id.clone()))?
         }
     })
+}
+
+/// Match a raw fcitx signal like `hotkey_match.h::matches`: fold letter case,
+/// keep Ctrl/Alt/Super exact, and permit a shifted US symbol pair only when the
+/// configured binding includes Shift.
+fn shortcut_event_matches(binding: &ShortcutBinding, symbol: u32, states: u32) -> bool {
+    let Ok((expected_symbol, expected_states)) = crate::settings::shortcut_to_raw(binding) else {
+        return false;
+    };
+    const MODIFIERS: u32 = 0x01 | 0x04 | 0x08 | 0x40;
+    let fold = |key: u32| {
+        if (u32::from(b'a')..=u32::from(b'z')).contains(&key) {
+            key - 32
+        } else {
+            key
+        }
+    };
+    let actual = fold(symbol);
+    let expected = fold(expected_symbol);
+    if actual == expected {
+        return states & MODIFIERS == expected_states & MODIFIERS;
+    }
+    if (0xffe1..=0xffee).contains(&actual) || (0xffe1..=0xffee).contains(&expected) {
+        return false;
+    }
+    let shifted_pair = [
+        (b';', b':'),
+        (b',', b'<'),
+        (b'.', b'>'),
+        (b'/', b'?'),
+        (b'\\', b'|'),
+        (b'[', b'{'),
+        (b']', b'}'),
+        (b'\'', b'"'),
+        (b'`', b'~'),
+        (b'-', b'_'),
+        (b'=', b'+'),
+        (b'1', b'!'),
+        (b'2', b'@'),
+        (b'3', b'#'),
+        (b'4', b'$'),
+        (b'5', b'%'),
+        (b'6', b'^'),
+        (b'7', b'&'),
+        (b'8', b'*'),
+        (b'9', b'('),
+        (b'0', b')'),
+    ]
+    .iter()
+    .any(|(base, shifted)| {
+        (actual == u32::from(*base) && expected == u32::from(*shifted))
+            || (actual == u32::from(*shifted) && expected == u32::from(*base))
+    });
+    shifted_pair
+        && expected_states & 0x01 != 0
+        && states & (MODIFIERS & !0x01) == expected_states & (MODIFIERS & !0x01)
+}
+
+/// Build the same raw translation event emitted by the fcitx5 signal adapter.
+/// This keeps the standalone host binary from reaching into the library's
+/// private shortcut-conversion module.
+pub fn translation_hotkey_event(target: &HotkeyRuntimeTarget) -> Option<LinuxHotkeyEvent> {
+    let (symbol, states) = crate::settings::shortcut_to_raw(&target.translation).ok()?;
+    Some(LinuxHotkeyEvent::TranslationPressed { symbol, states })
 }
 
 /// 本地边沿与插件信号之间的去重记账。

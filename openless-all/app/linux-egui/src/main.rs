@@ -2629,13 +2629,15 @@ mod linux_app {
         /// 采纳一条插件热键信号？（与窗口报上来的本地边沿去重。）
         fn accept_plugin_hotkey(&mut self, event: &LinuxHotkeyEvent) -> bool {
             let Some(target) = self.hotkey_target() else {
-                return true;
+                return !matches!(event, LinuxHotkeyEvent::TranslationPressed { .. });
             };
             match openless_linux_egui::plugin_event_hotkey(event, &target) {
                 Some(hotkey) => self
                     .hotkey_dedupe
                     .accept_signal(&hotkey, std::time::Instant::now()),
-                None => true,
+                // Translation signals carry their raw key identity; a mismatched
+                // signal must be discarded instead of forwarded to Core.
+                None => !matches!(event, LinuxHotkeyEvent::TranslationPressed { .. }),
             }
         }
 
@@ -2709,7 +2711,10 @@ mod linux_app {
                 }
                 // 单发事件（翻译/切换风格/划词润色/打开应用/风格包）只在按下或
                 // 一次完整单击时触发；松开不再重复发一次。
-                let single_shot = edge.kind != LocalHotkeyEdgeKind::Released;
+                let single_shot = matches!(
+                    edge.kind,
+                    LocalHotkeyEdgeKind::Pressed | LocalHotkeyEdgeKind::Combined
+                );
                 match &edge.hotkey {
                     LocalHotkey::Qa => {
                         log::info!("[hotkey] local selection-ask hotkey: toggling the panel");
@@ -2745,6 +2750,12 @@ mod linux_app {
                             press_id: edge.press_id,
                             at,
                         },
+                        LocalHotkeyEdgeKind::Cancelled => LinuxHotkeyEvent::DictationCombined {
+                            symbol: 0,
+                            states: 0,
+                            press_id: edge.press_id,
+                            at,
+                        },
                     }),
                     LocalHotkey::LessComputer => {
                         if !single_shot {
@@ -2766,11 +2777,23 @@ mod linux_app {
                                     at,
                                 }
                             }
+                            LocalHotkeyEdgeKind::Cancelled => {
+                                LinuxHotkeyEvent::LessComputerCombined {
+                                    symbol: 0,
+                                    states: 0,
+                                    press_id: edge.press_id,
+                                    at,
+                                }
+                            }
                         });
                     }
                     LocalHotkey::Translation => {
                         if single_shot {
-                            events.push(LinuxHotkeyEvent::TranslationPressed);
+                            if let Some(event) =
+                                openless_linux_egui::translation_hotkey_event(&target)
+                            {
+                                events.push(event);
+                            }
                         }
                     }
                     LocalHotkey::SwitchStyle => {

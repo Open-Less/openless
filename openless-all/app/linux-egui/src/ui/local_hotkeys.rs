@@ -42,13 +42,48 @@ impl LocalHotkeyMatcher {
         target: &HotkeyRuntimeTarget,
     ) -> Option<LocalHotkeyEdge> {
         if let Some(held) = self.held.take() {
+            if held.key.is_none() && first_press_key(ctx).is_some() {
+                return Some(LocalHotkeyEdge {
+                    hotkey: held.hotkey,
+                    kind: LocalHotkeyEdgeKind::Cancelled,
+                    press_id: held.press_id,
+                });
+            }
             if !released(ctx, held.key, &held.primary) {
                 self.held = Some(held);
+                return None;
             } else {
                 return Some(LocalHotkeyEdge {
                     hotkey: held.hotkey,
                     kind: LocalHotkeyEdgeKind::Released,
                     press_id: held.press_id,
+                });
+            }
+        }
+
+        // A modifier-only binding needs a real press edge so Hold mode can start
+        // recording and stop on release. Core's modifier grace period handles
+        // ordinary typing; a following non-modifier key sends Cancelled above.
+        let bare_modifier = ctx
+            .input(|input| bare_modifier_name(input.modifiers))
+            .map(str::to_string);
+        if let Some(primary) = bare_modifier {
+            let binding = ShortcutBinding {
+                primary: primary.clone(),
+                modifiers: Vec::new(),
+            };
+            if let Some(hotkey) = match_hotkey(target, &binding) {
+                let press_id = next_local_press_id();
+                self.held = Some(HeldHotkey {
+                    hotkey: hotkey.clone(),
+                    primary,
+                    key: None,
+                    press_id,
+                });
+                return Some(LocalHotkeyEdge {
+                    hotkey,
+                    kind: LocalHotkeyEdgeKind::Pressed,
+                    press_id,
                 });
             }
         }
