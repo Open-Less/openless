@@ -361,8 +361,20 @@ pub fn selection_ask(
             } else {
                 0.0
             };
-            let footer_height = CARD_SPACING * 2.0 + COMPOSER_HEIGHT + 12.0 + 22.0 + edit_block;
-            let content_height = (ui.available_height() - footer_height).max(80.0);
+            let recording_selection_height = if recording && state.selection_preview.is_some() {
+                28.0
+            } else {
+                0.0
+            };
+            let footer_height = CARD_SPACING * 2.0
+                + COMPOSER_HEIGHT
+                + 12.0
+                + 22.0
+                + recording_selection_height
+                + edit_block;
+            // Never force an 80px thread area: on short work areas that
+            // minimum overlaps the fixed composer and clips its bottom edge.
+            let content_height = (ui.available_height() - footer_height).max(0.0);
             let has_thread = !state.messages.is_empty()
                 || !state.streaming_answer.is_empty()
                 || thinking
@@ -1047,8 +1059,15 @@ pub fn dictation_capsule(
             } else {
                 (PILL_WIDTH, PILL_HEIGHT, ROUND_BUTTON, 5)
             };
+            let siri = use_gpu;
             let (pill_bg, pill_border, pill_ink) = if typeless {
                 (TYPELESS_BG, TYPELESS_BORDER, TYPELESS_INK)
+            } else if siri {
+                (
+                    egui::Color32::TRANSPARENT,
+                    egui::Color32::TRANSPARENT,
+                    theme::INK_2,
+                )
             } else {
                 (theme::SURFACE, theme::LINE, theme::INK_2)
             };
@@ -1077,17 +1096,19 @@ pub fn dictation_capsule(
             };
             let pill =
                 egui::Rect::from_center_size(rect.center(), rect.size() * (1.0 + ambient * 0.018));
-            ui.painter().rect_filled(
-                pill,
-                egui::CornerRadius::same((pill_height / 2.0) as u8),
-                pill_bg,
-            );
-            ui.painter().rect_stroke(
-                pill,
-                egui::CornerRadius::same((pill_height / 2.0) as u8),
-                egui::Stroke::new(1.0, pill_border),
-                egui::StrokeKind::Inside,
-            );
+            if !siri {
+                ui.painter().rect_filled(
+                    pill,
+                    egui::CornerRadius::same((pill_height / 2.0) as u8),
+                    pill_bg,
+                );
+                ui.painter().rect_stroke(
+                    pill,
+                    egui::CornerRadius::same((pill_height / 2.0) as u8),
+                    egui::Stroke::new(1.0, pill_border),
+                    egui::StrokeKind::Inside,
+                );
+            }
             let inset = if typeless { 7.0 } else { 8.0 };
             let cancel_rect = egui::Rect::from_center_size(
                 egui::pos2(rect.left() + inset + button / 2.0, rect.center().y),
@@ -1149,8 +1170,9 @@ pub fn dictation_capsule(
                 "starting" | "transcribing" | "polishing" | "inserting"
             );
             if phase == "recording" {
-                // Siri 声波（Tauri `SiriGL` wave 模式）：GPU 路径用真实电平驱动，
-                // 失败时回落到经典五根音量条。
+                // Siri capsules are a transparent overlay. Draw the spectral
+                // ribbons with egui primitives so they work on the Vulkan path
+                // too (the legacy GL shader callback is unavailable there).
                 let drive = siri_gl::SiriDrive {
                     level: state.audio_level.unwrap_or_default(),
                     resolved: 1.0,
@@ -1159,8 +1181,11 @@ pub fn dictation_capsule(
                 };
                 let dt = ui.input(|input| input.stable_dt);
                 let clock = siri_gl::tick(ui.ctx(), "capsule-siri-wave", drive, dt);
-                let glow = siri_gl::SiriGlow::wave(clock.time, clock.level, clock.resolved);
-                if !use_gpu || !siri_gl::paint(ui, center, glow) {
+                if siri {
+                    paint_siri_ribbons(ui, center, clock.time, clock.level);
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(16));
+                } else {
                     audio_bars(
                         ui,
                         center,
@@ -1296,6 +1321,46 @@ fn audio_bars(ui: &egui::Ui, rect: egui::Rect, level: f32, bar_count: usize, ink
             ink,
         );
         x += bar_width + gap;
+    }
+}
+
+/// Transparent Siri treatment: several independently drifting spectral
+/// ribbons, driven by the smoothed microphone level rather than a filled pill.
+fn paint_siri_ribbons(ui: &egui::Ui, rect: egui::Rect, time: f32, level: f32) {
+    const SPECTRUM: [egui::Color32; 6] = [
+        egui::Color32::from_rgb(255, 93, 156),
+        egui::Color32::from_rgb(194, 111, 255),
+        egui::Color32::from_rgb(104, 126, 255),
+        egui::Color32::from_rgb(72, 203, 255),
+        egui::Color32::from_rgb(92, 239, 197),
+        egui::Color32::from_rgb(255, 191, 94),
+    ];
+    let painter = ui.painter();
+    let width = rect.width().max(1.0);
+    let amplitude = 2.0 + level.clamp(0.0, 1.0) * 10.0;
+    let samples = 48;
+    for (ribbon, color) in SPECTRUM.into_iter().enumerate() {
+        let phase = time * (1.7 + ribbon as f32 * 0.13) + ribbon as f32 * 0.91;
+        let offset = (ribbon as f32 - 2.5) * 1.4;
+        let ribbon_amplitude = amplitude * (0.62 + (ribbon % 3) as f32 * 0.16);
+        for segment in 0..samples {
+            let x0 = segment as f32 / samples as f32;
+            let x1 = (segment + 1) as f32 / samples as f32;
+            let point = |x: f32| {
+                let envelope = (std::f32::consts::PI * x).sin().powf(0.65);
+                let wave = (x * 2.0 * std::f32::consts::PI * 1.18 + phase).sin()
+                    + 0.28 * (x * 2.0 * std::f32::consts::PI * 2.3 - phase * 0.71).sin();
+                egui::pos2(
+                    rect.left() + width * x,
+                    rect.center().y + offset + wave * ribbon_amplitude * envelope * 0.48,
+                )
+            };
+            let alpha = (150.0 + 80.0 * (time * 1.6 + x0 * 7.0 + ribbon as f32).sin().abs()) as u8;
+            painter.line_segment(
+                [point(x0), point(x1)],
+                egui::Stroke::new(1.7, color.gamma_multiply(alpha as f32 / 255.0)),
+            );
+        }
     }
 }
 

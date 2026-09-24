@@ -147,23 +147,11 @@ pub fn titlebar(ctx: &egui::Context, actions: &mut Vec<FrontendAction>) {
             }
 
             let texture = load_app_icon(ctx);
-            let icon_tile = egui::Rect::from_center_size(
-                window.min + egui::vec2(16.0, TITLEBAR_HEIGHT / 2.0),
-                egui::vec2(24.0, 24.0),
-            );
-            ui.painter()
-                .rect_filled(icon_tile, egui::CornerRadius::same(7), theme::BLUE_SOFT);
-            ui.painter().rect_stroke(
-                icon_tile,
-                egui::CornerRadius::same(7),
-                egui::Stroke::new(0.5, theme::LINE),
-                egui::StrokeKind::Inside,
-            );
             paint_app_icon(
                 ui,
                 egui::Rect::from_center_size(
                     window.min + egui::vec2(16.0, TITLEBAR_HEIGHT / 2.0),
-                    egui::vec2(21.0, 21.0),
+                    egui::vec2(26.0, 26.0),
                 ),
                 &texture,
             );

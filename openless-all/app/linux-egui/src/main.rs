@@ -6899,6 +6899,10 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
     }
 
     impl eframe::App for NativePopupApp {
+        fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+            egui::Color32::TRANSPARENT.to_normalized_gamma_f32()
+        }
+
         fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
             let ctx = ui.ctx().clone();
             // Overlay placement first: it must run before the window is shown so
@@ -7324,7 +7328,10 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 openless_linux_egui::CAPSULE_WINDOW_SIZE.1 as f32,
             ],
         };
-        let transparent = matches!(kind, PopupKind::Capsule);
+        // Popup cards paint their own rounded surface. A transparent native
+        // surface lets the rounded corners reveal the desktop instead of the
+        // rectangular X11 window backing showing through around the card.
+        let transparent = true;
         // 三条路径的优先级（`popup_layer::choose_capsule_path`）：
         //   1. 合成器有 zwlr_layer_shell_v1 → 走原生 layer surface（已在上面 return）
         //   2. 否且有 X 服务器 → XWayland + 下面的 X11 叠加层（本分支）
@@ -7349,6 +7356,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             .with_decorations(false)
             .with_always_on_top()
             .with_transparent(transparent)
+            .with_has_shadow(false)
             .with_visible(false);
         if let Some(position) = initial_position {
             viewport = viewport.with_position([position.0 as f32, position.1 as f32]);
@@ -7361,6 +7369,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         let options = eframe::NativeOptions {
             viewport,
             renderer: eframe::Renderer::Wgpu,
+            multisampling: 4,
             ..Default::default()
         };
         let options = vulkan_options(options);
@@ -7498,6 +7507,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 .with_resizable(true)
                 .with_visible(true),
             renderer: eframe::Renderer::Wgpu,
+            multisampling: 4,
             ..Default::default()
         };
         let options = vulkan_options(options);

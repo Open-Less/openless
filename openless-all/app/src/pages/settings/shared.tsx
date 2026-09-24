@@ -151,9 +151,11 @@ export function SettingRow({ label, desc, children, controlWidth }: SettingRowPr
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'flex-start',
+          justifySelf: 'stretch',
           minWidth: 0,
-          width: stackLayout ? '100%' : (controlWidth ?? 'auto'),
-          maxWidth: '100%',
+          width: '100%',
+          maxWidth: controlWidth ?? '100%',
+          boxSizing: 'border-box',
           flexWrap: stackLayout ? 'wrap' : 'nowrap',
           gap: stackLayout ? 6 : undefined,
         }}
