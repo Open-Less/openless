@@ -850,10 +850,15 @@ mod tests {
         assert!(!SIRI_VERTEX_SRC.contains("#version"));
     }
 
+    /// 着色器路径已从渲染路径上摘除（见本文件第 7 行的 `allow(dead_code)`），
+    /// `paint` 现在直接用 CPU 形状画出每一种光效，并恒返回 `true`（调用方不得
+    /// 再画自己的回退）。等 wgpu 光效落地后，这里要恢复成「GPU 回调 + 所有权」
+    /// 的断言。
     #[test]
-    fn paint_queues_a_gpu_callback() {
+    fn paint_draws_every_mode_on_the_cpu_and_claims_ownership() {
         let _guard = gpu_state_guard();
         let ctx = egui::Context::default();
+        let mut modes = 0;
         let output = crate::ui::frontend::run_pass(
             &ctx,
             egui::RawInput {
@@ -869,10 +874,19 @@ mod tests {
                     SiriGlow::orb(0.5, 1.0),
                     SiriGlow::ring(0.5, 12.0, 2.0, 1.6),
                 ] {
-                    // Before a successful GPU frame the caller keeps its CPU fallback.
-                    assert!(!paint(ui, ui.max_rect(), glow), "{:?} ownership", glow.mode);
+                    assert!(
+                        paint(ui, ui.max_rect(), glow),
+                        "{:?} must paint its CPU fallback and claim the centre",
+                        glow.mode
+                    );
+                    modes += 1;
                 }
             },
+        );
+        assert_eq!(modes, 3, "every mode must be exercised");
+        assert!(
+            !output.shapes.is_empty(),
+            "the glow must still reach the frame as CPU shapes"
         );
         let callbacks = output
             .shapes
@@ -880,15 +894,15 @@ mod tests {
             .filter(|clipped| matches!(clipped.shape, egui::Shape::Callback(_)))
             .count();
         assert_eq!(
-            callbacks, 3,
-            "every mode must reach the paint callback registration"
+            callbacks, 0,
+            "the shader path is off: nothing may queue a GPU callback"
         );
     }
 
-    /// The warm-up must queue a single compile-only callback and then stay out
-    /// of the way, while leaving the CPU fallback ownership rule untouched.
+    /// 着色器路径关掉之后，`warm_up` 是空函数：不排队、不改状态，也依然不影响
+    /// `paint` 的「CPU 光效 + 所有权」结论。
     #[test]
-    fn warm_up_queues_one_compile_callback_and_keeps_the_cpu_fallback() {
+    fn warm_up_queues_nothing_while_the_shader_path_is_off() {
         let ctx = egui::Context::default();
         // The GPU state is process-global, so serialise with the other GPU tests.
         let _guard = gpu_state_guard();
@@ -904,9 +918,7 @@ mod tests {
             |ui| {
                 warm_up(ui);
                 warm_up(ui);
-                // Warm-up only compiles: until a real glow frame draws, the caller
-                // still owns its CPU fallback.
-                assert!(!paint(
+                assert!(paint(
                     ui,
                     ui.max_rect(),
                     SiriGlow::ring(0.0, 12.0, 2.0, 1.6)
@@ -919,15 +931,12 @@ mod tests {
             .filter(|clipped| matches!(clipped.shape, egui::Shape::Callback(_)))
             .count();
         assert_eq!(
-            callbacks, 2,
-            "one warm-up callback plus the ring, no matter how often warm_up runs"
+            callbacks, 0,
+            "warm-up never queues a callback while the shader path is off"
         );
         let (queued, done) = warm_up_state();
-        assert!(queued, "the warm-up callback must be queued");
-        assert!(
-            !done,
-            "the callback body needs a GL context, so it cannot have run"
-        );
+        assert!(!queued, "nothing may stay queued after warm-up");
+        assert!(!done, "there is no callback body left to run");
     }
 
     /// Once the programs exist (or the driver already failed), warm-up is a
@@ -1059,12 +1068,14 @@ mod tests {
         );
     }
 
+    /// 驱动已经拒绝过着色器也一样：CPU 光效依旧画出中心并拿走所有权，只是不
+    /// 会排任何 GPU 回调。
     #[test]
-    fn disabled_gpu_keeps_the_cpu_fallback() {
+    fn a_rejected_driver_still_gets_the_cpu_glow() {
         let _guard = gpu_state_guard();
         GPU_FAILED.store(true, Ordering::Relaxed);
         let ctx = egui::Context::default();
-        let mut queued = 0;
+        let mut owned = 0;
         let output = crate::ui::frontend::run_pass(
             &ctx,
             egui::RawInput {
@@ -1076,11 +1087,14 @@ mod tests {
             },
             |ui| {
                 if paint(ui, ui.max_rect(), SiriGlow::orb(0.0, 1.0)) {
-                    queued += 1;
+                    owned += 1;
                 }
             },
         );
-        assert_eq!(queued, 0, "a disabled GPU path reports no ownership");
+        assert_eq!(
+            owned, 1,
+            "the CPU glow owns the centre even when the driver rejected the shader"
+        );
         assert_eq!(
             output
                 .shapes
