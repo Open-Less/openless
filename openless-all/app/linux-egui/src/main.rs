@@ -51,6 +51,10 @@ mod linux_app {
         Providers(Result<ProviderPanel, String>),
         /// Credential channels for the settings modal's AI-services tab.
         SettingsChannels(Result<Vec<SettingsChannelRow>, String>),
+        ChannelCreated {
+            kind: openless_core::ChannelKind,
+            result: Result<String, String>,
+        },
         ServiceConfigured([bool; 2]),
         ProviderEditor {
             kind: openless_core::ChannelKind,
@@ -3278,6 +3282,18 @@ mod linux_app {
                         self.settings_channels_loading = false;
                         self.frontend_vm.settings_notice = Some(error);
                     }
+                    UiResult::ChannelCreated { kind, result } => match result {
+                        Ok(channel_id) => {
+                            self.settings_channel_kind = kind;
+                            self.provider_kind = kind;
+                            self.selected_channel_id = Some(channel_id);
+                            self.close_provider_editor();
+                            self.load_settings_channels();
+                            self.load_service_configured();
+                            self.load_providers(kind);
+                        }
+                        Err(error) => self.frontend_vm.settings_notice = Some(error),
+                    },
                     UiResult::MarketplaceDetail(Ok(detail)) => {
                         self.status =
                             fmt_l10n(lang, "status.detail_loaded", &[&detail.summary.name]);
@@ -4571,6 +4587,8 @@ mod linux_app {
                             self.frontend_vm.active_page = frontend::view_model::Page::Settings;
                             // 每次打开设置都刷新「必配服务」状态点。
                             self.load_service_configured();
+                            self.provider_kind = self.settings_channel_kind;
+                            self.load_providers(self.settings_channel_kind);
                             // 也重新枚举麦克风：设备可能在启动后才插上（Tauri 在
                             // 下拉打开时同样重查）。
                             self.load_microphones();
@@ -5251,15 +5269,19 @@ mod linux_app {
                         };
                         if self.settings_channel_kind != kind {
                             self.settings_channel_kind = kind;
+                            self.provider_kind = kind;
                             // The editor belongs to one channel kind: switching the
                             // AI-services tab must not carry it across.
                             self.close_provider_editor();
                             self.selected_channel_id = None;
                             self.load_settings_channels();
                             self.load_service_configured();
+                            self.load_providers(kind);
                         } else if self.settings_channels.is_empty() {
+                            self.provider_kind = kind;
                             self.load_settings_channels();
                             self.load_service_configured();
+                            self.load_providers(kind);
                         }
                     }
                     frontend::view_model::FrontendAction::SettingsChannelFormOpen(open) => {
@@ -5286,14 +5308,15 @@ mod linux_app {
                         if let (Some(backend), Some(provider_type)) =
                             (self.backend(), provider_type)
                         {
-                            let lang = self.lang;
-                            self.spawn(async move {
-                                backend.create_channel(kind, provider_type, name).await?;
-                                Ok(tr_l10n(lang, "status.channel_created").to_string())
+                            let tx = self.tx.clone();
+                            self.tokio.spawn(async move {
+                                let result = backend
+                                    .create_channel(kind, provider_type, name)
+                                    .await
+                                    .map_err(|error| error.to_string());
+                                let _ = tx.send(UiResult::ChannelCreated { kind, result });
                             });
                             self.frontend_vm.channel_form_open = false;
-                            self.load_settings_channels();
-                            self.load_service_configured();
                         }
                     }
                     frontend::view_model::FrontendAction::ShortcutMenu(field) => {
