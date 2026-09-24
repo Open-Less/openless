@@ -217,10 +217,12 @@ pub fn install(ctx: &egui::Context) {
 
     apply_visuals(ctx, openless_core::shared_types::ThemeMode::System);
 
-    let mut style = (*ctx.style()).clone();
-    style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-    style.spacing.button_padding = egui::vec2(10.0, 6.0);
-    ctx.set_style(style);
+    for theme in [egui::Theme::Dark, egui::Theme::Light] {
+        ctx.style_mut_of(theme, |style| {
+            style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+            style.spacing.button_padding = egui::vec2(10.0, 6.0);
+        });
+    }
 }
 
 /// Apply the light/dark visual theme.

@@ -340,7 +340,7 @@ fn tool_row(
                 .id(egui::Id::new(SEARCH_INPUT_ID))
                 .hint_text(tr_l10n(lang, "vocab.search_placeholder"))
                 .text_color(theme::INK)
-                .frame(false),
+                .frame(egui::Frame::NONE),
         );
         if response.changed() {
             _actions.push(FrontendAction::VocabSearch(vm.vocab_query.clone()));
@@ -629,7 +629,7 @@ fn quick_add(
                         .id(egui::Id::new(INPUT_ID))
                         .desired_width(content_width)
                         .hint_text(tr_l10n(lang, "vocab.placeholder"))
-                        .frame(false),
+                        .frame(egui::Frame::NONE),
                 );
                 if (response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)))
                     || (ui.input(|input| input.key_pressed(egui::Key::Enter))
@@ -750,7 +750,7 @@ fn presets(
                             [180.0, 20.0],
                             egui::TextEdit::singleline(&mut vm.vocab_preset_name)
                                 .hint_text(tr_l10n(lang, "vocab.presets_name_placeholder"))
-                                .frame(false),
+                                .frame(egui::Frame::NONE),
                         );
                     });
                 let save = tr_l10n(lang, "vocab.presets_save");

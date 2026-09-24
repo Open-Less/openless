@@ -196,7 +196,7 @@ fn rail(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronten
                             // 明确文字颜色：默认的控件前景色在浅底上过淡，
                             // 看上去像「输入了但没有显示字符」。
                             .text_color(theme::INK)
-                            .frame(false)
+                            .frame(egui::Frame::NONE)
                             .vertical_align(egui::Align::Center),
                     );
                 });

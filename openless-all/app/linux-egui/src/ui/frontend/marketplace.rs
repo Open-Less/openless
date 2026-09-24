@@ -87,7 +87,7 @@ pub fn marketplace_page(
                             .id(egui::Id::new("openless-marketplace-search"))
                             .hint_text(tr_l10n(lang, "marketplace.search_placeholder"))
                             .text_color(theme::INK)
-                            .frame(false)
+                            .frame(egui::Frame::NONE)
                             .desired_width(search_width - 34.0),
                     );
                     if resp.changed() {

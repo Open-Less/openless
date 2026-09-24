@@ -205,7 +205,7 @@ fn input(ui: &mut egui::Ui, width: f32, value: &mut String, hint: &str) {
                 egui::TextEdit::singleline(value)
                     .desired_width(content_width)
                     .hint_text(hint)
-                    .frame(false),
+                    .frame(egui::Frame::NONE),
             );
         });
 }

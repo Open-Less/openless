@@ -1,35 +1,15 @@
-//! GPU implementation of the Apple-Siri glow used by the Linux popups.
-//!
-//! Tauri renders this effect with WebGL (`components/SiriGL.tsx`): a single
-//! full-screen triangle plus a fragment shader, driven by four uniforms. The
-//! egui host used to approximate the same effect on the CPU by sampling the
-//! rounded-rect perimeter (`popups::spinner_ring`, five volume bars on the
-//! capsule), which cannot reproduce the spectral dispersion, the Lorentzian
-//! light lines or the metaball merge — and costs a line segment per sample on
-//! every animated frame.
-//!
-//! This module ports the *same* shader source (wave + orb) to the renderer the
-//! host actually runs: eframe's glow (OpenGL) backend, via
-//! [`egui_glow::CallbackFn`]. One cached program per mode; the only per-frame
-//! uniforms are time / resolution / level / gather / tint, so no allocation
-//! happens while animating.
-//!
-//! ```
-//! // Shader header is chosen from the live context: `#version 330 core` on
-//! // desktop GL, `#version 300 es` on GLES (Wayland/EGL can hand us either).
-//! ```
-//!
-//! Fallback: [`paint`] reports whether the GPU path owns the frame. Until the
-//! program has been compiled *and* drawn successfully at least once, the caller
-//! keeps drawing its CPU fallback, so a driver that rejects the shader (or a
-//! headless/software GL that half-supports it) degrades to the old look instead
-//! of an empty popup.
+//! Siri-inspired audio visuals shared by the Vulkan eframe windows and the
+//! manually-rendered Wayland capsule. Animation state is time- and level-
+//! driven; the visible wave/orb/ring is drawn with renderer-independent egui
+//! primitives so a missing GL callback can never replace it with generic bars.
+//! Legacy shader sources below remain for source parity/reference while this
+//! module is being fully simplified.
+#![allow(dead_code)] // legacy GL shader source is retained for parity review, but is not on the Vulkan render path
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use eframe::egui_glow::CallbackFn;
-use eframe::glow::{self, HasContext};
+use glow::{self, HasContext};
 
 /// Shared vertex stage: one oversized triangle covers the whole callback
 /// viewport, so no per-frame vertex data is uploaded (Tauri's `VERTEX_SRC`).
@@ -521,35 +501,7 @@ static PROGRAMS: OnceLock<Mutex<[Option<GlowProgram>; 3]>> = OnceLock::new();
 /// driver has already failed / a GPU frame has already drawn) this is a single
 /// relaxed atomic load — no extra work, and no repaint request.
 pub fn warm_up(ui: &egui::Ui) {
-    if !should_queue_warm_up() {
-        return;
-    }
-    let center = ui.max_rect().center();
-    if !center.is_finite() {
-        return;
-    }
-    let callback = egui::PaintCallback {
-        rect: egui::Rect::from_center_size(center, egui::vec2(1.0, 1.0)),
-        callback: Arc::new(CallbackFn::new(|_info, painter| {
-            let started = std::time::Instant::now();
-            match prepare_all(painter.gl()) {
-                Ok(()) => {
-                    WARM_UP_DONE.store(true, Ordering::Relaxed);
-                    // 一次性证据行：真机上（每个浮窗进程一次）能确认预热跑过。
-                    log::info!("siri glow shaders precompiled in {:?}", started.elapsed());
-                }
-                Err(error) => {
-                    // Same degradation contract as a failed draw: fall back to
-                    // the CPU painter for the rest of the process.
-                    if !gpu_disabled() {
-                        log::warn!("siri glow GPU path disabled during warm-up: {error}");
-                    }
-                    GPU_FAILED.store(true, Ordering::Relaxed);
-                }
-            }
-        })),
-    };
-    ui.painter().add(egui::Shape::Callback(callback));
+    let _ = ui;
 }
 
 /// True when this call is the one that must queue the warm-up callback.
@@ -568,25 +520,69 @@ fn should_queue_warm_up() -> bool {
 /// first frames paint both (the callback is a no-op until it has a program, so
 /// nothing is double-drawn) and a broken driver keeps the old look forever.
 pub fn paint(ui: &egui::Ui, rect: egui::Rect, glow: SiriGlow) -> bool {
-    if gpu_disabled() || !rect.is_positive() || !rect.is_finite() {
+    if !rect.is_positive() || !rect.is_finite() {
         return false;
     }
-    let callback = egui::PaintCallback {
-        rect,
-        callback: Arc::new(CallbackFn::new(move |info, painter| {
-            match draw(painter.gl(), &info, glow) {
-                Ok(()) => GPU_READY.store(true, Ordering::Relaxed),
-                Err(error) => {
-                    if !gpu_disabled() {
-                        log::warn!("siri glow GPU path disabled after error: {error}");
-                    }
-                    GPU_FAILED.store(true, Ordering::Relaxed);
-                }
-            }
-        })),
+    let painter = ui.painter().with_clip_rect(rect);
+    let color = |rgb: [f32; 3], alpha: f32| {
+        egui::Color32::from_rgba_unmultiplied(
+            (rgb[0].clamp(0.0, 1.0) * 255.0) as u8,
+            (rgb[1].clamp(0.0, 1.0) * 255.0) as u8,
+            (rgb[2].clamp(0.0, 1.0) * 255.0) as u8,
+            (alpha.clamp(0.0, 1.0) * 255.0) as u8,
+        )
     };
-    ui.painter().add(egui::Shape::Callback(callback));
-    gpu_ready()
+    match glow.mode {
+        SiriMode::Wave => {
+            let amplitude =
+                (rect.height() * (0.10 + glow.level * 0.36)).clamp(2.0, rect.height() * 0.48);
+            let center_y = rect.center().y;
+            let hues = [
+                [0.35, 0.74, 1.0],
+                [0.45, 0.45, 1.0],
+                [0.95, 0.48, 0.94],
+                [1.0, 0.55, 0.72],
+            ];
+            for (index, hue) in hues.into_iter().enumerate() {
+                let phase = index as f32 * 0.72;
+                let points = (0..=48)
+                    .map(|step| {
+                        let t = step as f32 / 48.0;
+                        let envelope = (std::f32::consts::PI * t).sin().powf(0.7);
+                        let y = center_y
+                            + (glow.time * 2.1 + t * 10.0 + phase).sin() * amplitude * envelope;
+                        egui::pos2(rect.left() + rect.width() * t, y)
+                    })
+                    .collect::<Vec<_>>();
+                painter.add(egui::Shape::line(
+                    points,
+                    egui::Stroke::new(if index == 1 { 2.4 } else { 1.2 }, color(hue, 0.48)),
+                ));
+            }
+        }
+        SiriMode::Orb => {
+            let gather = glow.gather.clamp(0.0, 1.0);
+            for index in 0..7 {
+                let angle = glow.time * 0.8 + index as f32 * std::f32::consts::TAU / 7.0;
+                let radius = rect.width().min(rect.height()) * (0.06 + (1.0 - gather) * 0.24);
+                let point =
+                    rect.center() + egui::vec2(angle.cos() * radius, angle.sin() * radius * 0.42);
+                let hue = [[0.35, 0.78, 1.0], [0.63, 0.52, 1.0], [1.0, 0.49, 0.82]][index % 3];
+                let dot_radius = 2.2 + (0.5 + (glow.time * 2.0 + index as f32).sin() * 0.5) * 1.8;
+                painter.circle_filled(point, dot_radius, color(hue, 0.88));
+            }
+        }
+        SiriMode::Ring => {
+            let color = color(glow.tint, 0.9);
+            painter.rect_stroke(
+                rect,
+                egui::CornerRadius::same(glow.radius.round().clamp(0.0, 255.0) as u8),
+                egui::Stroke::new(glow.thickness.max(1.0), color),
+                egui::StrokeKind::Inside,
+            );
+        }
+    }
+    true
 }
 
 /// A compiled program plus the uniform slots it needs.

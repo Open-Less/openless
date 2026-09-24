@@ -737,7 +737,7 @@ pub fn card_salt(rect: egui::Rect) -> (i32, i32) {
 pub fn fixed_ui<R>(
     ui: &mut egui::Ui,
     rect: egui::Rect,
-    id_salt: impl std::hash::Hash,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
     contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
     let mut child = ui.new_child(
@@ -923,7 +923,7 @@ pub fn toggle(
     ui: &mut egui::Ui,
     rect: egui::Rect,
     on: bool,
-    id_salt: impl std::hash::Hash,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
 ) -> egui::Response {
     let response = ui.interact(rect, ui.id().with(id_salt), egui::Sense::click());
     // Tauri `Toggle`: 开启 --ol-blue，关闭 --ol-toggle-off-bg。
@@ -1095,7 +1095,7 @@ pub fn text_input(
         .hint_text(hint)
         .font(egui::FontId::proportional(INPUT_FONT_SIZE))
         .text_color(theme::INK)
-        .frame(false)
+        .frame(egui::Frame::NONE)
         .desired_width(inner.width())
         .vertical_align(egui::Align::Center);
     if password {

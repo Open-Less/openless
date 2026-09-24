@@ -221,7 +221,7 @@ fn list_card(
                         .text_color(theme::INK)
                         .font(egui::FontId::proportional(12.5))
                         .vertical_align(egui::Align::Center)
-                        .frame(false),
+                        .frame(egui::Frame::NONE),
                 );
             });
         });

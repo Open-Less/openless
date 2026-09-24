@@ -105,7 +105,7 @@ fn toolbar(ui: &mut egui::Ui, width: f32, vm: &mut FrontendViewModel) {
                     .id(egui::Id::new("openless-translation-search"))
                     .hint_text(tr_l10n(lang, "translation.search_languages"))
                     .text_color(theme::INK)
-                    .frame(false)
+                    .frame(egui::Frame::NONE)
                     .vertical_align(egui::Align::Center),
             );
         });

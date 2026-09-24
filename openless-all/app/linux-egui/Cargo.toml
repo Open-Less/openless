@@ -4,7 +4,7 @@ version = "0.1.0"
 license = "AGPL-3.0-only"
 description = "Linux host seam for the OpenLess egui frontend"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.95"
 publish = false
 
 [dependencies]
@@ -35,16 +35,17 @@ dbus = "0.9"
 keyring = { version = "3.6.3", default-features = false, features = ["linux-native-sync-persistent", "crypto-rust"] }
 cpal = { version = "0.18.2", default-features = false, features = ["pipewire", "pulseaudio"] }
 rfd = { version = "0.16", default-features = false, features = ["xdg-portal", "tokio"] }
-egui = "=0.33.3"
+egui = "=0.36.2"
 # wlr-layer-shell 胶囊窗口：KWin 6.7+/sway/Hyprland 等合成器直接给
 # 「贴底居中 + 不抢键盘焦点」的 overlay surface；不支持时回退到 X11 叠加层。
 wayland-client = "0.31"
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 glutin = { version = "0.32", default-features = false, features = ["egl", "wayland"] }
-egui_glow = "0.33"
-glow = "0.16"
+egui_glow = "0.36.2"
+glow = "0.17"
 raw-window-handle = "0.6"
-eframe = { version = "=0.33.3", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
+eframe = { version = "=0.36.2", default-features = false, features = ["accesskit", "default_fonts", "wgpu_no_default_features", "wayland", "x11"] }
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "vulkan", "wgsl"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 libc = "0.2"
 x11rb = { version = "0.13.2", optional = true }

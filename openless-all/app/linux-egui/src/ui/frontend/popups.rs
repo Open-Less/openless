@@ -258,7 +258,7 @@ pub fn polish_result_mode(
 /// 划词追问面板：卡片头（标题 + 副行 + ✕）、消息流（空状态 / 对话 / 思考中 /
 /// 出错）、底部输入组（选区条 + 输入框 + 麦克风 + 发送）。
 pub fn selection_ask(
-    ctx: &egui::Context,
+    root_ui: &mut egui::Ui,
     state: &QaPopupState,
     composer: &mut String,
     lang: Lang,
@@ -281,7 +281,7 @@ pub fn selection_ask(
                 .corner_radius(egui::CornerRadius::same(14))
                 .stroke(egui::Stroke::new(0.5, theme::LINE)),
         )
-        .show(ctx, |ui| {
+        .show(root_ui, |ui| {
             // 首帧只编译不绘制地把三个程序编译好（进程内只排一次），
             // 免得录音/思考的第一帧才发现要编译——那是按热键后「慢一拍」的来源。
             siri_gl::warm_up(ui);
@@ -561,7 +561,7 @@ pub fn selection_ask(
                     let response = child.add(
                         egui::TextEdit::singleline(composer)
                             .id(egui::Id::new("openless-qa-composer-input"))
-                            .frame(false)
+                            .frame(egui::Frame::NONE)
                             .text_color(theme::INK)
                             .font(egui::FontId::proportional(13.5))
                             .hint_text(tr_l10n(lang, "qa.composer_placeholder"))
@@ -1025,7 +1025,7 @@ fn translating_badge(ui: &mut egui::Ui, pill: egui::Rect, lang: Lang) {
 
 /// 录音胶囊：经典药丸（Tauri `ClassicPill`）—— 左 ✕、中间状态、右 ✓。
 pub fn dictation_capsule(
-    ctx: &egui::Context,
+    root_ui: &mut egui::Ui,
     state: &CapsulePopupState,
     lang: Lang,
 ) -> CapsuleAction {
@@ -1033,7 +1033,7 @@ pub fn dictation_capsule(
     let phase = state.phase.to_ascii_lowercase();
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
-        .show(ctx, |ui| {
+        .show(root_ui, |ui| {
             // 胶囊进程的首帧预热（同 QA 面板；录音环与 Siri 波都是 GPU 路径）。
             siri_gl::warm_up(ui);
             // Tauri `capsuleStyle`：siri = 流光药丸（GPU 波/环），classic = 经典药丸 +
@@ -1559,19 +1559,23 @@ mod tests {
 
     /// Render one popup for two frames (egui sizes some widgets lazily) and
     /// return everything it painted.
-    fn run(size: egui::Vec2, mut render: impl FnMut(&egui::Context) -> String) -> String {
+    fn run(size: egui::Vec2, mut render: impl FnMut(&mut egui::Ui) -> String) -> String {
         // Every popup test renders the same frontend as the GPU-state tests, so
         // they share the process-global glow flags and must not run in parallel.
         let _guard = super::siri_gl::gpu_state_guard();
         let ctx = egui::Context::default();
         let mut painted = String::new();
         for _ in 0..2 {
-            ctx.begin_pass(egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
-                ..Default::default()
-            });
-            let _ = render(&ctx);
-            painted = painted_text(&ctx.end_pass());
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    ..Default::default()
+                },
+                |ui| {
+                    let _ = render(ui);
+                },
+            );
+            painted = painted_text(&output);
         }
         painted
     }
@@ -1579,18 +1583,21 @@ mod tests {
     /// 与 `run` 同款流程，但把最后一帧的 `FullOutput` 交出来（要按形状断言时用）。
     fn run_output(
         size: egui::Vec2,
-        mut render: impl FnMut(&egui::Context) -> String,
+        mut render: impl FnMut(&mut egui::Ui) -> String,
     ) -> egui::FullOutput {
         let _guard = super::siri_gl::gpu_state_guard();
         let ctx = egui::Context::default();
         let mut last = None;
         for _ in 0..2 {
-            ctx.begin_pass(egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
-                ..Default::default()
-            });
-            let _ = render(&ctx);
-            last = Some(ctx.end_pass());
+            last = Some(ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    ..Default::default()
+                },
+                |ui| {
+                    let _ = render(ui);
+                },
+            ));
         }
         last.expect("at least one pass")
     }
@@ -2270,7 +2277,7 @@ pub enum LessComputerAction {
 /// 用户指令是右对齐气泡、工具调用与上下文压缩是行内标记、助手正文走 markdown，
 /// 阻塞命令在输入框上方给出批准 / 拒绝。
 pub fn less_computer(
-    ctx: &egui::Context,
+    root_ui: &mut egui::Ui,
     state: &LessComputerPopupState,
     composer: &mut String,
     lang: Lang,
@@ -2284,7 +2291,7 @@ pub fn less_computer(
                 .stroke(egui::Stroke::new(0.5, theme::LINE))
                 .inner_margin(egui::Margin::same(CARD_SPACING as i8)),
         )
-        .show(ctx, |ui| {
+        .show(root_ui, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.label(
@@ -2465,7 +2472,7 @@ pub fn less_computer(
                     .hint_text(tr_l10n(lang, "less_computer.input_placeholder"))
                     .font(egui::FontId::proportional(13.5))
                     .text_color(theme::INK)
-                    .frame(false)
+                    .frame(egui::Frame::NONE)
                     .desired_width(text_rect.width())
                     .vertical_align(egui::Align::Center),
             );

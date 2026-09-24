@@ -550,7 +550,7 @@ impl GlSurface {
         painter: &mut egui_glow::Painter,
         size: (u32, u32),
         primitives: &[egui::ClippedPrimitive],
-        textures_delta: &egui::TexturesDelta,
+        textures_delta: &mut egui::TexturesDelta,
         scale: f32,
     ) {
         // The capsule is a transparent overlay: the painter clears the buffer
@@ -690,14 +690,14 @@ where
         let _ = connection.flush();
         let rect = geometry.rect_for_configure(state.configure.unwrap_or((width, height)));
         let input = state.take_input(rect);
-        let frame = frame(&context, input, first);
+        let mut frame = frame(&context, input, first);
         first = false;
         let primitives = context.tessellate(frame.output.shapes.clone(), scale);
         gl.paint(
             &mut painter,
             (rect.width().max(1.0) as u32, rect.height().max(1.0) as u32),
             &primitives,
-            &frame.output.textures_delta,
+            &mut frame.output.textures_delta,
             scale,
         );
         gl.surface

@@ -1115,13 +1115,23 @@ mod linux_app {
                     Ok(()) => openless_core::SelectionVoiceApplyOutcome::Inserted,
                     Err(_) => openless_core::SelectionVoiceApplyOutcome::Failed,
                 };
-                let _ = services
+                services
                     .selection_voice
                     .finish_preview_apply(ticket.ticket_id, outcome)
-                    .await;
-                if outcome.may_have_applied() {
-                    // 只剩「这一轮已经落字」的收尾：结束后再允许新一轮。
-                    let _ = services.qa.dismiss_session(qa_session).await;
+                    .await?;
+                if !outcome.may_have_applied() {
+                    return Err(BackendError::new(
+                        openless_core::BackendErrorCode::Platform,
+                        "selectionVoiceInsertFailed",
+                    ));
+                }
+                // Match the Tauri command: only dismiss this exact QA turn after
+                // Core has recorded a successful native apply receipt. A failed
+                // fcitx5 target check must leave the preview available to retry.
+                if let Err(error) = services.qa.dismiss_session(qa_session).await {
+                    if error.code != openless_core::BackendErrorCode::Cancelled {
+                        return Err(error);
+                    }
                 }
                 Ok(tr_l10n(lang, "selection.replaced").to_string())
             });
@@ -6800,8 +6810,8 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             let capsule = self.state.capsule.clone();
             let lang = self.lang;
             let mut action = frontend::popups::CapsuleAction::None;
-            let output = ctx.run(raw, |ctx| {
-                action = frontend::popups::dictation_capsule(ctx, &capsule, lang);
+            let output = ctx.run_ui(raw, |ui| {
+                action = frontend::popups::dictation_capsule(ui, &capsule, lang);
             });
             match action {
                 frontend::popups::CapsuleAction::None => {}
@@ -6841,19 +6851,20 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
     }
 
     impl eframe::App for NativePopupApp {
-        fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+            let ctx = ui.ctx().clone();
             // Overlay placement first: it must run before the window is shown so
             // the compositor never gives the capsule the keyboard.
             if let Some(overlay) = self.overlay.as_mut() {
-                overlay.place(ctx, self.state.visible);
+                overlay.place(&ctx, self.state.visible);
             }
-            if self.pump(Some(ctx)) {
+            if self.pump(Some(&ctx)) {
                 return;
             }
             self.send_ready_if_needed();
-            self.poll_local_hotkeys(ctx);
+            self.poll_local_hotkeys(&ctx);
             if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-                self.dismiss(ctx);
+                self.dismiss(&ctx);
                 return;
             }
             let lang = self.lang;
@@ -6863,7 +6874,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             let animated;
             match self.kind {
                 PopupKind::Qa => {
-                    self.avatar.sync(ctx, &self.state.qa.viewer_login);
+                    self.avatar.sync(&ctx, &self.state.qa.viewer_login);
                     let qa_phase = self.state.qa.phase.to_ascii_lowercase();
                     animated = self.avatar.pending.is_some()
                         || matches!(
@@ -6871,14 +6882,14 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                             "loading" | "thinking" | "recording" | "answerdelta"
                         );
                     let action = frontend::popups::selection_ask(
-                        ctx,
+                        ui,
                         &self.state.qa,
                         &mut self.qa_input,
                         lang,
                         self.avatar.texture.as_ref(),
                     );
                     match action {
-                        frontend::popups::QaAction::Dismiss => self.dismiss(ctx),
+                        frontend::popups::QaAction::Dismiss => self.dismiss(&ctx),
                         frontend::popups::QaAction::ConfirmPolish(text) => {
                             if let Some(session_id) = self.session_id() {
                                 let sequence = self.next_sequence();
@@ -6900,7 +6911,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                                     sequence,
                                 });
                             }
-                            self.dismiss(ctx);
+                            self.dismiss(&ctx);
                         }
                         frontend::popups::QaAction::ToggleRecording => {
                             if let Some(session_id) = self.session_id() {
@@ -6972,7 +6983,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                     // 运行中的一轮需要连续重绘（「执行中…」标记 + 滚动到底）。
                     animated = self.state.less_computer.working;
                     let action = frontend::popups::less_computer(
-                        ctx,
+                        ui,
                         &self.state.less_computer,
                         &mut self.less_computer_input,
                         lang,
@@ -7032,8 +7043,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                         capsule_phase.as_str(),
                         "starting" | "recording" | "transcribing" | "polishing" | "inserting"
                     );
-                    let action =
-                        frontend::popups::dictation_capsule(ctx, &self.state.capsule, lang);
+                    let action = frontend::popups::dictation_capsule(ui, &self.state.capsule, lang);
                     let message = match action {
                         frontend::popups::CapsuleAction::Cancel => {
                             Some(PopupToHost::CancelDictation {
@@ -7187,7 +7197,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                     }
                     Err(error) => {
                         log::error!("popup pipe unavailable: {error}");
-                        let output = ctx.run(raw, |_| {});
+                        let output = ctx.run_ui(raw, |_| {});
                         return openless_linux_egui::LayerFrame {
                             output,
                             exit: true,
@@ -7302,8 +7312,10 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         }
         let options = eframe::NativeOptions {
             viewport,
+            renderer: eframe::Renderer::Wgpu,
             ..Default::default()
         };
+        let options = vulkan_options(options);
         eframe::run_native(
             "OpenLess Popup",
             options,
@@ -7407,6 +7419,14 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
     ///
     /// 它不构造 Core 后端、不打开数据目录、不抢单实例锁、不注册托盘与热键 ——
     /// 关掉它等于「关掉一个窗口」，宿主与所有后台能力原地不动。
+    fn vulkan_options(mut options: eframe::NativeOptions) -> eframe::NativeOptions {
+        if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup
+        {
+            setup.instance_descriptor.backends = eframe::egui_wgpu::wgpu::Backends::VULKAN;
+        }
+        options
+    }
+
     fn run_ui_client(socket: std::path::PathBuf) -> Result<(), String> {
         // UI 进程不复用宿主的日志器对象，但写到同一个文件里，
         // 排查「窗口进程怎么没了」时两端日志在同一处。
@@ -7429,8 +7449,10 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 .with_transparent(true)
                 .with_resizable(true)
                 .with_visible(true),
+            renderer: eframe::Renderer::Wgpu,
             ..Default::default()
         };
+        let options = vulkan_options(options);
         eframe::run_native(
             "OpenLess",
             options,
@@ -7603,13 +7625,13 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             for action in actions {
                 match action {
                     frontend::view_model::FrontendAction::WindowClose => {
-                        self.request_exit(ctx, "close button");
+                        self.request_exit(&ctx, "close button");
                     }
                     frontend::view_model::FrontendAction::WindowMinimize => {
                         // 最小化在 Wayland 上是单向门（winit 明确拒绝取消最小化），
                         // 而宿主已经接管热键与弹窗，所以按「关窗回托盘」处理：
                         // 窗口进程退出，任务栏条目消失，托盘随时能再开一个。
-                        self.request_exit(ctx, "minimize button");
+                        self.request_exit(&ctx, "minimize button");
                     }
                     frontend::view_model::FrontendAction::WindowMaximize => {
                         let maximized =
@@ -7644,12 +7666,13 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             egui::Color32::TRANSPARENT.to_normalized_gamma_f32()
         }
 
-        fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-            self.drain_host(ctx);
-            self.poll_local_hotkeys(ctx);
-            theme::apply_visuals(ctx, self.view_model.theme_mode);
+        fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+            let ctx = ui.ctx().clone();
+            self.drain_host(&ctx);
+            self.poll_local_hotkeys(&ctx);
+            theme::apply_visuals(&ctx, self.view_model.theme_mode);
             if ctx.input(|input| input.viewport().close_requested()) {
-                self.request_exit(ctx, "window manager close request");
+                self.request_exit(&ctx, "window manager close request");
             }
             if self.exited {
                 return;
@@ -7662,11 +7685,11 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 }
             }
             let mut actions = Vec::new();
-            frontend::render(ctx, &mut self.view_model, &mut actions);
+            frontend::render(&ctx, &mut self.view_model, &mut actions);
             if ui_debug_enabled() && !actions.is_empty() {
                 log::info!("[ui-client] actions from the renderer: {actions:?}");
             }
-            self.dispatch(actions, ctx);
+            self.dispatch(actions, &ctx);
             self.ping_if_due();
             ctx.request_repaint_after(Duration::from_millis(30));
         }
