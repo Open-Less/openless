@@ -863,15 +863,16 @@ enum SupervisorCommand {
 
 /// Whether this popup must be pushed onto X11 (XWayland counts).
 ///
-/// The recording capsule is a pure overlay: it must sit inside the desktop work
-/// area and never take the keyboard from the app being dictated into. When
-/// XWayland is available, use it even if layer-shell exists: X11 exposes the
-/// taskbar-excluded work area and `WM_HINTS.input = FALSE`, avoiding both the
-/// taskbar overlap and the focus race on first map. Native layer-shell remains
-/// the fallback on Wayland-only sessions. Typing panels keep their native
-/// backend either way.
-pub fn force_x11_for(kind: PopupKind, display: Option<&str>) -> bool {
-    kind == PopupKind::Capsule && display.is_some_and(|value| !value.trim().is_empty())
+/// The capsule may use X11 only in a native X11 session. A Wayland session must
+/// never be routed through XWayland, even when DISPLAY is present.
+pub fn force_x11_for(
+    kind: PopupKind,
+    display: Option<&str>,
+    wayland_display: Option<&str>,
+) -> bool {
+    kind == PopupKind::Capsule
+        && !crate::popup_layer::wayland_display_available(wayland_display)
+        && display.is_some_and(|value| !value.trim().is_empty())
 }
 
 /// Build the popup child command, including the backend choice above.
@@ -879,14 +880,24 @@ pub fn popup_command(
     executable: impl AsRef<Path>,
     kind: PopupKind,
     display: Option<&str>,
+    wayland_display: Option<&str>,
+    layer_shell: bool,
 ) -> Command {
     let mut command = Command::new(executable.as_ref());
     command.arg("--openless-egui-popup").arg(kind.argument());
-    if force_x11_for(kind, display) {
-        // winit prefers Wayland whenever `WAYLAND_DISPLAY` is set. Dropping it
-        // also pins the child's `detect_capsule_path` to the X11 overlay.
+    if force_x11_for(kind, display, wayland_display) {
         command.env_remove("WAYLAND_DISPLAY");
         command.env_remove("WAYLAND_SOCKET");
+    } else if kind == PopupKind::Capsule
+        && crate::popup_layer::wayland_display_available(wayland_display)
+    {
+        // Pin the Wayland backend explicitly, even if the parent environment
+        // contains an X11 test override. Without layer-shell, use native
+        // xdg-shell and accept compositor-managed placement.
+        command.env(
+            crate::popup_layer::CAPSULE_PATH_ENV,
+            if layer_shell { "layer" } else { "plain" },
+        );
     }
     command
 }
@@ -900,15 +911,22 @@ pub struct PopupSupervisor {
 impl PopupSupervisor {
     pub fn spawn(runtime: &Handle, executable: impl AsRef<Path>, kind: PopupKind) -> Self {
         let display = std::env::var("DISPLAY").ok();
-        // Prefer XWayland when present for the taskbar-excluded work area and
-        // pre-map no-focus hint. Without XWayland the child keeps Wayland and
-        // uses layer-shell when available.
+        let wayland_display = std::env::var("WAYLAND_DISPLAY").ok();
         let layer_shell = crate::popup_layer::layer_shell_available();
         log::debug!(
             "popup spawn: kind={kind:?} x11={} layer_shell={layer_shell}",
             display.as_deref().unwrap_or("none")
         );
-        Self::spawn_command(runtime, popup_command(executable, kind, display.as_deref()))
+        Self::spawn_command(
+            runtime,
+            popup_command(
+                executable,
+                kind,
+                display.as_deref(),
+                wayland_display.as_deref(),
+                layer_shell,
+            ),
+        )
     }
 
     /// Low-level construction seam used by tests and alternative launchers.
@@ -1234,25 +1252,29 @@ mod tests {
     }
 
     #[test]
-    fn capsule_prefers_xwayland_for_work_area_and_no_focus() {
-        assert!(force_x11_for(PopupKind::Capsule, Some(":0")));
-        assert!(!force_x11_for(PopupKind::Capsule, None));
-        assert!(!force_x11_for(PopupKind::Capsule, Some("  ")));
-        // Even when layer-shell is advertised, XWayland provides the real
-        // work area and an input hint before mapping, so it avoids panels and
-        // prevents a lost hotkey release when recording starts.
-        assert!(force_x11_for(PopupKind::Capsule, Some(":0")));
+    fn capsule_uses_x11_only_in_a_native_x11_session() {
+        assert!(force_x11_for(PopupKind::Capsule, Some(":0"), None));
+        assert!(!force_x11_for(PopupKind::Capsule, None, None));
+        assert!(!force_x11_for(PopupKind::Capsule, Some("  "), None));
+        // DISPLAY can be XWayland: never switch away from native Wayland.
+        assert!(!force_x11_for(
+            PopupKind::Capsule,
+            Some(":0"),
+            Some("wayland-0")
+        ));
         // The panels take keyboard input, so they keep their Wayland windows
         // （选区助手面板现在也承担润色结果，同样是键盘输入的窗口）。
-        assert!(!force_x11_for(PopupKind::Qa, Some(":0")));
+        assert!(!force_x11_for(PopupKind::Qa, Some(":0"), None));
     }
 
     #[test]
-    fn capsule_command_uses_xwayland_when_display_is_available() {
+    fn capsule_command_uses_x11_when_wayland_is_not_running() {
         let command = popup_command(
             "/usr/bin/openless-linux-egui",
             PopupKind::Capsule,
             Some(":0"),
+            None,
+            false,
         );
         let envs: Vec<(String, Option<String>)> = command
             .as_std()
@@ -1274,30 +1296,46 @@ mod tests {
         assert_eq!(args, vec!["--openless-egui-popup", "--capsule"]);
     }
 
-    /// If XWayland exists, prefer its work-area placement even when layer-shell
-    /// is advertised by the compositor.
+    /// A Wayland session with XWayland installed remains a native Wayland app.
     #[test]
-    fn capsule_command_uses_xwayland_when_layer_shell_is_available() {
+    fn capsule_command_stays_on_native_wayland_when_layer_shell_is_available() {
         let command = popup_command(
             "/usr/bin/openless-linux-egui",
             PopupKind::Capsule,
             Some(":0"),
+            Some("wayland-0"),
+            true,
         );
         let envs: Vec<_> = command.as_std().get_envs().collect();
-        assert!(envs
-            .iter()
-            .any(|(key, value)| { key == "WAYLAND_DISPLAY" && value.is_none() }));
+        assert!(envs.iter().any(|(key, value)| {
+            key == "WAYLAND_DISPLAY" && value == Some(std::ffi::OsStr::new("wayland-0"))
+        }));
+        assert!(envs.iter().any(|(key, value)| {
+            key == "OPENLESS_CAPSULE_PATH" && value == Some(std::ffi::OsStr::new("layer"))
+        }));
     }
 
     #[test]
     fn qa_command_keeps_the_wayland_backend() {
-        let command = popup_command("/usr/bin/openless-linux-egui", PopupKind::Qa, Some(":0"));
+        let command = popup_command(
+            "/usr/bin/openless-linux-egui",
+            PopupKind::Qa,
+            Some(":0"),
+            Some("wayland-0"),
+            true,
+        );
         assert_eq!(command.as_std().get_envs().count(), 0);
     }
 
     #[test]
     fn capsule_command_keeps_wayland_without_an_x_server() {
-        let command = popup_command("/usr/bin/openless-linux-egui", PopupKind::Capsule, None);
+        let command = popup_command(
+            "/usr/bin/openless-linux-egui",
+            PopupKind::Capsule,
+            None,
+            None,
+            false,
+        );
         assert_eq!(command.as_std().get_envs().count(), 0);
     }
     use std::io::Cursor;

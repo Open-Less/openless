@@ -1,11 +1,11 @@
-//! Native Wayland overlay for the recording capsule: `zwlr_layer_shell_v1`.
+//! Native Wayland surface for the recording capsule: `zwlr_layer_shell_v1`.
 //!
 //! The capsule must sit at the bottom centre of the screen and must **never**
 //! take the keyboard — the user is dictating into another window, and a focus
 //! steal would send the insert to the wrong place. `xdg-shell` offers neither an
-//! absolute position nor a focus opt-out, so the capsule used to run under
-//! XWayland (see [`crate::popup_window`], which owns that fallback). Compositors
-//! that implement `zwlr_layer_shell_v1` — KWin 6.7+ (verified against
+//! absolute position nor a focus opt-out, so Wayland-only compositors without
+//! layer-shell get a best-effort native borderless window. Compositors that
+//! implement `zwlr_layer_shell_v1` — KWin 6.7+ (verified against
 //! `zwlr_layer_shell_v1` version 5), sway, Hyprland, labwc, … — can host the
 //! capsule natively instead:
 //!
@@ -14,8 +14,8 @@
 //!   horizontal anchor is centred by the compositor, and the input region stays
 //!   the pill's own box instead of the whole bottom strip),
 //! * `KeyboardInteractivity::None` makes keyboard focus impossible,
-//! * `exclusive_zone(-1)` keeps the compositor from reserving space, so the
-//!   capsule never reflows other windows.
+//! * `exclusive_zone(0)` keeps the capsule non-exclusive while asking the
+//!   compositor to respect reserved panel/taskbar space.
 //!
 //! Rendering reuses the popup's existing egui view ([`crate::ui::frontend::popups::dictation_capsule`]):
 //! the runner below owns the EGL context (glutin), the `egui_glow` painter and
@@ -24,8 +24,7 @@
 //! Everything that can be decided without a compositor lives in pure functions
 //! ([`has_layer_shell`], [`choose_capsule_path`], [`capsule_geometry`],
 //! [`pointer_events`]) so the policy is unit-testable; the I/O half is a thin
-//! shell around them and reports failures as `Err`, letting the caller fall back
-//! to the X11 overlay.
+//! shell around them and reports failures as `Err`.
 
 use std::ffi::c_void;
 use std::num::NonZeroU32;
@@ -633,7 +632,8 @@ where
     let layer_surface = layer_shell.get_layer_surface(
         &wl_surface,
         None,
-        zwlr_layer_shell_v1::Layer::Overlay,
+        // Stay below true overlay surfaces such as desktop panels.
+        zwlr_layer_shell_v1::Layer::Top,
         LAYER_NAMESPACE.to_string(),
         &qh,
         (),
@@ -645,7 +645,9 @@ where
     // keeping the input region at the pill instead of the whole bottom strip.
     layer_surface.set_anchor(zwlr_layer_surface_v1::Anchor::Bottom);
     layer_surface.set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::None);
-    layer_surface.set_exclusive_zone(-1);
+    // Zero does not reserve extra space, but keeps placement inside the
+    // compositor's usable area. -1 explicitly allows overlap with panels.
+    layer_surface.set_exclusive_zone(0);
     layer_surface.set_margin(0, 0, geometry.bottom_gap, 0);
     wl_surface.commit();
 
@@ -668,7 +670,7 @@ where
     let (configured_width, configured_height) = state.configure.unwrap_or((width, height));
     eprintln!(
         "OpenLess capsule: layer surface configured {configured_width}x{configured_height} \
-         (anchor=bottom, margin.bottom={}, keyboard-interactivity=none, exclusive-zone=-1)",
+         (layer=top, anchor=bottom, margin.bottom={}, keyboard-interactivity=none, exclusive-zone=0)",
         geometry.bottom_gap
     );
     let gl = GlSurface::new(&connection, &wl_surface, geometry.buffer_size())?;
