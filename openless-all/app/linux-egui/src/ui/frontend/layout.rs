@@ -147,11 +147,23 @@ pub fn titlebar(ctx: &egui::Context, actions: &mut Vec<FrontendAction>) {
             }
 
             let texture = load_app_icon(ctx);
+            let icon_tile = egui::Rect::from_center_size(
+                window.min + egui::vec2(16.0, TITLEBAR_HEIGHT / 2.0),
+                egui::vec2(24.0, 24.0),
+            );
+            ui.painter()
+                .rect_filled(icon_tile, egui::CornerRadius::same(7), theme::BLUE_SOFT);
+            ui.painter().rect_stroke(
+                icon_tile,
+                egui::CornerRadius::same(7),
+                egui::Stroke::new(0.5, theme::LINE),
+                egui::StrokeKind::Inside,
+            );
             paint_app_icon(
                 ui,
                 egui::Rect::from_center_size(
                     window.min + egui::vec2(16.0, TITLEBAR_HEIGHT / 2.0),
-                    egui::vec2(18.0, 18.0),
+                    egui::vec2(21.0, 21.0),
                 ),
                 &texture,
             );
@@ -186,12 +198,30 @@ pub fn titlebar(ctx: &egui::Context, actions: &mut Vec<FrontendAction>) {
             for (rect, response) in [
                 (minimize, &minimize_response),
                 (maximize, &maximize_response),
-                (close, &close_response),
             ] {
                 if response.hovered() {
                     ui.painter()
                         .rect_filled(rect, egui::CornerRadius::same(6), theme::SURFACE_2);
                 }
+            }
+            if close_response.hovered() {
+                let center = close.center();
+                let arm = 5.0;
+                let stroke = egui::Stroke::new(1.0, theme::ERR);
+                ui.painter().line_segment(
+                    [
+                        center + egui::vec2(-arm, -arm),
+                        center + egui::vec2(arm, arm),
+                    ],
+                    stroke,
+                );
+                ui.painter().line_segment(
+                    [
+                        center + egui::vec2(arm, -arm),
+                        center + egui::vec2(-arm, arm),
+                    ],
+                    stroke,
+                );
             }
 
             let stroke = egui::Stroke::new(1.0, theme::INK_3);
@@ -234,19 +264,20 @@ pub fn titlebar(ctx: &egui::Context, actions: &mut Vec<FrontendAction>) {
                     egui::StrokeKind::Inside,
                 );
             }
+            let close_stroke = egui::Stroke::new(1.0, if close_response.hovered() { theme::ERR } else { theme::INK_3 });
             ui.painter().line_segment(
                 [
                     close.center() - egui::vec2(5.0, 5.0),
                     close.center() + egui::vec2(5.0, 5.0),
                 ],
-                stroke,
+                close_stroke,
             );
             ui.painter().line_segment(
                 [
                     close.center() + egui::vec2(5.0, -5.0),
                     close.center() + egui::vec2(-5.0, 5.0),
                 ],
-                stroke,
+                close_stroke,
             );
         });
 }

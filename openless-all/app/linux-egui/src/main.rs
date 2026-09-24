@@ -3923,6 +3923,8 @@ mod linux_app {
 
         fn apply_settings_toggle(&mut self, field: frontend::view_model::SettingsField) {
             let Some(preferences) = self.preferences.as_mut() else {
+                self.frontend_vm.shortcut_recording = None;
+                self.frontend_vm.shortcut_pending_modifier = None;
                 return;
             };
             match field {
@@ -7691,7 +7693,15 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             }
             self.dispatch(actions, &ctx);
             self.ping_if_due();
-            ctx.request_repaint_after(Duration::from_millis(30));
+            // Shortcut capture is sampled from egui input events; refresh its
+            // inline recorder promptly so capture/cancel closes in the same
+            // perceptual beat as the key press. Idle settings keep the 30ms cap.
+            let repaint_ms = if self.frontend_vm.shortcut_recording.is_some() {
+                12
+            } else {
+                30
+            };
+            ctx.request_repaint_after(Duration::from_millis(repaint_ms));
         }
     }
 

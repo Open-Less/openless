@@ -554,9 +554,20 @@ pub fn paint(ui: &egui::Ui, rect: egui::Rect, glow: SiriGlow) -> bool {
                         egui::pos2(rect.left() + rect.width() * t, y)
                     })
                     .collect::<Vec<_>>();
+                // Stack a broad, low-alpha halo beneath the crisp filament.
+                // A single opaque polyline reads as neon wire; Siri's reference
+                // has a soft colored bloom around a bright, thin wave.
+                painter.add(egui::Shape::line(
+                    points.clone(),
+                    egui::Stroke::new(7.0 + glow.level * 3.0, color(hue, 0.055)),
+                ));
+                painter.add(egui::Shape::line(
+                    points.clone(),
+                    egui::Stroke::new(3.8 + glow.level * 1.5, color(hue, 0.14)),
+                ));
                 painter.add(egui::Shape::line(
                     points,
-                    egui::Stroke::new(if index == 1 { 2.4 } else { 1.2 }, color(hue, 0.48)),
+                    egui::Stroke::new(if index == 1 { 1.8 } else { 1.2 }, color(hue, 0.72)),
                 ));
             }
         }
@@ -569,7 +580,9 @@ pub fn paint(ui: &egui::Ui, rect: egui::Rect, glow: SiriGlow) -> bool {
                     rect.center() + egui::vec2(angle.cos() * radius, angle.sin() * radius * 0.42);
                 let hue = [[0.35, 0.78, 1.0], [0.63, 0.52, 1.0], [1.0, 0.49, 0.82]][index % 3];
                 let dot_radius = 2.2 + (0.5 + (glow.time * 2.0 + index as f32).sin() * 0.5) * 1.8;
-                painter.circle_filled(point, dot_radius, color(hue, 0.88));
+                painter.circle_filled(point, dot_radius * 2.6, color(hue, 0.075));
+                painter.circle_filled(point, dot_radius * 1.55, color(hue, 0.24));
+                painter.circle_filled(point, dot_radius, color(hue, 0.92));
             }
         }
         SiriMode::Ring => {

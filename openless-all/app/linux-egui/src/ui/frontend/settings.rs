@@ -591,7 +591,6 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                 &ShortcutRow {
                     field: ShortcutField::Dictation,
                     label: tr_l10n(lang, "settings.recording.hotkey_label"),
-                    desc: tr_l10n(lang, "settings.recording.combo_disable_hint"),
                     value: vm.dictation_hotkey.clone(),
                     can_disable: false,
                     hint: recording_mode_hint(lang, vm.settings.recording_mode),
@@ -605,7 +604,7 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
             segmented_row(
                 ui,
                 tr_l10n(lang, "settings.recording.mode_label"),
-                tr_l10n(lang, "settings.recording.mode_desc"),
+                "",
                 &modes,
                 vm.settings.recording_mode.min(2),
                 |val| {
@@ -615,9 +614,6 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     ));
                 },
             );
-            // #6「默认录音方式下面的提示语」：录音方式这张卡片的本行说明也要真的
-            // 画出来（Tauri `modeDesc`），不能只藏在「?」里。
-            hint_line(ui, tr_l10n(lang, "settings.recording.mode_desc"));
             // 上游 #1082（稳定模式：先录音后识别）：录音期间不连接 ASR，停止后提交整段
             // 音频；结果更晚，但录音不受建连延迟与网络抖动影响。
             toggle_row(
@@ -730,6 +726,7 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     ));
                 },
             );
+            capsule_style_preview(ui, vm.settings.capsule_style.min(2));
             toggle_row(
                 ui,
                 tr_l10n(lang, "settings.recording.mute_during_recording_label"),
@@ -851,99 +848,85 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
     );
 
     // 远程输入（Tauri RemoteInputSection）
-    card(
-        ui,
-        tr_l10n(lang, "settings.remote_input.title"),
-        tr_l10n(lang, "settings.remote_input.security_hint"),
-        |ui| {
-            toggle_row(
-                ui,
-                tr_l10n(lang, "settings.remote_input.enable_label"),
-                tr_l10n(lang, "settings.remote_input.enable_desc"),
-                vm.settings.remote_input,
-                || {
-                    actions.push(FrontendAction::SettingsToggle(SettingsField::RemoteInput));
-                },
-            );
-            let port = vm.settings.remote_port.clone();
-            text_edit_row(
-                ui,
-                tr_l10n(lang, "settings.remote_input.port_label"),
-                "",
-                &mut vm.settings.remote_port,
-                "8765",
-                || {
-                    actions.push(FrontendAction::SettingsText(
-                        SettingsTextField::RemotePort,
-                        port,
-                    ));
-                },
-            );
-            combo_index_row(
-                ui,
-                tr_l10n(lang, "settings.remote_input.default_mode_label"),
-                "",
-                vm.settings.remote_default_mode,
-                &[
-                    tr_l10n(lang, "settings.remote_input.mode_toggle"),
-                    tr_l10n(lang, "settings.remote_input.mode_hold"),
-                ],
-                |val| {
-                    actions.push(FrontendAction::SettingsCombo(
-                        SettingsComboField::RemoteDefaultMode,
-                        val,
-                    ));
-                },
-            );
-            // 连接细节（配对码 / 网址 / 证书指纹）只在服务真的在监听、且地址未过期时
-            // 展示：过期地址可能指向别的主机，展示它等于诱导用户在错误地址上配对。
-            let cert_state = remote_cert_fingerprint_state(
-                vm.remote_running,
-                vm.remote_urls_stale,
-                vm.remote_cert_fingerprint.as_deref(),
-            );
-            if vm.remote_running && !vm.remote_urls_stale {
-                if !vm.remote_pin.is_empty() {
-                    text_row(
-                        ui,
-                        tr_l10n(lang, "settings.remote_input.pin_label"),
-                        "",
-                        &vm.remote_pin,
-                    );
-                }
-                if !vm.remote_urls.is_empty() {
-                    text_row(
-                        ui,
-                        tr_l10n(lang, "settings.remote_input.url_label"),
-                        tr_l10n(lang, "settings.remote_input.security_hint"),
-                        &vm.remote_urls.join(" · "),
-                    );
-                }
-                if matches!(cert_state, RemoteCertFingerprintState::Available) {
-                    action_row(
-                        ui,
-                        tr_l10n(lang, "settings.remote_input.cert_fingerprint_label"),
-                        tr_l10n(lang, "settings.remote_input.cert_verify_hint"),
-                        tr_l10n(lang, "settings.remote_input.cert_fingerprint_copy"),
-                        SettingsActionField::CopyCertFingerprint,
-                        actions,
-                    );
-                    ui.label(
-                        egui::RichText::new(vm.remote_cert_fingerprint.clone().unwrap_or_default())
-                            .size(10.5)
-                            .color(theme::INK_4),
-                    );
-                } else {
-                    // 拿不到可核验的完整指纹时必须显式告警：静默省略会让人以为
-                    // 「不用核对证书也能连」。
-                    ui.colored_label(
-                        theme::WARN,
-                        tr_l10n(lang, "settings.remote_input.cert_fingerprint_unavailable"),
-                    );
-                }
+    card_group(ui, tr_l10n(lang, "settings.remote_input.title"), |ui| {
+        hint_line(ui, tr_l10n(lang, "settings.remote_input.security_hint"));
+        toggle_row(
+            ui,
+            tr_l10n(lang, "settings.remote_input.enable_label"),
+            tr_l10n(lang, "settings.remote_input.enable_desc"),
+            vm.settings.remote_input,
+            || {
+                actions.push(FrontendAction::SettingsToggle(SettingsField::RemoteInput));
+            },
+        );
+        let port = vm.settings.remote_port.clone();
+        text_edit_row(
+            ui,
+            tr_l10n(lang, "settings.remote_input.port_label"),
+            "",
+            &mut vm.settings.remote_port,
+            "8765",
+            || {
+                actions.push(FrontendAction::SettingsText(
+                    SettingsTextField::RemotePort,
+                    port,
+                ));
+            },
+        );
+        remote_mode_row(ui, lang, vm.settings.remote_default_mode, |val| {
+            actions.push(FrontendAction::SettingsCombo(
+                SettingsComboField::RemoteDefaultMode,
+                val,
+            ));
+        });
+        // 连接细节（配对码 / 网址 / 证书指纹）只在服务真的在监听、且地址未过期时
+        // 展示：过期地址可能指向别的主机，展示它等于诱导用户在错误地址上配对。
+        let cert_state = remote_cert_fingerprint_state(
+            vm.remote_running,
+            vm.remote_urls_stale,
+            vm.remote_cert_fingerprint.as_deref(),
+        );
+        if vm.remote_running && !vm.remote_urls_stale {
+            if !vm.remote_pin.is_empty() {
+                text_row(
+                    ui,
+                    tr_l10n(lang, "settings.remote_input.pin_label"),
+                    "",
+                    &vm.remote_pin,
+                );
             }
-        },
-    );
+            if !vm.remote_urls.is_empty() {
+                text_row(
+                    ui,
+                    tr_l10n(lang, "settings.remote_input.url_label"),
+                    tr_l10n(lang, "settings.remote_input.security_hint"),
+                    &vm.remote_urls.join(" · "),
+                );
+            }
+            if matches!(cert_state, RemoteCertFingerprintState::Available) {
+                action_row(
+                    ui,
+                    tr_l10n(lang, "settings.remote_input.cert_fingerprint_label"),
+                    tr_l10n(lang, "settings.remote_input.cert_verify_hint"),
+                    tr_l10n(lang, "settings.remote_input.cert_fingerprint_copy"),
+                    SettingsActionField::CopyCertFingerprint,
+                    actions,
+                );
+                ui.label(
+                    egui::RichText::new(vm.remote_cert_fingerprint.clone().unwrap_or_default())
+                        .size(10.5)
+                        .color(theme::INK_4),
+                );
+            } else {
+                // 拿不到可核验的完整指纹时必须显式告警：静默省略会让人以为
+                // 「不用核对证书也能连」。
+                ui.colored_label(
+                    theme::WARN,
+                    tr_l10n(lang, "settings.remote_input.cert_fingerprint_unavailable"),
+                );
+            }
+        }
+    });
 }
 
 /// 证书指纹的展示决定（对齐 Tauri `RemoteInputSection`）：服务未监听或地址已过期
@@ -986,7 +969,6 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
         ShortcutRow {
             field: ShortcutField::Dictation,
             label: tr_l10n(lang, "settings.shortcuts.start_stop"),
-            desc: "",
             value: vm.dictation_hotkey.clone(),
             can_disable: false,
             hint: dictation_hint,
@@ -994,7 +976,6 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
         ShortcutRow {
             field: ShortcutField::Translation,
             label: tr_l10n(lang, "hotkey.translation"),
-            desc: "",
             value: vm.translation_hotkey.clone(),
             can_disable: false,
             hint: String::new(),
@@ -1002,7 +983,6 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
         ShortcutRow {
             field: ShortcutField::Qa,
             label: tr_l10n(lang, "selection_ask.hotkey_title"),
-            desc: "",
             value: vm.qa_hotkey.clone(),
             can_disable: true,
             hint: String::new(),
@@ -1010,7 +990,6 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
         ShortcutRow {
             field: ShortcutField::SwitchStyle,
             label: tr_l10n(lang, "settings.shortcuts.switch_style"),
-            desc: "",
             value: vm.switch_style_hotkey.clone(),
             can_disable: true,
             hint: String::new(),
@@ -1018,7 +997,6 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
         ShortcutRow {
             field: ShortcutField::OpenApp,
             label: tr_l10n(lang, "settings.shortcuts.open_app"),
-            desc: "",
             value: vm.open_app_hotkey.clone(),
             can_disable: true,
             hint: String::new(),
@@ -1026,7 +1004,6 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
         ShortcutRow {
             field: ShortcutField::CodingAgentVoice,
             label: tr_l10n(lang, "settings.shortcuts.agent_voice"),
-            desc: tr_l10n(lang, "settings.coding_agent.voice_hotkey_desc"),
             value: vm.coding_agent_hotkey.clone(),
             can_disable: true,
             hint: String::new(),
@@ -1062,7 +1039,6 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
                 &ShortcutRow {
                     field: ShortcutField::SelectionPolish,
                     label: tr_l10n(lang, "settings.selection_workspace.polish_hotkey"),
-                    desc: tr_l10n(lang, "settings.selection_workspace.polish_hotkey_desc"),
                     value: vm.selection_polish_hotkey.clone(),
                     can_disable: true,
                     hint: String::new(),
@@ -1092,7 +1068,6 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
 struct ShortcutRow {
     field: ShortcutField,
     label: &'static str,
-    desc: &'static str,
     /// 已格式化的键帽文本（`Ctrl+Shift+;`），空串 = 未设置。
     value: String,
     /// 核心热键（录音）不可停用，Tauri 用 `comboDisableHint` 说明原因。
@@ -1112,40 +1087,26 @@ fn shortcut_row(
     let lang = vm.lang;
     let recording = vm.shortcut_recording == Some(row.field);
     let menu_open = vm.shortcut_menu == Some(row.field);
-    ui.horizontal(|ui| {
-        ui.set_min_height(46.0);
-        ui.label(
-            egui::RichText::new(row.label)
-                .font(theme::medium_font(14.0))
-                .color(theme::INK),
-        );
-        if !row.desc.is_empty() {
-            help_dot(ui, row.desc);
+    row_desc(ui, row.label, "", |ui| {
+        if recording {
+            recording_panel(ui, vm, actions, row.field);
+            return;
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if recording {
-                recording_panel(ui, vm, actions, row.field);
-                return;
-            }
-            let (rect, response) =
-                ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
-            if response.hovered() {
-                ui.painter()
-                    .rect_filled(rect, egui::CornerRadius::same(6), theme::SURFACE_2);
-            }
-            draw_chevron_down(ui, rect.center(), menu_open, theme::INK_4);
-            if response.clicked() {
-                actions.push(FrontendAction::ShortcutMenu(if menu_open {
-                    None
-                } else {
-                    Some(row.field)
-                }));
-            }
-            ui.add_space(4.0);
-            keycaps_in(ui, &row.value);
-        });
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
+        if response.hovered() {
+            ui.painter()
+                .rect_filled(rect, egui::CornerRadius::same(6), theme::SURFACE_2);
+        }
+        draw_chevron_down(ui, rect.center(), menu_open, theme::INK_4);
+        if response.clicked() {
+            actions.push(FrontendAction::ShortcutMenu(if menu_open {
+                None
+            } else {
+                Some(row.field)
+            }));
+        }
+        keycaps_in(ui, &row.value);
     });
-    separator_line(ui);
     if !row.hint.is_empty() {
         ui.label(
             egui::RichText::new(row.hint.as_str())
@@ -2389,47 +2350,66 @@ fn drill_row(ui: &mut egui::Ui, icon: SettingsIcon, title: &str, description: &s
 
 fn about(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
     let lang = vm.lang;
+    let icon = layout::load_app_icon(ui.ctx());
     card(ui, "", "", |ui| {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("OpenLess").size(17.0).strong());
+            let (icon_rect, _) =
+                ui.allocate_exact_size(egui::vec2(56.0, 56.0), egui::Sense::hover());
+            ui.painter()
+                .rect_filled(icon_rect, egui::CornerRadius::same(13), theme::SURFACE);
+            ui.painter().rect_stroke(
+                icon_rect,
+                egui::CornerRadius::same(13),
+                egui::Stroke::new(0.5, theme::LINE),
+                egui::StrokeKind::Inside,
+            );
+            ui.painter().image(
+                icon.id(),
+                icon_rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("OpenLess").size(17.0).strong());
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} · v{}",
+                        tr_l10n(lang, "settings.about.tagline"),
+                        vm.version
+                    ))
+                    .size(12.0)
+                    .color(theme::INK_3),
+                );
+            });
             if vm.auto_update_capable {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                egui::RichText::new(tr_l10n(
-                                    lang,
-                                    "settings.about.check_stable_update_btn",
-                                ))
-                                .size(11.5),
-                            )
-                            .fill(theme::SURFACE_2)
-                            .stroke(egui::Stroke::new(0.8, theme::LINE))
-                            .corner_radius(egui::CornerRadius::same(8))
-                            .min_size(egui::vec2(0.0, 26.0)),
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new(tr_l10n(
+                                lang,
+                                "settings.about.check_stable_update_btn",
+                            ))
+                            .size(11.5),
                         )
-                        .clicked()
-                    {
-                        actions.push(FrontendAction::SettingsAction(
-                            SettingsActionField::CheckUpdate,
-                        ));
-                    }
-                });
+                        .fill(theme::SURFACE_2)
+                        .stroke(egui::Stroke::new(0.8, theme::LINE))
+                        .corner_radius(egui::CornerRadius::same(8))
+                        .min_size(egui::vec2(0.0, 26.0)),
+                    )
+                    .clicked()
+                {
+                    actions.push(FrontendAction::SettingsAction(
+                        SettingsActionField::CheckUpdate,
+                    ));
+                }
             }
         });
-        ui.label(
-            egui::RichText::new(format!(
-                "{} · v{}",
-                tr_l10n(lang, "settings.about.tagline"),
-                vm.version
-            ))
-            .size(12.0)
-            .color(theme::INK_3),
-        );
         if let Some(notice) = &vm.settings_notice {
             ui.label(egui::RichText::new(notice).size(11.0).color(theme::BLUE));
         }
     });
+    // The Tauri link card groups documentation links above a divider.
+    ui.add_space(-8.0);
     card(ui, tr_l10n(lang, "settings.about.links_title"), "", |ui| {
         link_row(
             ui,
@@ -2445,6 +2425,7 @@ fn about(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
             SettingsActionField::OpenHelp,
             actions,
         );
+        separator_line(ui);
         link_row(
             ui,
             tr_l10n(lang, "modal.sections.help_center"),
@@ -3270,7 +3251,7 @@ fn service_tabs(
 
 fn card_title(ui: &mut egui::Ui, title: &str, hint: &str) {
     ui.horizontal(|ui| {
-        ui.label(
+        let title_response = ui.label(
             // Tauri `SectionTitle`: font-size 14 / font-weight 600。
             egui::RichText::new(title)
                 .size(14.0)
@@ -3278,7 +3259,7 @@ fn card_title(ui: &mut egui::Ui, title: &str, hint: &str) {
                 .color(theme::INK),
         );
         if !hint.is_empty() {
-            help_dot(ui, hint);
+            let _ = title_response.on_hover_text(hint);
         }
     });
     ui.add_space(6.0);
@@ -3390,6 +3371,183 @@ fn segmented_row(
         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 26.0), egui::Sense::hover());
         if let Some(index) = layout::segmented(ui, rect, options, selected) {
             on_select(index);
+        }
+    });
+}
+
+fn remote_mode_row(ui: &mut egui::Ui, lang: Lang, selected: usize, on_select: impl FnOnce(usize)) {
+    row_desc(
+        ui,
+        tr_l10n(lang, "settings.remote_input.default_mode_label"),
+        "",
+        |ui| {
+            let mut changed = None;
+            for (index, key) in [
+                "settings.remote_input.mode_toggle",
+                "settings.remote_input.mode_hold",
+            ]
+            .iter()
+            .enumerate()
+            {
+                let text = tr_l10n(lang, key);
+                let (rect, response) = ui.allocate_exact_size(
+                    egui::vec2(layout::text_width(ui, text, 12.0) + 26.0, 30.0),
+                    egui::Sense::click(),
+                );
+                let fill = if selected == index {
+                    theme::BLUE
+                } else {
+                    theme::SURFACE_2
+                };
+                ui.painter()
+                    .rect_filled(rect, egui::CornerRadius::same(8), fill);
+                ui.painter().rect_stroke(
+                    rect,
+                    egui::CornerRadius::same(8),
+                    egui::Stroke::new(0.7, theme::LINE_STRONG),
+                    egui::StrokeKind::Inside,
+                );
+                let center = rect.left_center() + egui::vec2(13.0, 0.0);
+                if index == 0 {
+                    ui.painter().circle_stroke(
+                        center,
+                        4.0,
+                        egui::Stroke::new(
+                            1.2,
+                            if selected == index {
+                                theme::SURFACE
+                            } else {
+                                theme::INK_2
+                            },
+                        ),
+                    );
+                    ui.painter().circle_filled(
+                        center,
+                        1.3,
+                        if selected == index {
+                            theme::SURFACE
+                        } else {
+                            theme::INK_2
+                        },
+                    );
+                } else {
+                    ui.painter().line_segment(
+                        [
+                            center + egui::vec2(0.0, -4.0),
+                            center + egui::vec2(0.0, 3.0),
+                        ],
+                        egui::Stroke::new(
+                            1.2,
+                            if selected == index {
+                                theme::SURFACE
+                            } else {
+                                theme::INK_2
+                            },
+                        ),
+                    );
+                    ui.painter().line_segment(
+                        [center, center + egui::vec2(-2.0, 2.0)],
+                        egui::Stroke::new(
+                            1.2,
+                            if selected == index {
+                                theme::SURFACE
+                            } else {
+                                theme::INK_2
+                            },
+                        ),
+                    );
+                    ui.painter().line_segment(
+                        [center, center + egui::vec2(2.0, 2.0)],
+                        egui::Stroke::new(
+                            1.2,
+                            if selected == index {
+                                theme::SURFACE
+                            } else {
+                                theme::INK_2
+                            },
+                        ),
+                    );
+                }
+                ui.painter().text(
+                    rect.left_center() + egui::vec2(24.0, 0.0),
+                    egui::Align2::LEFT_CENTER,
+                    text,
+                    theme::medium_font(12.0),
+                    if selected == index {
+                        theme::SURFACE
+                    } else {
+                        theme::INK
+                    },
+                );
+                if response.clicked() {
+                    changed = Some(index);
+                }
+            }
+            if let Some(index) = changed {
+                on_select(index);
+            }
+        },
+    );
+}
+
+fn capsule_style_preview(ui: &mut egui::Ui, style: usize) {
+    ui.horizontal(|ui| {
+        ui.add_space(216.0);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(164.0, 42.0), egui::Sense::hover());
+        match style {
+            0 => {
+                for i in 0..3 {
+                    let color = [
+                        theme::BLUE,
+                        egui::Color32::from_rgb(143, 102, 255),
+                        egui::Color32::from_rgb(255, 112, 174),
+                    ][i];
+                    ui.painter().circle_filled(
+                        rect.center()
+                            + egui::vec2((i as f32 - 1.0) * 17.0, ((i as f32) - 1.0).abs() * 3.0),
+                        6.0,
+                        color,
+                    );
+                }
+            }
+            1 => {
+                let pill = egui::Rect::from_center_size(rect.center(), egui::vec2(152.0, 34.0));
+                ui.painter()
+                    .rect_filled(pill, egui::CornerRadius::same(17), theme::SURFACE);
+                ui.painter().rect_stroke(
+                    pill,
+                    egui::CornerRadius::same(17),
+                    egui::Stroke::new(1.0, theme::LINE),
+                    egui::StrokeKind::Inside,
+                );
+                for i in 0..5 {
+                    let h = [8.0, 16.0, 22.0, 12.0, 7.0][i];
+                    let x = pill.center().x + (i as f32 - 2.0) * 7.0;
+                    ui.painter().line_segment(
+                        [
+                            egui::pos2(x, pill.center().y - h / 2.0),
+                            egui::pos2(x, pill.center().y + h / 2.0),
+                        ],
+                        egui::Stroke::new(2.0, theme::BLUE),
+                    );
+                }
+            }
+            _ => {
+                let pill = egui::Rect::from_center_size(rect.center(), egui::vec2(152.0, 34.0));
+                ui.painter()
+                    .rect_filled(pill, egui::CornerRadius::same(17), theme::INK);
+                for i in 0..7 {
+                    let h = [5.0, 10.0, 17.0, 22.0, 15.0, 8.0, 5.0][i];
+                    let x = pill.center().x + (i as f32 - 3.0) * 7.0;
+                    ui.painter().line_segment(
+                        [
+                            egui::pos2(x, pill.center().y - h / 2.0),
+                            egui::pos2(x, pill.center().y + h / 2.0),
+                        ],
+                        egui::Stroke::new(2.0, theme::SURFACE),
+                    );
+                }
+            }
         }
     });
 }
