@@ -1326,7 +1326,7 @@ fn audio_bars(ui: &egui::Ui, rect: egui::Rect, level: f32, bar_count: usize, ink
 
 /// Transparent Siri treatment: several independently drifting spectral
 /// ribbons, driven by the smoothed microphone level rather than a filled pill.
-fn paint_siri_ribbons(ui: &egui::Ui, rect: egui::Rect, time: f32, level: f32) {
+pub(super) fn paint_siri_ribbons(ui: &egui::Ui, rect: egui::Rect, time: f32, level: f32) {
     const SPECTRUM: [egui::Color32; 6] = [
         egui::Color32::from_rgb(255, 93, 156),
         egui::Color32::from_rgb(194, 111, 255),
@@ -1356,9 +1356,16 @@ fn paint_siri_ribbons(ui: &egui::Ui, rect: egui::Rect, time: f32, level: f32) {
                 )
             };
             let alpha = (150.0 + 80.0 * (time * 1.6 + x0 * 7.0 + ribbon as f32).sin().abs()) as u8;
+            // Layer a broad, low-opacity spectral stroke behind the crisp
+            // filament so the transparent capsule reads as light rather than
+            // as a stack of flat colored rules.
             painter.line_segment(
                 [point(x0), point(x1)],
-                egui::Stroke::new(1.7, color.gamma_multiply(alpha as f32 / 255.0)),
+                egui::Stroke::new(6.0, color.gamma_multiply(0.12)),
+            );
+            painter.line_segment(
+                [point(x0), point(x1)],
+                egui::Stroke::new(2.0, color.gamma_multiply(alpha as f32 / 255.0)),
             );
         }
     }

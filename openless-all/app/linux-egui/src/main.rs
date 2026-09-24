@@ -7287,24 +7287,32 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
     }
 
     fn run_popup_process(kind: PopupKind) -> Result<(), String> {
-        // 胶囊优先走原生 layer surface；不可用时（无该协议 / EGL 失败 /
-        // configure 超时）安静回退到下面那条 XWayland 叠加层路径。
-        if kind == PopupKind::Capsule
-            && openless_linux_egui::detect_capsule_path()
-                == openless_linux_egui::CapsulePath::LayerShell
+        let capsule_path =
+            (kind == PopupKind::Capsule).then(openless_linux_egui::detect_capsule_path);
+        // A regular xdg-shell toplevel can be activated by the compositor. That
+        // is unacceptable for a recording indicator, and Wayland has no client
+        // API to force a non-activating, positioned overlay without layer-shell.
+        // Keep recording functional but omit the capsule instead of stealing
+        // focus or silently routing the surface through XWayland.
+        if capsule_path == Some(openless_linux_egui::CapsulePath::PlainWindow)
+            && std::env::var_os("WAYLAND_DISPLAY").is_some()
         {
+            return Err(
+                "native Wayland capsule requires zwlr_layer_shell_v1; refusing a focusable xdg-shell fallback".to_string(),
+            );
+        }
+        // The capsule uses a native layer surface on Wayland and an X11 overlay
+        // only in a native X11 session. A layer-shell startup failure is fatal:
+        // do not create a second, focusable Wayland toplevel.
+        if capsule_path == Some(openless_linux_egui::CapsulePath::LayerShell) {
             match run_capsule_layer_process() {
                 Ok(()) => return Ok(()),
                 Err(failure) if failure.started => return Err(failure.message),
                 Err(failure) => {
-                    eprintln!(
-                        "OpenLess capsule: layer-shell unavailable ({}); using the XWayland overlay",
+                    return Err(format!(
+                        "native layer-shell capsule unavailable: {}",
                         failure.message
-                    );
-                    log::warn!(
-                        "layer-shell capsule unavailable ({}); falling back to the XWayland overlay",
-                        failure.message
-                    );
+                    ))
                 }
             }
         }
@@ -7332,12 +7340,8 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         // surface lets the rounded corners reveal the desktop instead of the
         // rectangular X11 window backing showing through around the card.
         let transparent = true;
-        // 三条路径的优先级（`popup_layer::choose_capsule_path`）：
-        //   1. 合成器有 zwlr_layer_shell_v1 → 走原生 layer surface（已在上面 return）
-        //   2. 否且有 X 服务器 → XWayland + 下面的 X11 叠加层（本分支）
-        //   3. 两者都没有 → 普通无边框窗口，位置/焦点交给合成器
-        // 胶囊只在第 2 条路径里做 X11 处理：先读一次几何，让窗口在**创建时**就落
-        // 在工作区底部居中，并在映射前把 WM_HINTS.input 关掉（kwin 不会再给它焦点）。
+        // 原生 X11 会话下先读一次几何，让胶囊在**创建时**就落在工作区底部居中，
+        // 并在映射前把 WM_HINTS.input 关掉（窗口管理器不会再给它焦点）。
         // 面板窗（QA/预览）需要键盘输入，只借 `with_position` 定位。
         let capsule_on_x11 = kind == PopupKind::Capsule
             && openless_linux_egui::detect_capsule_path()
