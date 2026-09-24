@@ -3640,29 +3640,33 @@ fn row_desc(ui: &mut egui::Ui, label: &str, desc: &str, control: impl FnOnce(&mu
     // 而不是各自贴右边缘 —— 贴右会让不同宽度的控件彼此错开。
     const LABEL_COLUMN: f32 = 200.0;
     const COLUMN_GAP: f32 = 16.0;
-    ui.horizontal(|ui| {
-        ui.set_min_height(46.0);
-        // 窄窗口下标签列最多占一半宽度，避免控件列被挤没。
-        let label_width = LABEL_COLUMN.min(ui.available_width() * 0.5);
-        ui.allocate_ui_with_layout(
-            egui::vec2(label_width, 0.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                if !label.is_empty() {
-                    ui.label(
-                        egui::RichText::new(label)
-                            .font(theme::medium_font(14.0))
-                            .color(theme::INK),
-                    );
-                }
-                if !desc.is_empty() {
-                    help_dot(ui, desc);
-                }
-            },
-        );
-        ui.add_space(COLUMN_GAP);
-        control(ui);
-    });
+    let row_width = ui.available_width();
+    ui.allocate_ui_with_layout(
+        egui::vec2(row_width, 46.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |row| {
+            // 窄窗口下标签列最多占一半宽度，避免控件列被挤没。
+            let label_width = LABEL_COLUMN.min(row_width * 0.5);
+            row.allocate_ui_with_layout(
+                egui::vec2(label_width, 46.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    if !label.is_empty() {
+                        ui.label(
+                            egui::RichText::new(label)
+                                .font(theme::medium_font(14.0))
+                                .color(theme::INK),
+                        );
+                    }
+                    if !desc.is_empty() {
+                        help_dot(ui, desc);
+                    }
+                },
+            );
+            row.add_space(COLUMN_GAP);
+            control(row);
+        },
+    );
     let rect = ui
         .allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover())
         .0;
