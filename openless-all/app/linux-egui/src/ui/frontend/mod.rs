@@ -796,9 +796,9 @@ mod tests {
         for modifiers in [held, held, egui::Modifiers::default()] {
             ctx.begin_pass(egui::RawInput {
                 screen_rect: Some(viewport()),
-                modifiers,
                 ..Default::default()
             });
+            ctx.input_mut(|i| i.modifiers = modifiers);
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
             let _ = ctx.end_pass();
@@ -837,9 +837,9 @@ mod tests {
         for modifiers in [both, both, egui::Modifiers::default()] {
             ctx.begin_pass(egui::RawInput {
                 screen_rect: Some(viewport()),
-                modifiers,
                 ..Default::default()
             });
+            ctx.input_mut(|i| i.modifiers = modifiers);
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
             let _ = ctx.end_pass();
@@ -1113,24 +1113,25 @@ mod tests {
         // over itself. `layout::fixed_ui` must not move the parent cursor even
         // when the card body paints instead of allocating.
         let ctx = egui::Context::default();
-        ctx.begin_pass(egui::RawInput {
-            screen_rect: Some(viewport()),
-            ..Default::default()
-        });
-        egui::CentralPanel::default().show(&ctx, |ui| {
-            ui.allocate_exact_size(egui::vec2(100.0, 10.0), egui::Sense::hover());
-            let before = ui.next_widget_position();
-            let rect = egui::Rect::from_min_size(before, egui::vec2(240.0, 120.0));
-            layout::fixed_ui(ui, rect, "test-card", |ui| {
-                ui.label("card body");
-            });
-            assert_eq!(
-                ui.next_widget_position(),
-                before,
-                "fixed_ui must leave the parent layout cursor untouched"
-            );
-        });
-        let _ = ctx.end_pass();
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(viewport()),
+                ..Default::default()
+            },
+            |ui| {
+                ui.allocate_exact_size(egui::vec2(100.0, 10.0), egui::Sense::hover());
+                let before = ui.next_widget_position();
+                let rect = egui::Rect::from_min_size(before, egui::vec2(240.0, 120.0));
+                layout::fixed_ui(ui, rect, "test-card", |ui| {
+                    ui.label("card body");
+                });
+                assert_eq!(
+                    ui.next_widget_position(),
+                    before,
+                    "fixed_ui must leave the parent layout cursor untouched"
+                );
+            },
+        );
     }
 
     #[test]
@@ -1692,18 +1693,20 @@ mod tests {
             } else {
                 Vec::new()
             };
-            ctx.begin_pass(egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(800.0, 600.0),
-                )),
-                events,
-                ..Default::default()
-            });
-            egui::CentralPanel::default().show(&ctx, |ui| {
-                super::settings::test_group_toggle(ui);
-            });
-            painted = painted_text(&ctx.end_pass());
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    super::settings::test_group_toggle(ui);
+                },
+            );
+            painted = painted_text(&output);
             states.push(painted.contains("GROUPCONTENT"));
         }
         assert!(states[0], "collapsible groups start expanded, like Tauri");

@@ -854,24 +854,25 @@ mod tests {
     fn paint_queues_a_gpu_callback() {
         let _guard = gpu_state_guard();
         let ctx = egui::Context::default();
-        ctx.begin_pass(egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(320.0, 240.0),
-            )),
-            ..Default::default()
-        });
-        egui::CentralPanel::default().show(&ctx, |ui| {
-            for glow in [
-                SiriGlow::wave(0.5, 0.3, 1.0),
-                SiriGlow::orb(0.5, 1.0),
-                SiriGlow::ring(0.5, 12.0, 2.0, 1.6),
-            ] {
-                // Before a successful GPU frame the caller keeps its CPU fallback.
-                assert!(!paint(ui, ui.max_rect(), glow), "{:?} ownership", glow.mode);
-            }
-        });
-        let output = ctx.end_pass();
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(320.0, 240.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                for glow in [
+                    SiriGlow::wave(0.5, 0.3, 1.0),
+                    SiriGlow::orb(0.5, 1.0),
+                    SiriGlow::ring(0.5, 12.0, 2.0, 1.6),
+                ] {
+                    // Before a successful GPU frame the caller keeps its CPU fallback.
+                    assert!(!paint(ui, ui.max_rect(), glow), "{:?} ownership", glow.mode);
+                }
+            },
+        );
         let callbacks = output
             .shapes
             .iter()
@@ -890,25 +891,26 @@ mod tests {
         let ctx = egui::Context::default();
         // The GPU state is process-global, so serialise with the other GPU tests.
         let _guard = gpu_state_guard();
-        ctx.begin_pass(egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(320.0, 240.0),
-            )),
-            ..Default::default()
-        });
-        egui::CentralPanel::default().show(&ctx, |ui| {
-            warm_up(ui);
-            warm_up(ui);
-            // Warm-up only compiles: until a real glow frame draws, the caller
-            // still owns its CPU fallback.
-            assert!(!paint(
-                ui,
-                ui.max_rect(),
-                SiriGlow::ring(0.0, 12.0, 2.0, 1.6)
-            ));
-        });
-        let output = ctx.end_pass();
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(320.0, 240.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                warm_up(ui);
+                warm_up(ui);
+                // Warm-up only compiles: until a real glow frame draws, the caller
+                // still owns its CPU fallback.
+                assert!(!paint(
+                    ui,
+                    ui.max_rect(),
+                    SiriGlow::ring(0.0, 12.0, 2.0, 1.6)
+                ));
+            },
+        );
         let callbacks = output
             .shapes
             .iter()
@@ -939,15 +941,16 @@ mod tests {
             let ctx = egui::Context::default();
             let _guard = gpu_state_guard();
             seed();
-            ctx.begin_pass(egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(320.0, 240.0),
-                )),
-                ..Default::default()
-            });
-            egui::CentralPanel::default().show(&ctx, |ui| warm_up(ui));
-            let output = ctx.end_pass();
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(320.0, 240.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| warm_up(ui),
+            );
             let callbacks = output
                 .shapes
                 .iter()
@@ -1058,20 +1061,21 @@ mod tests {
         let _guard = gpu_state_guard();
         GPU_FAILED.store(true, Ordering::Relaxed);
         let ctx = egui::Context::default();
-        ctx.begin_pass(egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(320.0, 240.0),
-            )),
-            ..Default::default()
-        });
         let mut queued = 0;
-        egui::CentralPanel::default().show(&ctx, |ui| {
-            if paint(ui, ui.max_rect(), SiriGlow::orb(0.0, 1.0)) {
-                queued += 1;
-            }
-        });
-        let output = ctx.end_pass();
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(320.0, 240.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                if paint(ui, ui.max_rect(), SiriGlow::orb(0.0, 1.0)) {
+                    queued += 1;
+                }
+            },
+        );
         assert_eq!(queued, 0, "a disabled GPU path reports no ownership");
         assert_eq!(
             output

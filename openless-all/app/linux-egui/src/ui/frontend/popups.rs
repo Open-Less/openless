@@ -1853,15 +1853,18 @@ mod tests {
         super::siri_gl::seed_gpu_ready_for_tests();
         let callbacks = |state: CapsulePopupState| {
             let ctx = egui::Context::default();
-            ctx.begin_pass(egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(200.0, 100.0),
-                )),
-                ..Default::default()
-            });
-            let _ = dictation_capsule(&ctx, &state, Lang::ZhCn);
-            let output = ctx.end_pass();
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(200.0, 100.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    let _ = dictation_capsule(ui, &state, Lang::ZhCn);
+                },
+            );
             output
                 .shapes
                 .iter()
@@ -2025,15 +2028,19 @@ mod tests {
         let mut composer = String::new();
         let mut painted = String::new();
         for _ in 0..2 {
-            ctx.begin_pass(egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(520.0, 520.0),
-                )),
-                ..Default::default()
-            });
-            selection_ask(&ctx, &state, &mut composer, Lang::ZhCn, Some(&texture));
-            painted = painted_text(&ctx.end_pass());
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(520.0, 520.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    selection_ask(ui, &state, &mut composer, Lang::ZhCn, Some(&texture));
+                },
+            );
+            painted = painted_text(&output);
         }
         assert!(has(&painted, "hello"), "{painted}");
     }
@@ -2062,15 +2069,18 @@ mod tests {
         let mut colors = Vec::new();
         let mut callbacks = 0;
         for _ in 0..2 {
-            ctx.begin_pass(egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(200.0, 100.0),
-                )),
-                ..Default::default()
-            });
-            let _ = dictation_capsule(&ctx, state, Lang::ZhCn);
-            let output = ctx.end_pass();
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(200.0, 100.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    let _ = dictation_capsule(ui, state, Lang::ZhCn);
+                },
+            );
             colors.clear();
             callbacks = 0;
             for clipped in &output.shapes {
@@ -2176,13 +2186,16 @@ mod tests {
                     modifiers: egui::Modifiers::default(),
                 }],
             ] {
-                ctx.begin_pass(egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
-                    events,
-                    ..Default::default()
-                });
-                action = dictation_capsule(&ctx, &state, Lang::ZhCn);
-                let _ = ctx.end_pass();
+                let _ = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        action = dictation_capsule(ui, &state, Lang::ZhCn);
+                    },
+                );
             }
             assert_eq!(
                 action, expected,

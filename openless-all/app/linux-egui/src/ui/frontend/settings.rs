@@ -3582,10 +3582,8 @@ mod tests {
             };
             let mut actions = Vec::new();
             let ctx = egui::Context::default();
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    provider_editor_panel(ui, &editor, Lang::ZhCn, &mut actions);
-                });
+            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                provider_editor_panel(ui, &editor, Lang::ZhCn, &mut actions);
             });
             assert!(
                 actions.is_empty(),
