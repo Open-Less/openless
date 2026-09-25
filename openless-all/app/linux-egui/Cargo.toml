@@ -46,6 +46,9 @@ raw-window-handle = "0.6"
 eframe = { version = "=0.36.2", default-features = false, features = ["accesskit", "default_fonts", "wgpu_no_default_features", "wayland", "x11"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "vulkan", "wgsl"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+# Rasterize user-supplied SVG icons locally before sending PNG to Core.
+resvg = { version = "=0.45.1", default-features = false, features = ["text", "system-fonts"] }
+roxmltree = "0.20"
 libc = "0.2"
 x11rb = { version = "0.13.2", optional = true }
 axum = { version = "0.7", default-features = false, features = ["ws", "http1", "tokio"] }

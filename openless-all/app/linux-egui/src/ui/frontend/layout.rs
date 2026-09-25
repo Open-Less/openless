@@ -47,6 +47,42 @@ pub fn load_app_icon(ctx: &egui::Context) -> egui::TextureHandle {
     texture
 }
 
+/// Decoded style-pack icon, cached in egui temp storage and keyed by the data
+/// URL so a repaint never re-decodes the PNG (Core re-encodes only on change).
+pub fn style_pack_icon_texture(
+    ctx: &egui::Context,
+    pack_id: &str,
+    data_url: &str,
+) -> Option<egui::TextureHandle> {
+    use base64::Engine as _;
+    let key = egui::Id::new(("openless-style-icon", pack_id));
+    if let Some((cached_url, texture)) =
+        ctx.data(|data| data.get_temp::<(String, egui::TextureHandle)>(key))
+    {
+        if cached_url == data_url {
+            return Some(texture);
+        }
+    }
+    let encoded = data_url.split_once(";base64,").map(|(_, value)| value)?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    let image = image::load_from_memory(&bytes).ok()?.into_rgba8();
+    let color = egui::ColorImage::from_rgba_unmultiplied(
+        [image.width() as usize, image.height() as usize],
+        image.as_raw(),
+    );
+    let texture = ctx.load_texture(
+        format!("openless-style-icon-{pack_id}"),
+        color,
+        egui::TextureOptions::LINEAR,
+    );
+    ctx.data_mut(|data| {
+        data.insert_temp(key, (data_url.to_string(), texture.clone()));
+    });
+    Some(texture)
+}
+
 pub fn paint_app_icon(ui: &egui::Ui, rect: egui::Rect, texture: &egui::TextureHandle) {
     ui.painter().image(
         texture.id(),
@@ -505,6 +541,14 @@ pub fn sidebar(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Ve
                                         "nav.history",
                                         NavTarget::Page(Page::History),
                                         IconName::History,
+                                        actions,
+                                    );
+                                    nav(
+                                        ui,
+                                        vm,
+                                        "nav.quickNote",
+                                        NavTarget::Page(Page::QuickNote),
+                                        IconName::Mic,
                                         actions,
                                     );
                                     nav(

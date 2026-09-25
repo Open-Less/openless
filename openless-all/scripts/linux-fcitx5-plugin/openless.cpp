@@ -91,6 +91,8 @@ public:
           triggerRawStates_(0),
           qaRawSym_(0),
           qaRawStates_(0),
+          quickNoteRawSym_(0),
+          quickNoteRawStates_(0),
           selectionPolishRawSym_(0),
           selectionPolishRawStates_(0),
           translationRawSym_(0),
@@ -264,6 +266,11 @@ public:
                             << " states=0x" << std::hex << states;
                         qaShortcutEvent(qaRawSym_, qaRawStates_, isPress);
                         consume(qaRawSym_);
+                        return;
+                    }
+                    if (quickNoteRawSym_ != 0 && hit(quickNoteRawSym_, quickNoteRawStates_)) {
+                        quickNoteEvent(quickNoteRawSym_, quickNoteRawStates_, isPress);
+                        consume(quickNoteRawSym_);
                         return;
                     }
                     if (selectionPolishRawSym_ != 0 &&
@@ -609,6 +616,16 @@ public:
             << " states=" << static_cast<uint32_t>(key.states());
     }
 
+    void setQuickNoteHotkeyRaw(uint32_t sym, uint32_t states) {
+        quickNoteRawSym_ = sym;
+        quickNoteRawStates_ = states;
+        RawConfig raw;
+        readAsIni(raw, configFile());
+        raw.setValueByPath("QuickNoteRawSym", std::to_string(sym));
+        raw.setValueByPath("QuickNoteRawStates", std::to_string(states));
+        safeSaveAsIni(raw, configFile());
+    }
+
     void setQaHotkeyRaw(uint32_t sym, uint32_t states) {
         qaRawSym_ = sym;
         qaRawStates_ = states;
@@ -741,6 +758,7 @@ public:
     FCITX_OBJECT_VTABLE_METHOD(setHotkeyRaw, "SetHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setCustomDictationTrigger, "SetCustomDictationTrigger", "s", "");
     FCITX_OBJECT_VTABLE_METHOD(setQaHotkeyRaw, "SetQaHotkeyRaw", "uu", "");
+    FCITX_OBJECT_VTABLE_METHOD(setQuickNoteHotkeyRaw, "SetQuickNoteHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setSelectionPolishHotkeyRaw, "SetSelectionPolishHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setTranslationHotkeyRaw, "SetTranslationHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setLessComputerHotkeyRaw, "SetLessComputerHotkeyRaw", "uu", "");
@@ -754,6 +772,7 @@ public:
     FCITX_OBJECT_VTABLE_SIGNAL(lessComputerKeyEvent, "LessComputerKeyEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(lessComputerKeyCombined, "LessComputerKeyCombined", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(qaShortcutEvent, "QaShortcutEvent", "uub");
+    FCITX_OBJECT_VTABLE_SIGNAL(quickNoteEvent, "QuickNoteEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(selectionPolishEvent, "SelectionPolishEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(translationModifierEvent, "TranslationModifierEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(switchStyleEvent, "SwitchStyleEvent", "uub");
@@ -783,6 +802,14 @@ public:
         {
             auto *v = raw.valueByPath("QaRawStates");
             qaRawStates_ = v ? std::stoul(*v, nullptr, 0) : 0;
+        }
+        {
+            auto *v = raw.valueByPath("QuickNoteRawSym");
+            quickNoteRawSym_ = v ? std::stoul(*v, nullptr, 0) : 0;
+        }
+        {
+            auto *v = raw.valueByPath("QuickNoteRawStates");
+            quickNoteRawStates_ = v ? std::stoul(*v, nullptr, 0) : 0;
         }
         {
             auto *v = raw.valueByPath("SelectionPolishRawSym");
@@ -948,6 +975,7 @@ private:
         std::vector<Entry> entries = {
             {"dictation_raw", triggerRawSym_, triggerRawStates_},
             {"qa", qaRawSym_, qaRawStates_},
+            {"quick_note", quickNoteRawSym_, quickNoteRawStates_},
             {"selection_polish", selectionPolishRawSym_, selectionPolishRawStates_},
             {"translation", translationRawSym_, translationRawStates_},
             {"switch_style", switchStyleRawSym_, switchStyleRawStates_},
@@ -1066,6 +1094,8 @@ private:
     uint32_t triggerRawStates_;
     uint32_t qaRawSym_;
     uint32_t qaRawStates_;
+    uint32_t quickNoteRawSym_;
+    uint32_t quickNoteRawStates_;
     uint32_t selectionPolishRawSym_;
     uint32_t selectionPolishRawStates_;
     uint32_t translationRawSym_;

@@ -183,6 +183,23 @@ pub const CATALOG: &[Msg] = &[
         text: row("历史", "歷史", "History", "履歴", "기록"),
     },
     Msg {
+        key: "marketplace.derivativeBadge",
+        text: row("衍生自 @{}", "衍生自 @{}", "Derived from @{}", "@{} から派生", "@{}에서 파생"),
+    },
+    Msg {
+        key: "nav.quickNote",
+        text: row("速记", "速記", "Quick notes", "速記", "속기"),
+    },
+    Msg { key: "quickNote.kicker", text: row("速记", "速記", "Quick notes", "速記", "속기") },
+    Msg { key: "quickNote.title", text: row("速记", "速記", "Quick notes", "速記", "속기") },
+    Msg { key: "quickNote.desc", text: row("永久保留录音，支持回放、导出、重新转录和重新润色。", "永久保留錄音，支援回放、匯出、重新轉錄與重新潤色。", "Permanent audio with playback, export, retranscription, and repolish.", "音声を保持し、再生・書き出し・再文字起こし・再推敲に対応します。", "오디오를 영구 보관하고 재생·내보내기·재전사·다시 다듬기를 지원합니다.") },
+    Msg { key: "quickNote.start", text: row("开始录音", "開始錄音", "Start recording", "録音を開始", "녹음 시작") },
+    Msg { key: "quickNote.finish", text: row("完成录音", "完成錄音", "Finish recording", "録音を終了", "녹음 종료") },
+    Msg { key: "quickNote.noTranscript", text: row("还没有转写内容。", "尚未有轉錄內容。", "No transcript yet.", "まだ文字起こしがありません。", "아직 전사 내용이 없습니다.") },
+    Msg { key: "quickNote.recording", text: row("录音中…", "錄音中…", "Recording…", "録音中…", "녹음 중…") },
+    Msg { key: "quickNote.shortcutTitle", text: row("速记快捷键", "速記快捷鍵", "Quick note shortcut", "速記ショートカット", "속기 단축키") },
+    Msg { key: "quickNote.shortcutDesc", text: row("按一次开始永久录音，再按一次结束并保存。", "按一下開始永久錄音，再按一下結束並保存。", "Press once to start a permanent capture, then press again to finish.", "一度押して録音を開始し、もう一度押して保存します。", "한 번 눌러 녹음하고 다시 눌러 저장합니다.") },
+    Msg {
         key: "nav.vocab",
         text: row("词典", "詞典", "Dictionary", "辞書", "사전"),
     },
@@ -4360,6 +4377,16 @@ pub const CATALOG: &[Msg] = &[
         key: "style.pack.list_count",
         text: row("{} 个风格包", "{} 個風格包", "{} packs", "{} 個", "{}개"),
     },
+        Msg {
+        key: "style.pack.list_desc",
+        text: row(
+            "浏览和切换风格包。",
+            "瀏覽和切換風格包。",
+            "Browse and switch packs.",
+            "パックを閲覧・切替。",
+            "팩 둘러보기·전환.",
+        ),
+    },
     Msg {
         key: "style.pack.list_title",
         text: row("本地风格包", "本機風格包", "Local Packs", "ローカルパック", "로컬 팩"),
@@ -5750,6 +5777,54 @@ pub const CATALOG: &[Msg] = &[
             "Set publisher identity in Settings → Marketplace first",
             "先に 設定 → マーケット で公開者名を設定してください",
             "먼저 설정 → 마켓에서 게시자 이름을 입력하세요",
+        ),
+    },
+    Msg {
+        key: "style.pack.iconInvalid",
+        text: row(
+            "请选择不含外部资源的有效 SVG 图标（最大 256 KB）。",
+            "請選擇不含外部資源的有效 SVG 圖示（最大 256 KB）。",
+            "Choose a valid SVG icon with no external resources (up to 256 KB).",
+            "外部リソースを含まない有効な SVG を選択してください（最大 256 KB）。",
+            "외부 리소스가 없는 유효한 SVG 아이콘을 선택하세요(최대 256 KB).",
+        ),
+    },
+    Msg {
+        key: "style.pack.iconSaved",
+        text: row("图标已保存", "圖示已儲存", "Icon saved", "アイコンを保存しました", "아이콘이 저장되었습니다"),
+    },
+    Msg {
+        key: "style.pack.resetIcon",
+        text: row(
+            "恢复默认图标",
+            "還原預設圖示",
+            "Restore default icon",
+            "既定のアイコンに戻す",
+            "기본 아이콘 복원",
+        ),
+    },
+    Msg {
+        key: "style.pack.uploadIcon",
+        text: row(
+            "为「{}」上传 SVG 图标",
+            "為「{}」上傳 SVG 圖示",
+            "Upload an SVG icon for {}",
+            "{} の SVG アイコンをアップロード",
+            "{}의 SVG 아이콘 업로드",
+        ),
+    },
+    Msg {
+        key: "common.hide",
+        text: row("隐藏", "隱藏", "Hide", "非表示", "숨기기"),
+    },
+    Msg {
+        key: "quickNote.showShortcut",
+        text: row(
+            "显示速记快捷键",
+            "顯示速記快捷鍵",
+            "Show quick note shortcut",
+            "速記ショートカットを表示",
+            "속기 단축키 표시",
         ),
     },
 ];

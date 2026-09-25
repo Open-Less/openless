@@ -13,7 +13,7 @@
 use eframe::egui;
 use openless_linux_egui::{fmt_l10n, tr_l10n, Lang};
 
-use super::icons::IconName;
+use super::icons::{self, IconName};
 use super::layout::{self, ButtonKind, PillTone};
 use super::theme;
 use super::view_model::{FrontendAction, FrontendViewModel, StylePack};
@@ -76,7 +76,7 @@ fn header(
         ui,
         import_rect,
         import,
-        Some(IconName::Download),
+        Some(IconName::Upload),
         ButtonKind::Blue,
     )
     .clicked()
@@ -114,18 +114,26 @@ fn list_header(
     actions: &mut Vec<FrontendAction>,
 ) -> f32 {
     let lang = vm.lang;
-    let row = egui::Rect::from_min_size(inner.min, egui::vec2(inner.width(), 30.0));
+    let row = egui::Rect::from_min_size(inner.min, egui::vec2(inner.width(), 46.0));
     let painter = ui.painter().with_clip_rect(inner);
 
     painter.text(
-        egui::pos2(row.left(), row.center().y),
+        egui::pos2(row.left(), row.top() + 11.0),
         egui::Align2::LEFT_CENTER,
         tr_l10n(lang, "style.pack.list_title"),
         egui::FontId::proportional(15.0),
         theme::INK,
     );
 
-    // 原文仅作为右侧单独按钮，不列入风格卡片。
+    painter.text(
+        egui::pos2(row.left(), row.top() + 31.0),
+        egui::Align2::LEFT_CENTER,
+        tr_l10n(lang, "style.pack.list_desc"),
+        egui::FontId::proportional(12.0),
+        theme::INK_3,
+    );
+
+    // The raw pack is adjacent to the left title, not in the right-hand toolbar.
     let raw_index = vm
         .style_packs
         .iter()
@@ -143,7 +151,12 @@ fn list_header(
     };
     let raw_width = layout::text_width(ui, &raw_label, 12.0) + 24.0;
     let raw_rect = egui::Rect::from_min_size(
-        egui::pos2(row.right() - raw_width, row.center().y - 12.0),
+        egui::pos2(
+            row.left()
+                + layout::text_width(ui, tr_l10n(lang, "style.pack.list_title"), 15.0)
+                + 14.0,
+            row.top(),
+        ),
         egui::vec2(raw_width, 24.0),
     );
     let raw_response = ui.interact(
@@ -151,21 +164,27 @@ fn list_header(
         ui.id().with("style-raw-tab"),
         egui::Sense::click(),
     );
-    if raw_active {
-        painter.rect_filled(raw_rect, egui::CornerRadius::same(6), theme::BLUE);
-    } else if raw_response.hovered() {
-        painter.rect_filled(raw_rect, egui::CornerRadius::same(6), theme::SURFACE_2);
-    }
+    painter.rect_filled(
+        raw_rect,
+        egui::CornerRadius::same(12),
+        if raw_active || raw_response.hovered() {
+            theme::SURFACE_2
+        } else {
+            theme::SURFACE
+        },
+    );
+    painter.rect_stroke(
+        raw_rect,
+        egui::CornerRadius::same(12),
+        egui::Stroke::new(0.8, theme::LINE),
+        egui::StrokeKind::Inside,
+    );
     painter.text(
         raw_rect.center(),
         egui::Align2::CENTER_CENTER,
         &raw_label,
         egui::FontId::proportional(12.0),
-        if raw_active {
-            egui::Color32::WHITE
-        } else {
-            theme::INK_3
-        },
+        if raw_active { theme::INK } else { theme::INK_3 },
     );
     if raw_response.clicked() && !raw_active {
         if let Some(index) = raw_index {
@@ -175,24 +194,16 @@ fn list_header(
     }
 
     // Workflow switch + pack counter, right aligned.
-    let count = fmt_l10n(
-        lang,
-        "style.pack.list_count",
-        &[&vm
-            .style_packs
-            .iter()
-            .filter(|pack| pack.id != "builtin.raw")
-            .count()],
-    );
+    let count = fmt_l10n(lang, "style.pack.list_count", &[&vm.style_packs.len()]);
     let count_size = layout::pill_size(ui, &count);
     let count_rect = egui::Rect::from_min_size(
         egui::pos2(
-            raw_rect.left() - 8.0 - count_size.x,
+            row.right() - count_size.x,
             row.center().y - count_size.y / 2.0,
         ),
         count_size,
     );
-    layout::paint_pill(&painter, count_rect, &count, PillTone::Gray);
+    layout::paint_pill(&painter, count_rect, &count, PillTone::Outline);
 
     let options = [
         tr_l10n(lang, "style.pack.dictation_tab"),
@@ -334,9 +345,67 @@ fn style_pack_card(
     );
 
     let inner = rect.shrink(PACK_CARD_PADDING);
-    let mut x = inner.left();
+    // Icon picker (Tauri `StylePackIconPicker`): a 24px icon button with a
+    // pencil badge, plus a reset cross once a custom icon is stored.
+    let icon_rect = egui::Rect::from_min_size(inner.min, egui::vec2(24.0, 24.0));
+    if let Some(texture) = pack
+        .icon_data_url
+        .as_deref()
+        .and_then(|url| layout::style_pack_icon_texture(ui.ctx(), &pack.id, url))
+    {
+        ui.painter().image(
+            texture.id(),
+            icon_rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    } else {
+        let default = match pack.base_mode.as_str() {
+            "raw" => IconName::Mic,
+            "light" => IconName::Feather,
+            "structured" => IconName::Layout,
+            _ => IconName::Doc,
+        };
+        icons::draw_icon(ui, icon_rect.center(), default, theme::INK_2);
+    }
+    icons::draw_icon(
+        ui,
+        icon_rect.right_bottom() - egui::vec2(3.0, 3.0),
+        IconName::Pencil,
+        theme::INK_3,
+    );
+    if ui
+        .interact(
+            icon_rect,
+            ui.id().with(("style-icon", index)),
+            egui::Sense::click(),
+        )
+        .on_hover_text(fmt_l10n(lang, "style.pack.uploadIcon", &[&pack.name]))
+        .clicked()
+    {
+        actions.push(FrontendAction::StyleChooseIcon(index));
+    }
+    if pack.icon_data_url.is_some() {
+        let reset_rect = egui::Rect::from_min_size(
+            egui::pos2(inner.right() - 16.0, inner.top()),
+            egui::vec2(16.0, 16.0),
+        );
+        icons::draw_icon(ui, reset_rect.center(), IconName::Close, theme::INK_3);
+        if ui
+            .interact(
+                reset_rect,
+                ui.id().with(("style-icon-reset", index)),
+                egui::Sense::click(),
+            )
+            .on_hover_text(tr_l10n(lang, "style.pack.resetIcon"))
+            .clicked()
+        {
+            actions.push(FrontendAction::StyleResetIcon(index));
+        }
+    }
 
     // Name, then the builtin / current badges.
+    let mut x = inner.left() + 32.0;
     painter.text(
         egui::pos2(x, inner.top()),
         egui::Align2::LEFT_TOP,

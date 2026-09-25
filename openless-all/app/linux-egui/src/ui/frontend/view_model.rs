@@ -7,6 +7,7 @@ pub enum Page {
     #[default]
     Overview,
     History,
+    QuickNote,
     Vocab,
     Style,
     Marketplace,
@@ -52,6 +53,8 @@ pub enum FrontendAction {
     HistorySelect(usize),
     /// Re-read the history list from Core.
     HistoryRefresh,
+    /// Start or finish a permanent quick-note recording through Core.
+    QuickNoteToggle,
     /// Ask for confirmation before clearing all history.
     HistoryRequestClear,
     /// Ask for confirmation before deleting one entry.
@@ -99,6 +102,10 @@ pub enum FrontendAction {
     },
     /// Style pack activated.
     StyleActivate(usize),
+    /// Dismiss / restore the shortcut card on the Quick Note page.
+    QuickNoteShortcutHidden(bool),
+    StyleChooseIcon(usize),
+    StyleResetIcon(usize),
     /// Style pack exported.
     StyleExport(usize),
     /// Style pack editor opened.
@@ -275,6 +282,7 @@ pub enum ShortcutField {
     Dictation,
     Translation,
     Qa,
+    QuickNote,
     SwitchStyle,
     OpenApp,
     CodingAgentVoice,
@@ -517,6 +525,8 @@ pub enum HistoryConfirm {
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug, Default)]
 pub struct HistoryEntry {
     pub id: String,
+    pub quick_note: bool,
+    pub error_code: Option<String>,
     pub created_at: String,
     /// Base polish mode; drives the list pill tone (raw renders as outline).
     pub mode: OverviewMode,
@@ -542,6 +552,10 @@ pub struct HistoryEntry {
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct StylePack {
     pub id: String,
+    pub icon_path: Option<String>,
+    pub icon_data_url: Option<String>,
+    /// `raw` / `light` / `structured` / `formal`; picks the default icon.
+    pub base_mode: String,
     pub name: String,
     pub description: String,
     pub tags: Vec<String>,
@@ -645,6 +659,9 @@ pub struct FrontendViewModel {
     pub history_query: String,
     pub history_selected: usize,
     pub history_entries: Vec<HistoryEntry>,
+    pub quick_note_recording: bool,
+    /// Whether the dismissible shortcut card on the Quick Note page is hidden.
+    pub quick_note_shortcut_hidden: bool,
     pub history_loading: bool,
     pub history_error: Option<String>,
     /// Set while a destructive action awaits confirmation (clear-all / delete).
@@ -659,6 +676,8 @@ pub struct FrontendViewModel {
     // Vocab
     pub vocab_entries: Vec<VocabEntry>,
     pub vocab_rules: Vec<CorrectionRule>,
+    /// 纠正规则页的「只看自动收集」筛选（Tauri 的 `onlyLearnedRules`）。
+    pub vocab_rules_only_learned: bool,
     /// 0 = all, 1 = auto-collected, 2 = manual.
     pub vocab_filter: usize,
     pub vocab_query: String,
@@ -776,6 +795,7 @@ pub struct FrontendViewModel {
     pub dictation_hotkey: String,
     /// Display label for the selection-ask popup shortcut.
     pub qa_hotkey: String,
+    pub quick_note_hotkey: String,
     /// Display label for the translation modifier shortcut.
     pub translation_hotkey: String,
     /// Display label for the switch-style shortcut.
@@ -807,6 +827,8 @@ impl Default for FrontendViewModel {
             history_query: String::new(),
             history_selected: 0,
             history_entries: Vec::new(),
+            quick_note_recording: false,
+            quick_note_shortcut_hidden: false,
             history_loading: true,
             history_error: None,
             history_confirm: None,
@@ -817,6 +839,7 @@ impl Default for FrontendViewModel {
             history_repolish_error: None,
             vocab_entries: Vec::new(),
             vocab_rules: Vec::new(),
+            vocab_rules_only_learned: false,
             vocab_filter: 0,
             vocab_query: String::new(),
             vocab_input: String::new(),
@@ -893,6 +916,7 @@ impl Default for FrontendViewModel {
             permissions: SettingsPermissions::default(),
             dictation_hotkey: String::new(),
             qa_hotkey: String::new(),
+            quick_note_hotkey: String::new(),
             translation_hotkey: String::new(),
             switch_style_hotkey: String::new(),
             open_app_hotkey: String::new(),

@@ -20,6 +20,8 @@ pub enum IconName {
     Trash,
     Refresh,
     Download,
+    Upload,
+    Plus,
     Play,
     Stop,
     /// 浮窗用：关闭 ✕、确认 ✓、发送 ↑、空状态对话气泡、用户头像占位。
@@ -33,6 +35,11 @@ pub enum IconName {
     /// 横向三点（列表/详情行的「…」操作菜单）。
     More,
     ChevronRight,
+    /// 风格包默认图标（lucide `feather` / `layout` / `file-text`）。
+    Feather,
+    Layout,
+    Doc,
+    Pencil,
 }
 
 /// Draw an icon centred at `center` with the given `color`.
@@ -144,6 +151,31 @@ pub fn draw_icon(ui: &egui::Ui, center: egui::Pos2, icon: IconName, color: egui:
             ));
             p.line_segment([pt(12.0, 15.0), pt(12.0, 3.0)], stroke);
         }
+        IconName::Upload => {
+            let s = 0.54;
+            let pt = |x: f32, y: f32| center + egui::vec2((x - 12.0) * s, (y - 12.0) * s);
+            p.add(egui::Shape::line(
+                [
+                    pt(3.0, 15.0),
+                    pt(3.0, 19.0),
+                    pt(5.0, 21.0),
+                    pt(19.0, 21.0),
+                    pt(21.0, 19.0),
+                    pt(21.0, 15.0),
+                ]
+                .to_vec(),
+                stroke,
+            ));
+            p.add(egui::Shape::line(
+                [pt(7.0, 9.0), pt(12.0, 4.0), pt(17.0, 9.0)].to_vec(),
+                stroke,
+            ));
+            p.line_segment([pt(12.0, 4.0), pt(12.0, 16.0)], stroke);
+        }
+        IconName::Plus => {
+            p.line_segment([point(-5.0, 0.0), point(5.0, 0.0)], stroke);
+            p.line_segment([point(0.0, -5.0), point(0.0, 5.0)], stroke);
+        }
         IconName::Play => {
             let s = 0.54;
             let stroke = egui::Stroke::new(1.0, color);
@@ -211,6 +243,126 @@ pub fn draw_icon(ui: &egui::Ui, center: egui::Pos2, icon: IconName, color: egui:
                 ),
             ));
             p.line_segment([point(4.0, 6.5), point(4.0, 19.5)], stroke);
+        }
+        // lucide `feather`：叶片轮廓 + 斜向羽轴 + 一小段横羽。
+        IconName::Feather => {
+            let s = 20.0 / 24.0;
+            p.add(egui::Shape::line(
+                [
+                    (12.67, 19.0),
+                    (14.09, 18.41),
+                    (20.24, 12.24),
+                    (21.42, 9.09),
+                    (20.24, 5.94),
+                    (17.09, 4.76),
+                    (13.94, 5.94),
+                    (5.59, 9.91),
+                    (5.0, 11.33),
+                    (5.0, 18.0),
+                    (6.0, 19.0),
+                    (12.67, 19.0),
+                ]
+                .into_iter()
+                .map(|(x, y)| center + egui::vec2((x - 12.0) * s, (y - 12.0) * s))
+                .collect(),
+                stroke,
+            ));
+            p.line_segment(
+                [
+                    center + egui::vec2((16.0 - 12.0) * s, (8.0 - 12.0) * s),
+                    center + egui::vec2((2.0 - 12.0) * s, (22.0 - 12.0) * s),
+                ],
+                stroke,
+            );
+            p.line_segment(
+                [
+                    center + egui::vec2((17.5 - 12.0) * s, (15.0 - 12.0) * s),
+                    center + egui::vec2((9.0 - 12.0) * s, (15.0 - 12.0) * s),
+                ],
+                stroke,
+            );
+        }
+        // lucide `layout`：外框 + 顶部横线 + 左侧竖线。
+        IconName::Layout => {
+            let s = 18.0 / 24.0;
+            let rect = egui::Rect::from_center_size(center, egui::vec2(18.0, 18.0) * s);
+            p.rect_stroke(
+                rect,
+                egui::CornerRadius::same(2),
+                stroke,
+                egui::StrokeKind::Middle,
+            );
+            p.line_segment(
+                [
+                    egui::pos2(rect.left(), center.y - 3.0 * s),
+                    egui::pos2(rect.right(), center.y - 3.0 * s),
+                ],
+                stroke,
+            );
+            p.line_segment(
+                [
+                    egui::pos2(center.x - 3.0 * s, center.y - 3.0 * s),
+                    egui::pos2(center.x - 3.0 * s, rect.bottom()),
+                ],
+                stroke,
+            );
+        }
+        // lucide `file-text`：折角文档 + 两条文本线。
+        IconName::Doc => {
+            let s = 19.0 / 24.0;
+            let path = |x: f32, y: f32| center + egui::vec2((x - 12.0) * s, (y - 12.0) * s);
+            p.add(egui::Shape::line(
+                vec![
+                    path(15.0, 2.0),
+                    path(6.0, 2.0),
+                    path(4.0, 4.0),
+                    path(4.0, 20.0),
+                    path(6.0, 22.0),
+                    path(18.0, 22.0),
+                    path(20.0, 20.0),
+                    path(20.0, 7.0),
+                    path(15.0, 2.0),
+                ],
+                stroke,
+            ));
+            p.add(egui::Shape::line(
+                vec![
+                    path(14.0, 2.0),
+                    path(14.0, 6.0),
+                    path(16.0, 8.0),
+                    path(20.0, 8.0),
+                ],
+                stroke,
+            ));
+            for y in [13.0, 17.0] {
+                p.line_segment([path(8.0, y), path(16.0, y)], stroke);
+            }
+        }
+        // lucide `pencil`：图标按钮右下角的「可编辑」角标。
+        IconName::Pencil => {
+            let s = 11.0 / 24.0;
+            let path = |x: f32, y: f32| center + egui::vec2((x - 12.0) * s, (y - 12.0) * s);
+            p.add(egui::Shape::line(
+                vec![
+                    path(21.17, 2.83),
+                    path(18.34, 2.83),
+                    path(16.4, 4.77),
+                    path(19.23, 7.6),
+                    path(21.17, 5.66),
+                    path(21.17, 2.83),
+                ],
+                stroke,
+            ));
+            p.add(egui::Shape::line(
+                vec![
+                    path(16.4, 4.77),
+                    path(3.0, 18.17),
+                    path(3.0, 21.0),
+                    path(5.83, 21.0),
+                    path(19.23, 7.6),
+                ],
+                stroke,
+            ));
         }
         IconName::Style => {
             let s = 2.0 / 3.0;

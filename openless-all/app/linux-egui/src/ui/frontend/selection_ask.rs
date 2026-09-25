@@ -199,35 +199,45 @@ fn save_history_card(
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 92.0), egui::Sense::hover());
     layout::card(ui, rect, CARD_PADDING, |ui, inner| {
         let painter = ui.painter().with_clip_rect(inner);
-        icons::draw_icon(
-            ui,
-            egui::pos2(inner.left() + 10.0, inner.center().y),
-            IconName::History,
-            theme::INK_3,
+        // Tauri `.ol-selection-ask-history-icon`：40×40 圆角方块 + 居中的 20px 图标。
+        let icon_box = egui::Rect::from_min_size(
+            egui::pos2(inner.left(), inner.center().y - 20.0),
+            egui::vec2(40.0, 40.0),
         );
-        painter.text(
-            egui::pos2(inner.left() + 34.0, inner.top() + 4.0),
-            egui::Align2::LEFT_TOP,
+        painter.rect_filled(icon_box, egui::CornerRadius::same(10), theme::SURFACE_2);
+        icons::draw_icon(ui, icon_box.center(), IconName::History, theme::INK_3);
+        // gap 14（`.ol-selection-ask-history` 的 `gap`）。
+        let text_left = icon_box.right() + 14.0;
+        let toggle_rect = egui::Rect::from_min_size(
+            egui::pos2(inner.right() - 40.0, inner.center().y - 12.0),
+            egui::vec2(40.0, 24.0),
+        );
+        let text_width = (toggle_rect.left() - 14.0 - text_left).max(40.0);
+        let title = layout::text_galley(
+            ui,
             tr_l10n(lang, "selection_ask.history_title"),
-            egui::FontId::proportional(13.5),
             theme::INK,
+            13.0,
+            text_width,
+            2,
         );
         let desc = layout::text_galley(
             ui,
             tr_l10n(lang, "selection_ask.history_desc"),
-            theme::INK_4,
-            11.5,
-            (inner.width() - 34.0 - 55.0).max(40.0),
+            theme::INK_3,
+            12.0,
+            text_width,
             3,
         );
+        // 标题在上、说明在下，整块在卡片内垂直居中（`align-items: center`）。
+        let title_height = title.size().y;
+        let block_height = title_height + 5.0 + desc.size().y;
+        let block_top = inner.center().y - block_height / 2.0;
+        painter.galley(egui::pos2(text_left, block_top), title, theme::INK);
         painter.galley(
-            egui::pos2(inner.left() + 34.0, inner.top() + 26.0),
+            egui::pos2(text_left, block_top + title_height + 5.0),
             desc,
-            theme::INK_4,
-        );
-        let toggle_rect = egui::Rect::from_min_size(
-            egui::pos2(inner.right() - 40.0, inner.center().y - 11.0),
-            egui::vec2(40.0, 22.0),
+            theme::INK_3,
         );
         if layout::toggle(
             ui,

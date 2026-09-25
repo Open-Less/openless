@@ -27,9 +27,10 @@ use openless_linux_egui::{fmt_l10n, tr_l10n, Lang};
 use super::format;
 use super::icons::{self, IconName};
 use super::layout::{self, ButtonKind, PillTone};
+use super::settings;
 use super::theme;
 use super::view_model::{
-    FrontendAction, FrontendViewModel, HistoryConfirm, HistoryEntry, OverviewMode,
+    FrontendAction, FrontendViewModel, HistoryConfirm, HistoryEntry, OverviewMode, ShortcutField,
 };
 
 const GAP: f32 = 14.0;
@@ -47,13 +48,30 @@ fn hover_fill() -> egui::Color32 {
 
 // ── Entry point ─────────────────────────────────────────────────────────────
 
-pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
+pub fn page(
+    ui: &mut egui::Ui,
+    vm: &mut FrontendViewModel,
+    actions: &mut Vec<FrontendAction>,
+    quick_notes_only: bool,
+) {
     let width = (ui.available_width() - 24.0).max(1.0);
     ui.set_min_width(width);
     ui.set_max_width(width);
     let lang = vm.lang;
 
-    header(ui, width, lang, actions);
+    // Tauri `QuickNote.tsx` puts the dismissible shortcut card above the list.
+    if quick_notes_only {
+        quick_note_shortcut_card(ui, width, vm, actions);
+    }
+
+    header(
+        ui,
+        width,
+        lang,
+        vm.quick_note_recording,
+        quick_notes_only,
+        actions,
+    );
     ui.add_space(GAP);
 
     let body_height = ui.available_height().max(260.0);
@@ -78,7 +96,7 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
         )
     };
 
-    let filtered = filtered_indices(vm);
+    let filtered = filtered_indices(vm, quick_notes_only);
     list_card(ui, list_rect, vm, &filtered, lang, actions);
     detail_card(ui, detail_rect, vm, &filtered, lang, actions);
 
@@ -87,34 +105,150 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
     }
 }
 
+/// Dismissible shortcut card for the Quick Note page. Hidden state persists in
+/// `linux-ui-state.json`; when hidden a ghost button brings it back.
+fn quick_note_shortcut_card(
+    ui: &mut egui::Ui,
+    width: f32,
+    vm: &mut FrontendViewModel,
+    actions: &mut Vec<FrontendAction>,
+) {
+    let lang = vm.lang;
+    if vm.quick_note_shortcut_hidden {
+        let show = tr_l10n(lang, "quickNote.showShortcut");
+        let button_width = layout::text_width(ui, show, 12.0) + 40.0;
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 32.0), egui::Sense::hover());
+        let button = egui::Rect::from_min_size(
+            egui::pos2(rect.right() - button_width, rect.top()),
+            egui::vec2(button_width, 28.0),
+        );
+        if layout::action_button(ui, button, show, Some(IconName::Bolt), ButtonKind::Ghost)
+            .clicked()
+        {
+            actions.push(FrontendAction::QuickNoteShortcutHidden(false));
+        }
+        ui.add_space(GAP);
+        return;
+    }
+
+    egui::Frame::new()
+        .fill(theme::SURFACE)
+        .stroke(egui::Stroke::new(0.5, theme::LINE))
+        .corner_radius(egui::CornerRadius::same(14))
+        .inner_margin(egui::Margin::symmetric(18, 18))
+        .show(ui, |ui| {
+            ui.set_width((width - 36.0).max(1.0));
+            let (row, _) = ui
+                .allocate_exact_size(egui::vec2(ui.available_width(), 20.0), egui::Sense::hover());
+            ui.painter().text(
+                egui::pos2(row.left(), row.center().y),
+                egui::Align2::LEFT_CENTER,
+                tr_l10n(lang, "quickNote.shortcutTitle"),
+                egui::FontId::proportional(13.0),
+                theme::INK,
+            );
+            let close = egui::Rect::from_min_size(
+                egui::pos2(row.right() - 20.0, row.top()),
+                egui::vec2(20.0, 20.0),
+            );
+            icons::draw_icon(ui, close.center(), IconName::Close, theme::INK_3);
+            if ui
+                .interact(
+                    close,
+                    ui.id().with("quick-note-shortcut-hide"),
+                    egui::Sense::click(),
+                )
+                .on_hover_text(tr_l10n(lang, "common.hide"))
+                .clicked()
+            {
+                actions.push(FrontendAction::QuickNoteShortcutHidden(true));
+            }
+            ui.label(
+                egui::RichText::new(tr_l10n(lang, "quickNote.shortcutDesc"))
+                    .size(11.0)
+                    .color(theme::INK_4),
+            );
+            ui.add_space(8.0);
+            let row = settings::ShortcutRow::new(
+                ShortcutField::QuickNote,
+                "",
+                vm.quick_note_hotkey.clone(),
+                true,
+                String::new(),
+            );
+            ui.horizontal(|ui| settings::shortcut_control(ui, vm, actions, &row));
+            settings::shortcut_menu(ui, vm, actions, &row);
+        });
+    ui.add_space(GAP);
+}
+
 // ── Header ──────────────────────────────────────────────────────────────────
 
-fn header(ui: &mut egui::Ui, width: f32, lang: Lang, actions: &mut Vec<FrontendAction>) {
+fn header(
+    ui: &mut egui::Ui,
+    width: f32,
+    lang: Lang,
+    recording: bool,
+    quick_note: bool,
+    actions: &mut Vec<FrontendAction>,
+) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 84.0), egui::Sense::hover());
     let painter = ui.painter().with_clip_rect(rect);
     painter.text(
         egui::pos2(rect.left(), rect.top() + 2.0),
         egui::Align2::LEFT_TOP,
-        tr_l10n(lang, "history.kicker"),
+        tr_l10n(
+            lang,
+            if quick_note {
+                "quickNote.kicker"
+            } else {
+                "history.kicker"
+            },
+        ),
         egui::FontId::proportional(11.0),
         theme::INK_4,
     );
     painter.text(
         egui::pos2(rect.left(), rect.top() + 18.0),
         egui::Align2::LEFT_TOP,
-        tr_l10n(lang, "history.title"),
+        tr_l10n(
+            lang,
+            if quick_note {
+                "quickNote.title"
+            } else {
+                "history.title"
+            },
+        ),
         egui::FontId::proportional(26.0),
         theme::INK,
     );
     painter.text(
         egui::pos2(rect.left(), rect.top() + 56.0),
         egui::Align2::LEFT_TOP,
-        tr_l10n(lang, "history.desc"),
+        tr_l10n(
+            lang,
+            if quick_note {
+                "quickNote.desc"
+            } else {
+                "history.desc"
+            },
+        ),
         egui::FontId::proportional(13.0),
         theme::INK_3,
     );
 
-    let clear = tr_l10n(lang, "common.clear");
+    let clear = tr_l10n(
+        lang,
+        if quick_note {
+            if recording {
+                "quickNote.finish"
+            } else {
+                "quickNote.start"
+            }
+        } else {
+            "common.clear"
+        },
+    );
     let refresh = tr_l10n(lang, "common.refresh");
     let clear_width = layout::text_width(ui, clear, 12.5) + 40.0;
     let refresh_width = layout::text_width(ui, refresh, 12.5) + 40.0;
@@ -142,27 +276,40 @@ fn header(ui: &mut egui::Ui, width: f32, lang: Lang, actions: &mut Vec<FrontendA
         ui,
         clear_rect,
         clear,
-        Some(IconName::Trash),
-        ButtonKind::Ghost,
+        Some(if quick_note {
+            IconName::Mic
+        } else {
+            IconName::Trash
+        }),
+        if quick_note {
+            ButtonKind::Blue
+        } else {
+            ButtonKind::Ghost
+        },
     )
     .clicked()
     {
-        actions.push(FrontendAction::HistoryRequestClear);
+        actions.push(if quick_note {
+            FrontendAction::QuickNoteToggle
+        } else {
+            FrontendAction::HistoryRequestClear
+        });
     }
 }
 
 // ── List ────────────────────────────────────────────────────────────────────
 
 /// Indices into `history_entries` that match the current search query.
-fn filtered_indices(vm: &FrontendViewModel) -> Vec<usize> {
+fn filtered_indices(vm: &FrontendViewModel, quick_notes_only: bool) -> Vec<usize> {
     let query = vm.history_query.trim().to_lowercase();
     vm.history_entries
         .iter()
         .enumerate()
         .filter(|(_, entry)| {
-            query.is_empty()
-                || entry.raw_transcript.to_lowercase().contains(&query)
-                || entry.final_text.to_lowercase().contains(&query)
+            (!quick_notes_only || entry.quick_note)
+                && (query.is_empty()
+                    || entry.raw_transcript.to_lowercase().contains(&query)
+                    || entry.final_text.to_lowercase().contains(&query))
         })
         .map(|(index, _)| index)
         .collect()
@@ -317,6 +464,18 @@ fn row(
     let preview_text = entry.final_text.split('\n').next().unwrap_or("");
     let preview_text = if preview_text.trim().is_empty() {
         entry.raw_transcript.split('\n').next().unwrap_or("")
+    } else {
+        preview_text
+    };
+    let preview_text = if preview_text.is_empty() && entry.quick_note {
+        tr_l10n(
+            lang,
+            if entry.error_code.as_deref() == Some("recording") {
+                "quickNote.recording"
+            } else {
+                "quickNote.noTranscript"
+            },
+        )
     } else {
         preview_text
     };
@@ -641,7 +800,14 @@ fn detail_body(
         entry.final_text.as_str()
     };
     let styled_text = if styled_source.trim().is_empty() {
-        tr_l10n(lang, "history.raw_empty")
+        tr_l10n(
+            lang,
+            if entry.quick_note {
+                "quickNote.noTranscript"
+            } else {
+                "history.raw_empty"
+            },
+        )
     } else {
         styled_source
     };

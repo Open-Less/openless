@@ -16,6 +16,7 @@ struct HotkeyPressIds {
     dictation: std::sync::atomic::AtomicU64,
     less_computer: std::sync::atomic::AtomicU64,
     qa: std::sync::atomic::AtomicBool,
+    quick_note: std::sync::atomic::AtomicBool,
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -63,6 +64,7 @@ pub enum LinuxHotkeyEvent {
         at: std::time::Instant,
     },
     QaPressed,
+    QuickNotePressed,
     SelectionPolishPressed,
     TranslationPressed {
         symbol: u32,
@@ -341,6 +343,20 @@ fn event_from_signal(
         ("QaShortcutEvent", false) => {
             press_ids
                 .qa
+                .store(false, std::sync::atomic::Ordering::Release);
+            None
+        }
+        ("QuickNoteEvent", true)
+            if !press_ids
+                .quick_note
+                .swap(true, std::sync::atomic::Ordering::AcqRel) =>
+        {
+            Some(LinuxHotkeyEvent::QuickNotePressed)
+        }
+        ("QuickNoteEvent", true) => None,
+        ("QuickNoteEvent", false) => {
+            press_ids
+                .quick_note
                 .store(false, std::sync::atomic::Ordering::Release);
             None
         }

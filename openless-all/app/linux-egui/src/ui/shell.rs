@@ -9,6 +9,7 @@ pub enum Page {
     #[default]
     Overview,
     History,
+    QuickNote,
     Vocabulary,
     Styles,
     Marketplace,

@@ -174,6 +174,11 @@ impl LinuxSettingsEffects for Fcitx5SettingsEffects {
         // fcitx 的 `Key::check` 要求修饰位精确相等，分号与 `Ctrl+Shift+;` 并不
         // 冲突（见 tests/fcitx5_config_contract.rs 锁死的不变量）。
         apply_action_hotkey("SetQaHotkeyRaw", target.qa.as_ref())?;
+        // Older installed plugins may not know the new Quick Note method.
+        tolerate_optional_fcitx_method(apply_action_hotkey(
+            "SetQuickNoteHotkeyRaw",
+            target.quick_note.as_ref(),
+        ))?;
         apply_action_hotkey(
             "SetSelectionPolishHotkeyRaw",
             target.selection_polish.as_ref(),
@@ -633,6 +638,7 @@ mod tests {
                 modifiers: vec!["alt".into()],
             },
             dictation_mode: openless_core::shared_types::HotkeyMode::Toggle,
+            quick_note: None,
             qa: Some(ShortcutBinding {
                 primary: ":".into(),
                 modifiers: vec!["ctrl".into(), "shift".into()],

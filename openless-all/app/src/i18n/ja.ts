@@ -157,6 +157,7 @@ export const ja: typeof zhCN = {
   nav: {
     overview: '概要',
     history: '履歴',
+    quickNote: '速記',
     vocab: '辞書',
     style: 'スタイル',
     marketplace: 'マーケット',
@@ -867,6 +868,15 @@ export const ja: typeof zhCN = {
       title: '使い方',
       step2: '任意のアプリでテキストを選択。',
     },
+  },
+  quickNote: {
+    kicker: '速記', title: '速記',
+    desc: '音声を保持し、再生・書き出し・再文字起こし・再推敲に対応します。',
+    start: '録音を開始', finish: '録音を終了',
+    noTranscript: 'まだ文字起こしがありません。', recording: '録音中…',
+    shortcutTitle: '速記ショートカット',
+    shortcutDesc: '一度押して録音を開始し、もう一度押して保存します。',
+    showShortcut: '速記ショートカットを表示',
   },
   settings: {
     selectionWorkspace: {

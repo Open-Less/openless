@@ -155,6 +155,7 @@ export const ko: typeof zhCN = {
   nav: {
     overview: '개요',
     history: '기록',
+    quickNote: '속기',
     vocab: '사전',
     style: '스타일',
     marketplace: '마켓',
@@ -865,6 +866,15 @@ export const ko: typeof zhCN = {
       title: '사용 방법',
       step2: '아무 앱에서 텍스트 선택.',
     },
+  },
+  quickNote: {
+    kicker: '속기', title: '속기',
+    desc: '오디오를 영구 보관하고 재생·내보내기·재전사·다시 다듬기를 지원합니다.',
+    start: '녹음 시작', finish: '녹음 종료',
+    noTranscript: '아직 전사 내용이 없습니다.', recording: '녹음 중…',
+    shortcutTitle: '속기 단축키',
+    shortcutDesc: '한 번 눌러 녹음하고 다시 눌러 저장합니다.',
+    showShortcut: '속기 단축키 표시',
   },
   settings: {
     selectionWorkspace: {

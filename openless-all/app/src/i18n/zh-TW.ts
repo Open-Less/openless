@@ -159,6 +159,7 @@ export const zhTW: typeof zhCN = {
   nav: {
     overview: '概覽',
     history: '歷史',
+    quickNote: '速記',
     vocab: '詞典',
     style: '風格',
     marketplace: '風格市場',
@@ -852,6 +853,15 @@ export const zhTW: typeof zhCN = {
       title: '使用方法',
       step2: '在任意 app 選中文字。',
     },
+  },
+  quickNote: {
+    kicker: '速記', title: '速記',
+    desc: '永久保留錄音，支援回放、匯出、重新轉錄與重新潤色。',
+    start: '開始錄音', finish: '完成錄音',
+    noTranscript: '尚未有轉錄內容。', recording: '錄音中…',
+    shortcutTitle: '速記快捷鍵',
+    shortcutDesc: '按一下開始永久錄音，再按一下結束並保存。',
+    showShortcut: '顯示速記快捷鍵',
   },
   settings: {
     selectionWorkspace: {

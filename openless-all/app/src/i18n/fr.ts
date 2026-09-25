@@ -166,6 +166,7 @@ export const fr: typeof zhCN = {
   nav: {
     overview: 'Vue d’ensemble',
     history: 'Historique',
+    quickNote: 'Notes vocales',
     vocab: 'Dictionnaire',
     style: 'Style',
     marketplace: 'Catalogue',
@@ -906,6 +907,15 @@ export const fr: typeof zhCN = {
       title: 'Mode d’emploi',
       step2: 'Sélectionnez du texte dans une application.',
     },
+  },
+  quickNote: {
+    kicker: 'Notes vocales', title: 'Notes vocales',
+    desc: 'Audio conservé durablement avec lecture, export, retranscription et réécriture.',
+    start: 'Démarrer', finish: 'Terminer',
+    noTranscript: 'Aucune transcription pour le moment.', recording: 'Enregistrement…',
+    shortcutTitle: 'Raccourci de note vocale',
+    shortcutDesc: 'Appuyez une fois pour enregistrer, puis à nouveau pour sauvegarder.',
+    showShortcut: 'Afficher le raccourci de note rapide',
   },
   settings: {
     selectionWorkspace: {

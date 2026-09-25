@@ -28,6 +28,7 @@ use crate::hotkeys::LinuxHotkeyEvent;
 pub enum LocalHotkey {
     Dictation,
     Qa,
+    QuickNote,
     Translation,
     SwitchStyle,
     SelectionPolish,
@@ -97,9 +98,10 @@ pub fn match_hotkey(
         // 不支持的主键（egui 词表里有、X11 keysym 表里没有）：交给插件那条路。
         return None;
     }
-    let candidates: [(Option<&ShortcutBinding>, LocalHotkey); 7] = [
+    let candidates: [(Option<&ShortcutBinding>, LocalHotkey); 8] = [
         (Some(&target.dictation), LocalHotkey::Dictation),
         (target.qa.as_ref(), LocalHotkey::Qa),
+        (target.quick_note.as_ref(), LocalHotkey::QuickNote),
         (
             target.selection_polish.as_ref(),
             LocalHotkey::SelectionPolish,
@@ -189,6 +191,7 @@ pub fn plugin_event_hotkey(
         | LinuxHotkeyEvent::DictationReleased { .. }
         | LinuxHotkeyEvent::DictationCombined { .. } => LocalHotkey::Dictation,
         LinuxHotkeyEvent::QaPressed => LocalHotkey::Qa,
+        LinuxHotkeyEvent::QuickNotePressed => LocalHotkey::QuickNote,
         LinuxHotkeyEvent::SelectionPolishPressed => LocalHotkey::SelectionPolish,
         LinuxHotkeyEvent::TranslationPressed { symbol, states } => {
             if !shortcut_event_matches(&target.translation, *symbol, *states) {
@@ -326,6 +329,7 @@ mod tests {
             dictation: binding("A", &["alt"]),
             dictation_mode: HotkeyMode::Toggle,
             qa: Some(binding(";", &["ctrl", "shift"])),
+            quick_note: None,
             translation: binding("Z", &["alt"]),
             switch_style: Some(binding("S", &["ctrl", "shift"])),
             open_app: None,

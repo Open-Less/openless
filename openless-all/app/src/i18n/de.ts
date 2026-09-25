@@ -166,6 +166,7 @@ export const de: typeof zhCN = {
   nav: {
     overview: 'Übersicht',
     history: 'Verlauf',
+    quickNote: 'Schnellnotizen',
     vocab: 'Wörterbuch',
     style: 'Stil',
     marketplace: 'Marktplatz',
@@ -899,6 +900,15 @@ export const de: typeof zhCN = {
       title: 'So funktioniert es',
       step2: 'Wähle Text in einer beliebigen App aus.',
     },
+  },
+  quickNote: {
+    kicker: 'Schnellnotizen', title: 'Schnellnotizen',
+    desc: 'Audio dauerhaft behalten, mit Wiedergabe, Export, Neu-Transkription und Überarbeitung.',
+    start: 'Aufnahme starten', finish: 'Aufnahme beenden',
+    noTranscript: 'Noch keine Transkription.', recording: 'Aufnahme läuft …',
+    shortcutTitle: 'Schnellnotizen-Kurzbefehl',
+    shortcutDesc: 'Einmal drücken zum Aufnehmen, erneut drücken zum Speichern.',
+    showShortcut: 'Kurznotiz-Tastenkürzel anzeigen',
   },
   settings: {
     selectionWorkspace: {

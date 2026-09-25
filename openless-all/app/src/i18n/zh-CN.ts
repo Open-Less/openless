@@ -157,6 +157,7 @@ export const zhCN = {
   nav: {
     overview: '概览',
     history: '历史',
+    quickNote: '速记',
     vocab: '词典',
     style: '风格',
     marketplace: '风格市场',
@@ -850,6 +851,15 @@ export const zhCN = {
       title: '使用方法',
       step2: '在任意 app 选中文字。',
     },
+  },
+  quickNote: {
+    kicker: '速记', title: '速记',
+    desc: '永久保留录音，支持回放、导出、重新转录和重新润色。',
+    start: '开始录音', finish: '完成录音',
+    noTranscript: '还没有转写内容。', recording: '录音中…',
+    shortcutTitle: '速记快捷键',
+    shortcutDesc: '按一次开始永久录音，再按一次结束并保存。',
+    showShortcut: '显示速记快捷键',
   },
   settings: {
     selectionWorkspace: {

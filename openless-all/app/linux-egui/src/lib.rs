@@ -116,7 +116,10 @@ pub use single_instance::{
     LinuxLaunchIntent, SingleInstanceBroker, SingleInstanceGuard, SingleInstanceRole,
 };
 pub use tray::{LinuxTray, TrayCommand, TrayError, TrayMicrophone};
-pub use ui_state::{load_locale_pref, save_locale_pref, ui_state_dir, ui_state_path, UiStateError};
+pub use ui_state::{
+    load_locale_pref, load_quick_note_shortcut_hidden, save_locale_pref,
+    save_quick_note_shortcut_hidden, ui_state_dir, ui_state_path, UiStateError,
+};
 pub use updater::{
     install_verified_appimage, install_verified_appimage_with_limit, manifest_urls, AppImageTarget,
     AppImageUpdater, CheckReason, DownloadProgress, InstalledUpdate, LinuxUpdateSupport,
@@ -420,6 +423,7 @@ impl LinuxHost {
                 .dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Combined { press_id, at })
                 .await
                 .map(Some),
+            LinuxHotkeyEvent::QuickNotePressed => Ok(None), // Host toggles the permanent recording.
             LinuxHotkeyEvent::QaPressed => {
                 // 用户报「选区助手快捷键打不开」时，这一行 + 宿主的 ShowQa/HideQa
                 // 日志能直接区分「键没到」和「到了但被隐藏」。

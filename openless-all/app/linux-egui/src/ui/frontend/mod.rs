@@ -57,11 +57,19 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
         match vm.active_page {
             Page::Overview => overview::page(ui, vm, actions),
             Page::Style => style::page(ui, vm, actions),
-            Page::History => history::page(ui, vm, actions),
+            Page::History => history::page(ui, vm, actions, false),
+            Page::QuickNote => history::page(ui, vm, actions, true),
             Page::Vocab => vocab::page(ui, vm, actions),
             page => {
+                // Bound the viewport to the current window, not the previous
+                // frame's content size: after shrinking a large window the
+                // translation guide must remain reachable by scrolling.
                 egui::ScrollArea::vertical()
                     .id_salt("openless-main-scroll")
+                    .max_height(
+                        (body.height() - layout::PAGE_TOP_PADDING - layout::PAGE_BOTTOM_PADDING)
+                            .max(1.0),
+                    )
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         match page {
@@ -79,6 +87,7 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
                             }
                             Page::Overview
                             | Page::History
+                            | Page::QuickNote
                             | Page::Style
                             | Page::Vocab
                             | Page::Settings => {
@@ -281,6 +290,8 @@ mod tests {
         vm.history_entries = vec![
             super::view_model::HistoryEntry {
                 id: "a".into(),
+                quick_note: false,
+                error_code: None,
                 created_at: "2026-01-15T12:34:00+00:00".into(),
                 mode: super::view_model::OverviewMode::Raw,
                 style_label: "raw".into(),
@@ -934,6 +945,9 @@ mod tests {
         let mut vm = FrontendViewModel::default();
         vm.style_packs = vec![
             super::view_model::StylePack {
+                icon_path: None,
+                icon_data_url: None,
+                base_mode: "light".into(),
                 id: "builtin-polish".into(),
                 name: "Polish".into(),
                 description: String::new(),
@@ -944,6 +958,9 @@ mod tests {
                 selection_active: false,
             },
             super::view_model::StylePack {
+                icon_path: None,
+                icon_data_url: None,
+                base_mode: "formal".into(),
                 id: "custom-legal".into(),
                 name: "Legal".into(),
                 description: String::new(),
@@ -1135,6 +1152,72 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn translation_page_stays_inside_its_viewport_and_scrolls_after_a_shrink() {
+        // Regression for "翻译页缩放卡顿、使用方法被遮挡且无法滚动": the page pinned
+        // only `set_min_width`, so after shrinking the window egui kept laying the
+        // two columns (and the four-column guide) out at the previous, larger
+        // width — a growing-width feedback loop that pushed the guide out of the
+        // scrollable area. The page must fit the viewport it is given at every
+        // size, and the guide must stay reachable by scrolling.
+        use openless_linux_egui::Lang;
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: Lang::ZhCn,
+            active_page: Page::Translation,
+            translation_unsupported: false,
+            ..Default::default()
+        };
+
+        let mut scroll_needed = false;
+        for (index, screen) in [
+            egui::vec2(1400.0, 900.0),
+            egui::vec2(1080.0, 700.0),
+            egui::vec2(900.0, 520.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, screen)),
+                ..Default::default()
+            });
+            let viewport = egui::Rect::from_min_size(
+                egui::pos2(220.0, 56.0),
+                egui::vec2((screen.x - 250.0).max(80.0), (screen.y - 80.0).max(80.0)),
+            );
+            let mut measured = None;
+            egui::Area::new(egui::Id::new(("translation-layout", index)))
+                .fixed_pos(viewport.min)
+                .show(&ctx, |ui| {
+                    ui.set_min_size(viewport.size());
+                    ui.set_max_size(viewport.size());
+                    let output = egui::ScrollArea::vertical()
+                        .id_salt("translation-layout-scroll")
+                        .max_height(viewport.height())
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            translation::page(ui, &mut vm, &mut Vec::new());
+                            ui.add_space(32.0);
+                        });
+                    measured = Some((output.content_size, output.inner_rect));
+                });
+            let (content, inner) = measured.expect("the page rendered into the area");
+            assert!(
+                content.x <= inner.width() + 1.0,
+                "the page must not exceed its viewport: content {content:?}, inner {inner:?}"
+            );
+            if content.y > inner.height() {
+                scroll_needed = true;
+            }
+        }
+        assert!(
+            scroll_needed,
+            "at the smallest window the page must be taller than the viewport so the \
+             usage guide stays reachable by scrolling"
+        );
     }
 
     #[test]
@@ -1338,6 +1421,9 @@ mod tests {
         let ctx = egui::Context::default();
         let zh = openless_linux_egui::Lang::ZhCn;
         let pack = |name: &str, is_active: bool| super::view_model::StylePack {
+            icon_path: None,
+            icon_data_url: None,
+            base_mode: "light".into(),
             id: format!("pack-{name}"),
             enabled: true,
             name: name.to_string(),

@@ -3,6 +3,7 @@ fn main() {
     eprintln!("openless-linux-egui is only available on Linux");
 }
 
+mod style_icon;
 #[cfg(target_os = "linux")]
 mod ui;
 
@@ -230,6 +231,7 @@ mod linux_app {
                 merged.dictation_hotkey = draft.dictation_hotkey.clone();
                 merged.hotkey = draft.hotkey.clone();
                 merged.qa_hotkey = draft.qa_hotkey.clone();
+                merged.quick_note_hotkey = draft.quick_note_hotkey.clone();
                 merged.translation_hotkey = draft.translation_hotkey.clone();
                 merged.switch_style_hotkey = draft.switch_style_hotkey.clone();
                 merged.open_app_hotkey = draft.open_app_hotkey.clone();
@@ -632,6 +634,10 @@ mod linux_app {
         vocabulary: Vec<openless_core::DictionaryEntry>,
         correction_rules: Vec<openless_core::CorrectionRule>,
         style_packs: Vec<openless_core::StylePack>,
+        /// `(pack id, icon path)` → data URL. Reading and base64-encoding the
+        /// icon every frame would be pure waste; entries are invalidated by
+        /// the path changing (Core writes a fresh filename per change).
+        style_icon_cache: std::collections::HashMap<(String, String), String>,
         vocab_preset_store: openless_core::VocabPresetStore,
         vocab_presets: Vec<openless_core::VocabPreset>,
         qa_popup: Option<PopupSupervisor>,
@@ -672,6 +678,8 @@ mod linux_app {
         popup_restarts: [PopupRestartBudget; POPUP_KIND_COUNT],
         /// 最近一次下发给窗口/面板的热键配置；变了才重发。
         hotkeys_sent: Option<openless_core::HotkeyRuntimeTarget>,
+        /// 速记页快捷键卡片是否被收起（持久化在 linux-ui-state.json）。
+        quick_note_shortcut_hidden: bool,
         /// 本帧从 UI 收到、待回包的延迟探针序号。
         pending_ui_pongs: Vec<u64>,
         update_manifest: Option<UpdateManifest>,
@@ -720,6 +728,9 @@ mod linux_app {
             let (tx, rx) = mpsc::channel();
             let locale_pref = load_locale_pref();
             let lang = locale_pref.resolve();
+            // The Quick Note shortcut card is dismissible and the choice
+            // survives restarts (upstream keeps it in localStorage).
+            let quick_note_shortcut_hidden = openless_linux_egui::load_quick_note_shortcut_hidden();
             if let Some(tray) = tray.as_ref() {
                 // The tray renders labels in the resolved UI language. It runs
                 // in its own worker, so push the resolved language through the
@@ -779,6 +790,7 @@ mod linux_app {
                         vocabulary: Vec::new(),
                         correction_rules: Vec::new(),
                         style_packs: Vec::new(),
+                        style_icon_cache: std::collections::HashMap::new(),
                         vocab_preset_store: openless_core::VocabPresetStore::default(),
                         vocab_presets: Vec::new(),
                         qa_popup: None,
@@ -800,6 +812,7 @@ mod linux_app {
                         pending_ui_actions: Vec::new(),
                         pending_local_hotkeys: Vec::new(),
                         hotkey_dedupe: openless_linux_egui::HotkeyDeduplicator::default(),
+                        quick_note_shortcut_hidden,
                         popup_restarts: [PopupRestartBudget::default(); POPUP_KIND_COUNT],
                         hotkeys_sent: None,
                         pending_ui_pongs: Vec::new(),
@@ -880,6 +893,7 @@ mod linux_app {
                     vocabulary: Vec::new(),
                     correction_rules: Vec::new(),
                     style_packs: Vec::new(),
+                    style_icon_cache: std::collections::HashMap::new(),
                     vocab_preset_store: openless_core::VocabPresetStore::default(),
                     vocab_presets: Vec::new(),
                     qa_popup: None,
@@ -901,6 +915,7 @@ mod linux_app {
                     pending_ui_actions: Vec::new(),
                     pending_local_hotkeys: Vec::new(),
                     hotkey_dedupe: openless_linux_egui::HotkeyDeduplicator::default(),
+                    quick_note_shortcut_hidden,
                     popup_restarts: [PopupRestartBudget::default(); POPUP_KIND_COUNT],
                     hotkeys_sent: None,
                     pending_ui_pongs: Vec::new(),
@@ -934,6 +949,98 @@ mod linux_app {
             self.native
                 .as_ref()
                 .map(|native| Arc::clone(native.host().backend()))
+        }
+
+        /// Hide / restore the Quick Note shortcut card and persist the choice.
+        fn set_quick_note_shortcut_hidden(&mut self, hidden: bool) {
+            self.quick_note_shortcut_hidden = hidden;
+            self.frontend_vm.quick_note_shortcut_hidden = hidden;
+            if let Err(error) = openless_linux_egui::save_quick_note_shortcut_hidden(hidden) {
+                log::warn!("[ui] cannot persist quick-note shortcut visibility: {error}");
+            }
+        }
+
+        /// Data URLs for every style-pack icon, cached by `(id, icon_path)`.
+        fn style_icon_urls(&mut self) -> Vec<Option<String>> {
+            let backend = self.backend();
+            let mut seen = Vec::new();
+            let urls = self
+                .style_packs
+                .iter()
+                .map(|pack| {
+                    let path = pack.icon_path.clone()?;
+                    let key = (pack.id.clone(), path);
+                    seen.push(key.clone());
+                    if let Some(url) = self.style_icon_cache.get(&key) {
+                        return Some(url.clone());
+                    }
+                    let url = backend
+                        .as_ref()?
+                        .read_style_pack_icon(&pack.id)
+                        .ok()
+                        .flatten();
+                    if let Some(url) = &url {
+                        self.style_icon_cache.insert(key, url.clone());
+                    }
+                    url
+                })
+                .collect();
+            // Drop entries whose icon was replaced or removed.
+            self.style_icon_cache.retain(|key, _| seen.contains(key));
+            urls
+        }
+
+        /// Rasterize an SVG picked by the user and hand the PNG to Core.
+        fn set_style_pack_icon_from_file(&mut self, id: String) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let lang = self.lang;
+            self.spawn_reporting(async move {
+                let bytes = tokio::task::spawn_blocking(|| {
+                    let path = rfd::FileDialog::new()
+                        .add_filter("SVG icon", &["svg"])
+                        .pick_file()?;
+                    std::fs::read(path).ok()
+                })
+                .await
+                .map_err(|error| {
+                    BackendError::new(openless_core::BackendErrorCode::Internal, error.to_string())
+                })?;
+                // Dismissing the picker is not an error and needs no notice.
+                let Some(bytes) = bytes else {
+                    return Ok(String::new());
+                };
+                let png =
+                    tokio::task::spawn_blocking(move || crate::style_icon::rasterize_svg(&bytes))
+                        .await
+                        .map_err(|error| {
+                            BackendError::new(
+                                openless_core::BackendErrorCode::Internal,
+                                error.to_string(),
+                            )
+                        })?
+                        .map_err(|reason| {
+                            log::warn!("[style] rejected icon for {id}: {reason}");
+                            BackendError::new(
+                                openless_core::BackendErrorCode::InvalidArgument,
+                                tr_l10n(lang, "style.pack.iconInvalid"),
+                            )
+                        })?;
+                backend.set_style_pack_icon(&id, Some(&png))?;
+                Ok(tr_l10n(lang, "style.pack.iconSaved").to_string())
+            });
+        }
+
+        fn reset_style_pack_icon(&mut self, id: String) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let lang = self.lang;
+            self.spawn(async move {
+                backend.set_style_pack_icon(&id, None)?;
+                Ok(tr_l10n(lang, "style.pack.resetIcon").to_string())
+            });
         }
 
         fn popup_slot(&mut self, kind: PopupKind) -> &mut Option<PopupSupervisor> {
@@ -1691,6 +1798,21 @@ mod linux_app {
             self.tokio.spawn(async move {
                 let message = future.await.unwrap_or_else(|error| error.to_string());
                 let _ = tx.send(UiResult::Message(message));
+            });
+        }
+
+        /// `spawn` variant for cancellable flows: an empty message means
+        /// "nothing happened", so no notice is posted.
+        fn spawn_reporting<F>(&self, future: F)
+        where
+            F: Future<Output = Result<String, BackendError>> + Send + 'static,
+        {
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let message = future.await.unwrap_or_else(|error| error.to_string());
+                if !message.is_empty() {
+                    let _ = tx.send(UiResult::Message(message));
+                }
             });
         }
 
@@ -2669,9 +2791,45 @@ mod linux_app {
             }
         }
 
+        /// Start/finish a permanent quick note, shared by the button and hotkeys.
+        fn toggle_quick_note(&mut self) {
+            if let Some(backend) = self.backend() {
+                let tx = self.tx.clone();
+                self.tokio.spawn(async move {
+                    let result = if backend.dictation_output_target()
+                        == Some(openless_core::DictationOutputTarget::QuickNote)
+                    {
+                        match backend.snapshot().dictation.session_id {
+                            Some(id) => backend.stop_dictation_session(id).await.map(|_| ()),
+                            None => Err(openless_core::BackendError::new(
+                                openless_core::BackendErrorCode::InvalidState,
+                                "quick note has no active session",
+                            )),
+                        }
+                    } else {
+                        backend
+                            .start_dictation_with_options(openless_core::DictationStartOptions {
+                                output_target: openless_core::DictationOutputTarget::QuickNote,
+                                insert_text: false,
+                                ..Default::default()
+                            })
+                            .await
+                            .map(|_| ())
+                    };
+                    if let Err(error) = result {
+                        let _ = tx.send(UiResult::Message(error.to_string()));
+                    }
+                });
+            }
+        }
+
         /// 宿主自己处理掉的热键（不发往 Core）。返回 true 表示已处理。
         fn intercept_hotkey(&mut self, event: &LinuxHotkeyEvent) -> bool {
             match event {
+                LinuxHotkeyEvent::QuickNotePressed => {
+                    self.toggle_quick_note();
+                    true
+                }
                 LinuxHotkeyEvent::QaPressed => {
                     log::info!("[hotkey] selection-ask hotkey: toggling the panel");
                     self.toggle_qa_panel();
@@ -2744,6 +2902,11 @@ mod linux_app {
                     LocalHotkeyEdgeKind::Pressed | LocalHotkeyEdgeKind::Combined
                 );
                 match &edge.hotkey {
+                    LocalHotkey::QuickNote => {
+                        if single_shot {
+                            self.toggle_quick_note();
+                        }
+                    }
                     LocalHotkey::Qa => {
                         log::info!("[hotkey] local selection-ask hotkey: toggling the panel");
                         self.toggle_qa_panel();
@@ -3514,6 +3677,8 @@ mod linux_app {
             let backend = self.backend();
             let lang = self.lang;
             let permissions = self.permission_snapshot();
+            // Style-pack icons must be read before `vm` borrows `frontend_vm`.
+            let style_icon_urls = self.style_icon_urls();
             // 文本型设置行只在偏好载入 / 外部变更时回灌一次，避免把输入中的
             // 内容每帧弹回旧值。
             let hydrate_text = std::mem::replace(&mut self.hydrate_text_fields, false);
@@ -3524,6 +3689,7 @@ mod linux_app {
             vm.active_page = match self.active_page {
                 shell::Page::Overview => frontend::view_model::Page::Overview,
                 shell::Page::History => frontend::view_model::Page::History,
+                shell::Page::QuickNote => frontend::view_model::Page::QuickNote,
                 shell::Page::Vocabulary => frontend::view_model::Page::Vocab,
                 shell::Page::Styles => frontend::view_model::Page::Style,
                 shell::Page::Marketplace => frontend::view_model::Page::Marketplace,
@@ -3534,6 +3700,10 @@ mod linux_app {
             };
 
             vm.status = self.status.clone();
+            vm.quick_note_recording = backend.as_ref().is_some_and(|backend| {
+                backend.dictation_output_target()
+                    == Some(openless_core::DictationOutputTarget::QuickNote)
+            });
             vm.version = env!("OPENLESS_APP_VERSION").to_string();
             vm.lang = lang;
             // UI 进程没有 Core 偏好，明暗主题必须随视图模型一起过去。
@@ -3549,6 +3719,12 @@ mod linux_app {
                     .as_ref()
                     .map(|binding| binding.display_label())
                     .unwrap_or_default();
+                vm.quick_note_hotkey = prefs
+                    .quick_note_hotkey
+                    .as_ref()
+                    .map(|binding| binding.display_label())
+                    .unwrap_or_default();
+                vm.quick_note_shortcut_hidden = self.quick_note_shortcut_hidden;
                 vm.translation_hotkey = prefs.translation_hotkey.display_label();
             }
 
@@ -3856,6 +4032,8 @@ mod linux_app {
                                     .map(|path| path.exists())
                                     .unwrap_or(false);
                                 frontend::view_model::HistoryEntry {
+                                    quick_note: item.source == openless_core::HistorySource::QuickNote,
+                                    error_code: item.error_code,
                                     id: item.id,
                                 created_at: item.created_at,
                                 mode: overview_mode(item.mode),
@@ -3958,8 +4136,18 @@ mod linux_app {
             vm.style_packs = self
                 .style_packs
                 .iter()
-                .map(|pack| frontend::view_model::StylePack {
+                .enumerate()
+                .map(|(index, pack)| frontend::view_model::StylePack {
                     id: pack.id.clone(),
+                    icon_path: pack.icon_path.clone(),
+                    icon_data_url: style_icon_urls.get(index).cloned().flatten(),
+                    base_mode: match pack.base_mode {
+                        openless_core::PolishMode::Raw => "raw",
+                        openless_core::PolishMode::Light => "light",
+                        openless_core::PolishMode::Structured => "structured",
+                        openless_core::PolishMode::Formal => "formal",
+                    }
+                    .to_string(),
                     name: pack.name.clone(),
                     description: pack.description.clone(),
                     // Localized mode label (Core's display_name is zh-only).
@@ -4291,6 +4479,7 @@ mod linux_app {
                 ShortcutField::Dictation => preferences.dictation_hotkey = binding,
                 ShortcutField::Translation => preferences.translation_hotkey = binding,
                 ShortcutField::Qa => preferences.qa_hotkey = Some(binding),
+                ShortcutField::QuickNote => preferences.quick_note_hotkey = Some(binding),
                 ShortcutField::SwitchStyle => preferences.switch_style_hotkey = Some(binding),
                 ShortcutField::OpenApp => preferences.open_app_hotkey = Some(binding),
                 ShortcutField::CodingAgentVoice => {
@@ -4332,6 +4521,7 @@ mod linux_app {
             use frontend::view_model::ShortcutField;
             match field {
                 ShortcutField::Qa => preferences.qa_hotkey = None,
+                ShortcutField::QuickNote => preferences.quick_note_hotkey = None,
                 ShortcutField::SwitchStyle => preferences.switch_style_hotkey = None,
                 ShortcutField::OpenApp => preferences.open_app_hotkey = None,
                 ShortcutField::CodingAgentVoice => preferences.coding_agent_voice_hotkey = None,
@@ -4667,6 +4857,7 @@ mod linux_app {
                         self.active_page = match page {
                             frontend::view_model::Page::Overview => shell::Page::Overview,
                             frontend::view_model::Page::History => shell::Page::History,
+                            frontend::view_model::Page::QuickNote => shell::Page::QuickNote,
                             frontend::view_model::Page::Vocab => shell::Page::Vocabulary,
                             frontend::view_model::Page::Style => shell::Page::Styles,
                             frontend::view_model::Page::Marketplace => shell::Page::Marketplace,
@@ -4867,6 +5058,12 @@ mod linux_app {
                     frontend::view_model::FrontendAction::MarketplaceSort(sort) => {
                         self.frontend_vm.marketplace_sort = sort;
                         self.load_marketplace();
+                    }
+                    frontend::view_model::FrontendAction::QuickNoteToggle => {
+                        self.toggle_quick_note();
+                    }
+                    frontend::view_model::FrontendAction::QuickNoteShortcutHidden(hidden) => {
+                        self.set_quick_note_shortcut_hidden(hidden);
                     }
                     frontend::view_model::FrontendAction::HistoryRefresh => {
                         self.frontend_vm.history_loading = true;
@@ -5248,6 +5445,16 @@ mod linux_app {
                                 backend.activate_style_pack(&id)?;
                                 Ok(tr_l10n(lang, "status.style_updated").to_string())
                             });
+                        }
+                    }
+                    frontend::view_model::FrontendAction::StyleChooseIcon(index) => {
+                        if let Some(pack) = self.style_packs.get(index) {
+                            self.set_style_pack_icon_from_file(pack.id.clone());
+                        }
+                    }
+                    frontend::view_model::FrontendAction::StyleResetIcon(index) => {
+                        if let Some(pack) = self.style_packs.get(index) {
+                            self.reset_style_pack_icon(pack.id.clone());
                         }
                     }
                     frontend::view_model::FrontendAction::StyleExport(index) => {

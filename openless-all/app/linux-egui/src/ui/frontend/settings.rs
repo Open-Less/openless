@@ -965,7 +965,7 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
     // Tauri `ShortcutsSection` 的行序：开始/停止 → 翻译 → 弹出浮窗 → 切换风格 →
     // 风格直达快捷键（子块）→ 打开 OpenLess → Less Computer → 取消本次录音。
     let dictation_hint = recording_mode_hint(lang, vm.settings.recording_mode);
-    let rows: [ShortcutRow; 6] = [
+    let rows: [ShortcutRow; 7] = [
         ShortcutRow {
             field: ShortcutField::Dictation,
             label: tr_l10n(lang, "settings.shortcuts.start_stop"),
@@ -986,6 +986,13 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
             value: vm.qa_hotkey.clone(),
             can_disable: true,
             hint: String::new(),
+        },
+        ShortcutRow {
+            field: ShortcutField::QuickNote,
+            label: tr_l10n(lang, "quickNote.shortcutTitle"),
+            value: vm.quick_note_hotkey.clone(),
+            can_disable: true,
+            hint: tr_l10n(lang, "quickNote.shortcutDesc").to_string(),
         },
         ShortcutRow {
             field: ShortcutField::SwitchStyle,
@@ -1014,12 +1021,12 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
         tr_l10n(lang, "settings.shortcuts.title"),
         tr_l10n(lang, "settings.shortcuts.desc_no_acc"),
         |ui| {
-            for row in &rows[..4] {
+            for row in &rows[..5] {
                 shortcut_row(ui, vm, actions, row);
             }
             // 风格直达快捷键：Tauri 把它放在「切换到上一个风格」之后、打开 App 之前。
             style_pack_hotkey_block(ui, vm, actions);
-            for row in &rows[4..] {
+            for row in &rows[5..] {
                 shortcut_row(ui, vm, actions, row);
             }
             // 取消本次录音：Tauri 只展示 Esc，不可编辑（Windows/Linux 胶囊无确认键）。
@@ -1065,7 +1072,7 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
 }
 
 /// 一行可编辑快捷键的展示数据。
-struct ShortcutRow {
+pub(super) struct ShortcutRow {
     field: ShortcutField,
     label: &'static str,
     /// 已格式化的键帽文本（`Ctrl+Shift+;`），空串 = 未设置。
@@ -1076,9 +1083,71 @@ struct ShortcutRow {
     hint: String,
 }
 
+impl ShortcutRow {
+    /// 供设置页之外的页面（速记页的快捷键卡片）构造同一套控件。
+    pub(super) fn new(
+        field: ShortcutField,
+        label: &'static str,
+        value: String,
+        can_disable: bool,
+        hint: String,
+    ) -> Self {
+        Self {
+            field,
+            label,
+            value,
+            can_disable,
+            hint,
+        }
+    }
+}
+
 /// 快捷键行：标签（+「?」）→ 键帽 → 最右的 chevron；点 chevron 展开
 /// 「录制快捷键 / 停用」菜单，进入录制后键帽位置换成「请按下快捷键组合…」面板。
-fn shortcut_row(
+pub(super) fn shortcut_row(
+    ui: &mut egui::Ui,
+    vm: &mut FrontendViewModel,
+    actions: &mut Vec<FrontendAction>,
+    row: &ShortcutRow,
+) {
+    row_desc(ui, row.label, "", |ui| {
+        shortcut_control(ui, vm, actions, row)
+    });
+    shortcut_menu(ui, vm, actions, row);
+}
+
+/// 键帽 + chevron（录制中则换成录制面板）。单独抽出供速记页的紧凑卡片复用，
+/// 那一页没有 200px 标签列。
+pub(super) fn shortcut_control(
+    ui: &mut egui::Ui,
+    vm: &mut FrontendViewModel,
+    actions: &mut Vec<FrontendAction>,
+    row: &ShortcutRow,
+) {
+    let recording = vm.shortcut_recording == Some(row.field);
+    let menu_open = vm.shortcut_menu == Some(row.field);
+    if recording {
+        recording_panel(ui, vm, actions, row.field);
+        return;
+    }
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(6), theme::SURFACE_2);
+    }
+    draw_chevron_down(ui, rect.center(), menu_open, theme::INK_4);
+    if response.clicked() {
+        actions.push(FrontendAction::ShortcutMenu(if menu_open {
+            None
+        } else {
+            Some(row.field)
+        }));
+    }
+    keycaps_in(ui, &row.value);
+}
+
+/// 行下方的补充说明 + 展开的「录制快捷键 / 停用」菜单。
+pub(super) fn shortcut_menu(
     ui: &mut egui::Ui,
     vm: &mut FrontendViewModel,
     actions: &mut Vec<FrontendAction>,
@@ -1087,26 +1156,6 @@ fn shortcut_row(
     let lang = vm.lang;
     let recording = vm.shortcut_recording == Some(row.field);
     let menu_open = vm.shortcut_menu == Some(row.field);
-    row_desc(ui, row.label, "", |ui| {
-        if recording {
-            recording_panel(ui, vm, actions, row.field);
-            return;
-        }
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
-        if response.hovered() {
-            ui.painter()
-                .rect_filled(rect, egui::CornerRadius::same(6), theme::SURFACE_2);
-        }
-        draw_chevron_down(ui, rect.center(), menu_open, theme::INK_4);
-        if response.clicked() {
-            actions.push(FrontendAction::ShortcutMenu(if menu_open {
-                None
-            } else {
-                Some(row.field)
-            }));
-        }
-        keycaps_in(ui, &row.value);
-    });
     if !row.hint.is_empty() {
         ui.label(
             egui::RichText::new(row.hint.as_str())

@@ -353,7 +353,7 @@ fn marketplace_card(
         pack.tags
             .iter()
             .take(2)
-            .map(|tag| (tag.as_str(), layout::PillTone::Outline)),
+            .map(|tag| (tag.as_str(), layout::PillTone::Gray)),
     ) {
         let size = layout::pill_size(ui, text);
         if x + size.x > inner.right() {
@@ -368,8 +368,12 @@ fn marketplace_card(
         x += size.x + 6.0;
     }
 
-    if let Some(author) = &pack.origin_author_login {
-        let badge = openless_linux_egui::fmt_l10n(lang, "style.pack.derivativeBadge", &[author]);
+    if let Some(author) = pack
+        .origin_author_login
+        .as_ref()
+        .filter(|author| *author != &pack.author)
+    {
+        let badge = openless_linux_egui::fmt_l10n(lang, "marketplace.derivativeBadge", &[author]);
         let size = layout::pill_size(ui, &badge);
         layout::paint_pill(
             &painter,
@@ -394,25 +398,13 @@ fn marketplace_card(
         egui::pos2(inner.right() - download_width, footer_center_y - 12.0),
         egui::vec2(download_width, 24.0),
     );
-    let install = tr_l10n(lang, "marketplace.install_btn");
-    let install_width = layout::text_width(ui, install, 11.5) + 26.0;
-    let install_rect = egui::Rect::from_min_size(
-        egui::pos2(
-            download_rect.left() - 6.0 - install_width,
-            footer_center_y - 12.0,
-        ),
-        egui::vec2(install_width, 24.0),
-    );
     painter.text(
-        egui::pos2(install_rect.left() - 10.0, footer_center_y),
+        egui::pos2(download_rect.left() - 10.0, footer_center_y),
         egui::Align2::RIGHT_CENTER,
         format!("☆ {}  ·  ↓ {}", pack.likes, pack.downloads),
         egui::FontId::proportional(10.5),
         theme::INK_4,
     );
-    if layout::action_button(ui, install_rect, install, None, layout::ButtonKind::Dark).clicked() {
-        actions.push(FrontendAction::MarketplaceInstall(index));
-    }
     if layout::action_button(ui, download_rect, download, None, layout::ButtonKind::Ghost).clicked()
     {
         actions.push(FrontendAction::MarketplaceDownload(index));
@@ -432,13 +424,12 @@ fn marketplace_detail(
     body_rect: egui::Rect,
     actions: &mut Vec<FrontendAction>,
 ) {
-    let modal_width = (body_rect.width() - 48.0).clamp(320.0, 520.0);
-    let card_height = (body_rect.height() - 40.0).clamp(280.0, 520.0);
-    let measured_id = egui::Id::new("openless-marketplace-detail-measured-size");
-    let measured = ctx
-        .data(|data| data.get_temp::<egui::Vec2>(measured_id))
-        .unwrap_or(egui::vec2(modal_width, card_height));
-    let card_rect = egui::Rect::from_center_size(body_rect.center(), measured);
+    // The Tauri Modal uses a 560px card. Keep the same centred dimensions
+    // while content changes; only shrink to fit genuinely small windows.
+    let modal_width = (body_rect.width() - 40.0).min(560.0);
+    let card_height = (body_rect.height() - 40.0).min(470.0);
+    let card_rect =
+        egui::Rect::from_center_size(body_rect.center(), egui::vec2(modal_width, card_height));
 
     let modal = egui::Area::new(egui::Id::new("openless-marketplace-detail-modal"))
         // 与设置弹窗同一套层级策略：遮罩、点击拦截与卡片必须同属**一个** `Area`（同一个
@@ -469,17 +460,40 @@ fn marketplace_detail(
                     .fill(theme::SURFACE)
                     .stroke(egui::Stroke::new(1.0, theme::LINE))
                     .corner_radius(egui::CornerRadius::same(14))
-                    .inner_margin(egui::Margin::same(20))
+                    .inner_margin(egui::Margin::same(22))
                     .show(ui, |ui| {
-                        ui.set_width(modal_width - 40.0);
-                        ui.set_min_height(card_height - 40.0);
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(&pack.name).size(18.0).strong());
+                        // egui Frame adds its own 3.8px on each side; keep
+                        // the measured outer card centred at the target width.
+                        ui.set_width(modal_width - 52.0);
+                        ui.set_min_height(card_height - 44.0);
+                        ui.set_max_height(card_height - 44.0);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&pack.name).size(18.0).strong(),
+                                )
+                                .truncate(),
+                            );
                             ui.label(
                                 egui::RichText::new(&pack.mode)
                                     .size(11.0)
                                     .color(theme::INK_3),
                             );
+                            if let Some(author) = pack
+                                .origin_author_login
+                                .as_ref()
+                                .filter(|author| *author != &pack.author)
+                            {
+                                ui.label(
+                                    egui::RichText::new(openless_linux_egui::fmt_l10n(
+                                        lang,
+                                        "marketplace.derivativeBadge",
+                                        &[author],
+                                    ))
+                                    .size(11.0)
+                                    .color(theme::OK),
+                                );
+                            }
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
@@ -506,21 +520,16 @@ fn marketplace_detail(
                                 .color(theme::INK_2),
                         );
                         ui.add_space(12.0);
-                        ui.label(
-                            egui::RichText::new(tr_l10n(lang, "style.pack.dictation_prompt_title"))
-                                .size(12.0)
-                                .strong(),
-                        );
                         egui::Frame::new()
                             .fill(theme::SURFACE_2)
                             .stroke(egui::Stroke::new(0.8, theme::LINE))
                             .corner_radius(egui::CornerRadius::same(8))
                             .inner_margin(egui::Margin::same(10))
                             .show(ui, |ui| {
-                                ui.set_width(modal_width - 60.0);
+                                ui.set_width((modal_width - 68.0).max(1.0));
                                 egui::ScrollArea::vertical()
-                                    .max_height((card_height - 260.0).max(65.0))
-                                    .min_scrolled_height((card_height - 260.0).max(65.0))
+                                    .max_height((card_height - 225.0).max(60.0))
+                                    .min_scrolled_height((card_height - 225.0).max(60.0))
                                     .show(ui, |ui| {
                                         ui.label(prompt.unwrap_or_default());
                                     });
@@ -532,10 +541,13 @@ fn marketplace_detail(
                                 |ui| {
                                     if ui
                                         .add(
-                                            egui::Button::new(tr_l10n(
-                                                lang,
-                                                "marketplace.install_btn",
-                                            ))
+                                            egui::Button::new(
+                                                egui::RichText::new(tr_l10n(
+                                                    lang,
+                                                    "marketplace.install_btn",
+                                                ))
+                                                .color(egui::Color32::WHITE),
+                                            )
                                             .fill(theme::BLUE)
                                             .stroke(egui::Stroke::NONE)
                                             .corner_radius(egui::CornerRadius::same(8)),
@@ -548,7 +560,26 @@ fn marketplace_detail(
                                     if ui.button(tr_l10n(lang, "common.cancel")).clicked() {
                                         actions.push(FrontendAction::MarketplaceCloseDetail);
                                     }
-                                    if ui.button(if liked { "★" } else { "☆" }).clicked() {
+                                    if ui
+                                        .add(
+                                            egui::Button::new(
+                                                egui::RichText::new(format!(
+                                                    "{} {}",
+                                                    if liked { "★" } else { "☆" },
+                                                    pack.likes
+                                                ))
+                                                .size(12.0)
+                                                .color(if liked {
+                                                    egui::Color32::from_rgb(239, 68, 68)
+                                                } else {
+                                                    theme::INK_2
+                                                }),
+                                            )
+                                            .fill(egui::Color32::TRANSPARENT)
+                                            .stroke(egui::Stroke::NONE),
+                                        )
+                                        .clicked()
+                                    {
                                         actions.push(FrontendAction::MarketplaceToggleLike(index));
                                     }
                                 },
@@ -564,7 +595,6 @@ fn marketplace_detail(
             egui::Id::new("openless-marketplace-detail-card-rect"),
             modal.inner.rect,
         );
-        data.insert_temp(measured_id, modal.inner.rect.size());
     });
 }
 

@@ -166,6 +166,7 @@ export const en: typeof zhCN = {
   nav: {
     overview: 'Overview',
     history: 'History',
+    quickNote: 'Quick notes',
     vocab: 'Dictionary',
     style: 'Style',
     marketplace: 'Marketplace',
@@ -880,6 +881,15 @@ export const en: typeof zhCN = {
       title: 'How to use',
       step2: 'Select text in any app.',
     },
+  },
+  quickNote: {
+    kicker: 'Quick notes', title: 'Quick notes',
+    desc: 'Permanent audio with playback, export, retranscription, and repolish.',
+    start: 'Start recording', finish: 'Finish recording',
+    noTranscript: 'No transcript yet.', recording: 'Recording…',
+    shortcutTitle: 'Quick note shortcut',
+    shortcutDesc: 'Press once to start a permanent capture, then press again to finish.',
+    showShortcut: 'Show quick note shortcut',
   },
   settings: {
     selectionWorkspace: {

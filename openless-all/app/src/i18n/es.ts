@@ -166,6 +166,7 @@ export const es: typeof zhCN = {
   nav: {
     overview: 'Resumen',
     history: 'Historial',
+    quickNote: 'Notas rápidas',
     vocab: 'Diccionario',
     style: 'Estilo',
     marketplace: 'Catálogo',
@@ -894,6 +895,15 @@ export const es: typeof zhCN = {
       title: 'Cómo usarlo',
       step2: 'Selecciona texto en cualquier aplicación.',
     },
+  },
+  quickNote: {
+    kicker: 'Notas rápidas', title: 'Notas rápidas',
+    desc: 'Audio permanente con reproducción, exportación, retranscripción y redacción.',
+    start: 'Iniciar grabación', finish: 'Terminar grabación',
+    noTranscript: 'Aún no hay transcripción.', recording: 'Grabando…',
+    shortcutTitle: 'Atajo de nota rápida',
+    shortcutDesc: 'Pulsa una vez para grabar y otra vez para guardar.',
+    showShortcut: 'Mostrar el atajo de nota rápida',
   },
   settings: {
     selectionWorkspace: {

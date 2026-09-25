@@ -102,70 +102,45 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                 vm.vocab_replacement.clear();
             }
         });
-        if let Some(error) = vm.vocab_error.clone() {
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new(error).size(11.5).color(theme::ERR));
-        }
-    });
-
-    ui.add_space(8.0);
-    if vm.vocab_rules.is_empty() {
-        // Empty state belongs immediately below the add form, not inside a
-        // second empty card with a repeated title.
-        ui.label(
-            egui::RichText::new(tr_l10n(lang, "vocab.corrections_empty"))
-                .size(12.0)
-                .color(theme::INK_4),
-        );
-        return;
-    }
-    ui.add_space(GAP);
-
-    // ── Rules ───────────────────────────────────────────────────────────────
-    let learned = vm.vocab_rules.iter().filter(|rule| rule.learned).count();
-    card(ui, width, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(tr_l10n(lang, "vocab.corrections_title"))
-                    .size(13.0)
-                    .strong(),
-            );
-            if learned > 0 {
-                ui.add_space(8.0);
-                egui::Frame::new()
-                    .fill(theme::SURFACE_2)
-                    .corner_radius(egui::CornerRadius::same(9))
-                    .inner_margin(egui::Margin::symmetric(8, 3))
-                    .show(ui, |ui| {
-                        ui.label(
-                            egui::RichText::new(fmt_l10n(
-                                lang,
-                                "vocab.corrections_only_learned",
-                                &[&learned],
-                            ))
-                            .size(10.5)
-                            .color(theme::INK_3),
-                        );
-                    });
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if learned > 0
-                    && ui
-                        .add(
-                            egui::Button::new(
-                                egui::RichText::new(tr_l10n(
-                                    lang,
-                                    "vocab.corrections_remove_all_learned",
-                                ))
-                                .size(11.5),
-                            )
-                            .fill(theme::SURFACE)
-                            .stroke(egui::Stroke::new(0.8, theme::LINE))
-                            .corner_radius(egui::CornerRadius::same(8))
-                            .min_size(egui::vec2(0.0, 28.0)),
-                        )
-                        .clicked()
+        // 自动收集的筛选与「一键清空」：Tauri 把两控件放在同一行。
+        let learned = vm.vocab_rules.iter().filter(|rule| rule.learned).count();
+        if learned > 0 {
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                let mut only_learned = vm.vocab_rules_only_learned;
+                if ui
+                    .checkbox(
+                        &mut only_learned,
+                        egui::RichText::new(fmt_l10n(
+                            lang,
+                            "vocab.corrections_only_learned",
+                            &[&learned],
+                        ))
+                        .size(12.0)
+                        .color(theme::INK_3),
+                    )
+                    .changed()
                 {
+                    vm.vocab_rules_only_learned = only_learned;
+                }
+                ui.add_space(4.0);
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new(tr_l10n(
+                                lang,
+                                "vocab.corrections_remove_all_learned",
+                            ))
+                            .size(11.5),
+                        )
+                        .fill(theme::SURFACE)
+                        .stroke(egui::Stroke::new(0.8, theme::LINE))
+                        .corner_radius(egui::CornerRadius::same(8))
+                        .min_size(egui::vec2(0.0, 28.0)),
+                    )
+                    .clicked()
+                {
+                    // 逐条删（Tauri 同样逐条调用），倒序保证索引不战。
                     let indices: Vec<usize> = vm
                         .vocab_rules
                         .iter()
@@ -179,35 +154,58 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                     }
                 }
             });
-        });
-        ui.add_space(12.0);
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-            let mut remove_index = None;
-            for (index, rule) in vm.vocab_rules.iter().enumerate() {
-                let label = if rule.learned {
-                    format!(
-                        "{} → {}   {}",
-                        rule.pattern,
-                        rule.replacement,
-                        tr_l10n(lang, "vocab.corrections_learned_badge")
-                    )
-                } else {
-                    format!("{} → {}", rule.pattern, rule.replacement)
-                };
-                let (toggle, remove) = correction_chip(ui, &label, rule.enabled);
-                if remove {
-                    remove_index = Some(index);
-                    break;
+        }
+        if let Some(error) = vm.vocab_error.clone() {
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new(error).size(11.5).color(theme::ERR));
+        }
+
+        // 规则标签始终在同一张卡片内；为空时用占位说明。
+        ui.add_space(10.0);
+        let visible: Vec<usize> = vm
+            .vocab_rules
+            .iter()
+            .enumerate()
+            .filter(|(_, rule)| !vm.vocab_rules_only_learned || rule.learned)
+            .map(|(index, _)| index)
+            .collect();
+        if visible.is_empty() {
+            ui.label(
+                egui::RichText::new(tr_l10n(lang, "vocab.corrections_empty"))
+                    .size(12.0)
+                    .color(theme::INK_4),
+            );
+        } else {
+            ui.horizontal_wrapped(|ui| {
+                ui.set_min_height(20.0);
+                ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+                let mut remove_index = None;
+                for index in visible {
+                    let rule = &vm.vocab_rules[index];
+                    let label = if rule.learned {
+                        format!(
+                            "{} → {}   {}",
+                            rule.pattern,
+                            rule.replacement,
+                            tr_l10n(lang, "vocab.corrections_learned_badge")
+                        )
+                    } else {
+                        format!("{} → {}", rule.pattern, rule.replacement)
+                    };
+                    let (toggle, remove) = correction_chip(ui, &label, rule.enabled);
+                    if remove {
+                        remove_index = Some(index);
+                        break;
+                    }
+                    if toggle {
+                        actions.push(FrontendAction::VocabToggleRule(index));
+                    }
                 }
-                if toggle {
-                    actions.push(FrontendAction::VocabToggleRule(index));
+                if let Some(index) = remove_index {
+                    actions.push(FrontendAction::VocabRemoveRule(index));
                 }
-            }
-            if let Some(index) = remove_index {
-                actions.push(FrontendAction::VocabRemoveRule(index));
-            }
-        });
+            });
+        }
     });
 }
 

@@ -75,6 +75,7 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
         Some(tr_l10n(lang, "vocab.desc")),
     );
     let mut right = header.right();
+    let mut opened_new_word_now = false;
     // Primary "new word" action (dark solid, like the Tauri `variant=primary`).
     let new_word = tr_l10n(lang, "vocab.new_word");
     let new_word_width = layout::text_width(ui, new_word, 12.5) + 42.0;
@@ -83,7 +84,8 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
         egui::vec2(new_word_width, 30.0),
     );
     right = new_word_rect.left() - 8.0;
-    if primary_button(ui, new_word_rect, new_word, Some(IconName::Hash)).clicked() {
+    if primary_button(ui, new_word_rect, new_word, Some(IconName::Plus)).clicked() {
+        opened_new_word_now = true;
         ui.ctx()
             .data_mut(|data| data.insert_temp(egui::Id::new(NEW_WORD_OPEN), true));
         vm.vocab_input.clear();
@@ -215,14 +217,26 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
         [divider.left_top(), divider.right_top()],
         egui::Stroke::new(1.0, theme::LINE),
     );
+    // Soft inset shadow separating the fixed entry toolbar from the scrolling list.
+    for (offset, alpha) in [(1.0, 20), (2.0, 10), (3.0, 5)] {
+        ui.painter().line_segment(
+            [
+                divider.left_top() - egui::vec2(0.0, offset),
+                divider.right_top() - egui::vec2(0.0, offset),
+            ],
+            egui::Stroke::new(1.0, egui::Color32::from_black_alpha(alpha)),
+        );
+    }
     // ── Quick add + presets ────────────────────────────────────────────────
     quick_add(ui, width, vm, actions);
     ui.add_space(12.0);
     presets(ui, width, vm, actions);
-    if ui.ctx().data(|data| {
-        data.get_temp::<bool>(egui::Id::new(NEW_WORD_OPEN))
-            .unwrap_or(false)
-    }) {
+    if !opened_new_word_now
+        && ui.ctx().data(|data| {
+            data.get_temp::<bool>(egui::Id::new(NEW_WORD_OPEN))
+                .unwrap_or(false)
+        })
+    {
         new_word_overlay(ui.ctx(), vm, actions);
     }
 }
@@ -253,37 +267,63 @@ fn tool_row(
                 + 4.0
         })
         .sum();
+    let tab_background = egui::Rect::from_min_size(
+        row.min + egui::vec2(0.0, 1.0),
+        egui::vec2(tabs_width + 12.0, TAB_HEIGHT + 2.0),
+    );
     ui.painter().rect_filled(
-        egui::Rect::from_min_size(
-            row.min + egui::vec2(0.0, 2.0),
-            egui::vec2(tabs_width + 4.0, TAB_HEIGHT),
-        ),
-        egui::CornerRadius::same(10),
+        tab_background,
+        egui::CornerRadius::same(18),
         theme::SURFACE_2,
     );
-    let mut x = row.left() + 2.0;
-    for (index, (icon, label)) in tabs.iter().enumerate() {
+    ui.painter().rect_stroke(
+        tab_background,
+        egui::CornerRadius::same(18),
+        egui::Stroke::new(0.8, theme::LINE),
+        egui::StrokeKind::Inside,
+    );
+    // 先算出每个 tab 的矩形：活动胶囊的位置只用一个动画值插值。以前在循环里对
+    // 同一个 id 反复写入「非活动 tab 就指向活动位置」的目标值，同一帧三次写不同
+    // 目标，胶囊会抖动。
+    let mut tab_rects = Vec::with_capacity(tabs.len());
+    let mut x = row.left() + 6.0;
+    for (icon, label) in &tabs {
         let text_width = layout::text_width(ui, label, 12.5);
-        let has_icon = *icon != TabIcon::None;
-        let tab_width = text_width + if has_icon { 38.0 } else { 22.0 };
-        let rect = egui::Rect::from_min_size(
+        let tab_width = text_width + if *icon == TabIcon::None { 22.0 } else { 38.0 };
+        tab_rects.push(egui::Rect::from_min_size(
             egui::pos2(x, row.top() + 2.0),
             egui::vec2(tab_width, TAB_HEIGHT),
-        );
-        let active = vm.vocab_filter.min(2) == index;
+        ));
+        x += tab_width + 4.0;
+    }
+    let active = vm.vocab_filter.min(2);
+    let pill_x = ui.ctx().animate_value_with_time(
+        ui.id().with("vocab-active-pill-x"),
+        tab_rects[active].left(),
+        0.18,
+    );
+    ui.painter().rect_filled(
+        egui::Rect::from_min_size(
+            egui::pos2(pill_x, tab_rects[active].top()),
+            tab_rects[active].size(),
+        ),
+        egui::CornerRadius::same(16),
+        theme::SURFACE,
+    );
+    for (index, (icon, label)) in tabs.iter().enumerate() {
+        let rect = tab_rects[index];
+        let active = active == index;
         let response = ui.interact(
             rect,
             ui.id().with(("openless-vocab-tab", index)),
             egui::Sense::click(),
         );
         let painter = ui.painter().with_clip_rect(rect);
-        if active {
-            painter.rect_filled(rect, egui::CornerRadius::same(8), theme::SURFACE);
-        } else if response.hovered() {
+        if !active && response.hovered() {
             painter.rect_filled(rect, egui::CornerRadius::same(8), theme::LINE);
         }
         let ink = if active { theme::INK } else { theme::INK_3 };
-        let text_left = if has_icon {
+        let text_left = if *icon != TabIcon::None {
             let center = egui::pos2(rect.left() + 13.0, rect.center().y);
             match icon {
                 TabIcon::Pencil => draw_pencil(ui, center, ink),
@@ -303,8 +343,8 @@ fn tool_row(
         if response.clicked() {
             _actions.push(FrontendAction::VocabFilter(index));
         }
-        x = rect.right() + 4.0;
     }
+    let x = tab_rects.last().map(|rect| rect.right() + 4.0).unwrap_or(x);
 
     // Select-all checkbox: label shows the selected count while non-empty.
     let all_selected = !visible.is_empty() && visible.iter().all(|index| selected.contains(index));
@@ -714,28 +754,42 @@ fn presets(
     actions: &mut Vec<FrontendAction>,
 ) {
     let lang = vm.lang;
-    ui.separator();
     let open = ui.ctx().data(|data| {
         data.get_temp::<bool>(egui::Id::new(PRESETS_OPEN))
             .unwrap_or(false)
     });
     card(ui, width, |ui| {
-        let title = tr_l10n(lang, "vocab.presets_title");
-        if ui
-            .button(format!("{}  {}", if open { "⌄" } else { "›" }, title))
-            .clicked()
-        {
+        let (heading, response) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 42.0), egui::Sense::click());
+        let painter = ui.painter();
+        painter.text(
+            egui::pos2(heading.left(), heading.top() + 11.0),
+            egui::Align2::LEFT_CENTER,
+            tr_l10n(lang, "vocab.presets_title"),
+            egui::FontId::proportional(13.0),
+            theme::INK,
+        );
+        painter.text(
+            egui::pos2(heading.left(), heading.top() + 30.0),
+            egui::Align2::LEFT_CENTER,
+            tr_l10n(lang, "vocab.presets_tip"),
+            egui::FontId::proportional(11.5),
+            theme::INK_4,
+        );
+        painter.text(
+            egui::pos2(heading.right() - 8.0, heading.center().y),
+            egui::Align2::CENTER_CENTER,
+            if open { "⌄" } else { "›" },
+            egui::FontId::proportional(17.0),
+            theme::INK_3,
+        );
+        if response.clicked() {
             ui.ctx()
                 .data_mut(|data| data.insert_temp(egui::Id::new(PRESETS_OPEN), !open));
         }
         if !open {
             return;
         }
-        ui.label(
-            egui::RichText::new(tr_l10n(lang, "vocab.presets_tip"))
-                .size(11.5)
-                .color(theme::INK_4),
-        );
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);

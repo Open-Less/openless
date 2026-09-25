@@ -37,6 +37,10 @@ const SUPPORTED_LANGUAGES: [(&str, &str); 15] = [
 ];
 
 pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
+    // The shared page scroll area is height-bounded by the shell, so this page
+    // only has to pin its own width. Pinning *both* min and max keeps the two
+    // columns (and the four-column usage guide) from feeding a wider content
+    // size back into the next frame's layout while a window is being resized.
     let width = (ui.available_width() - 24.0).max(1.0);
     ui.set_min_width(width);
     ui.set_max_width(width);
@@ -307,8 +311,13 @@ fn target_language(
             // Match the left column so the two cards end on the same line.
             ui.set_min_height((height - CARD_PADDING * 2.0).max(0.0));
         }
+        // The status pill is `flex: 0 0 auto` upstream, so the text block has to
+        // wrap instead of pushing the pill past the card edge on a narrow column.
+        let pill_width =
+            layout::text_width(ui, tr_l10n(lang, "translation.status_disabled"), 10.5) + 24.0;
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
+                ui.set_max_width((ui.available_width() - pill_width - 8.0).max(80.0));
                 ui.label(
                     egui::RichText::new(tr_l10n(lang, "translation.target_title"))
                         .size(13.5)
@@ -344,8 +353,14 @@ fn target_language(
         ui.add_space(10.0);
 
         let mut selected_target = target.clone();
+        // `ComboBox::width` is the *minimum* width of the selected text, and the
+        // final button is that text plus the drop-down icon and the button
+        // padding. Asking for `available - 4` therefore overflowed the card by
+        // that chrome, which made egui widen the whole page (and with it the two
+        // columns) again on the next frame.
+        let combo_width = (ui.available_width() - 28.0).clamp(60.0, 360.0);
         egui::ComboBox::from_id_salt("translation-target-language")
-            .width((ui.available_width() - 4.0).min(360.0))
+            .width(combo_width)
             .height(32.0)
             .truncate()
             .selected_text(if target.is_empty() {
