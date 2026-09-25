@@ -132,6 +132,10 @@ mkdir -p "$RPM_TOP"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS,rpmdb,tmp}
 tar -C "$RPM_ROOT" --transform="s,^\./,openless-$RPM_VERSION/," \
   -czf "$RPM_TOP/SOURCES/openless-$RPM_VERSION.tar.gz" .
 cat > "$RPM_TOP/SPECS/openless.spec" <<EOF
+# Preserve the ELF bytes used by the fcitx5 addon SHA-256 manifest. Fedora's
+# default brp-strip and debuginfo passes otherwise change it after staging.
+%global __os_install_post %{nil}
+%global debug_package %{nil}
 Name: openless
 Version: $RPM_VERSION
 Release: 1

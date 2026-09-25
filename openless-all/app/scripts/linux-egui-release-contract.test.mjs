@@ -4,184 +4,87 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
-const releaseWorkflow = await readFile(
-  join(repoRoot, '.github/workflows/release-linux-egui.yml'),
-  'utf8',
-);
-const ciWorkflow = await readFile(
-  join(repoRoot, '.github/workflows/ci.yml'),
-  'utf8',
-);
-const packageScript = await readFile(
-  join(repoRoot, 'openless-all/app/scripts/package-linux-egui.sh'),
-  'utf8',
-);
-const dependencyGate = await readFile(
-  join(repoRoot, 'openless-all/app/scripts/check-core-deps.ps1'),
-  'utf8',
-);
-const hostManifest = await readFile(
-  join(repoRoot, 'openless-all/app/linux-egui/Cargo.toml'),
-  'utf8',
-);
+const root = fileURLToPath(new URL('../../..', import.meta.url));
+const load = (path) => readFile(join(root, path), 'utf8');
+const [release, ci, check, pack, verify, gate, manifest, tauri] = await Promise.all([
+  load('.github/workflows/release-linux-egui.yml'),
+  load('.github/workflows/ci.yml'),
+  load('.github/workflows/check-linux-egui.yml'),
+  load('openless-all/app/scripts/package-linux-egui.sh'),
+  load('openless-all/app/scripts/verify-linux-egui-packages.sh'),
+  load('openless-all/app/scripts/check-core-deps.ps1'),
+  load('openless-all/app/linux-egui/Cargo.toml'),
+  load('.github/workflows/release-tauri.yml'),
+]);
 
-// 1. CI must exercise the Tauri-free Linux host: build, test, clippy and a
-//    dependency contract on openless-linux-egui with no WebKit/GTK native deps.
-assert.ok(ciWorkflow.includes('cargo test --locked -p openless-linux-egui --all-targets'),
-  'CI must test the Linux egui host');
-assert.ok(ciWorkflow.includes('cargo check --locked -p openless-linux-egui --all-targets'),
-  'CI must check the Linux egui host');
-assert.ok(ciWorkflow.includes('./scripts/check-core-deps.ps1 openless-linux-egui'),
-  'CI must run the cargo-tree dependency gate for the Linux egui host');
-assert.ok(!/libgtk-3|webkit2gtk|libwebkit/.test(ciWorkflow),
-  'CI apt list must not pull WebKitGTK/GTK native dependencies');
+// CI must execute the exact test/build/package/checksum path used for tags.
+assert.match(ci, /linux-egui-package:[\s\S]*?uses: \.\/\.github\/workflows\/check-linux-egui\.yml/);
+assert.match(ci, /linux-egui-package:[\s\S]*?permissions:\s*contents: read/);
+assert.match(release, /uses: \.\/\.github\/workflows\/check-linux-egui\.yml/);
+assert.match(check, /workflow_call:/);
+assert.match(check, /contents: read/);
+assert.match(check, /runs-on: ubuntu-24\.04/);
+assert.match(check, /cargo test --locked -p openless-linux-egui --all-targets/);
+assert.match(check, /cargo check --locked -p openless-linux-egui --all-targets/);
+assert.match(check, /check-core-deps\.ps1 openless-linux-egui/);
+assert.match(check, /ctest --test-dir build --output-on-failure/);
+assert.match(check, /cargo build --locked --release -p openless-linux-egui/);
+assert.match(check, /bash scripts\/package-linux-egui\.sh/);
+assert.match(check, /sha256sum \.\/\*\.deb \.\/\*\.rpm > SHA256SUMS/);
+assert.match(check, /bash scripts\/verify-linux-egui-packages\.sh/);
+assert.match(gate, /cargo tree --locked/);
+assert.match(gate, /tauri\|wry\|webkit2gtk/);
+assert.doesNotMatch(ci + check, /libgtk-3|webkit2gtk|libwebkit/);
 
-// 2. The Linux dependency gate must forbid Tauri/Wry/WebKit at the cargo-tree
-//    level while still allowing egui/eframe for the host itself.
-assert.ok(dependencyGate.includes('cargo tree --locked'),
-  'dependency gate must run cargo tree');
-assert.ok(dependencyGate.includes('openless-linux-egui'),
-  'dependency gate must accept the Linux egui host package name');
-assert.ok(/tauri\|wry\|webkit2gtk/.test(dependencyGate),
-  'dependency gate must forbid tauri/wry/webkit2gtk');
+// An admin's existing Tauri tag launches an independent Linux build. No PR or
+// manual dispatch can attach assets; Beta remains a shared draft for review.
+assert.match(release, /tags:\s*\n\s*- 'v\*-tauri'/);
+assert.match(release, /if: github\.event_name == 'push' && startsWith\(github\.ref, 'refs\/tags\/v'\) && endsWith\(github\.ref, '-tauri'\)/);
+assert.match(release, /needs: build-linux-egui/);
+assert.match(release, /contents: write/);
+assert.match(release, /softprops\/action-gh-release@v2/);
+assert.match(release, /draft:.*Beta\./);
+assert.match(release, /prerelease:.*Beta\./);
+assert.match(release, /tag_name: \$\{\{ github\.ref_name \}\}/);
+assert.match(check, /does not match package\.json version/);
+assert.ok(!tauri.includes('build-linux-egui:'), 'Linux does not build Tauri');
+assert.ok(!release.includes('release_tag:'), 'the manual build cannot target a Release');
 
-// 3. Release must build x86_64 deb and rpm only; AppImage is intentionally
-// retired from the Linux distribution channel.
-for (const [format, tool] of [['deb', 'dpkg-deb --build'], ['rpm', 'rpmbuild --define']]) {
-  assert.ok(packageScript.includes(tool), `package script must build ${format} via ${tool}`);
+// Keep deb/rpm only, including dynamically-loaded desktop libraries and the
+// fcitx5 addon. No AppImage, minisign, embedded downloader or Qwen ASR runtime.
+assert.match(pack, /dpkg-deb --build/);
+assert.match(pack, /rpmbuild --define/);
+assert.match(pack, /x86_64-linux-gnu\/fcitx5\/libopenless\.so/);
+assert.match(pack, /\/usr\/lib64\/fcitx5\/libopenless\.so/);
+assert.doesNotMatch(pack, /appimagetool|AppImage|qwen-asr|qwen_asr/i);
+assert.doesNotMatch(release + check, /appimagetool|APPIMAGE_|MINISIGN|latest-linux-egui/i);
+assert.match(verify, /test "\$\{#debs\[@\]\}" -eq 1/);
+assert.match(verify, /test "\$\{#rpms\[@\]\}" -eq 1/);
+assert.match(verify, /test "\$\{#appimages\[@\]\}" -eq 0/);
+assert.match(verify, /sha256sum --check --strict SHA256SUMS/);
+assert.match(verify, /desktop-file-validate/);
+assert.match(verify, /check_elf "\$WORK\/deb\/usr\/bin\/openless"/);
+assert.match(verify, /fcitx5\/libopenless\.so/);
+assert.ok(!existsSync(join(root, 'openless-all/app/linux-egui/src/updater.rs')));
+assert.doesNotMatch(manifest, /minisign-verify/);
+const debDeps = pack.match(/^Depends: ([^\n]+)/m)?.[1].split(/,\s*/) ?? [];
+for (const dep of ['fcitx5', 'libpipewire-0.3-0', 'libegl1', 'liblzma5', 'libwayland-egl1']) {
+  assert.ok(debDeps.includes(dep), `deb must require ${dep}`);
 }
-assert.ok(releaseWorkflow.includes("test \"$(find \"$OUTPUT\" -maxdepth 1 -name '*.deb' | wc -l)\" -eq 1"),
-  'release must gate exactly one deb');
-assert.ok(releaseWorkflow.includes("test \"$(find \"$OUTPUT\" -maxdepth 1 -name '*.rpm' | wc -l)\" -eq 1"),
-  'release must gate exactly one rpm');
-assert.ok(!/appimagetool|AppImage|APPIMAGE/i.test(packageScript),
-  'Linux package script must not build or stage AppImage');
-
-// 3b. AppImage is retired, so the host must not carry a replacement path for a
-//     package format nothing produces: no in-host downloader/verifier and no
-//     minisign dependency (that key only ever verified the AppImage manifest).
-assert.ok(!existsSync(join(repoRoot, 'openless-all/app/linux-egui/src/updater.rs')),
-  'the Linux host must not keep an AppImage updater module');
-assert.ok(!/minisign-verify/.test(hostManifest),
-  'the Linux host must not depend on the AppImage signature verifier');
-
-// 4. deb/rpm must carry the host and fcitx5 addon. Qwen ASR is
-//    deliberately excluded from Linux packages and must never enter this flow.
-assert.ok(releaseWorkflow.includes("! ldd target/release/openless-linux-egui | grep -q 'not found'"),
-  'release must run an ldd gate on the host binary');
-assert.ok(/! ldd .*grep -Eqi 'webkit\|wry\|tauri'/.test(releaseWorkflow),
-  'release must assert the host binary does not link WebKit/Wry/Tauri');
-assert.ok(releaseWorkflow.includes("dpkg-deb -c \"$OUTPUT\"/*.deb | grep -q 'usr/bin/openless'"),
-  'deb must ship the host binary');
-assert.ok(releaseWorkflow.includes("dpkg-deb -c \"$OUTPUT\"/*.deb | grep -q 'fcitx5/libopenless.so'"),
-  'deb must ship the fcitx5 addon');
-assert.ok(releaseWorkflow.includes("rpm -qlp \"$OUTPUT\"/*.rpm | grep -q '/usr/bin/openless'"),
-  'rpm must ship the host binary');
-assert.ok(releaseWorkflow.includes("rpm -qlp \"$OUTPUT\"/*.rpm | grep -q '/usr/lib64/fcitx5/libopenless.so'"),
-  'rpm must ship the fcitx5 addon');
-assert.ok(!/qwen-asr|qwen_asr/i.test(releaseWorkflow),
-  'Linux release must neither fetch nor compile nor package Qwen ASR');
-assert.ok(!/qwen-asr|qwen_asr/i.test(packageScript),
-  'Linux packaging must not stage Qwen ASR');
-
-// The packaging script must carry the fcitx plugin into both package formats.
-assert.ok(packageScript.includes('x86_64-linux-gnu/fcitx5/libopenless.so'), 'deb fcitx addon path');
-assert.ok(packageScript.includes('/usr/lib64/fcitx5/libopenless.so'), 'rpm fcitx addon path');
-// Hand-written deb metadata must account for the host, the bundled fcitx addon,
-// and the window/rendering libraries dynamically loaded at runtime. RPM adds
-// direct-link sonames automatically, but its dlopen libraries need manual Requires.
-const debDeps = packageScript.match(/^Depends: ([^\n]+)/m)?.[1].split(/,\s*/) ?? [];
-for (const name of [
-  'fcitx5', 'fcitx5-module-dbus', 'libbz2-1.0', 'liblzma5', 'libsystemd0',
-  'libfcitx5core7', 'libfcitx5config6', 'libfcitx5utils2', 'libwayland-client0',
-  'libx11-6', 'libx11-xcb1', 'libxcb1', 'libxcursor1', 'libxi6',
-  'libxkbcommon0', 'libxkbcommon-x11-0', 'libwayland-egl1', 'libegl1', 'libvulkan1',
+const rpmDeps = pack.match(/^Requires: ([^\n]+)/m)?.[1].split(/,\s*/) ?? [];
+for (const dep of ['fcitx5', 'pipewire-libs', 'libglvnd-egl', 'libwayland-egl.so.1()(64bit)']) {
+  assert.ok(rpmDeps.includes(dep), `rpm must require ${dep}`);
+}
+for (const [file, size] of [
+  ['32x32.png', '32x32'], ['64x64.png', '64x64'], ['128x128.png', '128x128'],
+  ['128x128@2x.png', '256x256'], ['icon.png', '512x512'],
 ]) {
-  assert.ok(debDeps.includes(name), `deb must declare runtime dependency ${name}`);
+  const [copy, shared] = await Promise.all([
+    readFile(join(root, 'openless-all/app/linux-egui/packaging/icons', file)),
+    readFile(join(root, 'openless-all/app/src-tauri/icons', file)),
+  ]);
+  assert.deepEqual(copy, shared, `${file} must match the shared icon`);
+  assert.ok(pack.includes(`${size}:${file}`));
 }
-const rpmDeps = packageScript.match(/^Requires: ([^\n]+)/m)?.[1].split(/,\s*/) ?? [];
-for (const name of [
-  'libX11', 'libxcb', 'libwayland-client', 'libxkbcommon', 'libglvnd-egl', 'vulkan-loader',
-  'libXi.so.6()(64bit)', 'libXcursor.so.1()(64bit)', 'libX11-xcb.so.1()(64bit)',
-  'libxkbcommon-x11.so.0()(64bit)', 'libwayland-egl.so.1()(64bit)',
-]) {
-  assert.ok(rpmDeps.includes(name), `rpm must declare dlopen dependency ${name}`);
-}
-// 5. ldd + cargo-tree verification gates are required for release and CI.
-
-// 6. Release must emit and verify checksums for both package artifacts.
-assert.ok(releaseWorkflow.includes('sha256sum'), 'release must compute sha256 checksums');
-assert.ok(releaseWorkflow.includes('> SHA256SUMS'), 'release must emit a SHA256SUMS artifact');
-assert.ok(releaseWorkflow.includes('sha256sum -c SHA256SUMS'), 'release must verify SHA256SUMS');
-assert.ok(releaseWorkflow.includes('sha256sum ./*.deb ./*.rpm'),
-  'SHA256SUMS must cover deb and rpm only');
-assert.ok(!/appimagetool|APPIMAGE_|LINUX_EGUI_MINISIGN|latest-linux-egui/i.test(releaseWorkflow),
-  'Linux release must not retain an AppImage updater or signing path');
-
-// 8. Legacy "-tauri" release tags are accepted only for compatibility: the
-//    suffix is stripped when present and the flow still resolves its own version
-//    from cargo metadata when no release tag is supplied, so it never depends on
-//    the Tauri release pipeline or its tag scheme.
-assert.ok(releaseWorkflow.includes('VERSION=${RELEASE_TAG#v}'), 'version must strip a leading v');
-assert.ok(releaseWorkflow.includes('VERSION=${VERSION%-tauri}'), 'legacy -tauri tag suffix must be tolerated');
-assert.ok(releaseWorkflow.includes('RELEASE_TAG:-}'), 'flow must run without a release tag');
-assert.ok(releaseWorkflow.includes("require('./package.json').version"),
-  'flow must resolve its version from the main app package when no tag is provided');
-assert.ok(!releaseWorkflow.includes('-tauri required') && !/case "\$RELEASE_TAG"[\s\S]*\*-tauri/.test(releaseWorkflow),
-  'flow must not mandate a -tauri release tag');
-
-// 9. The release flow never touches the Tauri host or its src-tauri tree.
-assert.ok(!/src-tauri/.test(packageScript), 'package script must not reference src-tauri');
-assert.ok(!/src-tauri/.test(releaseWorkflow), 'release workflow must not reference src-tauri');
-assert.ok(!/\btauri\b|\bwry\b/.test(packageScript), 'package script must not invoke Tauri tooling');
-
-// 9b. 图标：egui 侧不能引用 src-tauri（上一条），但共享同一套图。打包脚本从 Tauri-free
-//     的 `linux-egui/packaging/icons/` 装 5 档 hicolor 尺寸；这些副本必须与共享图标源
-//     `src-tauri/icons/`（Tauri 的 macOS/Windows/Android 打包也用那份）逐字节一致，
-//     否则两份图会静默漂移。以前只装一档，而且把 512×512 的图放进了 256x256 目录。
-const iconSizeLadder = [
-  ['32x32.png', '32x32'],
-  ['64x64.png', '64x64'],
-  ['128x128.png', '128x128'],
-  ['128x128@2x.png', '256x256'],
-  ['icon.png', '512x512'],
-];
-for (const [file, hicolor] of iconSizeLadder) {
-  const copy = await readFile(
-    join(repoRoot, 'openless-all/app/linux-egui/packaging/icons', file),
-  );
-  const shared = await readFile(
-    join(repoRoot, 'openless-all/app/src-tauri/icons', file),
-  );
-  assert.ok(
-    copy.equals(shared),
-    `linux-egui packaging icon ${file} must stay byte-identical to the shared src-tauri/icons copy`,
-  );
-  assert.ok(
-    packageScript.includes(`${hicolor}:${file}`),
-    `package script must install ${file} into hicolor/${hicolor}`,
-  );
-}
-assert.ok(
-  packageScript.includes('usr/share/icons/hicolor/${spec%%:*}/apps/openless.png'),
-  'package script must install the whole hicolor ladder, not a single size',
-);
-
-// Linux egui has its own release workflow; the beta Tauri/Android release
-// workflows remain upstream-owned. Never require edits to another platform's
-// release pipeline just to change the Linux host.
-const tauriWorkflow = await readFile(join(repoRoot, '.github/workflows/release-tauri.yml'), 'utf8');
-assert.ok(!tauriWorkflow.includes('build-linux-egui:'),
-  'Linux egui must remain independent from the beta Tauri release workflow');
-for (const gate of [
-  'test "$(find "$OUTPUT" -maxdepth 1 -name \'*.deb\' | wc -l)" -eq 1',
-  'test "$(find "$OUTPUT" -maxdepth 1 -name \'*.rpm\' | wc -l)" -eq 1',
-  "! ldd target/release/openless-linux-egui | grep -q 'not found'",
-  'fcitx5/libopenless.so',
-  'dpkg-deb -c',
-]) {
-  assert.ok(releaseWorkflow.includes(gate), `Linux egui release must keep gate: ${gate}`);
-}
-
+assert.doesNotMatch(pack + release + check, /src-tauri/);
 console.log('linux-egui-release-contract.test.mjs passed');

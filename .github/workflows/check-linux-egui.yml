@@ -1,0 +1,131 @@
+name: Linux egui build and backend checks
+
+# CI and tag releases call this exact deb/rpm build and verification path.
+# PRs already invoke it from ci.yml; avoid running it twice.
+on:
+  push:
+    branches: [Linux-egui]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-egui-build-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-linux-egui:
+    # PipeWire/libspa in this host needs 24.04. Packages target glibc >= 2.39.
+    runs-on: ubuntu-24.04
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri') && github.ref_name || '' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Install native build and packaging dependencies
+        run: |
+          sudo add-apt-repository -y universe || true
+          sudo apt-get update
+          sudo apt-get install -y \
+            appstream build-essential cmake cpio desktop-file-utils \
+            fcitx5-modules-dev file libasound2-dev libdbus-1-dev \
+            libfcitx5config-dev libfcitx5core-dev libfcitx5utils-dev \
+            liblzma-dev libpipewire-0.3-dev libpulse-dev libssl-dev \
+            libwayland-dev libx11-dev libxkbcommon-dev pkg-config ripgrep rpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Resolve package version and validate release tag
+        id: version
+        working-directory: openless-all/app
+        env:
+          VERSION_TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          if [ -n "$VERSION_TAG" ]; then
+            TAG_VERSION=${VERSION_TAG#v}
+            TAG_VERSION=${TAG_VERSION%-tauri}
+            if [ "${VERSION%%+*}" != "$TAG_VERSION" ]; then
+              echo "::error::tag $VERSION_TAG does not match package.json version $VERSION"
+              exit 1
+            fi
+          fi
+          # Keep the existing package upgrade scheme. Build metadata stays in
+          # the app, while the package version matches the numeric Beta.N tag.
+          echo "version=${VERSION%%+*}" >> "$GITHUB_OUTPUT"
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'openless-all/app -> target'
+
+      - name: Build and test fcitx5 plugin
+        working-directory: openless-all/scripts/linux-fcitx5-plugin
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+          test -s build/libopenless.so
+          test -s build/openless.conf
+
+      - name: Test Core, Linux host, and platform boundaries
+        working-directory: openless-all/app
+        run: |
+          cargo test --locked -p openless-core
+          cargo clippy --locked -p openless-core --all-targets
+          cargo test --locked -p openless-linux-egui --all-targets
+          cargo check --locked -p openless-linux-egui --all-targets
+          node scripts/linux-egui-tauri-free-contract.test.mjs
+          node scripts/linux-egui-release-contract.test.mjs
+          node scripts/tauri-linux-free-contract.test.mjs
+          pwsh -NoProfile -File ./scripts/check-core-deps.ps1
+          pwsh -NoProfile -File ./scripts/check-core-deps.ps1 openless-linux-egui
+          pwsh -NoProfile -File ./scripts/check-core-secret-surface.ps1
+          pwsh -NoProfile -File ./scripts/check-core-test-isolation.ps1
+          pwsh -NoProfile -File ./scripts/check-core-runtime-seam.ps1
+          pwsh -NoProfile -File ./scripts/check-linux-public-surface.ps1
+
+      - name: Validate Linux desktop metadata
+        run: |
+          desktop-file-validate openless-all/app/linux-egui/packaging/openless.desktop
+          appstreamcli validate --no-net openless-all/app/linux-egui/packaging/top.openless.OpenLess.metainfo.xml
+
+      - name: Build Linux egui host
+        working-directory: openless-all/app
+        run: cargo build --locked --release -p openless-linux-egui
+
+      - name: Package deb and rpm without Tauri
+        working-directory: openless-all/app
+        env:
+          OPENLESS_LINUX_VERSION: ${{ steps.version.outputs.version }}
+          OPENLESS_LINUX_ARCH: x86_64
+        run: |
+          # CI runners are disposable. Ignore old outputs restored by a cache.
+          rm -f target/linux-egui-packages/*.deb target/linux-egui-packages/*.rpm \
+            target/linux-egui-packages/SHA256SUMS
+          bash scripts/package-linux-egui.sh
+
+      - name: Generate checksums and verify distributable packages
+        working-directory: openless-all/app
+        run: |
+          set -euo pipefail
+          OUTPUT=target/linux-egui-packages
+          ( cd "$OUTPUT" && sha256sum ./*.deb ./*.rpm > SHA256SUMS )
+          bash scripts/verify-linux-egui-packages.sh
+
+      - name: Upload verified Linux packages as workflow artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: openless-linux-egui-x86_64
+          path: openless-all/app/target/linux-egui-packages/*
+          if-no-files-found: error

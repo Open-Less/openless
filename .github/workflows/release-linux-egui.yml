@@ -1,233 +1,53 @@
 name: Release Linux egui
 
-# Linux egui 的独立手动发版入口；Tauri/Android 的 beta 发版流程保持上游原样。
-# 不挂自动 tag 触发：需要 Linux 安装与回滚验证后手动 dispatch。
-# 产物为 deb/rpm + SHA256SUMS，release_tag 可指定现有 release。
+# An admin pushes v*-tauri only after CI and Linux device acceptance. This
+# workflow calls the exact same deb/rpm build used by CI, then attaches its
+# verified assets to the shared Tauri/Android Release (Beta remains a draft).
 on:
+  push:
+    tags:
+      - 'v*-tauri'
   workflow_dispatch:
-    inputs:
-      release_tag:
-        description: "Existing v* tag whose Linux egui assets to build/upload (e.g. v2.0.0-Beta.1-egui); blank only uploads Actions artifacts"
-        required: false
-        type: string
-      attach_release:
-        description: "Upload the built packages to the release named by release_tag (ignored when release_tag is blank)"
-        required: false
-        default: true
-        type: boolean
-  workflow_call:
-    inputs:
-      release_tag:
-        required: false
-        type: string
-      # 编排层（release-tauri.yml）传 false：四个平台并发跑，谁都不能在建 release
-      # 的同一秒里抢写，所以 Linux 资产的 release 上传统一交给聚合层（bundle job）。
-      attach_release:
-        required: false
-        default: true
-        type: boolean
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-linux-egui-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build-linux-egui:
-    # 跟 ci.yml 的 linux-core-contract 用同一个镜像，理由也一样：cpal 的 PipeWire
-    # 后端需要 24.04 自带的 PipeWire/libspa ABI，22.04 的头文件编译不过
-    # libspa 0.10.x（缺 spa_meta_first 等字段——
-    # "spa_video_info_raw has no field named flags" 就是这个）。
-    # 这条工作流以前从没跑过，所以从没拿到 ci.yml 早就打上的这个修正；
-    # 一旦冷缓存重编 libspa 就会在编译阶段直接挂掉（实测 2026-09-16 run 35120587777）。
-    #
-    # ⚠ 分发基线（用户已确认，不要改回 22.04）：产出的 deb/rpm 需要 glibc ≥ 2.39，
-    #   支持范围是 Ubuntu 24.04+ 一类的新发行版；Ubuntu 22.04 / Debian 12 不在
-    #   支持范围内。要覆盖它们必须在依赖层解决 libspa/PipeWire 版本，而不是换 runner。
+    permissions:
+      contents: read
+    uses: ./.github/workflows/check-linux-egui.yml
+
+  publish-linux-egui:
+    # Manual builds only upload Actions artifacts; they never change a Release.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
+    needs: build-linux-egui
     runs-on: ubuntu-24.04
-    env:
-      RELEASE_TAG: ${{ inputs.release_tag }}
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      # 这个 gate 必须排在编译之前：它只依赖 checkout 与 gh，几秒就能出结论。
-      # 历史教训：它原来在依赖安装 + fcitx5 插件构建 + 全量测试之后（第 8 步），
-      # 一个不合规的 release_tag 会白烧掉 4.5 分钟 runner 才报错。
-      - name: Validate release target and UI gate
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          if [ -z "${RELEASE_TAG:-}" ]; then
-            echo "release_tag is empty: only uploading Actions artifacts, no release is touched"
-            exit 0
-          fi
-          case "$RELEASE_TAG" in
-            v*) ;;
-            *)
-              echo "::error::release_tag '$RELEASE_TAG' must be an existing v* tag (e.g. v2.0.0-Beta.1-egui); leave it blank to only upload Actions artifacts"
-              exit 1
-              ;;
-          esac
-          if grep -q 'openless-linux-egui host stub' openless-all/app/linux-egui/src/main.rs; then
-            echo "::error::The egui UI stub cannot be uploaded as a release asset"
-            exit 1
-          fi
-          # 只要求 tag 存在（存在才能安全建 release）；release 不存在就由本工作流
-          # 末尾的 softprops 步骤创建——-egui tag 是全新命名空间，首次推送时还没
-          # 有任何 release，旧实现要求的"release 必须先存在"会把这条路堵死。
-          if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "::error::tag '$RELEASE_TAG' does not exist in $GITHUB_REPOSITORY; push the tag first, or leave release_tag blank"
-            exit 1
-          fi
-          echo "release target $RELEASE_TAG is a real tag in $GITHUB_REPOSITORY"
-
-      - name: Install native build and packaging dependencies
-        run: |
-          sudo add-apt-repository -y universe || true
-          sudo apt-get update
-          sudo apt-get install -y \
-            appstream \
-            build-essential \
-            cmake \
-            desktop-file-utils \
-            fcitx5-modules-dev \
-            libasound2-dev \
-            libdbus-1-dev \
-            libpipewire-0.3-dev \
-            libpulse-dev \
-            libfcitx5config-dev \
-            libfcitx5core-dev \
-            libfcitx5utils-dev \
-            liblzma-dev \
-            libssl-dev \
-            libwayland-dev \
-            libx11-dev \
-            libxkbcommon-dev \
-            pkg-config \
-            ripgrep \
-            rpm \
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - name: Cache Cargo
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: 'openless-all/app -> target'
-
-      - name: Build fcitx5 plugin
-        working-directory: openless-all/scripts/linux-fcitx5-plugin
-        run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
-          cmake --build build --parallel
-          ctest --test-dir build --output-on-failure
-          test -s build/libopenless.so
-          test -s build/openless.conf
-
-      - name: Verify framework-independent Linux contract
-        working-directory: openless-all/app
-        shell: pwsh
-        run: |
-          cargo test --locked -p openless-core
-          cargo clippy --locked -p openless-core --all-targets
-          cargo test --locked -p openless-linux-egui --all-targets
-          node scripts/linux-egui-tauri-free-contract.test.mjs
-          node scripts/linux-egui-release-contract.test.mjs
-          ./scripts/check-core-deps.ps1
-          ./scripts/check-core-deps.ps1 openless-linux-egui
-          ./scripts/check-core-secret-surface.ps1
-          ./scripts/check-core-test-isolation.ps1
-          ./scripts/check-core-runtime-seam.ps1
-          ./scripts/check-linux-public-surface.ps1
-
-      - name: Validate Linux desktop metadata
-        run: |
-          desktop-file-validate openless-all/app/linux-egui/packaging/openless.desktop
-          appstreamcli validate --no-net openless-all/app/linux-egui/packaging/top.openless.OpenLess.metainfo.xml
-
-      - name: Build Linux egui host
-        working-directory: openless-all/app
-        run: cargo build --locked --release -p openless-linux-egui
-
-      - name: Resolve package version
-        id: version
-        shell: bash
-        working-directory: openless-all/app
-        run: |
-          if [ -n "${RELEASE_TAG:-}" ]; then
-            VERSION=${RELEASE_TAG#v}
-            # egui 产物统一用 -egui tag 后缀；$%-tauri 只保留为历史 tag 的兼容写法。
-            VERSION=${VERSION%-egui}
-            VERSION=${VERSION%-tauri}
-          else
-            VERSION=$(node -p "require('./package.json').version")
-          fi
-          test -n "$VERSION"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Package deb and rpm without Tauri
-        working-directory: openless-all/app
-        env:
-          OPENLESS_LINUX_VERSION: ${{ steps.version.outputs.version }}
-          OPENLESS_LINUX_ARCH: x86_64
-        run: bash scripts/package-linux-egui.sh
-
-      - name: Verify package contents and ELF dependencies
-        working-directory: openless-all/app
-        run: |
-          OUTPUT=target/linux-egui-packages
-          test "$(find "$OUTPUT" -maxdepth 1 -name '*.deb' | wc -l)" -eq 1
-          test "$(find "$OUTPUT" -maxdepth 1 -name '*.rpm' | wc -l)" -eq 1
-          test "$(find "$OUTPUT" -maxdepth 1 -name '*.AppImage' | wc -l)" -eq 0
-          ! ldd target/release/openless-linux-egui | grep -q 'not found'
-          ! ldd target/release/openless-linux-egui | grep -Eqi 'webkit|wry|tauri'
-          dpkg-deb -c "$OUTPUT"/*.deb | grep -q 'usr/bin/openless'
-          dpkg-deb -c "$OUTPUT"/*.deb | grep -q 'fcitx5/libopenless.so'
-          rpm -qlp "$OUTPUT"/*.rpm | grep -q '/usr/bin/openless'
-          rpm -qlp "$OUTPUT"/*.rpm | grep -q '/usr/lib64/fcitx5/libopenless.so'
-
-      - name: Generate release checksums
-        working-directory: openless-all/app
-        run: |
-          set -euo pipefail
-          OUTPUT=target/linux-egui-packages
-          test "$(find "$OUTPUT" -maxdepth 1 -name '*.deb' | wc -l)" -eq 1
-          test "$(find "$OUTPUT" -maxdepth 1 -name '*.rpm' | wc -l)" -eq 1
-          test "$(find "$OUTPUT" -maxdepth 1 -name '*.AppImage' | wc -l)" -eq 0
-          # 保持打包脚本/本地流程一致的命名（不改名）：聚合 zip 只装 Linux 产物，
-          # 不会与其它平台那份撞名。
-          ( cd "$OUTPUT" && sha256sum ./*.deb ./*.rpm > SHA256SUMS )
-          test "$(wc -l < "$OUTPUT/SHA256SUMS")" -eq 2
-          cat "$OUTPUT/SHA256SUMS"
-
-      - name: Verify Linux release checksums
-        working-directory: openless-all/app
-        run: |
-          test -s target/linux-egui-packages/SHA256SUMS
-          ( cd target/linux-egui-packages && sha256sum -c SHA256SUMS >/dev/null )
-
-      - name: Upload Linux egui workflow artifacts
-        uses: actions/upload-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: openless-linux-egui-x86_64
-          path: openless-all/app/target/linux-egui-packages/*
-          if-no-files-found: error
+          path: linux-egui-packages
 
-      - name: Create / update the release with Linux egui assets
-        if: inputs.release_tag != '' && inputs.attach_release
+      - name: Verify downloaded release assets
+        run: |
+          set -euo pipefail
+          test "$(find linux-egui-packages -maxdepth 1 -name '*.deb' | wc -l)" -eq 1
+          test "$(find linux-egui-packages -maxdepth 1 -name '*.rpm' | wc -l)" -eq 1
+          test "$(find linux-egui-packages -maxdepth 1 -name '*.AppImage' | wc -l)" -eq 0
+          ( cd linux-egui-packages && sha256sum --check --strict SHA256SUMS )
+
+      - name: Attach Linux assets to the shared release draft
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.release_tag }}
-          # 不传 name/body_path：release 不存在时用默认标题（tag 名本身带 -egui
-          # 后缀，不会误标成 Tauri），已存在时保留 leader 写好的标题与 body。
-          # Beta 先把包留在 draft 里：与 Tauri/Android 两个 workflow 共用同一个
-          # release，只有管理员核对过包与 updater manifest 之后才发布。
-          draft: ${{ endsWith(inputs.release_tag, '-beta-egui') || contains(inputs.release_tag, '-Beta.') }}
-          # -egui tag 是一个独立命名空间，beta 渠道必须自己判：否则首次为
-          # v*-Beta.N-egui 建 release 时会默认成正式版，把预发布包推给正式版用户。
-          prerelease: ${{ endsWith(inputs.release_tag, '-beta-egui') || contains(inputs.release_tag, '-Beta.') }}
-          files: openless-all/app/target/linux-egui-packages/*
+          tag_name: ${{ github.ref_name }}
+          draft: ${{ endsWith(github.ref_name, '-beta-tauri') || contains(github.ref_name, '-Beta.') }}
+          prerelease: ${{ endsWith(github.ref_name, '-beta-tauri') || contains(github.ref_name, '-Beta.') }}
+          files: linux-egui-packages/*
           fail_on_unmatched_files: true
