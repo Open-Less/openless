@@ -3663,11 +3663,7 @@ fn capsule_style_preview(ui: &mut egui::Ui, style: usize) {
             0 => {
                 // Match the transparent, drifting spectral ribbons used by the
                 // live Siri capsule instead of showing unrelated loading dots.
-                let _ = super::siri_gl::paint(
-                    ui,
-                    rect,
-                    super::siri_gl::SiriGlow::wave(1.35, 0.52, 1.0),
-                );
+                let _ = super::siri_gl::paint(ui, rect, super::siri_gl::SiriGlow::wave(1.35, 0.52));
             }
             1 => {
                 let pill = egui::Rect::from_center_size(rect.center(), egui::vec2(152.0, 34.0));

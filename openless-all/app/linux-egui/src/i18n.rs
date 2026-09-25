@@ -1741,9 +1741,6 @@ pub const CATALOG: &[Msg] = &[
     Msg { key: "head.marketplace_detail", text: row("详情：{}", "詳情：{}", "Details: {}", "詳細: {}", "상세: {}") },
     Msg { key: "head.history_empty", text: row("历史", "歷史", "History", "履歴", "기록") },
     // ---- Update UI
-    Msg { key: "update.available", text: row("可用版本：{}", "可用版本：{}", "Available version: {}", "利用可能なバージョン: {}", "사용 가능한 버전: {}") },
-    Msg { key: "update.downloaded", text: row("已下载 {} 字节", "已下載 {} 位元組", "{} bytes downloaded", "{} バイトをダウンロード", "{}바이트 다운로드됨") },
-    Msg { key: "update.manual_notice", text: row("deb/rpm 与开发构建由包管理器或发布页更新。", "deb/rpm 與開發建置由套件管理員或發布頁更新。", "deb/rpm and dev builds update via your package manager or the releases page.", "deb/rpm と開発ビルドはパッケージマネージャまたはリリースページで更新されます。", "deb/rpm 및 개발 빌드는 패키지 관리자 또는 릴리스 페이지로 업데이트됩니다.") },
     Msg { key: "update.system_managed", text: row("当前安装包由系统包管理器更新", "目前套件由系統套件管理員更新", "This build is updated by your system package manager", "このパッケージはシステムのパッケージマネージャで更新されます", "이 패키지는 시스템 패키지 관리자가 업데이트합니다") },
     Msg { key: "update.discovered", text: row("发现新版本 {}", "發現新版本 {}", "New version available: {}", "新しいバージョン: {}", "새 버전 발견: {}") },
     Msg { key: "update.up_to_date", text: row("当前已是最新版本", "目前已是最新版本", "You are up to date", "最新バージョン입니다", "최신 버전입니다") },
@@ -6081,6 +6078,142 @@ pub const CATALOG: &[Msg] = &[
     },
     Msg {
         key: "marketplace.installingBtn",
+        text: row("安装中…", "安裝中…", "Installing…", "インストール中…", "설치 중…"),
+    },
+    Msg {
+        key: "settings.about.update_dialog_available_desc",
+        text: row(
+            "发现 OpenLess {}，是否现在更新？",
+            "發現 OpenLess {}，是否現在更新？",
+            "OpenLess {} is available. Update now?",
+            "OpenLess {} が見つかりました。今すぐ更新しますか？",
+            "OpenLess {} 을(를) 발견했습니다. 지금 업데이트하시겠습니까?",
+        ),
+    },
+    Msg {
+        key: "settings.about.update_dialog_available_title",
+        text: row(
+            "发现新版本",
+            "發現新版本",
+            "Update available",
+            "新しいバージョンがあります",
+            "새 버전 발견",
+        ),
+    },
+    Msg {
+        key: "settings.about.update_dialog_downloaded_desc",
+        text: row(
+            "OpenLess {} 已安装完成。是否现在自动重启以应用更新？",
+            "OpenLess {} 已安裝完成。是否現在自動重啓以應用更新？",
+            "OpenLess {} has been installed. Restart automatically now to apply it?",
+            "OpenLess {} のインストールが完了しました。今すぐ自動再起動して適用しますか？",
+            "OpenLess {} 설치가 완료되었습니다. 지금 자동 재시작하여 적용하시겠습니까?",
+        ),
+    },
+    Msg {
+        key: "settings.about.update_dialog_downloaded_title",
+        text: row("更新已准备好", "更新已準備好", "Update ready", "アップデートの準備完了", "업데이트 준비 완료"),
+    },
+    Msg {
+        key: "settings.about.update_dialog_downloading_desc",
+        text: row(
+            "正在下载 OpenLess {}，请保持应用打开。",
+            "正在下載 OpenLess {}，請保持應用打開。",
+            "Downloading OpenLess {}. Keep the app open.",
+            "OpenLess {} をダウンロード中です。アプリを開いたままにしてください。",
+            "OpenLess {} 을(를) 다운로드 중입니다. 앱을 열어 두세요.",
+        ),
+    },
+    Msg {
+        key: "settings.about.update_dialog_downloading_title",
+        text: row(
+            "正在下载更新",
+            "正在下載更新",
+            "Downloading update",
+            "アップデートをダウンロード中",
+            "업데이트 다운로드 중",
+        ),
+    },
+    Msg {
+        key: "settings.about.update_dialog_install",
+        text: row("现在更新", "現在更新", "Update now", "今すぐ更新", "지금 업데이트"),
+    },
+    Msg {
+        key: "settings.about.update_dialog_install_error_desc",
+        text: row(
+            "自动更新没能完成：{}。你可以前往下载页手动下载安装最新版本。",
+            "自動更新未能完成：{}。你可以前往下載頁手動下載安裝最新版本。",
+            "The automatic update couldn't finish: {}. You can download and install the latest version manually.",
+            "自動更新を完了できませんでした：{}。ダウンロードページから手動で最新版を入手できます。",
+            "자동 업데이트를 완료하지 못했습니다: {}. 다운로드 페이지에서 최신 버전을 직접 받아 설치할 수 있습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.about.update_dialog_install_error_title",
+        text: row(
+            "更新失败",
+            "更新失敗",
+            "Update failed",
+            "更新に失敗しました",
+            "업데이트 실패",
+        ),
+    },
+    Msg {
+        key: "settings.about.update_dialog_installing_desc",
+        text: row(
+            "正在安装 OpenLess {}，请保持应用打开。",
+            "正在安裝 OpenLess {}，請保持應用打開。",
+            "Installing OpenLess {}. Keep the app open.",
+            "OpenLess {} をインストール中です。アプリを開いたままにしてください。",
+            "OpenLess {} 을(를) 설치 중입니다. 앱을 열어 두세요.",
+        ),
+    },
+    Msg {
+        key: "settings.about.update_dialog_installing_title",
+        text: row(
+            "正在安装更新",
+            "正在安裝更新",
+            "Installing update",
+            "アップデートをインストール中",
+            "업데이트 설치 중",
+        ),
+    },
+    Msg {
+        key: "settings.about.update_dialog_later",
+        text: row(
+            "稍后手动重启",
+            "稍後手動重啓",
+            "Restart manually later",
+            "後で手動再起動",
+            "나중에 수동 재시작",
+        ),
+    },
+    Msg {
+        key: "settings.about.update_dialog_progress",
+        text: row(
+            "{}% · {} / {}",
+            "{}% · {} / {}",
+            "{}% · {} / {}",
+            "{}% · {} / {}",
+            "{}% · {} / {}",
+        ),
+    },
+    Msg {
+        key: "settings.about.update_dialog_progress_unknown",
+        text: row(
+            "已下载 {}",
+            "已下載 {}",
+            "{} downloaded",
+            "ダウンロード済み {}",
+            "다운로드됨 {}",
+        ),
+    },
+    Msg {
+        key: "settings.about.update_dialog_downloading_label",
+        text: row("下载中…", "下載中…", "Downloading…", "ダウンロード中…", "다운로드 중…"),
+    },
+    Msg {
+        key: "settings.about.update_dialog_installing_label",
         text: row("安装中…", "安裝中…", "Installing…", "インストール中…", "설치 중…"),
     },
 ];

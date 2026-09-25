@@ -284,7 +284,6 @@ pub fn selection_ask(
         .show(root_ui, |ui| {
             // 首帧只编译不绘制地把三个程序编译好（进程内只排一次），
             // 免得录音/思考的第一帧才发现要编译——那是按热键后「慢一拍」的来源。
-            siri_gl::warm_up(ui);
             // ── 润色结果模式：同一个面板，第二套 UI（原独立预览窗口的同一套视觉）。
             if let Some(polish) = state.polish.as_ref() {
                 action = match polish_result_mode(ui, polish, lang) {
@@ -543,7 +542,6 @@ pub fn selection_ask(
                             clock.time,
                             12.0,
                             if recording { 2.0 } else { 1.6 },
-                            if recording { 1.5 } else { 2.1 },
                         )
                         .with_tint(tint);
                         if !siri_gl::paint(ui, rect.expand(3.0), glow) {
@@ -1047,7 +1045,6 @@ pub fn dictation_capsule(
         .frame(egui::Frame::NONE)
         .show(root_ui, |ui| {
             // 胶囊进程的首帧预热（同 QA 面板；录音环与 Siri 波都是 GPU 路径）。
-            siri_gl::warm_up(ui);
             // Tauri `capsuleStyle`：siri = 流光药丸（GPU 波/环），classic = 经典药丸 +
             // 五根音量条，typeless = 176×64 深色胶囊 + 11 根波形。
             let style = state.style.as_str();
@@ -1190,7 +1187,7 @@ pub fn dictation_capsule(
                     let _ = siri_gl::paint(
                         ui,
                         center,
-                        siri_gl::SiriGlow::wave(clock.time, clock.level, 1.0),
+                        siri_gl::SiriGlow::wave(clock.time, clock.level),
                     );
                     ui.ctx()
                         .request_repaint_after(std::time::Duration::from_millis(16));
@@ -1596,7 +1593,6 @@ mod tests {
     fn run(size: egui::Vec2, mut render: impl FnMut(&mut egui::Ui) -> String) -> String {
         // Every popup test renders the same frontend as the GPU-state tests, so
         // they share the process-global glow flags and must not run in parallel.
-        let _guard = super::siri_gl::gpu_state_guard();
         let ctx = egui::Context::default();
         let mut painted = String::new();
         for _ in 0..2 {
@@ -1620,7 +1616,6 @@ mod tests {
         size: egui::Vec2,
         mut render: impl FnMut(&mut egui::Ui) -> String,
     ) -> egui::FullOutput {
-        let _guard = super::siri_gl::gpu_state_guard();
         let ctx = egui::Context::default();
         let mut last = None;
         for _ in 0..2 {
@@ -1885,8 +1880,6 @@ mod tests {
     #[test]
     fn capsule_keeps_the_centre_glow_off_the_gpu_path() {
         // The GPU state is process-global; take the shared test guard.
-        let _guard = super::siri_gl::gpu_state_guard();
-        super::siri_gl::seed_gpu_ready_for_tests();
         let frame = |state: CapsulePopupState| {
             let ctx = egui::Context::default();
             let output = crate::ui::frontend::run_pass(
@@ -2119,7 +2112,6 @@ mod tests {
     /// Render one capsule frame and collect the colours, the GPU callback count
     /// and the number of centre glow strokes (the CPU wave lines).
     fn capsule_frame(state: &CapsulePopupState) -> (Vec<egui::Color32>, usize, usize) {
-        let _guard = super::siri_gl::gpu_state_guard();
         let ctx = egui::Context::default();
         let mut colors = Vec::new();
         let mut callbacks = 0;
@@ -2226,7 +2218,6 @@ mod tests {
     /// 的圆心，必须分别返回 Cancel / Confirm。
     #[test]
     fn the_capsule_buttons_report_cancel_and_confirm() {
-        let _guard = super::siri_gl::gpu_state_guard();
         let size = egui::vec2(460.0, 180.0);
         // 与渲染同源的几何：药丸 176×42，水平居中、距底 16；圆钮 28、内缩 8。
         let pill_left = size.x / 2.0 - PILL_WIDTH / 2.0;

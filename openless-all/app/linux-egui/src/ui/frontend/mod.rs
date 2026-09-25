@@ -12,6 +12,7 @@ pub mod settings;
 pub mod siri_gl;
 pub mod style;
 pub mod translation;
+pub mod update;
 pub mod view_model;
 pub mod vocab;
 
@@ -103,6 +104,10 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
         if vm.settings_open {
             settings::settings_overlay(ctx, vm, actions, body);
         }
+
+        // Self-update modal. Drawn after the settings overlay: the button that
+        // opens it lives in the About card, so it has to sit above that card.
+        update::update_overlay(ctx, vm, actions, body);
     });
 }
 
@@ -298,14 +303,11 @@ mod tests {
                 raw_transcript: "raw transcript of the first entry".into(),
                 final_text: String::new(),
                 duration_ms: Some(3_100),
-                insert_status: super::view_model::HistoryInsertStatus::Failed,
                 has_audio: true,
                 asr_provider: Some("zhipu".into()),
                 asr_model: Some("glm-asr-2512".into()),
                 asr_ms: Some(465),
                 llm_provider: None,
-                llm_model: None,
-                polish_ms: None,
                 app_name: Some("OpenLess".into()),
                 dictionary_count: Some(2),
             },
@@ -317,7 +319,6 @@ mod tests {
                 raw_transcript: "second raw".into(),
                 final_text: "second polished text".into(),
                 duration_ms: Some(2_400),
-                insert_status: super::view_model::HistoryInsertStatus::Inserted,
                 has_audio: false,
                 ..Default::default()
             },
@@ -1746,6 +1747,28 @@ mod tests {
             "openless-style-editor-modal",
             "openless-style-editor-card-rect",
             CardPlacement::RightDocked,
+        );
+    }
+
+    /// 自更新对话框用同一套结构：遮罩、点击拦截与卡片同属一个 `Area`。
+    /// 它是唯一画在设置弹窗之上的弹窗（入口在「关于」卡片里）。
+    #[test]
+    fn update_dialog_overlay_is_one_layer() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: openless_linux_egui::Lang::ZhCn,
+            active_page: Page::Settings,
+            settings_open: true,
+            update_stage: Some(super::view_model::UpdateStage::Available),
+            update_version: "2.0.0-Beta.2".into(),
+            ..Default::default()
+        };
+        assert_overlay_keeps_the_card_on_top(
+            &ctx,
+            &mut vm,
+            "openless-update-modal",
+            "openless-update-card-rect",
+            CardPlacement::Centred,
         );
     }
 

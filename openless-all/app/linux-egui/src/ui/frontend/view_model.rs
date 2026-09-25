@@ -46,6 +46,10 @@ pub enum FrontendAction {
     MarketplaceDownload(usize),
     /// Install marketplace pack.
     MarketplaceInstall(usize),
+    /// 自更新：开始下载并安装（Tauri 的 updateDialog「Update now」）。
+    UpdateInstall,
+    /// 关掉自更新对话框（未安装成功时允许，安装中不允许）。
+    UpdateDismiss,
     /// Toggle marketplace pack like.
     MarketplaceToggleLike(usize),
     MarketplaceCloseMine,
@@ -227,6 +231,22 @@ pub enum FrontendAction {
     /// Sidebar group toggle.
     SidebarToggleStyle,
     SidebarToggleTools,
+}
+
+// ── Update dialog ───────────────────────────────────────────────────────────
+
+/// Which face the self-update dialog shows (Tauri `AutoUpdate.tsx`'s `status`).
+/// The host owns the real state machine; this is what the page paints.
+#[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug, PartialEq, Eq)]
+pub enum UpdateStage {
+    /// A newer version is published and waiting for the user's go-ahead.
+    Available,
+    Downloading,
+    /// Bytes are in: verifying the signature and swapping the AppImage.
+    Installing,
+    /// Installed; it takes effect on the next launch.
+    Installed,
+    Failed,
 }
 
 // ── Marketplace types ───────────────────────────────────────────────────────
@@ -518,18 +538,6 @@ pub struct SavedVocabPreset {
 
 // ── History types ───────────────────────────────────────────────────────────
 
-/// Insert outcome, mirrored from Core's `HistoryInsertStatus` into a plain
-/// frontend enum so the page never has to depend on Core types.
-#[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug, Default, PartialEq, Eq)]
-pub enum HistoryInsertStatus {
-    #[default]
-    NotRequested,
-    Inserted,
-    PasteSent,
-    CopiedFallback,
-    Failed,
-}
-
 /// In-app playback state for the entry currently being played.
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct HistoryPlayback {
@@ -559,14 +567,11 @@ pub struct HistoryEntry {
     pub raw_transcript: String,
     pub final_text: String,
     pub duration_ms: Option<u64>,
-    pub insert_status: HistoryInsertStatus,
     pub has_audio: bool,
     pub asr_provider: Option<String>,
     pub asr_model: Option<String>,
     pub asr_ms: Option<u64>,
     pub llm_provider: Option<String>,
-    pub llm_model: Option<String>,
-    pub polish_ms: Option<u64>,
     pub app_name: Option<String>,
     pub dictionary_count: Option<u32>,
 }
@@ -758,6 +763,14 @@ pub struct FrontendViewModel {
     pub marketplace_loading: bool,
     /// Pack id currently being installed (the detail button shows 安装中…).
     pub marketplace_installing: Option<String>,
+
+    // Self-update dialog. `None` = no dialog; the host only fills the version
+    // and progress, the page resolves every string.
+    pub update_stage: Option<UpdateStage>,
+    pub update_version: String,
+    pub update_downloaded: u64,
+    pub update_total: Option<u64>,
+    pub update_error: Option<String>,
     pub marketplace_unsupported: bool,
 
     // Settings
@@ -927,6 +940,11 @@ impl Default for FrontendViewModel {
             marketplace_notice: None,
             marketplace_loading: true,
             marketplace_installing: None,
+            update_stage: None,
+            update_version: String::new(),
+            update_downloaded: 0,
+            update_total: None,
+            update_error: None,
             marketplace_unsupported: true,
             settings_section: SettingsSection::General,
             services_view: 0,

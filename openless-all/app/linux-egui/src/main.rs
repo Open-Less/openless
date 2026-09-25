@@ -23,8 +23,8 @@ mod linux_app {
     use eframe::egui;
     use openless_core::{
         BackendConfig, BackendError, BackendEvent, BackendEventKind, BackendSnapshot,
-        DictationPhase, HistoryInsertStatus, HostAction, LessComputerEventKind, QaStateEvent,
-        QaStateKind, SelectionPhase, SelectionSnapshot, TranscriptAccumulator, UserPreferences,
+        DictationPhase, HostAction, LessComputerEventKind, QaStateEvent, QaStateKind,
+        SelectionPhase, SelectionSnapshot, TranscriptAccumulator, UserPreferences,
     };
     use openless_linux_egui::{
         capsule_hide_delay, capsule_hide_is_still_current, capsule_needs_fallback_dismissal,
@@ -86,6 +86,10 @@ mod linux_app {
         Microphones(Result<Vec<openless_core::MicrophoneDevice>, String>),
         Overview(Result<OverviewData, String>),
         UpdateCheck(Result<Option<UpdateManifest>, String>),
+        /// 自更新下载进度（Tauri `DownloadEvent` 的 Progress）。
+        UpdateProgress(openless_linux_egui::DownloadProgress),
+        /// 自更新安装结束（成功或失败）。
+        UpdateInstalled(Result<openless_linux_egui::InstalledUpdate, String>),
     }
 
     #[derive(Clone)]
@@ -690,6 +694,10 @@ mod linux_app {
         update_manifest: Option<UpdateManifest>,
         update_busy: bool,
         update_progress: Option<openless_linux_egui::DownloadProgress>,
+        /// 安装成功后的版本号（对话框显示「已安装 X，请重启」）。
+        update_installed: Option<String>,
+        /// 安装失败的原文（对话框显示原因）。
+        update_install_error: Option<String>,
         /// Currently playing history recording (session id + player handle).
         history_clip: Option<(String, openless_linux_egui::ClipPlayer)>,
         marketplace_items: Vec<openless_core::MarketplaceListItem>,
@@ -745,6 +753,38 @@ mod linux_app {
             || vm.style_model.trim() != saved.recommended_model.clone().unwrap_or_default()
             || vm.style_compatible_version.trim()
                 != saved.compatible_app_version.clone().unwrap_or_default()
+    }
+
+    /// 宿主自更新状态 → 对话框阶段（Tauri `AutoUpdate.tsx` 的 `status`）。
+    /// 一次只有一个阶段：安装中/失败/已安装优先于「发现新版本」。
+    fn update_dialog_stage(
+        busy: bool,
+        progress: Option<&openless_linux_egui::DownloadProgress>,
+        installed: bool,
+        failed: bool,
+        available: bool,
+    ) -> Option<frontend::view_model::UpdateStage> {
+        use frontend::view_model::UpdateStage;
+        if busy {
+            let downloaded = progress.map(|progress| progress.downloaded).unwrap_or(0);
+            // `download_and_install` 一口气做完下载→校验→替换，没有中间的信号：
+            // 字节数到齐就当进入校验/替换阶段，否则还在下载。
+            let done = progress
+                .and_then(|progress| progress.content_length)
+                .is_some_and(|total| total > 0 && downloaded >= total);
+            return Some(if done {
+                UpdateStage::Installing
+            } else {
+                UpdateStage::Downloading
+            });
+        }
+        if installed {
+            return Some(UpdateStage::Installed);
+        }
+        if failed {
+            return Some(UpdateStage::Failed);
+        }
+        available.then_some(UpdateStage::Available)
     }
 
     impl OpenLessEguiApp {
@@ -849,6 +889,8 @@ mod linux_app {
                         update_manifest: None,
                         update_busy: false,
                         update_progress: None,
+                        update_installed: None,
+                        update_install_error: None,
                         history_clip: None,
                         marketplace_items: Vec::new(),
                         marketplace_attempted: false,
@@ -952,6 +994,8 @@ mod linux_app {
                     update_manifest: None,
                     update_busy: false,
                     update_progress: None,
+                    update_installed: None,
+                    update_install_error: None,
                     history_clip: None,
                     marketplace_items: Vec::new(),
                     marketplace_attempted: false,
@@ -2201,6 +2245,38 @@ mod linux_app {
                     .await
                     .map_err(|error| error.to_string());
                 let _ = tx.send(UiResult::UpdateCheck(result));
+            });
+        }
+
+        /// 下载、校验签名并替换 AppImage（Tauri `update.download()` + `install()`）。
+        /// 只有 AppImage 包能自更新；deb/rpm 下 `update_support` 不是 AppImage，
+        /// 对话框也不会出现。
+        fn install_update(&mut self) {
+            let (LinuxUpdateSupport::AppImage(updater), Some(manifest)) =
+                (self.update_support.clone(), self.update_manifest.clone())
+            else {
+                return;
+            };
+            if self.update_busy {
+                return;
+            }
+            self.update_busy = true;
+            self.update_installed = None;
+            self.update_install_error = None;
+            self.update_progress = Some(openless_linux_egui::DownloadProgress {
+                downloaded: 0,
+                content_length: None,
+            });
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let progress_tx = tx.clone();
+                let result = updater
+                    .download_and_install(manifest, move |progress| {
+                        let _ = progress_tx.send(UiResult::UpdateProgress(progress));
+                    })
+                    .await
+                    .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::UpdateInstalled(result));
             });
         }
 
@@ -3689,6 +3765,20 @@ mod linux_app {
                         self.update_busy = false;
                         self.status = fmt_l10n(lang, "update.check_failed", &[&error]);
                     }
+                    UiResult::UpdateProgress(progress) => self.update_progress = Some(progress),
+                    UiResult::UpdateInstalled(Ok(installed)) => {
+                        self.update_busy = false;
+                        self.update_manifest = None;
+                        self.update_progress = None;
+                        self.update_installed = Some(installed.version.clone());
+                        self.status =
+                            fmt_l10n(lang, "update.installed_restart", &[&installed.version]);
+                    }
+                    UiResult::UpdateInstalled(Err(error)) => {
+                        self.update_busy = false;
+                        self.update_install_error = Some(error.clone());
+                        self.status = fmt_l10n(lang, "update.install_failed", &[&error]);
+                    }
                 }
             }
             if let Some(backend) = self.backend() {
@@ -3842,6 +3932,31 @@ mod linux_app {
                     .map(|binding| binding.display_label())
                     .unwrap_or_default();
             }
+
+            // 自更新对话框：宿主是状态机唯一来源，这里只映射成界面阶段。
+            vm.update_stage = update_dialog_stage(
+                self.update_busy,
+                self.update_progress.as_ref(),
+                self.update_installed.is_some(),
+                self.update_install_error.is_some(),
+                self.update_manifest.is_some(),
+            );
+            vm.update_version = self
+                .update_manifest
+                .as_ref()
+                .map(|manifest| manifest.version.clone())
+                .or_else(|| self.update_installed.clone())
+                .unwrap_or_default();
+            vm.update_error = self.update_install_error.clone();
+            vm.update_downloaded = self
+                .update_progress
+                .as_ref()
+                .map(|progress| progress.downloaded)
+                .unwrap_or(0);
+            vm.update_total = self
+                .update_progress
+                .as_ref()
+                .and_then(|progress| progress.content_length);
 
             // The drawer's Save button is enabled only while the draft differs
             // from what Core last stored.
@@ -4152,44 +4267,26 @@ mod linux_app {
                                     .map(|path| path.exists())
                                     .unwrap_or(false);
                                 frontend::view_model::HistoryEntry {
-                                    quick_note: item.source == openless_core::HistorySource::QuickNote,
+                                    quick_note: item.source
+                                        == openless_core::HistorySource::QuickNote,
                                     error_code: item.error_code,
                                     id: item.id,
-                                created_at: item.created_at,
-                                mode: overview_mode(item.mode),
-                                // A record's style pack name is not resolvable here without the
-                                // pack catalog, so the pill falls back to the polish mode label
-                                // (which is what records without a style pack show anyway).
-                                style_label: polish_mode_label(lang, item.mode).to_string(),
-                                raw_transcript: item.raw_transcript,
-                                final_text: item.final_text,
-                                duration_ms: item.duration_ms,
-                                insert_status: match item.insert_status {
-                                    HistoryInsertStatus::Inserted => {
-                                        frontend::view_model::HistoryInsertStatus::Inserted
-                                    }
-                                    HistoryInsertStatus::CopiedFallback => {
-                                        frontend::view_model::HistoryInsertStatus::CopiedFallback
-                                    }
-                                    HistoryInsertStatus::PasteSent => {
-                                        frontend::view_model::HistoryInsertStatus::PasteSent
-                                    }
-                                    HistoryInsertStatus::Failed => {
-                                        frontend::view_model::HistoryInsertStatus::Failed
-                                    }
-                                    HistoryInsertStatus::NotRequested => {
-                                        frontend::view_model::HistoryInsertStatus::NotRequested
-                                    }
-                                },
-                                has_audio,
+                                    created_at: item.created_at,
+                                    mode: overview_mode(item.mode),
+                                    // A record's style pack name is not resolvable here without the
+                                    // pack catalog, so the pill falls back to the polish mode label
+                                    // (which is what records without a style pack show anyway).
+                                    style_label: polish_mode_label(lang, item.mode).to_string(),
+                                    raw_transcript: item.raw_transcript,
+                                    final_text: item.final_text,
+                                    duration_ms: item.duration_ms,
+                                    has_audio,
                                     asr_provider: item.asr_provider,
-                                asr_model: item.asr_model,
-                                asr_ms: item.asr_ms,
-                                llm_provider: item.llm_provider,
-                                llm_model: item.llm_model,
-                                polish_ms: item.polish_ms,
-                                app_name: item.app_name,
-                                dictionary_count: item.dictionary_entry_count,
+                                    asr_model: item.asr_model,
+                                    asr_ms: item.asr_ms,
+                                    llm_provider: item.llm_provider,
+                                    app_name: item.app_name,
+                                    dictionary_count: item.dictionary_entry_count,
                                 }
                             })
                             .collect();
@@ -5086,6 +5183,17 @@ mod linux_app {
                                     });
                                 });
                             }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::UpdateInstall => {
+                        self.install_update();
+                    }
+                    frontend::view_model::FrontendAction::UpdateDismiss => {
+                        if !self.update_busy {
+                            self.update_manifest = None;
+                            self.update_installed = None;
+                            self.update_install_error = None;
+                            self.update_progress = None;
                         }
                     }
                     frontend::view_model::FrontendAction::MarketplaceDownload(index) => {
@@ -8677,6 +8785,45 @@ Internal flags (set by OpenLess itself, not for regular use):
         /// 快捷键卡片上的每一行都必须从 Core 偏好取真值。宿主以前只填了
         /// 听写/翻译/QA/速记四行，其余行无论偏好里有没有绑定都画成空键帽 ——
         /// 看起来是「未设置」，录制却实实在在地写进了偏好。
+        /// 自更新阶段映射：宿主状态是唯一来源，界面只画映射结果。
+        #[test]
+        fn update_dialog_stage_follows_the_host_state() {
+            use frontend::view_model::UpdateStage;
+            let progress =
+                |downloaded: u64, total: Option<u64>| openless_linux_egui::DownloadProgress {
+                    downloaded,
+                    content_length: total,
+                };
+            // 没有任何状态：不显示对话框（deb/rpm 用户永远不会看到）。
+            assert_eq!(update_dialog_stage(false, None, false, false, false), None);
+            // 发现新版本。
+            assert_eq!(
+                update_dialog_stage(false, None, false, false, true),
+                Some(UpdateStage::Available)
+            );
+            // 下载中：没有 Content-Length 也算下载中。
+            for total in [Some(100), None] {
+                assert_eq!(
+                    update_dialog_stage(true, Some(&progress(10, total)), false, false, true),
+                    Some(UpdateStage::Downloading)
+                );
+            }
+            // 字节到齐 → 校验/替换阶段（install 是一口气做完的，只能靠字节数判断）。
+            assert_eq!(
+                update_dialog_stage(true, Some(&progress(100, Some(100))), false, false, true),
+                Some(UpdateStage::Installing)
+            );
+            // 终态压过「发现新版本」。
+            assert_eq!(
+                update_dialog_stage(false, None, true, false, true),
+                Some(UpdateStage::Installed)
+            );
+            assert_eq!(
+                update_dialog_stage(false, None, false, true, true),
+                Some(UpdateStage::Failed)
+            );
+        }
+
         #[test]
         fn shortcut_rows_show_the_bindings_core_holds() {
             let mut app = fixture_app(true);
