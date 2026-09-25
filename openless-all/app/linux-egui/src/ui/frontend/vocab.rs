@@ -20,6 +20,8 @@ const CARD_PADDING: f32 = 20.0;
 const INPUT_ID: &str = "openless-vocab-input";
 const SEARCH_ID: &str = "openless-vocab-search";
 const SEARCH_INPUT_ID: &str = "openless-vocab-search-input";
+const NEW_WORD_OPEN: &str = "openless-vocab-new-word-open";
+const PRESETS_OPEN: &str = "openless-vocab-presets-open";
 const SELECTION_ID: &str = "openless-vocab-selection";
 const TAB_HEIGHT: f32 = 30.0;
 const SEARCH_WIDTH: f32 = 210.0;
@@ -82,7 +84,10 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
     );
     right = new_word_rect.left() - 8.0;
     if primary_button(ui, new_word_rect, new_word, Some(IconName::Hash)).clicked() {
-        ui.memory_mut(|memory| memory.request_focus(egui::Id::new(INPUT_ID)));
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(egui::Id::new(NEW_WORD_OPEN), true));
+        vm.vocab_input.clear();
+        vm.vocab_selected_presets.clear();
     }
     // Batch delete appears only while something is selected.
     if !selected.is_empty() {
@@ -150,54 +155,76 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
         }
     }
 
-    // ── Word list ──────────────────────────────────────────────────────────
-    if visible.is_empty() {
-        ui.add_space(6.0);
-        let message = if vm.vocab_query.trim().is_empty() {
-            tr_l10n(lang, "vocab.empty").to_string()
-        } else {
-            tr_l10n(lang, "vocab.search_empty").to_string()
-        };
-        ui.label(egui::RichText::new(message).size(12.0).color(theme::INK_4));
-    } else {
-        let mut next_selection = selected.clone();
-        let mut remove = None;
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-            for index in &visible {
-                let entry = &vm.vocab_entries[*index];
-                let is_selected = selected.contains(index);
-                match word_chip(ui, entry, is_selected) {
-                    ChipAction::None => {}
-                    ChipAction::Toggle => {
-                        actions.push(FrontendAction::VocabTogglePhrase(*index));
-                    }
-                    ChipAction::Select => {
-                        if is_selected {
-                            next_selection.remove(index);
-                        } else {
-                            next_selection.insert(*index);
+    // 词条独立滚动；输入与场景预设固定在可视区底部，不能跟词条一同滚走。
+    let presets_expanded = ui.ctx().data(|data| {
+        data.get_temp::<bool>(egui::Id::new(PRESETS_OPEN))
+            .unwrap_or(false)
+    });
+    let list_height =
+        (ui.available_height() - if presets_expanded { 270.0 } else { 154.0 }).max(80.0);
+    egui::ScrollArea::vertical()
+        .id_salt("openless-vocab-list-scroll")
+        .max_height(list_height)
+        .min_scrolled_height(list_height)
+        .show(ui, |ui| {
+            // ── Word list ──────────────────────────────────────────────────────────
+            if visible.is_empty() {
+                ui.add_space(6.0);
+                let message = if vm.vocab_query.trim().is_empty() {
+                    tr_l10n(lang, "vocab.empty").to_string()
+                } else {
+                    tr_l10n(lang, "vocab.search_empty").to_string()
+                };
+                ui.label(egui::RichText::new(message).size(12.0).color(theme::INK_4));
+            } else {
+                let mut next_selection = selected.clone();
+                let mut remove = None;
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                    for index in &visible {
+                        let entry = &vm.vocab_entries[*index];
+                        let is_selected = selected.contains(index);
+                        match word_chip(ui, entry, is_selected) {
+                            ChipAction::None => {}
+                            ChipAction::Toggle => {
+                                actions.push(FrontendAction::VocabTogglePhrase(*index));
+                            }
+                            ChipAction::Select => {
+                                if is_selected {
+                                    next_selection.remove(index);
+                                } else {
+                                    next_selection.insert(*index);
+                                }
+                            }
+                            ChipAction::Remove => remove = Some(*index),
                         }
                     }
-                    ChipAction::Remove => remove = Some(*index),
+                });
+                if let Some(index) = remove {
+                    actions.push(FrontendAction::VocabRemovePhrase(index));
+                    next_selection.remove(&index);
+                }
+                if next_selection != selected {
+                    set_selection(ui.ctx(), next_selection);
                 }
             }
         });
-        if let Some(index) = remove {
-            actions.push(FrontendAction::VocabRemovePhrase(index));
-            next_selection.remove(&index);
-        }
-        if next_selection != selected {
-            set_selection(ui.ctx(), next_selection);
-        }
-    }
-
-    ui.add_space(GAP);
-
+    ui.add_space(6.0);
+    let (divider, _) = ui.allocate_exact_size(egui::vec2(width, 3.0), egui::Sense::hover());
+    ui.painter().line_segment(
+        [divider.left_top(), divider.right_top()],
+        egui::Stroke::new(1.0, theme::LINE),
+    );
     // ── Quick add + presets ────────────────────────────────────────────────
     quick_add(ui, width, vm, actions);
     ui.add_space(12.0);
     presets(ui, width, vm, actions);
+    if ui.ctx().data(|data| {
+        data.get_temp::<bool>(egui::Id::new(NEW_WORD_OPEN))
+            .unwrap_or(false)
+    }) {
+        new_word_overlay(ui.ctx(), vm, actions);
+    }
 }
 
 // ── Tool row ────────────────────────────────────────────────────────────────
@@ -218,7 +245,23 @@ fn tool_row(
     ];
     let (row, _) = ui.allocate_exact_size(egui::vec2(width, 34.0), egui::Sense::hover());
 
-    let mut x = row.left();
+    let tabs_width: f32 = tabs
+        .iter()
+        .map(|(icon, label)| {
+            layout::text_width(ui, label, 12.5)
+                + if *icon == TabIcon::None { 22.0 } else { 38.0 }
+                + 4.0
+        })
+        .sum();
+    ui.painter().rect_filled(
+        egui::Rect::from_min_size(
+            row.min + egui::vec2(0.0, 2.0),
+            egui::vec2(tabs_width + 4.0, TAB_HEIGHT),
+        ),
+        egui::CornerRadius::same(10),
+        theme::SURFACE_2,
+    );
+    let mut x = row.left() + 2.0;
     for (index, (icon, label)) in tabs.iter().enumerate() {
         let text_width = layout::text_width(ui, label, 12.5);
         let has_icon = *icon != TabIcon::None;
@@ -235,9 +278,9 @@ fn tool_row(
         );
         let painter = ui.painter().with_clip_rect(rect);
         if active {
-            painter.rect_filled(rect, egui::CornerRadius::same(8), theme::SURFACE_2);
+            painter.rect_filled(rect, egui::CornerRadius::same(8), theme::SURFACE);
         } else if response.hovered() {
-            painter.rect_filled(rect, egui::CornerRadius::same(8), theme::SURFACE_2);
+            painter.rect_filled(rect, egui::CornerRadius::same(8), theme::LINE);
         }
         let ink = if active { theme::INK } else { theme::INK_3 };
         let text_left = if has_icon {
@@ -671,12 +714,27 @@ fn presets(
     actions: &mut Vec<FrontendAction>,
 ) {
     let lang = vm.lang;
+    ui.separator();
+    let open = ui.ctx().data(|data| {
+        data.get_temp::<bool>(egui::Id::new(PRESETS_OPEN))
+            .unwrap_or(false)
+    });
     card(ui, width, |ui| {
-        layout::section_title(
-            ui,
-            ui.available_width(),
-            tr_l10n(lang, "vocab.presets_title"),
-            Some(tr_l10n(lang, "vocab.presets_tip")),
+        let title = tr_l10n(lang, "vocab.presets_title");
+        if ui
+            .button(format!("{}  {}", if open { "⌄" } else { "›" }, title))
+            .clicked()
+        {
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(egui::Id::new(PRESETS_OPEN), !open));
+        }
+        if !open {
+            return;
+        }
+        ui.label(
+            egui::RichText::new(tr_l10n(lang, "vocab.presets_tip"))
+                .size(11.5)
+                .color(theme::INK_4),
         );
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
@@ -827,6 +885,153 @@ fn presets(
             });
         }
     });
+}
+
+// ── New-word modal (scoped to the right content pane) ───────────────────────
+
+fn new_word_overlay(
+    ctx: &egui::Context,
+    vm: &mut FrontendViewModel,
+    actions: &mut Vec<FrontendAction>,
+) {
+    let lang = vm.lang;
+    let body = layout::body_rect(ctx);
+    let region = egui::Rect::from_min_max(
+        egui::pos2(body.left() + layout::SIDEBAR_WIDTH, body.top()),
+        body.max,
+    );
+    let modal_width = 440.0_f32.min(region.width() - 36.0);
+    let modal_height = 426.0_f32.min(region.height() - 32.0);
+    let modal =
+        egui::Rect::from_center_size(region.center(), egui::vec2(modal_width, modal_height));
+    let mut close = ctx.input(|input| input.key_pressed(egui::Key::Escape));
+    if ctx.input(|input| {
+        input.pointer.any_click()
+            && input
+                .pointer
+                .interact_pos()
+                .is_some_and(|pos| region.contains(pos) && !modal.contains(pos))
+    }) {
+        close = true;
+    }
+    egui::Area::new(egui::Id::new("openless-vocab-new-word-area"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(region.min)
+        .show(ctx, |ui| {
+            ui.set_min_size(region.size());
+            ui.painter().rect_filled(region, 0, theme::OVERLAY);
+            let _ = ui.allocate_rect(region, egui::Sense::click());
+            let mut child = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt("new-word-dialog")
+                    .max_rect(modal)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            child.set_clip_rect(modal);
+            egui::Frame::new()
+                .fill(theme::SURFACE)
+                .stroke(egui::Stroke::new(1.0, theme::LINE))
+                .corner_radius(egui::CornerRadius::same(16))
+                .inner_margin(egui::Margin::same(20))
+                .show(&mut child, |ui| {
+                    ui.set_width((modal_width - 40.0).max(1.0));
+                    ui.label(
+                        egui::RichText::new(tr_l10n(lang, "vocab.newWordTitle"))
+                            .size(15.0)
+                            .strong(),
+                    );
+                    ui.label(
+                        egui::RichText::new(tr_l10n(lang, "vocab.newWordDesc"))
+                            .size(12.0)
+                            .color(theme::INK_3),
+                    );
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        let field_width = (ui.available_width() - 82.0).max(90.0);
+                        let edit = ui.add_sized(
+                            [field_width, 36.0],
+                            egui::TextEdit::singleline(&mut vm.vocab_input)
+                                .hint_text(tr_l10n(lang, "vocab.newWordInputPlaceholder")),
+                        );
+                        if (edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                            || ui.button(tr_l10n(lang, "btn.add")).clicked()
+                        {
+                            let word = vm.vocab_input.trim().to_string();
+                            if !word.is_empty() {
+                                actions.push(FrontendAction::VocabAddPhrase(word));
+                                vm.vocab_input.clear();
+                            }
+                        }
+                    });
+                    ui.add_space(14.0);
+                    ui.label(
+                        egui::RichText::new(tr_l10n(lang, "vocab.newWordTemplates"))
+                            .size(12.5)
+                            .strong(),
+                    );
+                    ui.add_space(7.0);
+                    let names = [
+                        tr_l10n(lang, "vocab.presets_dev_tools"),
+                        tr_l10n(lang, "vocab.presets_products"),
+                        tr_l10n(lang, "vocab.presets_terms"),
+                        tr_l10n(lang, "vocab.presets_english"),
+                    ];
+                    for (index, name) in names.iter().enumerate() {
+                        let selected = vm.vocab_selected_presets.contains(&index);
+                        let label = if selected {
+                            format!("✓ {name}")
+                        } else {
+                            (*name).to_string()
+                        };
+                        if ui
+                            .add_sized(
+                                [ui.available_width(), 34.0],
+                                egui::Button::new(label)
+                                    .fill(if selected {
+                                        theme::BLUE_SOFT
+                                    } else {
+                                        theme::SURFACE
+                                    })
+                                    .stroke(egui::Stroke::new(
+                                        0.8,
+                                        if selected { theme::BLUE } else { theme::LINE },
+                                    ))
+                                    .corner_radius(egui::CornerRadius::same(9)),
+                            )
+                            .clicked()
+                        {
+                            if selected {
+                                vm.vocab_selected_presets.retain(|item| *item != index);
+                            } else {
+                                vm.vocab_selected_presets.push(index);
+                            }
+                        }
+                    }
+                    ui.add_space(14.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add_enabled(
+                                !vm.vocab_selected_presets.is_empty(),
+                                egui::Button::new(tr_l10n(lang, "vocab.newWordAddSelected"))
+                                    .fill(theme::INK)
+                                    .stroke(egui::Stroke::NONE),
+                            )
+                            .clicked()
+                        {
+                            for index in vm.vocab_selected_presets.drain(..) {
+                                actions.push(FrontendAction::VocabApplyPreset(index));
+                            }
+                            close = true;
+                        }
+                        if ui.button(tr_l10n(lang, "common.close")).clicked() {
+                            close = true;
+                        }
+                    });
+                });
+        });
+    if close {
+        ctx.data_mut(|data| data.insert_temp(egui::Id::new(NEW_WORD_OPEN), false));
+    }
 }
 
 // ── Small shared pieces ─────────────────────────────────────────────────────

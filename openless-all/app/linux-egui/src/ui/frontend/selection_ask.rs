@@ -48,20 +48,26 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
     }
 
     let settings_label = tr_l10n(lang, "selection_ask.shortcut_settings");
-    let settings_width = layout::text_width(ui, settings_label, 12.5) + 46.0;
+    let settings_width = layout::text_width(ui, settings_label, 12.5) + 60.0;
     let settings_rect = egui::Rect::from_min_size(
         egui::pos2(header.right() - settings_width, header.top() + 28.0),
         egui::vec2(settings_width, 30.0),
     );
-    if layout::action_button(
+    let settings_clicked = layout::action_button(
         ui,
         settings_rect,
         settings_label,
         Some(IconName::Settings),
         layout::ButtonKind::Ghost,
     )
-    .clicked()
-    {
+    .clicked();
+    icons::draw_icon(
+        ui,
+        egui::pos2(settings_rect.right() - 13.0, settings_rect.center().y),
+        IconName::ChevronRight,
+        theme::INK_3,
+    );
+    if settings_clicked {
         actions.push(FrontendAction::ToggleSettings);
         actions.push(FrontendAction::SettingsSection(SettingsSection::Shortcuts));
     }
@@ -161,6 +167,11 @@ fn guide(ui: &mut egui::Ui, width: f32, vm: &FrontendViewModel) {
         egui::pos2(dismiss_left - 8.0 - chip_width, footer.center().y - 9.0),
         egui::vec2(chip_width, 18.0),
     );
+    painter.rect_filled(
+        chip.translate(egui::vec2(0.0, 2.0)),
+        egui::CornerRadius::same(5),
+        egui::Color32::from_black_alpha(14),
+    );
     painter.rect_filled(chip, egui::CornerRadius::same(5), theme::SURFACE_2);
     painter.rect_stroke(
         chip,
@@ -185,7 +196,7 @@ fn save_history_card(
     actions: &mut Vec<FrontendAction>,
 ) {
     let lang = vm.lang;
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 78.0), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 92.0), egui::Sense::hover());
     layout::card(ui, rect, CARD_PADDING, |ui, inner| {
         let painter = ui.painter().with_clip_rect(inner);
         icons::draw_icon(
@@ -201,11 +212,17 @@ fn save_history_card(
             egui::FontId::proportional(13.5),
             theme::INK,
         );
-        painter.text(
-            egui::pos2(inner.left() + 34.0, inner.top() + 26.0),
-            egui::Align2::LEFT_TOP,
+        let desc = layout::text_galley(
+            ui,
             tr_l10n(lang, "selection_ask.history_desc"),
-            egui::FontId::proportional(11.5),
+            theme::INK_4,
+            11.5,
+            (inner.width() - 34.0 - 55.0).max(40.0),
+            3,
+        );
+        painter.galley(
+            egui::pos2(inner.left() + 34.0, inner.top() + 26.0),
+            desc,
             theme::INK_4,
         );
         let toggle_rect = egui::Rect::from_min_size(

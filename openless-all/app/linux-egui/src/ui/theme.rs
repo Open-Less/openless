@@ -128,9 +128,11 @@ pub fn install(ctx: &egui::Context) {
     }
     for (name, query) in [
         ("openless-cjk", ":lang=zh-cn"),
-        ("openless-arabic", ":lang=ar"),
-        ("openless-thai", ":lang=th"),
-        ("openless-devanagari", ":lang=hi"),
+        // 本机 fc-match ':lang=ar/th/hi' 错误地总返回 Noto Sans CJK SC，
+        // 这些脚本的字形根本不存在；显式请求对应的 Noto 家族。
+        ("openless-arabic", "Noto Sans Arabic"),
+        ("openless-thai", "Noto Looped Thai"),
+        ("openless-devanagari", "Noto Sans Devanagari UI"),
     ] {
         if let Some((path, index)) = fontconfig_match(query) {
             candidates.push((name.to_owned(), path, index, true, true));

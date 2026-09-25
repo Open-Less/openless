@@ -32,6 +32,7 @@ pub enum IconName {
     Github,
     /// 横向三点（列表/详情行的「…」操作菜单）。
     More,
+    ChevronRight,
 }
 
 /// Draw an icon centred at `center` with the given `color`.
@@ -496,20 +497,25 @@ pub fn draw_icon(ui: &egui::Ui, center: egui::Pos2, icon: IconName, color: egui:
             );
         }
         IconName::Settings => {
-            p.circle_stroke(center, 4.5, stroke);
-            for angle in [
-                0.0,
-                std::f32::consts::FRAC_PI_4,
-                std::f32::consts::FRAC_PI_2,
-                3.0 * std::f32::consts::FRAC_PI_4,
-                std::f32::consts::PI,
-                5.0 * std::f32::consts::FRAC_PI_4,
-                3.0 * std::f32::consts::FRAC_PI_2,
-                7.0 * std::f32::consts::FRAC_PI_4,
-            ] {
-                let direction = egui::vec2(angle.cos(), angle.sin());
-                p.line_segment([center + direction * 5.0, center + direction * 7.0], stroke);
-            }
+            // Lucide Settings: closed gear silhouette and a separate centre opening,
+            // rather than the old sun-like circle with eight disconnected rays.
+            let points: Vec<_> = (0..32)
+                .map(|step| {
+                    let angle = step as f32 * std::f32::consts::TAU / 32.0;
+                    let radius = if step % 4 == 1 || step % 4 == 2 {
+                        7.4
+                    } else {
+                        5.7
+                    };
+                    center + egui::vec2(angle.cos(), angle.sin()) * radius
+                })
+                .collect();
+            p.add(egui::Shape::closed_line(points, stroke));
+            p.circle_stroke(center, 2.3, stroke);
+        }
+        IconName::ChevronRight => {
+            p.line_segment([point(-2.5, -4.5), point(2.0, 0.0)], stroke);
+            p.line_segment([point(2.0, 0.0), point(-2.5, 4.5)], stroke);
         }
     }
 }

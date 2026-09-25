@@ -26,13 +26,30 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
         return;
     }
 
-    layout::page_header(
+    let header = layout::page_header(
         ui,
         width,
         tr_l10n(lang, "nav.corrections"),
         tr_l10n(lang, "vocab.corrections_title"),
         Some(tr_l10n(lang, "vocab.corrections_tip")),
     );
+    let refresh = tr_l10n(lang, "common.refresh");
+    let refresh_width = layout::text_width(ui, refresh, 12.5) + 40.0;
+    let refresh_rect = egui::Rect::from_min_size(
+        egui::pos2(header.right() - refresh_width, header.top() + 22.0),
+        egui::vec2(refresh_width, 30.0),
+    );
+    if layout::action_button(
+        ui,
+        refresh_rect,
+        refresh,
+        Some(super::icons::IconName::Refresh),
+        layout::ButtonKind::Ghost,
+    )
+    .clicked()
+    {
+        actions.push(FrontendAction::VocabRefresh);
+    }
     ui.add_space(GAP);
 
     // ── Add a rule ──────────────────────────────────────────────────────────
@@ -91,6 +108,17 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
         }
     });
 
+    ui.add_space(8.0);
+    if vm.vocab_rules.is_empty() {
+        // Empty state belongs immediately below the add form, not inside a
+        // second empty card with a repeated title.
+        ui.label(
+            egui::RichText::new(tr_l10n(lang, "vocab.corrections_empty"))
+                .size(12.0)
+                .color(theme::INK_4),
+        );
+        return;
+    }
     ui.add_space(GAP);
 
     // ── Rules ───────────────────────────────────────────────────────────────
@@ -178,13 +206,6 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
             }
             if let Some(index) = remove_index {
                 actions.push(FrontendAction::VocabRemoveRule(index));
-            }
-            if vm.vocab_rules.is_empty() {
-                ui.label(
-                    egui::RichText::new(tr_l10n(lang, "vocab.corrections_empty"))
-                        .size(12.0)
-                        .color(theme::INK_4),
-                );
             }
         });
     });

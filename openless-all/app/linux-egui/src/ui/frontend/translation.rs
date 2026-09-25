@@ -6,13 +6,13 @@
 use eframe::egui;
 use openless_linux_egui::{fmt_l10n, tr_l10n};
 
+use super::icons::{self, IconName};
 use super::layout;
 use super::theme;
 use super::view_model::{FrontendAction, FrontendViewModel};
 
 const GAP: f32 = 12.0;
 const CARD_PADDING: f32 = 18.0;
-const TWO_COLUMN_MIN_WIDTH: f32 = 860.0;
 
 /// `(native name, language code)`. Core stores the native name, so selection
 /// matching must keep using it; the code is the secondary label shown under the
@@ -60,7 +60,8 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
     toolbar(ui, width, vm);
     ui.add_space(GAP);
 
-    if width >= TWO_COLUMN_MIN_WIDTH {
+    // 主窗口最低宽度依然保留左右两栏，不按内容区宽度误判为窄屏。
+    {
         let column_width = (width - GAP) / 2.0;
         ui.columns(2, |columns| {
             // The left card drives the shared height so both columns end level.
@@ -73,10 +74,6 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                 Some(left_height),
             );
         });
-    } else {
-        working_languages(ui, width, vm, actions);
-        ui.add_space(GAP);
-        target_language(ui, width, vm, actions, None);
     }
     ui.add_space(GAP);
     usage(ui, width, vm);
@@ -88,27 +85,37 @@ fn toolbar(ui: &mut egui::Ui, width: f32, vm: &mut FrontendViewModel) {
     let count_text = fmt_l10n(lang, "translation.selected_languages", &[&count]);
     let count_width = layout::text_width(ui, &count_text, 11.5) + 4.0;
     let (row, _) = ui.allocate_exact_size(egui::vec2(width, 34.0), egui::Sense::hover());
-    egui::Frame::new()
-        .fill(theme::SURFACE_2)
-        .stroke(egui::Stroke::new(0.8, theme::LINE))
-        .corner_radius(egui::CornerRadius::same(17))
-        .inner_margin(egui::Margin::symmetric(14, 6))
-        .show(ui, |ui| {
-            let inner_width = ui.available_width().max(1.0);
-            ui.set_width(inner_width);
-            // 右侧计数标签画在同一行的右端，输入框按它的宽度让位（此前没让，
-            // 文字会压到「已选 N 种语言」上）。
-            let field_width = (inner_width - count_width).max(1.0);
-            ui.add_sized(
-                [field_width, 22.0],
-                egui::TextEdit::singleline(&mut vm.translation_query)
-                    .id(egui::Id::new("openless-translation-search"))
-                    .hint_text(tr_l10n(lang, "translation.search_languages"))
-                    .text_color(theme::INK)
-                    .frame(egui::Frame::NONE)
-                    .vertical_align(egui::Align::Center),
-            );
-        });
+    let search = egui::Rect::from_min_max(
+        row.min,
+        egui::pos2(row.right() - count_width - 8.0, row.bottom()),
+    );
+    ui.painter()
+        .rect_filled(search, egui::CornerRadius::same(17), theme::SURFACE);
+    ui.painter().rect_stroke(
+        search,
+        egui::CornerRadius::same(17),
+        egui::Stroke::new(0.8, theme::LINE),
+        egui::StrokeKind::Inside,
+    );
+    icons::draw_icon(
+        ui,
+        egui::pos2(search.left() + 17.0, search.center().y),
+        IconName::Search,
+        theme::INK_4,
+    );
+    let input = egui::Rect::from_min_max(
+        egui::pos2(search.left() + 33.0, search.top() + 5.0),
+        egui::pos2(search.right() - 9.0, search.bottom() - 5.0),
+    );
+    ui.put(
+        input,
+        egui::TextEdit::singleline(&mut vm.translation_query)
+            .id(egui::Id::new("openless-translation-search"))
+            .hint_text(tr_l10n(lang, "translation.search_languages"))
+            .text_color(theme::INK)
+            .frame(egui::Frame::NONE)
+            .vertical_align(egui::Align::Center),
+    );
     ui.painter().text(
         egui::pos2(row.right(), row.center().y),
         egui::Align2::RIGHT_CENTER,
@@ -159,12 +166,13 @@ fn working_languages(
         } else {
             const ROW_HEIGHT: f32 = 46.0;
             const ROW_GAP: f32 = 8.0;
-            const COLUMNS: usize = 2;
             let available = ui.available_width();
-            let cell_width = (available - ROW_GAP * (COLUMNS as f32 - 1.0)) / COLUMNS as f32;
+            let columns: usize = if available >= 560.0 { 3 } else { 2 };
+
+            let cell_width = (available - ROW_GAP * (columns as f32 - 1.0)) / columns as f32;
             let mut index = 0;
             while index < visible.len() {
-                let count = COLUMNS.min(visible.len() - index);
+                let count = columns.min(visible.len() - index);
                 let (row, _) =
                     ui.allocate_exact_size(egui::vec2(available, ROW_HEIGHT), egui::Sense::hover());
                 for slot in 0..count {
@@ -249,7 +257,11 @@ fn language_row(
 
 fn draw_check(ui: &egui::Ui, rect: egui::Rect, checked: bool) {
     let painter = ui.painter();
-    painter.rect_filled(rect, egui::CornerRadius::same(4), theme::SURFACE);
+    painter.rect_filled(
+        rect,
+        egui::CornerRadius::same(4),
+        if checked { theme::INK } else { theme::SURFACE },
+    );
     painter.rect_stroke(
         rect,
         egui::CornerRadius::same(4),
@@ -257,7 +269,7 @@ fn draw_check(ui: &egui::Ui, rect: egui::Rect, checked: bool) {
         egui::StrokeKind::Inside,
     );
     if checked {
-        let stroke = egui::Stroke::new(1.5, theme::INK);
+        let stroke = egui::Stroke::new(1.5, theme::SURFACE);
         painter.line_segment(
             [
                 rect.left_center() + egui::vec2(3.0, 0.5),
@@ -391,7 +403,7 @@ fn target_language(
                 egui::Frame::new()
                     .fill(theme::BLUE_SOFT)
                     .corner_radius(egui::CornerRadius::same(10))
-                    .inner_margin(egui::Margin::symmetric(9, 4))
+                    .inner_margin(egui::Margin::symmetric(9, 2))
                     .show(ui, |ui| {
                         ui.label(
                             egui::RichText::new(style_name)
@@ -483,39 +495,6 @@ fn usage(ui: &mut egui::Ui, width: f32, vm: &FrontendViewModel) {
                 ui.add_space(10.0);
             }
         }
-
-        ui.add_space(12.0);
-        layout::soft_separator(ui);
-        ui.add_space(10.0);
-        note(
-            ui,
-            tr_l10n(lang, "translation.howto_indicator_title"),
-            tr_l10n(lang, "translation.howto_indicator_desc"),
-            theme::BLUE,
-        );
-        ui.add_space(8.0);
-        note(
-            ui,
-            tr_l10n(lang, "translation.howto_fallback_title"),
-            tr_l10n(lang, "translation.howto_fallback_desc"),
-            theme::OK,
-        );
-    });
-}
-
-fn note(ui: &mut egui::Ui, title: &str, desc: &str, color: egui::Color32) {
-    ui.horizontal(|ui| {
-        let (dot, _) = ui.allocate_exact_size(egui::vec2(8.0, 18.0), egui::Sense::hover());
-        ui.painter().circle_filled(dot.center(), 3.0, color);
-        ui.vertical(|ui| {
-            ui.label(
-                egui::RichText::new(title)
-                    .size(12.0)
-                    .strong()
-                    .color(theme::INK_2),
-            );
-            ui.label(egui::RichText::new(desc).size(11.5).color(theme::INK_4));
-        });
     });
 }
 

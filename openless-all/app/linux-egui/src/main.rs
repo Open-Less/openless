@@ -43,6 +43,10 @@ mod linux_app {
 
     enum UiResult {
         Message(String),
+        HistoryRepolish {
+            id: String,
+            result: Result<String, String>,
+        },
         /// 终态在屏上停留结束：胶囊可以收起了（handler 会再核对会话与相位）。
         CapsuleDismissDue {
             session_id: String,
@@ -67,6 +71,7 @@ mod linux_app {
             result: Result<Vec<String>, String>,
         },
         Library(Result<LibraryPanel, String>),
+        LibraryRefresh,
         SettingsSaved(Box<Result<openless_core::SettingsUpdateOutcome, String>>),
         Marketplace(u64, Result<Vec<openless_core::MarketplaceListItem>, String>),
         MarketplaceLikes(Result<Vec<String>, String>),
@@ -1906,8 +1911,21 @@ mod linux_app {
                 return;
             };
             let tx = self.tx.clone();
+            let lang = self.lang;
             self.tokio.spawn(async move {
                 let result = async {
+                    if !backend
+                        .services()
+                        .marketplace
+                        .auth_status()
+                        .await?
+                        .signed_in
+                    {
+                        return Err(BackendError::new(
+                            openless_core::BackendErrorCode::PermissionDenied,
+                            tr_l10n(lang, "marketplace.myPacks.notLoggedIn"),
+                        ));
+                    }
                     let packs = backend.services().marketplace.my_packs().await?;
                     let likes = backend.services().marketplace.my_likes().await?;
                     Ok::<_, BackendError>((packs, likes))
@@ -3105,6 +3123,16 @@ mod linux_app {
             while let Ok(result) = self.rx.try_recv() {
                 match result {
                     UiResult::Message(message) => self.status = message,
+                    UiResult::HistoryRepolish { id, result } => {
+                        self.frontend_vm.history_repolish_running = false;
+                        match result {
+                            Ok(text) => {
+                                self.frontend_vm.history_repolish_error = None;
+                                self.frontend_vm.history_repolish_result = Some((id, text));
+                            }
+                            Err(error) => self.frontend_vm.history_repolish_error = Some(error),
+                        }
+                    }
                     UiResult::CapsuleDismissDue { session_id } => {
                         let current = self
                             .snapshot
@@ -3264,6 +3292,7 @@ mod linux_app {
                             }
                         }
                     }
+                    UiResult::LibraryRefresh => self.load_library(),
                     UiResult::Library(Ok(library)) => {
                         self.vocabulary = library.vocabulary;
                         self.correction_rules = library.correction_rules;
@@ -3349,6 +3378,7 @@ mod linux_app {
                     UiResult::MarketplaceDetail(Ok(detail)) => {
                         self.status =
                             fmt_l10n(lang, "status.detail_loaded", &[&detail.summary.name]);
+                        self.frontend_vm.marketplace_detail_prompt = Some(detail.prompt.clone());
                         self.marketplace_detail = Some(detail);
                     }
                     UiResult::MarketplaceDetail(Err(error)) => self.status = error,
@@ -3358,10 +3388,23 @@ mod linux_app {
                             "status.my_publish_likes",
                             &[&packs.len(), &likes.len()],
                         );
+                        self.frontend_vm.marketplace_mine_packs = packs
+                            .iter()
+                            .map(|pack| {
+                                (
+                                    pack.summary.name.clone(),
+                                    pack.summary.description.clone(),
+                                    pack.summary.tags.clone(),
+                                )
+                            })
+                            .collect();
                         self.marketplace_my_packs = packs;
                         self.marketplace_my_likes = likes;
                     }
-                    UiResult::MarketplaceMine(Err(error)) => self.status = error,
+                    UiResult::MarketplaceMine(Err(error)) => {
+                        self.frontend_vm.marketplace_notice = Some(error.clone());
+                        self.status = error;
+                    }
                     UiResult::Microphones(Ok(devices)) => {
                         self.microphone_error = None;
                         self.microphones = devices.clone();
@@ -3950,6 +3993,7 @@ mod linux_app {
                         description: item.description.clone(),
                         mode: item.base_mode.clone(),
                         author: item.author_login.clone(),
+                        origin_author_login: item.origin_author_login.clone(),
                         tags: item.tags.clone(),
                         likes: item.like_count as u32,
                         downloads: item.download_count as u32,
@@ -4684,7 +4728,13 @@ mod linux_app {
                         self.load_marketplace();
                     }
                     frontend::view_model::FrontendAction::MarketplaceMyPacks => {
+                        self.frontend_vm.marketplace_mine_open = true;
+                        self.frontend_vm.marketplace_notice = None;
+                        self.frontend_vm.marketplace_mine_packs.clear();
                         self.load_marketplace_mine();
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceCloseMine => {
+                        self.frontend_vm.marketplace_mine_open = false;
                     }
                     frontend::view_model::FrontendAction::MarketplaceSearch(query) => {
                         self.marketplace_query = query.clone();
@@ -4696,6 +4746,7 @@ mod linux_app {
                     }
                     frontend::view_model::FrontendAction::MarketplaceCloseDetail => {
                         self.frontend_vm.marketplace_selected = None;
+                        self.frontend_vm.marketplace_detail_prompt = None;
                     }
                     frontend::view_model::FrontendAction::MarketplaceInstall(index) => {
                         if let Some(item) = self.marketplace_items.get(index) {
@@ -4891,6 +4942,41 @@ mod linux_app {
                             }
                         }
                     }
+                    frontend::view_model::FrontendAction::HistoryRepolishOpen(index) => {
+                        self.frontend_vm.history_selected = index;
+                        self.frontend_vm.history_repolish_open = true;
+                    }
+                    frontend::view_model::FrontendAction::HistoryRepolishClose => {
+                        self.frontend_vm.history_repolish_open = false;
+                    }
+                    frontend::view_model::FrontendAction::HistoryRepolish(index, pack_index) => {
+                        if let (Some(backend), Some(entry)) =
+                            (self.backend(), self.frontend_vm.history_entries.get(index))
+                        {
+                            if !entry.raw_transcript.trim().is_empty() {
+                                let request = openless_core::auxiliary::RepolishRequest {
+                                    raw_text: entry.raw_transcript.clone(),
+                                    style_pack_id: pack_index
+                                        .and_then(|i| self.style_packs.get(i))
+                                        .map(|p| p.id.clone()),
+                                    front_app: entry.app_name.clone(),
+                                };
+                                let id = entry.id.clone();
+                                let tx = self.tx.clone();
+                                self.frontend_vm.history_repolish_running = true;
+                                self.frontend_vm.history_repolish_error = None;
+                                self.tokio.spawn(async move {
+                                    let result = backend
+                                        .services()
+                                        .auxiliary
+                                        .repolish(request)
+                                        .await
+                                        .map_err(|error| error.to_string());
+                                    let _ = tx.send(UiResult::HistoryRepolish { id, result });
+                                });
+                            }
+                        }
+                    }
                     frontend::view_model::FrontendAction::HistoryRetranscribe(index) => {
                         if let Some(backend) = self.backend() {
                             if let Some(entry) = self.frontend_vm.history_entries.get(index) {
@@ -5052,15 +5138,28 @@ mod linux_app {
                             }
                         }
                     }
+                    frontend::view_model::FrontendAction::VocabRefresh => {
+                        self.load_library();
+                    }
                     frontend::view_model::FrontendAction::VocabAddRule {
                         pattern,
                         replacement,
                     } => {
                         if let Some(backend) = self.backend() {
                             let lang = self.lang;
-                            self.spawn(async move {
-                                backend.add_correction_rule(pattern, replacement)?;
-                                Ok(tr_l10n(lang, "status.correction_saved").to_string())
+                            let tx = self.tx.clone();
+                            self.tokio.spawn(async move {
+                                match backend.add_correction_rule(pattern, replacement) {
+                                    Ok(_) => {
+                                        let _ = tx.send(UiResult::Message(
+                                            tr_l10n(lang, "status.correction_saved").to_string(),
+                                        ));
+                                        let _ = tx.send(UiResult::LibraryRefresh);
+                                    }
+                                    Err(error) => {
+                                        let _ = tx.send(UiResult::Message(error.to_string()));
+                                    }
+                                }
                             });
                         }
                     }
@@ -5200,18 +5299,37 @@ mod linux_app {
                     }
                     frontend::view_model::FrontendAction::StyleEdit(index) => {
                         if let Some(pack) = self.style_packs.get(index).cloned() {
-                            self.style_editor = Some(pack);
+                            self.style_editor = Some(pack.clone());
                             self.frontend_vm.style_editor_open = true;
-                            self.frontend_vm.style_prompt = self
-                                .style_editor
-                                .as_ref()
-                                .map(|e| e.prompt.clone())
-                                .unwrap_or_default();
+                            self.frontend_vm.style_prompt = pack.prompt.clone();
+                            self.frontend_vm.style_name = pack.name.clone();
+                            self.frontend_vm.style_description = pack.description.clone();
+                            self.frontend_vm.style_selection_prompt = pack.selection_prompt.clone();
+                            self.frontend_vm.style_voice_edit_prompt =
+                                pack.voice_edit_prompt.clone();
+                            self.frontend_vm.style_tags = pack.tags.join(", ");
                         }
                     }
-                    frontend::view_model::FrontendAction::StyleSaveEditor(prompt) => {
+                    frontend::view_model::FrontendAction::StyleSaveEditor {
+                        name,
+                        description,
+                        prompt,
+                        selection_prompt,
+                        voice_edit_prompt,
+                        tags,
+                    } => {
                         if let Some(mut pack) = self.style_editor.take() {
+                            pack.name = name.trim().to_string();
+                            pack.description = description.trim().to_string();
                             pack.prompt = prompt;
+                            pack.selection_prompt = selection_prompt;
+                            pack.voice_edit_prompt = voice_edit_prompt;
+                            pack.tags = tags
+                                .split([',', '，', '\n'])
+                                .map(str::trim)
+                                .filter(|tag| !tag.is_empty())
+                                .map(ToOwned::to_owned)
+                                .collect();
                             if let Some(backend) = self.backend() {
                                 let exists = self.style_packs.iter().any(|p| p.id == pack.id);
                                 let lang = self.lang;
@@ -5238,6 +5356,13 @@ mod linux_app {
                             ..Default::default()
                         });
                         self.frontend_vm.style_editor_open = true;
+                        self.frontend_vm.style_name =
+                            tr_l10n(self.lang, "lbl.new_style_default").to_string();
+                        self.frontend_vm.style_description.clear();
+                        self.frontend_vm.style_prompt.clear();
+                        self.frontend_vm.style_selection_prompt.clear();
+                        self.frontend_vm.style_voice_edit_prompt.clear();
+                        self.frontend_vm.style_tags.clear();
                     }
                     frontend::view_model::FrontendAction::StyleImport => {
                         if let Some(backend) = self.backend() {
@@ -5661,6 +5786,7 @@ mod linux_app {
                     }
                     frontend::view_model::FrontendAction::MarketplaceDetail(index) => {
                         self.frontend_vm.marketplace_selected = Some(index);
+                        self.frontend_vm.marketplace_detail_prompt = None;
                         // Load real detail from backend, not just index.
                         if let Some(item) = self.marketplace_items.get(index) {
                             if let Some(backend) = self.backend() {

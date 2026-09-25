@@ -58,15 +58,13 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
             Page::Overview => overview::page(ui, vm, actions),
             Page::Style => style::page(ui, vm, actions),
             Page::History => history::page(ui, vm, actions),
+            Page::Vocab => vocab::page(ui, vm, actions),
             page => {
                 egui::ScrollArea::vertical()
                     .id_salt("openless-main-scroll")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         match page {
-                            Page::Vocab => {
-                                vocab::page(ui, vm, actions);
-                            }
                             Page::Marketplace => {
                                 marketplace::marketplace_page(ui, vm, actions, body);
                             }
@@ -79,7 +77,11 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
                             Page::Corrections => {
                                 corrections::page(ui, vm, actions);
                             }
-                            Page::Overview | Page::History | Page::Style | Page::Settings => {
+                            Page::Overview
+                            | Page::History
+                            | Page::Style
+                            | Page::Vocab
+                            | Page::Settings => {
                                 // Handled above or via overlay.
                             }
                         }
@@ -333,7 +335,6 @@ mod tests {
             "history.desc",
             "common.refresh",
             "common.clear",
-            "history.play",
             "history.step_asr",
             // 润色信息现在挂在润色卡片胶囊上（「润色 · 风格」）。
             "history.step_polish",
@@ -348,7 +349,12 @@ mod tests {
             );
         }
         // 菜单默认收起：导出/重新转录/删除都在「…」浮层里，不该直接出现在页面上。
-        for key in ["history.export", "history.retranscribe", "common.delete"] {
+        for key in [
+            "history.play",
+            "history.export",
+            "history.retranscribe",
+            "common.delete",
+        ] {
             let unexpected = tr(key);
             assert!(
                 !painted.contains(unexpected),
@@ -1587,6 +1593,7 @@ mod tests {
             description: "fixture for the marketplace detail overlay test".to_string(),
             mode: "dictation".to_string(),
             author: "tester".to_string(),
+            origin_author_login: None,
             tags: Vec::new(),
             likes: 1,
             downloads: 2,

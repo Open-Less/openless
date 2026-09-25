@@ -47,6 +47,7 @@ pub enum FrontendAction {
     MarketplaceInstall(usize),
     /// Toggle marketplace pack like.
     MarketplaceToggleLike(usize),
+    MarketplaceCloseMine,
     /// Select a history entry (index into `history_entries`).
     HistorySelect(usize),
     /// Re-read the history list from Core.
@@ -63,6 +64,9 @@ pub enum FrontendAction {
     HistoryExport(usize),
     /// Re-run ASR on a history entry's recording.
     HistoryRetranscribe(usize),
+    HistoryRepolishOpen(usize),
+    HistoryRepolishClose,
+    HistoryRepolish(usize, Option<usize>),
     /// Open a history entry's recording in the system player.
     HistoryPlay(usize),
     /// Vocab entry added.
@@ -75,6 +79,8 @@ pub enum FrontendAction {
     VocabRemovePhrase(usize),
     /// Vocab entry toggled enabled/disabled.
     VocabTogglePhrase(usize),
+    /// Reload dictionary and correction rules from Core.
+    VocabRefresh,
     /// Correction rule added.
     VocabAddRule {
         pattern: String,
@@ -98,7 +104,14 @@ pub enum FrontendAction {
     /// Style pack editor opened.
     StyleEdit(usize),
     /// Style editor prompt saved.
-    StyleSaveEditor(String),
+    StyleSaveEditor {
+        name: String,
+        description: String,
+        prompt: String,
+        selection_prompt: String,
+        voice_edit_prompt: String,
+        tags: String,
+    },
     /// Style editor closed.
     StyleCloseEditor,
     /// New style pack creation requested.
@@ -216,6 +229,7 @@ pub struct MarketplacePack {
     pub description: String,
     pub mode: String,
     pub author: String,
+    pub origin_author_login: Option<String>,
     pub tags: Vec<String>,
     pub likes: u32,
     pub downloads: u32,
@@ -637,6 +651,10 @@ pub struct FrontendViewModel {
     pub history_confirm: Option<HistoryConfirm>,
     /// In-app playback progress for one history entry.
     pub history_playback: Option<HistoryPlayback>,
+    pub history_repolish_open: bool,
+    pub history_repolish_running: bool,
+    pub history_repolish_result: Option<(String, String)>,
+    pub history_repolish_error: Option<String>,
 
     // Vocab
     pub vocab_entries: Vec<VocabEntry>,
@@ -661,6 +679,11 @@ pub struct FrontendViewModel {
     pub style_selection_workflow: bool,
     pub style_editor_open: bool,
     pub style_prompt: String,
+    pub style_name: String,
+    pub style_description: String,
+    pub style_selection_prompt: String,
+    pub style_voice_edit_prompt: String,
+    pub style_tags: String,
     pub style_notice: Option<String>,
     pub style_unsupported: bool,
 
@@ -669,6 +692,10 @@ pub struct FrontendViewModel {
     pub marketplace_sort: MarketplaceSort,
     pub marketplace_packs: Vec<MarketplacePack>,
     pub marketplace_selected: Option<usize>,
+    pub marketplace_detail_prompt: Option<String>,
+    pub marketplace_mine_open: bool,
+    pub marketplace_mine_query: String,
+    pub marketplace_mine_packs: Vec<(String, String, Vec<String>)>,
     pub marketplace_notice: Option<String>,
     pub marketplace_loading: bool,
     pub marketplace_unsupported: bool,
@@ -784,6 +811,10 @@ impl Default for FrontendViewModel {
             history_error: None,
             history_confirm: None,
             history_playback: None,
+            history_repolish_open: false,
+            history_repolish_running: false,
+            history_repolish_result: None,
+            history_repolish_error: None,
             vocab_entries: Vec::new(),
             vocab_rules: Vec::new(),
             vocab_filter: 0,
@@ -803,12 +834,21 @@ impl Default for FrontendViewModel {
             style_selection_workflow: false,
             style_editor_open: false,
             style_prompt: String::new(),
+            style_name: String::new(),
+            style_description: String::new(),
+            style_selection_prompt: String::new(),
+            style_voice_edit_prompt: String::new(),
+            style_tags: String::new(),
             style_notice: None,
             style_unsupported: true,
             marketplace_query: String::new(),
             marketplace_sort: MarketplaceSort::Popular,
             marketplace_packs: Vec::new(),
             marketplace_selected: None,
+            marketplace_detail_prompt: None,
+            marketplace_mine_open: false,
+            marketplace_mine_query: String::new(),
+            marketplace_mine_packs: Vec::new(),
             marketplace_notice: None,
             marketplace_loading: true,
             marketplace_unsupported: true,

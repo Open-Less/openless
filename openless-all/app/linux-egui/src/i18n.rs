@@ -5566,6 +5566,192 @@ pub const CATALOG: &[Msg] = &[
         key: "shell.beta_tag",
         text: row("BETA", "BETA", "BETA", "BETA", "BETA"),
     },
+    Msg {
+        key: "common.close",
+        text: row("关闭", "關閉", "Close", "閉じる", "닫기"),
+    },
+    Msg {
+        key: "vocab.newWordAddSelected",
+        text: row("添加所选", "新增所選", "Add Selected", "選択を追加", "선택 추가"),
+    },
+    Msg {
+        key: "vocab.newWordDesc",
+        text: row(
+            "直接输入新词，或从预设模板批量导入。",
+            "直接輸入新詞，或從預設範本批次匯入。",
+            "Type a word directly, or import preset templates in bulk.",
+            "単語を直接入力、またはプリセットテンプレートから一括インポート。",
+            "단어를 직접 입력하거나 프리셋 템플릿에서 일괄 가져오세요.",
+        ),
+    },
+    Msg {
+        key: "vocab.newWordInputPlaceholder",
+        text: row(
+            "输入词语，按 Enter 添加…",
+            "輸入詞語，按 Enter 新增…",
+            "Type a word, press Enter to add…",
+            "単語を入力して Enter で追加…",
+            "단어 입력 후 Enter로 추가…",
+        ),
+    },
+    Msg {
+        key: "vocab.newWordTemplates",
+        text: row(
+            "预设模板",
+            "預設範本",
+            "Preset Templates",
+            "プリセットテンプレート",
+            "프리셋 템플릿",
+        ),
+    },
+    Msg {
+        key: "vocab.newWordTitle",
+        text: row(
+            "添加新词",
+            "新增新詞",
+            "Add New Words",
+            "新語を追加",
+            "새 단어 추가",
+        ),
+    },
+    Msg {
+        key: "history.repolish.empty",
+        text: row(
+            "（模型返回了空结果）",
+            "（模型返回了空結果）",
+            "(the model returned an empty result)",
+            "（モデルが空の結果を返しました）",
+            "(모델이 빈 결과를 반환했습니다)",
+        ),
+    },
+    Msg {
+        key: "history.repolish.hint",
+        text: row(
+            "基于上面的原文再跑一次润色。结果只在本次查看时显示，不写回这条记录。原风格包已删除或旧记录时，重试将使用当前风格。",
+            "基於上面的原文再跑一次潤色。結果只在本次查看時顯示，不寫回這條記錄。原風格包已刪除或舊記錄時，重試將使用當前風格。",
+            "Run polish again on the transcript above. Results are shown for this visit only and are not written back to the record. When the original style pack was deleted or the record predates style packs, retry uses the current style.",
+            "上の原文でもう一度整文を実行します。結果は今回の表示のみで、この記録には書き戻しません。元のスタイルパックが削除されているか、古い記録の場合は、再試行では現在のスタイルを使用します。",
+            "위 원문으로 다듬기를 다시 실행합니다. 결과는 이번 조회에만 표시되며 기록에 반영되지 않습니다. 원래 스타일 팩이 삭제되었거나 오래된 기록인 경우, 다시 시도 시 현재 스타일을 사용합니다.",
+        ),
+    },
+    Msg {
+        key: "history.repolish.retry",
+        text: row(
+            "用原风格重试",
+            "用原風格重試",
+            "Retry with same style",
+            "同じスタイルで再試行",
+            "같은 스타일로 재시도",
+        ),
+    },
+    Msg {
+        key: "history.repolish.retryResultTitle",
+        text: row("重试结果", "重試結果", "Retry result", "再試行の結果", "재시도 결과"),
+    },
+    Msg {
+        key: "history.repolish.title",
+        text: row("重新润色", "重新潤色", "Re-polish", "再整文", "다시 다듬기"),
+    },
+    Msg {
+        key: "marketplace.myPacks.buttonLabel",
+        text: row("我的发布", "我的發布", "My Packs", "自分の公開", "내 게시물"),
+    },
+    Msg {
+        key: "marketplace.myPacks.searchPlaceholder",
+        text: row(
+            "搜索名称、标签",
+            "搜尋名稱、標籤",
+            "Search name or tags",
+            "名前・タグを検索",
+            "이름·태그 검색",
+        ),
+    },
+    Msg {
+        key: "marketplace.myPacks.summary",
+        text: row("已发布 {} 个风格包", "已發布 {} 個風格包", "{} published", "公開済み {} 個", "게시 {}개"),
+    },
+    Msg {
+        key: "style.pack.derivativeBadge",
+        text: row(
+            "衍生自 @{}",
+            "衍生自 @{}",
+            "Derived from @{}",
+            "@{} から派生",
+            "@{}에서 파생",
+        ),
+    },
+    Msg {
+        key: "style.pack.fieldDescription",
+        text: row("描述", "描述", "Description", "説明", "설명"),
+    },
+    Msg {
+        key: "style.pack.fieldName",
+        text: row("名称", "名稱", "Name", "名前", "이름"),
+    },
+    Msg {
+        key: "style.pack.fieldTags",
+        text: row("标签", "標籤", "Tags", "タグ", "태그"),
+    },
+    Msg {
+        key: "style.pack.fieldTagsPlaceholder",
+        text: row(
+            "用英文逗号分隔，例如 community, voiceover, formal",
+            "用英文逗號分隔，例如 community, voiceover, formal",
+            "Comma-separated tags, e.g. community, voiceover, formal",
+            "カンマ区切り、例: community, voiceover, formal",
+            "쉼표로 구분, 예: community, voiceover, formal",
+        ),
+    },
+    Msg {
+        key: "style.pack.selectionPromptHint",
+        text: row(
+            "用于用户主动选中的书面文字；不经过 ASR，不把内容当成转写，也不回答其中的问题。",
+            "用於使用者主動選中的書面文字；不經過 ASR，不把內容當成轉寫，也不回答其中的問題。",
+            "For user-selected written text; not ASR output. Do not treat it as a transcript or answer its questions.",
+            "ユーザーが選択した書面テキスト用。ASRは経由せず、書き起こしとして扱わず、その中の質問にも答えません。",
+            "사용자가 선택한 서면 텍스트용. ASR을 거치지 않으며, 받아쓰기로 취급하지 않고 그 안의 질문에도 답하지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "style.pack.selectionPromptTitle",
+        text: row(
+            "选区润色 Prompt（无 ASR）",
+            "選區潤色 Prompt（無 ASR）",
+            "Selection polish prompt (no ASR)",
+            "選択範囲の推敲プロンプト（ASRなし）",
+            "선택 영역 다듬기 프롬프트(ASR 없음)",
+        ),
+    },
+    Msg {
+        key: "style.pack.voiceEditPromptTitle",
+        text: row(
+            "选区语音编辑 Prompt（EditPlan）",
+            "選區語音編輯 Prompt（EditPlan）",
+            "Selection voice edit prompt (EditPlan)",
+            "選択範囲の音声編集プロンプト（EditPlan）",
+            "선택 영역 음성 편집 프롬프트(EditPlan)",
+        ),
+    },
+    Msg {
+        key: "marketplace.myPacks.buttonTitleEmpty",
+        text: row(
+            "先在 Settings → 风格市场 填写发布身份",
+            "先在 Settings → 風格市場 填寫發布身份",
+            "Set publisher identity in Settings → Marketplace first",
+            "先に 設定 → マーケット で公開者名を設定してください",
+            "먼저 설정 → 마켓에서 게시자 이름을 입력하세요",
+        ),
+    },
+    Msg {
+        key: "marketplace.myPacks.notLoggedIn",
+        text: row(
+            "请先在 Settings → 风格市场 填写发布身份",
+            "請先在 Settings → 風格市場 填寫發布身份",
+            "Set publisher identity in Settings → Marketplace first",
+            "先に 設定 → マーケット で公開者名を設定してください",
+            "먼저 설정 → 마켓에서 게시자 이름을 입력하세요",
+        ),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

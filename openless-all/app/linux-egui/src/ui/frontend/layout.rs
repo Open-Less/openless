@@ -828,16 +828,6 @@ pub fn fixed_ui<R>(
     contents(&mut child)
 }
 
-pub fn soft_separator(ui: &mut egui::Ui) {
-    let rect = ui
-        .allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover())
-        .0;
-    ui.painter().line_segment(
-        [rect.left_center(), rect.right_center()],
-        egui::Stroke::new(0.5, egui::Color32::from_rgb(242, 242, 244)),
-    );
-}
-
 /// Width of `text` at `size` points, measured with the live font atlas.
 /// Needed wherever a control is laid out by hand rather than by egui's cursor.
 pub fn text_width(ui: &egui::Ui, text: &str, size: f32) -> f32 {
@@ -862,6 +852,8 @@ pub enum ButtonKind {
     Ghost,
     /// Filled with the accent blue, white text.
     Blue,
+    /// Dark primary action used by marketplace installation.
+    Dark,
     /// Greyed-out button that swallows clicks (Tauri's 置灰 停用).
     Disabled,
 }
@@ -897,6 +889,15 @@ pub fn action_button(
                 theme::BLUE.linear_multiply(0.92)
             } else {
                 theme::BLUE
+            },
+            None,
+            egui::Color32::WHITE,
+        ),
+        ButtonKind::Dark => (
+            if response.hovered() {
+                theme::INK_2
+            } else {
+                theme::INK
             },
             None,
             egui::Color32::WHITE,
@@ -1220,6 +1221,8 @@ pub enum PillTone {
     Gray,
     /// Accent-tinted fill.
     Blue,
+    /// Derived marketplace packs.
+    Green,
 }
 
 /// Natural size of a small pill for `text`.
@@ -1233,6 +1236,7 @@ pub fn paint_pill(painter: &egui::Painter, rect: egui::Rect, text: &str, tone: P
         PillTone::Outline => (egui::Color32::TRANSPARENT, Some(theme::LINE), theme::INK_3),
         PillTone::Gray => (theme::SURFACE_2, None, theme::INK_3),
         PillTone::Blue => (theme::BLUE_SOFT, None, theme::BLUE),
+        PillTone::Green => (egui::Color32::from_rgb(235, 250, 239), None, theme::OK),
     };
     painter.rect_filled(rect, egui::CornerRadius::same(9), fill);
     if let Some(border) = border {

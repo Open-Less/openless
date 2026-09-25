@@ -444,6 +444,70 @@ fn detail_card(
                         lang,
                         actions,
                     );
+                    if vm.history_repolish_open {
+                        ui.add_space(12.0);
+                        ui.separator();
+                        ui.label(
+                            egui::RichText::new(tr_l10n(lang, "history.repolish.title")).strong(),
+                        );
+                        ui.label(
+                            egui::RichText::new(tr_l10n(lang, "history.repolish.hint"))
+                                .size(11.5)
+                                .color(theme::INK_4),
+                        );
+                        if let Some(error) = &vm.history_repolish_error {
+                            ui.colored_label(theme::ERR, error);
+                        }
+                        ui.horizontal_wrapped(|ui| {
+                            if ui
+                                .add_enabled(
+                                    !vm.history_repolish_running,
+                                    egui::Button::new(tr_l10n(lang, "history.repolish.retry")),
+                                )
+                                .clicked()
+                            {
+                                actions.push(FrontendAction::HistoryRepolish(index, None));
+                            }
+                            for (pack_index, pack) in vm.style_packs.iter().enumerate() {
+                                if pack.enabled
+                                    && pack.id != "builtin.raw"
+                                    && ui
+                                        .add_enabled(
+                                            !vm.history_repolish_running,
+                                            egui::Button::new(&pack.name),
+                                        )
+                                        .clicked()
+                                {
+                                    actions.push(FrontendAction::HistoryRepolish(
+                                        index,
+                                        Some(pack_index),
+                                    ));
+                                }
+                            }
+                            if ui.button(tr_l10n(lang, "common.close")).clicked() {
+                                actions.push(FrontendAction::HistoryRepolishClose);
+                            }
+                        });
+                        if vm.history_repolish_running {
+                            ui.spinner();
+                        }
+                        if let Some((id, text)) = &vm.history_repolish_result {
+                            if id == &vm.history_entries[index].id {
+                                ui.label(
+                                    egui::RichText::new(tr_l10n(
+                                        lang,
+                                        "history.repolish.retryResultTitle",
+                                    ))
+                                    .strong(),
+                                );
+                                ui.label(if text.trim().is_empty() {
+                                    tr_l10n(lang, "history.repolish.empty")
+                                } else {
+                                    text
+                                });
+                            }
+                        }
+                    }
                 });
         },
     );
@@ -506,30 +570,14 @@ fn detail_body(
             .data_mut(|data| data.insert_temp(menu_id, menu_open));
     }
 
-    // In-app playback: a player bar with the elapsed time and a progress track.
-    if entry.has_audio {
+    // Playback controls belong in the action menu. Only show the progress bar while
+    // this recording is actually playing (not a second default Play button).
+    if entry.has_audio && playback.is_some_and(|clip| clip.id == entry.id) {
         ui.add_space(10.0);
         let (play_row, _) = ui.allocate_exact_size(egui::vec2(width, 32.0), egui::Sense::hover());
-        let playing = playback.filter(|playback| playback.id == entry.id);
-        let label = if playing.is_some() {
-            tr_l10n(lang, "history.stop_playback")
-        } else {
-            tr_l10n(lang, "history.play")
-        };
-        let icon = if playing.is_some() {
-            IconName::Stop
-        } else {
-            IconName::Play
-        };
-        let button_width = layout::text_width(ui, label, 12.5) + 42.0;
-        let button_rect = egui::Rect::from_min_size(play_row.min, egui::vec2(button_width, 32.0));
-        if layout::action_button(ui, button_rect, label, Some(icon), ButtonKind::Ghost).clicked() {
-            actions.push(FrontendAction::HistoryPlay(index));
-        }
-        if let Some(playback) = playing {
-            // Progress track to the right of the button.
+        if let Some(playback) = playback.filter(|clip| clip.id == entry.id) {
             let track = egui::Rect::from_min_max(
-                egui::pos2(button_rect.right() + 12.0, play_row.center().y - 3.0),
+                egui::pos2(play_row.left() + 12.0, play_row.center().y - 3.0),
                 egui::pos2(play_row.right() - 96.0, play_row.center().y + 3.0),
             );
             if track.width() > 20.0 {
@@ -561,7 +609,11 @@ fn detail_body(
         }
     }
 
-    ui.add_space(if entry.has_audio { 12.0 } else { 4.0 });
+    ui.add_space(if playback.is_some_and(|clip| clip.id == entry.id) {
+        12.0
+    } else {
+        4.0
+    });
     separator(ui, width);
     ui.add_space(12.0);
 
@@ -698,10 +750,7 @@ enum HistoryMenuItem {
     },
 }
 
-/// 详情头部右侧的「…」菜单（Tauri `HistoryActionMenu`）：播放 / 导出录音 /
-/// 重新转录 / 删除，右对齐向下展开；返回菜单矩形供“点外面关闭”判定。
-///
-/// 上游还有「重新润色」一项，egui 侧后端还没接这个能力，暂不提供。
+/// 详情头部右侧的「…」菜单：播放、导出、重新转录、重新润色、删除。
 fn history_action_menu(
     ui: &mut egui::Ui,
     button: egui::Rect,
@@ -731,6 +780,15 @@ fn history_action_menu(
             danger: false,
             action: FrontendAction::HistoryRetranscribe(index),
         });
+    }
+    if !entry.raw_transcript.trim().is_empty() {
+        items.push(HistoryMenuItem::Action {
+            icon: IconName::Sparkle,
+            label: tr_l10n(lang, "history.repolish.title").to_string(),
+            danger: false,
+            action: FrontendAction::HistoryRepolishOpen(index),
+        });
+        items.push(HistoryMenuItem::Separator);
     }
     items.push(HistoryMenuItem::Action {
         icon: IconName::Trash,
