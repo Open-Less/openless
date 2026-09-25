@@ -129,3 +129,6 @@ CapsWriter
 /.idea/vcs.xml
 /openless-all/app/pnpm-lock.yaml
 /openless-all/app/pnpm-workspace.yaml
+
+# 本地会话工具（pi-subagents 编排脚本等），不属于产品，也不该进 PR
+.agents/
