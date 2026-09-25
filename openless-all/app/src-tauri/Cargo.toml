@@ -1,6 +1,6 @@
 [package]
 name = "openless"
-version = "2.0.0-Beta.1"
+version = "2.0.0-Beta.2"
 license = "AGPL-3.0-only"
 description = "OpenLess — local voice input that types where your cursor is"
 authors = ["OpenLess"]
