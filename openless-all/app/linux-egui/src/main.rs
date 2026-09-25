@@ -75,6 +75,11 @@ mod linux_app {
         LibraryRefresh,
         SettingsSaved(Box<Result<openless_core::SettingsUpdateOutcome, String>>),
         Marketplace(u64, Result<Vec<openless_core::MarketplaceListItem>, String>),
+        /// 安装结束（成功或失败）：清掉「安装中…」状态并给出提示。
+        MarketplaceInstallFinished {
+            id: String,
+            result: Result<String, String>,
+        },
         MarketplaceLikes(Result<Vec<String>, String>),
         MarketplaceDetail(Result<openless_core::MarketplaceDetail, String>),
         MarketplaceMine(Result<(Vec<openless_core::MarketplaceMyPackItem>, Vec<String>), String>),
@@ -3571,6 +3576,16 @@ mod linux_app {
                             log::debug!("dropping stale marketplace response (seq {seq})");
                         }
                     }
+                    UiResult::MarketplaceInstallFinished { id, result } => {
+                        // Only clear the flag for the pack the UI is still showing.
+                        if self.frontend_vm.marketplace_installing.as_deref() == Some(id.as_str()) {
+                            self.frontend_vm.marketplace_installing = None;
+                        }
+                        match result {
+                            Ok(message) => self.status = message,
+                            Err(error) => self.status = error,
+                        }
+                    }
                     UiResult::MarketplaceLikes(Ok(likes)) => self.marketplace_my_likes = likes,
                     UiResult::MarketplaceLikes(Err(error)) => {
                         // Not signed in / offline: keep the previous like set.
@@ -3740,6 +3755,28 @@ mod linux_app {
             let permissions = self.permission_snapshot();
             // Style-pack icons must be read before `vm` borrows `frontend_vm`.
             let style_icon_urls = self.style_icon_urls();
+            // The drawer's runtime card previews the *draft*, using Core's own
+            // prompt composer, so it must be built before `vm` is borrowed.
+            let style_runtime = if self.frontend_vm.style_editor_open {
+                match (backend.as_ref(), self.style_editor.as_ref()) {
+                    (Some(backend), Some(stored)) => {
+                        let mut draft = stored.clone();
+                        draft.prompt = self.frontend_vm.style_prompt.clone();
+                        draft.selection_prompt = self.frontend_vm.style_selection_prompt.clone();
+                        draft.voice_edit_prompt = self.frontend_vm.style_voice_edit_prompt.clone();
+                        let diagnostics = backend.preview_style_pack_runtime(&draft);
+                        Some(frontend::view_model::StyleRuntimePreview {
+                            context_active: diagnostics.includes_context_premise,
+                            hotword_active: diagnostics.includes_hotword_block,
+                            history_active: diagnostics.includes_history_instruction,
+                            omits_front_app: diagnostics.preview_omits_front_app,
+                        })
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
             // 文本型设置行只在偏好载入 / 外部变更时回灌一次，避免把输入中的
             // 内容每帧弹回旧值。
             let hydrate_text = std::mem::replace(&mut self.hydrate_text_fields, false);
@@ -3792,6 +3829,7 @@ mod linux_app {
             // The drawer's Save button is enabled only while the draft differs
             // from what Core last stored.
             vm.style_editor_dirty = style_editor_is_dirty(vm);
+            vm.style_runtime = style_runtime;
 
             // Overview: wire real data when available.
             if let Some(summary) = self.overview.summary(chrono::Local::now().date_naive()) {
@@ -4241,6 +4279,7 @@ mod linux_app {
                     .marketplace_items
                     .iter()
                     .map(|item| frontend::view_model::MarketplacePack {
+                        id: item.id.clone(),
                         name: item.name.clone(),
                         version: item.version.clone(),
                         description: item.description.clone(),
@@ -5009,13 +5048,25 @@ mod linux_app {
                             if let Some(backend) = self.backend() {
                                 let id = item.id.clone();
                                 let lang = self.lang;
-                                self.spawn(async move {
-                                    let pack = backend.services().marketplace.install(id).await?;
-                                    Ok(fmt_l10n(
-                                        lang,
-                                        "status.marketplace_installed",
-                                        &[&pack.name],
-                                    ))
+                                // 详情里的安装按钮在完成后才恢复：把「安装中」状态
+                                // 记在宿主里，任务结束时无论成败都清掉。
+                                self.frontend_vm.marketplace_installing = Some(id.clone());
+                                let tx = self.tx.clone();
+                                let finished_id = id.clone();
+                                self.tokio.spawn(async move {
+                                    let result =
+                                        match backend.services().marketplace.install(id).await {
+                                            Ok(pack) => Ok(fmt_l10n(
+                                                lang,
+                                                "status.marketplace_installed",
+                                                &[&pack.name],
+                                            )),
+                                            Err(error) => Err(error.to_string()),
+                                        };
+                                    let _ = tx.send(UiResult::MarketplaceInstallFinished {
+                                        id: finished_id,
+                                        result,
+                                    });
                                 });
                             }
                         }

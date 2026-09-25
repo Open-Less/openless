@@ -1707,6 +1707,7 @@ mod tests {
             ..Default::default()
         };
         vm.marketplace_packs = vec![super::view_model::MarketplacePack {
+            id: "overlay-fixture-id".to_string(),
             name: "overlay-fixture".to_string(),
             version: "1.0.0".to_string(),
             description: "fixture for the marketplace detail overlay test".to_string(),

@@ -5951,6 +5951,138 @@ pub const CATALOG: &[Msg] = &[
             "선택 영역 다듬기 프롬프트를 편집 중입니다. 입력은 사용자가 선택한 서면 텍스트이며 ASR을 거치지 않습니다.",
         ),
     },
+    Msg {
+        key: "style.pack.runtimeActive",
+        text: row("当前生效", "目前生效", "Active", "有効", "활성"),
+    },
+    Msg {
+        key: "style.pack.runtimeContextDesc",
+        text: row(
+            "来自语言与应用上下文",
+            "來自語言與應用上下文",
+            "From language and app context",
+            "言語とアプリのコンテキストから",
+            "언어·앱 컨텍스트에서",
+        ),
+    },
+    Msg {
+        key: "style.pack.runtimeContextEmpty",
+        text: row(
+            "当前不会附加",
+            "目前不會附加",
+            "Not added in the current preview.",
+            "現在のプレビューでは付加されません。",
+            "현재 미리보기에는 추가되지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "style.pack.runtimeContextTitle",
+        text: row(
+            "上下文前提",
+            "上下文前提",
+            "Context premise",
+            "コンテキスト前提",
+            "컨텍스트 전제",
+        ),
+    },
+    Msg {
+        key: "style.pack.runtimeDesc",
+        text: row(
+            "只读的运行时辅助项。",
+            "只讀的執行時輔助項。",
+            "Read-only runtime helpers.",
+            "読み取り専用の実行時ヘルパー。",
+            "읽기 전용 런타임 보조.",
+        ),
+    },
+    Msg {
+        key: "style.pack.runtimeHistoryDesc",
+        text: row(
+            "仅用于实时多轮 polish",
+            "僅用於即時多輪 polish",
+            "Only for live multi-turn polish",
+            "ライブのマルチターン polish のみで使用",
+            "실시간 멀티턴 polish 전용",
+        ),
+    },
+    Msg {
+        key: "style.pack.runtimeHistoryEmpty",
+        text: row(
+            "只有存在 prior turns 时才会附加",
+            "只有存在 prior turns 時才會附加",
+            "Only added when prior turns exist.",
+            "前のターンが存在する場合のみ付加。",
+            "이전 턴이 있을 때만 추가됩니다.",
+        ),
+    },
+    Msg {
+        key: "style.pack.runtimeHistoryTitle",
+        text: row(
+            "多轮历史保护段",
+            "多輪歷史保護段",
+            "Multi-turn history guardrail",
+            "マルチターン履歴ガード",
+            "멀티턴 히스토리 가드",
+        ),
+    },
+    Msg {
+        key: "style.pack.runtimeHotwordDesc",
+        text: row(
+            "来自已启用热词",
+            "來自已啟用熱詞",
+            "From enabled hotwords",
+            "有効なホットワードから",
+            "활성화된 핫워드에서",
+        ),
+    },
+    Msg {
+        key: "style.pack.runtimeHotwordEmpty",
+        text: row(
+            "当前不会附加",
+            "目前不會附加",
+            "Not added in the current preview.",
+            "現在のプレビューでは付加されません。",
+            "현재 미리보기에는 추가되지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "style.pack.runtimeHotwordTitle",
+        text: row(
+            "热词提示段",
+            "熱詞提示段",
+            "Hotword block",
+            "ホットワードブロック",
+            "핫워드 블록",
+        ),
+    },
+    Msg {
+        key: "style.pack.runtimeInactive",
+        text: row("当前未生效", "目前未生效", "Inactive", "無効", "비활성"),
+    },
+    Msg {
+        key: "style.pack.runtimePreviewOmittedFrontApp",
+        text: row(
+            "预览已省略前台 app 标签。",
+            "預覽已省略前台 app 標籤。",
+            "Preview omits the front-app label.",
+            "プレビューはフロントアプリのラベルを省略しています。",
+            "미리보기에서 프런트앱 라벨이 생략되었습니다.",
+        ),
+    },
+    Msg {
+        key: "style.pack.runtimeTitle",
+        text: row(
+            "OpenLess 运行时附加指令",
+            "OpenLess 執行時附加指令",
+            "OpenLess Runtime Directives",
+            "OpenLess 実行時付加指令",
+            "OpenLess 런타임 추가 지시",
+        ),
+    },
+    Msg {
+        key: "marketplace.installingBtn",
+        text: row("安装中…", "安裝中…", "Installing…", "インストール中…", "설치 중…"),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

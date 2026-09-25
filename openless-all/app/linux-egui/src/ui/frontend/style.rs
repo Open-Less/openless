@@ -887,6 +887,13 @@ fn drawer_body(
                 );
             }
 
+            // The runtime card belongs to the dictation workflow: it shows which
+            // directives Core actually assembles into the prompt right now.
+            if !vm.style_selection_workflow {
+                ui.add_space(FIELD_GAP + 4.0);
+                runtime_card(ui, vm);
+            }
+
             ui.add_space(18.0);
             drawer_footer(ui, vm, actions);
             ui.add_space(18.0);
@@ -1035,6 +1042,120 @@ fn prompt_field(
     ui.add_sized(
         [ui.available_width(), height],
         egui::TextEdit::multiline(value),
+    );
+}
+
+/// Dictation directives preview. Rendering only reads the DTO Core built, so the
+/// UI can never disagree with the prompt the pipeline actually sends.
+fn runtime_card(ui: &mut egui::Ui, vm: &FrontendViewModel) {
+    let lang = vm.lang;
+    let Some(runtime) = vm.style_runtime.as_ref() else {
+        return;
+    };
+    egui::Frame::new()
+        .fill(theme::SURFACE_2)
+        .stroke(egui::Stroke::new(0.5, theme::LINE))
+        .corner_radius(egui::CornerRadius::same(14))
+        .inner_margin(egui::Margin::same(14))
+        .show(ui, |ui| {
+            ui.set_width((ui.available_width() - 2.0).max(80.0));
+            ui.label(
+                egui::RichText::new(tr_l10n(lang, "style.pack.runtimeTitle"))
+                    .size(13.0)
+                    .strong()
+                    .color(theme::INK),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(tr_l10n(lang, "style.pack.runtimeDesc"))
+                    .size(11.5)
+                    .color(theme::INK_4),
+            );
+            ui.add_space(12.0);
+            runtime_row(
+                ui,
+                tr_l10n(lang, "style.pack.runtimeContextTitle"),
+                tr_l10n(lang, "style.pack.runtimeContextDesc"),
+                runtime.context_active,
+                tr_l10n(lang, "style.pack.runtimeContextEmpty"),
+                lang,
+            );
+            ui.add_space(8.0);
+            runtime_row(
+                ui,
+                tr_l10n(lang, "style.pack.runtimeHotwordTitle"),
+                tr_l10n(lang, "style.pack.runtimeHotwordDesc"),
+                runtime.hotword_active,
+                tr_l10n(lang, "style.pack.runtimeHotwordEmpty"),
+                lang,
+            );
+            ui.add_space(8.0);
+            runtime_row(
+                ui,
+                tr_l10n(lang, "style.pack.runtimeHistoryTitle"),
+                tr_l10n(lang, "style.pack.runtimeHistoryDesc"),
+                runtime.history_active,
+                tr_l10n(lang, "style.pack.runtimeHistoryEmpty"),
+                lang,
+            );
+            if runtime.omits_front_app {
+                ui.add_space(10.0);
+                ui.label(
+                    egui::RichText::new(tr_l10n(lang, "style.pack.runtimePreviewOmittedFrontApp"))
+                        .size(11.5)
+                        .color(theme::INK_4),
+                );
+            }
+        });
+}
+
+/// One directive row: title + description on the left, active/inactive pill right.
+fn runtime_row(
+    ui: &mut egui::Ui,
+    title: &str,
+    detail: &str,
+    active: bool,
+    inactive_hint: &str,
+    lang: Lang,
+) {
+    let (row, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::hover());
+    let painter = ui.painter().with_clip_rect(row);
+    let pill_text = if active {
+        tr_l10n(lang, "style.pack.runtimeActive")
+    } else {
+        tr_l10n(lang, "style.pack.runtimeInactive")
+    };
+    let pill_size = layout::pill_size(ui, pill_text);
+    let text_width = (row.width() - pill_size.x - 12.0).max(60.0);
+    let title_galley = layout::text_galley(ui, title, theme::INK, 12.0, text_width, 1);
+    painter.galley(
+        egui::pos2(row.left(), row.top() + 2.0),
+        title_galley,
+        theme::INK,
+    );
+    let hint = if active { detail } else { inactive_hint };
+    let hint_galley = layout::text_galley(ui, hint, theme::INK_4, 11.0, text_width, 1);
+    painter.galley(
+        egui::pos2(row.left(), row.top() + 18.0),
+        hint_galley,
+        theme::INK_4,
+    );
+    layout::paint_pill(
+        &painter,
+        egui::Rect::from_min_size(
+            egui::pos2(
+                row.right() - pill_size.x,
+                row.center().y - pill_size.y / 2.0,
+            ),
+            pill_size,
+        ),
+        pill_text,
+        if active {
+            PillTone::Blue
+        } else {
+            PillTone::Gray
+        },
     );
 }
 

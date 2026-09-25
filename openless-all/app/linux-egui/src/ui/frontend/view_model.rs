@@ -241,6 +241,9 @@ pub enum MarketplaceSort {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct MarketplacePack {
+    /// Marketplace id; the install action is index-based, but the UI needs the
+    /// id to show which pack is currently installing.
+    pub id: String,
     pub name: String,
     pub version: String,
     pub description: String,
@@ -273,6 +276,17 @@ pub struct SettingsPermissions {
     pub accessibility: PermissionState,
     pub hotkey: PermissionState,
     pub network: PermissionState,
+}
+
+/// What Core's prompt composer actually puts into the dictation prompt right
+/// now (`preview_style_pack_runtime`). The editor shows one row per directive
+/// instead of letting the UI guess the rules.
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug, Default)]
+pub struct StyleRuntimePreview {
+    pub context_active: bool,
+    pub hotword_active: bool,
+    pub history_active: bool,
+    pub omits_front_app: bool,
 }
 
 /// One 风格包直选 row (style pack name + its hotkey chip).
@@ -726,6 +740,8 @@ pub struct FrontendViewModel {
     pub style_editor_dirty: bool,
     /// The stored pack the draft is compared against (dirty check + Revert).
     pub style_editor_saved: Option<openless_core::StylePack>,
+    /// Live runtime directives of the draft (dictation workflow only).
+    pub style_runtime: Option<StyleRuntimePreview>,
     pub style_notice: Option<String>,
     pub style_unsupported: bool,
 
@@ -740,6 +756,8 @@ pub struct FrontendViewModel {
     pub marketplace_mine_packs: Vec<(String, String, Vec<String>)>,
     pub marketplace_notice: Option<String>,
     pub marketplace_loading: bool,
+    /// Pack id currently being installed (the detail button shows 安装中…).
+    pub marketplace_installing: Option<String>,
     pub marketplace_unsupported: bool,
 
     // Settings
@@ -895,6 +913,7 @@ impl Default for FrontendViewModel {
             style_editor_mode: String::new(),
             style_editor_dirty: false,
             style_editor_saved: None,
+            style_runtime: None,
             style_notice: None,
             style_unsupported: true,
             marketplace_query: String::new(),
@@ -907,6 +926,7 @@ impl Default for FrontendViewModel {
             marketplace_mine_packs: Vec::new(),
             marketplace_notice: None,
             marketplace_loading: true,
+            marketplace_installing: None,
             marketplace_unsupported: true,
             settings_section: SettingsSection::General,
             services_view: 0,

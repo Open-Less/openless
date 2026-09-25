@@ -278,6 +278,9 @@ pub fn marketplace_page(
                 index,
                 pack.liked,
                 vm.marketplace_detail_prompt.as_deref(),
+                vm.marketplace_installing
+                    .as_deref()
+                    .is_some_and(|installing| installing == pack.id),
                 body_rect,
                 actions,
             );
@@ -421,6 +424,7 @@ fn marketplace_detail(
     index: usize,
     liked: bool,
     prompt: Option<&str>,
+    installing: bool,
     body_rect: egui::Rect,
     actions: &mut Vec<FrontendAction>,
 ) {
@@ -467,42 +471,53 @@ fn marketplace_detail(
                         ui.set_width(modal_width - 52.0);
                         ui.set_min_height(card_height - 44.0);
                         ui.set_max_height(card_height - 44.0);
-                        ui.horizontal_wrapped(|ui| {
+                        // Tauri `Modal`: name + outline mode pill + ok-toned
+                        // derivative pill + mono version, baseline-aligned in one
+                        // wrapping row.
+                        ui.horizontal(|ui| {
                             ui.add(
                                 egui::Label::new(
                                     egui::RichText::new(&pack.name).size(18.0).strong(),
                                 )
                                 .truncate(),
                             );
-                            ui.label(
-                                egui::RichText::new(&pack.mode)
-                                    .size(11.0)
-                                    .color(theme::INK_3),
+                            let (mode_rect, _) = ui.allocate_exact_size(
+                                layout::pill_size(ui, &pack.mode),
+                                egui::Sense::hover(),
+                            );
+                            layout::paint_pill(
+                                ui.painter(),
+                                mode_rect,
+                                &pack.mode,
+                                layout::PillTone::Outline,
                             );
                             if let Some(author) = pack
                                 .origin_author_login
                                 .as_ref()
                                 .filter(|author| *author != &pack.author)
                             {
-                                ui.label(
-                                    egui::RichText::new(openless_linux_egui::fmt_l10n(
-                                        lang,
-                                        "marketplace.derivativeBadge",
-                                        &[author],
-                                    ))
-                                    .size(11.0)
-                                    .color(theme::OK),
+                                let badge = openless_linux_egui::fmt_l10n(
+                                    lang,
+                                    "marketplace.derivativeBadge",
+                                    &[author],
                                 );
+                                let (rect, response) = ui.allocate_exact_size(
+                                    layout::pill_size(ui, &badge),
+                                    egui::Sense::hover(),
+                                );
+                                layout::paint_pill(
+                                    ui.painter(),
+                                    rect,
+                                    &badge,
+                                    layout::PillTone::Green,
+                                );
+                                response.on_hover_text(&badge);
                             }
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    ui.label(
-                                        egui::RichText::new(format!("v{}", pack.version))
-                                            .size(10.0)
-                                            .color(theme::INK_4),
-                                    );
-                                },
+                            ui.label(
+                                egui::RichText::new(format!("v{}", pack.version))
+                                    .size(11.0)
+                                    .monospace()
+                                    .color(theme::INK_4),
                             );
                         });
                         ui.label(
@@ -531,7 +546,12 @@ fn marketplace_detail(
                                     .max_height((card_height - 225.0).max(60.0))
                                     .min_scrolled_height((card_height - 225.0).max(60.0))
                                     .show(ui, |ui| {
-                                        ui.label(prompt.unwrap_or_default());
+                                        ui.label(
+                                            egui::RichText::new(prompt.unwrap_or_default())
+                                                .size(12.0)
+                                                .monospace()
+                                                .color(theme::INK_2),
+                                        );
                                     });
                             });
                         ui.add_space(14.0);
@@ -539,21 +559,24 @@ fn marketplace_detail(
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    if ui
-                                        .add(
-                                            egui::Button::new(
-                                                egui::RichText::new(tr_l10n(
-                                                    lang,
-                                                    "marketplace.install_btn",
-                                                ))
+                                    // Two literal call sites: the i18n sync only
+                                    // registers keys written next to `tr_l10n(…,`.
+                                    let install_label = if installing {
+                                        tr_l10n(lang, "marketplace.installingBtn")
+                                    } else {
+                                        tr_l10n(lang, "marketplace.install_btn")
+                                    };
+                                    let install_button = ui.add_enabled(
+                                        !installing,
+                                        egui::Button::new(
+                                            egui::RichText::new(install_label)
                                                 .color(egui::Color32::WHITE),
-                                            )
-                                            .fill(theme::BLUE)
-                                            .stroke(egui::Stroke::NONE)
-                                            .corner_radius(egui::CornerRadius::same(8)),
                                         )
-                                        .clicked()
-                                    {
+                                        .fill(theme::BLUE)
+                                        .stroke(egui::Stroke::NONE)
+                                        .corner_radius(egui::CornerRadius::same(8)),
+                                    );
+                                    if install_button.clicked() {
                                         actions.push(FrontendAction::MarketplaceInstall(index));
                                         actions.push(FrontendAction::MarketplaceCloseDetail);
                                     }
