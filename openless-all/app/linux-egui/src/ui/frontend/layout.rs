@@ -921,7 +921,13 @@ pub fn action_button(
     let icon_space = if icon.is_some() { 19.0 } else { 0.0 };
     let mut x = rect.center().x - (label_width + icon_space) / 2.0;
     if let Some(icon) = icon {
-        icons::draw_icon(ui, egui::pos2(x + 6.5, rect.center().y), icon, ink);
+        // 只有图标的按钮（例如历史详情的「…」菜单）把图标居中。
+        let icon_center = if label.is_empty() {
+            rect.center()
+        } else {
+            egui::pos2(x + 6.5, rect.center().y)
+        };
+        icons::draw_icon(ui, icon_center, icon, ink);
         x += icon_space;
     }
     painter.text(
