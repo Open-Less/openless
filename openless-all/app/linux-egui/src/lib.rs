@@ -33,7 +33,6 @@ mod settings;
 mod single_instance;
 mod tray;
 mod ui_state;
-mod updater;
 
 pub use audio::LinuxCpalRecorder;
 pub use audio_cue::{play_cue_start, play_cue_stop, CueTone};
@@ -103,6 +102,7 @@ pub use popup_window::{
     LESS_COMPUTER_WINDOW_SIZE, QA_WINDOW_SIZE,
 };
 
+pub use openless_core::contract::*;
 pub use recordings::{read_recording_wav, recording_path, recording_pcm, RecordingError};
 pub use resources::{
     LinuxPackageKind, LinuxResourceLayout, LinuxResourceResolver, FCITX_PLUGIN_CONFIG,
@@ -119,16 +119,6 @@ pub use ui_state::{
     load_locale_pref, load_quick_note_shortcut_hidden, save_locale_pref,
     save_quick_note_shortcut_hidden, ui_state_dir, ui_state_path, UiStateError,
 };
-pub use updater::{
-    install_verified_appimage, install_verified_appimage_with_limit, manifest_urls, AppImageTarget,
-    AppImageUpdater, CheckReason, DownloadProgress, InstalledUpdate, LinuxUpdateSupport,
-    PinnedMinisignVerifier, SignatureVerifier, UnavailableSignatureVerifier, UpdateChannel,
-    UpdateError, UpdateManifest, UpdateSchedule, BETA_RELEASES_API, DEFAULT_MAX_APPIMAGE_BYTES,
-    DEFAULT_MAX_MANIFEST_BYTES, DIRECT_RELEASE_BASE, MANIFEST_HOST, MANIFEST_SCHEMA_VERSION,
-    PERIODIC_CHECK_INTERVAL, PINNED_MINISIGN_PUBLIC_KEY, RELEASES_URL, STARTUP_CHECK_DELAY,
-};
-
-pub use openless_core::contract::*;
 
 /// Coordinates Core operations with Linux settings and recording lifecycles.
 ///

@@ -1741,12 +1741,6 @@ pub const CATALOG: &[Msg] = &[
     Msg { key: "head.marketplace_detail", text: row("详情：{}", "詳情：{}", "Details: {}", "詳細: {}", "상세: {}") },
     Msg { key: "head.history_empty", text: row("历史", "歷史", "History", "履歴", "기록") },
     // ---- Update UI
-    Msg { key: "update.system_managed", text: row("当前安装包由系统包管理器更新", "目前套件由系統套件管理員更新", "This build is updated by your system package manager", "このパッケージはシステムのパッケージマネージャで更新されます", "이 패키지는 시스템 패키지 관리자가 업데이트합니다") },
-    Msg { key: "update.discovered", text: row("发现新版本 {}", "發現新版本 {}", "New version available: {}", "新しいバージョン: {}", "새 버전 발견: {}") },
-    Msg { key: "update.up_to_date", text: row("当前已是最新版本", "目前已是最新版本", "You are up to date", "最新バージョン입니다", "최신 버전입니다") },
-    Msg { key: "update.check_failed", text: row("检查更新失败：{}", "檢查更新失敗：{}", "Update check failed: {}", "更新確認に失敗: {}", "업데이트 확인 실패: {}") },
-    Msg { key: "update.installed_restart", text: row("已安装 {}，请重启 OpenLess", "已安裝 {}，請重新啟動 OpenLess", "{} installed — restart OpenLess", "{} をインストールしました。OpenLess を再起動してください", "{} 설치됨 — OpenLess를 재시작하세요") },
-    Msg { key: "update.install_failed", text: row("安装更新失败：{}", "安裝更新失敗：{}", "Update install failed: {}", "更新のインストールに失敗: {}", "업데이트 설치 실패: {}") },
     // ---- Settings / preferences
     Msg { key: "settings.recording_input", text: row("录音与输入", "錄音與輸入", "Recording & input", "録音と入力", "녹음 및 입력") },
     Msg { key: "settings.rec_mode", text: row("录音方式", "錄音方式", "Recording mode", "録音方式", "녹음 방식") },
@@ -2585,16 +2579,6 @@ pub const CATALOG: &[Msg] = &[
         ),
     },
     Msg {
-        key: "settings.about.beta_channel_label",
-        text: row(
-            "加入 Beta 渠道",
-            "加入 Beta 渠道",
-            "Join Beta channel",
-            "Beta チャンネルに参加",
-            "Beta 채널 참여",
-        ),
-    },
-    Msg {
         key: "settings.coding_agent.enable",
         text: row(
             "启用 Less Computer",
@@ -3138,26 +3122,6 @@ pub const CATALOG: &[Msg] = &[
             "Hotkey to open the panel",
             "フロートウィンドウのショートカット",
             "플로팅 창 단축키",
-        ),
-    },
-    Msg {
-        key: "settings.about.beta_channel_toggle_label",
-        text: row(
-            "启用 Beta 渠道",
-            "啟用 Beta 渠道",
-            "Enable Beta channel",
-            "Beta チャンネルを有効化",
-            "Beta 채널 사용",
-        ),
-    },
-    Msg {
-        key: "settings.about.check_stable_update_btn",
-        text: row(
-            "检查正式版更新",
-            "檢查正式版更新",
-            "Check stable update",
-            "正式版を確認",
-            "정식판 확인",
         ),
     },
     Msg {
@@ -4511,26 +4475,6 @@ pub const CATALOG: &[Msg] = &[
     Msg {
         key: "modal.service_views.omni",
         text: row("多模态模型", "多模態模型", "Multimodal", "マルチモーダル", "멀티모달"),
-    },
-    Msg {
-        key: "settings.about.beta_channel_desc",
-        text: row(
-            "开启后，后台自动更新将跟随 Beta 渠道；关闭则回到正式版。下方按钮可随时手动检查 Beta 更新。",
-            "開啟後，背景自動更新將跟隨 Beta 渠道；關閉則回到正式版。下方按鈕可隨時手動檢查 Beta 更新。",
-            "When on, background auto-update follows Beta; when off, it uses stable. Use the button below to manually check Beta anytime.",
-            "オンにするとバックグラウンド自動更新が Beta に従います。オフで正式版に戻ります。下のボタンでいつでも Beta を手動確認できます。",
-            "켜면 백그라운드 자동 업데이트가 Beta를 따릅니다. 끄면 정식판으로 돌아갑니다. 아래 버튼으로 언제든 Beta를 수동 확인할 수 있습니다.",
-        ),
-    },
-    Msg {
-        key: "settings.about.check_beta_update_btn",
-        text: row(
-            "检查 Beta 更新",
-            "檢查 Beta 更新",
-            "Check Beta update",
-            "Beta を確認",
-            "Beta 확인",
-        ),
     },
     Msg {
         key: "settings.advanced.multimodal_pipeline_hint",
@@ -6078,142 +6022,6 @@ pub const CATALOG: &[Msg] = &[
     },
     Msg {
         key: "marketplace.installingBtn",
-        text: row("安装中…", "安裝中…", "Installing…", "インストール中…", "설치 중…"),
-    },
-    Msg {
-        key: "settings.about.update_dialog_available_desc",
-        text: row(
-            "发现 OpenLess {}，是否现在更新？",
-            "發現 OpenLess {}，是否現在更新？",
-            "OpenLess {} is available. Update now?",
-            "OpenLess {} が見つかりました。今すぐ更新しますか？",
-            "OpenLess {} 을(를) 발견했습니다. 지금 업데이트하시겠습니까?",
-        ),
-    },
-    Msg {
-        key: "settings.about.update_dialog_available_title",
-        text: row(
-            "发现新版本",
-            "發現新版本",
-            "Update available",
-            "新しいバージョンがあります",
-            "새 버전 발견",
-        ),
-    },
-    Msg {
-        key: "settings.about.update_dialog_downloaded_desc",
-        text: row(
-            "OpenLess {} 已安装完成。是否现在自动重启以应用更新？",
-            "OpenLess {} 已安裝完成。是否現在自動重啓以應用更新？",
-            "OpenLess {} has been installed. Restart automatically now to apply it?",
-            "OpenLess {} のインストールが完了しました。今すぐ自動再起動して適用しますか？",
-            "OpenLess {} 설치가 완료되었습니다. 지금 자동 재시작하여 적용하시겠습니까?",
-        ),
-    },
-    Msg {
-        key: "settings.about.update_dialog_downloaded_title",
-        text: row("更新已准备好", "更新已準備好", "Update ready", "アップデートの準備完了", "업데이트 준비 완료"),
-    },
-    Msg {
-        key: "settings.about.update_dialog_downloading_desc",
-        text: row(
-            "正在下载 OpenLess {}，请保持应用打开。",
-            "正在下載 OpenLess {}，請保持應用打開。",
-            "Downloading OpenLess {}. Keep the app open.",
-            "OpenLess {} をダウンロード中です。アプリを開いたままにしてください。",
-            "OpenLess {} 을(를) 다운로드 중입니다. 앱을 열어 두세요.",
-        ),
-    },
-    Msg {
-        key: "settings.about.update_dialog_downloading_title",
-        text: row(
-            "正在下载更新",
-            "正在下載更新",
-            "Downloading update",
-            "アップデートをダウンロード中",
-            "업데이트 다운로드 중",
-        ),
-    },
-    Msg {
-        key: "settings.about.update_dialog_install",
-        text: row("现在更新", "現在更新", "Update now", "今すぐ更新", "지금 업데이트"),
-    },
-    Msg {
-        key: "settings.about.update_dialog_install_error_desc",
-        text: row(
-            "自动更新没能完成：{}。你可以前往下载页手动下载安装最新版本。",
-            "自動更新未能完成：{}。你可以前往下載頁手動下載安裝最新版本。",
-            "The automatic update couldn't finish: {}. You can download and install the latest version manually.",
-            "自動更新を完了できませんでした：{}。ダウンロードページから手動で最新版を入手できます。",
-            "자동 업데이트를 완료하지 못했습니다: {}. 다운로드 페이지에서 최신 버전을 직접 받아 설치할 수 있습니다.",
-        ),
-    },
-    Msg {
-        key: "settings.about.update_dialog_install_error_title",
-        text: row(
-            "更新失败",
-            "更新失敗",
-            "Update failed",
-            "更新に失敗しました",
-            "업데이트 실패",
-        ),
-    },
-    Msg {
-        key: "settings.about.update_dialog_installing_desc",
-        text: row(
-            "正在安装 OpenLess {}，请保持应用打开。",
-            "正在安裝 OpenLess {}，請保持應用打開。",
-            "Installing OpenLess {}. Keep the app open.",
-            "OpenLess {} をインストール中です。アプリを開いたままにしてください。",
-            "OpenLess {} 을(를) 설치 중입니다. 앱을 열어 두세요.",
-        ),
-    },
-    Msg {
-        key: "settings.about.update_dialog_installing_title",
-        text: row(
-            "正在安装更新",
-            "正在安裝更新",
-            "Installing update",
-            "アップデートをインストール中",
-            "업데이트 설치 중",
-        ),
-    },
-    Msg {
-        key: "settings.about.update_dialog_later",
-        text: row(
-            "稍后手动重启",
-            "稍後手動重啓",
-            "Restart manually later",
-            "後で手動再起動",
-            "나중에 수동 재시작",
-        ),
-    },
-    Msg {
-        key: "settings.about.update_dialog_progress",
-        text: row(
-            "{}% · {} / {}",
-            "{}% · {} / {}",
-            "{}% · {} / {}",
-            "{}% · {} / {}",
-            "{}% · {} / {}",
-        ),
-    },
-    Msg {
-        key: "settings.about.update_dialog_progress_unknown",
-        text: row(
-            "已下载 {}",
-            "已下載 {}",
-            "{} downloaded",
-            "ダウンロード済み {}",
-            "다운로드됨 {}",
-        ),
-    },
-    Msg {
-        key: "settings.about.update_dialog_downloading_label",
-        text: row("下载中…", "下載中…", "Downloading…", "ダウンロード中…", "다운로드 중…"),
-    },
-    Msg {
-        key: "settings.about.update_dialog_installing_label",
         text: row("安装中…", "安裝中…", "Installing…", "インストール中…", "설치 중…"),
     },
 ];

@@ -46,10 +46,6 @@ pub enum FrontendAction {
     MarketplaceDownload(usize),
     /// Install marketplace pack.
     MarketplaceInstall(usize),
-    /// 自更新：开始下载并安装（Tauri 的 updateDialog「Update now」）。
-    UpdateInstall,
-    /// 关掉自更新对话框（未安装成功时允许，安装中不允许）。
-    UpdateDismiss,
     /// Toggle marketplace pack like.
     MarketplaceToggleLike(usize),
     MarketplaceCloseMine,
@@ -231,22 +227,6 @@ pub enum FrontendAction {
     /// Sidebar group toggle.
     SidebarToggleStyle,
     SidebarToggleTools,
-}
-
-// ── Update dialog ───────────────────────────────────────────────────────────
-
-/// Which face the self-update dialog shows (Tauri `AutoUpdate.tsx`'s `status`).
-/// The host owns the real state machine; this is what the page paints.
-#[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug, PartialEq, Eq)]
-pub enum UpdateStage {
-    /// A newer version is published and waiting for the user's go-ahead.
-    Available,
-    Downloading,
-    /// Bytes are in: verifying the signature and swapping the AppImage.
-    Installing,
-    /// Installed; it takes effect on the next launch.
-    Installed,
-    Failed,
 }
 
 // ── Marketplace types ───────────────────────────────────────────────────────
@@ -460,7 +440,6 @@ pub enum SettingsField {
     SystemProxy,
     LessComputer,
     Multimodal,
-    BetaChannel,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug)]
@@ -502,8 +481,6 @@ pub enum SettingsActionField {
     /// 试听录音提示音（Tauri `audioCuePreview` 按钮）。
     PreviewAudioCue,
     ExportDiagnostics,
-    CheckUpdate,
-    CheckBetaUpdate,
     CopyCertFingerprint,
     OpenGitHub,
     OpenHelp,
@@ -764,13 +741,6 @@ pub struct FrontendViewModel {
     /// Pack id currently being installed (the detail button shows 安装中…).
     pub marketplace_installing: Option<String>,
 
-    // Self-update dialog. `None` = no dialog; the host only fills the version
-    // and progress, the page resolves every string.
-    pub update_stage: Option<UpdateStage>,
-    pub update_version: String,
-    pub update_downloaded: u64,
-    pub update_total: Option<u64>,
-    pub update_error: Option<String>,
     pub marketplace_unsupported: bool,
 
     // Settings
@@ -787,7 +757,6 @@ pub struct FrontendViewModel {
     /// Multimodal pipeline is enabled → the 多模态 view joins the tab strip.
     pub multimodal_view: bool,
     /// The host can self-update (AppImage) → beta-channel / check-update rows.
-    pub auto_update_capable: bool,
     /// The platform has a working desktop hotkey backend (fcitx5 listener up).
     /// Tauri's `visibleSettingsSections(supportsDesktopHotkey)` hides the
     /// 「快捷键」 section when there is none; the rail follows the same rule.
@@ -940,11 +909,6 @@ impl Default for FrontendViewModel {
             marketplace_notice: None,
             marketplace_loading: true,
             marketplace_installing: None,
-            update_stage: None,
-            update_version: String::new(),
-            update_downloaded: 0,
-            update_total: None,
-            update_error: None,
             marketplace_unsupported: true,
             settings_section: SettingsSection::General,
             services_view: 0,
@@ -978,7 +942,6 @@ impl Default for FrontendViewModel {
             service_configured: [false; 2],
             supports_local_asr: false,
             multimodal_view: false,
-            auto_update_capable: false,
             hotkeys_supported: true,
             shortcut_menu: None,
             shortcut_recording: None,
@@ -1044,7 +1007,6 @@ pub struct SettingsFields {
     pub coding_agent_workdir: String,
     pub coding_agent_exe: String,
     pub multimodal: bool,
-    pub beta_channel: bool,
     pub language: usize,
     pub theme: usize,
     /// 历史保留天数（0 = 永久，输入框）。
@@ -1090,7 +1052,6 @@ impl Default for SettingsFields {
             coding_agent_workdir: String::new(),
             coding_agent_exe: String::new(),
             multimodal: false,
-            beta_channel: false,
             language: 0,
             theme: 0,
             retention_days: "0".to_string(),

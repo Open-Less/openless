@@ -2440,30 +2440,6 @@ fn about(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
                         .color(theme::INK_3),
                     );
                 });
-                if vm.auto_update_capable {
-                    row.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new(tr_l10n(
-                                        lang,
-                                        "settings.about.check_stable_update_btn",
-                                    ))
-                                    .size(11.5),
-                                )
-                                .fill(theme::SURFACE_2)
-                                .stroke(egui::Stroke::new(0.8, theme::LINE))
-                                .corner_radius(egui::CornerRadius::same(8))
-                                .min_size(egui::vec2(0.0, 26.0)),
-                            )
-                            .clicked()
-                        {
-                            actions.push(FrontendAction::SettingsAction(
-                                SettingsActionField::CheckUpdate,
-                            ));
-                        }
-                    });
-                }
             },
         );
         if let Some(notice) = &vm.settings_notice {
@@ -2517,33 +2493,6 @@ fn about(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
             actions,
         );
     });
-    // Beta 渠道（Tauri BetaChannelSection）：只在宿主支持自更新时出现。
-    if vm.auto_update_capable {
-        card(
-            ui,
-            tr_l10n(lang, "settings.about.beta_channel_label"),
-            tr_l10n(lang, "settings.about.beta_channel_desc"),
-            |ui| {
-                toggle_row(
-                    ui,
-                    tr_l10n(lang, "settings.about.beta_channel_toggle_label"),
-                    "",
-                    vm.settings.beta_channel,
-                    || {
-                        actions.push(FrontendAction::SettingsToggle(SettingsField::BetaChannel));
-                    },
-                );
-                action_row(
-                    ui,
-                    "",
-                    "",
-                    tr_l10n(lang, "settings.about.check_beta_update_btn"),
-                    SettingsActionField::CheckBetaUpdate,
-                    actions,
-                );
-            },
-        );
-    }
 }
 
 /// One credential channel row: name + current marker, provider/model, actions.

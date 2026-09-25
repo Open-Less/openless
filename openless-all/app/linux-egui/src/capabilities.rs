@@ -6,7 +6,7 @@ use openless_core::{
     PlatformCapabilities,
 };
 
-use crate::{fcitx5_available, LinuxPackageKind};
+use crate::fcitx5_available;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinuxDesktopSession {
@@ -29,7 +29,6 @@ impl LinuxCapabilitySnapshot {
         x11_display: Option<&str>,
         fcitx5_ready: bool,
         tray_available: bool,
-        _package_kind: LinuxPackageKind,
     ) -> Self {
         let session = if wayland_display.is_some_and(|value| !value.trim().is_empty()) {
             LinuxDesktopSession::Wayland
@@ -54,9 +53,9 @@ impl LinuxCapabilitySnapshot {
                 supports_local_asr: false,
                 supports_local_qwen3_mlx: false,
                 supports_in_app_dictation: false,
-                // AppImage detection alone is not an updater capability. Keep
-                // this false until transport and a pinned minisign verifier
-                // have both initialized successfully.
+                // Linux ships deb/rpm only (no AppImage, no updater manifest),
+                // so the host can never replace its own package. Always false —
+                // the UI gates every update control on it.
                 supports_auto_update: false,
             },
             permissions: PermissionSnapshot {
@@ -70,23 +69,15 @@ impl LinuxCapabilitySnapshot {
         }
     }
 
-    pub fn detect(
-        tray_available: bool,
-        package_kind: LinuxPackageKind,
-        updater_available: bool,
-    ) -> Self {
+    pub fn detect(tray_available: bool) -> Self {
         let wayland = std::env::var("WAYLAND_DISPLAY").ok();
         let x11 = std::env::var("DISPLAY").ok();
-        let mut snapshot = Self::from_environment(
+        Self::from_environment(
             wayland.as_deref(),
             x11.as_deref(),
             fcitx5_available(),
             tray_available,
-            package_kind,
-        );
-        snapshot.capabilities.supports_auto_update =
-            package_kind == LinuxPackageKind::AppImage && updater_available;
-        snapshot
+        )
     }
 }
 
@@ -308,25 +299,15 @@ mod tests {
 
     #[test]
     fn x11_and_wayland_have_explicitly_different_overlay_capabilities() {
-        let x11 = LinuxCapabilitySnapshot::from_environment(
-            None,
-            Some(":0"),
-            true,
-            true,
-            LinuxPackageKind::AppImage,
-        );
+        let x11 = LinuxCapabilitySnapshot::from_environment(None, Some(":0"), true, true);
         assert_eq!(x11.session, LinuxDesktopSession::X11);
         assert!(x11.capabilities.supports_overlay);
         assert!(!x11.capabilities.supports_local_asr);
+        // deb/rpm 是本平台唯一的发布格式：宿主永远不能替换自己。
         assert!(!x11.capabilities.supports_auto_update);
 
-        let wayland = LinuxCapabilitySnapshot::from_environment(
-            Some("wayland-0"),
-            Some(":0"),
-            false,
-            false,
-            LinuxPackageKind::SystemPackage,
-        );
+        let wayland =
+            LinuxCapabilitySnapshot::from_environment(Some("wayland-0"), Some(":0"), false, false);
         assert_eq!(wayland.session, LinuxDesktopSession::Wayland);
         assert!(!wayland.capabilities.supports_overlay);
         assert!(!wayland.capabilities.supports_desktop_hotkey);
@@ -335,13 +316,7 @@ mod tests {
 
     #[test]
     fn headless_session_does_not_claim_desktop_or_microphone_support() {
-        let snapshot = LinuxCapabilitySnapshot::from_environment(
-            None,
-            None,
-            false,
-            false,
-            LinuxPackageKind::Development,
-        );
+        let snapshot = LinuxCapabilitySnapshot::from_environment(None, None, false, false);
         assert_eq!(snapshot.session, LinuxDesktopSession::Headless);
         assert!(!snapshot.capabilities.supports_local_asr);
         assert_eq!(

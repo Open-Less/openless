@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +19,10 @@ const packageScript = await readFile(
 );
 const dependencyGate = await readFile(
   join(repoRoot, 'openless-all/app/scripts/check-core-deps.ps1'),
+  'utf8',
+);
+const hostManifest = await readFile(
+  join(repoRoot, 'openless-all/app/linux-egui/Cargo.toml'),
   'utf8',
 );
 
@@ -52,6 +57,14 @@ assert.ok(releaseWorkflow.includes("test \"$(find \"$OUTPUT\" -maxdepth 1 -name 
   'release must gate exactly one rpm');
 assert.ok(!/appimagetool|AppImage|APPIMAGE/i.test(packageScript),
   'Linux package script must not build or stage AppImage');
+
+// 3b. AppImage is retired, so the host must not carry a replacement path for a
+//     package format nothing produces: no in-host downloader/verifier and no
+//     minisign dependency (that key only ever verified the AppImage manifest).
+assert.ok(!existsSync(join(repoRoot, 'openless-all/app/linux-egui/src/updater.rs')),
+  'the Linux host must not keep an AppImage updater module');
+assert.ok(!/minisign-verify/.test(hostManifest),
+  'the Linux host must not depend on the AppImage signature verifier');
 
 // 4. deb/rpm must carry the host and fcitx5 addon. Qwen ASR is
 //    deliberately excluded from Linux packages and must never enter this flow.

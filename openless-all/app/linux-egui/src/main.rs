@@ -36,10 +36,9 @@ mod linux_app {
         open_external, write_jsonl, EventDrainOutcome, Fcitx5HotkeyListener,
         FcitxPluginInstallPlan, FcitxPluginStatus, HostToPopup, LinuxBackendBuilder,
         LinuxCapabilitySnapshot, LinuxHotkeyEvent, LinuxLaunchIntent, LinuxNativeRuntime,
-        LinuxPackageKind, LinuxResourceLayout, LinuxUpdateSupport, Notification, PopupActionGuard,
-        PopupChatMessage, PopupKind, PopupState, PopupSupervisor, PopupSupervisorEvent,
-        PopupToHost, SingleInstanceBroker, SingleInstanceRole, UpdateManifest, UpdateSchedule,
-        POPUP_PROTOCOL_VERSION,
+        LinuxResourceLayout, Notification, PopupActionGuard, PopupChatMessage, PopupKind,
+        PopupState, PopupSupervisor, PopupSupervisorEvent, PopupToHost, SingleInstanceBroker,
+        SingleInstanceRole, POPUP_PROTOCOL_VERSION,
     };
 
     enum UiResult {
@@ -85,11 +84,6 @@ mod linux_app {
         MarketplaceMine(Result<(Vec<openless_core::MarketplaceMyPackItem>, Vec<String>), String>),
         Microphones(Result<Vec<openless_core::MicrophoneDevice>, String>),
         Overview(Result<OverviewData, String>),
-        UpdateCheck(Result<Option<UpdateManifest>, String>),
-        /// 自更新下载进度（Tauri `DownloadEvent` 的 Progress）。
-        UpdateProgress(openless_linux_egui::DownloadProgress),
-        /// 自更新安装结束（成功或失败）。
-        UpdateInstalled(Result<openless_linux_egui::InstalledUpdate, String>),
     }
 
     #[derive(Clone)]
@@ -156,7 +150,6 @@ mod linux_app {
         start_minimized: bool,
         launch_at_login: bool,
         auto_update_check: bool,
-        update_channel: bool,
         remote_input_enabled: bool,
         remote_input_port: bool,
         recording: bool,
@@ -173,7 +166,6 @@ mod linux_app {
                 || self.start_minimized
                 || self.launch_at_login
                 || self.auto_update_check
-                || self.update_channel
                 || self.remote_input_enabled
                 || self.remote_input_port
                 || self.recording
@@ -201,9 +193,6 @@ mod linux_app {
             }
             if self.auto_update_check {
                 merged.auto_update_check = draft.auto_update_check;
-            }
-            if self.update_channel {
-                merged.update_channel = draft.update_channel;
             }
             if self.remote_input_enabled {
                 merged.remote_input_enabled = draft.remote_input_enabled;
@@ -658,9 +647,6 @@ mod linux_app {
         capsule_dismissal_scheduled: Option<String>,
         tray: Option<openless_linux_egui::LinuxTray>,
         exit_requested: bool,
-        update_support: LinuxUpdateSupport,
-        update_schedule: UpdateSchedule,
-        update_started: std::time::Instant,
         /// 上次打「泵心跳」日志的时间。
         last_pump_heartbeat: std::time::Instant,
         /// 用户是否希望主窗口开着。窗口本体在独立的 UI 进程里，宿主只负责
@@ -691,13 +677,6 @@ mod linux_app {
         quick_note_shortcut_hidden: bool,
         /// 本帧从 UI 收到、待回包的延迟探针序号。
         pending_ui_pongs: Vec<u64>,
-        update_manifest: Option<UpdateManifest>,
-        update_busy: bool,
-        update_progress: Option<openless_linux_egui::DownloadProgress>,
-        /// 安装成功后的版本号（对话框显示「已安装 X，请重启」）。
-        update_installed: Option<String>,
-        /// 安装失败的原文（对话框显示原因）。
-        update_install_error: Option<String>,
         /// Currently playing history recording (session id + player handle).
         history_clip: Option<(String, openless_linux_egui::ClipPlayer)>,
         marketplace_items: Vec<openless_core::MarketplaceListItem>,
@@ -755,44 +734,11 @@ mod linux_app {
                 != saved.compatible_app_version.clone().unwrap_or_default()
     }
 
-    /// 宿主自更新状态 → 对话框阶段（Tauri `AutoUpdate.tsx` 的 `status`）。
-    /// 一次只有一个阶段：安装中/失败/已安装优先于「发现新版本」。
-    fn update_dialog_stage(
-        busy: bool,
-        progress: Option<&openless_linux_egui::DownloadProgress>,
-        installed: bool,
-        failed: bool,
-        available: bool,
-    ) -> Option<frontend::view_model::UpdateStage> {
-        use frontend::view_model::UpdateStage;
-        if busy {
-            let downloaded = progress.map(|progress| progress.downloaded).unwrap_or(0);
-            // `download_and_install` 一口气做完下载→校验→替换，没有中间的信号：
-            // 字节数到齐就当进入校验/替换阶段，否则还在下载。
-            let done = progress
-                .and_then(|progress| progress.content_length)
-                .is_some_and(|total| total > 0 && downloaded >= total);
-            return Some(if done {
-                UpdateStage::Installing
-            } else {
-                UpdateStage::Downloading
-            });
-        }
-        if installed {
-            return Some(UpdateStage::Installed);
-        }
-        if failed {
-            return Some(UpdateStage::Failed);
-        }
-        available.then_some(UpdateStage::Available)
-    }
-
     impl OpenLessEguiApp {
         fn new(
             tokio: Arc<tokio::runtime::Runtime>,
             native: Result<LinuxNativeRuntime, String>,
             tray: Option<openless_linux_egui::LinuxTray>,
-            update_support: LinuxUpdateSupport,
             window_should_be_open: bool,
         ) -> Self {
             let (tx, rx) = mpsc::channel();
@@ -870,9 +816,6 @@ mod linux_app {
                         capsule_dismissal_scheduled: None,
                         tray,
                         exit_requested: false,
-                        update_support,
-                        update_schedule: UpdateSchedule::new(Duration::ZERO),
-                        update_started: std::time::Instant::now(),
                         last_pump_heartbeat: std::time::Instant::now(),
                         window_should_be_open,
                         ui_window: None,
@@ -886,11 +829,6 @@ mod linux_app {
                         popup_restarts: [PopupRestartBudget::default(); POPUP_KIND_COUNT],
                         hotkeys_sent: None,
                         pending_ui_pongs: Vec::new(),
-                        update_manifest: None,
-                        update_busy: false,
-                        update_progress: None,
-                        update_installed: None,
-                        update_install_error: None,
                         history_clip: None,
                         marketplace_items: Vec::new(),
                         marketplace_attempted: false,
@@ -975,9 +913,6 @@ mod linux_app {
                     capsule_dismissal_scheduled: None,
                     tray,
                     exit_requested: false,
-                    update_support,
-                    update_schedule: UpdateSchedule::new(Duration::ZERO),
-                    update_started: std::time::Instant::now(),
                     last_pump_heartbeat: std::time::Instant::now(),
                     window_should_be_open,
                     ui_window: None,
@@ -991,11 +926,6 @@ mod linux_app {
                     popup_restarts: [PopupRestartBudget::default(); POPUP_KIND_COUNT],
                     hotkeys_sent: None,
                     pending_ui_pongs: Vec::new(),
-                    update_manifest: None,
-                    update_busy: false,
-                    update_progress: None,
-                    update_installed: None,
-                    update_install_error: None,
                     history_clip: None,
                     marketplace_items: Vec::new(),
                     marketplace_attempted: false,
@@ -2224,59 +2154,6 @@ mod linux_app {
                 .await
                 .map_err(|error| error.to_string());
                 let _ = tx.send(UiResult::Overview(result));
-            });
-        }
-
-        fn request_update_check(&mut self, channel: openless_core::shared_types::UpdateChannel) {
-            let lang = self.lang;
-            let LinuxUpdateSupport::AppImage(updater) = self.update_support.clone() else {
-                self.status = tr_l10n(lang, "update.system_managed").to_string();
-                return;
-            };
-            if self.update_busy {
-                return;
-            }
-            self.update_busy = true;
-            self.update_progress = None;
-            let tx = self.tx.clone();
-            self.tokio.spawn(async move {
-                let result = updater
-                    .check(channel)
-                    .await
-                    .map_err(|error| error.to_string());
-                let _ = tx.send(UiResult::UpdateCheck(result));
-            });
-        }
-
-        /// 下载、校验签名并替换 AppImage（Tauri `update.download()` + `install()`）。
-        /// 只有 AppImage 包能自更新；deb/rpm 下 `update_support` 不是 AppImage，
-        /// 对话框也不会出现。
-        fn install_update(&mut self) {
-            let (LinuxUpdateSupport::AppImage(updater), Some(manifest)) =
-                (self.update_support.clone(), self.update_manifest.clone())
-            else {
-                return;
-            };
-            if self.update_busy {
-                return;
-            }
-            self.update_busy = true;
-            self.update_installed = None;
-            self.update_install_error = None;
-            self.update_progress = Some(openless_linux_egui::DownloadProgress {
-                downloaded: 0,
-                content_length: None,
-            });
-            let tx = self.tx.clone();
-            self.tokio.spawn(async move {
-                let progress_tx = tx.clone();
-                let result = updater
-                    .download_and_install(manifest, move |progress| {
-                        let _ = progress_tx.send(UiResult::UpdateProgress(progress));
-                    })
-                    .await
-                    .map_err(|error| error.to_string());
-                let _ = tx.send(UiResult::UpdateInstalled(result));
             });
         }
 
@@ -3752,33 +3629,6 @@ mod linux_app {
                         self.status = error.clone();
                         self.overview = OverviewState::Failed(error);
                     }
-                    UiResult::UpdateCheck(Ok(Some(manifest))) => {
-                        self.update_busy = false;
-                        self.status = fmt_l10n(lang, "update.discovered", &[&manifest.version]);
-                        self.update_manifest = Some(manifest);
-                    }
-                    UiResult::UpdateCheck(Ok(None)) => {
-                        self.update_busy = false;
-                        self.status = tr_l10n(lang, "update.up_to_date").to_string();
-                    }
-                    UiResult::UpdateCheck(Err(error)) => {
-                        self.update_busy = false;
-                        self.status = fmt_l10n(lang, "update.check_failed", &[&error]);
-                    }
-                    UiResult::UpdateProgress(progress) => self.update_progress = Some(progress),
-                    UiResult::UpdateInstalled(Ok(installed)) => {
-                        self.update_busy = false;
-                        self.update_manifest = None;
-                        self.update_progress = None;
-                        self.update_installed = Some(installed.version.clone());
-                        self.status =
-                            fmt_l10n(lang, "update.installed_restart", &[&installed.version]);
-                    }
-                    UiResult::UpdateInstalled(Err(error)) => {
-                        self.update_busy = false;
-                        self.update_install_error = Some(error.clone());
-                        self.status = fmt_l10n(lang, "update.install_failed", &[&error]);
-                    }
                 }
             }
             if let Some(backend) = self.backend() {
@@ -3933,31 +3783,6 @@ mod linux_app {
                     .unwrap_or_default();
             }
 
-            // 自更新对话框：宿主是状态机唯一来源，这里只映射成界面阶段。
-            vm.update_stage = update_dialog_stage(
-                self.update_busy,
-                self.update_progress.as_ref(),
-                self.update_installed.is_some(),
-                self.update_install_error.is_some(),
-                self.update_manifest.is_some(),
-            );
-            vm.update_version = self
-                .update_manifest
-                .as_ref()
-                .map(|manifest| manifest.version.clone())
-                .or_else(|| self.update_installed.clone())
-                .unwrap_or_default();
-            vm.update_error = self.update_install_error.clone();
-            vm.update_downloaded = self
-                .update_progress
-                .as_ref()
-                .map(|progress| progress.downloaded)
-                .unwrap_or(0);
-            vm.update_total = self
-                .update_progress
-                .as_ref()
-                .and_then(|progress| progress.content_length);
-
             // The drawer's Save button is enabled only while the draft differs
             // from what Core last stored.
             vm.style_editor_dirty = style_editor_is_dirty(vm);
@@ -4101,10 +3926,6 @@ mod linux_app {
                     openless_core::shared_types::SelectionPolishOutputMode::DirectReplace => 0,
                     openless_core::shared_types::SelectionPolishOutputMode::PreviewConfirm => 1,
                 };
-                s.beta_channel = matches!(
-                    prefs.update_channel,
-                    openless_core::shared_types::UpdateChannel::Beta
-                );
                 // 多模态 / 平台能力：决定 AI 服务页的视图与更新控件。
                 // 远程输入的实时状态：配对码 / 访问网址 / 证书指纹。
                 if let Some((status, pin)) = &self.remote_access {
@@ -4133,7 +3954,6 @@ mod linux_app {
                     .native
                     .as_ref()
                     .is_some_and(LinuxNativeRuntime::hotkeys_available);
-                vm.auto_update_capable = self.update_support.supports_auto_update();
                 vm.permissions = permissions;
                 vm.selection_polish_hotkey = prefs
                     .selection_polish_hotkey
@@ -4524,26 +4344,6 @@ mod linux_app {
                 frontend::view_model::SettingsField::LaunchAtLogin => {
                     preferences.launch_at_login = !preferences.launch_at_login;
                     self.settings_dirty.launch_at_login = true;
-                }
-                frontend::view_model::SettingsField::BetaChannel => {
-                    // The Beta toggle is the same knob as the update channel.
-                    if let Some(preferences) = self.preferences.as_mut() {
-                        preferences.update_channel = if preferences.update_channel
-                            == openless_core::shared_types::UpdateChannel::Beta
-                        {
-                            openless_core::shared_types::UpdateChannel::Stable
-                        } else {
-                            openless_core::shared_types::UpdateChannel::Beta
-                        };
-                        self.settings_dirty.update_channel = true;
-                    }
-                    self.frontend_vm.settings.beta_channel = self
-                        .preferences
-                        .as_ref()
-                        .map(|prefs| {
-                            prefs.update_channel == openless_core::shared_types::UpdateChannel::Beta
-                        })
-                        .unwrap_or(false);
                 }
             }
             self.save_settings_if_dirty();
@@ -4948,9 +4748,6 @@ mod linux_app {
                         });
                     }
                 }
-                frontend::view_model::SettingsActionField::CheckBetaUpdate => {
-                    self.request_update_check(openless_core::shared_types::UpdateChannel::Beta);
-                }
                 frontend::view_model::SettingsActionField::CopyCertFingerprint => {
                     let fingerprint = self
                         .remote_access
@@ -4977,14 +4774,6 @@ mod linux_app {
                             );
                         }
                     }
-                }
-                frontend::view_model::SettingsActionField::CheckUpdate => {
-                    let channel = self
-                        .preferences
-                        .as_ref()
-                        .map(|prefs| prefs.update_channel)
-                        .unwrap_or_default();
-                    self.request_update_check(channel);
                 }
                 frontend::view_model::SettingsActionField::PreviewAudioCue => {
                     // 与真实录音开始时同一段合成提示音（Tauri `playRecordStartCue`）。
@@ -5183,17 +4972,6 @@ mod linux_app {
                                     });
                                 });
                             }
-                        }
-                    }
-                    frontend::view_model::FrontendAction::UpdateInstall => {
-                        self.install_update();
-                    }
-                    frontend::view_model::FrontendAction::UpdateDismiss => {
-                        if !self.update_busy {
-                            self.update_manifest = None;
-                            self.update_installed = None;
-                            self.update_install_error = None;
-                            self.update_progress = None;
                         }
                     }
                     frontend::view_model::FrontendAction::MarketplaceDownload(index) => {
@@ -6383,25 +6161,6 @@ mod linux_app {
         fn tick(&mut self, ctx: &egui::Context) {
             self.poll(ctx);
             self.drain_tray(ctx);
-            let auto_check = self
-                .preferences
-                .as_ref()
-                .is_some_and(|preferences| preferences.auto_update_check);
-            if auto_check
-                && !self.update_busy
-                && self.update_manifest.is_none()
-                && self
-                    .update_schedule
-                    .poll(self.update_started.elapsed(), false)
-                    .is_some()
-            {
-                let channel = self
-                    .preferences
-                    .as_ref()
-                    .map(|preferences| preferences.update_channel)
-                    .unwrap_or_default();
-                self.request_update_check(channel);
-            }
             self.log_pump_heartbeat(ctx);
         }
 
@@ -7045,16 +6804,6 @@ mod linux_app {
         }
     }
 
-    fn package_kind() -> LinuxPackageKind {
-        if std::env::var_os("APPDIR").is_some() {
-            LinuxPackageKind::AppImage
-        } else if cfg!(debug_assertions) {
-            LinuxPackageKind::Development
-        } else {
-            LinuxPackageKind::SystemPackage
-        }
-    }
-
     /// OpenLess 数据目录。宿主写数据，UI 进程只用它定位日志文件。
     fn openless_data_dir() -> Result<std::path::PathBuf, String> {
         std::env::var_os("XDG_DATA_HOME")
@@ -7067,10 +6816,7 @@ mod linux_app {
             .ok_or_else(|| "HOME/XDG_DATA_HOME is unavailable".to_string())
     }
 
-    fn backend_config(
-        tray_available: bool,
-        updater_available: bool,
-    ) -> Result<BackendConfig, String> {
+    fn backend_config(tray_available: bool) -> Result<BackendConfig, String> {
         let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
         let data_dir = openless_data_dir()?;
         let cache_dir = std::env::var_os("XDG_CACHE_HOME")
@@ -7080,9 +6826,7 @@ mod linux_app {
             .join("OpenLess");
         std::fs::create_dir_all(&data_dir).map_err(|error| error.to_string())?;
         std::fs::create_dir_all(&cache_dir).map_err(|error| error.to_string())?;
-        let kind = package_kind();
-        let capabilities =
-            LinuxCapabilitySnapshot::detect(tray_available, kind, updater_available).capabilities;
+        let capabilities = LinuxCapabilitySnapshot::detect(tray_available).capabilities;
         Ok(BackendConfig {
             data_dir,
             cache_dir,
@@ -8185,7 +7929,6 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         tokio: Arc<tokio::runtime::Runtime>,
         native: Result<LinuxNativeRuntime, String>,
         tray: Option<openless_linux_egui::LinuxTray>,
-        update_support: LinuxUpdateSupport,
         start_minimized: bool,
     ) -> Result<(), String> {
         let socket = bridge::ui_socket_path(runtime_dir);
@@ -8195,8 +7938,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         // 没有托盘时必须开窗，否则关掉就再也找不回来。
         let window_should_be_open = !start_minimized || !tray_available;
         let ctx = egui::Context::default();
-        let mut app =
-            OpenLessEguiApp::new(tokio, native, tray, update_support, window_should_be_open);
+        let mut app = OpenLessEguiApp::new(tokio, native, tray, window_should_be_open);
         log::info!(
             "[ui-host] host started (no window in this process); bridge={} window_should_be_open={window_should_be_open} tray={tray_available}",
             ui_bridge.path().display()
@@ -8584,9 +8326,6 @@ Internal flags (set by OpenLess itself, not for regular use):
         }
         let start_minimized = args.iter().any(|arg| arg == "--minimized");
         let tokio = Arc::new(tokio::runtime::Runtime::new().map_err(|error| error.to_string())?);
-        let kind = package_kind();
-        let update_support = LinuxUpdateSupport::initialize(kind);
-        let updater_available = update_support.supports_auto_update();
         let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
             .map(std::path::PathBuf::from)
             .or_else(|| {
@@ -8610,7 +8349,7 @@ Internal flags (set by OpenLess itself, not for regular use):
             tray = openless_linux_egui::LinuxTray::start().ok();
         }
         let tray_available = tray.is_some();
-        let config = backend_config(tray_available, updater_available)?;
+        let config = backend_config(tray_available)?;
         if let Err(error) = openless_linux_egui::init_file_logger(&config.data_dir) {
             eprintln!("OpenLess file logger unavailable: {error}");
         }
@@ -8647,14 +8386,7 @@ Internal flags (set by OpenLess itself, not for regular use):
                 .map_err(|error| error.to_string())
         })();
         // 常驻宿主：本进程不再创建窗口，窗口交给独立的 UI 进程。
-        run_host(
-            &runtime_dir,
-            tokio,
-            native,
-            tray,
-            update_support,
-            start_minimized,
-        )?;
+        run_host(&runtime_dir, tokio, native, tray, start_minimized)?;
         Ok(())
     }
 
@@ -8775,9 +8507,6 @@ Internal flags (set by OpenLess itself, not for regular use):
                 Arc::new(tokio::runtime::Runtime::new().unwrap()),
                 Err("fixture".into()),
                 None,
-                LinuxUpdateSupport::ManualOnly {
-                    releases_url: openless_linux_egui::RELEASES_URL,
-                },
                 window_should_be_open,
             )
         }
@@ -8785,45 +8514,6 @@ Internal flags (set by OpenLess itself, not for regular use):
         /// 快捷键卡片上的每一行都必须从 Core 偏好取真值。宿主以前只填了
         /// 听写/翻译/QA/速记四行，其余行无论偏好里有没有绑定都画成空键帽 ——
         /// 看起来是「未设置」，录制却实实在在地写进了偏好。
-        /// 自更新阶段映射：宿主状态是唯一来源，界面只画映射结果。
-        #[test]
-        fn update_dialog_stage_follows_the_host_state() {
-            use frontend::view_model::UpdateStage;
-            let progress =
-                |downloaded: u64, total: Option<u64>| openless_linux_egui::DownloadProgress {
-                    downloaded,
-                    content_length: total,
-                };
-            // 没有任何状态：不显示对话框（deb/rpm 用户永远不会看到）。
-            assert_eq!(update_dialog_stage(false, None, false, false, false), None);
-            // 发现新版本。
-            assert_eq!(
-                update_dialog_stage(false, None, false, false, true),
-                Some(UpdateStage::Available)
-            );
-            // 下载中：没有 Content-Length 也算下载中。
-            for total in [Some(100), None] {
-                assert_eq!(
-                    update_dialog_stage(true, Some(&progress(10, total)), false, false, true),
-                    Some(UpdateStage::Downloading)
-                );
-            }
-            // 字节到齐 → 校验/替换阶段（install 是一口气做完的，只能靠字节数判断）。
-            assert_eq!(
-                update_dialog_stage(true, Some(&progress(100, Some(100))), false, false, true),
-                Some(UpdateStage::Installing)
-            );
-            // 终态压过「发现新版本」。
-            assert_eq!(
-                update_dialog_stage(false, None, true, false, true),
-                Some(UpdateStage::Installed)
-            );
-            assert_eq!(
-                update_dialog_stage(false, None, false, true, true),
-                Some(UpdateStage::Failed)
-            );
-        }
-
         #[test]
         fn shortcut_rows_show_the_bindings_core_holds() {
             let mut app = fixture_app(true);
@@ -9017,9 +8707,6 @@ Internal flags (set by OpenLess itself, not for regular use):
                 Arc::new(tokio::runtime::Runtime::new().unwrap()),
                 Err("fixture".into()),
                 None,
-                LinuxUpdateSupport::ManualOnly {
-                    releases_url: openless_linux_egui::RELEASES_URL,
-                },
                 false,
             );
             let first = openless_core::SessionId::new();
@@ -9096,9 +8783,6 @@ Internal flags (set by OpenLess itself, not for regular use):
                 Arc::new(tokio::runtime::Runtime::new().unwrap()),
                 Err("fixture".into()),
                 None,
-                LinuxUpdateSupport::ManualOnly {
-                    releases_url: openless_linux_egui::RELEASES_URL,
-                },
                 false,
             );
             let session = openless_core::SessionId::new();
