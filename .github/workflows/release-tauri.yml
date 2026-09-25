@@ -649,6 +649,7 @@ jobs:
             libfcitx5config-dev \
             libfcitx5core-dev \
             libfcitx5utils-dev \
+            liblzma-dev \
             libssl-dev \
             libwayland-dev \
             libx11-dev \

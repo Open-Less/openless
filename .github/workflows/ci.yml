@@ -192,6 +192,7 @@ jobs:
             build-essential \
             libasound2-dev \
             libdbus-1-dev \
+            liblzma-dev \
             libpipewire-0.3-dev \
             libssl-dev \
             libwayland-dev \
