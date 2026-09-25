@@ -1296,7 +1296,9 @@ mod tests {
         assert_eq!(args, vec!["--openless-egui-popup", "--capsule"]);
     }
 
-    /// A Wayland session with XWayland installed remains a native Wayland app.
+    /// A Wayland session with XWayland installed remains a native Wayland app: the
+    /// capsule keeps the session's own Wayland display and only gets the layer-shell
+    /// path hint.
     #[test]
     fn capsule_command_stays_on_native_wayland_when_layer_shell_is_available() {
         let command = popup_command(
@@ -1307,12 +1309,21 @@ mod tests {
             true,
         );
         let envs: Vec<_> = command.as_std().get_envs().collect();
-        assert!(envs.iter().any(|(key, value)| {
-            key == "WAYLAND_DISPLAY" && value == Some(std::ffi::OsStr::new("wayland-0"))
-        }));
-        assert!(envs.iter().any(|(key, value)| {
-            key == "OPENLESS_CAPSULE_PATH" && value == Some(std::ffi::OsStr::new("layer"))
-        }));
+        // `env_remove` would still show up here (with a `None` value), so "no entry at
+        // all" is what proves the child inherits the session's Wayland display.
+        assert!(
+            !envs
+                .iter()
+                .any(|(key, _)| *key == std::ffi::OsStr::new("WAYLAND_DISPLAY")),
+            "the capsule must keep the session's Wayland display: {envs:?}"
+        );
+        assert!(
+            envs.iter().any(|(key, value)| {
+                *key == std::ffi::OsStr::new("OPENLESS_CAPSULE_PATH")
+                    && *value == Some(std::ffi::OsStr::new("layer"))
+            }),
+            "layer-shell availability must reach the capsule: {envs:?}"
+        );
     }
 
     #[test]

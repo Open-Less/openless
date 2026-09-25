@@ -5384,6 +5384,154 @@ pub const CATALOG: &[Msg] = &[
             "선택된 내용 없음",
         ),
     },
+    Msg {
+        key: "settings.channels.availableModels",
+        text: row(
+            "可用模型",
+            "可用模型",
+            "Available models",
+            "利用可能なモデル",
+            "사용 가능한 모델",
+        ),
+    },
+    Msg {
+        key: "settings.channels.modelHint",
+        text: row(
+            "直接输入模型名称，或拉取并选择供应商的可用模型。",
+            "直接輸入模型名稱，或取得並選擇供應商的可用模型。",
+            "Enter a model name directly, or fetch and select a model from your provider.",
+            "モデル名を直接入力するか、プロバイダーから一覧を取得して選択します。",
+            "모델 이름을 직접 입력하거나 공급자의 모델 목록을 가져와 선택하세요.",
+        ),
+    },
+    Msg {
+        key: "settings.channels.modelTitle",
+        text: row(
+            "模型设置",
+            "模型設定",
+            "Model settings",
+            "モデル設定",
+            "모델 설정",
+        ),
+    },
+    Msg {
+        key: "settings.providers.customModelLabel",
+        text: row(
+            "自定义模型…",
+            "自訂模型…",
+            "Custom model…",
+            "カスタムモデル…",
+            "사용자 정의 모델…",
+        ),
+    },
+    Msg {
+        key: "settings.providers.fetchModels",
+        text: row("拉取模型", "拉取模型", "Fetch models", "モデル一覧", "모델 가져오기"),
+    },
+    Msg {
+        key: "settings.providers.loadingModels",
+        text: row(
+            "拉取模型中…",
+            "拉取模型中…",
+            "Fetching models…",
+            "モデル取得中…",
+            "모델 가져오는 중…",
+        ),
+    },
+    Msg {
+        key: "settings.providers.modelLabel",
+        text: row("模型", "模型", "Model", "モデル", "모델"),
+    },
+    Msg {
+        key: "settings.providers.modelSaved",
+        text: row(
+            "已保存模型 {}。",
+            "已保存模型 {}。",
+            "Saved model {}.",
+            "モデル {} を保存しました。",
+            "모델 {} 을(를) 저장했습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.providers.modelsEmpty",
+        text: row(
+            "鉴权成功，但没有返回可用模型。",
+            "鑑權成功，但沒有返回可用模型。",
+            "Credentials are valid, but no models were returned.",
+            "認証成功ですが、利用可能なモデルが返されませんでした。",
+            "인증 성공이지만 사용 가능한 모델이 반환되지 않았습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.providers.modelsLoaded",
+        text: row(
+            "已拉取 {} 个模型。",
+            "已拉取 {} 個模型。",
+            "Fetched {} models.",
+            "{} 個のモデルを取得しました。",
+            "{}개의 모델을 가져왔습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.providers.noMatchingModels",
+        text: row(
+            "没有匹配的模型",
+            "沒有符合的模型",
+            "No matching models",
+            "一致するモデルがありません",
+            "일치하는 모델이 없습니다",
+        ),
+    },
+    Msg {
+        key: "settings.providers.planModelsHint",
+        text: row(
+            "打开套餐控制台，复制支持的文本模型 ID 并填写到模型栏。",
+            "開啟方案控制台，複製支援的文字模型 ID 並填入模型欄位。",
+            "Open the plan console, copy a supported text model ID, and enter it in the model field.",
+            "プランのコンソールで対応するテキストモデル ID をコピーし、モデル欄に入力してください。",
+            "요금제 콘솔에서 지원되는 텍스트 모델 ID를 복사해 모델 필드에 입력하세요.",
+        ),
+    },
+    Msg {
+        key: "settings.providers.presetListLabel",
+        text: row(
+            "返回预设列表",
+            "返回預設清單",
+            "Back to presets",
+            "プリセットに戻る",
+            "프리셋으로 돌아가기",
+        ),
+    },
+    Msg {
+        key: "settings.providers.searchModels",
+        text: row(
+            "搜索模型…",
+            "搜尋模型…",
+            "Search models…",
+            "モデルを検索…",
+            "모델 검색…",
+        ),
+    },
+    Msg {
+        key: "settings.providers.selectModel",
+        text: row(
+            "选择一个模型写入上方字段",
+            "選擇一個模型寫入上方字段",
+            "Select a model to fill the field above",
+            "モデルを選んで上記欄に入力",
+            "모델을 선택해 위 필드에 입력",
+        ),
+    },
+    Msg {
+        key: "settings.providers.viewModels",
+        text: row(
+            "查看支持的模型",
+            "查看支援的模型",
+            "View supported models",
+            "対応モデルを確認",
+            "지원 모델 보기",
+        ),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

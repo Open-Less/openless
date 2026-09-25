@@ -2673,6 +2673,169 @@ fn channel_row(
 /// One editor text row. The pushed value is the post-edit text: pushing the
 /// pre-edit copy would make the host write the old value straight back into the
 /// field on every keystroke.
+/// 模型设置块：对应 Tauri `ProvidersSection` 里的「模型设置」分区。
+///
+/// - 模型字段（`ChannelModelField`）：descriptor 带 `staticModels` 时是一个预设下拉，
+///   末尾附「自定义模型…」逃生口切到手输；没预设时是普通输入框。值为空且有
+///   `defaultModel` 时给一个「填入默认」。
+/// - 可用模型（`ProviderTools`）：当前 endpoint 命中带文档页的预设时按钮是
+///   「查看支持的模型」（打开文档）；否则是「拉取模型」。拉到后下拉选择，
+///   **选中即落地凭据**（Tauri `applyModel`）。
+fn provider_model_block(
+    ui: &mut egui::Ui,
+    editor: &SettingsProviderEditor,
+    lang: Lang,
+    actions: &mut Vec<FrontendAction>,
+) {
+    ui.add_space(6.0);
+    ui.label(
+        egui::RichText::new(tr_l10n(lang, "settings.channels.modelTitle"))
+            .font(theme::medium_font(12.0))
+            .color(theme::INK),
+    );
+    ui.label(
+        egui::RichText::new(if editor.has_models_url {
+            tr_l10n(lang, "settings.providers.planModelsHint")
+        } else {
+            tr_l10n(lang, "settings.channels.modelHint")
+        })
+        .size(11.0)
+        .color(theme::INK_4),
+    );
+    ui.add_space(4.0);
+
+    // 模型字段：预设下拉 ⇄ 自定义输入。
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(tr_l10n(lang, "settings.providers.modelLabel"))
+                .size(11.5)
+                .color(theme::INK_3),
+        );
+        let show_presets = !editor.static_models.is_empty() && !editor.custom_model;
+        if show_presets {
+            // Tauri 会把当前值（不在清单里时）也塞进选项，否则下拉会显示空白。
+            let mut options: Vec<String> = editor.static_models.clone();
+            let current = editor.model.trim();
+            if !current.is_empty() && !options.iter().any(|option| option == current) {
+                options.push(current.to_string());
+            }
+            let mut pick = editor.model.clone();
+            egui::ComboBox::from_id_salt("settings-provider-model-preset")
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    for option in &options {
+                        if ui.selectable_label(current == option, option).clicked() {
+                            pick = option.clone();
+                            ui.close();
+                        }
+                    }
+                    if ui
+                        .selectable_label(
+                            false,
+                            tr_l10n(lang, "settings.providers.customModelLabel"),
+                        )
+                        .clicked()
+                    {
+                        actions.push(FrontendAction::SettingsProviderModelCustom(true));
+                        ui.close();
+                    }
+                });
+            if pick != editor.model {
+                actions.push(FrontendAction::SettingsProviderField(
+                    SettingsProviderField::Model,
+                    pick,
+                ));
+            }
+        } else {
+            let mut draft = editor.model.clone();
+            let id = egui::Id::new("openless-settings-provider-model");
+            if layout::text_input(ui, &mut draft, id, "", 220.0, false).changed() {
+                actions.push(FrontendAction::SettingsProviderField(
+                    SettingsProviderField::Model,
+                    draft,
+                ));
+            }
+            if !editor.static_models.is_empty()
+                && provider_small_button(ui, lang, "settings.providers.presetListLabel", false)
+            {
+                actions.push(FrontendAction::SettingsProviderModelCustom(false));
+            }
+        }
+        if editor.model.trim().is_empty() && !editor.default_model.is_empty() {
+            if provider_small_button(ui, lang, "settings.providers.fillDefault", false) {
+                actions.push(FrontendAction::SettingsProviderField(
+                    SettingsProviderField::Model,
+                    editor.default_model.clone(),
+                ));
+            }
+        }
+    });
+
+    // 可用模型：拉取（或看文档）→ 选择 → 写入模型字段并保存。
+    ui.add_space(2.0);
+    if editor.has_models_url {
+        if provider_small_button(ui, lang, "settings.providers.viewModels", false) {
+            actions.push(FrontendAction::SettingsProviderModelsUrl);
+        }
+        return;
+    }
+    let fetch = if editor.models_loading {
+        tr_l10n(lang, "settings.providers.loadingModels")
+    } else {
+        tr_l10n(lang, "settings.providers.fetchModels")
+    };
+    let fetch_width = layout::text_width(ui, fetch, 11.5) + 24.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(fetch_width, 26.0), egui::Sense::hover());
+    if layout::action_button(ui, rect, fetch, None, layout::ButtonKind::Ghost).clicked() {
+        actions.push(FrontendAction::SettingsProviderModels);
+    }
+    if editor.models.is_empty() {
+        return;
+    }
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new(tr_l10n(lang, "settings.channels.availableModels"))
+            .size(11.0)
+            .color(theme::INK_3),
+    );
+    // Tauri 的「可用模型」是可搜索下拉（OrcaRouter 这类目录很大）；这里同样在下拉里
+    // 带一个搜索框，并把过滤词存在 egui 自己的临时存储里。
+    let filter_id = egui::Id::new("openless-settings-provider-model-filter");
+    let mut filter: String = ui.data(|data| data.get_temp(filter_id).unwrap_or_default());
+    egui::ComboBox::from_id_salt("settings-provider-model-catalog")
+        .selected_text(tr_l10n(lang, "settings.providers.selectModel"))
+        .show_ui(ui, |ui| {
+            if ui
+                .add(
+                    egui::TextEdit::singleline(&mut filter)
+                        .hint_text(tr_l10n(lang, "settings.providers.searchModels")),
+                )
+                .changed()
+            {
+                ui.data_mut(|data| data.insert_temp(filter_id, filter.clone()));
+            }
+            let needle = filter.trim().to_lowercase();
+            let mut shown = 0;
+            for model in &editor.models {
+                if !needle.is_empty() && !model.to_lowercase().contains(&needle) {
+                    continue;
+                }
+                shown += 1;
+                if ui.selectable_label(editor.model == *model, model).clicked() {
+                    actions.push(FrontendAction::SettingsProviderModelSelected(model.clone()));
+                    ui.close();
+                }
+            }
+            if shown == 0 {
+                ui.label(
+                    egui::RichText::new(tr_l10n(lang, "settings.providers.noMatchingModels"))
+                        .size(11.0)
+                        .color(theme::INK_4),
+                );
+            }
+        });
+}
+
 fn provider_field(
     ui: &mut egui::Ui,
     label: &str,
@@ -2830,14 +2993,6 @@ fn provider_editor_panel(
                         false,
                         actions,
                     );
-                    provider_field(
-                        ui,
-                        "Model",
-                        &editor.model,
-                        SettingsProviderField::Model,
-                        false,
-                        actions,
-                    );
                 }
                 SettingsProviderAuth::Xfyun => {
                     provider_field(
@@ -2856,28 +3011,12 @@ fn provider_editor_panel(
                         true,
                         actions,
                     );
-                    provider_field(
-                        ui,
-                        "Model",
-                        &editor.model,
-                        SettingsProviderField::Model,
-                        false,
-                        actions,
-                    );
                 }
                 SettingsProviderAuth::Other => {
                     ui.label(
                         egui::RichText::new(tr_l10n(lang, "providers.core_note"))
                             .size(11.0)
                             .color(theme::INK_4),
-                    );
-                    provider_field(
-                        ui,
-                        "Model",
-                        &editor.model,
-                        SettingsProviderField::Model,
-                        false,
-                        actions,
                     );
                 }
                 SettingsProviderAuth::ApiKey => {
@@ -2897,45 +3036,9 @@ fn provider_editor_panel(
                         false,
                         actions,
                     );
-                    provider_field(
-                        ui,
-                        "Model",
-                        &editor.model,
-                        SettingsProviderField::Model,
-                        false,
-                        actions,
-                    );
                 }
             }
-            ui.horizontal(|ui| {
-                if provider_small_button(ui, lang, "btn.list_models", false) {
-                    actions.push(FrontendAction::SettingsProviderModels);
-                }
-                if editor.models_loading {
-                    ui.label(
-                        egui::RichText::new(tr_l10n(lang, "common.loading"))
-                            .size(10.5)
-                            .color(theme::INK_4),
-                    );
-                }
-            });
-            if !editor.models.is_empty() {
-                ui.label(
-                    egui::RichText::new(tr_l10n(lang, "providers.model_list"))
-                        .size(11.0)
-                        .color(theme::INK_3),
-                );
-                ui.horizontal_wrapped(|ui| {
-                    for model in &editor.models {
-                        if ui.selectable_label(editor.model == *model, model).clicked() {
-                            actions.push(FrontendAction::SettingsProviderField(
-                                SettingsProviderField::Model,
-                                model.clone(),
-                            ));
-                        }
-                    }
-                });
-            }
+            provider_model_block(ui, editor, lang, actions);
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 if provider_small_button(ui, lang, "btn.save_fields", true) {
@@ -3663,6 +3766,10 @@ fn row_desc(ui: &mut egui::Ui, label: &str, desc: &str, control: impl FnOnce(&mu
                 egui::vec2(label_width, 46.0),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
+                    // `allocate_ui_with_layout` 只按内容实际宽度推进光标：不显式撑开
+                    // 最小宽度，标签列就会塌缩成文字宽度，控件紧贴在标签后面（用户报
+                    // 「都被向左对齐了」）。Tauri 的 `minmax(0,200px)` 是硬列宽。
+                    ui.set_min_width(label_width);
                     if !label.is_empty() {
                         ui.label(
                             egui::RichText::new(label)
@@ -3720,6 +3827,70 @@ mod tests {
         assert!(!rail_section_visible(SettingsSection::Shortcuts, false));
     }
 
+    /// Tauri 的 `SettingRow` 是 grid `minmax(0,200px) minmax(0,1fr)`：每一行的控件
+    /// 都从同一条竖直线开始（第一列固定 200px，第二列里左对齐）。egui 的
+    /// `allocate_ui_with_layout` 只按内容实际宽度推进光标，标签列会塌缩成文字宽度，
+    /// 控件就紧贴在标签后面——用户看到的就是「都被向左对齐了」。
+    #[test]
+    fn setting_rows_put_every_control_on_one_column() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: Lang::ZhCn,
+            active_page: crate::ui::frontend::view_model::Page::Settings,
+            settings_open: true,
+            settings_section: SettingsSection::General,
+            ..Default::default()
+        };
+        let mut actions = Vec::new();
+        let output = crate::ui::frontend::run_pass(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(760.0, 1600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| general(ui, &mut vm, &mut actions),
+        );
+        let mut columns = Vec::new();
+        for clipped in &output.shapes {
+            collect_toggle_columns(&clipped.shape, &mut columns);
+        }
+        assert!(
+            columns.len() >= 3,
+            "expected several toggles in the recording pane, got {columns:?}"
+        );
+        let first = columns[0];
+        assert!(
+            columns.iter().all(|x| (x - first).abs() < 0.5),
+            "every toggle must start on the same column: {columns:?}"
+        );
+        // 固定 200px 标签列 + 16px 间距 ⇒ 控件不可能落在 200px 以内。
+        assert!(
+            first > 200.0,
+            "the label column must be reserved: toggle at x={first}"
+        );
+    }
+
+    /// 「录音与输入」页上的开关都是 36×20 的圆角矩形，把它们的左边缘收出来。
+    fn collect_toggle_columns(shape: &egui::Shape, out: &mut Vec<f32>) {
+        match shape {
+            egui::Shape::Rect(rect)
+                if (rect.rect.width() - 36.0).abs() < 0.5
+                    && (rect.rect.height() - 20.0).abs() < 0.5 =>
+            {
+                out.push(rect.rect.left());
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect_toggle_columns(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
     #[test]
     fn provider_editor_renders_every_auth_shape() {
         // 描述符决定渲染哪组字段：六种形态都必须能画出来，且静态渲染不得产生任何
@@ -3747,6 +3918,10 @@ mod tests {
                 secondary_secret: String::new(),
                 models: vec!["m1".to_string()],
                 models_loading: false,
+                static_models: Vec::new(),
+                default_model: String::new(),
+                has_models_url: false,
+                custom_model: false,
                 busy: false,
             };
             let mut actions = Vec::new();
@@ -3758,6 +3933,109 @@ mod tests {
                 actions.is_empty(),
                 "渲染 {auth:?} 形态的编辑器时不应产生动作"
             );
+        }
+    }
+
+    /// 模型块照 Core descriptor 走：有 `staticModels` 时是一个带当前值的预设下拉，
+    /// 有文档页时按钮变成「查看支持的模型」而不是拉取，自定义模式下能切回预设列表。
+    #[test]
+    fn provider_model_block_follows_the_descriptor() {
+        let editor = |static_models: Vec<String>, has_models_url: bool, custom_model: bool| {
+            SettingsProviderEditor {
+                channel_id: "channel".to_string(),
+                provider: "volcengine".to_string(),
+                provider_type: "volcengine".to_string(),
+                name: "main".to_string(),
+                endpoint: "https://example.invalid".to_string(),
+                model: "doubao-pro".to_string(),
+                resource_id: String::new(),
+                auth_mode: "app_id_token".to_string(),
+                auth: SettingsProviderAuth::Volcengine,
+                primary_secret: String::new(),
+                secondary_secret: String::new(),
+                models: vec!["doubao-lite".to_string()],
+                models_loading: false,
+                static_models,
+                default_model: "doubao-lite".to_string(),
+                has_models_url,
+                custom_model,
+                busy: false,
+            }
+        };
+        let presets = vec!["doubao-lite".to_string(), "doubao-pro".to_string()];
+
+        // 预设模式：分区标题、提示、当前值、可用模型的选择入口都在。
+        let painted = painted_provider_editor(&editor(presets.clone(), false, false));
+        for expected in [
+            tr_l10n(Lang::ZhCn, "settings.channels.modelTitle"),
+            tr_l10n(Lang::ZhCn, "settings.channels.modelHint"),
+            tr_l10n(Lang::ZhCn, "settings.providers.fetchModels"),
+            "doubao-pro",
+        ] {
+            assert!(
+                painted.contains(expected),
+                "missing {expected:?}: {painted}"
+            );
+        }
+
+        // 服务商只提供文档页（例如火山方舟）：改成引导去看文档，说明也换成套餐提示。
+        let painted = painted_provider_editor(&editor(Vec::new(), true, false));
+        assert!(
+            painted.contains(tr_l10n(Lang::ZhCn, "settings.providers.viewModels")),
+            "{painted}"
+        );
+        assert!(
+            painted.contains(tr_l10n(Lang::ZhCn, "settings.providers.planModelsHint")),
+            "{painted}"
+        );
+
+        // 「自定义模型…」模式：手输框旁边给出回到预设列表的入口。
+        let painted = painted_provider_editor(&editor(presets, false, true));
+        assert!(
+            painted.contains(tr_l10n(Lang::ZhCn, "settings.providers.presetListLabel")),
+            "{painted}"
+        );
+    }
+
+    fn painted_provider_editor(editor: &SettingsProviderEditor) -> String {
+        let ctx = egui::Context::default();
+        let mut actions = Vec::new();
+        let output = crate::ui::frontend::run_pass(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(560.0, 1200.0),
+                )),
+                ..Default::default()
+            },
+            |ui| provider_editor_panel(ui, editor, Lang::ZhCn, &mut actions),
+        );
+        let mut text = String::new();
+        for clipped in &output.shapes {
+            collect_shape_text(&clipped.shape, &mut text);
+        }
+        text
+    }
+
+    fn collect_shape_text(shape: &egui::Shape, out: &mut String) {
+        match shape {
+            egui::Shape::Text(text) => {
+                for row in &text.galley.rows {
+                    for glyph in &row.glyphs {
+                        if glyph.chr != '\0' {
+                            out.push(glyph.chr);
+                        }
+                    }
+                    out.push('\n');
+                }
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect_shape_text(shape, out);
+                }
+            }
+            _ => {}
         }
     }
 

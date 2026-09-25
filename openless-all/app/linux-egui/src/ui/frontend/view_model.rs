@@ -159,6 +159,13 @@ pub enum FrontendAction {
     SettingsProviderClearSecrets,
     /// Ask Core for the provider's model list (Core's `provider.list_models`).
     SettingsProviderModels,
+    /// 从「可用模型」里选了一个：写进模型字段**并立刻持久化**（Tauri
+    /// `applyModel`：`setCredential(modelAccount, model)` +「已保存模型 X」）。
+    SettingsProviderModelSelected(String),
+    /// 模型字段在「预设下拉」与「自定义输入」之间切换（Tauri `customModelMode`）。
+    SettingsProviderModelCustom(bool),
+    /// 打开该服务商的模型文档页（Tauri `viewModels`，来自 `endpointPresets[].modelsUrl`）。
+    SettingsProviderModelsUrl,
     /// Close the provider editor.
     SettingsProviderClose,
     /// 快捷键行的交互：展开/收起编辑菜单（`None` 收起全部）。
@@ -332,6 +339,17 @@ pub struct SettingsProviderEditor {
     /// Result of `provider.list_models`.
     pub models: Vec<String>,
     pub models_loading: bool,
+    /// Core descriptor 的固定模型清单（Tauri `descriptor.staticModels`）：非空时模型
+    /// 字段是一个预设下拉，而不是空白输入框。
+    pub static_models: Vec<String>,
+    /// Core descriptor 的默认模型（Tauri `descriptor.defaultModel`）：模型为空时
+    /// 提供「填入默认」。
+    pub default_model: String,
+    /// 当前 endpoint 对应的服务商文档页（Tauri `modelsUrl`）：有值时「可用模型」不是
+    /// 拉取，而是打开文档。
+    pub has_models_url: bool,
+    /// 模型字段是否处于「自定义模型…」手输模式（Tauri `customModelMode`）。
+    pub custom_model: bool,
     pub busy: bool,
 }
 

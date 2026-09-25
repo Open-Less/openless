@@ -73,7 +73,7 @@ fn fcitx5_dbus_methods_and_listener_have_stable_platform_semantics() {
     ));
     assert!(matches!(
         events[6],
-        openless_linux_egui::LinuxHotkeyEvent::TranslationPressed
+        openless_linux_egui::LinuxHotkeyEvent::TranslationPressed { .. }
     ));
     drop(listener);
 

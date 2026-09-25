@@ -482,6 +482,12 @@ mod linux_app {
         secondary_secret: String,
         models: Vec<String>,
         models_loading: bool,
+        /// Core descriptor 的高阶字段：模型块的「预设 / 默认 / 文档页」全部由它决定。
+        static_models: Vec<String>,
+        default_model: String,
+        models_url: Option<String>,
+        /// 「自定义模型…」手输模式（仅 UI 状态，Tauri `customModelMode`）。
+        custom_model: bool,
     }
 
     impl ProviderEditorForm {
@@ -508,6 +514,10 @@ mod linux_app {
                 secondary_secret: String::new(),
                 models: Vec::new(),
                 models_loading: false,
+                static_models: editor.descriptor.static_models.clone(),
+                default_model: editor.descriptor.default_model.clone().unwrap_or_default(),
+                models_url: provider_models_url(&editor.descriptor, &editor.endpoint),
+                custom_model: false,
             }
         }
     }
@@ -3196,6 +3206,19 @@ mod linux_app {
                                     Some(ProviderEditorForm::from_editor(&editor, self.lang));
                                 self.provider_editor =
                                     ProviderEditorState::Loaded(Box::new(editor));
+                                // Tauri `CatalogModelField` 在挂载时就拉一次目录（只有
+                                // OrcaRouter 这种没有固定清单的服务商才需要），否则用户
+                                // 得自己找到「拉取模型」才知道可选什么。
+                                if self
+                                    .provider_editor_form
+                                    .as_ref()
+                                    .is_some_and(|form| form.provider_type == "orcarouter")
+                                {
+                                    if let Some(form) = self.provider_editor_form.as_mut() {
+                                        form.models_loading = true;
+                                    }
+                                    self.request_provider_models(kind, channel_id);
+                                }
                             }
                             Err(error) => {
                                 self.provider_editor = ProviderEditorState::Failed;
@@ -3214,11 +3237,17 @@ mod linux_app {
                         {
                             match result {
                                 Ok(models) => {
-                                    self.status = fmt_l10n(
-                                        lang,
-                                        "status.provider_models_loaded",
-                                        &[&models.len()],
-                                    );
+                                    // Tauri `loadModels`：空清单也要明说（「鉴权成功，
+                                    // 但没有返回可用模型。」），否则和拉取失败长得一样。
+                                    self.status = if models.is_empty() {
+                                        tr_l10n(lang, "settings.providers.modelsEmpty").to_string()
+                                    } else {
+                                        fmt_l10n(
+                                            lang,
+                                            "settings.providers.modelsLoaded",
+                                            &[&models.len()],
+                                        )
+                                    };
                                     if let Some(form) = self.provider_editor_form.as_mut() {
                                         form.models = models.clone();
                                         form.models_loading = false;
@@ -3756,6 +3785,10 @@ mod linux_app {
                     secondary_secret: form.secondary_secret.clone(),
                     models: form.models.clone(),
                     models_loading: form.models_loading,
+                    static_models: form.static_models.clone(),
+                    default_model: form.default_model.clone(),
+                    has_models_url: form.models_url.is_some(),
+                    custom_model: form.custom_model,
                     busy: matches!(self.provider_editor, ProviderEditorState::Loading),
                 }
             });
@@ -5535,6 +5568,47 @@ mod linux_app {
                             self.request_provider_models(kind, channel_id);
                         }
                     }
+                    frontend::view_model::FrontendAction::SettingsProviderModelSelected(model) => {
+                        // Tauri `applyModel`：选中即写入模型字段并立刻落地凭据，不需要
+                        // 再按一次保存；失败时错误直接顶到状态栏。
+                        let kind = self.settings_channel_kind;
+                        let channel_id = self
+                            .provider_editor_form
+                            .as_ref()
+                            .map(|form| form.channel_id.clone());
+                        if let Some(form) = self.provider_editor_form.as_mut() {
+                            form.model = model.clone();
+                            form.custom_model = false;
+                        }
+                        if let (Some(backend), Some(channel_id)) = (self.backend(), channel_id) {
+                            let lang = self.lang;
+                            self.spawn(async move {
+                                write_or_remove_provider_value(
+                                    &backend,
+                                    kind,
+                                    &channel_id,
+                                    model_account(kind),
+                                    &model,
+                                )
+                                .await?;
+                                Ok(fmt_l10n(lang, "settings.providers.modelSaved", &[&model]))
+                            });
+                        }
+                    }
+                    frontend::view_model::FrontendAction::SettingsProviderModelCustom(custom) => {
+                        if let Some(form) = self.provider_editor_form.as_mut() {
+                            form.custom_model = custom;
+                        }
+                    }
+                    frontend::view_model::FrontendAction::SettingsProviderModelsUrl => {
+                        if let Some(form) = self.provider_editor_form.as_ref() {
+                            if let Some(url) = form.models_url.clone() {
+                                if let Err(error) = open_external(&url) {
+                                    log::warn!("provider models url: {error}");
+                                }
+                            }
+                        }
+                    }
                     frontend::view_model::FrontendAction::SettingsProviderClose => {
                         self.close_provider_editor();
                     }
@@ -5939,6 +6013,27 @@ mod linux_app {
             openless_core::ChannelKind::Asr => openless_core::credentials::ASR_MODEL_ACCOUNT,
             openless_core::ChannelKind::Llm => openless_core::credentials::LLM_MODEL_ACCOUNT,
         }
+    }
+
+    /// 「可用模型」按钮的目标：当前 endpoint 命中某个预设、且该预设带文档页时返回它
+    /// （Tauri `descriptor.endpointPresets.find(matchesEndpointPreset)?.modelsUrl`）。
+    /// 有文档页的服务商（例如火山方舟）不提供 `/models`，只能引导用户去看文档。
+    fn provider_models_url(
+        descriptor: &openless_core::ProviderDescriptor,
+        endpoint: &str,
+    ) -> Option<String> {
+        let endpoint = if endpoint.trim().is_empty() {
+            descriptor.default_endpoint.as_deref().unwrap_or("")
+        } else {
+            endpoint
+        };
+        descriptor
+            .endpoint_presets
+            .iter()
+            .find(|preset| {
+                openless_core::provider_rules::matches_endpoint_preset(endpoint, &preset.endpoint)
+            })
+            .and_then(|preset| preset.models_url.clone())
     }
 
     fn api_key_account(kind: openless_core::ChannelKind) -> &'static str {

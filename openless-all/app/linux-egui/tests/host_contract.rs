@@ -237,9 +237,12 @@ async fn forwarded_launch_intents_use_core_state_and_semantic_host_actions() {
     host.update_settings_strict(preferences, host.snapshot().preferences_revision)
         .unwrap();
     assert_eq!(
-        host.dispatch_hotkey_event(LinuxHotkeyEvent::TranslationPressed)
-            .await
-            .unwrap(),
+        host.dispatch_hotkey_event(LinuxHotkeyEvent::TranslationPressed {
+            symbol: 0,
+            states: 0,
+        })
+        .await
+        .unwrap(),
         None
     );
     assert!(matches!(
