@@ -1569,11 +1569,21 @@ mod tests {
     ///    egui memory 里的 Area 矩形作基准，而不是 `layout::body_rect`）；
     ///  * 遮罩上的点也落在弹窗自己的图层（点击不会漏到下方页面）；
     ///  * 点一下遮罩之后，卡片既不移位、也不会被抬起的遮罩盖住。
+    /// 弹窗卡片相对遮罩区的位置。上游 Beta.2 里市场详情/历史确认是居中的
+    /// `Modal`，风格编辑器是贴右边的抽屉（`top/right/bottom: 16`，
+    /// `width: min(760px, 100vw - 32px)`）。
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum CardPlacement {
+        Centred,
+        RightDocked,
+    }
+
     fn assert_overlay_keeps_the_card_on_top(
         ctx: &egui::Context,
         vm: &mut FrontendViewModel,
         area_id: &str,
         card_rect_key: &str,
+        placement: CardPlacement,
     ) {
         let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(area_id));
         // Areas 用第一帧建立屏幕矩形，第二帧才可查询。
@@ -1599,21 +1609,44 @@ mod tests {
             overlay.contains_rect(card),
             "the card {card:?} must sit inside its mask {overlay:?}"
         );
-        assert!(
-            (card.center().x - overlay.center().x).abs() <= 1.5,
-            "card must be horizontally centred: {card:?} in {overlay:?}"
-        );
-        assert!(
-            (card.center().y - overlay.center().y).abs() <= 1.5,
-            "card must be vertically centred: {card:?} in {overlay:?}"
-        );
+        match placement {
+            CardPlacement::Centred => {
+                assert!(
+                    (card.center().x - overlay.center().x).abs() <= 1.5,
+                    "card must be horizontally centred: {card:?} in {overlay:?}"
+                );
+                assert!(
+                    (card.center().y - overlay.center().y).abs() <= 1.5,
+                    "card must be vertically centred: {card:?} in {overlay:?}"
+                );
+            }
+            CardPlacement::RightDocked => {
+                assert!(
+                    (card.right() - (overlay.right() - 16.0)).abs() <= 1.5,
+                    "the drawer must dock 16px from the right edge: {card:?} in {overlay:?}"
+                );
+                assert!(
+                    (card.left() - (overlay.right() - 16.0 - 760.0)).abs() <= 1.5,
+                    "the drawer must be min(760px, …) wide: {card:?} in {overlay:?}"
+                );
+                assert!(
+                    (card.top() - (overlay.top() + 16.0)).abs() <= 1.5
+                        && (card.bottom() - (overlay.bottom() - 16.0)).abs() <= 1.5,
+                    "the drawer must keep a 16px inset vertically: {card:?} in {overlay:?}"
+                );
+            }
+        }
         assert_eq!(
             ctx.layer_id_at(card.center()),
             Some(layer),
             "{area_id}: the card must live in the modal's own layer"
         );
-        // 遮罩探针：遮罩顶端内缩 6px（卡片居中，肯定不在卡片上）。
-        let mask = egui::pos2(overlay.center().x, overlay.top() + 6.0);
+        // 遮罩探针：选一个肯定落在遮罩上、不落在卡片上的点。
+        let mask = match placement {
+            CardPlacement::Centred => egui::pos2(overlay.center().x, overlay.top() + 6.0),
+            // 抽屉贴右，遮罩左缘 20px 处一定在遮罩上。
+            CardPlacement::RightDocked => egui::pos2(overlay.left() + 20.0, overlay.center().y),
+        };
         assert!(
             !card.contains(mask) && overlay.contains(mask),
             "probe {mask:?} must be on the mask, not on the card {card:?}"
@@ -1691,6 +1724,7 @@ mod tests {
             &mut vm,
             "openless-marketplace-detail-modal",
             "openless-marketplace-detail-card-rect",
+            CardPlacement::Centred,
         );
     }
 
@@ -1710,6 +1744,106 @@ mod tests {
             &mut vm,
             "openless-style-editor-modal",
             "openless-style-editor-card-rect",
+            CardPlacement::RightDocked,
+        );
+    }
+
+    /// Editor parity: upstream renders a right-hand drawer whose body follows the
+    /// workflow switch (dictation prompt vs. the two selection prompts) and whose
+    /// destructive button is "reset built-in" or "delete imported" depending on
+    /// the pack kind. Both must reach Core, so they are distinct actions.
+    #[test]
+    fn style_editor_drawer_follows_the_workflow_and_the_pack_kind() {
+        let zh = openless_linux_egui::Lang::ZhCn;
+        let ctx = egui::Context::default();
+
+        let mut dictation = FrontendViewModel {
+            lang: zh,
+            active_page: Page::Style,
+            style_unsupported: false,
+            style_editor_open: true,
+            style_editor_id: "builtin-light".to_string(),
+            style_editor_builtin: true,
+            style_editor_dirty: true,
+            ..Default::default()
+        };
+        let mut lines = Vec::new();
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(viewport()),
+                ..Default::default()
+            });
+            let mut actions = Vec::new();
+            render(&ctx, &mut dictation, &mut actions);
+            lines = painted_text(&crate::ui::frontend::end_pass(&ctx))
+                .lines()
+                .map(|line| line.trim().to_string())
+                .collect();
+        }
+        let has = |key: &'static str| {
+            let label = openless_linux_egui::tr_l10n(zh, key);
+            assert!(
+                lines.iter().any(|line| line == label),
+                "{key} ({label:?}) must be painted in {lines:?}"
+            );
+        };
+        has("style.pack.editorTitle");
+        has("style.pack.dictationPromptEditorDesc");
+        has("style.pack.dictation_prompt_title");
+        has("style.pack.resetBuiltin");
+        has("style.pack.unsaved");
+        assert!(
+            !lines.iter().any(|line| {
+                line == openless_linux_egui::tr_l10n(zh, "style.pack.voiceEditPromptTitle")
+            }),
+            "the dictation workflow must not show the selection-voice prompt"
+        );
+        assert!(
+            !lines.iter().any(|line| {
+                line == openless_linux_egui::tr_l10n(zh, "style.pack.deleteImported")
+            }),
+            "a built-in pack is reset, never deleted"
+        );
+
+        // Same drawer, selection workflow, imported pack.
+        let mut selection = FrontendViewModel {
+            lang: zh,
+            active_page: Page::Style,
+            style_unsupported: false,
+            style_editor_open: true,
+            style_editor_id: "custom-legal".to_string(),
+            style_editor_builtin: false,
+            style_selection_workflow: true,
+            ..Default::default()
+        };
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(viewport()),
+                ..Default::default()
+            });
+            let mut actions = Vec::new();
+            render(&ctx, &mut selection, &mut actions);
+            lines = painted_text(&crate::ui::frontend::end_pass(&ctx))
+                .lines()
+                .map(|line| line.trim().to_string())
+                .collect();
+        }
+        let has_selection = |key: &'static str| {
+            let label = openless_linux_egui::tr_l10n(zh, key);
+            assert!(
+                lines.iter().any(|line| line == label),
+                "{key} ({label:?}) must be painted in {lines:?}"
+            );
+        };
+        has_selection("style.pack.selectionPromptEditorDesc");
+        has_selection("style.pack.selectionPromptTitle");
+        has_selection("style.pack.voiceEditPromptTitle");
+        has_selection("style.pack.deleteImported");
+        assert!(
+            !lines.iter().any(|line| {
+                line == openless_linux_egui::tr_l10n(zh, "style.pack.resetBuiltin")
+            }),
+            "an imported pack is deleted, never reset"
         );
     }
 
@@ -1727,6 +1861,7 @@ mod tests {
             &mut vm,
             "openless-history-confirm",
             "openless-history-confirm-card-rect",
+            CardPlacement::Centred,
         );
     }
 

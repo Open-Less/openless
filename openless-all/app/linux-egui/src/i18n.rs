@@ -5827,6 +5827,130 @@ pub const CATALOG: &[Msg] = &[
             "속기 단축키 표시",
         ),
     },
+    Msg {
+        key: "style.pack.active",
+        text: row("当前", "目前", "Active", "使用中", "사용 중"),
+    },
+    Msg {
+        key: "style.pack.closeEditor",
+        text: row("关闭", "關閉", "Close", "閉じる", "닫기"),
+    },
+    Msg {
+        key: "style.pack.deleteImported",
+        text: row("删除", "刪除", "Delete", "削除", "삭제"),
+    },
+    Msg {
+        key: "style.pack.editorTitle",
+        text: row("编辑风格", "編輯風格", "Edit Pack", "パック編集", "팩 편집"),
+    },
+    Msg {
+        key: "style.pack.exportZip",
+        text: row("导出 ZIP", "匯出 ZIP", "Export ZIP", "ZIP をエクスポート", "ZIP 내보내기"),
+    },
+    Msg {
+        key: "style.pack.fieldAuthor",
+        text: row("作者", "作者", "Author", "作者", "작성자"),
+    },
+    Msg {
+        key: "style.pack.fieldAuthorPlaceholder",
+        text: row(
+            "可选，方便标注来源",
+            "可選，方便標註來源",
+            "Optional source label",
+            "任意。ソース表示用",
+            "선택. 출처 표시용",
+        ),
+    },
+    Msg {
+        key: "style.pack.fieldCompatibility",
+        text: row(
+            "兼容版本",
+            "相容版本",
+            "Compatible App Version",
+            "互換アプリバージョン",
+            "호환 앱 버전",
+        ),
+    },
+    Msg {
+        key: "style.pack.fieldCompatibilityPlaceholder",
+        text: row(
+            "可选，例如 >=1.3.0",
+            "可選，例如 >=1.3.0",
+            "Optional, e.g. >=1.3.0",
+            "任意。例: >=1.3.0",
+            "선택. 예: >=1.3.0",
+        ),
+    },
+    Msg {
+        key: "style.pack.fieldModel",
+        text: row(
+            "推荐模型（仅元数据）",
+            "建議模型（僅元資料）",
+            "Recommended Model (Metadata)",
+            "推奨モデル（メタデータのみ）",
+            "권장 모델(메타데이터)",
+        ),
+    },
+    Msg {
+        key: "style.pack.fieldModelHint",
+        text: row(
+            "仅作说明，不会切换实际模型。",
+            "僅作說明，不會切換實際模型。",
+            "Metadata only. Does not switch model.",
+            "メタデータのみ。実際のモデルは切り替わりません。",
+            "메타데이터일 뿐 실제 모델을 전환하지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "style.pack.fieldModelPlaceholder",
+        text: row(
+            "可选，例如 gpt-4.1 / deepseek-v3",
+            "可選，例如 gpt-4.1 / deepseek-v3",
+            "Optional, e.g. gpt-4.1 / deepseek-v3",
+            "任意。例: gpt-4.1 / deepseek-v3",
+            "선택. 예: gpt-4.1 / deepseek-v3",
+        ),
+    },
+    Msg {
+        key: "style.pack.fieldVersion",
+        text: row("版本", "版本", "Version", "バージョン", "버전"),
+    },
+    Msg {
+        key: "style.pack.resetBuiltin",
+        text: row("重置", "重設", "Reset", "リセット", "재설정"),
+    },
+    Msg {
+        key: "style.pack.revert",
+        text: row("撤销", "還原", "Revert", "元に戻す", "되돌리기"),
+    },
+    Msg {
+        key: "style.pack.save",
+        text: row("保存", "儲存", "Save", "保存", "저장"),
+    },
+    Msg {
+        key: "style.pack.unsaved",
+        text: row("未保存", "未儲存", "Unsaved", "未保存", "저장 안 됨"),
+    },
+    Msg {
+        key: "style.pack.dictationPromptEditorDesc",
+        text: row(
+            "当前编辑录音 / ASR 风格 Prompt；输入对象是语音识别后的转写文本。",
+            "目前編輯錄音 / ASR 風格 Prompt；輸入對象是語音辨識後的轉寫文本。",
+            "Editing the recording / ASR style prompt; input is ASR transcript text after dictation.",
+            "録音 / ASRスタイルのプロンプトを編集中。入力は音声認識後の書き起こしテキストです。",
+            "녹음 / ASR 스타일 프롬프트를 편집 중입니다. 입력은 음성 인식 후 받아쓰기 텍스트입니다.",
+        ),
+    },
+    Msg {
+        key: "style.pack.selectionPromptEditorDesc",
+        text: row(
+            "当前编辑选区润色 Prompt；输入对象是用户主动选中的书面文字，不经过 ASR。",
+            "目前編輯選區潤色 Prompt；輸入對象是使用者主動選中的書面文字，不經過 ASR。",
+            "Editing the selection polish prompt; input is written text the user actively selected, without ASR.",
+            "選択範囲の推敲プロンプトを編集中。入力はユーザーが選択した書面テキストで、ASRは経由しません。",
+            "선택 영역 다듬기 프롬프트를 편집 중입니다. 입력은 사용자가 선택한 서면 텍스트이며 ASR을 거치지 않습니다.",
+        ),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

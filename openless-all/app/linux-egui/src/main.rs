@@ -717,6 +717,31 @@ mod linux_app {
         rx: mpsc::Receiver<UiResult>,
     }
 
+    /// Dirty check between the style-editor draft and the last stored pack.
+    fn style_editor_is_dirty(vm: &frontend::view_model::FrontendViewModel) -> bool {
+        let Some(saved) = vm.style_editor_saved.as_ref() else {
+            return true;
+        };
+        let tags: Vec<String> = vm
+            .style_tags
+            .split([',', '，', '\n'])
+            .map(str::trim)
+            .filter(|tag| !tag.is_empty())
+            .map(ToOwned::to_owned)
+            .collect();
+        vm.style_name.trim() != saved.name
+            || vm.style_description.trim() != saved.description
+            || vm.style_prompt != saved.prompt
+            || vm.style_selection_prompt != saved.selection_prompt
+            || vm.style_voice_edit_prompt != saved.voice_edit_prompt
+            || tags != saved.tags
+            || vm.style_author.trim() != saved.author.clone().unwrap_or_default()
+            || vm.style_version.trim() != saved.version
+            || vm.style_model.trim() != saved.recommended_model.clone().unwrap_or_default()
+            || vm.style_compatible_version.trim()
+                != saved.compatible_app_version.clone().unwrap_or_default()
+    }
+
     impl OpenLessEguiApp {
         fn new(
             tokio: Arc<tokio::runtime::Runtime>,
@@ -958,6 +983,42 @@ mod linux_app {
             if let Err(error) = openless_linux_egui::save_quick_note_shortcut_hidden(hidden) {
                 log::warn!("[ui] cannot persist quick-note shortcut visibility: {error}");
             }
+        }
+
+        /// Load the editor's stored pack into the view model. `Revert` reuses
+        /// this so the drawer always shows Core's last persisted values.
+        fn hydrate_style_editor(&mut self, pack: &openless_core::StylePack, exists: bool) {
+            // Read the workflow-specific active id before borrowing `frontend_vm`.
+            let selection_active = self.selection_style_pack_id() == Some(pack.id.clone());
+            let vm = &mut self.frontend_vm;
+            vm.style_editor_open = true;
+            vm.style_editor_id = pack.id.clone();
+            vm.style_editor_builtin = pack.kind == openless_core::StylePackKind::Builtin;
+            vm.style_editor_active = if vm.style_selection_workflow {
+                selection_active
+            } else {
+                pack.active
+            };
+            vm.style_editor_mode = polish_mode_label(self.lang, pack.base_mode).to_string();
+            vm.style_prompt = pack.prompt.clone();
+            vm.style_name = pack.name.clone();
+            vm.style_description = pack.description.clone();
+            vm.style_selection_prompt = pack.selection_prompt.clone();
+            vm.style_voice_edit_prompt = pack.voice_edit_prompt.clone();
+            vm.style_tags = pack.tags.join(", ");
+            vm.style_author = pack.author.clone().unwrap_or_default();
+            vm.style_version = pack.version.clone();
+            vm.style_model = pack.recommended_model.clone().unwrap_or_default();
+            vm.style_compatible_version = pack.compatible_app_version.clone().unwrap_or_default();
+            vm.style_editor_dirty = !exists;
+            vm.style_editor_saved = Some(pack.clone());
+        }
+
+        fn selection_style_pack_id(&self) -> Option<String> {
+            self.preferences
+                .as_ref()
+                .map(|prefs| prefs.selection_polish_style_pack_id.clone())
+                .filter(|id| !id.is_empty())
         }
 
         /// Data URLs for every style-pack icon, cached by `(id, icon_path)`.
@@ -3728,6 +3789,10 @@ mod linux_app {
                 vm.translation_hotkey = prefs.translation_hotkey.display_label();
             }
 
+            // The drawer's Save button is enabled only while the draft differs
+            // from what Core last stored.
+            vm.style_editor_dirty = style_editor_is_dirty(vm);
+
             // Overview: wire real data when available.
             if let Some(summary) = self.overview.summary(chrono::Local::now().date_naive()) {
                 vm.overview_loading = false;
@@ -5507,15 +5572,61 @@ mod linux_app {
                     frontend::view_model::FrontendAction::StyleEdit(index) => {
                         if let Some(pack) = self.style_packs.get(index).cloned() {
                             self.style_editor = Some(pack.clone());
-                            self.frontend_vm.style_editor_open = true;
-                            self.frontend_vm.style_prompt = pack.prompt.clone();
-                            self.frontend_vm.style_name = pack.name.clone();
-                            self.frontend_vm.style_description = pack.description.clone();
-                            self.frontend_vm.style_selection_prompt = pack.selection_prompt.clone();
-                            self.frontend_vm.style_voice_edit_prompt =
-                                pack.voice_edit_prompt.clone();
-                            self.frontend_vm.style_tags = pack.tags.join(", ");
+                            self.hydrate_style_editor(&pack, true);
                         }
+                    }
+                    frontend::view_model::FrontendAction::StyleRevertDraft => {
+                        if let Some(pack) = self.style_editor.clone() {
+                            self.hydrate_style_editor(&pack, true);
+                        }
+                    }
+                    frontend::view_model::FrontendAction::StyleResetBuiltin => {
+                        let id = self.frontend_vm.style_editor_id.clone();
+                        if id.is_empty() {
+                            return;
+                        }
+                        if let Some(backend) = self.backend() {
+                            let lang = self.lang;
+                            let tx = self.tx.clone();
+                            self.tokio.spawn(async move {
+                                match backend.reset_builtin_style_pack(&id) {
+                                    // Core publishes `StylePacksChanged`, so the host
+                                    // reloads the list (and the drawer) by itself.
+                                    Ok(_) => {
+                                        let _ = tx.send(UiResult::Message(
+                                            tr_l10n(lang, "style.pack.resetBuiltin").to_string(),
+                                        ));
+                                    }
+                                    Err(error) => {
+                                        let _ = tx.send(UiResult::Message(error.to_string()));
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    frontend::view_model::FrontendAction::StyleDeleteImported => {
+                        let id = self.frontend_vm.style_editor_id.clone();
+                        if id.is_empty() {
+                            return;
+                        }
+                        if let Some(backend) = self.backend() {
+                            let lang = self.lang;
+                            let tx = self.tx.clone();
+                            self.tokio.spawn(async move {
+                                match backend.remove_style_pack(&id) {
+                                    Ok(_) => {
+                                        let _ = tx.send(UiResult::Message(
+                                            tr_l10n(lang, "style.pack.deleteImported").to_string(),
+                                        ));
+                                    }
+                                    Err(error) => {
+                                        let _ = tx.send(UiResult::Message(error.to_string()));
+                                    }
+                                }
+                            });
+                        }
+                        self.style_editor = None;
+                        self.frontend_vm.style_editor_open = false;
                     }
                     frontend::view_model::FrontendAction::StyleSaveEditor {
                         name,
@@ -5524,6 +5635,10 @@ mod linux_app {
                         selection_prompt,
                         voice_edit_prompt,
                         tags,
+                        author,
+                        version,
+                        model,
+                        compatible_version,
                     } => {
                         if let Some(mut pack) = self.style_editor.take() {
                             pack.name = name.trim().to_string();
@@ -5531,6 +5646,15 @@ mod linux_app {
                             pack.prompt = prompt;
                             pack.selection_prompt = selection_prompt;
                             pack.voice_edit_prompt = voice_edit_prompt;
+                            pack.author = Some(author.trim().to_string()).filter(|v| !v.is_empty());
+                            if !version.trim().is_empty() {
+                                pack.version = version.trim().to_string();
+                            }
+                            pack.recommended_model =
+                                Some(model.trim().to_string()).filter(|v| !v.is_empty());
+                            pack.compatible_app_version =
+                                Some(compatible_version.trim().to_string())
+                                    .filter(|v| !v.is_empty());
                             pack.tags = tags
                                 .split([',', '，', '\n'])
                                 .map(str::trim)
@@ -5540,7 +5664,12 @@ mod linux_app {
                             if let Some(backend) = self.backend() {
                                 let exists = self.style_packs.iter().any(|p| p.id == pack.id);
                                 let lang = self.lang;
-                                self.spawn(async move {
+                                // Keep the stored pack so the drawer stays open and
+                                // can report dirty again after the next edit.
+                                self.style_editor = Some(pack.clone());
+                                self.frontend_vm.style_editor_saved = Some(pack.clone());
+                                self.frontend_vm.style_editor_dirty = false;
+                                self.spawn_reporting(async move {
                                     let saved = if exists {
                                         backend.update_style_pack(pack)?
                                     } else {
@@ -5550,26 +5679,22 @@ mod linux_app {
                                 });
                             }
                         }
-                        self.frontend_vm.style_editor_open = false;
                     }
                     frontend::view_model::FrontendAction::StyleCloseEditor => {
                         self.style_editor = None;
                         self.frontend_vm.style_editor_open = false;
                     }
                     frontend::view_model::FrontendAction::StyleNewPack => {
-                        self.style_editor = Some(openless_core::StylePack {
+                        let pack = openless_core::StylePack {
                             id: uuid::Uuid::new_v4().to_string(),
                             name: tr_l10n(self.lang, "lbl.new_style_default").to_string(),
+                            version: "1.0.0".to_string(),
                             ..Default::default()
-                        });
-                        self.frontend_vm.style_editor_open = true;
-                        self.frontend_vm.style_name =
-                            tr_l10n(self.lang, "lbl.new_style_default").to_string();
-                        self.frontend_vm.style_description.clear();
-                        self.frontend_vm.style_prompt.clear();
-                        self.frontend_vm.style_selection_prompt.clear();
-                        self.frontend_vm.style_voice_edit_prompt.clear();
-                        self.frontend_vm.style_tags.clear();
+                        };
+                        self.style_editor = Some(pack.clone());
+                        self.hydrate_style_editor(&pack, false);
+                        self.frontend_vm.style_editor_saved = None;
+                        self.frontend_vm.style_editor_dirty = true;
                     }
                     frontend::view_model::FrontendAction::StyleImport => {
                         if let Some(backend) = self.backend() {

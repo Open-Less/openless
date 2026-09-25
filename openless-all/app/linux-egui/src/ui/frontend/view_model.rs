@@ -110,6 +110,12 @@ pub enum FrontendAction {
     StyleExport(usize),
     /// Style pack editor opened.
     StyleEdit(usize),
+    /// Reset a built-in pack to Core's shipped prompt (`reset_builtin_style_pack`).
+    StyleResetBuiltin,
+    /// Delete the imported pack the editor is showing (`remove_style_pack`).
+    StyleDeleteImported,
+    /// Throw away the editor's local draft and re-read the stored pack.
+    StyleRevertDraft,
     /// Style editor prompt saved.
     StyleSaveEditor {
         name: String,
@@ -118,6 +124,10 @@ pub enum FrontendAction {
         selection_prompt: String,
         voice_edit_prompt: String,
         tags: String,
+        author: String,
+        version: String,
+        model: String,
+        compatible_version: String,
     },
     /// Style editor closed.
     StyleCloseEditor,
@@ -703,6 +713,19 @@ pub struct FrontendViewModel {
     pub style_selection_prompt: String,
     pub style_voice_edit_prompt: String,
     pub style_tags: String,
+    /// Editor-only fields (`author` / `version` / model hints) from the pack.
+    pub style_author: String,
+    pub style_version: String,
+    pub style_model: String,
+    pub style_compatible_version: String,
+    /// Editor chrome: which pack is open, whether it is pristine, and the pills.
+    pub style_editor_id: String,
+    pub style_editor_builtin: bool,
+    pub style_editor_active: bool,
+    pub style_editor_mode: String,
+    pub style_editor_dirty: bool,
+    /// The stored pack the draft is compared against (dirty check + Revert).
+    pub style_editor_saved: Option<openless_core::StylePack>,
     pub style_notice: Option<String>,
     pub style_unsupported: bool,
 
@@ -862,6 +885,16 @@ impl Default for FrontendViewModel {
             style_selection_prompt: String::new(),
             style_voice_edit_prompt: String::new(),
             style_tags: String::new(),
+            style_author: String::new(),
+            style_version: String::new(),
+            style_model: String::new(),
+            style_compatible_version: String::new(),
+            style_editor_id: String::new(),
+            style_editor_builtin: false,
+            style_editor_active: false,
+            style_editor_mode: String::new(),
+            style_editor_dirty: false,
+            style_editor_saved: None,
             style_notice: None,
             style_unsupported: true,
             marketplace_query: String::new(),

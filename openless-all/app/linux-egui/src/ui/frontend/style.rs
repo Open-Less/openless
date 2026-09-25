@@ -633,7 +633,16 @@ fn notice(ui: &mut egui::Ui, width: f32, vm: &mut FrontendViewModel) {
 
 // ── Editor ──────────────────────────────────────────────────────────────────
 
-/// Pack editor window: the style pack's prompt plus save / reset / cancel.
+/// Style-pack editor: the upstream Beta.2 drawer, not a centred modal.
+///
+/// Tauri `Style.tsx` renders the editor as a right-hand panel
+/// (`top/right/bottom: 16`, `width: min(760px, 100vw - 32px)`) with a fixed
+/// header (title, workflow-specific description, close) and one scrolling body
+/// holding the pills, the fields, the prompt editors and the footer actions.
+const DRAWER_WIDTH: f32 = 760.0;
+const DRAWER_INSET: f32 = 16.0;
+const FIELD_GAP: f32 = 12.0;
+
 fn editor_overlay(
     ctx: &egui::Context,
     vm: &mut FrontendViewModel,
@@ -642,43 +651,30 @@ fn editor_overlay(
     if !vm.style_editor_open {
         return;
     }
-    let lang = vm.lang;
-    let name = vm
-        .style_packs
-        .iter()
-        .find(|pack| {
-            if vm.style_selection_workflow {
-                pack.selection_active
-            } else {
-                pack.is_active
-            }
-        })
-        .map(|pack| pack.name.clone())
-        .unwrap_or_else(|| tr_l10n(lang, "btn.new_style").to_string());
-
-    // In-app overlay: dim the window and float a card above it, exactly like the
-    // settings modal. (A free-floating `egui::Window` reads as a second OS window.)
-    // Mask the content area and centre the card there, matching the other
-    // overlays (settings modal / marketplace detail).
     let body = layout::body_rect(ctx);
     let body = egui::Rect::from_min_max(
         egui::pos2(body.left() + layout::SIDEBAR_WIDTH, body.top()),
         body.max,
     );
-    let size = egui::vec2(
-        (body.width() - 40.0).max(320.0).min(720.0),
-        (body.height() - 40.0).max(240.0).min(560.0),
+    let width = DRAWER_WIDTH
+        .min(body.width() - DRAWER_INSET * 2.0)
+        .max(240.0);
+    let card_rect = egui::Rect::from_min_max(
+        egui::pos2(
+            body.right() - DRAWER_INSET - width,
+            body.top() + DRAWER_INSET,
+        ),
+        egui::pos2(body.right() - DRAWER_INSET, body.bottom() - DRAWER_INSET),
     );
+    // 卡片实际落点写进 memory，供测试查询（Area 覆盖整个 body，面积已不等于卡片）.
+    ctx.data_mut(|data| {
+        data.insert_temp(egui::Id::new("openless-style-editor-card-rect"), card_rect)
+    });
     // 遮罩、点击拦截与卡片必须同属**一个** `Area`（同一个 LayerId）：各自独立 Area 时，
     // egui 会在按下后把被点到的 Area 抬到同层最上（`move_to_top`），遮罩被抬起就会盖住
     // 卡片；同一图层里先画遮罩、再画卡片在结构上就不可能出现。这里用 `Foreground` 而不是
     // `Tooltip`：弹窗若占 Tooltip，会盖住同层弹出的下拉/菜单（跨 Order 是 Tooltip >
     // Foreground）。
-    let card_rect = egui::Rect::from_center_size(body.center(), size);
-    // 卡片实际落点写进 memory，供测试查询（Area 现在覆盖整个 body，面积已不等于卡片）。
-    ctx.data_mut(|data| {
-        data.insert_temp(egui::Id::new("openless-style-editor-card-rect"), card_rect)
-    });
     egui::Area::new(egui::Id::new("openless-style-editor-modal"))
         .order(egui::Order::Foreground)
         .fixed_pos(body.min)
@@ -710,198 +706,421 @@ fn editor_overlay(
                         color: egui::Color32::from_black_alpha(42),
                     })
                     .show(ui, |ui| {
-                        ui.set_min_size(size);
-                        ui.set_max_size(size);
-                        egui::Frame::NONE
-                            .inner_margin(egui::Margin::symmetric(22, 18))
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.vertical(|ui| {
-                                        ui.label(
-                                            egui::RichText::new(tr_l10n(
-                                                lang,
-                                                "head.style_pack_editor",
-                                            ))
-                                            .size(11.0)
-                                            .color(theme::INK_4),
-                                        );
-                                        ui.label(
-                                            egui::RichText::new(&name)
-                                                .size(18.0)
-                                                .strong()
-                                                .color(theme::INK),
-                                        );
-                                    });
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Min),
-                                        |ui| {
-                                            if ui
-                                                .add(
-                                                    egui::Button::new(
-                                                        egui::RichText::new("×")
-                                                            .size(20.0)
-                                                            .color(theme::INK_3),
-                                                    )
-                                                    .fill(theme::SURFACE_2)
-                                                    .stroke(egui::Stroke::new(0.7, theme::LINE))
-                                                    .corner_radius(egui::CornerRadius::same(8))
-                                                    .min_size(egui::vec2(28.0, 28.0)),
-                                                )
-                                                .clicked()
-                                            {
-                                                actions.push(FrontendAction::StyleCloseEditor);
-                                            }
-                                        },
-                                    );
-                                });
-                                ui.add_space(6.0);
-                                egui::ScrollArea::vertical()
-                                    .id_salt("style-editor-fields")
-                                    .max_height((size.y - 122.0).max(120.0))
-                                    .show(ui, |ui| {
-                                        ui.set_width(size.x - 52.0);
-                                        ui.label(
-                                            egui::RichText::new(tr_l10n(
-                                                lang,
-                                                "style.pack.fieldName",
-                                            ))
-                                            .strong(),
-                                        );
-                                        ui.text_edit_singleline(&mut vm.style_name);
-                                        ui.label(
-                                            egui::RichText::new(tr_l10n(
-                                                lang,
-                                                "style.pack.fieldDescription",
-                                            ))
-                                            .strong(),
-                                        );
-                                        ui.text_edit_multiline(&mut vm.style_description);
-                                        ui.label(
-                                            egui::RichText::new(tr_l10n(
-                                                lang,
-                                                "style.pack.fieldTags",
-                                            ))
-                                            .strong(),
-                                        );
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut vm.style_tags)
-                                                .hint_text(tr_l10n(
-                                                    lang,
-                                                    "style.pack.fieldTagsPlaceholder",
-                                                )),
-                                        );
-                                        ui.add_space(10.0);
-                                        ui.label(
-                                            egui::RichText::new(tr_l10n(lang, "lbl.style_note"))
-                                                .size(11.5)
-                                                .color(theme::INK_3),
-                                        );
-                                        ui.add_space(14.0);
-                                        ui.label(
-                                            egui::RichText::new(tr_l10n(
-                                                lang,
-                                                "style.pack.dictation_prompt_title",
-                                            ))
-                                            .size(12.0)
-                                            .strong(),
-                                        );
-                                        ui.label(
-                                            egui::RichText::new(tr_l10n(
-                                                lang,
-                                                "style.pack.dictation_prompt_hint",
-                                            ))
-                                            .size(11.0)
-                                            .color(theme::INK_4),
-                                        );
-                                        ui.add_space(6.0);
-                                        ui.add_sized(
-                                            [ui.available_width(), 115.0],
-                                            egui::TextEdit::multiline(&mut vm.style_prompt)
-                                                .desired_rows(5),
-                                        );
-                                        ui.add_space(12.0);
-                                        ui.label(
-                                            egui::RichText::new(tr_l10n(
-                                                lang,
-                                                "style.pack.selectionPromptTitle",
-                                            ))
-                                            .strong(),
-                                        );
-                                        ui.label(
-                                            egui::RichText::new(tr_l10n(
-                                                lang,
-                                                "style.pack.selectionPromptHint",
-                                            ))
-                                            .size(11.0)
-                                            .color(theme::INK_4),
-                                        );
-                                        ui.add_sized(
-                                            [ui.available_width(), 100.0],
-                                            egui::TextEdit::multiline(
-                                                &mut vm.style_selection_prompt,
-                                            )
-                                            .desired_rows(4),
-                                        );
-                                        ui.add_space(12.0);
-                                        ui.label(
-                                            egui::RichText::new(tr_l10n(
-                                                lang,
-                                                "style.pack.voiceEditPromptTitle",
-                                            ))
-                                            .strong(),
-                                        );
-                                        ui.add_sized(
-                                            [ui.available_width(), 100.0],
-                                            egui::TextEdit::multiline(
-                                                &mut vm.style_voice_edit_prompt,
-                                            )
-                                            .desired_rows(4),
-                                        );
-                                        ui.add_space(10.0);
-                                        ui.horizontal(|ui| {
-                                            if ui
-                                                .add(
-                                                    egui::Button::new(tr_l10n(
-                                                        lang,
-                                                        "style.custom_prompt_save",
-                                                    ))
-                                                    .fill(theme::BLUE)
-                                                    .corner_radius(egui::CornerRadius::same(7)),
-                                                )
-                                                .clicked()
-                                            {
-                                                if vm.style_name.trim().is_empty() {
-                                                    return;
-                                                }
-                                                actions.push(FrontendAction::StyleSaveEditor {
-                                                    name: vm.style_name.clone(),
-                                                    description: vm.style_description.clone(),
-                                                    prompt: vm.style_prompt.clone(),
-                                                    selection_prompt: vm
-                                                        .style_selection_prompt
-                                                        .clone(),
-                                                    voice_edit_prompt: vm
-                                                        .style_voice_edit_prompt
-                                                        .clone(),
-                                                    tags: vm.style_tags.clone(),
-                                                });
-                                                vm.style_editor_open = false;
-                                            }
-                                            if ui
-                                                .button(tr_l10n(lang, "btn.reset_builtin"))
-                                                .clicked()
-                                            {
-                                                // No reset action exists yet: clearing the custom
-                                                // prompt falls back to the built-in system prompt.
-                                                vm.style_prompt.clear();
-                                            }
-                                            if ui.button(tr_l10n(lang, "common.cancel")).clicked() {
-                                                actions.push(FrontendAction::StyleCloseEditor);
-                                            }
-                                        });
-                                    }); // scrollable editor fields
-                            });
+                        ui.set_min_size(card_rect.size());
+                        ui.set_max_size(card_rect.size());
+                        let inner = egui::Rect::from_min_size(
+                            card_rect.min,
+                            egui::vec2(card_rect.width(), card_rect.height()),
+                        );
+                        let header_height = drawer_header(ui, inner, vm, actions);
+                        let content = egui::Rect::from_min_max(
+                            egui::pos2(inner.left(), inner.top() + header_height),
+                            inner.max,
+                        );
+                        drawer_body(ui, content, vm, actions);
                     });
             });
         });
+}
+
+/// Fixed drawer header. Returns its height so the body can start below it.
+fn drawer_header(
+    ui: &mut egui::Ui,
+    inner: egui::Rect,
+    vm: &FrontendViewModel,
+    actions: &mut Vec<FrontendAction>,
+) -> f32 {
+    let lang = vm.lang;
+    let height = 78.0;
+    let rect = egui::Rect::from_min_size(inner.min, egui::vec2(inner.width(), height));
+    let painter = ui.painter().with_clip_rect(rect);
+    let text_left = rect.left() + 18.0;
+    let text_width = (rect.width() - 36.0 - 34.0).max(80.0);
+    painter.text(
+        egui::pos2(text_left, rect.top() + 18.0),
+        egui::Align2::LEFT_TOP,
+        tr_l10n(lang, "style.pack.editorTitle"),
+        egui::FontId::proportional(15.0),
+        theme::INK,
+    );
+    // Two literal call sites on purpose: the i18n sync only registers catalog
+    // keys it can find as a string literal next to `tr_l10n(…,`.
+    let description = if vm.style_selection_workflow {
+        tr_l10n(lang, "style.pack.selectionPromptEditorDesc")
+    } else {
+        tr_l10n(lang, "style.pack.dictationPromptEditorDesc")
+    };
+    let desc = layout::text_galley(ui, description, theme::INK_3, 12.0, text_width, 3);
+    painter.galley(egui::pos2(text_left, rect.top() + 40.0), desc, theme::INK_3);
+    // 28px circular close button, top-right.
+    let close = egui::Rect::from_min_size(
+        egui::pos2(rect.right() - 18.0 - 28.0, rect.top() + 14.0),
+        egui::vec2(28.0, 28.0),
+    );
+    if ui
+        .interact(
+            close,
+            ui.id().with("style-editor-close"),
+            egui::Sense::click(),
+        )
+        .on_hover_text(tr_l10n(lang, "style.pack.closeEditor"))
+        .clicked()
+    {
+        actions.push(FrontendAction::StyleCloseEditor);
+    }
+    icons::draw_icon(ui, close.center(), IconName::Close, theme::INK_3);
+    painter.line_segment(
+        [
+            egui::pos2(rect.left(), rect.bottom()),
+            egui::pos2(rect.right(), rect.bottom()),
+        ],
+        egui::Stroke::new(0.5, theme::LINE),
+    );
+    height
+}
+
+fn drawer_body(
+    ui: &mut egui::Ui,
+    content: egui::Rect,
+    vm: &mut FrontendViewModel,
+    actions: &mut Vec<FrontendAction>,
+) {
+    let lang = vm.lang;
+    let field_width = (content.width() - 36.0 - FIELD_GAP) / 2.0;
+    egui::ScrollArea::vertical()
+        .id_salt("style-editor-fields")
+        .max_height(content.height().max(120.0))
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_width((content.width() - 36.0).max(120.0));
+            ui.add_space(18.0);
+            pills_row(ui, content, vm, actions);
+            ui.add_space(FIELD_GAP);
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_width(field_width);
+                    field_label(ui, tr_l10n(lang, "style.pack.fieldName"));
+                    ui.text_edit_singleline(&mut vm.style_name);
+                });
+                ui.vertical(|ui| {
+                    ui.set_width(field_width);
+                    field_label(ui, tr_l10n(lang, "style.pack.fieldAuthor"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut vm.style_author)
+                            .hint_text(tr_l10n(lang, "style.pack.fieldAuthorPlaceholder")),
+                    );
+                });
+            });
+            ui.add_space(FIELD_GAP);
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_width(field_width);
+                    field_label(ui, tr_l10n(lang, "style.pack.fieldVersion"));
+                    ui.text_edit_singleline(&mut vm.style_version);
+                });
+                ui.vertical(|ui| {
+                    ui.set_width(field_width);
+                    field_label(ui, tr_l10n(lang, "style.pack.fieldTags"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut vm.style_tags)
+                            .hint_text(tr_l10n(lang, "style.pack.fieldTagsPlaceholder")),
+                    );
+                });
+            });
+            ui.add_space(FIELD_GAP);
+            field_label(ui, tr_l10n(lang, "style.pack.fieldDescription"));
+            ui.add_sized(
+                [ui.available_width(), 86.0],
+                egui::TextEdit::multiline(&mut vm.style_description),
+            );
+            ui.add_space(FIELD_GAP);
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_width(field_width);
+                    field_label(ui, tr_l10n(lang, "style.pack.fieldModel"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut vm.style_model)
+                            .hint_text(tr_l10n(lang, "style.pack.fieldModelPlaceholder")),
+                    );
+                    ui.label(
+                        egui::RichText::new(tr_l10n(lang, "style.pack.fieldModelHint"))
+                            .size(11.5)
+                            .color(theme::INK_4),
+                    );
+                });
+                ui.vertical(|ui| {
+                    ui.set_width(field_width);
+                    field_label(ui, tr_l10n(lang, "style.pack.fieldCompatibility"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut vm.style_compatible_version)
+                            .hint_text(tr_l10n(lang, "style.pack.fieldCompatibilityPlaceholder")),
+                    );
+                });
+            });
+            ui.add_space(FIELD_GAP + 4.0);
+
+            // The two workflows read different prompt slots from one pack, so the
+            // drawer only edits the one the page is currently showing.
+            if vm.style_selection_workflow {
+                prompt_field(
+                    ui,
+                    tr_l10n(lang, "style.pack.selectionPromptTitle"),
+                    Some(tr_l10n(lang, "style.pack.selectionPromptHint")),
+                    &mut vm.style_selection_prompt,
+                    100.0,
+                );
+                ui.add_space(FIELD_GAP);
+                prompt_field(
+                    ui,
+                    tr_l10n(lang, "style.pack.voiceEditPromptTitle"),
+                    None,
+                    &mut vm.style_voice_edit_prompt,
+                    100.0,
+                );
+            } else {
+                prompt_field(
+                    ui,
+                    tr_l10n(lang, "style.pack.dictation_prompt_title"),
+                    Some(tr_l10n(lang, "style.pack.dictation_prompt_hint")),
+                    &mut vm.style_prompt,
+                    140.0,
+                );
+            }
+
+            ui.add_space(18.0);
+            drawer_footer(ui, vm, actions);
+            ui.add_space(18.0);
+        });
+}
+
+/// Kind / mode / active / unsaved pills plus export and activate.
+fn pills_row(
+    ui: &mut egui::Ui,
+    content: egui::Rect,
+    vm: &mut FrontendViewModel,
+    actions: &mut Vec<FrontendAction>,
+) {
+    let lang = vm.lang;
+    let index = vm
+        .style_packs
+        .iter()
+        .position(|pack| pack.id == vm.style_editor_id);
+    let row = egui::Rect::from_min_size(
+        egui::pos2(content.left() + 18.0, ui.cursor().top()),
+        egui::vec2(content.width() - 36.0, 24.0),
+    );
+    ui.allocate_rect(row, egui::Sense::hover());
+    let painter = ui.painter().with_clip_rect(row);
+    let mut x = row.left();
+    let pill = |text: &str, tone: PillTone, x: &mut f32| {
+        let size = layout::pill_size(ui, text);
+        if *x + size.x > row.right() - 200.0 {
+            return;
+        }
+        layout::paint_pill(
+            &painter,
+            egui::Rect::from_min_size(egui::pos2(*x, row.center().y - size.y / 2.0), size),
+            text,
+            tone,
+        );
+        *x += size.x + 6.0;
+    };
+    pill(
+        tr_l10n(
+            lang,
+            if vm.style_editor_builtin {
+                "style.pack.builtin"
+            } else {
+                "style.pack.imported"
+            },
+        ),
+        if vm.style_editor_builtin {
+            PillTone::Outline
+        } else {
+            PillTone::Blue
+        },
+        &mut x,
+    );
+    if !vm.style_editor_mode.is_empty() {
+        let mode = vm.style_editor_mode.clone();
+        pill(&mode, PillTone::Gray, &mut x);
+    }
+    if vm.style_editor_active {
+        pill(tr_l10n(lang, "style.pack.active"), PillTone::Blue, &mut x);
+    }
+    if vm.style_editor_dirty {
+        pill(
+            tr_l10n(lang, "style.pack.unsaved"),
+            PillTone::Outline,
+            &mut x,
+        );
+    }
+
+    // Right side: export ZIP + activate (both reuse the list-row actions).
+    let activate = if vm.style_editor_active {
+        tr_l10n(lang, "style.pack.active")
+    } else {
+        tr_l10n(lang, "style.pack.activate")
+    };
+    let activate_width = layout::text_width(ui, activate, 11.5) + 30.0;
+    let activate_rect = egui::Rect::from_min_size(
+        egui::pos2(row.right() - activate_width, row.center().y - 14.0),
+        egui::vec2(activate_width, 28.0),
+    );
+    let export = tr_l10n(lang, "style.pack.exportZip");
+    let export_width = layout::text_width(ui, export, 11.5) + 42.0;
+    let export_rect = egui::Rect::from_min_size(
+        egui::pos2(
+            activate_rect.left() - 8.0 - export_width,
+            row.center().y - 14.0,
+        ),
+        egui::vec2(export_width, 28.0),
+    );
+    if layout::action_button(
+        ui,
+        export_rect,
+        export,
+        Some(IconName::Download),
+        ButtonKind::Ghost,
+    )
+    .clicked()
+    {
+        if let Some(index) = index {
+            actions.push(FrontendAction::StyleExport(index));
+        }
+    }
+    if layout::action_button(
+        ui,
+        activate_rect,
+        activate,
+        None,
+        if vm.style_editor_active {
+            ButtonKind::Ghost
+        } else {
+            ButtonKind::Blue
+        },
+    )
+    .clicked()
+        && !vm.style_editor_active
+    {
+        if let Some(index) = index {
+            actions.push(FrontendAction::StyleActivate(index));
+        }
+    }
+    ui.add_space(6.0);
+}
+
+fn field_label(ui: &mut egui::Ui, text: &str) {
+    ui.label(
+        egui::RichText::new(text)
+            .size(12.0)
+            .strong()
+            .color(theme::INK),
+    );
+    ui.add_space(4.0);
+}
+
+fn prompt_field(
+    ui: &mut egui::Ui,
+    title: &str,
+    hint: Option<&str>,
+    value: &mut String,
+    height: f32,
+) {
+    field_label(ui, title);
+    if let Some(hint) = hint {
+        ui.label(egui::RichText::new(hint).size(11.0).color(theme::INK_4));
+        ui.add_space(4.0);
+    }
+    ui.add_sized(
+        [ui.available_width(), height],
+        egui::TextEdit::multiline(value),
+    );
+}
+
+/// Save / revert on the left, reset-or-delete on the right.
+fn drawer_footer(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
+    let lang = vm.lang;
+    let row_width = ui.available_width();
+    let (row, _) = ui.allocate_exact_size(egui::vec2(row_width, 32.0), egui::Sense::hover());
+    let save = tr_l10n(lang, "style.pack.save");
+    let save_width = layout::text_width(ui, save, 11.5) + 40.0;
+    let save_rect = egui::Rect::from_min_size(row.min, egui::vec2(save_width, 30.0));
+    // Upstream only enables Save while the draft differs from the stored pack.
+    if vm.style_editor_dirty
+        && layout::action_button(ui, save_rect, save, Some(IconName::Check), ButtonKind::Blue)
+            .clicked()
+    {
+        if !vm.style_name.trim().is_empty() {
+            actions.push(FrontendAction::StyleSaveEditor {
+                name: vm.style_name.clone(),
+                description: vm.style_description.clone(),
+                prompt: vm.style_prompt.clone(),
+                selection_prompt: vm.style_selection_prompt.clone(),
+                voice_edit_prompt: vm.style_voice_edit_prompt.clone(),
+                tags: vm.style_tags.clone(),
+                author: vm.style_author.clone(),
+                version: vm.style_version.clone(),
+                model: vm.style_model.clone(),
+                compatible_version: vm.style_compatible_version.clone(),
+            });
+        }
+    } else if !vm.style_editor_dirty {
+        // Still paint the disabled button so the layout does not jump.
+        layout::action_button(
+            ui,
+            save_rect,
+            save,
+            Some(IconName::Check),
+            ButtonKind::Disabled,
+        );
+    }
+
+    let revert = tr_l10n(lang, "style.pack.revert");
+    let revert_width = layout::text_width(ui, revert, 11.5) + 40.0;
+    let revert_rect = egui::Rect::from_min_size(
+        egui::pos2(save_rect.right() + 8.0, row.top()),
+        egui::vec2(revert_width, 30.0),
+    );
+    let kind = if vm.style_editor_dirty {
+        ButtonKind::Ghost
+    } else {
+        ButtonKind::Disabled
+    };
+    if layout::action_button(ui, revert_rect, revert, Some(IconName::Refresh), kind).clicked()
+        && vm.style_editor_dirty
+    {
+        actions.push(FrontendAction::StyleRevertDraft);
+    }
+
+    // Built-in packs reset to Core's shipped prompt; imported ones are deleted.
+    let secondary = if vm.style_editor_builtin {
+        tr_l10n(lang, "style.pack.resetBuiltin")
+    } else {
+        tr_l10n(lang, "style.pack.deleteImported")
+    };
+    let secondary_width = layout::text_width(ui, secondary, 11.5) + 42.0;
+    let secondary_rect = egui::Rect::from_min_size(
+        egui::pos2(row.right() - secondary_width, row.top()),
+        egui::vec2(secondary_width, 30.0),
+    );
+    if layout::action_button(
+        ui,
+        secondary_rect,
+        secondary,
+        Some(if vm.style_editor_builtin {
+            IconName::Refresh
+        } else {
+            IconName::Trash
+        }),
+        ButtonKind::Ghost,
+    )
+    .clicked()
+    {
+        actions.push(if vm.style_editor_builtin {
+            FrontendAction::StyleResetBuiltin
+        } else {
+            FrontendAction::StyleDeleteImported
+        });
+    }
 }
