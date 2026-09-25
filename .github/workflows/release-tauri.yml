@@ -536,7 +536,9 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: 'OpenLess ${{ github.ref_name }}'
-          draft: false
+          # Beta 的桌面包先落在共享 draft 里，等三平台都构建完、管理员核对过可下载
+          # 的包之后才发布（正式版仍直接发布）。
+          draft: ${{ env.OPENLESS_RELEASE_CHANNEL == 'beta' }}
           # beta 渠道的 release 必须标 prerelease=true：GitHub UI 会折叠它，
           # 普通用户看不到；同时只上传 latest-*-beta.json，正式版用户的
           # endpoint（latest-*.json）永远不会被覆盖，保证 Beta 不溢出正式版。
@@ -839,7 +841,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          draft: false
+          # 不显式写 false：Tauri job 建的同 tag release 若是 draft（Beta），这里
+          # 挂 Linux 资产不能把它变成公开。
+          draft: ${{ env.OPENLESS_RELEASE_CHANNEL == 'beta' }}
           # 不传 name/body_path：release 不存在时用 tag 名作标题（tag 自带 -egui 后缀，
           # 不会误标成 Tauri）；已存在时保留 leader 写好的标题与 body。
           prerelease: ${{ env.OPENLESS_RELEASE_CHANNEL == 'beta' }}

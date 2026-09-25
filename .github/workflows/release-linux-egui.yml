@@ -231,7 +231,9 @@ jobs:
           tag_name: ${{ inputs.release_tag }}
           # 不传 name/body_path：release 不存在时用默认标题（tag 名本身带 -egui
           # 后缀，不会误标成 Tauri），已存在时保留 leader 写好的标题与 body。
-          draft: false
+          # Beta 先把包留在 draft 里：与 Tauri/Android 两个 workflow 共用同一个
+          # release，只有管理员核对过包与 updater manifest 之后才发布。
+          draft: ${{ endsWith(inputs.release_tag, '-beta-egui') || contains(inputs.release_tag, '-Beta.') }}
           # -egui tag 是一个独立命名空间，beta 渠道必须自己判：否则首次为
           # v*-Beta.N-egui 建 release 时会默认成正式版，把预发布包推给正式版用户。
           prerelease: ${{ endsWith(inputs.release_tag, '-beta-egui') || contains(inputs.release_tag, '-Beta.') }}

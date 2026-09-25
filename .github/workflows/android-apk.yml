@@ -436,7 +436,8 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: OpenLess ${{ github.ref_name }}
-          draft: false
+          # 桌面与 Android job 共用同一个 Beta draft：全部构建完并核对过后再发布。
+          draft: ${{ env.OPENLESS_RELEASE_CHANNEL == 'beta' }}
           prerelease: ${{ env.OPENLESS_RELEASE_CHANNEL == 'beta' }}
           append_body: true
           body_path: ${{ runner.temp }}/android-release-body.md

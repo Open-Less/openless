@@ -49,6 +49,17 @@ with `scripts/bump-version.sh <X.Y.Z>`:
 
 The root `openless-all/app/Cargo.lock` belongs only to the framework-independent core/Linux workspace and is not one of the five Tauri application version locations.
 
+A dated build may carry SemVer build metadata in the synchronized application version,
+for example `2.0.0-Beta.2+build.20260924`. Keep its release tag in the existing
+`v2.0.0-Beta.2-tauri` format: released clients only recognize a numeric `Beta.<N>`
+tag suffix. Include the complete application version in the release title and
+updater manifests. Build metadata does not advance SemVer precedence; each new
+public Beta still increments `N`. Use the `build.` prefix for date metadata: Tauri
+2.10.1 otherwise maps a numeric date to the fourth Windows product-version
+component, which is a 16-bit field, and NSIS packaging fails. The full version still
+appears in the app and updater manifest; NSIS uses its supported numeric fallback for
+file metadata. See [the pinned NSIS bundler](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.10.1/crates/tauri-bundler/src/bundle/windows/nsis/mod.rs#L149).
+
 ## License boundary
 
 Published 1.x releases remain MIT. `2.0.0-Beta.1` is the effective boundary for
@@ -65,6 +76,11 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
 3. CI is green on the commit being tagged.
 4. The applicable [desktop feature and device acceptance](docs/2.0-desktop-acceptance.md), signing, and distribution requirements are met; green builds alone do not establish product readiness.
 5. Then, and only then, push the release tag.
+6. Beta tag workflows upload the desktop, Android, and Linux egui assets to one
+   shared **draft** release. Wait for every workflow to succeed, verify the
+   packages and the Beta updater manifests, then publish that draft as a
+   prerelease. Do not rerun an asset workflow after publication without first
+   returning the release to draft.
 
 Before attaching Linux assets, additionally require all of the following:
 
