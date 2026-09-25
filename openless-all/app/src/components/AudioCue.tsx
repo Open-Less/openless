@@ -1,10 +1,9 @@
 // 录音提示音：监听 capsule:state 事件，在"开始录音"边沿播放合成提示音。
 // 独立组件，不依赖胶囊窗口显示——胶囊隐藏时也能正常工作。
-// Linux 的 Web Audio 输出会被 PipeWire/KDE 当作 sink-input，启动/退出时触发音量 OSD；
+// Web Audio 输出会被某些桌面音频栈当作 sink-input，启动/退出时触发音量 OSD；
 // Android 也可能因 Web Audio 输出切换录音输入路由，因此这两个平台禁用。
 
 import { useEffect, useRef } from 'react';
-import { detectOS } from './WindowChrome';
 import { isAndroid, isTauri } from '../lib/ipc';
 import { playRecordStartCue, primeAudioCue, stopAudioCue } from '../lib/audioCue';
 import type { CapsuleState, UserPreferences } from '../lib/types';
@@ -20,7 +19,7 @@ interface CapsulePayload {
 export function AudioCueListener() {
   const audioCueEnabledRef = useRef<boolean>(true);
   const prevStateRef = useRef<CapsuleState>('idle' as CapsuleState);
-  const audioCueRuntimeEnabled = !isAndroid() && detectOS() !== 'linux';
+  const audioCueRuntimeEnabled = !isAndroid();
 
   // 读取设置（默认开启）
   useEffect(() => {

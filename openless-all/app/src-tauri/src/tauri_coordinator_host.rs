@@ -166,16 +166,7 @@ fn show_capsule_window_no_activate<R: tauri::Runtime>(
     true
 }
 
-#[cfg(target_os = "linux")]
-fn show_capsule_window_no_activate<R: tauri::Runtime>(
-    _app: &AppHandle<R>,
-    _window: &tauri::WebviewWindow<R>,
-    _reassert_spaces: bool,
-) -> bool {
-    true
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn show_capsule_window_no_activate<R: tauri::Runtime>(
     _app: &AppHandle<R>,
     _window: &tauri::WebviewWindow<R>,
@@ -646,20 +637,6 @@ impl TauriCapsuleWindow {
         };
         let fallback_card_active = self.state.defer_if_fallback_active(payload);
 
-        #[cfg(target_os = "linux")]
-        {
-            let _ = (
-                window,
-                payload,
-                show_capsule,
-                style,
-                fallback_card_active,
-                reassert_spaces,
-            );
-            return;
-        }
-
-        #[cfg(not(target_os = "linux"))]
         {
             let action = capsule_window_action(fallback_card_active, show_capsule, payload.state);
             if action == CapsuleWindowAction::PreserveFallbackCard {
@@ -806,7 +783,7 @@ impl TauriCoordinatorHost {
         tauri::async_runtime::block_on(future)
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     pub(crate) fn local_qwen_asr(
         &self,
         engine: std::sync::Arc<crate::asr::local::LocalQwenEngine>,

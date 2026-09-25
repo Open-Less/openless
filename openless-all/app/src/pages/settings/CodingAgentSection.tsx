@@ -11,7 +11,6 @@
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { detectOS } from '../../components/WindowChrome';
 import {
   codingAgentDetectCli,
   codingAgentDetectOpencode,
@@ -72,7 +71,6 @@ const DEFAULT_EXE: Record<CodingAgentProviderId, string> = {
 export function CodingAgentSection() {
   const { t } = useTranslation();
   const { prefs, updatePrefs: savePrefs } = useHotkeySettings();
-  const os = detectOS();
 
   // OpenCode 安装检测：仅当启用 + 选了 OpenCode 后端时探测一次，用于提示是否需先安装。
   const [opencode, setOpencode] = useState<OpenCodeDetection | null>(null);
@@ -173,8 +171,7 @@ export function CodingAgentSection() {
     }
   };
 
-  // Windows/macOS 共用 Core Agent 流程；Linux 入口由 egui Host 提供。
-  if (os === 'linux') return null;
+  // Windows/macOS 共用 Core Agent 流程。
 
   if (!prefs) {
     return (

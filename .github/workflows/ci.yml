@@ -212,6 +212,7 @@ jobs:
           cargo check --locked -p openless-linux-egui --all-targets
           node scripts/linux-egui-tauri-free-contract.test.mjs
           node scripts/linux-egui-release-contract.test.mjs
+          node scripts/tauri-linux-free-contract.test.mjs
 
       - name: Enforce Linux dependency boundaries
         shell: pwsh

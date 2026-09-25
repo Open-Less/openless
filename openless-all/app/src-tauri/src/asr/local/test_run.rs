@@ -1,4 +1,3 @@
-#![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
 //! 本地 Qwen3-ASR 一键"加载 + 测试"实现。
 //!
 //! 流程：
@@ -8,11 +7,11 @@
 //!   3. 加载模型，跑 batch transcribe，分别记录 load_ms / transcribe_ms
 //!   4. 给前端用：用户点击「加载并测试」按钮立即知道模型是否能跑、有多快、识别什么
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 use std::path::Path;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 use std::sync::Arc;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 use std::time::Instant;
 
 use anyhow::Result;
@@ -22,7 +21,7 @@ use super::models::ModelId;
 
 /// 内嵌测试音频。原始文件 `vendor/qwen-asr/samples/test_speech.wav`
 /// 内容："Hello. This is a test of the Voxtrail speech-to-text system."
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 const TEST_WAV: &[u8] = include_bytes!("../../../vendor/qwen-asr/samples/test_speech.wav");
 
 /// 测试结果给前端展示。
@@ -38,7 +37,7 @@ pub struct TestResult {
     pub transcribe_ms: u64,
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 pub async fn run_test(
     model_id: ModelId,
     backend: Option<super::QwenBackend>,
@@ -47,8 +46,6 @@ pub async fn run_test(
     if model_id.is_whisper() {
         #[cfg(target_os = "macos")]
         return run_whisper_test(model_id, model_dir).await;
-        #[cfg(target_os = "linux")]
-        anyhow::bail!("本地 Whisper 测试仅支持 macOS");
     }
     let backend =
         backend.ok_or_else(|| anyhow::anyhow!("当前系统不支持所选的本地 Qwen3-ASR 后端"))?;
@@ -181,16 +178,16 @@ async fn run_whisper_test(model_id: ModelId, model_dir: std::path::PathBuf) -> R
     })
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(target_os = "macos"))]
 pub async fn run_test(
     _model_id: ModelId,
     _backend: Option<super::QwenBackend>,
     _model_dir: std::path::PathBuf,
 ) -> Result<TestResult> {
-    anyhow::bail!("本地 Qwen3-ASR C 后端目前仅支持 macOS/Linux；MLX 后端仅支持 macOS")
+    anyhow::bail!("Tauri 本地 Qwen3-ASR C/MLX 后端仅支持 macOS")
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 fn load_engine(backend: super::QwenBackend, dir: &Path) -> Result<Arc<super::LocalQwenEngine>> {
     let engine = super::LocalQwenEngine::load(backend, dir)?;
     Ok(Arc::new(engine))

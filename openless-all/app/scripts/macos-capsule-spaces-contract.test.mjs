@@ -16,7 +16,7 @@ const coordinatorHostRs = (
   await readFile(new URL('../src-tauri/src/tauri_coordinator_host.rs', import.meta.url), 'utf-8')
 ).replace(/\r\n/g, '\n');
 const functionMatch = coordinatorHostRs.match(
-  /#\[cfg\(target_os = "macos"\)\]\s*(?:pub\((?:crate|super)\) )?fn show_capsule_window_no_activate[\s\S]*?\n}\n\n#\[cfg\(target_os = "linux"\)\]/,
+  /#\[cfg\(target_os = "macos"\)\]\s*(?:pub\((?:crate|super)\) )?fn show_capsule_window_no_activate[\s\S]*?\n}\n\n#\[cfg\(not\(any\(target_os = "macos", target_os = "windows"\)\)\)\]/,
 );
 
 if (!functionMatch) {

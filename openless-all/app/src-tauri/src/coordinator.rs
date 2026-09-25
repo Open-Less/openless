@@ -1,7 +1,3 @@
-#![cfg_attr(
-    target_os = "linux",
-    allow(dead_code, unused_imports, unused_variables)
-)]
 //! Dictation coordinator.
 //!
 //! Mirrors the Swift `DictationCoordinator` state machine. Single owner of
@@ -1142,8 +1138,6 @@ impl Coordinator {
                             .name("openless-combo-hotkey-bridge".into())
                             .spawn(move || combo_hotkey_bridge_loop(bridge_inner, rx))
                             .ok();
-                        #[cfg(target_os = "linux")]
-                        sync_custom_dictation_to_plugin(&inner_clone);
                     }
                     Err(e) => {
                         log::warn!("[coord] update combo hotkey binding 失败: {e}");
@@ -1384,24 +1378,12 @@ impl Coordinator {
 
     fn ensure_modifier_hotkey_monitor(&self, binding: crate::types::HotkeyBinding) {
         if let Some(monitor) = self.inner.hotkey.lock().as_ref() {
-            #[cfg(target_os = "linux")]
-            let plugin_binding = binding.clone();
             monitor.update_binding(binding);
-            #[cfg(target_os = "linux")]
-            if plugin_binding.trigger == crate::types::HotkeyTrigger::Custom {
-                sync_custom_dictation_to_plugin(&self.inner);
-            } else {
-                crate::linux_fcitx::sync_binding_to_plugin(&plugin_binding);
-            }
             return;
         }
         let (tx, rx) = mpsc::channel::<HotkeyEvent>();
-        #[cfg(target_os = "linux")]
-        let (fcitx_tx, fcitx_binding) = (tx.clone(), binding.clone());
         let cancel_tx = spawn_esc_cancel_bridge(&self.inner);
         let combo_tx = spawn_combo_abort_bridge(&self.inner, handle_trigger_combined);
-        #[cfg(target_os = "linux")]
-        let combo_tx_for_fcitx = combo_tx.clone();
         match HotkeyMonitor::start(binding, tx, cancel_tx, combo_tx) {
             Ok(monitor) => {
                 let adapter = monitor.kind();
@@ -1417,27 +1399,6 @@ impl Coordinator {
                     .name("openless-hotkey-bridge".into())
                     .spawn(move || hotkey_bridge_loop(inner_clone, rx))
                     .ok();
-                // Linux: 启动 fcitx5 插件信号监听作为热键源。
-                #[cfg(target_os = "linux")]
-                {
-                    let (qa_trigger, selection_polish_trigger, translation_trigger) =
-                        modifier_shortcut_triggers(&self.inner);
-                    let custom_key = custom_dictation_key_string(&self.inner);
-                    crate::linux_fcitx::start_dictation_signal_listener(
-                        fcitx_tx,
-                        combo_tx_for_fcitx,
-                        fcitx_binding.clone(),
-                        qa_trigger,
-                        selection_polish_trigger,
-                        translation_trigger,
-                        custom_key,
-                    );
-                    if fcitx_binding.trigger == crate::types::HotkeyTrigger::Custom {
-                        sync_custom_dictation_to_plugin(&self.inner);
-                    } else {
-                        crate::linux_fcitx::sync_binding_to_plugin(&fcitx_binding);
-                    }
-                }
             }
             Err(e) => {
                 *self.inner.hotkey_status.lock() = HotkeyStatus {

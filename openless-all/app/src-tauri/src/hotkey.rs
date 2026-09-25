@@ -1,11 +1,9 @@
-#![cfg_attr(target_os = "linux", allow(dead_code))]
 //! 全局热键监听：发送按下 / 抬起 / 取消三类边沿事件。
 //!
 //! - macOS：原生 CGEventTap（core-foundation + core-graphics FFI），与 Swift
 //!   `OpenLessHotkey/HotkeyMonitor.swift` 同源。
 //! - Windows：原生 `WH_KEYBOARD_LL` low-level keyboard hook，保留 modifier-only
 //!   trigger（如右 Control / 右 Alt）的真实语义。
-//! - Linux：fcitx5 插件提供热键事件（DBus 信号 `DictationKeyEvent`）。
 //!
 //! 仅产出带代次和单调时间戳的原始边沿，业务语义由 openless-core 解释。
 //!
@@ -423,6 +421,29 @@ fn reset_shared_held_state(shared: &Shared) {
 }
 
 // ─────────────────────────── macOS implementation ───────────────────────────
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+mod platform {
+    //! 没有原生全局热键后端的桌面构建：安装直接失败，调用方据此给用户明确提示，
+    //! 而不是默默不工作。真实实现见 macOS（CGEventTap）与 Windows（WH_KEYBOARD_LL）。
+
+    use super::{
+        HotkeyAdapter, HotkeyBinding, HotkeyCombinedEdge, HotkeyEvent, HotkeyInstallError,
+    };
+    use std::sync::mpsc::Sender;
+
+    pub fn start_adapter(
+        _binding: HotkeyBinding,
+        _tx: Sender<HotkeyEvent>,
+        _cancel_tx: Sender<()>,
+        _combo_tx: Sender<HotkeyCombinedEdge>,
+    ) -> Result<Box<dyn HotkeyAdapter>, HotkeyInstallError> {
+        Err(HotkeyInstallError {
+            code: "hotkey_unsupported".to_string(),
+            message: "当前平台不提供原生全局热键后端".to_string(),
+        })
+    }
+}
 
 #[cfg(target_os = "macos")]
 mod platform {
@@ -2180,67 +2201,5 @@ mod platform {
 
             drop(monitor);
         }
-    }
-}
-
-// ─────────────────────────── Linux / other implementation ───────────────────────────
-
-#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-mod platform {
-    use std::sync::mpsc::Sender;
-
-    use super::{HotkeyAdapter, HotkeyCombinedEdge, HotkeyEvent};
-    use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError, HotkeyTrigger};
-
-    /// Linux 统一使用 fcitx5 插件作为热键源（Wayland / X11 均可）。
-    ///
-    /// 实际的热键事件由 `linux_fcitx::start_dictation_signal_listener` 接收
-    /// fcitx5 插件的 DBus 信号并转发到 `Sender<HotkeyEvent>`。
-    pub fn start_adapter(
-        _binding: HotkeyBinding,
-        _tx: Sender<HotkeyEvent>,
-        _cancel_tx: Sender<()>,
-        _combo_tx: Sender<HotkeyCombinedEdge>,
-    ) -> Result<Box<dyn HotkeyAdapter>, HotkeyInstallError> {
-        log::info!("[hotkey] Linux — fcitx5 plugin handles hotkeys");
-        Ok(Box::new(PlaceholderAdapter {
-            _tx,
-            _cancel_tx,
-            _combo_tx,
-        }))
-    }
-
-    /// Linux 占位 adapter：实现接口但不监听键盘。
-    /// 热键事件由 fcitx5 插件的 `DictationKeyEvent` DBus 信号提供。
-    /// 组合键撤销由 fcitx5 插件通过 `DictationKeyCombined` 信号上报。
-    struct PlaceholderAdapter {
-        _tx: Sender<HotkeyEvent>,
-        _cancel_tx: Sender<()>,
-        _combo_tx: Sender<HotkeyCombinedEdge>,
-    }
-
-    impl HotkeyAdapter for PlaceholderAdapter {
-        fn kind(&self) -> HotkeyAdapterKind {
-            HotkeyAdapterKind::Fcitx5
-        }
-
-        fn update_binding(&self, _binding: HotkeyBinding) {
-            // fcitx5 插件热键由 sync_binding_to_plugin 单独同步。
-        }
-
-        fn update_modifier_shortcuts(
-            &self,
-            qa_trigger: Option<HotkeyTrigger>,
-            selection_polish_trigger: Option<HotkeyTrigger>,
-            translation_trigger: Option<HotkeyTrigger>,
-        ) {
-            crate::linux_fcitx::sync_qa_binding(qa_trigger);
-            // 选区润色触发键：fcitx5 插件通过 SelectionPolishEvent 信号回传
-            //（插件端需 `scripts/inject-fcitx5-plugin.sh` 重装新版 .so）。
-            crate::linux_fcitx::sync_selection_polish_binding(selection_polish_trigger);
-            crate::linux_fcitx::sync_translation_binding(translation_trigger);
-        }
-
-        fn reset_held_state(&self) {}
     }
 }

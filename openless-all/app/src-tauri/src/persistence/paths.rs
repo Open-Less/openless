@@ -1,4 +1,3 @@
-#![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
 //! Storage path resolution: models root, recordings archive (with retention
 //! pruning), and the Windows
 //! Foundry Local cache roots.

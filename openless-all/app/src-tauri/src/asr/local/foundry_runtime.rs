@@ -1,5 +1,3 @@
-#![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
-
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
