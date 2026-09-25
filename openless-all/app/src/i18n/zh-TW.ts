@@ -488,6 +488,8 @@ export const zhTW: typeof zhCN = {
     retranscribing: '轉錄中…',
     retranscribeFailed: '重新轉錄失敗：{{err}}',
     rawLabel: '原文',
+    showRaw: '查看原文',
+    hideRaw: '隱藏原文',
     rawEmpty: '（空）',
     selectHint: '左側選一條查看詳情。',
     recorded: '錄音 {{duration}}',

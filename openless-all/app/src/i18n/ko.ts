@@ -492,6 +492,8 @@ export const ko: typeof zhCN = {
     retranscribing: '인식 중…',
     retranscribeFailed: '다시 인식 실패: {{err}}',
     rawLabel: '원문',
+    showRaw: '원문 보기',
+    hideRaw: '원문 숨기기',
     rawEmpty: '(비어 있음)',
     selectHint: '왼쪽에서 하나를 선택하여 자세히 보기.',
     recorded: '녹음 {{duration}}',

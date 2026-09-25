@@ -514,6 +514,8 @@ export const de: typeof zhCN = {
     retranscribing: 'Wird transkribiert…',
     retranscribeFailed: 'Erneute Transkription fehlgeschlagen: {{err}}',
     rawLabel: 'Rohtext',
+    showRaw: 'Rohtext anzeigen',
+    hideRaw: 'Rohtext ausblenden',
     rawEmpty: '(leer)',
     selectHint: 'Wähle links einen Eintrag aus, um die Details anzuzeigen.',
     recorded: 'Aufnahmedauer: {{duration}}',

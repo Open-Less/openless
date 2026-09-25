@@ -513,6 +513,8 @@ export const es: typeof zhCN = {
     retranscribing: 'Transcribiendo…',
     retranscribeFailed: 'No se pudo volver a transcribir: {{err}}',
     rawLabel: 'Original',
+    showRaw: 'Mostrar transcripción original',
+    hideRaw: 'Ocultar transcripción original',
     rawEmpty: '(vacío)',
     selectHint: 'Selecciona un registro de la izquierda para ver sus detalles.',
     recorded: 'Grabación: {{duration}}',

@@ -333,15 +333,13 @@ mod tests {
             "history.desc",
             "common.refresh",
             "common.clear",
-            "history.raw_label",
             "history.play",
-            "history.export",
-            "history.retranscribe",
             "history.step_asr",
+            // 润色信息现在挂在润色卡片胶囊上（「润色 · 风格」）。
             "history.step_polish",
-            "history.step_insert",
+            // 默认只看润色结果：原文靠这个开关展开。
+            "history.show_raw",
             "common.copy",
-            "common.delete",
         ] {
             let expected = tr(key);
             assert!(
@@ -349,14 +347,18 @@ mod tests {
                 "expected the history page to paint {key} ({expected:?})"
             );
         }
-        // Formatted entries are checked on their substituted form: the first
-        // entry has an empty final text but two dictionary hits.
-        let chars = openless_linux_egui::fmt_l10n(zh, "history.chars", &[&0]);
-        let hits = openless_linux_egui::fmt_l10n(zh, "history.vocab_hits", &[&2]);
-        let insert_detail = format!("OpenLess · {chars} · {hits}");
+        // 菜单默认收起：导出/重新转录/删除都在「…」浮层里，不该直接出现在页面上。
+        for key in ["history.export", "history.retranscribe", "common.delete"] {
+            let unexpected = tr(key);
+            assert!(
+                !painted.contains(unexpected),
+                "the collapsed action menu must not paint {key} ({unexpected:?})"
+            );
+        }
+        // 步骤区按上游只保留识别/润色两步，插入行（字数/热词）已经不在详情区。
         assert!(
-            painted.contains(&insert_detail),
-            "expected {insert_detail:?}"
+            !painted.contains(tr("history.step_insert")),
+            "the insert step row must be gone"
         );
         let placeholder =
             openless_linux_egui::fmt_l10n(zh, "history.search_placeholder", &[&"Ctrl+K"]);
@@ -1159,6 +1161,78 @@ mod tests {
     }
 
     #[test]
+    fn shell_paints_a_gray_sidebar_over_white_content_and_a_tinted_titlebar() {
+        let ctx = egui::Context::default();
+        frame(&ctx, Vec::new());
+        frame(&ctx, Vec::new());
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(viewport()),
+            ..Default::default()
+        });
+        let mut vm = FrontendViewModel::default();
+        let mut actions = Vec::new();
+        render(&ctx, &mut vm, &mut actions);
+        let output = crate::ui::frontend::end_pass(&ctx);
+
+        let mut fills: Vec<(egui::Rect, egui::Color32)> = Vec::new();
+        for clipped in &output.shapes {
+            collect_rect_fills(&clipped.shape, &mut fills);
+        }
+        let window = layout::window_rect(&ctx);
+        let body = layout::body_rect(&ctx);
+        let sidebar_rect =
+            egui::Rect::from_min_size(body.min, egui::vec2(layout::SIDEBAR_WIDTH, body.height()));
+        let titlebar_rect = egui::Rect::from_min_max(
+            window.min,
+            egui::pos2(window.max.x, window.min.y + layout::TITLEBAR_HEIGHT),
+        );
+        // 入场动画会把 UI 层的颜色整体乘一个 alpha（存的是预乘色），所以比「源色」的
+        // RGB 而不是比字面值。
+        let painted_with = |rect: egui::Rect, color: egui::Color32| {
+            let [want_r, want_g, want_b, _] = color.to_srgba_unmultiplied();
+            fills.iter().any(|(painted, fill)| {
+                if *painted != rect {
+                    return false;
+                }
+                let [r, g, b, _] = fill.to_srgba_unmultiplied();
+                // 反预乘会有一两点取整误差，所以给 ±3 的容差。
+                (r as i32 - want_r as i32).abs() <= 3
+                    && (g as i32 - want_g as i32).abs() <= 3
+                    && (b as i32 - want_b as i32).abs() <= 3
+            })
+        };
+        // 侧栏（左列）= 灰底；内容区底板 = 白底。
+        // 这两个搞反就是用户报的「左右两侧的底色搞翻了」。
+        assert!(
+            painted_with(sidebar_rect, theme::SIDEBAR),
+            "the sidebar column must be painted with the gray sidebar surface"
+        );
+        assert!(
+            painted_with(body, theme::SURFACE),
+            "the body must be painted white (content area), not canvas gray"
+        );
+        // 自绘标题栏比纯白更灰（Tauri 的 Linux 标题栏不是纯白）。
+        assert!(
+            painted_with(titlebar_rect, theme::TITLEBAR),
+            "the titlebar strip must use the tinted titlebar surface"
+        );
+        assert_ne!(theme::TITLEBAR, theme::SURFACE);
+        assert_ne!(theme::SIDEBAR, theme::SURFACE);
+    }
+
+    fn collect_rect_fills(shape: &egui::Shape, out: &mut Vec<(egui::Rect, egui::Color32)>) {
+        match shape {
+            egui::Shape::Rect(rect) => out.push((rect.rect, rect.fill)),
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect_rect_fills(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
     fn sidebar_navigation_receives_pointer_clicks_above_window_layers() {
         let ctx = egui::Context::default();
 
@@ -1166,41 +1240,51 @@ mod tests {
         frame(&ctx, Vec::new());
         frame(&ctx, Vec::new());
 
-        let pointer = egui::pos2(50.0, 133.0);
-        assert_eq!(
-            ctx.layer_id_at(pointer),
-            Some(egui::LayerId::new(
-                egui::Order::Middle,
-                egui::Id::new("openless-sidebar"),
-            )),
-            "the sidebar must be the top input layer at a navigation button"
-        );
-        frame(
-            &ctx,
-            vec![
-                egui::Event::PointerMoved(pointer),
-                egui::Event::PointerButton {
+        // 侧栏顶部现在是两行版本信息（BETA 徽章 + 版本号），导航行的实际 y 会随
+        // 字体度量漂移，所以扫一列而不是写死一个坐标：只要有一个位置能点出导航，
+        // 就说明最上层的 resize 层没吃掉侧栏的点击。
+        let mut navigated = false;
+        let mut y = 80.0;
+        while y <= 320.0 && !navigated {
+            let pointer = egui::pos2(50.0, y);
+            if y == 80.0 {
+                assert_eq!(
+                    ctx.layer_id_at(pointer),
+                    Some(egui::LayerId::new(
+                        egui::Order::Middle,
+                        egui::Id::new("openless-sidebar"),
+                    )),
+                    "the sidebar must be the top input layer over its own column"
+                );
+            }
+            frame(
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(pointer),
+                    egui::Event::PointerButton {
+                        pos: pointer,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            let actions = frame(
+                &ctx,
+                vec![egui::Event::PointerButton {
                     pos: pointer,
                     button: egui::PointerButton::Primary,
-                    pressed: true,
+                    pressed: false,
                     modifiers: egui::Modifiers::NONE,
-                },
-            ],
-        );
-        let actions = frame(
-            &ctx,
-            vec![egui::Event::PointerButton {
-                pos: pointer,
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: egui::Modifiers::NONE,
-            }],
-        );
-
-        assert!(
-            actions
+                }],
+            );
+            navigated = actions
                 .iter()
-                .any(|action| matches!(action, FrontendAction::Navigate(Page::History))),
+                .any(|action| matches!(action, FrontendAction::Navigate(_)));
+            y += 4.0;
+        }
+        assert!(
+            navigated,
             "the foreground resize layer must not consume sidebar clicks"
         );
     }

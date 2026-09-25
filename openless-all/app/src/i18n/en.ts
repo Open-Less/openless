@@ -506,6 +506,8 @@ export const en: typeof zhCN = {
     retranscribing: 'Transcribing…',
     retranscribeFailed: 'Retranscribe failed: {{err}}',
     rawLabel: 'Raw',
+    showRaw: 'Show raw transcript',
+    hideRaw: 'Hide raw transcript',
     rawEmpty: '(empty)',
     selectHint: 'Select an entry on the left to see details.',
     recorded: 'Recorded {{duration}}',

@@ -30,6 +30,8 @@ pub enum IconName {
     Pin,
     Chat,
     Github,
+    /// 横向三点（列表/详情行的「…」操作菜单）。
+    More,
 }
 
 /// Draw an icon centred at `center` with the given `color`.
@@ -40,21 +42,15 @@ pub fn draw_icon(ui: &egui::Ui, center: egui::Pos2, icon: IconName, color: egui:
     let point = |x: f32, y: f32| center + egui::vec2(x, y);
     match icon {
         IconName::Overview => {
-            let s = 2.0 / 3.0;
-            p.add(egui::Shape::line(
-                [
-                    center + egui::vec2(-9.0 * s, -9.0 * s),
-                    center + egui::vec2(-9.0 * s, 9.0 * s),
-                    center + egui::vec2(9.0 * s, 9.0 * s),
-                ]
-                .to_vec(),
-                stroke,
-            ));
-            for (x, top) in [(6.0, 9.0), (1.0, 5.0), (-4.0, 14.0)] {
+            // Tauri 的概览图标是 lucide `ChartNoAxesColumn`：**只有三根柱子、没有坐标轴**。
+            // 之前多画了一条 L 形坐标轴，和上游不是同一个图标。
+            // lucide 24px 画布：柱子在 x=6/12/18，底线 y=20，顶端 y=14/4/10。
+            let s = 20.0 / 24.0;
+            for (x, top) in [(6.0_f32, 14.0_f32), (12.0, 4.0), (18.0, 10.0)] {
                 p.line_segment(
                     [
-                        center + egui::vec2(x * s, 5.0 * s),
-                        center + egui::vec2(x * s, (top - 12.0) * s),
+                        center + egui::vec2((x - 12.0) * s, 8.0 * s),
+                        center + egui::vec2((x - 12.0) * s, (top - 12.0) * s),
                     ],
                     stroke,
                 );
@@ -479,6 +475,11 @@ pub fn draw_icon(ui: &egui::Ui, center: egui::Pos2, icon: IconName, color: egui:
         IconName::Github => {
             p.circle_filled(center, 7.0, color.gamma_multiply(0.75));
             p.circle_filled(center + egui::vec2(0.0, 3.0), 3.4, theme::SURFACE_2);
+        }
+        IconName::More => {
+            for offset in [-4.5_f32, 0.0, 4.5] {
+                p.circle_filled(center + egui::vec2(offset, 0.0), 1.4, stroke.color);
+            }
         }
         IconName::Copy => {
             p.rect_stroke(

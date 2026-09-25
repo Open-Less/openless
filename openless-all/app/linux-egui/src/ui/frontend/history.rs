@@ -29,8 +29,7 @@ use super::icons::{self, IconName};
 use super::layout::{self, ButtonKind, PillTone};
 use super::theme;
 use super::view_model::{
-    FrontendAction, FrontendViewModel, HistoryConfirm, HistoryEntry, HistoryInsertStatus,
-    OverviewMode,
+    FrontendAction, FrontendViewModel, HistoryConfirm, HistoryEntry, OverviewMode,
 };
 
 const GAP: f32 = 14.0;
@@ -490,62 +489,21 @@ fn detail_body(
         theme::INK_4,
     );
 
-    // Right-aligned actions: 删除 / 重新转写 / 导出录音 (audio-gated).
-    let mut right = top.right();
-    let delete_label = tr_l10n(lang, "common.delete");
-    let delete_width = layout::text_width(ui, delete_label, 12.5) + 38.0;
-    let delete_rect = egui::Rect::from_min_size(
-        egui::pos2(right - delete_width, top.center().y - 15.0),
-        egui::vec2(delete_width, 30.0),
+    // Right-aligned: 「…」录音操作菜单。Tauri 把删除/重新转录/导出/播放收进一个
+    // `HistoryActionMenu`（右对齐浮层、向下展开），不再平铺一排按钮。
+    let more_size = 30.0;
+    let more_rect = egui::Rect::from_min_size(
+        egui::pos2(top.right() - more_size, top.center().y - more_size / 2.0),
+        egui::vec2(more_size, more_size),
     );
-    right = delete_rect.left() - 6.0;
-    if layout::action_button(
-        ui,
-        delete_rect,
-        delete_label,
-        Some(IconName::Trash),
-        ButtonKind::Ghost,
-    )
-    .clicked()
-    {
-        actions.push(FrontendAction::HistoryRequestDelete(index));
-    }
-    if entry.has_audio {
-        let retranscribe = tr_l10n(lang, "history.retranscribe");
-        let retranscribe_width = layout::text_width(ui, retranscribe, 12.5) + 38.0;
-        let retranscribe_rect = egui::Rect::from_min_size(
-            egui::pos2(right - retranscribe_width, top.center().y - 15.0),
-            egui::vec2(retranscribe_width, 30.0),
-        );
-        right = retranscribe_rect.left() - 6.0;
-        if layout::action_button(
-            ui,
-            retranscribe_rect,
-            retranscribe,
-            Some(IconName::Refresh),
-            ButtonKind::Ghost,
-        )
-        .clicked()
-        {
-            actions.push(FrontendAction::HistoryRetranscribe(index));
-        }
-        let export = tr_l10n(lang, "history.export");
-        let export_width = layout::text_width(ui, export, 12.5) + 38.0;
-        let export_rect = egui::Rect::from_min_size(
-            egui::pos2(right - export_width, top.center().y - 15.0),
-            egui::vec2(export_width, 30.0),
-        );
-        if layout::action_button(
-            ui,
-            export_rect,
-            export,
-            Some(IconName::Download),
-            ButtonKind::Ghost,
-        )
-        .clicked()
-        {
-            actions.push(FrontendAction::HistoryExport(index));
-        }
+    let menu_id = egui::Id::new(("openless-history-menu", entry.id.as_str()));
+    let mut menu_open = ui
+        .ctx()
+        .data(|data| data.get_temp::<bool>(menu_id).unwrap_or(false));
+    if layout::action_button(ui, more_rect, "", Some(IconName::More), ButtonKind::Ghost).clicked() {
+        menu_open = !menu_open;
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(menu_id, menu_open));
     }
 
     // In-app playback: a player bar with the elapsed time and a progress track.
@@ -607,157 +565,274 @@ fn detail_body(
     separator(ui, width);
     ui.add_space(12.0);
 
-    // Pipeline rows: 识别 / 润色 / 插入.
-    let step_labels = [
-        tr_l10n(lang, "history.step_asr"),
-        tr_l10n(lang, "history.step_polish"),
-        tr_l10n(lang, "history.step_insert"),
-    ];
-    let label_column = step_labels
-        .iter()
-        .map(|label| layout::text_width(ui, label, 11.0))
-        .fold(0.0_f32, f32::max)
-        + 14.0;
-
+    // 流水线明细：默认只留「识别」一行（用来语音识别的模型）。润色/插入属于前台
+    // 投递细节，不在这块展示；润色信息由下方润色卡片的「润色 · 风格」胶囊承担。
+    let label_column = layout::text_width(ui, tr_l10n(lang, "history.step_asr"), 11.0) + 14.0;
     let asr_detail = join_provider(&entry.asr_provider, &entry.asr_model);
     if !asr_detail.is_empty() || entry.asr_ms.is_some() {
         pipeline_row(
             ui,
             width,
             label_column,
-            step_labels[0],
+            tr_l10n(lang, "history.step_asr"),
             &asr_detail,
             entry.asr_ms.map(|ms| format::step_duration(ms, lang)),
         );
     }
-    let llm_detail = join_provider(&entry.llm_provider, &entry.llm_model);
-    if !llm_detail.is_empty() || entry.polish_ms.is_some() {
-        pipeline_row(
-            ui,
-            width,
-            label_column,
-            step_labels[1],
-            &llm_detail,
-            entry.polish_ms.map(|ms| format::step_duration(ms, lang)),
-        );
-    }
-    let mut insert_detail = match &entry.app_name {
-        Some(app) if !app.trim().is_empty() => format!("{app} · "),
-        _ => String::new(),
-    };
-    insert_detail.push_str(&fmt_l10n(
-        lang,
-        "history.chars",
-        &[&format::code_points(&entry.final_text)],
-    ));
-    if let Some(count) = entry.dictionary_count.filter(|count| *count > 0) {
-        insert_detail.push_str(" · ");
-        insert_detail.push_str(&fmt_l10n(lang, "history.vocab_hits", &[&count]));
-    }
-    pipeline_row(
-        ui,
-        width,
-        label_column,
-        step_labels[2],
-        &insert_detail,
-        Some(insert_status_label(lang, entry.insert_status)),
-    );
 
-    // 原文 / 润色结果 cards.
+    // 结果卡片：默认只显示**润色结果**，原文按需展开（Tauri：「默认只显示润色
+    // 结果；原文仍可按需展开，避免用户每次都面对两栏重复内容」）。
     ui.add_space(16.0);
-    let remaining = ui.available_height().max(120.0);
+    let styled_source = if entry.final_text.trim().is_empty() {
+        entry.raw_transcript.as_str()
+    } else {
+        entry.final_text.as_str()
+    };
+    let styled_text = if styled_source.trim().is_empty() {
+        tr_l10n(lang, "history.raw_empty")
+    } else {
+        styled_source
+    };
+    // 复制按钮始终在：润色失败时回退到原文（Tauri 的 `onCopy` 也是这个回退）。
+    let styled_copy = Some(("openless-history-copy-styled", styled_source.to_string()));
     let raw_text = entry.raw_transcript.as_str();
-    let styled_text = entry.final_text.as_str();
-    let raw_empty = tr_l10n(lang, "history.raw_empty");
-    let raw_body = if raw_text.trim().is_empty() {
-        raw_empty
-    } else {
-        raw_text
-    };
-    let raw_galley = layout_text(
-        ui,
-        raw_body,
-        theme::INK_2,
-        13.0,
-        (width / 2.0 - 60.0).max(60.0),
-        60,
-    );
-    let styled_galley = layout_text(
-        ui,
-        styled_text,
-        theme::INK,
-        13.0,
-        (width / 2.0 - 60.0).max(60.0),
-        60,
-    );
-    let content_height = raw_galley.size().y.max(styled_galley.size().y);
-    let card_height = remaining.max(52.0 + content_height);
-
-    let (cards, _) = ui.allocate_exact_size(egui::vec2(width, card_height), egui::Sense::hover());
-    let raw_label = tr_l10n(lang, "history.raw_label");
     let raw_is_empty = raw_text.trim().is_empty();
-    let raw_override = if raw_is_empty {
-        Some(tr_l10n(lang, "history.raw_empty").to_string())
-    } else {
-        None
-    };
     let raw_copy = (!raw_is_empty).then(|| ("openless-history-copy-raw", raw_text.to_string()));
-    let styled_is_empty = styled_text.trim().is_empty();
-    let styled_copy =
-        (!styled_is_empty).then(|| ("openless-history-copy-styled", styled_text.to_string()));
+    let raw_override = raw_is_empty.then(|| tr_l10n(lang, "history.raw_empty").to_string());
 
-    if width >= 560.0 {
-        let column_width = (width - 12.0) / 2.0;
-        let left_rect = egui::Rect::from_min_size(cards.min, egui::vec2(column_width, card_height));
-        let right_rect = egui::Rect::from_min_size(
-            egui::pos2(cards.left() + column_width + 12.0, cards.top()),
-            egui::vec2(column_width, card_height),
-        );
-        text_card(
-            ui,
-            left_rect,
-            raw_label,
-            PillTone::Outline,
-            raw_text,
-            raw_override,
-            raw_copy,
-            lang,
-        );
-        text_card(
-            ui,
-            right_rect,
-            &entry.style_label,
-            PillTone::Blue,
-            styled_text,
-            None,
-            styled_copy,
-            lang,
-        );
-    } else {
-        text_card(
-            ui,
-            cards,
-            raw_label,
-            PillTone::Outline,
-            raw_text,
-            raw_override,
-            raw_copy,
-            lang,
-        );
+    // 「查看原文 / 隐藏原文」开关：状态挂在条目 id 上（Tauri 是组件 state，
+    // 切条目就重置；这里按条目记，行为等价且省一次跳变）。
+    let raw_id = egui::Id::new(("openless-history-raw", entry.id.as_str()));
+    let mut raw_open = ui
+        .ctx()
+        .data(|data| data.get_temp::<bool>(raw_id).unwrap_or(false));
+
+    let text_width = (width - 12.0 - DETAIL_PADDING * 2.0).max(60.0);
+    let styled_galley = layout_text(ui, styled_text, theme::INK, 13.0, text_width, 60);
+    // 润色胶囊带上步骤名：Tauri 是「润色 · 风格名」。
+    let styled_pill = format!(
+        "{} · {}",
+        tr_l10n(lang, "history.step_polish"),
+        entry.style_label
+    );
+    let styled_card_height = 52.0 + styled_galley.size().y;
+    let (styled_card, _) =
+        ui.allocate_exact_size(egui::vec2(width, styled_card_height), egui::Sense::hover());
+    let toggled = text_card_with_action(
+        ui,
+        styled_card,
+        &styled_pill,
+        PillTone::Blue,
+        styled_text,
+        None,
+        styled_copy,
+        lang,
+        (!raw_is_empty).then(|| {
+            if raw_open {
+                tr_l10n(lang, "history.hide_raw")
+            } else {
+                tr_l10n(lang, "history.show_raw")
+            }
+        }),
+    );
+    if toggled {
+        raw_open = !raw_open;
+        ui.ctx().data_mut(|data| data.insert_temp(raw_id, raw_open));
+    }
+
+    if raw_open {
         ui.add_space(12.0);
-        let (second, _) =
-            ui.allocate_exact_size(egui::vec2(width, card_height), egui::Sense::hover());
-        text_card(
+        let raw_galley = layout_text(
             ui,
-            second,
-            &entry.style_label,
-            PillTone::Blue,
-            styled_text,
-            None,
-            styled_copy,
+            raw_override.as_deref().unwrap_or(raw_text),
+            theme::INK_2,
+            13.0,
+            text_width,
+            60,
+        );
+        let card_height = 52.0 + raw_galley.size().y;
+        let (raw_card, _) =
+            ui.allocate_exact_size(egui::vec2(width, card_height), egui::Sense::hover());
+        text_card_with_action(
+            ui,
+            raw_card,
+            tr_l10n(lang, "history.step_asr"),
+            PillTone::Outline,
+            raw_text,
+            raw_override,
+            raw_copy,
             lang,
+            None,
         );
     }
+
+    // 「…」菜单浮层：右对齐、向下展开（Tauri 的 `HistoryActionMenu`：
+    // `top: calc(100% + 6px); right: 0`）。
+    if menu_open {
+        let menu_rect = history_action_menu(ui, more_rect, entry, index, lang, actions);
+        let clicked_outside = ui.input(|input| {
+            input.pointer.any_click()
+                && input
+                    .pointer
+                    .interact_pos()
+                    .is_some_and(|pos| !menu_rect.contains(pos) && !more_rect.contains(pos))
+        });
+        if clicked_outside || ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+            ui.ctx().data_mut(|data| data.insert_temp(menu_id, false));
+        }
+    }
+}
+
+/// 「…」菜单宽度 / 行高（Tauri：`width: min(260px, ...)`，行内边距 8×9）。
+const MENU_WIDTH: f32 = 208.0;
+const MENU_ITEM_HEIGHT: f32 = 31.0;
+const MENU_PADDING: f32 = 6.0;
+
+enum HistoryMenuItem {
+    Separator,
+    Action {
+        icon: IconName,
+        label: String,
+        danger: bool,
+        action: FrontendAction,
+    },
+}
+
+/// 详情头部右侧的「…」菜单（Tauri `HistoryActionMenu`）：播放 / 导出录音 /
+/// 重新转录 / 删除，右对齐向下展开；返回菜单矩形供“点外面关闭”判定。
+///
+/// 上游还有「重新润色」一项，egui 侧后端还没接这个能力，暂不提供。
+fn history_action_menu(
+    ui: &mut egui::Ui,
+    button: egui::Rect,
+    entry: &HistoryEntry,
+    index: usize,
+    lang: Lang,
+    actions: &mut Vec<FrontendAction>,
+) -> egui::Rect {
+    let mut items: Vec<HistoryMenuItem> = Vec::new();
+    if entry.has_audio {
+        items.push(HistoryMenuItem::Action {
+            icon: IconName::Play,
+            label: tr_l10n(lang, "history.play_recording").to_string(),
+            danger: false,
+            action: FrontendAction::HistoryPlay(index),
+        });
+        items.push(HistoryMenuItem::Action {
+            icon: IconName::Download,
+            label: tr_l10n(lang, "history.export").to_string(),
+            danger: false,
+            action: FrontendAction::HistoryExport(index),
+        });
+        items.push(HistoryMenuItem::Separator);
+        items.push(HistoryMenuItem::Action {
+            icon: IconName::Refresh,
+            label: tr_l10n(lang, "history.retranscribe").to_string(),
+            danger: false,
+            action: FrontendAction::HistoryRetranscribe(index),
+        });
+    }
+    items.push(HistoryMenuItem::Action {
+        icon: IconName::Trash,
+        label: tr_l10n(lang, "common.delete").to_string(),
+        danger: true,
+        action: FrontendAction::HistoryRequestDelete(index),
+    });
+
+    let height = MENU_PADDING * 2.0
+        + items
+            .iter()
+            .map(|item| match item {
+                HistoryMenuItem::Separator => 13.0,
+                HistoryMenuItem::Action { .. } => MENU_ITEM_HEIGHT,
+            })
+            .sum::<f32>();
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(button.right() - MENU_WIDTH, button.bottom() + 6.0),
+        egui::vec2(MENU_WIDTH, height),
+    );
+
+    egui::Area::new(egui::Id::new((
+        "openless-history-menu-area",
+        entry.id.as_str(),
+    )))
+    .order(egui::Order::Foreground)
+    .fixed_pos(rect.min)
+    .show(ui.ctx(), |ui| {
+        ui.set_min_size(rect.size());
+        ui.set_max_size(rect.size());
+        let painter = ui.painter().clone();
+        painter.rect_filled(rect, egui::CornerRadius::same(10), theme::SURFACE);
+        painter.rect_stroke(
+            rect,
+            egui::CornerRadius::same(10),
+            egui::Stroke::new(0.8, theme::LINE_STRONG),
+            egui::StrokeKind::Inside,
+        );
+        let mut y = rect.top() + MENU_PADDING;
+        for item in items {
+            match item {
+                HistoryMenuItem::Separator => {
+                    painter.line_segment(
+                        [
+                            egui::pos2(rect.left() + 10.0, y + 6.0),
+                            egui::pos2(rect.right() - 10.0, y + 6.0),
+                        ],
+                        egui::Stroke::new(1.0, theme::LINE_SOFT),
+                    );
+                    y += 13.0;
+                }
+                HistoryMenuItem::Action {
+                    icon,
+                    label,
+                    danger,
+                    action,
+                } => {
+                    let item_rect = egui::Rect::from_min_size(
+                        egui::pos2(rect.left() + MENU_PADDING, y),
+                        egui::vec2(MENU_WIDTH - MENU_PADDING * 2.0, MENU_ITEM_HEIGHT - 2.0),
+                    );
+                    let response = ui.interact(
+                        item_rect,
+                        ui.id().with(label.as_str()),
+                        egui::Sense::click(),
+                    );
+                    if response.hovered() {
+                        painter.rect_filled(
+                            item_rect,
+                            egui::CornerRadius::same(7),
+                            theme::SURFACE_2,
+                        );
+                    }
+                    let color = if danger { theme::ERR } else { theme::INK_2 };
+                    icons::draw_icon(
+                        ui,
+                        egui::pos2(item_rect.left() + 15.0, item_rect.center().y),
+                        icon,
+                        color,
+                    );
+                    painter.text(
+                        egui::pos2(item_rect.left() + 30.0, item_rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        &label,
+                        egui::FontId::proportional(12.5),
+                        color,
+                    );
+                    if response.clicked() {
+                        actions.push(action);
+                        ui.ctx().data_mut(|data| {
+                            data.insert_temp(
+                                egui::Id::new(("openless-history-menu", entry.id.as_str())),
+                                false,
+                            )
+                        });
+                    }
+                    y += MENU_ITEM_HEIGHT;
+                }
+            }
+        }
+    });
+    rect
 }
 
 fn join_provider(provider: &Option<String>, model: &Option<String>) -> String {
@@ -767,18 +842,6 @@ fn join_provider(provider: &Option<String>, model: &Option<String>) -> String {
         .filter(|part| !part.trim().is_empty())
         .collect::<Vec<_>>()
         .join(" · ")
-}
-
-fn insert_status_label(lang: Lang, status: HistoryInsertStatus) -> String {
-    match status {
-        HistoryInsertStatus::Inserted => tr_l10n(lang, "history.inserted").to_string(),
-        HistoryInsertStatus::PasteSent => tr_l10n(lang, "history.paste_sent").to_string(),
-        HistoryInsertStatus::CopiedFallback => {
-            fmt_l10n(lang, "history.copied_fallback", &[&"Ctrl+V"])
-        }
-        HistoryInsertStatus::Failed => tr_l10n(lang, "history.insert_failed").to_string(),
-        HistoryInsertStatus::NotRequested => tr_l10n(lang, "history.not_requested").to_string(),
-    }
 }
 
 /// One `label | detail | status` row of the pipeline breakdown.
@@ -818,9 +881,11 @@ fn pipeline_row(
     ui.add_space(4.0);
 }
 
-/// A `原文` / polished text card with an optional pill and copy button.
+/// A `原文` / polished text card with an optional pill, copy button and an
+/// optional secondary toggle (used for 查看原文 / 隐藏原文). Returns whether the
+/// toggle was clicked.
 #[allow(clippy::too_many_arguments)]
-fn text_card(
+fn text_card_with_action(
     ui: &mut egui::Ui,
     rect: egui::Rect,
     pill_text: &str,
@@ -829,9 +894,10 @@ fn text_card(
     empty_override: Option<String>,
     copy: Option<(&'static str, String)>,
     lang: Lang,
-) {
+    toggle: Option<&str>,
+) -> bool {
     if rect == egui::Rect::NOTHING {
-        return;
+        return false;
     }
     ui.painter()
         .rect_filled(rect, egui::CornerRadius::same(10), theme::SURFACE_2);
@@ -849,6 +915,8 @@ fn text_card(
     );
     layout::paint_pill(&painter, pill_rect, pill_text, pill_tone);
 
+    let mut toggled = false;
+    let mut right = rect.right() - DETAIL_PADDING;
     if let Some((salt, text)) = copy {
         let id = egui::Id::new(salt);
         let now = ui.input(|input| input.time);
@@ -863,12 +931,10 @@ fn text_card(
         };
         let button_width = layout::text_width(ui, label, 12.5) + 34.0;
         let button_rect = egui::Rect::from_min_size(
-            egui::pos2(
-                rect.right() - DETAIL_PADDING - button_width,
-                rect.top() + DETAIL_PADDING - 3.0,
-            ),
+            egui::pos2(right - button_width, rect.top() + DETAIL_PADDING - 3.0),
             egui::vec2(button_width, 26.0),
         );
+        right = button_rect.left() - 6.0;
         if layout::action_button(
             ui,
             button_rect,
@@ -881,6 +947,14 @@ fn text_card(
             ui.ctx().copy_text(text);
             ui.ctx().data_mut(|data| data.insert_temp(id, now));
         }
+    }
+    if let Some(label) = toggle {
+        let button_width = layout::text_width(ui, label, 12.5) + 20.0;
+        let button_rect = egui::Rect::from_min_size(
+            egui::pos2(right - button_width, rect.top() + DETAIL_PADDING - 3.0),
+            egui::vec2(button_width, 26.0),
+        );
+        toggled = layout::action_button(ui, button_rect, label, None, ButtonKind::Ghost).clicked();
     }
 
     let text = empty_override.as_deref().unwrap_or(body);
@@ -902,6 +976,7 @@ fn text_card(
         galley,
         color,
     );
+    toggled
 }
 
 // ── Confirmation dialog ─────────────────────────────────────────────────────

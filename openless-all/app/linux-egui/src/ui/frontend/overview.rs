@@ -31,10 +31,11 @@ use super::view_model::{
 
 const GAP: f32 = 12.0;
 const SECTION_GAP: f32 = 14.0;
-/// Below this content width the four metric cards collapse into two rows.
-const METRIC_STACK_WIDTH: f32 = 660.0;
-/// Below this content width the chart and recent cards stack vertically.
-const ROW_STACK_WIDTH: f32 = 760.0;
+/// 窄屏断点。Tauri 用的是**整个窗口**宽度（`useMobileLayout(720)`：
+/// `window.innerWidth < 720`），不是内容区宽度；egui 这里换算回窗口宽度，
+/// 否则主窗口缩到最小（960）时内容区 ≈748 < 原来的 760 阀值 → 两块卡片会错误地
+/// 上下堆叠（用户报的「窗口缩到最小后星期几张图被遮住」）。
+const MOBILE_BREAKPOINT: f32 = 720.0;
 const METRIC_CARD_HEIGHT: f32 = 92.0;
 const PROVIDER_CARD_HEIGHT: f32 = 104.0;
 const CARD_PADDING: f32 = 14.0;
@@ -53,21 +54,33 @@ pub fn page(ui: &mut egui::Ui, vm: &FrontendViewModel, actions: &mut Vec<Fronten
     let width = (ui.available_width() - 24.0).max(1.0);
     ui.set_min_width(width);
     ui.set_max_width(width);
+    // `width` 是内容区宽度（还减了 24px 滚动条/内边距），换算回窗口宽度再比断点。
+    let mobile = width + 24.0 + layout::SIDEBAR_WIDTH < MOBILE_BREAKPOINT;
 
-    // Single-screen by default, but a short window must still be reachable:
-    // scroll the whole dashboard instead of clipping it.
-    if ui.available_height() < OVERVIEW_MIN_HEIGHT {
+    // 单屏仪表盘优先；窗口高度不够时整页滚动，而不是把底部的年度活动热力图裁掉
+    // （裁掉就完全摸不到了）。
+    if ui.available_height() < overview_min_height(mobile) {
         egui::ScrollArea::vertical()
             .id_salt("openless-overview-scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.set_min_width(width);
                 ui.set_max_width(width);
-                body(ui, width, vm, actions, OVERVIEW_MIN_HEIGHT);
+                body(ui, width, vm, actions, overview_min_height(mobile), mobile);
             });
         return;
     }
-    body(ui, width, vm, actions, 0.0);
+    body(ui, width, vm, actions, 0.0, mobile);
+}
+
+/// 单屏仪表盘需要的最小高度：低于它就把整页改成滚动布局。
+/// 底部两张卡左右排列时需要的空间比堆叠少，所以窄屏的阀值反而更高。
+fn overview_min_height(mobile: bool) -> f32 {
+    if mobile {
+        OVERVIEW_MIN_HEIGHT + BOTTOM_MIN_HEIGHT
+    } else {
+        OVERVIEW_MIN_HEIGHT
+    }
 }
 
 /// One dashboard layout. `forced_total` > 0 lays the page out for a scroll
@@ -78,6 +91,7 @@ fn body(
     vm: &FrontendViewModel,
     actions: &mut Vec<FrontendAction>,
     forced_total: f32,
+    mobile: bool,
 ) {
     let lang = vm.lang;
     let start_y = ui.cursor().min.y;
@@ -117,11 +131,11 @@ fn body(
     ui.add_space(SECTION_GAP);
 
     if !(summary.asr_configured && summary.llm_configured) {
-        providers_section(ui, width, summary, lang, actions);
+        providers_section(ui, width, summary, lang, actions, mobile);
         ui.add_space(SECTION_GAP);
     }
 
-    stats_section(ui, width, summary, lang);
+    stats_section(ui, width, summary, lang, mobile);
     ui.add_space(SECTION_GAP);
 
     // The bottom row absorbs the leftover height; the heatmap keeps its
@@ -149,7 +163,7 @@ fn body(
         available.max(BOTTOM_MIN_HEIGHT)
     };
 
-    bottom_row(ui, width, bottom_height, vm, summary, lang, actions);
+    bottom_row(ui, width, bottom_height, vm, summary, lang, actions, mobile);
 
     if show_heatmap {
         ui.add_space(SECTION_GAP);
@@ -166,7 +180,7 @@ fn header(ui: &mut egui::Ui, width: f32, lang: Lang, actions: &mut Vec<FrontendA
         rect.left_center(),
         egui::Align2::LEFT_CENTER,
         tr_l10n(lang, "overview.title"),
-        egui::FontId::proportional(26.0),
+        theme::medium_font(26.0),
         theme::INK,
     );
     let label = tr_l10n(lang, "overview.refresh");
@@ -232,13 +246,14 @@ fn providers_section(
     summary: &OverviewSummary,
     lang: Lang,
     actions: &mut Vec<FrontendAction>,
+    mobile: bool,
 ) {
     let (heading, _) = ui.allocate_exact_size(egui::vec2(width, 20.0), egui::Sense::hover());
     ui.painter().with_clip_rect(heading).text(
         heading.left_center(),
         egui::Align2::LEFT_CENTER,
         tr_l10n(lang, "overview.services_title"),
-        egui::FontId::proportional(13.0),
+        theme::medium_font(13.0),
         theme::INK_2,
     );
     ui.add_space(8.0);
@@ -265,11 +280,8 @@ fn providers_section(
         return;
     }
 
-    let columns = if pending.len() < 2 || width < 620.0 {
-        1
-    } else {
-        2
-    };
+    // Tauri：`mobile || pendingProviders.length < 2` → 单列，否则两列。
+    let columns = if pending.len() < 2 || mobile { 1 } else { 2 };
     let mut index = 0;
     while index < pending.len() {
         let count = columns.min(pending.len() - index);
@@ -388,18 +400,24 @@ fn provider_card(
 
 // ── Usage metrics ───────────────────────────────────────────────────────────
 
-fn stats_section(ui: &mut egui::Ui, width: f32, summary: &OverviewSummary, lang: Lang) {
+fn stats_section(
+    ui: &mut egui::Ui,
+    width: f32,
+    summary: &OverviewSummary,
+    lang: Lang,
+    mobile: bool,
+) {
     let (heading, _) = ui.allocate_exact_size(egui::vec2(width, 18.0), egui::Sense::hover());
     ui.painter().with_clip_rect(heading).text(
         heading.left_center(),
         egui::Align2::LEFT_CENTER,
         tr_l10n(lang, "overview.stats_title"),
-        egui::FontId::proportional(13.0),
+        theme::medium_font(13.0),
         theme::INK_2,
     );
     ui.add_space(8.0);
 
-    if width < METRIC_STACK_WIDTH {
+    if mobile {
         cards_row(ui, width, METRIC_CARD_HEIGHT, 2, GAP, |ui, slot, rect| {
             metric_card(ui, rect, slot, summary, lang);
         });
@@ -498,8 +516,9 @@ fn bottom_row(
     summary: &OverviewSummary,
     lang: Lang,
     actions: &mut Vec<FrontendAction>,
+    mobile: bool,
 ) {
-    if width >= ROW_STACK_WIDTH {
+    if !mobile {
         let (row, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
         let left_width = ((width - GAP) / 2.4).max(220.0);
         let right_width = (width - GAP - left_width).max(220.0);

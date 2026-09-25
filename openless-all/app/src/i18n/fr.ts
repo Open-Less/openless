@@ -519,6 +519,8 @@ export const fr: typeof zhCN = {
     retranscribing: 'Transcription…',
     retranscribeFailed: 'Échec de la nouvelle transcription : {{err}}',
     rawLabel: 'Brut',
+    showRaw: 'Afficher la transcription brute',
+    hideRaw: 'Masquer la transcription brute',
     rawEmpty: '(vide)',
     selectHint: 'Sélectionnez une entrée à gauche pour afficher ses détails.',
     recorded: 'Enregistrement : {{duration}}',

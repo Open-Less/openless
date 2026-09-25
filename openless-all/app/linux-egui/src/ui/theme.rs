@@ -7,6 +7,15 @@ pub const BLUE_SOFT: egui::Color32 = egui::Color32::from_rgb(239, 245, 255);
 pub const CANVAS: egui::Color32 = egui::Color32::from_rgb(250, 250, 250);
 pub const SURFACE: egui::Color32 = egui::Color32::WHITE;
 pub const SURFACE_2: egui::Color32 = egui::Color32::from_rgb(244, 244, 245);
+/// Tauri `--ol-sidebar-bg`：左侧导航栏底色。比内容区（纯白）更灰，两者不能搞反——
+/// 侧栏灰、内容白是 Tauri 的层次关系（`ol-sidebar-surface` / `ol-console-main`）。
+pub const SIDEBAR: egui::Color32 = egui::Color32::from_rgb(240, 240, 241);
+/// 自绘标题栏底色。Tauri 的 Linux 标题栏用 `--ol-linux-titlebar-bg`
+/// （`rgba(250,250,250,0.92)`，浮在不透明桌面之上才显灰）；egui 的窗口是不透明的，
+/// 所以直接取等价的浅灰，而不是纯白。
+pub const TITLEBAR: egui::Color32 = SURFACE_2;
+/// Tauri `--ol-pill-blue-border`：蓝色徽章的描边（BETA 标签）。
+pub const BLUE_PILL_BORDER: egui::Color32 = egui::Color32::from_rgba_premultiplied(23, 40, 60, 61);
 /// Tauri `--ol-segmented-bg`: the segmented-control track.
 pub const SEGMENTED_TRACK: egui::Color32 = egui::Color32::from_rgba_premultiplied(10, 10, 10, 10);
 /// Tauri `--ol-segmented-active-bg`: the selected chip is a plain white surface.
@@ -103,6 +112,13 @@ pub fn install(ctx: &egui::Context) {
     let mut candidates: Vec<(String, PathBuf, u32, bool, bool)> = Vec::new();
     if let Some(path) = std::env::var_os("OPENLESS_IME_FONT").map(PathBuf::from) {
         candidates.push(("openless-primary".to_owned(), path, 0, true, true));
+    }
+    // 拉丁字体排在 CJK 前面：`fc-match sans-serif` 在中文桌面（例如 Noto Sans CJK SC）
+    // 返回的是 CJK 面，而 CJK 面的 `…`（U+2026）是**居中**的点（全角省略号），
+    // 于是「搜索转写内容…」的省略号看着像「···」；macOS 的 `system-ui` 是拉丁优先、
+    // CJK 回退，所以我们要同样的顺序。缺字形时照样回退到下面的 CJK 面。
+    if let Some((path, index)) = fontconfig_match("sans-serif:lang=en") {
+        candidates.push(("openless-ui-latin".to_owned(), path, index, true, false));
     }
     if let Some((path, index)) = fontconfig_match("sans-serif") {
         candidates.push(("openless-ui-sans".to_owned(), path, index, true, false));

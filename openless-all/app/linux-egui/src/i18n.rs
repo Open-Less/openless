@@ -5532,6 +5532,40 @@ pub const CATALOG: &[Msg] = &[
             "지원 모델 보기",
         ),
     },
+    Msg {
+        key: "history.hide_raw",
+        text: row(
+            "隐藏原文",
+            "隱藏原文",
+            "Hide raw transcript",
+            "原文を隠す",
+            "원문 숨기기",
+        ),
+    },
+    Msg {
+        key: "history.play_recording",
+        text: row(
+            "播放录音",
+            "播放錄音",
+            "Play recording",
+            "録音を再生",
+            "녹음 재생",
+        ),
+    },
+    Msg {
+        key: "history.show_raw",
+        text: row(
+            "查看原文",
+            "查看原文",
+            "Show raw transcript",
+            "原文を表示",
+            "원문 보기",
+        ),
+    },
+    Msg {
+        key: "shell.beta_tag",
+        text: row("BETA", "BETA", "BETA", "BETA", "BETA"),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

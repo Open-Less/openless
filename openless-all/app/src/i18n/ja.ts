@@ -494,6 +494,8 @@ export const ja: typeof zhCN = {
     retranscribing: '認識中…',
     retranscribeFailed: '再認識に失敗：{{err}}',
     rawLabel: '原文',
+    showRaw: '原文を表示',
+    hideRaw: '原文を隠す',
     rawEmpty: '（空）',
     selectHint: '左側から 1 件選択して詳細を表示。',
     recorded: '録音 {{duration}}',

@@ -66,8 +66,3 @@ pub fn time_label(created_at: &str) -> String {
         )
     }
 }
-
-/// Count of Unicode code points, matching the backend's `chars().count()`.
-pub fn code_points(text: &str) -> usize {
-    text.chars().count()
-}

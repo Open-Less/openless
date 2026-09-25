@@ -486,6 +486,8 @@ export const zhCN = {
     retranscribing: '转录中…',
     retranscribeFailed: '重新转录失败：{{err}}',
     rawLabel: '原文',
+    showRaw: '查看原文',
+    hideRaw: '隐藏原文',
     rawEmpty: '（空）',
     selectHint: '左侧选一条查看详情。',
     recorded: '录音 {{duration}}',

@@ -7,7 +7,13 @@ use super::theme;
 use super::view_model::{FrontendAction, FrontendViewModel, Page};
 
 pub const SIDEBAR_WIDTH: f32 = 188.0;
-pub const TITLEBAR_HEIGHT: f32 = 38.0;
+/// 自绘标题栏高度。对齐 Tauri 的 Linux 自绘标题栏（`LINUX_TITLEBAR_HEIGHT = 36`）。
+pub const TITLEBAR_HEIGHT: f32 = 36.0;
+/// 页面顶部留白。Tauri 的页面容器是 `padding: 56px 28px ...`（非 mac），
+/// 所以「今日概览」这类标题离客户区顶边约 56px。
+pub const PAGE_TOP_PADDING: f32 = 56.0;
+/// 页面底部留白（Tauri：24px）。
+pub const PAGE_BOTTOM_PADDING: f32 = 24.0;
 const WINDOW_MARGIN: f32 = 6.0;
 const WINDOW_RADIUS: u8 = 14;
 
@@ -59,10 +65,26 @@ pub fn paint_window_background(ctx: &egui::Context) {
         egui::Order::Background,
         egui::Id::new("openless-window-background"),
     ));
+    // 整张窗口底板：白。内容区就是这块白（Tauri 的 `ol-console-main` 是
+    // `--ol-surface`），不要再用灰画 body——否则侧栏/内容的白灰层次正好搞反。
     painter.rect_filled(
         window,
         egui::CornerRadius::same(WINDOW_RADIUS),
         theme::SURFACE,
+    );
+    let titlebar = egui::Rect::from_min_max(
+        window.min,
+        egui::pos2(window.max.x, window.min.y + TITLEBAR_HEIGHT),
+    );
+    painter.rect_filled(
+        titlebar,
+        egui::CornerRadius {
+            nw: WINDOW_RADIUS,
+            ne: WINDOW_RADIUS,
+            sw: 0,
+            se: 0,
+        },
+        theme::TITLEBAR,
     );
     painter.rect_filled(
         body,
@@ -72,7 +94,14 @@ pub fn paint_window_background(ctx: &egui::Context) {
             sw: WINDOW_RADIUS,
             se: WINDOW_RADIUS,
         },
-        theme::CANVAS,
+        theme::SURFACE,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(titlebar.left(), titlebar.bottom()),
+            egui::pos2(titlebar.right(), titlebar.bottom()),
+        ],
+        egui::Stroke::new(1.0, theme::LINE),
     );
     painter.rect_stroke(
         window,
@@ -419,7 +448,7 @@ pub fn sidebar(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Ve
                     sw: WINDOW_RADIUS,
                     se: 0,
                 },
-                theme::SURFACE,
+                theme::SIDEBAR,
             );
             ui.painter().line_segment(
                 [
@@ -432,23 +461,19 @@ pub fn sidebar(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Ve
                 .inner_margin(egui::Margin::symmetric(10, 12))
                 .show(ui, |ui| {
                     ui.set_width(SIDEBAR_WIDTH - 20.0);
+                    // 版本信息行：Tauri 把原「OpenLess」品牌位换成版本信息（BETA 徽章
+                    // 与版本号）。侧栏只有 188px，两者同行的结果是把版本号拦腰折断
+                    // （「版本 v2.0.0-」/「Beta.2+…」），所以徽章占一行、版本号另起一行。
                     ui.horizontal(|ui| {
                         ui.add_space(10.0);
-                        egui::Frame::new()
-                            .fill(theme::BLUE_SOFT)
-                            .corner_radius(egui::CornerRadius::same(7))
-                            .inner_margin(egui::Margin::symmetric(6, 2))
-                            .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new("BETA")
-                                        .size(9.5)
-                                        .strong()
-                                        .color(theme::BLUE),
-                                );
-                            });
+                        beta_badge(ui, vm.lang);
+                    });
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(10.0);
                         ui.label(
                             egui::RichText::new(fmt_l10n(vm.lang, "shell.version", &[&vm.version]))
-                                .size(10.5)
+                                .size(12.0)
                                 .color(theme::INK_4),
                         );
                     });
@@ -601,6 +626,26 @@ fn nav(
     nav_with_icon(ui, vm, key, target, icon, actions);
 }
 
+/// Tauri 的 BETA 徽章（`FloatingShell` 版本信息行）：蓝字、透明底、0.5px 蓝描边、
+/// 圆角 5、内边距 1×6、字号 10 + 字重 600。区别于其它胶囊的灰/淡蓝实底。
+fn beta_badge(ui: &mut egui::Ui, lang: openless_linux_egui::Lang) {
+    let label = tr_l10n(lang, "shell.beta_tag");
+    let font = theme::medium_font(10.0);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font, theme::BLUE);
+    let padding = egui::vec2(6.0, 1.0);
+    let (rect, _) = ui.allocate_exact_size(galley.size() + padding * 2.0, egui::Sense::hover());
+    let painter = ui.painter();
+    painter.rect_stroke(
+        rect,
+        egui::CornerRadius::same(5),
+        egui::Stroke::new(0.8, theme::BLUE_PILL_BORDER),
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(rect.min + padding, galley, theme::BLUE);
+}
+
 fn nav_with_icon(
     ui: &mut egui::Ui,
     vm: &mut FrontendViewModel,
@@ -714,9 +759,14 @@ fn group(
 
 pub fn content_panel(ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::Ui)) {
     let body = body_rect(ctx);
+    // 页面留白对齐 Tauri 的页面容器（`padding: 56px 28px 24px`）：标题离标题栏
+    // 下沿 56px，左右 28px，底部 24px。
     let content = egui::Rect::from_min_max(
-        egui::pos2(body.left() + SIDEBAR_WIDTH + 28.0, body.top()),
-        egui::pos2(body.right() - 2.0, body.bottom() - 8.0),
+        egui::pos2(
+            body.left() + SIDEBAR_WIDTH + 28.0,
+            body.top() + PAGE_TOP_PADDING,
+        ),
+        egui::pos2(body.right() - 2.0, body.bottom() - PAGE_BOTTOM_PADDING),
     );
     egui::Area::new(egui::Id::new("openless-content"))
         .order(egui::Order::Middle)
@@ -735,7 +785,9 @@ pub fn content_panel(ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::U
             scroll.bar_outer_margin = 0.0;
             scroll.foreground_color = false;
             scroll.floating_width = 6.0;
-            scroll.floating_allocated_width = 0.0;
+            // 预留滚动条槽位：Tauri 用 `scrollbar-gutter: stable` 常驻 6px，
+            // 滚动条不会盖住右边那列文字（之前是 0.0 → 悬浮条压字）。
+            scroll.floating_allocated_width = 8.0;
             let visuals = &mut ui.style_mut().visuals.widgets;
             visuals.inactive.corner_radius = egui::CornerRadius::same(6);
             visuals.hovered.corner_radius = egui::CornerRadius::same(6);
