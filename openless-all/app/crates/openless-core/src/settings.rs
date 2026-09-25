@@ -46,6 +46,8 @@ pub struct HotkeyRuntimeTarget {
     pub dictation: ShortcutBinding,
     pub dictation_mode: HotkeyMode,
     pub qa: Option<ShortcutBinding>,
+    #[serde(default)]
+    pub quick_note: Option<ShortcutBinding>,
     pub translation: ShortcutBinding,
     pub switch_style: Option<ShortcutBinding>,
     pub open_app: Option<ShortcutBinding>,
@@ -61,6 +63,7 @@ impl From<&UserPreferences> for HotkeyRuntimeTarget {
             dictation: preferences.dictation_hotkey.clone(),
             dictation_mode: preferences.hotkey.mode,
             qa: preferences.qa_hotkey.clone(),
+            quick_note: preferences.quick_note_hotkey.clone(),
             translation: preferences.translation_hotkey.clone(),
             switch_style: preferences.switch_style_hotkey.clone(),
             open_app: preferences.open_app_hotkey.clone(),

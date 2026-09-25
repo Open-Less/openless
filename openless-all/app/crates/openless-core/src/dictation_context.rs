@@ -20,9 +20,17 @@ pub enum DictationAudioSource {
     External,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DictationOutputTarget {
+    #[default]
+    ForegroundApp,
+    QuickNote,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DictationStartOptions {
     pub translation_requested: bool,
+    pub output_target: DictationOutputTarget,
     pub audio_source: DictationAudioSource,
     pub insert_text: bool,
     pub style_pack_id: Option<String>,
@@ -34,6 +42,7 @@ impl Default for DictationStartOptions {
     fn default() -> Self {
         Self {
             translation_requested: false,
+            output_target: DictationOutputTarget::ForegroundApp,
             audio_source: DictationAudioSource::Microphone,
             insert_text: true,
             style_pack_id: None,
@@ -147,6 +156,7 @@ pub struct RecordingPlan {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DictationContext {
+    pub output_target: DictationOutputTarget,
     pub audio_source: DictationAudioSource,
     pub recording: RecordingPlan,
     pub pipeline_mode: PipelineMode,
@@ -245,13 +255,16 @@ impl DictationContext {
         let prior_turns =
             eligible_polish_context_turns(recent_history, &style_pack.id, translation_active);
         Self {
+            output_target: options.output_target,
             audio_source: options.audio_source,
             recording: RecordingPlan {
                 microphone_device_name: non_blank(&preferences.microphone_device_name),
                 mute_during_recording: preferences.mute_during_recording,
                 transcribe_after_stop: preferences.stable_transcription_enabled,
                 archive_enabled: true,
-                archive_successful_recording: preferences.record_audio_for_debug,
+                archive_successful_recording: options.output_target
+                    == DictationOutputTarget::QuickNote
+                    || preferences.record_audio_for_debug,
                 retention_days: preferences.history_retention_days,
                 // Recordings and transcript history have independent caps in
                 // the UI; only the age limit is shared with history.
@@ -287,9 +300,11 @@ impl DictationContext {
                 prior_turns,
             },
             insertion: DictationInsertionContext {
-                enabled: options.insert_text,
+                enabled: options.insert_text
+                    && options.output_target != DictationOutputTarget::QuickNote,
                 observe_edits: preferences.cursor_context_enabled,
-                streaming: preferences.streaming_insert,
+                streaming: preferences.streaming_insert
+                    && options.output_target != DictationOutputTarget::QuickNote,
                 save_streamed_text_to_clipboard: preferences.streaming_insert_save_clipboard,
                 restore_clipboard_after_paste: preferences.restore_clipboard_after_paste,
                 paste_shortcut: preferences.paste_shortcut,

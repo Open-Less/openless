@@ -4243,6 +4243,17 @@ impl OpenLessBackend {
         );
     }
 
+    pub fn dictation_output_target(
+        &self,
+    ) -> Option<crate::dictation_context::DictationOutputTarget> {
+        self.state
+            .read()
+            .expect("backend state lock poisoned")
+            .dictation_context
+            .as_ref()
+            .map(|context| context.output_target)
+    }
+
     pub fn list_history(&self) -> Result<Vec<DictationSession>, BackendError> {
         self.history.list()
     }
@@ -4275,8 +4286,13 @@ impl OpenLessBackend {
         retention_days: u32,
         max_entries: Option<u32>,
     ) -> Result<(), BackendError> {
-        self.history
-            .append_with_retention(session, retention_days, max_entries)?;
+        if session.source == HistorySource::QuickNote {
+            self.history
+                .upsert_with_retention(session, retention_days, max_entries)?;
+        } else {
+            self.history
+                .append_with_retention(session, retention_days, max_entries)?;
+        }
         self.publish_history_changed();
         Ok(())
     }
@@ -4949,6 +4965,11 @@ impl OpenLessBackend {
             if state.dictation.session_id == Some(session_id)
                 && state.dictation.phase == DictationPhase::Starting
             {
+                if context.output_target
+                    == crate::dictation_context::DictationOutputTarget::QuickNote
+                {
+                    self.persist_quick_note_started(&context, session_id);
+                }
                 state.dictation.phase = DictationPhase::Recording;
                 self.events.publish(
                     Some(session_id),
@@ -5345,6 +5366,60 @@ impl OpenLessBackend {
         Ok(result)
     }
 
+    fn settle_cancelled_quick_note(&self, id: SessionId) {
+        if let Ok(Some(mut entry)) = self.list_history().map(|entries| {
+            entries.into_iter().find(|entry| {
+                entry.id == id.to_string() && entry.error_code.as_deref() == Some("recording")
+            })
+        }) {
+            entry.error_code = Some("cancelled".to_string());
+            let _ = self.update_history_entry(entry);
+        }
+    }
+
+    fn persist_quick_note_started(&self, context: &DictationContext, id: SessionId) {
+        let prefs = self.get_preferences();
+        let entry = DictationSession {
+            id: id.to_string(),
+            created_at: self.clock.now_utc().to_rfc3339(),
+            source: HistorySource::QuickNote,
+            raw_transcript: String::new(),
+            asr_transcript: None,
+            final_text: String::new(),
+            mode: context.polish.mode,
+            style_pack_id: Some(context.polish.style_pack_id.clone()),
+            translation_active: false,
+            polish_source: None,
+            app_bundle_id: None,
+            app_name: None,
+            insert_status: HistoryInsertStatus::NotRequested,
+            error_code: Some("recording".to_string()),
+            duration_ms: None,
+            dictionary_entry_count: None,
+            has_audio_recording: Some(true),
+            asr_provider: Some(context.asr.provider_id.clone()),
+            asr_model: context.asr.model.clone(),
+            llm_provider: None,
+            llm_model: None,
+            pipeline_mode: Some(
+                match context.pipeline_mode {
+                    crate::shared_types::PipelineMode::Traditional => "traditional",
+                    crate::shared_types::PipelineMode::Multimodal => "multimodal",
+                }
+                .to_string(),
+            ),
+            asr_ms: None,
+            polish_ms: None,
+        };
+        if let Err(error) = self.append_history(
+            entry,
+            prefs.history_retention_days,
+            prefs.history_max_entries,
+        ) {
+            log::warn!("failed to persist quick note recording draft: {error}");
+        }
+    }
+
     fn persist_completed_dictation(
         &self,
         context: &DictationContext,
@@ -5384,7 +5459,13 @@ impl OpenLessBackend {
         let session = DictationSession {
             id: result.session_id.to_string(),
             created_at: self.clock.now_utc().to_rfc3339(),
-            source: HistorySource::Voice,
+            source: if context.output_target
+                == crate::dictation_context::DictationOutputTarget::QuickNote
+            {
+                HistorySource::QuickNote
+            } else {
+                HistorySource::Voice
+            },
             raw_transcript: result.raw_text.clone(),
             asr_transcript: engine_result.asr_transcript.clone(),
             final_text: result.polished_text.clone(),
@@ -5460,7 +5541,13 @@ impl OpenLessBackend {
         let session = DictationSession {
             id: session_id.to_string(),
             created_at: self.clock.now_utc().to_rfc3339(),
-            source: HistorySource::Voice,
+            source: if context.output_target
+                == crate::dictation_context::DictationOutputTarget::QuickNote
+            {
+                HistorySource::QuickNote
+            } else {
+                HistorySource::Voice
+            },
             raw_transcript: raw_text.clone(),
             asr_transcript: Some(raw_text),
             final_text,
@@ -5665,7 +5752,7 @@ impl OpenLessBackend {
         &self,
         session_id: Option<SessionId>,
     ) -> Result<(), BackendError> {
-        let active = {
+        let (active, quick_note) = {
             let mut state = self.state.write().expect("backend state lock poisoned");
             ensure_running(&state)?;
             let active = state.dictation.session_id.ok_or_else(|| {
@@ -5680,6 +5767,9 @@ impl OpenLessBackend {
                     "session id does not match the active session",
                 ));
             }
+            let quick_note = state.dictation_context.as_ref().is_some_and(|context| {
+                context.output_target == crate::dictation_context::DictationOutputTarget::QuickNote
+            });
             state.dictation.phase = DictationPhase::Cancelled;
             self.events.publish(
                 Some(active),
@@ -5690,9 +5780,12 @@ impl OpenLessBackend {
             state.silence_monitor = None;
             state.transcripts.remove(&active);
             self.phase_changed.notify_waiters();
-            active
+            (active, quick_note)
         };
         let cancel_result = self.cancel_session_adapters(active).await;
+        if quick_note {
+            self.settle_cancelled_quick_note(active);
+        }
         // The state can already display cancellation, but native audio/input
         // cleanup still owns the shared resource. Reject new capture until that
         // cleanup finishes, including on its error path.

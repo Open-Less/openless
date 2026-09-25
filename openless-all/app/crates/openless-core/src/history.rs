@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::persistence::{atomic_write, persistence_error, read_or_default};
-use crate::types::DictationSession;
+use crate::types::{DictationSession, HistorySource};
 
 pub const HISTORY_CAP: usize = 200;
 
@@ -40,18 +40,29 @@ impl HistoryStore {
         let _guard = self.lock_store()?;
         let mut sessions = self.read_locked()?;
         sessions.insert(0, session);
-        if retention_days > 0 {
-            let cutoff = chrono::Utc::now() - chrono::Duration::days(i64::from(retention_days));
-            sessions.retain(|session| {
-                chrono::DateTime::parse_from_rfc3339(&session.created_at)
-                    .map(|time| time.with_timezone(&chrono::Utc) >= cutoff)
-                    .unwrap_or(true)
-            });
+        retain_with_policy(&mut sessions, retention_days, max_entries);
+        self.write_locked(&sessions)
+    }
+
+    /// A recording-start draft and its completed result share one stable identity.
+    pub fn upsert_with_retention(
+        &self,
+        session: DictationSession,
+        retention_days: u32,
+        max_entries: Option<u32>,
+    ) -> Result<(), BackendError> {
+        let _guard = self.lock_store()?;
+        let mut sessions = self.read_locked()?;
+        if let Some(existing) = sessions.iter_mut().find(|item| item.id == session.id) {
+            let mut replacement = session;
+            if replacement.has_audio_recording.is_none() {
+                replacement.has_audio_recording = existing.has_audio_recording;
+            }
+            *existing = replacement;
+        } else {
+            sessions.insert(0, session);
         }
-        let cap = max_entries
-            .map(|count| (count as usize).clamp(5, HISTORY_CAP))
-            .unwrap_or(HISTORY_CAP);
-        sessions.truncate(cap);
+        retain_with_policy(&mut sessions, retention_days, max_entries);
         self.write_locked(&sessions)
     }
 
@@ -99,7 +110,12 @@ impl HistoryStore {
 
     pub fn clear(&self) -> Result<(), BackendError> {
         let _guard = self.lock_store()?;
-        self.write_locked(&[])
+        let notes = self
+            .read_locked()?
+            .into_iter()
+            .filter(|entry| entry.source == HistorySource::QuickNote)
+            .collect::<Vec<_>>();
+        self.write_locked(&notes)
     }
 
     fn lock_store(&self) -> Result<std::sync::MutexGuard<'_, ()>, BackendError> {
@@ -117,6 +133,33 @@ impl HistoryStore {
             .map_err(|_| persistence_error("encode history entries"))?;
         atomic_write(&self.path, &json)
     }
+}
+
+fn retain_with_policy(
+    sessions: &mut Vec<DictationSession>,
+    retention_days: u32,
+    max_entries: Option<u32>,
+) {
+    if retention_days > 0 {
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(i64::from(retention_days));
+        sessions.retain(|session| {
+            session.source == HistorySource::QuickNote
+                || chrono::DateTime::parse_from_rfc3339(&session.created_at)
+                    .map(|time| time.with_timezone(&chrono::Utc) >= cutoff)
+                    .unwrap_or(true)
+        });
+    }
+    let cap = max_entries
+        .map(|count| (count as usize).clamp(5, HISTORY_CAP))
+        .unwrap_or(HISTORY_CAP);
+    let mut ordinary = 0;
+    sessions.retain(|session| {
+        if session.source == HistorySource::QuickNote {
+            return true;
+        }
+        ordinary += 1;
+        ordinary <= cap
+    });
 }
 
 #[cfg(test)]

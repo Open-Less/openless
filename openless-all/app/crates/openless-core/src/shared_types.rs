@@ -441,6 +441,9 @@ pub struct UserPreferences {
     /// 默认 Cmd+Shift+; (macOS) / Ctrl+Shift+; (Windows)。详见 issue #118。
     #[serde(default = "default_qa_hotkey")]
     pub qa_hotkey: Option<ShortcutBinding>,
+    /// Optional quick-note toggle shortcut. Disabled by default.
+    #[serde(default)]
+    pub quick_note_hotkey: Option<ShortcutBinding>,
     /// 选区润色全局快捷键。Windows 默认右 Alt；其它平台默认关闭。
     #[serde(default = "default_selection_polish_hotkey")]
     pub selection_polish_hotkey: Option<ShortcutBinding>,
@@ -834,6 +837,8 @@ struct UserPreferencesWire {
     #[serde(default)]
     output_language_preference: OutputLanguagePreference,
     qa_hotkey: Option<ShortcutBinding>,
+    #[serde(default)]
+    quick_note_hotkey: Option<ShortcutBinding>,
     /// Outer `None` means the field was absent in a pre-Selection-Polish file;
     /// `Some(None)` means the user explicitly disabled it.
     #[serde(default, deserialize_with = "deserialize_selection_polish_hotkey")]
@@ -1045,6 +1050,7 @@ impl Default for UserPreferencesWire {
             chinese_script_preference: prefs.chinese_script_preference,
             output_language_preference: prefs.output_language_preference,
             qa_hotkey: prefs.qa_hotkey,
+            quick_note_hotkey: prefs.quick_note_hotkey,
             selection_polish_hotkey: None,
             selection_polish_style_pack_id: prefs.selection_polish_style_pack_id,
             selection_polish_output_mode: prefs.selection_polish_output_mode,
@@ -1210,6 +1216,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             chinese_script_preference: wire.chinese_script_preference,
             output_language_preference: wire.output_language_preference,
             qa_hotkey: wire.qa_hotkey,
+            quick_note_hotkey: wire.quick_note_hotkey,
             selection_polish_hotkey,
             selection_polish_style_pack_id: wire.selection_polish_style_pack_id,
             selection_polish_output_mode: wire.selection_polish_output_mode,
@@ -1563,6 +1570,7 @@ impl Default for UserPreferences {
             chinese_script_preference: ChineseScriptPreference::Auto,
             output_language_preference: OutputLanguagePreference::Auto,
             qa_hotkey: default_qa_hotkey(),
+            quick_note_hotkey: None,
             selection_polish_hotkey: default_selection_polish_hotkey(),
             selection_polish_style_pack_id: default_active_style_pack_id(),
             selection_polish_output_mode: SelectionPolishOutputMode::default(),

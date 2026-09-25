@@ -238,8 +238,9 @@ pub use credentials::{
 };
 pub use dictation_context::{
     build_asr_prompt, eligible_polish_context_turns, DictationAudioSource, DictationContext,
-    DictationInsertionContext, DictationPolishContext, DictationStartOptions, DictationStopOptions,
-    PolishHistoryTurn, ProviderInvocation, RecordingPlan, ASR_PROMPT_CHAR_BUDGET,
+    DictationInsertionContext, DictationOutputTarget, DictationPolishContext,
+    DictationStartOptions, DictationStopOptions, PolishHistoryTurn, ProviderInvocation,
+    RecordingPlan, ASR_PROMPT_CHAR_BUDGET,
 };
 pub use dictation_engine::{PipelineDictationEngine, PolishFailurePolicy};
 pub use domains::*;

@@ -438,6 +438,7 @@ pub fn reject_non_dictation_side_specific_shortcuts(
         preferences.switch_style_hotkey.as_ref(),
         preferences.open_app_hotkey.as_ref(),
         preferences.coding_agent_voice_hotkey.as_ref(),
+        preferences.quick_note_hotkey.as_ref(),
     ]
     .into_iter()
     .flatten()
@@ -583,6 +584,7 @@ pub fn reconcile_hotkey_collisions(
     enum NonCoreHotkey {
         Translation,
         Qa,
+        QuickNote,
         SwitchStyle,
         OpenApp,
         SelectionPolish,
@@ -594,6 +596,7 @@ pub fn reconcile_hotkey_collisions(
             match self {
                 Self::Translation => Some(preferences.translation_hotkey.clone()),
                 Self::Qa => preferences.qa_hotkey.clone(),
+                Self::QuickNote => preferences.quick_note_hotkey.clone(),
                 Self::SwitchStyle => preferences.switch_style_hotkey.clone(),
                 Self::OpenApp => preferences.open_app_hotkey.clone(),
                 Self::SelectionPolish => preferences.selection_polish_hotkey.clone(),
@@ -609,6 +612,7 @@ pub fn reconcile_hotkey_collisions(
                     }
                 }
                 Self::Qa => preferences.qa_hotkey = value,
+                Self::QuickNote => preferences.quick_note_hotkey = value,
                 Self::SwitchStyle => preferences.switch_style_hotkey = value,
                 Self::OpenApp => preferences.open_app_hotkey = value,
                 Self::SelectionPolish => preferences.selection_polish_hotkey = value,
@@ -630,9 +634,10 @@ pub fn reconcile_hotkey_collisions(
         }
     }
 
-    const ORDER: [NonCoreHotkey; 6] = [
+    const ORDER: [NonCoreHotkey; 7] = [
         NonCoreHotkey::Translation,
         NonCoreHotkey::Qa,
+        NonCoreHotkey::QuickNote,
         NonCoreHotkey::SwitchStyle,
         NonCoreHotkey::OpenApp,
         NonCoreHotkey::SelectionPolish,
@@ -705,6 +710,25 @@ pub fn reject_hotkey_collisions(preferences: &UserPreferences) -> Result<(), Str
     let switch_style = preferences.switch_style_hotkey.as_ref();
     let open_app = preferences.open_app_hotkey.as_ref();
     let less_computer = preferences.coding_agent_voice_hotkey.as_ref();
+    if let Some(binding) = preferences.quick_note_hotkey.as_ref() {
+        for other in [
+            Some(&preferences.dictation_hotkey),
+            Some(&preferences.translation_hotkey),
+            preferences.qa_hotkey.as_ref(),
+            switch_style,
+            open_app,
+            less_computer,
+            preferences.selection_polish_hotkey.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            reject_overlap(binding, other, "速记快捷键不能与其他快捷键重复")?;
+        }
+        for pack in &preferences.style_pack_hotkeys {
+            reject_overlap(binding, &pack.binding, "速记快捷键不能与风格快捷键重复")?;
+        }
+    }
     if let Some(qa) = preferences.qa_hotkey.as_ref() {
         reject_dictation_qa_hotkey_overlap(&preferences.dictation_hotkey, qa)?;
         reject_qa_translation_hotkey_overlap(qa, &preferences.translation_hotkey)?;
