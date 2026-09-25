@@ -3862,11 +3862,6 @@ mod linux_app {
                     _ => 0,
                 };
                 s.restore_clipboard = prefs.restore_clipboard_after_paste;
-                // Tauri 只提供 Ctrl+V / Ctrl+Shift+V 两项。
-                s.paste_shortcut = match prefs.paste_shortcut {
-                    openless_core::shared_types::PasteShortcut::CtrlShiftV => 1,
-                    _ => 0,
-                };
                 s.silence_auto_stop = prefs.silence_auto_stop_enabled;
                 s.silence_seconds =
                     prefs.silence_auto_stop_seconds.round().clamp(1.0, 5.0) as usize;
@@ -4442,14 +4437,6 @@ mod linux_app {
                             .unwrap_or_default()
                     };
                     self.settings_dirty.microphone = true;
-                }
-                frontend::view_model::SettingsComboField::PasteShortcut => {
-                    preferences.paste_shortcut = match index {
-                        1 => openless_core::shared_types::PasteShortcut::CtrlShiftV,
-                        2 => openless_core::shared_types::PasteShortcut::ShiftInsert,
-                        _ => openless_core::shared_types::PasteShortcut::CtrlV,
-                    };
-                    self.settings_dirty.recording = true;
                 }
                 frontend::view_model::SettingsComboField::RemoteDefaultMode => {
                     preferences.remote_input_default_mode = if index == 1 {
@@ -8039,12 +8026,48 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         sequence > last_sequence
     }
 
+    /// 三方合并：`base` = 宿主上一份快照，`local` = 本地（用户可能正在输入的）
+    /// 视图模型，`incoming` = 宿主新快照。
+    ///
+    /// 用户可见文本全都直接绑在视图模型的字段上（`TextEdit::singleline(&mut
+    /// vm.…)×`），而宿主每 2s、以及任何状态变化时都会推一份完整快照；UI 侧原先
+    /// 是整份替换，于是「打好字还没提交」的输入会被下一份快照抹掉 —— 用户看到的
+    /// 就是「输入一秒后文字自己消失」。这里按字段判断：宿主相对上一份快照**改过**
+    /// 的字段以宿主为准（打开编辑器时 hydrate、提交后回写、宿主侧列表刷新都走这条），
+    /// **没改过**的字段保留本地值（用户正在输入的内容）。
+    fn merge_local_edits(
+        local: &serde_json::Value,
+        base: &serde_json::Value,
+        incoming: &serde_json::Value,
+    ) -> serde_json::Value {
+        if let serde_json::Value::Object(incoming_fields) = incoming {
+            let mut merged = serde_json::Map::new();
+            for (key, incoming_value) in incoming_fields {
+                let base_value = base.get(key).unwrap_or(&serde_json::Value::Null);
+                let value = match local.get(key) {
+                    Some(local_value) => merge_local_edits(local_value, base_value, incoming_value),
+                    None => incoming_value.clone(),
+                };
+                merged.insert(key.clone(), value);
+            }
+            serde_json::Value::Object(merged)
+        } else if incoming == base {
+            // 宿主没动这个字段：本地值（可能是没提交的输入）留下。
+            local.clone()
+        } else {
+            incoming.clone()
+        }
+    }
+
     /// UI 进程侧的 eframe 应用：收快照 → 渲染 → 把动作发回宿主。
     struct UiClientApp {
         client: UiBridgeClient,
         view_model: FrontendViewModel,
         /// 已采纳的最大快照序号。
         last_sequence: u64,
+        /// 宿主上一份快照的 JSON：用来分辨「宿主改了这个字段」和「用户还没提交的
+        /// 本地输入」。
+        last_adopted: Option<serde_json::Value>,
         /// 已发出的动作序号（宿主可据此看出重复或丢失）。
         action_sequence: u64,
         ping_sequence: u64,
@@ -8065,6 +8088,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 client,
                 view_model: FrontendViewModel::default(),
                 last_sequence: 0,
+                last_adopted: None,
                 action_sequence: 0,
                 ping_sequence: 0,
                 ping_sent_at: None,
@@ -8075,6 +8099,24 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher::default(),
                 hotkey_sequence: 0,
             }
+        }
+
+        /// 采纳一份快照，但保留用户还没提交、而宿主也没有改动的输入。
+        fn adopt_snapshot(&mut self, sequence: u64, incoming: FrontendViewModel) {
+            self.last_sequence = sequence;
+            let incoming_json = serde_json::to_value(&incoming).ok();
+            let adopted = match (&self.last_adopted, &incoming_json) {
+                (Some(base), Some(incoming_json)) => serde_json::to_value(&self.view_model)
+                    .ok()
+                    .and_then(|local| {
+                        serde_json::from_value(merge_local_edits(&local, base, incoming_json)).ok()
+                    })
+                    .unwrap_or(incoming),
+                // 第一份快照没有可比对的基准：整份采纳。
+                _ => incoming,
+            };
+            self.view_model = adopted;
+            self.last_adopted = incoming_json;
         }
 
         /// 收宿主的帧。快照按序号采纳；`Shutdown` 与断连都表示「宿主走了」，
@@ -8095,8 +8137,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                         view_model,
                     }) => {
                         if snapshot_supersedes(self.last_sequence, sequence) {
-                            self.last_sequence = sequence;
-                            self.view_model = *view_model;
+                            self.adopt_snapshot(sequence, *view_model);
                         } else {
                             log::debug!("[ui-client] dropped stale snapshot #{sequence}");
                         }
@@ -8492,6 +8533,119 @@ Internal flags (set by OpenLess itself, not for regular use):
             assert!(app.window_should_be_open);
         }
 
+        /// 润色与语音快捷键的补充说明必须出现在快捷键页。
+        #[test]
+        fn shortcut_hints_come_from_the_catalog() {
+            let zh = Lang::ZhCn;
+            let ctx = egui::Context::default();
+            let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 2400.0));
+            let mut time = 0.0_f64;
+            let mut render = |vm: &mut FrontendViewModel, events: Vec<egui::Event>| {
+                time += 1.0;
+                let output = crate::ui::frontend::run_pass(
+                    &ctx,
+                    egui::RawInput {
+                        screen_rect: Some(viewport),
+                        events,
+                        time: Some(time),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let mut actions = Vec::new();
+                        frontend::settings::test_render_shortcuts(ui, vm, &mut actions);
+                    },
+                );
+                painted_text_of(&output)
+            };
+
+            let mut vm = FrontendViewModel {
+                lang: zh,
+                active_page: frontend::view_model::Page::Settings,
+                settings_open: true,
+                settings_section: frontend::view_model::SettingsSection::Shortcuts,
+                ..Default::default()
+            };
+            let _ = render(&mut vm, Vec::new());
+            let painted = render(&mut vm, Vec::new());
+            for key in [
+                "settings.selection_workspace.polish_hotkey_desc",
+                "settings.coding_agent.voice_hotkey_desc",
+            ] {
+                assert!(
+                    painted.contains(tr_l10n(zh, key)),
+                    "{key} must be rendered on the shortcuts page:\n{painted}"
+                );
+            }
+        }
+
+        /// 输入框回归：宿主推新快照时，用户还没提交的输入不能被抹掉。
+        /// 之前的实现是整份替换视图模型，界面上表现为「打完字一秒后文字消失」。
+        #[test]
+        fn a_pending_edit_survives_the_next_snapshot() {
+            let mut base = FrontendViewModel::default();
+            base.settings_query = String::new();
+            base.style_name = "原始名字".into();
+            let mut local = base.clone();
+            // 用户正在输入：改了搜索框和风格名，都还没提交（未失焦/未回车）。
+            local.settings_query = "润色上下文".into();
+            local.style_name = "原始名字".into();
+
+            // 宿主这份快照什么都没改（保活推送）。
+            let merged = merge_local_edits(
+                &serde_json::to_value(&local).unwrap(),
+                &serde_json::to_value(&base).unwrap(),
+                &serde_json::to_value(&base).unwrap(),
+            );
+            let merged: FrontendViewModel = serde_json::from_value(merged).unwrap();
+            assert_eq!(merged.settings_query, "润色上下文");
+
+            // 宿主改了别的字段（例如状态栏文案）：本地输入仍然保留，宿主的改动生效。
+            let mut incoming = base.clone();
+            incoming.status = "已保存".into();
+            let merged = merge_local_edits(
+                &serde_json::to_value(&local).unwrap(),
+                &serde_json::to_value(&base).unwrap(),
+                &serde_json::to_value(&incoming).unwrap(),
+            );
+            let merged: FrontendViewModel = serde_json::from_value(merged).unwrap();
+            assert_eq!(merged.settings_query, "润色上下文");
+            assert_eq!(merged.status, "已保存");
+
+            // 宿主改了同一个字段（打开编辑器 hydrate / 提交后回写）：以宿主为准。
+            let mut incoming = base.clone();
+            incoming.style_name = "宿主 hydrate 的名字".into();
+            let merged = merge_local_edits(
+                &serde_json::to_value(&local).unwrap(),
+                &serde_json::to_value(&base).unwrap(),
+                &serde_json::to_value(&incoming).unwrap(),
+            );
+            let merged: FrontendViewModel = serde_json::from_value(merged).unwrap();
+            assert_eq!(merged.style_name, "宿主 hydrate 的名字");
+        }
+
+        /// 嵌套对象与列表同样按字段判断：宿主换过的列表用宿主的，没换的保留本地。
+        #[test]
+        fn only_fields_the_host_touched_are_taken_from_the_snapshot() {
+            let base = serde_json::json!({
+                "settings": { "remote_input_port": "8765", "retention_days": "7" },
+                "history_entries": [],
+            });
+            let local = serde_json::json!({
+                // 用户在输入框里把端口改成了半截内容，还没提交。
+                "settings": { "remote_input_port": "8", "retention_days": "7" },
+                "history_entries": [],
+            });
+            let incoming = serde_json::json!({
+                // 宿主只刷新了历史列表与保留时长。
+                "settings": { "remote_input_port": "8765", "retention_days": "30" },
+                "history_entries": [{ "id": "a" }],
+            });
+            let merged = merge_local_edits(&local, &base, &incoming);
+            assert_eq!(merged["settings"]["remote_input_port"], "8");
+            assert_eq!(merged["settings"]["retention_days"], "30");
+            assert_eq!(merged["history_entries"].as_array().unwrap().len(), 1);
+        }
+
         #[test]
         fn the_host_heartbeat_runs_without_any_window() {
             // tick() 不依赖 eframe 的帧循环：用一个没有窗口的 egui Context
@@ -8500,6 +8654,28 @@ Internal flags (set by OpenLess itself, not for regular use):
             let mut app = fixture_app(true);
             app.tick(&ctx);
             app.tick(&ctx);
+        }
+
+        fn painted_text_of(output: &egui::FullOutput) -> String {
+            fn collect(shape: &egui::Shape, out: &mut String) {
+                match shape {
+                    egui::Shape::Text(text) => {
+                        out.push_str(text.galley.text());
+                        out.push('\n');
+                    }
+                    egui::Shape::Vec(shapes) => {
+                        for shape in shapes {
+                            collect(shape, out);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let mut out = String::new();
+            for clipped in &output.shapes {
+                collect(&clipped.shape, &mut out);
+            }
+            out
         }
 
         fn fixture_app(window_should_be_open: bool) -> OpenLessEguiApp {

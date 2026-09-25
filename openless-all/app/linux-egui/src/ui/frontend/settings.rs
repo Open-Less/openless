@@ -1013,7 +1013,7 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
             label: tr_l10n(lang, "settings.shortcuts.agent_voice"),
             value: vm.coding_agent_hotkey.clone(),
             can_disable: true,
-            hint: String::new(),
+            hint: tr_l10n(lang, "settings.coding_agent.voice_hotkey_desc").to_string(),
         },
     ];
     card(
@@ -1048,7 +1048,8 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
                     label: tr_l10n(lang, "settings.selection_workspace.polish_hotkey"),
                     value: vm.selection_polish_hotkey.clone(),
                     can_disable: true,
-                    hint: String::new(),
+                    hint: tr_l10n(lang, "settings.selection_workspace.polish_hotkey_desc")
+                        .to_string(),
                 },
             );
             segmented_row(
@@ -2183,7 +2184,7 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
         ),
     ];
     if vm.advanced_open < rows.len() {
-        let (icon, title, description) = rows[vm.advanced_open];
+        let (icon, title, _) = rows[vm.advanced_open];
         let _ = icon;
         // 多模态管线是实验性功能：Tauri 用 `ExperimentalSectionTitle`（标题 + 徽章
         // + 悬停说明），所以它不用普通卡片。
@@ -2192,7 +2193,8 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                 ui,
                 title,
                 tr_l10n(lang, "common.experimental"),
-                description,
+                // Tauri 的 `ExperimentalSectionTitle hint`：悬停在标题/徽章上的说明。
+                tr_l10n(lang, "settings.advanced.multimodal_pipeline_title_hint"),
                 |ui| {
                     toggle_row(
                         ui,
@@ -3795,6 +3797,15 @@ pub(crate) fn test_group_toggle(ui: &mut egui::Ui) {
     card_group(ui, "group-toggle-probe", |ui| {
         ui.label("GROUPCONTENT");
     });
+}
+
+#[cfg(test)]
+pub(crate) fn test_render_shortcuts(
+    ui: &mut egui::Ui,
+    vm: &mut FrontendViewModel,
+    actions: &mut Vec<FrontendAction>,
+) {
+    shortcuts(ui, vm, actions);
 }
 
 #[cfg(test)]

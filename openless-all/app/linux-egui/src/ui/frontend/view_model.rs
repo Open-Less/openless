@@ -451,7 +451,6 @@ pub enum SettingsComboField {
     CapsuleStyle,
     RecordingMode,
     SilenceSeconds,
-    PasteShortcut,
     RemoteDefaultMode,
     /// 选区润色交付方式：0 = 直接替换，1 = 预览确认。
     SelectionPolishDelivery,
@@ -994,7 +993,6 @@ pub struct SettingsFields {
     pub polish_context_window: String,
     /// 调试录音最多保留条数。
     pub audio_recording_max_entries: String,
-    pub paste_shortcut: usize,
     /// 选区润色交付方式：0 = 直接替换，1 = 预览确认。
     pub selection_polish_delivery: usize,
     pub activity_heatmap: bool,
@@ -1041,7 +1039,6 @@ impl Default for SettingsFields {
             style_pack_hotkeys: Vec::new(),
             polish_context_window: String::new(),
             audio_recording_max_entries: String::new(),
-            paste_shortcut: 0,
             selection_polish_delivery: 0,
             activity_heatmap: true,
             system_proxy: false,
