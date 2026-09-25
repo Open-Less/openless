@@ -896,8 +896,6 @@ pub enum ButtonKind {
     Ghost,
     /// Filled with the accent blue, white text.
     Blue,
-    /// Dark primary action used by marketplace installation.
-    Dark,
     /// Greyed-out button that swallows clicks (Tauri's 置灰 停用).
     Disabled,
 }
@@ -933,15 +931,6 @@ pub fn action_button(
                 theme::BLUE.linear_multiply(0.92)
             } else {
                 theme::BLUE
-            },
-            None,
-            egui::Color32::WHITE,
-        ),
-        ButtonKind::Dark => (
-            if response.hovered() {
-                theme::INK_2
-            } else {
-                theme::INK
             },
             None,
             egui::Color32::WHITE,

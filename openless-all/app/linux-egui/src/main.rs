@@ -3824,6 +3824,23 @@ mod linux_app {
                     .unwrap_or_default();
                 vm.quick_note_shortcut_hidden = self.quick_note_shortcut_hidden;
                 vm.translation_hotkey = prefs.translation_hotkey.display_label();
+                // 这几行一直在界面上，但宿主以前只填了前四个：没填的行无论 Core 里
+                // 有没有绑定都显示成空键帽，看起来像「未设置」。一律从偏好取真值。
+                vm.switch_style_hotkey = prefs
+                    .switch_style_hotkey
+                    .as_ref()
+                    .map(|binding| binding.display_label())
+                    .unwrap_or_default();
+                vm.open_app_hotkey = prefs
+                    .open_app_hotkey
+                    .as_ref()
+                    .map(|binding| binding.display_label())
+                    .unwrap_or_default();
+                vm.coding_agent_hotkey = prefs
+                    .coding_agent_voice_hotkey
+                    .as_ref()
+                    .map(|binding| binding.display_label())
+                    .unwrap_or_default();
             }
 
             // The drawer's Save button is enabled only while the draft differs
@@ -8655,6 +8672,41 @@ Internal flags (set by OpenLess itself, not for regular use):
                 },
                 window_should_be_open,
             )
+        }
+
+        /// 快捷键卡片上的每一行都必须从 Core 偏好取真值。宿主以前只填了
+        /// 听写/翻译/QA/速记四行，其余行无论偏好里有没有绑定都画成空键帽 ——
+        /// 看起来是「未设置」，录制却实实在在地写进了偏好。
+        #[test]
+        fn shortcut_rows_show_the_bindings_core_holds() {
+            let mut app = fixture_app(true);
+            app.preferences = Some(UserPreferences {
+                switch_style_hotkey: Some(openless_core::shared_types::ShortcutBinding {
+                    primary: "1".into(),
+                    modifiers: vec!["ctrl".into(), "shift".into()],
+                }),
+                open_app_hotkey: Some(openless_core::shared_types::ShortcutBinding {
+                    primary: "o".into(),
+                    modifiers: vec!["ctrl".into(), "alt".into()],
+                }),
+                coding_agent_voice_hotkey: Some(openless_core::shared_types::ShortcutBinding {
+                    primary: "v".into(),
+                    modifiers: vec!["ctrl".into(), "super".into()],
+                }),
+                ..Default::default()
+            });
+            app.sync_view_model();
+            let vm = &app.frontend_vm;
+            for (label, value) in [
+                ("switch_style", &vm.switch_style_hotkey),
+                ("open_app", &vm.open_app_hotkey),
+                ("coding_agent", &vm.coding_agent_hotkey),
+            ] {
+                assert!(
+                    !value.trim().is_empty(),
+                    "{label} shortcut row must show the binding Core holds"
+                );
+            }
         }
 
         #[test]

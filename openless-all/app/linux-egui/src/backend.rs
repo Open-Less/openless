@@ -201,11 +201,6 @@ impl LinuxBackendBuilder {
         self
     }
 
-    pub fn with_host_actions(mut self, actions: Arc<LinuxHostActions>) -> Self {
-        self.host_actions = Some(actions);
-        self
-    }
-
     pub fn with_settings_runtime(mut self, runtime: Arc<dyn SettingsRuntime>) -> Self {
         self.settings_runtime = Some(runtime);
         self

@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use crate::desktop::atomic_save;
-use crate::i18n::{LocalePref, FOLLOW_SYSTEM};
+use crate::i18n::LocalePref;
 
 const STATE_FILE: &str = "linux-ui-state.json";
 
@@ -77,11 +77,7 @@ pub fn load_locale_pref() -> LocalePref {
 /// state cannot be written at all; unknown environments (no HOME) simply leave
 /// the preference unsaved and are reported as a recoverable failure.
 pub fn save_locale_pref(pref: LocalePref) -> Result<(), UiStateError> {
-    let tag = match pref {
-        LocalePref::System => FOLLOW_SYSTEM.to_string(),
-        LocalePref::Lang(lang) => lang.tag().to_string(),
-    };
-    write_state_value("locale", serde_json::Value::String(tag))
+    write_state_value("locale", serde_json::Value::String(pref.to_tag()))
 }
 
 /// The state document as a JSON object. Unreadable or non-object content

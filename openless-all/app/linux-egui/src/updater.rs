@@ -387,10 +387,6 @@ impl LinuxUpdateSupport {
     pub fn supports_auto_update(&self) -> bool {
         matches!(self, Self::AppImage(_))
     }
-
-    pub fn manual_download_url(&self) -> &'static str {
-        RELEASES_URL
-    }
 }
 
 impl AppImageUpdater {

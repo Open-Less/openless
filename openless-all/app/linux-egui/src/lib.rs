@@ -20,7 +20,6 @@ mod hotkeys;
 mod i18n;
 pub mod local_hotkeys;
 mod logging;
-mod marketplace;
 mod popup;
 mod popup_layer;
 mod popup_window;
@@ -539,39 +538,6 @@ impl LinuxHost {
             LessComputerHotkeyAction::Noop => {}
         }
         Ok(None)
-    }
-
-    /// Feed one canonical PCM frame from the Linux cpal callback into the
-    /// active Less Computer voice session.
-    pub fn feed_less_computer_pcm(&self, pcm: &[u8]) -> Result<(), BackendError> {
-        self.less_computer_voice
-            .lock()
-            .expect("Linux Less Computer voice lock poisoned")
-            .session
-            .as_ref()
-            .ok_or_else(|| {
-                BackendError::new(
-                    BackendErrorCode::InvalidState,
-                    "Less Computer voice session is not active",
-                )
-            })?
-            .feed_pcm(pcm)
-    }
-
-    /// Download a Core-validated Marketplace archive and save it to a user-selected
-    /// Linux filesystem path without exposing HTTP, OAuth or archive validation to UI code.
-    pub async fn download_marketplace_archive(
-        &self,
-        pack_id: String,
-        target: std::path::PathBuf,
-    ) -> Result<(), BackendError> {
-        let bytes = self
-            .backend
-            .services()
-            .marketplace
-            .download_archive(pack_id)
-            .await?;
-        marketplace::write_archive(&target, &bytes)
     }
 }
 
