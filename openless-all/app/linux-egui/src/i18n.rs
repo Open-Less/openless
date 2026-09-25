@@ -2303,7 +2303,16 @@ pub const CATALOG: &[Msg] = &[
             "안전 폴백",
         ),
     },
-
+    Msg {
+        key: "translation.howto_indicator_desc",
+        text: row(
+            "按 Shift 后屏幕底部会显示蓝色「正在翻译」标识。",
+            "按 Shift 後螢幕底部會顯示藍色「正在翻譯」標識。",
+            "A blue \"Translating\" indicator appears at the bottom of the screen after pressing Shift.",
+            "Shift を押すと画面下部に青い「翻訳中」表示が出ます。",
+            "Shift 를 누르면 화면 하단에 파란색 \"번역 중\" 표시가 나타납니다.",
+        ),
+    },
     Msg {
         key: "translation.howto_indicator_title",
         text: row(
@@ -2478,7 +2487,16 @@ pub const CATALOG: &[Msg] = &[
             "전사를 클라우드에서 로컬 추론으로 전환합니다. 오프라인 / 프라이버시용에만 권장됩니다.",
         ),
     },
-
+    Msg {
+        key: "settings.advanced.multimodal_pipeline_title_hint",
+        text: row(
+            "用单个多模态模型一步完成语音识别；与传统 ASR + LLM 配置完全隔离。",
+            "用單一多模態模型一步完成語音辨識；與傳統 ASR + LLM 設定完全隔離。",
+            "One-pass audio recognition with a single multimodal model; traditional ASR + LLM configuration is fully isolated from it.",
+            "1つのマルチモーダルモデルで音声認識を一括実行。従来の ASR + LLM 設定から完全に分離されます。",
+            "단일 멀티모달 모델로 음성 인식을 한 번에 처리합니다. 기존 ASR + LLM 설정과 완전히 분리됩니다.",
+        ),
+    },
     Msg {
         key: "settings.advanced.platform_not_supported",
         text: row(
@@ -3850,7 +3868,16 @@ pub const CATALOG: &[Msg] = &[
             "녹음 중 시스템 출력을 일시적으로 음소거하여 스피커 에코를 방지합니다.",
         ),
     },
-
+    Msg {
+        key: "settings.recording.paste_shortcut_desc",
+        text: row(
+            "插入时模拟按下的粘贴键，部分终端类应用需要 Ctrl+Shift+V（仅 Windows / Linux）。",
+            "插入時模擬按下的粘貼鍵，部分終端類應用需要 Ctrl+Shift+V（僅 Windows / Linux）。",
+            "Which paste combo to simulate when inserting; some terminals need Ctrl+Shift+V (Windows / Linux only).",
+            "挿入時に模擬するペーストショートカット。一部のターミナルでは Ctrl+Shift+V が必要（Windows / Linux のみ）。",
+            "삽입 시 시뮬레이션할 붙여넣기 단축키. 일부 터미널은 Ctrl+Shift+V 가 필요 (Windows / Linux 만).",
+        ),
+    },
     Msg {
         key: "settings.recording.polish_context_window_desc",
         text: row(
@@ -3989,7 +4016,16 @@ pub const CATALOG: &[Msg] = &[
             "선택 영역 도우미 단축키",
         ),
     },
-
+    Msg {
+        key: "settings.selection_workspace.polish_hotkey_desc",
+        text: row(
+            "关闭语音编辑时直接润色；开启语音编辑时按住口述指令（录音方式跟随全局设置）。",
+            "關閉語音編輯時直接潤色；開啟語音編輯時按住口述指令（錄音方式跟隨全域設定）。",
+            "Polishes directly when voice edit is off; hold to speak when voice edit is on (recording follows global settings).",
+            "音声編集オフ時は推敲、オン時は押しながら話す（録音方式はグローバル設定に従う）。",
+            "음성 편집 끄면 바로 다듬기, 켜면 누른 채 말하기(녹음 방식은 전역 설정 따름).",
+        ),
+    },
     Msg {
         key: "settings.shortcuts.style_pack_desc",
         text: row(
@@ -4178,7 +4214,16 @@ pub const CATALOG: &[Msg] = &[
             "(시작 / 정지)",
         ),
     },
-
+    Msg {
+        key: "settings.coding_agent.voice_hotkey_desc",
+        text: row(
+            "按住说话、松开执行。支持 Ctrl/Option/Fn 等单键。功能说明参见「高级」设置页。",
+            "按住說話、放開執行。支援 Ctrl/Option/Fn 等單鍵。功能說明參見「進階」設定頁。",
+            "Hold to talk, release to run. Supports Ctrl/Option/Fn single keys. See the Advanced settings page for what it does.",
+            "押して話す、離して実行。Ctrl/Option/Fn などの単キー対応。機能の説明は「詳細」設定ページを参照。",
+            "누르고 말하고 놓으면 실행. Ctrl/Option/Fn 단일 키 지원. 기능 설명은 「고급」 설정 페이지 참조.",
+        ),
+    },
     Msg {
         key: "settings.recording.combo_conflict",
         text: row(
