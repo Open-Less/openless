@@ -88,6 +88,26 @@ assert.ok(!/qwen-asr|qwen_asr/i.test(packageScript),
 // The packaging script must carry the fcitx plugin into both package formats.
 assert.ok(packageScript.includes('x86_64-linux-gnu/fcitx5/libopenless.so'), 'deb fcitx addon path');
 assert.ok(packageScript.includes('/usr/lib64/fcitx5/libopenless.so'), 'rpm fcitx addon path');
+// Hand-written deb metadata must account for the host, the bundled fcitx addon,
+// and the window/rendering libraries dynamically loaded at runtime. RPM adds
+// direct-link sonames automatically, but its dlopen libraries need manual Requires.
+const debDeps = packageScript.match(/^Depends: ([^\n]+)/m)?.[1].split(/,\s*/) ?? [];
+for (const name of [
+  'fcitx5', 'fcitx5-module-dbus', 'libbz2-1.0', 'liblzma5', 'libsystemd0',
+  'libfcitx5core7', 'libfcitx5config6', 'libfcitx5utils2', 'libwayland-client0',
+  'libx11-6', 'libx11-xcb1', 'libxcb1', 'libxcursor1', 'libxi6',
+  'libxkbcommon0', 'libxkbcommon-x11-0', 'libwayland-egl1', 'libegl1', 'libvulkan1',
+]) {
+  assert.ok(debDeps.includes(name), `deb must declare runtime dependency ${name}`);
+}
+const rpmDeps = packageScript.match(/^Requires: ([^\n]+)/m)?.[1].split(/,\s*/) ?? [];
+for (const name of [
+  'libX11', 'libxcb', 'libwayland-client', 'libxkbcommon', 'libglvnd-egl', 'vulkan-loader',
+  'libXi.so.6()(64bit)', 'libXcursor.so.1()(64bit)', 'libX11-xcb.so.1()(64bit)',
+  'libxkbcommon-x11.so.0()(64bit)', 'libwayland-egl.so.1()(64bit)',
+]) {
+  assert.ok(rpmDeps.includes(name), `rpm must declare dlopen dependency ${name}`);
+}
 // 5. ldd + cargo-tree verification gates are required for release and CI.
 
 // 6. Release must emit and verify checksums for both package artifacts.
