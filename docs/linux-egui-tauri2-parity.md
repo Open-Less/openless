@@ -34,9 +34,9 @@ Windows, macOS, and Android remain on Tauri.
 - #997 native QA/selection/capsule popup design: same-executable re-entry,
   versioned serde JSONL, Markdown, drag/Esc, QA microphone and Enter submit,
   session/sequence/kind guards, nonblocking pipes, crash restart, and snapshot replay
-- stable/beta AppImage checks, delayed/hourly/manual scheduling, byte progress,
-  SHA-256 and pinned minisign verification, same-directory fsync and atomic replace;
-  deb/rpm use the release page
+- ~~stable/beta AppImage checks, scheduling, byte progress, SHA-256/minisign
+  verification, atomic replace~~ — not ported: AppImage is retired from the Linux
+  channel and deb/rpm cannot replace themselves, so the host keeps no update path
 - Remote Input assets, Qwen vendor files, shared icons, version parsing, packaging,
   and release workflow are independent of `src-tauri`
 
@@ -73,8 +73,7 @@ Windows, macOS, and Android remain on Tauri.
   does not disturb the session or trigger unexpected volume OSD.
 - X11 and Wayland device runs are still required for focus, Unicode insertion,
   popup positioning, tray, fcitx5 reload/rebind, microphone unplug/recovery,
-  Secret Service, real phone Remote Input, real Qwen inference, and signed
-  AppImage install/rollback. Ignored hardware tests or a green build are not
+  Secret Service, real phone Remote Input, and real Qwen inference. Ignored hardware tests or a green build are not
   recorded as device proof.
 
 The automated scope is complete only when every command above passes at the

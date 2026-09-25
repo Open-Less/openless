@@ -5,7 +5,7 @@
 ## 1. 已有实现
 
 - **fcitx5 热键监听**：`hotkeys.rs` `Fcitx5HotkeyListener::start()/drain()/take_error()`——经 fcitx5 插件路由热键事件（已实现待实测，见 L11）。
-- **fcitx5 输入/选区**：`fcitx5.rs`——插件安装（AppImage 在 listener 前安装）、PRIMARY 选区、落字。
+- **fcitx5 输入/选区**：`fcitx5.rs`——插件安装（deb/rpm 下把随包插件装进用户 fcitx5 搜索路径）、PRIMARY 选区、落字。
 - **单实例**：`single_instance.rs` `SingleInstanceGuard::acquire(path)` + `SingleInstanceBroker::acquire_or_forward()/drain()`——二次启动意图转发给首实例。
 - **设置侧拒绝逻辑**：`settings.rs:56-61` 对 `switch_style` / `open_app` / `style_packs` 三类热键修改给出明确拒绝信息（L01 的直接证据）。
 - **能力探测**：`capabilities.rs` `LinuxCapabilitySnapshot`（session 类型、`PlatformCapabilities`、权限快照），`supports_tray` 只是探测字段。

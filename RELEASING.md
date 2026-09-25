@@ -79,15 +79,17 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
 6. Beta tag workflows upload the desktop, Android, and Linux egui assets to one
    shared **draft** release. Wait for every workflow to succeed, verify the
    packages and the Beta updater manifests, then publish that draft as a
-   prerelease. Do not rerun an asset workflow after publication without first
+   prerelease.
+   Linux egui assets are deb/rpm plus `SHA256SUMS` only: AppImage was retired
+   from that channel, so there is no Linux egui updater manifest to verify. Do not rerun an asset workflow after publication without first
    returning the release to draft.
 
 Before attaching Linux assets, additionally require all of the following:
 
 1. The egui team has completed the [Linux Host/UI gaps and acceptance](docs/linux-egui-handoff/07-acceptance.md). The existing `eframe::App` is a starting implementation; its presence and successful packaging alone do not establish product completeness.
 2. Linux core/host tests, dependency gates, and secret-surface gates are green on Ubuntu.
-3. The manual Linux workflow verifies the ELF dependency list, deb/rpm/AppImage contents, desktop metadata, fcitx5 plugin paths, minisign output, and independent updater manifest.
-4. An admin passes the already published Tauri release tag as `release_tag`; a non-empty tag also requires `LINUX_EGUI_MINISIGN_SECRET_KEY`.
+3. The manual Linux workflow verifies the ELF dependency list, deb/rpm contents, desktop metadata, fcitx5 plugin paths, and `SHA256SUMS`; it gates that no AppImage and no updater/signing path remains.
+4. An admin passes the already published Tauri release tag as `release_tag`.
 
 ## Process summary
 

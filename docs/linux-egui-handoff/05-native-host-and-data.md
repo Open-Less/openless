@@ -20,7 +20,7 @@ Core `ports.rs` 提供 `EditObservationSink` / `EditObservationAdapter`（`ports
 
 ## 4. 桌面集成（L10）
 
-未实现：托盘（`capabilities.rs` 仅探测 `supports_tray`）、自启、通知（仅状态栏）、检查/下载/安装更新与重启。AppImage 能力判定（`LinuxPackageKind`）不等于更新器已接好。关闭标准：各能力有真实 Host 效果与失败反馈，不以配置状态伪造就绪。
+未实现：托盘（`capabilities.rs` 仅探测 `supports_tray`）、自启、通知（仅状态栏）。更新不在范围内：Linux 只发 deb/rpm，宿主无法替换自己，`PlatformCapabilities::supports_auto_update` 恒为 false，界面据此隐藏上游的全部更新控件（检查按钮、Beta 渠道卡）。关闭标准：各能力有真实 Host 效果与失败反馈，不以配置状态伪造就绪。
 
 ## 5. 进程与运行时
 
