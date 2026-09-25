@@ -1,19 +1,19 @@
 # 应用目录与工程结构
 
-状态：canonical；更新：2026-09-23。分层与调用链见 [架构](architecture.md)。
+状态：canonical；更新：2026-09-26。分层与调用链见 [架构](architecture.md)。
 
 ## 仓库与应用工作目录
 
 ```text
-1-app/                            Git 仓库、分支与发布边界
-├── AGENTS.md / docs/              规则、架构、合同说明和平台交接
+<repo>/                          Git 仓库、分支与发布边界
+├── CONTRIBUTING.md / docs/        公开贡献规则、架构、合同说明和平台交接
 ├── README.md / README.zh.md       面向使用者和贡献者的双语介绍
 ├── RELEASING.md / USAGE.md        发布规则与使用说明
 ├── .github/workflows/            CI、Tauri、Android、Linux 发布
 ├── Casks/                        Homebrew 分发定义
 ├── Examples/                     示例数据
-├── assets/ / video-materials/     产品展示材料
-├── scripts/                      仓库级辅助脚本
+├── assets/                       产品展示材料
+├── scripts/                      仓库级版本管理脚本
 └── openless-all/
     ├── design_handoff_openless/   设计交接材料
     └── app/                      npm 与 Core/Linux Cargo 工作目录
@@ -66,7 +66,7 @@ Core 其余模块按领域列于 [架构模块地图](architecture.md)。平台�
 | `src-tauri/gen/` | Tauri 平台生成目录；Android 手写源与合成脚本保留在 `android/`、`scripts/` |
 | `node_modules/`、`dist/`、各 `target/` | 依赖和构建产物，不作为源码或 docs 的事实来源 |
 
-检查命令集中在 [架构的验证入口](architecture.md)，版本与发布流程集中在 [RELEASING.md](../RELEASING.md)。不要在目录说明中复制易变的命令数量、分支领先数或单次测试结果。
+贡献规则见 [CONTRIBUTING.md](../CONTRIBUTING.md)，检查命令集中在 [架构的验证入口](architecture.md)，版本与发布流程集中在 [RELEASING.md](../RELEASING.md)。不要在目录说明中复制易变的命令数量、分支领先数或单次测试结果。
 
 ## 源码格式与注释
 
