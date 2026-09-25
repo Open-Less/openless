@@ -1,6 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { access, constants } from 'node:fs/promises';
-import { extname, join } from 'node:path';
+import { basename, extname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 // The Tauri shell no longer ships a Linux desktop target: Linux runs the egui
@@ -42,7 +42,7 @@ for (const file of rustFiles) {
   lines.forEach((line, index) => {
     const normalized = line.trim();
     if (!/^#!?\[cfg\(target_os = "linux"\)\]/.test(normalized)) return;
-    const isGuard = file.endsWith('/lib.rs')
+    const isGuard = basename(file) === 'lib.rs'
       && lines.slice(index, index + 3).some((entry) => entry.includes('compile_error!'));
     if (!isGuard) failures.push(`${file}:${index + 1}: Linux-only cfg block`);
   });
@@ -70,7 +70,7 @@ try {
 
 // ── 3. React: no Linux branch (i18n copy is excluded, see the header) ────────
 const reactFiles = await collect(reactSrc, new Set(['.ts', '.tsx']), {
-  skip: (path) => path.includes('/i18n/'),
+  skip: (path) => /[/\\]i18n[/\\]/.test(path),
 });
 for (const file of reactFiles) {
   if (file.endsWith('.test.ts') || file.endsWith('.test.tsx')) continue;
