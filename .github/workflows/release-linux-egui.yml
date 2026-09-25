@@ -1,17 +1,8 @@
 name: Release Linux egui
 
-# 单独手动入口：只想出一份 Linux 包（不跑 macOS/Windows）时 dispatch 这条。
-#
-# ⚠ 发版路径**不再**经过这里：release-tauri.yml 把下面这套步骤**内联**成与 build
-#   平级的普通 job（linux-egui），因为 GitHub 会把 workflow_call 调用的工作流渲染成
-#   嵌套可折叠的一层，Linux 在 Actions 页面上就不与三个平台平级。
-#   ⚠ 两份步骤必须保持一致：scripts/linux-egui-release-contract.test.mjs 会断言
-#     两边都保留同样的关键门禁（deb/rpm 各恰好一个、ldd 门禁、手动安装包门禁等），
-#     只改一边会让契约测试失败。
-#
-# 这里仍然不挂自动 tag 触发（历史上没有真正的 Ubuntu 音频/焦点/安装/回滚证据），
-# 所以它永远不会自己跑起来。版本串只能来自 release_tag 输入，从不自己拼 tag。
-# 产物命名 OpenLess-Linux-egui-<ver>-<arch>.deb/.rpm，校验和由打包脚本自己产出。
+# Linux egui 的独立手动发版入口；Tauri/Android 的 beta 发版流程保持上游原样。
+# 不挂自动 tag 触发：需要 Linux 安装与回滚验证后手动 dispatch。
+# 产物为 deb/rpm + SHA256SUMS，release_tag 可指定现有 release。
 on:
   workflow_dispatch:
     inputs:

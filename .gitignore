@@ -34,9 +34,6 @@ video-materials/
 node_modules/
 dist/
 target/
-# Explicitly ignore local cache symlinks as well as generated target directories.
-/openless-all/app/target
-/openless-all/egui-frontend/target
 # 本地从 CI / Actions 下载的 APK 及解压目录（非源码）
 ci-artifacts/
 *.apk
@@ -130,5 +127,6 @@ CapsWriter
 /openless-all/app/pnpm-lock.yaml
 /openless-all/app/pnpm-workspace.yaml
 
-# 本地会话工具（pi-subagents 编排脚本等），不属于产品，也不该进 PR
-.agents/
+# Local Linux toolchains, build logs and packaging workspaces.
+openless-all/app/.cache/
+openless-all/scripts/linux-desktop/kde/build/

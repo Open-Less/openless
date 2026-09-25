@@ -46,7 +46,6 @@ pub struct HotkeyRuntimeTarget {
     pub dictation: ShortcutBinding,
     pub dictation_mode: HotkeyMode,
     pub qa: Option<ShortcutBinding>,
-    #[serde(default)]
     pub quick_note: Option<ShortcutBinding>,
     pub translation: ShortcutBinding,
     pub switch_style: Option<ShortcutBinding>,
@@ -54,6 +53,10 @@ pub struct HotkeyRuntimeTarget {
     pub selection_polish: Option<ShortcutBinding>,
     pub coding_agent_enabled: bool,
     pub coding_agent_voice: Option<ShortcutBinding>,
+    #[serde(default)]
+    pub coding_agent_panel: Option<ShortcutBinding>,
+    #[serde(default)]
+    pub coding_agent_quick: Option<ShortcutBinding>,
     pub style_packs: Vec<StylePackHotkey>,
 }
 
@@ -70,6 +73,8 @@ impl From<&UserPreferences> for HotkeyRuntimeTarget {
             selection_polish: preferences.selection_polish_hotkey.clone(),
             coding_agent_enabled: preferences.coding_agent_enabled,
             coding_agent_voice: preferences.coding_agent_voice_hotkey.clone(),
+            coding_agent_panel: preferences.coding_agent_panel_hotkey.clone(),
+            coding_agent_quick: preferences.coding_agent_quick_hotkey.clone(),
             style_packs: preferences.style_pack_hotkeys.clone(),
         }
     }

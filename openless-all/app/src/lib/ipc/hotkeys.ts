@@ -85,6 +85,13 @@ export function setOpenAppHotkey(binding: ShortcutBinding | null): Promise<void>
   return invokeOrMock('set_open_app_hotkey', { binding }, () => undefined);
 }
 
+export function setQuickNoteHotkey(binding: ShortcutBinding | null): Promise<void> {
+  return invokeOrMock('set_quick_note_hotkey', { binding }, () => {
+    mockSetSettings({ ...mockSettings, quickNoteHotkey: binding });
+    return undefined;
+  });
+}
+
 // 风格包直达快捷键：整表替换（前端任何增删改都发全量列表，issue #759）。
 export function setStylePackHotkeys(hotkeys: StylePackHotkey[]): Promise<void> {
   return invokeOrMock('set_style_pack_hotkeys', { hotkeys }, () => {

@@ -1,0 +1,6 @@
+{
+  "KPlugin": {"Id": "openless-desktop", "Name": "OpenLess Desktop Bridge", "Description": "OpenLess focus and floating window integration", "Version": "1.0", "License": "AGPL-3.0-only"},
+  "X-Plasma-API": "javascript",
+  "X-Plasma-MainScript": "code/main.js",
+  "KPackageStructure": "KWin/Script"
+}

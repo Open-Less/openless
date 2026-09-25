@@ -50,7 +50,7 @@ impl ExternalRecordingArchive {
                 entries.push((path, modified));
             }
         }
-        entries.sort_by(|left, right| right.1.cmp(&left.1));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.1));
         let cap = plan
             .max_entries
             .map(|count| (count as usize).clamp(1, crate::history::HISTORY_CAP))

@@ -166,12 +166,12 @@ export const es: typeof zhCN = {
   nav: {
     overview: 'Resumen',
     history: 'Historial',
-    quickNote: 'Notas rápidas',
     vocab: 'Diccionario',
     style: 'Estilo',
     marketplace: 'Catálogo',
     translation: 'Traducción',
     selectionAsk: 'Preguntar',
+    quickNote: 'Notas rápidas',
     corrections: 'Correcciones',
     polishMode: 'Modo de redacción',
     group: {
@@ -302,6 +302,7 @@ export const es: typeof zhCN = {
       translation:
         'Traducción: mantén pulsada Mayús mientras hablas para insertar el texto en otro idioma',
       selectionAsk: 'Preguntar sobre una selección: selecciona texto y pregunta por voz',
+      quickNote: 'Notas rápidas: conserva el audio y vuelve al texto cuando quieras',
       settings: 'Preferencias: atajos, proveedores, privacidad y actualizaciones',
     },
     footer: {
@@ -505,17 +506,25 @@ export const es: typeof zhCN = {
     clearFailed: 'No se pudo borrar el historial: {{err}}',
     deleteFailed: 'No se pudo eliminar el registro: {{err}}',
     copyFailed: 'No se pudo copiar: {{err}}',
+    actionMenu: 'Acciones de grabación',
     playRecording: 'Reproducir grabación',
     audioLoading: 'Cargando…',
     audioDecodeFailed: 'No se pudo decodificar el audio: {{err}}',
     exportRecording: 'Exportar grabación',
     exportFailed: 'No se pudo exportar: {{err}}',
+    chooseSaveDirectory: 'Elegir ubicación de los archivos transcritos',
+    saveDirectoryPrompt: 'Introduce la carpeta de los archivos transcritos',
+    saveDirectory: 'Configurar ubicación de archivos transcritos',
+    changeSaveDirectory: 'Cambiar ubicación de archivos transcritos',
+    resetSaveDirectory: 'Usar la ubicación predeterminada',
+    defaultSaveDirectory: 'Elegir cada vez que exportes',
+    saveDirectoryFailed: 'No se pudo actualizar la ubicación: {{err}}',
     retranscribe: 'Volver a transcribir',
     retranscribing: 'Transcribiendo…',
     retranscribeFailed: 'No se pudo volver a transcribir: {{err}}',
-    rawLabel: 'Original',
     showRaw: 'Mostrar transcripción original',
     hideRaw: 'Ocultar transcripción original',
+    rawLabel: 'Original',
     rawEmpty: '(vacío)',
     selectHint: 'Selecciona un registro de la izquierda para ver sus detalles.',
     recorded: 'Grabación: {{duration}}',
@@ -530,6 +539,7 @@ export const es: typeof zhCN = {
     inserted: 'Insertado',
     pasteSent: 'Pegado enviado',
     copiedFallback: 'Copiado (usa {{shortcut}})',
+    notRequested: 'No se solicitó insertar',
     insertFailed: 'No se pudo insertar',
     confirmClear:
       '¿Eliminar los {{count}} registros del historial? Esta acción no se puede deshacer.',
@@ -897,13 +907,21 @@ export const es: typeof zhCN = {
     },
   },
   quickNote: {
-    kicker: 'Notas rápidas', title: 'Notas rápidas',
+    kicker: 'Notas rápidas',
+    title: 'Notas rápidas',
     desc: 'Audio permanente con reproducción, exportación, retranscripción y redacción.',
-    start: 'Iniciar grabación', finish: 'Terminar grabación',
-    noTranscript: 'Aún no hay transcripción.', recording: 'Grabando…',
+    recording: 'Grabando…',
+    failedTitle: 'La grabación necesita atención',
+    emptyTitle: 'Grabación sin título',
+    noTranscript: 'Aún no hay transcripción.',
+    applyResult: 'Aplicar a la nota',
+    applying: 'Aplicando…',
     shortcutTitle: 'Atajo de nota rápida',
     shortcutDesc: 'Pulsa una vez para grabar y otra vez para guardar.',
     showShortcut: 'Mostrar el atajo de nota rápida',
+    repolishNeedsTranscript: 'Primero vuelve a transcribir el audio.',
+    shareRecording: 'Compartir audio',
+    cancelledTitle: 'Grabación cancelada',
   },
   settings: {
     selectionWorkspace: {
@@ -1123,6 +1141,10 @@ export const es: typeof zhCN = {
       capsuleLabel: 'Cápsula de grabación',
       capsuleDesc: 'Muestra una cápsula en la parte inferior de la pantalla mientras grabas.',
       capsuleStyleTypeless: 'Estilo compacto Typeless',
+      capsuleTranscriptLabel: 'Mostrar transcripción en directo',
+      capsuleTranscriptDesc:
+        'Muestra el texto reconocido en lugar de las barras de audio. Sin streaming, aparece al recibir el resultado. Desactiva para restaurar la vista original.',
+      capsuleTranscriptFontSize: 'Tamaño de la transcripción',
       capsuleStyleLabel: 'Estilo de cápsula',
       capsuleStyleSiri: 'Estilo luminoso Siri',
       capsuleStyleClassic: 'Estilo predeterminado de OpenLess',
@@ -1338,6 +1360,7 @@ export const es: typeof zhCN = {
         asrSiliconflow: 'SiliconFlow SenseVoice',
         asrStepfun: 'StepFun StepAudio ASR',
         asrZhipu: 'Zhipu GLM-ASR',
+        asrMinimax: 'MiniMax ASR',
         asrGroq: 'Groq Whisper-large-v3',
         asrWhisper: 'OpenAI Whisper (compatible)',
         asrOpenrouter: 'OpenRouter Whisper',
@@ -1459,6 +1482,16 @@ export const es: typeof zhCN = {
       bailianVocabularyIdLabel: 'ID del vocabulario de palabras clave (opcional)',
       bailianVocabularyIdNote:
         'Si creaste un vocabulario en DashScope, introduce su ID vocab-... Déjalo vacío para no usar palabras clave.',
+      bailianProtocolLabel: "Tipo de API",
+      bailianProtocolNote: "La selección manual prevalece sobre el nombre del modelo y se guarda por canal para validar y grabar. Consulte la documentación del modelo.",
+      bailianProtocolOptions: {
+        "auto": "Automático",
+        "dashscope-realtime": "Tiempo real (DashScope)",
+        "qwen-realtime": "Tiempo real (Qwen Realtime)",
+        "multimodal": "Síncrono no en tiempo real (Fun-ASR / Qwen-Audio)",
+        "qwen-multimodal": "Síncrono no en tiempo real (Qwen3-ASR)",
+        "async-transcription": "Asíncrono (transcripción de archivos)",
+      },
       bailianModelRealtimeHint: 'Modelo en tiempo real: transcribe mientras hablas.',
       bailianModelSyncFileHint:
         'Modelo síncrono de grabación: transcribe al terminar (máx. 5 min por grabación).',
@@ -1518,6 +1551,9 @@ export const es: typeof zhCN = {
       descNoAcc:
         'Todos los atajos funcionan globalmente. Si no responden, comprueba el estado de los atajos globales en Permisos.',
       startStop: 'Iniciar / detener grabación',
+      quickNote: 'Nota rápida',
+      quickNoteDesc:
+        'Pulsa una vez para iniciar una nota de audio permanente y otra vez para finalizarla.',
       cancel: 'Cancelar la grabación actual',
       confirm: 'Confirmar inserción de la cápsula',
       switchStyle: 'Cambiar al estilo anterior',
@@ -1731,6 +1767,23 @@ export const es: typeof zhCN = {
         up: 'Durante la grabación, desliza hacia arriba para cancelar sin transcribir ni insertar.',
         down: 'Durante la grabación, desliza hacia abajo para cancelar sin transcribir ni insertar.',
       },
+      androidOverlayGestureActionsLabel: 'Acciones de deslizamiento de la superposición',
+      androidOverlayGestureActionsDesc:
+        'Estas acciones se aplican durante la grabación. Un toque normal termina el dictado; un deslizamiento de nota rápida conserva el audio.',
+      androidOverlayGestureDirection: {
+        up: 'Arriba',
+        down: 'Abajo',
+        left: 'Izquierda',
+        right: 'Derecha',
+      },
+      androidOverlayGestureAction: {
+        none: 'Sin acción',
+        quick_note: 'Nota rápida',
+        translation: 'Traducción',
+        style_pack: 'Cambiar estilo',
+        cancel: 'Cancelar',
+        qa: 'Preguntar',
+      },
       windowsIme: {
         installed: 'Instalado. La entrada de voz cambia temporalmente al IME de OpenLess.',
         notInstalled: 'Sin instalar. OpenLess usa la alternativa de portapapeles / WM_PASTE.',
@@ -1746,6 +1799,7 @@ export const es: typeof zhCN = {
       multimodalPipelineHint:
         'Añade un selector Tradicional / Multimodal a la página de proveedores de IA. Tradicional usa ASR + LLM y Multimodal usa un modelo con audio. Las configuraciones se guardan por separado y nunca comparten credenciales.',
       streamingInsertTitle: 'Inserción progresiva',
+      streamingInsertTitleLinux: 'Inserción progresiva (experimental)',
       streamingInsertDesc:
         'Inserta el texto carácter a carácter donde está el cursor para reducir la espera percibida. Si no se cumplen las condiciones, pega todo de una vez.',
       streamingInsertLabel: 'Inserción progresiva',
@@ -1753,6 +1807,8 @@ export const es: typeof zhCN = {
         'Cambia temporalmente la fuente de entrada a ABC para que los IME de chino, japonés o coreano no intercepten las teclas. Se restaura al terminar la sesión.',
       streamingInsertHintWindows:
         'SendInput Unicode escribe directamente, sin pasar por TSF / IME y sin cambiar de método de entrada.',
+      streamingInsertHintLinux:
+        'Usa el complemento fcitx5 para enviar texto; la inserción progresiva simula teclas mediante enigo + XTest.',
       streamingInsertSaveClipboardLabel: 'Copiar al portapapeles',
       streamingInsertSaveClipboardHint:
         'Después de insertar correctamente, copia el texto final al portapapeles para poder pegarlo otra vez con Cmd+V. Desactivado: no se modifica el portapapeles.',
@@ -2195,9 +2251,10 @@ export const es: typeof zhCN = {
     groupOther: 'Otros',
     mirrorLabel: 'Servidor de descarga',
     mirrorDesc:
-      'huggingface.co es el origen oficial; hf-mirror.com es una réplica de la comunidad que suele funcionar mejor en China continental.',
+      'Elige HuggingFace, la réplica comunitaria o los repositorios oficiales de ModelScope para modelos compatibles.',
     mirrorHuggingface: 'HuggingFace oficial (huggingface.co)',
     mirrorHfMirror: 'Réplica para China continental (hf-mirror.com)',
+    mirrorModelscope: 'ModelScope oficial (modelscope.cn)',
     activeBadge: 'En uso',
     downloadedBadge: 'Descargado',
     notDownloadedBadge: 'Sin descargar',

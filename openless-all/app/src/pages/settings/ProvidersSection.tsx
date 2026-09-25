@@ -25,6 +25,8 @@ import {
   validateProviderCredentials,
   type ProviderDescriptor,
 } from '../../lib/ipc';
+import { BailianProtocolField } from './BailianProtocolField';
+import type { BailianProtocol } from '../../lib/bailianProtocol';
 import { LlmProtocolFields } from './LlmProtocolFields';
 import { ProviderFormContext } from './ProviderForm';
 import { LocalModelPicker } from './models/LocalModelPicker';
@@ -233,6 +235,7 @@ export function ChannelCredentialFields({
   const [asrModelRevision, setAsrModelRevision] = useState(0);
   const unifiedBailian = providerType === 'bailian';
   const [bailianModel, setBailianModel] = useState('');
+  const [bailianProtocol, setBailianProtocol] = useState<BailianProtocol>('auto');
   const [volcengineAuthMode, setVolcengineAuthMode] = useState<'app_id_token' | 'api_key'>(
     'app_id_token',
   );
@@ -816,13 +819,16 @@ export function ChannelCredentialFields({
             : undefined
         }
       />
+      {unifiedBailian && <BailianProtocolField key={channelId} channelId={channelId}
+        onChange={setBailianProtocol} onUserMutation={onAsrMutation} onBlockedChange={trackField} />}
       {unifiedBailian && (
         <BailianProtocolHint
           key={`${channelId}:proto:${asrModelRevision}`}
           currentModel={bailianModel}
+          selectedProtocol={bailianProtocol}
         />
       )}
-      {unifiedBailian && bailianModelSupportsVocabulary(bailianModel) && (
+      {unifiedBailian && (bailianProtocol === 'dashscope-realtime' || (bailianProtocol === 'auto' && bailianModelSupportsVocabulary(bailianModel))) && (
         <>
           <CredentialField
             key={`${channelId}:vocabulary_id`}
@@ -860,6 +866,7 @@ export function ChannelCredentialFields({
       {/* 统一百炼「拉取模型」只写 model，不覆盖用户选择的区域或工作空间 endpoint。 */}
       <ProviderTools
         kind="asr"
+        disabled={Object.values(blockedFields).some(Boolean)}
         modelAccount="asr.model"
         provider={channelId}
         onModelSelected={() => setAsrModelRevision((v) => v + 1)}
@@ -1009,7 +1016,8 @@ function AsrAdvancedOptions({
 // 与 qwen-audio-3.0-asr-flash 是「录音文件·说完转写」（同步）。
 function bailianModelProtocol(model: string): 'realtime' | 'sync' | 'async' {
   const m = model.trim();
-  if (!m || m.includes('realtime')) return 'realtime';
+  if (!m || m.includes('realtime') || m === 'qwen-audio-3.0-asr-flash-streaming')
+    return 'realtime';
   // qwen3-asr-flash-filetrans 仅接受公网 URL，暂不支持（后端 protocol_for_model
   // 显式拒绝），前端不再归为 async 提示。
   if (
@@ -1028,6 +1036,7 @@ function bailianModelSupportsVocabulary(model: string): boolean {
   const m = model.trim();
   return (
     !m ||
+    m === 'qwen-audio-3.0-asr-flash-streaming' ||
     m.startsWith('fun-asr-realtime') ||
     m.startsWith('paraformer-realtime') ||
     m.startsWith('sensevoice-realtime')
@@ -1036,29 +1045,12 @@ function bailianModelSupportsVocabulary(model: string): boolean {
 
 // 模型框下的一行协议提示,解决「三种模型看不出区别」——告诉用户当前模型是实时还是
 // 录音文件、行为差异如何。随 asrModelRevision(拉取/选择模型时)与挂载时重读 asr.model。
-function BailianProtocolHint({ currentModel }: { currentModel: string }) {
+function BailianProtocolHint({ currentModel, selectedProtocol }: { currentModel: string; selectedProtocol: BailianProtocol }) {
   const { t } = useTranslation();
-  const [model, setModel] = useState('');
-
-  useEffect(() => {
-    let cancelled = false;
-    readCredential('asr.model')
-      .then((v) => {
-        if (!cancelled) setModel(v || 'fun-asr-realtime');
-      })
-      .catch(() => {
-        /* 读失败按默认实时提示 */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    setModel(currentModel || 'fun-asr-realtime');
-  }, [currentModel]);
-
-  const protocol = bailianModelProtocol(model);
+  const protocol = selectedProtocol === 'auto'
+    ? bailianModelProtocol(currentModel)
+    : selectedProtocol === 'async-transcription' ? 'async'
+      : selectedProtocol.endsWith('realtime') ? 'realtime' : 'sync';
   const hint =
     protocol === 'realtime'
       ? t('settings.providers.bailianModelRealtimeHint')

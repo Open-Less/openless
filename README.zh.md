@@ -220,7 +220,7 @@ OpenLess 只做一件事:**把语音变成可用的书面文字(尤其是 AI 提
 - **多语言界面**——设置 → 语言 可在 简体中文 / 繁體中文 / English / 日本語 / 한국어 之间切换(首次启动自动检测)。
 - **Tauri 宿主内自动更新**——macOS、Windows 与 Android 通过 设置 → 关于 → 检查 获取签名产物；Linux 使用独立更新清单与 updater 契约。
 - **Beta 频道(可选加入)**——设置 → 关于 → 加入 Beta 频道,可下载最新预发布版本进行手动安装。Beta 版本绝不会自动推送给 Stable 用户(见[贡献流程](#贡献流程))。
-- **分发渠道**——从 [Releases](../../releases) 直接下载 DMG/EXE、Homebrew Cask(`brew install --cask openless`)、Windows 安装包。Linux 包会等独立 egui UI 完成并启用发布门禁后再正式发布。
+- **分发渠道**——从 [Releases](../../releases) 直接下载 DMG/EXE、Homebrew Cask(须先添加项目 tap，见下方安装步骤)、Windows 安装包。Linux 包会等独立 egui UI 完成并启用发布门禁后再正式发布。
 - **单实例锁**——防止两个 OpenLess 进程争抢同一个快捷键边沿。
 - 词典条目注入到支持热词的 ASR 提供方(Volcengine 的 `context.hotwords`、StepFun 的 `hotwords`、Whisper 兼容的 `prompt`(ZenMux 除外——其 JSON 协议不携带 `prompt`/`hotwords`)、百炼的 vocabulary_id),并在润色时作为语义提示;命中次数按会话累计。讯飞实时语音转写标准版没有请求级热词参数,需在讯飞控制台配置个性化热词。
 - 平台原生全局快捷键:macOS 上为 CGEventTap,Windows 上为低级键盘钩子(`WH_KEYBOARD_LL`)。

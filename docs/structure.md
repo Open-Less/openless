@@ -1,6 +1,6 @@
 # 应用目录与工程结构
 
-状态：canonical；更新：2026-09-08。分层与调用链见 [架构](architecture.md)。
+状态：canonical；更新：2026-09-23。分层与调用链见 [架构](architecture.md)。
 
 ## 仓库与应用工作目录
 
@@ -61,6 +61,7 @@ Core 其余模块按领域列于 [架构模块地图](architecture.md)。平台�
 | `src-tauri/tauri.conf.json` / `src-tauri/capabilities/` | 应用元数据、初始窗口、打包与 Tauri 能力权限 |
 | `src-tauri/vendor/` | 原生 ASR 引擎与子模块；升级按 [qwen-asr 清单](qwen-asr-submodule-upgrade-checklist.md) |
 | `src/lib/ipc/provider-descriptors.generated.json` | Core 导出的公开 provider 目录；生成命令见 [架构](architecture.md) |
+| `assets/remote-input/` / `assets/vocab-presets.json` | Tauri 与 Linux 共用的手机输入页面及内置词表；测试和格式化均读取这份资源 |
 | `contract/language-catalog.json` | 工作语言的原生保存值、显示代码、ASR 代码与 Apple locale；前端及 Core 直接共用，新增语种不分别修改三份映射 |
 | `src-tauri/gen/` | Tauri 平台生成目录；Android 手写源与合成脚本保留在 `android/`、`scripts/` |
 | `node_modules/`、`dist/`、各 `target/` | 依赖和构建产物，不作为源码或 docs 的事实来源 |

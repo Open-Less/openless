@@ -259,16 +259,6 @@ pub trait DictationEngine: Send + Sync + 'static {
     /// Resolve the provider-facing side before the host starts recording.
     /// Legacy implementations defer their existing provider-only start until
     /// the returned prepared session is actually started.
-    /// Spawner used for buffered-transcription background attach work. Engines
-    /// that hold the host's injected `TaskSpawner` should expose it here; the
-    /// default keeps the Tokio-backed default used by `BackendDependencies`.
-    ///
-    /// Production code must never call `tokio::spawn` directly (CI gate
-    /// `check-core-runtime-seam.ps1`), so background work goes through this.
-    fn buffered_task_spawner(&self) -> Arc<dyn crate::config::TaskSpawner> {
-        Arc::new(crate::config::TokioTaskSpawner)
-    }
-
     fn prepare_transcription(
         self: Arc<Self>,
         session_id: SessionId,
@@ -287,17 +277,21 @@ pub trait DictationEngine: Send + Sync + 'static {
     /// It uses the same buffered lifecycle as normal voice capture.
     fn start_transcription_with_progress(
         self: Arc<Self>,
+        task_spawner: Arc<dyn crate::TaskSpawner>,
         session_id: SessionId,
         context: Arc<DictationContext>,
         partials: Arc<dyn TextStreamSink>,
         progress: Arc<dyn RecordingProgressSink>,
     ) -> BoxFuture<'static, Result<Arc<dyn TranscriptionSession>, BackendError>> {
-        let spawner = self.buffered_task_spawner();
         let preparation = self.prepare_transcription(session_id, Arc::clone(&context));
         Box::pin(async move {
             let prepared = preparation.await?;
             Ok(crate::dictation_engine::buffered_transcription_session(
-                prepared, context, partials, progress, spawner,
+                prepared,
+                context,
+                partials,
+                progress,
+                task_spawner,
             ))
         })
     }
@@ -434,6 +428,17 @@ pub trait RecordingControlSink: Send + Sync {
 /// immutable session policy.
 pub trait RecordingArchive: Send + Sync {
     fn is_available(&self) -> bool;
+
+    /// Move an undecided capture into the permanent quick-note archive.
+    /// Hosts that do not need separate storage can keep the default no-op.
+    fn promote_to_quick_note(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    /// Move a retained undecided capture back into ordinary debug storage.
+    fn demote_to_ordinary_recording(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+        Box::pin(async { Ok(()) })
+    }
 
     fn read_pcm(&self) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
         Box::pin(async {

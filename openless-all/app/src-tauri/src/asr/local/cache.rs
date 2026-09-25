@@ -1,3 +1,7 @@
+#![cfg_attr(
+    target_os = "linux",
+    allow(dead_code, unused_imports, unused_variables)
+)]
 //! 本地 Qwen3-ASR 引擎缓存。
 //!
 //! 用途：避免每次 dictation 都重加载 1.2GB+ 模型。引擎一次 load 后驻留在内存，
@@ -278,12 +282,12 @@ impl LocalAsrCache {
                 .filter(|cached| cached.engine.is_healthy())
                 .map(|cached| cached.model_id.clone());
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         None
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn pressure_relief() {}
 
 /// drop MLX Qwen 引擎后调一次：让 macOS libmalloc 把 freelist 上的物理页归还内核。

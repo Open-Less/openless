@@ -1,0 +1,11 @@
+{
+  "uuid": "openless@openless.app",
+  "name": "OpenLess Desktop Bridge",
+  "description": "Native OpenLess hotkeys and window placement",
+  "version": 1,
+  "shell-version": [
+    "42",
+    "43",
+    "44"
+  ]
+}

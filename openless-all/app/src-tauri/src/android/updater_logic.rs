@@ -232,10 +232,7 @@ mod tests {
     #[test]
     fn decode_tauri_minisign_text_passthrough_raw_file() {
         let raw = "untrusted comment: minisign public key: ABC\nRWABC";
-        assert_eq!(
-            decode_tauri_minisign_text(&format!("{raw}\n")).unwrap(),
-            raw
-        );
+        assert_eq!(decode_tauri_minisign_text(&format!("{raw}\n")).unwrap(), raw);
         assert_eq!(decode_tauri_minisign_text(raw).unwrap(), raw);
     }
 

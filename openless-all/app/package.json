@@ -1,7 +1,7 @@
 {
   "name": "openless-app",
   "private": true,
-  "version": "2.0.0-Beta.2",
+  "version": "2.0.0-Beta.2+build.20260924",
   "type": "module",
   "scripts": {
     "pretest": "npm run build",
@@ -31,8 +31,8 @@
     "check:pin-persistence-security": "node scripts/pin-persistence-security-contract.test.mjs",
     "check:android-updater-pubkey": "node scripts/check-android-updater-pubkey.mjs",
     "check:android-shizuku-scaffolding": "node scripts/merge-android-shizuku-manifest.test.mjs && node scripts/patch-android-shizuku-deps.test.mjs",
-    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"android/frontend/**/*.{ts,tsx}\" \"scripts/**/*.{js,mjs,sh}\" \"*.{ts,json,html,sh}\" \"src-tauri/src/remote_server/assets/*.{js,css,html}\"",
-    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"android/frontend/**/*.{ts,tsx}\" \"scripts/**/*.{js,mjs,sh}\" \"*.{ts,json,html,sh}\" \"src-tauri/src/remote_server/assets/*.{js,css,html}\""
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"android/frontend/**/*.{ts,tsx}\" \"scripts/**/*.{js,mjs,sh}\" \"*.{ts,json,html,sh}\" \"assets/remote-input/*.{js,css,html}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"android/frontend/**/*.{ts,tsx}\" \"scripts/**/*.{js,mjs,sh}\" \"*.{ts,json,html,sh}\" \"assets/remote-input/*.{js,css,html}\""
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

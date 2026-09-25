@@ -66,7 +66,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             "onStartCommand action=${intent?.action} startId=$startId rootAttached=${rootView?.isAttachedToWindow}",
         )
         when (intent?.action) {
-            ACTION_SHOW -> showOverlay()
+            null, ACTION_SHOW -> showOverlay()
             ACTION_START_RECORDING -> {
                 showOverlay()
                 if (!tryPromoteRecordingForeground()) {
@@ -105,7 +105,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         super.onDestroy()
     }
 
-    override fun onCapsuleStateChanged(state: String, message: String?) {
+    override fun onCapsuleStateChanged(state: String, message: String?, level: Float) {
         when (state) {
             "recording" -> {
                 recording = true
@@ -436,7 +436,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                     if (
                         recording &&
                             verticalSwipe != null &&
-                            matchesConfiguredCancelSwipe(verticalSwipe) &&
+                            gestureAction(verticalSwipe) != "none" &&
                             !swipeConsumed
                     ) {
                         pendingSwipe = verticalSwipe
@@ -448,6 +448,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                     if (
                         (recording || armed || longPressRecording) &&
                             swipe != null &&
+                            gestureAction(swipe) != "none" &&
                             !swipeConsumed
                     ) {
                         pendingSwipe = swipe
@@ -574,33 +575,38 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         return if (dy < 0) SwipeDirection.Up else SwipeDirection.Down
     }
 
-    private fun matchesConfiguredCancelSwipe(direction: SwipeDirection): Boolean {
-        val configured = OpenLessAndroidPreferences.overlayCancelSwipeDirection(this)
-        return (direction == SwipeDirection.Up && configured == "up") ||
-            (direction == SwipeDirection.Down && configured == "down")
+    private fun gestureAction(direction: SwipeDirection): String {
+        return OpenLessAndroidPreferences.overlayGestureAction(this, direction.name.lowercase())
     }
 
     private fun applySwipePreview(direction: SwipeDirection) {
-        when (direction) {
-            SwipeDirection.Left -> applyVisualState(OverlayVisualState.Armed)
-            SwipeDirection.Right -> applyVisualState(OverlayVisualState.Processing)
-            SwipeDirection.Up,
-            SwipeDirection.Down -> applyVisualState(OverlayVisualState.Error)
+        when (gestureAction(direction)) {
+            "quick_note",
+            "translation",
+            "style_pack" -> applyVisualState(OverlayVisualState.Processing)
+            "qa" -> applyVisualState(OverlayVisualState.Processing)
+            "cancel" -> applyVisualState(OverlayVisualState.Error)
+            else -> Unit
         }
     }
 
     private fun commitSwipe(direction: SwipeDirection) {
         Log.i(TAG, "commit swipe direction=$direction recording=$recording processing=$processing")
-        when (direction) {
-            SwipeDirection.Left -> handleLeftSwipe()
-            SwipeDirection.Right -> finalizeQaFromOverlay()
-            SwipeDirection.Up,
-            SwipeDirection.Down -> cancelRecordingFromOverlay(direction)
+        when (gestureAction(direction)) {
+            "quick_note" -> stopQuickNoteFromOverlay()
+            "translation" -> stopRecordingFromOverlay(translation = true)
+            "style_pack" -> {
+                switchStylePackFromOverlay()
+                if (recording) stopRecordingFromOverlay()
+            }
+            "qa" -> finalizeQaFromOverlay()
+            "cancel" -> cancelRecordingFromOverlay(direction)
+            else -> Unit
         }
     }
 
     private fun cancelRecordingFromOverlay(direction: SwipeDirection) {
-        if (!recording || !matchesConfiguredCancelSwipe(direction)) {
+        if (!recording || gestureAction(direction) != "cancel") {
             return
         }
         try {
@@ -615,18 +621,6 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             Log.w(TAG, "cancel dictation bridge unavailable", error)
             applyVisualState(OverlayVisualState.Error)
             showToast("语音服务未就绪，请打开 OpenLess 后重试")
-        }
-    }
-
-    private fun handleLeftSwipe() {
-        when (OpenLessAndroidPreferences.overlayLeftSwipeAction(this)) {
-            "style_pack" -> {
-                switchStylePackFromOverlay()
-                if (recording) {
-                    stopRecordingFromOverlay()
-                }
-            }
-            else -> stopRecordingFromOverlay(translation = true)
         }
     }
 
@@ -721,6 +715,21 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             }
         } catch (error: Throwable) {
             Log.w(TAG, "stop dictation bridge unavailable", error)
+            recording = false
+            processing = false
+            applyVisualState(OverlayVisualState.Error)
+            showToast("语音服务未就绪，请打开 OpenLess 后重试")
+        }
+    }
+
+    private fun stopQuickNoteFromOverlay() {
+        try {
+            recording = false
+            processing = true
+            applyVisualState(OverlayVisualState.Processing)
+            OpenLessNative.nativeStopDictationAsQuickNote()
+        } catch (error: Throwable) {
+            Log.w(TAG, "stop quick note bridge unavailable", error)
             recording = false
             processing = false
             applyVisualState(OverlayVisualState.Error)

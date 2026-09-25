@@ -5,6 +5,8 @@ import { detectOS, type OS } from './WindowChrome';
 import { warmUpSiriShaders } from './SiriGL';
 import { VoiceOrbStage } from './VoiceOrbStage';
 import { TypelessCapsule } from './TypelessCapsule';
+import { LiveTranscriptPill } from './LiveTranscriptPill';
+import { capsuleTranscriptFontSize, visibleCapsuleTranscript } from '../lib/capsuleTranscript';
 import { getSettings } from '../lib/ipc/settings';
 import { cancelDictation, stopDictation } from '../lib/ipc/dictation';
 import {
@@ -20,6 +22,7 @@ import type {
   CapsuleStyle,
   InsertFallbackCardPayload,
   PendingCorrection,
+  UserPreferences,
 } from '../lib/types';
 import { VocabSuggestionCard } from './VocabSuggestionCard';
 import { InsertFallbackCard } from './InsertFallbackCard';
@@ -452,7 +455,7 @@ function ClassicPill({
   const shadowAlpha = 0.2 + ambient * 0.1;
 
   return (
-    // 桌面走假毛玻璃；Android 由 .ol-frost 平台规则退成不透明面。
+    // 非 Linux 走假毛玻璃；Linux 禁用透明窗口后由 .ol-frost 平台规则退成不透明面。
     // 不写 backdrop-filter —— webview 模糊不了透明窗口背后的桌面（Tauri 上游限制）。
     <div
       className="ol-frost ol-capsule-pill"
@@ -500,6 +503,8 @@ interface ClassicCapsuleProps {
   level: number;
   insertedChars: number;
   message?: string;
+  transcript?: string;
+  transcriptFontSize?: number;
   operating?: boolean;
   translation: boolean;
 }
@@ -514,6 +519,8 @@ function ClassicCapsule({
   level,
   insertedChars,
   message,
+  transcript,
+  transcriptFontSize = 14,
   operating,
   translation,
 }: ClassicCapsuleProps) {
@@ -526,6 +533,9 @@ function ClassicCapsule({
   const onConfirm = useCallback(() => {
     void stopDictation();
   }, []);
+  const liveText = transcript?.trim() ?? '';
+  const recording = state === 'recording';
+  const processing = state === 'transcribing' || state === 'polishing';
 
   return (
     <>
@@ -571,16 +581,35 @@ function ClassicCapsule({
           {t('capsule.translating')}
         </div>
       </div>
-      <ClassicPill
-        os={os}
-        state={state}
-        level={level}
-        insertedChars={insertedChars}
-        message={message}
-        operating={operating}
-        onCancel={onCancel}
-        onConfirm={onConfirm}
-      />
+      {liveText ? (
+        <LiveTranscriptPill
+          text={liveText}
+          fontSize={transcriptFontSize}
+          tone="frost"
+          stageWidth={hostMetrics.width}
+          maxWidth={hostMetrics.width - 16}
+          minWidth={metrics.width}
+          height={metrics.height}
+          controlSize={28}
+          onCancel={onCancel}
+          onConfirm={onConfirm}
+          cancelEnabled={recording || processing}
+          confirmEnabled={recording}
+          cancelLabel={t('common.cancel')}
+          confirmLabel={t('settings.shortcuts.confirm')}
+        />
+      ) : (
+        <ClassicPill
+          os={os}
+          state={state}
+          level={level}
+          insertedChars={insertedChars}
+          message={message}
+          operating={operating}
+          onCancel={onCancel}
+          onConfirm={onConfirm}
+        />
+      )}
     </>
   );
 }
@@ -613,6 +642,16 @@ const CAPSULE_PREVIEW_STATES: CapsuleState[] = [
   'error',
 ];
 
+/** 参考视频里的插入节奏：分片到达、全部并发、远处更晚启动。 */
+const INSERT_DEMO_CHUNKS = [
+  '帮我',
+  '帮我查找一',
+  '帮我查找一下',
+  '帮我查找一下10',
+  '帮我查找一下10六号',
+];
+const INSERT_DEMO_GAPS_MS = [420, 560, 640, 540, 280];
+
 function getPreviewCapsulePayload() {
   if (isTauri || typeof window === 'undefined') {
     return {
@@ -623,6 +662,7 @@ function getPreviewCapsulePayload() {
       warming: false,
       selectionPolish: false,
       style: 'siri' as CapsuleStyle,
+      insertDemo: false,
     };
   }
 
@@ -632,14 +672,16 @@ function getPreviewCapsulePayload() {
     ? (stateParam as CapsuleState)
     : 'recording';
   const previewLevel = Number(params.get('level') ?? 0.6);
+  const insertDemo = params.get('insertDemo') === '1';
   return {
-    state: previewState,
+    state: insertDemo ? ('recording' as CapsuleState) : previewState,
     level: Number.isFinite(previewLevel) ? Math.min(1, Math.max(0, previewLevel)) : 0.6,
     message: params.get('message') ?? undefined,
     translation: params.get('translation') === '1',
     warming: params.get('warming') === '1',
     selectionPolish: params.get('selectionPolish') === '1',
     style: parseCapsuleStyle(params.get('style')) ?? 'siri',
+    insertDemo,
   };
 }
 
@@ -656,11 +698,22 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const [level, setLevel] = useState<number>(preview.level);
   const [message, setMessage] = useState<string | undefined>(preview.message);
   const [localAsrText, setLocalAsrText] = useState('');
+  const [transcriptEnabled, setTranscriptEnabled] = useState(
+    () => isTauri || new URLSearchParams(window.location.search).get('transcript') !== '0',
+  );
+  const [transcriptFontSize, setTranscriptFontSize] = useState(() =>
+    capsuleTranscriptFontSize(
+      isTauri
+        ? undefined
+        : Number(new URLSearchParams(window.location.search).get('fontSize') || 14),
+    ),
+  );
   const transcriptViewRef = useRef<TranscriptViewState>({
     sessionId: null,
     sequence: 0,
     text: '',
   });
+  const capsuleStateRef = useRef<CapsuleState>(preview.state);
   const [translation, setTranslation] = useState<boolean>(preview.translation);
   const [selectionPolish, setSelectionPolish] = useState<boolean>(preview.selectionPolish);
   // 偏好事件即时换肤；录音状态携带同一个样式，保证首次显示也能正确呈现。
@@ -729,7 +782,16 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         setState(p.state);
         setLevel(p.level ?? 0);
         setMessage(p.message ?? undefined);
-        if (p.state === 'recording') setLocalAsrText('');
+        const previous = capsuleStateRef.current;
+        capsuleStateRef.current = p.state;
+        if (
+          p.state === 'recording' &&
+          previous !== 'recording' &&
+          previous !== 'transcribing' &&
+          previous !== 'polishing'
+        ) {
+          setLocalAsrText('');
+        }
         setTranslation(p.translation === true);
         setWarming(p.warming === true);
         setSelectionPolish(p.selectionPolish === true);
@@ -780,7 +842,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     let preferenceRevision = 0;
     (async () => {
       const { listen } = await import('@tauri-apps/api/event');
-      const handle = await listen<{ capsuleStyle?: CapsuleStyle }>('prefs:changed', (event) => {
+      const handle = await listen<UserPreferences>('prefs:changed', (event) => {
+        setTranscriptEnabled(event.payload.capsuleTranscriptEnabled ?? true);
+        setTranscriptFontSize(capsuleTranscriptFontSize(event.payload.capsuleTranscriptFontSize));
         preferenceRevision += 1;
         const next = parseCapsuleStyle(event.payload?.capsuleStyle);
         if (next) {
@@ -797,6 +861,8 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       const preferences = await getSettings();
       const next = parseCapsuleStyle(preferences.capsuleStyle);
       if (!cancelled && revisionAtRead === preferenceRevision && next) {
+        setTranscriptEnabled(preferences.capsuleTranscriptEnabled ?? true);
+        setTranscriptFontSize(capsuleTranscriptFontSize(preferences.capsuleTranscriptFontSize));
         stylePreferenceReadyRef.current = true;
         setCapsuleStyle(next);
       }
@@ -864,6 +930,25 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     });
   }, [warming]);
 
+  useEffect(() => {
+    if (!preview.insertDemo) return undefined;
+    let cancelled = false;
+    let elapsed = 0;
+    const timers: number[] = [];
+    INSERT_DEMO_CHUNKS.forEach((chunk, index) => {
+      elapsed += INSERT_DEMO_GAPS_MS[index] ?? 480;
+      timers.push(
+        window.setTimeout(() => {
+          if (!cancelled) setLocalAsrText(chunk);
+        }, elapsed),
+      );
+    });
+    return () => {
+      cancelled = true;
+      for (const timer of timers) window.clearTimeout(timer);
+    };
+  }, [preview.insertDemo]);
+
   // 兜底卡片排在最前：它是在会话收尾那一刻弹的，那一帧胶囊还在渲染 Done/Error 终态，
   // 而这次会话的结果恰恰是「没落进去」—— 让终态盖在上面等于报了个假的成功。
   // 后端那边同步让路：卡片可见时 idle 隐藏不收窗口（见 capsule_focus.rs）。
@@ -891,6 +976,13 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       : state === 'transcribing' && localAsrText
         ? localAsrText
         : message;
+  const liveTranscript = visibleCapsuleTranscript(
+    localAsrText,
+    transcriptEnabled,
+    renderedState,
+    renderedSelectionPolish,
+  );
+  const showLiveTranscript = liveTranscript.length > 0;
 
   return (
     <div
@@ -905,7 +997,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         paddingRight: hostMetrics.horizontalInset,
         paddingBottom: hostMetrics.bottomInset,
         boxSizing: hostMetrics.boxSizing,
-        background: 'transparent',
+        background: preview.insertDemo
+          ? 'radial-gradient(ellipse at 50% 35%, #4d9a4a 0%, #1a4a22 42%, #0e2414 100%)'
+          : 'transparent',
         animation: leaving
           ? `capsule-out ${exitMs}ms cubic-bezier(.55,.06,.68,.19) forwards`
           : // .68s 的入场被反馈「按下之后有延迟」：压到 .38s，曲线保持轻微弹性，
@@ -923,6 +1017,8 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
             level={leaving ? 0 : level}
             insertedChars={insertedCharsRef.current}
             message={renderedMessage}
+            transcript={liveTranscript}
+            transcriptFontSize={transcriptFontSize}
             operating={operatingRef.current}
             translation={translation}
           />
@@ -932,6 +1028,8 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
             level={leaving ? 0 : level}
             insertedChars={insertedCharsRef.current}
             message={renderedMessage}
+            transcript={liveTranscript}
+            transcriptFontSize={transcriptFontSize}
             operating={operatingRef.current}
             translation={translation}
             warming={!leaving && warming}
@@ -985,14 +1083,41 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
                 {t('capsule.translating')}
               </div>
             </div>
-            <VoiceOrbStage
-              os={os}
-              state={renderedState}
-              level={leaving ? 0 : level}
-              warming={!leaving && warming}
-              warmupMs={warmupMs}
-              message={renderedMessage}
-            />
+            <div
+              style={{
+                opacity: 1,
+                transition: 'opacity .28s var(--ol-motion-soft)',
+              }}
+            >
+              <VoiceOrbStage
+                os={os}
+                state={renderedState}
+                level={leaving ? 0 : level}
+                warming={!leaving && warming}
+                warmupMs={warmupMs}
+                message={renderedMessage}
+              />
+            </div>
+            {showLiveTranscript && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: hostMetrics.horizontalInset,
+                  right: hostMetrics.horizontalInset,
+                  bottom: 24,
+                  display: 'flex',
+                  justifyContent: 'center',
+                }}
+              >
+                <LiveTranscriptPill
+                  text={liveTranscript}
+                  fontSize={transcriptFontSize}
+                  tone="frost"
+                  stageWidth={hostMetrics.width}
+                  maxWidth={hostMetrics.width - 24}
+                />
+              </div>
+            )}
           </>
         ))}
       {renderedSelectionPolish && (

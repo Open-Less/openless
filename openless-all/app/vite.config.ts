@@ -29,7 +29,7 @@ export default defineConfig(async () => ({
       : host
         ? { protocol: 'ws', host, port: 1421 }
         : undefined,
-    watch: { ignored: ['**/src-tauri/**'] },
+    watch: { ignored: ['**/src-tauri/**', '**/target/**'] },
     proxy: {
       // Browser-only preview parity: the native app calls OrcaRouter directly,
       // while Vite needs a same-origin bridge because /models does not advertise CORS.

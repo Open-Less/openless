@@ -496,6 +496,7 @@ export interface SidebarModelEntry {
   isActive: boolean;
   /** 引擎标识，决定右侧动作按钮分派。 */
   engine: 'qwen3' | 'whisper' | 'sherpa' | 'foundry';
+  runtimeLabel?: string;
   downloadError?: string | null;
 }
 
@@ -542,7 +543,7 @@ function ModelChoice({
     <button type="button" className="ol-model-choice" aria-pressed={selected} onClick={onSelect}>
       <span className="ol-model-choice-name">{entry.displayName || entry.name}</span>
       <span className="ol-model-choice-meta">
-        <span>{ENGINE_LABELS[entry.engine]}</span>
+        <span>{entry.runtimeLabel ?? ENGINE_LABELS[entry.engine]}</span>
         {entry.languages?.length ? <span>{entry.languages.join(' / ')}</span> : null}
         <span>
           {entry.remoteBytes || entry.sizeBytes
@@ -612,7 +613,7 @@ function ModelFacts({
     <dl className="ol-model-facts">
       <div>
         <dt>{t('localAsr.engineLabel')}</dt>
-        <dd>{ENGINE_LABELS[entry.engine]}</dd>
+        <dd>{entry.runtimeLabel ?? ENGINE_LABELS[entry.engine]}</dd>
       </div>
       <div>
         <dt>{t('localAsr.sizeLabel')}</dt>

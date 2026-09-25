@@ -32,6 +32,7 @@ const ASR_PROVIDER_TYPES: &[(&str, &str)] = &[
     ("siliconflow", "asrSiliconflow"),
     ("stepfun", "asrStepfun"),
     ("zhipu", "asrZhipu"),
+    ("minimax", "asrMinimax"),
     ("groq", "asrGroq"),
     ("whisper", "asrWhisper"),
     ("openrouter", "asrOpenrouter"),
@@ -353,6 +354,7 @@ fn static_models(kind: ProviderKind, provider_type: &str) -> &'static [&'static 
         (ProviderKind::Asr, "xiaomi-mimo-asr") => &[crate::asr::mimo::DEFAULT_MODEL],
         (ProviderKind::Asr, "bailian-fun-asr-flash") => DASHSCOPE_MODELS,
         (ProviderKind::Asr, "elevenlabs") => &[crate::asr::elevenlabs::DEFAULT_MODEL],
+        (ProviderKind::Asr, "minimax") => &["asr-1.0"],
         (ProviderKind::Llm, crate::polish::CODEX_OAUTH_PROVIDER_ID) => &[
             crate::polish::CODEX_DEFAULT_MODEL,
             "gpt-5.3-codex",
@@ -555,6 +557,7 @@ pub fn default_asr_endpoint(provider_type: &str) -> Option<&'static str> {
         "siliconflow" => Some("https://api.siliconflow.cn/v1"),
         "stepfun" => Some("https://api.stepfun.com/v1"),
         "zhipu" => Some("https://open.bigmodel.cn/api/paas/v4"),
+        "minimax" => Some("https://api.minimaxi.com/v1"),
         "groq" => Some("https://api.groq.com/openai/v1"),
         "whisper" => Some("https://api.openai.com/v1"),
         "openrouter" => Some("https://openrouter.ai/api/v1"),
@@ -574,6 +577,7 @@ pub fn default_asr_model(provider_type: &str) -> Option<&'static str> {
         "siliconflow" => Some("FunAudioLLM/SenseVoiceSmall"),
         "stepfun" => Some("stepaudio-2.5-asr"),
         "zhipu" => Some("glm-asr-2512"),
+        "minimax" => Some("asr-1.0"),
         "groq" => Some("whisper-large-v3-turbo"),
         "whisper" => Some("whisper-1"),
         "openrouter" => Some("openai/whisper-large-v3-turbo"),
@@ -790,8 +794,69 @@ pub fn is_tencent_cloud_provider(id: &str) -> bool {
 pub fn is_whisper_compatible_provider(id: &str) -> bool {
     matches!(
         id,
-        "whisper" | "siliconflow" | "zhipu" | "groq" | "openrouter" | "stepfun" | "zenmux"
+        "whisper" | "siliconflow" | "zhipu" | "groq" | "openrouter" | "stepfun" | "zenmux" | "minimax"
     ) || id == OPENAI_COMPATIBLE_ASR_PROVIDER_ID
+}
+
+/// Explicit channel selection takes precedence over model-name inference.
+/// Stored inside asr.advanced_config so all hosts use the existing credential lifecycle.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BailianProtocol {
+    #[default]
+    Auto,
+    DashscopeRealtime,
+    QwenRealtime,
+    Multimodal,
+    QwenMultimodal,
+    AsyncTranscription,
+}
+
+impl BailianProtocol {
+    pub fn from_config(provider: &str, raw: Option<&str>) -> Result<Self, String> {
+        if !is_bailian_provider(provider) {
+            return Ok(Self::Auto);
+        }
+        let Some(raw) = raw.filter(|s| !s.trim().is_empty()) else {
+            return Ok(Self::Auto);
+        };
+        let value: serde_json::Value =
+            serde_json::from_str(raw).map_err(|_| "百炼接口配置不是有效 JSON".to_string())?;
+        match value.get("bailianProtocol") {
+            None => Ok(Self::Auto),
+            Some(value) => serde_json::from_value(value.clone())
+                .map_err(|_| "不支持的百炼接口类型，请重新选择接口".to_string()),
+        }
+    }
+
+    pub fn resolve_provider(self, provider: &str, model: &str) -> Result<String, String> {
+        if !is_bailian_provider(provider) || self == Self::Auto {
+            return resolve_effective_asr_provider(provider, model);
+        }
+        if model.trim().is_empty() {
+            return Err("手动选择百炼接口时必须填写模型 ID".to_string());
+        }
+        Ok(match self {
+            Self::DashscopeRealtime => BAILIAN_PROVIDER_ID,
+            Self::QwenRealtime => QWEN3_REALTIME_PROVIDER_ID,
+            _ => DASHSCOPE_MULTIMODAL_PROVIDER_ID,
+        }
+        .to_string())
+    }
+
+    pub fn batch_protocol(self, model: &str) -> Option<DashScopeBatchProtocol> {
+        match self {
+            Self::Auto => dashscope_batch_protocol_for_model(model),
+            Self::Multimodal | Self::QwenMultimodal => Some(DashScopeBatchProtocol::Multimodal),
+            Self::AsyncTranscription => Some(DashScopeBatchProtocol::AsyncTranscription),
+            _ => None,
+        }
+    }
+
+    pub fn uses_qwen_envelope(self, model: &str) -> bool {
+        self == Self::QwenMultimodal
+            || (self == Self::Auto && dashscope_uses_qwen_sync_envelope(model))
+    }
 }
 
 pub fn resolve_effective_asr_provider(active_asr: &str, model: &str) -> Result<String, String> {
@@ -820,7 +885,8 @@ pub fn resolve_effective_asr_provider(active_asr: &str, model: &str) -> Result<S
 }
 
 fn is_classic_bailian_realtime_model(model: &str) -> bool {
-    model.starts_with("fun-asr-realtime")
+    model == "qwen-audio-3.0-asr-flash-streaming"
+        || model.starts_with("fun-asr-realtime")
         || model.starts_with("fun-asr-flash-8k-realtime")
         || model.starts_with("paraformer-realtime")
         || model.starts_with("paraformer-8k-realtime")
@@ -1070,7 +1136,63 @@ mod tests {
     }
 
     #[test]
+    fn manual_bailian_protocol_overrides_names_and_preserves_auto() {
+        for (name, expected) in [
+            ("dashscope-realtime", BAILIAN_PROVIDER_ID),
+            ("qwen-realtime", QWEN3_REALTIME_PROVIDER_ID),
+            ("multimodal", DASHSCOPE_MULTIMODAL_PROVIDER_ID),
+            ("qwen-multimodal", DASHSCOPE_MULTIMODAL_PROVIDER_ID),
+            ("async-transcription", DASHSCOPE_MULTIMODAL_PROVIDER_ID),
+        ] {
+            let raw = format!(r#"{{"bailianProtocol":"{name}"}}"#);
+            let protocol = BailianProtocol::from_config("bailian", Some(&raw)).unwrap();
+            for model in ["unknown-model", "fun-asr", "qwen3-asr-flash-realtime"] {
+                assert_eq!(
+                    protocol.resolve_provider("bailian", model).unwrap(),
+                    expected
+                );
+            }
+            assert!(protocol.resolve_provider("bailian", " ").is_err());
+            assert_eq!(
+                BailianProtocol::from_config("whisper", Some(&raw)).unwrap(),
+                BailianProtocol::Auto
+            );
+        }
+        assert_eq!(
+            BailianProtocol::from_config("bailian", None).unwrap(),
+            BailianProtocol::Auto
+        );
+        assert_eq!(
+            BailianProtocol::from_config("bailian", Some("{}")).unwrap(),
+            BailianProtocol::Auto
+        );
+        assert!(
+            BailianProtocol::from_config("bailian", Some(r#"{"bailianProtocol":"typo"}"#)).is_err()
+        );
+        assert!(BailianProtocol::Auto
+            .resolve_provider("bailian", "unknown-model")
+            .is_err());
+        assert_eq!(
+            BailianProtocol::Auto
+                .resolve_provider("bailian", "fun-asr")
+                .unwrap(),
+            DASHSCOPE_MULTIMODAL_PROVIDER_ID
+        );
+    }
+
+    #[test]
     fn routes_bailian_and_stepfun_models() {
+        let streaming = "qwen-audio-3.0-asr-flash-streaming";
+        assert_eq!(
+            resolve_effective_asr_provider(BAILIAN_PROVIDER_ID, streaming).unwrap(),
+            BAILIAN_PROVIDER_ID
+        );
+        assert_eq!(dashscope_batch_protocol_for_model(streaming), None);
+        assert_eq!(
+            resolve_effective_asr_provider(BAILIAN_PROVIDER_ID, "qwen-audio-3.0-asr-flash")
+                .unwrap(),
+            DASHSCOPE_MULTIMODAL_PROVIDER_ID
+        );
         assert_eq!(
             resolve_effective_asr_provider(BAILIAN_PROVIDER_ID, "fun-asr-realtime").unwrap(),
             BAILIAN_PROVIDER_ID
@@ -1260,6 +1382,26 @@ mod tests {
         );
         assert_eq!(llm.default_request_format, None);
         assert!(llm.supported_request_formats.is_empty());
+    }
+
+    #[test]
+    fn minimax_asr_supplies_defaults_and_whisper_compatibility() {
+        assert!(crate::cloud_providers::SHARED_CLOUD_ASR_PROVIDER_TYPES.contains(&"minimax"));
+        let asr = provider_descriptor(ProviderKind::Asr, "minimax").unwrap();
+        assert_eq!(asr.label_key, "asrMinimax");
+        assert_eq!(
+            asr.default_endpoint.as_deref(),
+            Some("https://api.minimaxi.com/v1")
+        );
+        assert_eq!(asr.default_model.as_deref(), Some("asr-1.0"));
+        assert_eq!(asr.static_models, vec!["asr-1.0"]);
+        assert_eq!(asr.auth_requirement, AuthRequirement::ApiKey);
+        assert_eq!(asr.validation_probe, ValidationProbe::AsrSilence);
+        assert!(is_whisper_compatible_provider("minimax"));
+        assert_eq!(
+            active_asr_provider_kind("minimax"),
+            ActiveAsrProviderKind::WhisperCompatible
+        );
     }
 
     #[test]

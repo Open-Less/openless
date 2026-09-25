@@ -267,12 +267,17 @@
   height: 100%;
 }
 
-/* ─── 助手 markdown 正文（原 qa-answer / lc-answer 合并，token 换 shadcn）── */
+/* ─── 助手 markdown 正文（原 qa-answer / lc-answer 合并，token 换 shadcn）──
+ * Inherit host color so History/QuickNote follow app light/dark ink tokens.
+ * Inside .olchat-shell the shell still pins a light foreground (intentional). */
 .olchat-answer {
   font-size: 0.8125rem;
   line-height: 1.6;
-  color: var(--color-foreground);
+  color: inherit;
   word-break: break-word;
+}
+.olchat-shell .olchat-answer {
+  color: var(--color-foreground);
 }
 .olchat-answer p {
   margin: 0 0 6px;
@@ -323,10 +328,13 @@
   background: transparent;
 }
 .olchat-answer a {
-  color: var(--color-foreground);
+  color: inherit;
   text-decoration: underline;
   text-underline-offset: 3px;
   cursor: pointer;
+}
+.olchat-shell .olchat-answer a {
+  color: var(--color-foreground);
 }
 .olchat-answer blockquote {
   margin: 0 0 6px;

@@ -1,3 +1,4 @@
+#![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
 //! 本地 Qwen3-ASR 一键"加载 + 测试"实现。
 //!
 //! 流程：
@@ -19,10 +20,10 @@ use serde::Serialize;
 
 use super::models::ModelId;
 
-/// 内嵌测试音频。原始文件 `../vendor/qwen-asr/samples/test_speech.wav`
+/// 内嵌测试音频。原始文件 `vendor/qwen-asr/samples/test_speech.wav`
 /// 内容："Hello. This is a test of the Voxtrail speech-to-text system."
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-const TEST_WAV: &[u8] = include_bytes!("../../../../vendor/qwen-asr/samples/test_speech.wav");
+const TEST_WAV: &[u8] = include_bytes!("../../../vendor/qwen-asr/samples/test_speech.wav");
 
 /// 测试结果给前端展示。
 #[derive(Debug, Serialize)]
@@ -46,6 +47,8 @@ pub async fn run_test(
     if model_id.is_whisper() {
         #[cfg(target_os = "macos")]
         return run_whisper_test(model_id, model_dir).await;
+        #[cfg(target_os = "linux")]
+        anyhow::bail!("本地 Whisper 测试仅支持 macOS");
     }
     let backend =
         backend.ok_or_else(|| anyhow::anyhow!("当前系统不支持所选的本地 Qwen3-ASR 后端"))?;

@@ -1,8 +1,9 @@
+#![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
 //! 跨平台光标位置文本插入。
 //!
 //! 通用步骤：先写剪贴板（模拟失败时用户能手动粘贴）→ 模拟粘贴快捷键。
 //! - macOS：用 CoreGraphics CGEvent 直接 post Cmd+V。
-//! - Windows：用 enigo 按 `PasteShortcut` 模拟。
+//! - Windows / Linux：用 enigo 按 `PasteShortcut` 模拟。
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -36,6 +37,23 @@ pub struct TextInserter;
 impl TextInserter {
     pub fn new() -> Self {
         Self
+    }
+
+    /// Linux 路径：优先走 fcitx5 CommitText；插件不可用或提交失败时回退剪贴板粘贴。
+    #[cfg(target_os = "linux")]
+    pub fn insert(
+        &self,
+        text: &str,
+        restore_clipboard_after_paste: bool,
+        paste_shortcut: PasteShortcut,
+    ) -> InsertStatus {
+        insert_with_fcitx_or_clipboard_fallback(
+            text,
+            restore_clipboard_after_paste,
+            paste_shortcut,
+            crate::linux_fcitx::commit_text,
+            insert_with_clipboard_restore,
+        )
     }
 
     /// Windows 路径：写剪贴板 + 模拟 `paste_shortcut`。
@@ -129,18 +147,6 @@ impl TextInserter {
         self.copy_fallback(text)
     }
 
-    /// 无原生粘贴快捷键实现的桌面构建：退回剪贴板兜底，与
-    /// [`Self::insert_via_clipboard_fallback`] 同语义（典型场景：终端/无合成键平台）。
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "android")))]
-    pub fn insert(
-        &self,
-        text: &str,
-        restore_clipboard_after_paste: bool,
-        paste_shortcut: PasteShortcut,
-    ) -> InsertStatus {
-        self.insert_via_clipboard_fallback(text, restore_clipboard_after_paste, paste_shortcut)
-    }
-
     /// 只写剪贴板、不模拟粘贴。用于目标控件活跃状态无法验证时的兜底路径。
     pub fn copy_fallback(&self, text: &str) -> InsertStatus {
         if text.is_empty() {
@@ -150,6 +156,32 @@ impl TextInserter {
             InsertStatus::CopiedFallback
         } else {
             InsertStatus::Failed
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn insert_with_fcitx_or_clipboard_fallback<C, F>(
+    text: &str,
+    restore_clipboard_after_paste: bool,
+    paste_shortcut: PasteShortcut,
+    commit_text: C,
+    clipboard_fallback: F,
+) -> InsertStatus
+where
+    C: FnOnce(&str) -> Result<(), String>,
+    F: FnOnce(&str, bool, PasteShortcut) -> InsertStatus,
+{
+    if text.is_empty() {
+        return InsertStatus::CopiedFallback;
+    }
+    match commit_text(text) {
+        Ok(()) => InsertStatus::Inserted,
+        Err(err) => {
+            log::warn!(
+                "[insertion] fcitx commit_text failed, falling back to clipboard paste: {err}"
+            );
+            clipboard_fallback(text, restore_clipboard_after_paste, paste_shortcut)
         }
     }
 }
@@ -638,6 +670,81 @@ mod tests {
             );
         }
         assert_eq!(inserter.copy_fallback(""), InsertStatus::CopiedFallback);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn linux_commit_text_success_skips_clipboard_fallback() {
+        let mut fallback_called = false;
+
+        let status = insert_with_fcitx_or_clipboard_fallback(
+            "dictated text",
+            true,
+            PasteShortcut::CtrlV,
+            |text| {
+                assert_eq!(text, "dictated text");
+                Ok(())
+            },
+            |_, _, _| {
+                fallback_called = true;
+                InsertStatus::CopiedFallback
+            },
+        );
+
+        assert_eq!(status, InsertStatus::Inserted);
+        assert!(!fallback_called);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn linux_commit_text_failure_uses_clipboard_fallback() {
+        let mut fallback_args = None;
+
+        let status = insert_with_fcitx_or_clipboard_fallback(
+            "dictated text",
+            true,
+            PasteShortcut::CtrlShiftV,
+            |_| Err("plugin unavailable".to_string()),
+            |text, restore_clipboard_after_paste, paste_shortcut| {
+                fallback_args = Some((
+                    text.to_string(),
+                    restore_clipboard_after_paste,
+                    paste_shortcut,
+                ));
+                InsertStatus::CopiedFallback
+            },
+        );
+
+        assert_eq!(status, InsertStatus::CopiedFallback);
+        assert_eq!(
+            fallback_args,
+            Some(("dictated text".to_string(), true, PasteShortcut::CtrlShiftV))
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn linux_empty_insert_skips_commit_text_and_clipboard_fallback() {
+        let mut commit_called = false;
+        let mut fallback_called = false;
+
+        let status = insert_with_fcitx_or_clipboard_fallback(
+            "",
+            true,
+            PasteShortcut::CtrlV,
+            |_| {
+                commit_called = true;
+                Ok(())
+            },
+            |_, _, _| {
+                fallback_called = true;
+                InsertStatus::CopiedFallback
+            },
+        );
+
+        assert_eq!(status, InsertStatus::CopiedFallback);
+        assert!(!commit_called);
+        assert!(!fallback_called);
     }
 
     #[test]

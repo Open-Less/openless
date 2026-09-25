@@ -27,6 +27,7 @@ pub const DEFAULT_MODEL_MAX_TOTAL_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 pub const DEFAULT_MODEL_METADATA_BYTES: u64 = 8 * 1024 * 1024;
 pub const DEFAULT_MODEL_MAX_RETRIES: u8 = 4;
 const PARTIAL_INDEX_VERSION: u8 = 1;
+const MODELSCOPE_BASE_URL: &str = "https://modelscope.cn";
 
 pub fn model_mirror_base(
     mirror: crate::local_asr_catalog::LocalAsrMirror,
@@ -34,6 +35,10 @@ pub fn model_mirror_base(
     match mirror {
         crate::local_asr_catalog::LocalAsrMirror::Huggingface => Ok("https://huggingface.co"),
         crate::local_asr_catalog::LocalAsrMirror::HfMirror => Ok("https://hf-mirror.com"),
+        crate::local_asr_catalog::LocalAsrMirror::Modelscope => Err(BackendError::new(
+            BackendErrorCode::Unsupported,
+            "ModelScope uses its own repository API",
+        )),
         crate::local_asr_catalog::LocalAsrMirror::GithubRelease => Err(BackendError::new(
             BackendErrorCode::Unsupported,
             "GitHub release models use their catalog URL rather than a Hugging Face mirror",
@@ -184,6 +189,7 @@ pub struct ModelArchiveSpec {
 pub struct ModelCatalogEntry {
     pub target: LocalAsrTarget,
     pub repository: String,
+    pub modelscope_repository: Option<String>,
     pub display_name: String,
     pub family: String,
     pub mode: String,
@@ -241,6 +247,7 @@ impl ModelCatalog {
         let mut add = |runtime,
                        id: &str,
                        repository: &str,
+                       modelscope_repository: Option<&str>,
                        display_name: &str,
                        family: &str,
                        mode: &str,
@@ -249,6 +256,7 @@ impl ModelCatalog {
             entries.push(ModelCatalogEntry {
                 target: LocalAsrTarget::parse(runtime, id).expect("built-in model id"),
                 repository: repository.into(),
+                modelscope_repository: modelscope_repository.map(str::to_string),
                 display_name: display_name.into(),
                 family: family.into(),
                 mode: mode.into(),
@@ -267,6 +275,7 @@ impl ModelCatalog {
                 LocalAsrRuntime::Generic,
                 id,
                 repository,
+                Some(repository),
                 id,
                 "qwen3",
                 "offline",
@@ -286,6 +295,7 @@ impl ModelCatalog {
                 LocalAsrRuntime::Generic,
                 id,
                 "ggerganov/whisper.cpp",
+                None,
                 id,
                 "whisper",
                 "offline",
@@ -304,6 +314,7 @@ impl ModelCatalog {
                 LocalAsrRuntime::Foundry,
                 id,
                 "microsoft/whisper",
+                None,
                 id,
                 "whisper",
                 "offline",
@@ -387,6 +398,7 @@ impl ModelCatalog {
                 LocalAsrRuntime::SherpaOnnx,
                 id,
                 repository,
+                None,
                 display_name,
                 family,
                 mode,
@@ -400,6 +412,7 @@ impl ModelCatalog {
             LocalAsrRuntime::SherpaOnnx,
             "qwen3-asr-0.6b-int8",
             "",
+            None,
             "Qwen3-ASR 0.6B INT8",
             qwen_sherpa
                 .sherpa_family()
@@ -444,6 +457,7 @@ impl Default for ModelCatalogEntry {
         Self {
             target,
             repository: "Qwen/Qwen3-ASR-0.6B".into(),
+            modelscope_repository: Some("Qwen/Qwen3-ASR-0.6B".into()),
             display_name: "qwen3-asr-0.6b".into(),
             family: "qwen3".into(),
             mode: "offline".into(),
@@ -760,11 +774,7 @@ impl ModelStore {
                 sha256: Some(sha256.clone()),
             }],
             ModelFileSelector::QwenRepository | ModelFileSelector::Exact(_) => self
-                .fetch_hf_manifest(
-                    target.clone(),
-                    &entry.repository,
-                    model_mirror_base(mirror)?,
-                )
+                .fetch_remote_manifest(target.clone(), entry, mirror, None)
                 .await?
                 .files
                 .into_iter()
@@ -807,6 +817,9 @@ impl ModelStore {
                 likes: 0,
                 description: entry.display_name.clone(),
             }
+        } else if mirror == crate::local_asr_catalog::LocalAsrMirror::Modelscope {
+            self.fetch_modelscope_model_card(target.model_id(), modelscope_repository(entry)?)
+                .await?
         } else {
             self.fetch_hf_model_card(
                 target.model_id(),
@@ -841,7 +854,7 @@ impl ModelStore {
             ));
         }
         let (cancelled, _active_guard) = self.begin_active_download(&target)?;
-        let manifest = match entry.selector {
+        let manifest = match entry.selector.clone() {
             ModelFileSelector::Native => unreachable!("native selector returned above"),
             ModelFileSelector::Archive {
                 url,
@@ -870,10 +883,10 @@ impl ModelStore {
                     Ok(manifest)
                 }),
             ModelFileSelector::QwenRepository | ModelFileSelector::Exact(_) => {
-                self.fetch_hf_manifest_with_cancel(
+                self.fetch_remote_manifest(
                     target.clone(),
-                    &entry.repository,
-                    model_mirror_base(mirror)?,
+                    &entry,
+                    mirror,
                     Some(Arc::clone(&cancelled)),
                 )
                 .await
@@ -895,6 +908,103 @@ impl ModelStore {
             }
         };
         self.download_registered(manifest, cancelled).await
+    }
+
+    async fn fetch_remote_manifest(
+        &self,
+        target: LocalAsrTarget,
+        entry: &ModelCatalogEntry,
+        mirror: crate::local_asr_catalog::LocalAsrMirror,
+        cancelled: Option<Arc<AtomicBool>>,
+    ) -> Result<ModelManifest, BackendError> {
+        if mirror == crate::local_asr_catalog::LocalAsrMirror::Modelscope {
+            self.fetch_modelscope_manifest_with_cancel(
+                target,
+                modelscope_repository(entry)?,
+                cancelled,
+            )
+            .await
+        } else {
+            self.fetch_hf_manifest_with_cancel(
+                target,
+                &entry.repository,
+                model_mirror_base(mirror)?,
+                cancelled,
+            )
+            .await
+        }
+    }
+
+    async fn fetch_modelscope_manifest_with_cancel(
+        &self,
+        target: LocalAsrTarget,
+        repository: &str,
+        cancelled: Option<Arc<AtomicBool>>,
+    ) -> Result<ModelManifest, BackendError> {
+        validate_model_id(target.model_id())?;
+        validate_repository(repository)?;
+        let entry = self
+            .catalog
+            .entries()
+            .iter()
+            .find(|entry| {
+                entry.target == target && entry.modelscope_repository.as_deref() == Some(repository)
+            })
+            .ok_or_else(|| invalid("model is not present in the ModelScope catalog"))?;
+        if matches!(
+            entry.selector,
+            ModelFileSelector::Native | ModelFileSelector::Archive { .. }
+        ) {
+            return Err(BackendError::new(
+                BackendErrorCode::Unsupported,
+                "selected model is not downloaded from a ModelScope repository",
+            ));
+        }
+        let request = self.transport.request(ModelTransportRequest {
+            url: format!(
+                "{MODELSCOPE_BASE_URL}/api/v1/models/{repository}/repo/files?Revision=master&Recursive=True"
+            ),
+            range: None,
+            max_response_bytes: DEFAULT_MODEL_METADATA_BYTES,
+        });
+        let response = if let Some(cancelled) = cancelled {
+            tokio::select! {
+                value = request => value?,
+                () = wait_until_cancelled(cancelled) => return Err(cancelled_error()),
+            }
+        } else {
+            request.await?
+        };
+        if response.status != 200 {
+            return Err(BackendError::new(
+                BackendErrorCode::Provider,
+                format!(
+                    "ModelScope manifest request returned HTTP {}",
+                    response.status
+                ),
+            ));
+        }
+        let value: serde_json::Value = serde_json::from_slice(&response.bytes)
+            .map_err(|error| invalid(format!("invalid ModelScope manifest JSON: {error}")))?;
+        if value.get("Success").and_then(serde_json::Value::as_bool) != Some(true) {
+            return Err(BackendError::new(
+                BackendErrorCode::Provider,
+                value
+                    .get("Message")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("ModelScope manifest request failed"),
+            ));
+        }
+        let files = value
+            .pointer("/Data/Files")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| invalid("ModelScope manifest response is missing files"))?;
+        let files = parse_modelscope_files(entry, repository, files)?;
+        let manifest = ModelManifest::new(target, repository, files)?;
+        if manifest.total_bytes > self.config.max_total_bytes {
+            return Err(invalid("model exceeds the configured total size limit"));
+        }
+        Ok(manifest)
     }
 
     pub async fn fetch_hf_manifest(
@@ -986,6 +1096,63 @@ impl ModelStore {
             url = next;
         }
         manifest_from_hf_pages(entry, &pages, base_url, self.config.max_total_bytes)
+    }
+
+    async fn fetch_modelscope_model_card(
+        &self,
+        model_id: &str,
+        repository: &str,
+    ) -> Result<ModelCard, BackendError> {
+        validate_model_id(model_id)?;
+        validate_repository(repository)?;
+        let response = self
+            .transport
+            .request(ModelTransportRequest {
+                url: format!("{MODELSCOPE_BASE_URL}/openapi/v1/models/{repository}"),
+                range: None,
+                max_response_bytes: DEFAULT_MODEL_METADATA_BYTES,
+            })
+            .await?;
+        if response.status != 200 {
+            return Err(BackendError::new(
+                BackendErrorCode::Provider,
+                format!(
+                    "ModelScope model card request returned HTTP {}",
+                    response.status
+                ),
+            ));
+        }
+        let value: serde_json::Value = serde_json::from_slice(&response.bytes)
+            .map_err(|error| invalid(format!("invalid ModelScope model card JSON: {error}")))?;
+        if value.get("success").and_then(serde_json::Value::as_bool) != Some(true) {
+            return Err(BackendError::new(
+                BackendErrorCode::Provider,
+                "ModelScope model card request failed",
+            ));
+        }
+        let data = value
+            .get("data")
+            .ok_or_else(|| invalid("ModelScope model card response is missing data"))?;
+        let description = data
+            .get("description")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| data.get("readme").and_then(serde_json::Value::as_str))
+            .map(first_readme_paragraph)
+            .unwrap_or_default();
+        Ok(ModelCard {
+            model_id: model_id.into(),
+            repository: repository.into(),
+            downloads: data
+                .get("downloads")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            likes: data
+                .get("likes")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            description: truncate_description(&description),
+        })
     }
 
     pub async fn fetch_hf_model_card(
@@ -2264,7 +2431,7 @@ fn validate_range_response(
     }
     match response.status {
         200 if start == 0 && received == total => Ok(()),
-        206 if received == end - start + 1 => match &response.metadata.content_range {
+        200 | 206 if received == end - start + 1 => match &response.metadata.content_range {
             Some(range) if range.start == start && range.end == end && range.total == total => {
                 Ok(())
             }
@@ -2340,6 +2507,18 @@ struct HfTreeEntry {
 struct HfLfs {
     oid: String,
     size: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelScopeFileEntry {
+    #[serde(rename = "Type")]
+    entry_type: String,
+    #[serde(rename = "Path")]
+    path: String,
+    #[serde(rename = "Size")]
+    size: u64,
+    #[serde(rename = "Sha256")]
+    sha256: String,
 }
 
 pub fn parse_hf_tree_page(
@@ -2485,6 +2664,77 @@ fn parse_hf_tree_page_for_entry(
     Ok(files)
 }
 
+fn parse_modelscope_files(
+    catalog_entry: &ModelCatalogEntry,
+    repository: &str,
+    entries: &[serde_json::Value],
+) -> Result<Vec<ModelFile>, BackendError> {
+    validate_model_id(catalog_entry.target.model_id())?;
+    validate_repository(repository)?;
+    if catalog_entry.modelscope_repository.as_deref() != Some(repository) {
+        return Err(invalid("model is not present in the ModelScope catalog"));
+    }
+    let mut files = Vec::new();
+    let mut seen = BTreeSet::new();
+    for value in entries {
+        let entry: ModelScopeFileEntry = serde_json::from_value(value.clone())
+            .map_err(|_| invalid("invalid ModelScope file entry"))?;
+        if entry.entry_type != "blob" {
+            continue;
+        }
+        validate_model_path(&entry.path)?;
+        let Some(local_path) = catalog_entry.selector.local_path(&entry.path) else {
+            continue;
+        };
+        validate_model_path(&local_path)?;
+        if !seen.insert(local_path.clone()) {
+            return Err(invalid("duplicate selected file in ModelScope repository"));
+        }
+        if entry.size == 0 || entry.size > DEFAULT_MODEL_MAX_FILE_BYTES {
+            return Err(invalid(
+                "ModelScope file size is invalid or exceeds the configured limit",
+            ));
+        }
+        if entry.sha256.len() != 64 || !entry.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(invalid("invalid ModelScope file sha256"));
+        }
+        let mut url = url::Url::parse(&format!(
+            "{MODELSCOPE_BASE_URL}/api/v1/models/{repository}/repo"
+        ))
+        .map_err(|_| invalid("invalid ModelScope download URL"))?;
+        url.query_pairs_mut()
+            .append_pair("Revision", "master")
+            .append_pair("FilePath", &entry.path);
+        files.push(ModelFile {
+            path: local_path,
+            url: url.into(),
+            size_bytes: entry.size,
+            sha256: Some(entry.sha256.to_ascii_lowercase()),
+        });
+    }
+    if files.is_empty() {
+        return Err(invalid(
+            "ModelScope repository returned no selected model files",
+        ));
+    }
+    if let ModelFileSelector::Exact(expected) = &catalog_entry.selector {
+        let actual = files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<BTreeSet<_>>();
+        if let Some(missing) = expected
+            .iter()
+            .find(|file| !actual.contains(file.local_path.as_str()))
+        {
+            return Err(invalid(format!(
+                "ModelScope repository is missing required model file {}",
+                missing.remote_path
+            )));
+        }
+    }
+    Ok(files)
+}
+
 /// The Hugging Face tree API returns `lfs.oid` as a bare SHA-256 hex digest;
 /// the `sha256:`-prefixed form (as in Git LFS pointer files) is accepted too.
 fn parse_lfs_sha256(oid: &str) -> Result<String, BackendError> {
@@ -2566,6 +2816,15 @@ fn validate_repository(repository: &str) -> Result<(), BackendError> {
         return Err(invalid("model repository is invalid"));
     }
     Ok(())
+}
+
+fn modelscope_repository(entry: &ModelCatalogEntry) -> Result<&str, BackendError> {
+    entry.modelscope_repository.as_deref().ok_or_else(|| {
+        BackendError::new(
+            BackendErrorCode::Unsupported,
+            "selected model has no official ModelScope repository",
+        )
+    })
 }
 
 fn expand_tar_bz2_archive(
@@ -2966,6 +3225,38 @@ mod tests {
     }
 
     #[test]
+    fn modelscope_uses_explicit_catalog_repository_and_checksum() {
+        let catalog = ModelCatalog::standard();
+        let qwen = catalog
+            .find(LocalAsrRuntime::Generic, "qwen3-asr-0.6b")
+            .unwrap();
+        let checksum = "a".repeat(64);
+        let files = parse_modelscope_files(
+            qwen,
+            "Qwen/Qwen3-ASR-0.6B",
+            &[
+                serde_json::json!({"Type":"blob","Path":"config.json","Size":6193,"Sha256":checksum}),
+                serde_json::json!({"Type":"blob","Path":"README.md","Size":10,"Sha256":"b".repeat(64)}),
+            ],
+        )
+        .unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "config.json");
+        assert_eq!(files[0].sha256.as_deref(), Some(checksum.as_str()));
+        let url = url::Url::parse(&files[0].url).unwrap();
+        assert_eq!(url.host_str(), Some("modelscope.cn"));
+        assert!(url
+            .query_pairs()
+            .any(|(key, value)| key == "FilePath" && value == "config.json"));
+
+        assert!(catalog
+            .find(LocalAsrRuntime::Generic, "whisper-small")
+            .unwrap()
+            .modelscope_repository
+            .is_none());
+    }
+
+    #[test]
     fn hf_link_pagination_accepts_same_origin_and_rejects_redirected_origin() {
         let current = "https://huggingface.co/api/models/org/model/tree/main?limit=1000";
         assert_eq!(
@@ -2987,7 +3278,7 @@ mod tests {
     }
 
     #[test]
-    fn range_contract_accepts_complete_200_and_exact_206_only() {
+    fn range_contract_accepts_complete_or_exact_partial_responses() {
         let complete = ModelTransportResponse {
             status: 200,
             bytes: vec![0; 4],
@@ -3012,6 +3303,11 @@ mod tests {
         };
         assert!(validate_range_response(&partial, 2, 3, 4).is_ok());
         assert!(validate_range_response(&partial, 0, 1, 4).is_err());
+        let modelscope_partial = ModelTransportResponse {
+            status: 200,
+            ..partial
+        };
+        assert!(validate_range_response(&modelscope_partial, 2, 3, 4).is_ok());
     }
 
     #[tokio::test]

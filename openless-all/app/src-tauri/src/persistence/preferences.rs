@@ -1,3 +1,4 @@
+#![cfg_attr(target_os = "linux", allow(dead_code))]
 //! Tauri path adapter for the framework-independent preferences store.
 
 use anyhow::{Context, Result};

@@ -4,18 +4,24 @@
 // 事件：local-asr-download-progress / local-asr-token
 //
 // 注意：模型文件清单与尺寸不在此处硬编码 —— 通过
-// `fetchLocalAsrRemoteInfo()` 实时从 HuggingFace tree API 拉取。
+// `fetchLocalAsrRemoteInfo()` 实时从所选模型源拉取。
 
 import { invokeOrMock } from './ipc';
 import type { OS } from '../components/WindowChrome';
 
-export function isLocalAsrModelSupportedOnOs(modelId: string, os: OS): boolean {
-  if (modelId.startsWith('whisper-')) return os === 'mac';
-  if (modelId.startsWith('qwen3-asr-')) return os === 'mac';
-  return true;
+export function isLocalAsrModelSupportedOnOs(
+  model: Pick<LocalAsrModelStatus, 'runtime' | 'family'>,
+  os: OS,
+): boolean {
+  if (model.runtime === 'foundry' || model.runtime === 'sherpa_onnx') return os === 'win';
+  if (model.runtime !== 'generic') return false;
+  if (model.family === 'whisper') return os === 'mac';
+  if (model.family === 'qwen3' || model.family === 'qwen3_asr')
+    return os === 'mac' || os === 'linux';
+  return false;
 }
 
-export type LocalAsrMirror = 'huggingface' | 'hf-mirror';
+export type LocalAsrMirror = 'huggingface' | 'hf-mirror' | 'modelscope';
 
 export interface LocalAsrSettings {
   providerId: string;
@@ -23,7 +29,7 @@ export interface LocalAsrSettings {
   mirror: string;
   modelsBaseDir: string | null;
   modelsRootDir: string;
-  /** 桌面端只在 macOS 编入本地引擎（Apple Silicon 另可用 MLX）。 */
+  /** macOS/Linux 编入 C 引擎；MLX 仅在 macOS 可用。 */
   engineAvailable: boolean;
 }
 
@@ -36,6 +42,7 @@ export interface LocalAsrStorageSettings {
 
 export interface LocalAsrModelStatus {
   id: string;
+  runtime: LocalAsrRuntime;
   hfRepo: string;
   displayName: string;
   family: string;
@@ -225,6 +232,7 @@ const MOCK_SETTINGS: LocalAsrSettings = {
 const MOCK_MODELS: LocalAsrModelStatus[] = [
   {
     id: 'qwen3-asr-0.6b',
+    runtime: 'generic',
     hfRepo: 'Qwen/Qwen3-ASR-0.6B',
     displayName: 'Qwen3 ASR 0.6B',
     family: 'qwen3_asr',
@@ -236,6 +244,7 @@ const MOCK_MODELS: LocalAsrModelStatus[] = [
   },
   {
     id: 'qwen3-asr-1.7b',
+    runtime: 'generic',
     hfRepo: 'Qwen/Qwen3-ASR-1.7B',
     displayName: 'Qwen3 ASR 1.7B',
     family: 'qwen3_asr',

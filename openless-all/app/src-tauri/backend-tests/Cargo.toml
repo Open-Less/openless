@@ -6,8 +6,9 @@ rust-version = "1.88"
 publish = false
 
 [dependencies]
+anyhow = "1"
 openless-core = { path = "../../crates/openless-core" }
-tokio = { version = "1", features = ["rt-multi-thread"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 
 rcgen = { version = "0.13", features = ["x509-parser"] }
 x509-parser = { version = "0.16", features = ["verify"] }

@@ -658,6 +658,8 @@ mod tests {
                 primary: "LeftControl".into(),
                 modifiers: Vec::new(),
             }),
+            coding_agent_panel: None,
+            coding_agent_quick: None,
             style_packs: Vec::new(),
         };
         let summary = registration_summary(&target);

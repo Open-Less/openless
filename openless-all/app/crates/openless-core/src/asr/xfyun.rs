@@ -447,33 +447,24 @@ impl XfyunStreamingASR {
             return;
         }
 
-        let mut state = self.state.lock();
-        state.last_result_text = trimmed.to_string();
-        let mut delta = None;
-        if is_final {
-            // 最终结果：以 seg_id 去重覆盖，收尾按 seg_id 顺序拼接。
-            state.final_segments.insert(seg_id, trimmed.to_string());
-            state.partial_segments.remove(&seg_id);
-        } else {
-            let previous = state
-                .partial_segments
-                .get(&seg_id)
-                .map(String::as_str)
-                .unwrap_or("");
-            delta = trimmed
-                .strip_prefix(previous)
-                .filter(|suffix| !suffix.is_empty())
-                .map(str::to_string);
-            state.partial_segments.insert(seg_id, trimmed.to_string());
-        }
-        drop(state);
-        if let Some(delta) = delta {
-            if let Some(sink) = self.partial_sink.lock().clone() {
-                let _ = sink.publish(TextStreamChunk {
-                    text: delta,
-                    offset: 0,
-                });
+        let snapshot = {
+            let mut state = self.state.lock();
+            state.last_result_text = trimmed.to_string();
+            if is_final {
+                state.final_segments.insert(seg_id, trimmed.to_string());
+                state.partial_segments.remove(&seg_id);
+            } else {
+                state.partial_segments.insert(seg_id, trimmed.to_string());
             }
+            let mut segments = state.partial_segments.clone();
+            segments.extend(state.final_segments.clone());
+            super::mimo::join_transcript_chunks(&segments.into_values().collect::<Vec<_>>())
+        };
+        if let Some(sink) = self.partial_sink.lock().clone() {
+            let _ = sink.publish(TextStreamChunk {
+                text: snapshot,
+                offset: 0,
+            });
         }
     }
 
@@ -689,6 +680,37 @@ fn classify_server_error(code: &str, desc: &str) -> XfyunASRError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transcript_snapshots_keep_prefix_and_recognition_corrections() {
+        let asr = XfyunStreamingASR::new(XfyunCredentials {
+            app_id: "test".into(),
+            api_key: "test".into(),
+        });
+        let sink = Arc::new(super::super::TranscriptCapture::default());
+        asr.set_partial_sink(sink.clone());
+        for (id, text, final_result) in [
+            (0, "你", false),
+            (0, "你好", false),
+            (0, "您好", false),
+            (0, "您好。", true),
+            (1, "世", false),
+            (1, "世界", false),
+            (1, "世界！", true),
+        ] {
+            let data = serde_json::json!({"seg_id": id, "cn": {"st": {"type": if final_result {"0"} else {"1"}, "rt": [{"ws": [{"cw": [{"w": text}]}]}]}}});
+            asr.record_result(&serde_json::json!({"data": data.to_string()}));
+        }
+        sink.assert_snapshots(&[
+            "你",
+            "你好",
+            "您好",
+            "您好。",
+            "您好。世",
+            "您好。世界",
+            "您好。世界！",
+        ]);
+    }
 
     #[test]
     fn signa_matches_official_documentation_example() {

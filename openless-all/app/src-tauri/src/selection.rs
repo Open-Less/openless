@@ -11,11 +11,10 @@
 //! 截断策略：超过 4000 字符的选区只保留首 2000 + 尾 2000 + `[…truncated…]` 标记，
 //! 避免给 LLM 灌过长 context。
 //!
-//! 模块依赖：`arboard`（跨平台剪贴板）+ libc + 平台 native 框架。
-//! Linux 桌面已改由 egui 前端（`openless-all/app/linux-egui`）承担，Tauri 版不再提供
-//! Linux 的选区读取路径。
+//! 模块依赖：`arboard`（跨平台剪贴板）+ libc + 平台 native 框架，Linux 另依赖
+//! `linux_fcitx` 的 DBus 客户端。
 
-// 仅 macOS / Windows 的模拟复制路径用 sleep。
+// 仅 macOS / Windows 的模拟复制路径用 sleep；Linux 走 fcitx5 DBus 直读，无 sleep。
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::time::Duration;
 
@@ -432,7 +431,25 @@ pub(crate) fn validate_selection_insertion_target(
         return SelectionInsertionTargetValidation::Valid;
     }
 
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(target_os = "linux")]
+    {
+        // Linux：重读 PRIMARY selection 与捕获文本比较——用户改了选区 / 清空
+        // PRIMARY 就拒绝粘贴（fcitx CommitText 直接写焦点输入上下文，无需
+        // 恢复窗口焦点，所以这里不需要窗口级校验）。
+        let current_selection = match linux_selection::read_selected_text() {
+            linux_selection::LinuxSelectionRead::Text(text) => {
+                let trimmed = text.trim();
+                (!trimmed.is_empty()).then(|| truncate_selection(trimmed))
+            }
+            _ => None,
+        };
+        if !selection_text_matches(expected_selection, current_selection.as_deref()) {
+            return SelectionInsertionTargetValidation::SelectionChanged;
+        }
+        SelectionInsertionTargetValidation::Valid
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
         SelectionInsertionTargetValidation::TargetUnavailable
     }
@@ -490,11 +507,21 @@ pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionT
             return false;
         };
         // 预览窗是 OpenLess 自己的窗口，确认后需要把焦点交还原应用再粘贴。
-        activate_app_by_pid(pid);
-        std::thread::sleep(Duration::from_millis(120));
-        // NSRunningApplication 激活也是 best-effort；必须复核 pid，失败就明确走
-        // copied/error，不能向此刻偶然持有焦点的应用盲写。
-        return current_front_app_pid() == Some(pid);
+        // NSRunningApplication activate 是 best-effort，且部分 app（Electron、
+        // 自绘窗口）恢复 key window 需要 >120ms——固定 sleep 一次就核 pid 会
+        // 偶发把「还在恢复中」误判为「恢复失败」。改成短轮询：pid 一稳定立刻
+        // 返回，最多等 ~320ms。
+        for _attempt in 0..4 {
+            // 每轮都补一次 activate：NSRunningApplication activate 对「前台被
+            // 其他 app 抢走」的情况可能不生效，重复调用是幂等的。
+            activate_app_by_pid(pid);
+            std::thread::sleep(Duration::from_millis(80));
+            if current_front_app_pid() == Some(pid) {
+                return true;
+            }
+        }
+        // 仍未成为前台：必须明确失败，不能向此刻偶然持有焦点的应用盲写。
+        false
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -522,6 +549,30 @@ fn activate_app_by_pid(pid: i32) {
         }
         let _: bool = msg_send![app, activateWithOptions: 1u64]; // IgnoringOtherApps
     }
+}
+
+/// macOS 专用：贴上前一刻的最终防线。`validate_selection_insertion_target`
+/// 的 simulate_copy 兜底最长含 200ms 重试，期间前台焦点可能跳到别的窗口或
+/// 应用（而对方恰好暴露相同选区文本时，仅靠文本比对会放行）。这里在
+/// `insert()` 之前立即重读前台应用 pid+name 并与捕获时比对，任何变化都拒绝
+/// 粘贴——宁可替换失败，不能写错目标。
+#[cfg(target_os = "macos")]
+pub(crate) fn selection_target_still_front(target: &SelectionInsertionTarget) -> bool {
+    let Some(captured) = target.macos.as_ref() else {
+        return false;
+    };
+    let Some(pid) = captured.front_app_pid else {
+        return false;
+    };
+    if current_front_app_pid() != Some(pid) {
+        return false;
+    }
+    if let Some(name) = captured.front_app.as_deref() {
+        if current_front_app().as_deref() != Some(name) {
+            return false;
+        }
+    }
+    true
 }
 
 /// 捕获选区。Linux 只通过 fcitx5 DBus 读取 PRIMARY 选区，失败统一视为无选区。
@@ -615,7 +666,38 @@ fn capture_selection_with_status_diag() -> (SelectionCaptureOutcome, SelectionCa
         }
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    // 3. Linux：通过 fcitx5 DBus 读取 PRIMARY selection。
+    #[cfg(target_os = "linux")]
+    match linux_selection::read_selected_text() {
+        linux_selection::LinuxSelectionRead::Text(text) => {
+            let trimmed = text.trim();
+            log::info!(
+                "[selection] linux primary selection OK ({} chars){}",
+                trimmed.chars().count(),
+                source_app
+                    .as_deref()
+                    .map(|a| format!(" front_app={a}"))
+                    .unwrap_or_default()
+            );
+            return (
+                SelectionCaptureOutcome {
+                    selection: Some(SelectionContext {
+                        text: truncate_selection(trimmed),
+                        source_app,
+                    }),
+                },
+                SelectionCaptureMissReason::Ok,
+            );
+        }
+        linux_selection::LinuxSelectionRead::NoSelection => {
+            return (
+                SelectionCaptureOutcome { selection: None },
+                SelectionCaptureMissReason::EmptyTrimmed,
+            );
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     (
         SelectionCaptureOutcome { selection: None },
         SelectionCaptureMissReason::NoCapturePath,
@@ -817,6 +899,61 @@ fn post_copy_shortcut() -> bool {
 #[cfg(target_os = "windows")]
 fn post_copy_shortcut() -> bool {
     windows_paste::send_ctrl_c().is_ok()
+}
+
+#[cfg(target_os = "linux")]
+mod linux_selection {
+    #[derive(Debug, PartialEq, Eq)]
+    pub enum LinuxSelectionRead {
+        Text(String),
+        NoSelection,
+    }
+
+    pub fn read_selected_text() -> LinuxSelectionRead {
+        classify_selection_result(crate::linux_fcitx::get_selection_text())
+    }
+
+    fn classify_selection_result(result: Result<String, String>) -> LinuxSelectionRead {
+        match result {
+            Ok(text) => {
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    LinuxSelectionRead::NoSelection
+                } else {
+                    LinuxSelectionRead::Text(trimmed.to_string())
+                }
+            }
+            Err(error) => {
+                log::debug!("[selection] fcitx5 GetSelectionText unavailable: {error}");
+                LinuxSelectionRead::NoSelection
+            }
+        }
+    }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn maps_dbus_text_to_selection() {
+            let result = classify_selection_result(Ok(" selected text ".to_string()));
+            assert_eq!(
+                result,
+                LinuxSelectionRead::Text("selected text".to_string())
+            );
+        }
+
+        #[test]
+        fn maps_empty_dbus_text_to_no_selection() {
+            let result = classify_selection_result(Ok(" \n".to_string()));
+            assert_eq!(result, LinuxSelectionRead::NoSelection);
+        }
+
+        #[test]
+        fn maps_dbus_error_to_no_selection() {
+            let result = classify_selection_result(Err("DBus unavailable".to_string()));
+            assert_eq!(result, LinuxSelectionRead::NoSelection);
+        }
+    }
 }
 
 // ─────────────────────────── macOS AX read ───────────────────────────

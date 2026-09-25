@@ -1,3 +1,7 @@
+#![cfg_attr(
+    target_os = "linux",
+    allow(dead_code, unused_imports, unused_variables)
+)]
 //! OpenLess Tauri backend.
 //!
 //! Modules mirror the original Swift libraries (one purpose per file):
@@ -9,19 +13,6 @@
 //! - persistence: history + preferences + credentials vault
 //! - coordinator: dictation state machine glue
 //! - commands: Tauri IPC surface
-
-// ── Linux 桌面不再由 Tauri 提供 ───────────────────────────────────────────────
-// 用户在 Linux 上已使用 egui 前端（`openless-all/app/linux-egui`），Tauri 版的 Linux
-// 桌面实现（fcitx5 插件桥 `linux_fcitx.rs`、Linux 热键/插入/选区路径、平台覆盖配置
-// `tauri.linux.conf.json`）已随本次一并删除。这里显式拦住误在 Linux 上构建 Tauri 版
-// 的情况，给出可操作的提示，而不是让人面对一堆“找不到模块”的零散错误。
-//
-// 不受影响的平台：macOS / Windows（桌面）与 Android（`target_os = "android"`）。
-#[cfg(target_os = "linux")]
-compile_error!(
-    "Tauri 版已不再支持 Linux 桌面：请使用 egui 前端 openless-all/app/linux-egui，\
-     打包用 openless-all/app/scripts/package-linux-egui.sh（deb/rpm/manual zip）。"
-);
 
 mod android;
 mod asr;
@@ -62,6 +53,8 @@ mod hotkey;
 #[path = "mobile_stubs/hotkey.rs"]
 mod hotkey;
 mod insertion;
+#[cfg(target_os = "linux")]
+mod linux_fcitx;
 mod llm_gemini;
 #[cfg(mobile)]
 mod mobile_runtime;
@@ -118,6 +111,9 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(target_os = "linux")]
+use gtk::prelude::WidgetExt;
+
 const LOG_ROTATE_LIMIT_BYTES: u64 = 10 * 1024 * 1024;
 #[cfg(target_os = "macos")]
 const OPENLESS_BUNDLE_ID: &str = "com.openless.app";
@@ -125,23 +121,6 @@ const OPENLESS_BUNDLE_ID: &str = "com.openless.app";
 /// 第一次 show 时把 QA 浮窗摆到屏幕底部居中；之后的 show 不再 reposition，
 /// 让用户拖动后的位置在 hide → show 之间得以保持。详见 issue #118 v2。
 static QA_WINDOW_POSITIONED: AtomicBool = AtomicBool::new(false);
-/// 「润色结果」模式的事件名。该模式复用选区助手（qa）面板，不再有独立预览窗。
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub(crate) const SELECTION_POLISH_PREVIEW_SHOWN: &str = "selection-polish-preview:shown";
-/// 让面板自行决定退出「润色结果」模式（它可能正处在提问对话中）。
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub(crate) const SELECTION_POLISH_PREVIEW_HIDE: &str = "selection-polish-preview:hide";
-/// 是否处于「润色结果」模式。`get_selection_polish_preview` 只在它为 true 时
-/// 返回负载：面板懒创建后挂载时也会拉一次，不能把残留的快照当成新请求。
-static SELECTION_POLISH_PREVIEW_PENDING: AtomicBool = AtomicBool::new(false);
-
-pub(crate) fn selection_polish_preview_pending() -> bool {
-    SELECTION_POLISH_PREVIEW_PENDING.load(Ordering::SeqCst)
-}
-
-pub(crate) fn clear_selection_polish_preview_pending() {
-    SELECTION_POLISH_PREVIEW_PENDING.store(false, Ordering::SeqCst);
-}
 /// 聊天面板退场动画的世代计数：hide 先发 `chat-panel:closing` 让前端播 220ms
 /// 退场动画、240ms 后才真正 hide；期间再次 show 会推进世代，作废挂起的 hide。
 static QA_PANEL_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -241,6 +220,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::read_audio_recording,
             commands::export_audio_recording,
             commands::retranscribe_recording,
+            commands::apply_quick_note_repolish,
             commands::marketplace_list,
             commands::marketplace_detail,
             commands::marketplace_install,
@@ -346,6 +326,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::set_translation_hotkey,
             commands::set_switch_style_hotkey,
             commands::set_open_app_hotkey,
+            commands::set_quick_note_hotkey,
             commands::set_style_pack_hotkeys,
             commands::qa_window_dismiss,
             commands::qa_toggle_recording,
@@ -489,6 +470,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::read_audio_recording,
             $crate::commands::export_audio_recording,
             $crate::commands::retranscribe_recording,
+            $crate::commands::apply_quick_note_repolish,
             $crate::commands::marketplace_list,
             $crate::commands::marketplace_detail,
             $crate::commands::marketplace_install,
@@ -684,6 +666,18 @@ fn run_desktop() {
                 // Linux 下 tao 的鼠标穿透实现会直接解包底层 GDK 窗口；visible=false 时
                 // 窗口尚未 realize。这里只创建窗口系统资源而不 map，避免 X11 崩溃，
                 // 也不会像 show() 那样在不支持窗口定位的 Wayland 上造成启动闪窗。
+                #[cfg(target_os = "linux")]
+                let cursor_passthrough_ready = match capsule.gtk_window() {
+                    Ok(gtk_window) => {
+                        gtk_window.realize();
+                        true
+                    }
+                    Err(e) => {
+                        log::warn!("[capsule] gtk_window failed; skipping cursor passthrough: {e}");
+                        false
+                    }
+                };
+                #[cfg(not(target_os = "linux"))]
                 let cursor_passthrough_ready = true;
 
                 if cursor_passthrough_ready {
@@ -750,6 +744,43 @@ fn run_desktop() {
                 if suppress_show {
                     log::info!("[main] start_minimized=true → 跳过初始 show，等用户点托盘");
                 } else {
+                    #[cfg(target_os = "linux")]
+                    {
+                        // Workaround for Linux Wayland WebKitGTK compositing:
+                        // `visible:false` → `show()` can leave the webview surface
+                        // without a valid input region. The ±1px nudge forces
+                        // GTK size-allocate → input surface reattach.
+                        // Ref: tauri#9394, cc-switch linux_fix.rs
+                        let main_clone = main.clone();
+                        let _ = main_clone.set_focus();
+                        tauri::async_runtime::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                            let _ = main_clone.set_focus();
+                            if let Ok(orig) = main_clone.inner_size() {
+                                let bumped = tauri::PhysicalSize::new(
+                                    orig.width.saturating_add(1),
+                                    orig.height,
+                                );
+                                let _ = main_clone.set_size(bumped);
+                                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                                let _ = main_clone.set_size(orig);
+                                log::info!("[main] Linux nudge: focus + surface reactivation done");
+                                // Reconcile: compositor may have coalesced the two
+                                // set_size calls, leaving the window at width+1.
+                                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                                if let Ok(after) = main_clone.inner_size() {
+                                    // Only correct the ±1px nudge artifact — if the
+                                    // compositor or user resized the window significantly
+                                    // during this window, don't clobber that change.
+                                    let dw = if after.width > orig.width { after.width - orig.width } else { orig.width - after.width };
+                                    let dh = if after.height > orig.height { after.height - orig.height } else { orig.height - after.height };
+                                    if dw <= 1 && dh <= 1 && (dw > 0 || dh > 0) {
+                                        let _ = main_clone.set_size(orig);
+                                    }
+                                }
+                            }
+                        });
+                    }
                     if let Err(e) = main.show() {
                         log::warn!("[main] initial show failed: {e}");
                     }
@@ -768,6 +799,10 @@ fn run_desktop() {
             // 符合 Apple HIG："在解释用途之后再弹出权限请求"。
             // 已授权用户不受影响（AXIsProcessTrusted 返回 true，引导页直接跳过）。
 
+            // AppImage / 便携版：fcitx5 插件缺了就从 bundled resources 自动安装
+            // 到 ~/.local/ 下面。不会覆盖系统已有的插件。
+            #[cfg(target_os = "linux")]
+            crate::linux_fcitx::ensure_plugin_installed(app.handle());
 
             // 菜单栏图标 — 与 Swift `MenuBarController` 同语义：
             // 左键点 → 显示/聚焦主窗口；菜单含「显示主窗口」「退出」。
@@ -853,6 +888,7 @@ fn run_desktop() {
                 coordinator.start_translation_hotkey_listener();
                 coordinator.start_switch_style_hotkey_listener();
                 coordinator.start_open_app_hotkey_listener();
+                coordinator.start_quick_note_hotkey_listener();
                 coordinator.start_style_pack_hotkey_listeners();
             }
             #[cfg(target_os = "macos")]
@@ -876,6 +912,7 @@ fn run_desktop() {
                 coordinator.stop_translation_hotkey_listener();
                 coordinator.stop_switch_style_hotkey_listener();
                 coordinator.stop_open_app_hotkey_listener();
+                coordinator.stop_quick_note_hotkey_listener();
                 coordinator.stop_style_pack_hotkey_listeners();
                 let backend = coordinator.backend();
                 tauri::async_runtime::spawn(async move {
@@ -2779,28 +2816,417 @@ pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     hide_chat_window_animated(app, "qa", &QA_PANEL_EPOCH);
 }
 
-/// 「润色结果」不再有独立窗口：复用选区助手（qa）面板切到润色模式。核心在
-/// 「预览确认」输出模式下照旧只发 `HostAction::ShowSelectionPreview`。
+/// 选区润色预览是独立、可编辑的小窗：模型结果不会直接覆盖，用户确认后才回到原选区粘贴。
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn ensure_selection_polish_preview_window<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Option<tauri::WebviewWindow<R>> {
+    if let Some(window) = app.get_webview_window("selection-polish-preview") {
+        return Some(window);
+    }
+    let built = WebviewWindowBuilder::new(
+        app,
+        "selection-polish-preview",
+        WebviewUrl::App("index.html?window=selection-polish-preview".into()),
+    )
+    .title("OpenLess 選區潤色預覽")
+    .inner_size(640.0, 440.0)
+    .min_inner_size(480.0, 320.0)
+    .resizable(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .focused(false)
+    .visible(false)
+    // Nonactivating NSPanel 的 WebKit 內容不可靠地接受 first mouse；native flag
+    // 仍保留作輔助，HTML 第一擊由下方 local NSEvent monitor 保證。
+    .accept_first_mouse(true)
+    .build();
+    match built {
+        Ok(window) => {
+            // macOS：转「非激活 NSPanel」（胶囊/QA 同手法）。预览窗展示期间 LLM 可能
+            // 还在等待、用户也可能切回原 app 继续工作——普通窗口的 show + set_focus
+            // 会把 OpenLess 整个激活成 frontmost，原 app 失去前台后很多编辑器的选区
+            // 直接消失，之后 confirm 的 reactivate/validate 就「有时」失败。
+            // 转成 NonactivatingPanel 后窗口可见、可编辑，但 app 保持后台。
+            // 必须在主线程执行（NSWindow class 切换是 AppKit 操作，worker 线程
+            // 调用可能触发 NSException 直接 abort）。
+            #[cfg(target_os = "macos")]
+            {
+                let window_clone = window.clone();
+                let _ = app.run_on_main_thread(move || {
+                    make_selection_polish_preview_panel_macos(&window_clone);
+                });
+            }
+            Some(window)
+        }
+        Err(error) => {
+            log::warn!("[selection-polish] create preview window failed: {error}");
+            None
+        }
+    }
+}
+
+/// 选区润色预览窗转「非激活 NSPanel」（macOS，胶囊/QA 同手法）。
+///
+/// `set_style_mask` 是全量替换而非 OR——只设 NSPanel 位会丢掉 titled/resizable，
+/// 所以先读当前 mask 再叠加 NonactivatingPanel 位（NSWindowStyleMaskNonactivatingPanel
+/// = 1 << 7）。面板保留标题栏（用户仍可拖动定位、点 X 关闭），只是不再
+/// 激活整个 app。
+#[cfg(target_os = "macos")]
+fn make_selection_polish_preview_panel_macos<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+    use tauri_nspanel::WebviewWindowExt;
+    match window.to_panel() {
+        Ok(panel) => {
+            // style mask 要先读再 OR（set_style_mask 是全量替换）。RawNSPanel 实现
+            // 的是 objc (v0) 的 Message trait，与 objc2::msg_send 不兼容，所以按
+            // QA 的手法对原生指针直接发消息（ZST 包装指针即 ObjC 对象指针）。
+            use objc2::msg_send;
+            use objc2::runtime::AnyObject;
+            let raw = &*panel as *const _ as *mut AnyObject;
+            if !raw.is_null() {
+                unsafe {
+                    let current: usize = msg_send![raw, styleMask];
+                    const NS_NONACTIVATING_PANEL_MASK: usize = 1 << 7;
+                    let _: () = msg_send![raw, setStyleMask: current | NS_NONACTIVATING_PANEL_MASK];
+                    log::info!(
+                        "[selection-polish] preview converted to nonactivating NSPanel (mask {current:#x} -> {:#x})",
+                        current | NS_NONACTIVATING_PANEL_MASK
+                    );
+                }
+            }
+            // 浮层级别（NSFloatingWindowLevel）：盖普通窗口，不盖菜单栏/胶囊(25)。
+            // to_panel 类切换后显式重设一次，与 QA 同配置。
+            panel.set_level(3);
+            // 划词常发生在全屏 app 里：CanJoinAllSpaces + FullScreenAuxiliary
+            // 让面板能叠到全屏空间上（QA 同配置）。
+            panel.set_collection_behaviour(
+                NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces,
+            );
+            install_selection_preview_first_click_guard(raw);
+        }
+        Err(e) => log::warn!("[selection-polish] preview to_panel failed: {e:?}"),
+    }
+}
+
+/// 圈選預覽窗第一擊護欄（macOS）。
+///
+/// local monitor 在 AppKit 派發前，若左鍵事件屬於目前的選區預覽窗且該窗不是 key，
+/// 先 makeKeyWindow，再原樣放行事件。監聽器只永久保存 windowNumber，不保存 NSPanel
+/// 裸指標；預覽窗重建時更新 windowNumber，避免 stale pointer。
+#[cfg(target_os = "macos")]
+fn install_selection_preview_first_click_guard(panel: *mut objc2::runtime::AnyObject) {
+    use block2::RcBlock;
+    use objc2::msg_send;
+    use objc2::runtime::{AnyObject, Bool};
+    use std::sync::atomic::{AtomicI64, AtomicPtr, Ordering};
+
+    static TARGET_WINDOW_NUMBER: AtomicI64 = AtomicI64::new(-1);
+    static MONITOR: AtomicPtr<AnyObject> = AtomicPtr::new(std::ptr::null_mut());
+
+    if panel.is_null() {
+        return;
+    }
+    let window_number = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+            let number: isize = msg_send![panel, windowNumber];
+            number as i64
+        }))
+    })) {
+        Ok(Ok(number)) if number >= 0 => number,
+        Ok(Ok(_)) => {
+            log::warn!("[selection-polish] first-click guard: invalid windowNumber");
+            return;
+        }
+        Ok(Err(error)) => {
+            log::warn!("[selection-polish] first-click guard: windowNumber raised: {error:?}");
+            return;
+        }
+        Err(_) => {
+            log::error!("[selection-polish] first-click guard: Rust panic reading windowNumber");
+            return;
+        }
+    };
+    TARGET_WINDOW_NUMBER.store(window_number, Ordering::SeqCst);
+
+    if !MONITOR.load(Ordering::SeqCst).is_null() {
+        log::info!(
+            "[selection-polish] first-click guard target updated window_number={window_number}"
+        );
+        return;
+    }
+
+    let block = RcBlock::new(move |event: *mut AnyObject| -> *mut AnyObject {
+        let guarded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                if event.is_null() {
+                    return false;
+                }
+                let win: *mut AnyObject = msg_send![event, window];
+                if win.is_null() {
+                    return false;
+                }
+                let event_window_number: isize = msg_send![win, windowNumber];
+                if event_window_number as i64 != TARGET_WINDOW_NUMBER.load(Ordering::SeqCst) {
+                    return false;
+                }
+                // windowNumber 可能在視窗銷毀後被 AppKit 重用；再用固定 title 驗證
+                // 事件確實來自選區預覽窗，避免誤把其他 OpenLess 視窗扶成 key。
+                let title: *mut AnyObject = msg_send![win, title];
+                if title.is_null() {
+                    return false;
+                }
+                let expected: *mut AnyObject = msg_send![
+                    objc2::runtime::AnyClass::get("NSString").expect("NSString class"),
+                    stringWithUTF8String: c"OpenLess 選區潤色預覽".as_ptr()
+                ];
+                if expected.is_null() {
+                    return false;
+                }
+                let title_matches: Bool = msg_send![title, isEqualToString: expected];
+                if !title_matches.as_bool() {
+                    return false;
+                }
+                let is_key: Bool = msg_send![win, isKeyWindow];
+                if !is_key.as_bool() {
+                    let _: () = msg_send![win, makeKeyWindow];
+                    return true;
+                }
+                false
+            }))
+        }));
+        match guarded {
+            Ok(Ok(true)) => log::info!(
+                "[selection-polish] first-click guard: panel made key before first mouse-down"
+            ),
+            Ok(Ok(false)) => {}
+            Ok(Err(error)) => log::warn!(
+                "[selection-polish] first-click guard: ObjC exception caught; event passed through: {error:?}"
+            ),
+            Err(_) => log::error!(
+                "[selection-polish] first-click guard: Rust panic caught; event passed through"
+            ),
+        }
+        event
+    });
+
+    let registration = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+            let Some(cls) = objc2::runtime::AnyClass::get("NSEvent") else {
+                return std::ptr::null_mut();
+            };
+            const MASK_LEFT_MOUSE_DOWN: u64 = 1 << 1;
+            let monitor: *mut AnyObject = msg_send![
+                cls,
+                addLocalMonitorForEventsMatchingMask: MASK_LEFT_MOUSE_DOWN,
+                handler: &*block
+            ];
+            if !monitor.is_null() {
+                let _: *mut AnyObject = msg_send![monitor, retain];
+            }
+            monitor
+        }))
+    }));
+    match registration {
+        Ok(Ok(monitor)) if !monitor.is_null() => {
+            MONITOR.store(monitor, Ordering::SeqCst);
+            log::info!(
+                "[selection-polish] first-click guard installed window_number={window_number}"
+            );
+        }
+        Ok(Ok(_)) => log::warn!(
+            "[selection-polish] first-click guard: monitor registration unavailable; will retry"
+        ),
+        Ok(Err(error)) => log::warn!(
+            "[selection-polish] first-click guard: registration raised; will retry: {error:?}"
+        ),
+        Err(_) => log::error!(
+            "[selection-polish] first-click guard: Rust panic during registration; will retry"
+        ),
+    }
+}
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R>) {
-    SELECTION_POLISH_PREVIEW_PENDING.store(true, Ordering::SeqCst);
-    show_qa_window(app, "polish-preview");
-    // 面板可能是本次才懒创建（刚挂载，订阅还没装上）——它在挂载时也会自己
-    // 拉一次负载（见 `get_selection_polish_preview` 的 pending 门禁）。
-    let _ = app.emit_to("qa", SELECTION_POLISH_PREVIEW_SHOWN, ());
+    let Some(window) = ensure_selection_polish_preview_window(app) else {
+        return;
+    };
+    let _ = app.emit_to(
+        "selection-polish-preview",
+        "selection-polish-preview:shown",
+        (),
+    );
+    #[cfg(target_os = "macos")]
+    {
+        // 不用 window.show()/set_focus()：tao 的 show 走 makeKeyAndOrderFront +
+        // NSApp.activate（已核对 tao 源码）——都会把 OpenLess 推成 frontmost，原
+        // app 丢前台后选区被清，之后的 confirm reactivate/validate 就「有时」失败。
+        // 改走 QA 同手法：主线程 orderFrontRegardless（可见但不抢前台、不成为 key
+        // window）；面板已是 NonactivatingPanel（ensure 阶段转换，同一主线程队列，
+        // 顺序有保证），textarea 的 autofocus 在点击/聚焦时自行 makeKey，而
+        // nonactivating 面板的 makeKey 不会激活 app。
+        let window_clone = window.clone();
+        let _ = app.run_on_main_thread(move || {
+            use objc2::msg_send;
+            use objc2::runtime::AnyObject;
+            match window_clone.ns_window() {
+                Ok(handle) => {
+                    let ns = handle as *mut AnyObject;
+                    if ns.is_null() {
+                        log::warn!("[selection-polish] ns_window null; falling back to show()");
+                        let _ = window_clone.show();
+                    } else {
+                        // 每次 show 都刷新 target；若初次 monitor 註冊失敗，這裡也會重試。
+                        install_selection_preview_first_click_guard(ns);
+                        unsafe {
+                            let _: () = msg_send![ns, orderFrontRegardless];
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[selection-polish] ns_window unavailable: {e}; falling back to show()"
+                    );
+                    let _ = window_clone.show();
+                }
+            }
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Err(error) = window.show() {
+            log::warn!("[selection-polish] show preview failed: {error}");
+            return;
+        }
+        if let Err(error) = window.set_focus() {
+            log::warn!("[selection-polish] focus preview failed: {error}");
+        }
+    }
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(_app: &AppHandle<R>) {}
 
-/// 退出「润色结果」模式。是否顺带关掉面板交给前端：面板可能正处在提问对话中，
-/// 不能被润色流程的收尾动作一起关掉（与 egui 侧 `HideSelectionPreview` 一致）。
 pub(crate) fn hide_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R>) {
-    clear_selection_polish_preview_pending();
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    let _ = app;
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let _ = app.emit_to("qa", SELECTION_POLISH_PREVIEW_HIDE, ());
+    let Some(window) = app.get_webview_window("selection-polish-preview") else {
+        return;
+    };
+    // macOS：转换后的 NSPanel 不能从 worker 线程操作（AppKit 硬约束，resize/hide
+    // 都可能让进程 abort），统一 dispatch 回主线程；其他平台 hide 走 Tauri 内部
+    // 主线程调度即可。
+    #[cfg(target_os = "macos")]
+    {
+        let window_clone = window.clone();
+        let _ = app.run_on_main_thread(move || {
+            let _ = window_clone.hide();
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window.hide();
+    }
+}
+
+/// Confirm 前同步撤掉選區預覽 NSPanel 的 key-window 狀態。
+///
+/// NonactivatingPanel 可以在來源 app 已是 frontmost 時仍保有 key window；若不先
+/// resign，validate 的全域 Cmd+C 可能仍送進預覽 WebView，讀到空剪貼簿後誤判
+/// SelectionChanged。只 resign、不 hide：失敗時預覽仍可見並可重試；成功後沿用
+/// selection service 原本的 hide 流程。
+#[cfg(target_os = "macos")]
+fn resign_selection_polish_preview_key_macos<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+) -> Result<bool, String> {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyObject, Bool};
+
+    let handle = window
+        .ns_window()
+        .map_err(|error| format!("ns_window unavailable: {error}"))?;
+    let ns = handle as *mut AnyObject;
+    if ns.is_null() {
+        return Err("ns_window returned null".to_string());
+    }
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+            let was_key: Bool = msg_send![ns, isKeyWindow];
+            if was_key.as_bool() {
+                let _: () = msg_send![ns, resignKeyWindow];
+            }
+            was_key.as_bool()
+        }))
+    }));
+    match caught {
+        Ok(Ok(was_key)) => Ok(was_key),
+        Ok(Err(error)) => Err(format!("resignKeyWindow raised: {error:?}")),
+        Err(_) => Err("Rust panic while resigning preview key window".to_string()),
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn resign_selection_polish_preview_key_for_apply<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> bool {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, Bool};
+
+    let Some(window) = app.get_webview_window("selection-polish-preview") else {
+        log::warn!("[selection-polish] apply: preview window missing before focus handoff");
+        return false;
+    };
+
+    let on_main_thread = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+            AnyClass::get("NSThread").is_some_and(|class| {
+                let is_main: Bool = msg_send![class, isMainThread];
+                is_main.as_bool()
+            })
+        }))
+    })) {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => {
+            log::warn!("[selection-polish] apply: NSThread lookup raised: {error:?}");
+            return false;
+        }
+        Err(_) => {
+            log::error!("[selection-polish] apply: Rust panic checking main thread");
+            return false;
+        }
+    };
+    let result = if on_main_thread {
+        resign_selection_polish_preview_key_macos(&window)
+    } else {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let window_clone = window.clone();
+        if let Err(error) = app.run_on_main_thread(move || {
+            let result = resign_selection_polish_preview_key_macos(&window_clone);
+            let _ = tx.send(result);
+        }) {
+            log::warn!(
+                "[selection-polish] apply: main-thread focus handoff dispatch failed: {error}"
+            );
+            return false;
+        }
+        // 呼叫端是 blocking apply；事件已排入主執行緒後等待唯一結果。主執行緒路徑
+        // 已在上方直接執行，不會 self-deadlock；不設 timeout，避免回報失敗後延遲
+        // resign 又在別的互動中生效。
+        rx.recv()
+            .unwrap_or_else(|error| Err(format!("preview resign channel closed: {error}")))
+    };
+
+    match result {
+        Ok(was_key) => {
+            log::info!(
+                "[selection-polish] apply: preview resigned key before reactivate was_key={was_key}"
+            );
+            true
+        }
+        Err(error) => {
+            log::warn!("[selection-polish] apply: preview resign failed: {error}");
+            false
+        }
+    }
 }
 
 /// 选区语音：说完后由用户选择提问或编辑。
@@ -2816,7 +3242,7 @@ fn ensure_selection_voice_intent_prompt_window<R: tauri::Runtime>(
         "selection-voice-intent",
         WebviewUrl::App("index.html?window=selection-voice-intent".into()),
     )
-    .title("OpenLess 选区语音")
+    .title("OpenLess 選區語音")
     .inner_size(420.0, 280.0)
     .min_inner_size(360.0, 240.0)
     .resizable(true)

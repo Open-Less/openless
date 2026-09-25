@@ -36,3 +36,9 @@
 - `cargo fmt --all --check`：根 workspace 的 openless-core、linux-egui；Tauri 单独执行 `cargo fmt --manifest-path src-tauri/Cargo.toml --check`。
 - `cargo test -p openless-core --locked`、`cargo test -p openless-linux-egui --locked`。
 - `src-tauri` 及 `backend-tests` 被 workspace exclude，按平台独立构建。源码构建 Tauri 前初始化子模块：`git submodule update --init --recursive`；Core/Linux 独立检查不依赖 Tauri 子模块。
+
+## 本地集成记录
+
+- [2026-09-23 2.0 PR 审查与构建](local-builds/2026-09-23-2.0.md)：PR 取舍、客户端修复及平台验证范围。
+
+- [2026-09-23 模型与云同步界面检查](local-builds/2026-09-23-models-and-sync.md)：运行时平台隔离、Qwen 中英文真实推理和新云同步文档边界。

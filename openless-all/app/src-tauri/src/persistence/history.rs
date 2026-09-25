@@ -1,3 +1,4 @@
+#![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
 //! Tauri path adapter for the shared dictation history repository.
 
 use anyhow::Result;

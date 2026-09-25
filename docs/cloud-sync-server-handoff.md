@@ -1,5 +1,7 @@
 # 云同步服务端交接
 
+> 此交接仅适用于旧 `/me/sync`。2026-09-23 新增的独立加密同步合同在工作区 `5-cloud-sync/docs/`；新协议不沿用此明文 DTO，也尚未接入当前应用。
+
 状态：canonical（客户端合同 v1 已实现并锁定）；更新：2026-09-10。读者：云同步服务端的实现与部署者。客户端实现见 [`cloud_sync.rs`](../openless-all/app/crates/openless-core/src/cloud_sync.rs)，DTO 见 [`cloud_sync_types.rs`](../openless-all/app/crates/openless-core/src/cloud_sync_types.rs)；数据范围与字段表见 [官方云同步](cloud-sync.md)。服务器端代码由服务端负责人编写，本文只约定客户端发出的请求与它接受的响应。
 
 ## 服务地址（客户端已内置）

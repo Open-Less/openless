@@ -1,0 +1,10 @@
+*.sh text eol=lf
+*.rs text eol=lf
+*.cpp text eol=lf
+*.hpp text eol=lf
+*.mjs text eol=lf
+*.yml text eol=lf
+*.desktop text eol=lf
+*.xml text eol=lf
+openless-all/app/linux-egui/packaging/AppRun text eol=lf
+openless-all/app/linux-egui/packaging/openless-desktop-integration text eol=lf

@@ -83,7 +83,7 @@ export const ja: typeof zhCN = {
   },
   selectionPolishPreview: {
     title: '選択範囲の推敲プレビュー',
-    subtitle: '読み取り専用の結果です。確定すると選択範囲に書き戻します。',
+    subtitle: '編集可能です。確認後はじめて元の選択範囲を置き換えます。',
     cancel: 'キャンセル',
     resultLabel: '推敲結果',
     sourcePrefix: '原文：',
@@ -157,12 +157,12 @@ export const ja: typeof zhCN = {
   nav: {
     overview: '概要',
     history: '履歴',
-    quickNote: '速記',
     vocab: '辞書',
     style: 'スタイル',
     marketplace: 'マーケット',
     translation: '翻訳',
     selectionAsk: '選択追問',
+    quickNote: '速記',
     corrections: '修正ルール',
     polishMode: '推敲モード',
     group: {
@@ -290,6 +290,7 @@ export const ja: typeof zhCN = {
       style: 'スタイル：出力スタイルとカスタムプロンプトを管理',
       translation: '翻訳：Shift を押しながら話すと目標言語で挿入',
       selectionAsk: '選択質問：テキストを選択して音声で質問',
+      quickNote: '速記：音声を保存して後から確認',
       settings: '環境設定：ショートカット・プロバイダー・プライバシー・更新',
     },
     footer: {
@@ -486,17 +487,25 @@ export const ja: typeof zhCN = {
     clearFailed: '履歴の消去に失敗：{{err}}',
     deleteFailed: '記録の削除に失敗：{{err}}',
     copyFailed: 'コピーに失敗：{{err}}',
+    actionMenu: '録音の操作',
     playRecording: '録音を再生',
     audioLoading: '読み込み中…',
     audioDecodeFailed: '音声デコード失敗：{{err}}',
     exportRecording: '録音をエクスポート',
     exportFailed: 'エクスポート失敗：{{err}}',
+    chooseSaveDirectory: '文字起こしファイルの保存場所を選択',
+    saveDirectoryPrompt: '文字起こしファイルの保存フォルダーを入力',
+    saveDirectory: '文字起こしファイルの保存場所を設定',
+    changeSaveDirectory: '文字起こしファイルの保存場所を変更',
+    resetSaveDirectory: '既定の保存場所に戻す',
+    defaultSaveDirectory: 'エクスポート時に毎回選択',
+    saveDirectoryFailed: '保存場所の更新に失敗：{{err}}',
     retranscribe: '再認識',
     retranscribing: '認識中…',
     retranscribeFailed: '再認識に失敗：{{err}}',
-    rawLabel: '原文',
     showRaw: '原文を表示',
     hideRaw: '原文を隠す',
+    rawLabel: '原文',
     rawEmpty: '（空）',
     selectHint: '左側から 1 件選択して詳細を表示。',
     recorded: '録音 {{duration}}',
@@ -511,6 +520,7 @@ export const ja: typeof zhCN = {
     inserted: '入力済み',
     pasteSent: '貼り付けを試行',
     copiedFallback: 'コピー済み（要 {{shortcut}}）',
+    notRequested: '入力なし',
     insertFailed: '入力失敗',
     confirmClear: '全 {{count}} 件の記録を削除しますか？この操作は取り消せません。',
     backToList: '一覧に戻る',
@@ -870,13 +880,21 @@ export const ja: typeof zhCN = {
     },
   },
   quickNote: {
-    kicker: '速記', title: '速記',
+    kicker: '速記',
+    title: '速記',
     desc: '音声を保持し、再生・書き出し・再文字起こし・再推敲に対応します。',
-    start: '録音を開始', finish: '録音を終了',
-    noTranscript: 'まだ文字起こしがありません。', recording: '録音中…',
+    recording: '録音中…',
+    failedTitle: '録音の確認が必要です',
+    emptyTitle: '無題の録音',
+    noTranscript: 'まだ文字起こしがありません。',
+    applyResult: '速記に適用',
+    applying: '適用中…',
     shortcutTitle: '速記ショートカット',
     shortcutDesc: '一度押して録音を開始し、もう一度押して保存します。',
     showShortcut: '速記ショートカットを表示',
+    repolishNeedsTranscript: '先に音声を再文字起こししてください。',
+    shareRecording: '音声を共有',
+    cancelledTitle: '録音をキャンセルしました',
   },
   settings: {
     selectionWorkspace: {
@@ -1092,6 +1110,10 @@ export const ja: typeof zhCN = {
       capsuleLabel: '録音カプセル',
       capsuleDesc: '録音 / 転写中、画面下部に半透明のカプセルを表示。',
       capsuleStyleTypeless: 'Typeless コンパクトスタイル',
+      capsuleTranscriptLabel: '文字起こしをリアルタイム表示',
+      capsuleTranscriptDesc:
+        '音声バーの代わりに認識した原文を表示します。オフにすると元の表示に戻ります。非ストリーミング認識は結果の受信後に表示します。',
+      capsuleTranscriptFontSize: '文字起こしの文字サイズ',
       capsuleStyleLabel: 'カプセルスタイル',
       capsuleStyleSiri: '光条 Siri スタイル',
       capsuleStyleClassic: 'Openless デフォルトスタイル',
@@ -1299,6 +1321,7 @@ export const ja: typeof zhCN = {
         asrSiliconflow: 'SiliconFlow SenseVoice',
         asrStepfun: 'StepFun StepAudio ASR',
         asrZhipu: 'Zhipu GLM-ASR',
+        asrMinimax: 'MiniMax ASR',
         asrGroq: 'Groq Whisper-large-v3',
         asrWhisper: 'OpenAI Whisper（互換）',
         asrOpenrouter: 'OpenRouter Whisper',
@@ -1424,6 +1447,16 @@ export const ja: typeof zhCN = {
       bailianVocabularyIdLabel: 'ホットワード Vocabulary ID（任意）',
       bailianVocabularyIdNote:
         'DashScope でホットワード辞書を作成済みの場合は vocab-... ID を入力します。空欄なら送信しません。',
+      bailianProtocolLabel: "API の種類",
+      bailianProtocolNote: "手動選択はモデル名による判定より優先され、検証と録音用にチャネルごとに保存されます。モデルのドキュメントに従って選択してください。",
+      bailianProtocolOptions: {
+        "auto": "自動判定",
+        "dashscope-realtime": "リアルタイム（DashScope）",
+        "qwen-realtime": "リアルタイム（Qwen Realtime）",
+        "multimodal": "非リアルタイム同期（Fun-ASR / Qwen-Audio）",
+        "qwen-multimodal": "非リアルタイム同期（Qwen3-ASR）",
+        "async-transcription": "非リアルタイム非同期（ファイル文字起こし）",
+      },
       bailianModelRealtimeHint: 'リアルタイムモデル · 話しながら文字起こし。',
       bailianModelSyncFileHint: '同期録音モデル · 話し終えてから一括で文字起こし（1 本 ≤ 5 分）。',
       bailianModelAsyncFileHint:
@@ -1475,6 +1508,8 @@ export const ja: typeof zhCN = {
       descNoAcc:
         'すべてのショートカットはグローバルで有効。応答がない場合は権限ページでグローバルショートカット監視の状態を確認してください。',
       startStop: '録音開始 / 停止',
+      quickNote: '速記',
+      quickNoteDesc: '1回押して音声メモを開始し、もう一度押して終了します。',
       cancel: '本回の録音をキャンセル',
       confirm: 'カプセル入力を確定',
       switchStyle: '前のスタイルに切り替え',
@@ -1664,6 +1699,23 @@ export const ja: typeof zhCN = {
         up: '録音中に上へスワイプすると、文字起こしや挿入をせずにキャンセルします。',
         down: '録音中に下へスワイプすると、文字起こしや挿入をせずにキャンセルします。',
       },
+      androidOverlayGestureActionsLabel: 'オーバーレイのスワイプ操作',
+      androidOverlayGestureActionsDesc:
+        '録音中に適用されます。通常のタップで通常の音声入力を終了し、速記スワイプで音声を永続保存します。',
+      androidOverlayGestureDirection: {
+        up: '上',
+        down: '下',
+        left: '左',
+        right: '右',
+      },
+      androidOverlayGestureAction: {
+        none: '操作なし',
+        quick_note: '速記',
+        translation: '翻訳',
+        style_pack: 'スタイル切替',
+        cancel: 'キャンセル',
+        qa: '質問',
+      },
       windowsIme: {
         installed: 'インストール済み。音声入力時に OpenLess IME へ一時的に切り替えます。',
         notInstalled:
@@ -1680,6 +1732,7 @@ export const ja: typeof zhCN = {
       multimodalPipelineHint:
         '有効にすると「サービス → AI プロバイダー」ページに従来 / マルチモーダルの切り替えが表示されます。従来 = ASR + LLM、マルチモーダル = 音声対応モデル1つ。設定は別々に保存され、認証情報を共有しません。',
       streamingInsertTitle: 'ストリーミング入力',
+      streamingInsertTitleLinux: 'ストリーミング入力（実験的）',
       streamingInsertDesc:
         '逐字リアルタイム挿入で体感遅延を低減。条件不一致時はワンショット貼り付けにフォールバック。',
       streamingInsertLabel: 'ストリーミング入力',
@@ -1687,6 +1740,8 @@ export const ja: typeof zhCN = {
         'ストリーミング中は一時的に ABC 入力ソースへ切替（CJK IME による傍受を回避）。セッション終了時に自動で元へ戻ります。',
       streamingInsertHintWindows:
         'SendInput Unicode で TSF / IME を迂回。入力ソースの切替は不要です。',
+      streamingInsertHintLinux:
+        'fcitx5 プラグインで文字を送信。ストリーミング入力は enigo + XTest でキー合成。',
       streamingInsertSaveClipboardLabel: 'クリップボードに保存',
       streamingInsertSaveClipboardHint:
         '挿入成功後に最終テキストをクリップボードへ書き込み、Cmd+V で再貼付け可能にします。OFF ではクリップボードに触れません。',
@@ -2115,9 +2170,10 @@ export const ja: typeof zhCN = {
     groupOther: 'その他',
     mirrorLabel: 'ダウンロードミラー',
     mirrorDesc:
-      '公式ソースは海外ネットワークで安定。hf-mirror.com は中国コミュニティ運営のミラー。',
+      'HuggingFace、コミュニティミラー、対応モデルの ModelScope 公式リポジトリを選択できます。',
     mirrorHuggingface: 'HuggingFace 公式 (huggingface.co)',
     mirrorHfMirror: '中国ミラー (hf-mirror.com)',
+    mirrorModelscope: 'ModelScope 公式 (modelscope.cn)',
     activeBadge: '使用中',
     downloadedBadge: 'ダウンロード済み',
     notDownloadedBadge: '未ダウンロード',

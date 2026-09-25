@@ -46,14 +46,15 @@ const PER_ADDR_TCP_TIMEOUT: Duration = Duration::from_millis(1500);
 
 fn default_port_for_request(
     request: &tokio_tungstenite::tungstenite::handshake::client::Request,
-) -> Result<u16, WsError> {
+) -> Result<u16, Box<WsError>> {
     let default_port = match request.uri().scheme_str() {
         Some("ws") => 80,
         Some("wss") => 443,
         _ => {
             return Err(WsError::Url(
                 tokio_tungstenite::tungstenite::error::UrlError::UnsupportedUrlScheme,
-            ))
+            )
+            .into())
         }
     };
     Ok(request.uri().port_u16().unwrap_or(default_port))
@@ -72,13 +73,14 @@ async fn connect_ws_to_addrs(
         WsStream,
         tokio_tungstenite::tungstenite::handshake::client::Response,
     ),
-    WsError,
+    Box<WsError>,
 > {
     if addrs.is_empty() {
         return Err(WsError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "no addresses for websocket endpoint",
-        )));
+        ))
+        .into());
     }
 
     let mut last_err = None;
@@ -101,12 +103,14 @@ async fn connect_ws_to_addrs(
         }
     }
 
-    Err(last_err.unwrap_or_else(|| {
-        WsError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotConnected,
-            "no tcp candidate",
-        ))
-    }))
+    Err(last_err
+        .unwrap_or_else(|| {
+            WsError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "no tcp candidate",
+            ))
+        })
+        .into())
 }
 
 async fn connect_ws_prefer_ipv4(
@@ -116,7 +120,7 @@ async fn connect_ws_prefer_ipv4(
         WsStream,
         tokio_tungstenite::tungstenite::handshake::client::Response,
     ),
-    WsError,
+    Box<WsError>,
 > {
     let port = default_port_for_request(&request)?;
     let host = request.uri().host().unwrap_or("").to_string();
@@ -528,36 +532,24 @@ impl BailianRealtimeASR {
             .and_then(Value::as_i64)
             .unwrap_or(0);
 
-        let mut delta: Option<String> = None;
-        {
+        let snapshot = {
             let mut st = self.state.lock();
             st.last_result_text = trimmed.to_string();
-
             if is_sentence_final {
-                // 所有 final 结果（含 sentence_id == 0）都存入 final_segments。
-                // BTreeMap 覆盖语义保证同一 sentence_id 不会重复追加。
                 st.final_segments.insert(sentence_id, trimmed.to_string());
                 st.partial_segments.remove(&sentence_id);
             } else {
-                let previous = st
-                    .partial_segments
-                    .get(&sentence_id)
-                    .map(String::as_str)
-                    .unwrap_or("");
-                delta = trimmed
-                    .strip_prefix(previous)
-                    .filter(|suffix| !suffix.is_empty())
-                    .map(str::to_string);
                 st.partial_segments.insert(sentence_id, trimmed.to_string());
             }
-        }
-        if let Some(delta) = delta {
-            if let Some(sink) = self.partial_sink.lock().clone() {
-                let _ = sink.publish(TextStreamChunk {
-                    text: delta,
-                    offset: 0,
-                });
-            }
+            let mut segments = st.partial_segments.clone();
+            segments.extend(st.final_segments.clone());
+            merge_segments(&segments.into_values().collect::<Vec<_>>())
+        };
+        if let Some(sink) = self.partial_sink.lock().clone() {
+            let _ = sink.publish(TextStreamChunk {
+                text: snapshot,
+                offset: 0,
+            });
         }
     }
 
@@ -813,6 +805,33 @@ async fn close_writer(writer: &SharedWriter) -> Result<(), BailianASRError> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn transcript_snapshots_keep_prefix_and_recognition_corrections() {
+        let asr = create_test_asr();
+        let sink = Arc::new(super::super::TranscriptCapture::default());
+        asr.set_partial_sink(sink.clone());
+        for (id, text, final_result) in [
+            (0, "你", false),
+            (0, "你好", false),
+            (0, "您好", false),
+            (0, "您好。", true),
+            (1, "世", false),
+            (1, "世界", false),
+            (1, "世界！", true),
+        ] {
+            asr.record_result(&make_result_event(id, text, final_result));
+        }
+        sink.assert_snapshots(&[
+            "你",
+            "你好",
+            "您好",
+            "您好。",
+            "您好。世",
+            "您好。世界",
+            "您好。世界！",
+        ]);
+    }
+
     // ---- helpers ----
 
     fn make_result_event(sentence_id: i64, text: &str, is_final: bool) -> Value {
@@ -869,13 +888,17 @@ mod tests {
         let request = "https://localhost/path".into_client_request().unwrap();
         let explicit_port = "https://localhost:443/path".into_client_request().unwrap();
         assert!(matches!(
-            default_port_for_request(&request),
+            default_port_for_request(&request)
+                .as_ref()
+                .map_err(|error| error.as_ref()),
             Err(WsError::Url(
                 tokio_tungstenite::tungstenite::error::UrlError::UnsupportedUrlScheme
             ))
         ));
         assert!(matches!(
-            default_port_for_request(&explicit_port),
+            default_port_for_request(&explicit_port)
+                .as_ref()
+                .map_err(|error| error.as_ref()),
             Err(WsError::Url(
                 tokio_tungstenite::tungstenite::error::UrlError::UnsupportedUrlScheme
             ))
@@ -943,7 +966,7 @@ mod tests {
         let request = "ws://localhost/path".into_client_request().unwrap();
         let result = connect_ws_to_addrs(request, Vec::new()).await;
         assert!(
-            matches!(result, Err(WsError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound)
+            matches!(result.as_ref().map_err(|error| error.as_ref()), Err(WsError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound)
         );
     }
 

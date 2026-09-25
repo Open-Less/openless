@@ -9,7 +9,6 @@ function assertMatch(source, pattern, name) {
 // 契约函数 show_capsule_window_no_activate 位于显式 Tauri Host Module。
 // 契约必须校验真正编译的那份，否则会出现
 // 「测试绿、线上坏」的假信心。
-// 函数体以「下一项的平台属性」为界（不再假定紧跟的是某一份特定平台实现）。
 const capsuleFocusRs = (
   await readFile(new URL('../src-tauri/src/coordinator/capsule_focus.rs', import.meta.url), 'utf-8')
 ).replace(/\r\n/g, '\n');
@@ -17,7 +16,7 @@ const coordinatorHostRs = (
   await readFile(new URL('../src-tauri/src/tauri_coordinator_host.rs', import.meta.url), 'utf-8')
 ).replace(/\r\n/g, '\n');
 const functionMatch = coordinatorHostRs.match(
-  /#\[cfg\(target_os = "macos"\)\]\s*(?:pub\((?:crate|super)\) )?fn show_capsule_window_no_activate[\s\S]*?\n}\n\n#\[cfg\(/,
+  /#\[cfg\(target_os = "macos"\)\]\s*(?:pub\((?:crate|super)\) )?fn show_capsule_window_no_activate[\s\S]*?\n}\n\n#\[cfg\(target_os = "linux"\)\]/,
 );
 
 if (!functionMatch) {

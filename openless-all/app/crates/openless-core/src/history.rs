@@ -44,7 +44,8 @@ impl HistoryStore {
         self.write_locked(&sessions)
     }
 
-    /// A recording-start draft and its completed result share one stable identity.
+    /// Replace an in-progress record when its terminal result arrives, or
+    /// append it when no provisional record exists (legacy/recovery path).
     pub fn upsert_with_retention(
         &self,
         session: DictationSession,
@@ -64,6 +65,19 @@ impl HistoryStore {
         }
         retain_with_policy(&mut sessions, retention_days, max_entries);
         self.write_locked(&sessions)
+    }
+
+    pub fn contains(&self, id: &str) -> Result<bool, BackendError> {
+        let _guard = self.lock_store()?;
+        Ok(self.read_locked()?.iter().any(|session| session.id == id))
+    }
+
+    pub fn read_entry(&self, id: &str) -> Result<Option<DictationSession>, BackendError> {
+        let _guard = self.lock_store()?;
+        Ok(self
+            .read_locked()?
+            .into_iter()
+            .find(|session| session.id == id))
     }
 
     pub fn recent_within_minutes(
@@ -110,12 +124,12 @@ impl HistoryStore {
 
     pub fn clear(&self) -> Result<(), BackendError> {
         let _guard = self.lock_store()?;
-        let notes = self
+        let quick_notes = self
             .read_locked()?
             .into_iter()
-            .filter(|entry| entry.source == HistorySource::QuickNote)
+            .filter(|session| session.source == HistorySource::QuickNote)
             .collect::<Vec<_>>();
-        self.write_locked(&notes)
+        self.write_locked(&quick_notes)
     }
 
     fn lock_store(&self) -> Result<std::sync::MutexGuard<'_, ()>, BackendError> {
@@ -140,10 +154,15 @@ fn retain_with_policy(
     retention_days: u32,
     max_entries: Option<u32>,
 ) {
+    // Quick notes are intentionally outside the ordinary history retention
+    // policy. A recording-start draft is also protected until it reaches a
+    // terminal state, because its audio may be the only recoverable artifact
+    // after a process crash.
     if retention_days > 0 {
         let cutoff = chrono::Utc::now() - chrono::Duration::days(i64::from(retention_days));
         sessions.retain(|session| {
             session.source == HistorySource::QuickNote
+                || session.error_code.as_deref() == Some("recording")
                 || chrono::DateTime::parse_from_rfc3339(&session.created_at)
                     .map(|time| time.with_timezone(&chrono::Utc) >= cutoff)
                     .unwrap_or(true)
@@ -152,13 +171,16 @@ fn retain_with_policy(
     let cap = max_entries
         .map(|count| (count as usize).clamp(5, HISTORY_CAP))
         .unwrap_or(HISTORY_CAP);
-    let mut ordinary = 0;
+    let mut ordinary_seen = 0usize;
     sessions.retain(|session| {
-        if session.source == HistorySource::QuickNote {
-            return true;
+        if session.source == HistorySource::QuickNote
+            || session.error_code.as_deref() == Some("recording")
+        {
+            true
+        } else {
+            ordinary_seen += 1;
+            ordinary_seen <= cap
         }
-        ordinary += 1;
-        ordinary <= cap
     });
 }
 
@@ -194,6 +216,37 @@ mod tests {
             asr_ms: None,
             polish_ms: None,
         }
+    }
+
+    #[test]
+    fn legacy_quick_note_history_survives_read_and_append() {
+        let path = std::env::temp_dir().join(format!(
+            "openless-legacy-history-{}.json",
+            uuid::Uuid::new_v4()
+        ));
+        let mut legacy =
+            serde_json::to_value(session("legacy", chrono::Utc::now().to_rfc3339())).unwrap();
+        legacy["source"] = "quick_note".into();
+        let bytes = serde_json::to_vec(&vec![legacy]).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let store = HistoryStore::at_path(path.clone());
+        assert_eq!(store.list().unwrap()[0].source, HistorySource::QuickNote);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            bytes,
+            "reading must not rewrite history"
+        );
+        store
+            .append_with_retention(session("new", chrono::Utc::now().to_rfc3339()), 0, None)
+            .unwrap();
+        let entries = store.list().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1].source, HistorySource::QuickNote);
+        assert_eq!(entries[1].raw_transcript, "raw");
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted[1]["source"], "quick_note");
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -241,6 +294,81 @@ mod tests {
         assert!(store.list().unwrap().is_empty());
         store.clear().unwrap();
         assert!(store.recent_within_minutes(0).unwrap().is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn quick_notes_survive_ordinary_history_cap() {
+        let path = std::env::temp_dir().join(format!(
+            "openless-core-quick-note-retention-{}.json",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let store = HistoryStore::at_path(path.clone());
+        let mut note = session("quick", chrono::Utc::now().to_rfc3339());
+        note.source = HistorySource::QuickNote;
+        store.append_with_retention(note, 1, Some(5)).unwrap();
+        for index in 0..8 {
+            store
+                .append_with_retention(
+                    session(
+                        &format!("ordinary-{index}"),
+                        chrono::Utc::now().to_rfc3339(),
+                    ),
+                    1,
+                    Some(5),
+                )
+                .unwrap();
+        }
+        let sessions = store.list().unwrap();
+        assert!(sessions.iter().any(|entry| entry.id == "quick"));
+        assert_eq!(
+            sessions
+                .iter()
+                .filter(|entry| entry.source == HistorySource::Voice)
+                .count(),
+            5
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn clearing_ordinary_history_preserves_quick_notes() {
+        let path = std::env::temp_dir().join(format!(
+            "openless-core-quick-note-clear-{}.json",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let store = HistoryStore::at_path(path.clone());
+        store
+            .append_with_retention(
+                session("ordinary", chrono::Utc::now().to_rfc3339()),
+                0,
+                None,
+            )
+            .unwrap();
+        let mut note = session("quick", chrono::Utc::now().to_rfc3339());
+        note.source = HistorySource::QuickNote;
+        store.append_with_retention(note, 0, None).unwrap();
+        store.clear().unwrap();
+        let entries = store.list().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "quick");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn upsert_preserves_an_existing_archived_audio_flag_when_update_omits_it() {
+        let path = std::env::temp_dir().join(format!(
+            "openless-core-quick-note-audio-flag-{}.json",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let store = HistoryStore::at_path(path.clone());
+        let mut original = session("audio", chrono::Utc::now().to_rfc3339());
+        original.has_audio_recording = Some(true);
+        store.append_with_retention(original, 0, None).unwrap();
+        let mut replacement = session("audio", chrono::Utc::now().to_rfc3339());
+        replacement.has_audio_recording = None;
+        store.upsert_with_retention(replacement, 0, None).unwrap();
+        assert_eq!(store.list().unwrap()[0].has_audio_recording, Some(true));
         let _ = std::fs::remove_file(path);
     }
 }

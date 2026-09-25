@@ -18,6 +18,9 @@ use anyhow::{Context, Result};
 use parking_lot::Mutex;
 use tokio::sync::Mutex as AsyncMutex;
 
+#[cfg(target_os = "windows")]
+use super::blocking_decode::run_serialized_decode;
+
 use crate::asr::local::sherpa::{
     SherpaPreparePhase, SherpaPrepareProgressPayload, SherpaRuntimeStatus, PROVIDER_ID,
 };
@@ -39,6 +42,8 @@ struct LoadedOfflineModel {
     alias: String,
     #[cfg(target_os = "windows")]
     recognizer: Arc<OfflineRecognizer>,
+    #[cfg(target_os = "windows")]
+    decode_gate: Arc<tokio::sync::Semaphore>,
 }
 
 /// Online 模型加载状态。每次听写会话会从 recognizer 创建独立 `OnlineStream`。
@@ -460,6 +465,7 @@ async fn load_model(alias: &str, dir: &Path) -> Result<LoadedModel> {
                 Ok(LoadedModel::Offline(LoadedOfflineModel {
                     alias,
                     recognizer: Arc::new(recognizer),
+                    decode_gate: Arc::new(tokio::sync::Semaphore::new(1)),
                 }))
             }
             Some(openless_core::LocalAsrExecutionMode::Online) => {
@@ -592,10 +598,15 @@ async fn transcribe_loaded_model(
     language_hint: Option<String>,
     audio_timeout: std::time::Duration,
 ) -> Result<String> {
-    tokio::time::timeout(audio_timeout, async move {
-        tokio::task::spawn_blocking(move || {
+    run_serialized_decode(
+        Arc::clone(&loaded.decode_gate),
+        audio_timeout,
+        move |cancelled| {
             let mut texts = Vec::with_capacity(pcm_chunks.len());
             for pcm in pcm_chunks {
+                if cancelled.load(Ordering::Acquire) {
+                    anyhow::bail!("sherpa-onnx transcribe cancelled");
+                }
                 let samples = pcm_s16le_to_f32(&pcm)?;
                 let stream = loaded.recognizer.create_stream();
                 if let Some(language) = language_hint.as_deref().filter(|value| !value.is_empty()) {
@@ -611,12 +622,9 @@ async fn transcribe_loaded_model(
                 texts.push(result.text);
             }
             Ok(openless_core::asr::whisper::join_transcript_chunks(&texts))
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("sherpa-onnx transcribe join failed: {e:#}"))?
-    })
+        },
+    )
     .await
-    .map_err(|_| anyhow::anyhow!("sherpa-onnx transcribe timeout"))?
 }
 
 #[cfg(not(target_os = "windows"))]

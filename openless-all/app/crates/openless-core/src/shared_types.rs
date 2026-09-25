@@ -5,16 +5,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::android_types::{
     default_android_insert_strategy, default_android_overlay_activation_mode,
-    default_android_overlay_cancel_swipe_direction, default_android_overlay_left_swipe_action,
-    default_android_overlay_size_dp, default_android_overlay_trigger,
-    normalize_android_insert_strategy, normalize_android_overlay_size_dp,
+    default_android_overlay_cancel_swipe_direction, default_android_overlay_gesture_actions,
+    default_android_overlay_left_swipe_action, default_android_overlay_size_dp,
+    default_android_overlay_trigger, normalize_android_insert_strategy,
+    normalize_android_overlay_size_dp,
 };
 pub use crate::android_types::{
     AndroidAccessibilityDiagnosis, AndroidAccessibilityRecoveryOutcome,
     AndroidAccessibilityRecoveryResult, AndroidAccessibilityState, AndroidAccessibilityStatus,
     AndroidInsertStrategy, AndroidOverlayActivationMode, AndroidOverlayCancelSwipeDirection,
-    AndroidOverlayLeftSwipeAction, AndroidOverlayPermissionState, AndroidOverlayStatus,
-    AndroidOverlayTrigger, AndroidShizukuState, AndroidShizukuStatus,
+    AndroidOverlayGestureAction, AndroidOverlayGestureActions, AndroidOverlayLeftSwipeAction,
+    AndroidOverlayPermissionState, AndroidOverlayStatus, AndroidOverlayTrigger,
+    AndroidShizukuState, AndroidShizukuStatus,
 };
 
 pub use crate::types::{HistorySource, PolishMode};
@@ -336,6 +338,10 @@ pub struct UserPreferences {
     /// 录音胶囊外观。偏好事件同步到各窗口，录音状态同时携带当前样式。
     #[serde(default)]
     pub capsule_style: CapsuleStyle,
+    #[serde(default = "default_true")]
+    pub capsule_transcript_enabled: bool,
+    #[serde(default = "default_capsule_transcript_font_size")]
+    pub capsule_transcript_font_size: u8,
     /// 录音期间临时静音系统输出，停止/取消/出错后恢复原静音状态。
     #[serde(default)]
     pub mute_during_recording: bool,
@@ -441,7 +447,7 @@ pub struct UserPreferences {
     /// 默认 Cmd+Shift+; (macOS) / Ctrl+Shift+; (Windows)。详见 issue #118。
     #[serde(default = "default_qa_hotkey")]
     pub qa_hotkey: Option<ShortcutBinding>,
-    /// Optional quick-note toggle shortcut. Disabled by default.
+    /// 独立的速记快捷键。None = 未配置；启用后按一次开始、再按一次结束。
     #[serde(default)]
     pub quick_note_hotkey: Option<ShortcutBinding>,
     /// 选区润色全局快捷键。Windows 默认右 Alt；其它平台默认关闭。
@@ -541,7 +547,7 @@ pub struct UserPreferences {
     /// 设置页测试 Whisper 时覆盖 Qwen 的模型选择。
     #[serde(default = "default_local_whisper_model")]
     pub local_whisper_active_model: String,
-    /// 本地模型下载源镜像（"huggingface" / "hf-mirror"）。
+    /// 本地模型下载源（"huggingface" / "hf-mirror" / "modelscope"）。
     #[serde(default = "default_local_asr_mirror")]
     pub local_asr_mirror: String,
     /// 本地 ASR 引擎在内存中的保留时长（秒）。0 = 说完话即释放；
@@ -670,6 +676,9 @@ pub struct UserPreferences {
     /// 这种「文本档案多 + 录音不占盘」组合下精确控制。
     #[serde(default)]
     pub audio_recording_max_entries: Option<u32>,
+    /// 速记导出的录音文件保存目录。空字符串表示每次导出时弹出保存对话框。
+    #[serde(default)]
+    pub quick_note_export_directory: String,
     /// Style Pack Marketplace HTTP 基地址。空 = 本地开发默认 http://127.0.0.1:8090；
     /// 用户在 Settings 里填生产 URL (如 https://api.openless-marketplace.com)。
     #[serde(default)]
@@ -692,6 +701,9 @@ pub struct UserPreferences {
     /// Android: vertical swipe direction that cancels recording.
     #[serde(default = "default_android_overlay_cancel_swipe_direction")]
     pub android_overlay_cancel_swipe_direction: AndroidOverlayCancelSwipeDirection,
+    /// Android: action assigned to each overlay swipe direction.
+    #[serde(default = "default_android_overlay_gesture_actions")]
+    pub android_overlay_gesture_actions: AndroidOverlayGestureActions,
     /// Android: floating overlay control diameter in dp.
     #[serde(default = "default_android_overlay_size_dp")]
     pub android_overlay_size_dp: u32,
@@ -785,6 +797,10 @@ struct UserPreferencesWire {
     show_capsule: bool,
     #[serde(default)]
     capsule_style: CapsuleStyle,
+    #[serde(default = "default_true")]
+    capsule_transcript_enabled: bool,
+    #[serde(default = "default_capsule_transcript_font_size")]
+    capsule_transcript_font_size: u8,
     #[serde(default)]
     mute_during_recording: bool,
     #[serde(default)]
@@ -952,6 +968,8 @@ struct UserPreferencesWire {
     #[serde(default)]
     audio_recording_max_entries: Option<u32>,
     #[serde(default)]
+    quick_note_export_directory: String,
+    #[serde(default)]
     marketplace_base_url: String,
     #[serde(default)]
     marketplace_dev_login: String,
@@ -965,6 +983,8 @@ struct UserPreferencesWire {
     android_overlay_left_swipe_action: AndroidOverlayLeftSwipeAction,
     #[serde(default = "default_android_overlay_cancel_swipe_direction")]
     android_overlay_cancel_swipe_direction: AndroidOverlayCancelSwipeDirection,
+    #[serde(default)]
+    android_overlay_gesture_actions: Option<AndroidOverlayGestureActions>,
     #[serde(default = "default_android_overlay_size_dp")]
     android_overlay_size_dp: u32,
     #[serde(default)]
@@ -1024,6 +1044,8 @@ impl Default for UserPreferencesWire {
             launch_at_login: prefs.launch_at_login,
             show_capsule: prefs.show_capsule,
             capsule_style: prefs.capsule_style,
+            capsule_transcript_enabled: prefs.capsule_transcript_enabled,
+            capsule_transcript_font_size: prefs.capsule_transcript_font_size,
             mute_during_recording: prefs.mute_during_recording,
             stable_transcription_enabled: prefs.stable_transcription_enabled,
             audio_cue_on_record: prefs.audio_cue_on_record,
@@ -1111,6 +1133,7 @@ impl Default for UserPreferencesWire {
             history_max_entries: prefs.history_max_entries,
             record_audio_for_debug: prefs.record_audio_for_debug,
             audio_recording_max_entries: prefs.audio_recording_max_entries,
+            quick_note_export_directory: prefs.quick_note_export_directory.clone(),
             marketplace_base_url: prefs.marketplace_base_url,
             marketplace_dev_login: prefs.marketplace_dev_login,
             android_insert_strategy: prefs.android_insert_strategy,
@@ -1118,6 +1141,7 @@ impl Default for UserPreferencesWire {
             android_overlay_activation_mode: prefs.android_overlay_activation_mode,
             android_overlay_left_swipe_action: prefs.android_overlay_left_swipe_action,
             android_overlay_cancel_swipe_direction: prefs.android_overlay_cancel_swipe_direction,
+            android_overlay_gesture_actions: None,
             android_overlay_size_dp: prefs.android_overlay_size_dp,
             splash_seen_version: prefs.splash_seen_version,
         }
@@ -1167,6 +1191,33 @@ impl<'de> Deserialize<'de> for UserPreferences {
         let update_channel_explicit = wire
             .update_channel_explicit
             .unwrap_or(matches!(wire.update_channel, UpdateChannel::Beta));
+        let android_overlay_gesture_actions =
+            wire.android_overlay_gesture_actions
+                .unwrap_or_else(|| AndroidOverlayGestureActions {
+                    up: if wire.android_overlay_cancel_swipe_direction
+                        == AndroidOverlayCancelSwipeDirection::Up
+                    {
+                        AndroidOverlayGestureAction::Cancel
+                    } else {
+                        AndroidOverlayGestureAction::None
+                    },
+                    down: if wire.android_overlay_cancel_swipe_direction
+                        == AndroidOverlayCancelSwipeDirection::Down
+                    {
+                        AndroidOverlayGestureAction::Cancel
+                    } else {
+                        AndroidOverlayGestureAction::None
+                    },
+                    left: match wire.android_overlay_left_swipe_action {
+                        AndroidOverlayLeftSwipeAction::Translation => {
+                            AndroidOverlayGestureAction::Translation
+                        }
+                        AndroidOverlayLeftSwipeAction::StylePack => {
+                            AndroidOverlayGestureAction::StylePack
+                        }
+                    },
+                    right: AndroidOverlayGestureAction::Qa,
+                });
 
         Ok(Self {
             hotkey: wire.hotkey,
@@ -1184,6 +1235,8 @@ impl<'de> Deserialize<'de> for UserPreferences {
             launch_at_login: wire.launch_at_login,
             show_capsule: wire.show_capsule,
             capsule_style: wire.capsule_style,
+            capsule_transcript_enabled: wire.capsule_transcript_enabled,
+            capsule_transcript_font_size: wire.capsule_transcript_font_size.clamp(12, 20),
             mute_during_recording: wire.mute_during_recording,
             stable_transcription_enabled: wire.stable_transcription_enabled,
             audio_cue_on_record: wire.audio_cue_on_record,
@@ -1282,6 +1335,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             history_max_entries: wire.history_max_entries,
             record_audio_for_debug: wire.record_audio_for_debug,
             audio_recording_max_entries: wire.audio_recording_max_entries,
+            quick_note_export_directory: wire.quick_note_export_directory,
             marketplace_base_url: wire.marketplace_base_url,
             marketplace_dev_login: wire.marketplace_dev_login,
             android_insert_strategy: normalize_android_insert_strategy(
@@ -1291,6 +1345,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             android_overlay_activation_mode: wire.android_overlay_activation_mode,
             android_overlay_left_swipe_action: wire.android_overlay_left_swipe_action,
             android_overlay_cancel_swipe_direction: wire.android_overlay_cancel_swipe_direction,
+            android_overlay_gesture_actions,
             android_overlay_size_dp: normalize_android_overlay_size_dp(
                 wire.android_overlay_size_dp,
             ),
@@ -1544,6 +1599,8 @@ impl Default for UserPreferences {
             launch_at_login: false,
             show_capsule: true,
             capsule_style: CapsuleStyle::Siri,
+            capsule_transcript_enabled: true,
+            capsule_transcript_font_size: default_capsule_transcript_font_size(),
             mute_during_recording: false,
             stable_transcription_enabled: false,
             audio_cue_on_record: true,
@@ -1628,6 +1685,7 @@ impl Default for UserPreferences {
             history_max_entries: None,
             record_audio_for_debug: false,
             audio_recording_max_entries: None,
+            quick_note_export_directory: String::new(),
             marketplace_base_url: String::new(),
             marketplace_dev_login: String::new(),
             android_insert_strategy: default_android_insert_strategy(),
@@ -1636,6 +1694,7 @@ impl Default for UserPreferences {
             android_overlay_left_swipe_action: default_android_overlay_left_swipe_action(),
             android_overlay_cancel_swipe_direction: default_android_overlay_cancel_swipe_direction(
             ),
+            android_overlay_gesture_actions: default_android_overlay_gesture_actions(),
             android_overlay_size_dp: default_android_overlay_size_dp(),
             splash_seen_version: String::new(),
         }
@@ -3404,5 +3463,44 @@ mod tests {
         assert_eq!(json["llmModel"], "deepseek-v3-2");
         assert_eq!(json["asrMs"], 230);
         assert_eq!(json["polishMs"], 1450);
+    }
+}
+
+fn default_capsule_transcript_font_size() -> u8 {
+    14
+}
+
+#[cfg(test)]
+mod capsule_transcript_preferences_tests {
+    use super::*;
+    #[test]
+    fn capsule_transcript_defaults_and_roundtrip() {
+        let mut value = serde_json::to_value(UserPreferences::default()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("capsuleTranscriptEnabled");
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("capsuleTranscriptFontSize");
+        let old: UserPreferences = serde_json::from_value(value).unwrap();
+        assert!(old.capsule_transcript_enabled);
+        assert_eq!(old.capsule_transcript_font_size, 14);
+        let mut prefs = old;
+        prefs.capsule_transcript_enabled = false;
+        prefs.capsule_transcript_font_size = 20;
+        let restored: UserPreferences =
+            serde_json::from_slice(&serde_json::to_vec(&prefs).unwrap()).unwrap();
+        assert!(!restored.capsule_transcript_enabled);
+        assert_eq!(restored.capsule_transcript_font_size, 20);
+        let mut value = serde_json::to_value(prefs).unwrap();
+        value["capsuleTranscriptFontSize"] = 0.into();
+        assert_eq!(
+            serde_json::from_value::<UserPreferences>(value)
+                .unwrap()
+                .capsule_transcript_font_size,
+            12
+        );
     }
 }

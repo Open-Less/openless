@@ -177,9 +177,6 @@ pub fn access_urls(port: u16) -> Vec<String> {
 
 // ───────────────────────── TLS ─────────────────────────
 
-// Platform-neutral shared source: also included by the Linux egui host
-// (`linux-egui/src/remote_input.rs`) so neither frontend owns the other's tree.
-#[path = "../../../shared/remote_tls/tls_identity.rs"]
 mod tls_identity;
 
 // ───────────────────────── 启动 ─────────────────────────

@@ -1,3 +1,4 @@
+#![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
 //! Tauri path adapter for the shared correction-rule repository.
 
 use std::path::PathBuf;

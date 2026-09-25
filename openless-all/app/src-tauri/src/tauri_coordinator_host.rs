@@ -166,7 +166,16 @@ fn show_capsule_window_no_activate<R: tauri::Runtime>(
     true
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(target_os = "linux")]
+fn show_capsule_window_no_activate<R: tauri::Runtime>(
+    _app: &AppHandle<R>,
+    _window: &tauri::WebviewWindow<R>,
+    _reassert_spaces: bool,
+) -> bool {
+    true
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 fn show_capsule_window_no_activate<R: tauri::Runtime>(
     _app: &AppHandle<R>,
     _window: &tauri::WebviewWindow<R>,
@@ -637,6 +646,20 @@ impl TauriCapsuleWindow {
         };
         let fallback_card_active = self.state.defer_if_fallback_active(payload);
 
+        #[cfg(target_os = "linux")]
+        {
+            let _ = (
+                window,
+                payload,
+                show_capsule,
+                style,
+                fallback_card_active,
+                reassert_spaces,
+            );
+            return;
+        }
+
+        #[cfg(not(target_os = "linux"))]
         {
             let action = capsule_window_action(fallback_card_active, show_capsule, payload.state);
             if action == CapsuleWindowAction::PreserveFallbackCard {
@@ -912,6 +935,32 @@ impl TauriCoordinatorHost {
             log::info!("[recorder] stopping microphone preview monitor before {owner}");
             recorder.stop();
         }
+    }
+
+    pub(crate) async fn switch_to_ascii(
+        &self,
+    ) -> Result<
+        Option<crate::unicode_keystroke::PreviousInputSource>,
+        crate::unicode_keystroke::TisError,
+    > {
+        let app = self.app().ok_or_else(|| {
+            crate::unicode_keystroke::TisError::MainThreadDispatch(
+                "Tauri AppHandle is not bound".to_string(),
+            )
+        })?;
+        crate::unicode_keystroke::switch_to_ascii(&app).await
+    }
+
+    pub(crate) async fn restore_input_source(
+        &self,
+        previous: Option<crate::unicode_keystroke::PreviousInputSource>,
+    ) -> Result<(), crate::unicode_keystroke::TisError> {
+        let app = self.app().ok_or_else(|| {
+            crate::unicode_keystroke::TisError::MainThreadDispatch(
+                "Tauri AppHandle is not bound".to_string(),
+            )
+        })?;
+        crate::unicode_keystroke::restore_input_source(&app, previous).await
     }
 }
 

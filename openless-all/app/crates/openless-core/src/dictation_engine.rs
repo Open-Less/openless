@@ -10,14 +10,13 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use futures_util::future::BoxFuture;
 
-use crate::config::{TaskSpawner, TokioTaskSpawner};
-use crate::dictation_context::DictationContext;
+use crate::dictation_context::{DictationContext, DictationOutputTarget};
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::ports::{
     ActiveRecording, AudioCapture, AudioConsumer, AudioRecorder, CapturedPcm, DictationEngine,
     EngineFailure, EngineFailureStage, EngineProgress, EngineProgressSink, EngineResult,
-    EngineStage, PreparedTranscription, RecordingProgressSink, TextPolisher, TextStreamChunk,
-    TextStreamSink, TranscriptionEngine, TranscriptionSession, VoiceCapture,
+    EngineStage, PreparedTranscription, RecordingArchive, RecordingProgressSink, TextPolisher,
+    TextStreamChunk, TextStreamSink, TranscriptionEngine, TranscriptionSession, VoiceCapture,
 };
 use crate::types::{PolishDelta, SessionId, TranscriptDelta};
 
@@ -462,11 +461,34 @@ impl DictationEngine for PipelineDictationEngine {
             let archive = recording.archive();
             let mut has_audio_recording = archive.as_ref().map(|archive| archive.is_available());
             if let Err(error) = recording.stop().await {
+                demote_failed_archive(
+                    archive.as_ref(),
+                    context.output_target,
+                    &mut has_audio_recording,
+                )
+                .await;
                 let _ = cancel_transcription_once(&session, transcription).await;
                 remove_session(&sessions, session_id, &session);
                 let mut failure = EngineFailure::new(error, EngineFailureStage::Transcribing);
                 failure.has_audio_recording = has_audio_recording;
                 return Err(failure);
+            }
+            if context.output_target == crate::dictation_context::DictationOutputTarget::QuickNote {
+                if let Some(archive) = archive.as_ref() {
+                    if let Err(error) = archive.promote_to_quick_note().await {
+                        log::error!(
+                            "[quick-note] failed to move the archive into permanent storage: {error}"
+                        );
+                    }
+                }
+            } else if context.recording.archive_successful_recording {
+                if let Some(archive) = archive.as_ref() {
+                    if let Err(error) = archive.demote_to_ordinary_recording().await {
+                        log::warn!(
+                            "[recording] failed to move retained debug archive to ordinary storage: {error}"
+                        );
+                    }
+                }
             }
             if session.cancelled.load(Ordering::Acquire) {
                 let _ = cancel_transcription_once(&session, transcription).await;
@@ -537,6 +559,12 @@ impl DictationEngine for PipelineDictationEngine {
                             }
                             Err((error, label)) => {
                                 asr_call_label = label.or(asr_call_label);
+                                demote_failed_archive(
+                                    archive.as_ref(),
+                                    context.output_target,
+                                    &mut has_audio_recording,
+                                )
+                                .await;
                                 remove_session(&sessions, session_id, &session);
                                 let mut failure =
                                     EngineFailure::new(error, EngineFailureStage::Transcribing);
@@ -547,6 +575,12 @@ impl DictationEngine for PipelineDictationEngine {
                             }
                         },
                         None => {
+                            demote_failed_archive(
+                                archive.as_ref(),
+                                context.output_target,
+                                &mut has_audio_recording,
+                            )
+                            .await;
                             remove_session(&sessions, session_id, &session);
                             let error = if cancelled {
                                 cancelled_error(
@@ -567,6 +601,9 @@ impl DictationEngine for PipelineDictationEngine {
             };
             let asr_ms = Some(asr_started.elapsed().as_millis() as u64);
             if session.cancelled.load(Ordering::Acquire) {
+                if !context.recording.archive_successful_recording {
+                    discard_ephemeral_archive(archive.as_ref(), &mut has_audio_recording).await;
+                }
                 remove_session(&sessions, session_id, &session);
                 return Err(cancelled_error(
                     "dictation was cancelled after transcription finished",
@@ -580,13 +617,16 @@ impl DictationEngine for PipelineDictationEngine {
             );
             let asr_transcript =
                 (transcript.text != original_asr_text).then_some(original_asr_text);
-            if !context.recording.archive_successful_recording && !transcript.text.trim().is_empty()
-            {
-                if let Some(archive) = archive.as_ref() {
-                    if archive.is_available() {
-                        let _ = archive.discard().await;
-                    }
-                    has_audio_recording = Some(archive.is_available());
+            if !context.recording.archive_successful_recording {
+                if transcript.text.trim().is_empty() {
+                    demote_failed_archive(
+                        archive.as_ref(),
+                        context.output_target,
+                        &mut has_audio_recording,
+                    )
+                    .await;
+                } else {
+                    discard_ephemeral_archive(archive.as_ref(), &mut has_audio_recording).await;
                 }
             }
             publish_progress(
@@ -750,6 +790,8 @@ impl DictationEngine for PipelineDictationEngine {
             if session.cancelled.swap(true, Ordering::AcqRel) {
                 return Ok(());
             }
+            let preserve_quick_note_archive = session.context().output_target
+                == crate::dictation_context::DictationOutputTarget::QuickNote;
 
             let (recording, transcription, buffered) = {
                 let mut resources = session
@@ -764,7 +806,13 @@ impl DictationEngine for PipelineDictationEngine {
             };
             let mut first_error = None;
             if let Some(recording) = recording {
+                let archive = recording.archive();
                 retain_first_error(&mut first_error, recording.stop().await);
+                if !preserve_quick_note_archive {
+                    if let Some(archive) = archive {
+                        retain_first_error(&mut first_error, archive.discard().await);
+                    }
+                }
             }
             if let Some(buffered) = buffered {
                 retain_first_error(
@@ -790,6 +838,40 @@ impl DictationEngine for PipelineDictationEngine {
             }
         })
     }
+}
+
+async fn discard_ephemeral_archive(
+    archive: Option<&Arc<dyn RecordingArchive>>,
+    has_audio_recording: &mut Option<bool>,
+) {
+    let Some(archive) = archive else {
+        return;
+    };
+    if archive.is_available() {
+        if let Err(error) = archive.discard().await {
+            log::warn!("[recording] failed to discard ephemeral archive: {error}");
+        }
+    }
+    *has_audio_recording = Some(archive.is_available());
+}
+
+async fn demote_failed_archive(
+    archive: Option<&Arc<dyn RecordingArchive>>,
+    output_target: DictationOutputTarget,
+    has_audio_recording: &mut Option<bool>,
+) {
+    if output_target == DictationOutputTarget::QuickNote {
+        return;
+    }
+    let Some(archive) = archive else {
+        return;
+    };
+    if archive.is_available() {
+        if let Err(error) = archive.demote_to_ordinary_recording().await {
+            log::warn!("[recording] failed to demote failed archive: {error}");
+        }
+    }
+    *has_audio_recording = Some(archive.is_available());
 }
 
 fn find_session(
@@ -1012,22 +1094,18 @@ pub(crate) fn buffered_transcription_session(
     context: Arc<DictationContext>,
     partials: Arc<dyn TextStreamSink>,
     progress: Arc<dyn RecordingProgressSink>,
-    task_spawner: Arc<dyn TaskSpawner>,
+    task_spawner: Arc<dyn crate::TaskSpawner>,
 ) -> Arc<dyn TranscriptionSession> {
     let partials = if context.recording.transcribe_after_stop {
         Arc::new(DiscardTextStream) as Arc<dyn TextStreamSink>
     } else {
         partials
     };
-    let buffered = Arc::new(BufferedTranscriptionSession::with_task_spawner(
-        prepared,
-        partials,
-        progress,
-        BUFFERED_TRANSCRIPTION_STOP_THRESHOLD_BYTES,
-        task_spawner,
+    let buffered = Arc::new(BufferedTranscriptionSession::new(
+        prepared, partials, progress,
     ));
     if !context.recording.transcribe_after_stop {
-        buffered.attach_in_background();
+        buffered.attach_in_background(task_spawner);
     }
     buffered
 }
@@ -1043,9 +1121,6 @@ struct BufferedTranscriptionInner {
     limit_notified: AtomicBool,
     limit_threshold_bytes: usize,
     state: Mutex<BufferedTranscriptionState>,
-    /// 背景挂接的提交器。生产代码不得直接 `tokio::spawn`（CI
-    /// `check-core-runtime-seam.ps1`），必须走注入的 `TaskSpawner`。
-    task_spawner: Arc<dyn TaskSpawner>,
 }
 
 enum BufferedTranscriptionState {
@@ -1079,24 +1154,6 @@ impl BufferedTranscriptionSession {
         progress: Arc<dyn RecordingProgressSink>,
         limit_threshold_bytes: usize,
     ) -> Self {
-        Self::with_task_spawner(
-            prepared,
-            partials,
-            progress,
-            limit_threshold_bytes,
-            Arc::new(TokioTaskSpawner),
-        )
-    }
-
-    /// 与 `new_with_limit` 相同，但后台挂接的提交器由调用方注入（宿主引擎
-    /// 持有的 `TaskSpawner`）。
-    fn with_task_spawner(
-        prepared: Arc<dyn PreparedTranscription>,
-        partials: Arc<dyn TextStreamSink>,
-        progress: Arc<dyn RecordingProgressSink>,
-        limit_threshold_bytes: usize,
-        task_spawner: Arc<dyn TaskSpawner>,
-    ) -> Self {
         Self {
             inner: Arc::new(BufferedTranscriptionInner {
                 prepared,
@@ -1105,7 +1162,6 @@ impl BufferedTranscriptionSession {
                 limit_notified: AtomicBool::new(false),
                 limit_threshold_bytes,
                 state: Mutex::new(BufferedTranscriptionState::Buffering(Vec::new())),
-                task_spawner,
             }),
         }
     }
@@ -1177,10 +1233,9 @@ impl BufferedTranscriptionSession {
         })
     }
 
-    fn attach_in_background(&self) {
+    fn attach_in_background(&self, task_spawner: Arc<dyn crate::TaskSpawner>) {
         let attaching = self.attach();
-        let spawner = Arc::clone(&self.inner.task_spawner);
-        spawner.spawn(Box::pin(async move {
+        task_spawner.spawn(Box::pin(async move {
             if let Err(error) = attaching.await {
                 log::warn!("provider-only transcription startup failed: {error}");
             }
@@ -1939,6 +1994,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn provider_only_capture_uses_host_spawner_and_stable_mode_defers_start() {
+        #[derive(Default)]
+        struct QueuedSpawner(Mutex<Vec<BoxFuture<'static, ()>>>);
+        impl crate::TaskSpawner for QueuedSpawner {
+            fn spawn(&self, task: BoxFuture<'static, ()>) {
+                self.0.lock().unwrap().push(task);
+            }
+        }
+        for stable in [false, true] {
+            let fixture = fixture_engine(
+                false,
+                Ok(crate::ports::PolishOutput::text("unused")),
+                None,
+                None,
+            );
+            let spawner = Arc::new(QueuedSpawner::default());
+            let mut context = DictationContext::default();
+            context.recording.transcribe_after_stop = stable;
+            let session = Arc::new(fixture.engine)
+                .start_transcription_with_progress(
+                    spawner.clone(),
+                    SessionId::new(),
+                    Arc::new(context),
+                    Arc::new(DiscardTextStream),
+                    Arc::new(NoopRecordingProgress),
+                )
+                .await
+                .unwrap();
+            session.consume_pcm_chunk(&[1, 0, 2, 0]);
+            assert_eq!(fixture.transcription_starts.load(Ordering::SeqCst), 0);
+            assert!(fixture.pcm.lock().unwrap().is_empty());
+            let tasks = std::mem::take(&mut *spawner.0.lock().unwrap());
+            assert_eq!(tasks.len(), usize::from(!stable));
+            for task in tasks {
+                task.await;
+            }
+            if !stable {
+                assert_eq!(fixture.transcription_starts.load(Ordering::SeqCst), 1);
+                assert_eq!(*fixture.pcm.lock().unwrap(), vec![1, 0, 2, 0]);
+            }
+            assert_eq!(session.finish().await.unwrap().text, "raw text");
+            assert_eq!(fixture.transcription_starts.load(Ordering::SeqCst), 1);
+            assert_eq!(*fixture.pcm.lock().unwrap(), vec![1, 0, 2, 0]);
+        }
+    }
+
+    #[tokio::test]
     async fn pipeline_streams_pcm_progress_and_terminal_deltas() {
         let fixture = fixture_engine(
             false,
@@ -2507,6 +2609,38 @@ mod tests {
             .await
             .expect("the original pipeline session must remain active");
         assert_eq!(result.polished_text, "polished text");
+    }
+
+    #[tokio::test]
+    async fn qa_handoff_preserves_question_without_calling_the_dictation_polisher() {
+        let fixture = fixture_engine(
+            false,
+            Ok(crate::ports::PolishOutput::text("must not be used")),
+            None,
+            None,
+        );
+        let session_id = SessionId::new();
+        let context = Arc::new(DictationContext::default());
+        fixture
+            .engine
+            .start(session_id, Arc::clone(&context), fixture.progress.clone())
+            .await
+            .unwrap();
+        fixture
+            .engine
+            .update_context(
+                session_id,
+                Arc::new(context.with_output_target(DictationOutputTarget::Qa)),
+            )
+            .await
+            .unwrap();
+        let result = fixture
+            .engine
+            .finish(session_id, fixture.progress.clone())
+            .await
+            .unwrap();
+        assert_eq!(result.polished_text, "raw text");
+        assert_eq!(fixture.polish_calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

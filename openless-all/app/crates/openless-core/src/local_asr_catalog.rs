@@ -257,6 +257,7 @@ pub enum LocalAsrMirror {
     #[default]
     Huggingface,
     HfMirror,
+    Modelscope,
     GithubRelease,
 }
 
@@ -264,6 +265,7 @@ impl LocalAsrMirror {
     pub fn from_legacy(value: &str) -> Self {
         match value.trim() {
             "hf-mirror" => Self::HfMirror,
+            "modelscope" => Self::Modelscope,
             "github-release" => Self::GithubRelease,
             _ => Self::Huggingface,
         }
@@ -273,6 +275,7 @@ impl LocalAsrMirror {
         match self {
             Self::Huggingface => "huggingface",
             Self::HfMirror => "hf-mirror",
+            Self::Modelscope => "modelscope",
             Self::GithubRelease => "github-release",
         }
     }

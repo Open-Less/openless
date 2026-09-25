@@ -1,13 +1,15 @@
+#![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
 //! Local persistence: history JSON, user preferences JSON, vocab JSON, and
 //! platform-backed credentials vault.
 //!
 //! Storage roots:
 //! - macOS:   `~/Library/Application Support/OpenLess`
 //! - Windows: `%APPDATA%\OpenLess`
+//! - Linux:   `$XDG_DATA_HOME/OpenLess` or `~/.local/share/OpenLess`
 //! - Android: `{Context.getFilesDir()}/OpenLess` (never `/data/local/tmp`)
 //!
 //! Credential storage policy: provider credentials are stored in the OS
-//! credential vault (macOS Keychain, Windows Credential Manager).
+//! credential vault (macOS Keychain, Windows Credential Manager, Linux keyring).
 //! A legacy plaintext JSON file is read once as a migration source and removed
 //! after a successful vault write; new writes never persist plaintext secrets.
 //!

@@ -82,7 +82,7 @@ export function inferPlatformCapabilities(): PlatformCapabilities {
     supportsTray: true,
     supportsOverlay: true,
     supportsImeInput: os === 'win',
-    supportsLocalAsr: os === 'mac' || os === 'win',
+    supportsLocalAsr: os === 'mac' || os === 'linux' || os === 'win',
     // Tauri returns the authoritative architecture-aware value. The browser fallback
     // keeps MLX visible on macOS until the native capability query is available.
     supportsLocalQwen3Mlx: os === 'mac',

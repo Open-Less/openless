@@ -57,6 +57,8 @@ pub struct WhisperBatchASR {
     /// 一等 `hotwords` 参数（JSON 数组字符串）。StepFun 等厂商不认 `prompt`
     /// （静默忽略），但提供专门的热词字段——用它词典才真正生效。空 = 不发。
     hotwords: Vec<String>,
+    /// 自定义端点路径（默认 `/audio/transcriptions`；MiniMax 等厂商为 `/speech_to_text`）。
+    endpoint_path: Option<String>,
     buffer: Mutex<Vec<u8>>,
 }
 
@@ -80,8 +82,15 @@ impl WhisperBatchASR {
             language: None,
             enable_itn: true,
             hotwords: Vec::new(),
+            endpoint_path: None,
             buffer: Mutex::new(Vec::new()),
         }
+    }
+
+    /// 设置自定义端点路径（例如 `"/speech_to_text"`）。
+    pub fn with_endpoint_path(mut self, path: impl Into<String>) -> Self {
+        self.endpoint_path = Some(path.into());
+        self
     }
 
     /// 设置请求体编码方式（默认 `Multipart`）。OpenRouter 需 `OpenRouterJson`。
@@ -166,7 +175,7 @@ impl WhisperBatchASR {
             .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
             .collect();
         let wav = encode_wav_16k_mono(&samples);
-        let url = transcription_url(&self.base_url)?;
+        let url = transcription_url(&self.base_url, self.endpoint_path.as_deref())?;
         let client = crate::net::http();
 
         let request = match self.request_format {
@@ -275,6 +284,19 @@ impl WhisperBatchASR {
         }
 
         let json: serde_json::Value = resp.json().await.context("parse Whisper response")?;
+        if let Some(base_resp) = json.get("base_resp") {
+            let status_code = base_resp
+                .get("status_code")
+                .and_then(|c| c.as_i64())
+                .unwrap_or(0);
+            if status_code != 0 {
+                let msg = base_resp
+                    .get("status_msg")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("unknown error");
+                anyhow::bail!("MiniMax API error {}: {}", status_code, msg);
+            }
+        }
         if self.verbose_json {
             // verbose_json：セグメントのメタデータで幻聴を除いた本文を組む。
             // segments が無い応答では内部で従来どおり text にフォールバック。
@@ -402,16 +424,40 @@ pub fn split_pcm_by_duration(pcm: &[u8], max_chunk_duration_ms: Option<u64>) -> 
     pcm.chunks(bytes_per_chunk).collect()
 }
 
-fn transcription_url(base_url: &str) -> Result<String> {
+fn transcription_url(base_url: &str, endpoint_path: Option<&str>) -> Result<String> {
     let parsed = reqwest::Url::parse(base_url.trim()).context("parse Whisper base URL")?;
     let mut url = parsed.clone();
     let path = parsed.path().trim_end_matches('/');
-    let next_path = if path.ends_with("/audio/transcriptions") {
+    let next_path = if let Some(target) = endpoint_path {
+        let target = target.trim();
+        if path.ends_with(target) {
+            path.to_string()
+        } else {
+            let prefix = path
+                .strip_suffix("/audio/transcriptions")
+                .or_else(|| path.strip_suffix("/chat/completions"))
+                .unwrap_or(path);
+            format!(
+                "{prefix}{}",
+                if target.starts_with('/') {
+                    target.to_string()
+                } else {
+                    format!("/{target}")
+                }
+            )
+        }
+    } else if path.ends_with("/audio/transcriptions") || path.ends_with("/speech_to_text") {
         path.to_string()
     } else if path.ends_with("/audio") {
         format!("{path}/transcriptions")
     } else if let Some(prefix) = path.strip_suffix("/chat/completions") {
         format!("{prefix}/audio/transcriptions")
+    } else if parsed.host_str().is_some_and(|host| {
+        ["minimaxi.com", "minimax.chat"]
+            .iter()
+            .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+    }) {
+        format!("{path}/speech_to_text")
     } else {
         format!("{path}/audio/transcriptions")
     };
@@ -745,23 +791,75 @@ mod tests {
     #[test]
     fn transcription_url_accepts_base_audio_or_full_endpoint() {
         assert_eq!(
-            transcription_url("https://open.bigmodel.cn/api/paas/v4").unwrap(),
+            transcription_url("https://open.bigmodel.cn/api/paas/v4", None).unwrap(),
             "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions"
         );
         assert_eq!(
-            transcription_url("https://open.bigmodel.cn/api/paas/v4/audio").unwrap(),
-            "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions"
-        );
-        assert_eq!(
-            transcription_url("https://open.bigmodel.cn/api/paas/v4/audio/transcriptions").unwrap(),
+            transcription_url("https://open.bigmodel.cn/api/paas/v4/audio", None).unwrap(),
             "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions"
         );
         assert_eq!(
             transcription_url(
-                "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions?api-version=2026-01-01"
+                "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions",
+                None
+            )
+            .unwrap(),
+            "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions"
+        );
+        assert_eq!(
+            transcription_url(
+                "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions?api-version=2026-01-01",
+                None
             )
             .unwrap(),
             "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions?api-version=2026-01-01"
+        );
+        // MiniMax & speech_to_text tests
+        assert_eq!(
+            transcription_url("https://api.minimaxi.com/v1", None).unwrap(),
+            "https://api.minimaxi.com/v1/speech_to_text"
+        );
+        assert_eq!(
+            transcription_url("https://api.minimax.chat/v1", None).unwrap(),
+            "https://api.minimax.chat/v1/speech_to_text"
+        );
+        assert_eq!(
+            transcription_url("https://custom-proxy.com/v1/speech_to_text", None).unwrap(),
+            "https://custom-proxy.com/v1/speech_to_text"
+        );
+        assert_eq!(
+            transcription_url("https://custom-proxy.com/v1", Some("/speech_to_text")).unwrap(),
+            "https://custom-proxy.com/v1/speech_to_text"
+        );
+        assert_eq!(
+            transcription_url(
+                "https://custom-proxy.com/v1/speech_to_text",
+                Some("/speech_to_text")
+            )
+            .unwrap(),
+            "https://custom-proxy.com/v1/speech_to_text"
+        );
+    }
+
+    #[test]
+    fn minimax_routing_does_not_capture_unrelated_custom_endpoints() {
+        for endpoint in [
+            "https://notminimaxi.com/v1",
+            "https://minimax.proxy.example/v1",
+            "https://proxy.example/minimax/v1",
+        ] {
+            assert_eq!(
+                transcription_url(endpoint, None).unwrap(),
+                format!("{endpoint}/audio/transcriptions")
+            );
+        }
+        assert_eq!(
+            transcription_url(
+                "https://proxy.example/v1/audio/transcriptions",
+                Some("/speech_to_text")
+            )
+            .unwrap(),
+            "https://proxy.example/v1/speech_to_text"
         );
     }
 

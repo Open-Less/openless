@@ -9,6 +9,11 @@ body,
   overflow: hidden;
 }
 
+html[data-ol-platform='linux'],
+html[data-ol-platform='linux'] body,
+html[data-ol-platform='linux'] #root {
+  background: var(--ol-surface);
+}
 
 html[data-ol-platform='android'],
 html[data-ol-platform='android'] body,
@@ -238,7 +243,13 @@ a {
   pointer-events: none;
 }
 
+html[data-ol-platform='linux'] .ol-frost {
+  background: var(--ol-surface);
+}
 
+html[data-ol-platform='linux'] .ol-frost::before {
+  content: none;
+}
 
 html[data-ol-platform='android'] .ol-frost {
   background: var(--ol-surface);
@@ -856,6 +867,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   border-color: var(--ol-capsule-pill-border) !important;
 }
 
+html[data-ol-platform='linux'] .ol-capsule-pill,
 html[data-ol-platform='android'] .ol-capsule-pill {
   background: var(--ol-capsule-pill-bg) !important;
 }
@@ -1481,11 +1493,15 @@ html:lang(de) {
 .ol-language-option {
   unicode-bidi: isolate;
 }
+.ol-cloud-sync {
+  display: grid;
+  gap: 16px;
+}
 .ol-cloud-sync header {
   display: flex;
   gap: 12px;
   align-items: flex-start;
-  margin-bottom: 18px;
+  margin-bottom: 0;
 }
 .ol-cloud-sync header > div {
   flex: 1;
@@ -1501,7 +1517,10 @@ html:lang(de) {
   line-height: 1.65;
   color: var(--ol-ink-3);
   overflow-wrap: anywhere;
-  margin: 6px 0 12px;
+  margin: 0;
+}
+.ol-cloud-sync header p {
+  margin-top: 8px;
 }
 .ol-cloud-sync-icon {
   display: grid;
@@ -1521,10 +1540,10 @@ html:lang(de) {
   font-size: 13px;
 }
 .ol-cloud-sync-account strong {
-  margin-left: auto;
+  overflow-wrap: anywhere;
 }
 .ol-cloud-sync-backup {
-  margin: 14px 0;
+  margin: 0;
   padding: 14px;
   border-radius: 12px;
   background: var(--ol-surface-2);
@@ -1543,6 +1562,6 @@ html:lang(de) {
   color: var(--ol-err);
 }
 .ol-cloud-sync .ol-cloud-sync-scope {
-  margin: 14px 0 0;
+  margin: 0;
   font-size: 12px;
 }

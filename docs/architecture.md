@@ -1,6 +1,6 @@
 # OpenLess 2.0 架构
 
-状态：canonical，当前实现说明；更新：2026-09-08。平台范围见 [2.0 需求](2.0-requirements.md)，文件定位见 [目录结构](structure.md)。
+状态：canonical，当前实现说明；更新：2026-09-23。平台范围见 [2.0 需求](2.0-requirements.md)，文件定位见 [目录结构](structure.md)。
 
 ## 1. 分层与工作区
 
@@ -43,6 +43,8 @@ flowchart TB
 
 听写主链由 `dictation_engine.rs` 管理：触发会话 → 录音/ASR → 清理与润色 → Host 插入 → 历史与事件。Tauri 在 `coordinator/dictation_core.rs` 接入该链路；本地 ASR 的模型管理归 Core，原生执行实现分别位于 Host。取消、失败和旧会话事件处理也属于该业务链，而不是页面各自实现。
 
+Android 悬浮窗在录音中转入追问时，Host 先捕获原选区，Core 的 `stop_dictation_for_qa` 按原会话 ID 完成转写并释放听写资源，跳过听写润色与文字插入，再由 `QaApi::submit_captured_text` 接收已录问题和选区。重复手势由 Host 的异步锁合并；QA 不重新抓取已经变化的前台选区。
+
 ## 3. Core 模块地图（按域，见 `src/lib.rs` pub mod 清单）
 
 - 听写链路：`dictation_engine` / `dictation_context` / `audio` / `external_audio` / `silence_auto_stop` / `streaming_insert` / `hotkey_interpreter` / `voice_session`
@@ -63,11 +65,15 @@ Tauri 在 `src-tauri/src/coordinator.rs` 构造 Core，`core_adapters.rs` 组装
 
 ## 5. 窗口体系
 
-`src-tauri/tauri.conf.json` 声明 `main`、`capsule` 两个窗口。`src/main.tsx` 读取 `?window=`，`src/App.tsx` 按类型加载胶囊、`qa`（含复用它的「润色结果」模式）、`selection-voice-intent`、`less-computer` 和 `less-computer-glow`；未指定类型时进入主界面。各 WebView 共用前端入口，重页面按需加载；移动端再依据平台能力选择布局。Linux 单实例由 `linux-egui/src/single_instance.rs` 守护并转发启动意图。
+`src-tauri/tauri.conf.json` 声明 `main`、`capsule` 两个窗口。`src/main.tsx` 读取 `?window=`，`src/App.tsx` 按类型加载胶囊、`qa`、`selection-polish-preview`、`selection-voice-intent`、`less-computer` 和 `less-computer-glow`；未指定类型时进入主界面。各 WebView 共用前端入口，重页面按需加载；移动端再依据平台能力选择布局。Linux 单实例由 `linux-egui/src/single_instance.rs` 守护并转发启动意图。
 
 主窗口默认逻辑尺寸为 1300×835，允许用户调整；macOS 原生窗口按钮左侧和顶部均留出 16px，前端保留 44px 拖动区。桌面侧栏宽 226px，主内容从版本行下方开始，设置面板单独限制高度并在内部滚动。
 
 Siri、Classic、Typeless 三种胶囊共用 Core 的 `CapsuleStyle`，窗口尺寸与点击范围在保存偏好时同步。胶囊按显示器工作区底部定位，避开未自动隐藏的 Dock/任务栏；可见期间重新检查工作区。带正文的浮窗使用不透明底色，聊天面板另叠加细噪点纹理，圆角外部仍保留透明区域。
+
+思考动画覆盖转写、润色和原生文字写入，输入完成后才收尾。macOS 流式键盘输入在可读取 AX 光标的控件上等待原控件光标到达本批文字末尾，再完成写入和恢复输入源；仅读选区范围，不读正文。不可读、提交型 Return 或等待超过 10 秒时回到按键发送完成语义，本次会话停止继续探测该控件。目标应用的实际输入表现仍需设备验收。
+
+选区直接润色在捕获文字和原输入目标后显示处理中提示，重复快捷键的 Busy 返回不覆盖该提示。已有语音选区入口在松开快捷键后继续显示思考动画，直到处理/替换完成，或交给确认和预览面板。录音提示音的 Web Audio context 在恢复超时或音频时钟冻结时丢弃并最多重试一次，重试沿用原请求的取消和迟到边界。
 
 界面启动等待所选语言资源就绪；语言选择持久化到 `ol.locale`，其他 WebView 通过存储事件同步，日期、数字和默认风格展示随语言变化。用户修改的风格名称、说明和内容保持原文。旧版两种强制排版字段只保留数据兼容，界面清除其布局效果，窄屏改由响应式布局处理。
 
@@ -84,7 +90,9 @@ Siri、Classic、Typeless 三种胶囊共用 Core 的 `CapsuleStyle`，窗口尺
 | 风格图标 | React `src/lib/stylePackIcon.ts` 清理上传的 SVG 并转成 PNG；`set_style_pack_icon` / `read_style_pack_icon` 经 Core `style_pack_store.rs` 保存资源、校验读取范围并返回图片 data URL。图标沿用 ZIP 的 64 KiB 限制，与风格包一起导出 |
 | 局域网手机输入 | Core `remote_input_service.rs` 定义共享业务，Tauri `remote_server/` 提供本机网络入口和网页资源 |
 
-应用不会把普通听写交给风格包市场后端。市场安装完成后使用本地风格包；官网也不参与应用的业务调用。长期参考数据、训练准备和历史快照不是 Core 的在线训练服务。
+应用不会把普通听写交给风格包市场后端。市场安装完成后使用本地风格包；官网也不参与应用的业务调用。
+
+模型远程元数据只在下载详情选择模型时读取，界面按模型与镜像合并请求并缓存五分钟。Sherpa 离线解码通过 `src-tauri/src/asr/local/blocking_decode.rs` 串行运行；超时或取消不会提前释放原生任务持有的模型和许可，任务结束后才允许下一次解码。长期参考数据、训练准备和历史快照不是 Core 的在线训练服务。
 
 macOS 凭据在 `persistence/credentials.rs` 使用单个 `credentials.v2` 钥匙串项目；首次迁移读取旧分块一次并保留旧项目供旧版本使用。读取失败返回错误，不能降级成“未配置”；ASR 配置状态从同一次成功读取的快照生成。其他平台保留各自存储限制与适配。
 

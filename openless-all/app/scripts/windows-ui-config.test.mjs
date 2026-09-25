@@ -99,14 +99,10 @@ assertMatch(
 
 const tokensCss = await readFile(new URL('../src/styles/tokens.css', import.meta.url), 'utf-8');
 
-// 外壳（圆角/边框/阴影）交给原生窗口装饰：没有任何受支持平台再画自绘的 14px 外壳。
-if (!/const shellRadius = 0;/.test(windowChromeTsx)) {
+if (!/os === 'win' \|\| os === 'android' \? 0 : 14/.test(windowChromeTsx)) {
   throw new Error(
     'windows main shell should rely on native decorations instead of a frameless chrome shell',
   );
-}
-if (/shellRadius = [^0]/.test(windowChromeTsx) && !/const shellRadius = 0;/.test(windowChromeTsx)) {
-  throw new Error('WindowChrome shell radius must stay 0 so native decorations own the frame');
 }
 
 assertMatch(
@@ -137,10 +133,19 @@ if (/standardWindowButton|setFrameOrigin: origin|tune_macos_main_window_controls
     'macOS traffic lights should not be manually repositioned; keep native AppKit button frames visible',
   );
 }
+if (!/className=\"ol-linux-close-btn\"/.test(windowChromeTsx)) {
+  throw new Error('linux titlebar should keep the close button treatment');
+}
 assertMatch(
   tokensCss,
   /--ol-motion-spring:[\s\S]*?--ol-motion-soft:[\s\S]*?--ol-motion-quick:/,
   'shared motion tokens should drive shell animations and transitions',
+);
+
+assertMatch(
+  windowChromeTsx,
+  /function LinuxTitlebar\(\)/,
+  'linux should keep the custom ol-linux-titlebar shell',
 );
 
 assertMatch(

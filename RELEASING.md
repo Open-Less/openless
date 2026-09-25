@@ -32,6 +32,17 @@ Tauri host release tags (created by an admin only):
   Stable users). The updater still recognizes the historical `*-beta-tauri`
   suffix for existing releases, but new releases use the `Beta.<N>` form.
 
+A dated build may carry SemVer build metadata in the synchronized application
+version, for example `2.0.0-Beta.2+build.20260924`. Keep its release tag in the existing
+`v2.0.0-Beta.2-tauri` format: released clients only recognize a numeric `Beta.N`
+tag suffix. Include the complete application version in the release title and
+updater manifests. Build metadata does not advance SemVer precedence; each new
+public Beta still increments `N`. Use the `build.` prefix for date metadata:
+Tauri 2.10.1 otherwise maps a numeric date to the fourth Windows product-version
+component, which is a 16-bit field. The full version still appears in the app and
+updater manifest; NSIS uses its supported numeric fallback for file metadata.
+See [the pinned NSIS bundler](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.10.1/crates/tauri-bundler/src/bundle/windows/nsis/mod.rs#L149).
+
 These tags publish the macOS, Windows, and Android Tauri hosts. Linux is not part of the Tauri matrix. Its independent host is built by `.github/workflows/release-linux-egui.yml`, which accepts an existing `release_tag` and writes `latest-linux-egui-x86_64.json`. This workflow has no automatic tag trigger; Linux publication requires its own product acceptance below.
 
 Under the [2026-09-06 2.0 requirements](docs/2.0-requirements.md), Windows and macOS must fully retain their respective Tauri 1.x features. This first delivery includes a usable Core contract and a [split handoff directory](docs/linux-egui-handoff/README.md) for Linux; the egui team owns remaining Linux Host/UI work and Linux product acceptance. Incomplete Linux application features do not independently block this Windows/macOS delivery. Shared Core defects and the desktop platforms' own acceptance requirements still do. Existing Android builds do not expand this scope into a new full-support commitment.
@@ -49,17 +60,6 @@ with `scripts/bump-version.sh <X.Y.Z>`:
 
 The root `openless-all/app/Cargo.lock` belongs only to the framework-independent core/Linux workspace and is not one of the five Tauri application version locations.
 
-A dated build may carry SemVer build metadata in the synchronized application version,
-for example `2.0.0-Beta.2+build.20260924`. Keep its release tag in the existing
-`v2.0.0-Beta.2-tauri` format: released clients only recognize a numeric `Beta.<N>`
-tag suffix. Include the complete application version in the release title and
-updater manifests. Build metadata does not advance SemVer precedence; each new
-public Beta still increments `N`. Use the `build.` prefix for date metadata: Tauri
-2.10.1 otherwise maps a numeric date to the fourth Windows product-version
-component, which is a 16-bit field, and NSIS packaging fails. The full version still
-appears in the app and updater manifest; NSIS uses its supported numeric fallback for
-file metadata. See [the pinned NSIS bundler](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.10.1/crates/tauri-bundler/src/bundle/windows/nsis/mod.rs#L149).
-
 ## License boundary
 
 Published 1.x releases remain MIT. `2.0.0-Beta.1` is the effective boundary for
@@ -76,20 +76,17 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
 3. CI is green on the commit being tagged.
 4. The applicable [desktop feature and device acceptance](docs/2.0-desktop-acceptance.md), signing, and distribution requirements are met; green builds alone do not establish product readiness.
 5. Then, and only then, push the release tag.
-6. Beta tag workflows upload the desktop, Android, and Linux egui assets to one
-   shared **draft** release. Wait for every workflow to succeed, verify the
-   packages and the Beta updater manifests, then publish that draft as a
-   prerelease.
-   Linux egui assets are deb/rpm plus `SHA256SUMS` only: AppImage was retired
-   from that channel, so there is no Linux egui updater manifest to verify. Do not rerun an asset workflow after publication without first
-   returning the release to draft.
+6. Beta tag workflows upload desktop and Android assets to a shared draft.
+   Wait for both workflows to succeed, verify the packages and Beta updater
+   manifests, then publish that draft as a prerelease. Do not rerun an asset
+   workflow after publication without first returning the release to draft.
 
 Before attaching Linux assets, additionally require all of the following:
 
 1. The egui team has completed the [Linux Host/UI gaps and acceptance](docs/linux-egui-handoff/07-acceptance.md). The existing `eframe::App` is a starting implementation; its presence and successful packaging alone do not establish product completeness.
 2. Linux core/host tests, dependency gates, and secret-surface gates are green on Ubuntu.
-3. The manual Linux workflow verifies the ELF dependency list, deb/rpm contents, desktop metadata, fcitx5 plugin paths, and `SHA256SUMS`; it gates that no AppImage and no updater/signing path remains.
-4. An admin passes the already published Tauri release tag as `release_tag`.
+3. The manual Linux workflow verifies the ELF dependency list, deb/rpm/AppImage contents, desktop metadata, fcitx5 plugin paths, minisign output, and independent updater manifest.
+4. An admin passes the already published Tauri release tag as `release_tag`; a non-empty tag also requires `LINUX_EGUI_MINISIGN_SECRET_KEY`.
 
 ## Process summary
 

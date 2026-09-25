@@ -1,3 +1,4 @@
+#![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
 //! 系统权限请求 / 检查（macOS / Windows）。
 //!
 //! 与 Swift `Sources/OpenLessHotkey/AccessibilityPermission.swift` +
@@ -310,7 +311,7 @@ mod platform {
     }
 }
 
-// ─────────────────────────────── Windows / 其他 ───────────────────────────────
+// ─────────────────────────── Windows / Linux / 其他 ───────────────────────────
 
 #[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
 mod platform {
@@ -323,7 +324,7 @@ mod platform {
     #[cfg(target_os = "windows")]
     use winreg::RegKey;
 
-    /// Windows 不存在 macOS 那种 Accessibility 概念。
+    /// Windows / Linux 不存在 macOS 那种 Accessibility 概念。
     pub fn check_accessibility() -> PermissionStatus {
         PermissionStatus::NotApplicable
     }
@@ -334,7 +335,19 @@ mod platform {
 
     /// Windows 的麦克风权限走系统设置 → 隐私 → 麦克风；
     /// 这里用 cpal 建立一次短生命周期输入流，避免只查设备格式时误报已授权。
+    /// Linux 没有对应的应用级权限状态，只检查设备是否存在，避免 PipeWire
+    /// 因权限探测建立临时输入流而触发桌面音量 OSD（issue #968）。
     pub fn check_microphone() -> PermissionStatus {
+        #[cfg(target_os = "linux")]
+        {
+            return if has_microphone_input_device() {
+                PermissionStatus::Granted
+            } else {
+                PermissionStatus::NoDevice
+            };
+        }
+
+        #[cfg(not(target_os = "linux"))]
         {
             if windows_microphone_registry_denied() {
                 log::warn!("[mic] Windows microphone privacy registry is denied");

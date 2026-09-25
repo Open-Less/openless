@@ -152,7 +152,104 @@ mod platform {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(target_os = "linux")]
+mod platform {
+    use std::process::Command;
+
+    enum Backend {
+        Wpctl,
+        Pactl,
+    }
+
+    pub struct PlatformMuteGuard {
+        backend: Backend,
+        was_muted: bool,
+    }
+
+    pub fn activate() -> Result<PlatformMuteGuard, String> {
+        if let Ok(was_muted) = wpctl_output_muted() {
+            if !was_muted {
+                wpctl_set_output_muted(true)?;
+            }
+            return Ok(PlatformMuteGuard {
+                backend: Backend::Wpctl,
+                was_muted,
+            });
+        }
+
+        let was_muted = pactl_output_muted()?;
+        if !was_muted {
+            pactl_set_output_muted(true)?;
+        }
+        Ok(PlatformMuteGuard {
+            backend: Backend::Pactl,
+            was_muted,
+        })
+    }
+
+    impl PlatformMuteGuard {
+        pub fn restore(self) {
+            let result = match self.backend {
+                Backend::Wpctl => wpctl_set_output_muted(self.was_muted),
+                Backend::Pactl => pactl_set_output_muted(self.was_muted),
+            };
+            if let Err(err) = result {
+                log::warn!("[audio-mute] restore output mute failed: {err}");
+            }
+        }
+    }
+
+    fn wpctl_output_muted() -> Result<bool, String> {
+        let output = Command::new("wpctl")
+            .args(["get-volume", "@DEFAULT_AUDIO_SINK@"])
+            .output()
+            .map_err(|e| format!("wpctl get-volume failed: {e}"))?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).contains("[MUTED]"))
+    }
+
+    fn wpctl_set_output_muted(muted: bool) -> Result<(), String> {
+        let value = if muted { "1" } else { "0" };
+        let output = Command::new("wpctl")
+            .args(["set-mute", "@DEFAULT_AUDIO_SINK@", value])
+            .output()
+            .map_err(|e| format!("wpctl set-mute failed: {e}"))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
+    }
+
+    fn pactl_output_muted() -> Result<bool, String> {
+        let output = Command::new("pactl")
+            .args(["get-sink-mute", "@DEFAULT_SINK@"])
+            .output()
+            .map_err(|e| format!("pactl get-sink-mute failed: {e}"))?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
+        Ok(stdout.contains("yes") || stdout.contains("是"))
+    }
+
+    fn pactl_set_output_muted(muted: bool) -> Result<(), String> {
+        let value = if muted { "1" } else { "0" };
+        let output = Command::new("pactl")
+            .args(["set-sink-mute", "@DEFAULT_SINK@", value])
+            .output()
+            .map_err(|e| format!("pactl set-sink-mute failed: {e}"))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 mod platform {
     pub struct PlatformMuteGuard;
 

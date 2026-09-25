@@ -24,6 +24,7 @@ struct QaState {
 
 enum QaSubmission {
     Text(String),
+    Captured(QaInput),
     SelectionEdit {
         selection_voice_session_id: SessionId,
         capture: crate::domains::SelectionCapture,
@@ -262,6 +263,7 @@ impl QaService {
     async fn submit_inner(&self, submission: QaSubmission) -> Result<(), BackendError> {
         let text = match &submission {
             QaSubmission::Text(text) => text,
+            QaSubmission::Captured(input) => &input.text,
             QaSubmission::SelectionEdit { instruction, .. } => instruction,
         }
         .trim()
@@ -304,6 +306,10 @@ impl QaService {
 
         let prepared = match submission {
             QaSubmission::Text(_) => self.runtime.prepare_text(session_id, text).await,
+            QaSubmission::Captured(mut input) => {
+                input.text = text;
+                self.runtime.prepare_captured_text(session_id, input).await
+            }
             QaSubmission::SelectionEdit {
                 selection_voice_session_id,
                 capture,
@@ -736,6 +742,11 @@ impl QaApi for QaService {
     fn submit_text(&self, text: String) -> BoxFuture<'static, Result<(), BackendError>> {
         let service = self.clone();
         Box::pin(async move { service.submit_text_inner(text).await })
+    }
+
+    fn submit_captured_text(&self, input: QaInput) -> BoxFuture<'static, Result<(), BackendError>> {
+        let service = self.clone();
+        Box::pin(async move { service.submit_inner(QaSubmission::Captured(input)).await })
     }
 
     fn submit_selection_edit(

@@ -336,6 +336,8 @@ mod tests {
             selection_polish: Some(binding("X", &["alt"])),
             coding_agent_enabled: true,
             coding_agent_voice: Some(binding("V", &["alt"])),
+            coding_agent_panel: None,
+            coding_agent_quick: None,
             style_packs: vec![StylePackHotkey {
                 pack_id: "pack-1".to_string(),
                 binding: binding("1", &["ctrl", "alt"]),

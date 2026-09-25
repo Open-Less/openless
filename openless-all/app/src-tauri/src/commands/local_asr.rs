@@ -39,7 +39,7 @@ pub struct LocalAsrSettings {
     pub mirror: String,
     pub models_base_dir: Option<String>,
     pub models_root_dir: String,
-    /// 本地 Qwen3-ASR C 引擎仅在 macOS 编入；Apple Silicon 另可用 MLX。
+    /// macOS/Linux 编入本地 Qwen3-ASR C 引擎；MLX 仅在 macOS 可用。
     pub engine_available: bool,
 }
 
@@ -82,6 +82,7 @@ impl From<openless_core::LocalAsrStorageSettings> for LocalAsrStorageSettings {
 #[serde(rename_all = "camelCase")]
 pub struct LocalAsrModelStatus {
     pub id: String,
+    pub runtime: LocalAsrRuntime,
     pub hf_repo: String,
     pub display_name: String,
     pub family: String,
@@ -96,6 +97,7 @@ impl From<openless_core::LocalAsrModel> for LocalAsrModelStatus {
     fn from(model: openless_core::LocalAsrModel) -> Self {
         Self {
             id: model.target.model_id().to_string(),
+            runtime: model.target.runtime,
             hf_repo: model.repository.clone().unwrap_or_default(),
             display_name: model.display_name,
             family: model.family,
@@ -569,6 +571,7 @@ mod wire_contract_tests {
             value,
             serde_json::json!({
                 "id": "qwen3-asr-0.6b",
+                "runtime": "generic",
                 "hfRepo": "Qwen/Qwen3-ASR-0.6B",
                 "displayName": "Qwen3 ASR 0.6B",
                 "family": "qwen3_asr",

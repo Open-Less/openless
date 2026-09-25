@@ -327,7 +327,12 @@ impl openless_core::ModelRuntimeAdapter for TauriLocalAsrRuntimeAdapter {
                 {
                     true
                 }
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(target_os = "linux")]
+                {
+                    openless_core::LocalAsrModelId::from_wire_id(target.model_id())
+                        .is_some_and(openless_core::LocalAsrModelId::is_qwen)
+                }
+                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                 {
                     false
                 }
@@ -454,7 +459,9 @@ impl openless_core::ModelRuntimeAdapter for TauriLocalAsrRuntimeAdapter {
                         } else {
                             qwen_cache.loaded_model_id()
                         };
-                    #[cfg(not(target_os = "macos"))]
+                    #[cfg(target_os = "linux")]
+                    let loaded = qwen_cache.loaded_model_id();
+                    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                     let loaded: Option<String> = None;
                     Ok(openless_core::LocalAsrRuntimeStatus {
                         runtime: settings.runtime,
@@ -946,6 +953,7 @@ impl TauriLocalAsrRuntimeAdapter {
             ))
         })
     }
+
 }
 
 #[derive(Clone)]
@@ -1048,6 +1056,18 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
         replacement_text: &str,
         reactivate: bool,
     ) -> Result<InsertOutcome, BackendError> {
+        #[cfg(target_os = "macos")]
+        if reactivate {
+            let app = self.app.lock().clone().ok_or_else(|| {
+                BackendError::new(BackendErrorCode::InvalidState, "Tauri AppHandle is not bound yet")
+            })?;
+            if !crate::resign_selection_polish_preview_key_for_apply(&app) {
+                return Err(BackendError::new(
+                    BackendErrorCode::Platform,
+                    "selectionPolishTargetUnavailable",
+                ));
+            }
+        }
         if reactivate && !crate::selection::reactivate_selection_insertion_target(target) {
             return Err(BackendError::new(
                 BackendErrorCode::Platform,
@@ -1067,6 +1087,16 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
                 crate::selection::SelectionInsertionTargetValidation::Valid => unreachable!(),
             };
             return Err(BackendError::new(error_code, code));
+        }
+        // 贴上前一刻的最终防线：validate 的 simulate_copy 兜底期间前台焦点
+        // 可能跳走（对方恰好暴露相同文本时文本比对会放行），这里再核一次
+        // 捕获时的前台应用是否仍是前台，不是就拒绝。
+        #[cfg(target_os = "macos")]
+        if !crate::selection::selection_target_still_front(target) {
+            return Err(BackendError::new(
+                BackendErrorCode::Cancelled,
+                "selectionPolishTargetChanged",
+            ));
         }
         let preferences = self.preferences()?;
         map_insert_status(crate::insertion::TextInserter::new().insert(
@@ -1878,7 +1908,7 @@ impl TranscriptionEngine for TauriNativeTranscriptionEngine {
                         ));
                     }
                 }
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(target_os = "linux")]
                 {
                     return Err(BackendError::new(
                         BackendErrorCode::Unsupported,
@@ -2416,14 +2446,14 @@ struct TauriActiveRecording {
 }
 
 struct TauriRecordingArchive {
-    path: PathBuf,
+    path: Arc<Mutex<PathBuf>>,
     available: Arc<AtomicBool>,
 }
 
 impl TauriRecordingArchive {
     fn new(path: PathBuf, available: bool) -> Self {
         Self {
-            path,
+            path: Arc::new(Mutex::new(path)),
             available: Arc::new(AtomicBool::new(available)),
         }
     }
@@ -2435,7 +2465,7 @@ impl RecordingArchive for TauriRecordingArchive {
     }
 
     fn read_pcm(&self) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
-        let path = self.path.clone();
+        let path = self.path.lock().clone();
         Box::pin(async move {
             let wav = tokio::fs::read(&path).await.map_err(|error| {
                 BackendError::new(
@@ -2458,7 +2488,7 @@ impl RecordingArchive for TauriRecordingArchive {
     }
 
     fn discard(&self) -> BoxFuture<'static, Result<(), BackendError>> {
-        let path = self.path.clone();
+        let path = self.path.lock().clone();
         let available = Arc::clone(&self.available);
         Box::pin(async move {
             if !available.load(Ordering::Acquire) {
@@ -2484,6 +2514,60 @@ impl RecordingArchive for TauriRecordingArchive {
                     ))
                 }
             }
+        })
+    }
+
+    fn promote_to_quick_note(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+        let path = Arc::clone(&self.path);
+        Box::pin(async move {
+            let current = path.lock().clone();
+            let Some(file_name) = current.file_name().map(|name| name.to_owned()) else {
+                return Err(BackendError::new(
+                    BackendErrorCode::Persistence,
+                    "quick-note archive has no file name",
+                ));
+            };
+            let target = crate::persistence::quick_note_recordings_root()
+                .map_err(|error| BackendError::new(BackendErrorCode::Persistence, error.to_string()))?
+                .join(file_name);
+            if current == target {
+                return Ok(());
+            }
+            tokio::fs::rename(&current, &target).await.map_err(|error| {
+                BackendError::new(
+                    BackendErrorCode::Persistence,
+                    format!("promote quick-note recording archive: {error}"),
+                )
+            })?;
+            *path.lock() = target;
+            Ok(())
+        })
+    }
+
+    fn demote_to_ordinary_recording(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+        let path = Arc::clone(&self.path);
+        Box::pin(async move {
+            let current = path.lock().clone();
+            let Some(file_name) = current.file_name().map(|name| name.to_owned()) else {
+                return Err(BackendError::new(
+                    BackendErrorCode::Persistence,
+                    "recording archive has no file name",
+                ));
+            };
+            let target = crate::persistence::recordings_root()
+                .map_err(|error| BackendError::new(BackendErrorCode::Persistence, error.to_string()))?
+                .join(file_name);
+            if current == target {
+                return Ok(());
+            }
+            tokio::fs::rename(&current, &target).await.map_err(|error| {
+                BackendError::new(
+                    BackendErrorCode::Persistence,
+                    format!("move recording archive to ordinary storage: {error}"),
+                )
+            })?;
+            *path.lock() = target;
+            Ok(())
         })
     }
 }
@@ -2559,17 +2643,33 @@ impl AudioRecorder for TauriAudioRecorder {
                     preview.stop();
                 }
             }
-            // QA/划词语音沿用1.x不落盘语义；不要先创建WAV，再依赖停止时删除。
+            let permanent_archive = !matches!(
+                context.output_target,
+                openless_core::DictationOutputTarget::ForegroundApp
+            );
+            // Undecided Android captures use the permanent quick-note spool
+            // until the terminal tap/gesture classifies the session.
             let archive_path = context
                 .recording
                 .archive_enabled
-                .then(|| crate::persistence::recording_path_for_session(&session_id.to_string()))
+                .then(|| {
+                    if permanent_archive {
+                        crate::persistence::quick_note_recording_path_for_session(
+                            &session_id.to_string(),
+                        )
+                    } else {
+                        crate::persistence::recording_path_for_session(&session_id.to_string())
+                    }
+                })
                 .transpose();
             let microphone = context.recording.microphone_device_name.clone();
             let recording_plan = context.recording.clone();
+            let prune_recordings_before_capture = recording_plan.archive_enabled
+                && (!recording_plan.archive_required
+                    || context.output_target == openless_core::DictationOutputTarget::Undecided);
             let fault_progress = Arc::clone(&progress);
             let (recording, runtime_errors) = tauri::async_runtime::spawn_blocking(move || {
-                if recording_plan.archive_enabled {
+                if prune_recordings_before_capture {
                     if let Err(error) = crate::persistence::prune_recordings(
                         recording_plan.retention_days,
                         recording_plan.max_entries,
@@ -2605,6 +2705,16 @@ impl AudioRecorder for TauriAudioRecorder {
                         return Err(map_recorder_error(error));
                     }
                 };
+                if recording_plan.archive_required && !archive_active {
+                    recorder.stop();
+                    if let Some(path) = &archive_path {
+                        let _ = std::fs::remove_file(path);
+                    }
+                    return Err(BackendError::new(
+                        BackendErrorCode::Persistence,
+                        "速记录音文件无法创建，已阻止开始录音以避免丢失内容",
+                    ));
+                }
                 let recording = Box::new(TauriActiveRecording {
                     recorder: Some(recorder),
                     archive: archive_path
@@ -2797,6 +2907,8 @@ impl CoreTextInserter for TauriTextInserter {
                 previous_input_source: Arc::new(Mutex::new(previous_input_source)),
                 #[cfg(target_os = "macos")]
                 streaming_ready,
+                #[cfg(target_os = "macos")]
+                confirm_keyboard_delivery: Arc::new(AtomicBool::new(true)),
             }) as Arc<dyn TextInsertionSession>)
         })
     }
@@ -2818,6 +2930,8 @@ struct TauriTextInsertionSession {
     previous_input_source: Arc<Mutex<Option<crate::unicode_keystroke::PreviousInputSource>>>,
     #[cfg(target_os = "macos")]
     streaming_ready: bool,
+    #[cfg(target_os = "macos")]
+    confirm_keyboard_delivery: Arc<AtomicBool>,
 }
 
 impl TauriTextInsertionSession {
@@ -2834,16 +2948,37 @@ impl TauriTextInsertionSession {
 
     async fn write_chunk(&self, text: String) -> Result<InsertWriteResult, BackendError> {
         self.restore_insertion_target()?;
-        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
         {
             let chunk = text.clone();
             #[cfg(target_os = "windows")]
             let newline_mode = self.context.insertion.windows_sendinput_newline_mode;
             #[cfg(target_os = "macos")]
             let newline_mode = self.context.insertion.macos_newline_mode;
+            #[cfg(target_os = "macos")]
+            let confirm_delivery = Arc::clone(&self.confirm_keyboard_delivery);
             let finished = Arc::clone(&self.finished);
             let written = tauri::async_runtime::spawn_blocking(move || {
                 if finished.load(Ordering::Acquire) {
+                    return 0;
+                }
+                // CGEventPost returns before the target has consumed its input.
+                // Retain the original control before posting; inspect only its
+                // caret, on this blocking thread, before completing the write.
+                #[cfg(target_os = "macos")]
+                let delivery = if confirm_delivery.load(Ordering::Acquire)
+                    && !(newline_mode == crate::types::MacosNewlineMode::Return
+                        && chunk.contains('\n'))
+                {
+                    crate::host_document::KeyboardDelivery::capture()
+                } else {
+                    None
+                };
+                #[cfg(target_os = "macos")]
+                if delivery
+                    .as_ref()
+                    .is_some_and(|delivery| !delivery.is_focused())
+                {
                     return 0;
                 }
                 #[cfg(target_os = "windows")]
@@ -2854,10 +2989,25 @@ impl TauriTextInsertionSession {
                 #[cfg(target_os = "macos")]
                 let result =
                     crate::unicode_keystroke::type_unicode_chunk_with_options(&chunk, newline_mode);
-                match result {
+                #[cfg(target_os = "linux")]
+                let result = crate::unicode_keystroke::type_unicode_chunk(&chunk);
+                let written = match result {
                     Ok(written) => written,
                     Err(error) => error.typed_chars(),
+                };
+                #[cfg(target_os = "macos")]
+                {
+                    let delivered = delivery.is_some_and(|delivery| {
+                        let posted: String = chunk.chars().take(written).collect();
+                        delivery.wait(&posted)
+                    });
+                    // Unsupported/stalled controls are tried once per session,
+                    // so a missing AX caret cannot add a delay to every delta.
+                    if !delivered {
+                        confirm_delivery.store(false, Ordering::Release);
+                    }
                 }
+                written
             })
             .await
             .map_err(|error| {
@@ -2870,7 +3020,7 @@ impl TauriTextInsertionSession {
                 written_chars: written,
             })
         }
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
         {
             let _ = text;
             Err(BackendError::new(

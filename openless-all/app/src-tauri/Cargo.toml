@@ -1,6 +1,6 @@
 [package]
 name = "openless"
-version = "2.0.0-Beta.2"
+version = "2.0.0-Beta.2+build.20260924"
 license = "AGPL-3.0-only"
 description = "OpenLess — local voice input that types where your cursor is"
 authors = ["OpenLess"]
@@ -82,7 +82,7 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
 global-hotkey = "0.6"
 enigo = "0.3"
-arboard = "3"
+arboard = { version = "3", features = ["wayland-data-control"] }
 rcgen = { version = "0.13", features = ["x509-parser"] }
 x509-parser = { version = "0.16", features = ["verify"] }
 time = "0.3"
@@ -109,6 +109,14 @@ features = ["windows-native"]
 # PIN persistence uses O_NOFOLLOW/O_NONBLOCK/O_CLOEXEC; macOS qwen-asr also
 # uses libc::free for strings allocated by the C runtime.
 libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus = "0.9"
+gtk = "0.18"
+[target.'cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))'.dependencies.keyring]
+version = "3.6.3"
+default-features = false
+features = ["linux-native-sync-persistent", "crypto-rust"]
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
@@ -183,3 +191,9 @@ lto = "thin"
 codegen-units = 1
 # Xcode 27 beta 的 strip 会损坏 proc-macro dylib；本地构建加 CARGO_PROFILE_RELEASE_STRIP=none。
 strip = "symbols"
+
+# issue #801: wayland-scanner 0.31.10 still pins vulnerable quick-xml 0.39.
+# This local copy backports upstream security commit d07c4f91f28b without
+# pulling the breaking, unreleased wayland-rs master branch.
+[patch.crates-io]
+wayland-scanner = { path = "vendor/wayland-scanner" }

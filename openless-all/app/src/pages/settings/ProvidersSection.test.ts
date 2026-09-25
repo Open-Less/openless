@@ -13,6 +13,9 @@ if (LLM_LABELS.find((p) => p.id === 'tencentTokenHub')?.nameKey !== 'tencentToke
 if (ASR_LABELS.find((p) => p.id === 'tencent-cloud')?.nameKey !== 'asrTencentCloud') {
   throw new Error('Tencent Cloud ASR label is missing');
 }
+if (ASR_LABELS.find((p) => p.id === 'minimax')?.nameKey !== 'asrMinimax') {
+  throw new Error('MiniMax ASR label is missing');
+}
 
 if (!atlascloudPreset) {
   throw new Error('Atlas Cloud LLM preset is missing');

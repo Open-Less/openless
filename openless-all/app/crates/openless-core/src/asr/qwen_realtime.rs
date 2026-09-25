@@ -131,6 +131,8 @@ struct SyncState {
     send_tx: Option<mpsc::UnboundedSender<SendItem>>,
     /// VAD 断句后按到达顺序累积的已完成句段（completed.transcript）。
     completed_segments: Vec<String>,
+    // Per connection: ignore updates/repeats for completed item IDs.
+    completed_item_ids: std::collections::HashSet<String>,
     /// 当前未完成句段的最新 interim 文本；completed 到达后清空。
     /// 服务端在句段开放期把累积文本放 `stash`、精修期放 `text`，取非空者。
     partial_text: String,
@@ -473,22 +475,26 @@ impl Qwen3RealtimeASR {
             });
         if let Some(text) = text {
             let text = text.trim();
-            let delta = {
+            let snapshot = {
                 let mut state = self.state.lock();
-                let delta = text
-                    .strip_prefix(&state.partial_text)
-                    .unwrap_or("")
-                    .to_string();
-                state.partial_text = text.to_string();
-                delta
-            };
-            if !delta.is_empty() {
-                if let Some(sink) = self.partial_sink.lock().clone() {
-                    let _ = sink.publish(TextStreamChunk {
-                        text: delta,
-                        offset: 0,
-                    });
+                if state.session_finished
+                    || value
+                        .get("item_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| state.completed_item_ids.contains(id))
+                {
+                    return;
                 }
+                state.partial_text = text.to_string();
+                let mut segments = state.completed_segments.clone();
+                segments.push(state.partial_text.clone());
+                join_segments(&segments)
+            };
+            if let Some(sink) = self.partial_sink.lock().clone() {
+                let _ = sink.publish(TextStreamChunk {
+                    text: snapshot,
+                    offset: 0,
+                });
             }
         }
     }
@@ -499,10 +505,26 @@ impl Qwen3RealtimeASR {
         };
         let trimmed = transcript.trim();
         let mut st = self.state.lock();
+        if st.session_finished {
+            return;
+        }
+        if let Some(id) = value.get("item_id").and_then(Value::as_str) {
+            if !st.completed_item_ids.insert(id.to_owned()) {
+                return;
+            }
+        }
         if !trimmed.is_empty() {
             st.completed_segments.push(trimmed.to_string());
         }
         st.partial_text.clear();
+        let snapshot = join_segments(&st.completed_segments);
+        drop(st);
+        if let Some(sink) = self.partial_sink.lock().clone() {
+            let _ = sink.publish(TextStreamChunk {
+                text: snapshot,
+                offset: 0,
+            });
+        }
     }
 
     fn finish_success(&self) {
@@ -696,6 +718,33 @@ async fn close_writer(writer: &SharedWriter) -> Result<(), Qwen3ASRError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transcript_snapshots_keep_prefix_and_recognition_corrections() {
+        let asr = create_test_asr();
+        let sink = Arc::new(super::super::TranscriptCapture::default());
+        asr.set_partial_sink(sink.clone());
+        for text in ["你", "你好", "您好"] {
+            asr.record_partial(&serde_json::json!({"text": text}));
+        }
+        asr.record_completed(&serde_json::json!({"transcript": "您好。"}));
+        asr.record_partial(&serde_json::json!({"stash": "世界"}));
+        asr.record_completed(&serde_json::json!({"transcript": "世界！"}));
+        sink.assert_snapshots(&["你", "你好", "您好", "您好。", "您好。世界", "您好。世界！"]);
+    }
+
+    #[test]
+    fn completed_item_ignores_late_partial_and_duplicate_but_accepts_next_item() {
+        let asr = create_test_asr();
+        let sink = Arc::new(super::super::TranscriptCapture::default());
+        asr.set_partial_sink(sink.clone());
+        asr.record_partial(&serde_json::json!({"item_id":"a", "text":"你好"}));
+        asr.record_completed(&serde_json::json!({"item_id":"a", "transcript":"你好。"}));
+        asr.record_partial(&serde_json::json!({"item_id":"a", "text":"旧文字"}));
+        asr.record_completed(&serde_json::json!({"item_id":"a", "transcript":"你好。"}));
+        asr.record_partial(&serde_json::json!({"item_id":"b", "text":"世界"}));
+        sink.assert_snapshots(&["你好", "你好。", "你好。世界"]);
+    }
 
     fn create_test_asr() -> Qwen3RealtimeASR {
         Qwen3RealtimeASR::new(Qwen3RealtimeCredentials {

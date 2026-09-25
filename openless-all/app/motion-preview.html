@@ -1,0 +1,33 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+  :root{--ol-font-sans: 'Microsoft YaHei',sans-serif;--ol-capsule-pill-bg:#f4f5f1;--ol-capsule-pill-border:#d5d8d1;--ol-capsule-center-ink:#202624;--ol-capsule-btn-ink:#202624;--ol-capsule-btn-bg:#ddd;--ol-capsule-btn-bg-confirm:#ddd}
+  body{margin:0;background:#e2e8e0;display:grid;place-items:center;height:100vh}#root{width:460px}
+
+  .toolbar{position:fixed;bottom:40px;display:flex;gap:12px;align-items:center;font:14px 'Microsoft YaHei',sans-serif}
+  .toolbar button,.toolbar select{border:1px solid #bdc8bb;border-radius:12px;padding:10px 16px;background:#f8faf6;color:#26332a;cursor:pointer}
+  </style></head><body><div id="root"></div><div class="toolbar"><button id="replay">重播插入动画</button><select id="tone"><option value="frost">浅色胶囊</option><option value="dark">深色胶囊</option></select><label><input id="controls" type="checkbox">显示操作按钮</label></div><script type="module">
+  import React from 'react';
+  import {createRoot} from 'react-dom/client';
+  import {flushSync} from 'react-dom';
+  import {LiveTranscriptPill} from '/src/components/LiveTranscriptPill.tsx';
+  const root=createRoot(document.getElementById('root'));
+  window.show=(text, controls=false, tone='frost')=>flushSync(()=>root.render(React.createElement(LiveTranscriptPill,{text,stageWidth:460,maxWidth:440,minWidth:72,tone,...(controls?{onCancel:()=>{},onConfirm:()=>{}}:{})})));
+
+  let generation=0;
+  async function replay(){
+    const current=++generation;
+    const tone=document.getElementById('tone').value;
+    const controls=document.getElementById('controls').checked;
+    window.show('',controls,tone);
+    // Match the reference's recognition update cadence; a new replay cancels this sequence.
+    for(const [text,delay] of [['帮我',500],['帮我查找一',900],['帮我查找一下',650],['帮我查找一下10六号',650],['帮我查找一下，16号',800],['帮我查找一下，16号上海',950],['帮我查找一下，16号上海的天气',950]]){
+      await new Promise(resolve=>setTimeout(resolve,delay));
+      if(current!==generation)return;
+      window.show(text,controls,tone);
+    }
+  }
+  document.getElementById('replay').onclick=replay;
+  document.getElementById('tone').onchange=replay;
+  document.getElementById('controls').onchange=replay;
+  replay();
+  window.ready=true;
+  </script></body></html>

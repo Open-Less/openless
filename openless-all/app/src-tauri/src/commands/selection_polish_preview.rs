@@ -22,11 +22,6 @@ fn map_selection_preview(
 pub async fn get_selection_polish_preview(
     core: CoreState<'_>,
 ) -> Result<Option<SelectionPolishPreviewPayload>, String> {
-    // 面板懒创建后会自己拉一次；只有后端确实处在「润色结果」模式时才给负载，
-    // 免把残留的选区快照当成新请求（面板会被意外切到润色模式）。
-    if !crate::selection_polish_preview_pending() {
-        return Ok(None);
-    }
     let snapshot = core
         .services()
         .selection
@@ -41,7 +36,6 @@ pub async fn confirm_selection_polish_preview(
     core: CoreState<'_>,
     text: String,
 ) -> Result<(), String> {
-    crate::clear_selection_polish_preview_pending();
     let snapshot = core
         .services()
         .selection
@@ -60,7 +54,6 @@ pub async fn confirm_selection_polish_preview(
 
 #[tauri::command]
 pub async fn cancel_selection_polish_preview(core: CoreState<'_>) -> Result<(), String> {
-    crate::clear_selection_polish_preview_pending();
     core.services()
         .selection
         .cancel(None)

@@ -287,6 +287,31 @@ impl TauriQaRuntimeAdapter {
 }
 
 impl QaRuntimeAdapter for TauriQaRuntimeAdapter {
+    fn prepare_captured_text(
+        &self,
+        session_id: SessionId,
+        input: QaInput,
+    ) -> BoxFuture<'static, Result<QaInput, BackendError>> {
+        let adapter = self.clone();
+        Box::pin(async move {
+            let session = Arc::new(TauriQaRuntimeSession {
+                context: Mutex::new(None),
+                voice_capture: Mutex::new(None),
+                audio_wav: Mutex::new(None),
+                selection_text: input.selection_text.clone(),
+                selection_target: Mutex::new(None),
+                prebound_selection_voice_session_id: None,
+                front_app: input.selection_source_app.clone(),
+                duration_ms: AtomicU64::new(0),
+                voice_turn: false,
+                cancelled: Arc::new(AtomicBool::new(false)),
+            });
+            Self::insert_session(&adapter.sessions, session_id, Arc::clone(&session))?;
+            adapter.prepare_context(session_id, &session).await?;
+            Ok(input)
+        })
+    }
+
     fn prepare_text(
         &self,
         session_id: SessionId,

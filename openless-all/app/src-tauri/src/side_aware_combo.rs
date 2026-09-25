@@ -172,18 +172,34 @@ impl SideAwareComboMonitor {
         binding: ShortcutBinding,
         tx: Sender<ComboHotkeyEvent>,
     ) -> Result<Self, crate::combo_hotkey::ComboHotkeyError> {
-        validate_side_binding(&binding)?;
+        // Linux has no side-aware platform dispatch (no CGEventTap / WH_KEYBOARD_LL
+        // equivalent wired here). Accepting the binding would leave the user with a
+        // "successfully configured" combo that silently never fires. Reject up front
+        // so the caller can surface an actionable error instead.
+        #[cfg(target_os = "linux")]
+        {
+            let _ = (&binding, &tx);
+            return Err(crate::combo_hotkey::ComboHotkeyError::UnsupportedModifier(
+                "侧向修饰键组合键在 Linux 暂不支持".into(),
+            ));
+        }
 
-        let slot = ACTIVE_MONITOR.get_or_init(|| RwLock::new(None));
-        let mut guard = slot.write().expect("side combo monitor lock poisoned");
-        *guard = Some(ActiveSideCombo {
-            tx,
-            state: Mutex::new(SideAwareComboState::new(binding)),
-        });
-        Ok(Self)
+        #[cfg(not(target_os = "linux"))]
+        {
+            validate_side_binding(&binding)?;
+
+            let slot = ACTIVE_MONITOR.get_or_init(|| RwLock::new(None));
+            let mut guard = slot.write().expect("side combo monitor lock poisoned");
+            *guard = Some(ActiveSideCombo {
+                tx,
+                state: Mutex::new(SideAwareComboState::new(binding)),
+            });
+            Ok(Self)
+        }
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 fn validate_side_binding(
     binding: &ShortcutBinding,
 ) -> Result<(), crate::combo_hotkey::ComboHotkeyError> {

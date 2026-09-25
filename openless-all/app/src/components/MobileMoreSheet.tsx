@@ -7,6 +7,7 @@ const MORE_TABS: Array<{ id: AppTab; icon: string }> = [
   { id: 'vocab', icon: 'vocab' },
   { id: 'translation', icon: 'translate' },
   { id: 'selectionAsk', icon: 'selectionAsk' },
+  { id: 'quickNote', icon: 'history' },
   { id: 'corrections', icon: 'filter' },
 ];
 

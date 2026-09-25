@@ -63,7 +63,7 @@ export function RecordingInputSection() {
     void getPlatformCapabilities().then(setPlatformCaps);
   }, []);
 
-  // 兼容旧 Windows 配置：Shift+Insert 仍保留在跨平台类型/后端中，
+  // 兼容旧 Windows 配置：Shift+Insert 仍保留在跨平台类型/后端中供 Linux 使用，
   // 但 Windows 已不再提供该选项；进入设置时迁移为 Ctrl+V，避免下拉框无匹配值。
   useEffect(() => {
     if (os !== 'win' || prefs?.pasteShortcut !== 'shiftInsert') return;
@@ -151,7 +151,7 @@ export function RecordingInputSection() {
 
   const isAndroid = platformCaps?.platform === 'android';
   const showDesktopHotkey = platformCaps?.supportsDesktopHotkey === true;
-  const showDesktopInsert = showDesktopHotkey;
+  const showDesktopInsert = showDesktopHotkey && os !== 'linux';
   const showDesktopStartup = showDesktopHotkey;
   const effectivePasteShortcut =
     os === 'win' && prefs.pasteShortcut === 'shiftInsert' ? 'ctrlV' : prefs.pasteShortcut;
@@ -422,7 +422,7 @@ export function RecordingInputSection() {
             )}
           </div>
         </SettingRow>
-        {!isAndroid && (
+        {os !== 'linux' && !isAndroid && (
           <SettingRow
             label={t('settings.recording.capsuleLabel')}
             desc={t('settings.recording.capsuleDesc')}
@@ -430,7 +430,7 @@ export function RecordingInputSection() {
             <Toggle on={prefs.showCapsule} onToggle={onShowCapsuleChange} />
           </SettingRow>
         )}
-        {!isAndroid && (
+        {os !== 'linux' && !isAndroid && (
           <SettingRow label={t('settings.recording.capsuleStyleLabel')}>
             <div style={{ minWidth: 0 }}>
               <SelectLite
@@ -448,6 +448,34 @@ export function RecordingInputSection() {
             </div>
           </SettingRow>
         )}
+        {os !== 'linux' && !isAndroid && (
+          <>
+            <SettingRow
+              label={t('settings.recording.capsuleTranscriptLabel')}
+              desc={t('settings.recording.capsuleTranscriptDesc')}
+            >
+              <Toggle
+                on={prefs.capsuleTranscriptEnabled ?? true}
+                onToggle={(next) => savePrefs({ ...prefs, capsuleTranscriptEnabled: next })}
+              />
+            </SettingRow>
+            {(prefs.capsuleTranscriptEnabled ?? true) && (
+              <SettingRow label={t('settings.recording.capsuleTranscriptFontSize')}>
+                <SelectLite
+                  value={String(prefs.capsuleTranscriptFontSize ?? 14)}
+                  onChange={(next) =>
+                    savePrefs({ ...prefs, capsuleTranscriptFontSize: Number(next) })
+                  }
+                  options={[12, 14, 16, 18, 20].map((size) => ({
+                    value: String(size),
+                    label: `${size}px`,
+                  }))}
+                  ariaLabel={t('settings.recording.capsuleTranscriptFontSize')}
+                />
+              </SettingRow>
+            )}
+          </>
+        )}
         <SettingRow
           label={t('settings.recording.stableTranscriptionLabel')}
           desc={t('settings.recording.stableTranscriptionDesc')}
@@ -463,8 +491,9 @@ export function RecordingInputSection() {
         >
           <Toggle on={prefs.muteDuringRecording} onToggle={onMuteDuringRecordingChange} />
         </SettingRow>
-        <SettingRow
-          label={t('settings.recording.audioCueLabel')}
+        {os !== 'linux' && (
+          <SettingRow
+            label={t('settings.recording.audioCueLabel')}
             desc={t('settings.recording.audioCueDesc')}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -488,8 +517,16 @@ export function RecordingInputSection() {
                 {t('settings.recording.audioCuePreview')}
               </button>
             </div>
-        </SettingRow>
-
+          </SettingRow>
+        )}
+        {os === 'linux' && (
+          <SettingRow label={t('settings.advanced.streamingInsertLabel')}>
+            <Toggle
+              on={!!prefs.streamingInsert}
+              onToggle={(next) => void savePrefs({ ...prefs, streamingInsert: next })}
+            />
+          </SettingRow>
+        )}
       </Card>
 
       {/* ─── 插入与剪贴板（折叠，仅 macOS / Windows） ──────────────── */}
@@ -512,7 +549,7 @@ export function RecordingInputSection() {
                 options={[
                   { value: 'ctrlV', label: t('settings.recording.pasteShortcutCtrlV') },
                   { value: 'ctrlShiftV', label: t('settings.recording.pasteShortcutCtrlShiftV') },
-                  // 这个「粘贴与剪贴板」组只在 Windows 出现（mac 走
+                  // 这个「粘贴与剪贴板」组只在 Windows 出现（showDesktopInsert 已排除 Linux，mac 走
                   // macEventTap 不显示本行）。Shift+Insert 是 xterm/urxvt 等 X11 终端的粘贴组合，
                   // 放在 Windows 上纯属误导，故不再作为选项（issue #786）。
                 ]}
@@ -655,7 +692,7 @@ export function RecordingInputSection() {
   );
 }
 
-// 不存进 prefs：autostart 状态由 OS 持有（mac LaunchAgent plist /
+// 不存进 prefs：autostart 状态由 OS 持有（mac LaunchAgent plist / linux .desktop /
 // windows HKCU\Run），prefs 缓存反而会与 OS 真相不一致。issue #194。
 function AutostartRow() {
   const { t } = useTranslation();

@@ -47,6 +47,7 @@ pub struct DashScopeMultimodalASR {
     api_key: String,
     base_url: String,
     model: String,
+    protocol: crate::provider_rules::BailianProtocol,
     buffer: Mutex<Vec<u8>>,
 }
 
@@ -56,8 +57,14 @@ impl DashScopeMultimodalASR {
             api_key,
             base_url,
             model,
+            protocol: crate::provider_rules::BailianProtocol::Auto,
             buffer: Mutex::new(Vec::new()),
         }
+    }
+
+    pub fn with_protocol(mut self, protocol: crate::provider_rules::BailianProtocol) -> Self {
+        self.protocol = protocol;
+        self
     }
 
     pub fn buffer_duration_ms(&self) -> u64 {
@@ -65,7 +72,9 @@ impl DashScopeMultimodalASR {
     }
 
     pub fn transcribe_timeout(&self, audio_secs: f64) -> Duration {
-        if protocol_for_model(&self.model) == Some(DashScopeBatchProtocol::AsyncTranscription) {
+        if self.protocol.batch_protocol(&self.model)
+            == Some(DashScopeBatchProtocol::AsyncTranscription)
+        {
             let pcm_bytes = (audio_secs.max(0.0) * 32_000.0).ceil() as u64;
             return async_upload_timeout(pcm_bytes.saturating_add(44))
                 + Duration::from_secs(ASYNC_TASK_POLL_TIMEOUT_SECS + ASYNC_WORKFLOW_OVERHEAD_SECS);
@@ -98,7 +107,9 @@ impl DashScopeMultimodalASR {
         }
 
         let duration_ms = crate::asr::pcm::pcm_duration_ms(pcm);
-        if protocol_for_model(&self.model) == Some(DashScopeBatchProtocol::AsyncTranscription) {
+        if self.protocol.batch_protocol(&self.model)
+            == Some(DashScopeBatchProtocol::AsyncTranscription)
+        {
             let samples: Vec<i16> = pcm
                 .as_chunks::<2>()
                 .0
@@ -129,7 +140,11 @@ impl DashScopeMultimodalASR {
             .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
             .collect();
         let wav = encode_wav_16k_mono(&samples);
-        let body = dashscope_multimodal_body(&self.model, &wav);
+        let audio_data = format!(
+            "data:audio/wav;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&wav)
+        );
+        let body = dashscope_multimodal_body_with_protocol(&self.model, &audio_data, self.protocol);
         let url = generation_url(&self.base_url)?;
         let request_timeout =
             self.transcribe_timeout(crate::asr::pcm::pcm_duration_ms(pcm) as f64 / 1000.0);
@@ -471,7 +486,19 @@ pub fn dashscope_multimodal_body(model: &str, wav: &[u8]) -> Value {
 }
 
 pub fn dashscope_multimodal_body_from_uri(model: &str, audio_uri: &str) -> Value {
-    if crate::provider_rules::dashscope_uses_qwen_sync_envelope(model) {
+    dashscope_multimodal_body_with_protocol(
+        model,
+        audio_uri,
+        crate::provider_rules::BailianProtocol::Auto,
+    )
+}
+
+pub fn dashscope_multimodal_body_with_protocol(
+    model: &str,
+    audio_uri: &str,
+    protocol: crate::provider_rules::BailianProtocol,
+) -> Value {
+    if protocol.uses_qwen_envelope(model) {
         return serde_json::json!({
             "model": model,
             "input": {
@@ -623,6 +650,42 @@ pub fn extract_dashscope_text(json: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn manual_protocol_controls_envelope_and_timeout_without_model_inference() {
+        use super::*;
+        use crate::provider_rules::BailianProtocol;
+        let uri = "data:audio/wav;base64,AAAA";
+        let standard = dashscope_multimodal_body_with_protocol(
+            "qwen3-asr-flash",
+            uri,
+            BailianProtocol::Multimodal,
+        );
+        assert_eq!(
+            standard["input"]["messages"][0]["content"][0]["input_audio"]["data"],
+            uri
+        );
+        let qwen = dashscope_multimodal_body_with_protocol(
+            "unknown-model",
+            uri,
+            BailianProtocol::QwenMultimodal,
+        );
+        assert_eq!(qwen["input"]["messages"][0]["content"][0]["audio"], uri);
+        assert!(qwen.get("parameters").is_none());
+        let asynchronous = DashScopeMultimodalASR::new(
+            "key".into(),
+            "https://example.com".into(),
+            "unknown-model".into(),
+        )
+        .with_protocol(BailianProtocol::AsyncTranscription);
+        assert!(asynchronous.transcribe_timeout(1.0) > Duration::from_secs(600));
+        let synchronous = DashScopeMultimodalASR::new(
+            "key".into(),
+            "https://example.com".into(),
+            "fun-asr".into(),
+        )
+        .with_protocol(BailianProtocol::Multimodal);
+        assert_eq!(synchronous.transcribe_timeout(1.0), Duration::from_secs(30));
+    }
     use super::*;
     use crate::asr::AudioConsumer;
     use std::io::{Read, Write};

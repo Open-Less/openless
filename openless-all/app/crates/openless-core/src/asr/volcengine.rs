@@ -754,25 +754,17 @@ impl VolcengineStreamingASR {
             }
         }
 
-        // 缓存最新的 partial transcript：服务端在 final 帧前断连时 fallback 用。
-        // 仅在非空且不是 final 时更新（final 走另一条路径）。
-        if !has_final && !full_text.is_empty() {
-            let delta = {
-                let mut state = self.state.lock();
-                let delta = full_text
-                    .strip_prefix(&state.last_partial_text)
-                    .unwrap_or("")
-                    .to_string();
-                state.last_partial_text = full_text.clone();
-                delta
-            };
-            if !delta.is_empty() {
-                if let Some(sink) = self.partial_sink.lock().clone() {
-                    let _ = sink.publish(TextStreamChunk {
-                        text: delta,
-                        offset: 0,
-                    });
-                }
+        // Offset zero replaces the current transcript, so publish the full snapshot,
+        // including recognition corrections rather than only an appended suffix.
+        if !full_text.is_empty() {
+            if !has_final {
+                self.state.lock().last_partial_text = full_text.clone();
+            }
+            if let Some(sink) = self.partial_sink.lock().clone() {
+                let _ = sink.publish(TextStreamChunk {
+                    text: full_text.clone(),
+                    offset: 0,
+                });
             }
         }
 
@@ -981,6 +973,35 @@ fn hotword_context(entries: &[DictionaryHotword]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transcript_snapshots_keep_prefix_and_recognition_corrections() {
+        let asr = VolcengineStreamingASR::new(
+            VolcengineCredentials {
+                service: VolcengineService::Standard,
+                auth_mode: VolcengineAuthMode::AppIdToken,
+                app_id: "test".into(),
+                access_token: "test".into(),
+                resource_id: VolcengineCredentials::default_resource_id().into(),
+            },
+            Vec::new(),
+        );
+        let sink = Arc::new(super::super::TranscriptCapture::default());
+        asr.set_partial_sink(sink.clone());
+        for text in ["你", "你好", "您好", "您好。世界"] {
+            let payload =
+                serde_json::to_vec(&serde_json::json!({"result": {"text": text}})).unwrap();
+            let bytes = frame::build(
+                MessageType::FullServerResponse,
+                frame::Flags::None,
+                frame::Serialization::Json,
+                &payload,
+                None,
+            );
+            assert!(asr.handle_frame(&bytes));
+        }
+        sink.assert_snapshots(&["你", "你好", "您好", "您好。世界"]);
+    }
 
     #[test]
     fn hotword_context_dedupes_case_insensitively_and_caps() {

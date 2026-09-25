@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender, TrySendError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
@@ -28,6 +28,9 @@ const TARGET_SAMPLE_RATE: u32 = 16_000;
 const LOG_EVERY_N_CALLBACKS: usize = 50;
 /// RMS → UI 电平的放大系数，与 Swift 端 `min(1.0, rms * 4)` 一致。
 const LEVEL_RMS_GAIN: f32 = 4.0;
+/// 归档写线程的最大待写 PCM 块数。满载时丢弃新的归档块而不阻塞实时回调；
+/// 识别链路仍继续收到完整 PCM，停止时已接受的归档消息会被完整刷完。
+const WAV_ARCHIVE_QUEUE_CAPACITY: usize = 256;
 
 /// 接收已重采样 Int16 PCM 字节流（小端）的下游。
 pub trait AudioConsumer: Send + Sync {
@@ -79,17 +82,86 @@ impl RecorderError {
     }
 }
 
+enum WavArchiveMessage {
+    Pcm(Vec<u8>),
+    Finish,
+}
+
+/// 非实时音频回调中的 WAV 归档入口。回调只负责复制 PCM 并把消息放进
+/// 有界 channel；文件写入、seek 和 sync 全部在专用线程执行。
+struct WavArchiveWriter {
+    sender: SyncSender<WavArchiveMessage>,
+    join_handle: Mutex<Option<JoinHandle<()>>>,
+    queue_full_warned: AtomicBool,
+}
+
+impl WavArchiveWriter {
+    fn create(path: &Path) -> std::io::Result<Self> {
+        let archiver = WavArchiver::create(path)?;
+        let (sender, receiver) = sync_channel::<WavArchiveMessage>(WAV_ARCHIVE_QUEUE_CAPACITY);
+        let join_handle = thread::Builder::new()
+            .name("openless-wav-archive".into())
+            .spawn(move || run_wav_archive_writer(archiver, receiver))?;
+        Ok(Self {
+            sender,
+            join_handle: Mutex::new(Some(join_handle)),
+            queue_full_warned: AtomicBool::new(false),
+        })
+    }
+
+    fn append(&self, pcm_bytes: &[u8]) {
+        match self
+            .sender
+            .try_send(WavArchiveMessage::Pcm(pcm_bytes.to_vec()))
+        {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                if !self.queue_full_warned.swap(true, Ordering::Relaxed) {
+                    log::warn!(
+                        "[recorder] wav archive queue is full; dropping archive PCM until the writer catches up"
+                    );
+                }
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                if !self.queue_full_warned.swap(true, Ordering::Relaxed) {
+                    log::warn!("[recorder] wav archive writer stopped before PCM was queued");
+                }
+            }
+        }
+    }
+
+    fn finish(&self) {
+        let _ = self.sender.send(WavArchiveMessage::Finish);
+        if let Some(handle) = self.join_handle.lock().take() {
+            if let Err(error) = handle.join() {
+                log::warn!("[recorder] wav archive writer join failed: {error:?}");
+            }
+        }
+    }
+}
+
+fn run_wav_archive_writer(mut archiver: WavArchiver, receiver: Receiver<WavArchiveMessage>) {
+    while let Ok(message) = receiver.recv() {
+        match message {
+            WavArchiveMessage::Pcm(pcm_bytes) => archiver.append(&pcm_bytes),
+            WavArchiveMessage::Finish => break,
+        }
+    }
+}
+
 /// 采集器句柄。Drop 时不会自动停止——必须显式调用 `stop`。
 pub struct Recorder {
     stop_flag: Arc<AtomicBool>,
     join_handle: Mutex<Option<JoinHandle<()>>>,
+    archive_writer: Option<Arc<WavArchiveWriter>>,
 }
 
 impl Recorder {
     /// 启动采集。`consumer` 收到 16 kHz/Mono/Int16-LE 的 PCM；
     /// `level_handler` 收到 0..1 的 RMS 电平。
     /// `audio_archive_path` 不为 None 时，同样的 16 kHz/Mono/Int16-LE 旁路写入 WAV 文件，
-    /// 用于 debug 麦克风灵敏度 / ASR 误识别。Drop 时自动回填 RIFF / data 长度。
+    /// 用于 debug 麦克风灵敏度 / ASR 误识别。专用写线程负责落盘，Drop 时自动回填
+    /// RIFF / data 长度。
     ///
     /// 返回值第三个 `bool` = "archive 实际成功创建"：caller 写 history 时应当用这个值
     /// 决定 `has_audio_recording`，而不是 prefs 开关。开关打开但写盘失败（路径不存在 /
@@ -109,43 +181,68 @@ impl Recorder {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_for_thread = Arc::clone(&stop_flag);
 
-        // 同步路径上尝试创建 WavArchiver——成功 / 失败都立刻知道，传给 caller 决定
+        // 同步路径上尝试创建 WavArchiveWriter——成功 / 失败都立刻知道，传给 caller 决定
         // 是否在 history 标 has_audio_recording。失败仅 log::warn 不抛错，主路径继续。
-        let archiver = audio_archive_path.and_then(|path| match WavArchiver::create(&path) {
-            Ok(arch) => Some(Arc::new(Mutex::new(arch))),
-            Err(err) => {
-                log::warn!("[recorder] wav archive create failed at {path:?}: {err}");
-                None
-            }
-        });
-        let archive_active = archiver.is_some();
+        let archive_writer =
+            audio_archive_path.and_then(|path| match WavArchiveWriter::create(&path) {
+                Ok(writer) => Some(Arc::new(writer)),
+                Err(err) => {
+                    log::warn!("[recorder] wav archive create failed at {path:?}: {err}");
+                    None
+                }
+            });
+        let archive_active = archive_writer.is_some();
+        let archive_for_thread = archive_writer.clone();
 
-        let join_handle = thread::Builder::new()
+        let join_handle = match thread::Builder::new()
             .name("openless-recorder".into())
             .spawn(move || {
                 run_audio_thread(
                     microphone_device_name,
                     consumer,
                     level_handler,
-                    archiver,
+                    archive_for_thread,
                     stop_for_thread,
                     startup_tx,
                     runtime_error_tx,
                 );
-            })
-            .map_err(|e| RecorderError::EngineFailed(format!("spawn audio thread: {e}")))?;
+            }) {
+            Ok(handle) => handle,
+            Err(error) => {
+                if let Some(archive) = archive_writer.as_ref() {
+                    archive.finish();
+                }
+                return Err(RecorderError::EngineFailed(format!(
+                    "spawn audio thread: {error}"
+                )));
+            }
+        };
 
         // 等待子线程报告启动结果。子线程要么 Send Ok 后继续 park，
         // 要么 Send Err 后立即退出——两种情况都保证 recv 能解锁。
-        let startup_result = startup_rx
-            .recv()
-            .map_err(|e| RecorderError::EngineFailed(format!("audio thread vanished: {e}")))?;
-        startup_result?;
+        let startup_result = match startup_rx.recv() {
+            Ok(result) => result,
+            Err(error) => {
+                if let Some(archive) = archive_writer.as_ref() {
+                    archive.finish();
+                }
+                return Err(RecorderError::EngineFailed(format!(
+                    "audio thread vanished: {error}"
+                )));
+            }
+        };
+        if let Err(error) = startup_result {
+            if let Some(archive) = archive_writer.as_ref() {
+                archive.finish();
+            }
+            return Err(error);
+        }
 
         Ok((
             Self {
                 stop_flag,
                 join_handle: Mutex::new(Some(join_handle)),
+                archive_writer,
             },
             runtime_error_rx,
             archive_active,
@@ -156,11 +253,19 @@ impl Recorder {
     ///
     /// 用 `self`（消费）签名，与 Swift API 语义一致——一次性资源。
     pub fn stop(self) {
-        self.stop_flag.store(true, Ordering::SeqCst);
-        if let Some(handle) = self.join_handle.lock().take() {
+        let Recorder {
+            stop_flag,
+            join_handle,
+            archive_writer,
+        } = self;
+        stop_flag.store(true, Ordering::SeqCst);
+        if let Some(handle) = join_handle.lock().take() {
             if let Err(err) = handle.join() {
                 log::warn!("recorder 线程 join 失败: {:?}", err);
             }
+        }
+        if let Some(archive) = archive_writer {
+            archive.finish();
         }
     }
 }
@@ -198,7 +303,7 @@ fn run_audio_thread(
     microphone_device_name: Option<String>,
     consumer: Arc<dyn AudioConsumer>,
     level_handler: Arc<dyn Fn(f32) + Send + Sync>,
-    archiver: Option<Arc<Mutex<WavArchiver>>>,
+    archiver: Option<Arc<WavArchiveWriter>>,
     stop_flag: Arc<AtomicBool>,
     startup_tx: Sender<Result<(), RecorderError>>,
     runtime_error_tx: Sender<RecorderError>,
@@ -348,7 +453,7 @@ fn build_input_stream(
     microphone_device_name: Option<String>,
     consumer: Arc<dyn AudioConsumer>,
     level_handler: Arc<dyn Fn(f32) + Send + Sync>,
-    archiver: Option<Arc<Mutex<WavArchiver>>>,
+    archiver: Option<Arc<WavArchiveWriter>>,
     runtime_error_tx: Sender<RecorderError>,
 ) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
     let host = cpal::default_host();
@@ -507,7 +612,7 @@ fn build_stream_for_format(
     sample_format: SampleFormat,
     consumer: Arc<dyn AudioConsumer>,
     level_handler: Arc<dyn Fn(f32) + Send + Sync>,
-    archiver: Option<Arc<Mutex<WavArchiver>>>,
+    archiver: Option<Arc<WavArchiveWriter>>,
     state: Arc<StreamState>,
     input_sr: u32,
     channels: usize,
@@ -603,7 +708,7 @@ fn process_callback(
     input_sr: u32,
     consumer: &dyn AudioConsumer,
     level_handler: &(dyn Fn(f32) + Send + Sync),
-    archiver: Option<&Mutex<WavArchiver>>,
+    archiver: Option<&WavArchiveWriter>,
     state: &StreamState,
 ) {
     if interleaved.is_empty() || channels == 0 {
@@ -623,7 +728,7 @@ fn process_callback(
 
     consumer.consume_pcm_chunk(&pcm_bytes);
     if let Some(arch) = archiver {
-        arch.lock().append(&pcm_bytes);
+        arch.append(&pcm_bytes);
     }
     level_handler(level);
 
@@ -772,6 +877,7 @@ fn update_peak(slot: &AtomicUsize, current: f32) {
 struct WavArchiver {
     file: std::fs::File,
     bytes_written: u32,
+    last_checkpoint_bytes: u32,
 }
 
 impl WavArchiver {
@@ -785,6 +891,7 @@ impl WavArchiver {
         Ok(Self {
             file,
             bytes_written: 0,
+            last_checkpoint_bytes: 0,
         })
     }
 
@@ -794,18 +901,40 @@ impl WavArchiver {
             self.bytes_written = self
                 .bytes_written
                 .saturating_add(pcm_bytes.len().min(u32::MAX as usize) as u32);
+            // Keep the header usable during a long meeting. Drop still does
+            // the final sync, but a process kill should not leave a WAV with
+            // data_size=0 for the entire recording.
+            const CHECKPOINT_INTERVAL_BYTES: u32 = 160_000;
+            if self
+                .bytes_written
+                .saturating_sub(self.last_checkpoint_bytes)
+                >= CHECKPOINT_INTERVAL_BYTES
+            {
+                self.checkpoint_header();
+            }
+        }
+    }
+
+    fn checkpoint_header(&mut self) {
+        use std::io::{Seek, SeekFrom, Write};
+        if self.file.seek(SeekFrom::Start(0)).is_ok() {
+            if self
+                .file
+                .write_all(&build_wav_header(self.bytes_written))
+                .is_ok()
+            {
+                let _ = self.file.seek(SeekFrom::End(0));
+                let _ = self.file.sync_data();
+                self.last_checkpoint_bytes = self.bytes_written;
+            }
         }
     }
 }
 
 impl Drop for WavArchiver {
     fn drop(&mut self) {
-        use std::io::{Seek, SeekFrom, Write};
-        let header = build_wav_header(self.bytes_written);
-        if self.file.seek(SeekFrom::Start(0)).is_ok() {
-            let _ = self.file.write_all(&header);
-            let _ = self.file.sync_all();
-        }
+        self.checkpoint_header();
+        let _ = self.file.sync_all();
     }
 }
 

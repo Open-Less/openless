@@ -882,6 +882,18 @@ pub trait QaRuntimeAdapter: Send + Sync {
         session_id: SessionId,
         text: String,
     ) -> BoxFuture<'static, Result<QaInput, BackendError>>;
+    /// Prepare a question whose selection was captured before showing QA.
+    fn prepare_captured_text(
+        &self,
+        session_id: SessionId,
+        input: QaInput,
+    ) -> BoxFuture<'static, Result<QaInput, BackendError>> {
+        let preparation = self.prepare_text(session_id, input.text.clone());
+        Box::pin(async move {
+            preparation.await?;
+            Ok(input)
+        })
+    }
     /// Prepare a Selection Voice edit turn whose text and opaque target were
     /// already captured before the QA window took focus. Hosts must not
     /// recapture the current selection in this path.
@@ -955,6 +967,12 @@ pub trait QaApi: Send + Sync {
         unsupported("QA")
     }
     fn submit_text(&self, text: String) -> BoxFuture<'static, Result<(), BackendError>>;
+    fn submit_captured_text(
+        &self,
+        _input: QaInput,
+    ) -> BoxFuture<'static, Result<(), BackendError>> {
+        unsupported("QA captured question")
+    }
     /// Open a QA edit turn from an already captured Selection Voice session.
     /// This preserves the original text/target across the QA focus change.
     fn submit_selection_edit(

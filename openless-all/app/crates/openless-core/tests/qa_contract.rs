@@ -552,6 +552,29 @@ fn backend_with_selection_voice(
 }
 
 #[tokio::test]
+async fn captured_question_keeps_selection_from_before_the_panel_opened() {
+    let runtime = Arc::new(FixtureQaRuntime::responding("answer"));
+    *runtime.selection.lock().unwrap() = Some("new foreground text".into());
+    let (backend, data_dir) = backend(runtime.clone());
+    backend.start().await.unwrap();
+    let input = QaInput {
+        text: "recorded question".into(),
+        selection_text: Some("original selected text".into()),
+        selection_source_app: Some("original editor".into()),
+    };
+    backend
+        .services()
+        .qa
+        .submit_captured_text(input.clone())
+        .await
+        .unwrap();
+    assert_eq!(runtime.requests.lock().unwrap()[0].input, input);
+    assert!(runtime.recording_sessions.lock().unwrap().is_empty());
+    backend.shutdown().await.unwrap();
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
 async fn qa_cancel_during_prepare_releases_late_context_without_answering() {
     let runtime = Arc::new(FixtureQaRuntime::responding("must not answer"));
     runtime.block_prepare.store(true, Ordering::Release);

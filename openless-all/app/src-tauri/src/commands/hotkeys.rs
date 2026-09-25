@@ -74,6 +74,23 @@ pub fn set_open_app_hotkey(
     super::settings::persist_strict_settings(&coord, prefs)
 }
 
+/// 设置独立速记快捷键。None = 停用。
+#[tauri::command]
+pub fn set_quick_note_hotkey(
+    coord: CoordinatorState<'_>,
+    binding: Option<ShortcutBinding>,
+) -> Result<(), String> {
+    if let Some(binding) = binding.as_ref() {
+        crate::shortcut_binding::validate_binding(binding).map_err(|e| e.to_string())?;
+        crate::shortcut_binding::reject_side_specific_non_dictation(binding)?;
+        reject_modifier_only_action_shortcut(binding)?;
+    }
+    let mut prefs = coord.backend().get_preferences();
+    prefs.quick_note_hotkey = binding;
+    reject_hotkey_collisions(&prefs)?;
+    super::settings::persist_strict_settings(&coord, prefs)
+}
+
 /// 设置 Selection Polish 全局快捷键。Core 先产生显式 effect target；Tauri
 /// 注册成功后才持久化，失败则按 receipt 恢复旧监听器且不写偏好。
 /// 选区润色为桌面（Windows-first）工作流，mobile 不注册。

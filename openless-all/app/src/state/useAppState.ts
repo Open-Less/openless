@@ -10,6 +10,7 @@ export type AppTab =
   | 'marketplace'
   | 'translation'
   | 'selectionAsk'
+  | 'quickNote'
   | 'corrections'
   | 'localAsr';
 

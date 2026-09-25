@@ -35,3 +35,28 @@ pub struct DictionaryHotword {
     pub phrase: String,
     pub enabled: bool,
 }
+
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct TranscriptCapture(std::sync::Mutex<Vec<crate::ports::TextStreamChunk>>);
+#[cfg(test)]
+impl crate::ports::TextStreamSink for TranscriptCapture {
+    fn publish(&self, chunk: crate::ports::TextStreamChunk) -> Result<(), crate::BackendError> {
+        self.0.lock().unwrap().push(chunk);
+        Ok(())
+    }
+}
+#[cfg(test)]
+impl TranscriptCapture {
+    pub(crate) fn assert_snapshots(&self, expected: &[&str]) {
+        let chunks = self.0.lock().unwrap();
+        assert!(chunks.iter().all(|chunk| chunk.offset == 0));
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|chunk| chunk.text.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+}
