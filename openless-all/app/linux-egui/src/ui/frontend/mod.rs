@@ -2441,6 +2441,177 @@ mod tests {
         );
     }
 
+    #[test]
+    fn style_editor_uses_the_published_live_blur_under_its_tint() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            active_page: Page::Style,
+            style_unsupported: false,
+            style_editor_open: true,
+            ..Default::default()
+        };
+        let mut output = None;
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(viewport()),
+                ..Default::default()
+            });
+            crate::ui::backdrop::publish(&ctx, Some(egui::TextureId::User(42)));
+            render(&ctx, &mut vm, &mut Vec::new());
+            output = Some(end_pass(&ctx));
+        }
+        let output = output.unwrap();
+        let body = layout::body_rect(&ctx);
+        fn collect_textured(shape: &egui::Shape, out: &mut Vec<(egui::Rect, egui::TextureId)>) {
+            match shape {
+                egui::Shape::Rect(rect) => {
+                    if let Some(brush) = &rect.brush {
+                        out.push((rect.rect, brush.fill_texture_id));
+                    }
+                }
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect_textured(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut textured = Vec::new();
+        for clipped in &output.shapes {
+            collect_textured(&clipped.shape, &mut textured);
+        }
+        assert!(
+            textured.iter().any(|(rect, texture)| {
+                *texture == egui::TextureId::User(42)
+                    && *rect
+                        == egui::Rect::from_min_max(
+                            egui::pos2(body.left() + layout::SIDEBAR_WIDTH, body.top()),
+                            body.max,
+                        )
+            }),
+            "style editor should draw the current-frame blurred backdrop: {textured:?}"
+        );
+    }
+
+    #[test]
+    fn style_editor_form_starts_below_header_and_inside_drawer() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            active_page: Page::Style,
+            style_unsupported: false,
+            style_editor_open: true,
+            style_name: "GEOMETRY_NAME_SENTINEL".into(),
+            ..Default::default()
+        };
+        let mut output = None;
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(viewport()),
+                ..Default::default()
+            });
+            render(&ctx, &mut vm, &mut Vec::new());
+            output = Some(end_pass(&ctx));
+        }
+        let output = output.unwrap();
+        let card: egui::Rect = ctx.data(|data| {
+            data.get_temp(egui::Id::new("openless-style-editor-card-rect"))
+                .unwrap()
+        });
+        let scroll: egui::Rect = ctx.data(|data| {
+            data.get_temp(egui::Id::new("style-editor-scroll-rect"))
+                .unwrap()
+        });
+        assert!(
+            scroll.top() >= card.top() + 78.0 - 1.0,
+            "form overlaps the fixed header: {scroll:?}, {card:?}"
+        );
+        assert!(
+            scroll.bottom() <= card.bottom() + 1.0,
+            "form extends beyond drawer: {scroll:?}, {card:?}"
+        );
+        fn collect(shape: &egui::Shape, out: &mut Vec<(String, egui::Pos2)>) {
+            match shape {
+                egui::Shape::Text(text) => out.push((text.galley.text().to_string(), text.pos)),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut text = Vec::new();
+        for clipped in &output.shapes {
+            collect(&clipped.shape, &mut text);
+        }
+        let label = |key| openless_linux_egui::tr_l10n(vm.lang, key);
+        let name = label("style.pack.fieldName");
+        let description = label("style.pack.fieldDescription");
+        let prompt = label("style.pack.dictation_prompt_title");
+        let targets = [
+            name,
+            label("style.pack.fieldAuthor"),
+            label("style.pack.fieldVersion"),
+            label("style.pack.fieldTags"),
+            description,
+            label("style.pack.fieldModel"),
+            prompt,
+            "GEOMETRY_NAME_SENTINEL",
+        ];
+        let positions: Vec<_> = text
+            .iter()
+            .filter(|(s, _)| targets.contains(&s.as_str()))
+            .collect();
+        assert!(positions.len() >= 7, "missing editor fields: {positions:?}");
+        assert!(
+            positions
+                .iter()
+                .all(|(_, p)| p.x >= card.left() + 16.0 && p.y >= scroll.top()),
+            "fields escape inset or overlap header: {positions:?}; {card:?}, {scroll:?}"
+        );
+        let position = |label: &str| positions.iter().find(|(s, _)| s == label).unwrap().1;
+        assert!(position(name).y < scroll.top() + 120.0);
+        assert!(position(description).y < scroll.top() + 290.0);
+        assert!(
+            position(prompt).y < scroll.bottom(),
+            "prompt should be visible without scrolling past a blank header"
+        );
+        fn collect_inputs(shape: &egui::Shape, borders: &mut Vec<(egui::Rect, egui::Stroke)>) {
+            match shape {
+                egui::Shape::Rect(rect)
+                    if rect.rect.width() > 280.0 && rect.rect.height() >= 30.0 =>
+                {
+                    borders.push((rect.rect, rect.stroke));
+                }
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect_inputs(shape, borders);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut borders = Vec::new();
+        for clipped in &output.shapes {
+            collect_inputs(&clipped.shape, &mut borders);
+        }
+        assert!(
+            borders
+                .iter()
+                .filter(|(rect, stroke)| {
+                    rect.left() >= card.left() + 16.0
+                        && rect.width() < card.width() - 20.0
+                        && card.contains(rect.center())
+                        && stroke.width >= 0.5
+                        && stroke.color.a() >= 50
+                })
+                .count()
+                >= 7,
+            "editor inputs and textareas need visible outlines, got {borders:?}"
+        );
+    }
+
     /// Editor parity: upstream renders a right-hand drawer whose body follows the
     /// workflow switch (dictation prompt vs. the two selection prompts) and whose
     /// destructive button is "reset built-in" or "delete imported" depending on

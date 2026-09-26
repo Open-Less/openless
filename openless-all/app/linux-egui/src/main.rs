@@ -8323,11 +8323,11 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                     log::info!("[ui-client] pointer click at {pointer:?}");
                 }
             }
-            // 设置页遮罩改为磨砂背板：先按当前窗口尺寸准备离屏目标，把纹理 id 发布给
-            // 遮罩；页面本身在这一帧稍后离屏重绘并模糊（都在 eframe 绘制之前完成，
+            // 设置与风格编辑遮罩共用实时磨砂背板：先按当前窗口尺寸准备离屏目标，
+            // 把纹理 id 发布给遮罩；页面在这一帧稍后离屏重绘并模糊（都在 eframe 绘制之前完成，
             // 所以遮罩采到的是当前帧的像素，不需要任何“等一帧截图”的补丁）。
             {
-                let open = self.view_model.settings_open;
+                let open = self.view_model.settings_open || self.view_model.style_editor_open;
                 let texture = self
                     .backdrop
                     .as_mut()
@@ -8336,7 +8336,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             }
             let mut actions = Vec::new();
             frontend::render(&ctx, &mut self.view_model, &mut actions);
-            if self.view_model.settings_open {
+            if self.view_model.settings_open || self.view_model.style_editor_open {
                 if let Some(backdrop) = self.backdrop.as_mut() {
                     backdrop.render_page(&ctx);
                 }

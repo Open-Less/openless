@@ -681,16 +681,16 @@ fn editor_overlay(
         .constrain(false)
         .show(ctx, |ui| {
             ui.set_min_size(body.size());
-            ui.painter().rect_filled(
-                body,
-                egui::CornerRadius {
-                    nw: 0,
-                    ne: 0,
-                    sw: 14,
-                    se: 14,
-                },
-                theme::OVERLAY,
-            );
+            // Like Settings, sample this frame's GPU-blurred page and apply the
+            // macOS overlay tint. Both layers obey the content area's corners.
+            let corners = layout::body_corner_radius(ctx);
+            if let Some(texture) = crate::ui::backdrop::published(ctx) {
+                ui.painter().add(egui::Shape::Rect(
+                    egui::epaint::RectShape::filled(body, corners, egui::Color32::WHITE)
+                        .with_texture(texture, crate::ui::backdrop::uv_for(ctx, body)),
+                ));
+            }
+            ui.painter().rect_filled(body, corners, theme::OVERLAY);
             // 点击拦截：吃掉 body 上的点击，下方页面既看不到也点不到。
             let _ = ui.allocate_rect(body, egui::Sense::click());
             ui.scope_builder(egui::UiBuilder::new().max_rect(card_rect), |ui| {
@@ -717,7 +717,19 @@ fn editor_overlay(
                             egui::pos2(inner.left(), inner.top() + header_height),
                             inner.max,
                         );
-                        drawer_body(ui, content, vm, actions);
+                        // Header is painted at a fixed rectangle and does not advance
+                        // egui's layout cursor. Anchor the scrollable body explicitly
+                        // below it; otherwise the form starts under the header and
+                        // ends one header-height before the drawer bottom.
+                        ui.scope_builder(
+                            egui::UiBuilder::new()
+                                .max_rect(content)
+                                .layout(egui::Layout::top_down(egui::Align::Min)),
+                            |ui| {
+                                ui.set_clip_rect(content.intersect(ui.clip_rect()));
+                                drawer_body(ui, content, vm, actions);
+                            },
+                        );
                     });
             });
         });
@@ -787,117 +799,142 @@ fn drawer_body(
 ) {
     let lang = vm.lang;
     let field_width = (content.width() - 36.0 - FIELD_GAP) / 2.0;
-    egui::ScrollArea::vertical()
+    let scroll = egui::ScrollArea::vertical()
         .id_salt("style-editor-fields")
         .max_height(content.height().max(120.0))
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.set_width((content.width() - 36.0).max(120.0));
-            ui.add_space(18.0);
-            pills_row(ui, content, vm, actions);
-            ui.add_space(FIELD_GAP);
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_width(field_width);
-                    field_label(ui, tr_l10n(lang, "style.pack.fieldName"));
-                    ui.text_edit_singleline(&mut vm.style_name);
-                });
-                ui.vertical(|ui| {
-                    ui.set_width(field_width);
-                    field_label(ui, tr_l10n(lang, "style.pack.fieldAuthor"));
-                    ui.add(
-                        egui::TextEdit::singleline(&mut vm.style_author)
-                            .hint_text(tr_l10n(lang, "style.pack.fieldAuthorPlaceholder")),
+            // Match the Tauri drawer's 18px scroll-body padding. A width
+            // constraint alone leaves every field hard against the card edge.
+            egui::Frame::new()
+                .inner_margin(egui::Margin::symmetric(18, 0))
+                .show(ui, |ui| {
+                    ui.set_width((content.width() - 36.0).max(120.0));
+                    ui.spacing_mut().item_spacing.x = FIELD_GAP;
+                    ui.add_space(18.0);
+                    pills_row(ui, content, vm, actions);
+                    ui.add_space(FIELD_GAP);
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.set_width(field_width);
+                            field_label(ui, tr_l10n(lang, "style.pack.fieldName"));
+                            ui.add_sized(
+                                [ui.available_width(), 38.0],
+                                editor_input(&mut vm.style_name),
+                            );
+                        });
+                        ui.vertical(|ui| {
+                            ui.set_width(field_width);
+                            field_label(ui, tr_l10n(lang, "style.pack.fieldAuthor"));
+                            ui.add_sized(
+                                [ui.available_width(), 38.0],
+                                editor_input(&mut vm.style_author)
+                                    .hint_text(tr_l10n(lang, "style.pack.fieldAuthorPlaceholder")),
+                            );
+                        });
+                    });
+                    ui.add_space(FIELD_GAP);
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.set_width(field_width);
+                            field_label(ui, tr_l10n(lang, "style.pack.fieldVersion"));
+                            ui.add_sized(
+                                [ui.available_width(), 38.0],
+                                editor_input(&mut vm.style_version),
+                            );
+                        });
+                        ui.vertical(|ui| {
+                            ui.set_width(field_width);
+                            field_label(ui, tr_l10n(lang, "style.pack.fieldTags"));
+                            ui.add_sized(
+                                [ui.available_width(), 38.0],
+                                editor_input(&mut vm.style_tags)
+                                    .hint_text(tr_l10n(lang, "style.pack.fieldTagsPlaceholder")),
+                            );
+                        });
+                    });
+                    ui.add_space(FIELD_GAP);
+                    field_label(ui, tr_l10n(lang, "style.pack.fieldDescription"));
+                    ui.add_sized(
+                        [ui.available_width(), 86.0],
+                        editor_textarea(&mut vm.style_description),
                     );
-                });
-            });
-            ui.add_space(FIELD_GAP);
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_width(field_width);
-                    field_label(ui, tr_l10n(lang, "style.pack.fieldVersion"));
-                    ui.text_edit_singleline(&mut vm.style_version);
-                });
-                ui.vertical(|ui| {
-                    ui.set_width(field_width);
-                    field_label(ui, tr_l10n(lang, "style.pack.fieldTags"));
-                    ui.add(
-                        egui::TextEdit::singleline(&mut vm.style_tags)
-                            .hint_text(tr_l10n(lang, "style.pack.fieldTagsPlaceholder")),
-                    );
-                });
-            });
-            ui.add_space(FIELD_GAP);
-            field_label(ui, tr_l10n(lang, "style.pack.fieldDescription"));
-            ui.add_sized(
-                [ui.available_width(), 86.0],
-                egui::TextEdit::multiline(&mut vm.style_description),
-            );
-            ui.add_space(FIELD_GAP);
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_width(field_width);
-                    field_label(ui, tr_l10n(lang, "style.pack.fieldModel"));
-                    ui.add(
-                        egui::TextEdit::singleline(&mut vm.style_model)
-                            .hint_text(tr_l10n(lang, "style.pack.fieldModelPlaceholder")),
-                    );
-                    ui.label(
-                        egui::RichText::new(tr_l10n(lang, "style.pack.fieldModelHint"))
-                            .size(11.5)
-                            .color(theme::INK_4),
-                    );
-                });
-                ui.vertical(|ui| {
-                    ui.set_width(field_width);
-                    field_label(ui, tr_l10n(lang, "style.pack.fieldCompatibility"));
-                    ui.add(
-                        egui::TextEdit::singleline(&mut vm.style_compatible_version)
-                            .hint_text(tr_l10n(lang, "style.pack.fieldCompatibilityPlaceholder")),
-                    );
-                });
-            });
-            ui.add_space(FIELD_GAP + 4.0);
+                    ui.add_space(FIELD_GAP);
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.set_width(field_width);
+                            field_label(ui, tr_l10n(lang, "style.pack.fieldModel"));
+                            ui.add_sized(
+                                [ui.available_width(), 38.0],
+                                editor_input(&mut vm.style_model)
+                                    .hint_text(tr_l10n(lang, "style.pack.fieldModelPlaceholder")),
+                            );
+                            ui.label(
+                                egui::RichText::new(tr_l10n(lang, "style.pack.fieldModelHint"))
+                                    .size(11.5)
+                                    .color(theme::INK_4),
+                            );
+                        });
+                        ui.vertical(|ui| {
+                            ui.set_width(field_width);
+                            field_label(ui, tr_l10n(lang, "style.pack.fieldCompatibility"));
+                            ui.add_sized(
+                                [ui.available_width(), 38.0],
+                                editor_input(&mut vm.style_compatible_version).hint_text(tr_l10n(
+                                    lang,
+                                    "style.pack.fieldCompatibilityPlaceholder",
+                                )),
+                            );
+                        });
+                    });
+                    ui.add_space(FIELD_GAP + 4.0);
 
-            // The two workflows read different prompt slots from one pack, so the
-            // drawer only edits the one the page is currently showing.
-            if vm.style_selection_workflow {
-                prompt_field(
-                    ui,
-                    tr_l10n(lang, "style.pack.selectionPromptTitle"),
-                    Some(tr_l10n(lang, "style.pack.selectionPromptHint")),
-                    &mut vm.style_selection_prompt,
-                    100.0,
-                );
-                ui.add_space(FIELD_GAP);
-                prompt_field(
-                    ui,
-                    tr_l10n(lang, "style.pack.voiceEditPromptTitle"),
-                    None,
-                    &mut vm.style_voice_edit_prompt,
-                    100.0,
-                );
-            } else {
-                prompt_field(
-                    ui,
-                    tr_l10n(lang, "style.pack.dictation_prompt_title"),
-                    Some(tr_l10n(lang, "style.pack.dictation_prompt_hint")),
-                    &mut vm.style_prompt,
-                    140.0,
-                );
-            }
+                    // The two workflows read different prompt slots from one pack, so the
+                    // drawer only edits the one the page is currently showing.
+                    if vm.style_selection_workflow {
+                        prompt_field(
+                            ui,
+                            tr_l10n(lang, "style.pack.selectionPromptTitle"),
+                            Some(tr_l10n(lang, "style.pack.selectionPromptHint")),
+                            &mut vm.style_selection_prompt,
+                            100.0,
+                        );
+                        ui.add_space(FIELD_GAP);
+                        prompt_field(
+                            ui,
+                            tr_l10n(lang, "style.pack.voiceEditPromptTitle"),
+                            None,
+                            &mut vm.style_voice_edit_prompt,
+                            100.0,
+                        );
+                    } else {
+                        prompt_field(
+                            ui,
+                            tr_l10n(lang, "style.pack.dictation_prompt_title"),
+                            Some(tr_l10n(lang, "style.pack.dictation_prompt_hint")),
+                            &mut vm.style_prompt,
+                            140.0,
+                        );
+                    }
 
-            // The runtime card belongs to the dictation workflow: it shows which
-            // directives Core actually assembles into the prompt right now.
-            if !vm.style_selection_workflow {
-                ui.add_space(FIELD_GAP + 4.0);
-                runtime_card(ui, vm);
-            }
+                    // The runtime card belongs to the dictation workflow: it shows which
+                    // directives Core actually assembles into the prompt right now.
+                    if !vm.style_selection_workflow {
+                        ui.add_space(FIELD_GAP + 4.0);
+                        runtime_card(ui, vm);
+                    }
 
-            ui.add_space(18.0);
-            drawer_footer(ui, vm, actions);
-            ui.add_space(18.0);
+                    ui.add_space(18.0);
+                    drawer_footer(ui, vm, actions);
+                    ui.add_space(18.0);
+                });
         });
+    #[cfg(test)]
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(egui::Id::new("style-editor-scroll-rect"), scroll.inner_rect)
+    });
+    #[cfg(not(test))]
+    let _ = scroll;
 }
 
 /// Kind / mode / active / unsaved pills plus export and activate.
@@ -1017,6 +1054,30 @@ fn pills_row(
     ui.add_space(6.0);
 }
 
+fn editor_input(text: &mut String) -> egui::TextEdit<'_> {
+    egui::TextEdit::singleline(text)
+        .font(egui::FontId::proportional(12.5))
+        .margin(egui::Margin::symmetric(11, 9))
+        .frame(
+            egui::Frame::new()
+                .fill(theme::SURFACE)
+                .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
+                .corner_radius(egui::CornerRadius::same(10)),
+        )
+}
+
+fn editor_textarea(text: &mut String) -> egui::TextEdit<'_> {
+    egui::TextEdit::multiline(text)
+        .font(egui::FontId::proportional(12.5))
+        .margin(egui::Margin::symmetric(12, 11))
+        .frame(
+            egui::Frame::new()
+                .fill(theme::SURFACE)
+                .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
+                .corner_radius(egui::CornerRadius::same(12)),
+        )
+}
+
 fn field_label(ui: &mut egui::Ui, text: &str) {
     ui.label(
         egui::RichText::new(text)
@@ -1039,10 +1100,7 @@ fn prompt_field(
         ui.label(egui::RichText::new(hint).size(11.0).color(theme::INK_4));
         ui.add_space(4.0);
     }
-    ui.add_sized(
-        [ui.available_width(), height],
-        egui::TextEdit::multiline(value),
-    );
+    ui.add_sized([ui.available_width(), height], editor_textarea(value));
 }
 
 /// Dictation directives preview. Rendering only reads the DTO Core built, so the
