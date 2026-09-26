@@ -17,7 +17,8 @@ use openless_linux_egui::{
 fn history_session(id: &str) -> DictationSession {
     DictationSession {
         id: id.to_string(),
-        created_at: "2026-08-27T00:00:00Z".to_string(),
+        // Keep this inside the 30-day retention window regardless of when CI runs.
+        created_at: chrono::Utc::now().to_rfc3339(),
         source: HistorySource::Voice,
         raw_transcript: "raw".to_string(),
         asr_transcript: None,

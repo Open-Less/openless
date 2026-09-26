@@ -1,8 +1,9 @@
 use eframe::egui;
+use resvg::{tiny_skia, usvg};
 
 use super::theme;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum IconName {
     Overview,
     History,
@@ -24,650 +25,192 @@ pub enum IconName {
     Plus,
     Play,
     Stop,
-    /// 浮窗用：关闭 ✕、确认 ✓、发送 ↑、空状态对话气泡、用户头像占位。
     Close,
     Check,
     Send,
-    /// 划词追问头部的图钉（固定 / 取消固定）。
     Pin,
     Chat,
+    // GitHub avatar fallback isn't a Lucide icon in the Tauri UI.
     Github,
-    /// 横向三点（列表/详情行的「…」操作菜单）。
     More,
     ChevronRight,
-    /// 风格包默认图标（lucide `feather` / `layout` / `file-text`）。
     Feather,
     Layout,
     Doc,
     Pencil,
 }
 
-/// Draw an icon centred at `center` with the given `color`.
+// These masks are generated from the pinned lucide-react package by
+// scripts/sync-egui-lucide-icons.mjs. Unlike the old hand-drawn approximations,
+// History, Vocab, Style, SelectionAsk and Settings retain every SVG path.
+fn lucide_svg(icon: IconName) -> Option<(&'static str, &'static str)> {
+    Some(match icon {
+        IconName::Overview => (
+            "Overview",
+            include_str!("../../../assets/lucide/Overview.svg"),
+        ),
+        IconName::History => (
+            "History",
+            include_str!("../../../assets/lucide/History.svg"),
+        ),
+        IconName::Vocab => ("Vocab", include_str!("../../../assets/lucide/Vocab.svg")),
+        IconName::Style => ("Style", include_str!("../../../assets/lucide/Style.svg")),
+        IconName::SelectionAsk => (
+            "SelectionAsk",
+            include_str!("../../../assets/lucide/SelectionAsk.svg"),
+        ),
+        IconName::Settings => (
+            "Settings",
+            include_str!("../../../assets/lucide/Settings.svg"),
+        ),
+        IconName::Mic => ("Mic", include_str!("../../../assets/lucide/Mic.svg")),
+        IconName::Sparkle => (
+            "Sparkle",
+            include_str!("../../../assets/lucide/Sparkle.svg"),
+        ),
+        IconName::Hash => ("Hash", include_str!("../../../assets/lucide/Hash.svg")),
+        IconName::Clock => ("Clock", include_str!("../../../assets/lucide/Clock.svg")),
+        IconName::Bolt => ("Bolt", include_str!("../../../assets/lucide/Bolt.svg")),
+        IconName::Copy => ("Copy", include_str!("../../../assets/lucide/Copy.svg")),
+        IconName::Search => ("Search", include_str!("../../../assets/lucide/Search.svg")),
+        IconName::Trash => ("Trash", include_str!("../../../assets/lucide/Trash.svg")),
+        IconName::Refresh => (
+            "Refresh",
+            include_str!("../../../assets/lucide/Refresh.svg"),
+        ),
+        IconName::Download => (
+            "Download",
+            include_str!("../../../assets/lucide/Download.svg"),
+        ),
+        IconName::Upload => ("Upload", include_str!("../../../assets/lucide/Upload.svg")),
+        IconName::Plus => ("Plus", include_str!("../../../assets/lucide/Plus.svg")),
+        IconName::Play => ("Play", include_str!("../../../assets/lucide/Play.svg")),
+        IconName::Stop => ("Stop", include_str!("../../../assets/lucide/Stop.svg")),
+        IconName::Close => ("Close", include_str!("../../../assets/lucide/Close.svg")),
+        IconName::Check => ("Check", include_str!("../../../assets/lucide/Check.svg")),
+        IconName::Send => ("Send", include_str!("../../../assets/lucide/Send.svg")),
+        IconName::Pin => ("Pin", include_str!("../../../assets/lucide/Pin.svg")),
+        IconName::Chat => ("Chat", include_str!("../../../assets/lucide/Chat.svg")),
+        IconName::More => ("More", include_str!("../../../assets/lucide/More.svg")),
+        IconName::ChevronRight => (
+            "ChevronRight",
+            include_str!("../../../assets/lucide/ChevronRight.svg"),
+        ),
+        IconName::Feather => (
+            "Feather",
+            include_str!("../../../assets/lucide/Feather.svg"),
+        ),
+        IconName::Layout => ("Layout", include_str!("../../../assets/lucide/Layout.svg")),
+        IconName::Doc => ("Doc", include_str!("../../../assets/lucide/Doc.svg")),
+        IconName::Pencil => ("Pencil", include_str!("../../../assets/lucide/Pencil.svg")),
+        IconName::Github => return None,
+    })
+}
+
+const ICON_PIXELS: usize = 48; // 3x the 16-point sidebar/control icon.
+const ICON_SIZE: f32 = 16.0;
+
+fn rasterize_mask(source: &str) -> Option<egui::ColorImage> {
+    let tree = usvg::Tree::from_str(source, &usvg::Options::default()).ok()?;
+    let mut pixmap = tiny_skia::Pixmap::new(ICON_PIXELS as u32, ICON_PIXELS as u32)?;
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(ICON_PIXELS as f32 / 24.0, ICON_PIXELS as f32 / 24.0),
+        &mut pixmap.as_mut(),
+    );
+    // tiny-skia returns premultiplied white; ColorImage expects straight RGBA.
+    // SVGs contain only white strokes, so opacity is the entire mask.
+    let mut pixels = Vec::with_capacity(ICON_PIXELS * ICON_PIXELS * 4);
+    for pixel in pixmap.data().chunks_exact(4) {
+        pixels.extend_from_slice(&[255, 255, 255, pixel[3]]);
+    }
+    Some(egui::ColorImage::from_rgba_unmultiplied(
+        [ICON_PIXELS, ICON_PIXELS],
+        &pixels,
+    ))
+}
+
+/// Draw the same SVG outlines used by Tauri, recolored for this surface.
+/// Texture handles live in egui's context and are reused across frames/windows.
 pub fn draw_icon(ui: &egui::Ui, center: egui::Pos2, icon: IconName, color: egui::Color32) {
-    let p = ui.painter();
-    let stroke = egui::Stroke::new(1.25, color);
-    // 与中心点的相对坐标（各 arm 若需要不同缩放会在内部自行 shadow）。
-    let point = |x: f32, y: f32| center + egui::vec2(x, y);
-    match icon {
-        IconName::Overview => {
-            // Tauri 的概览图标是 lucide `ChartNoAxesColumn`：**只有三根柱子、没有坐标轴**。
-            // 之前多画了一条 L 形坐标轴，和上游不是同一个图标。
-            // lucide 24px 画布：柱子在 x=6/12/18，底线 y=20，顶端 y=14/4/10。
-            let s = 20.0 / 24.0;
-            for (x, top) in [(6.0_f32, 14.0_f32), (12.0, 4.0), (18.0, 10.0)] {
-                p.line_segment(
-                    [
-                        center + egui::vec2((x - 12.0) * s, 8.0 * s),
-                        center + egui::vec2((x - 12.0) * s, (top - 12.0) * s),
-                    ],
-                    stroke,
-                );
-            }
-        }
-        IconName::History | IconName::Clock => {
-            p.circle_stroke(center, 6.0, stroke);
-            p.line_segment([center, center + egui::vec2(0.0, -3.5)], stroke);
-            p.line_segment([center, center + egui::vec2(3.0, 2.0)], stroke);
-        }
-        IconName::Search => {
-            let s = 0.5;
-            let stroke = egui::Stroke::new(1.0, color);
-            p.circle_stroke(center + egui::vec2(-0.5, -0.5), 4.0, stroke);
-            p.line_segment(
-                [
-                    center + egui::vec2(4.65 * s, 4.65 * s),
-                    center + egui::vec2(9.0 * s, 9.0 * s),
-                ],
-                stroke,
+    let Some((name, svg)) = lucide_svg(icon) else {
+        // Not part of Icon.tsx: the account avatar fallback is deliberately
+        // separate from the monochrome Lucide interface controls.
+        let p = ui.painter();
+        p.circle_filled(center, 7.0, color.gamma_multiply(0.75));
+        p.circle_filled(center + egui::vec2(0.0, 3.0), 3.4, theme::SURFACE_2);
+        return;
+    };
+    let ctx = ui.ctx();
+    let id = egui::Id::new(("lucide-icon", name));
+    let texture = ctx
+        .data(|data| data.get_temp::<egui::TextureHandle>(id))
+        .or_else(|| {
+            let image = rasterize_mask(svg)?;
+            let texture = ctx.load_texture(
+                format!("lucide-{name}"),
+                image,
+                egui::TextureOptions::LINEAR,
             );
-        }
-        IconName::Trash => {
-            let s = 0.54;
-            let stroke = egui::Stroke::new(1.0, color);
-            let pt = |x: f32, y: f32| center + egui::vec2((x - 12.0) * s, (y - 12.0) * s);
-            p.line_segment([pt(3.0, 6.0), pt(21.0, 6.0)], stroke);
-            p.line_segment([pt(19.0, 6.0), pt(19.0, 20.0)], stroke);
-            p.line_segment([pt(19.0, 20.0), pt(17.0, 22.0)], stroke);
-            p.line_segment([pt(17.0, 22.0), pt(7.0, 22.0)], stroke);
-            p.line_segment([pt(7.0, 22.0), pt(5.0, 20.0)], stroke);
-            p.line_segment([pt(5.0, 20.0), pt(5.0, 6.0)], stroke);
-            p.line_segment([pt(8.0, 6.0), pt(8.0, 4.0)], stroke);
-            p.add(egui::Shape::QuadraticBezier(
-                egui::epaint::QuadraticBezierShape::from_points_stroke(
-                    [pt(8.0, 4.0), pt(8.0, 2.0), pt(10.0, 2.0)],
-                    false,
-                    egui::Color32::TRANSPARENT,
-                    stroke,
-                ),
-            ));
-            p.line_segment([pt(10.0, 2.0), pt(14.0, 2.0)], stroke);
-            p.add(egui::Shape::QuadraticBezier(
-                egui::epaint::QuadraticBezierShape::from_points_stroke(
-                    [pt(14.0, 2.0), pt(16.0, 2.0), pt(16.0, 4.0)],
-                    false,
-                    egui::Color32::TRANSPARENT,
-                    stroke,
-                ),
-            ));
-            p.line_segment([pt(16.0, 4.0), pt(16.0, 6.0)], stroke);
-            p.line_segment([pt(10.0, 11.0), pt(10.0, 17.0)], stroke);
-            p.line_segment([pt(14.0, 11.0), pt(14.0, 17.0)], stroke);
-        }
-        IconName::Refresh => {
-            let s = 0.54;
-            let stroke = egui::Stroke::new(1.0, color);
-            let pt = |x: f32, y: f32| center + egui::vec2((x - 12.0) * s, (y - 12.0) * s);
-            let arc = (0..=24)
-                .map(|step| {
-                    let t = step as f32 / 24.0;
-                    let angle = std::f32::consts::PI
-                        - t * (std::f32::consts::PI + std::f32::consts::FRAC_PI_2);
-                    center + egui::vec2(angle.cos() * 9.0 * s, angle.sin() * 9.0 * s)
-                })
-                .collect::<Vec<_>>();
-            p.add(egui::Shape::line(arc, stroke));
-            p.line_segment([pt(3.0, 3.0), pt(3.0, 8.0)], stroke);
-            p.line_segment([pt(3.0, 3.0), pt(8.0, 3.0)], stroke);
-        }
-        IconName::Download => {
-            let s = 0.54;
-            let stroke = egui::Stroke::new(1.0, color);
-            let pt = |x: f32, y: f32| center + egui::vec2((x - 12.0) * s, (y - 12.0) * s);
-            p.add(egui::Shape::line(
-                [
-                    pt(21.0, 15.0),
-                    pt(21.0, 19.0),
-                    pt(19.0, 21.0),
-                    pt(5.0, 21.0),
-                    pt(3.0, 19.0),
-                    pt(3.0, 15.0),
-                ]
-                .to_vec(),
-                stroke,
-            ));
-            p.add(egui::Shape::line(
-                [pt(7.0, 10.0), pt(12.0, 15.0), pt(17.0, 10.0)].to_vec(),
-                stroke,
-            ));
-            p.line_segment([pt(12.0, 15.0), pt(12.0, 3.0)], stroke);
-        }
-        IconName::Upload => {
-            let s = 0.54;
-            let pt = |x: f32, y: f32| center + egui::vec2((x - 12.0) * s, (y - 12.0) * s);
-            p.add(egui::Shape::line(
-                [
-                    pt(3.0, 15.0),
-                    pt(3.0, 19.0),
-                    pt(5.0, 21.0),
-                    pt(19.0, 21.0),
-                    pt(21.0, 19.0),
-                    pt(21.0, 15.0),
-                ]
-                .to_vec(),
-                stroke,
-            ));
-            p.add(egui::Shape::line(
-                [pt(7.0, 9.0), pt(12.0, 4.0), pt(17.0, 9.0)].to_vec(),
-                stroke,
-            ));
-            p.line_segment([pt(12.0, 4.0), pt(12.0, 16.0)], stroke);
-        }
-        IconName::Plus => {
-            p.line_segment([point(-5.0, 0.0), point(5.0, 0.0)], stroke);
-            p.line_segment([point(0.0, -5.0), point(0.0, 5.0)], stroke);
-        }
-        IconName::Play => {
-            let s = 0.54;
-            let stroke = egui::Stroke::new(1.0, color);
-            let pt = |x: f32, y: f32| center + egui::vec2((x - 12.0) * s, (y - 12.0) * s);
-            p.add(egui::Shape::line(
-                [pt(5.0, 3.0), pt(19.0, 12.0), pt(5.0, 21.0), pt(5.0, 3.0)].to_vec(),
-                stroke,
-            ));
-        }
-        IconName::Stop => {
-            let s = 0.54;
-            let stroke = egui::Stroke::new(1.0, color);
-            let pt = |x: f32, y: f32| center + egui::vec2((x - 12.0) * s, (y - 12.0) * s);
-            p.add(egui::Shape::line(
-                [
-                    pt(6.0, 6.0),
-                    pt(18.0, 6.0),
-                    pt(18.0, 18.0),
-                    pt(6.0, 18.0),
-                    pt(6.0, 6.0),
-                ]
-                .to_vec(),
-                stroke,
-            ));
-        }
-        IconName::Vocab => {
-            let s = 2.0 / 3.0;
-            let point = |x: f32, y: f32| center + egui::vec2((x - 12.0) * s, (y - 12.0) * s);
-            p.add(egui::Shape::QuadraticBezier(
-                egui::epaint::QuadraticBezierShape::from_points_stroke(
-                    [point(4.0, 19.5), point(4.0, 17.0), point(6.5, 17.0)],
-                    false,
-                    egui::Color32::TRANSPARENT,
-                    stroke,
-                ),
-            ));
-            p.add(egui::Shape::line(
-                [point(6.5, 17.0), point(20.0, 17.0)].to_vec(),
-                stroke,
-            ));
-            p.add(egui::Shape::QuadraticBezier(
-                egui::epaint::QuadraticBezierShape::from_points_stroke(
-                    [point(4.0, 19.5), point(4.0, 22.0), point(6.5, 22.0)],
-                    false,
-                    egui::Color32::TRANSPARENT,
-                    stroke,
-                ),
-            ));
-            p.add(egui::Shape::line(
-                [
-                    point(6.5, 22.0),
-                    point(20.0, 22.0),
-                    point(20.0, 4.0),
-                    point(6.5, 4.0),
-                ]
-                .to_vec(),
-                stroke,
-            ));
-            p.add(egui::Shape::QuadraticBezier(
-                egui::epaint::QuadraticBezierShape::from_points_stroke(
-                    [point(6.5, 4.0), point(4.0, 4.0), point(4.0, 6.5)],
-                    false,
-                    egui::Color32::TRANSPARENT,
-                    stroke,
-                ),
-            ));
-            p.line_segment([point(4.0, 6.5), point(4.0, 19.5)], stroke);
-        }
-        // lucide `feather`：叶片轮廓 + 斜向羽轴 + 一小段横羽。
-        IconName::Feather => {
-            let s = 20.0 / 24.0;
-            p.add(egui::Shape::line(
-                [
-                    (12.67, 19.0),
-                    (14.09, 18.41),
-                    (20.24, 12.24),
-                    (21.42, 9.09),
-                    (20.24, 5.94),
-                    (17.09, 4.76),
-                    (13.94, 5.94),
-                    (5.59, 9.91),
-                    (5.0, 11.33),
-                    (5.0, 18.0),
-                    (6.0, 19.0),
-                    (12.67, 19.0),
-                ]
-                .into_iter()
-                .map(|(x, y)| center + egui::vec2((x - 12.0) * s, (y - 12.0) * s))
-                .collect(),
-                stroke,
-            ));
-            p.line_segment(
-                [
-                    center + egui::vec2((16.0 - 12.0) * s, (8.0 - 12.0) * s),
-                    center + egui::vec2((2.0 - 12.0) * s, (22.0 - 12.0) * s),
-                ],
-                stroke,
+            ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
+            Some(texture)
+        });
+    if let Some(texture) = texture {
+        ui.painter().image(
+            texture.id(),
+            egui::Rect::from_center_size(center, egui::vec2(ICON_SIZE, ICON_SIZE)),
+            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+            color,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_lucide_icon_rasterizes_to_a_nonempty_mask() {
+        let icons = [
+            IconName::Overview,
+            IconName::History,
+            IconName::Vocab,
+            IconName::Style,
+            IconName::SelectionAsk,
+            IconName::Settings,
+            IconName::Mic,
+            IconName::Sparkle,
+            IconName::Hash,
+            IconName::Clock,
+            IconName::Bolt,
+            IconName::Copy,
+            IconName::Search,
+            IconName::Trash,
+            IconName::Refresh,
+            IconName::Download,
+            IconName::Upload,
+            IconName::Plus,
+            IconName::Play,
+            IconName::Stop,
+            IconName::Close,
+            IconName::Check,
+            IconName::Send,
+            IconName::Pin,
+            IconName::Chat,
+            IconName::More,
+            IconName::ChevronRight,
+            IconName::Feather,
+            IconName::Layout,
+            IconName::Doc,
+            IconName::Pencil,
+        ];
+        for icon in icons {
+            let (name, svg) = lucide_svg(icon).unwrap();
+            let image = rasterize_mask(svg).unwrap_or_else(|| panic!("invalid SVG: {name}"));
+            assert!(
+                image.pixels.iter().any(|pixel| pixel.a() != 0),
+                "empty SVG: {name}"
             );
-            p.line_segment(
-                [
-                    center + egui::vec2((17.5 - 12.0) * s, (15.0 - 12.0) * s),
-                    center + egui::vec2((9.0 - 12.0) * s, (15.0 - 12.0) * s),
-                ],
-                stroke,
-            );
-        }
-        // lucide `layout`：外框 + 顶部横线 + 左侧竖线。
-        IconName::Layout => {
-            let s = 18.0 / 24.0;
-            let rect = egui::Rect::from_center_size(center, egui::vec2(18.0, 18.0) * s);
-            p.rect_stroke(
-                rect,
-                egui::CornerRadius::same(2),
-                stroke,
-                egui::StrokeKind::Middle,
-            );
-            p.line_segment(
-                [
-                    egui::pos2(rect.left(), center.y - 3.0 * s),
-                    egui::pos2(rect.right(), center.y - 3.0 * s),
-                ],
-                stroke,
-            );
-            p.line_segment(
-                [
-                    egui::pos2(center.x - 3.0 * s, center.y - 3.0 * s),
-                    egui::pos2(center.x - 3.0 * s, rect.bottom()),
-                ],
-                stroke,
-            );
-        }
-        // lucide `file-text`：折角文档 + 两条文本线。
-        IconName::Doc => {
-            let s = 19.0 / 24.0;
-            let path = |x: f32, y: f32| center + egui::vec2((x - 12.0) * s, (y - 12.0) * s);
-            p.add(egui::Shape::line(
-                vec![
-                    path(15.0, 2.0),
-                    path(6.0, 2.0),
-                    path(4.0, 4.0),
-                    path(4.0, 20.0),
-                    path(6.0, 22.0),
-                    path(18.0, 22.0),
-                    path(20.0, 20.0),
-                    path(20.0, 7.0),
-                    path(15.0, 2.0),
-                ],
-                stroke,
-            ));
-            p.add(egui::Shape::line(
-                vec![
-                    path(14.0, 2.0),
-                    path(14.0, 6.0),
-                    path(16.0, 8.0),
-                    path(20.0, 8.0),
-                ],
-                stroke,
-            ));
-            for y in [13.0, 17.0] {
-                p.line_segment([path(8.0, y), path(16.0, y)], stroke);
-            }
-        }
-        // lucide `pencil`：图标按钮右下角的「可编辑」角标。
-        IconName::Pencil => {
-            let s = 11.0 / 24.0;
-            let path = |x: f32, y: f32| center + egui::vec2((x - 12.0) * s, (y - 12.0) * s);
-            p.add(egui::Shape::line(
-                vec![
-                    path(21.17, 2.83),
-                    path(18.34, 2.83),
-                    path(16.4, 4.77),
-                    path(19.23, 7.6),
-                    path(21.17, 5.66),
-                    path(21.17, 2.83),
-                ],
-                stroke,
-            ));
-            p.add(egui::Shape::line(
-                vec![
-                    path(16.4, 4.77),
-                    path(3.0, 18.17),
-                    path(3.0, 21.0),
-                    path(5.83, 21.0),
-                    path(19.23, 7.6),
-                ],
-                stroke,
-            ));
-        }
-        IconName::Style => {
-            let s = 2.0 / 3.0;
-            p.line_segment(
-                [
-                    center + egui::vec2(0.0, -10.0 * s),
-                    center + egui::vec2(0.0, 10.0 * s),
-                ],
-                stroke,
-            );
-            p.add(egui::Shape::line(
-                [
-                    center + egui::vec2(5.0 * s, -7.0 * s),
-                    center + egui::vec2(-2.5 * s, -7.0 * s),
-                    center + egui::vec2(-5.5 * s, -5.0 * s),
-                    center + egui::vec2(-5.5 * s, -1.5 * s),
-                    center + egui::vec2(-3.5 * s, 1.5 * s),
-                    center + egui::vec2(3.0 * s, 1.5 * s),
-                    center + egui::vec2(5.0 * s, 3.5 * s),
-                    center + egui::vec2(4.0 * s, 6.0 * s),
-                    center + egui::vec2(1.0 * s, 7.0 * s),
-                    center + egui::vec2(-6.0 * s, 7.0 * s),
-                ]
-                .to_vec(),
-                stroke,
-            ));
-        }
-        IconName::SelectionAsk => {
-            p.rect_stroke(
-                egui::Rect::from_center_size(
-                    center + egui::vec2(0.0, -1.0),
-                    egui::vec2(13.0, 10.0),
-                ),
-                egui::CornerRadius::same(2),
-                stroke,
-                egui::StrokeKind::Inside,
-            );
-            p.line_segment(
-                [
-                    center + egui::vec2(-2.0, 4.0),
-                    center + egui::vec2(-5.0, 7.0),
-                ],
-                stroke,
-            );
-        }
-        IconName::Mic => {
-            p.rect_stroke(
-                egui::Rect::from_center_size(center + egui::vec2(0.0, -2.0), egui::vec2(7.0, 11.0)),
-                egui::CornerRadius::same(4),
-                stroke,
-                egui::StrokeKind::Inside,
-            );
-            p.line_segment(
-                [
-                    center + egui::vec2(-4.0, -2.0),
-                    center + egui::vec2(-4.0, 1.0),
-                ],
-                stroke,
-            );
-            p.line_segment(
-                [
-                    center + egui::vec2(4.0, -2.0),
-                    center + egui::vec2(4.0, 1.0),
-                ],
-                stroke,
-            );
-            p.line_segment(
-                [
-                    center + egui::vec2(-4.0, 1.0),
-                    center + egui::vec2(4.0, 1.0),
-                ],
-                stroke,
-            );
-            p.line_segment(
-                [center + egui::vec2(0.0, 1.0), center + egui::vec2(0.0, 5.0)],
-                stroke,
-            );
-            p.line_segment(
-                [
-                    center + egui::vec2(-3.0, 5.0),
-                    center + egui::vec2(3.0, 5.0),
-                ],
-                stroke,
-            );
-        }
-        IconName::Sparkle => {
-            p.line_segment(
-                [
-                    center + egui::vec2(0.0, -7.0),
-                    center + egui::vec2(2.5, -2.5),
-                ],
-                stroke,
-            );
-            p.line_segment(
-                [
-                    center + egui::vec2(2.5, -2.5),
-                    center + egui::vec2(7.0, 0.0),
-                ],
-                stroke,
-            );
-            p.line_segment(
-                [center + egui::vec2(7.0, 0.0), center + egui::vec2(2.5, 2.5)],
-                stroke,
-            );
-            p.line_segment(
-                [center + egui::vec2(2.5, 2.5), center + egui::vec2(0.0, 7.0)],
-                stroke,
-            );
-            p.line_segment(
-                [
-                    center + egui::vec2(0.0, 7.0),
-                    center + egui::vec2(-2.5, 2.5),
-                ],
-                stroke,
-            );
-            p.line_segment(
-                [
-                    center + egui::vec2(-2.5, 2.5),
-                    center + egui::vec2(-7.0, 0.0),
-                ],
-                stroke,
-            );
-            p.line_segment(
-                [
-                    center + egui::vec2(-7.0, 0.0),
-                    center + egui::vec2(-2.5, -2.5),
-                ],
-                stroke,
-            );
-            p.line_segment(
-                [
-                    center + egui::vec2(-2.5, -2.5),
-                    center + egui::vec2(0.0, -7.0),
-                ],
-                stroke,
-            );
-        }
-        IconName::Hash => {
-            p.line_segment(
-                [
-                    center + egui::vec2(-6.0, -3.0),
-                    center + egui::vec2(6.0, -3.0),
-                ],
-                stroke,
-            );
-            p.line_segment(
-                [
-                    center + egui::vec2(-6.0, 3.0),
-                    center + egui::vec2(6.0, 3.0),
-                ],
-                stroke,
-            );
-            p.line_segment(
-                [
-                    center + egui::vec2(-2.0, -7.0),
-                    center + egui::vec2(-4.0, 7.0),
-                ],
-                stroke,
-            );
-            p.line_segment(
-                [
-                    center + egui::vec2(4.0, -7.0),
-                    center + egui::vec2(2.0, 7.0),
-                ],
-                stroke,
-            );
-        }
-        IconName::Bolt => {
-            p.line_segment(
-                [
-                    center + egui::vec2(1.0, -8.0),
-                    center + egui::vec2(-5.0, 1.0),
-                ],
-                stroke,
-            );
-            p.line_segment(
-                [
-                    center + egui::vec2(-5.0, 1.0),
-                    center + egui::vec2(1.0, 1.0),
-                ],
-                stroke,
-            );
-            p.line_segment(
-                [
-                    center + egui::vec2(1.0, 1.0),
-                    center + egui::vec2(-1.0, 8.0),
-                ],
-                stroke,
-            );
-            p.line_segment(
-                [
-                    center + egui::vec2(-1.0, 8.0),
-                    center + egui::vec2(6.0, -1.0),
-                ],
-                stroke,
-            );
-            p.line_segment(
-                [
-                    center + egui::vec2(6.0, -1.0),
-                    center + egui::vec2(1.0, -1.0),
-                ],
-                stroke,
-            );
-            p.line_segment(
-                [
-                    center + egui::vec2(1.0, -1.0),
-                    center + egui::vec2(1.0, -8.0),
-                ],
-                stroke,
-            );
-        }
-        IconName::Close => {
-            p.line_segment([point(-4.5, -4.5), point(4.5, 4.5)], stroke);
-            p.line_segment([point(4.5, -4.5), point(-4.5, 4.5)], stroke);
-        }
-        IconName::Check => {
-            p.add(egui::Shape::line(
-                [point(-5.0, 0.5), point(-1.5, 4.0), point(5.0, -4.0)].to_vec(),
-                egui::Stroke::new(1.6, color),
-            ));
-        }
-        IconName::Send => {
-            p.add(egui::Shape::line(
-                [point(0.0, -5.5), point(0.0, 5.5)].to_vec(),
-                egui::Stroke::new(1.6, color),
-            ));
-            p.add(egui::Shape::line(
-                [point(-4.0, -1.5), point(0.0, -5.5), point(4.0, -1.5)].to_vec(),
-                egui::Stroke::new(1.6, color),
-            ));
-        }
-        IconName::Chat => {
-            p.rect_stroke(
-                egui::Rect::from_center_size(
-                    center + egui::vec2(0.0, -1.0),
-                    egui::vec2(18.0, 13.0),
-                ),
-                egui::CornerRadius::same(4),
-                stroke,
-                egui::StrokeKind::Inside,
-            );
-            p.add(egui::Shape::line(
-                [
-                    center + egui::vec2(-3.0, 5.5),
-                    center + egui::vec2(-1.0, 5.5),
-                    center + egui::vec2(-4.0, 8.5),
-                ]
-                .to_vec(),
-                stroke,
-            ));
-        }
-        IconName::Pin => {
-            p.circle_stroke(center + egui::vec2(0.0, -3.0), 3.4, stroke);
-            p.add(egui::Shape::line(
-                [point(-4.6, -6.6), point(4.6, -6.6)].to_vec(),
-                stroke,
-            ));
-            p.add(egui::Shape::line(
-                [point(0.0, 0.4), point(0.0, 7.0)].to_vec(),
-                stroke,
-            ));
-        }
-        IconName::Github => {
-            p.circle_filled(center, 7.0, color.gamma_multiply(0.75));
-            p.circle_filled(center + egui::vec2(0.0, 3.0), 3.4, theme::SURFACE_2);
-        }
-        IconName::More => {
-            for offset in [-4.5_f32, 0.0, 4.5] {
-                p.circle_filled(center + egui::vec2(offset, 0.0), 1.4, stroke.color);
-            }
-        }
-        IconName::Copy => {
-            p.rect_stroke(
-                egui::Rect::from_center_size(center + egui::vec2(1.5, 1.5), egui::vec2(10.0, 12.0)),
-                egui::CornerRadius::same(1),
-                stroke,
-                egui::StrokeKind::Inside,
-            );
-            p.rect_stroke(
-                egui::Rect::from_center_size(center + egui::vec2(-1.5, -2.5), egui::vec2(8.0, 5.0)),
-                egui::CornerRadius::same(1),
-                stroke,
-                egui::StrokeKind::Inside,
-            );
-        }
-        IconName::Settings => {
-            // Lucide Settings: closed gear silhouette and a separate centre opening,
-            // rather than the old sun-like circle with eight disconnected rays.
-            let points: Vec<_> = (0..32)
-                .map(|step| {
-                    let angle = step as f32 * std::f32::consts::TAU / 32.0;
-                    let radius = if step % 4 == 1 || step % 4 == 2 {
-                        7.4
-                    } else {
-                        5.7
-                    };
-                    center + egui::vec2(angle.cos(), angle.sin()) * radius
-                })
-                .collect();
-            p.add(egui::Shape::closed_line(points, stroke));
-            p.circle_stroke(center, 2.3, stroke);
-        }
-        IconName::ChevronRight => {
-            p.line_segment([point(-2.5, -4.5), point(2.0, 0.0)], stroke);
-            p.line_segment([point(2.0, 0.0), point(-2.5, 4.5)], stroke);
         }
     }
 }

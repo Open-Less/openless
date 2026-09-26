@@ -546,14 +546,6 @@ pub fn sidebar(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Ve
                                     nav(
                                         ui,
                                         vm,
-                                        "nav.quickNote",
-                                        NavTarget::Page(Page::QuickNote),
-                                        IconName::Mic,
-                                        actions,
-                                    );
-                                    nav(
-                                        ui,
-                                        vm,
                                         "nav.vocab",
                                         NavTarget::Page(Page::Vocab),
                                         IconName::Vocab,
@@ -607,6 +599,13 @@ pub fn sidebar(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Ve
                                             vm,
                                             "nav.selection_ask",
                                             NavTarget::Page(Page::SelectionAsk),
+                                            actions,
+                                        );
+                                        subnav(
+                                            ui,
+                                            vm,
+                                            "nav.quickNote",
+                                            NavTarget::Page(Page::QuickNote),
                                             actions,
                                         );
                                         subnav(
