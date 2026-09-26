@@ -64,14 +64,7 @@ pub fn page(
         quick_note_shortcut_card(ui, width, vm, actions);
     }
 
-    header(
-        ui,
-        width,
-        lang,
-        vm.quick_note_recording,
-        quick_notes_only,
-        actions,
-    );
+    header(ui, width, lang, quick_notes_only, actions);
     ui.add_space(GAP);
 
     let body_height = ui.available_height().max(260.0);
@@ -188,7 +181,6 @@ fn header(
     ui: &mut egui::Ui,
     width: f32,
     lang: Lang,
-    recording: bool,
     quick_note: bool,
     actions: &mut Vec<FrontendAction>,
 ) {
@@ -237,29 +229,21 @@ fn header(
         theme::INK_3,
     );
 
-    let clear = tr_l10n(
-        lang,
-        if quick_note {
-            if recording {
-                "quickNote.finish"
-            } else {
-                "quickNote.start"
-            }
-        } else {
-            "common.clear"
-        },
-    );
+    let clear = tr_l10n(lang, "common.clear");
     let refresh = tr_l10n(lang, "common.refresh");
-    let clear_width = layout::text_width(ui, clear, 12.5) + 40.0;
+    let clear_width = if quick_note {
+        0.0
+    } else {
+        layout::text_width(ui, clear, 12.5) + 40.0
+    };
     let refresh_width = layout::text_width(ui, refresh, 12.5) + 40.0;
     let top = rect.top() + 22.0;
     let refresh_rect = egui::Rect::from_min_size(
-        egui::pos2(rect.right() - clear_width - 8.0 - refresh_width, top),
+        egui::pos2(
+            rect.right() - refresh_width - if quick_note { 0.0 } else { clear_width + 8.0 },
+            top,
+        ),
         egui::vec2(refresh_width, 30.0),
-    );
-    let clear_rect = egui::Rect::from_min_size(
-        egui::pos2(rect.right() - clear_width, top),
-        egui::vec2(clear_width, 30.0),
     );
     if layout::action_button(
         ui,
@@ -272,28 +256,24 @@ fn header(
     {
         actions.push(FrontendAction::HistoryRefresh);
     }
-    if layout::action_button(
-        ui,
-        clear_rect,
-        clear,
-        Some(if quick_note {
-            IconName::Mic
-        } else {
-            IconName::Trash
-        }),
-        if quick_note {
-            ButtonKind::Blue
-        } else {
-            ButtonKind::Ghost
-        },
-    )
-    .clicked()
-    {
-        actions.push(if quick_note {
-            FrontendAction::QuickNoteToggle
-        } else {
-            FrontendAction::HistoryRequestClear
-        });
+    // Tauri's QuickNote history has only Refresh. Recording is controlled by
+    // the configured hotkey, not a Start/Finish button in this page header.
+    if !quick_note {
+        let clear_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.right() - clear_width, top),
+            egui::vec2(clear_width, 30.0),
+        );
+        if layout::action_button(
+            ui,
+            clear_rect,
+            clear,
+            Some(IconName::Trash),
+            ButtonKind::Ghost,
+        )
+        .clicked()
+        {
+            actions.push(FrontendAction::HistoryRequestClear);
+        }
     }
 }
 

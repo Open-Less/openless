@@ -1208,6 +1208,18 @@ mod tests {
                     measured = Some((output.content_size, output.inner_rect));
                 });
             let (content, inner) = measured.expect("the page rendered into the area");
+            let badge: egui::Rect = ctx.data(|data| {
+                data.get_temp(egui::Id::new("translation-style-badge"))
+                    .expect("translation style has a badge")
+            });
+            assert!(
+                badge.width() <= 180.0 && badge.height() <= 24.0,
+                "badge stretched: {badge:?}"
+            );
+            assert!(
+                badge.right() <= viewport.right() && badge.left() >= viewport.left(),
+                "badge must remain inside the resized viewport: {badge:?} / {viewport:?}"
+            );
             assert!(
                 content.x <= inner.width() + 1.0,
                 "the page must not exceed its viewport: content {content:?}, inner {inner:?}"
@@ -1221,6 +1233,29 @@ mod tests {
             "at the smallest window the page must be taller than the viewport so the \
              usage guide stays reachable by scrolling"
         );
+    }
+
+    #[test]
+    fn quick_note_header_has_refresh_but_no_start_or_finish_recording_button() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: openless_linux_egui::Lang::ZhCn,
+            quick_note_recording: true,
+            ..Default::default()
+        };
+        let output = run_pass(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(viewport()),
+                ..Default::default()
+            },
+            |ui| history::page(ui, &mut vm, &mut Vec::new(), true),
+        );
+        let text = painted_text(&output);
+        assert!(text.contains(openless_linux_egui::tr_l10n(vm.lang, "common.refresh")));
+        assert!(!text.contains(openless_linux_egui::tr_l10n(vm.lang, "quickNote.start")));
+        assert!(!text.contains(openless_linux_egui::tr_l10n(vm.lang, "quickNote.finish")));
+        assert!(!text.contains(openless_linux_egui::tr_l10n(vm.lang, "common.clear")));
     }
 
     #[test]

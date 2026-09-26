@@ -393,8 +393,25 @@ fn target_language(
         ui.add_space(12.0);
         ui.separator();
         ui.add_space(12.0);
+        let style_name = if let Some(pack) = vm.style_packs.get(vm.style_selected) {
+            pack.name.as_str()
+        } else if vm.style_selected == usize::MAX {
+            tr_l10n(lang, "overview.mode_raw")
+        } else {
+            tr_l10n(lang, "overview.mode_light")
+        };
+        let row_width = ui.available_width();
+        // CSS uses flex: 0 0 auto, max-width: 180px and a single ellipsized
+        // line. An egui Frame inside right_to_left instead inherited all the
+        // remaining width and wrapped the style name into a tall blue block.
+        let badge_width = (layout::text_width(ui, style_name, 11.5) + 18.0)
+            .min(180.0)
+            .min((row_width * 0.48).max(18.0));
+        let label_width = (row_width - badge_width - ui.spacing().item_spacing.x).max(1.0);
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
+                ui.set_width(label_width);
+                ui.set_max_width(label_width);
                 ui.label(
                     egui::RichText::new(tr_l10n(lang, "translation.style_title"))
                         .size(12.0)
@@ -407,27 +424,10 @@ fn target_language(
                         .color(theme::INK_4),
                 );
             });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let style_name = if let Some(pack) = vm.style_packs.get(vm.style_selected) {
-                    pack.name.clone()
-                } else if vm.style_selected == usize::MAX {
-                    tr_l10n(lang, "overview.mode_raw").to_string()
-                } else {
-                    tr_l10n(lang, "overview.mode_light").to_string()
-                };
-                egui::Frame::new()
-                    .fill(theme::BLUE_SOFT)
-                    .corner_radius(egui::CornerRadius::same(10))
-                    .inner_margin(egui::Margin::symmetric(9, 2))
-                    .show(ui, |ui| {
-                        ui.label(
-                            egui::RichText::new(style_name)
-                                .size(11.0)
-                                .strong()
-                                .color(theme::BLUE),
-                        );
-                    });
-            });
+            let (badge, response) =
+                ui.allocate_exact_size(egui::vec2(badge_width, 24.0), egui::Sense::hover());
+            paint_style_badge(ui, badge, style_name);
+            response.on_hover_text(style_name);
         });
 
         if redundant {
@@ -448,6 +448,24 @@ fn target_language(
     });
 }
 
+fn paint_style_badge(ui: &egui::Ui, rect: egui::Rect, name: &str) {
+    let painter = ui.painter().with_clip_rect(rect);
+    painter.rect_filled(rect, egui::CornerRadius::same(12), theme::BLUE_SOFT);
+    let galley = layout::text_galley(ui, name, theme::BLUE, 11.5, rect.width() - 18.0, 1);
+    painter.galley(
+        egui::pos2(rect.left() + 9.0, rect.center().y - galley.size().y / 2.0),
+        galley,
+        theme::BLUE,
+    );
+    #[cfg(test)]
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(egui::Id::new("translation-style-badge"), rect));
+}
+
+fn usage_columns(width: f32) -> usize {
+    ((width + 14.0) / (150.0 + 14.0)).floor().clamp(1.0, 5.0) as usize
+}
+
 fn usage(ui: &mut egui::Ui, width: f32, vm: &FrontendViewModel) {
     let lang = vm.lang;
     card(ui, width, |ui| {
@@ -465,9 +483,10 @@ fn usage(ui: &mut egui::Ui, width: f32, vm: &FrontendViewModel) {
             fmt_l10n(lang, "translation.howto_step4", &[&vm.dictation_hotkey]),
             tr_l10n(lang, "translation.howto_step5").to_string(),
         ];
-        // Steps flow in four columns like the Tauri layout.
-        let columns = if ui.available_width() >= 720.0 { 4 } else { 2 };
-        let gap = 12.0;
+        // Match CSS grid repeat(auto-fit, minmax(150px, 1fr)) with a 14px
+        // column gap: five steps fit in one row only when the viewport allows.
+        let columns = usage_columns(ui.available_width());
+        let gap = 14.0;
         let cell_width = (ui.available_width() - gap * (columns as f32 - 1.0)) / columns as f32;
         let mut index = 0;
         while index < steps.len() {
@@ -480,8 +499,8 @@ fn usage(ui: &mut egui::Ui, width: f32, vm: &FrontendViewModel) {
                     &steps[index + slot],
                     theme::INK_2,
                     12.0,
-                    (cell_width - 18.0).max(1.0),
-                    3,
+                    (cell_width - 26.0).max(1.0),
+                    usize::MAX,
                 );
                 row_height = row_height.max(galley.size().y + 2.0);
                 galleys.push(galley);
@@ -496,14 +515,16 @@ fn usage(ui: &mut egui::Ui, width: f32, vm: &FrontendViewModel) {
                     egui::pos2(left, row.top()),
                     egui::vec2(cell_width, row_height),
                 ));
+                let number = egui::pos2(left + 9.0, row.top() + 10.0);
+                painter.circle_filled(number, 9.0, theme::BLUE_SOFT);
                 painter.text(
-                    egui::pos2(left, row.top() + 1.0),
-                    egui::Align2::LEFT_TOP,
-                    format!("{}.", index + slot + 1),
-                    egui::FontId::proportional(12.0),
-                    theme::INK_4,
+                    number,
+                    egui::Align2::CENTER_CENTER,
+                    (index + slot + 1).to_string(),
+                    egui::FontId::proportional(11.0),
+                    theme::BLUE,
                 );
-                painter.galley(egui::pos2(left + 18.0, row.top()), galley, theme::INK_2);
+                painter.galley(egui::pos2(left + 26.0, row.top()), galley, theme::INK_2);
             }
             index += count;
             if index < steps.len() {
@@ -511,6 +532,71 @@ fn usage(ui: &mut egui::Ui, width: f32, vm: &FrontendViewModel) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usage_steps_auto_fit_into_one_through_five_columns() {
+        for (width, expected) in [
+            (140.0, 1),
+            (314.0, 2),
+            (478.0, 3),
+            (642.0, 4),
+            (806.0, 5),
+            (1600.0, 5),
+        ] {
+            assert_eq!(usage_columns(width), expected, "width={width}");
+        }
+    }
+
+    #[test]
+    fn long_style_name_is_ellipsized_inside_a_one_line_badge() {
+        let ctx = egui::Context::default();
+        let _ = super::super::run_pass(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(500.0, 300.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let name = "An exceptionally long translation style name that must not wrap";
+                let badge =
+                    egui::Rect::from_min_size(egui::pos2(50.0, 50.0), egui::vec2(180.0, 24.0));
+                paint_style_badge(ui, badge, name);
+                let galley =
+                    layout::text_galley(ui, name, theme::BLUE, 11.5, badge.width() - 18.0, 1);
+                assert_eq!(galley.rows.len(), 1);
+                assert!(galley.elided);
+            },
+        );
+    }
+
+    #[test]
+    fn narrow_step_text_is_wrapped_without_three_line_truncation() {
+        let ctx = egui::Context::default();
+        let _ = super::super::run_pass(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(480.0, 300.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let text = "A long instruction must be fully readable even when the window is narrowed and the grid reflows";
+                let galley = layout::text_galley(ui, text, theme::INK_2, 12.0, 90.0, usize::MAX);
+                assert!(galley.rows.len() > 3);
+                assert!(!galley.elided);
+            },
+        );
+    }
 }
 
 /// Full-width card that sizes itself to its contents. Returns its height.
