@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "version": "2.0.0",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "OpenLess",
+        "width": 390,
+        "height": 844,
+        "minWidth": 300,
+        "minHeight": 500,
+        "resizable": true,
+        "visible": true,
+        "acceptFirstMouse": true
+      }
+    ]
+  },
+  "bundle": {
+    "iOS": {
+      "bundleVersion": "2.0.0"
+    }
+  }
+}

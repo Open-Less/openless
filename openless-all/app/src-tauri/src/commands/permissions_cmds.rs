@@ -220,6 +220,28 @@ pub async fn trigger_microphone_prompt(core: CoreState<'_>) -> Result<(), String
     }
 }
 
+/// iOS 键盘扩展启用状态。UIKit 只能主线程触碰，经 run_on_main_thread 跳转；
+/// async 命令跑在 tokio worker 上，不存在主线程阻塞死锁。
+#[tauri::command]
+pub async fn get_ios_keyboard_status(
+    app: tauri::AppHandle,
+) -> Result<crate::ios::KeyboardExtensionStatus, String> {
+    #[cfg(target_os = "ios")]
+    {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        app.run_on_main_thread(move || {
+            let _ = tx.send(crate::ios::keyboard_status::detect_keyboard_extension_status());
+        })
+        .map_err(|error| format!("run_on_main_thread failed: {error}"))?;
+        rx.await.map_err(|error| format!("keyboard status channel closed: {error}"))
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        let _ = app;
+        Err("get_ios_keyboard_status is only supported on iOS".to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -147,6 +147,20 @@ impl TextInserter {
         self.copy_fallback(text)
     }
 
+    /// iOS：跨应用输入由键盘扩展承载；App 内通用插入只写剪贴板兜底。
+    #[cfg(target_os = "ios")]
+    pub fn insert(
+        &self,
+        text: &str,
+        _restore_clipboard_after_paste: bool,
+        _paste_shortcut: PasteShortcut,
+    ) -> InsertStatus {
+        if text.is_empty() {
+            return InsertStatus::CopiedFallback;
+        }
+        self.copy_fallback(text)
+    }
+
     /// 只写剪贴板、不模拟粘贴。用于目标控件活跃状态无法验证时的兜底路径。
     pub fn copy_fallback(&self, text: &str) -> InsertStatus {
         if text.is_empty() {
@@ -263,9 +277,7 @@ fn copy_to_clipboard(text: &str) -> bool {
 
     #[cfg(target_os = "ios")]
     {
-        let _ = text;
-        log::warn!("[insertion] mobile clipboard fallback unavailable");
-        false
+        return crate::ios::clipboard::copy_to_clipboard(text);
     }
 }
 

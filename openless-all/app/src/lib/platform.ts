@@ -44,6 +44,12 @@ export function isAndroid(): boolean {
   return detectOS() === 'android' || detectAndroidFromUa();
 }
 
+/** iOS（含 iPadOS）。authoritative 值来自 Core（platform === 'mobile' 仅在 iOS 出现）。 */
+export function isIos(): boolean {
+  if (cachedCapabilities) return cachedCapabilities.platform === 'mobile';
+  return detectIosFromUa();
+}
+
 export function isMobile(): boolean {
   if (cachedCapabilities) {
     return cachedCapabilities.platform === 'mobile' || cachedCapabilities.platform === 'android';

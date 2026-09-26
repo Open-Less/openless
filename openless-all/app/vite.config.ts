@@ -17,6 +17,7 @@ export default defineConfig(async () => ({
   resolve: {
     alias: {
       '@android': path.resolve(appRoot, 'android/frontend'),
+      '@ios': path.resolve(appRoot, 'ios/frontend'),
     },
   },
   clearScreen: false,

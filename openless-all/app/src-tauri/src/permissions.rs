@@ -322,8 +322,62 @@ extern "C" {}
 #[cfg(target_os = "ios")]
 mod platform {
     use super::PermissionStatus;
+    use std::ffi::c_void;
     use std::sync::mpsc;
     use std::time::Duration;
+
+    extern "C" {
+        static _dispatch_main_q: c_void;
+        fn dispatch_sync(queue: *const c_void, block: *const c_void);
+        fn pthread_main_np() -> i32;
+    }
+
+    // AVMediaTypeAudio 是 AVFoundation 导出的 NSString * 常量。必须按对象指针
+    // 声明（objc2 校验选择器编码 '@'；按 c_void 声明会 panic "expected type code
+    // '@', found '^v'"——macOS 段的 c_void 声明是从未执行的兜底路径，别照抄）。
+    #[link(name = "AVFoundation", kind = "framework")]
+    extern "C" {
+        static AVMediaTypeAudio: *const objc2_foundation::NSString;
+    }
+
+    /// AVFoundation 的权限查询在 iOS 27 模拟器上从非主线程调用会挂死
+    /// （AVAudioSession/AVCaptureDevice 实测一致），而权限命令来自 tokio
+    /// worker——统一把 ObjC 调用派发到主线程执行。已在主线程则直接执行。
+    fn run_on_main<T: Send, F: FnOnce() -> T + Send>(f: F) -> T {
+        use block2::RcBlock;
+        if unsafe { pthread_main_np() } == 1 {
+            return f();
+        }
+        let slot = std::sync::Arc::new(std::sync::Mutex::new(None::<T>));
+        let f_slot = std::sync::Arc::new(std::sync::Mutex::new(Some(f)));
+        let slot_for_block = std::sync::Arc::clone(&slot);
+        let f_for_block = std::sync::Arc::clone(&f_slot);
+        let block = RcBlock::new(move || {
+            let f = f_for_block
+                .lock()
+                .unwrap()
+                .take()
+                .expect("main block invoked twice");
+            *slot_for_block.lock().unwrap() = Some(f());
+        });
+        unsafe {
+            dispatch_sync(&_dispatch_main_q, &*block as *const _ as *const c_void);
+        }
+        let value = slot
+            .lock()
+            .unwrap()
+            .take()
+            .expect("dispatch_sync main block did not run");
+        value
+    }
+
+    fn media_type_audio() -> &'static objc2_foundation::NSString {
+        unsafe {
+            let ptr = AVMediaTypeAudio;
+            debug_assert!(!ptr.is_null(), "AVMediaTypeAudio symbol is null");
+            &*ptr
+        }
+    }
 
     pub fn check_accessibility() -> PermissionStatus {
         PermissionStatus::NotApplicable
@@ -333,67 +387,82 @@ mod platform {
         PermissionStatus::NotApplicable
     }
 
-    // AVAudioSessionRecordPermission 与 macOS AVAudioApplicationRecordPermission
-    // 同为 NS_ENUM(NSInteger, ...) FourCC：
-    //   'grnt' = 1735552628 / 'deny' = 1684368761 / 'undt' = 1970168948
-    fn check_microphone_via_avaudio_session() -> Option<PermissionStatus> {
+    // iOS 麦克风权限走 AVCaptureDevice.authorizationStatus（与 macOS 同源同值），
+    // 统一经 run_on_main 派发——AVFoundation 权限查询在 iOS 27 模拟器上从
+    // 非主线程调用会挂死（AVAudioSession/AVCaptureDevice 实测一致），而权限
+    // 命令来自 tokio worker。AVAuthorizationStatus 与 macOS 同值：
+    //   0=NotDetermined / 1=Restricted / 2=Denied / 3=Authorized
+    fn check_microphone_via_avcapture_device() -> PermissionStatus {
         use objc2::msg_send;
-        use objc2::runtime::{AnyClass, AnyObject};
+        use objc2::runtime::AnyClass;
 
-        let cls = AnyClass::get("AVAudioSession")?;
-        let shared: *mut AnyObject = unsafe { msg_send![cls, sharedInstance] };
-        if shared.is_null() {
-            log::warn!("[mic] AVAudioSession sharedInstance returned null");
-            return None;
-        }
-        let perm: i64 = unsafe { msg_send![shared, recordPermission] };
-        let mapped = match perm {
-            0x6772_6e74 => PermissionStatus::Granted,
-            0x6465_6e79 => PermissionStatus::Denied,
-            0x756e_6474 => PermissionStatus::NotDetermined,
-            _ => PermissionStatus::NotDetermined,
-        };
-        log::info!("[mic] AVAudioSession.recordPermission raw=0x{perm:x} → {mapped:?}");
-        Some(mapped)
+        run_on_main(|| {
+            let cls = match AnyClass::get("AVCaptureDevice") {
+                Some(c) => c,
+                None => {
+                    log::warn!("[mic-ios] AVCaptureDevice class not registered");
+                    return PermissionStatus::NotDetermined;
+                }
+            };
+            let status: i64 = unsafe {
+                msg_send![cls, authorizationStatusForMediaType: media_type_audio()]
+            };
+            let mapped = match status {
+                3 => PermissionStatus::Granted,
+                2 => PermissionStatus::Denied,
+                1 => PermissionStatus::Restricted,
+                0 => PermissionStatus::NotDetermined,
+                _ => PermissionStatus::NotDetermined,
+            };
+            log::info!("[mic-ios] AVCaptureDevice.authStatus raw={status} → {mapped:?}");
+            mapped
+        })
     }
 
     pub fn check_microphone() -> PermissionStatus {
-        check_microphone_via_avaudio_session().unwrap_or(PermissionStatus::NotDetermined)
+        check_microphone_via_avcapture_device()
     }
 
     pub fn request_microphone() -> PermissionStatus {
         use block2::RcBlock;
         use objc2::msg_send;
-        use objc2::runtime::{AnyClass, AnyObject, Bool};
-
-        let Some(cls) = AnyClass::get("AVAudioSession") else {
-            return PermissionStatus::NotDetermined;
-        };
-        let shared: *mut AnyObject = unsafe { msg_send![cls, sharedInstance] };
-        if shared.is_null() {
-            log::warn!("[mic] AVAudioSession sharedInstance returned null");
-            return PermissionStatus::NotDetermined;
-        }
+        use objc2::runtime::{AnyClass, Bool};
 
         let (tx, rx) = mpsc::channel();
-        let block = RcBlock::new(move |granted: Bool| {
-            let _ = tx.send(granted.as_bool());
+        // 只把「发起请求」派发到主线程；完成回调由系统在主线程异步送达。
+        // 等待在调用线程（tokio worker）上进行——若在主线程 recv，会阻塞
+        // run loop，弹窗与回调都永远无法发生。
+        let dispatch_result = run_on_main(|| -> Result<(), String> {
+            let Some(cls) = AnyClass::get("AVCaptureDevice") else {
+                return Err("AVCaptureDevice class not registered".into());
+            };
+            let block = RcBlock::new(move |granted: Bool| {
+                let _ = tx.send(granted.as_bool());
+            });
+            log::info!("[mic-ios] requesting via AVCaptureDevice.requestAccessForMediaType");
+            unsafe {
+                let _: () = msg_send![
+                    cls,
+                    requestAccessForMediaType: media_type_audio()
+                    completionHandler: &*block
+                ];
+            }
+            Ok(())
         });
-        log::info!("[mic] requesting via AVAudioSession.requestRecordPermission");
-        unsafe {
-            let _: () = msg_send![shared, requestRecordPermission: &*block];
+        if let Err(error) = dispatch_result {
+            log::warn!("[mic-ios] request dispatch failed: {error}");
+            return PermissionStatus::NotDetermined;
         }
 
-        let mapped = match rx.recv_timeout(Duration::from_secs(8)) {
+        let mapped = match rx.recv_timeout(Duration::from_secs(60)) {
             Ok(true) => PermissionStatus::Granted,
             Ok(false) => PermissionStatus::Denied,
             Err(err) => {
-                log::warn!("[mic] AVAudioSession request timeout/error: {err}");
-                check_microphone_via_avaudio_session()
-                    .unwrap_or(PermissionStatus::NotDetermined)
+                log::warn!("[mic-ios] AVCaptureDevice request timeout/error: {err}");
+                PermissionStatus::NotDetermined
             }
         };
-        log::info!("[mic] AVAudioSession.requestRecordPermission → {mapped:?}");
+        log::info!("[mic-ios] AVCaptureDevice.requestAccess → {mapped:?}");
         mapped
     }
 }

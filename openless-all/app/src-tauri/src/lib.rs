@@ -53,6 +53,8 @@ mod hotkey;
 #[path = "mobile_stubs/hotkey.rs"]
 mod hotkey;
 mod insertion;
+// iOS 平台集成（剪贴板、键盘扩展状态）。镜像 `mod android;` 的组织方式。
+mod ios;
 #[cfg(target_os = "linux")]
 mod linux_fcitx;
 mod llm_gemini;
@@ -441,6 +443,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::request_android_shizuku_permission,
             $crate::commands::open_shizuku_app,
             $crate::commands::recover_android_accessibility,
+            $crate::commands::get_ios_keyboard_status,
             $crate::commands::open_external_url,
             $crate::commands::list_microphone_devices,
             $crate::commands::start_microphone_level_monitor,

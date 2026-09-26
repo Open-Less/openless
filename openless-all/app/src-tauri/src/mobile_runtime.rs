@@ -31,6 +31,17 @@ pub fn run() {
 
             if let Some(main) = app.get_webview_window("main") {
                 let _ = main.show();
+                // iOS：桌面配置的窗口尺寸（1300x835）在竖屏设备上会偏移出屏，
+                // 重设为主屏幕大小铺满。config 里的 390x844 只是兜底初值。
+                #[cfg(target_os = "ios")]
+                if let Ok(Some(monitor)) = main.current_monitor() {
+                    let scale = monitor.scale_factor();
+                    let size = monitor.size();
+                    let logical =
+                        tauri::LogicalSize::new(size.width as f64 / scale, size.height as f64 / scale);
+                    let _ = main.set_size(logical);
+                    let _ = main.set_position(tauri::LogicalPosition::new(0.0, 0.0));
+                }
             }
             if let Some(qa) = app.get_webview_window("qa") {
                 let _ = qa.hide();
@@ -46,6 +57,7 @@ pub fn run() {
                 return Err("OpenLess Core did not reach the running state".into());
             }
             crate::tauri_events::start(app.handle().clone(), Arc::clone(&core_backend));
+
             #[cfg(target_os = "android")]
             {
                 crate::android::register_android_backend(core_backend);
@@ -103,3 +115,4 @@ fn initialize_android_ndk_context_for_audio() {
 
 #[cfg(not(target_os = "android"))]
 fn initialize_android_ndk_context_for_audio() {}
+

@@ -4,6 +4,7 @@ use super::*;
 pub async fn get_startup_snapshot(
     core: CoreState<'_>,
 ) -> Result<openless_core::StartupSnapshot, String> {
+    log::info!("[startup] get_startup_snapshot invoked");
     core.start().await.map_err(|error| error.to_string())
 }
 
