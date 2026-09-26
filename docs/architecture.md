@@ -1,10 +1,10 @@
 # OpenLess 2.0 架构
 
-状态：canonical，当前实现说明；更新：2026-09-23。平台范围见 [2.0 需求](2.0-requirements.md)，文件定位见 [目录结构](structure.md)。
+状态：canonical，当前实现说明；更新：2026-09-26。平台范围见 [2.0 需求](2.0-requirements.md)，文件定位见 [目录结构](structure.md)。
 
 ## 1. 分层与工作区
 
-应用开发与构建源在 `openless-all/app/`。下文源码路径以该目录为基准。根 [Cargo workspace](../openless-all/app/Cargo.toml) 成员为 `crates/openless-core` + `linux-egui`；`src-tauri`（及其 `backend-tests` 测试 crate）被 exclude，独立构建。Core 是与 Host 同进程的业务库。
+应用开发与构建源在 `openless-all/app/`。下文源码路径以该目录为基准。根 [Cargo workspace](../openless-all/app/Cargo.toml) 成员为 `crates/openless-core`、`crates/openless-computer` 与 `linux-egui`；`src-tauri`（及其 `backend-tests` 测试 crate）被 exclude，独立构建。Core 是与 Host 同进程的业务库。`openless-computer` 是内置 PI 的单次桌面工具进程，不进入 Core 的业务状态机。
 
 | 层 | 位置 | 职责 |
 | --- | --- | --- |
@@ -16,7 +16,7 @@
 
 iOS 工程入口为 `ios/OpenLess.xcodeproj`，初版支持听写主流程和用户主动发送文字到键盘后的跨应用插入。它沿用产品语义与兼容服务协议，不是 Core 的新 Host 实现，不能据此推断已覆盖桌面 provider、市场、云同步等功能。详细边界与签名配置见 [iOS README](../openless-all/app/ios/README.md)。该源工程本次未执行编译或验证。
 
-Android 侧：`src-tauri/src/android/`（JNI/桥接）+ `android/`（aidl、kotlin、manifests、frontend）；`android/frontend` 经 Vite 别名 `@android` 被 `src/` 引用；manifest 由 `scripts/merge-android-*.mjs` 合成。Linux 已有可复用 Host/UI 起点，剩余能力与产品验收见 [交接目录](linux-egui-handoff/README.md)。
+Android 侧：`src-tauri/src/android/`（JNI/桥接）+ `android/`（aidl、kotlin、manifests、frontend）；`android/frontend` 经 Vite 别名 `@android` 被 `src/` 引用；manifest 由 `scripts/merge-android-*.mjs` 合成。输入法面板、笔画与软件键盘见 [Android 输入法](android-ime.md)。Linux 已有可复用 Host/UI 起点，剩余能力与产品验收见 [交接目录](linux-egui-handoff/README.md)。内置 PI 的打包与配置见 [Less Computer：内置 PI](less-computer-pi.md)。
 
 ## 2. 数据流
 

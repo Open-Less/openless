@@ -36,12 +36,11 @@ PLUGIN_ROOT="$APP_ROOT/../scripts/linux-fcitx5-plugin/build"
 PI_BACKEND="$APP_ROOT/src-tauri/resources/pi-backend"
 PACKAGING="$APP_ROOT/linux-egui/packaging"
 OUTPUT="$TARGET_DIR/linux-egui-packages"
-# 图标：与 Tauri 侧共用同一套画（`icon.png` 与 `public/AppIcon.png` 的 md5 相同，
-# 都是 512×512）。但本脚本必须保持 Tauri-free —— 两条契约都会检查脚本里不得出现
-# Tauri 源码树的路径名 —— 所以这里放字节相同的副本，并由 release 契约做逐字节
-# 一致性断言，保证两边共用一套素材且不会静默漂移。
+# Icons match the Tauri set byte for byte (512×512). This script must stay
+# Tauri-free: release contracts reject Tauri source paths, and compare the
+# copies so the two icon sets cannot drift.
 ICON_DIR="$PACKAGING/icons"
-# 图标名 → hicolor 尺寸目录 → 源文件（与 Tauri 侧的图标集逐字节一致）。
+# hicolor size directory, then source file. Same bytes as the Tauri icon set.
 HICOLOR_ICONS=(
   "32x32:32x32.png"
   "64x64:64x64.png"
@@ -92,15 +91,16 @@ exit 0
 EOF
 chmod 0755 "$POST_INSTALL"
 
-# 卸载同样要重启 fcitx5：文件被删掉后，运行中的输入法仍持有旧插件的映像。
-# 用 D-Bus 的 controller Restart（立即返回），**不要**用 `fcitx5 -r`：它会替换 daemon
-# 并一直前台运行，导致 postinst/postrm 每次都要等满 timeout（安装卡顿），还会被 kill 掉新 daemon。
+# Removal restarts fcitx5 so a running daemon drops the deleted plugin image.
+# Use the D-Bus controller Restart, which returns immediately. Do not use
+# `fcitx5 -r`: it replaces the daemon and stays in the foreground, so
+# postinst/postrm hit the timeout and can kill the new daemon.
 POST_REMOVE="$TARGET_DIR/openless-fcitx5-postrm"
 sed 's/Package installation runs as root/Package removal runs as root/' \
   "$POST_INSTALL" > "$POST_REMOVE"
 chmod 0755 "$POST_REMOVE"
 
-# 插件指纹清单：装完包后一条命令就能核对「系统里的插件 == 包里的插件」。
+# Fingerprint so a packaged install can be checked against the built plugin.
 PLUGIN_SHA=$(sha256sum "$PLUGIN_ROOT/libopenless.so" | awk '{print $1}')
 PLUGIN_MANIFEST="$TARGET_DIR/openless-fcitx5-manifest"
 cat > "$PLUGIN_MANIFEST" <<EOF
@@ -114,8 +114,8 @@ stage_common() {
     "$root/usr/share/applications/openless.desktop"
   install -Dm644 "$PACKAGING/top.openless.OpenLess.metainfo.xml" \
     "$root/usr/share/metainfo/top.openless.OpenLess.metainfo.xml"
-  # 多档 hicolor 尺寸：桌面环境按需选档（任务栏 32/48、菜单 64/128、大图标 256/512）。
-  # 旧的单档安装把 512×512 的图放进了 256x256 目录（那档根本不是 256px）。
+  # Install each hicolor size from a matching source. A single 512px icon
+  # in the 256x256 directory is the wrong size for that slot.
   for spec in "${HICOLOR_ICONS[@]}"; do
     install -Dm644 "$ICON_DIR/${spec#*:}" \
       "$root/usr/share/icons/hicolor/${spec%%:*}/apps/openless.png"
