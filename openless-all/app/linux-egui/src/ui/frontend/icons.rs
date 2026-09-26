@@ -139,7 +139,7 @@ fn rasterize_mask(source: &str) -> Option<egui::ColorImage> {
     // tiny-skia returns premultiplied white; ColorImage expects straight RGBA.
     // SVGs contain only white strokes, so opacity is the entire mask.
     let mut pixels = Vec::with_capacity(ICON_PIXELS * ICON_PIXELS * 4);
-    for pixel in pixmap.data().chunks_exact(4) {
+    for pixel in pixmap.data().as_chunks::<4>().0 {
         pixels.extend_from_slice(&[255, 255, 255, pixel[3]]);
     }
     Some(egui::ColorImage::from_rgba_unmultiplied(
