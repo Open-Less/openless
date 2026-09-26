@@ -901,8 +901,15 @@ pub const CATALOG: &[Msg] = &[
         key: "history.recorded",
         text: row("录音 {}", "錄音 {}", "Recorded {}", "録音 {}", "녹음 {}"),
     },
-    // egui-only: the in-app player bar toggles play/stop; the Tauri player uses
-    // an icon-only button.
+    // egui-only in-app player controls; Tauri opens the recording externally.
+    Msg {
+        key: "history.pause",
+        text: row("暂停播放", "暫停播放", "Pause recording", "再生を一時停止", "재생 일시 정지"),
+    },
+    Msg {
+        key: "history.resume",
+        text: row("继续播放", "繼續播放", "Resume recording", "再生を再開", "재생 계속"),
+    },
 
     Msg {
         key: "history.play",

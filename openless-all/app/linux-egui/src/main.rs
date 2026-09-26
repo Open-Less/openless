@@ -4128,6 +4128,7 @@ mod linux_app {
                     id: id.clone(),
                     position_ms: player.position_ms(),
                     total_ms: player.total_ms(),
+                    paused: player.is_paused(),
                 }
             });
 
@@ -5143,6 +5144,16 @@ mod linux_app {
                                 Ok(player) => self.history_clip = Some((id, player)),
                                 Err(error) => self.status = error,
                             }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::HistoryPauseToggle => {
+                        if let Some((_, player)) = self.history_clip.as_ref() {
+                            player.toggle_pause();
+                        }
+                    }
+                    frontend::view_model::FrontendAction::HistorySeek(ms) => {
+                        if let Some((_, player)) = self.history_clip.as_ref() {
+                            player.seek_ms(ms);
                         }
                     }
                     frontend::view_model::FrontendAction::HistoryRepolishOpen(index) => {

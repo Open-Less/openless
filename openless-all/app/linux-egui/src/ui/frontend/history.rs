@@ -179,7 +179,7 @@ fn quick_note_shortcut_card(
                 true,
                 String::new(),
             );
-            ui.horizontal(|ui| settings::shortcut_control(ui, vm, actions, &row));
+            settings::shortcut_control(ui, vm, actions, &row);
             settings::shortcut_menu(ui, vm, actions, &row);
         });
     ui.add_space(GAP);
@@ -745,21 +745,95 @@ fn detail_body(
             .data_mut(|data| data.insert_temp(menu_id, menu_open));
     }
 
-    // Playback controls belong in the action menu. Only show the progress bar while
-    // this recording is actually playing (not a second default Play button).
+    // Start/stop remains in the action menu. Once started, both History and Quick Note
+    // share this pause/resume button, draggable seek bar and live elapsed clock.
     if entry.has_audio && playback.is_some_and(|clip| clip.id == entry.id) {
         ui.add_space(10.0);
         let (play_row, _) = ui.allocate_exact_size(egui::vec2(width, 32.0), egui::Sense::hover());
         if let Some(playback) = playback.filter(|clip| clip.id == entry.id) {
+            let button = egui::Rect::from_min_size(
+                egui::pos2(play_row.left(), play_row.center().y - 14.0),
+                egui::vec2(28.0, 28.0),
+            );
+            let toggle = ui.interact(
+                button,
+                ui.id().with(("playback-toggle", &entry.id)),
+                egui::Sense::click(),
+            );
+            if toggle.hovered() {
+                ui.painter()
+                    .rect_filled(button, egui::CornerRadius::same(6), theme::BLUE_SOFT);
+            }
+            if playback.paused {
+                icons::draw_icon(ui, button.center(), IconName::Play, theme::BLUE);
+            } else {
+                // Two filled bars are more legible than a 14px outline icon.
+                for dx in [-4.0, 2.0] {
+                    ui.painter().rect_filled(
+                        egui::Rect::from_min_size(
+                            button.center() + egui::vec2(dx, -6.0),
+                            egui::vec2(3.0, 12.0),
+                        ),
+                        egui::CornerRadius::same(1),
+                        theme::BLUE,
+                    );
+                }
+            }
+            if toggle
+                .on_hover_text(tr_l10n(
+                    lang,
+                    if playback.paused {
+                        "history.resume"
+                    } else {
+                        "history.pause"
+                    },
+                ))
+                .clicked()
+            {
+                actions.push(FrontendAction::HistoryPauseToggle);
+            }
+            let clock = format!(
+                "{} / {}",
+                playback_clock(playback.position_ms),
+                playback_clock(playback.total_ms),
+            );
+            let clock_width = layout::text_width(ui, &clock, 11.0) + 6.0;
             let track = egui::Rect::from_min_max(
-                egui::pos2(play_row.left() + 12.0, play_row.center().y - 3.0),
-                egui::pos2(play_row.right() - 96.0, play_row.center().y + 3.0),
+                egui::pos2(play_row.left() + 34.0, play_row.center().y - 3.0),
+                egui::pos2(
+                    play_row.right() - clock_width - 8.0,
+                    play_row.center().y + 3.0,
+                ),
+            );
+            ui.painter().text(
+                egui::pos2(play_row.right(), play_row.center().y),
+                egui::Align2::RIGHT_CENTER,
+                clock,
+                egui::FontId::monospace(11.0),
+                theme::INK_4,
             );
             if track.width() > 20.0 {
+                let hit = track.expand2(egui::vec2(0.0, 10.0));
+                let response = ui.interact(
+                    hit,
+                    ui.id().with(("playback-seek", &entry.id)),
+                    egui::Sense::click_and_drag(),
+                );
+                let seek = if response.dragged() || response.clicked() {
+                    response
+                        .interact_pointer_pos()
+                        .map(|pos| seek_position_ms(pos.x, track, playback.total_ms))
+                } else {
+                    None
+                };
+                if let Some(ms) = seek {
+                    actions.push(FrontendAction::HistorySeek(ms));
+                }
+                let displayed_ms = seek.unwrap_or(playback.position_ms);
                 let ratio = if playback.total_ms == 0 {
                     0.0
                 } else {
-                    (playback.position_ms as f32 / playback.total_ms as f32).clamp(0.0, 1.0)
+                    (displayed_ms as f32 / playback.total_ms as f32).clamp(0.0, 1.0)
                 };
                 ui.painter()
                     .rect_filled(track, egui::CornerRadius::same(3), theme::SURFACE_2);
@@ -769,17 +843,12 @@ fn detail_body(
                 );
                 ui.painter()
                     .rect_filled(filled, egui::CornerRadius::same(3), theme::BLUE);
-                ui.painter().text(
-                    egui::pos2(play_row.right(), play_row.center().y),
-                    egui::Align2::RIGHT_CENTER,
-                    format!(
-                        "{} / {}",
-                        playback_clock(playback.position_ms),
-                        playback_clock(playback.total_ms)
-                    ),
-                    egui::FontId::monospace(11.0),
-                    theme::INK_4,
+                ui.painter().circle_filled(
+                    egui::pos2(track.left() + track.width() * ratio, track.center().y),
+                    5.0,
+                    theme::BLUE,
                 );
+                response.on_hover_cursor(egui::CursorIcon::PointingHand);
             }
         }
     }
@@ -1301,10 +1370,34 @@ fn confirm_overlay(
 
 // ── Painting helpers ────────────────────────────────────────────────────────
 
+/// Convert a pointer position (including drags beyond either end) to a clip timestamp.
+fn seek_position_ms(pointer_x: f32, track: egui::Rect, total_ms: u64) -> u64 {
+    if track.width() <= 0.0 {
+        return 0;
+    }
+    let fraction = ((pointer_x - track.left()) / track.width()).clamp(0.0, 1.0);
+    (fraction as f64 * total_ms as f64).round() as u64
+}
+
 /// `m:ss` clock used by the in-app player bar.
 fn playback_clock(ms: u64) -> String {
     let seconds = ms / 1000;
     format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+#[cfg(test)]
+mod playback_tests {
+    use super::*;
+
+    #[test]
+    fn seek_uses_track_coordinates_and_clamps_drag_outside_it() {
+        let track = egui::Rect::from_min_max(egui::pos2(100.0, 10.0), egui::pos2(300.0, 16.0));
+        assert_eq!(seek_position_ms(100.0, track, 90_000), 0);
+        assert_eq!(seek_position_ms(200.0, track, 90_000), 45_000);
+        assert_eq!(seek_position_ms(400.0, track, 90_000), 90_000);
+        assert_eq!(seek_position_ms(-50.0, track, 90_000), 0);
+        assert_eq!(playback_clock(45_900), "0:45");
+    }
 }
 
 fn paint_card(painter: &egui::Painter, rect: egui::Rect) {

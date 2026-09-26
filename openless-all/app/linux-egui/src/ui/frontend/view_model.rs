@@ -74,6 +74,10 @@ pub enum FrontendAction {
     HistoryRepolish(usize, Option<usize>),
     /// Open a history entry's recording in the system player.
     HistoryPlay(usize),
+    /// Pause or resume the current in-app recording without dropping its cursor.
+    HistoryPauseToggle,
+    /// Seek the current recording to a millisecond timestamp.
+    HistorySeek(u64),
     /// Vocab entry added.
     VocabAddPhrase(String),
     /// Vocab list filter changed (0 = all, 1 = auto-collected, 2 = manual).
@@ -303,7 +307,7 @@ pub struct StylePackHotkeyRow {
 /// One editable shortcut row in 快捷键与选区. `StylePack(index)` addresses an
 /// existing entry of [`SettingsFields::style_pack_hotkeys`]; `StyleDraft` is the
 /// 「＋ 添加风格快捷键」row before it is committed.
-#[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShortcutField {
     Dictation,
     Translation,
@@ -522,6 +526,7 @@ pub struct HistoryPlayback {
     pub id: String,
     pub position_ms: u64,
     pub total_ms: u64,
+    pub paused: bool,
 }
 
 /// A pending destructive action that needs an in-window confirmation.

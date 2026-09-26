@@ -17,7 +17,7 @@ pub struct ClipPlayer {
     total_samples: usize,
     channels: usize,
     sample_rate: u32,
-    finished: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
 }
 
 impl ClipPlayer {
@@ -61,7 +61,7 @@ impl ClipPlayer {
 
         let data = Arc::new(interleaved);
         let played_samples = Arc::new(AtomicUsize::new(0));
-        let finished = Arc::new(AtomicBool::new(false));
+        let paused = Arc::new(AtomicBool::new(false));
         let total_samples = data.len();
 
         let stream = build_stream(
@@ -70,7 +70,7 @@ impl ClipPlayer {
             sample_format,
             data.clone(),
             played_samples.clone(),
-            finished.clone(),
+            paused.clone(),
         )?;
         stream.play().map_err(|error| error.to_string())?;
 
@@ -80,13 +80,17 @@ impl ClipPlayer {
             total_samples,
             channels,
             sample_rate,
-            finished,
+            paused,
         })
     }
 
     /// Playback head in milliseconds.
     pub fn position_ms(&self) -> u64 {
-        let frames = self.played_samples.load(Ordering::Relaxed) / self.channels.max(1);
+        let frames = self
+            .played_samples
+            .load(Ordering::Relaxed)
+            .min(self.total_samples)
+            / self.channels.max(1);
         (frames as u64 * 1000) / self.sample_rate.max(1) as u64
     }
 
@@ -97,8 +101,32 @@ impl ClipPlayer {
     }
 
     pub fn is_finished(&self) -> bool {
-        self.finished.load(Ordering::Relaxed)
+        self.played_samples.load(Ordering::Relaxed) >= self.total_samples
     }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::Relaxed)
+    }
+
+    pub fn toggle_pause(&self) {
+        self.paused.fetch_xor(true, Ordering::Relaxed);
+    }
+
+    /// Seek in whole frames so all output channels stay aligned. The callback uses a
+    /// compare-exchange to avoid overwriting this position if a seek races an audio block.
+    pub fn seek_ms(&self, ms: u64) {
+        let frames = seek_frame(
+            ms,
+            self.sample_rate,
+            self.total_samples / self.channels.max(1),
+        );
+        self.played_samples
+            .store(frames * self.channels, Ordering::Relaxed);
+    }
+}
+
+fn seek_frame(ms: u64, rate: u32, frames: usize) -> usize {
+    ((ms as u128 * rate as u128) / 1000).min(frames.saturating_sub(1) as u128) as usize
 }
 
 fn build_stream(
@@ -107,7 +135,7 @@ fn build_stream(
     format: cpal::SampleFormat,
     data: Arc<Vec<f32>>,
     played: Arc<AtomicUsize>,
-    finished: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
 ) -> Result<cpal::Stream, String> {
     let error_callback = |error| log::warn!("audio playback error: {error}");
     // Fill the output buffer from `data`, starting at the played head.
@@ -115,28 +143,13 @@ fn build_stream(
         ($ty:ty, $convert:expr) => {{
             let data = data.clone();
             let played = played.clone();
-            let finished = finished.clone();
+            let paused = paused.clone();
             device
                 .build_output_stream(
                     config.clone(),
                     move |output: &mut [$ty], _| {
                         let convert: fn(f32) -> $ty = $convert;
-                        let start = played.load(Ordering::Relaxed);
-                        let mut done = false;
-                        for (offset, slot) in output.iter_mut().enumerate() {
-                            let index = start + offset;
-                            match data.get(index) {
-                                Some(value) => *slot = convert(*value),
-                                None => {
-                                    done = true;
-                                    *slot = convert(0.0);
-                                }
-                            }
-                        }
-                        played.store(start + output.len(), Ordering::Relaxed);
-                        if done {
-                            finished.store(true, Ordering::Relaxed);
-                        }
+                        write_samples(output, &data, &played, &paused, convert);
                     },
                     error_callback,
                     None,
@@ -157,5 +170,63 @@ fn build_stream(
             )
         }
         other => Err(format!("unsupported output sample format: {other:?}")),
+    }
+}
+
+fn write_samples<T: Copy>(
+    output: &mut [T],
+    data: &[f32],
+    played: &AtomicUsize,
+    paused: &AtomicBool,
+    convert: fn(f32) -> T,
+) {
+    let silence = convert(0.0);
+    if paused.load(Ordering::Relaxed) {
+        output.fill(silence);
+        return;
+    }
+    let start = played.load(Ordering::Relaxed);
+    for (offset, slot) in output.iter_mut().enumerate() {
+        *slot = data.get(start + offset).copied().map_or(silence, convert);
+    }
+    // A seek can arrive while we fill the device buffer: never let this callback
+    // overwrite the new cursor. Completion derives from the cursor, so seeking
+    // back from the end cannot race with a separate `finished` flag.
+    let _ = played.compare_exchange(
+        start,
+        start.saturating_add(output.len()).min(data.len()),
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seek_clamps_at_both_ends_and_aligns_output_channels() {
+        assert_eq!(seek_frame(250, 48_000, 48_000), 12_000);
+        assert_eq!(seek_frame(u64::MAX, 48_000, 48_000), 47_999);
+        assert_eq!(seek_frame(0, 48_000, 0), 0);
+        // Two interleaved channels: a 250ms seek starts at sample 24_000.
+        let samples = seek_frame(250, 48_000, 48_000) * 2;
+        assert_eq!(samples, 24_000);
+        assert_eq!(samples % 2, 0);
+    }
+
+    #[test]
+    fn paused_output_is_silent_and_does_not_advance() {
+        let data = [0.5, -0.5, 0.25];
+        let played = AtomicUsize::new(1);
+        let paused = AtomicBool::new(true);
+        let mut output = [1.0; 2];
+        write_samples(&mut output, &data, &played, &paused, |v| v);
+        assert_eq!(output, [0.0, 0.0]);
+        assert_eq!(played.load(Ordering::Relaxed), 1);
+        paused.store(false, Ordering::Relaxed);
+        write_samples(&mut output, &data, &played, &paused, |v| v);
+        assert_eq!(output, [-0.5, 0.25]);
+        assert_eq!(played.load(Ordering::Relaxed), data.len());
     }
 }

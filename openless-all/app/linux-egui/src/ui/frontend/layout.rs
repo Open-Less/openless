@@ -1058,6 +1058,8 @@ pub enum ButtonKind {
     Ghost,
     /// Filled with the accent blue, white text.
     Blue,
+    /// Shortcut recorder menu: pale blue fill, blue outline and blue text.
+    BlueSoft,
     /// Greyed-out button that swallows clicks (Tauri's 置灰 停用).
     Disabled,
 }
@@ -1096,6 +1098,18 @@ pub fn action_button(
             },
             None,
             egui::Color32::WHITE,
+        ),
+        ButtonKind::BlueSoft => (
+            if response.hovered() {
+                theme::BLUE_SOFT.linear_multiply(0.92)
+            } else {
+                theme::BLUE_SOFT
+            },
+            Some(egui::Stroke::new(
+                1.0,
+                egui::Color32::from_rgba_unmultiplied(37, 99, 235, 64),
+            )),
+            theme::BLUE,
         ),
         ButtonKind::Disabled => (
             egui::Color32::TRANSPARENT,

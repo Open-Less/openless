@@ -989,7 +989,7 @@ impl ShortcutRow {
     }
 }
 
-/// 快捷键行：标签（+「?」）→ 键帽 → 最右的 chevron；点 chevron 展开
+/// 快捷键行：标签（+「?」）→ 键帽 → 录制控件行最右的 chevron；点 chevron 展开
 /// 「录制快捷键 / 停用」菜单，进入录制后键帽位置换成「请按下快捷键组合…」面板。
 pub(super) fn shortcut_row(
     ui: &mut egui::Ui,
@@ -1003,8 +1003,8 @@ pub(super) fn shortcut_row(
     shortcut_menu(ui, vm, actions, row);
 }
 
-/// 键帽 + chevron（录制中则换成录制面板）。单独抽出供速记页的紧凑卡片复用，
-/// 那一页没有 200px 标签列。
+/// 键帽在行首、chevron 在行尾（录制中则换成录制面板）。单独抽出供速记页
+/// 的快捷键卡片复用，那一页没有 200px 标签列。
 pub(super) fn shortcut_control(
     ui: &mut egui::Ui,
     vm: &mut FrontendViewModel,
@@ -1017,12 +1017,27 @@ pub(super) fn shortcut_control(
         recording_panel(ui, vm, actions, row.field);
         return;
     }
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
+    // Tauri `ShortcutRecorder`: 录制控件宽度上限 360px，值靠左，展开符贴**同一行**
+    // 的最右缘。过去先画箭头再画键帽，速记卡片里箭头挤在键帽左侧。
+    let width = ui.available_width().min(360.0).max(26.0);
+    let (line, _) = ui.allocate_exact_size(egui::vec2(width, 26.0), egui::Sense::hover());
+    let arrow = egui::Rect::from_min_size(
+        egui::pos2(line.right() - 26.0, line.top()),
+        egui::vec2(26.0, 26.0),
+    );
+    #[cfg(test)]
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(egui::Id::new("shortcut-control-rects"), (line, arrow)));
+    let response = ui.interact(
+        arrow,
+        ui.id().with(("shortcut-menu", row.field)),
+        egui::Sense::click(),
+    );
     if response.hovered() {
         ui.painter()
-            .rect_filled(rect, egui::CornerRadius::same(6), theme::SURFACE_2);
+            .rect_filled(arrow, egui::CornerRadius::same(6), theme::SURFACE_2);
     }
-    draw_chevron_down(ui, rect.center(), menu_open, theme::INK_4);
+    draw_chevron_down(ui, arrow.center(), menu_open, theme::INK_4);
     if response.clicked() {
         actions.push(FrontendAction::ShortcutMenu(if menu_open {
             None
@@ -1030,7 +1045,38 @@ pub(super) fn shortcut_control(
             Some(row.field)
         }));
     }
-    keycaps_in(ui, &row.value);
+    let mut x = line.left();
+    for part in row
+        .value
+        .split('+')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        let key_width = layout::text_width(ui, part, 11.0) + 16.0;
+        if x + key_width > arrow.left() - 6.0 {
+            break;
+        }
+        let key = egui::Rect::from_min_size(
+            egui::pos2(x, line.center().y - 11.0),
+            egui::vec2(key_width, 22.0),
+        );
+        ui.painter()
+            .rect_filled(key, egui::CornerRadius::same(6), theme::SURFACE_2);
+        ui.painter().rect_stroke(
+            key,
+            egui::CornerRadius::same(6),
+            egui::Stroke::new(0.5, theme::LINE_STRONG),
+            egui::StrokeKind::Inside,
+        );
+        ui.painter().text(
+            key.center(),
+            egui::Align2::CENTER_CENTER,
+            part,
+            egui::FontId::proportional(11.0),
+            theme::INK_2,
+        );
+        x += key_width + 4.0;
+    }
 }
 
 /// 行下方的补充说明 + 展开的「录制快捷键 / 停用」菜单。
@@ -1051,32 +1097,31 @@ pub(super) fn shortcut_menu(
         );
     }
     if menu_open && !recording {
-        // Tauri 的展开菜单：录制快捷键（主按钮）+ 停用（录音行置灰）。
+        // Tauri 的展开菜单紧贴键帽**下方左侧**，录制按钮是浅蓝底/蓝边/蓝字，
+        // 而不是整行靠右的蓝底白字主按钮。
         ui.horizontal(|ui| {
             ui.set_min_height(36.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let disable = tr_l10n(lang, "settings.shortcuts.disable");
-                let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(58.0, 28.0), egui::Sense::hover());
-                let kind = if row.can_disable {
-                    layout::ButtonKind::Ghost
-                } else {
-                    layout::ButtonKind::Disabled
-                };
-                if layout::action_button(ui, rect, disable, None, kind).clicked() && row.can_disable
-                {
-                    actions.push(FrontendAction::ShortcutDisable(row.field));
-                }
-                ui.add_space(6.0);
-                let record = tr_l10n(lang, "settings.recording.combo_record_btn");
-                let width = layout::text_width(ui, record, 12.0) + 24.0;
-                let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::hover());
-                if layout::action_button(ui, rect, record, None, layout::ButtonKind::Blue).clicked()
-                {
-                    actions.push(FrontendAction::ShortcutRecording(Some(row.field)));
-                }
-            });
+            let record = tr_l10n(lang, "settings.recording.combo_record_btn");
+            let width = layout::text_width(ui, record, 12.0) + 24.0;
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::hover());
+            #[cfg(test)]
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(egui::Id::new("shortcut-record-button"), rect));
+            if layout::action_button(ui, rect, record, None, layout::ButtonKind::BlueSoft).clicked()
+            {
+                actions.push(FrontendAction::ShortcutRecording(Some(row.field)));
+            }
+            ui.add_space(6.0);
+            let disable = tr_l10n(lang, "settings.shortcuts.disable");
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(58.0, 28.0), egui::Sense::hover());
+            let kind = if row.can_disable {
+                layout::ButtonKind::Ghost
+            } else {
+                layout::ButtonKind::Disabled
+            };
+            if layout::action_button(ui, rect, disable, None, kind).clicked() && row.can_disable {
+                actions.push(FrontendAction::ShortcutDisable(row.field));
+            }
         });
         if row.field == ShortcutField::Dictation {
             ui.label(
@@ -1450,28 +1495,26 @@ fn style_pack_hotkey_block(
         if menu_open && !recording {
             ui.horizontal(|ui| {
                 ui.set_min_height(34.0);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let remove = tr_l10n(lang, "settings.shortcuts.style_pack_remove");
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(58.0, 28.0), egui::Sense::hover());
-                    if layout::action_button(ui, rect, remove, None, layout::ButtonKind::Ghost)
-                        .clicked()
-                    {
-                        actions.push(FrontendAction::StyleHotkeyRemove(index));
-                    }
-                    ui.add_space(6.0);
-                    let record = tr_l10n(lang, "settings.recording.combo_record_btn");
-                    let width = layout::text_width(ui, record, 12.0) + 24.0;
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::hover());
-                    if layout::action_button(ui, rect, record, None, layout::ButtonKind::Blue)
-                        .clicked()
-                    {
-                        actions.push(FrontendAction::ShortcutRecording(Some(
-                            ShortcutField::StylePack(index),
-                        )));
-                    }
-                });
+                let record = tr_l10n(lang, "settings.recording.combo_record_btn");
+                let width = layout::text_width(ui, record, 12.0) + 24.0;
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::hover());
+                if layout::action_button(ui, rect, record, None, layout::ButtonKind::BlueSoft)
+                    .clicked()
+                {
+                    actions.push(FrontendAction::ShortcutRecording(Some(
+                        ShortcutField::StylePack(index),
+                    )));
+                }
+                ui.add_space(6.0);
+                let remove = tr_l10n(lang, "settings.shortcuts.style_pack_remove");
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(58.0, 28.0), egui::Sense::hover());
+                if layout::action_button(ui, rect, remove, None, layout::ButtonKind::Ghost)
+                    .clicked()
+                {
+                    actions.push(FrontendAction::StyleHotkeyRemove(index));
+                }
             });
         }
     }
@@ -1516,7 +1559,7 @@ fn style_pack_hotkey_block(
                     let width = layout::text_width(ui, record, 12.0) + 24.0;
                     let (rect, _) =
                         ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::hover());
-                    if layout::action_button(ui, rect, record, None, layout::ButtonKind::Blue)
+                    if layout::action_button(ui, rect, record, None, layout::ButtonKind::BlueSoft)
                         .clicked()
                     {
                         actions.push(FrontendAction::ShortcutRecording(Some(
@@ -3697,6 +3740,57 @@ pub(crate) fn test_render_shortcuts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quick_note_shortcut_value_and_menu_align_left_with_arrow_at_row_end() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            shortcut_menu: Some(ShortcutField::QuickNote),
+            ..Default::default()
+        };
+        let row = ShortcutRow::new(
+            ShortcutField::QuickNote,
+            "",
+            "Ctrl+Shift+S".into(),
+            true,
+            String::new(),
+        );
+        let mut actions = Vec::new();
+        let _ = crate::ui::frontend::run_pass(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(520.0, 180.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                ui.set_width(480.0);
+                shortcut_control(ui, &mut vm, &mut actions, &row);
+                shortcut_menu(ui, &mut vm, &mut actions, &row);
+            },
+        );
+        let (line, arrow): (egui::Rect, egui::Rect) = ctx.data(|data| {
+            data.get_temp(egui::Id::new("shortcut-control-rects"))
+                .unwrap()
+        });
+        let record: egui::Rect = ctx.data(|data| {
+            data.get_temp(egui::Id::new("shortcut-record-button"))
+                .unwrap()
+        });
+        assert!(
+            (line.width() - 360.0).abs() < 1.0,
+            "Tauri recorder max width: {line:?}"
+        );
+        assert_eq!(arrow.right(), line.right());
+        assert!(arrow.left() > line.left() + 300.0);
+        assert!(
+            (record.left() - line.left()).abs() < 1.0,
+            "record button must be below value, left-aligned: {record:?}, {line:?}"
+        );
+        assert!(record.top() >= line.bottom());
+    }
 
     #[test]
     fn the_shortcut_section_hides_without_a_hotkey_backend() {
