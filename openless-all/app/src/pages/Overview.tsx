@@ -59,6 +59,7 @@ const LLM_NAME_KEY_BY_ID: Record<string, string> = {
   mimo: 'mimo',
   cometapi: 'cometapi',
   openrouterFree: 'openrouterFree',
+  requesty: 'requesty',
   orcarouter: 'orcarouter',
   alibabaCoding: 'alibabaCoding',
   codingPlanX: 'codingPlanX',

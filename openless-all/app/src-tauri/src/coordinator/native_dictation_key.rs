@@ -47,14 +47,17 @@ impl Coordinator {
                             .update_binding(binding)
                             .map_err(|error| error.to_string())?;
                     } else {
-                        let (tx, rx) = mpsc::channel();
-                        let monitor =
-                            crate::side_aware_combo::SideAwareComboMonitor::start(binding, tx)
-                                .map_err(|error| error.to_string())?;
+                        let (tx, rx) = mpsc::channel::<HotkeyEvent>();
+                        let combo_tx =
+                            spawn_combo_abort_bridge(&inner, handle_trigger_combined);
+                        let monitor = crate::side_aware_combo::SideAwareComboMonitor::start(
+                            binding, tx, combo_tx,
+                        )
+                        .map_err(|error| error.to_string())?;
                         let bridge_inner = Arc::clone(&inner);
                         std::thread::Builder::new()
                             .name("openless-side-combo-bridge".into())
-                            .spawn(move || combo_hotkey_bridge_loop(bridge_inner, rx))
+                            .spawn(move || hotkey_bridge_loop(bridge_inner, rx))
                             .map_err(|error| error.to_string())?;
                         *slot = Some(monitor);
                     }

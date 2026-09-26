@@ -24,6 +24,7 @@ struct QaState {
 
 enum QaSubmission {
     Text(String),
+    ScopedText { text: String, expected_session: Option<SessionId> },
     Captured(QaInput),
     SelectionEdit {
         selection_voice_session_id: SessionId,
@@ -45,6 +46,7 @@ pub struct QaService {
     persistence: Option<Arc<QaPersistence>>,
     selection_voice: Option<Arc<dyn SelectionVoiceApi>>,
     voice_sessions: Arc<crate::voice_session::VoiceSessionGate>,
+    runtime_work: Arc<crate::voice_session::RuntimeActivityGate>,
 }
 
 pub(crate) struct QaPersistence {
@@ -77,6 +79,7 @@ impl QaService {
             host_actions,
             events: Arc::new(Mutex::new(None)),
             state: Arc::new(Mutex::new(QaState::default())),
+            runtime_work: Arc::new(crate::voice_session::RuntimeActivityGate::default()),
             presentation: Arc::new(Mutex::new(())),
             persistence: None,
             selection_voice: None,
@@ -96,10 +99,25 @@ impl QaService {
             host_actions,
             events: Arc::new(Mutex::new(None)),
             state: Arc::new(Mutex::new(QaState::default())),
+            runtime_work: Arc::new(crate::voice_session::RuntimeActivityGate::default()),
             presentation: Arc::new(Mutex::new(())),
             persistence: Some(Arc::new(persistence)),
             selection_voice: Some(selection_voice),
             voice_sessions,
+        }
+    }
+
+    fn begin_runtime_work(
+        &self,
+    ) -> Result<crate::voice_session::RuntimeActivityHold, BackendError> {
+        let state = self.state.lock().expect("QA state lock poisoned");
+        if matches!(
+            state.snapshot.phase,
+            QaPhase::Recording | QaPhase::Thinking | QaPhase::AwaitingApproval
+        ) {
+            Ok(self.runtime_work.existing_work())
+        } else {
+            self.runtime_work.acquire()
         }
     }
 
@@ -166,6 +184,7 @@ impl QaService {
     }
 
     async fn begin_recording(&self) -> Result<(), BackendError> {
+        let _runtime = self.begin_runtime_work()?;
         let session_id = SessionId::new();
         {
             let _presentation = self
@@ -218,14 +237,15 @@ impl QaService {
     }
 
     async fn finish_recording(&self, session_id: SessionId) -> Result<(), BackendError> {
-        {
+        let _runtime = {
             let mut state = self.state.lock().expect("QA state lock poisoned");
             // Validate the callback's generation and claim the finish under
             // one lock. A delayed silence event cannot toggle a completed turn
             // back on, stop its successor, or compete with a manual stop.
             ensure_current_phase(&state.snapshot, session_id, QaPhase::Recording)?;
             state.snapshot.phase = QaPhase::Thinking;
-        }
+            self.runtime_work.existing_work()
+        };
         self.publish_snapshot(QaStateKind::Loading, Some((session_id, QaPhase::Thinking)));
 
         let input = match self.runtime.finish_recording(session_id).await {
@@ -261,8 +281,14 @@ impl QaService {
     }
 
     async fn submit_inner(&self, submission: QaSubmission) -> Result<(), BackendError> {
+        let _runtime = self.begin_runtime_work()?;
+        let expected_session = match &submission {
+            QaSubmission::ScopedText { expected_session, .. } => Some(*expected_session),
+            _ => None,
+        };
         let text = match &submission {
             QaSubmission::Text(text) => text,
+            QaSubmission::ScopedText { text, .. } => text,
             QaSubmission::Captured(input) => &input.text,
             QaSubmission::SelectionEdit { instruction, .. } => instruction,
         }
@@ -280,6 +306,9 @@ impl QaService {
             let previous = {
                 let mut state = self.state.lock().expect("QA state lock poisoned");
                 ensure_qa_idle(&state.snapshot)?;
+                if expected_session.is_some_and(|expected| expected != state.snapshot.session_id) {
+                    return Err(BackendError::new(BackendErrorCode::InvalidState, "qa_context_changed"));
+                }
                 let previous = state.snapshot.clone();
                 let conversation_id = state.snapshot.conversation_id.unwrap_or(session_id);
                 state.snapshot.phase = QaPhase::Thinking;
@@ -305,7 +334,7 @@ impl QaService {
         }
 
         let prepared = match submission {
-            QaSubmission::Text(_) => self.runtime.prepare_text(session_id, text).await,
+            QaSubmission::Text(_) | QaSubmission::ScopedText { .. } => self.runtime.prepare_text(session_id, text).await,
             QaSubmission::Captured(mut input) => {
                 input.text = text;
                 self.runtime.prepare_captured_text(session_id, input).await
@@ -557,6 +586,21 @@ impl QaService {
         requested_session_id: Option<SessionId>,
         clear: bool,
     ) -> Result<(), BackendError> {
+        let service = self.clone();
+        self.runtime_work
+            .cleanup(Box::pin(async move {
+                service
+                    .cancel_inner_owned(requested_session_id, clear)
+                    .await
+            }))
+            .await
+    }
+
+    async fn cancel_inner_owned(
+        &self,
+        requested_session_id: Option<SessionId>,
+        clear: bool,
+    ) -> Result<(), BackendError> {
         let (runtime_session_id, conversation_id, host_result) = {
             let _presentation = self
                 .presentation
@@ -631,7 +675,11 @@ impl QaService {
     }
 
     async fn cancel_runtime_best_effort(&self, session_id: SessionId) {
-        if let Err(error) = self.runtime.cancel(session_id).await {
+        if let Err(error) = self
+            .runtime_work
+            .cleanup(self.runtime.cancel(session_id))
+            .await
+        {
             log::warn!("failed to release QA runtime session after an error: {error}");
         }
     }
@@ -659,6 +707,23 @@ impl QaService {
 }
 
 impl QaApi for QaService {
+    fn bind_runtime_restore_guard(
+        &self,
+        guard: crate::domains::RuntimeRestoreGuard,
+        spawner: Arc<dyn crate::config::TaskSpawner>,
+    ) -> Result<(), BackendError> {
+        self.runtime_work.bind(guard, spawner)
+    }
+
+    fn runtime_restore_idle(&self) -> bool {
+        self.state.lock().is_ok_and(|state| {
+            matches!(
+                state.snapshot.phase,
+                QaPhase::Idle | QaPhase::Completed | QaPhase::Cancelled | QaPhase::Failed
+            ) && self.runtime_work.runtime_restore_idle()
+        })
+    }
+
     fn bind_event_publisher(&self, publisher: BackendEventPublisher) {
         *self
             .events
@@ -720,7 +785,7 @@ impl QaApi for QaService {
         error: BackendError,
     ) -> BoxFuture<'static, Result<(), BackendError>> {
         let service = self.clone();
-        Box::pin(async move {
+        self.runtime_work.cleanup(Box::pin(async move {
             {
                 let state = service.state.lock().expect("QA state lock poisoned");
                 ensure_current_phase(&state.snapshot, session_id, QaPhase::Recording)?;
@@ -728,7 +793,7 @@ impl QaApi for QaService {
             service.fail_if_current(session_id, &error);
             service.voice_sessions.release(session_id);
             service.runtime.cancel(session_id).await
-        })
+        }))
     }
 
     fn stop_recording(
@@ -742,6 +807,11 @@ impl QaApi for QaService {
     fn submit_text(&self, text: String) -> BoxFuture<'static, Result<(), BackendError>> {
         let service = self.clone();
         Box::pin(async move { service.submit_text_inner(text).await })
+    }
+
+    fn submit_text_in_context(&self, text: String, expected_session: Option<SessionId>) -> BoxFuture<'static, Result<(), BackendError>> {
+        let service = self.clone();
+        Box::pin(async move { service.submit_inner(QaSubmission::ScopedText { text, expected_session }).await })
     }
 
     fn submit_captured_text(&self, input: QaInput) -> BoxFuture<'static, Result<(), BackendError>> {
@@ -1066,4 +1136,282 @@ fn publish_qa_snapshot_impl(
             force_edit_fields,
         )),
     );
+}
+
+#[cfg(test)]
+mod runtime_restore_tests {
+    use super::*;
+    use crate::domains::QaTurnResult;
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
+
+    #[derive(Clone, Default)]
+    struct Runtime {
+        calls: Arc<AtomicUsize>,
+        block_prepare: Arc<AtomicBool>,
+        fail_prepare: Arc<AtomicBool>,
+        prepare_entered: Arc<tokio::sync::Notify>,
+        prepare_release: Arc<tokio::sync::Notify>,
+        block_cancel: Arc<AtomicBool>,
+        cancel_entered: Arc<tokio::sync::Notify>,
+        cancel_release: Arc<tokio::sync::Notify>,
+        cancel_done: Arc<tokio::sync::Notify>,
+    }
+    impl QaRuntimeAdapter for Runtime {
+        fn prepare_text(
+            &self,
+            _: SessionId,
+            text: String,
+        ) -> BoxFuture<'static, Result<QaInput, BackendError>> {
+            let this = self.clone();
+            Box::pin(async move {
+                this.calls.fetch_add(1, Ordering::SeqCst);
+                if this.fail_prepare.load(Ordering::SeqCst) {
+                    return Err(BackendError::new(
+                        BackendErrorCode::Provider,
+                        "fixture prepare failure",
+                    ));
+                }
+                if this.block_prepare.load(Ordering::SeqCst) {
+                    this.prepare_entered.notify_one();
+                    this.prepare_release.notified().await;
+                }
+                Ok(QaInput {
+                    text,
+                    selection_text: None,
+                    selection_source_app: None,
+                })
+            })
+        }
+        fn start_recording(
+            &self,
+            _: SessionId,
+            _: Arc<dyn QaProgressSink>,
+        ) -> BoxFuture<'static, Result<(), BackendError>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        }
+        fn finish_recording(
+            &self,
+            _: SessionId,
+        ) -> BoxFuture<'static, Result<QaInput, BackendError>> {
+            Box::pin(async {
+                Ok(QaInput {
+                    text: "question".into(),
+                    selection_text: None,
+                    selection_source_app: None,
+                })
+            })
+        }
+        fn answer(
+            &self,
+            _: QaTurnRequest,
+            _: Arc<dyn QaProgressSink>,
+        ) -> BoxFuture<'static, Result<QaTurnResult, BackendError>> {
+            Box::pin(async {
+                Ok(QaTurnResult {
+                    answer: "answer".into(),
+                })
+            })
+        }
+        fn cancel(&self, _: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
+            let this = self.clone();
+            Box::pin(async move {
+                if this.block_cancel.load(Ordering::SeqCst) {
+                    this.cancel_entered.notify_one();
+                    this.cancel_release.notified().await;
+                }
+                this.cancel_done.notify_one();
+                Ok(())
+            })
+        }
+    }
+    fn service(runtime: Runtime, restoring: Arc<AtomicBool>) -> QaService {
+        let service = QaService::new(Arc::new(runtime), Arc::new(crate::ports::NoopHostActions));
+        service.bind_event_publisher(BackendEventPublisher::new(Arc::new(
+            crate::events::EventBus::new(32),
+        )));
+        service
+            .bind_runtime_restore_guard(
+                Arc::new(move || {
+                    if restoring.load(Ordering::Acquire) {
+                        Err(BackendError::new(BackendErrorCode::Busy, "restoring"))
+                    } else {
+                        Ok(())
+                    }
+                }),
+                Arc::new(crate::config::TokioTaskSpawner),
+            )
+            .unwrap();
+        service
+    }
+
+    #[tokio::test]
+    async fn runtime_restore_rejects_qa_text_and_voice_before_host_work_but_keeps_snapshot_readable(
+    ) {
+        let runtime = Runtime::default();
+        let flag = Arc::new(AtomicBool::new(true));
+        let service = service(runtime.clone(), flag.clone());
+        assert_eq!(
+            service
+                .submit_text("question".into())
+                .await
+                .unwrap_err()
+                .code,
+            BackendErrorCode::Busy
+        );
+        assert_eq!(
+            service.toggle_recording().await.unwrap_err().code,
+            BackendErrorCode::Busy
+        );
+        assert_eq!(runtime.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(service.snapshot().await.unwrap().phase, QaPhase::Idle);
+        assert!(service.runtime_restore_idle());
+        flag.store(false, Ordering::Release);
+        service.submit_text("question".into()).await.unwrap();
+        assert_eq!(service.snapshot().await.unwrap().phase, QaPhase::Completed);
+        assert!(service.runtime_restore_idle());
+    }
+
+    #[tokio::test]
+    async fn runtime_restore_qa_text_lease_does_not_take_the_exclusive_voice_slot() {
+        let runtime = Runtime::default();
+        runtime.block_prepare.store(true, Ordering::SeqCst);
+        let flag = Arc::new(AtomicBool::new(false));
+        let service = service(runtime.clone(), flag.clone());
+        let text = tokio::spawn(service.submit_text("question".into()));
+        runtime.prepare_entered.notified().await;
+        assert!(!service.runtime_restore_idle());
+        let voice = SessionId::new();
+        service
+            .voice_sessions
+            .acquire(voice, crate::voice_session::VoiceSessionKind::Dictation)
+            .unwrap();
+        service.voice_sessions.release(voice);
+        flag.store(true, Ordering::Release);
+        assert_eq!(
+            service
+                .submit_text("another".into())
+                .await
+                .unwrap_err()
+                .code,
+            BackendErrorCode::Busy
+        );
+        runtime.prepare_release.notify_one();
+        text.await.unwrap().unwrap();
+        assert!(
+            service.runtime_restore_idle(),
+            "an attempted restore must not break the accepted turn"
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_restore_qa_cancel_waiter_drop_keeps_cleanup_busy_until_drained() {
+        let runtime = Runtime::default();
+        runtime.block_cancel.store(true, Ordering::SeqCst);
+        let service = service(runtime.clone(), Arc::new(AtomicBool::new(false)));
+        service.toggle_recording().await.unwrap();
+        let cancel = tokio::spawn(service.cancel(None));
+        runtime.cancel_entered.notified().await;
+        assert_eq!(service.snapshot().await.unwrap().phase, QaPhase::Cancelled);
+        assert!(!service.runtime_restore_idle());
+        cancel.abort();
+        assert!(cancel.await.unwrap_err().is_cancelled());
+        assert!(!service.runtime_restore_idle());
+        runtime.cancel_release.notify_one();
+        runtime.cancel_done.notified().await;
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+        assert!(service.runtime_restore_idle());
+    }
+
+    #[test]
+    fn runtime_restore_qa_probe_cannot_pass_between_check_and_claim() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let service = QaService::new(
+            Arc::new(Runtime::default()),
+            Arc::new(crate::ports::NoopHostActions),
+        );
+        let (checked, receive_checked) = std::sync::mpsc::channel();
+        let (resume, receive_resume) = std::sync::mpsc::channel();
+        let receive_resume = Mutex::new(receive_resume);
+        let check_flag = flag.clone();
+        service.bind_event_publisher(BackendEventPublisher::new(Arc::new(
+            crate::events::EventBus::new(32),
+        )));
+        service
+            .bind_runtime_restore_guard(
+                Arc::new(move || {
+                    assert!(!check_flag.load(Ordering::Acquire));
+                    checked.send(()).unwrap();
+                    receive_resume.lock().unwrap().recv().unwrap();
+                    Ok(())
+                }),
+                Arc::new(crate::config::TokioTaskSpawner),
+            )
+            .unwrap();
+        let start = std::thread::spawn({
+            let service = service.clone();
+            move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(service.toggle_recording())
+            }
+        });
+        receive_checked
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        flag.store(true, Ordering::Release);
+        let probe = std::thread::spawn({
+            let service = service.clone();
+            move || service.runtime_restore_idle()
+        });
+        resume.send(()).unwrap();
+        start.join().unwrap().unwrap();
+        assert!(!probe.join().unwrap());
+    }
+    #[tokio::test]
+    async fn runtime_restore_error_cleanup_survives_dropping_the_failed_submit_waiter() {
+        let runtime = Runtime::default();
+        runtime.fail_prepare.store(true, Ordering::SeqCst);
+        runtime.block_cancel.store(true, Ordering::SeqCst);
+        let service = service(runtime.clone(), Arc::new(AtomicBool::new(false)));
+        let submitting = tokio::spawn(service.submit_text("fixture".into()));
+        runtime.cancel_entered.notified().await;
+        assert_eq!(service.snapshot().await.unwrap().phase, QaPhase::Failed);
+        submitting.abort();
+        assert!(submitting.await.unwrap_err().is_cancelled());
+        assert!(
+            !service.runtime_restore_idle(),
+            "error cleanup still owns native runtime work"
+        );
+        runtime.cancel_release.notify_one();
+        runtime.cancel_done.notified().await;
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+        assert!(service.runtime_restore_idle());
+    }
+    #[tokio::test]
+    async fn runtime_restore_cancel_return_does_not_release_an_inflight_text_reader() {
+        let runtime = Runtime::default();
+        runtime.block_prepare.store(true, Ordering::SeqCst);
+        let service = service(runtime.clone(), Arc::new(AtomicBool::new(false)));
+        let question = tokio::spawn(service.submit_text("fixture".into()));
+        runtime.prepare_entered.notified().await;
+        service.cancel(None).await.unwrap();
+        assert_eq!(service.snapshot().await.unwrap().phase, QaPhase::Cancelled);
+        assert!(
+            !service.runtime_restore_idle(),
+            "old context preparation has not drained"
+        );
+        runtime.prepare_release.notify_one();
+        assert_eq!(
+            question.await.unwrap().unwrap_err().code,
+            BackendErrorCode::Cancelled
+        );
+        assert!(service.runtime_restore_idle());
+    }
 }

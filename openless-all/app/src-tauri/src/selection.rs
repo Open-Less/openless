@@ -506,6 +506,12 @@ pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionT
         let Some(pid) = captured.front_app_pid else {
             return false;
         };
+        // Streaming writes usually already own the foreground application.
+        // Do not reactivate it and sleep for 80ms on every delta; the caller
+        // still validates the captured text control before posting keys.
+        if current_front_app_pid() == Some(pid) {
+            return true;
+        }
         // 预览窗是 OpenLess 自己的窗口，确认后需要把焦点交还原应用再粘贴。
         // NSRunningApplication activate 是 best-effort，且部分 app（Electron、
         // 自绘窗口）恢复 key window 需要 >120ms——固定 sleep 一次就核 pid 会

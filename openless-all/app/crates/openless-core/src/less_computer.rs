@@ -581,10 +581,12 @@ impl LessComputerApi for LessComputerService {
                 .lock()
                 .expect("Less Computer approval lock poisoned")
                 .remove(&token);
-            if let Some(sender) = sender {
-                let _ = sender.send(approved);
-            }
-            Ok(())
+            let sender = sender.ok_or_else(|| BackendError::new(
+                BackendErrorCode::InvalidState, "approval request is no longer pending",
+            ))?;
+            sender.send(approved).map_err(|_| BackendError::new(
+                BackendErrorCode::InvalidState, "approval receiver is no longer waiting",
+            ))
         })
     }
 
@@ -1167,7 +1169,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn approval_tokens_are_instance_local_idempotent_and_event_driven() {
+    async fn approval_tokens_are_instance_local_confirmed_once_and_event_driven() {
         let (owner, mut events) = service_with_events();
         let (other, _) = service_with_events();
         let owner_for_request = owner.clone();
@@ -1193,12 +1195,12 @@ mod tests {
         assert_eq!(command, "rm file");
         assert_eq!(reason, "destructive");
 
-        other.approve(token.clone(), true).await.unwrap();
+        assert!(other.approve(token.clone(), true).await.is_err());
         tokio::task::yield_now().await;
         assert!(!waiting.is_finished());
 
         owner.approve(token.clone(), true).await.unwrap();
-        owner.approve(token, false).await.unwrap();
+        assert!(owner.approve(token, false).await.is_err());
         assert!(waiting.await.unwrap().unwrap());
         assert_eq!(owner.pending_approval_count(), 0);
     }

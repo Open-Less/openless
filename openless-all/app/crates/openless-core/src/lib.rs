@@ -13,6 +13,10 @@ pub mod auxiliary;
 pub mod cli;
 mod cloud_providers;
 pub mod cloud_sync;
+pub mod cloud_sync_e2ee;
+pub mod cloud_sync_e2ee_documents;
+pub mod cloud_sync_e2ee_store;
+mod cloud_sync_e2ee_protocol;
 mod cloud_sync_transaction;
 mod cloud_sync_types;
 mod cloud_sync_validation;
@@ -326,7 +330,8 @@ pub use shared_types::{
 };
 pub use shortcut_types::{
     binding_from_legacy_trigger, binding_requires_side_aware_hook, bindings_overlap,
-    is_side_specific_modifier_tag, legacy_modifier_trigger, normalize_side_modifier_tag,
+    is_modifier_chord_binding, is_side_specific_modifier_tag, legacy_modifier_trigger,
+    normalize_side_modifier_tag,
     reconcile_hotkey_collisions, reject_bare_shift_dictation_shortcut,
     reject_dictation_qa_hotkey_overlap, reject_dictation_translation_hotkey_overlap,
     reject_hotkey_collisions, reject_modifier_only_action_shortcut,

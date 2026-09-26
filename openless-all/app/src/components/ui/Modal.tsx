@@ -36,11 +36,12 @@ export function Modal({
   // Portal 出去后 fixed 相对视口，遮罩铺满全局。与 Tooltip / SelectLite 同款做法。
   return createPortal(
     <div
+      className="ol-dialog-overlay"
       onClick={onClose}
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0,0,0,0.22)',
+        background: 'var(--ol-dialog-backdrop)',
         display: 'grid',
         placeItems: 'center',
         zIndex,
@@ -51,16 +52,17 @@ export function Modal({
       }}
     >
       <div
+        className="ol-dialog-card"
         onClick={(e) => e.stopPropagation()}
         style={{
           width,
           maxHeight: '85vh',
           overflow: 'auto',
-          borderRadius: 16,
+          borderRadius: 'var(--ol-dialog-radius)',
           background: 'var(--ol-surface)',
-          border: '0.5px solid var(--ol-line-strong)',
-          boxShadow: '0 18px 42px rgba(0,0,0,0.18)',
-          padding: 22,
+          border: '1px solid var(--ol-dialog-border)',
+          boxShadow: 'var(--ol-dialog-shadow)',
+          padding: 24,
           animation: closing
             ? 'ol-modal-card-in 0.18s var(--ol-motion-soft) reverse both'
             : 'ol-modal-card-in 0.24s var(--ol-motion-spring)',

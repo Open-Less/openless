@@ -124,6 +124,58 @@ fn open_envelope(
         .map_err(StoreError::Crypto)
 }
 
+/// Inspect the last durable candidate without completing migrations or recovery.
+/// Startup with an E2EE recovery marker must not rename, chmod, reset a key,
+/// mark migration complete, or delete any envelope before its restore lease.
+pub(super) fn read_only(
+    path: &Path,
+    crypto: &mut impl AndroidCredentialsCrypto,
+) -> Result<ReadOutcome, StoreError> {
+    match fs::read(verified_v2_temporary_path(path)) {
+        Ok(bytes) => return open_envelope(&bytes, crypto).map(ReadOutcome::Plaintext),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(io_error("read verified recovery candidate", error)),
+    }
+    let bytes = match fs::read(path) {
+        Ok(bytes) if !bytes.is_empty() => Some(bytes),
+        Ok(_) => Some(Vec::new()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(io_error("read without migration", error)),
+    };
+    let bytes = if bytes.as_ref().is_none_or(Vec::is_empty) {
+        match fs::read(path.with_extension("legacy.tmp")) {
+            Ok(candidate) => candidate,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => match bytes {
+                Some(bytes) => bytes,
+                None => return Ok(ReadOutcome::Missing),
+            },
+            Err(error) => return Err(io_error("read legacy recovery candidate", error)),
+        }
+    } else {
+        bytes.ok_or(StoreError::InvalidEnvelope)?
+    };
+    match bytes
+        .iter()
+        .copied()
+        .find(|byte| !byte.is_ascii_whitespace())
+    {
+        Some(b'{') => open_envelope(&bytes, crypto).map(ReadOutcome::Plaintext),
+        Some(_) => {
+            if crypto.migration_complete().map_err(StoreError::Crypto)? {
+                return Err(StoreError::InvalidEnvelope);
+            }
+            let plaintext = base64::engine::general_purpose::STANDARD
+                .decode(&bytes)
+                .map_err(|_| StoreError::InvalidEnvelope)?;
+            if plaintext.is_empty() {
+                return Err(StoreError::InvalidEnvelope);
+            }
+            Ok(ReadOutcome::Legacy(plaintext))
+        }
+        None => Err(StoreError::InvalidEnvelope),
+    }
+}
+
 pub(super) fn read(
     path: &Path,
     crypto: &mut impl AndroidCredentialsCrypto,
@@ -744,6 +796,73 @@ mod tests {
         if let Some(parent) = path.parent() {
             let _ = std::fs::remove_dir_all(parent);
         }
+    }
+
+    #[test]
+    fn read_only_preserves_verified_candidates_and_invalidated_key_envelopes() {
+        let path = test_path("android-read-only-pending");
+        let pending = verified_v2_temporary_path(&path);
+        let mut crypto = TestCrypto::default();
+        write_verified(&path, b"old committed root", &mut crypto).unwrap();
+        let old = fs::read(&path).unwrap();
+        let sealed = crypto.seal(b"new verified root", ENVELOPE_AAD).unwrap();
+        let candidate = envelope_for(&sealed).unwrap();
+        fs::write(&pending, &candidate).unwrap();
+        #[cfg(unix)]
+        {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        crypto.fail_next_mark_migration = Some(CryptoErrorKind::TemporarilyUnavailable);
+        assert_eq!(
+            read_only(&path, &mut crypto).unwrap(),
+            ReadOutcome::Plaintext(b"new verified root".to_vec())
+        );
+        assert!(crypto.fail_next_mark_migration.is_some());
+        assert_eq!(fs::read(&path).unwrap(), old);
+        assert_eq!(fs::read(&pending).unwrap(), candidate);
+        #[cfg(unix)]
+        {
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o644
+            );
+        }
+        crypto.fail_next_open = Some(CryptoErrorKind::KeyMissingOrInvalidated);
+        assert!(matches!(
+            read_only(&path, &mut crypto),
+            Err(StoreError::Crypto(CryptoErrorKind::KeyMissingOrInvalidated))
+        ));
+        assert_eq!(crypto.delete_key_calls, 0);
+        assert_eq!(fs::read(&path).unwrap(), old);
+        assert_eq!(fs::read(&pending).unwrap(), candidate);
+        fs::write(&pending, b"invalid candidate").unwrap();
+        assert!(read_only(&path, &mut crypto).is_err());
+        assert_eq!(fs::read(&path).unwrap(), old);
+        remove_test_parent(&path);
+    }
+
+    #[test]
+    fn read_only_legacy_recovery_never_promotes_or_marks_a_source() {
+        let path = test_path("android-read-only-legacy");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let candidate = path.with_extension("legacy.tmp");
+        let bytes = base64::engine::general_purpose::STANDARD.encode(b"legacy root");
+        fs::write(&candidate, &bytes).unwrap();
+        let mut crypto = TestCrypto::default();
+        assert_eq!(
+            read_only(&path, &mut crypto).unwrap(),
+            ReadOutcome::Legacy(b"legacy root".to_vec())
+        );
+        assert!(!path.exists());
+        assert_eq!(fs::read(&candidate).unwrap(), bytes.as_bytes());
+        assert!(!crypto.migration_complete().unwrap());
+        crypto.mark_migration_complete().unwrap();
+        assert!(matches!(
+            read_only(&path, &mut crypto),
+            Err(StoreError::InvalidEnvelope)
+        ));
+        assert!(candidate.exists());
+        remove_test_parent(&path);
     }
 
     #[test]

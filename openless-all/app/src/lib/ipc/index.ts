@@ -161,6 +161,8 @@ export {
   getQaHotkeyLabel,
   setQaHotkey,
   qaWindowDismiss,
+  qaWindowSetExpanded,
+  qaGetSnapshot,
   qaToggleRecording,
   qaSubmitText,
   qaSetEditInstructionMode,

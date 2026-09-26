@@ -2826,6 +2826,130 @@ where
     }
 }
 
+/// Worker creation follows an already completed TIS switch. Roll back that
+/// switch on startup failure, retaining the original error if rollback fails.
+#[cfg(target_os = "macos")]
+async fn start_worker_restoring_on_error<P, W, F>(
+    previous: P,
+    start: impl FnOnce() -> Result<W, BackendError>,
+    restore: impl FnOnce(P) -> F,
+) -> Result<(P, W), BackendError>
+where
+    F: std::future::Future<Output = Result<(), BackendError>>,
+{
+    match start() {
+        Ok(worker) => Ok((previous, worker)),
+        Err(error) => {
+            if let Err(restore_error) = restore(previous).await {
+                log::warn!("[core-adapter] restore input source after worker startup failed: {restore_error}");
+            }
+            Err(error)
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MacInsertionCompletion {
+    Finished(InsertOutcome),
+    Cancelled,
+}
+
+/// TIS restoration belongs to the terminal effect, never to an individual
+/// caller's future. Repeated finish/cancel callers join the same result.
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct MacInsertionTerminal {
+    started: AtomicBool,
+    result: std::sync::OnceLock<Result<MacInsertionCompletion, BackendError>>,
+    ready: tokio::sync::Notify,
+}
+
+#[cfg(target_os = "macos")]
+impl MacInsertionTerminal {
+    fn settle(&self, result: Result<MacInsertionCompletion, BackendError>) {
+        if self.result.set(result).is_ok() {
+            self.ready.notify_waiters();
+        }
+    }
+
+    async fn join_or_spawn<F>(
+        self: &Arc<Self>,
+        effect: impl FnOnce() -> F + Send + 'static,
+        spawn: impl FnOnce(BoxFuture<'static, ()>),
+    ) -> Result<MacInsertionCompletion, BackendError>
+    where
+        F: std::future::Future<Output = Result<MacInsertionCompletion, BackendError>>
+            + Send
+            + 'static,
+    {
+        if self
+            .started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            let guard = MacInsertionTerminalGuard(Arc::clone(self));
+            spawn(Box::pin(async move {
+                guard.settle(effect().await);
+            }));
+        }
+        loop {
+            let notified = self.ready.notified();
+            if let Some(result) = self.result.get() {
+                return result.clone();
+            }
+            notified.await;
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct MacInsertionTerminalGuard(Arc<MacInsertionTerminal>);
+
+#[cfg(target_os = "macos")]
+impl MacInsertionTerminalGuard {
+    fn settle(&self, result: Result<MacInsertionCompletion, BackendError>) {
+        self.0.settle(result);
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for MacInsertionTerminalGuard {
+    fn drop(&mut self) {
+        self.0.settle(Err(BackendError::new(
+            BackendErrorCode::Internal,
+            "macOS insertion finalization did not complete",
+        )));
+    }
+}
+
+/// Preserve the existing written-text outcome on TIS restoration failure, but
+/// always restore after a failed delivery barrier as well. A barrier error must
+/// not cause a second insertion of text that may already have been posted.
+#[cfg(target_os = "macos")]
+async fn finish_mac_insertion_after_barrier<B, E, R>(
+    barrier: B,
+    effect: impl FnOnce() -> E,
+    restore: impl FnOnce() -> R,
+) -> Result<MacInsertionCompletion, BackendError>
+where
+    B: std::future::Future<Output = Result<(), BackendError>>,
+    E: std::future::Future<Output = Result<MacInsertionCompletion, BackendError>>,
+    R: std::future::Future<Output = Result<(), BackendError>>,
+{
+    let result = match barrier.await {
+        Ok(()) => effect().await,
+        Err(error) => Err(error),
+    };
+    if let Err(error) = restore().await {
+        log::warn!("[core-adapter] restore input state after insertion failed: {error}");
+        if matches!(result, Ok(MacInsertionCompletion::Cancelled)) {
+            return Err(error);
+        }
+    }
+    result
+}
+
 impl CoreTextInserter for TauriTextInserter {
     fn capture_target(&self) -> Option<Arc<dyn CoreTextInserter>> {
         Some(Arc::new(Self {
@@ -2869,7 +2993,7 @@ impl CoreTextInserter for TauriTextInserter {
                 None
             };
             #[cfg(target_os = "macos")]
-            let (app_handle, previous_input_source, streaming_ready) = {
+            let (app_handle, mut previous_input_source, streaming_ready) = {
                 let app_handle = app.lock().clone().ok_or_else(|| {
                     BackendError::new(
                         BackendErrorCode::InvalidState,
@@ -2890,6 +3014,36 @@ impl CoreTextInserter for TauriTextInserter {
                 .await;
                 (app_handle, previous, streaming_ready)
             };
+            #[cfg(target_os = "macos")]
+            let cancel_requested = Arc::new(AtomicBool::new(false));
+            #[cfg(target_os = "macos")]
+            let streaming_worker = if streaming_ready {
+                let (previous, worker) = start_worker_restoring_on_error(
+                    previous_input_source,
+                    || {
+                        crate::macos_streaming_input::MacStreamingInput::spawn(
+                            insertion_target.clone(),
+                            context.insertion.macos_newline_mode,
+                            Arc::clone(&cancel_requested),
+                        )
+                    },
+                    |previous| {
+                        let app_handle = &app_handle;
+                        async move {
+                            crate::unicode_keystroke::restore_input_source(app_handle, previous)
+                                .await
+                                .map_err(|error| {
+                                    BackendError::new(BackendErrorCode::Platform, error.to_string())
+                                })
+                        }
+                    },
+                )
+                .await?;
+                previous_input_source = previous;
+                Some(worker)
+            } else {
+                None
+            };
             #[cfg(not(target_os = "macos"))]
             let _ = app;
             Ok(Arc::new(TauriTextInsertionSession {
@@ -2908,7 +3062,11 @@ impl CoreTextInserter for TauriTextInserter {
                 #[cfg(target_os = "macos")]
                 streaming_ready,
                 #[cfg(target_os = "macos")]
-                confirm_keyboard_delivery: Arc::new(AtomicBool::new(true)),
+                streaming_worker,
+                #[cfg(target_os = "macos")]
+                cancel_requested,
+                #[cfg(target_os = "macos")]
+                terminal: Arc::new(MacInsertionTerminal::default()),
             }) as Arc<dyn TextInsertionSession>)
         })
     }
@@ -2931,7 +3089,11 @@ struct TauriTextInsertionSession {
     #[cfg(target_os = "macos")]
     streaming_ready: bool,
     #[cfg(target_os = "macos")]
-    confirm_keyboard_delivery: Arc<AtomicBool>,
+    streaming_worker: Option<crate::macos_streaming_input::MacStreamingInput>,
+    #[cfg(target_os = "macos")]
+    cancel_requested: Arc<AtomicBool>,
+    #[cfg(target_os = "macos")]
+    terminal: Arc<MacInsertionTerminal>,
 }
 
 impl TauriTextInsertionSession {
@@ -2947,38 +3109,34 @@ impl TauriTextInsertionSession {
     }
 
     async fn write_chunk(&self, text: String) -> Result<InsertWriteResult, BackendError> {
+        #[cfg(target_os = "macos")]
+        {
+            // A write future may have been created before a terminal caller
+            // sealed the session but only polled afterwards.
+            if self.finished.load(Ordering::Acquire) {
+                return Err(BackendError::new(
+                    BackendErrorCode::Cancelled,
+                    "text insertion session is closed",
+                ));
+            }
+            let worker = self.streaming_worker.as_ref().ok_or_else(|| {
+                BackendError::new(
+                    BackendErrorCode::Unsupported,
+                    "macOS streaming insertion is unavailable",
+                )
+            })?;
+            worker.write(text).await
+        }
+        #[cfg(not(target_os = "macos"))]
         self.restore_insertion_target()?;
-        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         {
             let chunk = text.clone();
             #[cfg(target_os = "windows")]
             let newline_mode = self.context.insertion.windows_sendinput_newline_mode;
-            #[cfg(target_os = "macos")]
-            let newline_mode = self.context.insertion.macos_newline_mode;
-            #[cfg(target_os = "macos")]
-            let confirm_delivery = Arc::clone(&self.confirm_keyboard_delivery);
             let finished = Arc::clone(&self.finished);
             let written = tauri::async_runtime::spawn_blocking(move || {
                 if finished.load(Ordering::Acquire) {
-                    return 0;
-                }
-                // CGEventPost returns before the target has consumed its input.
-                // Retain the original control before posting; inspect only its
-                // caret, on this blocking thread, before completing the write.
-                #[cfg(target_os = "macos")]
-                let delivery = if confirm_delivery.load(Ordering::Acquire)
-                    && !(newline_mode == crate::types::MacosNewlineMode::Return
-                        && chunk.contains('\n'))
-                {
-                    crate::host_document::KeyboardDelivery::capture()
-                } else {
-                    None
-                };
-                #[cfg(target_os = "macos")]
-                if delivery
-                    .as_ref()
-                    .is_some_and(|delivery| !delivery.is_focused())
-                {
                     return 0;
                 }
                 #[cfg(target_os = "windows")]
@@ -2986,27 +3144,12 @@ impl TauriTextInsertionSession {
                     &chunk,
                     crate::unicode_keystroke::WindowsSendInputOptions { newline_mode },
                 );
-                #[cfg(target_os = "macos")]
-                let result =
-                    crate::unicode_keystroke::type_unicode_chunk_with_options(&chunk, newline_mode);
                 #[cfg(target_os = "linux")]
                 let result = crate::unicode_keystroke::type_unicode_chunk(&chunk);
                 let written = match result {
                     Ok(written) => written,
                     Err(error) => error.typed_chars(),
                 };
-                #[cfg(target_os = "macos")]
-                {
-                    let delivered = delivery.is_some_and(|delivery| {
-                        let posted: String = chunk.chars().take(written).collect();
-                        delivery.wait(&posted)
-                    });
-                    // Unsupported/stalled controls are tried once per session,
-                    // so a missing AX caret cannot add a delay to every delta.
-                    if !delivered {
-                        confirm_delivery.store(false, Ordering::Release);
-                    }
-                }
                 written
             })
             .await
@@ -3148,6 +3291,56 @@ impl TauriTextInsertionSession {
         }
         Ok(())
     }
+
+    #[cfg(target_os = "macos")]
+    async fn finalize_mac(
+        self,
+        final_text: Option<String>,
+    ) -> Result<MacInsertionCompletion, BackendError> {
+        self.finished.store(true, Ordering::Release);
+        if final_text.is_none() {
+            // Separate from the normal finished latch: normal finish must not
+            // cancel Write commands already accepted by the worker's queue.
+            self.cancel_requested.store(true, Ordering::Release);
+        }
+        let terminal = Arc::clone(&self.terminal);
+        terminal
+            .join_or_spawn(
+                move || async move {
+                    let worker = self.streaming_worker.clone();
+                    let session = &self;
+                    finish_mac_insertion_after_barrier(
+                        async move {
+                            match worker {
+                                Some(worker) => worker.finish().await,
+                                None => Ok(()),
+                            }
+                        },
+                        move || async move {
+                            if session.cancel_requested.load(Ordering::Acquire) {
+                                return Ok(MacInsertionCompletion::Cancelled);
+                            }
+                            match final_text {
+                                Some(text) if !text.is_empty() => session
+                                    .insert_final(text)
+                                    .await
+                                    .map(MacInsertionCompletion::Finished),
+                                Some(_) => {
+                                    Ok(MacInsertionCompletion::Finished(InsertOutcome::Inserted))
+                                }
+                                None => Ok(MacInsertionCompletion::Cancelled),
+                            }
+                        },
+                        || session.restore_platform_state(),
+                    )
+                    .await
+                },
+                |task| {
+                    tauri::async_runtime::spawn(task);
+                },
+            )
+            .await
+    }
 }
 
 impl TextInsertionSession for TauriTextInsertionSession {
@@ -3186,34 +3379,251 @@ impl TextInsertionSession for TauriTextInsertionSession {
     ) -> BoxFuture<'static, Result<InsertOutcome, BackendError>> {
         let session = self.clone();
         Box::pin(async move {
-            if session.finished.swap(true, Ordering::AcqRel) {
-                return Err(BackendError::new(
-                    BackendErrorCode::InvalidState,
-                    "text insertion session is already closed",
-                ));
+            #[cfg(target_os = "macos")]
+            {
+                match session.finalize_mac(Some(final_text)).await? {
+                    MacInsertionCompletion::Finished(outcome) => Ok(outcome),
+                    MacInsertionCompletion::Cancelled => Err(BackendError::new(
+                        BackendErrorCode::Cancelled,
+                        "text insertion session was cancelled before completion",
+                    )),
+                }
             }
-            let result = if final_text.is_empty() {
-                Ok(InsertOutcome::Inserted)
-            } else {
-                session.insert_final(final_text).await
-            };
-            if let Err(error) = session.restore_platform_state().await {
-                // 恢复输入源失败并不能撤销已经落下的文字。保留真实交付结果，
-                // 避免历史误报失败后诱导用户重试造成重复；无论插入成败都记录恢复错误。
-                log::warn!("[core-adapter] restore input state after insertion failed: {error}");
+            #[cfg(not(target_os = "macos"))]
+            {
+                if session.finished.swap(true, Ordering::AcqRel) {
+                    return Err(BackendError::new(
+                        BackendErrorCode::InvalidState,
+                        "text insertion session is already closed",
+                    ));
+                }
+                let result = if final_text.is_empty() {
+                    Ok(InsertOutcome::Inserted)
+                } else {
+                    session.insert_final(final_text).await
+                };
+                if let Err(error) = session.restore_platform_state().await {
+                    // 恢复输入源失败并不能撤销已经落下的文字。保留真实交付结果，
+                    // 避免历史误报失败后诱导用户重试造成重复；无论插入成败都记录恢复错误。
+                    log::warn!(
+                        "[core-adapter] restore input state after insertion failed: {error}"
+                    );
+                }
+                result
             }
-            result
         })
     }
 
     fn cancel(&self) -> BoxFuture<'static, Result<(), BackendError>> {
         let session = self.clone();
         Box::pin(async move {
-            if session.finished.swap(true, Ordering::AcqRel) {
-                return Ok(());
+            #[cfg(target_os = "macos")]
+            {
+                session.finalize_mac(None).await.map(|_| ())
             }
-            session.restore_platform_state().await
+            #[cfg(not(target_os = "macos"))]
+            {
+                if session.finished.swap(true, Ordering::AcqRel) {
+                    return Ok(());
+                }
+                session.restore_platform_state().await
+            }
         })
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod mac_insertion_lifecycle_tests {
+    use super::*;
+
+    fn spawn(task: BoxFuture<'static, ()>) {
+        tokio::spawn(task);
+    }
+
+    #[tokio::test]
+    async fn worker_start_failure_restores_the_previous_source_once() {
+        let restored = Arc::new(Mutex::new(Vec::new()));
+        let error = BackendError::new(BackendErrorCode::Platform, "worker unavailable");
+        let result = start_worker_restoring_on_error(
+            7,
+            || Err::<(), _>(error.clone()),
+            |token| {
+                let restored = &restored;
+                async move {
+                    restored.lock().push(token);
+                    Ok(())
+                }
+            },
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), error);
+        assert_eq!(*restored.lock(), [7]);
+        assert_eq!(
+            start_worker_restoring_on_error(
+                8,
+                || Ok(9),
+                |_| async {
+                    panic!("successful startup must retain the source for terminal cleanup")
+                }
+            )
+            .await
+            .unwrap(),
+            (8, 9)
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_barrier_skips_insertion_but_still_restores() {
+        let actions = Mutex::new(Vec::new());
+        let error = BackendError::new(BackendErrorCode::Internal, "worker stopped");
+        let result = finish_mac_insertion_after_barrier(
+            async {
+                actions.lock().push("barrier");
+                Err(error.clone())
+            },
+            || async { panic!("uncertain posted input must not be inserted again") },
+            || async {
+                actions.lock().push("restore");
+                Ok(())
+            },
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), error);
+        assert_eq!(*actions.lock(), ["barrier", "restore"]);
+    }
+
+    #[tokio::test]
+    async fn failed_final_insertion_still_restores_and_preserves_its_error() {
+        let actions = Mutex::new(Vec::new());
+        let error = BackendError::new(BackendErrorCode::Platform, "target unavailable");
+        let result = finish_mac_insertion_after_barrier(
+            async {
+                actions.lock().push("barrier");
+                Ok(())
+            },
+            || async {
+                actions.lock().push("insert");
+                Err(error.clone())
+            },
+            || async {
+                actions.lock().push("restore");
+                Err(BackendError::new(
+                    BackendErrorCode::Platform,
+                    "TIS unavailable",
+                ))
+            },
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), error);
+        assert_eq!(*actions.lock(), ["barrier", "insert", "restore"]);
+    }
+
+    #[tokio::test]
+    async fn restoration_error_keeps_written_outcome_but_is_reported_on_cancel() {
+        let error = BackendError::new(BackendErrorCode::Platform, "TIS unavailable");
+        let completed = MacInsertionCompletion::Finished(InsertOutcome::Inserted);
+        assert_eq!(
+            finish_mac_insertion_after_barrier(
+                async { Ok(()) },
+                || async { Ok(completed) },
+                || async { Err(error.clone()) },
+            )
+            .await
+            .unwrap(),
+            completed
+        );
+        assert_eq!(
+            finish_mac_insertion_after_barrier(
+                async { Ok(()) },
+                || async { Ok(MacInsertionCompletion::Cancelled) },
+                || async { Err(error.clone()) },
+            )
+            .await
+            .unwrap_err(),
+            error
+        );
+    }
+
+    async fn assert_terminal_join(completion: MacInsertionCompletion, drop_first: bool) {
+        let terminal = Arc::new(MacInsertionTerminal::default());
+        let actions = Arc::new(Mutex::new(Vec::new()));
+        let entered = Arc::new(tokio::sync::Semaphore::new(0));
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let observed = Arc::clone(&actions);
+        let start = Arc::clone(&entered);
+        let gate = Arc::clone(&release);
+        let mut first = Box::pin(terminal.join_or_spawn(
+            move || async move {
+                let observed = &observed;
+                finish_mac_insertion_after_barrier(
+                    async {
+                        observed.lock().push("barrier started");
+                        start.add_permits(1);
+                        gate.acquire().await.unwrap().forget();
+                        observed.lock().push("barrier drained");
+                        Ok(())
+                    },
+                    || async {
+                        observed.lock().push("effect");
+                        Ok(completion)
+                    },
+                    || async {
+                        observed.lock().push("source restored");
+                        Ok(())
+                    },
+                )
+                .await
+            },
+            spawn,
+        ));
+        assert!(futures_util::poll!(first.as_mut()).is_pending());
+        entered.acquire().await.unwrap().forget();
+        assert_eq!(*actions.lock(), ["barrier started"]);
+        let mut second = std::pin::pin!(terminal.join_or_spawn(
+            || async { panic!("duplicate terminal call must not repeat effects") },
+            spawn,
+        ));
+        assert!(futures_util::poll!(second.as_mut()).is_pending());
+        let first = if drop_first {
+            drop(first);
+            None
+        } else {
+            Some(first)
+        };
+        release.add_permits(1);
+        assert_eq!(second.await.unwrap(), completion);
+        if let Some(first) = first {
+            assert_eq!(first.await.unwrap(), completion);
+        }
+        assert_eq!(
+            *actions.lock(),
+            [
+                "barrier started",
+                "barrier drained",
+                "effect",
+                "source restored"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_finish_and_cancel_wait_for_the_same_terminal_barrier() {
+        for completion in [
+            MacInsertionCompletion::Finished(InsertOutcome::Inserted),
+            MacInsertionCompletion::Cancelled,
+        ] {
+            assert_terminal_join(completion, false).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_the_initial_terminal_future_does_not_skip_restore() {
+        for completion in [
+            MacInsertionCompletion::Finished(InsertOutcome::Inserted),
+            MacInsertionCompletion::Cancelled,
+        ] {
+            assert_terminal_join(completion, true).await;
+        }
     }
 }
 

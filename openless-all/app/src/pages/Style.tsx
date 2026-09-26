@@ -1177,7 +1177,7 @@ export function Style() {
               style={{
                 position: 'fixed',
                 inset: 0,
-                background: 'var(--ol-overlay-bg)',
+                background: 'var(--ol-dialog-backdrop)',
                 ...(mobile
                   ? {}
                   : {
@@ -1220,8 +1220,8 @@ export function Style() {
                   display: 'grid',
                   gridTemplateRows: 'auto minmax(0, 1fr)',
                   overflow: 'hidden',
-                  boxShadow: mobile ? 'none' : 'var(--ol-shadow-xl)',
-                  borderRadius: mobile ? 0 : undefined,
+                  boxShadow: mobile ? 'none' : 'var(--ol-dialog-shadow)',
+                  borderRadius: mobile ? 0 : 'var(--ol-dialog-radius)',
                 }}
               >
                 <div style={{ padding: 18, borderBottom: '0.5px solid var(--ol-line)' }}>

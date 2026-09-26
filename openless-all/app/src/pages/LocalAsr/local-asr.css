@@ -349,7 +349,7 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: var(--ol-overlay-bg);
+  background: var(--ol-dialog-backdrop);
 }
 .ol-model-dialog {
   display: flex;
@@ -358,9 +358,9 @@
   height: min(720px, calc(100dvh - 48px));
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--ol-line-strong);
-  border-radius: 14px;
-  box-shadow: var(--ol-shadow-xl);
+  border: 1px solid var(--ol-dialog-border);
+  border-radius: var(--ol-dialog-radius);
+  box-shadow: var(--ol-dialog-shadow);
   background: var(--ol-surface);
   color: var(--ol-ink);
   outline: none;

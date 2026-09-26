@@ -71,7 +71,7 @@ Tauri 在 `src-tauri/src/coordinator.rs` 构造 Core，`core_adapters.rs` 组装
 
 Siri、Classic、Typeless 三种胶囊共用 Core 的 `CapsuleStyle`，窗口尺寸与点击范围在保存偏好时同步。胶囊按显示器工作区底部定位，避开未自动隐藏的 Dock/任务栏；可见期间重新检查工作区。带正文的浮窗使用不透明底色，聊天面板另叠加细噪点纹理，圆角外部仍保留透明区域。
 
-思考动画覆盖转写、润色和原生文字写入，输入完成后才收尾。macOS 流式键盘输入在可读取 AX 光标的控件上等待原控件光标到达本批文字末尾，再完成写入和恢复输入源；仅读选区范围，不读正文。不可读、提交型 Return 或等待超过 10 秒时回到按键发送完成语义，本次会话停止继续探测该控件。目标应用的实际输入表现仍需设备验收。
+思考动画覆盖转写、润色和原生文字写入，输入完成后才收尾。macOS 流式键盘输入由会话内串行 worker 维护原控件和累计 UTF-16 终点；每批发送后不再等待 AX 长确认，finish/cancel 在已接收写入之后等待最终屏障，再恢复输入源。AX 仅读选区范围，不读正文；采用 250 ms 无进展预算和 10 秒总预算。不可读、提交型 Return 或预算耗尽时明确降级到按键已发送语义，不重新粘贴已发送文字。目标应用的实际输入表现仍需设备验收。
 
 选区直接润色在捕获文字和原输入目标后显示处理中提示，重复快捷键的 Busy 返回不覆盖该提示。已有语音选区入口在松开快捷键后继续显示思考动画，直到处理/替换完成，或交给确认和预览面板。录音提示音的 Web Audio context 在恢复超时或音频时钟冻结时丢弃并最多重试一次，重试沿用原请求的取消和迟到边界。
 
@@ -86,7 +86,8 @@ Siri、Classic、Typeless 三种胶囊共用 Core 的 `CapsuleStyle`，窗口尺
 | 服务凭据 | Core `CredentialStore` 合同，Tauri keyring/Android Keystore 或 Linux `credentials.rs` 适配 |
 | 云端 ASR / LLM | Core provider 目录、选择与传输模块；平台本地引擎位于 `src-tauri/src/asr/local/` 或 Linux Host |
 | 风格包市场 | Core `marketplace.rs` 管理 HTTP、GitHub device flow 与本地安装；地址由 `MarketplaceConfig` 注入，内置默认值在该模块 |
-| 私有云同步 | Core `cloud_sync.rs` 复用同一 GitHub 登录与官方服务地址，按版本同步词典、纠错、风格包和允许的个人偏好；`cloud_sync_transaction.rs` 在本地恢复失败时回滚文件，凭据和设备配置保持本机所有。合同及边界见 [官方云同步](cloud-sync.md) |
+| 加密云同步 | Core `cloud_sync_e2ee` 复用 GitHub 登录并交换独立同步会话，通过 `/v1/...` 保存客户端加密快照；protocol/documents/store 分别负责加密协议、登记与合并、仓库及系统凭据的受控恢复。默认关闭，凭据、本地基线和回滚日志不交给 UI。详情与验证边界见 [加密云同步客户端](encrypted-cloud-sync.md) |
+| 旧手动同步 | `cloud_sync.rs` 和 `/me/sync` 保留有限明文快照合同；旧入口不上传新加密文档中的服务密钥。已注册加密恢复 gate 的仓库拒绝旧多文件恢复，防止绕过受控恢复；未注册的旧 Host 保留原合同。见 [旧同步合同](cloud-sync.md) |
 | 风格图标 | React `src/lib/stylePackIcon.ts` 清理上传的 SVG 并转成 PNG；`set_style_pack_icon` / `read_style_pack_icon` 经 Core `style_pack_store.rs` 保存资源、校验读取范围并返回图片 data URL。图标沿用 ZIP 的 64 KiB 限制，与风格包一起导出 |
 | 局域网手机输入 | Core `remote_input_service.rs` 定义共享业务，Tauri `remote_server/` 提供本机网络入口和网页资源 |
 

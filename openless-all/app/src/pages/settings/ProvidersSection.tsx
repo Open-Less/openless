@@ -139,6 +139,7 @@ export const LLM_LABELS = [
   ['mimo', 'mimo'],
   ['cometapi', 'cometapi'],
   ['openrouterFree', 'openrouterFree'],
+  ['requesty', 'requesty'],
   ['orcarouter', 'orcarouter'],
   ['alibabaCoding', 'alibabaCoding'],
   ['codingPlanX', 'codingPlanX'],

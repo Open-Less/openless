@@ -60,6 +60,9 @@ const RESERVED_EXTRA_HEADER_NAMES: &[&str] = &[
 const KEYRING_CHUNK_MAX_UTF16_UNITS: usize = 1000;
 
 static CREDENTIALS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static SYNC_WRITE_GATE: OnceLock<
+    Mutex<Option<std::sync::Arc<openless_core::credentials::SyncWriteGate>>>,
+> = OnceLock::new();
 
 // Keychain 访问节流：每进程只补写/扫描一次，避免重复授权弹窗。
 #[cfg(not(target_os = "android"))]
@@ -83,6 +86,367 @@ static ANDROID_MARKETPLACE_LEGACY_SCRUBBED: OnceLock<Mutex<bool>> = OnceLock::ne
 
 fn credentials_lock() -> &'static Mutex<()> {
     CREDENTIALS_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn sync_write_gate() -> Option<std::sync::Arc<openless_core::credentials::SyncWriteGate>> {
+    SYNC_WRITE_GATE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .clone()
+}
+
+fn install_sync_write_gate(
+    installed: &mut Option<std::sync::Arc<openless_core::credentials::SyncWriteGate>>,
+    gate: std::sync::Arc<openless_core::credentials::SyncWriteGate>,
+) -> Result<()> {
+    if let Some(current) = installed.as_ref() {
+        anyhow::ensure!(
+            std::sync::Arc::ptr_eq(current, &gate),
+            "credential vault already has a different encrypted sync gate"
+        );
+    } else {
+        *installed = Some(gate);
+    }
+    Ok(())
+}
+
+fn sync_access_error(
+    error: openless_core::cloud_sync_e2ee_documents::DocumentError,
+) -> anyhow::Error {
+    use openless_core::cloud_sync_e2ee_documents::DocumentError;
+    use openless_core::{BackendError, BackendErrorCode};
+    let code = if error == DocumentError::SourceChanged {
+        BackendErrorCode::Busy
+    } else {
+        BackendErrorCode::OutcomeUnknown
+    };
+    BackendError::new(
+        code,
+        if code == BackendErrorCode::Busy {
+            "credential store is busy with encrypted sync"
+        } else {
+            "credential store requires encrypted sync recovery"
+        },
+    )
+    .into()
+}
+
+/// The lease precedes both the vault lock and the initial read. Cancellation of
+/// the async caller cannot release it: this entire function runs in its worker.
+fn mutate_credentials(
+    origin: openless_core::credentials::ChangeOrigin,
+    update: impl FnOnce(&mut CredsRoot) -> Result<bool>,
+) -> Result<()> {
+    mutate_credentials_with(
+        sync_write_gate(),
+        origin,
+        load_credentials_for_update,
+        update,
+        save_credentials,
+    )
+}
+
+fn mutate_credentials_with(
+    gate: Option<std::sync::Arc<openless_core::credentials::SyncWriteGate>>,
+    origin: openless_core::credentials::ChangeOrigin,
+    load: impl FnOnce() -> Result<CredsRoot>,
+    update: impl FnOnce(&mut CredsRoot) -> Result<bool>,
+    persist: impl FnOnce(&CredsRoot) -> Result<()>,
+) -> Result<()> {
+    let was_unbound = gate.is_none();
+    let permit = gate
+        .map(|gate| gate.begin_mutation())
+        .transpose()
+        .map_err(sync_access_error)?;
+    let _guard = credentials_lock().lock();
+    // First binding may win the lock after this worker observed no gate.
+    // Such a worker must retry; it cannot write through a newly installed barrier.
+    if was_unbound && sync_write_gate().is_some() {
+        return Err(sync_access_error(
+            openless_core::cloud_sync_e2ee_documents::DocumentError::SourceChanged,
+        ));
+    }
+    let prepared = (|| -> Result<(CredsRoot, bool)> {
+        let mut root = load()?;
+        let changed = update(&mut root)?;
+        Ok((root, changed))
+    })();
+    let (root, changed) = match prepared {
+        Ok(result) => result,
+        Err(error) => {
+            if let Some(permit) = permit {
+                permit.abort_unmodified().map_err(sync_access_error)?;
+            }
+            return Err(error);
+        }
+    };
+    if !changed {
+        if let Some(permit) = permit {
+            permit.abort_unmodified().map_err(sync_access_error)?;
+        }
+        return Ok(());
+    }
+    if let Err(error) = persist(&root) {
+        // The chunked writer can prove that the old manifest never changed.
+        // Other native failures remain uncertain and intentionally retain intent.
+        if matches!(
+            error.downcast_ref::<VaultCommitFailure>(),
+            Some(VaultCommitFailure::Unchanged)
+        ) {
+            if let Some(permit) = permit {
+                permit.abort_unmodified().map_err(sync_access_error)?;
+            }
+        }
+        return Err(error);
+    }
+    if let Some(permit) = permit {
+        permit.commit(origin).map_err(sync_access_error)?;
+    }
+    Ok(())
+}
+
+fn require_sync_exclusive(permit: &openless_core::credentials::ExclusivePermit) -> Result<()> {
+    let gate = sync_write_gate()
+        .ok_or_else(|| anyhow::anyhow!("encrypted sync credential gate is not bound"))?;
+    if !permit.belongs_to(&gate) {
+        anyhow::bail!("encrypted sync credential lease belongs to another gate");
+    }
+    Ok(())
+}
+
+fn validate_sync_key(value: &openless_core::SecretValue) -> Result<()> {
+    use base64::Engine;
+    let encoded = value.expose_secret();
+    anyhow::ensure!(encoded.len() == 43, "invalid encrypted sync key encoding");
+    let decoded = zeroize::Zeroizing::new(
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(encoded)
+            .map_err(|_| anyhow::anyhow!("invalid encrypted sync key encoding"))?,
+    );
+    anyhow::ensure!(
+        decoded.len() == 32
+            && base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&*decoded) == encoded,
+        "invalid encrypted sync key encoding"
+    );
+    Ok(())
+}
+
+#[cfg(not(target_os = "android"))]
+fn read_sync_secret_raw(
+    account: &openless_core::credentials::SyncSecretAccount,
+) -> Result<Option<openless_core::SecretValue>> {
+    get_keyring_password(account.as_str())?
+        .map(|raw| {
+            let value = openless_core::SecretValue::new(raw);
+            validate_sync_key(&value)?;
+            Ok(value)
+        })
+        .transpose()
+}
+
+#[cfg(not(target_os = "android"))]
+fn write_sync_secret_raw(
+    account: &openless_core::credentials::SyncSecretAccount,
+    value: &openless_core::SecretValue,
+) -> Result<()> {
+    set_keyring_password(account.as_str(), value.expose_secret())
+}
+
+#[cfg(not(target_os = "android"))]
+fn remove_sync_secret_raw(account: &openless_core::credentials::SyncSecretAccount) -> Result<()> {
+    match keyring_entry_for(account.as_str())?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(_) => anyhow::bail!("could not remove encrypted sync key from system credential store"),
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+struct SyncSecretCrypto<C> {
+    inner: C,
+    account: String,
+}
+
+#[cfg(any(target_os = "android", test))]
+impl<C> SyncSecretCrypto<C> {
+    fn aad(&self, original: &[u8]) -> Vec<u8> {
+        let mut aad = b"openless-e2ee-local-keystore\0v1\0".to_vec();
+        aad.extend_from_slice(self.account.as_bytes());
+        aad.push(0);
+        aad.extend_from_slice(original);
+        aad
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+impl<C: super::android_credentials::AndroidCredentialsCrypto>
+    super::android_credentials::AndroidCredentialsCrypto for SyncSecretCrypto<C>
+{
+    fn seal(
+        &mut self,
+        plaintext: &[u8],
+        aad: &[u8],
+    ) -> std::result::Result<
+        super::android_credentials::SealedPayload,
+        super::android_credentials::CryptoErrorKind,
+    > {
+        self.inner.seal(plaintext, &self.aad(aad))
+    }
+    fn open(
+        &mut self,
+        sealed: &super::android_credentials::SealedPayload,
+        aad: &[u8],
+    ) -> std::result::Result<Vec<u8>, super::android_credentials::CryptoErrorKind> {
+        self.inner.open(sealed, &self.aad(aad))
+    }
+    fn delete_key(
+        &mut self,
+    ) -> std::result::Result<(), super::android_credentials::CryptoErrorKind> {
+        // This namespace never owns the provider vault's shared master key.
+        Ok(())
+    }
+    fn migration_complete(
+        &mut self,
+    ) -> std::result::Result<bool, super::android_credentials::CryptoErrorKind> {
+        // Sync keys have never had a plaintext format. Reject downgrade without
+        // reading or modifying the provider vault's independent migration marker.
+        Ok(true)
+    }
+    fn mark_migration_complete(
+        &mut self,
+    ) -> std::result::Result<(), super::android_credentials::CryptoErrorKind> {
+        Ok(())
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AndroidSyncKeyRecord {
+    version: u32,
+    account: String,
+    value: String,
+}
+
+#[cfg(any(target_os = "android", test))]
+impl Drop for AndroidSyncKeyRecord {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.value.zeroize();
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+fn read_android_sync_key_with_crypto(
+    path: &Path,
+    account: &openless_core::credentials::SyncSecretAccount,
+    crypto: &mut impl super::android_credentials::AndroidCredentialsCrypto,
+) -> Result<Option<openless_core::SecretValue>> {
+    use super::android_credentials::ReadOutcome;
+    match std::fs::metadata(path) {
+        Ok(meta) => anyhow::ensure!(
+            meta.len() <= 16_384,
+            "encrypted sync key envelope exceeds limit"
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => anyhow::bail!("could not inspect encrypted sync key envelope"),
+    }
+    let bytes = match super::android_credentials::read(path, crypto)
+        .map_err(|_| anyhow::anyhow!("could not open Android Keystore sync key"))?
+    {
+        ReadOutcome::Missing => return Ok(None),
+        ReadOutcome::Legacy(mut bytes) => {
+            use zeroize::Zeroize;
+            bytes.zeroize();
+            anyhow::bail!("legacy plaintext sync keys are not supported");
+        }
+        ReadOutcome::Plaintext(bytes) => zeroize::Zeroizing::new(bytes),
+    };
+    let mut record: AndroidSyncKeyRecord = serde_json::from_slice(&bytes)
+        .map_err(|_| anyhow::anyhow!("invalid encrypted sync key record"))?;
+    anyhow::ensure!(
+        record.version == 1 && record.account == account.as_str(),
+        "encrypted sync key binding mismatch"
+    );
+    let value = openless_core::SecretValue::new(std::mem::take(&mut record.value));
+    validate_sync_key(&value)?;
+    Ok(Some(value))
+}
+
+#[cfg(any(target_os = "android", test))]
+fn write_android_sync_key_with_crypto(
+    path: &Path,
+    account: &openless_core::credentials::SyncSecretAccount,
+    value: &openless_core::SecretValue,
+    crypto: &mut impl super::android_credentials::AndroidCredentialsCrypto,
+) -> Result<()> {
+    validate_sync_key(value)?;
+    let record = AndroidSyncKeyRecord {
+        version: 1,
+        account: account.as_str().into(),
+        value: value.expose_secret().into(),
+    };
+    let bytes = zeroize::Zeroizing::new(
+        serde_json::to_vec(&record)
+            .map_err(|_| anyhow::anyhow!("cannot encode encrypted sync key record"))?,
+    );
+    super::android_credentials::write_verified(path, &bytes, crypto)
+        .map_err(|_| anyhow::anyhow!("could not save Android Keystore sync key"))
+}
+
+#[cfg(target_os = "android")]
+fn android_sync_key_path(
+    account: &openless_core::credentials::SyncSecretAccount,
+) -> Result<PathBuf> {
+    let credential_path = android_credentials_path()?;
+    let parent = credential_path
+        .parent()
+        .context("Android credential directory is unavailable")?;
+    Ok(parent
+        .join("sync-secrets")
+        .join(format!("{}.json", account.as_str())))
+}
+
+#[cfg(target_os = "android")]
+fn read_sync_secret_raw(
+    account: &openless_core::credentials::SyncSecretAccount,
+) -> Result<Option<openless_core::SecretValue>> {
+    let mut crypto = SyncSecretCrypto {
+        inner: super::android_credentials::AndroidKeystoreCrypto,
+        account: account.as_str().into(),
+    };
+    read_android_sync_key_with_crypto(&android_sync_key_path(account)?, account, &mut crypto)
+}
+
+#[cfg(target_os = "android")]
+fn write_sync_secret_raw(
+    account: &openless_core::credentials::SyncSecretAccount,
+    value: &openless_core::SecretValue,
+) -> Result<()> {
+    let mut crypto = SyncSecretCrypto {
+        inner: super::android_credentials::AndroidKeystoreCrypto,
+        account: account.as_str().into(),
+    };
+    write_android_sync_key_with_crypto(
+        &android_sync_key_path(account)?,
+        account,
+        value,
+        &mut crypto,
+    )
+}
+
+#[cfg(target_os = "android")]
+fn remove_sync_secret_raw(account: &openless_core::credentials::SyncSecretAccount) -> Result<()> {
+    let path = android_sync_key_path(account)?;
+    // Remove only this binding, never the shared non-exportable Keystore master key.
+    for item in [
+        path.clone(),
+        path.with_extension("json.tmp"),
+        path.with_extension("json.pending"),
+    ] {
+        super::android_credentials::secure_remove(&item)
+            .map_err(|_| anyhow::anyhow!("could not remove Android sync key envelope"))?;
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "android")]
@@ -120,7 +484,13 @@ fn store_credentials_cache(root: &CredsRoot) {
 }
 
 fn record_vault_read_failure(error: &anyhow::Error) {
-    let chain = format!("{error:#}");
+    // Serde errors may echo a malformed field's raw string (including a secret).
+    // Preserve native Keystore error categories while keeping payload diagnostics local.
+    let chain = if error.downcast_ref::<serde_json::Error>().is_some() {
+        "credential payload could not be decoded".to_string()
+    } else {
+        format!("{error:#}")
+    };
     *last_vault_read_error_slot().lock() = Some(chain.clone());
     let mut logged = last_vault_read_error_logged_slot().lock();
     if logged.as_deref() != Some(chain.as_str()) {
@@ -225,7 +595,7 @@ struct CredsProviders {
 /// 多模态（Omni）模型配置：一个 active provider + 按 provider 隔离的 entry。
 /// entry 字段形状与 LLM 对齐（API Key / Base URL / Model / 温度 / 额外请求头），
 /// 但存放在独立命名空间，绝不与 `providers.llm` 共享槽位。
-#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct CredsOmni {
     #[serde(default = "creds_default_omni")]
     active: String,
@@ -233,13 +603,26 @@ struct CredsOmni {
     providers: HashMap<String, CredsOmniEntry>,
 }
 
+impl Default for CredsOmni {
+    fn default() -> Self {
+        Self {
+            active: creds_default_omni(),
+            providers: HashMap::new(),
+        }
+    }
+}
+
 fn creds_default_omni() -> String {
     "custom".into()
 }
 
-#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq)]
 #[allow(non_snake_case)]
 struct CredsOmniEntry {
+    #[serde(flatten)]
+    channel: ChannelMeta,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    displayName: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     apiKey: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -254,6 +637,9 @@ struct CredsOmniEntry {
 
 impl CredsOmniEntry {
     fn is_empty(&self) -> bool {
+        if self.channel.providerType.is_some() {
+            return false;
+        }
         self.apiKey.as_deref().unwrap_or("").is_empty()
             && self.baseURL.as_deref().unwrap_or("").is_empty()
             && self.model.as_deref().unwrap_or("").is_empty()
@@ -296,7 +682,7 @@ impl std::fmt::Debug for MarketplaceGithubToken {
 ///     `None` = v1 老数据，此时 map key 本身就是 providerType（见 `channel_provider_type`）。
 ///   - `order` 越小越优先，启用列表的第一个即"当前使用"。
 ///   - 关闭的渠道会被自动排到末尾（见 `commands::channels::toggle`）。
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[allow(non_snake_case)]
 struct ChannelMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -338,7 +724,7 @@ fn is_zero(value: &u64) -> bool {
 
 /// 「测试连通」的结果，持久化以便重启后仍能看到上次测试的延迟。
 /// `error` 同时承担 P0 的失败标红（测试失败）与 P2 的运行时失败标红。
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[allow(non_snake_case)]
 struct ChannelTest {
     ok: bool,
@@ -628,6 +1014,49 @@ fn migrate_channel_map<V: HasChannelMeta>(map: &mut HashMap<String, V>, active: 
 /// 渠道 schema 版本：1 = 一个 preset 一个槽；2 = 渠道卡片。
 const CHANNELS_SCHEMA_VERSION: u32 = 2;
 
+/// Early Omni vaults used derive(Default), bypassing the serde "custom" default.
+/// Legacy account imports could consequently write a complete provider under "".
+/// Normalize the loaded copy only; a later gated save owns persistence. Never
+/// combine two different endpoint/key/model configurations or discard either one.
+fn migrate_legacy_omni_slot(omni: &mut CredsOmni) -> bool {
+    let Some(legacy) = omni.providers.get("") else {
+        return false;
+    };
+    if !matches!(
+        legacy.channel.providerType.as_deref(),
+        None | Some("" | "custom")
+    ) {
+        return false;
+    }
+    let mut recovered = legacy.clone();
+    recovered.channel.providerType = Some(creds_default_omni());
+    if let Some(current) = omni.providers.get("custom") {
+        if !matches!(
+            current.channel.providerType.as_deref(),
+            None | Some("" | "custom")
+        ) {
+            return false;
+        }
+        let mut normalized = current.clone();
+        normalized.channel.providerType = Some(creds_default_omni());
+        if normalized != recovered {
+            return false;
+        }
+    }
+    omni.providers.remove("");
+    omni.providers.insert(creds_default_omni(), recovered);
+    if omni.active.is_empty() {
+        omni.active = creds_default_omni();
+    }
+    // Readers normalize a copy of the same cache; emit this value-free evidence
+    // once per process, without logging the source configuration or identifiers.
+    static RECOVERY_LOGGED: AtomicBool = AtomicBool::new(false);
+    if !RECOVERY_LOGGED.swap(true, Ordering::Relaxed) {
+        log::info!("[e2ee-capture] stage=legacy_omni_identity code=recovered");
+    }
+    true
+}
+
 /// 就地把 v1 数据补成渠道卡片。返回是否有实际改动（调用方据此决定要不要落盘）。
 fn migrate_channels(root: &mut CredsRoot) -> bool {
     let active_asr = root.active.asr.clone();
@@ -662,7 +1091,8 @@ fn migrate_channels(root: &mut CredsRoot) -> bool {
             root.active.llm = current_channel_id(&root.providers.llm).unwrap_or_default();
         }
     }
-    changed
+    // Omni normalization must not trigger the separate ASR/LLM active fallback.
+    migrate_legacy_omni_slot(&mut root.omni) || changed
 }
 
 /// 全新安装的平台预置。
@@ -1180,6 +1610,63 @@ fn mark_marketplace_token_verified() {
     MARKETPLACE_TOKEN_REJECTED.store(false, Ordering::SeqCst);
 }
 
+#[cfg(any(not(target_os = "android"), test))]
+fn set_marketplace_token_with(
+    gate: Option<std::sync::Arc<openless_core::credentials::SyncWriteGate>>,
+    value: &str,
+    load: impl FnOnce() -> Result<CredsRoot>,
+    persist: impl FnOnce(&CredsRoot) -> Result<()>,
+) -> Result<()> {
+    mutate_credentials_with(
+        gate,
+        openless_core::credentials::ChangeOrigin::LocalOnly,
+        load,
+        |root| {
+            write_marketplace_github_token(root, Some(value.to_string()));
+            Ok(true)
+        },
+        |root| {
+            persist(root)?;
+            // Keep verification in the same vault critical section as publication.
+            if value.trim().is_empty() {
+                invalidate_marketplace_token_process_local();
+            } else {
+                mark_marketplace_token_verified();
+            }
+            Ok(())
+        },
+    )
+}
+
+#[cfg(any(not(target_os = "android"), test))]
+fn remove_marketplace_token_with(
+    gate: Option<std::sync::Arc<openless_core::credentials::SyncWriteGate>>,
+    load: impl FnOnce() -> Result<CredsRoot>,
+    persist: impl FnOnce(&CredsRoot) -> Result<()>,
+) -> Result<()> {
+    // Block new reads immediately, including when the gate is busy with restore.
+    invalidate_marketplace_token_process_local();
+    let result = mutate_credentials_with(
+        gate,
+        openless_core::credentials::ChangeOrigin::LocalOnly,
+        load,
+        |root| {
+            // A concurrent login could have finished while this worker waited for the lock.
+            invalidate_marketplace_token_process_local();
+            write_marketplace_github_token(root, None);
+            Ok(true)
+        },
+        persist,
+    );
+    if result.is_err() {
+        // Read/gate failures happen before the update closure. Reassert the local
+        // revocation after any earlier in-flight login has left its vault section.
+        let _guard = credentials_lock().lock();
+        invalidate_marketplace_token_process_local();
+    }
+    result
+}
+
 fn read_legacy_credentials_file(path: &Path) -> Option<CredsRoot> {
     if !path.exists() {
         return None;
@@ -1221,11 +1708,101 @@ fn remove_legacy_credentials_file_best_effort() {
 struct CredsChunkManifest {
     openless_credentials_storage: String,
     version: u32,
-    /// Earlier vaults used UUID-prefixed chunks. Keep reading them during migration;
-    /// current chunked writes use stable names so item authorizations can persist.
+    /// Every new Windows write uses a private generation; old stable chunks remain
+    /// readable until one atomic manifest update commits the new complete payload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     generation: Option<String>,
     chunks: usize,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum VaultCommitFailure {
+    #[error("credential vault write failed before commit")]
+    Unchanged,
+    #[error("credential vault commit result requires reconciliation")]
+    Unknown,
+}
+
+/// Each candidate lives under a new UUID namespace. The single manifest is the
+/// only publication point: readers never guess a generation from orphan chunks.
+#[cfg(any(not(any(target_os = "macos", target_os = "android")), test))]
+fn save_chunked_credentials_with(
+    json: &str,
+    mut read: impl FnMut(&str) -> Result<Option<String>>,
+    mut write: impl FnMut(&str, &str) -> Result<()>,
+    mut delete: impl FnMut(&str) -> Result<()>,
+) -> Result<()> {
+    let previous_head =
+        read(KEYRING_CREDENTIALS_ACCOUNT).map_err(|_| VaultCommitFailure::Unchanged)?;
+    let previous = match previous_head.as_deref() {
+        Some(head) => match read_chunk_manifest(head) {
+            Some(manifest) if manifest.chunks > 0 => Some(manifest),
+            Some(_) => return Err(VaultCommitFailure::Unchanged.into()),
+            None => {
+                decode_single_credentials(head).map_err(|_| VaultCommitFailure::Unchanged)?;
+                None
+            }
+        },
+        None => None,
+    };
+    decode_single_credentials(json).map_err(|_| VaultCommitFailure::Unchanged)?;
+    let generation = uuid::Uuid::new_v4().to_string();
+    let chunks = chunk_json_payload(json);
+    let accounts = (0..chunks.len())
+        .map(|index| chunk_account(Some(&generation), index))
+        .collect::<Vec<_>>();
+    let candidate = CredsChunkManifest {
+        openless_credentials_storage: "chunked".into(),
+        version: 1,
+        generation: Some(generation),
+        chunks: chunks.len(),
+    };
+    let candidate_head =
+        serde_json::to_string(&candidate).map_err(|_| VaultCommitFailure::Unchanged)?;
+    let prepared = (|| -> Result<()> {
+        for (account, chunk) in accounts.iter().zip(&chunks) {
+            write(account, chunk)?;
+        }
+        let mut recovered = zeroize::Zeroizing::new(String::with_capacity(json.len()));
+        for account in &accounts {
+            let chunk =
+                zeroize::Zeroizing::new(read(account)?.ok_or(VaultCommitFailure::Unchanged)?);
+            if recovered.len().saturating_add(chunk.len()) > json.len() {
+                return Err(VaultCommitFailure::Unchanged.into());
+            }
+            recovered.push_str(&chunk);
+        }
+        if recovered.as_str() != json {
+            return Err(VaultCommitFailure::Unchanged.into());
+        }
+        Ok(())
+    })();
+    if prepared.is_err() {
+        for account in &accounts {
+            let _ = delete(account);
+        }
+        return Err(VaultCommitFailure::Unchanged.into());
+    }
+
+    // Even a failed native call may have committed. Confirm the exact head before
+    // deciding whether a candidate may be discarded, or old chunks may be pruned.
+    let _publication = write(KEYRING_CREDENTIALS_ACCOUNT, &candidate_head);
+    match read(KEYRING_CREDENTIALS_ACCOUNT) {
+        Ok(Some(head)) if head == candidate_head => {}
+        Ok(head) if head == previous_head => {
+            for account in &accounts {
+                let _ = delete(account);
+            }
+            return Err(VaultCommitFailure::Unchanged.into());
+        }
+        _ => return Err(VaultCommitFailure::Unknown.into()),
+    }
+    if let Some(previous) = previous {
+        for index in 0..previous.chunks {
+            let _ = delete(&chunk_account(previous.generation.as_deref(), index));
+        }
+    }
+    Ok(())
 }
 
 /// Legacy UUID-prefixed and current stable chunk names share one reader.
@@ -1413,7 +1990,6 @@ fn load_keyring_credentials_with(
     Ok(Some(root))
 }
 
-#[cfg(any(not(target_os = "android"), test))]
 fn decode_single_credentials(json: &str) -> Result<CredsRoot> {
     // Serde defaults alone would accept unrelated JSON as an empty configuration.
     let payload: serde_json::Value =
@@ -1543,9 +2119,141 @@ fn load_credentials_for_update() -> Result<CredsRoot> {
     Ok(root)
 }
 
+/// Pending restore startup may inspect existing sources, but the restore lease
+/// exclusively owns their eventual migration/replacement. Never synthesize an
+/// empty vault from a failed native read or a corrupt legacy source.
+fn load_credentials_for_recovery_readonly() -> Result<CredsRoot> {
+    #[cfg(not(target_os = "android"))]
+    let mut root = load_desktop_credentials_readonly_with(
+        get_keyring_password,
+        || {
+            let path = credentials_path()?;
+            match std::fs::read(path) {
+                Ok(bytes) => {
+                    let bytes = zeroize::Zeroizing::new(bytes);
+                    let json = std::str::from_utf8(&bytes)
+                        .context("invalid legacy credential encoding")?;
+                    decode_single_credentials(json).map(Some)
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(_) => anyhow::bail!("could not read legacy credential source"),
+            }
+        },
+        cfg!(target_os = "macos"),
+    )?;
+    #[cfg(target_os = "android")]
+    let mut root = {
+        let path = android_credentials_path()?;
+        let mut crypto = super::android_credentials::AndroidKeystoreCrypto;
+        let mut loaded = load_android_credentials_readonly_at(&path, &mut crypto)?;
+        if loaded.is_none() {
+            for source in android_legacy_credentials_paths(&path) {
+                loaded = load_android_credentials_readonly_at(&source, &mut crypto)?;
+                if loaded.is_some() {
+                    break;
+                }
+            }
+        }
+        loaded.unwrap_or_default()
+    };
+    migrate_channels(&mut root);
+    Ok(root)
+}
+
+#[cfg(any(not(target_os = "android"), test))]
+fn load_desktop_credentials_readonly_with(
+    mut read: impl FnMut(&str) -> Result<Option<String>>,
+    legacy_file: impl FnOnce() -> Result<Option<CredsRoot>>,
+    prefer_single: bool,
+) -> Result<CredsRoot> {
+    if prefer_single {
+        if let Some(json) = read(KEYRING_SINGLE_CREDENTIALS_ACCOUNT)? {
+            let json = zeroize::Zeroizing::new(json);
+            return decode_single_credentials(&json);
+        }
+    }
+    if let Some(root) = load_keyring_credentials_with(
+        &mut read,
+        |_, _| anyhow::bail!("read-only credential loading cannot consolidate"),
+        false,
+    )? {
+        return Ok(root);
+    }
+    if let Some(root) = legacy_file()? {
+        return Ok(root);
+    }
+    let mut root = CredsRoot::default();
+    for account in CredentialAccount::all() {
+        if let Some(value) = read(account.keyring_account())? {
+            write_account(&mut root, *account, Some(value));
+        }
+    }
+    Ok(clean_credentials(&root))
+}
+
+#[cfg(any(target_os = "android", test))]
+fn load_android_credentials_readonly_at(
+    path: &Path,
+    crypto: &mut impl super::android_credentials::AndroidCredentialsCrypto,
+) -> Result<Option<CredsRoot>> {
+    use super::android_credentials::ReadOutcome;
+    let bytes =
+        match super::android_credentials::read_only(path, crypto).map_err(anyhow::Error::new)? {
+            ReadOutcome::Missing => return Ok(None),
+            ReadOutcome::Plaintext(bytes) | ReadOutcome::Legacy(bytes) => {
+                zeroize::Zeroizing::new(bytes)
+            }
+        };
+    let json =
+        std::str::from_utf8(&bytes).context("invalid read-only Android credential encoding")?;
+    let root = decode_single_credentials(json)?;
+    // Legacy OAuth remains excluded even while the encrypted restore barrier
+    // temporarily prevents rewriting its old source envelope.
+    Ok(Some(android_persistable_credentials(&root)))
+}
+
+fn load_credentials_for_sync_binding_with(
+    readonly_required: bool,
+    readonly: impl FnOnce() -> Result<CredsRoot>,
+    ordinary: impl FnOnce() -> Result<CredsRoot>,
+) -> Result<CredsRoot> {
+    if readonly_required {
+        readonly()
+    } else {
+        ordinary()
+    }
+}
+
+/// Bound readers may run before recovery or while an exclusive restore is
+/// preparing. Only inspect complete sources; the next gated save can migrate
+/// legacy storage. A failed read leaves no default cache and remains retryable.
+fn load_credentials_readonly_into_cache_with(
+    loader: impl FnOnce() -> Result<CredsRoot>,
+) -> Result<CredsRoot> {
+    if let Some(cached) = credentials_cache().lock().as_ref().cloned() {
+        return Ok(cached);
+    }
+    match loader() {
+        Ok(root) => {
+            clear_vault_read_error();
+            store_credentials_cache(&root);
+            Ok(root)
+        }
+        Err(error) => {
+            record_vault_read_failure(&error);
+            Err(error)
+        }
+    }
+}
+
 fn load_credentials_raw() -> CredsRoot {
     if let Some(cached) = credentials_cache().lock().as_ref().cloned() {
         return cached;
+    }
+
+    if sync_write_gate().is_some() {
+        return load_credentials_readonly_into_cache_with(load_credentials_for_recovery_readonly)
+            .unwrap_or_default();
     }
 
     #[cfg(target_os = "android")]
@@ -1572,6 +2280,14 @@ fn load_credentials_for_update_raw() -> Result<CredsRoot> {
         return Ok(cached);
     }
 
+    load_credentials_for_sync_binding_with(
+        sync_write_gate().is_some(),
+        || load_credentials_readonly_into_cache_with(load_credentials_for_recovery_readonly),
+        load_credentials_for_update_unbound,
+    )
+}
+
+fn load_credentials_for_update_unbound() -> Result<CredsRoot> {
     #[cfg(target_os = "android")]
     {
         return android_credentials_root_for_update(load_android_credentials);
@@ -1604,6 +2320,26 @@ fn load_credentials_for_update_raw() -> Result<CredsRoot> {
     }
 }
 
+fn finish_credential_write(root: &CredsRoot, outcome: Result<()>) -> Result<()> {
+    match outcome {
+        Ok(()) => {
+            store_credentials_cache(root);
+            Ok(())
+        }
+        Err(error) => {
+            // A native write may have committed even though confirmation failed.
+            // Reconciliation must read the OS store rather than a stale process cache.
+            if !matches!(
+                error.downcast_ref::<VaultCommitFailure>(),
+                Some(VaultCommitFailure::Unchanged)
+            ) {
+                *credentials_cache().lock() = None;
+            }
+            Err(error)
+        }
+    }
+}
+
 fn save_credentials(root: &CredsRoot) -> Result<()> {
     let mut cleaned = clean_credentials(root);
     let current_revision = credentials_cache()
@@ -1618,8 +2354,7 @@ fn save_credentials(root: &CredsRoot) -> Result<()> {
 
     #[cfg(target_os = "android")]
     {
-        save_android_credentials(&cleaned)?;
-        store_credentials_cache(&cleaned);
+        finish_credential_write(&cleaned, save_android_credentials(&cleaned))?;
         return Ok(());
     }
 
@@ -1628,8 +2363,10 @@ fn save_credentials(root: &CredsRoot) -> Result<()> {
         let json = serde_json::to_string(&cleaned).context("encode credentials failed")?;
         // Updating this stable item keeps the user's authorization attached to it.
         // Do not recreate entries or rewrite/delete legacy chunks on each save.
-        set_keyring_password(KEYRING_SINGLE_CREDENTIALS_ACCOUNT, &json)?;
-        store_credentials_cache(&cleaned);
+        finish_credential_write(
+            &cleaned,
+            set_keyring_password(KEYRING_SINGLE_CREDENTIALS_ACCOUNT, &json),
+        )?;
         remove_legacy_credentials_file_best_effort();
         return Ok(());
     }
@@ -1637,55 +2374,17 @@ fn save_credentials(root: &CredsRoot) -> Result<()> {
     #[cfg(not(any(target_os = "android", target_os = "macos")))]
     {
         let json = serde_json::to_string(&cleaned).context("encode credentials failed")?;
-        let previous_manifest = get_keyring_password(KEYRING_CREDENTIALS_ACCOUNT)
-            .ok()
-            .flatten()
-            .and_then(|value| read_chunk_manifest(&value));
-        let chunks = chunk_json_payload(&json);
-
-        // Publish the chunk count only after all writes succeed. Existing chunk
-        // names remain stable; this format is retained for bounded platform stores.
-        for (index, chunk) in chunks.iter().enumerate() {
-            let account = chunk_account(None, index);
-            keyring_entry_for(&account)?
-                .set_password(chunk)
-                .with_context(|| format!("write system credential vault chunk {index}"))?;
-        }
-
-        let manifest = CredsChunkManifest {
-            openless_credentials_storage: "chunked".to_string(),
-            version: 1,
-            generation: None,
-            chunks: chunks.len(),
-        };
-        let manifest_json =
-            serde_json::to_string(&manifest).context("encode credential manifest failed")?;
-        keyring_entry()?
-            .set_password(&manifest_json)
-            .context("write system credential vault manifest")?;
-
-        // 清理旧 chunks：
-        // 1) 旧 manifest 用 UUID generation → 那一代 chunks 全删（迁移到 stable name）
-        // 2) 旧 manifest 也是 stable name，但 chunks 数量比这次多 → 删多余的 idx
-        if let Some(previous) = previous_manifest {
-            match previous.generation.as_deref() {
-                Some(prev_gen) => {
-                    for index in 0..previous.chunks {
-                        delete_keyring_password(&chunk_account(Some(prev_gen), index));
-                    }
-                }
-                None => {
-                    for index in chunks.len()..previous.chunks {
-                        delete_keyring_password(&chunk_account(None, index));
-                    }
-                }
-            }
-        }
-
+        let outcome = save_chunked_credentials_with(
+            &json,
+            get_keyring_password,
+            set_keyring_password,
+            |account| {
+                delete_keyring_password(account);
+                Ok(())
+            },
+        );
+        finish_credential_write(&cleaned, outcome)?;
         remove_legacy_credentials_file_best_effort();
-        // 写完成功后立刻刷新 process cache —— 同进程后续读不再回 Keychain。
-        // 见 CREDENTIALS_CACHE 的 doc。
-        store_credentials_cache(&cleaned);
         Ok(())
     }
 }
@@ -2175,12 +2874,514 @@ fn channel_has_secrets(root: &CredsRoot, kind: ChannelKind, id: &str) -> bool {
     }
 }
 
+fn canonical_headers(headers: &Option<HashMap<String, String>>) -> Result<Option<String>> {
+    headers
+        .as_ref()
+        .map(|values| {
+            let ordered = values.iter().collect::<BTreeMap<_, _>>();
+            serde_json::to_string(&ordered).context("encode sync provider headers")
+        })
+        .transpose()
+}
+
+fn sync_channel(
+    id: &str,
+    namespace: openless_core::credentials::SyncNamespace,
+    meta: &ChannelMeta,
+    name: &Option<String>,
+    active: &str,
+) -> openless_core::credentials::SyncChannel {
+    openless_core::credentials::SyncChannel {
+        id: id.into(),
+        namespace,
+        provider_type: meta.providerType.clone().unwrap_or_else(|| id.into()),
+        name: name.clone().unwrap_or_default(),
+        enabled: meta.enabled,
+        order: meta.order.unwrap_or(u32::MAX),
+        active: id == active,
+    }
+}
+
+/// Project actual storage fields, not lookup_account's compatibility fallbacks.
+/// In particular appKey=None must not become a duplicated apiKey after a restore.
+fn export_sync_credentials_root(
+    root: &CredsRoot,
+) -> Result<openless_core::credentials::SyncCredentials> {
+    use openless_core::credentials::{SyncCredentialRecord, SyncCredentials, SyncNamespace};
+    let mut snapshot = SyncCredentials {
+        channels: Vec::new(),
+        credentials: Vec::new(),
+    };
+    macro_rules! accounts {
+        ($entry:expr, $( $name:literal => $field:ident ),+ $(,)?) => {{
+            let mut values = BTreeMap::new();
+            $(if let Some(value) = &$entry.$field { values.insert($name.into(), value.clone()); })+
+            values
+        }};
+    }
+    for (id, entry) in &root.providers.asr {
+        snapshot.channels.push(sync_channel(
+            id,
+            SyncNamespace::Asr,
+            &entry.channel,
+            &entry.displayName,
+            &root.active.asr,
+        ));
+        snapshot.credentials.push(SyncCredentialRecord { channel_id: id.clone(), namespace: SyncNamespace::Asr,
+            accounts: accounts!(entry,
+                "asr.api_key"=>apiKey, "asr.endpoint"=>baseURL, "asr.model"=>model,
+                "asr.vocabulary_id"=>vocabularyId, "asr.advanced_config"=>advancedConfig,
+                "volcengine.app_key"=>appKey, "volcengine.access_key"=>accessKey,
+                "volcengine.resource_id"=>resourceId, "volcengine.service"=>volcengineService,
+                "volcengine.auth_mode"=>authMode, "volcengine.api_key"=>volcengineApiKey,
+                "xfyun.app_id"=>xfyunAppId, "xfyun.api_key"=>xfyunApiKey,
+                "tencent_cloud.app_id"=>tencentCloudAppId, "tencent_cloud.secret_id"=>tencentCloudSecretId,
+                "tencent_cloud.secret_key"=>tencentCloudSecretKey),
+        });
+    }
+    for (id, entry) in &root.providers.llm {
+        snapshot.channels.push(sync_channel(
+            id,
+            SyncNamespace::Llm,
+            &entry.channel,
+            &entry.displayName,
+            &root.active.llm,
+        ));
+        let mut values = accounts!(entry, "ark.api_key"=>apiKey, "ark.endpoint"=>baseURL, "ark.model_id"=>model,
+            "ark.request_format"=>requestFormat, "ark.messages_thinking"=>messagesThinking,
+            "ark.max_tokens"=>maxTokens, "ark.thinking_budget"=>thinkingBudget);
+        if let Some(value) = entry.temperature {
+            values.insert("ark.temperature".into(), value.to_string());
+        }
+        if let Some(value) = canonical_headers(&entry.extraHeaders)? {
+            values.insert("ark.extra_headers".into(), value);
+        }
+        snapshot.credentials.push(SyncCredentialRecord {
+            channel_id: id.clone(),
+            namespace: SyncNamespace::Llm,
+            accounts: values,
+        });
+    }
+    let mut omni_ids = root.omni.providers.keys().cloned().collect::<Vec<_>>();
+    // Omni has a fixed-provider selector, which may be persisted before any key.
+    if !root.omni.active.is_empty() && !omni_ids.contains(&root.omni.active) {
+        omni_ids.push(root.omni.active.clone());
+    }
+    omni_ids.sort();
+    for (index, id) in omni_ids.iter().enumerate() {
+        let empty = CredsOmniEntry::default();
+        let entry = root.omni.providers.get(id).unwrap_or(&empty);
+        let mut channel = sync_channel(
+            id,
+            SyncNamespace::Omni,
+            &entry.channel,
+            &entry.displayName,
+            &root.omni.active,
+        );
+        if entry.channel.order.is_none() {
+            channel.order = u32::try_from(index).context("too many Omni providers")?;
+        }
+        snapshot.channels.push(channel);
+        let mut values =
+            accounts!(entry, "omni.api_key"=>apiKey, "omni.endpoint"=>baseURL, "omni.model"=>model);
+        if let Some(value) = entry.temperature {
+            values.insert("omni.temperature".into(), value.to_string());
+        }
+        if let Some(value) = canonical_headers(&entry.extraHeaders)? {
+            values.insert("omni.extra_headers".into(), value);
+        }
+        snapshot.credentials.push(SyncCredentialRecord {
+            channel_id: id.clone(),
+            namespace: SyncNamespace::Omni,
+            accounts: values,
+        });
+    }
+    snapshot
+        .channels
+        .sort_by(|a, b| (a.namespace, a.order, &a.id).cmp(&(b.namespace, b.order, &b.id)));
+    snapshot
+        .credentials
+        .sort_by(|a, b| (a.namespace, &a.channel_id).cmp(&(b.namespace, &b.channel_id)));
+    snapshot.validate().map_err(|error| {
+        // Recheck the pure validator only to retain its fixed, value-free cause.
+        // The original rejection and BackendError remain unchanged.
+        if let Err(cause) = openless_core::cloud_sync_e2ee_documents::validate_credential_set(
+            &snapshot.channels,
+            &snapshot.credentials,
+        ) {
+            log::warn!("[e2ee-capture] stage=credential_validation code={cause}");
+        }
+        anyhow::Error::new(error)
+    })?;
+    Ok(snapshot)
+}
+
+/// Classify typed causes without formatting an error, credential attribute or blob.
+fn sync_capture_read_error_code(error: &anyhow::Error) -> &'static str {
+    let mut fallback = "native_store_failed";
+    for cause in error.chain() {
+        if let Some(code) = sync_keyring_error_code(cause) {
+            if code != "keyring_platform_failure" {
+                return code;
+            }
+            fallback = code;
+        }
+        if let Some(error) = cause.downcast_ref::<serde_json::Error>() {
+            use serde_json::error::Category;
+            return match error.classify() {
+                Category::Io => error
+                    .io_error_kind()
+                    .map(sync_io_error_code)
+                    .unwrap_or("json_io"),
+                Category::Syntax => "json_syntax",
+                Category::Data => "json_data",
+                Category::Eof => "json_eof",
+            };
+        }
+        if let Some(error) = cause.downcast_ref::<std::io::Error>() {
+            return sync_io_error_code(error.kind());
+        }
+        if cause.is::<std::str::Utf8Error>() || cause.is::<std::string::FromUtf8Error>() {
+            return "invalid_utf8";
+        }
+        if let Some(error) = cause.downcast_ref::<openless_core::BackendError>() {
+            use openless_core::BackendErrorCode;
+            return match error.code {
+                BackendErrorCode::PermissionDenied => "backend_permission_denied",
+                BackendErrorCode::InvalidArgument => "backend_invalid_argument",
+                BackendErrorCode::Persistence => "backend_persistence",
+                BackendErrorCode::OutcomeUnknown => "backend_outcome_unknown",
+                BackendErrorCode::Unsupported => "backend_unsupported",
+                _ => "backend_failed",
+            };
+        }
+    }
+    fallback
+}
+
+fn sync_io_error_code(kind: std::io::ErrorKind) -> &'static str {
+    use std::io::ErrorKind;
+    match kind {
+        ErrorKind::PermissionDenied => "io_permission_denied",
+        ErrorKind::NotFound => "io_not_found",
+        ErrorKind::InvalidData => "io_invalid_data",
+        ErrorKind::InvalidInput => "io_invalid_input",
+        ErrorKind::UnexpectedEof => "io_unexpected_eof",
+        ErrorKind::TimedOut => "io_timed_out",
+        ErrorKind::WouldBlock => "io_would_block",
+        ErrorKind::Interrupted => "io_interrupted",
+        _ => "io_other",
+    }
+}
+
+fn sync_keyring_error_code(_cause: &(dyn std::error::Error + 'static)) -> Option<&'static str> {
+    #[cfg(not(target_os = "android"))]
+    if let Some(error) = _cause.downcast_ref::<keyring::Error>() {
+        return Some(match error {
+            keyring::Error::NoStorageAccess(_) => "keyring_access_denied",
+            keyring::Error::NoEntry => "keyring_no_entry",
+            keyring::Error::BadEncoding(_) => "keyring_bad_encoding",
+            keyring::Error::TooLong(_, _) => "keyring_attribute_too_long",
+            keyring::Error::Invalid(_, _) => "keyring_invalid_attribute",
+            keyring::Error::Ambiguous(_) => "keyring_ambiguous",
+            keyring::Error::PlatformFailure(_) => "keyring_platform_failure",
+            _ => "keyring_other",
+        });
+    }
+    None
+}
+
+fn sync_identity_error_code(value: &str) -> Option<&'static str> {
+    if value.is_empty() {
+        Some("empty")
+    } else if value.len() > 512 {
+        Some("too_long")
+    } else if matches!(value, "." | "..") {
+        Some("dot_segment")
+    } else if value.chars().any(char::is_control) {
+        Some("control_character")
+    } else if value.contains(['/', '\\']) {
+        Some("path_separator")
+    } else {
+        None
+    }
+}
+
+fn capture_sync_credentials_with(
+    load: impl FnOnce() -> Result<CredsRoot>,
+) -> Result<openless_core::credentials::SyncCredentials> {
+    let root = load().inspect_err(|error| {
+        let code = sync_capture_read_error_code(error);
+        log::warn!("[e2ee-capture] stage=credential_load code={code}");
+    })?;
+    export_sync_credentials_root(&root).inspect_err(|_| {
+        // Metadata counts identify invalid legacy state without exposing channel names,
+        // accounts, secret values, provider IDs, endpoints, or underlying error bodies.
+        let disabled_active = usize::from(root.providers.asr.get(&root.active.asr).is_some_and(|entry| !entry.channel.enabled))
+            + usize::from(root.providers.llm.get(&root.active.llm).is_some_and(|entry| !entry.channel.enabled))
+            + usize::from(root.omni.providers.get(&root.omni.active).is_some_and(|entry| !entry.channel.enabled));
+        let mismatched_omni = root.omni.providers.iter().filter(|(id,entry)| entry.channel.providerType.as_ref().is_some_and(|provider|provider!=*id)).count();
+        let identities = root.providers.asr.iter().map(|(id, entry)| ("asr", id, &entry.channel))
+            .chain(root.providers.llm.iter().map(|(id, entry)| ("llm", id, &entry.channel)))
+            .chain(root.omni.providers.iter().map(|(id, entry)| ("omni", id, &entry.channel)));
+        for (namespace, id, meta) in identities {
+            for (field, value) in [("channel_id", Some(id.as_str())), ("provider_type", meta.providerType.as_deref())] {
+                if let Some(code) = value.and_then(sync_identity_error_code) {
+                    log::warn!("[e2ee-capture] stage=credential_identity namespace={namespace} field={field} code={code}");
+                }
+            }
+        }
+        let invalid_id = |value: &str| sync_identity_error_code(value).is_some();
+        let invalid_identities = root.providers.asr.iter().filter(|(id,entry)|invalid_id(id) || entry.channel.providerType.as_deref().is_some_and(invalid_id)).count()
+            + root.providers.llm.iter().filter(|(id,entry)|invalid_id(id) || entry.channel.providerType.as_deref().is_some_and(invalid_id)).count()
+            + root.omni.providers.iter().filter(|(id,entry)|invalid_id(id) || entry.channel.providerType.as_deref().is_some_and(invalid_id)).count();
+        log::warn!("[e2ee-capture] stage=credential_projection code=invalid_snapshot disabled_active={disabled_active} mismatched_omni={mismatched_omni} invalid_identities={invalid_identities}");
+    })
+}
+
+fn restored_channel_meta(channel: &openless_core::credentials::SyncChannel) -> ChannelMeta {
+    ChannelMeta {
+        providerType: Some(channel.provider_type.clone()),
+        order: Some(channel.order),
+        enabled: channel.enabled,
+        lastTest: None,
+    }
+}
+
+fn apply_sync_credentials_root(
+    root: &CredsRoot,
+    snapshot: &openless_core::credentials::SyncCredentials,
+) -> Result<CredsRoot> {
+    use openless_core::credentials::SyncNamespace;
+    snapshot.validate().map_err(anyhow::Error::new)?;
+    let accounts = snapshot
+        .credentials
+        .iter()
+        .map(|record| {
+            (
+                (record.namespace, record.channel_id.as_str()),
+                &record.accounts,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut next = root.clone(); // Preserve Marketplace OAuth and all unrelated local root state.
+    next.version = CHANNELS_SCHEMA_VERSION;
+    next.providers = CredsProviders::default();
+    next.omni.providers.clear();
+    next.active.asr.clear();
+    next.active.llm.clear();
+    next.omni.active.clear();
+    for channel in &snapshot.channels {
+        let values = accounts
+            .get(&(channel.namespace, channel.id.as_str()))
+            .context("missing sync credential channel")?;
+        let value = |name: &str| values.get(name).cloned();
+        let name = (!channel.name.is_empty()).then(|| channel.name.clone());
+        match channel.namespace {
+            SyncNamespace::Asr => {
+                next.providers.asr.insert(
+                    channel.id.clone(),
+                    CredsAsrEntry {
+                        channel: restored_channel_meta(channel),
+                        displayName: name,
+                        apiKey: value("asr.api_key"),
+                        baseURL: value("asr.endpoint"),
+                        model: value("asr.model"),
+                        vocabularyId: value("asr.vocabulary_id"),
+                        advancedConfig: value("asr.advanced_config"),
+                        appKey: value("volcengine.app_key"),
+                        accessKey: value("volcengine.access_key"),
+                        resourceId: value("volcengine.resource_id"),
+                        volcengineService: value("volcengine.service"),
+                        authMode: value("volcengine.auth_mode"),
+                        volcengineApiKey: value("volcengine.api_key"),
+                        xfyunAppId: value("xfyun.app_id"),
+                        xfyunApiKey: value("xfyun.api_key"),
+                        tencentCloudAppId: value("tencent_cloud.app_id"),
+                        tencentCloudSecretId: value("tencent_cloud.secret_id"),
+                        tencentCloudSecretKey: value("tencent_cloud.secret_key"),
+                    },
+                );
+                if channel.active {
+                    next.active.asr = channel.id.clone();
+                }
+            }
+            SyncNamespace::Llm => {
+                let mut protocol = openless_core::llm_protocol::LlmProtocolConfig {
+                    format: openless_core::llm_protocol::LlmRequestFormat::default_for(
+                        &channel.provider_type,
+                    ),
+                    ..Default::default()
+                };
+                for key in [
+                    "ark.request_format",
+                    "ark.messages_thinking",
+                    "ark.max_tokens",
+                    "ark.thinking_budget",
+                ] {
+                    if let Some(value) = values.get(key) {
+                        protocol.apply(key, value)?;
+                    }
+                }
+                let temperature = values
+                    .get("ark.temperature")
+                    .map(|value| parse_llm_temperature(value))
+                    .transpose()?
+                    .flatten();
+                let headers = values
+                    .get("ark.extra_headers")
+                    .map(|value| parse_extra_headers_json(value))
+                    .transpose()?;
+                protocol.validate()?;
+                if let Some(headers) = &headers {
+                    protocol.validate_headers(headers)?;
+                }
+                next.providers.llm.insert(
+                    channel.id.clone(),
+                    CredsLlmEntry {
+                        channel: restored_channel_meta(channel),
+                        displayName: name,
+                        apiKey: value("ark.api_key"),
+                        baseURL: value("ark.endpoint"),
+                        model: value("ark.model_id"),
+                        temperature,
+                        extraHeaders: headers,
+                        requestFormat: value("ark.request_format"),
+                        messagesThinking: value("ark.messages_thinking"),
+                        maxTokens: value("ark.max_tokens"),
+                        thinkingBudget: value("ark.thinking_budget"),
+                    },
+                );
+                if channel.active {
+                    next.active.llm = channel.id.clone();
+                }
+            }
+            SyncNamespace::Omni => {
+                anyhow::ensure!(
+                    channel.id == channel.provider_type,
+                    "Omni provider identity cannot be remapped"
+                );
+                let temperature = values
+                    .get("omni.temperature")
+                    .map(|value| parse_llm_temperature(value))
+                    .transpose()?
+                    .flatten();
+                let headers = values
+                    .get("omni.extra_headers")
+                    .map(|value| parse_extra_headers_json(value))
+                    .transpose()?;
+                next.omni.providers.insert(
+                    channel.id.clone(),
+                    CredsOmniEntry {
+                        channel: restored_channel_meta(channel),
+                        displayName: name,
+                        apiKey: value("omni.api_key"),
+                        baseURL: value("omni.endpoint"),
+                        model: value("omni.model"),
+                        temperature,
+                        extraHeaders: headers,
+                    },
+                );
+                if channel.active {
+                    next.omni.active = channel.id.clone();
+                }
+            }
+        }
+    }
+    Ok(next)
+}
+
 /// 凭据存储——系统凭据库；旧 JSON 文件只作为迁移来源。
 pub struct CredentialsVault;
 
 impl CredentialsVault {
     /// 系统凭据库 service name；macOS 下对应 Keychain service。
     pub const SERVICE_NAME: &'static str = "com.openless.app";
+
+    pub(crate) fn bind_sync_gate(
+        gate: std::sync::Arc<openless_core::credentials::SyncWriteGate>,
+    ) -> Result<()> {
+        let _guard = credentials_lock().lock();
+        let mut installed = SYNC_WRITE_GATE.get_or_init(|| Mutex::new(None)).lock();
+        // Binding is deliberately independent of OS authorization and migration.
+        // Status/read/export lazily inspect the native store under this barrier;
+        // denial must remain retryable rather than disabling sync construction.
+        install_sync_write_gate(&mut installed, gate)
+    }
+
+    pub(crate) fn export_sync_credentials_readonly(
+    ) -> Result<openless_core::credentials::SyncCredentials> {
+        let _guard = credentials_lock().lock();
+        // Cold capture uses the same strict read-only loader as bound getters.
+        // Legacy sources remain readable without migration, even before startup
+        // recovery. Failed OS access leaves the next capture free to retry.
+        anyhow::ensure!(
+            sync_write_gate().is_some(),
+            "encrypted sync credential gate is not bound"
+        );
+        capture_sync_credentials_with(|| {
+            let mut root =
+                load_credentials_readonly_into_cache_with(load_credentials_for_recovery_readonly)?;
+            migrate_channels(&mut root);
+            Ok(root)
+        })
+    }
+
+    pub(crate) fn export_sync_credentials(
+        permit: &openless_core::credentials::ExclusivePermit,
+    ) -> Result<openless_core::credentials::SyncCredentials> {
+        require_sync_exclusive(permit)?;
+        let _guard = credentials_lock().lock();
+        capture_sync_credentials_with(load_credentials_for_update)
+    }
+
+    pub(crate) fn replace_sync_credentials(
+        snapshot: &openless_core::credentials::SyncCredentials,
+        permit: &openless_core::credentials::ExclusivePermit,
+    ) -> Result<()> {
+        require_sync_exclusive(permit)?;
+        let _guard = credentials_lock().lock();
+        let current = load_credentials_for_update()?;
+        let replacement = apply_sync_credentials_root(&current, snapshot)?;
+        // The outer restore transaction owns the exclusive generation/receipt.
+        save_credentials(&replacement)
+    }
+
+    pub(crate) fn read_sync_secret(
+        account: &openless_core::credentials::SyncSecretAccount,
+    ) -> Result<Option<openless_core::SecretValue>> {
+        let _guard = credentials_lock().lock();
+        read_sync_secret_raw(account)
+    }
+
+    pub(crate) fn write_sync_secret(
+        account: &openless_core::credentials::SyncSecretAccount,
+        value: &openless_core::SecretValue,
+    ) -> Result<()> {
+        validate_sync_key(value)?;
+        let _guard = credentials_lock().lock();
+        if let Some(existing) = read_sync_secret_raw(account)? {
+            if existing == *value {
+                return Ok(());
+            }
+            anyhow::bail!("refusing to replace an existing encrypted sync key binding");
+        }
+        write_sync_secret_raw(account, value)?;
+        let stored = read_sync_secret_raw(account)?
+            .context("encrypted sync key write could not be verified")?;
+        anyhow::ensure!(
+            stored == *value,
+            "encrypted sync key write verification failed"
+        );
+        Ok(())
+    }
+
+    pub(crate) fn remove_sync_secret(
+        account: &openless_core::credentials::SyncSecretAccount,
+    ) -> Result<()> {
+        let _guard = credentials_lock().lock();
+        remove_sync_secret_raw(account)
+    }
 
     /// Last envelope/keyring read failure, if this process has not successfully
     /// loaded credentials since. Distinguishes "vault unreadable" from
@@ -2195,10 +3396,13 @@ impl CredentialsVault {
     }
 
     pub fn save_metadata(metadata: openless_core::CredentialMetadata) -> Result<()> {
-        let _guard = credentials_lock().lock();
-        let mut root = load_credentials_for_update()?;
-        apply_credential_metadata(&mut root, metadata)?;
-        save_credentials(&root)
+        mutate_credentials(
+            openless_core::credentials::ChangeOrigin::User,
+            move |root| {
+                apply_credential_metadata(root, metadata)?;
+                Ok(true)
+            },
+        )
     }
 
     pub fn channel_has_secrets(kind: ChannelKind, id: &str) -> Result<bool> {
@@ -2216,15 +3420,14 @@ impl CredentialsVault {
     }
 
     pub fn set(account: CredentialAccount, value: &str) -> Result<()> {
-        let _guard = credentials_lock().lock();
-        let mut root = load_credentials_for_update()?;
-        let v = if value.is_empty() {
-            None
-        } else {
-            Some(value.to_string())
-        };
-        write_account(&mut root, account, v);
-        save_credentials(&root)
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            write_account(
+                root,
+                account,
+                (!value.is_empty()).then(|| value.to_string()),
+            );
+            Ok(true)
+        })
     }
 
     pub fn get_for_asr_provider(id: &str, account: CredentialAccount) -> Result<Option<String>> {
@@ -2235,21 +3438,24 @@ impl CredentialsVault {
     }
 
     pub fn set_for_asr_provider(id: &str, account: CredentialAccount, value: &str) -> Result<()> {
-        let _guard = credentials_lock().lock();
-        let mut root = load_credentials_for_update()?;
-        let active = root.active.asr.clone();
-        root.active.asr = id.to_string();
-        let value = (!value.is_empty()).then(|| value.to_string());
-        write_account(&mut root, account, value);
-        root.active.asr = active;
-        save_credentials(&root)
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            let active = root.active.asr.clone();
+            root.active.asr = id.to_string();
+            write_account(
+                root,
+                account,
+                (!value.is_empty()).then(|| value.to_string()),
+            );
+            root.active.asr = active;
+            Ok(true)
+        })
     }
 
     pub fn remove(account: CredentialAccount) -> Result<()> {
-        let _guard = credentials_lock().lock();
-        let mut root = load_credentials_for_update()?;
-        write_account(&mut root, account, None);
-        save_credentials(&root)
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            write_account(root, account, None);
+            Ok(true)
+        })
     }
 
     /// GitHub OAuth token for authenticated marketplace operations.
@@ -2277,9 +3483,9 @@ impl CredentialsVault {
     }
 
     pub fn set_marketplace_github_token(value: &str) -> Result<()> {
-        let _guard = credentials_lock().lock();
         #[cfg(target_os = "android")]
         {
+            let _guard = credentials_lock().lock();
             ensure_android_marketplace_legacy_scrubbed()?;
             *android_marketplace_token().lock() =
                 (!value.trim().is_empty()).then(|| MarketplaceGithubToken(value.to_string()));
@@ -2288,34 +3494,30 @@ impl CredentialsVault {
             } else {
                 mark_marketplace_token_verified();
             }
-            return Ok(());
-        }
-        #[cfg(not(target_os = "android"))]
-        {
-            let mut root = load_credentials_for_update()?;
-            write_marketplace_github_token(&mut root, Some(value.to_string()));
-            save_credentials(&root)?;
-            mark_marketplace_token_verified();
             Ok(())
         }
+        #[cfg(not(target_os = "android"))]
+        set_marketplace_token_with(
+            sync_write_gate(),
+            value,
+            load_credentials_for_update,
+            save_credentials,
+        )
     }
 
     pub fn remove_marketplace_github_token() -> Result<()> {
-        let _guard = credentials_lock().lock();
-        invalidate_marketplace_token_with(|| {
-            #[cfg(target_os = "android")]
-            {
-                // Retry the durable legacy scrub on every logout until it has
-                // actually completed. Process memory is already invalidated.
-                return ensure_android_marketplace_legacy_scrubbed();
-            }
-            #[cfg(not(target_os = "android"))]
-            {
-                let mut root = load_credentials_for_update()?;
-                write_marketplace_github_token(&mut root, None);
-                save_credentials(&root)
-            }
-        })
+        #[cfg(target_os = "android")]
+        {
+            invalidate_marketplace_token_process_local();
+            let _guard = credentials_lock().lock();
+            invalidate_marketplace_token_with(ensure_android_marketplace_legacy_scrubbed)
+        }
+        #[cfg(not(target_os = "android"))]
+        remove_marketplace_token_with(
+            sync_write_gate(),
+            load_credentials_for_update,
+            save_credentials,
+        )
     }
 
     #[cfg(test)]
@@ -2408,14 +3610,17 @@ impl CredentialsVault {
     }
 
     pub fn set_for_llm_provider(id: &str, account: CredentialAccount, value: &str) -> Result<()> {
-        let _guard = credentials_lock().lock();
-        let mut root = load_credentials_for_update()?;
-        let active = root.active.llm.clone();
-        root.active.llm = id.to_string();
-        let value = (!value.is_empty()).then(|| value.to_string());
-        write_account(&mut root, account, value);
-        root.active.llm = active;
-        save_credentials(&root)
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            let active = root.active.llm.clone();
+            root.active.llm = id.to_string();
+            write_account(
+                root,
+                account,
+                (!value.is_empty()).then(|| value.to_string()),
+            );
+            root.active.llm = active;
+            Ok(true)
+        })
     }
 
     pub fn get_active_omni() -> String {
@@ -2428,18 +3633,18 @@ impl CredentialsVault {
     }
 
     fn select_active_provider(slot: openless_core::ProviderSlot, id: &str) -> Result<()> {
-        let _guard = credentials_lock().lock();
-        let mut root = load_credentials_for_update()?;
-        let mut metadata = credential_metadata(&root);
-        let revision = metadata.revision();
-        metadata
-            .select_active_provider(slot, id.to_string())
-            .map_err(|error| anyhow::anyhow!(error.message))?;
-        if metadata.revision() == revision {
-            return Ok(());
-        }
-        apply_credential_metadata(&mut root, metadata)?;
-        save_credentials(&root)
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            let mut metadata = credential_metadata(root);
+            let revision = metadata.revision();
+            metadata
+                .select_active_provider(slot, id.to_string())
+                .map_err(anyhow::Error::new)?;
+            if metadata.revision() == revision {
+                return Ok(false);
+            }
+            apply_credential_metadata(root, metadata)?;
+            Ok(true)
+        })
     }
 
     pub fn get_for_omni_provider(id: &str, account: CredentialAccount) -> Result<Option<String>> {
@@ -2448,15 +3653,15 @@ impl CredentialsVault {
     }
 
     pub fn set_for_omni_provider(id: &str, account: CredentialAccount, value: &str) -> Result<()> {
-        let _guard = credentials_lock().lock();
-        let mut root = load_credentials_for_update()?;
-        write_omni_account(
-            &mut root,
-            id,
-            account,
-            (!value.is_empty()).then(|| value.to_string()),
-        )?;
-        save_credentials(&root)
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            write_omni_account(
+                root,
+                id,
+                account,
+                (!value.is_empty()).then(|| value.to_string()),
+            )?;
+            Ok(true)
+        })
     }
 
     pub fn get_active_omni_extra_headers() -> HashMap<String, String> {
@@ -2490,57 +3695,51 @@ impl CredentialsVault {
     }
 
     pub fn set_active_omni_temperature(value: &str) -> Result<()> {
-        let _guard = credentials_lock().lock();
         let temperature = parse_llm_temperature(value)?;
-        let mut root = load_credentials_for_update()?;
-        let entry = root
-            .omni
-            .providers
-            .entry(root.omni.active.clone())
-            .or_default();
-        entry.temperature = temperature;
-        save_credentials(&root)
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            root.omni
+                .providers
+                .entry(root.omni.active.clone())
+                .or_default()
+                .temperature = temperature;
+            Ok(true)
+        })
     }
 
     pub fn set_omni_temperature_for_provider(id: &str, value: &str) -> Result<()> {
-        let _guard = credentials_lock().lock();
         let temperature = parse_llm_temperature(value)?;
-        let mut root = load_credentials_for_update()?;
-        root.omni
-            .providers
-            .entry(id.to_string())
-            .or_default()
-            .temperature = temperature;
-        save_credentials(&root)
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            root.omni
+                .providers
+                .entry(id.to_string())
+                .or_default()
+                .temperature = temperature;
+            Ok(true)
+        })
     }
 
     pub fn set_active_omni_extra_headers_json(value: &str) -> Result<()> {
-        let _guard = credentials_lock().lock();
         let headers = parse_extra_headers_json(value)?;
-        let mut root = load_credentials_for_update()?;
-        let entry = root
-            .omni
-            .providers
-            .entry(root.omni.active.clone())
-            .or_default();
-        entry.extraHeaders = if headers.is_empty() {
-            None
-        } else {
-            Some(headers)
-        };
-        save_credentials(&root)
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            root.omni
+                .providers
+                .entry(root.omni.active.clone())
+                .or_default()
+                .extraHeaders = (!headers.is_empty()).then_some(headers);
+            Ok(true)
+        })
     }
 
     pub fn set_omni_extra_headers_json_for_provider(id: &str, value: &str) -> Result<()> {
-        let _guard = credentials_lock().lock();
         let headers = parse_extra_headers_json(value)?;
-        let mut root = load_credentials_for_update()?;
-        root.omni
-            .providers
-            .entry(id.to_string())
-            .or_default()
-            .extraHeaders = (!headers.is_empty()).then_some(headers);
-        save_credentials(&root)
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            root.omni
+                .providers
+                .entry(id.to_string())
+                .or_default()
+                .extraHeaders = (!headers.is_empty()).then_some(headers);
+            Ok(true)
+        })
     }
 
     pub fn get_active_llm_extra_headers() -> HashMap<String, String> {
@@ -2564,16 +3763,15 @@ impl CredentialsVault {
     }
 
     pub fn set_active_llm_temperature(value: &str) -> Result<()> {
-        let _guard = credentials_lock().lock();
         let temperature = parse_llm_temperature(value)?;
-        let mut root = load_credentials_for_update()?;
-        let entry = root
-            .providers
-            .llm
-            .entry(root.active.llm.clone())
-            .or_default();
-        entry.temperature = temperature;
-        save_credentials(&root)
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            root.providers
+                .llm
+                .entry(root.active.llm.clone())
+                .or_default()
+                .temperature = temperature;
+            Ok(true)
+        })
     }
 
     pub fn get_llm_protocol_option(id: Option<&str>, account: &str) -> Result<Option<String>> {
@@ -2587,51 +3785,46 @@ impl CredentialsVault {
     }
 
     pub fn set_llm_protocol_option(id: Option<&str>, account: &str, value: &str) -> Result<()> {
-        let _guard = credentials_lock().lock();
         let mut config = openless_core::llm_protocol::LlmProtocolConfig::default();
         config.apply(account, value)?;
-        let mut root = load_credentials_for_update()?;
-        let id = id.unwrap_or(&root.active.llm).to_string();
-        let entry = root.providers.llm.entry(id).or_default();
-        *entry.protocol_option(account)? =
-            (!value.trim().is_empty()).then(|| value.trim().to_string());
-        entry.channel.lastTest = None;
-        save_credentials(&root)
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            let id = id.unwrap_or(&root.active.llm).to_string();
+            let entry = root.providers.llm.entry(id).or_default();
+            *entry.protocol_option(account)? =
+                (!value.trim().is_empty()).then(|| value.trim().to_string());
+            entry.channel.lastTest = None;
+            Ok(true)
+        })
     }
 
     /// 写入指定 LLM 渠道的采样温度，不改变 active 渠道。
     pub fn set_llm_temperature_for_provider(id: &str, value: &str) -> Result<()> {
-        let _guard = credentials_lock().lock();
         let temperature = parse_llm_temperature(value)?;
-        let mut root = load_credentials_for_update()?;
-        set_llm_temperature_for_provider_in_root(&mut root, id, temperature);
-        save_credentials(&root)
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            set_llm_temperature_for_provider_in_root(root, id, temperature);
+            Ok(true)
+        })
     }
 
     pub fn set_active_llm_extra_headers_json(value: &str) -> Result<()> {
-        let _guard = credentials_lock().lock();
         let headers = parse_extra_headers_json(value)?;
-        let mut root = load_credentials_for_update()?;
-        let entry = root
-            .providers
-            .llm
-            .entry(root.active.llm.clone())
-            .or_default();
-        entry.extraHeaders = if headers.is_empty() {
-            None
-        } else {
-            Some(headers)
-        };
-        save_credentials(&root)
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            root.providers
+                .llm
+                .entry(root.active.llm.clone())
+                .or_default()
+                .extraHeaders = (!headers.is_empty()).then_some(headers);
+            Ok(true)
+        })
     }
 
     /// 写入指定 LLM 渠道的额外请求头，不改变 active 渠道。
     pub fn set_llm_extra_headers_json_for_provider(id: &str, value: &str) -> Result<()> {
-        let _guard = credentials_lock().lock();
         let headers = parse_extra_headers_json(value)?;
-        let mut root = load_credentials_for_update()?;
-        set_llm_extra_headers_for_provider_in_root(&mut root, id, headers);
-        save_credentials(&root)
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            set_llm_extra_headers_for_provider_in_root(root, id, headers);
+            Ok(true)
+        })
     }
 
     pub fn snapshot() -> CredentialsSnapshot {
@@ -3368,7 +4561,6 @@ mod tests {
 
     #[test]
     fn android_startup_failure_does_not_cache_default_or_suppress_retry() {
-        use anyhow::Context;
         reset_credentials_cache_for_tests();
         let first = load_credentials_into_cache_with(|| {
             Err(anyhow!("injected startup scrub failure")
@@ -3405,8 +4597,19 @@ mod tests {
     }
 
     #[test]
+    fn malformed_payload_errors_never_echo_private_field_values() {
+        reset_credentials_cache_for_tests();
+        let error = serde_json::from_str::<CredsRoot>(r#"{"version":"private-canary-secret"}"#)
+            .unwrap_err();
+        super::record_vault_read_failure(&anyhow::Error::new(error));
+        let recorded = CredentialsVault::last_read_error().unwrap();
+        assert_eq!(recorded, "credential payload could not be decoded");
+        assert!(!recorded.contains("private-canary-secret"));
+        super::clear_vault_read_error();
+    }
+
+    #[test]
     fn android_for_update_path_retries_and_does_not_cache_on_envelope_error() {
-        use anyhow::Context;
         reset_credentials_cache_for_tests();
         let err = android_credentials_root_for_update(|| {
             Err(anyhow!("temporarily unavailable")
@@ -3813,5 +5016,1048 @@ mod tests {
             lookup_account(&root, CredentialAccount::ArkApiKey).as_deref(),
             Some("sk-uuid-a")
         );
+    }
+}
+
+#[cfg(test)]
+mod encrypted_sync_tests {
+    use super::*;
+    use openless_core::credentials::{
+        ChangeOrigin, SyncNamespace, SyncSecretAccount, SyncWriteGate,
+    };
+    use std::cell::{Cell, RefCell};
+
+    struct Temporary(PathBuf);
+    impl Temporary {
+        fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("openless-vault-sync-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for Temporary {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn root_with_secret(value: &str) -> CredsRoot {
+        let mut root = CredsRoot::default();
+        root.version = 2;
+        root.active.asr = "stable-channel".into();
+        root.providers.asr.insert(
+            "stable-channel".into(),
+            CredsAsrEntry {
+                channel: ChannelMeta {
+                    providerType: Some("openai-compatible".into()),
+                    order: Some(0),
+                    enabled: true,
+                    lastTest: None,
+                },
+                apiKey: Some(value.into()),
+                ..Default::default()
+            },
+        );
+        root
+    }
+    fn installed_chunks(json: &str, generation: Option<&str>) -> HashMap<String, String> {
+        let chunks = chunk_json_payload(json);
+        let manifest = CredsChunkManifest {
+            openless_credentials_storage: "chunked".into(),
+            version: 1,
+            generation: generation.map(str::to_string),
+            chunks: chunks.len(),
+        };
+        let mut values = HashMap::from([(
+            KEYRING_CREDENTIALS_ACCOUNT.into(),
+            serde_json::to_string(&manifest).unwrap(),
+        )]);
+        for (i, part) in chunks.into_iter().enumerate() {
+            values.insert(chunk_account(generation, i), part);
+        }
+        values
+    }
+    fn read_root(values: &RefCell<HashMap<String, String>>) -> CredsRoot {
+        load_keyring_credentials_with(
+            |key| Ok(values.borrow().get(key).cloned()),
+            |_, _| panic!("reader must not write"),
+            false,
+        )
+        .unwrap()
+        .unwrap()
+    }
+
+    #[test]
+    fn sync_gate_binding_is_lazy_and_preserves_pending_recovery() {
+        let temp = Temporary::new();
+        let path = temp.0.join("generation.json");
+        let gate = SyncWriteGate::open(path.clone()).unwrap();
+        drop(gate.begin_mutation().unwrap());
+        let before = std::fs::read(&path).unwrap();
+        let mut installed = None;
+        install_sync_write_gate(&mut installed, gate.clone()).unwrap();
+        install_sync_write_gate(&mut installed, gate.clone()).unwrap();
+        assert!(std::sync::Arc::ptr_eq(installed.as_ref().unwrap(), &gate));
+        assert!(gate.recovery_required().unwrap());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        let other = SyncWriteGate::open(temp.0.join("other.json")).unwrap();
+        assert!(install_sync_write_gate(&mut installed, other).is_err());
+        assert!(std::sync::Arc::ptr_eq(installed.as_ref().unwrap(), &gate));
+    }
+
+    #[test]
+    fn readonly_warm_cache_retries_denial_and_only_real_read_clears_failure() {
+        reset_credentials_cache_for_tests();
+        let failure = load_credentials_readonly_into_cache_with(|| {
+            Err(anyhow::anyhow!("fixture native access denied"))
+        })
+        .unwrap_err();
+        assert!(failure.to_string().contains("fixture native access denied"));
+        assert!(credentials_cache().lock().is_none());
+        let recorded = CredentialsVault::last_read_error().unwrap();
+
+        // A cache hit itself is not a successful OS read. Seed only the cache
+        // slot, without the successful-load/save helper's error-latch update.
+        *credentials_cache().lock() = Some(root_with_secret("fixture-cached"));
+        let cached =
+            load_credentials_readonly_into_cache_with(|| panic!("must use cache")).unwrap();
+        assert_eq!(
+            cached.providers.asr["stable-channel"].apiKey.as_deref(),
+            Some("fixture-cached")
+        );
+        assert_eq!(
+            CredentialsVault::last_read_error().as_deref(),
+            Some(recorded.as_str())
+        );
+
+        *credentials_cache().lock() = None;
+        let loaded = load_credentials_readonly_into_cache_with(|| {
+            Ok(root_with_secret("fixture-retry-succeeded"))
+        })
+        .unwrap();
+        assert_eq!(
+            loaded.providers.asr["stable-channel"].apiKey.as_deref(),
+            Some("fixture-retry-succeeded")
+        );
+        assert!(credentials_cache().lock().is_some());
+        assert!(CredentialsVault::last_read_error().is_none());
+        reset_credentials_cache_for_tests();
+    }
+
+    #[test]
+    fn bound_cold_read_preserves_legacy_file_until_a_real_save() {
+        let temp = Temporary::new();
+        let path = temp.0.join("legacy.json");
+        let mut legacy = root_with_secret("fixture-legacy-provider");
+        legacy.version = 1;
+        legacy.marketplace.githubAccessToken =
+            Some(MarketplaceGithubToken("fixture-local-oauth".into()));
+        let original = serde_json::to_vec(&legacy).unwrap();
+        std::fs::write(&path, &original).unwrap();
+        let loaded = load_credentials_for_sync_binding_with(
+            true,
+            || {
+                load_desktop_credentials_readonly_with(
+                    |_| Ok(None),
+                    || decode_single_credentials(&std::fs::read_to_string(&path)?).map(Some),
+                    true,
+                )
+            },
+            || panic!("bound read must not call the migration loader"),
+        )
+        .unwrap();
+        assert_eq!(
+            loaded.providers.asr["stable-channel"].apiKey.as_deref(),
+            Some("fixture-legacy-provider")
+        );
+        assert_eq!(
+            lookup_marketplace_github_token(&loaded).as_deref(),
+            Some("fixture-local-oauth")
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn recovery_binding_uses_only_readers_and_preserves_the_pending_gate() {
+        let temp = Temporary::new();
+        let path = temp.0.join("generation.json");
+        let gate = SyncWriteGate::open(path.clone()).unwrap();
+        drop(gate.begin_mutation().unwrap());
+        let before = std::fs::read(&path).unwrap();
+        let json = serde_json::to_string(&root_with_secret("fixture-source")).unwrap();
+        let chunks = installed_chunks(&json, Some("prior-generation"));
+        let root = load_credentials_for_sync_binding_with(
+            gate.recovery_required().unwrap(),
+            || {
+                load_desktop_credentials_readonly_with(
+                    |account| Ok(chunks.get(account).cloned()),
+                    || panic!("complete chunks must not probe a legacy file"),
+                    true,
+                )
+            },
+            || panic!("pending startup must not call the migration loader"),
+        )
+        .unwrap();
+        assert_eq!(
+            root.providers.asr["stable-channel"].apiKey.as_deref(),
+            Some("fixture-source")
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        let error = load_credentials_for_sync_binding_with(
+            gate.recovery_required().unwrap(),
+            || {
+                load_desktop_credentials_readonly_with(
+                    |_| Err(anyhow::anyhow!("fixture native access denied")),
+                    || panic!("native errors must not fall back"),
+                    true,
+                )
+            },
+            || panic!("must not migrate after denial"),
+        );
+        assert!(error.is_err());
+        assert!(gate.recovery_required().unwrap());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        let single = load_desktop_credentials_readonly_with(
+            |account| {
+                assert_eq!(account, KEYRING_SINGLE_CREDENTIALS_ACCOUNT);
+                Ok(Some(json.clone()))
+            },
+            || panic!("v2 has priority"),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            single.providers.asr["stable-channel"].apiKey.as_deref(),
+            Some("fixture-source")
+        );
+        assert!(load_desktop_credentials_readonly_with(
+            |_| Ok(Some("{}".into())),
+            || panic!("corrupt source must not fall back"),
+            true
+        )
+        .is_err());
+        assert!(load_desktop_credentials_readonly_with(
+            |_| Ok(None),
+            || Err(anyhow::anyhow!("unreadable legacy source")),
+            false
+        )
+        .is_err());
+        let legacy = load_desktop_credentials_readonly_with(
+            |account| Ok((account == "asr.api_key").then(|| "legacy-source".into())),
+            || Ok(None),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            lookup_account(&legacy, CredentialAccount::AsrApiKey).as_deref(),
+            Some("legacy-source")
+        );
+        let empty =
+            load_desktop_credentials_readonly_with(|_| Ok(None), || Ok(None), false).unwrap();
+        assert!(empty.providers.asr.is_empty());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn recovery_android_vault_read_is_strict_and_does_not_scrub_or_migrate() {
+        use base64::Engine;
+        let temp = Temporary::new();
+        let path = temp.0.join("credentials.enc.json");
+        let mut root = root_with_secret("private-provider");
+        write_marketplace_github_token(&mut root, Some("legacy-oauth".into()));
+        let bytes =
+            base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&root).unwrap());
+        std::fs::write(&path, &bytes).unwrap();
+        let mut crypto = super::super::android_credentials::TestCrypto::default();
+        let loaded = load_android_credentials_readonly_at(&path, &mut crypto)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            loaded.providers.asr["stable-channel"].apiKey.as_deref(),
+            Some("private-provider")
+        );
+        assert!(lookup_marketplace_github_token(&loaded).is_none());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes.as_bytes());
+        assert_eq!(crypto.delete_key_calls, 0);
+        std::fs::write(
+            &path,
+            base64::engine::general_purpose::STANDARD.encode(b"{}"),
+        )
+        .unwrap();
+        assert!(load_android_credentials_readonly_at(&path, &mut crypto).is_err());
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn generation_writer_preserves_old_data_at_every_precommit_failure() {
+        let old = serde_json::to_string(&root_with_secret(&"old".repeat(1500))).unwrap();
+        let new = serde_json::to_string(&root_with_secret(&"new".repeat(1500))).unwrap();
+        let initial = installed_chunks(&old, None);
+        for failed_piece in 0..chunk_json_payload(&new).len() {
+            let values = RefCell::new(initial.clone());
+            let writes = Cell::new(0);
+            let result = save_chunked_credentials_with(
+                &new,
+                |key| Ok(values.borrow().get(key).cloned()),
+                |key, value| {
+                    if key != KEYRING_CREDENTIALS_ACCOUNT {
+                        let n = writes.get();
+                        writes.set(n + 1);
+                        if n == failed_piece {
+                            anyhow::bail!("fixture failure");
+                        }
+                    }
+                    values.borrow_mut().insert(key.into(), value.into());
+                    Ok(())
+                },
+                |key| {
+                    values.borrow_mut().remove(key);
+                    Ok(())
+                },
+            );
+            assert!(result.is_err());
+            assert_eq!(
+                read_root(&values).providers.asr["stable-channel"].apiKey,
+                root_with_secret(&"old".repeat(1500)).providers.asr["stable-channel"].apiKey
+            );
+            assert_eq!(
+                values.borrow().get(KEYRING_CREDENTIALS_ACCOUNT),
+                initial.get(KEYRING_CREDENTIALS_ACCOUNT)
+            );
+        }
+    }
+
+    #[test]
+    fn generation_writer_verifies_chunks_and_head_without_claiming_fake_success() {
+        let old = serde_json::to_string(&root_with_secret("old")).unwrap();
+        let new = serde_json::to_string(&root_with_secret(&"new".repeat(1000))).unwrap();
+        for mode in [
+            "head_read",
+            "chunk_read",
+            "corrupt_chunk",
+            "head_noop",
+            "head_error",
+            "head_confirmation",
+        ] {
+            let values = RefCell::new(installed_chunks(&old, Some("old-generation")));
+            let switched = Cell::new(false);
+            let result = save_chunked_credentials_with(
+                &new,
+                |key| {
+                    if mode == "head_read" && key == KEYRING_CREDENTIALS_ACCOUNT {
+                        anyhow::bail!("fixture");
+                    }
+                    if mode == "head_confirmation"
+                        && key == KEYRING_CREDENTIALS_ACCOUNT
+                        && switched.get()
+                    {
+                        anyhow::bail!("fixture");
+                    }
+                    if key.starts_with(KEYRING_CREDENTIALS_CHUNK_PREFIX)
+                        && !key.contains("old-generation")
+                    {
+                        if mode == "chunk_read" {
+                            anyhow::bail!("fixture");
+                        }
+                        if mode == "corrupt_chunk" {
+                            return Ok(Some("corrupt".into()));
+                        }
+                    }
+                    Ok(values.borrow().get(key).cloned())
+                },
+                |key, value| {
+                    if key == KEYRING_CREDENTIALS_ACCOUNT {
+                        if mode == "head_error" {
+                            anyhow::bail!("fixture");
+                        }
+                        if mode == "head_noop" {
+                            return Ok(());
+                        }
+                        switched.set(true);
+                    }
+                    values.borrow_mut().insert(key.into(), value.into());
+                    Ok(())
+                },
+                |key| {
+                    values.borrow_mut().remove(key);
+                    Ok(())
+                },
+            );
+            assert!(result.is_err(), "{mode}");
+            let expected = if mode == "head_confirmation" {
+                "new".repeat(1000)
+            } else {
+                "old".into()
+            };
+            assert_eq!(
+                read_root(&values).providers.asr["stable-channel"]
+                    .apiKey
+                    .as_deref(),
+                Some(expected.as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn generation_commit_survives_lost_ack_and_cleanup_failure_and_migrates_legacy() {
+        let old = serde_json::to_string(&root_with_secret("old")).unwrap();
+        let new = serde_json::to_string(&root_with_secret("new")).unwrap();
+        for initial in [
+            installed_chunks(&old, None),
+            installed_chunks(&old, Some("previous-generation")),
+            HashMap::from([(KEYRING_CREDENTIALS_ACCOUNT.into(), old.clone())]),
+        ] {
+            let values = RefCell::new(initial);
+            save_chunked_credentials_with(
+                &new,
+                |key| Ok(values.borrow().get(key).cloned()),
+                |key, value| {
+                    values.borrow_mut().insert(key.into(), value.into());
+                    if key == KEYRING_CREDENTIALS_ACCOUNT {
+                        anyhow::bail!("lost native ack");
+                    }
+                    Ok(())
+                },
+                |_| anyhow::bail!("cleanup denied"),
+            )
+            .unwrap();
+            assert_eq!(
+                read_root(&values).providers.asr["stable-channel"]
+                    .apiKey
+                    .as_deref(),
+                Some("new")
+            );
+            let head = values.borrow()[KEYRING_CREDENTIALS_ACCOUNT].clone();
+            assert!(read_chunk_manifest(&head).unwrap().generation.is_some());
+        }
+    }
+
+    #[test]
+    fn full_provider_capture_roundtrips_fixed_ids_and_keeps_local_oauth() {
+        let mut root = root_with_secret("asr-primary");
+        let asr = root.providers.asr.get_mut("stable-channel").unwrap();
+        asr.appKey = None;
+        asr.accessKey = Some("legacy-access".into());
+        asr.resourceId = Some("resource".into());
+        asr.volcengineApiKey = Some("new-service-key".into());
+        asr.vocabularyId = Some("vocab".into());
+        asr.advancedConfig = Some("{\"verboseJson\":true}".into());
+        asr.xfyunAppId = Some("xfyun-id".into());
+        asr.xfyunApiKey = Some("xfyun-secret".into());
+        asr.tencentCloudAppId = Some("tencent-id".into());
+        asr.tencentCloudSecretId = Some("tencent-secret-id".into());
+        asr.tencentCloudSecretKey = Some("tencent-secret".into());
+        asr.channel.lastTest = Some(ChannelTest {
+            ok: true,
+            latencyMs: Some(1),
+            at: 5,
+            error: None,
+        });
+        root.active.llm = "stable-llm".into();
+        root.providers.llm.insert(
+            "stable-llm".into(),
+            CredsLlmEntry {
+                channel: ChannelMeta {
+                    providerType: Some("custom".into()),
+                    order: Some(5),
+                    enabled: true,
+                    lastTest: asr.channel.lastTest.clone(),
+                },
+                displayName: Some("Named provider".into()),
+                apiKey: Some("llm-secret".into()),
+                baseURL: Some("https://api.example/v1".into()),
+                model: Some("model".into()),
+                temperature: Some(0.7),
+                extraHeaders: Some(HashMap::from([(
+                    "x-provider-key".into(),
+                    "header-secret".into(),
+                )])),
+                requestFormat: Some("chat_completions".into()),
+                messagesThinking: Some("adaptive".into()),
+                maxTokens: Some("4096".into()),
+                thinkingBudget: None,
+            },
+        );
+        root.omni.active = "custom".into();
+        for id in ["custom", "qwen3-omni", "volcengine-omni"] {
+            root.omni.providers.insert(
+                id.into(),
+                CredsOmniEntry {
+                    apiKey: Some(format!("{id}-secret")),
+                    baseURL: Some("https://omni.example".into()),
+                    model: Some("omni-model".into()),
+                    temperature: Some(0.8),
+                    extraHeaders: Some(HashMap::from([(
+                        "x-extra".into(),
+                        "omni-extra-secret".into(),
+                    )])),
+                    ..Default::default()
+                },
+            );
+        }
+        write_marketplace_github_token(&mut root, Some("local-only-oauth".into()));
+        let count = Cell::new(0);
+        let capture = capture_sync_credentials_with(|| {
+            count.set(count.get() + 1);
+            Ok(root.clone())
+        })
+        .unwrap();
+        assert_eq!(count.get(), 1);
+        assert!(!format!("{capture:?}").contains("secret"));
+        assert!(!capture.credentials.iter().any(|record| record
+            .accounts
+            .values()
+            .any(|value| value == "local-only-oauth")));
+        assert!(!capture
+            .credentials
+            .iter()
+            .find(|record| record.namespace == SyncNamespace::Asr)
+            .unwrap()
+            .accounts
+            .contains_key("volcengine.app_key"));
+        assert_eq!(
+            capture
+                .channels
+                .iter()
+                .filter(|c| c.namespace == SyncNamespace::Omni)
+                .count(),
+            3
+        );
+        let restored = apply_sync_credentials_root(&root, &capture).unwrap();
+        assert_eq!(export_sync_credentials_root(&restored).unwrap(), capture);
+        assert_eq!(
+            lookup_marketplace_github_token(&restored).as_deref(),
+            Some("local-only-oauth")
+        );
+        assert!(restored
+            .providers
+            .asr
+            .values()
+            .all(|entry| entry.channel.lastTest.is_none()));
+        assert!(restored
+            .providers
+            .llm
+            .values()
+            .all(|entry| entry.channel.lastTest.is_none()));
+        let mut excluded = capture.clone();
+        excluded.credentials[0]
+            .accounts
+            .insert("github.oauth_token".into(), "not-allowed".into());
+        assert!(apply_sync_credentials_root(&root, &excluded).is_err());
+        let mut invalid_protocol = capture.clone();
+        let accounts = &mut invalid_protocol
+            .credentials
+            .iter_mut()
+            .find(|record| record.namespace == SyncNamespace::Llm)
+            .unwrap()
+            .accounts;
+        accounts.insert("ark.request_format".into(), "messages".into());
+        accounts.insert("ark.messages_thinking".into(), "budget".into());
+        accounts.insert("ark.thinking_budget".into(), "4096".into());
+        assert!(apply_sync_credentials_root(&root, &invalid_protocol).is_err());
+        assert!(
+            capture_sync_credentials_with(|| Err(anyhow::anyhow!("unreadable fixture vault")))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn mutation_lease_precedes_read_and_lives_until_actual_save_finishes() {
+        let temp = Temporary::new();
+        let gate = SyncWriteGate::open(temp.0.join("generation.json")).unwrap();
+        mutate_credentials_with(
+            Some(gate.clone()),
+            ChangeOrigin::User,
+            || {
+                assert!(gate.try_exclusive().is_err());
+                Ok(root_with_secret("old"))
+            },
+            |root| {
+                root.active.asr = "changed".into();
+                Ok(true)
+            },
+            |_| {
+                assert!(gate.try_exclusive().is_err());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(gate.generation().unwrap().get(), 1);
+        let exclusive = gate.try_exclusive().unwrap();
+        assert!(mutate_credentials_with(
+            Some(gate.clone()),
+            ChangeOrigin::User,
+            || panic!("must reject before read"),
+            |_| Ok(true),
+            |_| Ok(())
+        )
+        .is_err());
+        drop(exclusive);
+        assert!(mutate_credentials_with(
+            Some(gate.clone()),
+            ChangeOrigin::User,
+            || Err(anyhow::anyhow!("read failed")),
+            |_| Ok(true),
+            |_| Ok(())
+        )
+        .is_err());
+        assert!(!gate.recovery_required().unwrap());
+        mutate_credentials_with(
+            Some(gate.clone()),
+            ChangeOrigin::LocalOnly,
+            || Ok(root_with_secret("old")),
+            |_| Ok(true),
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(gate.generation().unwrap().get(), 1);
+        assert!(mutate_credentials_with(
+            Some(gate.clone()),
+            ChangeOrigin::User,
+            || Ok(root_with_secret("old")),
+            |_| Ok(true),
+            |_| Err(VaultCommitFailure::Unknown.into())
+        )
+        .is_err());
+        assert!(gate.recovery_required().unwrap());
+    }
+
+    #[test]
+    fn unknown_publication_drops_cache_before_reconciliation() {
+        let old = root_with_secret("old");
+        let new = root_with_secret("new");
+        store_credentials_cache(&old);
+        assert!(finish_credential_write(&new, Err(VaultCommitFailure::Unchanged.into())).is_err());
+        assert_eq!(
+            credentials_cache().lock().as_ref().unwrap().providers.asr["stable-channel"]
+                .apiKey
+                .as_deref(),
+            Some("old")
+        );
+        assert!(finish_credential_write(&new, Err(VaultCommitFailure::Unknown.into())).is_err());
+        assert!(credentials_cache().lock().is_none());
+        let count = Cell::new(0);
+        let loaded = load_credentials_into_cache_with(|| {
+            count.set(count.get() + 1);
+            Ok(Some(new))
+        });
+        assert_eq!(count.get(), 1);
+        assert_eq!(
+            loaded.providers.asr["stable-channel"].apiKey.as_deref(),
+            Some("new")
+        );
+        reset_credentials_cache_for_tests();
+    }
+
+    #[test]
+    fn failed_revocation_after_concurrent_login_keeps_oauth_unusable() {
+        use std::sync::{mpsc, Arc};
+        use std::time::{Duration, Instant};
+        let root = Arc::new(Mutex::new(root_with_secret("provider-only")));
+        store_credentials_cache(&root.lock());
+        mark_marketplace_token_verified();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let login_root = root.clone();
+        let login = std::thread::spawn(move || {
+            set_marketplace_token_with(
+                None,
+                "new-oauth",
+                || Ok(login_root.lock().clone()),
+                |next| {
+                    started_tx.send(()).unwrap();
+                    release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                    *login_root.lock() = next.clone();
+                    store_credentials_cache(next);
+                    Ok(())
+                },
+            )
+        });
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let revoke = std::thread::spawn(move || {
+            remove_marketplace_token_with(
+                None,
+                || Ok(root.lock().clone()),
+                |_| Err(VaultCommitFailure::Unchanged.into()),
+            )
+        });
+        let start = Instant::now();
+        while !marketplace_token_is_rejected() && start.elapsed() < Duration::from_secs(5) {
+            std::thread::yield_now();
+        }
+        let saw_revocation = marketplace_token_is_rejected();
+        release_tx.send(()).unwrap();
+        login.join().unwrap().unwrap();
+        assert!(revoke.join().unwrap().is_err());
+        assert!(saw_revocation);
+        assert!(marketplace_token_is_rejected());
+        assert!(credentials_cache()
+            .lock()
+            .as_ref()
+            .and_then(lookup_marketplace_github_token)
+            .is_none());
+        reset_credentials_cache_for_tests();
+        mark_marketplace_token_verified();
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn sync_key_write_does_not_complete_or_delete_main_vault_migration() {
+        use super::super::android_credentials::{AndroidCredentialsCrypto, ReadOutcome};
+        use base64::Engine;
+        let temp = Temporary::new();
+        let main_path = temp.0.join("credentials.enc.json");
+        let legacy = serde_json::to_vec(&root_with_secret("legacy-provider-secret")).unwrap();
+        std::fs::write(
+            &main_path,
+            base64::engine::general_purpose::STANDARD.encode(&legacy),
+        )
+        .unwrap();
+        let account =
+            SyncSecretAccount::new(format!("cloud-sync.e2ee.key.{}", "c".repeat(64))).unwrap();
+        let key = openless_core::SecretValue::new(
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([8; 32]),
+        );
+        let mut wrapper = SyncSecretCrypto {
+            inner: super::super::android_credentials::TestCrypto::default(),
+            account: account.as_str().into(),
+        };
+        write_android_sync_key_with_crypto(
+            &temp.0.join("sync-key.json"),
+            &account,
+            &key,
+            &mut wrapper,
+        )
+        .unwrap();
+        assert!(!wrapper.inner.migration_complete().unwrap());
+        assert!(wrapper.migration_complete().unwrap());
+        wrapper.delete_key().unwrap();
+        assert_eq!(wrapper.inner.delete_key_calls, 0);
+        assert!(matches!(
+            super::super::android_credentials::read(&main_path, &mut wrapper.inner).unwrap(),
+            ReadOutcome::Legacy(_)
+        ));
+        let migrated =
+            load_android_credentials_from_path_with_crypto(&main_path, &mut wrapper.inner)
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            migrated.providers.asr["stable-channel"].apiKey.as_deref(),
+            Some("legacy-provider-secret")
+        );
+        assert!(wrapper.inner.migration_complete().unwrap());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn android_sync_key_envelope_is_account_bound_and_never_plaintext() {
+        use base64::Engine;
+        let temp = Temporary::new();
+        let path = temp.0.join("sync-key.json");
+        let account =
+            SyncSecretAccount::new(format!("cloud-sync.e2ee.local.{}", "a".repeat(64))).unwrap();
+        let other =
+            SyncSecretAccount::new(format!("cloud-sync.e2ee.local.{}", "b".repeat(64))).unwrap();
+        let key = openless_core::SecretValue::new(
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([7; 32]),
+        );
+        let mut crypto = SyncSecretCrypto {
+            inner: super::super::android_credentials::TestCrypto::default(),
+            account: account.as_str().into(),
+        };
+        write_android_sync_key_with_crypto(&path, &account, &key, &mut crypto).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains(key.expose_secret()));
+        assert_eq!(
+            read_android_sync_key_with_crypto(&path, &account, &mut crypto).unwrap(),
+            Some(key.clone())
+        );
+        crypto.account = other.as_str().into();
+        assert!(read_android_sync_key_with_crypto(&path, &other, &mut crypto).is_err());
+        assert!(path.exists());
+        assert!(super::super::android_credentials::read(&path, &mut crypto.inner).is_err());
+        assert!(path.exists());
+        assert!(validate_sync_key(&openless_core::SecretValue::new("not-a-key")).is_err());
+    }
+}
+
+#[cfg(test)]
+mod sync_capture_diagnostic_tests {
+    use super::*;
+    #[test]
+    fn typed_diagnostics_never_expose_error_bodies_or_attributes() {
+        let private = "fixture-private-value-never-log";
+        let cases: Vec<(anyhow::Error, &str)> = vec![
+            (
+                anyhow::Error::new(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    private,
+                ))
+                .context(private),
+                "io_permission_denied",
+            ),
+            (
+                anyhow::Error::new(
+                    serde_json::from_str::<u32>(&format!("\"{private}\"")).unwrap_err(),
+                )
+                .context(private),
+                "json_data",
+            ),
+            (
+                anyhow::Error::new(serde_json::from_str::<serde_json::Value>("]").unwrap_err()),
+                "json_syntax",
+            ),
+            (
+                anyhow::Error::new(serde_json::from_str::<serde_json::Value>("{").unwrap_err()),
+                "json_eof",
+            ),
+            (
+                anyhow::Error::new(String::from_utf8(vec![255]).unwrap_err()),
+                "invalid_utf8",
+            ),
+            (anyhow::anyhow!(private), "native_store_failed"),
+        ];
+        for (error, expected) in cases {
+            let code = sync_capture_read_error_code(&error);
+            assert_eq!(code, expected);
+            assert!(!code.contains(private));
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn keyring_causes_are_classified_without_formatting_secret_material() {
+        let private = "fixture-private-value-never-log";
+        let cases: Vec<(keyring::Error, &str)> = vec![
+            (
+                keyring::Error::NoStorageAccess(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    private,
+                ))),
+                "keyring_access_denied",
+            ),
+            (
+                keyring::Error::PlatformFailure(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    private,
+                ))),
+                "io_timed_out",
+            ),
+            (
+                keyring::Error::BadEncoding(private.as_bytes().to_vec()),
+                "keyring_bad_encoding",
+            ),
+            (
+                keyring::Error::Invalid(private.into(), private.into()),
+                "keyring_invalid_attribute",
+            ),
+            (keyring::Error::NoEntry, "keyring_no_entry"),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(
+                sync_capture_read_error_code(&anyhow::Error::new(error).context(private)),
+                expected
+            );
+        }
+    }
+    #[test]
+    fn projection_diagnostic_does_not_relax_omni_identity_validation() {
+        let mut root = CredsRoot::default();
+        root.omni.active = "custom".into();
+        root.omni.providers.insert(
+            "custom".into(),
+            CredsOmniEntry {
+                channel: ChannelMeta {
+                    providerType: Some("different".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        let error = export_sync_credentials_root(&root).unwrap_err();
+        assert_eq!(
+            error
+                .downcast_ref::<openless_core::BackendError>()
+                .unwrap()
+                .code,
+            openless_core::BackendErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn omni_defaults_and_legacy_account_import_use_the_same_custom_slot() {
+        let omitted: CredsRoot =
+            serde_json::from_str(r#"{"version":1,"active":{},"providers":{}}"#).unwrap();
+        let explicit: CredsOmni = serde_json::from_str("{}").unwrap();
+        assert_eq!(CredsRoot::default().omni.active, explicit.active);
+        assert_eq!(omitted.omni.active, "custom");
+        let imported = load_desktop_credentials_readonly_with(
+            |account| Ok((account == "omni.api_key").then(|| "legacy-fixture-key".into())),
+            || Ok(None),
+            true,
+        )
+        .unwrap();
+        assert_eq!(imported.omni.providers.len(), 1);
+        assert_eq!(
+            imported.omni.providers["custom"].apiKey.as_deref(),
+            Some("legacy-fixture-key")
+        );
+        export_sync_credentials_root(&imported).unwrap();
+    }
+
+    fn legacy_empty_omni_slot() -> CredsOmniEntry {
+        CredsOmniEntry {
+            displayName: Some("Legacy fixture".into()),
+            apiKey: Some("legacy-fixture-key".into()),
+            baseURL: Some("https://legacy.example/v1".into()),
+            model: Some("legacy-model".into()),
+            temperature: Some(0.7),
+            extraHeaders: Some(HashMap::from([("x-fixture".into(), "header-value".into())])),
+            channel: ChannelMeta {
+                order: Some(3),
+                lastTest: Some(ChannelTest {
+                    ok: true,
+                    latencyMs: Some(12),
+                    at: 7,
+                    error: None,
+                }),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn legacy_empty_omni_slot_migrates_losslessly_and_preserves_selected_provider() {
+        for active in ["", "qwen3-omni"] {
+            let mut root = CredsRoot {
+                version: CHANNELS_SCHEMA_VERSION,
+                ..Default::default()
+            };
+            root.omni.active = active.into();
+            let mut expected = legacy_empty_omni_slot();
+            root.omni.providers.insert(String::new(), expected.clone());
+            let persisted_before = serde_json::to_value(&root).unwrap();
+
+            // Match a read-only capture: normalize the loaded copy, never the OS source.
+            let mut loaded = decode_single_credentials(&persisted_before.to_string()).unwrap();
+            assert!(migrate_channels(&mut loaded));
+            expected.channel.providerType = Some("custom".into());
+            assert_eq!(
+                serde_json::to_value(&loaded.omni.providers["custom"]).unwrap(),
+                serde_json::to_value(&expected).unwrap()
+            );
+            assert!(!loaded.omni.providers.contains_key(""));
+            assert_eq!(
+                loaded.omni.active,
+                if active.is_empty() { "custom" } else { active }
+            );
+            assert_eq!(loaded.active.asr, root.active.asr);
+            assert_eq!(loaded.active.llm, root.active.llm);
+            let captured = capture_sync_credentials_with(|| Ok(loaded.clone())).unwrap();
+            let restored = apply_sync_credentials_root(&loaded, &captured).unwrap();
+            assert_eq!(export_sync_credentials_root(&restored).unwrap(), captured);
+            assert!(!migrate_channels(&mut loaded));
+            assert_eq!(serde_json::to_value(&root).unwrap(), persisted_before);
+        }
+    }
+
+    #[test]
+    fn legacy_empty_omni_slot_only_deduplicates_identical_custom_configuration() {
+        let mut root = CredsRoot {
+            version: CHANNELS_SCHEMA_VERSION,
+            ..Default::default()
+        };
+        root.omni.active = "qwen3-omni".into();
+        let legacy = legacy_empty_omni_slot();
+        let mut custom = legacy.clone();
+        custom.channel.providerType = Some("custom".into());
+        root.omni.providers.insert(String::new(), legacy);
+        root.omni.providers.insert("custom".into(), custom);
+        assert!(migrate_channels(&mut root));
+        assert!(!root.omni.providers.contains_key(""));
+        assert_eq!(root.omni.active, "qwen3-omni");
+        export_sync_credentials_root(&root).unwrap();
+
+        for field in [
+            "apiKey",
+            "baseURL",
+            "model",
+            "temperature",
+            "extraHeaders",
+            "displayName",
+            "order",
+            "enabled",
+            "lastTest",
+        ] {
+            let mut conflict = root.clone();
+            conflict
+                .omni
+                .providers
+                .insert(String::new(), legacy_empty_omni_slot());
+            let mut changed = serde_json::to_value(&conflict.omni.providers["custom"]).unwrap();
+            changed.as_object_mut().unwrap().remove(field);
+            if field == "enabled" {
+                changed[field] = serde_json::json!(false);
+            }
+            conflict
+                .omni
+                .providers
+                .insert("custom".into(), serde_json::from_value(changed).unwrap());
+            let before = serde_json::to_value(&conflict).unwrap();
+            assert!(
+                !migrate_channels(&mut conflict),
+                "conflicting {field} must stay untouched"
+            );
+            assert_eq!(serde_json::to_value(&conflict).unwrap(), before);
+            assert!(export_sync_credentials_root(&conflict).is_err());
+        }
+    }
+
+    #[test]
+    fn legacy_omni_repair_does_not_reinterpret_other_invalid_identities() {
+        for provider_type in [None, Some(""), Some("custom")] {
+            let mut root = CredsRoot {
+                version: CHANNELS_SCHEMA_VERSION,
+                ..Default::default()
+            };
+            let mut entry = legacy_empty_omni_slot();
+            entry.channel.providerType = provider_type.map(str::to_string);
+            root.omni.providers.insert(String::new(), entry);
+            assert!(migrate_channels(&mut root));
+            export_sync_credentials_root(&root).unwrap();
+        }
+        for (id, provider_type) in [("", "other"), ("unsafe/path", "unsafe/path")] {
+            let mut root = CredsRoot {
+                version: CHANNELS_SCHEMA_VERSION,
+                ..Default::default()
+            };
+            let mut entry = legacy_empty_omni_slot();
+            entry.channel.providerType = Some(provider_type.into());
+            root.omni.providers.insert(id.into(), entry);
+            let before = serde_json::to_value(&root).unwrap();
+            assert!(!migrate_channels(&mut root));
+            assert_eq!(serde_json::to_value(&root).unwrap(), before);
+            assert!(export_sync_credentials_root(&root).is_err());
+        }
+    }
+
+    #[test]
+    fn legacy_omni_repair_preserves_restored_empty_and_inactive_snapshots() {
+        let root = CredsRoot::default();
+        let empty = openless_core::credentials::SyncCredentials {
+            channels: vec![],
+            credentials: vec![],
+        };
+        let mut inactive = export_sync_credentials_root(&root).unwrap();
+        for channel in &mut inactive.channels {
+            channel.active = false;
+            channel.enabled = false;
+        }
+        for snapshot in [empty, inactive] {
+            let mut restored = apply_sync_credentials_root(&root, &snapshot).unwrap();
+            assert!(restored.omni.active.is_empty());
+            assert!(!migrate_channels(&mut restored));
+            assert_eq!(export_sync_credentials_root(&restored).unwrap(), snapshot);
+        }
     }
 }

@@ -14,6 +14,7 @@ fn persistence_error(operation: impl Into<String>) -> BackendError {
 }
 
 fn read_preferences(path: &Path) -> Result<UserPreferences, BackendError> {
+    let read_only = crate::cloud_sync_e2ee_store::gate::recovery_pending_for_path(path);
     if !path.exists() {
         return Ok(UserPreferences::default());
     }
@@ -24,9 +25,14 @@ fn read_preferences(path: &Path) -> Result<UserPreferences, BackendError> {
 
     let preferences = match serde_json::from_slice::<UserPreferences>(&bytes) {
         Ok(preferences) => preferences,
-        Err(error) => {
+        Err(_error) => {
+            if read_only {
+                // Recovery owns the authoritative before/after images. Do not back up,
+                // migrate, or overwrite a partially restored file during construction.
+                return Ok(UserPreferences::salvage_from_json_bytes(&bytes));
+            }
             log::error!(
-                "[prefs] strict decode of {} failed: {error}; backing up and salvaging",
+                "[prefs] strict decode of {} failed; backing up and salvaging",
                 path.display()
             );
             let backup = backup_unparseable_preferences(path, &bytes)?;
@@ -35,8 +41,11 @@ fn read_preferences(path: &Path) -> Result<UserPreferences, BackendError> {
                 backup.display()
             );
             let salvaged = UserPreferences::salvage_from_json_bytes(&bytes);
-            match serde_json::to_vec_pretty(&salvaged)
-                .map_err(|_| persistence_error("encode salvaged preferences"))
+            match preferences_json_preserving_unknown(path, &salvaged)
+                .and_then(|value| {
+                    serde_json::to_vec_pretty(&value)
+                        .map_err(|_| persistence_error("encode salvaged preferences"))
+                })
                 .and_then(|json| atomic_write(path, &json))
             {
                 Ok(()) => log::info!(
@@ -60,9 +69,12 @@ fn read_preferences(path: &Path) -> Result<UserPreferences, BackendError> {
                 .and_then(|flag| flag.as_bool())
         })
         .unwrap_or(false);
-    if !streaming_default_migrated {
-        match serde_json::to_vec_pretty(&preferences)
-            .map_err(|_| persistence_error("encode migrated preferences"))
+    if !streaming_default_migrated && !read_only {
+        match preferences_json_preserving_unknown(path, &preferences)
+            .and_then(|value| {
+                serde_json::to_vec_pretty(&value)
+                    .map_err(|_| persistence_error("encode migrated preferences"))
+            })
             .and_then(|json| atomic_write(path, &json))
         {
             Ok(()) => log::info!("[prefs] migrated streamingInsert default marker"),
@@ -74,6 +86,87 @@ fn read_preferences(path: &Path) -> Result<UserPreferences, BackendError> {
     }
 
     Ok(preferences)
+}
+
+fn preferences_json_preserving_unknown(
+    path: &Path,
+    preferences: &UserPreferences,
+) -> Result<serde_json::Value, BackendError> {
+    let mut value =
+        serde_json::to_value(preferences).map_err(|_| persistence_error("encode preferences"))?;
+    let existing = match fs::read(path) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return Err(persistence_error("read unknown preference fields")),
+    };
+    if let Some(bytes) = existing {
+        if let Ok(serde_json::Value::Object(old)) = serde_json::from_slice(&bytes) {
+            let object = value
+                .as_object_mut()
+                .ok_or_else(|| persistence_error("preferences object"))?;
+            let mut old = serde_json::Value::Object(old);
+            if let Some(map) = old.as_object_mut() {
+                map.remove("windowsSendinputInsertionOnly");
+                map.remove("windowsSendinputNewlineMode");
+            }
+            let mut canonical = serde_json::to_value(preferences)
+                .map_err(|_| persistence_error("encode preferences"))?;
+            preserve_unknown_fields(&mut canonical, &old)?;
+            *object = canonical
+                .as_object_mut()
+                .ok_or_else(|| persistence_error("preferences object"))?
+                .clone();
+        }
+    }
+    Ok(value)
+}
+
+fn preserve_unknown_fields(
+    canonical: &mut serde_json::Value,
+    old: &serde_json::Value,
+) -> Result<(), BackendError> {
+    use serde_json::Value;
+    match (canonical, old) {
+        (Value::Object(current), Value::Object(old)) => {
+            for (key, value) in old {
+                if let Some(known) = current.get_mut(key) {
+                    preserve_unknown_fields(known, value)?;
+                } else {
+                    current.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        (Value::Array(current), Value::Array(old)) => {
+            // Existing object arrays have stable identities. Preserve extensions across
+            // reordering/editing, and let explicit entity deletion remove its extensions.
+            for item in current.iter_mut().filter(|item| item.is_object()) {
+                let key = ["packId", "code", "id"]
+                    .into_iter()
+                    .find(|key| item.get(*key).is_some());
+                let Some(key) = key else {
+                    return Err(BackendError::new(
+                        BackendErrorCode::Unsupported,
+                        "unsupported preference array extension",
+                    ));
+                };
+                let matches: Vec<_> = old
+                    .iter()
+                    .filter(|candidate| candidate.get(key) == item.get(key))
+                    .collect();
+                if matches.len() > 1 {
+                    return Err(BackendError::new(
+                        BackendErrorCode::Unsupported,
+                        "ambiguous preference array identity",
+                    ));
+                }
+                if let Some(previous) = matches.first() {
+                    preserve_unknown_fields(item, previous)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn backup_unparseable_preferences(path: &Path, bytes: &[u8]) -> Result<PathBuf, BackendError> {
@@ -109,7 +202,15 @@ impl PreferencesStore {
         if path.as_os_str().is_empty() {
             return Err(persistence_error("preferences path is empty"));
         }
-        let preferences = read_preferences(&path)?;
+        let preferences = if crate::cloud_sync_e2ee_store::gate::recovery_pending_for_path(&path) {
+            read_preferences(&path)?
+        } else {
+            crate::cloud_sync_e2ee_store::gate::with_registered_mutation(
+                &path,
+                crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+                || read_preferences(&path),
+            )?
+        };
         Ok(Self {
             path,
             state: Mutex::new(preferences),
@@ -141,6 +242,11 @@ impl PreferencesStore {
             .clone()
     }
 
+    /// Immutable Host-selected path, used to check a write barrier before taking store locks.
+    pub(crate) fn persistence_path(&self) -> &Path {
+        &self.path
+    }
+
     /// Keep the live value locked until a coordinated restore has committed all of its files.
     pub(crate) fn cloud_sync_access(&self) -> (std::sync::MutexGuard<'_, UserPreferences>, &Path) {
         (
@@ -152,14 +258,47 @@ impl PreferencesStore {
     }
 
     pub fn set(&self, preferences: UserPreferences) -> Result<(), BackendError> {
-        let json = serde_json::to_vec_pretty(&preferences)
-            .map_err(|_| persistence_error("encode preferences"))?;
+        self.update(|current| *current = preferences)
+    }
+
+    pub(crate) fn sync_snapshot(
+        &self,
+        permit: &crate::cloud_sync_e2ee_store::gate::ExclusivePermit,
+    ) -> Result<serde_json::Value, BackendError> {
+        crate::cloud_sync_e2ee_store::gate::require_exclusive(&self.path, permit)?;
+        self.sync_snapshot_readonly()
+    }
+
+    pub(crate) fn sync_snapshot_readonly(&self) -> Result<serde_json::Value, BackendError> {
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        atomic_write(&self.path, &json)?;
-        *state = preferences;
+        if self.path.exists() {
+            let bytes =
+                fs::read(&self.path).map_err(|_| persistence_error("read sync preferences"))?;
+            *state = serde_json::from_slice(&bytes)
+                .map_err(|_| persistence_error("decode sync preferences"))?;
+        }
+        preferences_json_preserving_unknown(&self.path, &state)
+    }
+
+    pub(crate) fn sync_replace_raw(
+        &self,
+        value: serde_json::Value,
+        permit: &crate::cloud_sync_e2ee_store::gate::ExclusivePermit,
+    ) -> Result<(), BackendError> {
+        crate::cloud_sync_e2ee_store::gate::require_exclusive(&self.path, permit)?;
+        let parsed: UserPreferences = serde_json::from_value(value.clone())
+            .map_err(|_| persistence_error("validate restored preferences"))?;
+        let bytes = serde_json::to_vec_pretty(&value)
+            .map_err(|_| persistence_error("encode restored preferences"))?;
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        crate::persistence::atomic_write_for_sync(&self.path, &bytes, permit)?;
+        *state = parsed;
         Ok(())
     }
 
@@ -171,33 +310,50 @@ impl PreferencesStore {
         &self,
         update: impl FnOnce(&mut UserPreferences) -> R,
     ) -> Result<R, BackendError> {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut next = state.clone();
-        let result = update(&mut next);
-        let json = serde_json::to_vec_pretty(&next)
-            .map_err(|_| persistence_error("encode preferences"))?;
-        atomic_write(&self.path, &json)?;
-        *state = next;
-        Ok(result)
+        crate::cloud_sync_e2ee_store::gate::with_registered_mutation_deciding(&self.path, || {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut next = match fs::read(&self.path) {
+                Ok(bytes) if !bytes.is_empty() => serde_json::from_slice::<UserPreferences>(&bytes)
+                    .map_err(|_| persistence_error("decode preferences before save"))?,
+                Ok(_) => state.clone(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => state.clone(),
+                Err(_) => return Err(persistence_error("read preferences before save")),
+            };
+            let previous =
+                serde_json::to_value(&next).map_err(|_| persistence_error("encode preferences"))?;
+            let result = update(&mut next);
+            let value = preferences_json_preserving_unknown(&self.path, &next)?;
+            let changed = crate::cloud_sync_e2ee_documents::registry::PREFERENCE_FIELDS
+                .iter()
+                .any(|field| {
+                    field.class
+                        != crate::cloud_sync_e2ee_documents::registry::PreferenceClass::Excluded
+                        && previous.get(field.key) != value.get(field.key)
+                });
+            let origin = if changed {
+                crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User
+            } else {
+                crate::cloud_sync_e2ee_store::gate::ChangeOrigin::LocalOnly
+            };
+            let json = serde_json::to_vec_pretty(&value)
+                .map_err(|_| persistence_error("encode preferences"))?;
+            atomic_write(&self.path, &json)?;
+            *state = next;
+            Ok((result, origin))
+        })
     }
 
     pub fn set_preserving_current_style_preferences(
         &self,
         mut preferences: UserPreferences,
     ) -> Result<(), BackendError> {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        preferences.preserve_style_preferences_from(&state);
-        let json = serde_json::to_vec_pretty(&preferences)
-            .map_err(|_| persistence_error("encode preferences"))?;
-        atomic_write(&self.path, &json)?;
-        *state = preferences;
-        Ok(())
+        self.update(|current| {
+            preferences.preserve_style_preferences_from(current);
+            *current = preferences;
+        })
     }
 }
 

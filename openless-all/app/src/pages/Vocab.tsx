@@ -1010,7 +1010,7 @@ function ModalShell({ title, desc, closing = false, onClose, children }: ModalSh
         alignItems: 'center',
         justifyContent: 'center',
         padding: 24,
-        background: 'rgba(15,17,22,0.28)',
+        background: 'var(--ol-dialog-backdrop)',
         backdropFilter: 'blur(6px) saturate(140%)',
         WebkitBackdropFilter: 'blur(6px) saturate(140%)',
         animation: closing
@@ -1026,10 +1026,10 @@ function ModalShell({ title, desc, closing = false, onClose, children }: ModalSh
         style={{
           width: 440,
           maxWidth: '100%',
-          borderRadius: 16,
+          borderRadius: 'var(--ol-dialog-radius)',
           background: 'var(--ol-surface)',
-          border: '0.5px solid rgba(0,0,0,.08)',
-          boxShadow: '0 24px 70px -24px rgba(15,17,22,.38), 0 0 0 0.5px rgba(0,0,0,.06)',
+          border: '1px solid var(--ol-dialog-border)',
+          boxShadow: 'var(--ol-dialog-shadow)',
           padding: 20,
           animation: closing
             ? 'ol-prompt-pop 0.2s var(--ol-motion-soft) reverse both'

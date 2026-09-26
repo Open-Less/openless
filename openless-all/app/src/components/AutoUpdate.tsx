@@ -340,7 +340,7 @@ export function UpdateDialog({
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0,0,0,0.22)',
+        background: 'var(--ol-dialog-backdrop)',
         display: 'grid',
         placeItems: 'center',
         zIndex: 40,
@@ -350,10 +350,10 @@ export function UpdateDialog({
       <div
         style={{
           width: 360,
-          borderRadius: 16,
+          borderRadius: 'var(--ol-dialog-radius)',
           background: 'var(--ol-surface)',
-          border: '0.5px solid var(--ol-line-strong)',
-          boxShadow: 'var(--ol-shadow-lg)',
+          border: '1px solid var(--ol-dialog-border)',
+          boxShadow: 'var(--ol-dialog-shadow)',
           padding: 18,
         }}
       >

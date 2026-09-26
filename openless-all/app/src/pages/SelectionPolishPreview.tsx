@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CheckIcon, XIcon } from 'lucide-react';
+import { CheckIcon, PencilLine } from 'lucide-react';
+import { ToolWindowHeader } from '../components/ui/ToolWindowHeader';
 import {
   cancelSelectionPolishPreview,
   confirmSelectionPolishPreview,
   getSelectionPolishPreview,
+  isTauri,
 } from '../lib/ipc';
 
 export function SelectionPolishPreview() {
@@ -26,6 +28,10 @@ export function SelectionPolishPreview() {
       }
     };
     void load();
+    if (!isTauri)
+      return () => {
+        cancelled = true;
+      };
     void import('@tauri-apps/api/event').then(({ listen }) =>
       listen('selection-polish-preview:shown', () => {
         // 预览窗是复用的：上一轮 confirm/cancel 成功后窗口 hide，但组件不卸载，
@@ -61,114 +67,44 @@ export function SelectionPolishPreview() {
   };
 
   return (
-    <main
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        flex: '1 1 auto',
-        width: '100%',
-        height: '100%',
-        boxSizing: 'border-box',
-        padding: 18,
-        background: 'var(--ol-surface)',
-        color: 'var(--ol-ink)',
-      }}
-    >
-      <header
-        style={{
-          display: 'flex',
-          alignItems: 'flex-start',
-          justifyContent: 'space-between',
-          gap: 12,
-          marginBottom: 12,
-        }}
-      >
-        <div>
-          <div style={{ fontSize: 16, fontWeight: 700 }}>{t('selectionPolishPreview.title')}</div>
-          <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ol-ink-4)' }}>
-            {t('selectionPolishPreview.subtitle')}
-          </div>
-        </div>
-        <button
-          className="ol-focus-ring"
-          onClick={() => void cancel()}
-          disabled={busy}
-          title={t('selectionPolishPreview.cancel')}
-          style={{ width: 30, height: 30, borderRadius: 7, color: 'var(--ol-ink-3)' }}
-        >
-          <XIcon size={17} />
-        </button>
-      </header>
-      <textarea
-        aria-label={t('selectionPolishPreview.resultLabel')}
-        autoFocus
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        style={{
-          flex: 1,
-          minHeight: 150,
-          width: '100%',
-          resize: 'none',
-          boxSizing: 'border-box',
-          border: '0.5px solid var(--ol-line-strong)',
-          borderRadius: 9,
-          background: 'var(--ol-control-solid)',
-          color: 'var(--ol-ink)',
-          padding: 12,
-          fontSize: 14,
-          lineHeight: 1.65,
-          outline: 'none',
-        }}
+    <main className="ol-tool-window">
+      <ToolWindowHeader
+        icon={<PencilLine />}
+        title={t('selectionPolishPreview.title')}
+        description={t('selectionPolishPreview.subtitle')}
+        onClose={() => void cancel()}
+        closeLabel={t('selectionPolishPreview.cancel')}
+        closeDisabled={busy}
       />
-      {sourceText && (
-        <div
-          style={{
-            marginTop: 8,
-            maxHeight: 42,
-            overflow: 'hidden',
-            fontSize: 11,
-            lineHeight: 1.5,
-            color: 'var(--ol-ink-4)',
-          }}
-        >
-          {t('selectionPolishPreview.sourcePrefix')}
-          {sourceText}
-        </div>
-      )}
-      {error && (
-        <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ol-red, #dc2626)' }}>
-          {t('selectionPolishPreview.applyError')}
-          {error}
-        </div>
-      )}
-      <footer style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
-        <button
-          className="ol-focus-ring"
-          onClick={() => void cancel()}
-          disabled={busy}
-          style={{
-            padding: '8px 14px',
-            borderRadius: 7,
-            border: '0.5px solid var(--ol-line-strong)',
-            color: 'var(--ol-ink-2)',
-          }}
-        >
+      <section className="ol-tool-content">
+        <textarea
+          className="ol-tool-editor"
+          aria-label={t('selectionPolishPreview.resultLabel')}
+          autoFocus
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+        />
+        {sourceText && (
+          <div className="ol-tool-source">
+            {t('selectionPolishPreview.sourcePrefix')}
+            {sourceText}
+          </div>
+        )}
+        {error && (
+          <div className="ol-tool-error" role="alert">
+            {t('selectionPolishPreview.applyError')}
+            {error}
+          </div>
+        )}
+      </section>
+      <footer className="ol-tool-footer">
+        <button className="ol-tool-button" onClick={() => void cancel()} disabled={busy}>
           {t('selectionPolishPreview.cancel')}
         </button>
         <button
-          className="ol-focus-ring"
+          className="ol-tool-button is-primary"
           onClick={() => void confirm()}
           disabled={busy || !text.trim()}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '8px 14px',
-            borderRadius: 7,
-            background: 'var(--ol-blue)',
-            color: '#fff',
-            fontWeight: 600,
-          }}
         >
           <CheckIcon size={16} />
           {t('selectionPolishPreview.confirmReplace')}

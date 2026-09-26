@@ -27,25 +27,28 @@ fi
 echo "▶ 检查 Apple Silicon MLX 构建依赖"
 npm run check:macos-metal-toolchain
 
-# Homebrew rustc 在 macOS 上对 `strip=symbols` 生成的 proc-macro dylib
-# 可能报 "mis-aligned LINKEDIT string pool"。仅官方 macOS 发布脚本降级
-# 为 debuginfo；Cargo.toml 的全局 profile 仍让 Linux/Windows/Android 使用 symbols。
-export CARGO_PROFILE_RELEASE_STRIP=debuginfo
-export RUSTC_WRAPPER="$PWD/scripts/rustc-macos-proc-macro-wrapper.sh"
+source scripts/macos-build-env.sh
+echo "▶ Cargo release codegen units: ${CARGO_PROFILE_RELEASE_CODEGEN_UNITS} (macOS only)"
 echo "▶ Cargo release strip: ${CARGO_PROFILE_RELEASE_STRIP} (macOS only)"
 echo "▶ Rust proc-macro host wrapper: ${RUSTC_WRAPPER}"
 
-# 只保留最新一份 qwen3-asr-rs 构建目录：本地混跑 cargo check/test/build 会按不同
-# feature 上下文生成多份，各自带一份 metallib，会让暂存脚本拒绝猜测。
-KEEP_QWEN_DIR="$(ls -dt src-tauri/target/release/build/qwen3-asr-rs-* 2>/dev/null | head -1 || true)"
+# Cargo 为 build-script 可执行文件和 OUT_DIR 创建不同目录。只在多个
+# metallib 输出之间清理，保留所有 build-script 缓存，避免每次重新编译。
+KEEP_QWEN_DIR=""
+for d in src-tauri/target/release/build/qwen3-asr-rs-*; do
+  [ -s "$d/out/lib/mlx.metallib" ] || continue
+  if [ -z "$KEEP_QWEN_DIR" ] || [ "$d/out/lib/mlx.metallib" -nt "$KEEP_QWEN_DIR/out/lib/mlx.metallib" ]; then
+    KEEP_QWEN_DIR="$d"
+  fi
+done
 if [ -n "$KEEP_QWEN_DIR" ]; then
   for d in src-tauri/target/release/build/qwen3-asr-rs-*; do
+    [ -s "$d/out/lib/mlx.metallib" ] || continue
     [ "$d" = "$KEEP_QWEN_DIR" ] || rm -rf "$d"
   done
 fi
 
 echo "▶ tauri build"
-BUILD_START_TS="$(date +%s)"
 TAURI_BUILD_ARGS=(build --ci)
 case "$(uname -m)" in
   arm64)
@@ -63,16 +66,41 @@ esac
 if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || [ -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]; then
   TAURI_BUILD_ARGS+=(--config '{"bundle":{"createUpdaterArtifacts":true}}')
 fi
-# bundle_dmg（AppleScript）在 Xcode beta 上可能退出非零；.app 与 DMG 是否真实
-# 产出交给下方的新鲜度/存在性校验判定，不在这一步盲 abort。
-npm run tauri -- "${TAURI_BUILD_ARGS[@]}" || echo "⚠ tauri build 退出码非零，继续校验产物"
-
 APP_VERSION="$(node -p "require('./package.json').version")"
 DMG_PATH="$DMG_DIR/OpenLess_${APP_VERSION}_${MAC_BUNDLE_ARCH}.dmg"
 
-# bundle 必须是本次构建产出的（与构建开始时间比；打包后原始二进制还会被签名
-# 触碰，不能拿它当基准）。
-if [ ! -d "$APP" ] || [ "$(stat -f %m "$APP/Contents/MacOS/openless")" -lt "$BUILD_START_TS" ]; then
+# 清掉交付产物，保留 Cargo 缓存。热构建可复用旧时间戳的二进制，不能用
+# 编译文件的 mtime 判断 bundle 新鲜度；Tauri 失败时也不能接受上轮安装包。
+rm -rf "$APP"
+rm -f "$DMG_PATH" "${APP}.tar.gz" "${APP}.tar.gz.sig"
+TAURI_BUILD_ARGS+=(-- --locked --timings)
+if [ "$MAC_BUNDLE_ARCH" = "aarch64" ]; then
+  # Tauri skips Finder AppleScript in CI. Write deterministic Finder metadata
+  # into its temporary image before Tauri compresses and signs the final DMG.
+  DMG_LAYOUT_ENV_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openless-dmg-python.XXXXXX")"
+  cleanup_dmg_environment() { rm -rf "$DMG_LAYOUT_ENV_DIR"; }
+  trap cleanup_dmg_environment EXIT
+  python3 -m venv "$DMG_LAYOUT_ENV_DIR"
+  DMG_LAYOUT_PYTHON="$DMG_LAYOUT_ENV_DIR/bin/python3"
+  "$DMG_LAYOUT_PYTHON" -m pip install --quiet --disable-pip-version-check \
+    --only-binary=:all: --no-deps --require-hashes -r scripts/macos-dmg-requirements.txt
+  "$DMG_LAYOUT_PYTHON" scripts/macos-dmg-layout.test.py
+  CI=true TAURI_BUNDLER_DMG_IGNORE_CI=false \
+    OPENLESS_DMG_LAYOUT_ROOT="$PWD" OPENLESS_DMG_LAYOUT_PYTHON="$DMG_LAYOUT_PYTHON" \
+    OPENLESS_DMG_LAYOUT_STAMP="$DMG_LAYOUT_ENV_DIR/layout-applied" \
+    PATH="$PWD/scripts/macos-dmg-bin:$PATH" npm run tauri -- "${TAURI_BUILD_ARGS[@]}"
+  if [ ! -s "$DMG_LAYOUT_ENV_DIR/layout-applied" ]; then
+    echo "✗ Tauri 未调用 DMG 布局步骤，中止交付"
+    exit 1
+  fi
+  "$DMG_LAYOUT_PYTHON" scripts/macos-dmg-layout.py verify "$DMG_PATH"
+  cleanup_dmg_environment
+  trap - EXIT
+else
+  npm run tauri -- "${TAURI_BUILD_ARGS[@]}"
+fi
+
+if [ ! -f "$APP/Contents/MacOS/openless" ]; then
   echo "✗ $APP 缺失或不是本次构建的产物（打包未完成），中止"
   exit 1
 fi

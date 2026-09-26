@@ -1,7 +1,7 @@
 //! Side-specific combo hotkey matching (e.g. Left Cmd + D).
 //!
 //! `global-hotkey` cannot distinguish left/right modifiers. This module maintains
-//! physical modifier state and matches combos registered via [`SideAwareComboMonitor`].
+//! physical modifier state and matches side-aware bindings registered via [`SideAwareComboMonitor`].
 
 use std::sync::mpsc::Sender;
 use std::sync::{OnceLock, RwLock};
@@ -9,14 +9,16 @@ use std::time::Instant;
 
 use parking_lot::Mutex;
 
-use crate::combo_hotkey::ComboHotkeyEvent;
+use crate::hotkey::{HotkeyCombinedEdge, HotkeyEvent};
 use crate::shortcut_binding::{is_side_specific_modifier_tag, normalize_side_modifier_tag};
 use crate::types::ShortcutBinding;
+use openless_core::is_modifier_chord_binding;
 
 static ACTIVE_MONITOR: OnceLock<RwLock<Option<ActiveSideCombo>>> = OnceLock::new();
 
 struct ActiveSideCombo {
-    tx: Sender<ComboHotkeyEvent>,
+    tx: Sender<HotkeyEvent>,
+    combo_tx: Sender<HotkeyCombinedEdge>,
     state: Mutex<SideAwareComboState>,
 }
 
@@ -36,7 +38,8 @@ struct ModifierSideState {
 struct SideAwareComboState {
     binding: ShortcutBinding,
     modifiers: ModifierSideState,
-    combo_active: bool,
+    active_press_id: Option<u64>,
+    companion_seen: bool,
 }
 
 impl SideAwareComboState {
@@ -44,7 +47,8 @@ impl SideAwareComboState {
         Self {
             binding,
             modifiers: ModifierSideState::default(),
-            combo_active: false,
+            active_press_id: None,
+            companion_seen: false,
         }
     }
 
@@ -106,50 +110,73 @@ impl SideAwareComboState {
         self.expected_modifier_tags() == self.pressed_modifier_tags()
     }
 
-    fn on_primary(&mut self, primary: &str, pressed: bool) -> Option<ComboHotkeyEvent> {
+    fn activate(&mut self) -> Option<HotkeyEvent> {
+        if self.active_press_id.is_some() {
+            return None;
+        }
+        let press_id = crate::hotkey::next_press_id();
+        self.active_press_id = Some(press_id);
+        self.companion_seen = false;
+        Some(HotkeyEvent::Pressed {
+            at: Instant::now(),
+            press_id,
+        })
+    }
+
+    fn release_active(&mut self) -> Option<HotkeyEvent> {
+        let press_id = self.active_press_id.take()?;
+        self.companion_seen = false;
+        Some(HotkeyEvent::Released {
+            at: Instant::now(),
+            press_id,
+        })
+    }
+
+    fn on_modifier_press(&mut self, side: SideModifier) -> Option<HotkeyEvent> {
+        self.set_side(side, true);
+        if is_modifier_chord_binding(&self.binding) && self.modifiers_match() {
+            return self.activate();
+        }
+        None
+    }
+
+    fn on_primary(&mut self, primary: &str, pressed: bool) -> Option<HotkeyEvent> {
+        if is_modifier_chord_binding(&self.binding) {
+            return None;
+        }
         if !primary_eq(&self.binding.primary, primary) {
             return None;
         }
         if pressed {
             if self.modifiers_match() {
-                // `modifiers_match()` is the authoritative activation gate. If
-                // `combo_active` is still true here, the previous `Released` was
-                // dropped by the OS: we must NOT emit a second `Pressed` (that
-                // would break the pairing invariant), so treat the flag as
-                // already reflecting an active combo and swallow this edge.
-                if !self.combo_active {
-                    self.combo_active = true;
-                    return Some(ComboHotkeyEvent::Pressed { at: Instant::now() });
-                }
-                return None;
+                return self.activate();
             }
-            // Modifiers no longer match — this is the single authoritative reset
-            // condition. If `combo_active` is stuck true (a modifier release was
-            // dropped so no `Released` was ever emitted), self-heal by emitting
-            // the terminal `Released` now so the recording latch cannot stick.
-            if self.combo_active {
-                self.combo_active = false;
-                return Some(ComboHotkeyEvent::Released { at: Instant::now() });
+            if self.active_press_id.is_some() {
+                return self.release_active();
             }
             return None;
         }
-        // Primary key up is the absolute termination signal for the combo.
-        if self.combo_active {
-            self.combo_active = false;
-            return Some(ComboHotkeyEvent::Released { at: Instant::now() });
+        self.release_active()
+    }
+
+    fn on_modifier_release(&mut self, side: SideModifier) -> Option<HotkeyEvent> {
+        self.set_side(side, false);
+        if self.active_press_id.is_some() && !self.modifiers_match() {
+            return self.release_active();
         }
         None
     }
 
-    fn on_modifier_release(&mut self, side: SideModifier) -> Option<ComboHotkeyEvent> {
-        self.set_side(side, false);
-        // Modifiers no longer matching is the authoritative reset condition:
-        // once the required side-modifier set is broken, the combo is over.
-        if self.combo_active && !self.modifiers_match() {
-            self.combo_active = false;
-            return Some(ComboHotkeyEvent::Released { at: Instant::now() });
+    fn on_companion_key_down(&mut self) -> Option<HotkeyCombinedEdge> {
+        if !is_modifier_chord_binding(&self.binding) || self.companion_seen {
+            return None;
         }
-        None
+        let press_id = self.active_press_id?;
+        self.companion_seen = true;
+        Some(HotkeyCombinedEdge {
+            at: Instant::now(),
+            press_id,
+        })
     }
 }
 
@@ -170,7 +197,8 @@ pub struct SideAwareComboMonitor;
 impl SideAwareComboMonitor {
     pub fn start(
         binding: ShortcutBinding,
-        tx: Sender<ComboHotkeyEvent>,
+        tx: Sender<HotkeyEvent>,
+        combo_tx: Sender<HotkeyCombinedEdge>,
     ) -> Result<Self, crate::combo_hotkey::ComboHotkeyError> {
         // Linux has no side-aware platform dispatch (no CGEventTap / WH_KEYBOARD_LL
         // equivalent wired here). Accepting the binding would leave the user with a
@@ -178,7 +206,7 @@ impl SideAwareComboMonitor {
         // so the caller can surface an actionable error instead.
         #[cfg(target_os = "linux")]
         {
-            let _ = (&binding, &tx);
+            let _ = (&binding, &tx, &combo_tx);
             return Err(crate::combo_hotkey::ComboHotkeyError::UnsupportedModifier(
                 "侧向修饰键组合键在 Linux 暂不支持".into(),
             ));
@@ -192,6 +220,7 @@ impl SideAwareComboMonitor {
             let mut guard = slot.write().expect("side combo monitor lock poisoned");
             *guard = Some(ActiveSideCombo {
                 tx,
+                combo_tx,
                 state: Mutex::new(SideAwareComboState::new(binding)),
             });
             Ok(Self)
@@ -213,13 +242,24 @@ fn validate_side_binding(
             "binding is not side-specific".into(),
         ));
     }
+    if is_modifier_chord_binding(binding) {
+        return openless_core::validate_shortcut_binding(binding).map_err(|error| match error {
+            openless_core::ShortcutBindingError::UnsupportedModifier(value) => {
+                crate::combo_hotkey::ComboHotkeyError::UnsupportedModifier(value)
+            }
+            openless_core::ShortcutBindingError::UnsupportedKey(value) => {
+                crate::combo_hotkey::ComboHotkeyError::UnsupportedKey(value)
+            }
+        });
+    }
+
     crate::shortcut_binding::parse_primary(&binding.primary)
         .map_err(|e| crate::combo_hotkey::ComboHotkeyError::UnsupportedKey(e.to_string()))?;
 
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 impl SideAwareComboMonitor {
     /// Update the existing route without replacing its handle or event sender.
     /// Used when a failed native-key switch restores an already-live shortcut.
@@ -261,9 +301,15 @@ where
     guard.as_ref().map(f)
 }
 
-fn send_event(tx: &Sender<ComboHotkeyEvent>, evt: ComboHotkeyEvent) {
+fn send_event(tx: &Sender<HotkeyEvent>, evt: HotkeyEvent) {
     if let Err(err) = tx.send(evt) {
         log::warn!("[side-aware-combo] event send failed: {err}");
+    }
+}
+
+fn send_combo_abort(tx: &Sender<HotkeyCombinedEdge>, edge: HotkeyCombinedEdge) {
+    if let Err(err) = tx.send(edge) {
+        log::warn!("[side-aware-combo] abort send failed: {err}");
     }
 }
 
@@ -271,8 +317,7 @@ pub fn handle_side_modifier(side: SideModifier, pressed: bool) {
     if let Some(evt) = with_active(|active| {
         let mut state = active.state.lock();
         if pressed {
-            state.set_side(side, true);
-            None
+            state.on_modifier_press(side)
         } else {
             state.on_modifier_release(side)
         }
@@ -291,6 +336,12 @@ pub fn handle_primary_key(primary: &str, pressed: bool) {
     .flatten()
     {
         with_active(|active| send_event(&active.tx, evt));
+    }
+}
+
+pub fn handle_companion_key_down() {
+    if let Some(edge) = with_active(|active| active.state.lock().on_companion_key_down()).flatten() {
+        with_active(|active| send_combo_abort(&active.combo_tx, edge));
     }
 }
 
@@ -585,7 +636,7 @@ pub mod platform {
 mod tests {
     use super::*;
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
     fn restoring_live_side_binding_preserves_its_event_route() {
         use std::sync::mpsc;
@@ -594,7 +645,8 @@ mod tests {
             modifiers: vec!["ctrl-right".into()],
         };
         let (tx, rx) = mpsc::channel();
-        let monitor = SideAwareComboMonitor::start(binding.clone(), tx).unwrap();
+        let (combo_tx, _combo_rx) = mpsc::channel();
+        let monitor = SideAwareComboMonitor::start(binding.clone(), tx, combo_tx).unwrap();
         let press_and_release = |primary: &str| {
             handle_side_modifier(SideModifier::CtrlRight, true);
             handle_primary_key(primary, true);
@@ -602,11 +654,11 @@ mod tests {
             handle_side_modifier(SideModifier::CtrlRight, false);
             assert!(matches!(
                 rx.try_recv(),
-                Ok(ComboHotkeyEvent::Pressed { .. })
+                Ok(HotkeyEvent::Pressed { .. })
             ));
             assert!(matches!(
                 rx.try_recv(),
-                Ok(ComboHotkeyEvent::Released { .. })
+                Ok(HotkeyEvent::Released { .. })
             ));
             assert!(rx.try_recv().is_err());
         };
@@ -618,7 +670,7 @@ mod tests {
         press_and_release("D");
         assert!(monitor
             .update_binding(ShortcutBinding {
-                primary: "F21".into(),
+                primary: "F25".into(),
                 modifiers: vec!["ctrl-right".into()]
             })
             .is_err());
@@ -686,7 +738,7 @@ mod tests {
         state.set_side(SideModifier::CmdLeft, true);
         assert!(state.modifiers_match());
         let evt = state.on_primary("D", true);
-        assert!(matches!(evt, Some(ComboHotkeyEvent::Pressed { .. })));
+        assert!(matches!(evt, Some(HotkeyEvent::Pressed { .. })));
     }
 
     #[test]
@@ -702,7 +754,7 @@ mod tests {
         assert!(state.modifiers_match());
         assert!(matches!(
             state.on_primary("D", true),
-            Some(ComboHotkeyEvent::Pressed { .. })
+            Some(HotkeyEvent::Pressed { .. })
         ));
     }
 
@@ -741,7 +793,7 @@ mod tests {
         assert!(state.modifiers_match());
         assert!(matches!(
             state.on_primary("D", true),
-            Some(ComboHotkeyEvent::Pressed { .. })
+            Some(HotkeyEvent::Pressed { .. })
         ));
     }
 
@@ -757,6 +809,63 @@ mod tests {
         assert_eq!(state.on_primary("D", true), None);
     }
 
+    #[test]
+    fn modifier_chord_activates_on_final_modifier_and_releases_with_same_generation() {
+        let mut state = SideAwareComboState::new(ShortcutBinding {
+            primary: "ModifierChord".into(),
+            modifiers: vec!["ctrl-left".into(), "cmd-left".into()],
+        });
+
+        assert_eq!(state.on_modifier_press(SideModifier::CtrlLeft), None);
+        let press_id = match state.on_modifier_press(SideModifier::CmdLeft) {
+            Some(HotkeyEvent::Pressed { press_id, .. }) => press_id,
+            other => panic!("expected modifier chord Pressed, got {other:?}"),
+        };
+        assert_ne!(press_id, 0);
+        assert_eq!(state.on_modifier_press(SideModifier::CmdLeft), None);
+
+        assert!(matches!(
+            state.on_modifier_release(SideModifier::CtrlLeft),
+            Some(HotkeyEvent::Released { press_id: released_id, .. }) if released_id == press_id
+        ));
+        assert!(state.active_press_id.is_none());
+    }
+
+    #[test]
+    fn modifier_chord_companion_aborts_once_but_still_pairs_release() {
+        let mut state = SideAwareComboState::new(ShortcutBinding {
+            primary: "ModifierChord".into(),
+            modifiers: vec!["ctrl-left".into(), "cmd-left".into()],
+        });
+        state.on_modifier_press(SideModifier::CtrlLeft);
+        let press_id = match state.on_modifier_press(SideModifier::CmdLeft) {
+            Some(HotkeyEvent::Pressed { press_id, .. }) => press_id,
+            other => panic!("expected modifier chord Pressed, got {other:?}"),
+        };
+
+        assert!(matches!(
+            state.on_companion_key_down(),
+            Some(HotkeyCombinedEdge { press_id: combined_id, .. }) if combined_id == press_id
+        ));
+        assert_eq!(state.on_companion_key_down(), None);
+        assert!(matches!(
+            state.on_modifier_release(SideModifier::CmdLeft),
+            Some(HotkeyEvent::Released { press_id: released_id, .. }) if released_id == press_id
+        ));
+    }
+
+    #[test]
+    fn extra_modifier_does_not_activate_modifier_chord_when_it_is_released() {
+        let mut state = SideAwareComboState::new(ShortcutBinding {
+            primary: "ModifierChord".into(),
+            modifiers: vec!["ctrl-left".into(), "cmd-left".into()],
+        });
+        assert_eq!(state.on_modifier_press(SideModifier::CtrlLeft), None);
+        assert_eq!(state.on_modifier_press(SideModifier::ShiftLeft), None);
+        assert_eq!(state.on_modifier_press(SideModifier::CmdLeft), None);
+        assert_eq!(state.on_modifier_release(SideModifier::ShiftLeft), None);
+        assert!(state.active_press_id.is_none());
+    }
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_side_keycodes_are_distinct() {
@@ -782,16 +891,16 @@ mod tests {
         state.set_side(SideModifier::CmdLeft, true);
         assert!(matches!(
             state.on_primary("D", true),
-            Some(ComboHotkeyEvent::Pressed { .. })
+            Some(HotkeyEvent::Pressed { .. })
         ));
         // Primary key up terminates the combo with exactly one Released.
         assert!(matches!(
             state.on_primary("D", false),
-            Some(ComboHotkeyEvent::Released { .. })
+            Some(HotkeyEvent::Released { .. })
         ));
         // No trailing events; a second key-up must not emit anything.
         assert_eq!(state.on_primary("D", false), None);
-        assert!(!state.combo_active);
+        assert!(state.active_press_id.is_none());
     }
 
     #[test]
@@ -800,50 +909,50 @@ mod tests {
         state.set_side(SideModifier::CmdLeft, true);
         assert!(matches!(
             state.on_primary("D", true),
-            Some(ComboHotkeyEvent::Pressed { .. })
+            Some(HotkeyEvent::Pressed { .. })
         ));
         // Modifier lifts while primary is still down -> combo terminates once.
         assert!(matches!(
             state.on_modifier_release(SideModifier::CmdLeft),
-            Some(ComboHotkeyEvent::Released { .. })
+            Some(HotkeyEvent::Released { .. })
         ));
-        assert!(!state.combo_active);
+        assert!(state.active_press_id.is_none());
         // A now-orphaned primary key-up must NOT emit a second Released.
         assert_eq!(state.on_primary("D", false), None);
     }
 
     #[test]
     fn dropped_modifier_release_is_recovered_on_primary_up() {
-        // Simulate the OS dropping the modifier-up event: combo_active stays true
+        // Simulate the OS dropping the modifier-up event: the active press stays latched
         // and modifiers still "match" from the state's perspective. The primary
         // key-up (absolute termination) must still emit the paired Released.
         let mut state = cmd_left_d_state();
         state.set_side(SideModifier::CmdLeft, true);
         assert!(matches!(
             state.on_primary("D", true),
-            Some(ComboHotkeyEvent::Pressed { .. })
+            Some(HotkeyEvent::Pressed { .. })
         ));
         // Modifier physically released but the release event never arrived, so the
         // side flag is still set here. Primary up is the fallback terminator.
         assert!(matches!(
             state.on_primary("D", false),
-            Some(ComboHotkeyEvent::Released { .. })
+            Some(HotkeyEvent::Released { .. })
         ));
-        assert!(!state.combo_active);
+        assert!(state.active_press_id.is_none());
     }
 
     #[test]
     fn stale_combo_active_reset_when_modifiers_stop_matching() {
-        // Reproduce a stuck latch: a prior Released was lost so combo_active is true,
+        // Reproduce a stuck latch: a prior Released was lost so an active press is still latched,
         // yet the required modifier is no longer held (modifiers_match() == false).
         // The next primary-down must self-heal by emitting the terminal Released
         // (NOT swallow it, and NOT emit a second Pressed) so recording can't stick.
         let mut state = cmd_left_d_state();
-        state.combo_active = true; // stale flag from a dropped Released
+        state.active_press_id = Some(crate::hotkey::next_press_id()); // stale flag from a dropped Released
         assert!(!state.modifiers_match()); // cmd-left is not held
         let evt = state.on_primary("D", true);
-        assert!(matches!(evt, Some(ComboHotkeyEvent::Released { .. })));
-        assert!(!state.combo_active);
+        assert!(matches!(evt, Some(HotkeyEvent::Released { .. })));
+        assert!(state.active_press_id.is_none());
     }
 
     #[test]
@@ -852,26 +961,26 @@ mod tests {
         // must be able to fire a fresh Pressed. Guards against the combo becoming
         // permanently unrepeatable (the historical #545/#468 stuck-latch class).
         let mut state = cmd_left_d_state();
-        state.combo_active = true; // leftover from a dropped Released
+        state.active_press_id = Some(crate::hotkey::next_press_id()); // leftover from a dropped Released
 
         // Releasing the required side-modifier breaks the match, so the stale latch
         // self-heals by emitting the terminal Released here (pairing the Pressed whose
-        // Released was dropped). Either way combo_active must end up cleared.
+        // Released was dropped). Either way the active press must end up cleared.
         assert!(matches!(
             state.on_modifier_release(SideModifier::CmdLeft),
-            Some(ComboHotkeyEvent::Released { .. })
+            Some(HotkeyEvent::Released { .. })
         ));
-        assert!(!state.combo_active);
+        assert!(state.active_press_id.is_none());
 
         // Fresh, clean press cycle now behaves normally.
         state.set_side(SideModifier::CmdLeft, true);
         assert!(matches!(
             state.on_primary("D", true),
-            Some(ComboHotkeyEvent::Pressed { .. })
+            Some(HotkeyEvent::Pressed { .. })
         ));
         assert!(matches!(
             state.on_primary("D", false),
-            Some(ComboHotkeyEvent::Released { .. })
+            Some(HotkeyEvent::Released { .. })
         ));
     }
 
@@ -882,13 +991,13 @@ mod tests {
         // must NOT emit a second Pressed — that would break the pairing invariant.
         let mut state = cmd_left_d_state();
         state.set_side(SideModifier::CmdLeft, true);
-        state.combo_active = true; // pretend previous Released was dropped
+        state.active_press_id = Some(crate::hotkey::next_press_id()); // pretend previous Released was dropped
         assert!(state.modifiers_match());
         assert_eq!(state.on_primary("D", true), None);
         // The real terminator (primary up) still yields exactly one Released.
         assert!(matches!(
             state.on_primary("D", false),
-            Some(ComboHotkeyEvent::Released { .. })
+            Some(HotkeyEvent::Released { .. })
         ));
     }
 

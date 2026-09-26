@@ -5,8 +5,10 @@ import { SplashVideo } from './components/SplashVideo';
 import { detectOS } from './components/WindowChrome';
 import { i18nReady } from './i18n';
 import { initThemeMode } from './lib/themeMode';
+import { installEncryptedSyncUiBridge } from './lib/encryptedSyncUiBridge';
 import './styles/tokens.css';
 import './styles/global.css';
+import './styles/overlays.css';
 
 import type { OS } from './components/WindowChrome';
 
@@ -46,4 +48,7 @@ const renderApp = () => {
 };
 
 // Mount only after the selected local language chunk is ready; avoid mixed-language startup.
-void i18nReady.then(renderApp);
+void i18nReady.then(async () => {
+  if (isMainWindow) await installEncryptedSyncUiBridge().catch(() => {});
+  renderApp();
+});

@@ -1537,8 +1537,10 @@
     setStatus(L.preparingMic, 'work');
     clearResult(); // 清掉上一次的识别结果,避免新录音时还显示旧文字
 
+    var gen = audioGen;
     withTimeout(ensureAudio(), MIC_PREP_TIMEOUT_MS, 'TIMEOUT')
       .then(function () {
+        if (gen !== audioGen) return;
         if (!recording) {
           // 期间已被取消/松手
           teardownAudioCapture();
@@ -1549,6 +1551,7 @@
         setStatus(L.preparingBackend, 'work');
       })
       .catch(function (err) {
+        if (gen !== audioGen) return;
         recording = false;
         resetRemoteStreamState();
         // 超时多半是 audioCtx 卡死(resume 永不 settle),彻底重建,否则下次重试会继续卡在
@@ -1639,6 +1642,7 @@
   // 确保 AudioContext / getUserMedia / 采集节点就绪并开始推流。
   // 必须在用户手势调用栈内(startRecording 由手势触发)。
   function ensureAudio() {
+    var gen = audioGen;
     // 不支持 getUserMedia
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       return Promise.reject(new Error('UNSUPPORTED:浏览器不支持录音,请升级或换浏览器'));
@@ -1665,11 +1669,10 @@
 
     return resumeP
       .then(function () {
+        if (gen !== audioGen) return null;
         // 2) 麦克风流(已存在则复用)
         if (mediaStream) return mediaStream;
-        // 捕获当前代际:迟到 resolve 时若代际已变(超时重置/断线释放),停掉轨道并放弃,
-        // 避免泄漏麦克风或覆盖重试成功的新流。
-        var gen = audioGen;
+        // 使用准备开始时的代际；停止/取消后迟到的流必须释放，不能覆盖下一次录音。
         return navigator.mediaDevices
           .getUserMedia({
             audio: {
@@ -1701,7 +1704,7 @@
       .then(function (stream) {
         // 3) 建立采集图(若已建好则跳过)。audioCtx 可能在准备超时后被 resetAudioContext
         // 置空(本次 getUserMedia 迟到 resolve),此时直接放弃,避免对 null ctx 建图报错。
-        if (sourceNode || !audioCtx || !stream) return;
+        if (gen !== audioGen || sourceNode || !audioCtx || !stream) return;
         sourceNode = audioCtx.createMediaStreamSource(stream);
         return buildCaptureGraph();
       });
@@ -1709,12 +1712,14 @@
 
   // 建立 AudioWorklet(优先)或 ScriptProcessor(兜底)
   function buildCaptureGraph() {
+    var gen = audioGen;
     var inSr = audioCtx.sampleRate || 48000;
 
     // 优先 AudioWorklet
     if (audioCtx.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
       return loadWorklet()
         .then(function () {
+          if (gen !== audioGen) return;
           workletNode = new AudioWorkletNode(audioCtx, 'ol-pcm-worklet', {
             numberOfInputs: 1,
             numberOfOutputs: 0,
@@ -1723,12 +1728,13 @@
           });
           workletNode.port.onmessage = function (e) {
             // e.data 是已转换好的 Int16 LE ArrayBuffer
-            sendAudio(e.data);
+            if (gen === audioGen) sendAudio(e.data);
           };
           sourceNode.connect(workletNode);
           usingWorklet = true;
         })
         .catch(function () {
+          if (gen !== audioGen) return;
           // worklet 加载失败 → 回退 ScriptProcessor
           usingWorklet = false;
           buildScriptProcessor(inSr);
@@ -2035,6 +2041,7 @@
   // ============================================================
   // 仅停止"采集/推流"(断开节点),保留 audioCtx & mediaStream 以便快速重启。
   function teardownAudioCapture() {
+    audioGen++; // 停止/取消也作废在途的 resume、麦克风、worklet 和准备超时回调。
     releaseWakeLock();
     if (wakeLockHint) wakeLockHint.textContent = L.wakeLockHint;
     try {
@@ -2072,7 +2079,6 @@
 
   // 彻底释放(断线时):停止麦克风轨道并关闭 ctx。
   function teardownAudio() {
-    audioGen++; // 代际推进:作废所有在途的 getUserMedia 迟到回调
     teardownAudioCapture();
     if (mediaStream) {
       try {
@@ -2093,7 +2099,6 @@
   // 与 teardownAudio 的区别:这里 close 并置空 audioCtx —— 超时根因往往是 ctx 自身坏掉
   // (resume 永不 settle),保留它只会让下次继续卡。
   function resetAudioContext() {
-    audioGen++; // 代际推进:作废所有在途的 getUserMedia 迟到回调
     teardownAudioCapture();
     if (mediaStream) {
       try {

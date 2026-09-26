@@ -190,6 +190,7 @@ fn is_builtin_llm_provider(provider_id: &str) -> bool {
             | "mimo"
             | "cometapi"
             | "openrouterFree"
+            | "requesty"
             | "orcarouter"
             | "alibabaCoding"
             | "codingPlanX"
@@ -1450,7 +1451,13 @@ pub(crate) fn append_utf8_sse_chunk(
     chunk: &[u8],
 ) -> Result<(), LLMError> {
     pending.extend_from_slice(chunk);
-    drain_complete_utf8(buffer, pending)
+    drain_complete_utf8(buffer, pending)?;
+    // Normalize only after reassembling UTF-8, including CR/LF split across chunks.
+    // Omni, Codex and TextEventStream share this framing boundary.
+    if buffer.contains("\r\n") {
+        *buffer = buffer.replace("\r\n", "\n");
+    }
+    Ok(())
 }
 
 pub(crate) fn finish_utf8_sse_chunks(
@@ -2167,6 +2174,96 @@ mod tests {
         let header = base64_url_no_pad(r#"{"alg":"none"}"#);
         let payload = base64_url_no_pad(&format!(r#"{{"exp":{}}}"#, exp));
         format!("{}.{}.sig", header, payload)
+    }
+
+    #[test]
+    fn utf8_sse_decoder_emits_each_crlf_or_lf_frame_before_the_next_one() {
+        let frames = [
+            "data: {\"delta\":\"你好🙂\"}\r\n\r\n",
+            "data: {\"delta\":\"second\"}\n\n",
+            "data: [DONE]\r\n\r\n",
+        ];
+        let mut buffer = String::new();
+        let mut pending = Vec::new();
+        let mut emitted = Vec::new();
+        for (index, frame) in frames.iter().enumerate() {
+            // One byte per HTTP chunk splits both CRLF pairs and UTF-8 codepoints.
+            for byte in frame.as_bytes() {
+                append_utf8_sse_chunk(&mut buffer, &mut pending, &[*byte]).unwrap();
+                while let Some(end) = buffer.find("\n\n") {
+                    emitted.push(buffer[..end].to_string());
+                    buffer.drain(..end + 2);
+                }
+            }
+            assert_eq!(
+                emitted.len(),
+                index + 1,
+                "must emit before another frame or EOF"
+            );
+        }
+        finish_utf8_sse_chunks(&mut buffer, &mut pending).unwrap();
+        assert_eq!(
+            emitted,
+            [
+                "data: {\"delta\":\"你好🙂\"}",
+                "data: {\"delta\":\"second\"}",
+                "data: [DONE]"
+            ]
+        );
+        assert!(buffer.is_empty());
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn utf8_sse_decoder_normalizes_crlf_at_every_network_split() {
+        let frame = "data: {\"delta\":\"你好🙂\"}\r\n\r\n";
+        for split in 0..=frame.len() {
+            let mut buffer = String::new();
+            let mut pending = Vec::new();
+            append_utf8_sse_chunk(&mut buffer, &mut pending, &frame.as_bytes()[..split]).unwrap();
+            append_utf8_sse_chunk(&mut buffer, &mut pending, &frame.as_bytes()[split..]).unwrap();
+            assert_eq!(buffer, "data: {\"delta\":\"你好🙂\"}\n\n", "split={split}");
+            assert!(pending.is_empty());
+        }
+    }
+
+    #[test]
+    fn codex_crlf_deltas_and_completion_do_not_wait_for_eof() {
+        for terminal in ["response.done", "response.completed"] {
+            let frames = [
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"你🙂\"}\r\n\r\n".to_string(),
+                "data: {\"type\":\"response.text.delta\",\"text\":\"好\"}\n\n".to_string(),
+                format!("data: {{\"type\":\"{terminal}\",\"response\":{{\"output_text\":\"最终文本\"}}}}\r\n\r\n"),
+                "data: [DONE]\r\n\r\n".to_string(),
+            ];
+            let mut buffer = String::new();
+            let mut pending = Vec::new();
+            let mut full_text = String::new();
+            let mut final_text = String::new();
+            let callbacks = StdMutex::new(Vec::new());
+            for (index, frame) in frames.iter().enumerate() {
+                for byte in frame.as_bytes() {
+                    append_utf8_sse_chunk(&mut buffer, &mut pending, &[*byte]).unwrap();
+                    while let Some(end) = buffer.find("\n\n") {
+                        let event = buffer[..end].to_string();
+                        buffer.drain(..end + 2);
+                        handle_codex_sse_event(&event, &mut full_text, &mut final_text, &|text| {
+                            callbacks.lock().unwrap().push(text.to_string());
+                        });
+                    }
+                }
+                assert_eq!(full_text, if index == 0 { "你🙂" } else { "你🙂好" });
+                assert_eq!(
+                    callbacks.lock().unwrap().len(),
+                    if index == 0 { 1 } else { 2 }
+                );
+                if index >= 2 {
+                    assert_eq!(final_text, "最终文本", "retain Codex completion fallback");
+                }
+            }
+            finish_utf8_sse_chunks(&mut buffer, &mut pending).unwrap();
+            assert!(buffer.is_empty());
+        }
     }
 
     #[test]

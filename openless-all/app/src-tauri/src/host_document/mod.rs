@@ -29,7 +29,7 @@
 mod macos;
 
 #[cfg(target_os = "macos")]
-pub(crate) use macos::KeyboardDelivery;
+pub(crate) use macos::{KeyboardDelivery, KeyboardDeliveryOutcome};
 
 // `minimal_edit` 目前只有 macOS 的观察回调在用，非 macOS 构建下没有消费方。
 #[allow(unused_imports)]

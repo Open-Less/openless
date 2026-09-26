@@ -292,13 +292,14 @@ export function SettingsModal({
   return (
     <ProviderLeaveContext.Provider value={providerForm.register}>
       <div
+        className={mobile ? undefined : 'ol-dialog-overlay'}
         onClick={mobile ? undefined : closeSettings}
         // 打开动画：遮罩淡入 + 面板弹入（global.css ol-modal-* keyframes，纯
         // opacity/transform，合成器友好）。此前设置面板是瞬间出现的。
         style={{
           position: mobile ? 'fixed' : 'absolute',
           inset: 0,
-          background: mobile ? 'var(--ol-surface)' : 'var(--ol-overlay-bg)',
+          background: mobile ? 'var(--ol-surface)' : 'var(--ol-dialog-backdrop)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -317,7 +318,7 @@ export function SettingsModal({
           // Existing menus and child dialogs portal to document.body. Keep those
           // accessible; FloatingShell makes the covered application inert.
           aria-label={t('shell.footer.settings')}
-          className="ol-settings-surface"
+          className="ol-settings-surface ol-dialog-card"
           data-ol-mobile={mobile ? 'true' : undefined}
           onClick={(event) => event.stopPropagation()}
           onKeyDown={handleKeyDown}
@@ -328,9 +329,9 @@ export function SettingsModal({
             maxHeight: mobile ? undefined : 680,
             minHeight: 0,
             background: 'var(--ol-settings-content-bg)',
-            borderRadius: mobile ? 0 : 14,
-            border: mobile ? 'none' : '0.5px solid var(--ol-line)',
-            boxShadow: mobile ? 'none' : 'var(--ol-shadow-xl)',
+            borderRadius: mobile ? 0 : 'var(--ol-dialog-radius)',
+            border: mobile ? 'none' : '1px solid var(--ol-dialog-border)',
+            boxShadow: mobile ? 'none' : 'var(--ol-dialog-shadow)',
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',

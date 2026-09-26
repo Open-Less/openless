@@ -5,6 +5,13 @@
   },
   "bundle": {
     "macOS": {
+      "dmg": {
+        "background": "dmg/installer-background@2x.png",
+        "windowPosition": { "x": 120, "y": 120 },
+        "windowSize": { "width": 768, "height": 512 },
+        "appPosition": { "x": 216, "y": 253 },
+        "applicationFolderPosition": { "x": 552, "y": 253 }
+      },
       "files": {
         "Resources/mlx.metallib": "target/release/openless-mlx/mlx.metallib"
       }

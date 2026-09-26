@@ -32,10 +32,11 @@ export function applyFontScale(id: FontScaleId): void {
   (document.documentElement.style as CSSStyleDeclaration & { zoom?: string }).zoom = String(scale);
 }
 
-export function setFontScale(id: FontScaleId): void {
+export function setFontScale(id: FontScaleId, source: 'user' | 'sync-restore' = 'user'): void {
   applyFontScale(id);
   try {
     window.localStorage.setItem(FONT_SCALE_KEY, id);
+    window.dispatchEvent(new CustomEvent('openless:ui-preferences-changed', { detail: { source, key: 'fontScale' } }));
   } catch {
     /* 忽略 */
   }

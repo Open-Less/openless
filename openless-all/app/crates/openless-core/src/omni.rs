@@ -40,6 +40,17 @@ impl OmniConfig {
         self.provider_id.trim() == OMNI_GEMINI_PROVIDER_ID
             || self.base_url.contains("generativelanguage.googleapis.com")
     }
+
+    /// 百炼/DashScope 兼容端点把 `input_audio.data` 按 URL/data-URL 解析，裸 Base64
+    /// 会被 400 拒绝（"The provided URL does not appear to be valid"）。与
+    /// `asr::dashscope_multimodal` 转写通道同款，Base64 须带 data-URL 前缀；
+    /// 沿用 polish 的主机名关键词，但只检查 URL 解析后的真实 host。
+    fn audio_requires_data_url(&self) -> bool {
+        reqwest::Url::parse(self.base_url.trim())
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+            .is_some_and(|host| host.contains("dashscope") || host.contains("aliyuncs"))
+    }
 }
 
 /// 一次 Omni 调用的构建时快照（provider id + model），落历史归因用。
@@ -103,7 +114,13 @@ impl OpenAICompatibleOmni {
     ) -> Vec<Value> {
         let user_content = match wav_bytes {
             Some(wav) => {
-                let data = base64::engine::general_purpose::STANDARD.encode(wav);
+                let encoded = base64::engine::general_purpose::STANDARD.encode(wav);
+                // 百炼系端点要求 data-URL 前缀；OpenAI 官方等其他兼容端点保持裸 Base64。
+                let data = if self.config.audio_requires_data_url() {
+                    format!("data:audio/wav;base64,{encoded}")
+                } else {
+                    encoded
+                };
                 let mut parts = vec![json!({
                     "type": "input_audio",
                     "input_audio": { "data": data, "format": "wav" },
@@ -190,7 +207,7 @@ impl OpenAICompatibleOmni {
             });
         }
 
-        // SSE 流解析与 polish 路径同款：一帧 = 若干行，`\n\n` 分隔，
+        // 共用 UTF-8 解码会把 CRLF 归一为 LF；一帧 = 若干行，`\n\n` 分隔，
         // 每行 `data: {...}` / `data: [DONE]`。
         let mut response = response;
         let mut buffer = String::new();
@@ -456,6 +473,74 @@ mod tests {
         assert_eq!(parts.len(), 2);
         assert_eq!(parts[1]["type"], "text");
         assert_eq!(parts[1]["text"], "翻译成中文");
+    }
+
+    #[test]
+    fn build_messages_wraps_audio_as_data_url_for_dashscope() {
+        let mut dashscope = config();
+        dashscope.base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1".into();
+        let provider = OpenAICompatibleOmni::new(dashscope);
+        let messages = provider.build_messages("system-prompt", "", Some(&[1u8, 2, 3, 4]));
+        let parts = messages[1]["content"].as_array().expect("audio parts");
+        let data = parts[0]["input_audio"]["data"]
+            .as_str()
+            .expect("audio data");
+        let payload = data
+            .strip_prefix("data:audio/wav;base64,")
+            .expect("data-url prefix for DashScope");
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(payload)
+            .expect("valid base64");
+        assert_eq!(decoded, vec![1u8, 2, 3, 4]);
+    }
+
+    #[test]
+    fn build_messages_wraps_audio_as_data_url_for_bailian_dedicated_endpoint() {
+        let mut maas = config();
+        maas.base_url =
+            "https://llm-example.cn-beijing.maas.aliyuncs.com/compatible-mode/v1".into();
+        let provider = OpenAICompatibleOmni::new(maas);
+        let messages = provider.build_messages("system-prompt", "", Some(&[1u8, 2, 3, 4]));
+        let parts = messages[1]["content"].as_array().expect("audio parts");
+        assert!(parts[0]["input_audio"]["data"]
+            .as_str()
+            .expect("audio data")
+            .starts_with("data:audio/wav;base64,"));
+    }
+
+    #[test]
+    fn omni_audio_data_url_matches_dashscope_hosts_only() {
+        assert!(!config().audio_requires_data_url());
+        let mut dashscope = config();
+        dashscope.base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1".into();
+        assert!(dashscope.audio_requires_data_url());
+        let mut maas = config();
+        maas.base_url = "https://LLM-EXAMPLE.cn-beijing.maas.aliyuncs.com/v1".into();
+        assert!(maas.audio_requires_data_url());
+        // host 之外的关键字（路径里碰巧含 dashscope）不触发。
+        let mut path_only = config();
+        path_only.base_url = "https://example.com/proxy/dashscope/v1".into();
+        assert!(!path_only.audio_requires_data_url());
+        let mut empty = config();
+        empty.base_url = String::new();
+        assert!(!empty.audio_requires_data_url());
+    }
+
+    #[test]
+    fn omni_audio_data_url_ignores_non_host_url_components() {
+        for base_url in [
+            "https://dashscope@api.example.com/v1",
+            "https://user:aliyuncs@api.example.com/v1",
+            "https://api.example.com?provider=dashscope",
+            "https://api.example.com#aliyuncs",
+        ] {
+            let mut other = config();
+            other.base_url = base_url.into();
+            assert!(!other.audio_requires_data_url(), "{base_url}");
+            let provider = OpenAICompatibleOmni::new(other);
+            let messages = provider.build_messages("system", "", Some(&[1u8, 2, 3, 4]));
+            assert_eq!(messages[1]["content"][0]["input_audio"]["data"], "AQIDBA==");
+        }
     }
 
     #[test]

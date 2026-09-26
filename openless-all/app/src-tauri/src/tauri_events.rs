@@ -60,7 +60,26 @@ pub fn start(app: AppHandle, backend: Arc<OpenLessBackend>) {
             log::error!("[core-events] backend start failed: {error}");
             return;
         }
+        if backend.ensure_runtime_ready().is_err() {
+            return;
+        }
         let preferences = backend.get_preferences();
+        if !preferences.active_asr_provider.is_empty() {
+            if let Err(error) = crate::commands::sync_active_asr_provider_to_vault(
+                &preferences.active_asr_provider,
+            ) {
+                log::warn!("[startup] active ASR provider mirror failed: {error}");
+            }
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let target = openless_core::WindowsKeyboardRuntimeTarget::from(&preferences);
+            if let Err(error) = crate::windows_ime_profile::apply_windows_openless_keyboard_list(
+                target.openless_language_profile_enabled,
+            ) {
+                log::warn!("[windows-ime] startup keyboard visibility failed: {error}");
+            }
+        }
         if let Err(error) = backend
             .services()
             .remote_input
@@ -136,6 +155,16 @@ async fn forward_legacy_event(
     }
     match kind {
         BackendEventKind::PreferencesChanged(_) => emit_preferences(app, backend),
+        BackendEventKind::CloudSyncStateChanged(event) => {
+            let _ = app.emit_to("main", "cloud-sync-e2ee:state", event);
+        }
+        BackendEventKind::CloudSyncConflictDetected(event) => {
+            let _ = app.emit_to("main", "cloud-sync-e2ee:conflict", event);
+        }
+        BackendEventKind::CloudSyncRestoreCompleted(event) => {
+            emit_preferences(app, backend);
+            let _ = app.emit_to("main", "cloud-sync-e2ee:restored", event);
+        }
         BackendEventKind::CredentialsChanged(status) => {
             let _ = app.emit("credentials:changed", status);
         }
@@ -304,7 +333,7 @@ async fn forward_legacy_event(
             let _ = app.emit_to(
                 crate::coordinator::qa_event_target(),
                 "qa:level",
-                serde_json::json!({ "level": level.level }),
+                serde_json::json!({ "sessionId": level.session_id, "level": level.level }),
             );
         }
         BackendEventKind::QaState(state) => {

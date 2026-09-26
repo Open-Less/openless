@@ -1,26 +1,20 @@
-// LessComputerPanel.tsx — Less Computer 语音 Agent 浮窗（窗口 label = "less-computer"）。
-//
-// 结构 = 官方 shadcn base 组件文档 message-scroller-demo **同款骨架**：
-//   MessageScrollerProvider → Card（CardHeader 标题/副行/CardAction ✕ →
-//   CardContent(p-0) 内 MessageScroller / Empty 空状态 → CardFooter 内
-//   InputGroup 输入组）。组件源码 1:1 来自官方 registry（components/chat/ui/，
-//   仅按 CLI 规则改 import 路径），行为来自 @shadcn/react 官方 primitive。
-//
-// 「电脑操控」形态：不带头像 —— 用户指令 = Bubble align="end"（官方 bubble-demo
-// 同款）；工具调用 = Marker + Spinner/✓ + shimmer（官方 marker-demo 同款）；
-// 上下文压缩 = Marker separator；思考 = 与转译胶囊一模一样的 SiriGL 流体圆点。
-//
-// 事件流：`user`（fresh=true 清空重开）→ delta/tool/compaction/approval 交错 →
-// completed（落成本）/ error / cancelled。浮窗首次创建时后端事件可能先于
-// listener 注册到达（webview 冷加载），丢掉 user 事件后其余事件必须自愈补轮，
-// 不能对空轮次静默丢弃（真机「后端在跑、前端一片空白」的根因）。
-//
-// 窗口固定尺寸（Rust 侧创建即定死 420×540），内容只在滚动框内滚动。
-// 关闭：Esc / ✕ → less_computer_window_dismiss → 后端隐藏窗口。
-
+// Less Computer desktop workspace. The event replay and voice projection remain
+// authoritative; history/multi-session placeholders never invent executable state.
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ArrowUpIcon, CheckIcon, MessageCircleDashedIcon, XIcon } from 'lucide-react';
+import {
+  ArrowUpIcon,
+  CheckIcon,
+  ChevronRightIcon,
+  HistoryIcon,
+  LayersIcon,
+  Maximize2Icon,
+  MicIcon,
+  MinusIcon,
+  PlusIcon,
+  ShieldCheckIcon,
+  XIcon,
+} from 'lucide-react';
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -29,47 +23,37 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from '../components/chat/ui/message-scroller';
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from '../components/chat/ui/card';
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from '../components/chat/ui/empty';
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-} from '../components/chat/ui/input-group';
-import { Marker, MarkerContent, MarkerIcon } from '../components/chat/ui/marker';
-import { Bubble, BubbleContent } from '../components/chat/ui/bubble';
-import { Button } from '../components/chat/ui/button';
-import { Spinner } from '../components/chat/ui/spinner';
-import { ThinkingOrb } from '../components/chat/avatars';
+import { VoiceWaveform } from '../components/chat/VoiceWaveform';
 import { AssistantMarkdown } from '../components/chat/markdown';
 import { useChatPanelLifecycle } from '../components/chat/lifecycle';
-import { cn } from '../components/chat/lib/utils';
+import { GithubLoginModal } from '../components/GithubLoginModal';
 import {
   chatPanelFocusKeyboard,
+  getSettings,
   isTauri,
   lessComputerApprove,
   lessComputerSubmitText,
   lessComputerSync,
   lessComputerWindowDismiss,
+  marketplaceAuthStatus,
 } from '../lib/ipc';
 import { reconcileLessComputerReplay, reduceLessComputerVoice } from '../lib/lessComputerReplay';
-import type { LessComputerEvent, LessComputerVoiceEvent } from '../lib/types';
-import '../components/chat/chat.css';
+import type {
+  CodingAgentProviderId,
+  LessComputerEvent,
+  LessComputerVoiceEvent,
+  UserPreferences,
+} from '../lib/types';
+import { groupToolActivities, toolActivityCategory } from '../lib/lessComputerToolActivity';
+import './less-computer-panel.css';
+
+type Translate = ReturnType<typeof useTranslation>['t'];
+const AGENTS: { id: CodingAgentProviderId; name: string }[] = [
+  { id: 'claude-code-cli', name: 'Claude Code' },
+  { id: 'opencode-cli', name: 'OpenCode' },
+  { id: 'codex-cli', name: 'Codex' },
+  { id: 'dsh-cli', name: 'dsh' },
+];
 
 type RunStatus = 'idle' | 'working' | 'done' | 'error' | 'cancelled';
 
@@ -81,7 +65,7 @@ interface TextSegment {
 interface ToolSegment {
   kind: 'tool';
   name: string;
-  /** 后端没有工具结束事件：下一个事件（delta/tool/approval/收尾）到达即视为结束。 */
+  /** 后端没有工具结束事件：下一个事件到达时仅停止活动指示，不推断工具成功。 */
   running: boolean;
 }
 
@@ -90,7 +74,9 @@ interface ApprovalSegment {
   token: string;
   command: string;
   reason: string;
-  /** 用户已点过的结果，决定按钮禁用态。undefined = 待处理。 */
+  /** Only confirmed IPC results become decisions. Pending requests remain undecided. */
+  pending?: boolean;
+  failed?: boolean;
   decision?: 'approved' | 'denied';
 }
 
@@ -129,74 +115,67 @@ function updateLastTurn(turns: Turn[], fn: (t: Turn) => Turn): Turn[] {
   return [...list.slice(0, -1), fn(list[list.length - 1])];
 }
 
-/** 把流里还在扫光的工具行停下来（下一个事件到达 = 上一个工具已结束）。 */
+/** 把流里还在扫光的工具行停下来（下一个事件到达仅停止工具活动指示）。 */
 function settleRunningTools(segments: Segment[]): Segment[] {
   if (!segments.some((s) => s.kind === 'tool' && s.running)) return segments;
   return segments.map((s) => (s.kind === 'tool' && s.running ? { ...s, running: false } : s));
 }
 
-// 浏览器预览（vite dev，非 Tauri）：?window=less-computer&demo=1 注入两轮演示对话
-// （第一轮完成态含成本行；第二轮进行中，覆盖「文本 → 工具行 → 压缩行 → 进行中
-// 工具行 → 审批卡」交错流与新轮次锚定），方便调样式。
-function getPreviewTurns(): Turn[] {
-  if (isTauri || typeof window === 'undefined') return [];
-  if (new URLSearchParams(window.location.search).get('demo') !== '1') return [];
-  return [
-    {
-      user: '看一下下载文件夹里最大的三个文件是什么',
-      segments: [
-        { kind: 'tool', name: 'Bash', running: false },
-        {
-          kind: 'text',
-          content:
-            '最大的三个文件：\n1. `Xcode_26.5.xip` — 12.4 GB\n2. `ubuntu-24.04.iso` — 5.8 GB\n3. `设计素材包.zip` — 2.1 GB',
-        },
-      ],
-      status: 'done',
-      errorMsg: '',
-      costUsd: 0.012,
-    },
-    {
-      user: '帮我把桌面上的截图整理到「本周素材」文件夹',
-      segments: [
-        { kind: 'text', content: '好的，我先看一下桌面上有哪些截图。' },
-        { kind: 'tool', name: 'Bash', running: false },
-        { kind: 'compaction' },
-        { kind: 'text', content: '找到 6 张截图，正在移动并按日期重命名…' },
-        { kind: 'tool', name: 'Bash', running: true },
-        {
-          kind: 'approval',
-          token: 'demo',
-          command: 'mv ~/Desktop/Screenshot*.png ~/Documents/本周素材/',
-          reason: 'Moving files outside the working directory.',
-        },
-      ],
-      status: 'working',
-      errorMsg: '',
-      costUsd: null,
-    },
-  ];
-}
-
-/** macOS movableByWindowBackground 拖动把手（header 区域整条可拖，普通箭头指针）。 */
-const drag = { 'data-tauri-drag-region': true } as const;
-
-/** 已应用事件的最大 seq。放模块级而不是 effect 闭包：StrictMode/HMR 重挂载时
- *  组件 state 保留，若水位归零会把同一批积压重放两遍、轮次翻倍。后端 seq 全局
- *  单调不回卷（新会话只清缓冲），webview 整页重载时本变量归零、恰好与「需要
- *  完整重放」对齐。 */
+// Keep the replay watermark across StrictMode/HMR effect remounts. A whole
+// WebView reload resets both state and watermark so the backend can replay it.
 let lcAppliedSeq = 0;
 
 export function LessComputerPanel() {
   const { t } = useTranslation();
-  // 连续对话：每按一次说话键追加一轮（除非后端标记 fresh=新会话则清空重开）。
-  const [turns, setTurns] = useState<Turn[]>(getPreviewTurns);
+  const [turns, setTurns] = useState<Turn[]>([]);
   const [voice, setVoice] = useState<LessComputerVoiceEvent | null>(null);
-  // 新会话计数：fresh 时 +1，作为壳 key 重放入场动画 —— 浮窗是常驻 webview
-  // （hide/show 复用），没有这个的话再次唤起时内容直接闪现，很突兀。
   const [sessionSeq, setSessionSeq] = useState(0);
-  // 出现/消失动画：后端 show/hide 发 chat-panel:shown / chat-panel:closing。
+  const [provider, setProvider] = useState<CodingAgentProviderId | null>(null);
+  const [signedIn, setSignedIn] = useState<boolean | null>(null);
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [windowError, setWindowError] = useState(false);
+  const turnEpoch = useRef(0);
+  const approvalRequests = useRef(new Map<string, symbol>());
   const { enterEpoch, closing } = useChatPanelLifecycle();
+
+  // Read actual configuration and account status; browser previews stay unavailable.
+  useEffect(() => {
+    if (!isTauri) return;
+    let cancelled = false;
+    let revision = 0;
+    let unlisten: (() => void) | undefined;
+    const refresh = async () => {
+      const current = ++revision;
+      const results = await Promise.allSettled([getSettings(), marketplaceAuthStatus()]);
+      if (cancelled || current !== revision) return;
+      const [settings, account] = results;
+      setProvider(settings.status === 'fulfilled' ? settings.value.codingAgentProvider : null);
+      setSignedIn(account.status === 'fulfilled' ? account.value.signedIn : null);
+    };
+    void (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        const handle = await listen<UserPreferences>('prefs:changed', (event) => {
+          revision += 1;
+          setProvider(event.payload.codingAgentProvider);
+        });
+        if (cancelled) {
+          handle();
+          return;
+        }
+        unlisten = handle;
+      } catch {
+        /* focus refresh still works when the optional subscription fails */
+      }
+      if (!cancelled) void refresh();
+    })();
+    window.addEventListener('focus', refresh);
+    return () => {
+      cancelled = true;
+      unlisten?.();
+      window.removeEventListener('focus', refresh);
+    };
+  }, [loginOpen]);
 
   // ── 后端事件订阅（mount 一次）────────────────────────────────────────
   //
@@ -243,6 +222,8 @@ export function LessComputerPanel() {
         if (cancelled) return;
         const reconciled = reconcileLessComputerReplay(lcAppliedSeq, replay, pending);
         if (reconciled.reset) {
+          turnEpoch.current += 1;
+          approvalRequests.current.clear();
           setTurns([]);
           setVoice(null);
         }
@@ -271,6 +252,8 @@ export function LessComputerPanel() {
         setVoice((previous) => reduceLessComputerVoice(previous, ev));
         break;
       case 'user': {
+        turnEpoch.current += 1;
+        approvalRequests.current.clear();
         // 一轮新对话。fresh=true（后端无可续会话→新会话）则清空历史重开；否则追加为后续轮次。
         setTurns((prev) => (ev.fresh ? [emptyTurn(ev.text)] : [...prev, emptyTurn(ev.text)]));
         if (ev.fresh) setSessionSeq((seq) => seq + 1);
@@ -366,120 +349,284 @@ export function LessComputerPanel() {
     }
   };
 
-  const onApproval = (token: string, approved: boolean) => {
-    setTurns((prev) =>
-      prev.map((tn) => ({
-        ...tn,
-        segments: tn.segments.map((s) =>
-          s.kind === 'approval' && s.token === token
-            ? { ...s, decision: approved ? 'approved' : ('denied' as const) }
-            : s,
-        ),
-      })),
+  const onApproval = async (token: string, approved: boolean) => {
+    const currentTurn = turns[turns.length - 1];
+    if (!isTauri || currentTurn?.status !== 'working' || approvalRequests.current.has(token))
+      return;
+    const card = currentTurn.segments.find(
+      (segment) => segment.kind === 'approval' && segment.token === token,
     );
-    void lessComputerApprove(token, approved);
+    if (!card || card.kind !== 'approval' || card.decision) return;
+    const request = Symbol(token);
+    const epoch = turnEpoch.current;
+    approvalRequests.current.set(token, request);
+    const update = (patch: Partial<ApprovalSegment>) =>
+      setTurns((previous) =>
+        previous.map((turn) => ({
+          ...turn,
+          segments: turn.segments.map((segment) =>
+            segment.kind === 'approval' && segment.token === token
+              ? { ...segment, ...patch }
+              : segment,
+          ),
+        })),
+      );
+    update({ pending: true, failed: false });
+    try {
+      await lessComputerApprove(token, approved);
+      if (turnEpoch.current === epoch)
+        update({ pending: false, decision: approved ? 'approved' : 'denied' });
+    } catch {
+      if (turnEpoch.current === epoch) update({ pending: false, failed: true });
+    } finally {
+      if (approvalRequests.current.get(token) === request) approvalRequests.current.delete(token);
+    }
   };
 
-  const onClose = () => void lessComputerWindowDismiss();
+  const windowAction = async (action: 'hide' | 'minimize' | 'maximize') => {
+    if (!isTauri) return;
+    setWindowError(false);
+    try {
+      if (action === 'hide') await lessComputerWindowDismiss();
+      else {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        const nativeWindow = getCurrentWindow();
+        if (action === 'minimize') await nativeWindow.minimize();
+        else await nativeWindow.toggleMaximize();
+      }
+    } catch {
+      setWindowError(true);
+    }
+  };
 
-  // ── Esc 关闭 ────────────────────────────────────────────────────────
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        void lessComputerWindowDismiss();
-      }
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return;
+      event.preventDefault();
+      if (loginOpen) {
+        event.stopPropagation();
+        setLoginOpen(false);
+      } else void windowAction('hide');
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, []);
+  }, [loginOpen]);
 
-  const working = turns.some((tn) => tn.status === 'working');
+  const working = turns.some((turn) => turn.status === 'working');
+  const latestTurn = turns[turns.length - 1];
+  const status = runStatusLabel(latestTurn, t);
 
-  // ── 官方 message-scroller-demo 同款骨架 ─────────────────────────────
   return (
-    <MessageScrollerProvider
-      autoScroll
-      defaultScrollPosition="last-anchor"
-      scrollPreviousItemPeek={18}
-    >
-      <Card
+    <>
+      <div
+        className={`lc-desktop${closing ? ' is-closing' : ''}`}
         key={`${sessionSeq}-${enterEpoch}`}
-        className={cn(
-          'olchat-shell olchat-shell-in h-screen w-full gap-0',
-          closing && 'olchat-shell-out',
-        )}
       >
-        <CardHeader {...drag} className="gap-1 border-b">
-          <CardTitle {...drag}>{t('lessComputer.title')}</CardTitle>
-          <CardDescription {...drag}>
-            {working ? (
-              <span className="shimmer" role="status">
-                {t('lessComputer.working')}
-              </span>
-            ) : (
-              t('lessComputer.subtitle')
-            )}
-          </CardDescription>
-          <CardAction>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={onClose}
-              onMouseDown={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-              }}
-              title={t('lessComputer.closeTooltip')}
+        <header className="lc-topbar" data-tauri-drag-region>
+          <div className="lc-window-controls">
+            <button
+              className="lc-window-close"
+              type="button"
+              disabled={!isTauri}
               aria-label={t('lessComputer.closeTooltip')}
+              title={t('lessComputer.closeTooltip')}
+              onClick={() => void windowAction('hide')}
             >
               <XIcon />
-            </Button>
-          </CardAction>
-        </CardHeader>
-        <CardContent className="flex-1 overflow-hidden p-0">
-          {turns.length === 0 ? (
-            <Empty className="h-full">
-              <EmptyHeader>
-                <EmptyMedia variant="icon">
-                  <MessageCircleDashedIcon />
-                </EmptyMedia>
-                <EmptyTitle>{t('lessComputer.title')}</EmptyTitle>
-                <EmptyDescription>{t('lessComputer.subtitle')}</EmptyDescription>
-              </EmptyHeader>
-            </Empty>
-          ) : (
-            <MessageScroller>
-              <MessageScrollerViewport>
-                <MessageScrollerContent
-                  aria-busy={working || undefined}
-                  className="p-(--card-spacing)"
+            </button>
+            <button
+              className="lc-window-minimize"
+              type="button"
+              disabled={!isTauri}
+              aria-label={t('lessComputer.desktop.minimize')}
+              title={t('lessComputer.desktop.minimize')}
+              onClick={() => void windowAction('minimize')}
+            >
+              <MinusIcon />
+            </button>
+            <button
+              className="lc-window-maximize"
+              type="button"
+              disabled={!isTauri}
+              aria-label={t('lessComputer.desktop.maximize')}
+              title={t('lessComputer.desktop.maximize')}
+              onClick={() => void windowAction('maximize')}
+            >
+              <Maximize2Icon />
+            </button>
+          </div>
+          <div className="lc-session-title" data-tauri-drag-region>
+            <span className="lc-session-dot" />
+            <span data-tauri-drag-region>{t('lessComputer.desktop.currentSession')}</span>
+          </div>
+        </header>
+        <aside className="lc-sidebar" aria-label={t('lessComputer.desktop.agents')}>
+          <div className="lc-sidebar-scroll">
+            <div className="lc-section-label">{t('lessComputer.desktop.agents')}</div>
+            <div className="lc-agent-list">
+              {AGENTS.map((agent) => (
+                <div
+                  key={agent.id}
+                  className={`lc-agent${provider === agent.id ? ' is-configured' : ''}`}
+                  title={agent.name}
                 >
-                  {turns.map((turn, ti) => (
-                    <TurnView key={ti} index={ti} turn={turn} onApproval={onApproval} t={t} />
-                  ))}
-                </MessageScrollerContent>
-              </MessageScrollerViewport>
-              <MessageScrollerButton aria-label={t('lessComputer.jumpToLatest')} />
-            </MessageScroller>
+                  <div className="lc-agent-name">
+                    <strong>{agent.name}</strong>
+                    <span>
+                      {provider === agent.id
+                        ? t('lessComputer.desktop.configured')
+                        : t('lessComputer.desktop.agentSettings')}
+                    </span>
+                  </div>
+                  <div className="lc-agent-actions">
+                    <button
+                      type="button"
+                      disabled
+                      aria-label={`${agent.name} · ${t('lessComputer.desktop.historyUnavailable')}`}
+                      title={t('lessComputer.desktop.historyUnavailable')}
+                    >
+                      <HistoryIcon />
+                    </button>
+                    <button
+                      type="button"
+                      disabled
+                      aria-label={`${agent.name} · ${t('lessComputer.desktop.sessionUnavailable')}`}
+                      title={t('lessComputer.desktop.sessionUnavailable')}
+                    >
+                      <PlusIcon />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p className="lc-sidebar-note">{t('lessComputer.desktop.agentHint')}</p>
+            <div className="lc-section-label lc-task-label">
+              {t('lessComputer.desktop.workspace')}
+            </div>
+            <button className="lc-placeholder" type="button" disabled>
+              <LayersIcon />
+              <span>
+                {t('lessComputer.desktop.multitask')}
+                <small>{t('lessComputer.desktop.unavailable')}</small>
+              </span>
+              <PlusIcon />
+            </button>
+            <p className="lc-sidebar-note">{t('lessComputer.desktop.historyHint')}</p>
+          </div>
+          <button
+            className="lc-github"
+            type="button"
+            disabled={!isTauri || signedIn === true}
+            onClick={() => setLoginOpen(true)}
+          >
+            <GithubMark />
+            <span>
+              <strong>GitHub</strong>
+              <small>
+                {signedIn === true
+                  ? t('lessComputer.desktop.signedIn')
+                  : t('lessComputer.desktop.signIn')}
+              </small>
+            </span>
+            {signedIn === true ? <CheckIcon /> : <ChevronRightIcon />}
+          </button>
+        </aside>
+
+        <main className="lc-conversation" aria-label={t('lessComputer.desktop.currentSession')}>
+          {windowError && (
+            <p className="lc-notice" role="alert">
+              {t('lessComputer.desktop.windowError')}
+            </p>
           )}
-        </CardContent>
-        <CardFooter className="flex-col gap-2">
+          <div className="lc-conversation-heading">
+            <h1>{t('lessComputer.title')}</h1>
+            <span className={`lc-run-status is-${latestTurn?.status ?? 'idle'}`} role="status">
+              <span />
+              {status}
+            </span>
+          </div>
+          <div className="lc-message-area">
+            <MessageScrollerProvider
+              autoScroll
+              defaultScrollPosition="last-anchor"
+              scrollPreviousItemPeek={18}
+            >
+              {turns.length === 0 ? (
+                <div className="lc-empty">
+                  <h2>{t('lessComputer.subtitle')}</h2>
+                  <p>{t('lessComputer.desktop.emptyHint')}</p>
+                  <span className="lc-empty-label">
+                    <MicIcon />
+                    {t('lessComputer.desktop.voiceHint')}
+                  </span>
+                </div>
+              ) : (
+                <MessageScroller>
+                  <MessageScrollerViewport>
+                    <MessageScrollerContent
+                      aria-busy={working || undefined}
+                      className="lc-messages"
+                    >
+                      {turns.map((turn, index) => (
+                        <TurnView
+                          key={index}
+                          index={index}
+                          turn={turn}
+                          actionable={index === turns.length - 1}
+                          onApproval={onApproval}
+                          t={t}
+                        />
+                      ))}
+                    </MessageScrollerContent>
+                  </MessageScrollerViewport>
+                  <MessageScrollerButton
+                    className="lc-jump"
+                    aria-label={t('lessComputer.jumpToLatest')}
+                  />
+                </MessageScroller>
+              )}
+            </MessageScrollerProvider>
+          </div>
           <Composer working={working} voice={voice} t={t} />
-        </CardFooter>
-      </Card>
-    </MessageScrollerProvider>
+        </main>
+      </div>
+      {loginOpen && isTauri && (
+        <GithubLoginModal
+          onClose={() => setLoginOpen(false)}
+          onSuccess={() => {
+            setSignedIn(true);
+            setLoginOpen(false);
+          }}
+        />
+      )}
+    </>
   );
 }
 
-// ── 底部输入区：官方 demo 同款 InputGroup，打字 + 语音两种形式完整 ────
-//
-// · 打字：单行输入 + 右下发送（官方 demo 的 block-end addon 布局）；Enter 走
-//   表单提交；IME 组合中的 Enter（选字确认）不触发（isComposing/keyCode 229
-//   守卫）。点进输入框时 chat_panel_focus_keyboard 让非激活面板成为 key window
-//   （不激活 app，主窗口不动）。
-// · 语音：录音红光、转译思考黑光绕输入组一圈圈跑（olchat-ring），输入框本体
-//   保持可见；只显示Core提供的voice_state，与聊天事件共用seq重放和session归属。
+function runStatusLabel(turn: Turn | undefined, t: Translate): string {
+  if (!turn) return t('lessComputer.desktop.idle');
+  if (
+    turn.status === 'working' &&
+    turn.segments.some((segment) => segment.kind === 'approval' && !segment.decision)
+  )
+    return t('lessComputer.desktop.waitingApproval');
+  if (turn.status === 'working') {
+    const active = turn.segments.find((segment) => segment.kind === 'tool' && segment.running);
+    return active?.kind === 'tool'
+      ? t(`lessComputer.activity.${toolActivityCategory(active.name)}Running`)
+      : t('lessComputer.working');
+  }
+  if (turn.status === 'done') return t('lessComputer.done');
+  if (turn.status === 'cancelled') return t('common.cancelled');
+  if (turn.status === 'error') return t('lessComputer.error');
+  return t('lessComputer.desktop.idle');
+}
+
+function voiceTime(elapsedMs: number): string {
+  const seconds = Math.floor(Math.max(0, Number.isFinite(elapsedMs) ? elapsedMs : 0) / 1000);
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
 function Composer({
   working,
   voice,
@@ -487,272 +634,371 @@ function Composer({
 }: {
   working: boolean;
   voice: LessComputerVoiceEvent | null;
-  t: ReturnType<typeof useTranslation>['t'];
+  t: Translate;
 }) {
   const [text, setText] = useState('');
-  const busy = working || (voice !== null && voice.phase !== 'idle');
-  // 输入组环形光：录音红光 → 转译黑光 → 指令落定（agent 已在跑）即停。
-  const ring =
-    voice?.phase === 'recording'
-      ? 'recording'
-      : (voice?.phase === 'starting' || voice?.phase === 'transcribing') && !working
-        ? 'thinking'
-        : undefined;
-  // IME 组合期间的 Enter 是「选字确认」不是「发送」。keydown 里 isComposing
-  // 已覆盖大部分场景，keyCode 229 兜底 WebKit 老行为。
+  const [submitting, setSubmitting] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const submittingRef = useRef(false);
   const composingRef = useRef(false);
-
-  const send = () => {
+  const speaking = voice !== null && voice.phase !== 'idle';
+  const busy = working || speaking || submitting;
+  const voiceLabel =
+    voice?.phase === 'recording'
+      ? t('overview.inAppDictation.recording')
+      : voice?.phase === 'starting'
+        ? t('common.loading')
+        : t('overview.inAppDictation.processing');
+  const send = async () => {
     const trimmed = text.trim();
-    if (!trimmed || busy) return;
-    setText('');
-    void lessComputerSubmitText(trimmed);
-  };
-
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (event.key !== 'Enter') return;
-    if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) {
-      event.preventDefault();
+    if (!isTauri || !trimmed || busy || submittingRef.current || composingRef.current) return;
+    submittingRef.current = true;
+    setSubmitting(true);
+    setFailed(false);
+    try {
+      await lessComputerSubmitText(trimmed);
+      // Keep a draft typed while the IPC was pending. The actual user event owns the chat.
+      setText((current) => (current === text ? '' : current));
+    } catch {
+      setFailed(true);
+    } finally {
+      submittingRef.current = false;
+      setSubmitting(false);
     }
   };
-
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Enter' || event.shiftKey) return;
+    event.preventDefault();
+    if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
+    void send();
+  };
   return (
-    <form
-      onSubmit={(event) => {
-        event.preventDefault();
-        send();
-      }}
-      className="w-full"
-    >
-      <InputGroup className="olchat-ring" data-ring={ring}>
-        <InputGroupInput
-          value={text}
-          placeholder={t('lessComputer.inputPlaceholder')}
-          onChange={(event) => setText(event.currentTarget.value)}
-          onKeyDown={onKeyDown}
-          onCompositionStart={() => {
-            composingRef.current = true;
-          }}
-          onCompositionEnd={() => {
-            composingRef.current = false;
-          }}
-          onFocus={() => void chatPanelFocusKeyboard()}
-          onPointerDown={() => void chatPanelFocusKeyboard()}
-        />
-        <InputGroupAddon align="block-end" className="pt-1">
-          {voice && voice.phase !== 'idle' && (
-            <span
-              className="mr-auto flex items-center gap-2 text-xs text-muted-foreground"
-              role="status"
-            >
-              {voice.phase === 'recording'
-                ? t('overview.inAppDictation.recording')
-                : voice.phase === 'starting'
-                  ? t('common.loading')
-                  : t('overview.inAppDictation.processing')}
-              {voice.phase === 'recording' && (
-                <meter
-                  className="w-16"
-                  min={0}
-                  max={1}
-                  value={voice.level}
-                  aria-label={t('overview.inAppDictation.recording')}
+    <div className="lc-composer-wrap">
+      <form
+        className={`lc-composer${speaking ? ' is-voice' : ''}`}
+        onSubmit={(event) => {
+          event.preventDefault();
+          void send();
+        }}
+      >
+        <div className="lc-input-stage">
+          <textarea
+            className="lc-text-input"
+            rows={2}
+            value={text}
+            disabled={!isTauri || speaking}
+            placeholder={t('lessComputer.inputPlaceholder')}
+            aria-label={t('lessComputer.inputPlaceholder')}
+            onChange={(event) => setText(event.currentTarget.value)}
+            onKeyDown={onKeyDown}
+            onCompositionStart={() => {
+              composingRef.current = true;
+            }}
+            onCompositionEnd={() => {
+              composingRef.current = false;
+            }}
+            onFocus={() => {
+              if (isTauri) void chatPanelFocusKeyboard().catch(() => undefined);
+            }}
+            onPointerDown={() => {
+              if (isTauri) void chatPanelFocusKeyboard().catch(() => undefined);
+            }}
+          />
+          <div className="lc-voice-stage" aria-hidden={!speaking}>
+            {speaking && voice && (
+              <>
+                <VoiceWaveform
+                  level={voice.phase === 'recording' ? voice.level : 0}
+                  processing={voice.phase !== 'recording'}
+                  label={voiceLabel}
                 />
-              )}
-            </span>
-          )}
-          <InputGroupButton
+                <time>{voiceTime(voice.elapsedMs)}</time>
+              </>
+            )}
+          </div>
+        </div>
+        <div className="lc-composer-footer">
+          <span>
+            <MicIcon />
+            {t('lessComputer.desktop.voiceHint')}
+          </span>
+          <button
+            className="lc-send"
             type="submit"
-            variant="default"
-            size="icon-sm"
-            className="ml-auto"
-            disabled={busy || !text.trim()}
+            disabled={!isTauri || busy || !text.trim()}
+            aria-label={t('lessComputer.send')}
+            title={t('lessComputer.send')}
           >
             <ArrowUpIcon />
-            <span className="sr-only">{t('lessComputer.send')}</span>
-          </InputGroupButton>
-        </InputGroupAddon>
-      </InputGroup>
-    </form>
+          </button>
+        </div>
+      </form>
+      <div className="lc-composer-caption">
+        {failed ? (
+          <span role="alert">{t('lessComputer.desktop.sendError')}</span>
+        ) : !isTauri ? (
+          t('lessComputer.desktop.browserUnavailable')
+        ) : working ? (
+          t('lessComputer.desktop.cancelHint')
+        ) : (
+          t('lessComputer.desktop.inputHint')
+        )}
+      </div>
+    </div>
   );
 }
 
-// ── 消息行 ────────────────────────────────────────────────────────────
-
-/** 渲染单轮对话：用户气泡行（锚点，无头像）→ 输出流（文本 / Marker 工具行 /
- *  separator 压缩行 / 审批卡交错）→ 收尾（思考圆点 / 错误 / 花费）。
- *  自愈补出的轮次没有用户文案，跳过指令气泡、锚点落在输出行上。 */
 function TurnView({
   index,
   turn,
+  actionable,
   onApproval,
   t,
 }: {
   index: number;
   turn: Turn;
+  actionable: boolean;
   onApproval: (token: string, approved: boolean) => void;
-  t: ReturnType<typeof useTranslation>['t'];
+  t: Translate;
 }) {
   const hasUser = turn.user.trim().length > 0;
   const lastSegment = turn.segments[turn.segments.length - 1];
-  // 思考指示只在流里没有「自带活动感」的内容时出现：整轮还没输出，或审批已决、
-  // 后端正在带着授权重跑。进行中工具行的 Spinner + 扫光本身就是活动指示。
   const waiting =
     turn.status === 'working' &&
     (turn.segments.length === 0 ||
       (lastSegment?.kind === 'approval' && lastSegment.decision != null));
-  const hasAssistantRow =
-    turn.segments.length > 0 ||
-    waiting ||
-    turn.status === 'error' ||
-    turn.status === 'cancelled' ||
-    (turn.status === 'done' && turn.costUsd != null);
   return (
     <>
-      {/* 用户指令 = 新轮次锚点行。电脑操控形态不带头像，右侧主色气泡。 */}
       {hasUser && (
-        <MessageScrollerItem messageId={`t${index}-user`} scrollAnchor className="olchat-enter">
-          <Bubble align="end">
-            <BubbleContent>{turn.user}</BubbleContent>
-          </Bubble>
-        </MessageScrollerItem>
-      )}
-      {hasAssistantRow && (
-        <MessageScrollerItem messageId={`t${index}-assistant`} scrollAnchor={!hasUser}>
-          <div className="flex min-w-0 flex-col gap-3">
-            {turn.segments.map((segment, i) => {
-              if (segment.kind === 'text') {
-                const streaming = turn.status === 'working' && i === turn.segments.length - 1;
-                return (
-                  <div key={`s${i}`} className="olchat-enter">
-                    <AssistantMarkdown markdown={segment.content} streaming={streaming} />
-                  </div>
-                );
-              }
-              if (segment.kind === 'tool') {
-                return (
-                  <ToolMarker
-                    key={`s${i}`}
-                    label={t('lessComputer.tool', { name: segment.name })}
-                    running={segment.running}
-                  />
-                );
-              }
-              if (segment.kind === 'compaction') {
-                return <CompactionMarker key={`s${i}`} label={t('lessComputer.compaction')} />;
-              }
-              return (
-                <ApprovalCard key={segment.token} card={segment} onDecide={onApproval} t={t} />
-              );
-            })}
-            {waiting && <WorkingRow label={t('lessComputer.working')} />}
-            {turn.status === 'error' && (
-              <Bubble variant="destructive" className="olchat-enter">
-                <BubbleContent>{turn.errorMsg || t('lessComputer.error')}</BubbleContent>
-              </Bubble>
-            )}
-            {turn.status === 'cancelled' && (
-              <Marker>
-                <MarkerContent className="font-mono text-[11px]">
-                  {t('common.cancelled')}
-                </MarkerContent>
-              </Marker>
-            )}
-            {turn.status === 'done' && turn.costUsd != null && (
-              <Marker>
-                <MarkerContent className="font-mono text-[11px]">
-                  {t('lessComputer.cost', { cost: turn.costUsd.toFixed(3) })}
-                </MarkerContent>
-              </Marker>
-            )}
+        <MessageScrollerItem messageId={`t${index}-user`} scrollAnchor>
+          <div className="lc-user-message">
+            <span>{t('lessComputer.you')}</span>
+            <p>{turn.user}</p>
           </div>
         </MessageScrollerItem>
       )}
+      <MessageScrollerItem messageId={`t${index}-assistant`} scrollAnchor={!hasUser}>
+        <div className="lc-assistant-message">
+          <div className="lc-assistant-label">Less Computer</div>
+          {turn.segments.map((segment, i) => {
+            if (segment.kind === 'text')
+              return (
+                <div className="lc-answer" key={`s${i}`}>
+                  <AssistantMarkdown
+                    markdown={segment.content}
+                    streaming={turn.status === 'working' && i === turn.segments.length - 1}
+                  />
+                </div>
+              );
+            if (segment.kind === 'tool') {
+              if (turn.segments[i - 1]?.kind === 'tool') return null;
+              const tools: ToolSegment[] = [];
+              let end = i;
+              while (end < turn.segments.length) {
+                const candidate = turn.segments[end];
+                if (candidate.kind !== 'tool') break;
+                tools.push(candidate);
+                end += 1;
+              }
+              return (
+                <ToolProcess
+                  key={`s${i}`}
+                  tools={tools}
+                  working={turn.status === 'working'}
+                  interrupted={
+                    (turn.status === 'error' || turn.status === 'cancelled') &&
+                    end === turn.segments.length
+                  }
+                  t={t}
+                />
+              );
+            }
+            if (segment.kind === 'compaction')
+              return (
+                <div className="lc-compaction" key={`s${i}`}>
+                  <LayersIcon />
+                  {t('lessComputer.compaction')}
+                </div>
+              );
+            return (
+              <ApprovalCard
+                key={`${segment.token}-${i}`}
+                card={segment}
+                actionable={actionable && turn.status === 'working'}
+                onDecide={onApproval}
+                t={t}
+              />
+            );
+          })}
+          {waiting && (
+            <div className="lc-thinking" role="status">
+              <span className="lc-active-dot" />
+              {t('lessComputer.working')}
+            </div>
+          )}
+          {turn.status === 'error' && (
+            <p className="lc-run-error" role="alert">
+              {turn.errorMsg || t('lessComputer.error')}
+            </p>
+          )}
+          {turn.status === 'cancelled' && (
+            <span className="lc-turn-footnote">{t('common.cancelled')}</span>
+          )}
+          {turn.status === 'done' && (
+            <div className="lc-turn-footnote">
+              <CheckIcon />
+              {t('lessComputer.done')}
+              {turn.costUsd != null && (
+                <span>{t('lessComputer.cost', { cost: turn.costUsd.toFixed(3) })}</span>
+              )}
+            </div>
+          )}
+        </div>
+      </MessageScrollerItem>
     </>
   );
 }
 
-/**
- * 工具调用标签：官方 marker-demo 同款 —— 进行中 = Marker role="status" +
- * MarkerIcon Spinner + MarkerContent shimmer；结束 = ✓ + 淡字。
- */
-function ToolMarker({ label, running }: { label: string; running: boolean }) {
+function ToolProcess({
+  tools,
+  working,
+  interrupted,
+  t,
+}: {
+  tools: ToolSegment[];
+  working: boolean;
+  interrupted: boolean;
+  t: Translate;
+}) {
+  const groups = groupToolActivities(tools, working, interrupted);
+  const active = groups.find((group) => group.state === 'active');
   return (
-    <Marker className="olchat-enter" role={running ? 'status' : undefined}>
-      <MarkerIcon>{running ? <Spinner /> : <CheckIcon />}</MarkerIcon>
-      <MarkerContent className={running ? 'shimmer' : undefined}>{label}</MarkerContent>
-    </Marker>
-  );
-}
-
-/** 上下文压缩标签：官方 marker-demo 同款 separator 形态（居中标签 + 分隔线）。 */
-function CompactionMarker({ label }: { label: string }) {
-  return (
-    <Marker className="olchat-enter" variant="separator">
-      <MarkerContent className="text-xs">{label}</MarkerContent>
-    </Marker>
-  );
-}
-
-/** 思考行：与转译胶囊一模一样的流体圆点（ThinkingOrb）+ 扫光文案。 */
-function WorkingRow({ label }: { label: string }) {
-  return (
-    <div className="olchat-enter flex items-center gap-2.5" role="status">
-      <ThinkingOrb size={48} />
-      <span className="shimmer text-xs font-medium">{label}</span>
-    </div>
+    <details className="lc-tool-process">
+      <summary>
+        <ChevronRightIcon className="lc-process-chevron" />
+        <span className={`lc-process-label${active ? ' is-running' : ''}`}>
+          {active
+            ? t(`lessComputer.activity.${active.category}Running`)
+            : t('lessComputer.activity.process')}
+        </span>
+        <span className="lc-process-count">
+          {t('lessComputer.activity.count', { count: tools.length })}
+        </span>
+        {!active && (
+          <span className="lc-process-result">
+            {interrupted ? t('lessComputer.activity.stopped') : t('lessComputer.activity.finished')}
+          </span>
+        )}
+      </summary>
+      <ol className="lc-process-steps">
+        {groups.map((group, index) => (
+          <li key={index} className={`lc-process-step is-${group.state}`}>
+            <span className="lc-process-marker" aria-hidden="true">
+              {group.state === 'active' ? (
+                <span />
+              ) : group.state === 'stopped' ? (
+                <MinusIcon />
+              ) : (
+                <CheckIcon />
+              )}
+            </span>
+            <div className="lc-process-step-content">
+              <div className="lc-process-phase-row">
+                <span
+                  className={`lc-process-phase${group.state === 'active' ? ' is-running' : ''}`}
+                >
+                  {t(
+                    `lessComputer.activity.${group.category}${group.state === 'active' ? 'Running' : ''}`,
+                  )}
+                </span>
+                {group.state !== 'active' && (
+                  <span className="lc-process-result">
+                    {t(
+                      `lessComputer.activity.${group.state === 'stopped' ? 'stopped' : 'finished'}`,
+                    )}
+                  </span>
+                )}
+              </div>
+              <ul className="lc-process-tools">
+                {group.names.map((tool, toolIndex) => (
+                  <li key={toolIndex}>
+                    <span>{tool.name}</span>
+                    {tool.count > 1 && <span className="lc-tool-count">×{tool.count}</span>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </details>
   );
 }
 
 function ApprovalCard({
   card,
+  actionable,
   onDecide,
   t,
 }: {
   card: ApprovalSegment;
+  actionable: boolean;
   onDecide: (token: string, approved: boolean) => void;
-  t: ReturnType<typeof useTranslation>['t'];
+  t: Translate;
 }) {
-  const decided = card.decision != null;
   return (
-    <div className="olchat-enter flex flex-col gap-2 rounded-2xl border border-destructive/30 bg-destructive/5 p-3">
-      <div className="text-[12.5px] font-semibold text-foreground">
-        {t('lessComputer.approvalTitle')}
+    <section className="lc-approval">
+      <div className="lc-approval-title">
+        <ShieldCheckIcon />
+        <strong>{t('lessComputer.approvalTitle')}</strong>
       </div>
-      <code className="rounded-md bg-muted px-2 py-1.5 font-mono text-[11.5px] break-all text-foreground">
-        {card.command}
-      </code>
-      <div className="text-[11.5px] text-muted-foreground">{card.reason}</div>
-      {!decided && (
-        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] leading-snug text-amber-700">
-          {t('lessComputer.approvalRerunWarning')}
-        </div>
-      )}
-      {decided ? (
-        <div className="text-[11.5px] font-semibold text-muted-foreground">
-          {card.decision === 'approved' ? t('lessComputer.approved') : t('lessComputer.denied')}
-        </div>
+      <pre>{card.command}</pre>
+      {card.reason && <p>{card.reason}</p>}
+      <p className="lc-approval-warning">{t('lessComputer.approvalRerunWarning')}</p>
+      {card.decision ? (
+        <span className="lc-approval-result">
+          <CheckIcon />
+          {t(`lessComputer.desktop.${card.decision}Submitted`)}
+        </span>
       ) : (
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            className="flex-1"
-            onMouseDown={(event) => event.stopPropagation()}
-            onClick={() => onDecide(card.token, false)}
-          >
-            {t('lessComputer.deny')}
-          </Button>
-          <Button
-            size="sm"
-            className="flex-1"
-            onMouseDown={(event) => event.stopPropagation()}
-            onClick={() => onDecide(card.token, true)}
-          >
-            {t('lessComputer.approve')}
-          </Button>
-        </div>
+        <>
+          <div className="lc-approval-actions">
+            <button
+              type="button"
+              disabled={!isTauri || !actionable || card.pending}
+              onClick={() => onDecide(card.token, false)}
+            >
+              {t('lessComputer.deny')}
+            </button>
+            <button
+              className="lc-primary-button"
+              type="button"
+              disabled={!isTauri || !actionable || card.pending}
+              onClick={() => onDecide(card.token, true)}
+            >
+              {card.pending
+                ? t('lessComputer.desktop.submittingApproval')
+                : t('lessComputer.approve')}
+            </button>
+          </div>
+          {card.failed && (
+            <p className="lc-run-error" role="alert">
+              {t('lessComputer.desktop.approvalError')}
+            </p>
+          )}
+          {!actionable && (
+            <p className="lc-turn-footnote">{t('lessComputer.desktop.approvalExpired')}</p>
+          )}
+        </>
       )}
-    </div>
+    </section>
+  );
+}
+
+function GithubMark() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+    </svg>
   );
 }

@@ -12,6 +12,12 @@ on:
   pull_request:
     branches: [main, beta]
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Platforms to check (macos runs only macOS gates)
+        type: choice
+        options: [all, macos]
+        default: all
 
 # 同一 PR 快速重复推送时取消旧运行；workflow_dispatch 用 run_id 隔离。
 concurrency:
@@ -20,6 +26,7 @@ concurrency:
 
 jobs:
   android-check:
+    if: github.event_name != 'workflow_dispatch' || inputs.platform != 'macos'
     name: Android cargo check
     runs-on: ubuntu-latest
     defaults:
@@ -166,6 +173,7 @@ jobs:
             --no-daemon
 
   linux-core-contract:
+    if: github.event_name != 'workflow_dispatch' || inputs.platform != 'macos'
     name: Linux core tests
     runs-on: ubuntu-22.04
     defaults:
@@ -194,13 +202,7 @@ jobs:
       # 一个平台挂掉不阻塞其他平台拿到验证结果。
       fail-fast: false
       matrix:
-        include:
-          - os: macos-latest
-            label: macOS
-            preflight: false
-          - os: windows-latest
-            label: Windows
-            preflight: true
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '[{"os":"macos-latest","label":"macOS","preflight":false}]' || '[{"os":"macos-latest","label":"macOS","preflight":false},{"os":"windows-latest","label":"Windows","preflight":true}]') }}
     runs-on: ${{ matrix.os }}
     env:
       # 新增 shared Core 后，macOS 首次编译同时构建 MLX C++ 依赖和完整
@@ -226,14 +228,35 @@ jobs:
           cache: npm
           cache-dependency-path: openless-all/app/package-lock.json
 
-      # 现有测试继续用 stable；额外安装声明的 MSRV，供下方兼容性门禁显式调用。
+      # macOS MSRV 在独立 job 并行检查；Windows 保留原有检查顺序。
       - uses: dtolnay/rust-toolchain@1.88.0
+        if: runner.os == 'Windows'
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Configure macOS check profile
+        if: runner.os == 'macOS'
+        run: echo "CARGO_PROFILE_DEV_DEBUG=0" >> "$GITHUB_ENV"
+
       - uses: swatinem/rust-cache@v2
+        if: runner.os == 'Windows'
         with:
           workspaces: 'openless-all/app/src-tauri -> target'
+
+      - name: Cache macOS stable dependencies
+        if: runner.os == 'macOS'
+        uses: swatinem/rust-cache@v2
+        with:
+          key: macos-stable-v1
+          workspaces: |
+            openless-all/app -> target
+            openless-all/app/src-tauri -> target
+
+      - name: Cache macOS MLX native build
+        if: runner.os == 'macOS' && runner.arch == 'ARM64'
+        uses: ./.github/actions/cache-macos-mlx
+        with:
+          profile: debug
 
       - name: Prepare Windows Sherpa static libraries
         if: runner.os == 'Windows'
@@ -284,11 +307,14 @@ jobs:
         run: cargo test --locked -p openless-core hardening_actually_narrows_the_writable_roots -- --ignored --nocapture --test-threads=1
 
       - name: Check Tauri backend (cargo check)
+        if: runner.os == 'Windows'
         run: cargo check --locked --manifest-path src-tauri/Cargo.toml
 
+      # test 编译并运行 lib/bin，覆盖原 cargo check 的生产 binary 路径。
+      # 避免先 metadata-only check、再为同一依赖图做一次 codegen。
       - name: Run Rust backend unit tests
         if: runner.os != 'Windows'
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --bins --timings
 
       - name: Compile Rust backend unit tests (Windows)
         # Windows runner 能链接 lib test binary，但干净镜像缺少可选 native runtime
@@ -304,9 +330,11 @@ jobs:
         run: cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml
 
       - name: Check Tauri backend with Rust 1.88 MSRV
+        if: runner.os == 'Windows'
         run: cargo +1.88.0 check --locked --manifest-path src-tauri/Cargo.toml
 
       - name: Compile backend tests with Rust 1.88 MSRV
+        if: runner.os == 'Windows'
         run: cargo +1.88.0 test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --no-run
 
       - name: Verify version sync across all 5 files
@@ -338,3 +366,42 @@ jobs:
             exit 1
           fi
           echo "[ok] 全部 5 处版本号一致：$PKG"
+
+  macos-msrv:
+    name: macOS Rust 1.88 MSRV
+    runs-on: macos-latest
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+    defaults:
+      run:
+        working-directory: openless-all/app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: openless-all/app/package-lock.json
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: swatinem/rust-cache@v2
+        with:
+          key: macos-msrv-v1
+          workspaces: |
+            openless-all/app/src-tauri -> target
+            openless-all/app/src-tauri/backend-tests -> target
+      - name: Cache macOS MLX native build
+        if: runner.arch == 'ARM64'
+        uses: ./.github/actions/cache-macos-mlx
+        with:
+          profile: debug
+      - run: npm ci
+      - run: npm run build
+      - name: Check Tauri backend with Rust 1.88 MSRV
+        run: cargo +1.88.0 check --locked --manifest-path src-tauri/Cargo.toml --timings
+      - name: Compile backend tests with Rust 1.88 MSRV
+        run: cargo +1.88.0 test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --no-run --timings

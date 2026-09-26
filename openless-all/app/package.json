@@ -1,7 +1,7 @@
 {
   "name": "openless-app",
   "private": true,
-  "version": "2.0.0-Beta.2+build.20260924",
+  "version": "2.0.0-Beta.3+build.20260925",
   "type": "module",
   "scripts": {
     "pretest": "npm run build",
@@ -14,9 +14,10 @@
     "tauri": "tauri",
     "tauri:android:init": "tauri android init",
     "tauri:android:dev": "tauri android dev",
-    "tauri:android:build": "tauri android build --apk --debug --target aarch64 armv7 i686 x86_64 --split-per-abi",
-    "tauri:android:build:debug": "tauri android build --apk --debug --target aarch64 armv7 i686 x86_64 --split-per-abi",
-    "tauri:android:build:release": "tauri android build --apk --target aarch64 armv7 i686 x86_64 --split-per-abi",
+    "tauri:android:build": "node scripts/run-android-tauri-build.mjs --debug",
+    "tauri:android:build:debug": "node scripts/run-android-tauri-build.mjs --debug",
+    "tauri:android:build:release": "node scripts/run-android-tauri-build.mjs --release",
+    "check:android-apk-workflow": "node scripts/android-apk-workflow-contract.test.mjs",
     "merge:android-v1-manifest": "node scripts/merge-android-v1-manifest.mjs",
     "merge:android-overlay-manifest": "node scripts/merge-android-overlay-manifest.mjs",
     "merge:android-shizuku-manifest": "node scripts/merge-android-shizuku-manifest.mjs",

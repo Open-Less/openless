@@ -178,7 +178,7 @@ assert.match(
 );
 assert.match(
   lessComputerPanel,
-  /reconciled\.reset\) \{\s*setTurns\(\[\]\);\s*setVoice\(null\)/,
+  /reconciled\.reset\) \{[^}]*?setTurns\(\[\]\);\s*setVoice\(null\)/,
   'a truncated replay must reset both the conversation and voice presentation',
 );
 

@@ -1,42 +1,14 @@
-// QaPanel.tsx — 划词追问浮窗 v3（issue #118 v2）。
-//
-// 结构 = 官方 shadcn base 组件文档 message-scroller-demo **同款骨架**：
-//   MessageScrollerProvider → Card（CardHeader 标题/副行/CardAction ✕ →
-//   CardContent(p-0) 内 MessageScroller / Empty 空状态 → CardFooter 内
-//   InputGroup 输入组）。组件源码 1:1 来自官方 registry（components/chat/ui/）。
-//
-// 「交流」形态（用户拍板）：官方 **Message** 带头像 —— 右侧用户消息挂 GitHub
-// 头像（未登录 = GitHub 图标），左侧助手消息挂**旋转中的**胶囊思考头像
-// （orbFeed 共享渲染源镜像）。
-//
-// 语音状态**只在输入区**表达（用户拍板：不进面板上部）：
-//   录音 = 输入组绕圈红光；转译思考（问题还没落到对话里）= 绕圈黑光；
-//   问题落定发出后光停，此时才在对话里出现助手思考行 —— 头像永远不先于
-//   用户的话出现（修「AI 头像先出来、动画抖动」）。
-//
-// 触发链路：
-//   1) 用户按 Cmd+Shift+;（默认）→ 后端 toggle 浮窗可见性；显示时发
-//      `qa:state { kind: "idle", messages: [] }` 与 `chat-panel:shown`（入场动画）。
-//   2) 提问两条并存路径：文字（输入框 Enter → qa_submit_text）与语音
-//      （麦克风按钮 / 听写键 → 录音 → ASR + LLM）。
-//   3) 答案后可继续多轮追问，messages 累积。
-//
-// 关闭：Esc / ✕ / 再按 Cmd+Shift+; → qa_window_dismiss → 后端发
-// `chat-panel:closing`（退场动画）→ 240ms 后隐藏窗口并清历史。
-
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-} from 'react';
+// Compact QA composer. Native desktop starts at 480×80 and expands downwards
+// after submission; embedded hosts retain their own frame and close callback.
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ArrowUpIcon,
   CheckIcon,
-  MessageCircleDashedIcon,
   MicIcon,
+  PencilLineIcon,
+  PlusIcon,
+  QuoteIcon,
   SquareIcon,
   XIcon,
 } from 'lucide-react';
@@ -48,35 +20,10 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from '../components/chat/ui/message-scroller';
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from '../components/chat/ui/card';
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from '../components/chat/ui/empty';
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-} from '../components/chat/ui/input-group';
-import { Message, MessageAvatar, MessageContent } from '../components/chat/ui/message';
-import { Bubble, BubbleContent } from '../components/chat/ui/bubble';
-import { Button } from '../components/chat/ui/button';
-import { OrbAvatar, UserAvatar, useGithubLogin } from '../components/chat/avatars';
+import { UserAvatar, useGithubLogin } from '../components/chat/avatars';
+import { VoiceWaveform } from '../components/chat/VoiceWaveform';
 import { AssistantMarkdown } from '../components/chat/markdown';
 import { useChatPanelLifecycle } from '../components/chat/lifecycle';
-import { cn } from '../components/chat/lib/utils';
 import {
   chatPanelFocusKeyboard,
   confirmSelectionVoicePreview,
@@ -86,65 +33,55 @@ import {
   qaSubmitText,
   qaToggleRecording,
   qaWindowDismiss,
+  qaWindowSetExpanded,
+  qaGetSnapshot,
   revertSelectionVoicePreview,
 } from '../lib/ipc';
 import { acceptQaSessionEvent, splitQaUserMessage } from '../lib/qaMessage';
 import type { QaChatMessage, QaStatePayload } from '../lib/types';
-import '../components/chat/chat.css';
-
-const SELECTION_PREVIEW_MAX = 60;
+import './qa-panel.css';
 
 type Status = 'idle' | 'recording' | 'thinking' | 'error';
-
+type Translate = ReturnType<typeof useTranslation>['t'];
 interface QaPanelProps {
   embedded?: boolean;
   onRequestClose?: () => void;
 }
-
-// 浏览器预览（vite dev，非 Tauri）：?window=qa&demo=1 注入两轮演示对话，方便调样式。
-function getPreviewMessages(): QaChatMessage[] {
-  if (isTauri || typeof window === 'undefined') return [];
-  if (new URLSearchParams(window.location.search).get('demo') !== '1') return [];
-  return [
-    {
-      role: 'user',
-      content:
-        '<selected_text>\nThe mitochondria is the powerhouse of the cell.\n</selected_text>\n\n# 我的问题\n这句话为什么会成为梗？',
-    },
-    {
-      role: 'assistant',
-      content:
-        '这句话出自初中生物课本，因为**被反复要求背诵**而深入人心。它简短好记、几乎人人见过，于是在英文互联网上被当作“唯一记得的知识点”反复调侃——任何需要往里塞一句正经知识的场合都能用它。',
-    },
-    {
-      role: 'user',
-      content: '那更严谨的说法是什么？',
-    },
-    {
-      role: 'assistant',
-      content:
-        '线粒体主要通过**氧化磷酸化**生成 ATP，是细胞的“能量工厂”没错，但：\n\n1. 它不是唯一的能量来源（糖酵解在细胞质里进行）\n2. 它还参与钙离子调控、凋亡信号等\n\n所以课本那句是简化版，方便记忆但不完整。',
-    },
-  ];
+interface QaLevelPayload {
+  sessionId: string;
+  level: number;
 }
-
-/** macOS movableByWindowBackground 拖动把手（header 区域整条可拖，普通箭头指针）。 */
-const drag = { 'data-tauri-drag-region': true } as const;
 
 export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {}) {
   const { t } = useTranslation();
-  const [messages, setMessages] = useState<QaChatMessage[]>(getPreviewMessages);
+  const [messages, setMessages] = useState<QaChatMessage[]>([]);
   const [status, setStatus] = useState<Status>('idle');
-  const [errorMsg, setErrorMsg] = useState<string>('');
-  const [selectionPreview, setSelectionPreview] = useState<string>('');
-  const [composerText, setComposerText] = useState<string>('');
-  /** 流式 LLM 答案：answer_delta 累积、answer 事件来时清空（最终内容已落到 messages）。 */
-  const [streamingAnswer, setStreamingAnswer] = useState<string>('');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [selectionPreview, setSelectionPreview] = useState('');
+  const [composerText, setComposerText] = useState('');
+  const [streamingAnswer, setStreamingAnswer] = useState('');
   const [editApplyAvailable, setEditApplyAvailable] = useState(false);
   const [editRevertAvailable, setEditRevertAvailable] = useState(false);
   const [editApplyBusy, setEditApplyBusy] = useState(false);
   const [editInstructionMode, setEditInstructionMode] = useState(false);
+  const [level, setLevel] = useState(0);
+  const [submitted, setSubmitted] = useState(false);
+  const [submitBusy, setSubmitBusy] = useState(false);
+  const [micBusy, setMicBusy] = useState(false);
+  const [modeBusy, setModeBusy] = useState(false);
+  const [layoutError, setLayoutError] = useState(false);
   const activeSessionIdRef = useRef<string | null>(null);
+  const statusRef = useRef<Status>('idle');
+  const panelEpoch = useRef(0);
+  const nativeStateEpoch = useRef(0);
+  const submissionRef = useRef<symbol | null>(null);
+  const microphoneRef = useRef<symbol | null>(null);
+  const editRequestRef = useRef<symbol | null>(null);
+  const modeRequestRef = useRef<symbol | null>(null);
+  const dismissRef = useRef<symbol | null>(null);
+  const resizeQueue = useRef<Promise<void>>(Promise.resolve());
+  const layoutEpoch = useRef(0);
+  const requestedLayout = useRef<{ expanded: boolean; promise: Promise<void> } | null>(null);
   const { enterEpoch, closing } = useChatPanelLifecycle();
   const tRef = useRef(t);
   tRef.current = t;
@@ -152,50 +89,79 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
   embeddedRef.current = embedded;
   const onRequestCloseRef = useRef(onRequestClose);
   onRequestCloseRef.current = onRequestClose;
+  const githubLogin = useGithubLogin(messages.filter((message) => message.role === 'user').length);
 
-  // 新轮次信号：用户消息条数变化 = 新提问发出，也用它刷新 GitHub 头像。
-  const userTurnCount = messages.filter((m) => m.role === 'user').length;
-  const githubLogin = useGithubLogin(userTurnCount);
+  const changeStatus = (next: Status) => {
+    statusRef.current = next;
+    setStatus(next);
+  };
+  const invalidateRequests = () => {
+    panelEpoch.current += 1;
+    submissionRef.current = null;
+    microphoneRef.current = null;
+    editRequestRef.current = null;
+    modeRequestRef.current = null;
+    setSubmitBusy(false);
+    setMicBusy(false);
+    setEditApplyBusy(false);
+    setModeBusy(false);
+  };
 
-  // ── 后端事件订阅（mount 时订阅一次，永不重订阅）──────────────────
   useEffect(() => {
     if (!isTauri) return;
-    let unlistenState: (() => void) | undefined;
-    let unlistenDismiss: (() => void) | undefined;
     let cancelled = false;
-    (async () => {
+    const handles: (() => void)[] = [];
+    void (async () => {
       try {
         const { listen } = await import('@tauri-apps/api/event');
-        const stateHandle = await listen<QaStatePayload>('qa:state', (event) => {
-          const payload = event.payload;
+        let stateEpoch = 0;
+        const applyState = (payload: QaStatePayload) => {
+          if (cancelled) return;
           const sessionEvent = acceptQaSessionEvent(activeSessionIdRef.current, payload);
-          if (!sessionEvent.accepted) {
-            return;
+          if (!sessionEvent.accepted) return;
+          nativeStateEpoch.current += 1;
+          if (activeSessionIdRef.current !== sessionEvent.sessionId) {
+            setLevel(0);
+            if (payload.kind === 'idle' || payload.kind === 'recording') {
+              submissionRef.current = null;
+              setSubmitBusy(false);
+              if (!payload.messages?.length) setSubmitted(false);
+            }
+            // Apply/revert belongs to the captured QA session. A new turn must
+            // not inherit a pending button or its late success/error response.
+            editRequestRef.current = null;
+            setEditApplyBusy(false);
+            modeRequestRef.current = null;
+            setModeBusy(false);
           }
           activeSessionIdRef.current = sessionEvent.sessionId;
-          if (payload.messages) {
-            setMessages(payload.messages);
-          }
-          if (typeof payload.editApplyAvailable === 'boolean') {
+          if (payload.messages) setMessages(payload.messages);
+          if (typeof payload.editApplyAvailable === 'boolean')
             setEditApplyAvailable(payload.editApplyAvailable);
-          }
-          if (typeof payload.editRevertAvailable === 'boolean') {
+          if (typeof payload.editRevertAvailable === 'boolean')
             setEditRevertAvailable(payload.editRevertAvailable);
-          }
-          if (typeof payload.editInstructionMode === 'boolean') {
+          if (typeof payload.editInstructionMode === 'boolean')
             setEditInstructionMode(payload.editInstructionMode);
-          }
+          if (payload.kind !== 'recording') setLevel(0);
           switch (payload.kind) {
             case 'idle':
-              setStatus('idle');
+              changeStatus('idle');
               setSelectionPreview('');
               setErrorMsg('');
               setStreamingAnswer('');
               setEditApplyAvailable(false);
               setEditRevertAvailable(false);
+              // Native ShowQa also sends a lightweight idle without messages;
+              // it must not collapse an in-flight text submission.
+              if (
+                payload.messages?.length === 0 &&
+                !submissionRef.current &&
+                !microphoneRef.current
+              )
+                setSubmitted(false);
               break;
             case 'recording':
-              setStatus('recording');
+              changeStatus('recording');
               setSelectionPreview(payload.selectionPreview ?? '');
               setErrorMsg('');
               setStreamingAnswer('');
@@ -203,417 +169,571 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               setEditRevertAvailable(false);
               break;
             case 'loading':
-              // ASR 在 finalize、user message 还没 push 的过渡帧。提前切到 thinking
-              // 视图避免 UI 卡 recording 几百 ms 反馈缺失。详见 issue #161。
-              setStatus('thinking');
-              if (payload.selectionPreview != null) {
-                setSelectionPreview(payload.selectionPreview);
-              }
-              setErrorMsg('');
-              setStreamingAnswer('');
-              setEditApplyAvailable(false);
-              setEditRevertAvailable(false);
-              break;
             case 'thinking':
-              setStatus('thinking');
-              if (payload.selectionPreview != null) {
-                setSelectionPreview(payload.selectionPreview);
-              }
+              changeStatus('thinking');
+              setSubmitted(true);
+              if (payload.selectionPreview != null) setSelectionPreview(payload.selectionPreview);
               setErrorMsg('');
               setStreamingAnswer('');
               setEditApplyAvailable(false);
               setEditRevertAvailable(false);
               break;
             case 'answer_delta':
-              // 流式增量。仍保持 thinking 状态——直到 answer 事件落定后才回 idle。
-              if (payload.chunk) {
-                setStreamingAnswer((prev) => prev + payload.chunk);
-              }
+              if (payload.chunk) setStreamingAnswer((previous) => previous + payload.chunk);
               break;
             case 'awaiting_approval':
-              setStatus('thinking');
+              changeStatus('thinking');
+              setSubmitted(true);
               break;
             case 'answer':
-              setStatus('idle');
+              changeStatus('idle');
               setErrorMsg('');
-              // messages 已被上面的 setMessages 落定，清掉流式 buffer 避免和最终气泡重影。
               setStreamingAnswer('');
               break;
             case 'cancelled':
-              setStatus('idle');
+              invalidateRequests();
+              changeStatus('idle');
               setErrorMsg('');
               setStreamingAnswer('');
               setEditApplyAvailable(false);
               setEditRevertAvailable(false);
               break;
             case 'error':
-              setStatus('error');
+              changeStatus('error');
               setErrorMsg(payload.error ?? tRef.current('qa.error'));
               setStreamingAnswer('');
               setEditApplyAvailable(false);
               setEditRevertAvailable(false);
               break;
           }
+        };
+        const stateHandle = await listen<QaStatePayload>('qa:state', (event) => {
+          stateEpoch += 1;
+          applyState(event.payload);
         });
-        const dismissHandle = await listen<unknown>('qa:dismiss', () => {
+        handles.push(stateHandle);
+        if (cancelled) {
+          stateHandle();
+          return;
+        }
+        const levelHandle = await listen<QaLevelPayload>('qa:level', (event) => {
+          const payload = event.payload;
+          if (
+            cancelled ||
+            statusRef.current !== 'recording' ||
+            !payload.sessionId ||
+            payload.sessionId !== activeSessionIdRef.current
+          )
+            return;
+          setLevel(Number.isFinite(payload.level) ? Math.max(0, Math.min(1, payload.level)) : 0);
+        });
+        handles.push(levelHandle);
+        if (cancelled) {
+          levelHandle();
+          return;
+        }
+        const dismissHandle = await listen('qa:dismiss', () => {
+          if (cancelled) return;
+          invalidateRequests();
           activeSessionIdRef.current = null;
           setSelectionPreview('');
           setComposerText('');
-          if (embeddedRef.current) {
-            onRequestCloseRef.current?.();
-          } else {
-            void qaWindowDismiss();
-          }
+          setLevel(0);
+          if (embeddedRef.current) onRequestCloseRef.current?.();
+          else void qaWindowDismiss().catch(() => undefined);
         });
+        handles.push(dismissHandle);
         if (cancelled) {
-          stateHandle();
           dismissHandle();
-        } else {
-          unlistenState = stateHandle;
-          unlistenDismiss = dismissHandle;
+          return;
         }
-      } catch (error) {
-        console.error('[QaPanel] listener setup failed', error);
+        // A lazily created desktop/embedded view can miss its initial recording
+        // event. Subscribe first, then hydrate from the actual Core snapshot.
+        // A state transition while the RPC is in flight supersedes that reply.
+        for (let attempt = 0; attempt < 4 && !cancelled; attempt += 1) {
+          const observed = stateEpoch;
+          const lifecycle = panelEpoch.current;
+          let snapshot: QaStatePayload;
+          try {
+            snapshot = await qaGetSnapshot();
+          } catch {
+            // A failed hydration RPC must not tear down the live subscriptions.
+            // Later native events remain authoritative, including a hotkey start.
+            if (cancelled || panelEpoch.current !== lifecycle || stateEpoch !== observed) break;
+            if (attempt === 3) {
+              changeStatus('error');
+              setErrorMsg(tRef.current('qa.error'));
+            }
+            continue;
+          }
+          if (cancelled || panelEpoch.current !== lifecycle) break;
+          if (stateEpoch !== observed) continue;
+          activeSessionIdRef.current = snapshot.sessionId ?? null;
+          applyState(snapshot);
+          break;
+        }
+      } catch {
+        handles.forEach((handle) => handle());
       }
     })();
     return () => {
       cancelled = true;
-      unlistenState?.();
-      unlistenDismiss?.();
+      handles.forEach((handle) => handle());
     };
   }, []);
 
   useEffect(() => {
     if (!closing) return;
+    invalidateRequests();
     activeSessionIdRef.current = null;
+    changeStatus('idle');
     setMessages([]);
-    setStatus('idle');
     setErrorMsg('');
     setStreamingAnswer('');
     setSelectionPreview('');
     setComposerText('');
     setEditInstructionMode(false);
+    setEditApplyAvailable(false);
+    setEditRevertAvailable(false);
+    setLevel(0);
+    setSubmitted(false);
   }, [closing]);
 
-  // ── Esc 关闭 ────────────────────────────────────────────────────────
+  const expanded =
+    embedded ||
+    submitted ||
+    messages.length > 0 ||
+    streamingAnswer.length > 0 ||
+    status === 'error' ||
+    editApplyAvailable ||
+    editRevertAvailable;
+  const requestSize = (next: boolean) => {
+    if (!isTauri || embeddedRef.current) return Promise.resolve();
+    if (requestedLayout.current?.expanded === next) return requestedLayout.current.promise;
+    // Serialize native geometry writes so a late expand cannot win over a later
+    // compact request. Callers separately discard old lifecycle responses.
+    const promise = resizeQueue.current
+      .catch(() => undefined)
+      .then(() => qaWindowSetExpanded(next));
+    const request = { expanded: next, promise };
+    requestedLayout.current = request;
+    resizeQueue.current = promise;
+    void promise.catch(() => {
+      if (requestedLayout.current === request) requestedLayout.current = null;
+    });
+    return promise;
+  };
+  useEffect(() => {
+    const epoch = ++layoutEpoch.current;
+    if (closing || embedded || !isTauri) return;
+    setLayoutError(false);
+    void requestSize(expanded).catch(() => {
+      if (layoutEpoch.current === epoch) setLayoutError(true);
+    });
+    return () => {
+      layoutEpoch.current += 1;
+    };
+  }, [expanded, embedded, enterEpoch, closing]);
+
+  const onClose = async () => {
+    if (dismissRef.current) return;
+    const request = Symbol('dismiss');
+    dismissRef.current = request;
+    invalidateRequests();
+    const epoch = panelEpoch.current;
+    try {
+      if (isTauri) await qaWindowDismiss();
+      if (panelEpoch.current === epoch) onRequestCloseRef.current?.();
+    } catch {
+      if (panelEpoch.current === epoch) {
+        changeStatus('error');
+        setErrorMsg(t('qa.compact.closeError'));
+      }
+    } finally {
+      if (dismissRef.current === request) dismissRef.current = null;
+    }
+  };
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        void qaWindowDismiss();
-        onRequestClose?.();
-      }
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return;
+      event.preventDefault();
+      void onClose();
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [onRequestClose]);
+  }, []);
 
-  const onClose = () => {
-    void qaWindowDismiss();
-    onRequestClose?.();
-  };
-
-  const onSubmitText = () => {
+  const onSubmitText = async () => {
     const text = composerText.trim();
-    if (!text || status === 'thinking' || status === 'recording') return;
+    if (
+      !isTauri ||
+      !text ||
+      statusRef.current === 'thinking' ||
+      statusRef.current === 'recording' ||
+      submissionRef.current ||
+      microphoneRef.current ||
+      editRequestRef.current ||
+      modeRequestRef.current
+    )
+      return;
+    const request = Symbol('submit');
+    const epoch = panelEpoch.current;
+    const originSession = activeSessionIdRef.current;
+    submissionRef.current = request;
+    setSubmitBusy(true);
+    setSubmitted(true);
     setComposerText('');
-    void qaSubmitText(text).catch((error) => {
-      console.error('[QaPanel] qa_submit_text failed', error);
-      setErrorMsg(error instanceof Error ? error.message : String(error));
-      setStatus('error');
-    });
-  };
-
-  const onToggleRecording = () => {
-    if (status === 'thinking') return;
-    void qaToggleRecording().catch((error) => {
-      console.error('[QaPanel] qa_toggle_recording failed', error);
-    });
-  };
-
-  const onEditInstructionModeChange = (enabled: boolean) => {
-    setEditInstructionMode(enabled);
-    void qaSetEditInstructionMode(enabled).catch((error) => {
-      console.error('[QaPanel] qa_set_edit_instruction_mode failed', error);
-    });
-  };
-
-  const onApplyEdit = async () => {
-    if (!editApplyAvailable || editApplyBusy) return;
-    setEditApplyBusy(true);
     setErrorMsg('');
     try {
-      const qaSessionId = activeSessionIdRef.current;
-      if (!qaSessionId) {
-        throw new Error(t('qa.editApplyUnavailable'));
+      await requestSize(true);
+      if (
+        panelEpoch.current !== epoch ||
+        submissionRef.current !== request ||
+        activeSessionIdRef.current !== originSession
+      )
+        return;
+      await qaSubmitText(text, originSession);
+    } catch {
+      if (
+        panelEpoch.current === epoch &&
+        submissionRef.current === request &&
+        activeSessionIdRef.current === originSession
+      ) {
+        setComposerText((current) => current || text);
+        setErrorMsg(t('qa.compact.sendError'));
+        changeStatus('error');
       }
-      const preview = await getSelectionVoicePreview(qaSessionId);
-      const text = preview?.text?.trim();
-      if (!text) {
-        throw new Error(t('qa.editApplyUnavailable'));
-      }
-      await confirmSelectionVoicePreview(text, qaSessionId);
-      setEditApplyAvailable(false);
-      setEditRevertAvailable(false);
-    } catch (error) {
-      setErrorMsg(error instanceof Error ? error.message : String(error));
-      setStatus('error');
     } finally {
-      setEditApplyBusy(false);
+      if (submissionRef.current === request) {
+        submissionRef.current = null;
+        setSubmitBusy(false);
+      }
     }
   };
-
-  const onRevertEdit = async () => {
-    if (!editRevertAvailable || editApplyBusy) return;
-    setEditApplyBusy(true);
+  const onToggleRecording = async () => {
+    if (
+      !isTauri ||
+      statusRef.current === 'thinking' ||
+      microphoneRef.current ||
+      submissionRef.current ||
+      editRequestRef.current ||
+      modeRequestRef.current
+    )
+      return;
+    const request = Symbol('microphone');
+    const epoch = panelEpoch.current;
+    const observedState = nativeStateEpoch.current;
+    microphoneRef.current = request;
+    setMicBusy(true);
     setErrorMsg('');
     try {
-      const qaSessionId = activeSessionIdRef.current;
-      if (!qaSessionId) {
-        throw new Error(t('qa.editApplyUnavailable'));
+      await qaToggleRecording();
+    } catch {
+      if (
+        panelEpoch.current === epoch &&
+        microphoneRef.current === request &&
+        nativeStateEpoch.current === observedState
+      ) {
+        setErrorMsg(t('qa.compact.microphoneError'));
+        changeStatus('error');
       }
-      await revertSelectionVoicePreview(qaSessionId);
-      setEditRevertAvailable(false);
-    } catch (error) {
-      setErrorMsg(error instanceof Error ? error.message : String(error));
-      setStatus('error');
     } finally {
-      setEditApplyBusy(false);
+      if (microphoneRef.current === request) {
+        microphoneRef.current = null;
+        setMicBusy(false);
+      }
+    }
+  };
+  const onEditInstructionModeChange = async (enabled: boolean) => {
+    if (
+      !isTauri ||
+      statusRef.current === 'thinking' ||
+      statusRef.current === 'recording' ||
+      modeRequestRef.current ||
+      submissionRef.current ||
+      microphoneRef.current ||
+      editRequestRef.current
+    )
+      return;
+    const request = Symbol('mode');
+    const epoch = panelEpoch.current;
+    modeRequestRef.current = request;
+    setModeBusy(true);
+    try {
+      await qaSetEditInstructionMode(enabled);
+      if (panelEpoch.current === epoch && modeRequestRef.current === request)
+        setEditInstructionMode(enabled);
+    } catch {
+      if (panelEpoch.current === epoch && modeRequestRef.current === request) {
+        setErrorMsg(t('qa.compact.modeError'));
+        changeStatus('error');
+      }
+    } finally {
+      if (modeRequestRef.current === request) {
+        modeRequestRef.current = null;
+        setModeBusy(false);
+      }
+    }
+  };
+  // The action belongs to the preview actually rendered on screen. An event
+  // may advance the ref before React commits the next frame.
+  const displayedSessionId = activeSessionIdRef.current;
+  const onEdit = async (revert: boolean) => {
+    const session = displayedSessionId;
+    if (
+      !isTauri ||
+      !session ||
+      activeSessionIdRef.current !== session ||
+      editRequestRef.current ||
+      submissionRef.current ||
+      microphoneRef.current ||
+      modeRequestRef.current ||
+      statusRef.current === 'thinking' ||
+      statusRef.current === 'recording' ||
+      (revert ? !editRevertAvailable : !editApplyAvailable)
+    )
+      return;
+    const request = Symbol('edit');
+    const epoch = panelEpoch.current;
+    editRequestRef.current = request;
+    setEditApplyBusy(true);
+    setErrorMsg('');
+    const current = () =>
+      panelEpoch.current === epoch &&
+      activeSessionIdRef.current === session &&
+      editRequestRef.current === request;
+    try {
+      if (revert) await revertSelectionVoicePreview(session);
+      else {
+        const preview = await getSelectionVoicePreview(session);
+        if (!current()) return;
+        const text = preview?.text?.trim();
+        if (!text) throw new Error('no_preview');
+        await confirmSelectionVoicePreview(text, session);
+      }
+      if (current()) {
+        if (!revert) setEditApplyAvailable(false);
+        setEditRevertAvailable(false);
+      }
+    } catch {
+      if (current()) {
+        setErrorMsg(t('qa.editApplyUnavailable'));
+        changeStatus('error');
+      }
+    } finally {
+      if (editRequestRef.current === request) {
+        editRequestRef.current = null;
+        setEditApplyBusy(false);
+      }
     }
   };
 
   const lastRole = messages[messages.length - 1]?.role;
-  // 问题是否已落进对话（转译完成 + 提交）。落定前头像不出现、黑光在输入框跑。
   const questionLanded = lastRole === 'user' || streamingAnswer.length > 0;
-  // 输入组环形光：录音红光 → 转译思考黑光 → 问题落定即停（用户拍板的三段式）。
-  const ring =
-    status === 'recording'
-      ? 'recording'
-      : status === 'thinking' && !questionLanded
-        ? 'thinking'
-        : undefined;
-  // 助手思考行：问题已在对话里、答案还没开始流出时才出现（头像不先于用户的话）。
   const thinkingRow = status === 'thinking' && !streamingAnswer && lastRole === 'user';
-  const showEmpty = messages.length === 0 && !streamingAnswer && !thinkingRow && status !== 'error';
+  const voiceActive =
+    status === 'recording' ||
+    (status === 'thinking' && !questionLanded && !submitBusy) ||
+    (micBusy && status !== 'thinking');
+  const inputBusy =
+    status === 'thinking' ||
+    status === 'recording' ||
+    submitBusy ||
+    micBusy ||
+    modeBusy ||
+    editApplyBusy;
 
-  // ── 官方 message-scroller-demo 同款骨架 ─────────────────────────────
   return (
-    <MessageScrollerProvider
-      autoScroll
-      defaultScrollPosition="last-anchor"
-      scrollPreviousItemPeek={18}
+    <div
+      className={`qa-capsule-shell${expanded ? ' is-expanded' : ''}${embedded ? ' is-embedded' : ''}${closing ? ' is-closing' : ''}`}
+      key={enterEpoch}
     >
-      <Card
-        key={enterEpoch}
-        className={cn(
-          'olchat-shell olchat-shell-in h-screen w-full gap-0',
-          embedded && 'min-h-screen rounded-none shadow-none ring-0',
-          closing && 'olchat-shell-out',
-        )}
-      >
-        <CardHeader {...(embedded ? {} : drag)} className="gap-1 border-b">
-          <CardTitle {...(embedded ? {} : drag)}>{t('qa.title')}</CardTitle>
-          {/* 副行固定欢迎语：录音/思考状态不进面板上部（用户拍板），语音反馈全在输入区。 */}
-          <CardDescription {...(embedded ? {} : drag)}>{t('qa.headerHint')}</CardDescription>
-          <CardAction>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={onClose}
-              onMouseDown={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-              }}
-              title={t('qa.closeTooltip')}
-              aria-label={t('qa.closeTooltip')}
+      <Composer
+        value={composerText}
+        status={status}
+        level={level}
+        voiceActive={voiceActive}
+        selectionPreview={selectionPreview}
+        busy={inputBusy}
+        micBusy={micBusy}
+        embedded={embedded}
+        editInstructionMode={editInstructionMode}
+        onEditInstructionModeChange={onEditInstructionModeChange}
+        onChange={setComposerText}
+        onSubmit={onSubmitText}
+        onToggleRecording={onToggleRecording}
+        onClose={onClose}
+        t={t}
+      />
+      {expanded && (
+        <section className="qa-answer-panel" aria-label={t('qa.title')}>
+          <header className="qa-answer-header" data-tauri-drag-region={embedded ? undefined : true}>
+            <span className="qa-symbol" aria-hidden="true">
+              ✳
+            </span>
+            <h1 data-tauri-drag-region={embedded ? undefined : true}>{t('qa.title')}</h1>
+            <span>{status === 'thinking' ? t('qa.thinking') : t('qa.compact.conversation')}</span>
+          </header>
+          {layoutError && (
+            <p className="qa-layout-error" role="alert">
+              {t('qa.compact.layoutError')}
+            </p>
+          )}
+          <div className="qa-answer-scroll">
+            <MessageScrollerProvider
+              autoScroll
+              defaultScrollPosition="last-anchor"
+              scrollPreviousItemPeek={18}
             >
-              <XIcon />
-            </Button>
-          </CardAction>
-        </CardHeader>
-        <CardContent className="flex-1 overflow-hidden p-0">
-          {showEmpty ? (
-            <Empty className="h-full">
-              <EmptyHeader>
-                <EmptyMedia variant="icon">
-                  <MessageCircleDashedIcon />
-                </EmptyMedia>
-                <EmptyTitle>{t('qa.emptyTitle')}</EmptyTitle>
-                <EmptyDescription>{t('qa.emptyDesc')}</EmptyDescription>
-              </EmptyHeader>
-            </Empty>
-          ) : (
-            <MessageScroller>
-              <MessageScrollerViewport>
-                <MessageScrollerContent
-                  aria-busy={status === 'thinking' || undefined}
-                  className="p-(--card-spacing)"
-                >
-                  {messages.map((message, i) => (
-                    <MessageRow key={i} index={i} message={message} githubLogin={githubLogin} />
-                  ))}
-                  {streamingAnswer && (
-                    <MessageScrollerItem messageId="streaming">
-                      <Message>
-                        <AiAvatar />
-                        <MessageContent>
+              <MessageScroller>
+                <MessageScrollerViewport>
+                  <MessageScrollerContent
+                    className="qa-messages"
+                    aria-busy={status === 'thinking' || undefined}
+                  >
+                    {messages.map((message, index) => (
+                      <MessageRow
+                        key={index}
+                        index={index}
+                        message={message}
+                        githubLogin={githubLogin}
+                        t={t}
+                      />
+                    ))}
+                    {streamingAnswer && (
+                      <MessageScrollerItem messageId="streaming">
+                        <div className="qa-assistant-message">
+                          <AssistantLabel />
                           <AssistantMarkdown markdown={streamingAnswer} streaming />
-                        </MessageContent>
-                      </Message>
-                    </MessageScrollerItem>
-                  )}
-                  {thinkingRow && (
-                    <MessageScrollerItem messageId="thinking" className="olchat-enter">
-                      <Message role="status">
-                        <AiAvatar />
-                        <MessageContent className="justify-center">
-                          <span className="shimmer w-fit text-xs font-medium">
-                            {t('qa.thinking')}
-                          </span>
-                        </MessageContent>
-                      </Message>
-                    </MessageScrollerItem>
-                  )}
-                  {status === 'error' && (
-                    <MessageScrollerItem messageId="error" className="olchat-enter">
-                      <Bubble variant="destructive">
-                        <BubbleContent>
-                          {(() => {
-                            const marker = '---model_output---';
-                            const endMarker = '---end_model_output---';
-                            const startIdx = errorMsg.indexOf(marker);
-                            if (startIdx < 0) {
-                              return <div>{errorMsg}</div>;
-                            }
-                            const main = errorMsg.slice(0, startIdx).trim();
-                            const after = errorMsg.slice(startIdx + marker.length);
-                            const endIdx = after.indexOf(endMarker);
-                            const raw = (endIdx >= 0 ? after.slice(0, endIdx) : after).trim();
-                            return (
-                              <>
-                                <div>{main || errorMsg}</div>
-                                {raw ? (
-                                  <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-black/10 p-2 text-[11px] leading-relaxed">
-                                    {raw}
-                                  </pre>
-                                ) : null}
-                              </>
-                            );
-                          })()}
-                          <div className="mt-1 text-[11.5px] opacity-70">
-                            {t('qa.errorRetryHint')}
-                          </div>
-                        </BubbleContent>
-                      </Bubble>
-                    </MessageScrollerItem>
-                  )}
-                </MessageScrollerContent>
-              </MessageScrollerViewport>
-              <MessageScrollerButton aria-label={t('qa.jumpToLatest')} />
-            </MessageScroller>
-          )}
-        </CardContent>
-        <CardFooter className="flex-col gap-2">
-          {status === 'recording' && selectionPreview && (
-            <SelectionChip text={selectionPreview} t={t} />
-          )}
+                        </div>
+                      </MessageScrollerItem>
+                    )}
+                    {thinkingRow && (
+                      <MessageScrollerItem messageId="thinking">
+                        <div className="qa-thinking" role="status">
+                          <span className="qa-thinking-dot" />
+                          {t('qa.thinking')}
+                        </div>
+                      </MessageScrollerItem>
+                    )}
+                    {status === 'error' && (
+                      <MessageScrollerItem messageId="error">
+                        <ErrorContent error={errorMsg} t={t} />
+                      </MessageScrollerItem>
+                    )}
+                    {messages.length === 0 && !streamingAnswer && status !== 'error' && (
+                      <div className="qa-empty-answer">
+                        {submitBusy
+                          ? t('qa.compact.sending')
+                          : status === 'thinking'
+                            ? t('overview.inAppDictation.processing')
+                            : t('qa.emptyDesc')}
+                      </div>
+                    )}
+                  </MessageScrollerContent>
+                </MessageScrollerViewport>
+                <MessageScrollerButton className="qa-jump" aria-label={t('qa.jumpToLatest')} />
+              </MessageScroller>
+            </MessageScrollerProvider>
+          </div>
           {editApplyAvailable && status === 'idle' && (
-            <div className="flex w-full flex-col gap-2">
+            <div className="qa-edit-actions">
               {editRevertAvailable && (
-                <Button
+                <button
                   type="button"
-                  variant="outline"
-                  className="w-full"
-                  disabled={editApplyBusy}
-                  onClick={() => void onRevertEdit()}
+                  disabled={!isTauri || editApplyBusy}
+                  onClick={() => void onEdit(true)}
                 >
                   {t('qa.editRevertPrevious')}
-                </Button>
+                </button>
               )}
-              <Button
+              <button
                 type="button"
-                className="w-full"
-                disabled={editApplyBusy}
-                onClick={() => void onApplyEdit()}
+                className="qa-apply"
+                disabled={!isTauri || editApplyBusy}
+                onClick={() => void onEdit(false)}
               >
                 <CheckIcon />
                 {t('qa.editApplyReplace')}
-              </Button>
+              </button>
             </div>
           )}
-          <Composer
-            value={composerText}
-            status={status}
-            ring={ring}
-            embedded={embedded}
-            editInstructionMode={editInstructionMode}
-            onEditInstructionModeChange={onEditInstructionModeChange}
-            onChange={setComposerText}
-            onSubmit={onSubmitText}
-            onToggleRecording={onToggleRecording}
-            t={t}
-          />
-        </CardFooter>
-      </Card>
-    </MessageScrollerProvider>
+        </section>
+      )}
+    </div>
   );
 }
 
-// ── 底部输入区：官方 demo 同款 InputGroup，打字 + 语音两种形式完整 ────
-//
-// · 打字：Enter 走表单提交；IME 组合中的 Enter（选字确认）不触发（isComposing/
-//   keyCode 229 守卫）。点进输入框时 chat_panel_focus_keyboard 让非激活面板
-//   成为 key window（不激活 app，主窗口不动）。
-// · 语音：麦克风按钮开/停录音；录音红光、转译黑光绕输入组一圈圈跑
-//   （olchat-ring），输入框本体保持可见。
 function Composer({
   value,
   status,
-  ring,
+  level,
+  voiceActive,
+  selectionPreview,
+  busy,
+  micBusy,
   embedded,
   editInstructionMode,
   onEditInstructionModeChange,
   onChange,
   onSubmit,
   onToggleRecording,
+  onClose,
   t,
 }: {
   value: string;
   status: Status;
-  ring: 'recording' | 'thinking' | undefined;
+  level: number;
+  voiceActive: boolean;
+  selectionPreview: string;
+  busy: boolean;
+  micBusy: boolean;
   embedded: boolean;
   editInstructionMode: boolean;
   onEditInstructionModeChange: (enabled: boolean) => void;
   onChange: (value: string) => void;
   onSubmit: () => void;
   onToggleRecording: () => void;
-  t: ReturnType<typeof useTranslation>['t'];
+  onClose: () => void;
+  t: Translate;
 }) {
-  // IME 组合期间的 Enter 是「选字确认」不是「发送」。keydown 里 isComposing
-  // 已覆盖大部分场景，keyCode 229 兜底 WebKit 老行为。
   const composingRef = useRef(false);
   const recording = status === 'recording';
-  const busy = status === 'thinking' || recording;
-
   const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key !== 'Enter') return;
-    if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) {
-      event.preventDefault();
-    }
+    event.preventDefault();
+    if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
+    if (!busy && isTauri) onSubmit();
   };
-
+  const label = recording
+    ? t('overview.inAppDictation.recording')
+    : micBusy
+      ? t('common.loading')
+      : t('overview.inAppDictation.processing');
   return (
     <form
+      className={`qa-prompt${voiceActive ? ' is-voice' : ''}`}
+      data-tauri-drag-region={embedded ? undefined : true}
       onSubmit={(event) => {
         event.preventDefault();
-        onSubmit();
+        if (!composingRef.current && !busy && isTauri) onSubmit();
       }}
-      className="w-full"
     >
-      <InputGroup className="olchat-ring" data-ring={ring}>
-        <InputGroupInput
+      <button
+        className="qa-add"
+        type="button"
+        disabled
+        aria-label={t('qa.compact.addUnavailable')}
+        title={t('qa.compact.addUnavailable')}
+      >
+        <PlusIcon />
+      </button>
+      <div className="qa-input-stage">
+        <input
           value={value}
+          disabled={!isTauri || recording || micBusy}
           placeholder={t('qa.composerPlaceholder')}
+          aria-label={t('qa.composerPlaceholder')}
           onChange={(event) => onChange(event.currentTarget.value)}
           onKeyDown={onKeyDown}
           onCompositionStart={() => {
@@ -622,117 +742,136 @@ function Composer({
           onCompositionEnd={() => {
             composingRef.current = false;
           }}
-          onFocus={embedded ? undefined : () => void chatPanelFocusKeyboard()}
-          onPointerDown={embedded ? undefined : () => void chatPanelFocusKeyboard()}
+          onFocus={() => {
+            if (isTauri && !embedded) void chatPanelFocusKeyboard().catch(() => undefined);
+          }}
+          onPointerDown={() => {
+            if (isTauri && !embedded) void chatPanelFocusKeyboard().catch(() => undefined);
+          }}
         />
-        <InputGroupAddon align="block-end" className="pt-1">
-          <label className="mr-auto flex cursor-pointer items-center gap-1.5 pl-1 text-[11.5px] text-muted-foreground select-none">
-            <input
-              type="checkbox"
-              className="size-3.5 accent-foreground"
-              checked={editInstructionMode}
-              disabled={busy}
-              onChange={(event) => onEditInstructionModeChange(event.currentTarget.checked)}
-            />
-            {t('qa.editInstructionMode')}
-          </label>
-          <InputGroupButton
-            type="button"
-            size="icon-sm"
-            variant={recording ? 'destructive' : 'ghost'}
-            disabled={status === 'thinking'}
-            onClick={onToggleRecording}
-            aria-pressed={recording}
-            aria-label={recording ? t('qa.micStop') : t('qa.micLabel')}
-            title={recording ? t('qa.micStop') : t('qa.micLabel')}
-          >
-            {recording ? <SquareIcon /> : <MicIcon />}
-          </InputGroupButton>
-          <InputGroupButton
-            type="submit"
-            variant="default"
-            size="icon-sm"
-            disabled={busy || !value.trim()}
-          >
-            <ArrowUpIcon />
-            <span className="sr-only">{t('qa.composerSend')}</span>
-          </InputGroupButton>
-        </InputGroupAddon>
-      </InputGroup>
+        {!isTauri && <span className="qa-browser-note">{t('qa.compact.browserUnavailable')}</span>}
+      </div>
+      <button
+        className={`qa-mode${editInstructionMode ? ' is-on' : ''}`}
+        type="button"
+        aria-pressed={editInstructionMode}
+        disabled={!isTauri || busy}
+        onClick={() => onEditInstructionModeChange(!editInstructionMode)}
+        aria-label={t('qa.editInstructionMode')}
+        title={t('qa.editInstructionMode')}
+      >
+        <PencilLineIcon />
+      </button>
+      <div className="qa-voice-pod">
+        <div className="qa-voice-feedback" aria-hidden={!voiceActive}>
+          {voiceActive && (
+            <>
+              <VoiceWaveform level={recording ? level : 0} processing={!recording} label={label} />
+              {selectionPreview && (
+                <span className="qa-recording-selection" title={selectionPreview}>
+                  <QuoteIcon />
+                  {truncate(selectionPreview, 32)}
+                </span>
+              )}
+            </>
+          )}
+        </div>
+        <button
+          className={`qa-mic${recording ? ' is-recording' : ''}`}
+          type="button"
+          disabled={!isTauri || status === 'thinking' || micBusy || (busy && !recording)}
+          onClick={onToggleRecording}
+          aria-pressed={recording}
+          aria-label={recording ? t('qa.micStop') : t('qa.micLabel')}
+          title={recording ? t('qa.micStop') : t('qa.micLabel')}
+        >
+          {recording ? <SquareIcon /> : <MicIcon />}
+        </button>
+      </div>
+      <button
+        className="qa-send"
+        type="submit"
+        disabled={!isTauri || busy || !value.trim()}
+        aria-label={t('qa.composerSend')}
+        title={t('qa.composerSend')}
+      >
+        <ArrowUpIcon />
+      </button>
+      <button
+        className="qa-close"
+        type="button"
+        disabled={!isTauri && !embedded}
+        onClick={onClose}
+        aria-label={t('qa.closeTooltip')}
+        title={t('qa.closeTooltip')}
+      >
+        <XIcon />
+      </button>
     </form>
   );
 }
 
-// ── 子组件 ────────────────────────────────────────────────────────────
-
-/** 助手头像：**旋转中的**胶囊思考动画（共享渲染源镜像，全部消息头像都在转）。 */
-function AiAvatar() {
+function AssistantLabel() {
   return (
-    <MessageAvatar className="size-8 bg-[#0b0b0f]">
-      <OrbAvatar size={32} />
-    </MessageAvatar>
+    <div className="qa-assistant-label">
+      <span className="qa-symbol" aria-hidden="true">
+        ✳
+      </span>
+      OpenLess
+    </div>
   );
 }
-
 function MessageRow({
   index,
   message,
   githubLogin,
+  t,
 }: {
   index: number;
   message: QaChatMessage;
   githubLogin: string;
+  t: Translate;
 }) {
   if (message.role === 'user') {
-    // 任意轮次都可能带选区信封：抽出问题单独显示，选区作引用块淡显在上。
     const { selection, question } = splitQaUserMessage(message);
     return (
-      // 用户消息 = 新轮次锚点行（MessageScrollerItem scrollAnchor），右挂 GitHub 头像。
-      <MessageScrollerItem messageId={`m${index}`} scrollAnchor className="olchat-enter">
-        <Message align="end">
-          <MessageAvatar>
+      <MessageScrollerItem messageId={`m${index}`} scrollAnchor>
+        <div className="qa-user-message">
+          <span className="qa-user-avatar">
             <UserAvatar login={githubLogin} />
-          </MessageAvatar>
-          <MessageContent>
-            {selection && (
-              <Bubble variant="muted" align="end" data-slot="selection">
-                <BubbleContent className="text-xs text-muted-foreground italic">
-                  “{truncate(selection, 120)}”
-                </BubbleContent>
-              </Bubble>
-            )}
-            <Bubble align="end">
-              <BubbleContent>{question}</BubbleContent>
-            </Bubble>
-          </MessageContent>
-        </Message>
+          </span>
+          <div>
+            {selection && <blockquote title={selection}>{truncate(selection, 120)}</blockquote>}
+            <p>{question}</p>
+          </div>
+        </div>
       </MessageScrollerItem>
     );
   }
   return (
-    <MessageScrollerItem messageId={`m${index}`} className="olchat-enter">
-      <Message>
-        <AiAvatar />
-        <MessageContent>
-          <AssistantMarkdown markdown={message.content} />
-        </MessageContent>
-      </Message>
+    <MessageScrollerItem messageId={`m${index}`}>
+      <div className="qa-assistant-message" aria-label={t('qa.compact.answer')}>
+        <AssistantLabel />
+        <AssistantMarkdown markdown={message.content} />
+      </div>
     </MessageScrollerItem>
   );
 }
-
-/** 录音时的选区上下文条：贴在输入区上方，让用户看到「在追问哪段文字」。 */
-function SelectionChip({ text, t }: { text: string; t: ReturnType<typeof useTranslation>['t'] }) {
-  const truncated = useMemo(() => truncate(text, SELECTION_PREVIEW_MAX), [text]);
+function ErrorContent({ error, t }: { error: string; t: Translate }) {
+  const marker = '---model_output---',
+    endMarker = '---end_model_output---';
+  const start = error.indexOf(marker),
+    after = start >= 0 ? error.slice(start + marker.length) : '';
+  const end = after.indexOf(endMarker),
+    raw = (end >= 0 ? after.slice(0, end) : after).trim();
   return (
-    <div className="olchat-enter flex w-full items-center rounded-xl bg-muted px-3 py-1.5 text-[11.5px] leading-normal">
-      <span className="mr-1.5 shrink-0 text-muted-foreground">{t('qa.selectionPreview')}</span>
-      <span className="truncate text-foreground/80">{truncated}</span>
+    <div className="qa-error" role="alert">
+      <p>{start < 0 ? error : error.slice(0, start).trim() || t('qa.error')}</p>
+      {raw && <pre>{raw}</pre>}
+      <span>{t('qa.errorRetryHint')}</span>
     </div>
   );
 }
-
-function truncate(text: string, max: number): string {
-  if (text.length <= max) return text;
-  return `${text.slice(0, max)}…`;
+function truncate(text: string, max: number) {
+  return text.length <= max ? text : `${text.slice(0, max)}…`;
 }

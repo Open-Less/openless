@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use chrono::Utc;
 
 use crate::errors::{BackendError, BackendErrorCode};
-use crate::persistence::{atomic_write, persistence_error, read_or_default};
+use crate::persistence::{atomic_write, persistence_error};
 use crate::types::{CorrectionRule, RuleSource};
 
 const NUM_TOKEN: &str = "{num}";
@@ -38,6 +38,27 @@ impl CorrectionRuleStore {
         self.read_locked()
     }
 
+    pub(crate) fn sync_snapshot(
+        &self,
+        permit: &crate::cloud_sync_e2ee_store::gate::ExclusivePermit,
+    ) -> Result<Vec<CorrectionRule>, BackendError> {
+        crate::cloud_sync_e2ee_store::gate::require_exclusive(&self.path, permit)?;
+        let _guard = self.lock_store()?;
+        crate::persistence::read_lossless_rows(&self.path, &[])
+    }
+
+    pub(crate) fn sync_replace_all(
+        &self,
+        records: &[CorrectionRule],
+        permit: &crate::cloud_sync_e2ee_store::gate::ExclusivePermit,
+    ) -> Result<(), BackendError> {
+        crate::cloud_sync_e2ee_store::gate::require_exclusive(&self.path, permit)?;
+        let _guard = self.lock_store()?;
+        let bytes = serde_json::to_vec_pretty(records)
+            .map_err(|_| persistence_error("encode restored corrections"))?;
+        crate::persistence::atomic_write_for_sync(&self.path, &bytes, permit)
+    }
+
     pub(crate) fn cloud_sync_access(
         &self,
     ) -> Result<(std::sync::MutexGuard<'_, ()>, &Path), BackendError> {
@@ -49,7 +70,11 @@ impl CorrectionRuleStore {
         pattern: String,
         replacement: String,
     ) -> Result<CorrectionRule, BackendError> {
-        self.add_with_source(pattern, replacement, RuleSource::Manual)
+        crate::cloud_sync_e2ee_store::gate::with_registered_mutation(
+            &self.path,
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || self.add_with_source(pattern, replacement, RuleSource::Manual),
+        )
     }
 
     pub fn add_with_source(
@@ -58,50 +83,68 @@ impl CorrectionRuleStore {
         replacement: String,
         source: RuleSource,
     ) -> Result<CorrectionRule, BackendError> {
-        let pattern = pattern.trim().to_string();
-        let replacement = replacement.trim().to_string();
-        validate_correction_rule_syntax(&pattern, &replacement)?;
-        let _guard = self.lock_store()?;
-        let mut rules = self.read_locked()?;
-        let rule = CorrectionRule {
-            id: uuid::Uuid::new_v4().to_string(),
-            pattern,
-            replacement,
-            enabled: true,
-            created_at: Utc::now().to_rfc3339(),
-            source,
-        };
-        rules.insert(0, rule.clone());
-        self.write_locked(&rules)?;
-        Ok(rule)
+        crate::cloud_sync_e2ee_store::gate::with_registered_mutation(
+            &self.path,
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let pattern = pattern.trim().to_string();
+                let replacement = replacement.trim().to_string();
+                validate_correction_rule_syntax(&pattern, &replacement)?;
+                let _guard = self.lock_store()?;
+                let mut rules = self.read_locked()?;
+                let rule = CorrectionRule {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    pattern,
+                    replacement,
+                    enabled: true,
+                    created_at: Utc::now().to_rfc3339(),
+                    source,
+                };
+                rules.insert(0, rule.clone());
+                self.write_locked(&rules)?;
+                Ok(rule)
+            },
+        )
     }
 
     /// Removing an unknown id is deliberately idempotent.
     pub fn remove(&self, id: &str) -> Result<(), BackendError> {
-        let _guard = self.lock_store()?;
-        let mut rules = self.read_locked()?;
-        let before = rules.len();
-        rules.retain(|rule| rule.id != id);
-        if rules.len() != before {
-            self.write_locked(&rules)?;
-        }
-        Ok(())
+        crate::cloud_sync_e2ee_store::gate::with_registered_mutation(
+            &self.path,
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let _guard = self.lock_store()?;
+                let mut rules = self.read_locked()?;
+                let before = rules.len();
+                rules.retain(|rule| rule.id != id);
+                if rules.len() != before {
+                    self.write_locked(&rules)?;
+                }
+                Ok(())
+            },
+        )
     }
 
     pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<(), BackendError> {
-        let _guard = self.lock_store()?;
-        let mut rules = self.read_locked()?;
-        let rule = rules.iter_mut().find(|rule| rule.id == id).ok_or_else(|| {
-            BackendError::new(
-                BackendErrorCode::InvalidArgument,
-                "correction rule not found",
-            )
-        })?;
-        if rule.enabled != enabled {
-            rule.enabled = enabled;
-            self.write_locked(&rules)?;
-        }
-        Ok(())
+        crate::cloud_sync_e2ee_store::gate::with_registered_mutation(
+            &self.path,
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let _guard = self.lock_store()?;
+                let mut rules = self.read_locked()?;
+                let rule = rules.iter_mut().find(|rule| rule.id == id).ok_or_else(|| {
+                    BackendError::new(
+                        BackendErrorCode::InvalidArgument,
+                        "correction rule not found",
+                    )
+                })?;
+                if rule.enabled != enabled {
+                    rule.enabled = enabled;
+                    self.write_locked(&rules)?;
+                }
+                Ok(())
+            },
+        )
     }
 
     fn lock_store(&self) -> Result<std::sync::MutexGuard<'_, ()>, BackendError> {
@@ -114,7 +157,7 @@ impl CorrectionRuleStore {
     }
 
     fn read_locked(&self) -> Result<Vec<CorrectionRule>, BackendError> {
-        read_or_default(&self.path)
+        crate::persistence::read_lossless_rows(&self.path, &[])
     }
 
     fn write_locked(&self, rules: &[CorrectionRule]) -> Result<(), BackendError> {

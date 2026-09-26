@@ -117,6 +117,7 @@ export function getLocalePreference(): SupportedLocale | typeof FOLLOW_SYSTEM_VA
  */
 export async function setLocalePreference(
   pref: SupportedLocale | typeof FOLLOW_SYSTEM_VALUE,
+  source: 'user' | 'sync-restore' = 'user',
 ): Promise<SupportedLocale> {
   const resolved = resolveLocalePreference(pref);
   if (pref === FOLLOW_SYSTEM_VALUE) {
@@ -124,6 +125,7 @@ export async function setLocalePreference(
   } else {
     window.localStorage.setItem(LOCALE_STORAGE_KEY, pref);
   }
+  window.dispatchEvent(new CustomEvent('openless:ui-preferences-changed', { detail: { source, key: 'locale' } }));
   await applyLocale(resolved);
   return resolved;
 }

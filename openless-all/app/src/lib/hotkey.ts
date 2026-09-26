@@ -8,6 +8,8 @@ import type {
   ShortcutBinding,
 } from './types';
 
+export const MODIFIER_CHORD_PRIMARY = 'ModifierChord';
+
 export function defaultQaShortcut(): ShortcutBinding {
   return {
     primary: ';',
@@ -269,7 +271,9 @@ export function formatComboParts(
     }
   }
 
-  parts.push(formatPrimary(binding.primary));
+  if (binding.primary !== MODIFIER_CHORD_PRIMARY) {
+    parts.push(formatPrimary(binding.primary));
+  }
   return parts;
 }
 
@@ -302,6 +306,22 @@ export function sideModifiersFromPressedCodes(codes: Iterable<string>): string[]
   if (set.has('ShiftLeft')) modifiers.push('shift-left');
   else if (set.has('ShiftRight')) modifiers.push('shift-right');
   return modifiers;
+}
+
+/** A modifier-only chord preserves every physical side, including Ctrl+Ctrl. */
+export function chordModifiersFromPressedCodes(codes: Iterable<string>): string[] {
+  const set = codes instanceof Set ? codes : new Set(codes);
+  const pairs = [
+    ['MetaLeft', 'cmd-left'],
+    ['MetaRight', 'cmd-right'],
+    ['ControlLeft', 'ctrl-left'],
+    ['ControlRight', 'ctrl-right'],
+    ['AltLeft', 'alt-left'],
+    ['AltRight', 'alt-right'],
+    ['ShiftLeft', 'shift-left'],
+    ['ShiftRight', 'shift-right'],
+  ];
+  return pairs.filter(([code]) => set.has(code)).map(([, modifier]) => modifier);
 }
 
 /** Build generic modifier tags (cmd/super/ctrl/alt/shift) from pressed key codes. */

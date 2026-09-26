@@ -385,12 +385,7 @@ impl TextEventStream {
     }
 
     pub fn push(&mut self, chunk: &[u8]) -> Result<(), LLMError> {
-        crate::polish::append_utf8_sse_chunk(&mut self.buffer, &mut self.pending, chunk)?;
-        // 在完整字符串上替换，兼容 CR 与 LF 分属不同网络块。
-        if self.buffer.contains("\r\n") {
-            self.buffer = self.buffer.replace("\r\n", "\n");
-        }
-        Ok(())
+        crate::polish::append_utf8_sse_chunk(&mut self.buffer, &mut self.pending, chunk)
     }
 
     pub fn next(&mut self) -> Result<Option<StreamEvent>, LLMError> {
@@ -767,6 +762,39 @@ mod tests {
             r#"{"stop_reason":"max_tokens","content":[{"type":"text","text":"partial"}]}"#
         )
         .is_err());
+    }
+
+    #[test]
+    fn chat_sse_preserves_utf8_and_done_with_lf_crlf_or_mixed_frames() {
+        for (text_eol, done_eol) in [
+            ("\n", "\n"),
+            ("\r\n", "\r\n"),
+            ("\n", "\r\n"),
+            ("\r\n", "\n"),
+        ] {
+            let mut stream = TextEventStream::new(LlmRequestFormat::ChatCompletions);
+            let text_event = format!("data: {{\"choices\":[{{\"delta\":{{\"content\":\"你\\r\\n🙂好\"}}}}]}}{text_eol}{text_eol}");
+            let mut text = String::new();
+            for byte in text_event.as_bytes() {
+                stream.push(&[*byte]).unwrap();
+                while let Some(event) = stream.next().unwrap() {
+                    if let StreamEvent::Text(delta) = event {
+                        text.push_str(&delta);
+                    }
+                }
+            }
+            assert_eq!(text, "你\r\n🙂好", "JSON escapes must remain user text");
+            assert!(!stream.done);
+            let done_event = format!("data: [DONE]{done_eol}{done_eol}");
+            for byte in done_event.as_bytes() {
+                stream.push(&[*byte]).unwrap();
+                while let Some(event) = stream.next().unwrap() {
+                    assert!(matches!(event, StreamEvent::Done));
+                }
+            }
+            assert!(stream.done, "recognize the terminal marker before EOF");
+            stream.finish().unwrap();
+        }
     }
 
     #[test]

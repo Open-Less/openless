@@ -9,10 +9,13 @@ publish = false
 
 [dependencies]
 anyhow = "1"
+argon2 = { version = "0.5", features = ["zeroize"] }
 base64 = "0.22"
 bzip2 = "0.4"
+chacha20poly1305 = "0.10"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 futures-util = "0.3"
+getrandom = "0.3"
 ferrous-opencc = "0.4"
 hmac = "0.12"
 log = "0.4"
@@ -35,4 +38,6 @@ tokio = { version = "1", features = ["sync", "time", "rt", "macros", "rt-multi-t
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 url = { version = "2", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+unicode-normalization = "0.1"
+zeroize = { version = "1", features = ["derive"] }
 zip = "2"

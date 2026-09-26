@@ -27,6 +27,15 @@ const SIDE_MODIFIER_TAGS: &[&str] = &[
     "super-right",
 ];
 
+const MODIFIER_CHORD_PRIMARY: &str = "ModifierChord";
+
+pub fn is_modifier_chord_binding(binding: &ShortcutBinding) -> bool {
+    binding
+        .primary
+        .trim()
+        .eq_ignore_ascii_case(MODIFIER_CHORD_PRIMARY)
+}
+
 pub fn normalize_side_modifier_tag(raw: &str) -> String {
     match raw.trim().to_ascii_lowercase().as_str() {
         "super-left" => "cmd-left".into(),
@@ -204,6 +213,24 @@ pub fn validate_shortcut_binding(binding: &ShortcutBinding) -> Result<(), Shortc
         return Ok(());
     }
     if binding.modifiers.is_empty() && binding.primary.eq_ignore_ascii_case("shift") {
+        return Ok(());
+    }
+    if is_modifier_chord_binding(binding) {
+        if binding.modifiers.len() < 2 {
+            return Err(ShortcutBindingError::UnsupportedKey(
+                binding.primary.trim().to_string(),
+            ));
+        }
+        let mut unique = BTreeSet::new();
+        for raw in &binding.modifiers {
+            if !is_side_specific_modifier_tag(raw) {
+                return Err(ShortcutBindingError::UnsupportedModifier(raw.clone()));
+            }
+            let normalized = normalize_side_modifier_tag(raw);
+            if !unique.insert(normalized) {
+                return Err(ShortcutBindingError::UnsupportedModifier(raw.clone()));
+            }
+        }
         return Ok(());
     }
 
@@ -869,6 +896,21 @@ mod tests {
             SIDE_SPECIFIC_NON_DICTATION_MSG
         );
         assert!(validate_shortcut_binding(&combo("D", &["cmd-left", "shift"])).is_err());
+    }
+
+    #[test]
+    fn modifier_chords_require_multiple_unique_side_specific_modifiers() {
+        let chord = combo("ModifierChord", &["ctrl-left", "super-left"]);
+        assert!(validate_shortcut_binding(&chord).is_ok());
+        assert!(binding_requires_side_aware_hook(&chord));
+        assert!(is_modifier_chord_binding(&chord));
+
+        assert!(validate_shortcut_binding(&combo("ModifierChord", &["ctrl-left"])).is_err());
+        assert!(validate_shortcut_binding(&combo("ModifierChord", &["ctrl", "super-left"])).is_err());
+        assert!(
+            validate_shortcut_binding(&combo("ModifierChord", &["cmd-left", "super-left"]))
+                .is_err()
+        );
     }
 
     #[test]

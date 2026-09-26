@@ -1,0 +1,929 @@
+/* LC is a neutral charcoal workspace; no QA or application theme selectors change. */
+.lc-desktop {
+  color-scheme: dark;
+  --lc-bg: #212121;
+  --lc-rail: #171717;
+  --lc-paper: #2b2b2b;
+  --lc-wash: #303030;
+  --lc-ink: #ececec;
+  --lc-muted: #a3a3a3;
+  --lc-line: #343434;
+  --lc-strong: #454545;
+  --lc-accent: #d4d4d4;
+  --lc-red: #ef9a91;
+  --lc-warm: #d5ba86;
+  --background: var(--lc-bg);
+  --foreground: var(--lc-ink);
+  --muted: var(--lc-wash);
+  --muted-foreground: var(--lc-muted);
+  --border: var(--lc-line);
+  --color-background: var(--lc-bg);
+  --color-foreground: var(--lc-ink);
+  --color-muted: var(--lc-wash);
+  --color-muted-foreground: var(--lc-muted);
+  --color-border: var(--lc-line);
+  display: grid;
+  grid-template-columns: 196px minmax(0, 1fr);
+  grid-template-rows: 52px minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+  isolation: isolate;
+  border: 1px solid #3a3a3a;
+  border-radius: 14px;
+  background: var(--lc-bg);
+  color: var(--lc-ink);
+  font: 13px/1.55 var(--ol-font-sans, system-ui, -apple-system, sans-serif);
+  animation: lc-window-in 200ms ease-out both;
+}
+.lc-desktop,
+.lc-desktop * {
+  box-sizing: border-box;
+}
+.lc-desktop :where(h1, h2, p, ol, ul, pre) {
+  margin: 0;
+}
+.lc-desktop :where(button, textarea) {
+  font: inherit;
+  color: inherit;
+}
+.lc-desktop button:disabled {
+  cursor: default;
+}
+.lc-desktop :where(button, summary):focus-visible {
+  outline: 2px solid var(--lc-accent);
+  outline-offset: 3px;
+}
+.lc-desktop svg {
+  display: block;
+  flex-shrink: 0;
+}
+.lc-desktop.is-closing {
+  animation: lc-window-out 180ms ease both;
+  pointer-events: none;
+}
+.lc-topbar {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+  padding: 0 18px;
+  background: #1b1b1b;
+  border-bottom: 1px solid #2b2b2b;
+}
+.lc-window-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.lc-window-controls button {
+  display: grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  color: rgb(0 0 0 / 65%);
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 12%);
+}
+.lc-window-controls svg {
+  width: 8px;
+  height: 8px;
+  stroke-width: 2.5;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.lc-window-controls:hover button:not(:disabled) svg,
+.lc-window-controls button:focus-visible svg {
+  opacity: 1;
+}
+.lc-window-close {
+  background: #ff5f57;
+}
+.lc-window-minimize {
+  background: #febc2e;
+}
+.lc-window-maximize {
+  background: #28c840;
+}
+.lc-window-controls button:disabled {
+  filter: saturate(0.4);
+  opacity: 0.55;
+}
+.lc-session-title {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  padding-right: 55px;
+  color: #a8a8a8;
+  font-size: 12px;
+  min-width: 0;
+}
+.lc-session-dot {
+  display: none;
+}
+.lc-sidebar {
+  grid-row: 2;
+  grid-column: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--lc-rail);
+}
+.lc-sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 25px 10px 20px;
+  scrollbar-width: thin;
+}
+.lc-section-label {
+  display: block;
+  color: #858585;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.lc-sidebar .lc-section-label {
+  padding: 0 12px 12px;
+}
+.lc-agent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.lc-agent {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 12px;
+  border-radius: 8px;
+}
+.lc-agent.is-configured {
+  background: #292929;
+}
+.lc-agent-name {
+  min-width: 0;
+}
+.lc-agent-name strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+}
+.lc-agent-name > span {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  color: #929292;
+}
+.lc-agent:not(.is-configured) .lc-agent-name > span {
+  display: none;
+}
+.lc-agent-actions {
+  display: flex;
+  gap: 4px;
+}
+.lc-agent-actions button {
+  display: grid;
+  place-items: center;
+  width: 19px;
+  height: 23px;
+  color: #8a8a8a;
+  opacity: 0.45;
+}
+.lc-agent-actions svg {
+  width: 12px;
+  height: 12px;
+}
+.lc-sidebar-note {
+  padding: 12px 12px 0;
+  color: #858585;
+  font-size: 10px;
+  line-height: 1.75;
+}
+.lc-sidebar .lc-task-label {
+  padding-top: 30px;
+}
+.lc-placeholder {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 12px;
+  color: #8d8d8d;
+  text-align: left;
+}
+.lc-placeholder > svg {
+  width: 14px;
+  height: 14px;
+}
+.lc-placeholder > svg:last-child {
+  width: 12px;
+  margin-left: auto;
+  opacity: 0.4;
+}
+.lc-placeholder span {
+  font-size: 12px;
+}
+.lc-placeholder small {
+  display: block;
+  font-size: 10px;
+  color: #707070;
+}
+.lc-github {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 21px;
+  min-height: 65px;
+  text-align: left;
+}
+.lc-github > svg {
+  width: 18px;
+  height: 18px;
+}
+.lc-github > svg:last-child {
+  margin-left: auto;
+  width: 12px;
+  height: 12px;
+  color: #8f8f8f;
+}
+.lc-github strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+}
+.lc-github small {
+  display: block;
+  font-size: 10px;
+  color: #929292;
+}
+.lc-github:not(:disabled):hover {
+  background: #242424;
+}
+.lc-conversation {
+  grid-row: 2;
+  grid-column: 2;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.lc-conversation-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  justify-content: space-between;
+  padding: 23px 32px 13px;
+}
+.lc-conversation-heading h1 {
+  font-size: 17px;
+  font-weight: 550;
+  letter-spacing: -0.3px;
+}
+.lc-run-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--lc-muted);
+  font-size: 11px;
+}
+.lc-run-status > span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.lc-run-status.is-error {
+  color: var(--lc-red);
+}
+.lc-message-area {
+  flex: 1;
+  min-height: 0;
+}
+.lc-empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 35px 30px 80px;
+  text-align: center;
+}
+.lc-empty h2 {
+  font-size: 27px;
+  line-height: 1.4;
+  font-weight: 500;
+  letter-spacing: -0.6px;
+}
+.lc-empty p {
+  color: var(--lc-muted);
+  max-width: 340px;
+  margin-top: 14px;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.lc-empty-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 24px;
+  color: #858585;
+  font-size: 11px;
+}
+.lc-empty-label svg {
+  width: 13px;
+  height: 13px;
+}
+.lc-messages {
+  width: 100%;
+  max-width: 850px;
+  margin: 0 auto;
+  padding: 23px 32px 36px;
+  gap: 29px;
+}
+.lc-user-message {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+.lc-user-message > span {
+  color: #898989;
+  font-size: 10px;
+}
+.lc-user-message > p {
+  max-width: 88%;
+  padding: 12px 17px;
+  border-radius: 18px;
+  background: var(--lc-wash);
+  font-size: 14px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.lc-user-message p,
+.lc-answer,
+.lc-approval pre,
+.lc-run-error,
+.lc-process-tools {
+  user-select: text;
+  -webkit-user-select: text;
+}
+.lc-assistant-message {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  min-width: 0;
+}
+.lc-assistant-label {
+  color: #a3a3a3;
+  font-size: 11px;
+  font-weight: 500;
+}
+.lc-answer .olchat-answer {
+  font-size: 14px;
+  line-height: 1.85;
+}
+.lc-thinking,
+.lc-compaction {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--lc-muted);
+  font-size: 12px;
+}
+.lc-compaction svg {
+  width: 13px;
+  height: 13px;
+}
+.lc-compaction {
+  padding: 3px 0;
+}
+.lc-active-dot {
+  width: 4px;
+  height: 4px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--lc-accent);
+  animation: lc-breathe 1.4s ease-in-out infinite;
+}
+.lc-turn-footnote {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #929292;
+  font-size: 11px;
+}
+.lc-turn-footnote svg {
+  width: 12px;
+  height: 12px;
+}
+.lc-turn-footnote > span {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.lc-jump {
+  background: #333;
+  color: var(--lc-ink);
+  border: 1px solid #4b4b4b;
+  box-shadow: 0 2px 9px rgb(0 0 0 / 18%);
+}
+/* Tools are a disclosure, not a second conversation or a row of cards. */
+.lc-tool-process {
+  color: var(--lc-muted);
+  min-width: 0;
+}
+.lc-tool-process > summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 5px 0;
+  border-radius: 4px;
+  list-style: none;
+  cursor: pointer;
+  font-size: 13px;
+}
+.lc-tool-process > summary::-webkit-details-marker {
+  display: none;
+}
+.lc-process-chevron {
+  width: 13px;
+  height: 13px;
+  color: #8b8b8b;
+  transition: transform 150ms ease;
+}
+.lc-tool-process[open] > summary .lc-process-chevron {
+  transform: rotate(90deg);
+}
+.lc-tool-process > summary:hover .lc-process-label {
+  color: var(--lc-ink);
+}
+.lc-process-count {
+  color: #777;
+  font-size: 11px;
+}
+.lc-process-result {
+  color: #858585;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.lc-process-steps {
+  list-style: none;
+  padding: 12px 0 2px 8px;
+}
+.lc-process-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  position: relative;
+  padding: 0 0 16px;
+}
+.lc-process-step:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 20px;
+  bottom: 3px;
+  width: 1px;
+  background: #414141;
+}
+.lc-process-marker {
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 20px;
+  flex-shrink: 0;
+  color: #8f8f8f;
+}
+.lc-process-marker > svg {
+  width: 12px;
+  height: 12px;
+}
+.lc-process-marker > span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #ddd;
+}
+.lc-process-step-content {
+  min-width: 0;
+  flex: 1;
+}
+.lc-process-phase-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 20px;
+}
+.lc-process-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 10px;
+  padding: 3px 0 0;
+  list-style: none;
+}
+.lc-process-tools li {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  color: #858585;
+  font: 10px/1.65 var(--ol-font-mono, ui-monospace, monospace);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.lc-tool-count {
+  color: #656565;
+  white-space: nowrap;
+}
+.lc-tool-process:not([open]) > summary .lc-process-label.is-running,
+.lc-process-phase.is-running {
+  background: linear-gradient(100deg, #949494 25%, #f5f5f5 45%, #949494 65%);
+  background-size: 240% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: lc-text-sweep 2.1s linear infinite;
+}
+.lc-approval {
+  border: 1px solid var(--lc-strong);
+  border-radius: 12px;
+  background: #282828;
+  padding: 16px;
+}
+.lc-approval-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 11px;
+  font-size: 13px;
+}
+.lc-approval-title svg {
+  width: 16px;
+  height: 16px;
+  color: var(--lc-warm);
+}
+.lc-approval pre {
+  font: 12px/1.7 var(--ol-font-mono, monospace);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: #202020;
+  padding: 10px 12px;
+  border-radius: 7px;
+}
+.lc-approval p {
+  margin-top: 10px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.lc-approval-warning {
+  color: var(--lc-muted);
+}
+.lc-approval-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+.lc-approval-actions button {
+  padding: 7px 15px;
+  border: 1px solid #505050;
+  border-radius: 7px;
+  font-size: 12px;
+}
+.lc-approval-actions .lc-primary-button {
+  background: #e7e7e7;
+  color: #202020;
+  border-color: #e7e7e7;
+}
+.lc-approval-actions button:disabled {
+  opacity: 0.4;
+}
+.lc-approval-result {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--lc-muted);
+}
+.lc-approval-result svg {
+  width: 12px;
+  height: 12px;
+}
+.lc-notice,
+.lc-run-error {
+  color: var(--lc-red);
+  font-size: 12px;
+}
+.lc-notice {
+  padding: 10px 32px 0;
+}
+.lc-composer-wrap {
+  width: 100%;
+  max-width: 850px;
+  align-self: center;
+  padding: 15px 28px 13px;
+}
+.lc-composer {
+  padding: 15px 16px 12px;
+  background: #303030;
+  border: 1px solid #3c3c3c;
+  border-radius: 20px;
+  transition: border-color 150ms ease;
+}
+.lc-composer:focus-within {
+  border-color: #626262;
+}
+.lc-input-stage {
+  display: grid;
+  min-height: 48px;
+}
+.lc-text-input,
+.lc-voice-stage {
+  grid-area: 1 / 1;
+  min-width: 0;
+  transition:
+    opacity 180ms ease,
+    transform 200ms ease;
+}
+.lc-text-input {
+  width: 100%;
+  resize: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 14px;
+  line-height: 1.65;
+  outline: none;
+  opacity: 1;
+  scrollbar-width: thin;
+}
+.lc-text-input::placeholder {
+  color: #a3a3a3;
+  opacity: 1;
+}
+.lc-text-input:disabled {
+  -webkit-text-fill-color: #969696;
+  opacity: 0.8;
+}
+.lc-voice-stage {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(4px);
+}
+.lc-composer.is-voice .lc-text-input {
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+}
+.lc-composer.is-voice .lc-voice-stage {
+  opacity: 1;
+  transform: translateY(0);
+}
+.lc-voice-stage time {
+  color: var(--lc-muted);
+  font: 11px var(--ol-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+.lc-composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 7px;
+}
+.lc-composer-footer > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #969696;
+}
+.lc-composer-footer > span > svg {
+  width: 12px;
+  height: 12px;
+}
+.lc-send {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #ececec;
+  color: #252525 !important;
+  transition: opacity 150ms ease;
+}
+.lc-send svg {
+  width: 17px;
+  height: 17px;
+}
+.lc-send:disabled {
+  opacity: 0.3;
+}
+.lc-composer-caption {
+  padding-top: 10px;
+  min-height: 25px;
+  color: #7f7f7f;
+  text-align: center;
+  font-size: 10px;
+  line-height: 1.4;
+}
+.lc-composer-caption [role='alert'] {
+  color: var(--lc-red);
+}
+.lc-desktop .voice-waveform {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  color: var(--lc-ink);
+}
+.lc-desktop .voice-waveform-bars {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.lc-desktop .voice-waveform-bars span {
+  width: 3px;
+  border-radius: 5px;
+  background: #cecece;
+  transition: height 90ms linear;
+}
+.lc-desktop .voice-waveform-label {
+  font-size: 12px;
+  color: var(--lc-muted);
+}
+.lc-desktop .voice-waveform.is-processing .voice-waveform-bars span {
+  animation: lc-breathe 1.2s ease-in-out var(--wave-delay) infinite;
+}
+/* GitHub's existing portal inherits this window's neutral surfaces. */
+body:has(.lc-desktop) .ol-dialog-overlay {
+  --ol-surface: #252525;
+  --ol-surface-2: #303030;
+  --ol-ink: #ececec;
+  --ol-ink-2: #d0d0d0;
+  --ol-ink-3: #a3a3a3;
+  --ol-line: #424242;
+  --ol-dialog-border: #424242;
+  --ol-dialog-backdrop: rgb(0 0 0 / 55%);
+}
+@keyframes lc-window-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes lc-window-out {
+  to {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@keyframes lc-breathe {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes lc-text-sweep {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+@media (max-width: 740px) {
+  .lc-desktop {
+    grid-template-columns: 172px minmax(0, 1fr);
+  }
+  .lc-agent {
+    padding-left: 10px;
+    padding-right: 8px;
+  }
+  .lc-agent-actions {
+    gap: 1px;
+  }
+  .lc-messages,
+  .lc-conversation-heading {
+    padding-left: 22px;
+    padding-right: 22px;
+  }
+  .lc-composer-wrap {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+}
+@media (max-width: 520px) {
+  .lc-desktop {
+    grid-template-columns: 128px minmax(0, 1fr);
+    border-radius: 12px;
+  }
+  .lc-agent {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .lc-agent-actions {
+    display: none;
+  }
+  .lc-agent-name strong {
+    font-size: 12px;
+  }
+  .lc-sidebar-scroll {
+    padding-left: 5px;
+    padding-right: 5px;
+  }
+  .lc-sidebar-note {
+    font-size: 9px;
+  }
+  .lc-github {
+    padding: 15px;
+    gap: 7px;
+  }
+  .lc-github > svg:last-child {
+    display: none;
+  }
+  .lc-conversation-heading {
+    padding: 20px 16px 10px;
+  }
+  .lc-conversation-heading h1 {
+    font-size: 15px;
+  }
+  .lc-run-status {
+    font-size: 10px;
+  }
+  .lc-empty {
+    padding: 25px 15px 50px;
+  }
+  .lc-empty h2 {
+    font-size: 22px;
+  }
+  .lc-messages {
+    padding: 20px 16px;
+  }
+  .lc-composer-wrap {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .lc-composer {
+    padding: 12px;
+  }
+  .lc-composer-footer > span {
+    font-size: 9px;
+  }
+  .lc-desktop .voice-waveform-bars {
+    gap: 2px;
+  }
+  .lc-desktop .voice-waveform {
+    gap: 6px;
+  }
+  .lc-desktop .voice-waveform-label {
+    font-size: 10px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lc-desktop,
+  .lc-desktop *,
+  .lc-desktop *::before,
+  .lc-desktop *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+  .lc-desktop.is-closing {
+    opacity: 0;
+  }
+  .lc-tool-process:not([open]) > summary .lc-process-label.is-running,
+  .lc-process-phase.is-running {
+    background: none;
+    color: var(--lc-muted);
+    -webkit-text-fill-color: currentColor;
+  }
+}
