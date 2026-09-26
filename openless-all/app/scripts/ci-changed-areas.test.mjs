@@ -5,7 +5,7 @@
 // made on a guess: this test drives the script against real git diffs and
 // asserts both directions - out-of-scope change sets skip, everything else runs.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -117,6 +117,65 @@ try {
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }
+
+// The wiring matters as much as the decision: a missing job output silently
+// turns "this change set cannot reach the Linux build" into a skipped job. These
+// checks read the workflow that consumes the script and fail when an area is not
+// published, when a gate is not fail-open, or when prose-only runs could skip
+// the Linux package chain without the reusable workflow's explicit opt-out.
+const workflow = readFileSync(
+  resolve(dirname(fileURLToPath(import.meta.url)), '../../..', '.github/workflows/ci.yml'),
+  'utf8',
+);
+const reusable = readFileSync(
+  resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    '../../..',
+    '.github/workflows/check-linux-egui.yml',
+  ),
+  'utf8',
+);
+const areas = ['tauri', 'msrv', 'linux'];
+check(
+  'workflow publishes every area',
+  areas.every((area) => workflow.includes(area + ': ${{ steps.detect.outputs.' + area + ' }}')),
+  true,
+);
+check(
+  'workflow computes every area in the detect step',
+  /for area in tauri msrv linux; do/.test(workflow),
+  true,
+);
+check(
+  'tauri gate is fail-open',
+  workflow.includes("if: needs.changes.outputs.tauri != 'false'"),
+  true,
+);
+check(
+  'msrv gate is fail-open',
+  workflow.includes("if: needs.changes.outputs.msrv != 'false'"),
+  true,
+);
+check(
+  'android gate is fail-open',
+  /inputs\.platform != 'macos'\) && needs\.changes\.outputs\.tauri != 'false'/.test(workflow),
+  true,
+);
+check(
+  'linux scope defaults to full',
+  workflow.includes("needs.changes.outputs.linux == 'false' && 'none' || 'full'"),
+  true,
+);
+check(
+  'reusable workflow defaults to a full build',
+  /scope:[\s\S]{0,80}default: full/.test(reusable),
+  true,
+);
+check(
+  'reusable workflow gates every build step',
+  (reusable.match(/if: inputs\.scope != 'none'/g) ?? []).length >= 10,
+  true,
+);
 
 if (failures > 0) {
   console.error(`ci-changed-areas contract test failed (${failures})`);

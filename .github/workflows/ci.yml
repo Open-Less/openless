@@ -50,12 +50,15 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          echo "tauri=$(bash scripts/ci-changed-areas.sh tauri "$BASE_SHA")" >> "$GITHUB_OUTPUT"
-          echo "msrv=$(bash scripts/ci-changed-areas.sh msrv "$BASE_SHA")" >> "$GITHUB_OUTPUT"
+          for area in tauri msrv linux; do
+            verdict=$(bash scripts/ci-changed-areas.sh "$area" "$BASE_SHA")
+            # 失败即运行：脚本读不到差异时返回 true，这里也只接受明确的 false。
+            echo "$area=$( [ "$verdict" = 'false' ] && echo false || echo true )" >> "$GITHUB_OUTPUT"
+          done
 
   android-check:
     needs: [changes]
-    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.tauri == 'true'
+    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.tauri != 'false'
     name: Android cargo check
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -217,12 +220,13 @@ jobs:
       contents: read
     uses: ./.github/workflows/check-linux-egui.yml
     with:
-      # Prose-only change sets skip the whole Linux build and package chain.
-      scope: ${{ needs.changes.outputs.linux == 'true' && 'full' || 'none' }}
+      # 散文改动跳过整条 Linux 构建与打包链；输出缺失/未知时退回 full。
+      scope: ${{ needs.changes.outputs.linux == 'false' && 'none' || 'full' }}
 
   cross-platform:
     needs: [changes]
-    if: needs.changes.outputs.tauri == 'true'
+    # 失败即运行：只有判定脚本明确说“够不到”才跳过。
+    if: needs.changes.outputs.tauri != 'false'
     name: ${{ matrix.label }} checks
     strategy:
       # 一个平台挂掉不阻塞其他平台拿到验证结果。
@@ -398,7 +402,8 @@ jobs:
 
   macos-msrv:
     needs: [changes]
-    if: needs.changes.outputs.msrv == 'true'
+    # 失败即运行：只有判定脚本明确说“够不到”才跳过。
+    if: needs.changes.outputs.msrv != 'false'
     name: macOS Rust 1.88 MSRV
     runs-on: macos-latest
     timeout-minutes: 60
