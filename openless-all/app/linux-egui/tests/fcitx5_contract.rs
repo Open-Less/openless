@@ -12,8 +12,11 @@ use openless_linux_egui::{
 #[ignore = "requires a running fcitx5 DBus service"]
 fn fcitx5_dbus_methods_and_listener_have_stable_platform_semantics() {
     assert!(fcitx5_available(), "fcitx5 service should answer DBus Ping");
-    set_fcitx5_hotkeys(vec!["Shift_L".to_string()]).expect("set fcitx5 hotkey");
-    set_fcitx5_less_computer_hotkey_raw(65, 0).expect("set Less Computer hotkey");
+    // 这个契约测试只验证 DBus 方法可用：**必须清空**而不是注册真实按键。
+    // 曾经这里注册 Shift_L + 'A'，在开发机上跑 --ignored 会真的让插件吞掉
+    // Shift/字母输入（用户踩过这个坑），所以现在只发清零请求。
+    set_fcitx5_hotkeys(Vec::new()).expect("clear the legacy fcitx5 hotkey list");
+    set_fcitx5_less_computer_hotkey_raw(0, 0).expect("clear the Less Computer hotkey");
 
     let listener = Fcitx5HotkeyListener::start().expect("start fcitx5 hotkey listener");
     assert!(listener.take_error().is_none());
@@ -70,7 +73,7 @@ fn fcitx5_dbus_methods_and_listener_have_stable_platform_semantics() {
     ));
     assert!(matches!(
         events[6],
-        openless_linux_egui::LinuxHotkeyEvent::TranslationPressed
+        openless_linux_egui::LinuxHotkeyEvent::TranslationPressed { .. }
     ));
     drop(listener);
 

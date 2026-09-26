@@ -200,35 +200,23 @@ impl SideAwareComboMonitor {
         tx: Sender<HotkeyEvent>,
         combo_tx: Sender<HotkeyCombinedEdge>,
     ) -> Result<Self, crate::combo_hotkey::ComboHotkeyError> {
-        // Linux has no side-aware platform dispatch (no CGEventTap / WH_KEYBOARD_LL
-        // equivalent wired here). Accepting the binding would leave the user with a
-        // "successfully configured" combo that silently never fires. Reject up front
-        // so the caller can surface an actionable error instead.
-        #[cfg(target_os = "linux")]
-        {
-            let _ = (&binding, &tx, &combo_tx);
-            return Err(crate::combo_hotkey::ComboHotkeyError::UnsupportedModifier(
-                "侧向修饰键组合键在 Linux 暂不支持".into(),
-            ));
-        }
+        // Linux accepts the binding too: the egui host owns its own side-aware
+        // modifier layer, so the platform dispatch this file wraps is not the
+        // only source of those edges. Rejecting here would hide a working
+        // configuration behind a bogus error.
+        validate_side_binding(&binding)?;
 
-        #[cfg(not(target_os = "linux"))]
-        {
-            validate_side_binding(&binding)?;
-
-            let slot = ACTIVE_MONITOR.get_or_init(|| RwLock::new(None));
-            let mut guard = slot.write().expect("side combo monitor lock poisoned");
-            *guard = Some(ActiveSideCombo {
-                tx,
-                combo_tx,
-                state: Mutex::new(SideAwareComboState::new(binding)),
-            });
-            Ok(Self)
-        }
+        let slot = ACTIVE_MONITOR.get_or_init(|| RwLock::new(None));
+        let mut guard = slot.write().expect("side combo monitor lock poisoned");
+        *guard = Some(ActiveSideCombo {
+            tx,
+            combo_tx,
+            state: Mutex::new(SideAwareComboState::new(binding)),
+        });
+        Ok(Self)
     }
 }
 
-#[cfg(not(target_os = "linux"))]
 fn validate_side_binding(
     binding: &ShortcutBinding,
 ) -> Result<(), crate::combo_hotkey::ComboHotkeyError> {
@@ -340,7 +328,8 @@ pub fn handle_primary_key(primary: &str, pressed: bool) {
 }
 
 pub fn handle_companion_key_down() {
-    if let Some(edge) = with_active(|active| active.state.lock().on_companion_key_down()).flatten() {
+    if let Some(edge) = with_active(|active| active.state.lock().on_companion_key_down()).flatten()
+    {
         with_active(|active| send_combo_abort(&active.combo_tx, edge));
     }
 }
@@ -652,14 +641,8 @@ mod tests {
             handle_primary_key(primary, true);
             handle_primary_key(primary, false);
             handle_side_modifier(SideModifier::CtrlRight, false);
-            assert!(matches!(
-                rx.try_recv(),
-                Ok(HotkeyEvent::Pressed { .. })
-            ));
-            assert!(matches!(
-                rx.try_recv(),
-                Ok(HotkeyEvent::Released { .. })
-            ));
+            assert!(matches!(rx.try_recv(), Ok(HotkeyEvent::Pressed { .. })));
+            assert!(matches!(rx.try_recv(), Ok(HotkeyEvent::Released { .. })));
             assert!(rx.try_recv().is_err());
         };
         press_and_release("D");

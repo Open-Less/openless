@@ -55,7 +55,7 @@ pub(crate) struct TauriNativeAsrDependencies {
     foundry_generation: Arc<AtomicU64>,
     #[cfg(target_os = "windows")]
     sherpa_generation: Arc<AtomicU64>,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     qwen_cache: Arc<crate::asr::local::LocalAsrCache>,
     #[cfg(target_os = "macos")]
     whisper_cache: Arc<crate::asr::local::LocalWhisperCache>,
@@ -80,14 +80,14 @@ impl TauriNativeAsrDependencies {
         Self {
             foundry: Arc::new(crate::asr::local::FoundryLocalRuntime::new()),
             sherpa: Arc::new(crate::asr::local::SherpaOnnxRuntime::new()),
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(target_os = "macos")]
             qwen_cache: Arc::new(crate::asr::local::LocalAsrCache::new()),
             #[cfg(target_os = "macos")]
             whisper_cache: Arc::new(crate::asr::local::LocalWhisperCache::new()),
         }
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     pub(crate) fn qwen_cache(&self) -> Arc<crate::asr::local::LocalAsrCache> {
         Arc::clone(&self.qwen_cache)
     }
@@ -134,13 +134,13 @@ pub(crate) fn backend_dependencies(
             .register(*provider_type, Arc::clone(&production_asr))
             .expect("built-in ASR provider ids are non-empty");
     }
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     let native_asr: Arc<dyn TranscriptionEngine> = Arc::new(TauriNativeTranscriptionEngine::new(
         native_asr_dependencies,
         model_store.clone(),
         Arc::clone(&backend),
     ));
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     let _ = native_asr_dependencies;
     #[cfg(target_os = "windows")]
     for provider_type in [
@@ -154,7 +154,7 @@ pub(crate) fn backend_dependencies(
             .register(provider_type, Arc::clone(&native_asr))
             .expect("native ASR provider ids are non-empty");
     }
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     for provider_type in [
         crate::asr::local::PROVIDER_ID,
         crate::asr::local::LOCAL_QWEN3_MLX_PROVIDER_ID,
@@ -313,7 +313,7 @@ impl openless_core::ModelRuntimeAdapter for TauriLocalAsrRuntimeAdapter {
     fn engine_available(&self, runtime: openless_core::LocalAsrRuntime) -> bool {
         match runtime {
             openless_core::LocalAsrRuntime::Generic => {
-                cfg!(any(target_os = "macos", target_os = "linux"))
+                cfg!(target_os = "macos")
             }
             openless_core::LocalAsrRuntime::Foundry
             | openless_core::LocalAsrRuntime::SherpaOnnx => cfg!(target_os = "windows"),
@@ -327,12 +327,7 @@ impl openless_core::ModelRuntimeAdapter for TauriLocalAsrRuntimeAdapter {
                 {
                     true
                 }
-                #[cfg(target_os = "linux")]
-                {
-                    openless_core::LocalAsrModelId::from_wire_id(target.model_id())
-                        .is_some_and(openless_core::LocalAsrModelId::is_qwen)
-                }
-                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                #[cfg(not(target_os = "macos"))]
                 {
                     false
                 }
@@ -443,7 +438,7 @@ impl openless_core::ModelRuntimeAdapter for TauriLocalAsrRuntimeAdapter {
     ) -> BoxFuture<'static, Result<openless_core::LocalAsrRuntimeStatus, BackendError>> {
         let foundry = Arc::clone(&self.native.foundry);
         let sherpa = Arc::clone(&self.native.sherpa);
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(target_os = "macos")]
         let qwen_cache = Arc::clone(&self.native.qwen_cache);
         #[cfg(target_os = "macos")]
         let whisper_cache = Arc::clone(&self.native.whisper_cache);
@@ -459,9 +454,7 @@ impl openless_core::ModelRuntimeAdapter for TauriLocalAsrRuntimeAdapter {
                         } else {
                             qwen_cache.loaded_model_id()
                         };
-                    #[cfg(target_os = "linux")]
-                    let loaded = qwen_cache.loaded_model_id();
-                    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                    #[cfg(not(target_os = "macos"))]
                     let loaded: Option<String> = None;
                     Ok(openless_core::LocalAsrRuntimeStatus {
                         runtime: settings.runtime,
@@ -641,7 +634,7 @@ impl openless_core::ModelRuntimeAdapter for TauriLocalAsrRuntimeAdapter {
                 // 此时才能拿到本次激活的 MLX/C provider，不能偷读尚未提交的旧偏好。
                 openless_core::LocalAsrRuntime::Generic => {
                     let model = native_local_asr_model(&target)?;
-                    if cfg!(target_os = "macos") || (cfg!(target_os = "linux") && model.is_qwen()) {
+                    if cfg!(target_os = "macos") {
                         Ok(target.model_id().to_string())
                     } else {
                         Err(BackendError::new(
@@ -685,14 +678,14 @@ impl openless_core::ModelRuntimeAdapter for TauriLocalAsrRuntimeAdapter {
         self.invalidate_scheduled_release(runtime);
         let foundry = Arc::clone(&self.native.foundry);
         let sherpa = Arc::clone(&self.native.sherpa);
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(target_os = "macos")]
         let qwen_cache = Arc::clone(&self.native.qwen_cache);
         #[cfg(target_os = "macos")]
         let whisper_cache = Arc::clone(&self.native.whisper_cache);
         Box::pin(async move {
             match runtime {
                 openless_core::LocalAsrRuntime::Generic => {
-                    #[cfg(any(target_os = "macos", target_os = "linux"))]
+                    #[cfg(target_os = "macos")]
                     qwen_cache.release_now();
                     #[cfg(target_os = "macos")]
                     whisper_cache.release_now();
@@ -716,7 +709,7 @@ impl openless_core::ModelRuntimeAdapter for TauriLocalAsrRuntimeAdapter {
         if lease.target.runtime != openless_core::LocalAsrRuntime::Generic {
             return;
         }
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(target_os = "macos")]
         if native_local_asr_model(&lease.target).is_ok_and(|model| model.is_qwen()) {
             self.native
                 .qwen_cache
@@ -739,7 +732,7 @@ impl openless_core::ModelRuntimeAdapter for TauriLocalAsrRuntimeAdapter {
         }
         // Generic 在 macOS 下有两个独立 cache。由 cache 同锁校验模型及激活代次，
         // 不能整体 release(Generic)，也不能先查询 ID 再清空以免释放新模型。
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(target_os = "macos")]
         if native_local_asr_model(&lease.target).is_ok_and(|model| model.is_qwen()) {
             self.native
                 .qwen_cache
@@ -856,7 +849,7 @@ impl TauriLocalAsrRuntimeAdapter {
         let foundry = Arc::clone(&self.native.foundry);
         #[cfg(target_os = "windows")]
         let sherpa = Arc::clone(&self.native.sherpa);
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(target_os = "macos")]
         let qwen_cache = Arc::clone(&self.native.qwen_cache);
         #[cfg(target_os = "macos")]
         let whisper_cache = Arc::clone(&self.native.whisper_cache);
@@ -893,7 +886,7 @@ impl TauriLocalAsrRuntimeAdapter {
                     ));
                 }
             }
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(target_os = "macos")]
             {
                 let provider = provider_type.as_str();
                 let model = native_local_asr_model(&target)?;
@@ -945,7 +938,7 @@ impl TauriLocalAsrRuntimeAdapter {
                     return Ok(());
                 }
             }
-            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+            #[cfg(not(target_os = "macos"))]
             let _ = model_dir;
             Err(BackendError::new(
                 BackendErrorCode::Unsupported,
@@ -1056,18 +1049,6 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
         replacement_text: &str,
         reactivate: bool,
     ) -> Result<InsertOutcome, BackendError> {
-        #[cfg(target_os = "macos")]
-        if reactivate {
-            let app = self.app.lock().clone().ok_or_else(|| {
-                BackendError::new(BackendErrorCode::InvalidState, "Tauri AppHandle is not bound yet")
-            })?;
-            if !crate::resign_selection_polish_preview_key_for_apply(&app) {
-                return Err(BackendError::new(
-                    BackendErrorCode::Platform,
-                    "selectionPolishTargetUnavailable",
-                ));
-            }
-        }
         if reactivate && !crate::selection::reactivate_selection_insertion_target(target) {
             return Err(BackendError::new(
                 BackendErrorCode::Platform,
@@ -1555,7 +1536,7 @@ impl openless_core::PlatformApi for TauriPlatformApi {
     }
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 struct TauriNativeTranscriptionEngine {
     dependencies: TauriNativeAsrDependencies,
     model_store: Option<Arc<openless_core::ModelStore>>,
@@ -1563,7 +1544,7 @@ struct TauriNativeTranscriptionEngine {
     backend: BackendSlot,
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 impl TauriNativeTranscriptionEngine {
     fn new(
         dependencies: TauriNativeAsrDependencies,
@@ -1579,7 +1560,7 @@ impl TauriNativeTranscriptionEngine {
     }
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 #[derive(Clone)]
 enum TauriNativeTranscriptionSessionKind {
     #[cfg(target_os = "windows")]
@@ -1592,7 +1573,7 @@ enum TauriNativeTranscriptionSessionKind {
         provider: Arc<crate::asr::local::SherpaOnnxAsr>,
         runtime: Arc<crate::asr::local::SherpaOnnxRuntime>,
     },
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     Qwen {
         engine: Arc<crate::asr::local::LocalQwenEngine>,
         cache: Arc<crate::asr::local::LocalAsrCache>,
@@ -1612,7 +1593,7 @@ enum TauriNativeTranscriptionSessionKind {
     AppleSpeech(Arc<crate::asr::local::AppleSpeechAsr>),
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 #[derive(Clone)]
 struct TauriNativeTranscriptionSession {
     kind: TauriNativeTranscriptionSessionKind,
@@ -1621,9 +1602,9 @@ struct TauriNativeTranscriptionSession {
     backend: BackendSlot,
     #[cfg(target_os = "windows")]
     session_id: SessionId,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     partials: Arc<dyn TextStreamSink>,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     next_offset: Arc<AtomicU64>,
     #[cfg(target_os = "windows")]
     generation: u64,
@@ -1633,7 +1614,7 @@ struct TauriNativeTranscriptionSession {
     released: Arc<AtomicBool>,
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 impl TranscriptionEngine for TauriNativeTranscriptionEngine {
     fn start(
         &self,
@@ -1661,7 +1642,7 @@ impl TranscriptionEngine for TauriNativeTranscriptionEngine {
         let backend = Arc::clone(&self.backend);
         #[cfg(target_os = "windows")]
         let sherpa = Arc::clone(&self.dependencies.sherpa);
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(target_os = "macos")]
         let qwen_cache = Arc::clone(&self.dependencies.qwen_cache);
         #[cfg(target_os = "macos")]
         let whisper_cache = Arc::clone(&self.dependencies.whisper_cache);
@@ -1775,7 +1756,7 @@ impl TranscriptionEngine for TauriNativeTranscriptionEngine {
                 ));
             };
 
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(target_os = "macos")]
             let (kind, label_model) = if crate::asr::local::is_local_qwen3(provider_type) {
                 let backend = crate::asr::local::qwen_backend_for_provider(provider_type)
                     .ok_or_else(|| {
@@ -1908,7 +1889,7 @@ impl TranscriptionEngine for TauriNativeTranscriptionEngine {
                         ));
                     }
                 }
-                #[cfg(target_os = "linux")]
+                #[cfg(not(target_os = "macos"))]
                 {
                     return Err(BackendError::new(
                         BackendErrorCode::Unsupported,
@@ -1930,9 +1911,9 @@ impl TranscriptionEngine for TauriNativeTranscriptionEngine {
                 backend,
                 #[cfg(target_os = "windows")]
                 session_id: _session_id,
-                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                #[cfg(target_os = "macos")]
                 partials,
-                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                #[cfg(target_os = "macos")]
                 next_offset: Arc::new(AtomicU64::new(0)),
                 #[cfg(target_os = "windows")]
                 generation,
@@ -1945,7 +1926,7 @@ impl TranscriptionEngine for TauriNativeTranscriptionEngine {
     }
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 impl CoreAudioConsumer for TauriNativeTranscriptionSession {
     fn consume_pcm_chunk(&self, pcm: &[u8]) {
         match &self.kind {
@@ -1957,7 +1938,7 @@ impl CoreAudioConsumer for TauriNativeTranscriptionSession {
             TauriNativeTranscriptionSessionKind::Sherpa { provider, .. } => {
                 LegacyAudioConsumer::consume_pcm_chunk(provider.as_ref(), pcm);
             }
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(target_os = "macos")]
             TauriNativeTranscriptionSessionKind::Qwen { pcm: buffer, .. } => {
                 buffer.lock().extend_from_slice(pcm);
             }
@@ -1973,7 +1954,7 @@ impl CoreAudioConsumer for TauriNativeTranscriptionSession {
     }
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 impl TranscriptionSession for TauriNativeTranscriptionSession {
     fn asr_call_label(&self) -> Option<openless_core::AsrCallLabel> {
         Some(self.asr_call_label.clone())
@@ -1985,9 +1966,9 @@ impl TranscriptionSession for TauriNativeTranscriptionSession {
 
         let session = self.clone();
         let kind = self.kind.clone();
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(target_os = "macos")]
         let partials = Arc::clone(&self.partials);
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(target_os = "macos")]
         let next_offset = Arc::clone(&self.next_offset);
         Box::pin(async move {
             #[cfg(target_os = "windows")]
@@ -2044,7 +2025,7 @@ impl TranscriptionSession for TauriNativeTranscriptionSession {
                         .map_err(map_native_asr_error)?;
                     output
                 }
-                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                #[cfg(target_os = "macos")]
                 TauriNativeTranscriptionSessionKind::Qwen {
                     engine,
                     cache: _,
@@ -2178,7 +2159,7 @@ fn foundry_transcription_notices(
     })
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 impl TauriNativeTranscriptionSession {
     fn cancel_native(&self) {
         match &self.kind {
@@ -2186,7 +2167,7 @@ impl TauriNativeTranscriptionSession {
             TauriNativeTranscriptionSessionKind::Foundry { provider, .. } => provider.cancel(),
             #[cfg(target_os = "windows")]
             TauriNativeTranscriptionSessionKind::Sherpa { provider, .. } => provider.cancel(),
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(target_os = "macos")]
             TauriNativeTranscriptionSessionKind::Qwen {
                 engine,
                 pcm,
@@ -2238,7 +2219,7 @@ impl TauriNativeTranscriptionSession {
                     Arc::clone(&self.current_generation),
                 );
             }
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(target_os = "macos")]
             TauriNativeTranscriptionSessionKind::Qwen { engine, cache, .. } => {
                 cache.finish_use(engine, discard);
                 if !discard {
@@ -2267,7 +2248,7 @@ impl TauriNativeTranscriptionSession {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux", test))]
+#[cfg(any(target_os = "macos", test))]
 async fn await_native_transcription<T>(
     timeout: std::time::Duration,
     operation: impl std::future::Future<Output = Result<T, BackendError>>,
@@ -2285,7 +2266,7 @@ async fn await_native_transcription<T>(
         })?
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 fn pcm_i16_to_f32(bytes: &[u8]) -> Vec<f32> {
     bytes
         .chunks_exact(2)
@@ -2293,12 +2274,12 @@ fn pcm_i16_to_f32(bytes: &[u8]) -> Vec<f32> {
         .collect()
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 fn pcm_duration_ms(bytes: &[u8]) -> u64 {
     (bytes.len() as u64 / 2).saturating_mul(1_000) / 16_000
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux", test))]
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
 fn local_asr_release_delay(keep_loaded_secs: u32) -> Option<std::time::Duration> {
     (keep_loaded_secs != openless_core::LOCAL_ASR_KEEP_LOADED_FOREVER_SECS)
         .then(|| std::time::Duration::from_secs(keep_loaded_secs as u64))
@@ -2377,7 +2358,7 @@ fn schedule_sherpa_release(
     });
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 fn schedule_qwen_release(
     cache: Arc<crate::asr::local::LocalAsrCache>,
     engine: std::sync::Weak<crate::asr::local::LocalQwenEngine>,
@@ -2411,12 +2392,12 @@ fn schedule_whisper_release(
     });
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 fn cancelled_native_asr_error() -> BackendError {
     BackendError::new(BackendErrorCode::Cancelled, "native ASR request cancelled")
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn map_native_asr_error(error: impl std::fmt::Display) -> BackendError {
     BackendError::new(
         BackendErrorCode::Provider,
@@ -3129,7 +3110,7 @@ impl TauriTextInsertionSession {
         }
         #[cfg(not(target_os = "macos"))]
         self.restore_insertion_target()?;
-        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        #[cfg(target_os = "windows")]
         {
             let chunk = text.clone();
             #[cfg(target_os = "windows")]
@@ -3144,8 +3125,6 @@ impl TauriTextInsertionSession {
                     &chunk,
                     crate::unicode_keystroke::WindowsSendInputOptions { newline_mode },
                 );
-                #[cfg(target_os = "linux")]
-                let result = crate::unicode_keystroke::type_unicode_chunk(&chunk);
                 let written = match result {
                     Ok(written) => written,
                     Err(error) => error.typed_chars(),
@@ -3163,7 +3142,7 @@ impl TauriTextInsertionSession {
                 written_chars: written,
             })
         }
-        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {
             let _ = text;
             Err(BackendError::new(
@@ -3351,7 +3330,7 @@ impl TextInsertionSession for TauriTextInsertionSession {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            cfg!(any(target_os = "windows", target_os = "linux"))
+            cfg!(target_os = "windows")
         }
     }
 
@@ -4032,7 +4011,7 @@ mod tests {
         );
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn generic_activation_uses_the_requested_target_before_preferences_commit() {
         use openless_core::{LocalAsrRuntime, LocalAsrTarget, ModelRuntimeAdapter};

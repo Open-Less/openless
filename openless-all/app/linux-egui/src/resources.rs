@@ -4,7 +4,6 @@ use openless_core::{BackendError, BackendErrorCode, DirectoryResourceResolver, R
 
 pub const FCITX_PLUGIN_LIBRARY: &str = "linux-fcitx5-plugin/libopenless.so";
 pub const FCITX_PLUGIN_CONFIG: &str = "linux-fcitx5-plugin/openless.conf";
-pub(crate) const QWEN_ASR_RUNTIME: &str = "qwen-asr/qwen_asr";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinuxPackageKind {
@@ -89,29 +88,6 @@ impl ResourceResolver for LinuxResourceResolver {
     }
 }
 
-pub(crate) fn qwen_runtime_path(
-    layout: &LinuxResourceLayout,
-    explicit: Option<PathBuf>,
-) -> Result<PathBuf, BackendError> {
-    if let Some(path) = explicit {
-        if !path.is_absolute() {
-            return Err(BackendError::new(
-                BackendErrorCode::InvalidArgument,
-                "OPENLESS_QWEN_ASR_BIN must be an absolute path",
-            ));
-        }
-        return Ok(path);
-    }
-    layout.resolver()?.resolve(Path::new(QWEN_ASR_RUNTIME))
-}
-
-pub(crate) fn detect_qwen_runtime_path() -> Result<PathBuf, BackendError> {
-    qwen_runtime_path(
-        &LinuxResourceLayout::detect(None)?,
-        std::env::var_os("OPENLESS_QWEN_ASR_BIN").map(PathBuf::from),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,29 +117,5 @@ mod tests {
         assert!(system
             .resource_root
             .ends_with("bin/../lib/openless/resources"));
-    }
-
-    #[test]
-    fn qwen_runtime_uses_the_packaged_resource_or_an_absolute_dev_override() {
-        let layout = LinuxResourceLayout {
-            package_kind: LinuxPackageKind::SystemPackage,
-            resource_root: PathBuf::from("/usr/lib/openless/resources"),
-        };
-
-        assert_eq!(
-            qwen_runtime_path(&layout, None).unwrap(),
-            PathBuf::from("/usr/lib/openless/resources/qwen-asr/qwen_asr")
-        );
-        let override_path = std::env::temp_dir().join("qwen_asr");
-        assert_eq!(
-            qwen_runtime_path(&layout, Some(override_path.clone())).unwrap(),
-            override_path
-        );
-        assert_eq!(
-            qwen_runtime_path(&layout, Some(PathBuf::from("qwen_asr")))
-                .unwrap_err()
-                .code,
-            BackendErrorCode::InvalidArgument
-        );
     }
 }

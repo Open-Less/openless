@@ -17,7 +17,8 @@ use openless_linux_egui::{
 fn history_session(id: &str) -> DictationSession {
     DictationSession {
         id: id.to_string(),
-        created_at: "2026-08-27T00:00:00Z".to_string(),
+        // Keep this inside the 30-day retention window regardless of when CI runs.
+        created_at: chrono::Utc::now().to_rfc3339(),
         source: HistorySource::Voice,
         raw_transcript: "raw".to_string(),
         asr_transcript: None,
@@ -237,9 +238,12 @@ async fn forwarded_launch_intents_use_core_state_and_semantic_host_actions() {
     host.update_settings_strict(preferences, host.snapshot().preferences_revision)
         .unwrap();
     assert_eq!(
-        host.dispatch_hotkey_event(LinuxHotkeyEvent::TranslationPressed)
-            .await
-            .unwrap(),
+        host.dispatch_hotkey_event(LinuxHotkeyEvent::TranslationPressed {
+            symbol: 0,
+            states: 0,
+        })
+        .await
+        .unwrap(),
         None
     );
     assert!(matches!(
@@ -368,7 +372,10 @@ fn linux_public_settings_contract_is_validated_transactional_and_runtime_backed(
     conflicting.translation_hotkey = conflicting.dictation_hotkey.clone();
 
     let error = host
-        .update_settings_strict(conflicting, revision)
+        .update_preference_fields(&std::collections::BTreeMap::from([(
+            "/translationHotkey".into(),
+            serde_json::to_value(conflicting.translation_hotkey).unwrap(),
+        )]))
         .expect_err("Linux host must receive the shared shortcut conflict");
 
     assert_eq!(error.code, BackendErrorCode::InvalidArgument);
@@ -389,7 +396,16 @@ fn linux_public_settings_contract_is_validated_transactional_and_runtime_backed(
     };
     runtime_failure.launch_at_login = true;
     let error = host
-        .update_settings_strict(runtime_failure, revision)
+        .update_preference_fields(&std::collections::BTreeMap::from([
+            (
+                "/dictationHotkey".into(),
+                serde_json::to_value(runtime_failure.dictation_hotkey).unwrap(),
+            ),
+            (
+                "/launchAtLogin".into(),
+                serde_json::Value::Bool(runtime_failure.launch_at_login),
+            ),
+        ]))
         .expect_err("Linux runtime failure must fail the settings transaction");
     assert_eq!(error.code, BackendErrorCode::Platform);
     assert_eq!(backend.snapshot().preferences_revision, revision);

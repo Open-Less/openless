@@ -3,61 +3,6 @@ use std::path::{Path, PathBuf};
 
 pub const MAX_RECORDING_BYTES: u64 = 1024 * 1024 * 1024;
 
-/// One host-owned player. Ending playback or shutting down kills only this child.
-#[derive(Default)]
-pub struct RecordingPlayback {
-    child: std::sync::Mutex<Option<std::process::Child>>,
-}
-impl RecordingPlayback {
-    pub fn play(&self, data_dir: &Path, session_id: &str) -> Result<(), String> {
-        read_recording_wav(data_dir, session_id).map_err(|e| e.to_string())?;
-        let path = recording_path(data_dir, session_id).map_err(|e| e.to_string())?;
-        let mut child = self.child.lock().map_err(|e| e.to_string())?;
-        stop_child(&mut child);
-        *child = Some(
-            std::process::Command::new("paplay")
-                .args(["--client-name=OpenLess", "--stream-name=Recording"])
-                .arg(path)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .map_err(|e| format!("无法播放录音：{e}"))?,
-        );
-        Ok(())
-    }
-    pub fn stop(&self) {
-        if let Ok(mut child) = self.child.lock() {
-            stop_child(&mut child);
-        }
-    }
-    pub fn is_playing(&self) -> bool {
-        let Ok(mut slot) = self.child.try_lock() else {
-            return true;
-        };
-        match slot.as_mut().map(|child| child.try_wait()) {
-            Some(Ok(None)) => true,
-            _ => {
-                *slot = None;
-                false
-            }
-        }
-    }
-}
-fn stop_child(slot: &mut Option<std::process::Child>) {
-    if let Some(mut child) = slot.take() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-}
-impl Drop for RecordingPlayback {
-    fn drop(&mut self) {
-        if let Ok(slot) = self.child.get_mut() {
-            stop_child(slot);
-        }
-    }
-}
-
 #[derive(Debug)]
 pub enum RecordingError {
     InvalidSession,
@@ -109,17 +54,6 @@ pub fn read_recording_wav(data_dir: &Path, session_id: &str) -> Result<Vec<u8>, 
     let wav = std::fs::read(path).map_err(RecordingError::Io)?;
     recording_pcm(&wav)?;
     Ok(wav)
-}
-
-/// Remove only the canonical recording for this history ID. Removing a symlink
-/// unlinks the link itself and never follows it outside the recordings directory.
-pub fn remove_recording(data_dir: &Path, session_id: &str) -> Result<(), RecordingError> {
-    let path = recording_path(data_dir, session_id)?;
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(RecordingError::Io(error)),
-    }
 }
 
 pub fn recording_pcm(wav: &[u8]) -> Result<&[u8], RecordingError> {

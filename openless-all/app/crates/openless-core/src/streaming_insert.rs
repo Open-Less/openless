@@ -168,14 +168,10 @@ pub fn strip_echoed_scaffolding(text: &str) -> String {
     const MARKER: &str = "__OPENLESS_SCAFFOLD_BODY__";
     let raw = crate::prompts::user_prompt(MARKER);
     let selection = crate::prompts::selection_user_prompt(MARKER);
-    let raw_traditional = apply_chinese_script_preference(
-        &raw,
-        ChineseScriptPreference::Traditional,
-    );
-    let selection_traditional = apply_chinese_script_preference(
-        &selection,
-        ChineseScriptPreference::Traditional,
-    );
+    let raw_traditional =
+        apply_chinese_script_preference(&raw, ChineseScriptPreference::Traditional);
+    let selection_traditional =
+        apply_chinese_script_preference(&selection, ChineseScriptPreference::Traditional);
 
     let stripped = [raw.as_str(), raw_traditional.as_str()]
         .into_iter()
@@ -186,12 +182,7 @@ pub fn strip_echoed_scaffolding(text: &str) -> String {
             [selection.as_str(), selection_traditional.as_str()]
                 .into_iter()
                 .find_map(|template| {
-                    strip_complete_template(
-                        text,
-                        template,
-                        "<selected_text>",
-                        "</selected_text>",
-                    )
+                    strip_complete_template(text, template, "<selected_text>", "</selected_text>")
                 })
         })
         .unwrap_or_else(|| text.to_string());
@@ -220,7 +211,10 @@ pub fn streaming_insert_eligible(
 mod tests {
     #[test]
     fn strip_echoed_scaffolding_none_passes_through() {
-        assert_eq!(strip_echoed_scaffolding("純正文，沒有標籤。"), "純正文，沒有標籤。");
+        assert_eq!(
+            strip_echoed_scaffolding("純正文，沒有標籤。"),
+            "純正文，沒有標籤。"
+        );
     }
 
     #[test]

@@ -93,10 +93,10 @@ export function presetsFor(
   if (kind === 'llm') return descriptorPresets;
   const available = descriptorPresets;
   const visible = available.filter((p) => {
-    // 本地引擎严格按其实际支持的平台暴露；Linux / Android 不展示桌面专有实现。
+    // 本地引擎严格按其实际支持的平台暴露；Android 不展示桌面专有实现。
     if (p.id === 'local-qwen3-mlx') return os === 'mac' && supportsQwen3Mlx;
     if (p.id === 'local-whisper' || p.id === 'apple-speech') return os === 'mac';
-    if (p.id === 'local-qwen3-c') return os === 'mac' || os === 'linux';
+    if (p.id === 'local-qwen3-c') return os === 'mac';
     if (p.id === 'local-qwen3') return false;
     if (p.id === 'foundry-local-whisper' || p.id === 'sherpa-onnx-local') {
       return os === 'win';

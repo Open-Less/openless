@@ -586,11 +586,11 @@ fn local_asr_configured(
         }
     }
     if crate::asr::local::is_local_qwen3(provider) {
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(target_os = "macos")]
         {
             return Some(crate::asr::local::qwen_backend_for_provider(provider).is_some());
         }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(not(target_os = "macos"))]
         {
             return Some(false);
         }

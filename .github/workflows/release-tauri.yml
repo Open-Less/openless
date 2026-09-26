@@ -42,6 +42,9 @@ jobs:
       matrix:
         include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"},{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"}]' || '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"},{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"},{"platform":"windows-latest","rust-target":"x86_64-pc-windows-msvc","updater-target":"windows","updater-arch":"x86_64"}]') }}
     runs-on: ${{ matrix.platform }}
+    # A release build takes ~33 minutes from a cold cache; anything past this is
+    # a hang that would otherwise hold the runner and the release for hours.
+    timeout-minutes: 120
     env:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -562,6 +565,7 @@ jobs:
     name: Update Homebrew cask (stable only)
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write
     if: >-

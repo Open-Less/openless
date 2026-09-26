@@ -1,4 +1,3 @@
-#![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
 //! Tauri path adapter for the framework-independent style-pack store.
 
 use std::path::Path;

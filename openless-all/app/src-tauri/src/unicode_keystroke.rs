@@ -1,11 +1,10 @@
-#![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
 //! 跨平台 Unicode keystroke 合成（流式输入用）。
 //!
 //! 公开 API 三件套：
 //! - `type_unicode_chunk(text)` —— 阻塞地把一段文字逐 codepoint 当作键盘事件发出去，
 //!   不动剪贴板。各平台用各自的原语；返回确认成功发送的字符数。
 //! - `switch_to_ascii(app)` —— 仅 macOS 有效；切到 ABC 输入源以绕过 CJK / 日文 IME
-//!   对 Unicode 字符串事件的拦截。Windows / Linux 上是 no-op。
+//!   对 Unicode 字符串事件的拦截。Windows 上是 no-op。
 //! - `restore_input_source(app, prev)` —— 配对调用，恢复 macOS 上的原输入源。
 //!
 //! ## 平台差异
@@ -15,7 +14,6 @@
 //!   必须 `switch_to_ascii` 切到 ABC，session 结束再 `restore_input_source` 切回。
 //! - **Windows**：`SendInput(KEYEVENTF_UNICODE)` 直接发 UTF-16 scancode。TSF 不拦
 //!   Unicode 事件（与 keyboard layout / IME 解耦），所以不需要切输入法。
-//! - **Linux**：走 fcitx5 插件 commitString 直写（DBus）或剪贴板回落。
 //!
 //! ## 已知坑（macOS）
 //!
@@ -58,12 +56,6 @@ pub enum TypeError {
     #[cfg(target_os = "windows")]
     #[error("Windows SendInput failed: {0}")]
     SendInputFailed(String),
-    #[cfg(target_os = "linux")]
-    #[error("enigo init failed: {0}")]
-    EnigoInit(String),
-    #[cfg(target_os = "linux")]
-    #[error("enigo text input failed: {0}")]
-    EnigoText(String),
 }
 
 impl TypeError {
@@ -423,7 +415,7 @@ mod windows_impl {
     const SENDINPUT_CHUNK_CHARS: usize = 16;
     const SENDINPUT_CHUNK_DELAY: Duration = Duration::from_millis(12);
 
-    /// Windows / Linux 上没有 input source 概念，token 留空。Send/Sync 自动派生。
+    /// Windows 上没有 input source 概念，token 留空。Send/Sync 自动派生。
     pub struct PreviousInputSource;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -672,46 +664,6 @@ pub(crate) fn classify_sendinput_char(ch: char) -> SendInputCharKind {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Linux 实现（实验性）
-// ═══════════════════════════════════════════════════════════════════════════
-#[cfg(target_os = "linux")]
-mod linux_impl {
-    use super::{TisError, TypeError};
-    #[allow(unused_imports)]
-    use tauri::{AppHandle, Runtime};
-
-    pub struct PreviousInputSource;
-
-    /// 通过 fcitx5 插件一次性提交整段文字（支持中文、Wayland/X11 均可）。
-    /// 如果插件未加载返回 Err，调用方降级到剪贴板拷贝。
-    pub fn type_unicode_chunk(text: &str) -> Result<usize, TypeError> {
-        if text.is_empty() {
-            return Ok(0);
-        }
-        if crate::linux_fcitx::commit_text(text).is_ok() {
-            Ok(text.chars().count())
-        } else {
-            Err(TypeError::EnigoText(
-                "fcitx5 plugin unavailable, try clipboard fallback".into(),
-            ))
-        }
-    }
-
-    pub async fn switch_to_ascii<R: Runtime>(
-        _app: &AppHandle<R>,
-    ) -> Result<Option<PreviousInputSource>, TisError> {
-        Ok(None)
-    }
-
-    pub async fn restore_input_source<R: Runtime>(
-        _app: &AppHandle<R>,
-        _prev: Option<PreviousInputSource>,
-    ) -> Result<(), TisError> {
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::TypeError;
@@ -829,11 +781,6 @@ mod tests {
         TypeError::SendInputFailed("fail".into())
     }
 
-    #[cfg(target_os = "linux")]
-    fn platform_error() -> TypeError {
-        TypeError::EnigoText("fail".into())
-    }
-
     #[cfg(target_os = "windows")]
     #[test]
     fn expected_sendinput_typed_chars_includes_swallowed_carriage_return() {
@@ -898,10 +845,4 @@ pub use macos_impl::{
 pub use windows_impl::{
     restore_input_source, switch_to_ascii, type_unicode_chunk, type_unicode_chunk_with_options,
     PreviousInputSource, WindowsSendInputOptions,
-};
-
-#[cfg(target_os = "linux")]
-#[allow(unused_imports)]
-pub use linux_impl::{
-    restore_input_source, switch_to_ascii, type_unicode_chunk, PreviousInputSource,
 };

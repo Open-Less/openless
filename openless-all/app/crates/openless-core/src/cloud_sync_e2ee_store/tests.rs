@@ -317,6 +317,7 @@ impl Fixture {
             device,
             gate,
             extensions.clone(),
+            Arc::new(crate::TokioTaskSpawner),
         )
         .unwrap();
         store.bind_runtime_idle_probe(Arc::new(|| true)).unwrap();
@@ -359,6 +360,7 @@ impl Fixture {
             device,
             gate,
             extensions.clone(),
+            Arc::new(crate::TokioTaskSpawner),
         )
         .unwrap();
         store.bind_runtime_idle_probe(Arc::new(|| true)).unwrap();

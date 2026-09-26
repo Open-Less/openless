@@ -3,8 +3,9 @@ name: CI
 # 多平台跨语言质量门禁。release-tauri.yml 是发版流水线（仅打包构建），这里负责
 # 在合并前快速验证两件事：
 #   1. 全部前端/契约测试与 vite bundle 通过（捕获行为、合同及跨 locale 类型 drift）
-#   2. Tauri 后端在 macOS / Windows、移动端在 Android 编译；Linux 只测试共享 core。
-# 跑 build-mac.sh / windows-package-msvc.ps1 / Tauri bundle 太重；只跑轻量 cargo check + vite build。
+#   2. Tauri 后端在 macOS / Windows、移动端在 Android 编译；Linux Core、
+#      remote_tls、egui 和 deb/rpm 统一使用发版构建链检查（PR 不上传 Release）。
+# macOS/Windows/Android 不跑完整 Tauri bundle；Linux 则运行完整 deb/rpm 发版构建校验。
 
 on:
   push:
@@ -25,10 +26,42 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # 判定这次改动能不能影响到各平台门禁。只有“改动物理上够不到”的变更才会
+  # 跳过对应 job：判定脚本对任何未知情况（没有基线、git 失败、空 diff）都返回
+  # true。push / tag / 手动运行不带基线，因此始终全量验证。
+  changes:
+    name: Changed areas
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tauri: ${{ steps.detect.outputs.tauri }}
+      msrv: ${{ steps.detect.outputs.msrv }}
+      linux: ${{ steps.detect.outputs.linux }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 需要基线提交才能算出差异，客户端不再重复 fetch。
+          fetch-depth: 0
+
+      - name: Detect changed areas
+        id: detect
+        working-directory: openless-all/app
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          for area in tauri msrv linux; do
+            verdict=$(bash scripts/ci-changed-areas.sh "$area" "$BASE_SHA")
+            # 失败即运行：脚本读不到差异时返回 true，这里也只接受明确的 false。
+            echo "$area=$( [ "$verdict" = 'false' ] && echo false || echo true )" >> "$GITHUB_OUTPUT"
+          done
+
   android-check:
-    if: github.event_name != 'workflow_dispatch' || inputs.platform != 'macos'
+    needs: [changes]
+    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.tauri != 'false'
     name: Android cargo check
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: openless-all/app
@@ -92,6 +125,10 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: 'openless-all/app/src-tauri -> target'
+          # 仓库缓存上限 10 GB，超出后按 LRU 淘汰。过去每个 PR 都会各存一份
+          # ~1.6 GB 的依赖树，把其他 job 的缓存挤掉，导致每次运行都从零编译。
+          # 现在 PR 只从基线分支恢复，只有分支推送和 tag 才写入缓存。
+          save-if: ${{ github.event_name != 'pull_request' }}
 
       - uses: gradle/actions/setup-gradle@v4
 
@@ -172,31 +209,24 @@ jobs:
             -x :app:rustBuildX86_64Debug
             --no-daemon
 
-  linux-core-contract:
+  # The Linux core/egui/deb+rpm checks live in a reusable workflow, which runs
+  # the same `cargo test -p openless-core` as upstream's `linux-core-contract`
+  # plus the Linux host, fcitx5 and package contracts.
+  linux-egui-package:
+    needs: [changes]
     if: github.event_name != 'workflow_dispatch' || inputs.platform != 'macos'
-    name: Linux core tests
-    runs-on: ubuntu-22.04
-    defaults:
-      run:
-        working-directory: openless-all/app
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: false
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: 'openless-all/app -> target'
-
-      - name: Test Core
-        run: cargo test --locked -p openless-core
-
-      - name: Test remote input TLS identity and Unix key permissions
-        run: cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --test remote_tls
+    name: Linux Core, egui and deb/rpm checks
+    permissions:
+      contents: read
+    uses: ./.github/workflows/check-linux-egui.yml
+    with:
+      # 散文改动跳过整条 Linux 构建与打包链；输出缺失/未知时退回 full。
+      scope: ${{ needs.changes.outputs.linux == 'false' && 'none' || 'full' }}
 
   cross-platform:
+    needs: [changes]
+    # 失败即运行：只有判定脚本明确说“够不到”才跳过。
+    if: needs.changes.outputs.tauri != 'false'
     name: ${{ matrix.label }} checks
     strategy:
       # 一个平台挂掉不阻塞其他平台拿到验证结果。
@@ -204,6 +234,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '[{"os":"macos-latest","label":"macOS","preflight":false}]' || '[{"os":"macos-latest","label":"macOS","preflight":false},{"os":"windows-latest","label":"Windows","preflight":true}]') }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     env:
       # 新增 shared Core 后，macOS 首次编译同时构建 MLX C++ 依赖和完整
       # Tauri test binary；限制并发避免 arm64 runner 在峰值内存处被系统终止。
@@ -242,12 +273,14 @@ jobs:
         if: runner.os == 'Windows'
         with:
           workspaces: 'openless-all/app/src-tauri -> target'
+          save-if: ${{ github.event_name != 'pull_request' }}
 
       - name: Cache macOS stable dependencies
         if: runner.os == 'macOS'
         uses: swatinem/rust-cache@v2
         with:
           key: macos-stable-v1
+          save-if: ${{ github.event_name != 'pull_request' }}
           workspaces: |
             openless-all/app -> target
             openless-all/app/src-tauri -> target
@@ -368,8 +401,12 @@ jobs:
           echo "[ok] 全部 5 处版本号一致：$PKG"
 
   macos-msrv:
+    needs: [changes]
+    # 失败即运行：只有判定脚本明确说“够不到”才跳过。
+    if: needs.changes.outputs.msrv != 'false'
     name: macOS Rust 1.88 MSRV
     runs-on: macos-latest
+    timeout-minutes: 60
     env:
       CARGO_BUILD_JOBS: 2
       CARGO_PROFILE_DEV_DEBUG: 0
@@ -391,6 +428,7 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           key: macos-msrv-v1
+          save-if: ${{ github.event_name != 'pull_request' }}
           workspaces: |
             openless-all/app/src-tauri -> target
             openless-all/app/src-tauri/backend-tests -> target

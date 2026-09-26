@@ -594,3 +594,50 @@
     opacity: 0;
   }
 }
+
+/* ── 「润色结果」模式（复用本面板，独立预览窗已下线）────────────────── */
+.qa-polish-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  padding: 18px 20px 20px;
+  overflow: auto;
+}
+
+.qa-polish-text {
+  flex: 1;
+  min-height: 150px;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--qa-line);
+  border-radius: 9px;
+  background: var(--qa-wash);
+  color: var(--qa-ink);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.qa-polish-text:focus-visible {
+  outline: 2px solid var(--qa-green);
+  outline-offset: 1px;
+}
+
+.qa-polish-source {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  margin: 0;
+  color: var(--qa-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.qa-answer-header .qa-close {
+  margin-left: 4px;
+}

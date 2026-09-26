@@ -1,10 +1,10 @@
 [package]
 name = "openless-linux-egui"
-version = "2.0.0-Beta.2+build.20260924"
+version = "0.1.0"
 license = "AGPL-3.0-only"
 description = "Linux host seam for the OpenLess egui frontend"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.95"
 publish = false
 
 [dependencies]
@@ -15,7 +15,6 @@ futures-util = "0.3"
 log = "0.4"
 simplelog = "0.12"
 base64 = "0.22"
-minisign-verify = "0.2.5"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 semver = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
@@ -23,18 +22,34 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 
+[features]
+default = ["x11-overlay"]
+# Native X11 overlay placement for X11 sessions. Wayland sessions use native
+# layer-shell when available and never route the capsule through XWayland.
+x11-overlay = ["dep:x11rb"]
+
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus = "0.9"
-x11rb = { version = "0.13.2", features = ["randr", "xinput"] }
 keyring = { version = "3.6.3", default-features = false, features = ["linux-native-sync-persistent", "crypto-rust"] }
-# PipeWire's PulseAudio protocol also supports the GNOME 42 / Ubuntu 22.04
-# baseline (native cpal PipeWire requires libpipewire >= 0.3.53).
-cpal = { version = "0.18.2", default-features = false, features = ["pulseaudio"] }
+cpal = { version = "0.18.2", default-features = false, features = ["pipewire", "pulseaudio"] }
 rfd = { version = "0.16", default-features = false, features = ["xdg-portal", "tokio"] }
-egui = "=0.33.3"
-eframe = { version = "=0.33.3", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
+egui = "=0.36.2"
+# wlr-layer-shell 胶囊窗口：KWin 6.7+/sway/Hyprland 等合成器直接给
+# 「贴底居中 + 不抢键盘焦点」的 overlay surface；不支持时回退到 X11 叠加层。
+wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+glutin = { version = "0.32", default-features = false, features = ["egl", "wayland"] }
+egui_glow = "0.36.2"
+glow = "0.17"
+raw-window-handle = "0.6"
+eframe = { version = "=0.36.2", default-features = false, features = ["accesskit", "default_fonts", "wgpu_no_default_features", "wayland", "x11"] }
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "vulkan", "wgsl"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+# Rasterize user-supplied SVG icons locally before sending PNG to Core.
+resvg = { version = "=0.45.1", default-features = false, features = ["text", "system-fonts"] }
+roxmltree = "0.20"
 libc = "0.2"
+x11rb = { version = "0.13.2", optional = true }
 axum = { version = "0.7", default-features = false, features = ["ws", "http1", "tokio"] }
 hyper-util = { version = "0.1", features = ["tokio", "server-auto", "server", "http1"] }
 local-ip-address = "0.6"

@@ -124,13 +124,6 @@ fn kill_process_group_with_id(
     child.start_kill().map_err(platform_error)
 }
 
-pub(crate) fn kill_process_group(
-    child: &mut tokio::process::Child,
-) -> Result<(), openless_core::BackendError> {
-    let id = child.id();
-    kill_process_group_with_id(child, id)
-}
-
 impl CodingAgentProcessAdapter for LinuxCodingAgentProcessAdapter {
     fn execute(
         &self,
@@ -335,29 +328,19 @@ mod tests {
         cancel_task.await.unwrap();
         let pids = std::fs::read_to_string(&ready).expect("child must actually start");
         let _ = std::fs::remove_file(&ready);
-        let mut running = Vec::new();
-        for pid in pids.split_whitespace() {
-            let alive = || {
-                std::fs::read_to_string(format!("/proc/{pid}/stat"))
-                    .ok()
-                    .and_then(|stat| {
-                        stat.rsplit_once(") ")
-                            .map(|(_, rest)| !rest.starts_with('Z'))
-                    })
-                    .unwrap_or(false)
-            };
-            // SIGKILL delivery to grandchildren can finish after wait() reaps
-            // the group leader. Wait for that kernel transition, boundedly.
-            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
-            while alive() && tokio::time::Instant::now() < deadline {
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-            if alive() {
-                running.push(pid.to_owned());
-                // Only fixture PIDs read from our private ready file are killed.
-                unsafe {
-                    libc::kill(pid.parse().unwrap(), libc::SIGKILL);
-                }
+        // SIGKILL is delivered immediately but the kernel retires the process
+        // (and its orphaned children) asynchronously, so give the group a
+        // bounded moment to disappear before calling the cancellation broken.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut running = alive_pids(&pids);
+        while !running.is_empty() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            running = alive_pids(&pids);
+        }
+        // Only fixture PIDs read from our private ready file are killed.
+        for pid in &running {
+            unsafe {
+                libc::kill(pid.parse().unwrap(), libc::SIGKILL);
             }
         }
         let result = result.expect("cancelled child must exit promptly").unwrap();
@@ -366,5 +349,21 @@ mod tests {
             running.is_empty(),
             "cancelled process group is still running: {running:?}"
         );
+    }
+
+    /// Fixture PIDs that are still alive (a zombie is already dead).
+    fn alive_pids(pids: &str) -> Vec<String> {
+        pids.split_whitespace()
+            .filter(|pid| {
+                std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                    .ok()
+                    .and_then(|stat| {
+                        stat.rsplit_once(") ")
+                            .map(|(_, rest)| !rest.starts_with('Z'))
+                    })
+                    .unwrap_or(false)
+            })
+            .map(str::to_owned)
+            .collect()
     }
 }

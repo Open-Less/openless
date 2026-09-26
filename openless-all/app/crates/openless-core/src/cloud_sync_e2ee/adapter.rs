@@ -16,6 +16,9 @@ use crate::cloud_sync_e2ee_store::{
 
 use super::{document_error, local::LocalStorage, service::SyncServiceData, SyncResult};
 
+// Composition boundary: keep the existing injected services explicit rather than
+// adding a second dependency bundle solely for this constructor.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build(
     config: super::EncryptedSyncConfig,
     data_dir: &Path,
@@ -24,6 +27,7 @@ pub(crate) fn build(
     marketplace: Arc<crate::marketplace::MarketplaceService>,
     github_client_id: String,
     events: crate::events::BackendEventPublisher,
+    tasks: Arc<dyn crate::TaskSpawner>,
 ) -> SyncResult<(super::EncryptedSyncService, Arc<CoreSyncStore>)> {
     let origin = url::Url::parse(&config.service_origin)
         .map_err(|_| super::error("unsupported_protocol"))?;
@@ -63,6 +67,7 @@ pub(crate) fn build(
             device,
             gate,
             Arc::new(local.clone()),
+            tasks,
         )
         .map_err(document_error)?,
     );

@@ -94,8 +94,8 @@ export function ShortcutsSection() {
 
   const readonlyRows: Array<[string, string]> = [
     [t('settings.shortcuts.cancel'), 'Esc'],
-    // 胶囊右侧「✓ 确认插入」目前只在 macOS 胶囊上有，Windows/Linux 胶囊没有这个按钮，
-    // 之前 os !== 'linux' 把它也展示给了 Windows，误导用户以为有个用不了的快捷键（issue #780）。
+    // 胶囊右侧「✓ 确认插入」只在 macOS 胶囊上有，Windows 胶囊没有这个按钮；
+    // 展示给 Windows 会误导用户（issue #780）。
     ...(os === 'mac'
       ? ([[t('settings.shortcuts.confirm'), t('settings.shortcuts.confirmHint')]] as Array<
           [string, string]

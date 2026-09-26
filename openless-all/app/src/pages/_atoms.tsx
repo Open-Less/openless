@@ -258,7 +258,7 @@ export function Btn({
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled && !muted ? 0.55 : 1,
         transition:
-          'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), box-shadow 0.18s var(--ol-motion-soft), transform 0.12s var(--ol-motion-quick)',
+          'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), box-shadow 0.18s var(--ol-motion-soft)',
         ...sizes[size],
         ...style,
       }}

@@ -25,8 +25,11 @@ import { VoiceWaveform } from '../components/chat/VoiceWaveform';
 import { AssistantMarkdown } from '../components/chat/markdown';
 import { useChatPanelLifecycle } from '../components/chat/lifecycle';
 import {
+  cancelSelectionPolishPreview,
   chatPanelFocusKeyboard,
+  confirmSelectionPolishPreview,
   confirmSelectionVoicePreview,
+  getSelectionPolishPreview,
   getSelectionVoicePreview,
   isTauri,
   qaSetEditInstructionMode,
@@ -64,6 +67,16 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
   const [editRevertAvailable, setEditRevertAvailable] = useState(false);
   const [editApplyBusy, setEditApplyBusy] = useState(false);
   const [editInstructionMode, setEditInstructionMode] = useState(false);
+  /**
+   * 「润色结果」模式：核心在「预览确认」输出模式下请求预览，内容画在**本面板**
+   * （原独立的 `selection-polish-preview` 窗口已下线）。结果只读，「确认并替换」
+   * 就是把它写回原选区的插入。
+   */
+  const [polishResult, setPolishResult] = useState<{ text: string; sourceText: string } | null>(
+    null,
+  );
+  const [polishError, setPolishError] = useState<string>('');
+  const [polishBusy, setPolishBusy] = useState(false);
   const [level, setLevel] = useState(0);
   const [submitted, setSubmitted] = useState(false);
   const [submitBusy, setSubmitBusy] = useState(false);
@@ -71,6 +84,26 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
   const [modeBusy, setModeBusy] = useState(false);
   const [layoutError, setLayoutError] = useState(false);
   const activeSessionIdRef = useRef<string | null>(null);
+  /** 供事件回调判断当前是否真的处于润色模式（长驻订阅闭包看不到最新 state）。 */
+  const polishActiveRef = useRef(false);
+  polishActiveRef.current = polishResult !== null;
+
+  /**
+   * 拉一次润色负载。面板懒创建时 `selection-polish-preview:shown` 可能早于订阅
+   * 到达，所以挂载时也拉一次；后端用 pending 标志保证平时（无润色请求）返回 null。
+   */
+  const loadPolishResult = async () => {
+    try {
+      const payload = await getSelectionPolishPreview();
+      if (!payload) return;
+      setPolishResult({ text: payload.text, sourceText: payload.sourceText });
+      setPolishError('');
+    } catch (error) {
+      console.error('[QaPanel] load polish preview failed', error);
+    }
+  };
+  const loadPolishResultRef = useRef(loadPolishResult);
+  loadPolishResultRef.current = loadPolishResult;
   const statusRef = useRef<Status>('idle');
   const panelEpoch = useRef(0);
   const nativeStateEpoch = useRef(0);
@@ -243,6 +276,27 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
           else void qaWindowDismiss().catch(() => undefined);
         });
         handles.push(dismissHandle);
+        // 「润色结果」模式的进入/退出复用本面板，与 egui 侧
+        // `HostAction::ShowSelectionPreview` 的落点一致。
+        handles.push(
+          await listen<unknown>('selection-polish-preview:shown', () => {
+            void loadPolishResultRef.current();
+          }),
+          await listen<unknown>('selection-polish-preview:hide', () => {
+            // 只有面板正处在润色模式时才收起它：提问对话中的面板不能被润色流程的
+            // 收尾动作一起关掉。
+            if (!polishActiveRef.current) return;
+            setPolishResult(null);
+            setPolishError('');
+            if (embeddedRef.current) onRequestCloseRef.current?.();
+            else void qaWindowDismiss();
+          }),
+        );
+        // 面板可能是本次才懒创建的（事件早于订阅）：挂载时补拉一次负载。嵌入主窗口
+        // 时不拉，主窗口的润色入口走页面内的选区助手。
+        if (!embeddedRef.current) {
+          void loadPolishResultRef.current();
+        }
         if (cancelled) {
           dismissHandle();
           return;
@@ -293,6 +347,8 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     setSelectionPreview('');
     setComposerText('');
     setEditInstructionMode(false);
+    setPolishResult(null);
+    setPolishError('');
     setEditApplyAvailable(false);
     setEditRevertAvailable(false);
     setLevel(0);
@@ -357,6 +413,19 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return;
       event.preventDefault();
+      // 润色结果模式下 Esc = 取消并关闭：只 hide 的话待处理标记会留在后端。
+      if (polishActiveRef.current) {
+        void cancelSelectionPolishPreview()
+          .catch((error) => {
+            console.error('[QaPanel] cancel selection polish failed', error);
+          })
+          .finally(() => {
+            setPolishResult(null);
+            void qaWindowDismiss();
+            onRequestCloseRef.current?.();
+          });
+        return;
+      }
       void onClose();
     };
     window.addEventListener('keydown', onKey, true);
@@ -528,6 +597,44 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     }
   };
 
+  // ── 润色结果模式：取消 / 确认并替换 ──────────────────────────────
+  const closePolishResult = () => {
+    setPolishResult(null);
+    setPolishError('');
+    if (embeddedRef.current) onRequestCloseRef.current?.();
+    else void qaWindowDismiss();
+  };
+
+  const onPolishCancel = () => {
+    if (polishBusy) return;
+    setPolishBusy(true);
+    void cancelSelectionPolishPreview()
+      .catch((error) => {
+        console.error('[QaPanel] cancel selection polish failed', error);
+      })
+      .finally(() => {
+        setPolishBusy(false);
+        closePolishResult();
+      });
+  };
+
+  /** 「确认并替换」= 把结果写回原选区的插入（Core `selection.confirm`）。 */
+  const onPolishConfirm = () => {
+    const text = polishResult?.text ?? '';
+    if (polishBusy || !text.trim()) return;
+    setPolishBusy(true);
+    setPolishError('');
+    void confirmSelectionPolishPreview(text)
+      .then(() => {
+        setPolishBusy(false);
+        closePolishResult();
+      })
+      .catch((error) => {
+        setPolishBusy(false);
+        setPolishError(error instanceof Error ? error.message : String(error));
+      });
+  };
+
   const lastRole = messages[messages.length - 1]?.role;
   const questionLanded = lastRole === 'user' || streamingAnswer.length > 0;
   const thinkingRow = status === 'thinking' && !streamingAnswer && lastRole === 'user';
@@ -542,6 +649,77 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     micBusy ||
     modeBusy ||
     editApplyBusy;
+
+  // ── 「润色结果」模式：整块面板换成只读结果 + 确认并替换 ─────────────
+  if (polishResult) {
+    return (
+      <div
+        className={`qa-capsule-shell is-expanded${embedded ? ' is-embedded' : ''}${closing ? ' is-closing' : ''}`}
+        key={enterEpoch}
+      >
+        <section className="qa-answer-panel" aria-label={t('selectionPolishPreview.title')}>
+          <header className="qa-answer-header" data-tauri-drag-region={embedded ? undefined : true}>
+            <span className="qa-symbol" aria-hidden="true">
+              ✳
+            </span>
+            <h1 data-tauri-drag-region={embedded ? undefined : true}>
+              {t('selectionPolishPreview.title')}
+            </h1>
+            <span>{t('selectionPolishPreview.subtitle')}</span>
+            <button
+              type="button"
+              className="qa-close"
+              disabled={polishBusy}
+              onClick={onPolishCancel}
+              title={t('selectionPolishPreview.cancel')}
+              aria-label={t('selectionPolishPreview.cancel')}
+            >
+              <XIcon />
+            </button>
+          </header>
+          {polishError && (
+            <p className="qa-error" role="alert">
+              {t('selectionPolishPreview.applyError')}
+              {polishError}
+            </p>
+          )}
+          <div className="qa-answer-scroll">
+            <div className="qa-polish-result">
+              {/* 结果只读（不做就地编辑）——与 egui 侧润色结果模式一致。 */}
+              <div
+                role="textbox"
+                aria-readonly="true"
+                aria-label={t('selectionPolishPreview.resultLabel')}
+                tabIndex={0}
+                className="qa-polish-text"
+              >
+                {polishResult.text}
+              </div>
+              {polishResult.sourceText && (
+                <p className="qa-polish-source">
+                  {t('selectionPolishPreview.sourcePrefix')}
+                  {polishResult.sourceText}
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="qa-edit-actions">
+            <button type="button" disabled={polishBusy} onClick={onPolishCancel}>
+              {t('selectionPolishPreview.cancel')}
+            </button>
+            <button
+              type="button"
+              disabled={polishBusy || !polishResult.text.trim()}
+              onClick={onPolishConfirm}
+            >
+              <CheckIcon />
+              {t('selectionPolishPreview.confirmReplace')}
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div

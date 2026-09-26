@@ -9,6 +9,7 @@ $linuxManifest = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-egui/C
 $coreManifest = Get-Content -Raw -LiteralPath (Join-Path $appRoot "crates/openless-core/Cargo.toml")
 $coreApi = Get-Content -Raw -LiteralPath (Join-Path $appRoot "crates/openless-core/src/api.rs")
 $mainSource = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-egui/src/main.rs")
+$mainSource += (Get-ChildItem -LiteralPath (Join-Path $appRoot "linux-egui/src/linux_app") -Filter "*.rs" | Sort-Object Name | ForEach-Object { Get-Content -Raw -LiteralPath $_.FullName }) -join "`n"
 $backendSource = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-egui/src/backend.rs")
 $qaSource = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-egui/src/qa.rs")
 $selectionSource = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-egui/src/selection.rs")
@@ -58,7 +59,7 @@ if ($backendSource -match 'qa_runtime:\s*None' -or
 $installer = $mainSource.IndexOf('ensure_fcitx5_ready(&config)')
 $listener = $mainSource.IndexOf('Fcitx5HotkeyListener::start')
 if ($installer -lt 0 -or $listener -lt 0 -or $installer -gt $listener) {
-    Write-Error "Linux AppImage fcitx5 installation must run before the hotkey listener"
+    Write-Error "Linux fcitx5 readiness must run before the hotkey listener"
     exit 1
 }
 

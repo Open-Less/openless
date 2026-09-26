@@ -20,7 +20,6 @@ const localProviders = [
 const expectedByPlatform: Record<OS, readonly string[]> = {
   mac: ['local-qwen3-mlx', 'local-qwen3-c', 'local-whisper', 'apple-speech'],
   win: ['foundry-local-whisper', 'sherpa-onnx-local'],
-  linux: ['local-qwen3-c'],
   android: [],
 };
 
@@ -84,7 +83,7 @@ if (!legacyQwenEditIds.has('local-qwen3')) {
 }
 
 const legacyBailianEditIds = new Set(
-  asrPresets('linux', true, 'bailian-qwen3-realtime').map((preset) => preset.id),
+  asrPresets('mac', true, 'bailian-qwen3-realtime').map((preset) => preset.id),
 );
 if (!legacyBailianEditIds.has('bailian-qwen3-realtime')) {
   throw new Error('editing a legacy Bailian channel must keep its current option visible');
