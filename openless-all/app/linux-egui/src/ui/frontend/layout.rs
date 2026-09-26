@@ -206,6 +206,8 @@ pub fn titlebar(ctx: &egui::Context, actions: &mut Vec<FrontendAction>) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
             } else if wants_drag || (holding && !focused) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                // 这次手势的释放大概率回不来（见 `note_window_drag_handoff`）。
+                note_window_drag_handoff(ctx);
             }
             if drag.double_clicked() {
                 actions.push(FrontendAction::WindowMaximize);
@@ -796,6 +798,109 @@ fn group(
     if response.clicked() {
         actions.push(toggle);
     }
+}
+
+// ── 合成器拖动留下的指针状态 ────────────────────────────────────────────────
+
+/// 「指针已经交给合成器拖动」的时间戳（见 [`note_window_drag_handoff`]）。
+const WINDOW_DRAG_HANDOFF: &str = "openless-window-drag-handoff";
+
+/// 交给合成器后多久还没等到释放，就断定这次释放被合成器吃掉了。够长，不至于把
+/// 正常的「按住标题栏一下」误判成丢事件；够短，用户不会察觉到卡顿。
+const ORPHANED_PRESS_TIMEOUT: f64 = 0.4;
+
+/// 记录「这一帧把指针交给合成器拖动」。
+///
+/// 标题栏在**按下那一帧**就得请合成器接管（Wayland 的 `xdg_toplevel.move` 只认按下
+/// 那一刻的 serial），代价是这次手势的释放也归合成器，客户端往往**收不到释放**。
+/// egui 于是永远以为自己还按着，`dragged_id` 留在标题栏的拖拽区上，而 `ScrollArea`
+/// 正好用 `ctx.dragged_id().is_none()` 当作吃滚轮的前置条件——「拖过窗口后整页滚不动，
+/// 点一下页面（那一次点击的释放）才恢复」。
+pub fn note_window_drag_handoff(ctx: &egui::Context) {
+    let id = egui::Id::new(WINDOW_DRAG_HANDOFF);
+    let now = ctx.input(|input| input.time);
+    ctx.data_mut(|data| {
+        // 已经有一次等待中的交接就别把截止时间往后推（`holding && !focused` 那条
+        // 分支可能连续几帧请求拖动）。
+        if data.get_temp::<f64>(id).is_none() {
+            data.insert_temp(id, now);
+        }
+    });
+}
+
+/// `raw_input_hook` 里每帧修一次指针状态，修的正是合成器拖动留下的两件坏事：
+///
+/// 1. **被吃掉的释放**：见 [`note_window_drag_handoff`]。拖窗已经由合成器负责，egui
+///    不需要保留这次按压，补一个释放把 `any_down`/`dragged_id` 清干净。
+/// 2. **失效的坐标**：窗口在指针底下被移动/缩放时，客户端**不会**收到 motion，egui
+///    手里还是按下那一刻的坐标（通常正落在标题栏上）。滚轮本身证明指针就在窗口里，
+///    所以坐标不可信时把它放到窗口主体中心；真实的指针事件一来就会立刻覆盖。
+///    只修「指针压根不在主体里」这种情况：侧栏自己也有滚动区，猜错会把它的滚动抢走。
+pub fn route_pointer_before_pass(ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+    release_orphaned_press(ctx, raw_input);
+    point_stale_pointer_at_the_body(ctx, raw_input);
+}
+
+fn pointer_release_event(event: &egui::Event) -> bool {
+    matches!(event, egui::Event::PointerButton { pressed: false, .. })
+}
+
+fn release_orphaned_press(ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+    let id = egui::Id::new(WINDOW_DRAG_HANDOFF);
+    let Some(handed_off_at) = ctx.data(|data| data.get_temp::<f64>(id)) else {
+        return;
+    };
+    let (down, now) = ctx.input(|input| (input.pointer.any_down(), input.time));
+    if !down {
+        // 释放正常送到了，不用管。
+        ctx.data_mut(|data| data.remove::<f64>(id));
+        return;
+    }
+    if raw_input.events.iter().any(pointer_release_event) {
+        // 这一帧就有真实释放，别重复补。
+        ctx.data_mut(|data| data.remove::<f64>(id));
+        return;
+    }
+    if now - handed_off_at < ORPHANED_PRESS_TIMEOUT {
+        return;
+    }
+    let pos = ctx
+        .input(|input| input.pointer.interact_pos())
+        .unwrap_or_else(|| body_rect(ctx).center());
+    raw_input.events.push(egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    ctx.data_mut(|data| data.remove::<f64>(id));
+}
+
+fn point_stale_pointer_at_the_body(ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+    let wheel = raw_input
+        .events
+        .iter()
+        .any(|event| matches!(event, egui::Event::MouseWheel { .. }));
+    if !wheel {
+        return;
+    }
+    // 这一帧已经带着真实的指针事件，坐标就是准的，不要猜。
+    if raw_input.events.iter().any(|event| {
+        matches!(
+            event,
+            egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. }
+        )
+    }) {
+        return;
+    }
+    let body = body_rect(ctx);
+    let known = ctx.input(|input| input.pointer.interact_pos());
+    if known.is_some_and(|pos| body.contains(pos)) {
+        return;
+    }
+    raw_input
+        .events
+        .insert(0, egui::Event::PointerMoved(body.center()));
 }
 
 // ── Content panel ───────────────────────────────────────────────────────────

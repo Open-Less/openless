@@ -8287,6 +8287,13 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             egui::Color32::TRANSPARENT.to_normalized_gamma_f32()
         }
 
+        /// 合成器拖窗（标题栏按下即交给它）会吃掉释放事件、并且不在拖动期间发 motion，
+        /// egui 的按压/拖拽状态与指针坐标都会留在原地——页面因此滚不动，直到用户点一下。
+        /// `raw_input_hook` 是唯一能赶在这一次 pass 之前修补事件的地方。
+        fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+            frontend::layout::route_pointer_before_pass(ctx, raw_input);
+        }
+
         fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
             let ctx = ui.ctx().clone();
             self.drain_host(&ctx);

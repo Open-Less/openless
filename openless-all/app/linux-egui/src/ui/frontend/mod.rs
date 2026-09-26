@@ -1230,6 +1230,16 @@ mod tests {
             });
             if frame == 3 {
                 assert!(paints_backdrop, "the modal layer must sample the backdrop");
+                // macOS 一致：模糊之上还有一层 `--ol-overlay-bg` 压暗。
+                let paints_tint = ctx.graphics(|graphics| {
+                    graphics.get(layer).is_some_and(|list| {
+                        list.all_entries().any(|entry| match &entry.shape {
+                            egui::Shape::Rect(rect) => rect.fill == theme::OVERLAY,
+                            _ => false,
+                        })
+                    })
+                });
+                assert!(paints_tint, "the modal layer must tint above the blur");
             }
             // 卡片矩形依然要写进 memory：遮罩换了材质，弹窗几何不能跟着变。
             assert!(ctx
@@ -1375,6 +1385,192 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// 复现「滚不动，点一下页面才行」：窗口被合成器拖动/缩放后，egui 手里的指针
+    /// 坐标停在按下那一刻（Wayland 交互式移动/缩放期间客户端不再收到 motion），
+    /// 用户其实是在页面上滚轮，egui 却以为指针还在标题栏上 —— `ScrollArea` 的
+    /// `rect_contains_pointer` 判定失败，滚轮整帧被丢掉。
+    #[test]
+    fn a_stale_pointer_must_not_swallow_the_page_wheel() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            active_page: Page::Translation,
+            translation_unsupported: false,
+            ..Default::default()
+        };
+        for frame in 0..12 {
+            let mut events = Vec::new();
+            if frame < 2 {
+                events.push(egui::Event::PointerMoved(egui::pos2(550.0, 390.0)));
+            }
+            if frame == 2 {
+                // 按标题栏拖窗：app 在按下那一帧就把指针交给合成器（StartDrag）。
+                events.push(egui::Event::PointerMoved(egui::pos2(400.0, 18.0)));
+                events.push(egui::Event::PointerButton {
+                    pos: egui::pos2(400.0, 18.0),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            if frame >= 3 {
+                // 拖动结束后客户端再没收到指针事件，用户就地滚滚轮。
+                events.push(egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -180.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            frame_with_pointer_routing(
+                &ctx,
+                egui::RawInput {
+                    screen_rect: Some(viewport()),
+                    events,
+                    time: Some(frame as f64 / 10.0),
+                    ..Default::default()
+                },
+                &mut vm,
+            );
+        }
+        let (content, visible, offset): (f32, f32, f32) = ctx.data(|data| {
+            data.get_temp(egui::Id::new("main-scroll-measure"))
+                .expect("the translation page must have a scroll container")
+        });
+        assert!(
+            content > visible,
+            "the page must be scrollable: {content} / {visible}"
+        );
+        assert!(
+            offset > 10.0,
+            "a stale pointer swallowed the wheel: {content} / {visible}, offset={offset}"
+        );
+    }
+
+    /// 跑一帧，并且像 `eframe::App::raw_input_hook` 那样先修一次指针状态
+    /// （测试里没有 eframe，只能手动走同一条路径，否则修的东西测不到）。
+    fn frame_with_pointer_routing(
+        ctx: &egui::Context,
+        mut raw_input: egui::RawInput,
+        vm: &mut FrontendViewModel,
+    ) {
+        layout::route_pointer_before_pass(ctx, &mut raw_input);
+        ctx.begin_pass(raw_input);
+        render(ctx, vm, &mut Vec::new());
+        let _ = end_pass(ctx);
+    }
+
+    #[test]
+    fn pointer_routing_only_guesses_when_the_pointer_is_not_in_the_body() {
+        let ctx = egui::Context::default();
+        // 指针在主体里：滚轮照旧走 egui 自己的命中判定，不要猜。
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(viewport()),
+            events: vec![egui::Event::PointerMoved(egui::pos2(600.0, 400.0))],
+            ..Default::default()
+        });
+        let _ = end_pass(&ctx);
+        let mut raw = egui::RawInput {
+            screen_rect: Some(viewport()),
+            events: vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -120.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        layout::route_pointer_before_pass(&ctx, &mut raw);
+        assert!(
+            !raw.events
+                .iter()
+                .any(|event| matches!(event, egui::Event::PointerMoved(_))),
+            "a pointer inside the body must be left alone"
+        );
+
+        // 指针停在标题栏上（合成器拖窗之后的典型状态）：滚轮证明指针在窗口里，
+        // 补一个主体内的坐标，滚轮才有人接。
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(viewport()),
+            events: vec![egui::Event::PointerMoved(egui::pos2(400.0, 18.0))],
+            ..Default::default()
+        });
+        let _ = end_pass(&ctx);
+        let mut raw = egui::RawInput {
+            screen_rect: Some(viewport()),
+            events: vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -120.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        layout::route_pointer_before_pass(&ctx, &mut raw);
+        let guessed = raw.events.iter().find_map(|event| match event {
+            egui::Event::PointerMoved(pos) => Some(*pos),
+            _ => None,
+        });
+        let body = layout::body_rect(&ctx);
+        assert!(
+            guessed.is_some_and(|pos| body.contains(pos)),
+            "a stale pointer must be moved into the body: {guessed:?}"
+        );
+    }
+
+    #[test]
+    fn an_orphaned_press_is_released_once_the_window_manager_keeps_it() {
+        let ctx = egui::Context::default();
+        // 按下标题栏：app 会把这次手势交给合成器。
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(viewport()),
+            time: Some(1.0),
+            events: vec![
+                egui::Event::PointerMoved(egui::pos2(400.0, 18.0)),
+                egui::Event::PointerButton {
+                    pos: egui::pos2(400.0, 18.0),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            ..Default::default()
+        });
+        layout::note_window_drag_handoff(&ctx);
+        let _ = end_pass(&ctx);
+        assert!(ctx.input(|input| input.pointer.any_down()));
+
+        // 刚交出去就补释放会把「按住标题栏」也打断，所以先等一会儿。
+        let mut early = egui::RawInput {
+            screen_rect: Some(viewport()),
+            time: Some(1.1),
+            ..Default::default()
+        };
+        layout::route_pointer_before_pass(&ctx, &mut early);
+        assert!(!early
+            .events
+            .iter()
+            .any(|event| matches!(event, egui::Event::PointerButton { pressed: false, .. })));
+
+        // 合成器一直没把释放还回来：这次手势已经不属于 egui，补上释放。
+        // （`raw_input_hook` 读的是上一帧的 `input().time`，所以先把时钟推过去。）
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(viewport()),
+            time: Some(2.0),
+            ..Default::default()
+        });
+        let _ = end_pass(&ctx);
+        let mut late = egui::RawInput {
+            screen_rect: Some(viewport()),
+            time: Some(2.1),
+            ..Default::default()
+        };
+        layout::route_pointer_before_pass(&ctx, &mut late);
+        assert!(late
+            .events
+            .iter()
+            .any(|event| matches!(event, egui::Event::PointerButton { pressed: false, .. })));
     }
 
     #[test]

@@ -99,32 +99,29 @@ pub fn settings_overlay(
         .fixed_pos(body.min)
         .constrain(false)
         .show(ctx, |ui| {
-            // 磨砂背板：把遮罩下方的页面整块换成离屏模糊后的同一帧像素（macOS 版靠窗口级
-            // vibrancy，Linux 没有系统合成层，只能自己模糊）。遮罩不再压一层暗色，
-            // 也不再靠卡片阴影假装模糊。
-            // 没有背板时（拿不到 wgpu 渲染状态的回退路径）保留一层轻暗色，卡片仍可读。
-            match crate::ui::backdrop::published(ctx) {
-                Some(texture) => {
-                    ui.painter().with_clip_rect(body).image(
-                        texture,
-                        body,
-                        crate::ui::backdrop::uv_for(ctx, body),
-                        egui::Color32::WHITE,
-                    );
-                }
-                None => {
-                    ui.painter().rect_filled(
-                        body,
-                        egui::CornerRadius {
-                            nw: 0,
-                            ne: 0,
-                            sw: 14,
-                            se: 14,
-                        },
-                        theme::OVERLAY,
-                    );
-                }
+            // 磨砂遮罩：先铺一层离屏模糊后的同一帧页面（macOS 版靠窗口级 vibrancy，
+            // Linux 没有系统合成层，只能自己模糊），再压上和 macOS 同一层的
+            // `--ol-overlay-bg`（`rgba(15,17,22,0.32)`，即 `theme::OVERLAY`）：
+            // 只模糊不压暗的话，设置卡片和背板分不开。
+            // 拿不到背板时（无 wgpu 渲染状态的回退路径）只压暗色，卡片仍然可读。
+            if let Some(texture) = crate::ui::backdrop::published(ctx) {
+                ui.painter().with_clip_rect(body).image(
+                    texture,
+                    body,
+                    crate::ui::backdrop::uv_for(ctx, body),
+                    egui::Color32::WHITE,
+                );
             }
+            ui.painter().rect_filled(
+                body,
+                egui::CornerRadius {
+                    nw: 0,
+                    ne: 0,
+                    sw: 14,
+                    se: 14,
+                },
+                theme::OVERLAY,
+            );
             let _ = ui.allocate_rect(body, egui::Sense::click());
             // 卡片：同图层内后画 → 永远在遮罩之上。位置用**显式矩形**而不是 anchor：
             // anchor 按上一帧面积（含阴影偏移）定位，卡片会稳定偏下 19.5px，且窗口
@@ -136,11 +133,14 @@ pub fn settings_overlay(
                     .fill(theme::CONTENT_BG)
                     .stroke(egui::Stroke::new(0.5, theme::LINE))
                     .corner_radius(egui::CornerRadius::same(14))
+                    // 学 macOS 的 `--ol-shadow-xl`（`0 54px 65px -29px rgba(15,17,22,0.39)`）：
+                    // 大而柔的落影。CSS 的 `-29px` 收边不搬进来——epaint 的 `spread` 会加到
+                    // 圆角上，负值会把 14px 圆角压成直角，反而露出方形阴影边。
                     .shadow(egui::Shadow {
-                        offset: [0, 4],
-                        blur: 12,
+                        offset: [0, 36],
+                        blur: 56,
                         spread: 0,
-                        color: egui::Color32::from_black_alpha(32),
+                        color: egui::Color32::from_black_alpha(96),
                     })
                     .show(ui, |ui| {
                         ui.set_min_size(size);
