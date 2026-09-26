@@ -44,6 +44,10 @@ updater manifest; NSIS uses its supported numeric fallback for file metadata.
 See [the pinned NSIS bundler](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.10.1/crates/tauri-bundler/src/bundle/windows/nsis/mod.rs#L149).
 
 These tags build the macOS, Windows, and Android Tauri hosts and the independent Linux egui host in parallel. Linux is not part of the Tauri matrix: `.github/workflows/release-linux-egui.yml` builds only deb/rpm, attaches them to the same Release draft and publishes no in-app updater manifest or AppImage. Linux product acceptance must be completed **before** an admin pushes the shared tag. CI runs the same Linux packaging and verification path on PRs without attaching release assets.
+For each new Linux package candidate, increment `openless-all/app/linux-egui/package-revision`
+from the last `-N` suffix (for example `2.0.0-Beta.2-79` → `2.0.0-Beta.2-80`).
+Both local packaging and the shared CI/tag build use this explicit revision; never drop
+it or derive it from the Tauri tag, whose SemVer remains `2.0.0-Beta.2`.
 
 Under the [2026-09-06 2.0 requirements](docs/2.0-requirements.md), Windows and macOS must fully retain their respective Tauri 1.x features. The egui team owns Linux Host/UI work and Linux product acceptance. Although Linux application gaps did not previously block Windows/macOS delivery, this shared-tag workflow now attaches Linux packages automatically: do not cut a shared release tag until Linux is accepted as well. Existing Android builds do not expand this scope into a new full-support commitment.
 

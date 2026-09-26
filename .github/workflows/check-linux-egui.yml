@@ -58,9 +58,11 @@ jobs:
               exit 1
             fi
           fi
-          # Keep the existing package upgrade scheme. Build metadata stays in
-          # the app, while the package version matches the numeric Beta.N tag.
-          echo "version=${VERSION%%+*}" >> "$GITHUB_OUTPUT"
+          # Linux packages use the same explicitly incremented -N revision as
+          # earlier Beta.2-78/-79 builds. Keep it separate from the Tauri tag.
+          REVISION=$(< linux-egui/package-revision)
+          [[ "$REVISION" =~ ^[1-9][0-9]*$ ]]
+          echo "version=${VERSION%%+*}-$REVISION" >> "$GITHUB_OUTPUT"
 
       - uses: swatinem/rust-cache@v2
         with:

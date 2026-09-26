@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../../..', import.meta.url));
 const load = (path) => readFile(join(root, path), 'utf8');
-const [release, ci, check, pack, verify, gate, manifest, tauri] = await Promise.all([
+const [release, ci, check, pack, verify, gate, manifest, tauri, revisionFile] = await Promise.all([
   load('.github/workflows/release-linux-egui.yml'),
   load('.github/workflows/ci.yml'),
   load('.github/workflows/check-linux-egui.yml'),
@@ -15,6 +15,7 @@ const [release, ci, check, pack, verify, gate, manifest, tauri] = await Promise.
   load('openless-all/app/scripts/check-core-deps.ps1'),
   load('openless-all/app/linux-egui/Cargo.toml'),
   load('.github/workflows/release-tauri.yml'),
+  load('openless-all/app/linux-egui/package-revision'),
 ]);
 
 // CI must execute the exact test/build/package/checksum path used for tags.
@@ -54,6 +55,13 @@ assert.match(release, /draft:.*Beta\./);
 assert.match(release, /prerelease:.*Beta\./);
 assert.match(release, /tag_name: \$\{\{ github\.ref_name \}\}/);
 assert.match(check, /does not match package\.json version/);
+const revision = revisionFile.trim();
+assert.match(revision, /^[1-9][0-9]*$/, 'Linux package revision must be a positive integer');
+assert.ok(Number(revision) > 79, 'new Linux packages must upgrade the last -79 candidate');
+assert.match(check, /REVISION=\$\(< linux-egui\/package-revision\)/);
+assert.match(check, /version=\$\{VERSION%%\+\*\}-\$REVISION/);
+assert.match(pack, /linux-egui\/package-revision/);
+assert.match(pack, /if \[ "\$VERSION" != "\$EXPECTED_VERSION" \]/);
 assert.ok(!tauri.includes('build-linux-egui:'), 'Linux does not build Tauri');
 assert.ok(!release.includes('release_tag:'), 'the manual build cannot target a Release');
 

@@ -3,6 +3,16 @@ set -euo pipefail
 
 APP_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 VERSION=${OPENLESS_LINUX_VERSION:?OPENLESS_LINUX_VERSION is required}
+# Never silently publish an unnumbered or stale package that apt treats as a
+# downgrade. Each candidate explicitly advances linux-egui/package-revision.
+REVISION=$(< "$APP_ROOT/linux-egui/package-revision")
+[[ "$REVISION" =~ ^[1-9][0-9]*$ ]] || { echo 'invalid Linux package revision' >&2; exit 1; }
+APP_VERSION=$(node -p "require('$APP_ROOT/package.json').version")
+EXPECTED_VERSION="${APP_VERSION%%+*}-$REVISION"
+if [ "$VERSION" != "$EXPECTED_VERSION" ]; then
+  echo "Linux package version must be $EXPECTED_VERSION (got $VERSION)" >&2
+  exit 1
+fi
 ARCH=${OPENLESS_LINUX_ARCH:-x86_64}
 TARGET_DIR=${CARGO_TARGET_DIR:-"$APP_ROOT/target"}
 BINARY="$TARGET_DIR/release/openless-linux-egui"
