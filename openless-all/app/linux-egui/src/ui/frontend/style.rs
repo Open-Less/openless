@@ -642,6 +642,9 @@ fn notice(ui: &mut egui::Ui, width: f32, vm: &mut FrontendViewModel) {
 const DRAWER_WIDTH: f32 = 760.0;
 const DRAWER_INSET: f32 = 16.0;
 const FIELD_GAP: f32 = 12.0;
+// egui also inserts item spacing between stacked widgets. The vertical gap
+// below yields the same form rhythm as Tauri's 16px section gap.
+const SECTION_GAP: f32 = 20.0;
 
 fn editor_overlay(
     ctx: &egui::Context,
@@ -813,7 +816,7 @@ fn drawer_body(
                     ui.spacing_mut().item_spacing.x = FIELD_GAP;
                     ui.add_space(18.0);
                     pills_row(ui, content, vm, actions);
-                    ui.add_space(FIELD_GAP);
+                    ui.add_space(SECTION_GAP);
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
                             ui.set_width(field_width);
@@ -833,7 +836,7 @@ fn drawer_body(
                             );
                         });
                     });
-                    ui.add_space(FIELD_GAP);
+                    ui.add_space(SECTION_GAP);
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
                             ui.set_width(field_width);
@@ -853,13 +856,10 @@ fn drawer_body(
                             );
                         });
                     });
-                    ui.add_space(FIELD_GAP);
+                    ui.add_space(SECTION_GAP);
                     field_label(ui, tr_l10n(lang, "style.pack.fieldDescription"));
-                    ui.add_sized(
-                        [ui.available_width(), 86.0],
-                        editor_textarea(&mut vm.style_description),
-                    );
-                    ui.add_space(FIELD_GAP);
+                    editor_textarea(ui, &mut vm.style_description, 86.0, "description");
+                    ui.add_space(SECTION_GAP);
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
                             ui.set_width(field_width);
@@ -887,7 +887,7 @@ fn drawer_body(
                             );
                         });
                     });
-                    ui.add_space(FIELD_GAP + 4.0);
+                    ui.add_space(SECTION_GAP + 4.0);
 
                     // The two workflows read different prompt slots from one pack, so the
                     // drawer only edits the one the page is currently showing.
@@ -897,15 +897,17 @@ fn drawer_body(
                             tr_l10n(lang, "style.pack.selectionPromptTitle"),
                             Some(tr_l10n(lang, "style.pack.selectionPromptHint")),
                             &mut vm.style_selection_prompt,
-                            100.0,
+                            150.0,
+                            "selection-prompt",
                         );
-                        ui.add_space(FIELD_GAP);
+                        ui.add_space(SECTION_GAP);
                         prompt_field(
                             ui,
                             tr_l10n(lang, "style.pack.voiceEditPromptTitle"),
                             None,
                             &mut vm.style_voice_edit_prompt,
-                            100.0,
+                            150.0,
+                            "voice-edit-prompt",
                         );
                     } else {
                         prompt_field(
@@ -913,14 +915,15 @@ fn drawer_body(
                             tr_l10n(lang, "style.pack.dictation_prompt_title"),
                             Some(tr_l10n(lang, "style.pack.dictation_prompt_hint")),
                             &mut vm.style_prompt,
-                            140.0,
+                            210.0,
+                            "dictation-prompt",
                         );
                     }
 
                     // The runtime card belongs to the dictation workflow: it shows which
                     // directives Core actually assembles into the prompt right now.
                     if !vm.style_selection_workflow {
-                        ui.add_space(FIELD_GAP + 4.0);
+                        ui.add_space(SECTION_GAP + 4.0);
                         runtime_card(ui, vm);
                     }
 
@@ -931,7 +934,15 @@ fn drawer_body(
         });
     #[cfg(test)]
     ui.ctx().data_mut(|data| {
-        data.insert_temp(egui::Id::new("style-editor-scroll-rect"), scroll.inner_rect)
+        data.insert_temp(egui::Id::new("style-editor-scroll-rect"), scroll.inner_rect);
+        data.insert_temp(
+            egui::Id::new("style-editor-scroll-content-height"),
+            scroll.content_size.y,
+        );
+        data.insert_temp(
+            egui::Id::new("style-editor-scroll-offset"),
+            scroll.state.offset.y,
+        );
     });
     #[cfg(not(test))]
     let _ = scroll;
@@ -1066,16 +1077,51 @@ fn editor_input(text: &mut String) -> egui::TextEdit<'_> {
         )
 }
 
-fn editor_textarea(text: &mut String) -> egui::TextEdit<'_> {
-    egui::TextEdit::multiline(text)
-        .font(egui::FontId::proportional(12.5))
-        .margin(egui::Margin::symmetric(12, 11))
-        .frame(
-            egui::Frame::new()
-                .fill(theme::SURFACE)
-                .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
-                .corner_radius(egui::CornerRadius::same(12)),
-        )
+/// Multiline TextEdit grows with its content even when passed to `add_sized`:
+/// that size is a *minimum*, not a height cap. Keep the border fixed and let
+/// long text scroll inside it, independently of the drawer's own scroll area.
+fn editor_textarea(ui: &mut egui::Ui, text: &mut String, height: f32, id: &'static str) {
+    let width = ui.available_width();
+    let inner_height = height - 22.0; // 11px top and bottom, matching textareaStyle
+    egui::Frame::new()
+        .fill(theme::SURFACE)
+        .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
+        .corner_radius(egui::CornerRadius::same(12))
+        .inner_margin(egui::Margin::symmetric(12, 11))
+        .show(ui, |ui| {
+            ui.set_width((width - 24.0).max(1.0));
+            let scroll = egui::ScrollArea::vertical()
+                .id_salt(("style-editor-textarea", id))
+                .max_height(inner_height)
+                .min_scrolled_height(inner_height)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::TextEdit::multiline(text)
+                            .font(egui::FontId::proportional(12.5))
+                            .frame(egui::Frame::NONE)
+                            .margin(egui::Margin::ZERO)
+                            .desired_width(ui.available_width()),
+                    );
+                });
+            #[cfg(test)]
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(
+                    egui::Id::new(("style-editor-textarea-measure", id)),
+                    (
+                        scroll.content_size.y,
+                        scroll.inner_rect.height(),
+                        scroll.state.offset.y,
+                    ),
+                );
+                data.insert_temp(
+                    egui::Id::new(("style-editor-textarea-rect", id)),
+                    scroll.inner_rect,
+                )
+            });
+            #[cfg(not(test))]
+            let _ = scroll;
+        });
 }
 
 fn field_label(ui: &mut egui::Ui, text: &str) {
@@ -1085,7 +1131,7 @@ fn field_label(ui: &mut egui::Ui, text: &str) {
             .strong()
             .color(theme::INK),
     );
-    ui.add_space(4.0);
+    ui.add_space(8.0);
 }
 
 fn prompt_field(
@@ -1094,13 +1140,14 @@ fn prompt_field(
     hint: Option<&str>,
     value: &mut String,
     height: f32,
+    id: &'static str,
 ) {
     field_label(ui, title);
     if let Some(hint) = hint {
         ui.label(egui::RichText::new(hint).size(11.0).color(theme::INK_4));
         ui.add_space(4.0);
     }
-    ui.add_sized([ui.available_width(), height], editor_textarea(value));
+    editor_textarea(ui, value, height, id);
 }
 
 /// Dictation directives preview. Rendering only reads the DTO Core built, so the

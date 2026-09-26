@@ -2612,6 +2612,159 @@ mod tests {
         );
     }
 
+    #[test]
+    fn style_editor_long_text_scrolls_within_fixed_height_inputs() {
+        fn measure(selection: bool, long: bool) -> (f32, Vec<(f32, f32, f32)>) {
+            let ctx = egui::Context::default();
+            let paragraphs = (0..100)
+                .map(|i| format!("paragraph {i}: some long text to wrap across the field width\n"))
+                .collect::<String>();
+            let mut vm = FrontendViewModel {
+                active_page: Page::Style,
+                style_unsupported: false,
+                style_editor_open: true,
+                style_selection_workflow: selection,
+                style_description: if long {
+                    paragraphs.clone()
+                } else {
+                    String::new()
+                },
+                style_prompt: if long {
+                    paragraphs.clone()
+                } else {
+                    String::new()
+                },
+                style_selection_prompt: if long {
+                    paragraphs.clone()
+                } else {
+                    String::new()
+                },
+                style_voice_edit_prompt: if long { paragraphs } else { String::new() },
+                ..Default::default()
+            };
+            for _ in 0..2 {
+                ctx.begin_pass(egui::RawInput {
+                    screen_rect: Some(viewport()),
+                    ..Default::default()
+                });
+                render(&ctx, &mut vm, &mut Vec::new());
+                let _ = end_pass(&ctx);
+            }
+            let content = ctx.data(|data| {
+                data.get_temp::<f32>(egui::Id::new("style-editor-scroll-content-height"))
+                    .unwrap()
+            });
+            let fields = if selection {
+                ["description", "selection-prompt", "voice-edit-prompt"].to_vec()
+            } else {
+                ["description", "dictation-prompt"].to_vec()
+            };
+            let measures = fields
+                .iter()
+                .map(|id| {
+                    ctx.data(|data| {
+                        data.get_temp::<(f32, f32, f32)>(egui::Id::new((
+                            "style-editor-textarea-measure",
+                            id,
+                        )))
+                        .unwrap()
+                    })
+                })
+                .collect();
+            (content, measures)
+        }
+        for selection in [false, true] {
+            let (empty_height, empty) = measure(selection, false);
+            let (long_height, long) = measure(selection, true);
+            assert!(
+                (long_height - empty_height).abs() < 10.0,
+                "long text stretched the drawer: {empty_height} -> {long_height}"
+            );
+            let expected = if selection {
+                vec![64.0, 128.0, 128.0]
+            } else {
+                vec![64.0, 188.0]
+            };
+            for ((empty_field, long_field), expected_height) in
+                empty.iter().zip(&long).zip(expected)
+            {
+                assert!(
+                    (long_field.1 - expected_height).abs() < 2.0,
+                    "wrong fixed field viewport: {long_field:?}"
+                );
+                assert!((empty_field.1 - long_field.1).abs() < 1.0);
+                assert!(
+                    long_field.0 > long_field.1 + 100.0,
+                    "long text must remain scrollable inside input: {long_field:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn style_editor_wheel_over_long_prompt_scrolls_input_not_drawer() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            active_page: Page::Style,
+            style_unsupported: false,
+            style_editor_open: true,
+            style_prompt: "long prompt line\n".repeat(100),
+            ..Default::default()
+        };
+        for frame in 0..6 {
+            let rect: egui::Rect = ctx
+                .data(|data| {
+                    data.get_temp(egui::Id::new((
+                        "style-editor-textarea-rect",
+                        "dictation-prompt",
+                    )))
+                })
+                .unwrap_or(egui::Rect::from_min_size(
+                    egui::pos2(750.0, 650.0),
+                    egui::vec2(200.0, 100.0),
+                ));
+            let events = if frame >= 2 {
+                vec![
+                    egui::Event::PointerMoved(rect.center()),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, -100.0),
+                        phase: egui::TouchPhase::Move,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]
+            } else {
+                Vec::new()
+            };
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(viewport()),
+                events,
+                ..Default::default()
+            });
+            render(&ctx, &mut vm, &mut Vec::new());
+            let _ = end_pass(&ctx);
+        }
+        let (_, visible, offset): (f32, f32, f32) = ctx.data(|data| {
+            data.get_temp(egui::Id::new((
+                "style-editor-textarea-measure",
+                "dictation-prompt",
+            )))
+            .unwrap()
+        });
+        assert!(
+            offset > 20.0,
+            "wheel did not scroll the bounded prompt: visible={visible}, offset={offset}"
+        );
+        let outer: f32 = ctx.data(|data| {
+            data.get_temp(egui::Id::new("style-editor-scroll-offset"))
+                .unwrap()
+        });
+        assert!(
+            outer < 2.0,
+            "wheel over the prompt scrolled the drawer: {outer}"
+        );
+    }
+
     /// Editor parity: upstream renders a right-hand drawer whose body follows the
     /// workflow switch (dictation prompt vs. the two selection prompts) and whose
     /// destructive button is "reset built-in" or "delete imported" depending on
@@ -2680,18 +2833,35 @@ mod tests {
             style_selection_workflow: true,
             ..Default::default()
         };
-        for _ in 0..2 {
+        let mut selection_lines = Vec::new();
+        for frame in 0..6 {
+            let events = if frame >= 2 {
+                vec![
+                    egui::Event::PointerMoved(egui::pos2(1000.0, 550.0)),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, -220.0),
+                        phase: egui::TouchPhase::Move,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]
+            } else {
+                Vec::new()
+            };
             ctx.begin_pass(egui::RawInput {
                 screen_rect: Some(viewport()),
+                events,
                 ..Default::default()
             });
             let mut actions = Vec::new();
             render(&ctx, &mut selection, &mut actions);
-            lines = painted_text(&crate::ui::frontend::end_pass(&ctx))
-                .lines()
-                .map(|line| line.trim().to_string())
-                .collect();
+            selection_lines.extend(
+                painted_text(&crate::ui::frontend::end_pass(&ctx))
+                    .lines()
+                    .map(|line| line.trim().to_string()),
+            );
         }
+        lines = selection_lines;
         let has_selection = |key: &'static str| {
             let label = openless_linux_egui::tr_l10n(zh, key);
             assert!(
