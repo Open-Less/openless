@@ -8,6 +8,7 @@
 #   tauri   macOS / Windows desktop Tauri builds and the Android build that
 #           shares the same dependency graph.
 #   msrv    The Rust 1.88 minimum-supported-toolchain compile.
+#   linux   The Linux host build, its tests and the deb/rpm package chain.
 #
 # Prints "true" when the check must run and "false" only when every changed file
 # is provably out of scope for that area. Anything unknown - no base revision
@@ -25,7 +26,7 @@ run() {
 }
 
 case "$area" in
-  tauri | msrv) ;;
+  tauri | msrv | linux) ;;
   *)
     echo "unknown area: $area" >&2
     run
@@ -59,6 +60,13 @@ while IFS= read -r file; do
       case "$file" in
         *.rs | *Cargo.toml | *Cargo.lock | *rust-toolchain* | .github/*) run ;;
         *) ;;
+      esac
+      ;;
+    linux)
+      # Prose cannot change what the host builds, tests or packages.
+      case "$file" in
+        docs/* | *.md | LICENSE* | NOTICE*) ;;
+        *) run ;;
       esac
       ;;
   esac

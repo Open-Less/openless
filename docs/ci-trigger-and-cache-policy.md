@@ -21,10 +21,11 @@
 |---|---|---|
 | `tauri` | 仅 `linux-egui/**`（但**不含**它的 `Cargo.toml`，那会动全工作区 lock）、`scripts/linux-fcitx5-plugin/**`、`docs/**`、`*.md`、`LICENSE` | macOS / Windows 桌面检查、Android 检查 |
 | `msrv` | 全部改动里没有任何 `.rs`、`Cargo.toml`、`Cargo.lock`、`rust-toolchain*`、`.github/**` | macOS Rust 1.88 MSRV |
+| `linux` | 全部改动都是散文（`docs/**`、`*.md`、`LICENSE`、`NOTICE`） | Linux Core/egui 测试与 deb/rpm 打包链 |
 
 规则是**失败即运行**：没有基线提交（push / tag / 手动）、git 读取失败、diff 为空、区域名未知，一律返回 `true`。跳过只允许是“改动可达性可证明”的结果，不允许是“读不到差异”的兜底。判定逻辑有契约测试：`scripts/ci-changed-areas.test.mjs`（`npm test` 会跑）。
 
-`linux-egui-package`（Linux Core/egui/deb+rpm）**不参与门控**：它是 Linux 产品和打包链的唯一验证，任何改动都跑。
+`linux-egui-package` 通过可复用工作流的 `scope` 输入接收结果（`full` / `none`，**默认 `full`**）：纯散文改动跳过整个 Linux 构建与打包链，而 push / tag / 发版调用不传该输入，因此永远全量构建。
 
 ## 2. MSRV 为什么是独立 job
 

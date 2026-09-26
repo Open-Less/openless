@@ -36,6 +36,7 @@ jobs:
     outputs:
       tauri: ${{ steps.detect.outputs.tauri }}
       msrv: ${{ steps.detect.outputs.msrv }}
+      linux: ${{ steps.detect.outputs.linux }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -209,11 +210,15 @@ jobs:
   # the same `cargo test -p openless-core` as upstream's `linux-core-contract`
   # plus the Linux host, fcitx5 and package contracts.
   linux-egui-package:
+    needs: [changes]
     if: github.event_name != 'workflow_dispatch' || inputs.platform != 'macos'
     name: Linux Core, egui and deb/rpm checks
     permissions:
       contents: read
     uses: ./.github/workflows/check-linux-egui.yml
+    with:
+      # Prose-only change sets skip the whole Linux build and package chain.
+      scope: ${{ needs.changes.outputs.linux == 'true' && 'full' || 'none' }}
 
   cross-platform:
     needs: [changes]

@@ -59,12 +59,14 @@ try {
   commit({ 'docs/architecture.md': 'docs\n' }, 'docs only');
   check('docs only: tauri', decide('tauri'), 'false');
   check('docs only: msrv', decide('msrv'), 'false');
+  check('docs only: linux', decide('linux'), 'false');
   reset();
 
   // The Linux host is a separate crate: only its own Rust sources stay in.
   commit({ 'openless-all/app/linux-egui/src/ui/theme.rs': 'fn x() {}\n' }, 'linux host source');
   check('linux host source: tauri', decide('tauri'), 'false');
   check('linux host source: msrv', decide('msrv'), 'true');
+  check('linux host source: linux', decide('linux'), 'true');
   reset();
 
   // ...but its manifest moves the shared workspace dependency graph.
@@ -81,6 +83,7 @@ try {
   commit({ 'openless-all/app/src/pages/Style.tsx': 'export const x = 1;\n' }, 'frontend only');
   check('frontend only: tauri', decide('tauri'), 'true');
   check('frontend only: msrv', decide('msrv'), 'false');
+  check('frontend only: linux', decide('linux'), 'true');
   reset();
 
   // Native code keeps every check on.
@@ -99,13 +102,16 @@ try {
   commit({ '.github/workflows/ci.yml': 'name: CI\n' }, 'workflow');
   check('workflow change: tauri', decide('tauri'), 'true');
   check('workflow change: msrv', decide('msrv'), 'true');
+  check('workflow change: linux', decide('linux'), 'true');
   reset();
 
   // Unreadable or empty change sets never skip a platform check.
   check('no base revision: tauri', decide('tauri', null), 'true');
   check('no base revision: msrv', decide('msrv', null), 'true');
+  check('no base revision: linux', decide('linux', null), 'true');
   check('empty diff: tauri', decide('tauri'), 'true');
   check('empty diff: msrv', decide('msrv'), 'true');
+  check('empty diff: linux', decide('linux'), 'true');
   check('unknown revision: tauri', decide('tauri', 'deadbeefdeadbeef'), 'true');
   check('unknown area', decide('nonsense'), 'true');
 } finally {

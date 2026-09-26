@@ -4,6 +4,14 @@ name: Linux egui build and backend checks
 # No standalone push trigger: a Linux PR must show one combined Linux check.
 on:
   workflow_call:
+    inputs:
+      # 'none' skips a change set that is only prose (see
+      # scripts/ci-changed-areas.sh): the callers that must always build the
+      # packages, including the tag release, leave the default in place.
+      scope:
+        required: false
+        type: string
+        default: full
 
 permissions:
   contents: read
@@ -31,6 +39,7 @@ jobs:
           submodules: false
 
       - name: Install native build and packaging dependencies
+        if: inputs.scope != 'none'
         run: |
           sudo add-apt-repository -y universe || true
           sudo apt-get update
@@ -44,10 +53,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+        if: inputs.scope != 'none'
 
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+        if: inputs.scope != 'none'
 
       - name: Resolve package version and validate release tag
         id: version
@@ -72,6 +83,7 @@ jobs:
           echo "version=${VERSION%%+*}-$REVISION" >> "$GITHUB_OUTPUT"
 
       - uses: swatinem/rust-cache@v2
+        if: inputs.scope != 'none'
         with:
           workspaces: 'openless-all/app -> target'
           # Saving after a failed test step keeps the next push incremental
@@ -79,6 +91,7 @@ jobs:
           cache-on-failure: true
 
       - name: Build and test fcitx5 plugin
+        if: inputs.scope != 'none'
         working-directory: openless-all/scripts/linux-fcitx5-plugin
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
@@ -88,6 +101,7 @@ jobs:
           test -s build/openless.conf
 
       - name: Test Core, Linux host, and platform boundaries
+        if: inputs.scope != 'none'
         working-directory: openless-all/app
         run: |
           cargo test --locked -p openless-core
@@ -105,19 +119,23 @@ jobs:
           pwsh -NoProfile -File ./scripts/check-linux-public-surface.ps1
 
       - name: Test remote input TLS identity and Unix key permissions
+        if: inputs.scope != 'none'
         working-directory: openless-all/app
         run: cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --test remote_tls
 
       - name: Validate Linux desktop metadata
+        if: inputs.scope != 'none'
         run: |
           desktop-file-validate openless-all/app/linux-egui/packaging/openless.desktop
           appstreamcli validate --no-net openless-all/app/linux-egui/packaging/top.openless.OpenLess.metainfo.xml
 
       - name: Build Linux egui host
+        if: inputs.scope != 'none'
         working-directory: openless-all/app
         run: cargo build --locked --release -p openless-linux-egui
 
       - name: Package deb and rpm without Tauri
+        if: inputs.scope != 'none'
         working-directory: openless-all/app
         env:
           OPENLESS_LINUX_VERSION: ${{ steps.version.outputs.version }}
@@ -129,6 +147,7 @@ jobs:
           bash scripts/package-linux-egui.sh
 
       - name: Generate checksums and verify distributable packages
+        if: inputs.scope != 'none'
         working-directory: openless-all/app
         run: |
           set -euo pipefail
@@ -139,7 +158,7 @@ jobs:
       - name: Upload verified Linux packages as workflow artifacts
         # Push builds keep the release path warm but do not publish artifacts;
         # the tag release and pull request runs are the consumers.
-        if: github.event_name != 'push' || env.RELEASE_TAG != ''
+        if: inputs.scope != 'none' && (github.event_name != 'push' || env.RELEASE_TAG != '')
         uses: actions/upload-artifact@v7
         with:
           name: openless-linux-egui-x86_64
