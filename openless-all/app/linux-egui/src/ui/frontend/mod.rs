@@ -2422,6 +2422,40 @@ mod tests {
     }
 
     #[test]
+    fn marketplace_mine_modal_matches_the_tauri_header_geometry() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: openless_linux_egui::Lang::ZhCn,
+            active_page: Page::Marketplace,
+            marketplace_loading: false,
+            marketplace_unsupported: false,
+            marketplace_mine_open: true,
+            marketplace_mine_loading: false,
+            marketplace_signed_in: false,
+            ..Default::default()
+        };
+        for _ in 0..2 {
+            overlay_frame(&ctx, &mut vm, Vec::new());
+        }
+        let body = layout::body_rect(&ctx);
+        let card = ctx
+            .data(|data| {
+                data.get_temp::<egui::Rect>(egui::Id::new("openless-marketplace-mine-card-rect"))
+            })
+            .expect("the my-packs card rect must be published while open");
+        assert!(body.contains_rect(card), "card={card:?} body={body:?}");
+        assert!((card.width() - 560.0).abs() <= 2.0);
+        assert!((card.height() - 300.0).abs() <= 2.0);
+        assert_eq!(
+            ctx.layer_id_at(card.center()),
+            Some(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("openless-marketplace-mine-modal"),
+            ))
+        );
+    }
+
+    #[test]
     fn style_editor_overlay_is_one_layer() {
         let ctx = egui::Context::default();
         let mut vm = FrontendViewModel {

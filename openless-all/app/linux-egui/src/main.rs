@@ -81,7 +81,14 @@ mod linux_app {
         },
         MarketplaceLikes(Result<Vec<String>, String>),
         MarketplaceAuth(Result<bool, String>),
+        MarketplaceOAuthStarted(Result<openless_core::OAuthDeviceFlow, String>),
+        MarketplaceOAuthPoll {
+            flow_id: String,
+            result: Result<openless_core::OAuthPollResult, String>,
+        },
         MarketplacePublish(Result<String, String>),
+        MarketplaceUpload(Result<openless_core::MarketplaceUploadResult, String>),
+        MarketplaceWithdraw(Result<String, String>),
         MarketplaceDetail(Result<openless_core::MarketplaceDetail, String>),
         MarketplaceMine(Result<(Vec<openless_core::MarketplaceMyPackItem>, Vec<String>), String>),
         Microphones(Result<Vec<openless_core::MicrophoneDevice>, String>),
@@ -221,6 +228,7 @@ mod linux_app {
             if self.appearance {
                 merged.theme_mode = draft.theme_mode;
                 merged.show_overview_activity_heatmap = draft.show_overview_activity_heatmap;
+                merged.qa_save_history = draft.qa_save_history;
                 merged.stacked_row_layout = draft.stacked_row_layout;
                 merged.conservative_layout = draft.conservative_layout;
                 merged.use_system_proxy = draft.use_system_proxy;
@@ -697,6 +705,8 @@ mod linux_app {
         /// after the last keystroke before hitting the API; without it every
         /// character (and every IME composition update) was its own request.
         marketplace_search_deadline: Option<std::time::Instant>,
+        marketplace_oauth_poll_deadline: Option<std::time::Instant>,
+        marketplace_oauth_interval_secs: u64,
         /// Likes are fetched once per session (Tauri refreshes them when the
         /// sign-in state changes), not on every search.
         marketplace_likes_loaded: bool,
@@ -841,6 +851,8 @@ mod linux_app {
                         marketplace_my_likes: Vec::new(),
                         marketplace_seq: 0,
                         marketplace_search_deadline: None,
+                        marketplace_oauth_poll_deadline: None,
+                        marketplace_oauth_interval_secs: 5,
                         marketplace_likes_loaded: false,
                         style_editor: None,
                         status: tr_l10n(lang, "status.core_started").to_string(),
@@ -938,6 +950,8 @@ mod linux_app {
                     marketplace_my_likes: Vec::new(),
                     marketplace_seq: 0,
                     marketplace_search_deadline: None,
+                    marketplace_oauth_poll_deadline: None,
+                    marketplace_oauth_interval_secs: 5,
                     marketplace_likes_loaded: false,
                     style_editor: None,
                     status: tr_l10n(lang, "status.startup_failed").to_string(),
@@ -2090,26 +2104,65 @@ mod linux_app {
             });
         }
 
+        fn start_marketplace_oauth(&mut self) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            self.frontend_vm.marketplace_oauth_loading = true;
+            self.frontend_vm.marketplace_oauth_error = None;
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let result = backend
+                    .services()
+                    .marketplace
+                    .start_device_flow()
+                    .await
+                    .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::MarketplaceOAuthStarted(result));
+            });
+        }
+
+        fn poll_marketplace_oauth(&mut self) {
+            let Some(deadline) = self.marketplace_oauth_poll_deadline else {
+                return;
+            };
+            if std::time::Instant::now() < deadline {
+                return;
+            }
+            self.marketplace_oauth_poll_deadline = None;
+            let Some(flow_id) = self.frontend_vm.marketplace_oauth_flow_id.clone() else {
+                return;
+            };
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let result = backend
+                    .services()
+                    .marketplace
+                    .poll_device_flow(flow_id.clone())
+                    .await
+                    .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::MarketplaceOAuthPoll { flow_id, result });
+            });
+        }
+
         fn load_marketplace_mine(&self) {
             let Some(backend) = self.backend() else {
                 return;
             };
             let tx = self.tx.clone();
-            let lang = self.lang;
             self.tokio.spawn(async move {
                 let result = async {
-                    if !backend
-                        .services()
-                        .marketplace
-                        .auth_status()
-                        .await?
-                        .signed_in
-                    {
-                        return Err(BackendError::new(
-                            openless_core::BackendErrorCode::PermissionDenied,
-                            tr_l10n(lang, "marketplace.myPacks.notLoggedIn"),
-                        ));
+                    let auth = backend.services().marketplace.auth_status().await?;
+                    if !auth.signed_in {
+                        // Not being logged in is a normal empty state for this
+                        // modal, not a page-level error/toast.
+                        let _ = tx.send(UiResult::MarketplaceAuth(Ok(false)));
+                        return Ok::<_, BackendError>((Vec::new(), Vec::new()));
                     }
+                    let _ = tx.send(UiResult::MarketplaceAuth(Ok(true)));
                     let packs = backend.services().marketplace.my_packs().await?;
                     let likes = backend.services().marketplace.my_likes().await?;
                     Ok::<_, BackendError>((packs, likes))
@@ -3568,6 +3621,68 @@ mod linux_app {
                     }
                     UiResult::MarketplaceAuth(result) => {
                         self.frontend_vm.marketplace_signed_in = result.unwrap_or(false);
+                        if !self.frontend_vm.marketplace_signed_in {
+                            self.frontend_vm.marketplace_login.clear();
+                        }
+                    }
+                    UiResult::MarketplaceOAuthStarted(result) => match result {
+                        Ok(flow) => {
+                            self.frontend_vm.marketplace_oauth_loading = false;
+                            self.frontend_vm.marketplace_oauth_open = true;
+                            self.frontend_vm.marketplace_oauth_flow_id = Some(flow.flow_id);
+                            self.frontend_vm.marketplace_oauth_user_code = flow.user_code;
+                            self.frontend_vm.marketplace_oauth_uri = flow.verification_uri;
+                            self.frontend_vm.marketplace_oauth_error = None;
+                            self.marketplace_oauth_interval_secs = flow.interval_secs.max(1);
+                            self.marketplace_oauth_poll_deadline = Some(
+                                std::time::Instant::now()
+                                    + Duration::from_secs(self.marketplace_oauth_interval_secs),
+                            );
+                        }
+                        Err(error) => {
+                            self.frontend_vm.marketplace_oauth_loading = false;
+                            self.frontend_vm.marketplace_oauth_open = true;
+                            self.frontend_vm.marketplace_oauth_error = Some(error);
+                        }
+                    },
+                    UiResult::MarketplaceOAuthPoll { flow_id, result } => {
+                        if self.frontend_vm.marketplace_oauth_flow_id.as_deref()
+                            != Some(flow_id.as_str())
+                        {
+                            continue;
+                        }
+                        match result {
+                            Ok(openless_core::OAuthPollResult::Authorized { login }) => {
+                                self.frontend_vm.marketplace_signed_in = true;
+                                self.frontend_vm.marketplace_login = login;
+                                self.frontend_vm.marketplace_oauth_open = false;
+                                self.frontend_vm.marketplace_oauth_flow_id = None;
+                                self.frontend_vm.marketplace_oauth_error = None;
+                                self.marketplace_oauth_poll_deadline = None;
+                                self.frontend_vm.marketplace_mine_loading = true;
+                                self.load_marketplace_mine();
+                            }
+                            Ok(openless_core::OAuthPollResult::Pending) => {
+                                self.marketplace_oauth_poll_deadline = Some(
+                                    std::time::Instant::now()
+                                        + Duration::from_secs(self.marketplace_oauth_interval_secs),
+                                );
+                            }
+                            Ok(openless_core::OAuthPollResult::SlowDown) => {
+                                self.marketplace_oauth_poll_deadline =
+                                    Some(std::time::Instant::now() + Duration::from_secs(5));
+                            }
+                            Ok(openless_core::OAuthPollResult::Error { message }) => {
+                                self.marketplace_oauth_poll_deadline = None;
+                                self.frontend_vm.marketplace_oauth_flow_id = None;
+                                self.frontend_vm.marketplace_oauth_error = Some(message);
+                            }
+                            Err(error) => {
+                                self.marketplace_oauth_poll_deadline = None;
+                                self.frontend_vm.marketplace_oauth_flow_id = None;
+                                self.frontend_vm.marketplace_oauth_error = Some(error);
+                            }
+                        }
                     }
                     UiResult::MarketplacePublish(result) => {
                         self.frontend_vm.style_editor_publishing = false;
@@ -3576,6 +3691,30 @@ mod linux_app {
                             Err(error) => self.frontend_vm.style_notice = Some(error),
                         }
                     }
+                    UiResult::MarketplaceUpload(result) => {
+                        self.frontend_vm.marketplace_upload_submitting = false;
+                        match result {
+                            Ok(uploaded) => {
+                                self.frontend_vm.marketplace_upload_open = false;
+                                self.frontend_vm.marketplace_upload_selected = None;
+                                self.frontend_vm.marketplace_notice = None;
+                                self.status = uploaded.message;
+                                self.frontend_vm.marketplace_mine_loading = true;
+                                self.load_marketplace_mine();
+                            }
+                            Err(error) => {
+                                self.frontend_vm.marketplace_notice = Some(error);
+                            }
+                        }
+                    }
+                    UiResult::MarketplaceWithdraw(result) => match result {
+                        Ok(message) => {
+                            self.frontend_vm.marketplace_mine_loading = true;
+                            self.status = message;
+                            self.load_marketplace_mine();
+                        }
+                        Err(error) => self.frontend_vm.marketplace_notice = Some(error),
+                    },
                     UiResult::SettingsChannels(Ok(rows)) => {
                         self.settings_channels = rows;
                         self.settings_channels_loading = false;
@@ -3607,25 +3746,32 @@ mod linux_app {
                     }
                     UiResult::MarketplaceDetail(Err(error)) => self.status = error,
                     UiResult::MarketplaceMine(Ok((packs, likes))) => {
-                        self.status = fmt_l10n(
-                            lang,
-                            "status.my_publish_likes",
-                            &[&packs.len(), &likes.len()],
-                        );
+                        self.frontend_vm.marketplace_mine_loading = false;
                         self.frontend_vm.marketplace_mine_packs = packs
                             .iter()
-                            .map(|pack| {
-                                (
-                                    pack.summary.name.clone(),
-                                    pack.summary.description.clone(),
-                                    pack.summary.tags.clone(),
-                                )
+                            .map(|pack| frontend::view_model::MarketplaceMinePack {
+                                pack: frontend::view_model::MarketplacePack {
+                                    id: pack.summary.id.clone(),
+                                    name: pack.summary.name.clone(),
+                                    version: pack.summary.version.clone(),
+                                    description: pack.summary.description.clone(),
+                                    mode: pack.summary.base_mode.clone(),
+                                    author: pack.summary.author_login.clone(),
+                                    origin_author_login: pack.summary.origin_author_login.clone(),
+                                    tags: pack.summary.tags.clone(),
+                                    likes: pack.summary.like_count.max(0) as u32,
+                                    downloads: pack.summary.download_count.max(0) as u32,
+                                    liked: false,
+                                },
+                                state: pack.state.clone(),
+                                updated_at: pack.summary.updated_at.clone(),
                             })
                             .collect();
                         self.marketplace_my_packs = packs;
                         self.marketplace_my_likes = likes;
                     }
                     UiResult::MarketplaceMine(Err(error)) => {
+                        self.frontend_vm.marketplace_mine_loading = false;
                         self.frontend_vm.marketplace_notice = Some(error.clone());
                         self.status = error;
                     }
@@ -3879,6 +4025,14 @@ mod linux_app {
                     s.remote_port = prefs.remote_input_port.to_string();
                 }
                 s.activity_heatmap = prefs.show_overview_activity_heatmap;
+                s.language = match self.locale_pref {
+                    LocalePref::System => 0,
+                    LocalePref::Lang(Lang::ZhCn) => 1,
+                    LocalePref::Lang(Lang::ZhTw) => 2,
+                    LocalePref::Lang(Lang::En) => 3,
+                    LocalePref::Lang(Lang::Ja) => 4,
+                    LocalePref::Lang(Lang::Ko) => 5,
+                };
                 s.theme = match prefs.theme_mode {
                     openless_core::shared_types::ThemeMode::System => 0,
                     openless_core::shared_types::ThemeMode::Light => 1,
@@ -3987,6 +4141,7 @@ mod linux_app {
                     .as_ref()
                     .map(|binding| binding.display_label())
                     .unwrap_or_default();
+                vm.qa_save_history = prefs.qa_save_history;
                 // 风格包直选：只展示已经录过的快捷键（录制器尚未实现）。
                 s.style_pack_hotkeys = prefs
                     .style_pack_hotkeys
@@ -4120,10 +4275,37 @@ mod linux_app {
                                     id: item.id,
                                     created_at: item.created_at,
                                     mode: overview_mode(item.mode),
-                                    // A record's style pack name is not resolvable here without the
-                                    // pack catalog, so the pill falls back to the polish mode label
-                                    // (which is what records without a style pack show anyway).
-                                    style_label: polish_mode_label(lang, item.mode).to_string(),
+                                    // History carries the exact style-pack id. Prefer the
+                                    // catalog name so imported packs do not collapse into the
+                                    // four base-mode labels; old records without an id still
+                                    // use the mode fallback.
+                                    style_label: item
+                                        .style_pack_id
+                                        .as_deref()
+                                        .and_then(|id| {
+                                            self.style_packs.iter().find(|pack| pack.id == id)
+                                        })
+                                        .map(|pack| {
+                                            let builtin_default =
+                                                openless_core::builtin_style_pack_for_mode(
+                                                    pack.base_mode,
+                                                )
+                                                .name;
+                                            if pack.kind == openless_core::StylePackKind::Builtin
+                                                && pack.id
+                                                    == openless_core::builtin_style_pack_id(
+                                                        pack.base_mode,
+                                                    )
+                                                && pack.name == builtin_default
+                                            {
+                                                polish_mode_label(lang, pack.base_mode).to_string()
+                                            } else {
+                                                pack.name.clone()
+                                            }
+                                        })
+                                        .unwrap_or_else(|| {
+                                            polish_mode_label(lang, item.mode).to_string()
+                                        }),
                                     raw_transcript: item.raw_transcript,
                                     final_text: item.final_text,
                                     duration_ms: item.duration_ms,
@@ -4947,12 +5129,184 @@ mod linux_app {
                     }
                     frontend::view_model::FrontendAction::MarketplaceMyPacks => {
                         self.frontend_vm.marketplace_mine_open = true;
+                        self.frontend_vm.marketplace_mine_loading = true;
                         self.frontend_vm.marketplace_notice = None;
                         self.frontend_vm.marketplace_mine_packs.clear();
                         self.load_marketplace_mine();
                     }
                     frontend::view_model::FrontendAction::MarketplaceCloseMine => {
                         self.frontend_vm.marketplace_mine_open = false;
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceUploadOpen {
+                        origin_pack_id,
+                        target_name,
+                    } => {
+                        if !self.frontend_vm.marketplace_signed_in {
+                            continue;
+                        }
+                        let target = target_name
+                            .as_deref()
+                            .unwrap_or_default()
+                            .trim()
+                            .to_lowercase();
+                        let mut packs: Vec<_> = self
+                            .style_packs
+                            .iter()
+                            .filter(|pack| {
+                                pack.kind != openless_core::StylePackKind::Builtin
+                            })
+                            .cloned()
+                            .collect();
+                        packs.sort_by(|left, right| {
+                            let left_match = !target.is_empty()
+                                && left.name.trim().to_lowercase() == target;
+                            let right_match = !target.is_empty()
+                                && right.name.trim().to_lowercase() == target;
+                            right_match
+                                .cmp(&left_match)
+                                .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+                        });
+                        let selected = if target.is_empty() {
+                            None
+                        } else {
+                            packs.iter().position(|pack| {
+                                pack.name.trim().to_lowercase() == target
+                            })
+                        };
+                        self.frontend_vm.marketplace_upload_open = true;
+                        self.frontend_vm.marketplace_upload_origin_pack_id = origin_pack_id;
+                        self.frontend_vm.marketplace_upload_target_name = target_name;
+                        self.frontend_vm.marketplace_upload_packs = packs;
+                        self.frontend_vm.marketplace_upload_selected = selected;
+                        self.frontend_vm.marketplace_upload_submitting = false;
+                        self.frontend_vm.marketplace_notice = None;
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceUploadSelect(index) => {
+                        if index < self.frontend_vm.marketplace_upload_packs.len()
+                            && !self.frontend_vm.marketplace_upload_submitting
+                        {
+                            self.frontend_vm.marketplace_upload_selected =
+                                Some(index);
+                        }
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceUploadCancel => {
+                        self.frontend_vm.marketplace_upload_open = false;
+                        self.frontend_vm.marketplace_upload_origin_pack_id = None;
+                        self.frontend_vm.marketplace_upload_target_name = None;
+                        self.frontend_vm.marketplace_upload_packs.clear();
+                        self.frontend_vm.marketplace_upload_selected = None;
+                        self.frontend_vm.marketplace_upload_submitting = false;
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceUploadConfirm => {
+                        if !self.frontend_vm.marketplace_signed_in
+                            || self.frontend_vm.marketplace_upload_submitting
+                        {
+                            continue;
+                        }
+                        let Some(index) = self.frontend_vm.marketplace_upload_selected else {
+                            continue;
+                        };
+                        let Some(pack) = self
+                            .frontend_vm
+                            .marketplace_upload_packs
+                            .get(index)
+                            .cloned()
+                        else {
+                            continue;
+                        };
+                        let origin_pack_id = self
+                            .frontend_vm
+                            .marketplace_upload_origin_pack_id
+                            .clone();
+                        let Some(backend) = self.backend() else {
+                            continue;
+                        };
+                        self.frontend_vm.marketplace_upload_submitting = true;
+                        let tx = self.tx.clone();
+                        self.tokio.spawn(async move {
+                            let result = backend
+                                .services()
+                                .marketplace
+                                .upload(pack.id, origin_pack_id)
+                                .await
+                                .map_err(|error| error.to_string());
+                            let _ = tx.send(UiResult::MarketplaceUpload(result));
+                        });
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceWithdrawRequest(index) => {
+                        if self.frontend_vm.marketplace_signed_in
+                            && index < self.frontend_vm.marketplace_mine_packs.len()
+                        {
+                            self.frontend_vm.marketplace_confirm_withdraw = Some(index);
+                        }
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceWithdrawCancel => {
+                        self.frontend_vm.marketplace_confirm_withdraw = None;
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceWithdrawConfirm => {
+                        let Some(index) = self.frontend_vm.marketplace_confirm_withdraw.take()
+                        else {
+                            continue;
+                        };
+                        let Some(pack) = self.marketplace_my_packs.get(index) else {
+                            continue;
+                        };
+                        let Some(backend) = self.backend() else {
+                            continue;
+                        };
+                        let id = pack.summary.id.clone();
+                        let lang = self.lang;
+                        let tx = self.tx.clone();
+                        self.tokio.spawn(async move {
+                            let result = backend
+                                .services()
+                                .marketplace
+                                .delete(id)
+                                .await
+                                .map(|_| tr_l10n(lang, "marketplace.withdraw.success").to_string())
+                                .map_err(|error| error.to_string());
+                            let _ = tx.send(UiResult::MarketplaceWithdraw(result));
+                        });
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceAuthStart => {
+                        self.frontend_vm.marketplace_oauth_open = true;
+                        self.frontend_vm.marketplace_oauth_loading = true;
+                        self.frontend_vm.marketplace_oauth_error = None;
+                        self.start_marketplace_oauth();
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceAuthOpenBrowser => {
+                        if !self.frontend_vm.marketplace_oauth_uri.is_empty() {
+                            if let Err(error) =
+                                open_external(&self.frontend_vm.marketplace_oauth_uri)
+                            {
+                                self.frontend_vm.marketplace_oauth_error = Some(error.to_string());
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceAuthCopyCode => {
+                        if !self.frontend_vm.marketplace_oauth_user_code.is_empty() {
+                            if let Err(error) = fcitx5_copy_to_clipboard(
+                                &self.frontend_vm.marketplace_oauth_user_code,
+                            ) {
+                                self.frontend_vm.marketplace_oauth_error = Some(error.to_string());
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceAuthCancel => {
+                        self.marketplace_oauth_poll_deadline = None;
+                        self.marketplace_oauth_interval_secs = 5;
+                        let flow_id = self.frontend_vm.marketplace_oauth_flow_id.take();
+                        self.frontend_vm.marketplace_oauth_open = false;
+                        self.frontend_vm.marketplace_oauth_loading = false;
+                        if let Some(backend) = self.backend() {
+                            self.tokio.spawn(async move {
+                                let _ = backend
+                                    .services()
+                                    .marketplace
+                                    .cancel_device_flow(flow_id)
+                                    .await;
+                            });
+                        }
                     }
                     frontend::view_model::FrontendAction::MarketplaceSearch(query) => {
                         self.marketplace_query = query.clone();
@@ -5789,7 +6143,12 @@ mod linux_app {
                         }
                     }
                     frontend::view_model::FrontendAction::SelectionAskToggleHistory => {
-                        self.frontend_vm.qa_save_history = !self.frontend_vm.qa_save_history;
+                        if let Some(preferences) = self.preferences.as_mut() {
+                            preferences.qa_save_history = !preferences.qa_save_history;
+                            self.settings_dirty.appearance = true;
+                            self.frontend_vm.qa_save_history = preferences.qa_save_history;
+                            self.save_settings_if_dirty();
+                        }
                     }
                     frontend::view_model::FrontendAction::TranslationToggleLanguage(language) => {
                         if let Some(preferences) = self.preferences.as_mut() {
@@ -8056,8 +8415,9 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             if !messages.is_empty() {
                 app.apply_window_messages(messages, tray_available);
             }
-            // Debounced marketplace search fires from the host tick.
+            // Debounced marketplace search and OAuth polling fire from the host tick.
             app.poll_marketplace_search();
+            app.poll_marketplace_oauth();
             app.tick(&ctx);
             if app.should_spawn_ui_window() {
                 if let Err(error) = app.spawn_ui_window(&socket) {
@@ -8427,11 +8787,19 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                     log::info!("[ui-client] pointer click at {pointer:?}");
                 }
             }
-            // 设置与风格编辑遮罩共用实时磨砂背板：先按当前窗口尺寸准备离屏目标，
+            // 所有前端弹窗共用实时磨砂背板：先按当前窗口尺寸准备离屏目标，
             // 把纹理 id 发布给遮罩；页面在这一帧稍后离屏重绘并模糊（都在 eframe 绘制之前完成，
             // 所以遮罩采到的是当前帧的像素，不需要任何“等一帧截图”的补丁）。
             {
-                let open = self.view_model.settings_open || self.view_model.style_editor_open;
+                let open = self.view_model.settings_open
+                    || self.view_model.style_editor_open
+                    || self.view_model.marketplace_selected.is_some()
+                    || self.view_model.marketplace_mine_open
+                    || self.view_model.marketplace_upload_open
+                    || self.view_model.marketplace_confirm_withdraw.is_some()
+                    || self.view_model.history_confirm.is_some()
+                    || (self.view_model.active_page == frontend::view_model::Page::Vocab
+                        && frontend::vocab::new_word_overlay_open(&ctx));
                 let texture = self
                     .backdrop
                     .as_mut()
@@ -8440,7 +8808,16 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             }
             let mut actions = Vec::new();
             frontend::render(&ctx, &mut self.view_model, &mut actions);
-            if self.view_model.settings_open || self.view_model.style_editor_open {
+            let modal_open = self.view_model.settings_open
+                || self.view_model.style_editor_open
+                || self.view_model.marketplace_selected.is_some()
+                || self.view_model.marketplace_mine_open
+                || self.view_model.marketplace_upload_open
+                || self.view_model.marketplace_confirm_withdraw.is_some()
+                || self.view_model.history_confirm.is_some()
+                || (self.view_model.active_page == frontend::view_model::Page::Vocab
+                    && frontend::vocab::new_word_overlay_open(&ctx));
+            if modal_open {
                 if let Some(backdrop) = self.backdrop.as_mut() {
                     backdrop.render_page(&ctx);
                 }

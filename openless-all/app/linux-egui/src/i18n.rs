@@ -1811,6 +1811,68 @@ pub const CATALOG: &[Msg] = &[
         text: row("风格市场", "MARKETPLACE", "MARKETPLACE", "マーケット", "마켓"),
     },
     Msg {
+        key: "marketplace.upload_btn",
+        text: row("上传", "上傳", "Upload", "アップロード", "업로드"),
+    },
+        Msg {
+        key: "marketplace.upload.title",
+        text: row(
+            "选择要上传的风格包",
+            "選擇要上傳的風格包",
+            "Pick a style pack to upload",
+            "アップロードするパックを選択",
+            "업로드할 팩 선택",
+        ),
+    },
+        Msg {
+        key: "marketplace.upload.updateTitle",
+        text: row("更新「{}」", "更新「{}」", "Update \"{}\"", "「{}」を更新", "\"{}\" 업데이트"),
+    },
+    Msg {
+        key: "marketplace.upload.hint",
+        text: row("选择一个本地风格包发布到市场。", "選擇一個本機風格包發布到市場。", "Choose a local style pack to publish.", "公開するローカルスタイルパックを選択してください。", "게시할 로컬 스타일 팩을 선택하세요."),
+    },
+        Msg {
+        key: "marketplace.upload.updateHint",
+        text: row(
+            "选中要上传的本地新版本风格包，下方点「确定上传」。同名包默认预选。",
+            "選中要上傳的本機新版本風格包，下方點「確定上傳」。同名包預設預選。",
+            "Pick the local newer version, then click \"Confirm upload\". A same-name pack is pre-selected.",
+            "アップロードするローカルの新版を選んで「アップロード確定」を押してください。同名パックは自動選択されます。",
+            "업로드할 로컬 최신본을 선택하고 \"업로드 확정\"을 누르세요. 동명 팩이 기본 선택됩니다.",
+        ),
+    },
+        Msg {
+        key: "marketplace.upload.noLocal",
+        text: row(
+            "本地没有可上传的风格包",
+            "本機沒有可上傳的風格包",
+            "No local style packs to upload",
+            "アップロード可能なローカルパックがありません",
+            "업로드 가능한 로컬 팩이 없습니다",
+        ),
+    },
+    Msg {
+        key: "marketplace.upload.confirm",
+        text: row("确定上传", "確定上傳", "Upload", "アップロード", "업로드"),
+    },
+    Msg {
+        key: "marketplace.upload.submitting",
+        text: row("正在提交…", "正在提交…", "Submitting…", "送信中…", "제출 중…"),
+    },
+    Msg {
+        key: "marketplace.withdraw.confirm",
+        text: row("确定要下架“{}”吗？", "確定要下架「{}」嗎？", "Withdraw “{}” from the marketplace?", "「{}」をマーケットから取り下げますか？", "“{}”을(를) 마켓에서 내릴까요?"),
+    },
+    Msg {
+        key: "marketplace.withdraw.confirmBtn",
+        text: row("确认下架", "確認下架", "Withdraw", "取り下げる", "내리기"),
+    },
+    Msg {
+        key: "marketplace.withdraw.success",
+        text: row("已下架", "已下架", "Publication withdrawn", "公開を取り下げました", "게시물을 내렸습니다"),
+    },
+    Msg {
         key: "marketplace.my_packs_button_label",
         text: row("我的发布", "我的發布", "My Packs", "自分の公開", "내 게시물"),
     },
@@ -4930,6 +4992,58 @@ pub const CATALOG: &[Msg] = &[
             "이름·태그 검색",
         ),
     },
+        Msg {
+        key: "marketplace.myPacks.emptyTitle",
+        text: row(
+            "你还没有发布过风格包",
+            "你還沒有發布過風格包",
+            "You have not published any style packs yet",
+            "まだ公開したパックはありません",
+            "아직 게시한 팩이 없습니다",
+        ),
+    },
+        Msg {
+        key: "marketplace.myPacks.emptyHint",
+        text: row(
+            "在「风格」页面编辑后点「发布到风格市场」，或点击右上角上传本地风格包。",
+            "在「風格」頁面編輯後點「發布到風格市場」，或點選右上角上傳本機風格包。",
+            "Edit a pack in the Style page and click \"Publish to Marketplace\", or upload a local pack from the top-right.",
+            "「スタイル」ページで編集して「マーケットに公開」をクリックするか、右上からローカルパックをアップロードしてください。",
+            "\"스타일\" 페이지에서 편집 후 \"마켓에 게시\"를 누르거나, 오른쪽 위에서 로컬 팩을 업로드하세요.",
+        ),
+    },
+        Msg {
+        key: "marketplace.myPacks.noMatch",
+        text: row(
+            "没有匹配的风格包",
+            "沒有符合的風格包",
+            "No matching style packs",
+            "一致するパックがありません",
+            "일치하는 팩이 없습니다",
+        ),
+    },
+        Msg {
+        key: "marketplace.myPacks.loadingTitle",
+        text: row("正在拉取，请稍后…", "正在拉取，請稍後…", "Loading…", "読み込み中…", "불러오는 중…"),
+    },
+        Msg {
+        key: "marketplace.myPacks.loadingHint",
+        text: row(
+            "从风格市场获取你最新发布的风格包。",
+            "從風格市場獲取你最新發布的風格包。",
+            "Fetching your latest publications from the marketplace.",
+            "マーケットからあなたの最新公開を取得しています。",
+            "마켓에서 최신 게시물을 가져오는 중입니다.",
+        ),
+    },
+        Msg {
+        key: "marketplace.myPacks.loadErrorTitle",
+        text: row("加载失败", "載入失敗", "Load failed", "読み込み失敗", "불러오기 실패"),
+    },
+    Msg {
+        key: "marketplace.myPacks.loadErrorRetry",
+        text: row("重试", "重試", "Retry", "再試行", "다시 시도"),
+    },
     Msg {
         key: "marketplace.myPacks.summary",
         text: row("已发布 {} 个风格包", "已發布 {} 個風格包", "{} published", "公開済み {} 個", "게시 {}개"),
@@ -5015,6 +5129,14 @@ pub const CATALOG: &[Msg] = &[
             "先に 設定 → マーケット で公開者名を設定してください",
             "먼저 설정 → 마켓에서 게시자 이름을 입력하세요",
         ),
+    },
+    Msg {
+        key: "marketplace.modal.loggedInLabel",
+        text: row("已登录", "已登入", "Signed in", "ログイン済み", "로그인됨"),
+    },
+        Msg {
+        key: "marketplace.oauth.loginBtn",
+        text: row("登录", "登入", "Sign in", "サインイン", "로그인"),
     },
     Msg {
         key: "style.pack.iconInvalid",
@@ -5406,6 +5528,78 @@ pub const CATALOG: &[Msg] = &[
             "Publish to Marketplace",
             "マーケットに公開",
             "마켓에 게시",
+        ),
+    },
+    Msg {
+        key: "marketplace.myPacks.actions.update",
+        text: row("更新", "更新", "Update", "更新", "업데이트"),
+    },
+    Msg {
+        key: "marketplace.myPacks.actions.withdraw",
+        text: row("下架", "下架", "Withdraw", "取り下げ", "내리기"),
+    },
+    Msg {
+        key: "marketplace.myPacks.stats",
+        text: row("★ {} · ↓ {}", "★ {} · ↓ {}", "★ {} · ↓ {}", "★ {} · ↓ {}", "★ {} · ↓ {}"),
+    },
+    Msg {
+        key: "marketplace.myPacks.versionDate",
+        text: row("v{} · {}", "v{} · {}", "v{} · {}", "v{} · {}", "v{} · {}"),
+    },
+    Msg {
+        key: "marketplace.oauth.browserHint",
+        text: row(
+            "在浏览器中打开 {} 并输入下方代码：",
+            "在瀏覽器中開啟 {} 並輸入下方程式碼：",
+            "Open {} in your browser and enter this code:",
+            "ブラウザで {} を開き、このコードを入力してください：",
+            "브라우저에서 {}을(를) 열고 아래 코드를 입력하세요:",
+        ),
+    },
+    Msg {
+        key: "marketplace.oauth.cancelBtn",
+        text: row("取消", "取消", "Cancel", "キャンセル", "취소"),
+    },
+    Msg {
+        key: "marketplace.oauth.copyBtn",
+        text: row("复制", "複製", "Copy", "コピー", "복사"),
+    },
+    Msg {
+        key: "marketplace.oauth.generating",
+        text: row(
+            "正在生成设备验证码…",
+            "正在產生裝置驗證碼…",
+            "Generating device code…",
+            "デバイスコードを生成中…",
+            "디바이스 코드 생성 중…",
+        ),
+    },
+    Msg {
+        key: "marketplace.oauth.openBrowserBtn",
+        text: row("打开浏览器", "開啟瀏覽器", "Open browser", "ブラウザを開く", "브라우저 열기"),
+    },
+    Msg {
+        key: "marketplace.oauth.retryBtn",
+        text: row("重试", "重試", "Retry", "再試行", "다시 시도"),
+    },
+    Msg {
+        key: "marketplace.oauth.title",
+        text: row(
+            "用 GitHub 登录",
+            "用 GitHub 登入",
+            "Sign in with GitHub",
+            "GitHub でサインイン",
+            "GitHub로 로그인",
+        ),
+    },
+    Msg {
+        key: "marketplace.oauth.waiting",
+        text: row(
+            "等待你在浏览器中授权…",
+            "等待你在瀏覽器中授權…",
+            "Waiting for browser authorization…",
+            "ブラウザでの認可を待っています…",
+            "브라우저에서 인증을 기다리는 중…",
         ),
     },
 ];

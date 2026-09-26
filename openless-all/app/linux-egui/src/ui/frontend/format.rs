@@ -4,7 +4,7 @@
 //! overview dashboard and the history detail panel.
 
 use chrono::{Datelike, Timelike};
-use openless_linux_egui::{fmt_l10n, Lang};
+use openless_linux_egui::{Lang, fmt_l10n};
 
 /// Recording length as shown on history rows and the `录音 …` label.
 /// `—` for unknown/zero, seconds below a minute, minutes above.

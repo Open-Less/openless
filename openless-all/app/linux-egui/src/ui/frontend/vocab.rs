@@ -22,6 +22,15 @@ const SEARCH_ID: &str = "openless-vocab-search";
 const SEARCH_INPUT_ID: &str = "openless-vocab-search-input";
 const NEW_WORD_OPEN: &str = "openless-vocab-new-word-open";
 const NEW_WORD_FOCUS: &str = "openless-vocab-new-word-focus";
+
+/// Whether the new-word modal is currently mounted. The native host uses this
+/// to prepare the same live GPU backdrop as the other modal surfaces.
+pub fn new_word_overlay_open(ctx: &egui::Context) -> bool {
+    ctx.data(|data| {
+        data.get_temp::<bool>(egui::Id::new(NEW_WORD_OPEN))
+            .unwrap_or(false)
+    })
+}
 const PRESETS_OPEN: &str = "openless-vocab-presets-open";
 const SELECTION_ID: &str = "openless-vocab-selection";
 const TAB_HEIGHT: f32 = 32.0;

@@ -346,6 +346,19 @@ pub fn marketplace_page(
             );
         }
     }
+    if vm.marketplace_upload_open {
+        marketplace_upload(ui.ctx(), vm, body_rect, actions);
+    }
+    if vm.marketplace_confirm_withdraw.is_some() {
+        marketplace_withdraw_confirm(ui.ctx(), vm, body_rect, actions);
+    }
+    if vm.marketplace_oauth_open {
+        let nested = vm.marketplace_selected.is_some()
+            || vm.marketplace_mine_open
+            || vm.marketplace_upload_open
+            || vm.marketplace_confirm_withdraw.is_some();
+        marketplace_oauth(ui.ctx(), vm, body_rect, actions, nested);
+    }
 }
 
 fn marketplace_card(
@@ -672,6 +685,482 @@ fn marketplace_detail(
     });
 }
 
+fn marketplace_oauth(
+    ctx: &egui::Context,
+    vm: &mut FrontendViewModel,
+    body: egui::Rect,
+    actions: &mut Vec<FrontendAction>,
+    nested: bool,
+) {
+    let lang = vm.lang;
+    let size = egui::vec2((body.width() - 40.0).min(440.0).max(320.0), 330.0);
+    let card = egui::Rect::from_center_size(body.center(), size);
+    egui::Area::new(egui::Id::new("openless-marketplace-oauth-modal"))
+        .order(egui::Order::Tooltip)
+        .fixed_pos(body.min)
+        .constrain(false)
+        .show(ctx, |ui| {
+            ui.set_min_size(body.size());
+            if nested {
+                // Keep the already-open detail/mine card visible, like the
+                // stacked Tauri Modal, instead of replacing it with a second
+                // snapshot of the page.
+                ui.painter().rect_filled(
+                    body,
+                    layout::body_corner_radius(ctx),
+                    egui::Color32::from_black_alpha(52),
+                );
+            } else {
+                layout::paint_blurred_overlay(ctx, ui, body, layout::body_corner_radius(ctx));
+            }
+            let _ = ui.allocate_rect(body, egui::Sense::click());
+            ui.scope_builder(egui::UiBuilder::new().max_rect(card), |ui| {
+                ui.set_clip_rect(body.intersect(ui.clip_rect()));
+                egui::Frame::new()
+                    .fill(theme::SURFACE)
+                    .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
+                    .corner_radius(egui::CornerRadius::same(16))
+                    .inner_margin(egui::Margin::same(22))
+                    .show(ui, |ui| {
+                        ui.set_width((size.x - 44.0).max(1.0));
+                        ui.add_space(2.0);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(tr_l10n(lang, "marketplace.oauth.title"))
+                                    .size(15.0)
+                                    .strong()
+                                    .color(theme::INK),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let close = ui.add(
+                                        egui::Button::new(
+                                            egui::RichText::new("×")
+                                                .size(16.0)
+                                                .color(theme::INK_2),
+                                        )
+                                        .fill(theme::SURFACE)
+                                        .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
+                                        .corner_radius(egui::CornerRadius::same(8))
+                                        .min_size(egui::vec2(28.0, 28.0)),
+                                    );
+                                    if close.clicked() {
+                                        actions.push(FrontendAction::MarketplaceAuthCancel);
+                                    }
+                                },
+                            );
+                        });
+                        ui.add_space(13.0);
+                        if vm.marketplace_oauth_loading {
+                            ui.vertical_centered(|ui| {
+                                ui.spinner();
+                                ui.add_space(8.0);
+                                ui.label(tr_l10n(lang, "marketplace.oauth.generating"));
+                            });
+                        } else if let Some(error) = vm.marketplace_oauth_error.as_deref() {
+                            ui.label(egui::RichText::new(error).size(12.0).color(theme::ERR));
+                            ui.add_space(14.0);
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .button(tr_l10n(lang, "marketplace.oauth.retryBtn"))
+                                    .clicked()
+                                {
+                                    actions.push(FrontendAction::MarketplaceAuthStart);
+                                }
+                                if ui
+                                    .button(tr_l10n(lang, "marketplace.oauth.cancelBtn"))
+                                    .clicked()
+                                {
+                                    actions.push(FrontendAction::MarketplaceAuthCancel);
+                                }
+                            });
+                        } else {
+                            ui.label(
+                                egui::RichText::new(openless_linux_egui::fmt_l10n(
+                                    lang,
+                                    "marketplace.oauth.browserHint",
+                                    &[&vm.marketplace_oauth_uri],
+                                ))
+                                .size(12.0)
+                                .color(theme::INK_3),
+                            );
+                            ui.add_space(10.0);
+                            egui::Frame::new()
+                                .fill(theme::SURFACE_2)
+                                .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
+                                .corner_radius(egui::CornerRadius::same(10))
+                                .inner_margin(egui::Margin::symmetric(12, 10))
+                                .show(ui, |ui| {
+                                    ui.vertical_centered(|ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.with_layout(
+                                            egui::Layout::left_to_right(egui::Align::Center),
+                                            |ui| {
+                                                ui.label(
+                                                    egui::RichText::new(
+                                                        &vm.marketplace_oauth_user_code,
+                                                    )
+                                                    .size(22.0)
+                                                    .strong()
+                                                    .color(theme::BLUE),
+                                                );
+                                                ui.add_space(10.0);
+                                                let copy = ui.add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new(
+                                                            tr_l10n(
+                                                                lang,
+                                                                "marketplace.oauth.copyBtn",
+                                                            ),
+                                                        )
+                                                        .size(11.0)
+                                                        .color(theme::INK_3),
+                                                    )
+                                                    .fill(theme::SURFACE)
+                                                    .stroke(egui::Stroke::new(
+                                                        0.5,
+                                                        theme::LINE_STRONG,
+                                                    ))
+                                                    .corner_radius(egui::CornerRadius::same(7)),
+                                                );
+                                                if copy.clicked() {
+                                                    actions.push(
+                                                        FrontendAction::MarketplaceAuthCopyCode,
+                                                    );
+                                                }
+                                            },
+                                        );
+                                    });
+                                });
+                            });
+                            ui.add_space(12.0);
+                            ui.horizontal(|ui| {
+                                let open = ui.add(
+                                    egui::Button::new(
+                                        egui::RichText::new(tr_l10n(
+                                            lang,
+                                            "marketplace.oauth.openBrowserBtn",
+                                        ))
+                                        .size(11.5)
+                                        .color(theme::INK_2),
+                                    )
+                                    .fill(theme::SURFACE)
+                                    .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
+                                    .corner_radius(egui::CornerRadius::same(8)),
+                                );
+                                if open.clicked() {
+                                    actions.push(FrontendAction::MarketplaceAuthOpenBrowser);
+                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let cancel = ui.add(
+                                            egui::Button::new(
+                                                egui::RichText::new(tr_l10n(
+                                                    lang,
+                                                    "marketplace.oauth.cancelBtn",
+                                                ))
+                                                .size(11.5)
+                                                .color(theme::INK_2),
+                                            )
+                                            .fill(theme::SURFACE)
+                                            .stroke(egui::Stroke::new(
+                                                0.5,
+                                                theme::LINE_STRONG,
+                                            ))
+                                            .corner_radius(egui::CornerRadius::same(8)),
+                                        );
+                                        if cancel.clicked() {
+                                            actions.push(FrontendAction::MarketplaceAuthCancel);
+                                        }
+                                    },
+                                );
+                            });
+                            ui.add_space(11.0);
+                            ui.vertical_centered(|ui| {
+                                ui.horizontal(|ui| {
+                                    let (dot, _) = ui.allocate_exact_size(
+                                        egui::vec2(8.0, 16.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    ui.painter().circle_filled(
+                                        egui::pos2(dot.center().x, dot.center().y),
+                                        3.5,
+                                        theme::BLUE,
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(
+                                            tr_l10n(lang, "marketplace.oauth.waiting"),
+                                        )
+                                        .size(11.5)
+                                        .color(theme::INK_4),
+                                    );
+                                });
+                            });
+                        }
+                    });
+            });
+        });
+}
+
+fn marketplace_upload(
+    ctx: &egui::Context,
+    vm: &mut FrontendViewModel,
+    body: egui::Rect,
+    actions: &mut Vec<FrontendAction>,
+) {
+    let lang = vm.lang;
+    let target_name = vm.marketplace_upload_target_name.clone();
+    let card_width = (body.width() - 40.0).min(560.0).max(320.0);
+    let card_height = (body.height() * 0.82).min(560.0).max(300.0);
+    let card = egui::Rect::from_center_size(
+        body.center(),
+        egui::vec2(card_width, card_height),
+    );
+    egui::Area::new(egui::Id::new("openless-marketplace-upload-modal"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(body.min)
+        .constrain(false)
+        .show(ctx, |ui| {
+            ui.set_min_size(body.size());
+            layout::paint_blurred_overlay(ctx, ui, body, layout::body_corner_radius(ctx));
+            let _ = ui.allocate_rect(body, egui::Sense::click());
+            ui.scope_builder(egui::UiBuilder::new().max_rect(card), |ui| {
+                ui.set_clip_rect(body.intersect(ui.clip_rect()));
+                egui::Frame::new()
+                    .fill(theme::SURFACE)
+                    .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
+                    .corner_radius(egui::CornerRadius::same(16))
+                    .inner_margin(egui::Margin::same(22))
+                    .show(ui, |ui| {
+                        ui.set_width((card_width - 44.0).max(1.0));
+                        ui.horizontal(|ui| {
+                            let title = if let Some(name) = target_name.as_deref() {
+                                openless_linux_egui::fmt_l10n(
+                                    lang,
+                                    "marketplace.upload.updateTitle",
+                                    &[&name],
+                                )
+                            } else {
+                                tr_l10n(lang, "marketplace.upload.title").to_string()
+                            };
+                            ui.label(
+                                egui::RichText::new(title)
+                                    .size(16.0)
+                                    .strong()
+                                    .color(theme::INK),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui.button("×").clicked() {
+                                        actions.push(FrontendAction::MarketplaceUploadCancel);
+                                    }
+                                },
+                            );
+                        });
+                        ui.add_space(6.0);
+                        ui.label(
+                            egui::RichText::new(if target_name.is_some() {
+                                tr_l10n(lang, "marketplace.upload.updateHint")
+                            } else {
+                                tr_l10n(lang, "marketplace.upload.hint")
+                            })
+                            .size(11.5)
+                            .color(theme::INK_3),
+                        );
+                        ui.add_space(12.0);
+                        if vm.marketplace_upload_submitting {
+                            ui.vertical_centered(|ui| {
+                                ui.add_space(42.0);
+                                ui.spinner();
+                                ui.add_space(8.0);
+                                ui.label(tr_l10n(lang, "marketplace.upload.submitting"));
+                            });
+                        } else if vm.marketplace_upload_packs.is_empty() {
+                            ui.vertical_centered(|ui| {
+                                ui.add_space(28.0);
+                                ui.label(
+                                    egui::RichText::new(tr_l10n(
+                                        lang,
+                                        "marketplace.upload.noLocal",
+                                    ))
+                                    .size(12.0)
+                                    .color(theme::INK_4),
+                                );
+                            });
+                        } else {
+                            egui::ScrollArea::vertical()
+                                .max_height((card_height - 150.0).max(100.0))
+                                .show(ui, |ui| {
+                                    for (index, pack) in
+                                        vm.marketplace_upload_packs.iter().enumerate()
+                                    {
+                                        let selected =
+                                            vm.marketplace_upload_selected == Some(index);
+                                        let label = format!(
+                                            "{}  ·  v{}  ·  {}",
+                                            pack.name,
+                                            pack.version,
+                                            pack.base_mode.display_name(),
+                                        );
+                                        let response = ui.add_sized(
+                                            [ui.available_width(), 46.0],
+                                            egui::Button::new(
+                                                egui::RichText::new(label)
+                                                    .size(12.0)
+                                                    .color(theme::INK),
+                                            )
+                                            .fill(if selected {
+                                                theme::BLUE_SOFT
+                                            } else {
+                                                theme::SURFACE
+                                            })
+                                            .stroke(egui::Stroke::new(
+                                                0.5,
+                                                if selected {
+                                                    theme::BLUE
+                                                } else {
+                                                    theme::LINE_STRONG
+                                                },
+                                            ))
+                                            .corner_radius(egui::CornerRadius::same(9)),
+                                        );
+                                        if response.clicked() {
+                                            actions.push(FrontendAction::MarketplaceUploadSelect(
+                                                index,
+                                            ));
+                                        }
+                                        if !pack.description.is_empty() {
+                                            ui.label(
+                                                egui::RichText::new(&pack.description)
+                                                    .size(10.5)
+                                                    .color(theme::INK_4),
+                                            );
+                                        }
+                                        ui.add_space(6.0);
+                                    }
+                                });
+                        }
+                        ui.add_space(12.0);
+                        ui.horizontal(|ui| {
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let confirm = ui.add_enabled(
+                                        vm.marketplace_upload_selected.is_some()
+                                            && !vm.marketplace_upload_submitting,
+                                        egui::Button::new(tr_l10n(
+                                            lang,
+                                            "marketplace.upload.confirm",
+                                        ))
+                                        .fill(theme::BLUE)
+                                        .stroke(egui::Stroke::NONE)
+                                        .corner_radius(egui::CornerRadius::same(8)),
+                                    );
+                                    if confirm.clicked() {
+                                        actions.push(FrontendAction::MarketplaceUploadConfirm);
+                                    }
+                                    if ui
+                                        .button(tr_l10n(lang, "common.cancel"))
+                                        .clicked()
+                                    {
+                                        actions.push(FrontendAction::MarketplaceUploadCancel);
+                                    }
+                                },
+                            );
+                        });
+                    });
+            });
+        });
+}
+
+fn marketplace_withdraw_confirm(
+    ctx: &egui::Context,
+    vm: &FrontendViewModel,
+    body: egui::Rect,
+    actions: &mut Vec<FrontendAction>,
+) {
+    let lang = vm.lang;
+    let Some(index) = vm.marketplace_confirm_withdraw else {
+        return;
+    };
+    let Some(pack) = vm.marketplace_mine_packs.get(index) else {
+        return;
+    };
+    let message = openless_linux_egui::fmt_l10n(
+        lang,
+        "marketplace.withdraw.confirm",
+        &[&pack.pack.name],
+    );
+    let card = egui::Rect::from_center_size(
+        body.center(),
+        egui::vec2(body.width().min(420.0), 170.0),
+    );
+    egui::Area::new(egui::Id::new("openless-marketplace-withdraw-confirm"))
+        .order(egui::Order::Tooltip)
+        .fixed_pos(body.min)
+        .constrain(false)
+        .show(ctx, |ui| {
+            ui.set_min_size(body.size());
+            layout::paint_blurred_overlay(ctx, ui, body, layout::body_corner_radius(ctx));
+            let _ = ui.allocate_rect(body, egui::Sense::click());
+            ui.scope_builder(egui::UiBuilder::new().max_rect(card), |ui| {
+                ui.set_clip_rect(body.intersect(ui.clip_rect()));
+                egui::Frame::new()
+                    .fill(theme::SURFACE)
+                    .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
+                    .corner_radius(egui::CornerRadius::same(14))
+                    .inner_margin(egui::Margin::same(20))
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new(message).size(13.0).color(theme::INK_2));
+                        ui.add_space(20.0);
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                if ui
+                                    .button(tr_l10n(lang, "marketplace.withdraw.confirmBtn"))
+                                    .clicked()
+                                {
+                                    actions.push(FrontendAction::MarketplaceWithdrawConfirm);
+                                }
+                                if ui
+                                    .button(tr_l10n(lang, "common.cancel"))
+                                    .clicked()
+                                {
+                                    actions.push(FrontendAction::MarketplaceWithdrawCancel);
+                                }
+                            },
+                        );
+                    });
+            });
+        });
+}
+
+fn market_state_label(lang: Lang, state: &str) -> String {
+    let key = match state {
+        "pending" => "marketplace.state.pending",
+        "approved" => "marketplace.state.approved",
+        "rejected" => "marketplace.state.rejected",
+        "withdrawn" => "marketplace.state.withdrawn",
+        "superseded" => "marketplace.state.superseded",
+        _ => "marketplace.state.unknown",
+    };
+    if state.is_empty()
+        || !matches!(
+            state,
+            "pending" | "approved" | "rejected" | "withdrawn" | "superseded"
+        )
+    {
+        if state.is_empty() {
+            return tr_l10n(lang, key).to_string();
+        }
+        return state.to_string();
+    }
+    tr_l10n(lang, key).to_string()
+}
+
 fn marketplace_mine(
     ctx: &egui::Context,
     vm: &mut FrontendViewModel,
@@ -679,11 +1168,32 @@ fn marketplace_mine(
     actions: &mut Vec<FrontendAction>,
 ) {
     let lang = vm.lang;
-    let size = egui::vec2(
-        (body.width() - 48.0).min(540.0),
-        (body.height() - 48.0).min(560.0),
-    );
+    let signed_in = vm.marketplace_signed_in;
+    let pack_count = vm
+        .marketplace_mine_packs
+        .iter()
+        .filter(|entry| !matches!(entry.state.as_str(), "withdrawn" | "rejected"))
+        .count();
+    let pending_count = vm
+        .marketplace_mine_packs
+        .iter()
+        .filter(|entry| entry.state == "pending")
+        .count();
+    let modal_width = (body.width() - 40.0).min(560.0).max(320.0);
+    let natural_height = if signed_in && pack_count > 0 {
+        280.0 + pack_count as f32 * 144.0
+    } else if signed_in {
+        330.0
+    } else {
+        300.0
+    };
+    let modal_height = natural_height.min((body.height() * 0.85).max(260.0));
+    let size = egui::vec2(modal_width, modal_height);
     let card = egui::Rect::from_center_size(body.center(), size);
+    #[cfg(test)]
+    ctx.data_mut(|data| {
+        data.insert_temp(egui::Id::new("openless-marketplace-mine-card-rect"), card)
+    });
     egui::Area::new(egui::Id::new("openless-marketplace-mine-modal"))
         .order(egui::Order::Foreground)
         .fixed_pos(body.min)
@@ -696,91 +1206,470 @@ fn marketplace_mine(
                 ui.set_clip_rect(body.intersect(ui.clip_rect()));
                 egui::Frame::new()
                     .fill(theme::SURFACE)
-                    .stroke(egui::Stroke::new(1.0, theme::LINE))
-                    .corner_radius(egui::CornerRadius::same(14))
-                    .inner_margin(egui::Margin::same(20))
+                    .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
+                    .corner_radius(egui::CornerRadius::same(16))
+                    .inner_margin(egui::Margin::same(22))
                     .show(ui, |ui| {
-                        ui.set_width(size.x - 40.0);
-                        ui.set_min_height(size.y - 40.0);
+                        ui.set_width((size.x - 44.0).max(1.0));
+                        ui.set_min_height((size.y - 44.0).max(1.0));
+
+                        // Tauri: search, identity chip and close are one compact
+                        // header row rather than a title on its own line.
+                        let row_width = ui.available_width();
+                        let close_width = 30.0;
+                        let login_label = if signed_in && !vm.marketplace_login.is_empty() {
+                            format!("@{}", vm.marketplace_login)
+                        } else if signed_in {
+                            tr_l10n(lang, "marketplace.modal.loggedInLabel").to_string()
+                        } else {
+                            tr_l10n(lang, "marketplace.oauth.loginBtn").to_string()
+                        };
+                        let login_avatar = vm
+                            .marketplace_login
+                            .chars()
+                            .next()
+                            .map(|ch| ch.to_uppercase().to_string())
+                            .unwrap_or_else(|| "?".to_string());
+                        let login_width = (layout::text_width(ui, &login_label, 12.0) + 42.0)
+                            .clamp(64.0, 132.0);
+                        let search_width =
+                            (row_width - close_width - login_width - 20.0).max(120.0);
                         ui.horizontal(|ui| {
-                            ui.heading(tr_l10n(lang, "marketplace.myPacks.buttonLabel"));
+                            ui.allocate_ui(egui::vec2(search_width, 30.0), |ui| {
+                                egui::Frame::new()
+                                    .fill(theme::SURFACE)
+                                    .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
+                                    .corner_radius(egui::CornerRadius::same(10))
+                                    .inner_margin(egui::Margin::symmetric(8, 5))
+                                    .show(ui, |ui| {
+                                        ui.set_width((search_width - 16.0).max(1.0));
+                                        ui.horizontal(|ui| {
+                                            let (icon_rect, _) = ui.allocate_exact_size(
+                                                egui::vec2(16.0, 18.0),
+                                                egui::Sense::hover(),
+                                            );
+                                            let icon_center =
+                                                icon_rect.center() - egui::vec2(1.5, 1.5);
+                                            let icon_stroke = egui::Stroke::new(1.3, theme::INK_3);
+                                            ui.painter().circle_stroke(
+                                                icon_center,
+                                                5.0,
+                                                icon_stroke,
+                                            );
+                                            ui.painter().line_segment(
+                                                [
+                                                    icon_center + egui::vec2(3.5, 3.5),
+                                                    icon_center + egui::vec2(7.0, 7.0),
+                                                ],
+                                                icon_stroke,
+                                            );
+                                            ui.add(
+                                                egui::TextEdit::singleline(
+                                                    &mut vm.marketplace_mine_query,
+                                                )
+                                                .hint_text(tr_l10n(
+                                                    lang,
+                                                    "marketplace.myPacks.searchPlaceholder",
+                                                ))
+                                                .frame(egui::Frame::NONE)
+                                                .desired_width((search_width - 40.0).max(48.0)),
+                                            );
+                                        });
+                                    });
+                            });
+                            ui.add_space(6.0);
+                            let (login_rect, login_response) = ui.allocate_exact_size(
+                                egui::vec2(login_width, 30.0),
+                                egui::Sense::click(),
+                            );
+                            let login_painter = ui.painter().with_clip_rect(login_rect);
+                            login_painter.rect_filled(
+                                login_rect,
+                                egui::CornerRadius::same(9),
+                                if signed_in {
+                                    theme::BLUE_SOFT
+                                } else {
+                                    theme::SURFACE
+                                },
+                            );
+                            login_painter.rect_stroke(
+                                login_rect,
+                                egui::CornerRadius::same(9),
+                                egui::Stroke::new(0.5, theme::LINE_STRONG),
+                                egui::StrokeKind::Inside,
+                            );
+                            let login_badge = egui::pos2(
+                                login_rect.left() + 19.0,
+                                login_rect.center().y,
+                            );
+                            login_painter.circle_filled(
+                                login_badge,
+                                9.0,
+                                if signed_in {
+                                    egui::Color32::from_rgba_premultiplied(37, 99, 235, 28)
+                                } else {
+                                    theme::SURFACE_2
+                                },
+                            );
+                            login_painter.text(
+                                login_badge,
+                                egui::Align2::CENTER_CENTER,
+                                &login_avatar,
+                                egui::FontId::proportional(10.0),
+                                if signed_in { theme::BLUE } else { theme::INK_2 },
+                            );
+                            login_painter.text(
+                                egui::pos2(login_badge.x + 17.0, login_rect.center().y),
+                                egui::Align2::LEFT_CENTER,
+                                &login_label,
+                                egui::FontId::proportional(12.0),
+                                if signed_in { theme::BLUE } else { theme::INK_2 },
+                            );
+                            if login_response.clicked() {
+                                actions.push(FrontendAction::MarketplaceAuthStart);
+                            }
+                            ui.add_space(6.0);
+                            if ui
+                                .add_sized(
+                                    [close_width, 30.0],
+                                    egui::Button::new("×")
+                                        .fill(theme::SURFACE)
+                                        .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
+                                        .corner_radius(egui::CornerRadius::same(9)),
+                                )
+                                .clicked()
+                            {
+                                actions.push(FrontendAction::MarketplaceCloseMine);
+                            }
+                        });
+                        ui.add_space(12.0);
+
+                        ui.horizontal(|ui| {
+                            let summary = if signed_in {
+                                let key = if pending_count > 0 {
+                                    "marketplace.myPacks.summaryPending"
+                                } else {
+                                    "marketplace.myPacks.summary"
+                                };
+                                if pending_count > 0 {
+                                    openless_linux_egui::fmt_l10n(
+                                        lang,
+                                        key,
+                                        &[&pack_count, &pending_count],
+                                    )
+                                } else {
+                                    openless_linux_egui::fmt_l10n(lang, key, &[&pack_count])
+                                }
+                            } else {
+                                tr_l10n(lang, "marketplace.myPacks.notLoggedIn").to_string()
+                            };
+                            ui.label(egui::RichText::new(summary).size(11.5).color(theme::INK_3));
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    if ui.button(tr_l10n(lang, "common.close")).clicked() {
-                                        actions.push(FrontendAction::MarketplaceCloseMine);
+                                    let upload_enabled =
+                                        signed_in && !vm.marketplace_upload_submitting;
+                                    let upload = ui.add_enabled(
+                                        upload_enabled,
+                                        egui::Button::new(
+                                            egui::RichText::new(tr_l10n(
+                                                lang,
+                                                "marketplace.upload_btn",
+                                            ))
+                                            .size(12.0)
+                                            .color(if upload_enabled {
+                                                egui::Color32::WHITE
+                                            } else {
+                                                theme::INK_4
+                                            }),
+                                        )
+                                        .fill(if upload_enabled {
+                                            theme::BLUE
+                                        } else {
+                                            theme::SURFACE_2
+                                        })
+                                        .stroke(egui::Stroke::new(
+                                            0.5,
+                                            if upload_enabled {
+                                                theme::BLUE
+                                            } else {
+                                                theme::LINE_STRONG
+                                            },
+                                        ))
+                                        .corner_radius(egui::CornerRadius::same(8)),
+                                    );
+                                    if upload.clicked() {
+                                        actions.push(FrontendAction::MarketplaceUploadOpen {
+                                            origin_pack_id: None,
+                                            target_name: None,
+                                        });
+                                    }
+                                    let refresh_enabled = signed_in && !vm.marketplace_mine_loading;
+                                    let refresh = ui.add_enabled(
+                                        refresh_enabled,
+                                        egui::Button::new(
+                                            egui::RichText::new(tr_l10n(lang, "common.refresh"))
+                                                .size(12.0)
+                                                .color(if refresh_enabled {
+                                                    theme::INK_2
+                                                } else {
+                                                    theme::INK_4
+                                                }),
+                                        )
+                                        .fill(theme::SURFACE)
+                                        .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
+                                        .corner_radius(egui::CornerRadius::same(8)),
+                                    );
+                                    if refresh.clicked() {
+                                        actions.push(FrontendAction::MarketplaceMyPacks);
                                     }
                                 },
                             );
                         });
                         ui.add_space(12.0);
-                        ui.add_sized(
-                            [ui.available_width(), 32.0],
-                            egui::TextEdit::singleline(&mut vm.marketplace_mine_query)
-                                .hint_text(tr_l10n(lang, "marketplace.myPacks.searchPlaceholder")),
-                        );
-                        ui.add_space(8.0);
-                        ui.horizontal(|ui| {
-                            ui.label(openless_linux_egui::fmt_l10n(
-                                lang,
-                                "marketplace.myPacks.summary",
-                                &[&vm.marketplace_mine_packs.len()],
-                            ));
-                            if ui.button(tr_l10n(lang, "common.refresh")).clicked() {
-                                actions.push(FrontendAction::MarketplaceMyPacks);
-                            }
-                        });
-                        if let Some(notice) = &vm.marketplace_notice {
-                            ui.colored_label(theme::ERR, notice);
-                        }
-                        ui.add_space(8.0);
-                        egui::ScrollArea::vertical()
-                            .max_height(size.y - 156.0)
-                            .show(ui, |ui| {
-                                let query = vm.marketplace_mine_query.trim().to_lowercase();
-                                let visible: Vec<_> = vm
-                                    .marketplace_mine_packs
-                                    .iter()
-                                    .filter(|(name, _, tags)| {
-                                        query.is_empty()
-                                            || name.to_lowercase().contains(&query)
-                                            || tags
-                                                .iter()
-                                                .any(|tag| tag.to_lowercase().contains(&query))
-                                    })
-                                    .collect();
-                                if visible.is_empty() {
-                                    ui.label(tr_l10n(
+
+                        if vm.marketplace_mine_loading {
+                            ui.vertical_centered(|ui| {
+                                ui.add_space(20.0);
+                                ui.label(
+                                    egui::RichText::new(tr_l10n(
                                         lang,
-                                        if query.is_empty() {
-                                            "marketplace.myPacks.emptyTitle"
-                                        } else {
-                                            "marketplace.myPacks.noMatch"
-                                        },
-                                    ));
-                                }
-                                for (name, description, tags) in visible {
-                                    egui::Frame::new()
-                                        .fill(theme::SURFACE_2)
-                                        .corner_radius(egui::CornerRadius::same(9))
-                                        .inner_margin(egui::Margin::same(10))
-                                        .show(ui, |ui| {
-                                            ui.set_width(size.x - 62.0);
-                                            ui.label(egui::RichText::new(name).strong());
-                                            ui.label(
-                                                egui::RichText::new(description)
-                                                    .size(11.5)
-                                                    .color(theme::INK_3),
-                                            );
-                                            ui.label(
-                                                egui::RichText::new(tags.join(" · "))
-                                                    .size(11.0)
-                                                    .color(theme::INK_4),
-                                            );
-                                        });
-                                    ui.add_space(8.0);
+                                        "marketplace.myPacks.loadingTitle",
+                                    ))
+                                    .size(13.0)
+                                    .color(theme::INK_3),
+                                );
+                                ui.add_space(6.0);
+                                ui.label(
+                                    egui::RichText::new(tr_l10n(
+                                        lang,
+                                        "marketplace.myPacks.loadingHint",
+                                    ))
+                                    .size(11.5)
+                                    .color(theme::INK_4),
+                                );
+                            });
+                        } else if let Some(error) = vm.marketplace_notice.as_deref() {
+                            ui.vertical_centered(|ui| {
+                                ui.add_space(16.0);
+                                ui.label(
+                                    egui::RichText::new(tr_l10n(
+                                        lang,
+                                        "marketplace.myPacks.loadErrorTitle",
+                                    ))
+                                    .size(13.0)
+                                    .color(theme::ERR),
+                                );
+                                ui.add_space(6.0);
+                                ui.label(egui::RichText::new(error).size(11.5).color(theme::INK_4));
+                                ui.add_space(10.0);
+                                if ui
+                                    .button(tr_l10n(lang, "marketplace.myPacks.loadErrorRetry"))
+                                    .clicked()
+                                {
+                                    actions.push(FrontendAction::MarketplaceMyPacks);
                                 }
                             });
+                        } else if !signed_in {
+                            ui.vertical_centered(|ui| {
+                                ui.add_space(18.0);
+                                ui.label(
+                                    egui::RichText::new(tr_l10n(
+                                        lang,
+                                        "marketplace.myPacks.notLoggedIn",
+                                    ))
+                                    .size(13.0)
+                                    .color(theme::INK_3),
+                                );
+                            });
+                        } else {
+                            let query = vm.marketplace_mine_query.trim().to_lowercase();
+                            let visible: Vec<_> = vm
+                                .marketplace_mine_packs
+                                .iter()
+                                .filter(|entry| {
+                                    if matches!(entry.state.as_str(), "withdrawn" | "superseded") {
+                                        return false;
+                                    }
+                                    query.is_empty()
+                                        || entry.pack.name.to_lowercase().contains(&query)
+                                        || entry.pack.description.to_lowercase().contains(&query)
+                                        || entry
+                                            .pack
+                                            .tags
+                                            .iter()
+                                            .any(|tag| tag.to_lowercase().contains(&query))
+                                })
+                                .collect();
+                            if visible.is_empty() {
+                                ui.vertical_centered(|ui| {
+                                    ui.add_space(20.0);
+                                    let empty_key = if query.is_empty() {
+                                        "marketplace.myPacks.emptyTitle"
+                                    } else {
+                                        "marketplace.myPacks.noMatch"
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(tr_l10n(lang, empty_key))
+                                            .size(13.0)
+                                            .color(theme::INK_3),
+                                    );
+                                    if query.is_empty() {
+                                        ui.add_space(6.0);
+                                        ui.label(
+                                            egui::RichText::new(tr_l10n(
+                                                lang,
+                                                "marketplace.myPacks.emptyHint",
+                                            ))
+                                            .size(11.5)
+                                            .color(theme::INK_4),
+                                        );
+                                    }
+                                });
+                            } else {
+                                egui::ScrollArea::vertical()
+                                    .max_height((size.y - 150.0).max(80.0))
+                                    .show(ui, |ui| {
+                                        for entry in visible {
+                                            let pack = &entry.pack;
+                                            egui::Frame::new()
+                                                .fill(theme::SURFACE)
+                                                .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
+                                                .corner_radius(egui::CornerRadius::same(12))
+                                                .inner_margin(egui::Margin::same(14))
+                                                .show(ui, |ui| {
+                                                    ui.set_width(ui.available_width());
+                                                    ui.horizontal(|ui| {
+                                                        ui.vertical(|ui| {
+                                                            ui.label(
+                                                                egui::RichText::new(&pack.name)
+                                                                    .size(14.0)
+                                                                    .strong()
+                                                                    .color(theme::INK),
+                                                            );
+                                                            ui.label(
+                                                                egui::RichText::new(
+                                                                    openless_linux_egui::fmt_l10n(
+                                                                        lang,
+                                                                        "marketplace.myPacks.versionDate",
+                                                                        &[&pack.version, &entry.updated_at],
+                                                                    ),
+                                                                )
+                                                                .size(11.0)
+                                                                .color(theme::INK_4),
+                                                            );
+                                                        });
+                                                        ui.with_layout(
+                                                            egui::Layout::right_to_left(egui::Align::Min),
+                                                            |ui| {
+                                                                egui::Frame::new()
+                                                                    .fill(theme::BLUE_SOFT)
+                                                                    .stroke(egui::Stroke::new(
+                                                                        0.5,
+                                                                        theme::LINE_STRONG,
+                                                                    ))
+                                                                    .corner_radius(egui::CornerRadius::same(7))
+                                                                    .inner_margin(egui::Margin::symmetric(7, 3))
+                                                                    .show(ui, |ui| {
+                                                                        ui.label(
+                                                                            egui::RichText::new(
+                                                                                market_state_label(
+                                                                                    lang,
+                                                                                    &entry.state,
+                                                                                ),
+                                                                            )
+                                                                            .size(11.0)
+                                                                            .color(theme::INK_3),
+                                                                        );
+                                                                    });
+                                                            },
+                                                        );
+                                                    });
+                                                    if !pack.description.is_empty() {
+                                                        ui.add_space(4.0);
+                                                        ui.label(
+                                                            egui::RichText::new(&pack.description)
+                                                                .size(12.0)
+                                                                .color(theme::INK_3),
+                                                        );
+                                                    }
+                                                    ui.horizontal_wrapped(|ui| {
+                                                        ui.label(
+                                                            egui::RichText::new(&pack.mode)
+                                                                .size(11.0)
+                                                                .color(theme::INK_4),
+                                                        );
+                                                        for tag in pack.tags.iter().take(3) {
+                                                            ui.label(
+                                                                egui::RichText::new(tag)
+                                                                    .size(11.0)
+                                                                    .color(theme::INK_4),
+                                                            );
+                                                        }
+                                                    });
+                                                    ui.horizontal(|ui| {
+                                                        ui.label(
+                                                            egui::RichText::new(
+                                                                openless_linux_egui::fmt_l10n(
+                                                                    lang,
+                                                                    "marketplace.myPacks.stats",
+                                                                    &[&pack.likes, &pack.downloads],
+                                                                ),
+                                                            )
+                                                            .size(11.0)
+                                                            .color(theme::INK_4),
+                                                        );
+                                                        ui.with_layout(
+                                                            egui::Layout::right_to_left(egui::Align::Center),
+                                                            |ui| {
+                                                                if ui
+                                                                    .button(tr_l10n(
+                                                                        lang,
+                                                                        "marketplace.myPacks.actions.withdraw",
+                                                                    ))
+                                                                    .clicked()
+                                                                {
+                                                                    if let Some(index) = vm
+                                                                        .marketplace_mine_packs
+                                                                        .iter()
+                                                                        .position(|candidate| {
+                                                                            candidate.pack.id == pack.id
+                                                                        })
+                                                                    {
+                                                                        actions.push(
+                                                                            FrontendAction::MarketplaceWithdrawRequest(
+                                                                                index,
+                                                                            ),
+                                                                        );
+                                                                    }
+                                                                }
+                                                                if ui
+                                                                    .button(tr_l10n(
+                                                                        lang,
+                                                                        "marketplace.myPacks.actions.update",
+                                                                    ))
+                                                                    .clicked()
+                                                                {
+                                                                    actions.push(
+                                                                        FrontendAction::MarketplaceUploadOpen {
+                                                                            origin_pack_id: Some(
+                                                                                pack.id.clone(),
+                                                                            ),
+                                                                            target_name: Some(
+                                                                                pack.name.clone(),
+                                                                            ),
+                                                                        },
+                                                                    );
+                                                                }
+                                                            },
+                                                        );
+                                                    });
+                                                });
+                                            ui.add_space(10.0);
+                                        }
+                                    });
+                            }
+                        }
                     });
             });
         });

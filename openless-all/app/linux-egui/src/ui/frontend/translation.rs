@@ -4,7 +4,7 @@
 //! target language and the inherited style on the right, then the usage guide.
 
 use eframe::egui;
-use openless_linux_egui::{fmt_l10n, tr_l10n};
+use openless_linux_egui::{fmt_l10n, tr_l10n, Lang};
 
 use super::icons::{self, IconName};
 use super::layout;
@@ -393,18 +393,17 @@ fn target_language(
         ui.add_space(12.0);
         ui.separator();
         ui.add_space(12.0);
-        let style_name = if let Some(pack) = vm.style_packs.get(vm.style_selected) {
-            pack.name.as_str()
-        } else if vm.style_selected == usize::MAX {
-            tr_l10n(lang, "overview.mode_raw")
-        } else {
-            tr_l10n(lang, "overview.mode_light")
-        };
+        // The host marks the persisted dictation pack with `is_active`. The
+        // page-local `style_selected` index is only a transient style-page
+        // cursor (and is not hydrated by the host), so using it here could
+        // leave Translation stuck on the first pack after another pack was
+        // activated in 润色模式.
+        let style_name = translation_style_name(vm, lang);
         let row_width = ui.available_width();
         // CSS uses flex: 0 0 auto, max-width: 180px and a single ellipsized
         // line. An egui Frame inside right_to_left instead inherited all the
         // remaining width and wrapped the style name into a tall blue block.
-        let badge_width = (layout::text_width(ui, style_name, 11.5) + 18.0)
+        let badge_width = (layout::text_width(ui, &style_name, 11.5) + 18.0)
             .min(180.0)
             .min((row_width * 0.48).max(18.0));
         let label_width = (row_width - badge_width - ui.spacing().item_spacing.x).max(1.0);
@@ -426,7 +425,7 @@ fn target_language(
             });
             let (badge, response) =
                 ui.allocate_exact_size(egui::vec2(badge_width, 24.0), egui::Sense::hover());
-            paint_style_badge(ui, badge, style_name);
+            paint_style_badge(ui, badge, &style_name);
             response.on_hover_text(style_name);
         });
 
@@ -446,6 +445,21 @@ fn target_language(
                 });
         }
     });
+}
+
+fn translation_style_name(vm: &FrontendViewModel, lang: Lang) -> String {
+    vm.style_packs
+        .iter()
+        .find(|pack| pack.is_active && pack.enabled)
+        .or_else(|| vm.style_packs.iter().find(|pack| pack.is_active))
+        .map(|pack| pack.name.clone())
+        .unwrap_or_else(|| {
+            if vm.style_selected == usize::MAX {
+                tr_l10n(lang, "overview.mode_raw").to_string()
+            } else {
+                tr_l10n(lang, "overview.mode_light").to_string()
+            }
+        })
 }
 
 fn paint_style_badge(ui: &egui::Ui, rect: egui::Rect, name: &str) {
@@ -537,6 +551,36 @@ fn usage(ui: &mut egui::Ui, width: f32, vm: &FrontendViewModel) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::frontend::view_model::StylePack;
+
+    #[test]
+    fn translation_style_name_follows_the_host_active_pack() {
+        let pack = |id: &str, name: &str, is_active: bool| StylePack {
+            id: id.to_string(),
+            icon_path: None,
+            icon_data_url: None,
+            base_mode: "light".to_string(),
+            name: name.to_string(),
+            description: String::new(),
+            tags: Vec::new(),
+            is_builtin: true,
+            enabled: true,
+            is_active,
+            selection_active: false,
+        };
+        let mut vm = FrontendViewModel::default();
+        vm.style_selected = 0;
+        vm.style_packs = vec![
+            pack("builtin.light", "轻度润色", false),
+            pack("custom", "My translation style", true),
+        ];
+
+        assert_eq!(
+            translation_style_name(&vm, Lang::ZhCn),
+            "My translation style",
+            "translation must follow Core's active pack, not the stale page index"
+        );
+    }
 
     #[test]
     fn usage_steps_auto_fit_into_one_through_five_columns() {

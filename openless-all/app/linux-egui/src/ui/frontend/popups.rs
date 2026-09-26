@@ -16,8 +16,8 @@ use eframe::egui;
 
 use super::{icons, layout, siri_gl, theme};
 use openless_linux_egui::{
-    fmt_l10n, tr_l10n, CapsulePopupState, Lang, LessComputerPopupState, PopupChatMessage,
-    QaPolishState, QaPopupState,
+    CapsulePopupState, Lang, LessComputerPopupState, PopupChatMessage, QaPolishState, QaPopupState,
+    fmt_l10n, tr_l10n,
 };
 
 /// Result of rendering the polish-result mode inside the selection-ask panel.
