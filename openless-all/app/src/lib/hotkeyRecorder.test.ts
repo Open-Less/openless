@@ -2,6 +2,7 @@ import {
   createHotkeyRecorderState,
   functionKeyPrimaryFromEvent,
   orderHotkeyCodes,
+  primaryFromKeyboardEvent,
   updateHotkeyRecorderState,
 } from './hotkeyRecorder';
 
@@ -132,3 +133,17 @@ assertEqual(
   null,
   'printable key preserved',
 );
+
+assertEqual(
+  primaryFromKeyboardEvent({ code: 'Space', key: ' ' }),
+  'Space',
+  'Space key normalizes to named Space (not literal space)',
+);
+assertEqual(
+  primaryFromKeyboardEvent({ code: 'Space', key: 'Space' }),
+  'Space',
+  'Space code with Space key name',
+);
+assertEqual(primaryFromKeyboardEvent({ code: 'KeyA', key: 'a' }), 'A', 'letter from code');
+assertEqual(primaryFromKeyboardEvent({ code: 'Digit1', key: '!' }), '1', 'digit from code');
+

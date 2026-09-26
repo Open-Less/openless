@@ -1420,6 +1420,7 @@ pub(super) fn combo_hotkey_supervisor_loop(inner: Arc<Inner>) {
         if crate::shortcut_binding::legacy_modifier_trigger(&target.dictation).is_some() {
             take_combo_hotkey_on_main_thread(&inner);
             inner.side_aware_combo.lock().take();
+            inner.mouse_dictation.lock().take();
             return;
         }
 
@@ -1427,11 +1428,44 @@ pub(super) fn combo_hotkey_supervisor_loop(inner: Arc<Inner>) {
         if is_unconfigured_shortcut(&binding) {
             take_combo_hotkey_on_main_thread(&inner);
             inner.side_aware_combo.lock().take();
+            inner.mouse_dictation.lock().take();
             return;
+        }
+
+        if crate::shortcut_binding::binding_requires_mouse_hook(&binding) {
+            take_combo_hotkey_on_main_thread(&inner);
+            inner.side_aware_combo.lock().take();
+            if inner.mouse_dictation.lock().is_some() {
+                return;
+            }
+            let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
+            match crate::mouse_dictation::MouseDictationMonitor::start(binding, tx) {
+                Ok(monitor) => {
+                    *inner.mouse_dictation.lock() = Some(monitor);
+                    let inner_clone = Arc::clone(&inner);
+                    std::thread::Builder::new()
+                        .name("openless-mouse-dictation-bridge".into())
+                        .spawn(move || combo_hotkey_bridge_loop(inner_clone, rx))
+                        .ok();
+                    return;
+                }
+                Err(e) => {
+                    attempts += 1;
+                    if attempts <= 3 || attempts % 10 == 0 {
+                        log::warn!(
+                            "[coord] mouse dictation 第 {attempts} 次注册失败: {e}; 3s 后重试"
+                        );
+                    }
+                    drop(registration);
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    continue;
+                }
+            }
         }
 
         if crate::shortcut_binding::binding_requires_side_aware_hook(&binding) {
             take_combo_hotkey_on_main_thread(&inner);
+            inner.mouse_dictation.lock().take();
             if inner.side_aware_combo.lock().is_some() {
                 return;
             }
@@ -1462,6 +1496,7 @@ pub(super) fn combo_hotkey_supervisor_loop(inner: Arc<Inner>) {
         }
 
         inner.side_aware_combo.lock().take();
+        inner.mouse_dictation.lock().take();
 
         if inner.combo_hotkey.lock().is_some() {
             return;
@@ -2543,6 +2578,7 @@ pub(crate) mod less_computer_test_support {
             less_computer_combo_pending_press: Mutex::new(None),
             combo_hotkey: Mutex::new(None),
             side_aware_combo: Mutex::new(None),
+            mouse_dictation: Mutex::new(None),
             translation_hotkey: Mutex::new(None),
             switch_style_hotkey: Mutex::new(None),
             open_app_hotkey: Mutex::new(None),

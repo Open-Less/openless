@@ -8,7 +8,8 @@ import {
   MODIFIER_CHORD_PRIMARY,
   modifiersFromPressedCodes,
 } from '../lib/hotkey';
-import { functionKeyPrimaryFromEvent } from '../lib/hotkeyRecorder';
+import { primaryFromKeyboardEvent } from '../lib/hotkeyRecorder';
+import { windowMouseHotkeyCode } from '../lib/windowHotkeyFallback';
 import { KbdGroup } from './Kbd';
 import { setShortcutRecordingActive, validateShortcutBinding } from '../lib/ipc';
 import type { ShortcutBinding } from '../lib/types';
@@ -131,10 +132,7 @@ export function ShortcutRecorder({
       setRecording(false);
       setError(null);
     } catch (reason) {
-      const message = String(reason);
-      setError(
-        message.includes('macDictationKey') ? message : t('settings.recording.comboConflict'),
-      );
+      setError(formatShortcutSaveError(String(reason), t('settings.recording.comboConflict')));
     }
   };
 
@@ -168,12 +166,26 @@ export function ShortcutRecorder({
         console.warn('[shortcut] recording state sync failed', error);
       }
     })();
+    const onMouseDown = (e: MouseEvent) => {
+      if (cancelled) return;
+      const primary = windowMouseHotkeyCode(e.button);
+      if (!primary) return;
+      e.preventDefault();
+      e.stopPropagation();
+      clearPendingModifier();
+      void finishRef.current({
+        primary,
+        modifiers: modifiersFromPressedCodes(pressedCodes.current, sideSpecificModifiers),
+      });
+    };
+    window.addEventListener('mousedown', onMouseDown, true);
     return () => {
       cancelled = true;
       unlisten?.();
+      window.removeEventListener('mousedown', onMouseDown, true);
       void setShortcutRecordingActive(false);
     };
-  }, [recording]);
+  }, [recording, sideSpecificModifiers]);
 
   /** 开始录入：同时收起菜单——「录制快捷键」按下后，重置/停用两个按钮随之消失。 */
   const startRecording = () => {
@@ -261,10 +273,7 @@ export function ShortcutRecorder({
     try {
       await onReset?.();
     } catch (reason) {
-      const message = String(reason);
-      setError(
-        message.includes('macDictationKey') ? message : t('settings.recording.comboConflict'),
-      );
+      setError(formatShortcutSaveError(String(reason), t('settings.recording.comboConflict')));
     }
   };
 
@@ -376,6 +385,8 @@ export function ShortcutRecorder({
             {t('settings.recording.comboRecordHint')}
             <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 4 }}>
               Esc · {t('common.cancel')}
+              {' · '}
+              {t('settings.recording.mouseSideHint')}
             </div>
           </motion.div>
         ) : (
@@ -517,47 +528,19 @@ function modifierPrimaryFromCode(code: string, key: string): string {
   return '';
 }
 
-function primaryFromKeyboardEvent(e: KeyboardEvent): string {
-  const functionKey = functionKeyPrimaryFromEvent(e);
-  if (functionKey) return functionKey;
-  const printable = primaryFromPrintableCode(e.code);
-  if (printable) return printable;
-  if (e.key.length === 1) return e.key;
-  const codeToName: Record<string, string> = {
-    Space: 'Space',
-    Enter: 'Enter',
-    Tab: 'Tab',
-    Backspace: 'Backspace',
-    Delete: 'Delete',
-    ArrowUp: 'ArrowUp',
-    ArrowDown: 'ArrowDown',
-    ArrowLeft: 'ArrowLeft',
-    ArrowRight: 'ArrowRight',
-    Home: 'Home',
-    End: 'End',
-    PageUp: 'PageUp',
-    PageDown: 'PageDown',
-  };
-  if (/^F\d{1,2}$/.test(e.key)) return e.key;
-  return codeToName[e.code] || e.key;
-}
-
-function primaryFromPrintableCode(code: string): string {
-  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
-  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
-  const codeToPrimary: Record<string, string> = {
-    Backquote: '`',
-    Minus: '-',
-    Equal: '=',
-    BracketLeft: '[',
-    BracketRight: ']',
-    Backslash: '\\',
-    Semicolon: ';',
-    Quote: "'",
-    Comma: ',',
-    Period: '.',
-    Slash: '/',
-    IntlBackslash: '\\',
-  };
-  return codeToPrimary[code] || '';
+/** Surface real validate/register errors instead of always masking as comboConflict (#1109). */
+function formatShortcutSaveError(message: string, fallback: string): string {
+  if (message.includes('macDictationKey')) return message;
+  if (
+    message.includes('不支持的主键') ||
+    message.includes('不支持的修饰键') ||
+    message.includes('UnsupportedKey') ||
+    message.includes('UnsupportedModifier') ||
+    message.includes('注册全局快捷键失败') ||
+    message.includes('RegisterFailed') ||
+    message.includes('(空)')
+  ) {
+    return message;
+  }
+  return fallback;
 }

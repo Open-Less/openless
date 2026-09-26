@@ -1420,6 +1420,7 @@ export const ko: typeof zhCN = {
       comboRecorded: '녹화됨',
       comboClear: '지우기',
       comboConflict: '이 단축키 조합은 사용할 수 없습니다',
+      mouseSideHint: '마우스 측면 버튼 Mouse4 / Mouse5는 Windows에서 전역 받아쓰기 단축키로 지원됩니다',
       allowNonTsfFallbackLabel: '비 TSF 폴백 허용',
       allowNonTsfFallbackDesc:
         'Windows: TSF 입력이 실패하면 분할된 Unicode SendInput을 사용하고, 그래도 실패하면 텍스트를 클립보드에 복사합니다.',

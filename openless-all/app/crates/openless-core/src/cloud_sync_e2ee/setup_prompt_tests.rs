@@ -1,3 +1,8 @@
+#![cfg(test)]
+// Seam scanner looks for #[cfg(test)] (inner attr alone is not enough).
+#[cfg(test)]
+mod __runtime_seam_test_marker {}
+
 use super::*;
 use std::sync::atomic::AtomicUsize;
 

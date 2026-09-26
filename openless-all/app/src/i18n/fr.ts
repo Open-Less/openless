@@ -1485,6 +1485,7 @@ export const fr: typeof zhCN = {
       comboRecorded: 'Raccourci enregistré',
       comboClear: 'Effacer',
       comboConflict: 'Cette combinaison n’est pas disponible',
+      mouseSideHint: 'Les boutons latéraux Mouse4 / Mouse5 sont pris en charge comme raccourcis de dictée globaux sous Windows',
       allowNonTsfFallbackLabel: 'Autoriser une solution de repli sans TSF',
       allowNonTsfFallbackDesc:
         'Windows : si l’insertion TSF échoue, utilise SendInput Unicode avec des pauses. En cas de nouvel échec, copie le texte dans le presse-papiers.',

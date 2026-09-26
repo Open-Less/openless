@@ -197,7 +197,30 @@ fn reconcile_hotkeys_on_main(
     let trigger = crate::shortcut_binding::legacy_modifier_trigger(&target.dictation);
     if trigger.is_some() || is_unconfigured_shortcut(&target.dictation) {
         inner.side_aware_combo.lock().take();
+        inner.mouse_dictation.lock().take();
+    } else if crate::shortcut_binding::binding_requires_mouse_hook(&target.dictation) {
+        inner.side_aware_combo.lock().take();
+        let mut mouse_slot = inner.mouse_dictation.lock();
+        if let Some(monitor) = mouse_slot.as_ref() {
+            monitor
+                .update_binding(target.dictation.clone())
+                .map_err(|error| error.to_string())?;
+        } else {
+            let (send, receive) = mpsc::channel();
+            let monitor = crate::mouse_dictation::MouseDictationMonitor::start(
+                target.dictation.clone(),
+                send,
+            )
+            .map_err(|error| error.to_string())?;
+            let owned = Arc::clone(inner);
+            std::thread::Builder::new()
+                .name("openless-mouse-dictation-bridge".into())
+                .spawn(move || combo_hotkey_bridge_loop(owned, receive))
+                .map_err(|error| error.to_string())?;
+            *mouse_slot = Some(monitor);
+        }
     } else if crate::shortcut_binding::binding_requires_side_aware_hook(&target.dictation) {
+        inner.mouse_dictation.lock().take();
         let mut side_slot = inner.side_aware_combo.lock();
         if let Some(monitor) = side_slot.as_ref() {
             monitor
@@ -221,6 +244,7 @@ fn reconcile_hotkeys_on_main(
         }
     } else {
         inner.side_aware_combo.lock().take();
+        inner.mouse_dictation.lock().take();
         let (send, receive) = mpsc::channel();
         let monitor = ComboHotkeyMonitor::start(target.dictation.clone(), send)
             .map_err(|error| error.to_string())?;

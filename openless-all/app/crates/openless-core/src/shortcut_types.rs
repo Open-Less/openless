@@ -56,12 +56,29 @@ pub fn binding_requires_side_aware_hook(binding: &ShortcutBinding) -> bool {
             .any(|tag| is_side_specific_modifier_tag(tag))
 }
 
+pub fn is_mouse_button_primary(primary: &str) -> bool {
+    matches!(
+        primary.trim().to_ascii_uppercase().as_str(),
+        "MOUSE4" | "MOUSE5"
+    )
+}
+
+pub fn binding_requires_mouse_hook(binding: &ShortcutBinding) -> bool {
+    is_mouse_button_primary(&binding.primary)
+}
+
 pub const SIDE_SPECIFIC_NON_DICTATION_MSG: &str =
     "Side-specific modifier shortcuts are only supported for dictation start/stop.";
+
+pub const MOUSE_NON_DICTATION_MSG: &str =
+    "Mouse button shortcuts are only supported for dictation start/stop.";
 
 pub fn reject_side_specific_non_dictation(binding: &ShortcutBinding) -> Result<(), String> {
     if binding.primary == "MacDictationKey" {
         return Err("The Mac Dictation key is only supported for dictation start/stop.".into());
+    }
+    if binding_requires_mouse_hook(binding) {
+        return Err(MOUSE_NON_DICTATION_MSG.to_string());
     }
     if binding_requires_side_aware_hook(binding) {
         return Err(SIDE_SPECIFIC_NON_DICTATION_MSG.to_string());
@@ -234,6 +251,12 @@ pub fn validate_shortcut_binding(binding: &ShortcutBinding) -> Result<(), Shortc
         return Ok(());
     }
 
+    if binding_requires_mouse_hook(binding) && binding_requires_side_aware_hook(binding) {
+        return Err(ShortcutBindingError::UnsupportedModifier(
+            "mouse button bindings do not support side-specific modifiers".into(),
+        ));
+    }
+
     validate_primary(&binding.primary)?;
     for raw in &binding.modifiers {
         if binding_requires_side_aware_hook(binding) {
@@ -264,6 +287,8 @@ pub fn validate_shortcut_binding(binding: &ShortcutBinding) -> Result<(), Shortc
 }
 
 fn validate_primary(raw: &str) -> Result<(), ShortcutBindingError> {
+    // Literal space character must not be trimmed to empty (#1109).
+    let raw = if raw == " " { "Space" } else { raw };
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(ShortcutBindingError::UnsupportedKey("(空)".into()));
@@ -300,6 +325,8 @@ fn validate_primary(raw: &str) -> Result<(), ShortcutBindingError> {
             | "LEFT"
             | "ARROWRIGHT"
             | "RIGHT"
+            | "MOUSE4"
+            | "MOUSE5"
             | "F1"
             | "F2"
             | "F3"

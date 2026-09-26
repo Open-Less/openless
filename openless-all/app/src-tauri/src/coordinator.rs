@@ -523,6 +523,8 @@ struct Inner {
     /// 代替 modifier-only 的 hotkey monitor。`None` 表示不使用自定义组合键或还没成功安装。
     combo_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     side_aware_combo: Mutex<Option<crate::side_aware_combo::SideAwareComboMonitor>>,
+    /// Mouse4/Mouse5 听写监听（WH_MOUSE_LL）；与 combo / side-aware 互斥。
+    mouse_dictation: Mutex<Option<crate::mouse_dictation::MouseDictationMonitor>>,
     translation_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     switch_style_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     open_app_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
@@ -680,6 +682,7 @@ impl Coordinator {
                 less_computer_combo_pending_press: Mutex::new(None),
                 combo_hotkey: Mutex::new(None),
                 side_aware_combo: Mutex::new(None),
+                mouse_dictation: Mutex::new(None),
                 translation_hotkey: Mutex::new(None),
                 switch_style_hotkey: Mutex::new(None),
                 open_app_hotkey: Mutex::new(None),
@@ -808,6 +811,7 @@ impl Coordinator {
             less_computer_combo_pending_press: Mutex::new(None),
             combo_hotkey: Mutex::new(None),
             side_aware_combo: Mutex::new(None),
+            mouse_dictation: Mutex::new(None),
             translation_hotkey: Mutex::new(None),
             switch_style_hotkey: Mutex::new(None),
             open_app_hotkey: Mutex::new(None),
@@ -1217,6 +1221,7 @@ impl Coordinator {
         if crate::shortcut_binding::legacy_modifier_trigger(&target.dictation).is_some() {
             take_combo_hotkey_on_main_thread(&self.inner);
             self.inner.side_aware_combo.lock().take();
+            self.inner.mouse_dictation.lock().take();
             log::info!("[coord] combo hotkey 已关闭（modifier-only）");
             return;
         }
@@ -1224,13 +1229,37 @@ impl Coordinator {
         if is_unconfigured_shortcut(&binding) {
             take_combo_hotkey_on_main_thread(&self.inner);
             self.inner.side_aware_combo.lock().take();
+            self.inner.mouse_dictation.lock().take();
             log::info!("[coord] combo hotkey 已关闭（无绑定）");
+            return;
+        }
+
+        if crate::shortcut_binding::binding_requires_mouse_hook(&binding) {
+            take_combo_hotkey_on_main_thread(&self.inner);
+            self.inner.side_aware_combo.lock().take();
+            self.inner.mouse_dictation.lock().take();
+            let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
+            match crate::mouse_dictation::MouseDictationMonitor::start(binding, tx) {
+                Ok(monitor) => {
+                    *self.inner.mouse_dictation.lock() = Some(monitor);
+                    let bridge_inner = Arc::clone(&self.inner);
+                    std::thread::Builder::new()
+                        .name("openless-mouse-dictation-bridge".into())
+                        .spawn(move || combo_hotkey_bridge_loop(bridge_inner, rx))
+                        .ok();
+                    log::info!("[coord] mouse dictation listener installed (via update)");
+                }
+                Err(e) => {
+                    log::warn!("[coord] update mouse dictation binding 失败: {e}");
+                }
+            }
             return;
         }
 
         if crate::shortcut_binding::binding_requires_side_aware_hook(&binding) {
             take_combo_hotkey_on_main_thread(&self.inner);
             self.inner.side_aware_combo.lock().take();
+            self.inner.mouse_dictation.lock().take();
             let (tx, rx) = mpsc::channel::<HotkeyEvent>();
             let combo_tx = spawn_combo_abort_bridge(&self.inner, handle_trigger_combined);
             match crate::side_aware_combo::SideAwareComboMonitor::start(binding, tx, combo_tx) {
@@ -1251,6 +1280,7 @@ impl Coordinator {
         }
 
         self.inner.side_aware_combo.lock().take();
+        self.inner.mouse_dictation.lock().take();
         let inner_clone = Arc::clone(&self.inner);
         let binding_for_main = binding.clone();
         if self

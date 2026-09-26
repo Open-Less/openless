@@ -1374,6 +1374,7 @@ export const zhTW: typeof zhCN = {
       comboRecorded: '已錄製',
       comboClear: '清除',
       comboConflict: '此快捷鍵組合不可用',
+      mouseSideHint: '支援滑鼠側鍵 Mouse4 / Mouse5（Windows 全域）',
       allowNonTsfFallbackLabel: '允許非 TSF 兜底',
       allowNonTsfFallbackDesc:
         'Windows：TSF 失敗時使用分批 Unicode SendInput；如果仍失敗，再複製到剪貼簿。',

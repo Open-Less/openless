@@ -330,9 +330,10 @@ pub use shared_types::{
     LOCAL_ASR_KEEP_LOADED_FOREVER_SECS,
 };
 pub use shortcut_types::{
-    binding_from_legacy_trigger, binding_requires_side_aware_hook, bindings_overlap,
-    is_modifier_chord_binding, is_side_specific_modifier_tag, legacy_modifier_trigger,
-    normalize_side_modifier_tag, reconcile_hotkey_collisions, reject_bare_shift_dictation_shortcut,
+    binding_from_legacy_trigger, binding_requires_mouse_hook, binding_requires_side_aware_hook,
+    bindings_overlap, is_modifier_chord_binding, is_mouse_button_primary,
+    is_side_specific_modifier_tag, legacy_modifier_trigger, normalize_side_modifier_tag,
+    reconcile_hotkey_collisions, reject_bare_shift_dictation_shortcut,
     reject_dictation_qa_hotkey_overlap, reject_dictation_translation_hotkey_overlap,
     reject_hotkey_collisions, reject_modifier_only_action_shortcut,
     reject_non_dictation_side_specific_shortcuts, reject_qa_less_computer_hotkey_overlap,
@@ -340,7 +341,7 @@ pub use shortcut_types::{
     reject_qa_translation_hotkey_overlap, reject_selection_polish_hotkey_collisions,
     reject_side_specific_non_dictation, reject_style_pack_hotkey_conflicts,
     sync_dictation_hotkey_legacy_fields, validate_shortcut_binding, ShortcutBindingError,
-    SIDE_SPECIFIC_NON_DICTATION_MSG,
+    MOUSE_NON_DICTATION_MSG, SIDE_SPECIFIC_NON_DICTATION_MSG,
 };
 pub use silence_auto_stop::{SilenceAutoStop, SilenceDecision};
 pub use streaming_insert::{

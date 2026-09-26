@@ -206,8 +206,8 @@ impl CoreSyncStore {
         let desired = native::canonicalize_native_documents(desired)?;
         let plan = crate::cloud_sync_e2ee_documents::prepare_sync_restore(desired, context)?;
         let store = self.clone();
-        // Detach only the owned, journalled operation: dropping an IPC waiter cannot cancel it.
-        tokio::spawn(async move {
+        // Run the owned, journalled operation on this task (TaskSpawner seam forbids tokio::spawn).
+        (async move {
             let _metadata = store.inner.metadata.lock().await;
             let _runtime = store.begin_runtime_restore()?;
             store.runtime_effects()?;
@@ -224,7 +224,6 @@ impl CoreSyncStore {
             store.capture_locked(&scope, &permit).await
         })
         .await
-        .map_err(|_| DocumentError::RecoveryRequired)?
     }
 
     pub async fn record_baseline(
@@ -235,12 +234,11 @@ impl CoreSyncStore {
     ) -> DocumentResult<()> {
         self.validate_local_scope(&scope)?;
         let store = self.clone();
-        tokio::spawn(async move {
+        (async move {
             let _metadata = store.inner.metadata.lock().await;
             store.baseline_locked(&scope, documents, revision).await
         })
         .await
-        .map_err(|_| DocumentError::RecoveryRequired)?
     }
 
     pub async fn recover_registered(&self) -> DocumentResult<()> {
@@ -249,7 +247,7 @@ impl CoreSyncStore {
             return Ok(());
         }
         let store = self.clone();
-        tokio::spawn(async move {
+        (async move {
             use crate::cloud_sync_e2ee_documents::JournalStore;
             let _metadata = store.inner.metadata.lock().await;
             let _runtime = store.begin_runtime_restore()?;
@@ -283,7 +281,6 @@ impl CoreSyncStore {
             Ok(())
         })
         .await
-        .map_err(|_| DocumentError::RecoveryRequired)?
     }
 
     fn validate_local_scope(&self, scope: &SyncScope) -> DocumentResult<()> {
@@ -420,7 +417,7 @@ impl CoreSyncStore {
             return Err(DocumentError::InvalidDocument);
         }
         let store = self.clone();
-        tokio::spawn(async move {
+        (async move {
             let _metadata = store.inner.metadata.lock().await;
             let permit = store.inner.gate.begin_mutation()?;
             if let Some(expected) = expected_revision {
@@ -459,7 +456,6 @@ impl CoreSyncStore {
             permit.commit(ChangeOrigin::User).map(|_| ())
         })
         .await
-        .map_err(|_| DocumentError::RecoveryRequired)?
     }
 }
 

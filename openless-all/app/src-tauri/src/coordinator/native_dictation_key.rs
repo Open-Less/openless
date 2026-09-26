@@ -37,6 +37,28 @@ impl Coordinator {
                     }
                     inner.combo_hotkey.lock().take();
                     inner.side_aware_combo.lock().take();
+                    inner.mouse_dictation.lock().take();
+                } else if crate::shortcut_binding::binding_requires_mouse_hook(&binding) {
+                    let mut slot = inner.mouse_dictation.lock();
+                    if let Some(monitor) = slot.as_ref() {
+                        monitor
+                            .update_binding(binding)
+                            .map_err(|error| error.to_string())?;
+                    } else {
+                        let (tx, rx) = mpsc::channel();
+                        let monitor = crate::mouse_dictation::MouseDictationMonitor::start(
+                            binding, tx,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        let bridge_inner = Arc::clone(&inner);
+                        std::thread::Builder::new()
+                            .name("openless-mouse-dictation-bridge".into())
+                            .spawn(move || combo_hotkey_bridge_loop(bridge_inner, rx))
+                            .map_err(|error| error.to_string())?;
+                        *slot = Some(monitor);
+                    }
+                    inner.combo_hotkey.lock().take();
+                    inner.side_aware_combo.lock().take();
                 } else if crate::shortcut_binding::binding_requires_side_aware_hook(&binding) {
                     let mut slot = inner.side_aware_combo.lock();
                     if let Some(monitor) = slot.as_ref() {
@@ -62,6 +84,7 @@ impl Coordinator {
                         *slot = Some(monitor);
                     }
                     inner.combo_hotkey.lock().take();
+                    inner.mouse_dictation.lock().take();
                 } else {
                     let mut slot = inner.combo_hotkey.lock();
                     if let Some(monitor) = slot.as_ref() {
@@ -80,6 +103,7 @@ impl Coordinator {
                         *slot = Some(monitor);
                     }
                     inner.side_aware_combo.lock().take();
+                    inner.mouse_dictation.lock().take();
                 }
                 if let Some(monitor) = inner.hotkey.lock().as_ref() {
                     monitor.update_binding(crate::types::HotkeyBinding {

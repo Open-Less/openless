@@ -3,8 +3,9 @@
 use crate::types::ShortcutBinding;
 
 pub use openless_core::{
-    binding_requires_side_aware_hook, bindings_overlap, is_side_specific_modifier_tag,
-    legacy_modifier_trigger, normalize_side_modifier_tag, reject_side_specific_non_dictation,
+    binding_requires_mouse_hook, binding_requires_side_aware_hook, bindings_overlap,
+    is_mouse_button_primary, is_side_specific_modifier_tag, legacy_modifier_trigger,
+    normalize_side_modifier_tag, reject_side_specific_non_dictation, MOUSE_NON_DICTATION_MSG,
     SIDE_SPECIFIC_NON_DICTATION_MSG,
 };
 

@@ -89,6 +89,11 @@ mod side_aware_combo;
 #[cfg(mobile)]
 #[path = "mobile_stubs/side_aware_combo.rs"]
 mod side_aware_combo;
+#[cfg(not(mobile))]
+mod mouse_dictation;
+#[cfg(mobile)]
+#[path = "mobile_stubs/mouse_dictation.rs"]
+mod mouse_dictation;
 mod tauri_events;
 mod types;
 #[cfg(not(mobile))]
