@@ -21,9 +21,10 @@ const INPUT_ID: &str = "openless-vocab-input";
 const SEARCH_ID: &str = "openless-vocab-search";
 const SEARCH_INPUT_ID: &str = "openless-vocab-search-input";
 const NEW_WORD_OPEN: &str = "openless-vocab-new-word-open";
+const NEW_WORD_FOCUS: &str = "openless-vocab-new-word-focus";
 const PRESETS_OPEN: &str = "openless-vocab-presets-open";
 const SELECTION_ID: &str = "openless-vocab-selection";
-const TAB_HEIGHT: f32 = 30.0;
+const TAB_HEIGHT: f32 = 32.0;
 const SEARCH_WIDTH: f32 = 210.0;
 
 // ── Page-local UI state ─────────────────────────────────────────────────────
@@ -86,8 +87,10 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
     right = new_word_rect.left() - 8.0;
     if primary_button(ui, new_word_rect, new_word, Some(IconName::Plus)).clicked() {
         opened_new_word_now = true;
-        ui.ctx()
-            .data_mut(|data| data.insert_temp(egui::Id::new(NEW_WORD_OPEN), true));
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(egui::Id::new(NEW_WORD_OPEN), true);
+            data.insert_temp(egui::Id::new(NEW_WORD_FOCUS), true);
+        });
         vm.vocab_input.clear();
         vm.vocab_selected_presets.clear();
     }
@@ -284,47 +287,52 @@ fn tool_row(
     let tabs = [
         (TabIcon::None, tr_l10n(lang, "vocab.filter_all")),
         (TabIcon::Sparkle, tr_l10n(lang, "vocab.filter_auto")),
-        (TabIcon::Pencil, tr_l10n(lang, "vocab.filter_manual")),
+        (TabIcon::Feather, tr_l10n(lang, "vocab.filter_manual")),
     ];
-    let (row, _) = ui.allocate_exact_size(egui::vec2(width, 34.0), egui::Sense::hover());
+    let (row, _) = ui.allocate_exact_size(egui::vec2(width, 40.0), egui::Sense::hover());
 
     let tabs_width: f32 = tabs
         .iter()
         .map(|(icon, label)| {
-            layout::text_width(ui, label, 12.5)
-                + if *icon == TabIcon::None { 22.0 } else { 38.0 }
-                + 4.0
+            layout::text_width(ui, label, 13.0) + if *icon == TabIcon::None { 28.0 } else { 47.0 }
         })
         .sum();
     let tab_background = egui::Rect::from_min_size(
-        row.min + egui::vec2(0.0, 1.0),
-        egui::vec2(tabs_width + 12.0, TAB_HEIGHT + 2.0),
+        row.min + egui::vec2(0.0, 0.5),
+        egui::vec2(tabs_width + 10.0, TAB_HEIGHT + 7.0),
     );
     ui.painter().rect_filled(
         tab_background,
-        egui::CornerRadius::same(18),
+        egui::CornerRadius::same(20),
         theme::SURFACE_2,
     );
     ui.painter().rect_stroke(
         tab_background,
-        egui::CornerRadius::same(18),
-        egui::Stroke::new(0.8, theme::LINE),
+        egui::CornerRadius::same(20),
+        egui::Stroke::new(0.5, theme::LINE),
         egui::StrokeKind::Inside,
     );
     // 先算出每个 tab 的矩形：活动胶囊的位置只用一个动画值插值。以前在循环里对
     // 同一个 id 反复写入「非活动 tab 就指向活动位置」的目标值，同一帧三次写不同
     // 目标，胶囊会抖动。
     let mut tab_rects = Vec::with_capacity(tabs.len());
-    let mut x = row.left() + 6.0;
+    let mut x = row.left() + 3.0;
     for (icon, label) in &tabs {
-        let text_width = layout::text_width(ui, label, 12.5);
-        let tab_width = text_width + if *icon == TabIcon::None { 22.0 } else { 38.0 };
+        let text_width = layout::text_width(ui, label, 13.0);
+        let tab_width = text_width + if *icon == TabIcon::None { 28.0 } else { 47.0 };
         tab_rects.push(egui::Rect::from_min_size(
-            egui::pos2(x, row.top() + 2.0),
+            egui::pos2(x, row.top() + 4.0),
             egui::vec2(tab_width, TAB_HEIGHT),
         ));
-        x += tab_width + 4.0;
+        x += tab_width + 2.0;
     }
+    #[cfg(test)]
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(
+            egui::Id::new("openless-vocab-tabs-test-rects"),
+            (tab_background, tab_rects.clone()),
+        );
+    });
     let active = vm.vocab_filter.min(2);
     let pill_x = ui.ctx().animate_value_with_time(
         ui.id().with("vocab-active-pill-x"),
@@ -349,31 +357,35 @@ fn tool_row(
         );
         let painter = ui.painter().with_clip_rect(rect);
         if !active && response.hovered() {
-            painter.rect_filled(rect, egui::CornerRadius::same(8), theme::LINE);
+            painter.rect_filled(rect, egui::CornerRadius::same(16), theme::SURFACE);
         }
-        let ink = if active { theme::INK } else { theme::INK_3 };
+        let ink = if active || response.hovered() {
+            theme::INK
+        } else {
+            theme::INK_3
+        };
         let text_left = if *icon != TabIcon::None {
-            let center = egui::pos2(rect.left() + 13.0, rect.center().y);
+            let center = egui::pos2(rect.left() + 21.0, rect.center().y);
             match icon {
-                TabIcon::Pencil => draw_pencil(ui, center, ink),
+                TabIcon::Feather => icons::draw_icon(ui, center, IconName::Feather, ink),
                 _ => icons::draw_icon(ui, center, IconName::Sparkle, ink),
             }
-            rect.left() + 26.0
+            rect.left() + 33.0
         } else {
-            rect.left() + 11.0
+            rect.left() + 14.0
         };
         painter.text(
             egui::pos2(text_left, rect.center().y),
             egui::Align2::LEFT_CENTER,
             *label,
-            egui::FontId::proportional(12.5),
+            egui::FontId::proportional(13.0),
             ink,
         );
         if response.clicked() {
             _actions.push(FrontendAction::VocabFilter(index));
         }
     }
-    let x = tab_rects.last().map(|rect| rect.right() + 4.0).unwrap_or(x);
+    let x = tab_rects.last().map(|rect| rect.right() + 3.0).unwrap_or(x);
 
     // Select-all checkbox: label shows the selected count while non-empty.
     let all_selected = !visible.is_empty() && visible.iter().all(|index| selected.contains(index));
@@ -522,32 +534,7 @@ enum ChipAction {
 enum TabIcon {
     None,
     Sparkle,
-    Pencil,
-}
-
-fn draw_pencil(ui: &egui::Ui, center: egui::Pos2, color: egui::Color32) {
-    let stroke = egui::Stroke::new(1.25, color);
-    ui.painter().line_segment(
-        [
-            center + egui::vec2(-5.0, 5.0),
-            center + egui::vec2(3.5, -3.5),
-        ],
-        stroke,
-    );
-    ui.painter().line_segment(
-        [
-            center + egui::vec2(3.5, -3.5),
-            center + egui::vec2(5.0, -1.2),
-        ],
-        stroke,
-    );
-    ui.painter().line_segment(
-        [
-            center + egui::vec2(-5.0, 5.0),
-            center + egui::vec2(-2.6, 4.4),
-        ],
-        stroke,
-    );
+    Feather,
 }
 
 fn word_chip(ui: &mut egui::Ui, entry: &VocabEntry, selected: bool) -> ChipAction {
@@ -995,8 +982,12 @@ fn new_word_overlay(
         egui::pos2(body.left() + layout::SIDEBAR_WIDTH, body.top()),
         body.max,
     );
+    // Tauri ModalShell is 440px wide and grows with the actual preset cards.
+    let presets = vm.vocab_saved_presets.clone();
     let modal_width = 440.0_f32.min(region.width() - 36.0);
-    let modal_height = 426.0_f32.min(region.height() - 32.0);
+    let modal_height = (224.0 + presets.len() as f32 * 54.0)
+        .max(260.0)
+        .min(region.height() - 32.0);
     let modal =
         egui::Rect::from_center_size(region.center(), egui::vec2(modal_width, modal_height));
     let mut close = ctx.input(|input| input.key_pressed(egui::Key::Escape));
@@ -1005,51 +996,106 @@ fn new_word_overlay(
             && input
                 .pointer
                 .interact_pos()
-                .is_some_and(|pos| region.contains(pos) && !modal.contains(pos))
+                .is_some_and(|pos| body.contains(pos) && !modal.contains(pos))
     }) {
         close = true;
     }
     egui::Area::new(egui::Id::new("openless-vocab-new-word-area"))
         .order(egui::Order::Foreground)
-        .fixed_pos(region.min)
+        .fixed_pos(body.min)
+        .constrain(false)
         .show(ctx, |ui| {
-            ui.set_min_size(region.size());
-            ui.painter().rect_filled(region, 0, theme::OVERLAY);
-            let _ = ui.allocate_rect(region, egui::Sense::click());
+            ui.set_min_size(body.size());
+            ui.painter().rect_filled(body, 0, theme::OVERLAY);
+            let _ = ui.allocate_rect(body, egui::Sense::click());
             let mut child = ui.new_child(
                 egui::UiBuilder::new()
                     .id_salt("new-word-dialog")
                     .max_rect(modal)
                     .layout(egui::Layout::top_down(egui::Align::Min)),
             );
-            child.set_clip_rect(modal);
-            egui::Frame::new()
+            child.set_clip_rect(body);
+            let card = egui::Frame::new()
                 .fill(theme::SURFACE)
-                .stroke(egui::Stroke::new(1.0, theme::LINE))
+                .stroke(egui::Stroke::new(0.5, theme::LINE))
                 .corner_radius(egui::CornerRadius::same(16))
+                .shadow(egui::Shadow {
+                    offset: [0, 24],
+                    blur: 32,
+                    spread: 0,
+                    color: egui::Color32::from_black_alpha(72),
+                })
                 .inner_margin(egui::Margin::same(20))
                 .show(&mut child, |ui| {
-                    ui.set_width((modal_width - 40.0).max(1.0));
-                    ui.label(
-                        egui::RichText::new(tr_l10n(lang, "vocab.newWordTitle"))
-                            .size(15.0)
-                            .strong(),
-                    );
-                    ui.label(
-                        egui::RichText::new(tr_l10n(lang, "vocab.newWordDesc"))
-                            .size(12.0)
-                            .color(theme::INK_3),
-                    );
+                    ui.set_width((modal_width - 44.0).max(1.0));
+                    ui.set_min_height((modal_height - 44.0).max(1.0));
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label(
+                                egui::RichText::new(tr_l10n(lang, "vocab.newWordTitle"))
+                                    .size(15.0)
+                                    .strong()
+                                    .color(theme::INK),
+                            );
+                            ui.add_space(4.0);
+                            ui.label(
+                                egui::RichText::new(tr_l10n(lang, "vocab.newWordDesc"))
+                                    .size(12.5)
+                                    .color(theme::INK_3),
+                            );
+                        });
+                        let remaining =
+                            (modal_width - 44.0 - ui.min_rect().width() - 34.0).max(0.0);
+                        ui.add_space(remaining);
+                        let (rect, response) =
+                            ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
+                        if response.hovered() {
+                            ui.painter().rect_filled(
+                                rect,
+                                egui::CornerRadius::same(8),
+                                theme::SURFACE_2,
+                            );
+                        }
+                        icons::draw_icon(ui, rect.center(), IconName::Close, theme::INK_4);
+                        #[cfg(test)]
+                        ui.ctx().data_mut(|data| {
+                            data.insert_temp(egui::Id::new("openless-new-word-close-rect"), rect)
+                        });
+                        if response.clicked() {
+                            close = true;
+                        }
+                    });
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
-                        let field_width = (ui.available_width() - 82.0).max(90.0);
-                        let edit = ui.add_sized(
-                            [field_width, 36.0],
-                            egui::TextEdit::singleline(&mut vm.vocab_input)
-                                .hint_text(tr_l10n(lang, "vocab.newWordInputPlaceholder")),
-                        );
-                        if (edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                            || ui.button(tr_l10n(lang, "btn.add")).clicked()
+                        let field_width = (modal_width - 44.0 - 92.0).max(90.0);
+                        let edit = egui::Frame::new()
+                            .fill(theme::SURFACE_2)
+                            .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
+                            .corner_radius(egui::CornerRadius::same(19))
+                            .inner_margin(egui::Margin::symmetric(12, 9))
+                            .show(ui, |ui| {
+                                ui.add_sized(
+                                    [field_width - 24.0, 20.0],
+                                    egui::TextEdit::singleline(&mut vm.vocab_input)
+                                        .hint_text(tr_l10n(lang, "vocab.newWordInputPlaceholder"))
+                                        .frame(egui::Frame::NONE),
+                                )
+                            })
+                            .inner;
+                        if ui
+                            .ctx()
+                            .data_mut(|data| {
+                                data.remove_temp::<bool>(egui::Id::new(NEW_WORD_FOCUS))
+                            })
+                            .unwrap_or(false)
+                        {
+                            edit.request_focus();
+                        }
+                        let add = tr_l10n(lang, "btn.add");
+                        let (button, _) =
+                            ui.allocate_exact_size(egui::vec2(84.0, 32.0), egui::Sense::hover());
+                        if primary_button(ui, button, add, Some(IconName::Plus)).clicked()
+                            || (edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                         {
                             let word = vm.vocab_input.trim().to_string();
                             if !word.is_empty() {
@@ -1058,58 +1104,112 @@ fn new_word_overlay(
                             }
                         }
                     });
-                    ui.add_space(14.0);
+                    ui.add_space(16.0);
                     ui.label(
                         egui::RichText::new(tr_l10n(lang, "vocab.newWordTemplates"))
                             .size(12.5)
                             .strong(),
                     );
-                    ui.add_space(7.0);
-                    let names = [
-                        tr_l10n(lang, "vocab.presets_dev_tools"),
-                        tr_l10n(lang, "vocab.presets_products"),
-                        tr_l10n(lang, "vocab.presets_terms"),
-                        tr_l10n(lang, "vocab.presets_english"),
-                    ];
-                    for (index, name) in names.iter().enumerate() {
-                        let selected = vm.vocab_selected_presets.contains(&index);
-                        let label = if selected {
-                            format!("✓ {name}")
-                        } else {
-                            (*name).to_string()
-                        };
-                        if ui
-                            .add_sized(
-                                [ui.available_width(), 34.0],
-                                egui::Button::new(label)
-                                    .fill(if selected {
+                    ui.add_space(8.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt("openless-new-word-templates")
+                        .max_height((modal_height - 222.0).max(52.0))
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            for (index, preset) in presets.iter().enumerate() {
+                                let selected = vm.vocab_selected_presets.contains(&index);
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::vec2(ui.available_width(), 46.0),
+                                    egui::Sense::click(),
+                                );
+                                ui.painter().rect_filled(
+                                    rect,
+                                    egui::CornerRadius::same(10),
+                                    if selected {
                                         theme::BLUE_SOFT
+                                    } else if response.hovered() {
+                                        theme::SURFACE_2
                                     } else {
                                         theme::SURFACE
-                                    })
-                                    .stroke(egui::Stroke::new(
-                                        0.8,
-                                        if selected { theme::BLUE } else { theme::LINE },
-                                    ))
-                                    .corner_radius(egui::CornerRadius::same(9)),
-                            )
-                            .clicked()
-                        {
-                            if selected {
-                                vm.vocab_selected_presets.retain(|item| *item != index);
-                            } else {
-                                vm.vocab_selected_presets.push(index);
+                                    },
+                                );
+                                ui.painter().rect_stroke(
+                                    rect,
+                                    egui::CornerRadius::same(10),
+                                    egui::Stroke::new(
+                                        if selected { 1.0 } else { 0.5 },
+                                        if selected {
+                                            theme::BLUE
+                                        } else {
+                                            theme::LINE_STRONG
+                                        },
+                                    ),
+                                    egui::StrokeKind::Inside,
+                                );
+                                let text_clip = egui::Rect::from_min_max(
+                                    rect.min,
+                                    egui::pos2(rect.right() - 65.0, rect.bottom()),
+                                );
+                                let painter = ui.painter().with_clip_rect(text_clip);
+                                painter.text(
+                                    rect.left_top() + egui::vec2(12.0, 14.0),
+                                    egui::Align2::LEFT_CENTER,
+                                    &preset.name,
+                                    egui::FontId::proportional(13.0),
+                                    theme::INK,
+                                );
+                                painter.text(
+                                    rect.left_top() + egui::vec2(12.0, 32.0),
+                                    egui::Align2::LEFT_CENTER,
+                                    preset.phrases.replace('、', " · "),
+                                    egui::FontId::proportional(11.5),
+                                    theme::INK_4,
+                                );
+                                let count =
+                                    preset.phrases.split('、').filter(|s| !s.is_empty()).count();
+                                ui.painter().text(
+                                    egui::pos2(
+                                        rect.right() - if selected { 30.0 } else { 12.0 },
+                                        rect.center().y,
+                                    ),
+                                    egui::Align2::RIGHT_CENTER,
+                                    fmt_l10n(lang, "vocab.newWordTemplateCount", &[&count]),
+                                    egui::FontId::proportional(11.5),
+                                    theme::INK_4,
+                                );
+                                if selected {
+                                    icons::draw_icon(
+                                        ui,
+                                        rect.right_center() - egui::vec2(12.0, 0.0),
+                                        IconName::Check,
+                                        theme::INK_2,
+                                    );
+                                }
+                                if response.clicked() {
+                                    if selected {
+                                        vm.vocab_selected_presets.retain(|item| *item != index);
+                                    } else {
+                                        vm.vocab_selected_presets.push(index);
+                                    }
+                                }
+                                if index + 1 < presets.len() {
+                                    ui.add_space(8.0);
+                                }
                             }
-                        }
-                    }
-                    ui.add_space(14.0);
+                        });
+                    ui.add_space(18.0);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .add_enabled(
                                 !vm.vocab_selected_presets.is_empty(),
-                                egui::Button::new(tr_l10n(lang, "vocab.newWordAddSelected"))
-                                    .fill(theme::INK)
-                                    .stroke(egui::Stroke::NONE),
+                                egui::Button::new(
+                                    egui::RichText::new(tr_l10n(lang, "vocab.newWordAddSelected"))
+                                        .size(13.0)
+                                        .color(theme::SURFACE),
+                                )
+                                .fill(theme::INK)
+                                .stroke(egui::Stroke::NONE)
+                                .corner_radius(egui::CornerRadius::same(8)),
                             )
                             .clicked()
                         {
@@ -1118,11 +1218,28 @@ fn new_word_overlay(
                             }
                             close = true;
                         }
-                        if ui.button(tr_l10n(lang, "common.close")).clicked() {
+                        if ui
+                            .add(
+                                egui::Button::new(tr_l10n(lang, "common.close"))
+                                    .fill(theme::SURFACE)
+                                    .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
+                                    .corner_radius(egui::CornerRadius::same(8)),
+                            )
+                            .clicked()
+                        {
                             close = true;
                         }
                     });
                 });
+            #[cfg(test)]
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(
+                    egui::Id::new("openless-new-word-card-rect"),
+                    card.response.rect,
+                )
+            });
+            #[cfg(not(test))]
+            let _ = card;
         });
     if close {
         ctx.data_mut(|data| data.insert_temp(egui::Id::new(NEW_WORD_OPEN), false));
@@ -1250,5 +1367,87 @@ mod tests {
                 collapsed_top = rect.top();
             }
         }
+    }
+
+    #[test]
+    fn filters_match_tauri_segmented_control_spacing() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel::default();
+        let _ = crate::ui::frontend::run_pass(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1240.0, 800.0),
+                )),
+                ..Default::default()
+            },
+            |ui| tool_row(ui, 900.0, &mut vm, &[], &BTreeSet::new(), &mut Vec::new()),
+        );
+        let (outer, items): (egui::Rect, Vec<egui::Rect>) = ctx.data(|data| {
+            data.get_temp(egui::Id::new("openless-vocab-tabs-test-rects"))
+                .unwrap()
+        });
+        assert_eq!(outer.height(), 39.0);
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].height(), 32.0);
+        assert_eq!(items[0].left() - outer.left(), 3.0);
+        assert_eq!(items[1].left() - items[0].right(), 2.0);
+        assert_eq!(outer.right() - items[2].right(), 3.0);
+    }
+
+    #[test]
+    fn new_word_dialog_uses_tauri_card_and_real_presets() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel::default();
+        vm.lang = openless_linux_egui::Lang::ZhCn;
+        let presets: Vec<_> = [
+            ("programmer", "PR、CI、Rust"),
+            ("chef", "heat、knife"),
+            ("clerk", "letter、report"),
+        ]
+        .into_iter()
+        .map(
+            |(name, phrases)| super::super::view_model::SavedVocabPreset {
+                name: name.into(),
+                phrases: phrases.into(),
+            },
+        )
+        .collect();
+        vm.vocab_saved_presets = presets.clone();
+        let mut heights = Vec::new();
+        for count in [1, 3] {
+            vm.vocab_saved_presets.truncate(count);
+            let _ = crate::ui::frontend::run_pass(
+                &ctx,
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1240.0, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |_ui| new_word_overlay(&ctx, &mut vm, &mut Vec::new()),
+            );
+            let card: egui::Rect = ctx.data(|data| {
+                data.get_temp(egui::Id::new("openless-new-word-card-rect"))
+                    .unwrap()
+            });
+            let close: egui::Rect = ctx.data(|data| {
+                data.get_temp(egui::Id::new("openless-new-word-close-rect"))
+                    .unwrap()
+            });
+            assert!(card.contains_rect(close), "close={close:?}, card={card:?}");
+            assert!((card.width() - 440.0).abs() < 10.0, "card={card:?}");
+            assert!(card.height() < 440.0, "card={card:?}");
+            heights.push(card.height());
+            if count == 1 {
+                vm.vocab_saved_presets = presets.clone();
+            }
+        }
+        assert!(
+            heights[1] > heights[0] + 90.0,
+            "modal must grow with real presets: {heights:?}"
+        );
     }
 }

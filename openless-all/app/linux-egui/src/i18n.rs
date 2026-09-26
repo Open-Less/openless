@@ -5313,6 +5313,10 @@ pub const CATALOG: &[Msg] = &[
         key: "marketplace.installingBtn",
         text: row("安装中…", "安裝中…", "Installing…", "インストール中…", "설치 중…"),
     },
+    Msg {
+        key: "vocab.newWordTemplateCount",
+        text: row("{} 词", "{} 詞", "{} words", "{} 語", "{}개 단어"),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {
