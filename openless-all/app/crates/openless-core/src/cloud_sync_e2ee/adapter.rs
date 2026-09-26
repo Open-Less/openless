@@ -24,6 +24,7 @@ pub(crate) fn build(
     marketplace: Arc<crate::marketplace::MarketplaceService>,
     github_client_id: String,
     events: crate::events::BackendEventPublisher,
+    tasks: Arc<dyn crate::TaskSpawner>,
 ) -> SyncResult<(super::EncryptedSyncService, Arc<CoreSyncStore>)> {
     let origin = url::Url::parse(&config.service_origin)
         .map_err(|_| super::error("unsupported_protocol"))?;
@@ -63,6 +64,7 @@ pub(crate) fn build(
             device,
             gate,
             Arc::new(local.clone()),
+            tasks,
         )
         .map_err(document_error)?,
     );

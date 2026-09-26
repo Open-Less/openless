@@ -36,6 +36,7 @@ struct Inner {
     device: SourceDevice,
     gate: Arc<SyncWriteGate>,
     extensions: Arc<dyn ProtectedExtensionStore>,
+    tasks: Arc<dyn crate::TaskSpawner>,
     restoring: AtomicBool,
     metadata: tokio::sync::Mutex<()>,
     runtime_idle: std::sync::Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>,
@@ -50,6 +51,7 @@ impl CoreSyncStore {
         device: SourceDevice,
         gate: Arc<SyncWriteGate>,
         extensions: Arc<dyn ProtectedExtensionStore>,
+        tasks: Arc<dyn crate::TaskSpawner>,
     ) -> DocumentResult<Self> {
         let registered = gate::open_for_data_dir(&data_dir)?;
         if !Arc::ptr_eq(&registered, &gate) {
@@ -70,6 +72,7 @@ impl CoreSyncStore {
                 device,
                 gate,
                 extensions,
+                tasks,
                 restoring: AtomicBool::new(false),
                 metadata: tokio::sync::Mutex::new(()),
                 runtime_idle: std::sync::Mutex::new(None),
@@ -207,7 +210,7 @@ impl CoreSyncStore {
         let plan = crate::cloud_sync_e2ee_documents::prepare_sync_restore(desired, context)?;
         let store = self.clone();
         // Detach only the owned, journalled operation: dropping an IPC waiter cannot cancel it.
-        tokio::spawn(async move {
+        self.spawn_owned(async move {
             let _metadata = store.inner.metadata.lock().await;
             let _runtime = store.begin_runtime_restore()?;
             store.runtime_effects()?;
@@ -224,7 +227,6 @@ impl CoreSyncStore {
             store.capture_locked(&scope, &permit).await
         })
         .await
-        .map_err(|_| DocumentError::RecoveryRequired)?
     }
 
     pub async fn record_baseline(
@@ -235,12 +237,11 @@ impl CoreSyncStore {
     ) -> DocumentResult<()> {
         self.validate_local_scope(&scope)?;
         let store = self.clone();
-        tokio::spawn(async move {
+        self.spawn_owned(async move {
             let _metadata = store.inner.metadata.lock().await;
             store.baseline_locked(&scope, documents, revision).await
         })
         .await
-        .map_err(|_| DocumentError::RecoveryRequired)?
     }
 
     pub async fn recover_registered(&self) -> DocumentResult<()> {
@@ -249,7 +250,7 @@ impl CoreSyncStore {
             return Ok(());
         }
         let store = self.clone();
-        tokio::spawn(async move {
+        self.spawn_owned(async move {
             use crate::cloud_sync_e2ee_documents::JournalStore;
             let _metadata = store.inner.metadata.lock().await;
             let _runtime = store.begin_runtime_restore()?;
@@ -283,7 +284,24 @@ impl CoreSyncStore {
             Ok(())
         })
         .await
-        .map_err(|_| DocumentError::RecoveryRequired)?
+    }
+
+    /// Runs an owned operation on the host task spawner and awaits its outcome.
+    /// Dropping the awaiting caller cannot cancel the operation: the spawned
+    /// task owns the sender side of the channel.
+    async fn spawn_owned<T, F>(&self, operation: F) -> DocumentResult<T>
+    where
+        T: Send + 'static,
+        F: std::future::Future<Output = DocumentResult<T>> + Send + 'static,
+    {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.inner.tasks.spawn(Box::pin(async move {
+            let _ = sender.send(operation.await);
+        }));
+        match receiver.await {
+            Ok(outcome) => outcome,
+            Err(_) => Err(DocumentError::RecoveryRequired),
+        }
     }
 
     fn validate_local_scope(&self, scope: &SyncScope) -> DocumentResult<()> {
@@ -420,7 +438,7 @@ impl CoreSyncStore {
             return Err(DocumentError::InvalidDocument);
         }
         let store = self.clone();
-        tokio::spawn(async move {
+        self.spawn_owned(async move {
             let _metadata = store.inner.metadata.lock().await;
             let permit = store.inner.gate.begin_mutation()?;
             if let Some(expected) = expected_revision {
@@ -459,7 +477,6 @@ impl CoreSyncStore {
             permit.commit(ChangeOrigin::User).map(|_| ())
         })
         .await
-        .map_err(|_| DocumentError::RecoveryRequired)?
     }
 }
 

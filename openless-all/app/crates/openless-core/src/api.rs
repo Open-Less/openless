@@ -2502,6 +2502,7 @@ impl OpenLessBackend {
                     Arc::clone(&marketplace),
                     github_client_id,
                     BackendEventPublisher::new(Arc::clone(&events)),
+                    Arc::clone(&deps.task_spawner),
                 )?;
                 encrypted_sync = Some(service);
                 encrypted_sync_store = Some(store);
