@@ -78,7 +78,22 @@ GitHub 每仓库保留 10 GB 缓存，超出按 LRU 静默淘汰；淘汰后 job
 - 自动维护：`.github/workflows/cache-maintenance.yml` 每周一 03:17 UTC 运行并支持手动触发，预算 8 GB。
 - 合并/关闭 PR 后可手动立即回收：`gh api -X DELETE repos/Open-Less/openless/actions/caches?ref=refs/pull/<N>/merge`。
 
-## 5. 发版耗时
+## 5. 实测对照
+
+同一 PR（#1060）、同一批 job，改动前后：
+
+| job | 改动前（冷 / 超配额） | 缓存配额生效后 | 门控生效后 |
+|---|---|---|---|
+| Changed areas | — | — | 11 s |
+| macOS checks | 20m01s | 8m36s | 6m16s |
+| Windows checks | 20m04s | 15m30s | 13m17s |
+| Android | 8m11s | 5m50s | 5m50s |
+| macOS Rust 1.88 MSRV | 16m47s | 3m39s | 3m39s |
+| Linux egui（测试 + 打包） | 17m21s | 6m35s（旧缓存前缀） | 8m08s（新前缀首次命中） |
+
+同一步骤的冷 / 热对照：`cargo test -p openless-core` 命中 201 s、冷启动 579 s；`cargo build --release -p openless-linux-egui` 命中 124 s、冷启动 463 s。整轮墙钟时间由最慢的 job 决定（本轮 Windows 13m17s），改动前是 20m12s。
+
+## 6. 发版耗时
 
 `Release Tauri (cross-platform)` 的基线是 ~32.7 分钟，关键路径是 macOS Intel 构建。原因是 tag 运行只能读默认分支（`beta`）的缓存，而基线分支跑的是 debug/test profile，不产生 `macos-release-v1` 前缀的 release 缓存，因此每个新 tag 都要从零编译 release 依赖。
 
@@ -86,7 +101,7 @@ GitHub 每仓库保留 10 GB 缓存，超出按 LRU 静默淘汰；淘汰后 job
 
 Linux 发版不受影响：`release-linux-egui.yml` 复用 CI 的同一个 `build-linux-egui` job（同名同 key），tag 运行能恢复基线分支的缓存。
 
-## 6. 已知取舍
+## 7. 已知取舍
 
 - 改动范围门控只跳过“够不到”的平台；`push` 到 `main`/`beta` 始终全量，所以合并后仍有完整证据。
 - `build-linux-egui` 在 `push` 时仍会构建 release 二进制（保持基线缓存里有 release 产物、并持续验证打包链），但不再上传 Action artifact；artifact 只在 PR 与 tag 运行产生。
