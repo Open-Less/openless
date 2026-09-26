@@ -1,6 +1,7 @@
 use eframe::egui;
 use openless_linux_egui::{fmt_l10n, tr_l10n, Lang};
 
+use super::icons::{self, IconName};
 use super::layout;
 use super::theme;
 use super::view_model::{
@@ -15,8 +16,9 @@ const SIDEBAR_RAIL_INPUT: f32 = 150.0;
 #[derive(Clone, Copy)]
 enum SettingsIcon {
     Settings,
-    Keyboard,
-    Sun,
+    Mic,
+    Sparkle,
+    Monitor,
     Cloud,
     Shield,
     Bolt,
@@ -55,12 +57,12 @@ impl SettingsSection {
 
     fn icon(self) -> SettingsIcon {
         match self {
-            Self::General => SettingsIcon::Settings,
-            Self::Shortcuts => SettingsIcon::Keyboard,
-            Self::Appearance => SettingsIcon::Sun,
+            Self::General => SettingsIcon::Mic,
+            Self::Shortcuts => SettingsIcon::Bolt,
+            Self::Appearance => SettingsIcon::Settings,
             Self::Services => SettingsIcon::Cloud,
             Self::Privacy => SettingsIcon::Shield,
-            Self::Advanced => SettingsIcon::Bolt,
+            Self::Advanced => SettingsIcon::Sparkle,
             Self::About => SettingsIcon::Info,
         }
     }
@@ -293,142 +295,20 @@ fn rail_item(ui: &mut egui::Ui, label: &str, icon: SettingsIcon, active: bool) -
 }
 
 fn draw_rail_icon(ui: &egui::Ui, center: egui::Pos2, icon: SettingsIcon, color: egui::Color32) {
-    let painter = ui.painter();
-    let stroke = egui::Stroke::new(1.35, color);
-    let point = |x: f32, y: f32| center + egui::vec2(x, y);
-    match icon {
-        SettingsIcon::Settings => {
-            painter.circle_stroke(center, 4.2, stroke);
-            for angle in [
-                0.0,
-                std::f32::consts::FRAC_PI_4,
-                std::f32::consts::FRAC_PI_2,
-                3.0 * std::f32::consts::FRAC_PI_4,
-                std::f32::consts::PI,
-                5.0 * std::f32::consts::FRAC_PI_4,
-                3.0 * std::f32::consts::FRAC_PI_2,
-                7.0 * std::f32::consts::FRAC_PI_4,
-            ] {
-                let direction = egui::vec2(angle.cos(), angle.sin());
-                painter.line_segment([center + direction * 5.0, center + direction * 7.0], stroke);
-            }
-        }
-        SettingsIcon::Keyboard => {
-            painter.rect_stroke(
-                egui::Rect::from_center_size(center, egui::vec2(15.0, 11.0)),
-                egui::CornerRadius::same(2),
-                stroke,
-                egui::StrokeKind::Inside,
-            );
-            painter.line_segment([point(-5.0, 2.5), point(5.0, 2.5)], stroke);
-            for x in [-4.5, 0.0, 4.5] {
-                painter.circle_filled(point(x, -2.0), 0.9, color);
-            }
-        }
-        SettingsIcon::Sun => {
-            painter.circle_stroke(center, 3.6, stroke);
-            for angle in [
-                0.0,
-                std::f32::consts::FRAC_PI_2,
-                std::f32::consts::PI,
-                3.0 * std::f32::consts::FRAC_PI_2,
-            ] {
-                let direction = egui::vec2(angle.cos(), angle.sin());
-                painter.line_segment([center + direction * 5.6, center + direction * 7.6], stroke);
-            }
-        }
-        SettingsIcon::Cloud => {
-            painter.circle_stroke(point(-2.6, 0.0), 4.2, stroke);
-            painter.circle_stroke(point(2.7, -2.1), 4.0, stroke);
-            painter.circle_stroke(point(5.5, 1.0), 3.4, stroke);
-            painter.line_segment([point(-6.0, 4.0), point(5.7, 4.0)], stroke);
-            painter.line_segment([point(-6.0, 4.0), point(-6.0, 2.0)], stroke);
-            painter.line_segment([point(5.7, 4.0), point(6.8, 2.0)], stroke);
-        }
-        SettingsIcon::Shield => {
-            painter.add(egui::Shape::line(
-                [
-                    point(0.0, 8.0),
-                    point(6.0, 5.0),
-                    point(6.0, -4.0),
-                    point(0.0, -7.0),
-                    point(-6.0, -4.0),
-                    point(-6.0, 5.0),
-                    point(0.0, 8.0),
-                ]
-                .to_vec(),
-                stroke,
-            ));
-        }
-        SettingsIcon::Bolt => {
-            painter.add(egui::Shape::line(
-                [
-                    point(1.0, -8.0),
-                    point(-5.0, 1.0),
-                    point(1.0, 1.0),
-                    point(-1.0, 8.0),
-                    point(6.0, -1.0),
-                    point(1.0, -1.0),
-                    point(1.0, -8.0),
-                ]
-                .to_vec(),
-                stroke,
-            ));
-        }
-        SettingsIcon::Info => {
-            painter.circle_stroke(center, 8.0, stroke);
-            painter.line_segment([point(0.0, -1.0), point(0.0, 5.0)], stroke);
-            painter.circle_filled(point(0.0, -4.0), 0.8, color);
-        }
-        SettingsIcon::Help => {
-            painter.circle_stroke(center, 8.0, stroke);
-            painter.add(egui::Shape::line(
-                [
-                    point(-2.2, -2.3),
-                    point(-1.2, -4.0),
-                    point(1.2, -4.0),
-                    point(2.2, -2.2),
-                    point(0.4, 0.0),
-                    point(0.4, 2.0),
-                ]
-                .to_vec(),
-                stroke,
-            ));
-            painter.circle_filled(point(0.4, 5.0), 0.75, color);
-        }
-        SettingsIcon::Document => {
-            painter.rect_stroke(
-                egui::Rect::from_center_size(
-                    center + egui::vec2(-1.0, 0.0),
-                    egui::vec2(12.0, 16.0),
-                ),
-                egui::CornerRadius::same(1),
-                stroke,
-                egui::StrokeKind::Inside,
-            );
-            painter.add(egui::Shape::line(
-                [point(1.0, -8.0), point(1.0, -3.0), point(6.0, -3.0)].to_vec(),
-                stroke,
-            ));
-        }
-        SettingsIcon::External => {
-            painter.add(egui::Shape::line(
-                vec![
-                    point(-5.0, 4.0),
-                    point(-5.0, 7.0),
-                    point(4.0, 7.0),
-                    point(4.0, -2.0),
-                    point(1.0, -2.0),
-                ],
-                stroke,
-            ));
-            painter.line_segment([point(-1.0, 3.0), point(7.0, -5.0)], stroke);
-            painter.add(egui::Shape::line(
-                [point(3.0, -5.0), point(7.0, -5.0), point(7.0, -1.0)].to_vec(),
-                stroke,
-            ));
-        }
-    }
+    let icon = match icon {
+        SettingsIcon::Settings => IconName::Settings,
+        SettingsIcon::Mic => IconName::Mic,
+        SettingsIcon::Sparkle => IconName::Sparkle,
+        SettingsIcon::Monitor => IconName::Monitor,
+        SettingsIcon::Cloud => IconName::Cloud,
+        SettingsIcon::Shield => IconName::Shield,
+        SettingsIcon::Bolt => IconName::Bolt,
+        SettingsIcon::Info => IconName::Info,
+        SettingsIcon::Help => IconName::Help,
+        SettingsIcon::Document => IconName::Doc,
+        SettingsIcon::External => IconName::External,
+    };
+    icons::draw_icon(ui, center, icon, color);
 }
 
 fn panel(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
@@ -2168,17 +2048,17 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
     // page (title + back button) while `advanced_open` is set.
     let rows = [
         (
-            SettingsIcon::Settings,
+            SettingsIcon::Monitor,
             tr_l10n(lang, "settings.coding_agent.title"),
             tr_l10n(lang, "modal.advanced_pages.less_computer"),
         ),
         (
-            SettingsIcon::Bolt,
+            SettingsIcon::Sparkle,
             tr_l10n(lang, "settings.advanced.multimodal_pipeline_title"),
             tr_l10n(lang, "modal.advanced_pages.multimodal"),
         ),
         (
-            SettingsIcon::Document,
+            SettingsIcon::Bolt,
             tr_l10n(lang, "settings.debug.title"),
             tr_l10n(lang, "modal.advanced_pages.debug"),
         ),

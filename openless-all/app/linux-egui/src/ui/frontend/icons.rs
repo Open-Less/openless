@@ -38,6 +38,12 @@ pub enum IconName {
     Layout,
     Doc,
     Pencil,
+    Cloud,
+    Shield,
+    Info,
+    Help,
+    External,
+    Monitor,
 }
 
 // These masks are generated from the pinned lucide-react package by
@@ -103,6 +109,18 @@ fn lucide_svg(icon: IconName) -> Option<(&'static str, &'static str)> {
         IconName::Layout => ("Layout", include_str!("../../../assets/lucide/Layout.svg")),
         IconName::Doc => ("Doc", include_str!("../../../assets/lucide/Doc.svg")),
         IconName::Pencil => ("Pencil", include_str!("../../../assets/lucide/Pencil.svg")),
+        IconName::Cloud => ("Cloud", include_str!("../../../assets/lucide/Cloud.svg")),
+        IconName::Shield => ("Shield", include_str!("../../../assets/lucide/Shield.svg")),
+        IconName::Info => ("Info", include_str!("../../../assets/lucide/Info.svg")),
+        IconName::Help => ("Help", include_str!("../../../assets/lucide/Help.svg")),
+        IconName::External => (
+            "External",
+            include_str!("../../../assets/lucide/External.svg"),
+        ),
+        IconName::Monitor => (
+            "Monitor",
+            include_str!("../../../assets/lucide/Monitor.svg"),
+        ),
         IconName::Github => return None,
     })
 }
@@ -203,6 +221,12 @@ mod tests {
             IconName::Layout,
             IconName::Doc,
             IconName::Pencil,
+            IconName::Cloud,
+            IconName::Shield,
+            IconName::Info,
+            IconName::Help,
+            IconName::External,
+            IconName::Monitor,
         ];
         for icon in icons {
             let (name, svg) = lucide_svg(icon).unwrap();

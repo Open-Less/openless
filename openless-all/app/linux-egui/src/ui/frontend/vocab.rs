@@ -157,17 +157,23 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
         }
     }
 
-    // 词条独立滚动；输入与场景预设固定在可视区底部，不能跟词条一同滚走。
+    // 词条独立滚动。下方整块（阴影分隔线、输入、提示、场景预设）
+    // 贴住窗口底缘；面板展开时向上生长，不随词条内容高度漂浮。
     let presets_expanded = ui.ctx().data(|data| {
         data.get_temp::<bool>(egui::Id::new(PRESETS_OPEN))
             .unwrap_or(false)
     });
-    let list_height =
-        (ui.available_height() - if presets_expanded { 270.0 } else { 154.0 }).max(80.0);
+    let panel_id = egui::Id::new(("openless-vocab-bottom-height", presets_expanded));
+    let measured = ui.ctx().data(|data| data.get_temp::<f32>(panel_id));
+    let reserved = measured.unwrap_or(if presets_expanded { 290.0 } else { 190.0 });
+    let viewport_bottom = ui.max_rect().bottom();
+    // egui's ScrollArea adds its own spacing after the viewport. Leave room
+    // for it so the fixed panel is never pushed below the content bottom.
+    let list_height = (viewport_bottom - ui.cursor().min.y - reserved - 12.0).max(80.0);
     egui::ScrollArea::vertical()
         .id_salt("openless-vocab-list-scroll")
         .max_height(list_height)
-        .min_scrolled_height(list_height)
+        .auto_shrink([false, false])
         .show(ui, |ui| {
             // ── Word list ──────────────────────────────────────────────────────────
             if visible.is_empty() {
@@ -211,26 +217,49 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                 }
             }
         });
-    ui.add_space(6.0);
-    let (divider, _) = ui.allocate_exact_size(egui::vec2(width, 3.0), egui::Sense::hover());
-    ui.painter().line_segment(
-        [divider.left_top(), divider.right_top()],
-        egui::Stroke::new(1.0, theme::LINE),
+    let panel_top = (viewport_bottom - reserved).max(ui.cursor().min.y + 6.0);
+    let panel_rect = egui::Rect::from_min_max(
+        egui::pos2(ui.cursor().min.x, panel_top),
+        egui::pos2(ui.cursor().min.x + width, viewport_bottom),
     );
-    // Soft inset shadow separating the fixed entry toolbar from the scrolling list.
-    for (offset, alpha) in [(1.0, 20), (2.0, 10), (3.0, 5)] {
+    let actual_height = layout::fixed_ui(ui, panel_rect, "openless-vocab-bottom", |ui| {
+        let top = panel_rect.top();
+        let (divider, _) = ui.allocate_exact_size(egui::vec2(width, 3.0), egui::Sense::hover());
         ui.painter().line_segment(
-            [
-                divider.left_top() - egui::vec2(0.0, offset),
-                divider.right_top() - egui::vec2(0.0, offset),
-            ],
-            egui::Stroke::new(1.0, egui::Color32::from_black_alpha(alpha)),
+            [divider.left_top(), divider.right_top()],
+            egui::Stroke::new(1.0, theme::LINE),
         );
+        // Soft inset shadow separating the fixed entry toolbar from the scrolling list.
+        for (offset, alpha) in [(1.0, 20), (2.0, 10), (3.0, 5)] {
+            ui.painter().line_segment(
+                [
+                    divider.left_top() - egui::vec2(0.0, offset),
+                    divider.right_top() - egui::vec2(0.0, offset),
+                ],
+                egui::Stroke::new(1.0, egui::Color32::from_black_alpha(alpha)),
+            );
+        }
+        quick_add(ui, width, vm, actions);
+        ui.add_space(12.0);
+        presets(ui, width, vm, actions);
+        ui.cursor().min.y - top
+    });
+    if measured.is_none_or(|previous| (previous - actual_height).abs() > 0.5) {
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(panel_id, actual_height));
+        ui.ctx().request_repaint();
     }
-    // ── Quick add + presets ────────────────────────────────────────────────
-    quick_add(ui, width, vm, actions);
-    ui.add_space(12.0);
-    presets(ui, width, vm, actions);
+    #[cfg(test)]
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(
+            egui::Id::new("openless-vocab-bottom-test-rect"),
+            egui::Rect::from_min_size(panel_rect.min, egui::vec2(width, actual_height)),
+        );
+        data.insert_temp(
+            egui::Id::new("openless-vocab-viewport-test-bottom"),
+            viewport_bottom,
+        );
+    });
     if !opened_new_word_now
         && ui.ctx().data(|data| {
             data.get_temp::<bool>(egui::Id::new(NEW_WORD_OPEN))
@@ -776,13 +805,25 @@ fn presets(
             egui::FontId::proportional(11.5),
             theme::INK_4,
         );
-        painter.text(
-            egui::pos2(heading.right() - 8.0, heading.center().y),
-            egui::Align2::CENTER_CENTER,
-            if open { "⌄" } else { "›" },
-            egui::FontId::proportional(17.0),
-            theme::INK_3,
-        );
+        // Tauri uses a rotated ChevronRight. Draw its two strokes directly so
+        // expanded state never depends on an unavailable Unicode glyph.
+        let center = egui::pos2(heading.right() - 8.0, heading.center().y);
+        let points = if open {
+            [
+                center + egui::vec2(-3.0, -1.5),
+                center + egui::vec2(0.0, 1.5),
+                center + egui::vec2(3.0, -1.5),
+            ]
+        } else {
+            [
+                center + egui::vec2(-1.5, -3.0),
+                center + egui::vec2(1.5, 0.0),
+                center + egui::vec2(-1.5, 3.0),
+            ]
+        };
+        for pair in points.windows(2) {
+            painter.line_segment([pair[0], pair[1]], egui::Stroke::new(1.5, theme::INK_3));
+        }
         if response.clicked() {
             ui.ctx()
                 .data_mut(|data| data.insert_temp(egui::Id::new(PRESETS_OPEN), !open));
@@ -1161,4 +1202,53 @@ fn card(ui: &mut egui::Ui, width: f32, contents: impl FnOnce(&mut egui::Ui)) {
             ui.set_width((width - CARD_PADDING * 2.0).max(1.0));
             contents(ui);
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bottom_panel_stays_at_viewport_bottom_and_grows_upward() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel::default();
+        vm.vocab_unsupported = false;
+        let mut actions = Vec::new();
+        let mut collapsed_top = 0.0;
+        for expanded in [false, true] {
+            ctx.data_mut(|data| data.insert_temp(egui::Id::new(PRESETS_OPEN), expanded));
+            // The first pass measures the panel; the next pass places it at the bottom.
+            for _ in 0..3 {
+                ctx.begin_pass(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1240.0, 800.0),
+                    )),
+                    ..Default::default()
+                });
+                layout::content_panel(&ctx, |ui| page(ui, &mut vm, &mut actions));
+                let _ = crate::ui::frontend::end_pass(&ctx);
+            }
+            let rect: egui::Rect = ctx.data(|data| {
+                data.get_temp(egui::Id::new("openless-vocab-bottom-test-rect"))
+                    .unwrap()
+            });
+            let bottom: f32 = ctx.data(|data| {
+                data.get_temp(egui::Id::new("openless-vocab-viewport-test-bottom"))
+                    .unwrap()
+            });
+            assert!(
+                (rect.bottom() - bottom).abs() < 0.5,
+                "expanded={expanded}, rect={rect:?}, bottom={bottom}"
+            );
+            if expanded {
+                assert!(
+                    rect.top() < collapsed_top,
+                    "expanded panel must grow upward"
+                );
+            } else {
+                collapsed_top = rect.top();
+            }
+        }
+    }
 }

@@ -9,8 +9,8 @@ import { resolve } from 'node:path';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const dest = resolve(root, 'linux-egui/assets/lucide');
-// The first 27 names match src/components/Icon.tsx. Stop/Send/Pin/Chat are
-// popup controls and use the corresponding Lucide shape from the same version.
+// Names match src/components/Icon.tsx. Stop/Send/Pin/Chat are popup
+// controls and use the corresponding Lucide shape from the same version.
 export const icons = {
   Overview: 'ChartNoAxesColumn', History: 'History', Vocab: 'BookOpenText',
   Style: 'SlidersHorizontal', SelectionAsk: 'MessageSquareText', Settings: 'Settings',
@@ -20,6 +20,8 @@ export const icons = {
   Stop: 'Square', Close: 'X', Check: 'Check', Send: 'ArrowUp', Pin: 'Pin',
   Chat: 'MessageSquare', More: 'Ellipsis', ChevronRight: 'ChevronRight',
   Feather: 'Feather', Layout: 'PanelLeft', Doc: 'FileText', Pencil: 'Pencil',
+  Cloud: 'Cloud', Shield: 'ShieldCheck', Info: 'Info', Help: 'CircleHelp',
+  External: 'ExternalLink', Monitor: 'Monitor',
 };
 const version = JSON.parse(readFileSync(resolve(root, 'node_modules/lucide-react/package.json'), 'utf8')).version;
 const check = process.argv.includes('--check');
