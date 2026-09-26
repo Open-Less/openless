@@ -57,6 +57,32 @@ brew install xcodegen cocoapods
 xcodebuild -downloadComponent MetalToolchain   # Xcode 27 拆分的组件，桌面构建需要
 ```
 
+## 真机安装
+
+签名模式由环境变量控制，`copy:ios-scaffolding` 可在两种模式间互相切换（幂等）：
+
+```bash
+# 付费账号（完整功能，含键盘扩展）：
+OPENLESS_IOS_DEVELOPMENT_TEAM=<TeamID> npm run copy:ios-scaffolding
+npm run tauri -- ios build --target aarch64 --export-method debugging
+xcrun devicectl device install app --device <UDID> <导出的.ipa>
+
+# 免费 Apple ID（无键盘变体；免费签名不支持 App Group）：
+rm -rf src-tauri/gen/apple && npm run tauri -- ios init
+OPENLESS_IOS_NO_KEYBOARD=1 npm run copy:ios-scaffolding
+# 免费 iPhone 安装走 Xcode GUI（Xcode 会做 free provisioning）：
+#   npm run tauri -- ios build --target aarch64 --open  ← 先启动保持 CLI 存活
+#   然后在 Xcode 里选真机 Run；7 天有效期，过期重跑
+```
+
+注意：
+- Xcode GUI 直接 Run 依赖存活的 tauri CLI（RPC server）；CLI 未运行时
+  「Build Rust Code」阶段必然失败。`--open` 流程会先拉起 CLI。
+- 构建脚本已自举 PATH（homebrew npm + ~/.cargo/bin），Dock 启动的
+  Xcode 也能正确执行。
+- 手机端首次运行：设置 → 通用 → VPN与设备管理 信任证书；iOS 16+ 需
+  开启开发者模式。
+
 ## 键盘扩展（M3 v1）
 
 结构：`ios/swift/KeyboardExtension/`（Swift 源，复制到 `gen/apple/KeyboardExtension/`）

@@ -28,8 +28,12 @@ const DEPLOYMENT_TARGET = '15.0';
 const APP_GROUP = 'group.com.openless.app';
 
 // 签名策略：未提供 Team ID 时禁用签名（模拟器构建不需要）；提供后走自动签名。
-// 真机调试键盘扩展必须提供 OPENLESS_IOS_DEVELOPMENT_TEAM（付费开发者账号）。
+// 真机调试键盘扩展必须提供 OPENLESS_IOS_DEVELOPMENT_TEAM（付费开发者账号；
+// 免费个人团队不支持 App Group entitlement）。两种设置可随环境变量互相切换：
+// 脚本会替换 project.yml 里另一模式的旧设置，而不是跳过。
 const developmentTeam = process.env.OPENLESS_IOS_DEVELOPMENT_TEAM;
+// 免费账号变体：跳过键盘扩展 target 与 App Group entitlements（免费签名不支持）。
+const withKeyboard = process.env.OPENLESS_IOS_NO_KEYBOARD !== '1';
 
 function signingSettingsLines(indent) {
   if (developmentTeam) {
@@ -42,6 +46,18 @@ function signingSettingsLines(indent) {
     `${indent}CODE_SIGNING_ALLOWED: NO`,
     `${indent}CODE_SIGNING_REQUIRES_TEAM: NO`,
   ];
+}
+
+// 把 settings.base 里现存的签名两行组（无签名对或旧 Team 对）替换为当前模式的
+// 两行组。按「现存的是哪种」选择 pattern（模式切换时与目标不同）；若现存已是
+// 目标模式，替换结果原样不变。app 与 keyboard 两个 target 全局覆盖。
+function replaceSigningSettings(content) {
+  const unsignedPattern = /( *)CODE_SIGNING_ALLOWED: NO\n\1CODE_SIGNING_REQUIRES_TEAM: NO/g;
+  const teamPattern = /( *)DEVELOPMENT_TEAM: \S+\n\1CODE_SIGN_STYLE: Automatic/g;
+  const pattern = unsignedPattern.test(content) ? unsignedPattern : teamPattern;
+  return content.replace(pattern, (_match, indent) =>
+    signingSettingsLines(indent).join('\n'),
+  );
 }
 
 const INFO_PROPERTIES_SNIPPET = `        LSRequiresIPhoneOS: true
@@ -137,10 +153,24 @@ function patchProjectYml(dryRun) {
     throw new Error('project.yml: 未找到 LSRequiresIPhoneOS 锚点，无法插入 Info.plist 权限声明');
   }
 
-  // 3. 签名设置（幂等）：以 EXCLUDED_ARCHS 行为锚点追加到 app target settings.base。
+  // 3. 签名设置（可切换幂等）：以 EXCLUDED_ARCHS 行为锚点追加到 app target
+  //    settings.base；两种模式（无签名 / 自动签名）之间用 replaceSigningSettings
+  //    互相替换，保证带 Team 重跑能覆盖掉旧的无签名配置。
   const excludedArchsAnchor = '        EXCLUDED_ARCHS[sdk=iphoneos*]: x86_64';
-  if (content.includes('CODE_SIGNING_ALLOWED:') || content.includes('DEVELOPMENT_TEAM:')) {
-    console.log('Signing settings already present; skipping.');
+  const hasUnsigned = content.includes('CODE_SIGNING_ALLOWED: NO');
+  const hasTeam = /DEVELOPMENT_TEAM: \S+/.test(content);
+  if (hasUnsigned || hasTeam) {
+    const before = content;
+    content = replaceSigningSettings(content);
+    if (content !== before) {
+      console.log(
+        developmentTeam
+          ? `Replaced signing settings with automatic signing (team ${developmentTeam}).`
+          : 'Replaced signing settings with unsigned mode.',
+      );
+    } else {
+      console.log('Signing settings already match the requested mode; skipping.');
+    }
   } else if (content.includes(excludedArchsAnchor)) {
     content = content.replace(
       excludedArchsAnchor,
@@ -173,39 +203,52 @@ function patchProjectYml(dryRun) {
     throw new Error('project.yml: 未找到 ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES 锚点');
   }
 
-  // 5. 主 App entitlements：App Group（键盘扩展共享数据）。
-  const appEntitlementsAnchor = '    entitlements:\n      path: openless_iOS/openless_iOS.entitlements';
-  if (content.includes('com.apple.security.application-groups')) {
-    console.log('App entitlements already patched; skipping.');
-  } else if (content.includes(appEntitlementsAnchor)) {
-    content = content.replace(
-      appEntitlementsAnchor,
-      `${appEntitlementsAnchor}\n      properties:\n        com.apple.security.application-groups:\n          - ${APP_GROUP}`,
-    );
-    console.log('Added App Group to app entitlements.');
-  } else {
-    throw new Error('project.yml: 未找到主 App entitlements 锚点');
-  }
-
-  // 6. 主 App dependencies：嵌入键盘扩展（PlugIns/*.appex）。
-  const appDepsAnchor = '    dependencies:\n      - framework: libapp.a';
-  if (content.includes('- target: OpenLessKeyboard')) {
-    console.log('App dependencies already patched; skipping.');
-  } else if (content.includes(appDepsAnchor)) {
-    content = content.replace(
-      appDepsAnchor,
-      '    dependencies:\n      - target: OpenLessKeyboard\n        embed: true\n      - framework: libapp.a',
-    );
-    console.log('Added keyboard extension embed to app dependencies.');
-  } else {
-    throw new Error('project.yml: 未找到主 App dependencies 锚点');
-  }
-
-  // 7. 键盘扩展 target：追加到 openless_iOS target 之后（其最后一个键是
-  //    preBuildScripts 的 arm64 outputFiles）。
+  // 5. 主 App entitlements：App Group（键盘扩展共享数据）。仅键盘模式。
+  // 6. 主 App dependencies：嵌入键盘扩展（PlugIns/*.appex）。仅键盘模式。
+  // 7. 键盘扩展 target：追加到 openless_iOS target 之后。仅键盘模式。
+  // 模式切换（带/不带键盘）要求重新 init：旧模式补丁已在 project.yml 里，
+  // 字符串移除太脆，直接给出明确指引。
   const appTargetEndAnchor =
     '          - $(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a';
-  const keyboardTargetBlock = `          - \$(SRCROOT)/Externals/arm64/\${CONFIGURATION}/libapp.a
+  if (!withKeyboard) {
+    if (content.includes('  OpenLessKeyboard:')) {
+      throw new Error(
+        '检测到当前工程包含键盘扩展（OPENLESS_IOS_NO_KEYBOARD=1 与之冲突）。\n' +
+          '切换到无键盘模式请重新生成脚手架：\n' +
+          '  rm -rf src-tauri/gen/apple && npm run tauri -- ios init\n' +
+          '  OPENLESS_IOS_NO_KEYBOARD=1 npm run copy:ios-scaffolding',
+      );
+    }
+    console.log('OPENLESS_IOS_NO_KEYBOARD=1 → 跳过键盘扩展与 App Group 补丁。');
+  } else {
+    const appEntitlementsAnchor =
+      '    entitlements:\n      path: openless_iOS/openless_iOS.entitlements';
+    if (content.includes('com.apple.security.application-groups')) {
+      console.log('App entitlements already patched; skipping.');
+    } else if (content.includes(appEntitlementsAnchor)) {
+      content = content.replace(
+        appEntitlementsAnchor,
+        `${appEntitlementsAnchor}\n      properties:\n        com.apple.security.application-groups:\n          - ${APP_GROUP}`,
+      );
+      console.log('Added App Group to app entitlements.');
+    } else {
+      throw new Error('project.yml: 未找到主 App entitlements 锚点');
+    }
+
+    const appDepsAnchor = '    dependencies:\n      - framework: libapp.a';
+    if (content.includes('- target: OpenLessKeyboard')) {
+      console.log('App dependencies already patched; skipping.');
+    } else if (content.includes(appDepsAnchor)) {
+      content = content.replace(
+        appDepsAnchor,
+        '    dependencies:\n      - target: OpenLessKeyboard\n        embed: true\n      - framework: libapp.a',
+      );
+      console.log('Added keyboard extension embed to app dependencies.');
+    } else {
+      throw new Error('project.yml: 未找到主 App dependencies 锚点');
+    }
+
+    const keyboardTargetBlock = `          - \$(SRCROOT)/Externals/arm64/\${CONFIGURATION}/libapp.a
   OpenLessKeyboard:
     type: app-extension
     platform: iOS
@@ -231,13 +274,14 @@ function patchProjectYml(dryRun) {
         ENABLE_BITCODE: false
         ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: true
 ${signingSettingsLines('        ').join('\n')}`;
-  if (content.includes('  OpenLessKeyboard:')) {
-    console.log('Keyboard extension target already present; skipping.');
-  } else if (content.includes(appTargetEndAnchor)) {
-    content = content.replace(appTargetEndAnchor, keyboardTargetBlock);
-    console.log('Added OpenLessKeyboard extension target.');
-  } else {
-    throw new Error('project.yml: 未找到 Build Rust Code 锚点，无法追加扩展 target');
+    if (content.includes('  OpenLessKeyboard:')) {
+      console.log('Keyboard extension target already present; skipping.');
+    } else if (content.includes(appTargetEndAnchor)) {
+      content = content.replace(appTargetEndAnchor, keyboardTargetBlock);
+      console.log('Added OpenLessKeyboard extension target.');
+    } else {
+      throw new Error('project.yml: 未找到 Build Rust Code 锚点，无法追加扩展 target');
+    }
   }
 
   // 8. Build Rust Code 脚本的 PATH：从 Dock/Finder 启动的 Xcode 只有最小 PATH
@@ -297,7 +341,7 @@ function main() {
 
   // ios/swift/KeyboardExtension → gen/apple/KeyboardExtension（扩展 target 源）；
   // 其余（ios/swift/App 等）→ gen/apple/Sources（主 App target 源）。
-  if (existsSync(swiftRoot)) {
+  if (withKeyboard && existsSync(swiftRoot)) {
     for (const entry of readdirSync(swiftRoot)) {
       const src = join(swiftRoot, entry);
       if (!statSync(src).isDirectory()) {
