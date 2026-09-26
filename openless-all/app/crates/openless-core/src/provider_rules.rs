@@ -794,7 +794,14 @@ pub fn is_tencent_cloud_provider(id: &str) -> bool {
 pub fn is_whisper_compatible_provider(id: &str) -> bool {
     matches!(
         id,
-        "whisper" | "siliconflow" | "zhipu" | "groq" | "openrouter" | "stepfun" | "zenmux" | "minimax"
+        "whisper"
+            | "siliconflow"
+            | "zhipu"
+            | "groq"
+            | "openrouter"
+            | "stepfun"
+            | "zenmux"
+            | "minimax"
     ) || id == OPENAI_COMPATIBLE_ASR_PROVIDER_ID
 }
 

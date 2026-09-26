@@ -736,9 +736,7 @@ fn marketplace_oauth(
                                 |ui| {
                                     let close = ui.add(
                                         egui::Button::new(
-                                            egui::RichText::new("×")
-                                                .size(16.0)
-                                                .color(theme::INK_2),
+                                            egui::RichText::new("×").size(16.0).color(theme::INK_2),
                                         )
                                         .fill(theme::SURFACE)
                                         .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
@@ -795,45 +793,43 @@ fn marketplace_oauth(
                                     ui.vertical_centered(|ui| {
                                         ui.horizontal(|ui| {
                                             ui.with_layout(
-                                            egui::Layout::left_to_right(egui::Align::Center),
-                                            |ui| {
-                                                ui.label(
-                                                    egui::RichText::new(
-                                                        &vm.marketplace_oauth_user_code,
-                                                    )
-                                                    .size(22.0)
-                                                    .strong()
-                                                    .color(theme::BLUE),
-                                                );
-                                                ui.add_space(10.0);
-                                                let copy = ui.add(
-                                                    egui::Button::new(
+                                                egui::Layout::left_to_right(egui::Align::Center),
+                                                |ui| {
+                                                    ui.label(
                                                         egui::RichText::new(
-                                                            tr_l10n(
+                                                            &vm.marketplace_oauth_user_code,
+                                                        )
+                                                        .size(22.0)
+                                                        .strong()
+                                                        .color(theme::BLUE),
+                                                    );
+                                                    ui.add_space(10.0);
+                                                    let copy = ui.add(
+                                                        egui::Button::new(
+                                                            egui::RichText::new(tr_l10n(
                                                                 lang,
                                                                 "marketplace.oauth.copyBtn",
-                                                            ),
+                                                            ))
+                                                            .size(11.0)
+                                                            .color(theme::INK_3),
                                                         )
-                                                        .size(11.0)
-                                                        .color(theme::INK_3),
-                                                    )
-                                                    .fill(theme::SURFACE)
-                                                    .stroke(egui::Stroke::new(
-                                                        0.5,
-                                                        theme::LINE_STRONG,
-                                                    ))
-                                                    .corner_radius(egui::CornerRadius::same(7)),
-                                                );
-                                                if copy.clicked() {
-                                                    actions.push(
-                                                        FrontendAction::MarketplaceAuthCopyCode,
+                                                        .fill(theme::SURFACE)
+                                                        .stroke(egui::Stroke::new(
+                                                            0.5,
+                                                            theme::LINE_STRONG,
+                                                        ))
+                                                        .corner_radius(egui::CornerRadius::same(7)),
                                                     );
-                                                }
-                                            },
-                                        );
+                                                    if copy.clicked() {
+                                                        actions.push(
+                                                            FrontendAction::MarketplaceAuthCopyCode,
+                                                        );
+                                                    }
+                                                },
+                                            );
+                                        });
                                     });
                                 });
-                            });
                             ui.add_space(12.0);
                             ui.horizontal(|ui| {
                                 let open = ui.add(
@@ -865,10 +861,7 @@ fn marketplace_oauth(
                                                 .color(theme::INK_2),
                                             )
                                             .fill(theme::SURFACE)
-                                            .stroke(egui::Stroke::new(
-                                                0.5,
-                                                theme::LINE_STRONG,
-                                            ))
+                                            .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
                                             .corner_radius(egui::CornerRadius::same(8)),
                                         );
                                         if cancel.clicked() {
@@ -890,9 +883,10 @@ fn marketplace_oauth(
                                         theme::BLUE,
                                     );
                                     ui.label(
-                                        egui::RichText::new(
-                                            tr_l10n(lang, "marketplace.oauth.waiting"),
-                                        )
+                                        egui::RichText::new(tr_l10n(
+                                            lang,
+                                            "marketplace.oauth.waiting",
+                                        ))
                                         .size(11.5)
                                         .color(theme::INK_4),
                                     );
@@ -914,10 +908,7 @@ fn marketplace_upload(
     let target_name = vm.marketplace_upload_target_name.clone();
     let card_width = (body.width() - 40.0).min(560.0).max(320.0);
     let card_height = (body.height() * 0.82).min(560.0).max(300.0);
-    let card = egui::Rect::from_center_size(
-        body.center(),
-        egui::vec2(card_width, card_height),
-    );
+    let card = egui::Rect::from_center_size(body.center(), egui::vec2(card_width, card_height));
     egui::Area::new(egui::Id::new("openless-marketplace-upload-modal"))
         .order(egui::Order::Foreground)
         .fixed_pos(body.min)
@@ -1062,10 +1053,7 @@ fn marketplace_upload(
                                     if confirm.clicked() {
                                         actions.push(FrontendAction::MarketplaceUploadConfirm);
                                     }
-                                    if ui
-                                        .button(tr_l10n(lang, "common.cancel"))
-                                        .clicked()
-                                    {
+                                    if ui.button(tr_l10n(lang, "common.cancel")).clicked() {
                                         actions.push(FrontendAction::MarketplaceUploadCancel);
                                     }
                                 },
@@ -1089,15 +1077,10 @@ fn marketplace_withdraw_confirm(
     let Some(pack) = vm.marketplace_mine_packs.get(index) else {
         return;
     };
-    let message = openless_linux_egui::fmt_l10n(
-        lang,
-        "marketplace.withdraw.confirm",
-        &[&pack.pack.name],
-    );
-    let card = egui::Rect::from_center_size(
-        body.center(),
-        egui::vec2(body.width().min(420.0), 170.0),
-    );
+    let message =
+        openless_linux_egui::fmt_l10n(lang, "marketplace.withdraw.confirm", &[&pack.pack.name]);
+    let card =
+        egui::Rect::from_center_size(body.center(), egui::vec2(body.width().min(420.0), 170.0));
     egui::Area::new(egui::Id::new("openless-marketplace-withdraw-confirm"))
         .order(egui::Order::Tooltip)
         .fixed_pos(body.min)
@@ -1116,23 +1099,17 @@ fn marketplace_withdraw_confirm(
                     .show(ui, |ui| {
                         ui.label(egui::RichText::new(message).size(13.0).color(theme::INK_2));
                         ui.add_space(20.0);
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                if ui
-                                    .button(tr_l10n(lang, "marketplace.withdraw.confirmBtn"))
-                                    .clicked()
-                                {
-                                    actions.push(FrontendAction::MarketplaceWithdrawConfirm);
-                                }
-                                if ui
-                                    .button(tr_l10n(lang, "common.cancel"))
-                                    .clicked()
-                                {
-                                    actions.push(FrontendAction::MarketplaceWithdrawCancel);
-                                }
-                            },
-                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .button(tr_l10n(lang, "marketplace.withdraw.confirmBtn"))
+                                .clicked()
+                            {
+                                actions.push(FrontendAction::MarketplaceWithdrawConfirm);
+                            }
+                            if ui.button(tr_l10n(lang, "common.cancel")).clicked() {
+                                actions.push(FrontendAction::MarketplaceWithdrawCancel);
+                            }
+                        });
                     });
             });
         });

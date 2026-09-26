@@ -639,16 +639,12 @@ mod tests {
             egui::Order::Middle,
             egui::Id::new("page")
         )));
-        assert!(
-            !layers
-                .iter()
-                .any(|layer| layer.id == egui::Id::new("openless-settings-modal"))
-        );
-        assert!(
-            !layers
-                .iter()
-                .any(|layer| layer.id == egui::Id::new("tooltip"))
-        );
+        assert!(!layers
+            .iter()
+            .any(|layer| layer.id == egui::Id::new("openless-settings-modal")));
+        assert!(!layers
+            .iter()
+            .any(|layer| layer.id == egui::Id::new("tooltip")));
         end_pass(&ctx);
     }
 

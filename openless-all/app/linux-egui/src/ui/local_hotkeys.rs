@@ -7,10 +7,10 @@
 //! 捕获复用设置页录制器的 `captured_binding`，命中判定复用注册给插件的
 //! `(keysym, states)` 换算，因此不会出现第二套键名表。
 
-use openless_core::HotkeyRuntimeTarget;
 use openless_core::shared_types::ShortcutBinding;
+use openless_core::HotkeyRuntimeTarget;
 use openless_linux_egui::local_hotkeys::{
-    LocalHotkey, LocalHotkeyEdge, LocalHotkeyEdgeKind, match_hotkey, next_local_press_id,
+    match_hotkey, next_local_press_id, LocalHotkey, LocalHotkeyEdge, LocalHotkeyEdgeKind,
 };
 
 use crate::ui::frontend::settings::{bare_modifier_name, captured_binding};

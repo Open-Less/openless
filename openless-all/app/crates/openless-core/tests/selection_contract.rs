@@ -719,12 +719,11 @@ async fn transient_platform_failure_keeps_the_preview_retryable() {
 async fn stale_preview_apply_settles_the_session_and_hides_the_preview() {
     // apply 报「目标已失效」类错误（Cancelled 语义）时 session 必须结算，
     // 预览隐藏、不允许无限重试一个已经不存在的目标。
-    let runtime = RecordingSelectionRuntime::new("source text").with_apply_error(
-        BackendError::new(
+    let runtime =
+        RecordingSelectionRuntime::new("source text").with_apply_error(BackendError::new(
             BackendErrorCode::Cancelled,
             "selection target is no longer active",
-        ),
-    );
+        ));
     let host = openless_core::testing::RecordingHostActions::default();
     let (backend, data_dir) = backend_with_selection_parts_and_host(
         runtime.clone(),

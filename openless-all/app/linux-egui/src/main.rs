@@ -5152,26 +5152,24 @@ mod linux_app {
                         let mut packs: Vec<_> = self
                             .style_packs
                             .iter()
-                            .filter(|pack| {
-                                pack.kind != openless_core::StylePackKind::Builtin
-                            })
+                            .filter(|pack| pack.kind != openless_core::StylePackKind::Builtin)
                             .cloned()
                             .collect();
                         packs.sort_by(|left, right| {
-                            let left_match = !target.is_empty()
-                                && left.name.trim().to_lowercase() == target;
-                            let right_match = !target.is_empty()
-                                && right.name.trim().to_lowercase() == target;
-                            right_match
-                                .cmp(&left_match)
-                                .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+                            let left_match =
+                                !target.is_empty() && left.name.trim().to_lowercase() == target;
+                            let right_match =
+                                !target.is_empty() && right.name.trim().to_lowercase() == target;
+                            right_match.cmp(&left_match).then_with(|| {
+                                left.name.to_lowercase().cmp(&right.name.to_lowercase())
+                            })
                         });
                         let selected = if target.is_empty() {
                             None
                         } else {
-                            packs.iter().position(|pack| {
-                                pack.name.trim().to_lowercase() == target
-                            })
+                            packs
+                                .iter()
+                                .position(|pack| pack.name.trim().to_lowercase() == target)
                         };
                         self.frontend_vm.marketplace_upload_open = true;
                         self.frontend_vm.marketplace_upload_origin_pack_id = origin_pack_id;
@@ -5185,8 +5183,7 @@ mod linux_app {
                         if index < self.frontend_vm.marketplace_upload_packs.len()
                             && !self.frontend_vm.marketplace_upload_submitting
                         {
-                            self.frontend_vm.marketplace_upload_selected =
-                                Some(index);
+                            self.frontend_vm.marketplace_upload_selected = Some(index);
                         }
                     }
                     frontend::view_model::FrontendAction::MarketplaceUploadCancel => {
@@ -5214,10 +5211,8 @@ mod linux_app {
                         else {
                             continue;
                         };
-                        let origin_pack_id = self
-                            .frontend_vm
-                            .marketplace_upload_origin_pack_id
-                            .clone();
+                        let origin_pack_id =
+                            self.frontend_vm.marketplace_upload_origin_pack_id.clone();
                         let Some(backend) = self.backend() else {
                             continue;
                         };

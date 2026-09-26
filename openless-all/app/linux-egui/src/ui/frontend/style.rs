@@ -11,7 +11,7 @@
 //! second card as active.
 
 use eframe::egui;
-use openless_linux_egui::{Lang, fmt_l10n, tr_l10n};
+use openless_linux_egui::{fmt_l10n, tr_l10n, Lang};
 
 use super::icons::{self, IconName};
 use super::layout::{self, ButtonKind, PillTone};
