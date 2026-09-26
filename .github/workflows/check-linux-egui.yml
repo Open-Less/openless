@@ -1,18 +1,15 @@
 name: Linux egui build and backend checks
 
-# CI and tag releases call this exact deb/rpm build and verification path.
-# PRs already invoke it from ci.yml; avoid running it twice.
+# Only the CI and tag-release workflows call this deb/rpm build and verification path.
+# No standalone push trigger: a Linux PR must show one combined Linux check.
 on:
-  push:
-    branches: [Linux-egui]
-  workflow_dispatch:
   workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: linux-egui-build-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  group: linux-egui-build-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -94,6 +91,10 @@ jobs:
           pwsh -NoProfile -File ./scripts/check-core-test-isolation.ps1
           pwsh -NoProfile -File ./scripts/check-core-runtime-seam.ps1
           pwsh -NoProfile -File ./scripts/check-linux-public-surface.ps1
+
+      - name: Test remote input TLS identity and Unix key permissions
+        working-directory: openless-all/app
+        run: cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --test remote_tls
 
       - name: Validate Linux desktop metadata
         run: |

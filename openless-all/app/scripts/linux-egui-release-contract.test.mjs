@@ -20,10 +20,17 @@ const [release, ci, check, pack, verify, gate, manifest, tauri] = await Promise.
 // CI must execute the exact test/build/package/checksum path used for tags.
 assert.match(ci, /linux-egui-package:[\s\S]*?uses: \.\/\.github\/workflows\/check-linux-egui\.yml/);
 assert.match(ci, /linux-egui-package:[\s\S]*?permissions:\s*contents: read/);
+assert.deepEqual(
+  [...ci.matchAll(/^  (linux-[\w-]+):/gm)].map((match) => match[1]),
+  ['linux-egui-package'],
+  'PR CI must expose one Linux job, including Core and remote TLS checks',
+);
 assert.match(release, /uses: \.\/\.github\/workflows\/check-linux-egui\.yml/);
-assert.match(check, /workflow_call:/);
+assert.match(check, /^on:\n  workflow_call:/m, 'the reusable check must not run as a duplicate standalone workflow');
 assert.match(check, /contents: read/);
 assert.match(check, /runs-on: ubuntu-24\.04/);
+assert.match(check, /cargo test --locked -p openless-core/);
+assert.match(check, /cargo test --locked --manifest-path src-tauri\/backend-tests\/Cargo\.toml --test remote_tls/);
 assert.match(check, /cargo test --locked -p openless-linux-egui --all-targets/);
 assert.match(check, /cargo check --locked -p openless-linux-egui --all-targets/);
 assert.match(check, /check-core-deps\.ps1 openless-linux-egui/);
@@ -86,5 +93,6 @@ for (const [file, size] of [
   assert.deepEqual(copy, shared, `${file} must match the shared icon`);
   assert.ok(pack.includes(`${size}:${file}`));
 }
-assert.doesNotMatch(pack + release + check, /src-tauri/);
+assert.doesNotMatch(pack + release, /src-tauri/);
+assert.doesNotMatch(check, /cargo (?:build|check|test) --locked --manifest-path src-tauri\/Cargo\.toml/);
 console.log('linux-egui-release-contract.test.mjs passed');

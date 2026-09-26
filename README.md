@@ -208,21 +208,21 @@ Every item below is one more layer sedimented into a default — a capability yo
 - **Cloud ASR**: Volcengine streaming ASR (bigasr), Tencent Cloud Hunyuan realtime ASR (Hy-ASR), iFlytek realtime ASR (RTASR), Alibaba Cloud Bailian (classic realtime / Qwen3 realtime / Fun-ASR-Flash file transcription), StepFun StepAudio (batch + realtime), Zhipu GLM-ASR, Xiaomi MiMo ASR, OrcaRouter audio-input Gemini, ElevenLabs Scribe, OpenAI-compatible batch transcription (OpenAI Whisper / Groq / SiliconFlow SenseVoice / OpenRouter / ZenMux), and Apple Speech (macOS).
 - **Local ASR**: bundled Qwen3-ASR (0.6B / 1.7B) via vendored `Open-Less/qwen-asr` (macOS); Windows Foundry Local Whisper and sherpa-onnx (experimental) variants.
 - **Polish providers**: Ark (Volcengine), DeepSeek, OpenAI, Google Gemini, Codex OAuth, SiliconFlow, Atlas Cloud, Xiaomi MiMo, Tencent Cloud TokenHub, CometAPI, OpenRouter, OrcaRouter, Alibaba Cloud Coding Plan, CodingPlanX, MiniMax, StepFun, and OpenCode Zen — plus any OpenAI-compatible endpoint you bring.
-- **Four output modes**: raw, light polish, structured (**AI-prompt mode**), and formal. Plus a **translation hotkey** that converts speech directly into the configured target language ([#43](https://github.com/Open-Less/openless/issues/43)).
-- **Selection-ask QA panel** — a separate hotkey opens a floating panel that runs voice Q&A against the highlighted text in any app ([#118](https://github.com/Open-Less/openless/issues/118)).
+- **Four output modes**: raw, light polish, structured (**AI-prompt mode**), and formal. Plus a **translation hotkey** that converts speech directly into the configured target language ([#43](../../issues/43)).
+- **Selection-ask QA panel** — a separate hotkey opens a floating panel that runs voice Q&A against the highlighted text in any app ([#118](../../issues/118)).
 - **Main window**: Overview / History / Vocab / Style / Marketplace / Settings. Persistent tray icon, plus a mini status capsule that floats on screen and follows the display you are typing on (multi-monitor).
 - **Local model management** — manage on-disk local-ASR model storage from Settings.
-- **Multilingual UI** — Settings → Language supports 简体中文 / 繁體中文 / English / 日本語 / 한국어 / Deutsch / Español / Français (auto-detected on first launch).
+- **Multilingual UI** — Settings → Language switches between 简体中文 / 繁體中文 / English / 日本語 / 한국어 (auto-detected on first launch).
 - **In-app auto-update on the Tauri hosts** — Settings → About → Check; signed updater artifacts via the Tauri updater plugin on macOS, Windows, and Android. Linux deb/rpm packages have no in-app updater or AppImage manifest.
 - **Beta channel (opt-in)** — Settings → About → Join Beta channel exposes the latest pre-release build for manual download. Beta releases never reach Stable users automatically (see [Contributing workflow](#contributing-workflow)).
-- **Distribution channels** — DMG/EXE/APK and, after Linux device acceptance, deb/rpm on [Releases](https://github.com/Open-Less/openless/releases); Homebrew Cask requires the project tap (see installation below). The shared release tag builds and verifies the Linux packages automatically.
+- **Distribution channels** — direct DMG/EXE from [Releases](../../releases), Homebrew Cask (add the project tap first; see installation below), and a Windows installer. Linux deb/rpm packages attach to the shared Release only after device acceptance and an admin's release tag.
 - **Single-instance lock** — prevents two OpenLess processes from racing the same hotkey edge.
 - Dictionary entries are injected as Volcengine ASR `context.hotwords` and as semantic hints during polish; hits accumulate per session.
 - Platform-native global hotkey: CGEventTap on macOS, low-level keyboard hook (`WH_KEYBOARD_LL`) on Windows.
 
 ## Download & install (end users)
 
-Go to [Releases](https://github.com/Open-Less/openless/releases) and download:
+Go to [Releases](../../releases) and download:
 
 - **macOS**: `OpenLess_<version>_aarch64.dmg` (Apple Silicon) or `OpenLess_<version>_x64.dmg` (Intel). Open it, drag the app to `/Applications`, **then run the following once in Terminal to bypass the Gatekeeper "damaged" warning** (the build is ad-hoc signed, not Apple-notarized):
   ```bash
@@ -237,7 +237,7 @@ Go to [Releases](https://github.com/Open-Less/openless/releases) and download:
   - In-app updates (Settings → About) use `latest-android-{arch}.json` manifests; Beta users join Beta in Advanced settings.
   - Debug smoke builds: `OpenLess-android-debug-{abi}-*.apk` from workflow_dispatch artifacts.
   - If unsure, run `adb shell getprop ro.product.cpu.abi` and pick the matching APK.
-- **Linux**: after real-device acceptance, the shared release includes `OpenLess-Linux-egui-<version>-x86_64.deb` and `.rpm` plus `SHA256SUMS`. The native `eframe` host requires glibc ≥ 2.39 (Ubuntu 24.04 or a comparable distribution); Ubuntu 22.04 / Debian 12 are not supported. Install and update through your package manager; there is no Linux in-app updater or AppImage. A passing CI build alone is not product acceptance.
+- **Linux**: the Tauri/WebView build has been retired. The native `eframe` host uses the shared Core 2.0 services. After CI and real Ubuntu audio, input, install, upgrade and rollback acceptance, the shared release includes deb/rpm packages and `SHA256SUMS`. Linux requires glibc ≥ 2.39 (Ubuntu 24.04 or a comparable distribution); there is no AppImage or in-app updater.
 - **macOS (Homebrew)**:
   ```bash
   brew tap Open-Less/openless https://github.com/Open-Less/openless
@@ -398,27 +398,48 @@ egui UI  ── Linux Adapter (no Tauri/WebKitGTK) ────┘
 
 `openless-core` owns the stable DTOs, errors, semantic events, repositories, credentials contract, and host-facing use-case Interface. Host-only concerns—IPC, windows, tray, permissions, updater, keyring, fcitx5, and package resource paths—are implemented by Adapters. Legacy React command/event names stay in the Tauri compatibility Adapter; Linux calls the typed Rust Interface in process. See [`docs/linux-egui-backend-contract.md`](docs/linux-egui-backend-contract.md).
 
-The `v<version>-tauri` / `v<version>-Beta.N-tauri` tags build macOS, Windows and Android alongside the independent Linux egui deb/rpm workflow. Linux packages attach to the same Release after PR CI and real Ubuntu install/runtime/upgrade/rollback acceptance; Beta assets remain in a draft until an admin publishes it. Linux does not ship AppImage or an in-app updater manifest.
+The `v<version>-tauri` / `v<version>-Beta.N-tauri` workflows build the macOS, Windows and Android hosts alongside the independent Linux egui deb/rpm workflow. After Linux device acceptance and an admin's tag, verified Linux packages attach to the shared Release; Beta assets remain in a draft until an admin publishes them. Linux has no AppImage or in-app updater manifest.
 
 The dictation pipeline: `hotkey edge → Recorder.start + ASR.openSession → [audio frames] → hotkey edge → Recorder.stop + ASR.sendLastFrame → Polish → Insert → History.save`.
 
-See the public [contributor guide](CONTRIBUTING.md) for repository rules and [Architecture](docs/architecture.md) for module responsibilities and wiring.
+See [AGENTS.md](AGENTS.md) for repository rules and [Architecture](docs/architecture.md) for module responsibilities and wiring.
 
 ## Roadmap
 
 Planned but not yet shipped:
 
-- Cross-session style memory: polish learns the user's tone over time ([#46](https://github.com/Open-Less/openless/issues/46)).
+- Cross-session style memory: polish learns the user's tone over time ([#46](../../issues/46)).
 - Snippets (no UI or trigger logic yet).
 - History enhancements: copy button, search, re-polish, re-insert.
 - A "Paste last result" hotkey.
 
 ## Maintainer release checklist
 
-**Only an administrator may cut release tags or publish Releases.** The full version-sync gate, product acceptance requirements, channel-specific updater checks and release checklist live in [RELEASING.md](RELEASING.md); this README is not a substitute.
+OpenLess ships two release channels. The branch name equals the channel name (see [Contributing workflow](#contributing-workflow)).
 
-- Beta: after CI and Linux device acceptance, an admin tags `beta` with `v<X.Y.Z>-Beta.<N>-tauri`. The macOS, Windows, Android and Linux workflows attach assets to a shared draft; the admin verifies all assets before publishing it as a prerelease.
-- Stable: after maintainer approval, merge `beta → main`. An admin tags the accepted commit with `v<version>-tauri` and verifies the Stable channel. Linux receives deb/rpm only; auto-update manifests are platform-specific and exclude Linux.
+### Common prep (both channels)
+
+- Bump the Tauri application version in **all five** locations: `package.json`, `package-lock.json` (root + nested entry under `packages.""`), `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and `src-tauri/Cargo.lock` (look for the `name = "openless"` block). CI's `Verify version sync` step will otherwise fail the build. The root `Cargo.lock` belongs only to `openless-core` and `openless-linux-egui`.
+- Run `INSTALL=0 ./scripts/build-mac.sh` and confirm the `.app` launches.
+- Smoke-test on a clean machine: permission flow, hotkey, recording, ASR, polish, insertion, and clipboard fallback.
+- Confirm that `TAURI_SIGNING_PRIVATE_KEY` and (for macOS) the Apple signing/notarization secrets are set on the repo.
+
+### Beta channel — `v<v>-beta-tauri`
+
+1. Land changes onto the `beta` branch via PR review.
+2. Push the tag **on `beta`**: `git tag v<v>-beta-tauri && git push origin v<v>-beta-tauri`.
+3. CI tags the GitHub Release as `Pre-release` and uploads only `latest-{tgt}-{arch}-beta.json` updater manifests. The Stable users' `releases/latest` redirect is unaffected.
+4. Announce in the appropriate channel (issue thread, QQ group) that opt-in Beta users can grab it from Settings → About → Join Beta channel.
+
+### Stable channel — `v<v>-tauri`
+
+1. Merge `beta → main` after the Beta release has soaked sufficiently (or run a final two-platform smoke build directly).
+2. Push the tag **on `main`**: `git tag v<v>-tauri && git push origin v<v>-tauri`.
+3. CI publishes a normal GitHub Release and uploads `latest-{tgt}-{arch}.json` (no `-beta` suffix). All Stable users receive the update through the in-app updater.
+
+### Post-release verification (always run)
+
+Follow [RELEASING.md](RELEASING.md) and verify the release page's pre-release flag, asset-filename channel correctness, Stable user flow, Beta opt-in flow, and raw update endpoints.
 
 ## Acknowledgements
 

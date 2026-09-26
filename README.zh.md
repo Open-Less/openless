@@ -213,21 +213,21 @@ OpenLess 只做一件事:**把语音变成可用的书面文字(尤其是 AI 提
 - **云端 ASR**:Volcengine 流式 ASR(bigasr)、腾讯云混元实时 ASR(Hy-ASR)、讯飞实时语音转写(RTASR)、阿里云百炼(经典实时 / Qwen3 实时 / Fun-ASR-Flash 录音文件)、阶跃星辰 StepAudio(批式 + 实时)、智谱 GLM-ASR、小米 MiMo ASR、OrcaRouter 音频输入 Gemini、ElevenLabs Scribe、OpenAI 兼容批量转写(OpenAI Whisper / Groq / 硅基流动 SenseVoice / OpenRouter / ZenMux),以及 Apple Speech(macOS)。
 - **本地 ASR**:通过 vendored 的 `Open-Less/qwen-asr` 内置 Qwen3-ASR(0.6B / 1.7B)(macOS);Windows 上的 Foundry Local Whisper 与 sherpa-onnx(实验性)变体。
 - **润色提供方**:Ark(火山方舟)、DeepSeek、OpenAI、Google Gemini、Codex OAuth、硅基流动、Atlas Cloud、小米 MiMo、腾讯云 TokenHub、CometAPI、OpenRouter、OrcaRouter、阿里云 Coding Plan、CodingPlanX、MiniMax、StepFun、OpenCode Zen,以及你自带的任意 OpenAI 兼容端点。
-- **四种输出模式**:原文、轻度润色、结构化(**AI 提示词模式**)、正式。另有一个**翻译快捷键**,将语音直接转换为所配置的目标语言([#43](https://github.com/Open-Less/openless/issues/43))。
-- **选区问答面板**——一个独立快捷键打开浮动面板,针对任意应用中被高亮选中的文本进行语音问答([#118](https://github.com/Open-Less/openless/issues/118))。
+- **四种输出模式**:原文、轻度润色、结构化(**AI 提示词模式**)、正式。另有一个**翻译快捷键**,将语音直接转换为所配置的目标语言([#43](../../issues/43))。
+- **选区问答面板**——一个独立快捷键打开浮动面板,针对任意应用中被高亮选中的文本进行语音问答([#118](../../issues/118))。
 - **主窗口**:概览 / 历史 / 词典 / 风格 / 市场 / 设置。常驻托盘图标,以及一个浮于屏幕、并跟随你正在输入的显示器的迷你状态胶囊(多显示器)。
 - **本地模型管理**——在设置中管理本地 ASR 模型在磁盘上的存储。
-- **多语言界面**——设置 → 语言 支持 简体中文 / 繁體中文 / English / 日本語 / 한국어 / Deutsch / Español / Français（首次启动自动检测）。
+- **多语言界面**——设置 → 语言 可在 简体中文 / 繁體中文 / English / 日本語 / 한국어 之间切换(首次启动自动检测)。
 - **Tauri 宿主内自动更新**——macOS、Windows 与 Android 通过 设置 → 关于 → 检查 获取签名产物；Linux deb/rpm 不提供应用内更新或 AppImage 更新清单。
 - **Beta 频道(可选加入)**——设置 → 关于 → 加入 Beta 频道,可下载最新预发布版本进行手动安装。Beta 版本绝不会自动推送给 Stable 用户(见[贡献流程](#贡献流程))。
-- **分发渠道**——[Releases](https://github.com/Open-Less/openless/releases) 提供 DMG/EXE/APK；Linux 完成真机验收后随共用 tag 自动构建和校验 deb/rpm，并附到同一 Release。Homebrew Cask 须先添加项目 tap（见下方安装步骤）。
+- **分发渠道**——从 [Releases](../../releases) 直接下载 DMG/EXE、Homebrew Cask(须先添加项目 tap，见下方安装步骤)、Windows 安装包。Linux deb/rpm 在真机验收、管理员创建发版 tag 后附到共用 Release。
 - **单实例锁**——防止两个 OpenLess 进程争抢同一个快捷键边沿。
 - 词典条目注入到支持热词的 ASR 提供方(Volcengine 的 `context.hotwords`、StepFun 的 `hotwords`、Whisper 兼容的 `prompt`(ZenMux 除外——其 JSON 协议不携带 `prompt`/`hotwords`)、百炼的 vocabulary_id),并在润色时作为语义提示;命中次数按会话累计。讯飞实时语音转写标准版没有请求级热词参数,需在讯飞控制台配置个性化热词。
 - 平台原生全局快捷键:macOS 上为 CGEventTap,Windows 上为低级键盘钩子(`WH_KEYBOARD_LL`)。
 
 ## 下载与安装(终端用户)
 
-前往 [Releases](https://github.com/Open-Less/openless/releases) 下载:
+前往 [Releases](../../releases) 下载:
 
 - **macOS**:`OpenLess_<version>_aarch64.dmg`(Apple Silicon)或 `OpenLess_<version>_x64.dmg`(Intel)。打开后将应用拖入 `/Applications`,**然后在终端执行一次以下命令,以绕过 Gatekeeper 的“已损坏”提示**(该构建为 ad-hoc 签名,未经 Apple 公证):
   ```bash
@@ -242,7 +242,7 @@ OpenLess 只做一件事:**把语音变成可用的书面文字(尤其是 AI 提
   - 应用内更新（设置 → 关于）读取 `latest-android-{arch}.json`；Beta 用户在高级设置加入 Beta 渠道。
   - 调试包:`OpenLess-android-debug-{abi}-*.apk`（workflow_dispatch 产物）。
   - 不确定时执行 `adb shell getprop ro.product.cpu.abi`，下载对应 ABI 的包。
-- **Linux**：完成真实设备验收后，共用 Release 提供 `OpenLess-Linux-egui-<version>-x86_64.deb`、`.rpm` 和 `SHA256SUMS`。原生 `eframe` 宿主要求 glibc ≥ 2.39（Ubuntu 24.04 或同等级发行版），不支持 Ubuntu 22.04 / Debian 12；通过包管理器安装和升级，不提供 Linux 应用内更新或 AppImage。CI 构建通过不等于产品验收。
+- **Linux**：原 Tauri/WebView 构建已退出 Linux 路线。基于共享 Core 2.0 服务的原生 `eframe` 宿主经 CI 和 Ubuntu 真实音频、输入、安装、升级、回滚验收后，随共用 Release 提供 deb/rpm 和 `SHA256SUMS`。要求 glibc ≥ 2.39（Ubuntu 24.04 或同等级发行版）；没有 AppImage 或应用内更新。
 - **macOS(Homebrew)**:
   ```bash
   brew tap Open-Less/openless https://github.com/Open-Less/openless
@@ -403,27 +403,55 @@ egui UI  ── Linux Adapter（无 Tauri/WebKitGTK）───┘
 
 `openless-core` 负责稳定 DTO、错误、语义事件、repository、凭据契约和面向宿主的 use-case Interface。IPC、窗口、托盘、权限、更新、keyring、fcitx5 与打包资源路径等宿主能力由 Adapter 实现。旧 React command/event 名称只保留在 Tauri 兼容 Adapter；Linux 与 core 同进程，通过类型化 Rust Interface 调用。详细契约见 [`docs/linux-egui-backend-contract.md`](docs/linux-egui-backend-contract.md)。
 
-`v<version>-tauri` / `v<version>-Beta.N-tauri` tag 同时触发 macOS、Windows、Android 和独立的 Linux egui deb/rpm 构建。Linux 包在 PR CI 验证和 Ubuntu 真实安装、运行、升级、回滚验收之后，自动附到同一 Release；Beta 资产先保留在草稿中，待管理员确认发布。Linux 不提供 AppImage 或应用内更新清单。
+`v<version>-tauri` / `v<version>-Beta.N-tauri` 工作流构建 macOS、Windows、Android 宿主以及独立的 Linux egui deb/rpm。Linux 真机验收完成、管理员创建 tag 后，验证过的 Linux 包自动附到共用 Release；Beta 资产先留在草稿中供管理员核对发布。Linux 不提供 AppImage 或应用内更新清单。
 
 听写流水线:`hotkey edge → Recorder.start + ASR.openSession → [audio frames] → hotkey edge → Recorder.stop + ASR.sendLastFrame → Polish → Insert → History.save`。
 
-公开仓库规则见[贡献指南](CONTRIBUTING.md)，模块职责与接线见[架构文档](docs/architecture.md)。
+仓库规则见 [AGENTS.md](AGENTS.md)，模块职责与接线见[架构文档](docs/architecture.md)。
 
 ## 路线图
 
 已规划但尚未发布:
 
-- 跨会话风格记忆:润色随时间学习用户的语气([#46](https://github.com/Open-Less/openless/issues/46))。
+- 跨会话风格记忆:润色随时间学习用户的语气([#46](../../issues/46))。
 - 片段(Snippets,尚无 UI 或触发逻辑)。
 - 历史增强:复制按钮、搜索、重新润色、重新插入。
 - “粘贴上次结果”快捷键。
 
 ## 维护者发布清单
 
-**只有管理员可以创建发布 tag 或发布 Release。**版本同步门禁、产品验收要求、各渠道更新检查与完整发布清单统一以 [RELEASING.md](RELEASING.md) 为准，不在 README 复制一份易过时的发布步骤。
+OpenLess 提供两个发布频道。分支名即频道名(见[贡献流程](#贡献流程))。
 
-- Beta：CI 和 Linux 真机验收完成后，管理员在 `beta` 的验收提交上创建 `v<X.Y.Z>-Beta.<N>-tauri` tag。macOS、Windows、Android、Linux 工作流把产物附到共用草稿；管理员核对后再作为 prerelease 发布。
-- Stable：维护者批准后将 `beta → main` 合并。管理员在验收提交上创建 `v<version>-tauri` tag，并核对 Stable 渠道。Linux 只有 deb/rpm；各平台应用内更新清单不包含 Linux。
+### 通用准备(两个频道)
+
+- 在 Tauri 应用的**全部五个**位置提升版本号:`package.json`、`package-lock.json`(根级 + `packages.""` 下的嵌套条目)、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`,以及 `src-tauri/Cargo.lock`(查找 `name = "openless"` 块)。否则 CI 的 `Verify version sync` 步骤会使构建失败。根 `Cargo.lock` 只属于 `openless-core` 与 `openless-linux-egui`。
+- 运行 `INSTALL=0 ./scripts/build-mac.sh`,确认 `.app` 能启动。
+- 在干净的机器上做冒烟测试:权限流程、快捷键、录音、ASR、润色、插入,以及剪贴板回退。
+- 确认 `TAURI_SIGNING_PRIVATE_KEY` 以及(macOS 所需的)Apple 签名 / 公证密钥已在仓库中配置。
+- Android tag 发版还需配置:`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`（release APK 签名；minisign 仍用 `TAURI_SIGNING_PRIVATE_KEY`）。
+
+### Beta 频道 — `v<v>-beta-tauri`
+
+1. 通过 PR 评审把改动落到 `beta` 分支。
+2. **在 `beta` 上**推送标签:`git tag v<v>-beta-tauri && git push origin v<v>-beta-tauri`。
+3. CI 会把该 GitHub Release 标记为 `Pre-release`,并上传 `latest-{tgt}-{arch}-beta.json` 与 `latest-android-{arch}-beta.json` 更新清单。Stable 用户的 `releases/latest` 跳转不受影响。
+4. 在合适的渠道(issue 讨论串、QQ 群)公告:可选加入的 Beta 用户可从 设置 → 关于 → 加入 Beta 频道 获取。
+
+### Stable 频道 — `v<v>-tauri`
+
+1. 在 Beta 发布充分沉淀后,将 `beta → main` 合并(或直接运行一次最终的双平台冒烟构建)。
+2. **在 `main` 上**推送标签:`git tag v<v>-tauri && git push origin v<v>-tauri`。
+3. CI 发布一个正常的 GitHub Release,并上传 `latest-{tgt}-{arch}.json` 与 `latest-android-{arch}.json`(无 `-beta` 后缀)。所有 Stable 用户都会通过应用内更新器获得更新。
+
+### 发布后验证(始终执行)
+
+按 [RELEASING.md](RELEASING.md) 验证发布页的 pre-release 标记、产物文件名与渠道、Stable 用户流程、Beta 选择流程和更新端点，并额外核对 Android：
+
+1. Release 页面含 `latest-android-aarch64.json`（Stable 无 `-beta` 后缀混用）。
+2. Beta pre-release 含 `latest-android-aarch64-beta.json`,URL 指向具体 tag。
+3. 真机:设置 → 关于 → 检查更新 → 下载 → 系统安装器 → 版本号递增。
+4. Beta 开关:高级 → 加入 Beta → 手动/自动检查 Beta manifest。
+5. 原始端点与 mirror 端点均可访问。
 
 ## 致谢
 

@@ -83,7 +83,7 @@ node scripts/patch-android-shizuku-deps.mjs
 CI=true npm run tauri:android:build
 ```
 
-Workflow： [`.github/workflows/android-apk.yml`](../../../.github/workflows/android-apk.yml)
+Workflow： [`.github/workflows/android-apk.yml`](../../.github/workflows/android-apk.yml)
 
 **本地 overlay / 无障碍开发（v3）** — 与 CI 相同的 manifest 合并链，使用本地 init / copy 脚本：
 
@@ -100,6 +100,5 @@ npm run tauri:android:build
 
 ## 相关文档
 
-- 真机闪退排查：保留复现步骤、设备与 Android 版本、`adb logcat` 错误日志；提交前删除日志中的 token 和个人数据。
-- [公开贡献指南](../../../CONTRIBUTING.md) — 源码边界与验证要求
-- [docs/android-mobile-apk-overlay-plan.md](../../../docs/android-mobile-apk-overlay-plan.md) — 分阶段产品计划
+- [AGENTS.md](../../AGENTS.md) — 真机闪退排查
+- [docs/android-mobile-apk-overlay-plan.md](../../docs/android-mobile-apk-overlay-plan.md) — 分阶段产品计划

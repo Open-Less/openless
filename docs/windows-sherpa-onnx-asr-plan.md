@@ -1,6 +1,6 @@
 # Windows sherpa-onnx 本地 ASR 实施规划
 
-> 状态：历史规划 / 已实现（以下实施步骤仅供追溯；当前行为以源码、测试和 CI 工作流为准）
+> 状态：历史规划 / 已实现（当前行为以代码与测试为准）
 > 日期：2026-05-12
 > 范围：仅 Windows；不替换 macOS `local-qwen3`；不替换 Windows `foundry-local-whisper`
 
@@ -249,7 +249,7 @@ pub sherpa_onnx_keep_loaded_secs: u32,
 - **Sherpa-Onnx Local（新增，实验）**
 - 模型选择 / 准备 / 删除 / 路径
 
-复用现有 `LocalAsr` UI 模式。新增 i18n key 时须补齐 `src/i18n/` 的八种语言并运行测试；见[公开贡献指南](../CONTRIBUTING.md)。
+复用现有 `LocalAsr` UI 模式。i18n key 用 zh-CN 源 + en 镜像（按 AGENTS.md 规则）。
 
 ---
 
@@ -275,10 +275,11 @@ sherpa-onnx = "..."   # 选最新稳定版，feature 关闭非必要后端
 - 通过 `build.rs` copy 到 target dir
 - 由 Tauri bundler 一同打进 NSIS / MSI
 - WiX 的 `Component` 落到 `INSTALLDIR`
-- **以当前 [Tauri 发布工作流](../.github/workflows/release-tauri.yml) 和 [Windows 打包脚本](../openless-all/app/scripts/windows-package-msvc.ps1) 为准**：
-  - NSIS 与 MSI 分开构建，NSIS 签名产物必须成功
-  - 支持的 Stable 版本构建 MSI，修复步骤重链时使用 `-sice:ICE80`
-  - Beta 或 WiX 无法表示的预发布版本跳过 MSI；不可把旧规划的“两轮必跑”当作现行 CI 规则
+- **严格遵守 AGENTS.md 的 Windows CI 红线**：
+  - 两轮 NSIS / MSI
+  - bash shell
+  - `-sice:ICE80`
+  - 不动 Repair 步骤
 
 如果 crate 不带 DLL：
 
@@ -348,7 +349,7 @@ sherpa-onnx = "..."   # 选最新稳定版，feature 关闭非必要后端
 
 | 风险 | 对策 |
 |---|---|
-| sherpa-onnx Windows 打包带 native DLL，触发 WiX / NSIS 兼容问题 | 以[当前 Windows 发布工作流](../.github/workflows/release-tauri.yml)为准验证 NSIS；MSI 仅在受支持版本构建，修复重链使用 `-sice:ICE80` |
+| sherpa-onnx Windows 打包带 native DLL，触发 WiX / NSIS 兼容问题 | 严格走 AGENTS.md 的两轮 bundle + `-sice:ICE80`；早期就在 CI 跑 |
 | ONNX Runtime 版本冲突 | 锁版本；不和其他 crate 共享 ORT |
 | 模型体积大，下载失败 | 强制镜像 + 断点续传 + SHA-256 + 明确错误文案 |
 | 安装路径含中文/空格导致模型加载失败 | 用 `\\?\` 长路径前缀 + 单元测试覆盖 |
@@ -376,7 +377,7 @@ sherpa-onnx = "..."   # 选最新稳定版，feature 关闭非必要后端
 - 不动 macOS 编译产物
 - 不动 Foundry 路径
 - 不引入新的 CI 红线
-- Windows NSIS 构建通过；仅支持 MSI 的版本执行 MSI 构建与 Repair 验证（当前 Beta 跳过 MSI）
+- Windows MSI / NSIS 两轮构建仍然通过
 - 包体增量在可接受范围（建议 < 50MB，不含模型）
 
 ### 测试
@@ -418,4 +419,4 @@ sherpa-onnx = "..."   # 选最新稳定版，feature 关闭非必要后端
   - `openless-all/app/src-tauri/src/asr/local/local_provider.rs`
 - 主听写链路集成点：
   - `openless-all/app/src-tauri/src/coordinator/dictation.rs`
-- Windows CI / 打包现行规则：[Tauri 发布工作流](../.github/workflows/release-tauri.yml)、[Windows 打包脚本](../openless-all/app/scripts/windows-package-msvc.ps1)
+- Windows CI / 打包红线：见仓库根 `AGENTS.md`「Windows CI 红线」一节

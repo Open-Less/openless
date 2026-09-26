@@ -8,7 +8,6 @@
 - [架构](architecture.md)：Core / 平台 Host / 界面分层、模块地图与验证入口。
 - [目录与工程结构](structure.md)：仓库与应用工作目录、构建清单、源码定位和生成目录。
 - [桌面验收清单](2.0-desktop-acceptance.md)：功能域 → 源码入口 → 必须的真实证据。
-- [公开贡献指南](../CONTRIBUTING.md)：分支、源代码边界、验证与翻译要求。
 - [发布规范](../RELEASING.md)：分支、渠道、版本同步和平台发布条件。
 
 ## Linux 接入交接（egui，目录内互链）
@@ -33,9 +32,9 @@
 
 ## 验证入口（在 `openless-all/app` 执行）
 
-- `npm test`：运行前端与合同测试；`npm run build`：TypeScript 检查与 Vite 构建。
+- `npm test`：构建 React + 全部前端/合同测试（含 Core 快捷键回归）。
 - `cargo fmt --all --check`：根 workspace 的 openless-core、linux-egui；Tauri 单独执行 `cargo fmt --manifest-path src-tauri/Cargo.toml --check`。
-- `cargo test --locked -p openless-core`、`cargo test --locked -p openless-linux-egui --all-targets`。PR 的 `CI` 调用 `check-linux-egui.yml`，与 tag 发版复用同一条 deb/rpm 构建、解包与哈希校验链；绿色构建不能代替真实设备验收。
+- `cargo test -p openless-core --locked`、`cargo test -p openless-linux-egui --locked`。
 - `src-tauri` 及 `backend-tests` 被 workspace exclude，按平台独立构建。源码构建 Tauri 前初始化子模块：`git submodule update --init --recursive`；Core/Linux 独立检查不依赖 Tauri 子模块。
 
 ## 本地集成记录
