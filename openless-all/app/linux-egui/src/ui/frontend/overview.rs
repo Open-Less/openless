@@ -59,28 +59,71 @@ pub fn page(ui: &mut egui::Ui, vm: &FrontendViewModel, actions: &mut Vec<Fronten
 
     // 单屏仪表盘优先；窗口高度不够时整页滚动，而不是把底部的年度活动热力图裁掉
     // （裁掉就完全摸不到了）。
-    if ui.available_height() < overview_min_height(mobile) {
-        egui::ScrollArea::vertical()
+    let min_height = overview_min_height(ui, width, vm, mobile);
+    if ui.available_height() < min_height {
+        let scroll_output = egui::ScrollArea::vertical()
             .id_salt("openless-overview-scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.set_min_width(width);
                 ui.set_max_width(width);
-                body(ui, width, vm, actions, overview_min_height(mobile), mobile);
+                body(ui, width, vm, actions, min_height, mobile);
             });
+        #[cfg(test)]
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(
+                egui::Id::new("overview-scroll-measure"),
+                (
+                    scroll_output.content_size.y,
+                    scroll_output.inner_rect.height(),
+                    scroll_output.state.offset.y,
+                ),
+            )
+        });
+        #[cfg(not(test))]
+        let _ = scroll_output;
         return;
     }
     body(ui, width, vm, actions, 0.0, mobile);
 }
 
-/// 单屏仪表盘需要的最小高度：低于它就把整页改成滚动布局。
-/// 底部两张卡左右排列时需要的空间比堆叠少，所以窄屏的阀值反而更高。
-fn overview_min_height(mobile: bool) -> f32 {
-    if mobile {
-        OVERVIEW_MIN_HEIGHT + BOTTOM_MIN_HEIGHT
-    } else {
-        OVERVIEW_MIN_HEIGHT
+/// Reserve enough room for the sections actually shown. A fixed 600px cutoff
+/// did not account for unconfigured provider cards + the yearly heatmap: at
+/// intermediate window heights the body shrank/dropped the heatmap without
+/// ever entering its scrollable layout.
+fn overview_min_height(ui: &egui::Ui, width: f32, vm: &FrontendViewModel, mobile: bool) -> f32 {
+    let base = OVERVIEW_MIN_HEIGHT + if mobile { BOTTOM_MIN_HEIGHT } else { 0.0 };
+    let Some(summary) = vm
+        .overview
+        .as_ref()
+        .filter(|_| !vm.overview_loading && vm.overview_error.is_none())
+    else {
+        return base;
+    };
+    let mut needed = 34.0
+        + SECTION_GAP
+        + 18.0
+        + 8.0
+        + METRIC_CARD_HEIGHT
+        + if mobile {
+            GAP + METRIC_CARD_HEIGHT
+        } else {
+            0.0
+        }
+        + SECTION_GAP
+        + BOTTOM_MIN_HEIGHT;
+    let pending = usize::from(!summary.asr_configured) + usize::from(!summary.llm_configured);
+    if pending > 0 {
+        let rows = if mobile { pending } else { 1 };
+        needed +=
+            SECTION_GAP + 20.0 + 8.0 + rows as f32 * PROVIDER_CARD_HEIGHT + (rows - 1) as f32 * GAP;
     }
+    if vm.settings.activity_heatmap && summary.heatmap.iter().any(|day| day.count > 0) {
+        let columns = heatmap_columns(summary.heatmap_year, summary.heatmap.len());
+        needed += SECTION_GAP + heatmap_card_height(width, columns);
+    }
+    needed += ui.spacing().item_spacing.y * 8.0;
+    base.max(needed)
 }
 
 /// One dashboard layout. `forced_total` > 0 lays the page out for a scroll

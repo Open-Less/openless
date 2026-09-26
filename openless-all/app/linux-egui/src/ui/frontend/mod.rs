@@ -64,8 +64,11 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
                 // Bound the viewport to the current window, not the previous
                 // frame's content size: after shrinking a large window the
                 // translation guide must remain reachable by scrolling.
-                egui::ScrollArea::vertical()
-                    .id_salt("openless-main-scroll")
+                let scroll_output = egui::ScrollArea::vertical()
+                    // Each page owns its own scroll position. Sharing one id
+                    // with other pages let a prior tab leave Translation at an
+                    // unexpected offset after switching or resizing.
+                    .id_salt(("openless-main-scroll", page))
                     .max_height(
                         (body.height() - layout::PAGE_TOP_PADDING - layout::PAGE_BOTTOM_PADDING)
                             .max(1.0),
@@ -96,6 +99,19 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
                         }
                         ui.add_space(32.0);
                     });
+                #[cfg(test)]
+                ctx.data_mut(|data| {
+                    data.insert_temp(
+                        egui::Id::new("main-scroll-measure"),
+                        (
+                            scroll_output.content_size.y,
+                            scroll_output.inner_rect.height(),
+                            scroll_output.state.offset.y,
+                        ),
+                    )
+                });
+                #[cfg(not(test))]
+                let _ = scroll_output;
             }
         }
 
@@ -260,6 +276,27 @@ mod tests {
         let content_bottom = layout::body_rect(&ctx).bottom() - layout::PAGE_BOTTOM_PADDING;
         assert!(heatmap.bottom() <= content_bottom + 0.5,
             "heatmap must not be obscured by the white bottom gutter: {heatmap:?}, content bottom={content_bottom}");
+
+        // With a pending provider the cards need more than the old fixed 600px
+        // cutoff. The yearly activity must remain reachable at this height.
+        vm.overview.as_mut().unwrap().asr_configured = false;
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(960.0, 800.0),
+            )),
+            ..Default::default()
+        });
+        render(&ctx, &mut vm, &mut Vec::new());
+        let _ = end_pass(&ctx);
+        let (content, visible, _): (f32, f32, f32) = ctx.data(|data| {
+            data.get_temp(egui::Id::new("overview-scroll-measure"))
+                .expect("provider cards plus heatmap must enable page scrolling")
+        });
+        assert!(
+            content > visible,
+            "overview did not offer scrolling: {content}/{visible}"
+        );
     }
 
     fn painted_text(output: &egui::FullOutput) -> String {
@@ -1155,6 +1192,245 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn history_and_quick_note_remain_side_by_side_at_the_window_minimum() {
+        for page in [Page::History, Page::QuickNote] {
+            let ctx = egui::Context::default();
+            let mut vm = FrontendViewModel {
+                active_page: page,
+                ..Default::default()
+            };
+            for size in [egui::vec2(1300.0, 835.0), egui::vec2(960.0, 640.0)] {
+                ctx.begin_pass(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    ..Default::default()
+                });
+                render(&ctx, &mut vm, &mut Vec::new());
+                let _ = end_pass(&ctx);
+            }
+            let (list, detail): (egui::Rect, egui::Rect) = ctx.data(|data| {
+                data.get_temp(egui::Id::new("history-column-rects"))
+                    .unwrap()
+            });
+            assert!(
+                detail.left() >= list.right(),
+                "{page:?} stacked at minimum: {list:?} / {detail:?}"
+            );
+            assert!(
+                detail.right() <= layout::body_rect(&ctx).right(),
+                "{page:?} detail clipped: {detail:?}"
+            );
+            let visible_bottom = layout::body_rect(&ctx).bottom() - layout::PAGE_BOTTOM_PADDING;
+            assert!(
+                detail.bottom() <= visible_bottom + 1.0,
+                "{page:?} detail extends under bottom gutter: {detail:?}, bottom={visible_bottom}"
+            );
+        }
+    }
+
+    #[test]
+    fn history_and_quick_note_scroll_both_columns_at_minimum_window_height() {
+        for page in [Page::History, Page::QuickNote] {
+            for (pointer, measure) in [
+                (egui::pos2(360.0, 400.0), "history-list-scroll-measure"),
+                (egui::pos2(670.0, 400.0), "history-detail-scroll-measure"),
+            ] {
+                let ctx = egui::Context::default();
+                let mut vm = FrontendViewModel {
+                    active_page: page,
+                    quick_note_shortcut_hidden: true,
+                    history_loading: false,
+                    history_entries: (0..25)
+                        .map(|n| super::view_model::HistoryEntry {
+                            id: n.to_string(),
+                            quick_note: page == Page::QuickNote,
+                            created_at: "2026-01-15T12:34:00+00:00".into(),
+                            raw_transcript: "long sentence for scroll testing ".repeat(90),
+                            final_text: "final paragraph ".repeat(60),
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                };
+                for frame in 0..6 {
+                    let size = if frame == 0 {
+                        egui::vec2(1300.0, 835.0)
+                    } else {
+                        egui::vec2(960.0, 640.0)
+                    };
+                    let mut events = vec![egui::Event::PointerMoved(pointer)];
+                    if frame >= 2 {
+                        events.push(egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, -180.0),
+                            phase: egui::TouchPhase::Move,
+                            modifiers: egui::Modifiers::NONE,
+                        });
+                    }
+                    ctx.begin_pass(egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        events,
+                        ..Default::default()
+                    });
+                    render(&ctx, &mut vm, &mut Vec::new());
+                    let _ = end_pass(&ctx);
+                }
+                let (content, visible, offset): (f32, f32, f32) =
+                    ctx.data(|data| data.get_temp(egui::Id::new(measure)).unwrap());
+                assert!(
+                    content > visible + 10.0,
+                    "{page:?} {measure} no scroll extent: {content}/{visible}"
+                );
+                assert!(
+                    offset > 10.0,
+                    "{page:?} {measure} did not scroll: {content}/{visible}, offset={offset}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn overview_and_translation_scroll_at_minimum_window_height() {
+        for page in [Page::Overview, Page::Translation] {
+            let ctx = egui::Context::default();
+            let mut vm = FrontendViewModel {
+                active_page: page,
+                translation_unsupported: false,
+                overview_loading: false,
+                ..Default::default()
+            };
+            if page == Page::Overview {
+                vm.settings.activity_heatmap = true;
+                vm.overview = Some(super::view_model::OverviewSummary {
+                    asr_provider: "asr".into(),
+                    llm_provider: "llm".into(),
+                    asr_configured: true,
+                    llm_configured: true,
+                    chars_today: 42,
+                    segments_today: 3,
+                    duration_ms_today: 12_000,
+                    avg_latency_ms: 1200,
+                    history_total: 20,
+                    recent: Vec::new(),
+                    activity_daily: Vec::new(),
+                    heatmap_year: 2026,
+                    heatmap: (0..365)
+                        .map(|day| super::view_model::OverviewHeatmapDay {
+                            date: format!("2026-01-{day}"),
+                            count: 1,
+                        })
+                        .collect(),
+                });
+            }
+            let large = egui::vec2(1300.0, 835.0);
+            let small = egui::vec2(960.0, 640.0);
+            for frame in 0..6 {
+                let size = if frame == 0 { large } else { small };
+                let events = if frame >= 2 {
+                    vec![
+                        egui::Event::PointerMoved(egui::pos2(550.0, 390.0)),
+                        egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, -180.0),
+                            phase: egui::TouchPhase::Move,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ]
+                } else {
+                    vec![egui::Event::PointerMoved(egui::pos2(550.0, 390.0))]
+                };
+                ctx.begin_pass(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events,
+                    ..Default::default()
+                });
+                render(&ctx, &mut vm, &mut Vec::new());
+                let _ = end_pass(&ctx);
+                if frame == 5 {
+                    let id = if page == Page::Overview {
+                        "overview-scroll-measure"
+                    } else {
+                        "main-scroll-measure"
+                    };
+                    let (content, visible, offset): (f32, f32, f32) = ctx.data(|data| {
+                        data.get_temp(egui::Id::new(id))
+                            .expect("scroll container must exist")
+                    });
+                    assert!(
+                        content > visible + 10.0,
+                        "{page:?} has no scroll extent: {content} / {visible}"
+                    );
+                    assert!(
+                        offset > 10.0,
+                        "{page:?} did not scroll: {content} / {visible}, offset={offset}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn translation_scroll_position_is_not_shared_with_other_pages() {
+        fn paint(ctx: &egui::Context, vm: &mut FrontendViewModel, events: Vec<egui::Event>) -> f32 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(960.0, 640.0),
+                )),
+                events,
+                ..Default::default()
+            });
+            render(ctx, vm, &mut Vec::new());
+            let _ = end_pass(ctx);
+            ctx.data(|data| {
+                data.get_temp::<(f32, f32, f32)>(egui::Id::new("main-scroll-measure"))
+                    .unwrap()
+                    .2
+            })
+        }
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            active_page: Page::Translation,
+            translation_unsupported: false,
+            ..Default::default()
+        };
+        paint(
+            &ctx,
+            &mut vm,
+            vec![egui::Event::PointerMoved(egui::pos2(530.0, 360.0))],
+        );
+        let mut scrolled = 0.0;
+        for _ in 0..3 {
+            scrolled = paint(
+                &ctx,
+                &mut vm,
+                vec![
+                    egui::Event::PointerMoved(egui::pos2(530.0, 360.0)),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, -130.0),
+                        phase: egui::TouchPhase::Move,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert!(scrolled > 1.0);
+        vm.active_page = Page::Marketplace;
+        paint(&ctx, &mut vm, Vec::new());
+        let other = paint(&ctx, &mut vm, Vec::new());
+        assert!(
+            other < 1.0,
+            "marketplace inherited translation scroll offset: {other}"
+        );
+        vm.active_page = Page::Translation;
+        let restored = paint(&ctx, &mut vm, Vec::new());
+        assert!(
+            restored > 10.0,
+            "translation lost its scroll position after switching pages: {scrolled} -> {restored}"
+        );
     }
 
     #[test]

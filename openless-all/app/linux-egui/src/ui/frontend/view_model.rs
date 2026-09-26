@@ -2,7 +2,9 @@ use openless_linux_egui::Lang;
 
 // ── Page / Tab ──────────────────────────────────────────────────────────────
 
-#[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(
+    Clone, serde::Serialize, serde::Deserialize, Copy, Debug, Default, PartialEq, Eq, Hash,
+)]
 pub enum Page {
     #[default]
     Overview,

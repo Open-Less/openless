@@ -15,9 +15,9 @@
 //! ```
 //!
 //! The page is a single-screen layout: the list and detail cards split the
-//! height the shell gives them, and each scrolls independently. Below
-//! `STACK_WIDTH` the two cards stack vertically. All strings come from the
-//! localization catalog; nothing is hardcoded.
+//! height the shell gives them, and each scrolls independently. Only when both
+//! columns cannot fit do they stack. All strings come from the localization
+//! catalog; nothing is hardcoded.
 
 use std::sync::Arc;
 
@@ -35,7 +35,10 @@ use super::view_model::{
 
 const GAP: f32 = 14.0;
 const LIST_WIDTH: f32 = 300.0;
-const STACK_WIDTH: f32 = 760.0;
+// Keep the 300px list and a usable 280px detail side by side at the Linux
+// window minimum (960px outer, ~706px page width). The old 760px breakpoint
+// stacked both cards there and hid the detail below the clipped viewport.
+const STACK_WIDTH: f32 = LIST_WIDTH + GAP + 280.0;
 const CARD_PADDING: f32 = 20.0;
 const DETAIL_PADDING: f32 = 12.0;
 const LINE_SOFT: egui::Color32 = theme::LINE_SOFT;
@@ -89,6 +92,13 @@ pub fn page(
         )
     };
 
+    #[cfg(test)]
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(
+            egui::Id::new("history-column-rects"),
+            (list_rect, detail_rect),
+        )
+    });
     let filtered = filtered_indices(vm, quick_notes_only);
     list_card(ui, list_rect, vm, &filtered, lang, actions);
     detail_card(ui, detail_rect, vm, &filtered, lang, actions);
@@ -358,7 +368,7 @@ fn list_card(
             egui::pos2(rect.right() - 6.0, rect.bottom() - 6.0),
         );
         layout::fixed_ui(ui, list_rect, ("openless-history-list-scroll",), |ui| {
-            egui::ScrollArea::vertical()
+            let scroll_output = egui::ScrollArea::vertical()
                 .id_salt("openless-history-list")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
@@ -396,6 +406,19 @@ fn list_card(
                         );
                     }
                 });
+            #[cfg(test)]
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(
+                    egui::Id::new("history-list-scroll-measure"),
+                    (
+                        scroll_output.content_size.y,
+                        scroll_output.inner_rect.height(),
+                        scroll_output.state.offset.y,
+                    ),
+                )
+            });
+            #[cfg(not(test))]
+            let _ = scroll_output;
         });
     });
 }
@@ -557,7 +580,7 @@ fn detail_card(
         rect.shrink(CARD_PADDING),
         ("openless-history-detail",),
         |ui| {
-            egui::ScrollArea::vertical()
+            let scroll_output = egui::ScrollArea::vertical()
                 .id_salt("openless-history-detail-scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
@@ -648,6 +671,19 @@ fn detail_card(
                         }
                     }
                 });
+            #[cfg(test)]
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(
+                    egui::Id::new("history-detail-scroll-measure"),
+                    (
+                        scroll_output.content_size.y,
+                        scroll_output.inner_rect.height(),
+                        scroll_output.state.offset.y,
+                    ),
+                )
+            });
+            #[cfg(not(test))]
+            let _ = scroll_output;
         },
     );
 }
