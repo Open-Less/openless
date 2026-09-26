@@ -253,6 +253,13 @@ mod tests {
                 "expected the overview dashboard to paint {key} ({expected:?})"
             );
         }
+        let heatmap: egui::Rect = ctx.data(|data| {
+            data.get_temp(egui::Id::new("openless-overview-heatmap-rect"))
+                .expect("populated overview should show the heatmap")
+        });
+        let content_bottom = layout::body_rect(&ctx).bottom() - layout::PAGE_BOTTOM_PADDING;
+        assert!(heatmap.bottom() <= content_bottom + 0.5,
+            "heatmap must not be obscured by the white bottom gutter: {heatmap:?}, content bottom={content_bottom}");
     }
 
     fn painted_text(output: &egui::FullOutput) -> String {

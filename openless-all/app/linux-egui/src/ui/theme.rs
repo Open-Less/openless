@@ -108,6 +108,7 @@ fn fontconfig_match(query: &str) -> Option<(PathBuf, u32)> {
 /// the desktop prefers is used, exactly like the Tauri build) and CJK is loaded
 /// with its proper face index. The egui defaults stay as the last fallback.
 pub fn install(ctx: &egui::Context) {
+    enable_antialiasing(ctx);
     // (font key, file, face index, proportional?, monospace?)
     let mut candidates: Vec<(String, PathBuf, u32, bool, bool)> = Vec::new();
     if let Some(path) = std::env::var_os("OPENLESS_IME_FONT").map(PathBuf::from) {
@@ -243,6 +244,15 @@ pub fn install(ctx: &egui::Context) {
     }
 }
 
+/// Feather shape edges in physical pixels on both the WGPU windows (which also
+/// use 4x MSAA) and the single-sample EGL layer surface.
+pub fn enable_antialiasing(ctx: &egui::Context) {
+    ctx.tessellation_options_mut(|options| {
+        options.feathering = true;
+        options.feathering_size_in_pixels = 1.0;
+    });
+}
+
 /// Apply the light/dark visual theme.
 pub fn apply_visuals(ctx: &egui::Context, mode: openless_core::shared_types::ThemeMode) {
     let dark = match mode {
@@ -268,4 +278,23 @@ pub fn apply_visuals(ctx: &egui::Context, mode: openless_core::shared_types::The
     visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(7);
     visuals.widgets.active.corner_radius = egui::CornerRadius::same(7);
     ctx.set_visuals(visuals);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn antialiasing_is_enabled_even_if_tessellation_was_disabled() {
+        let ctx = egui::Context::default();
+        ctx.tessellation_options_mut(|options| {
+            options.feathering = false;
+            options.feathering_size_in_pixels = 0.0;
+        });
+        enable_antialiasing(&ctx);
+        ctx.tessellation_options(|options| {
+            assert!(options.feathering);
+            assert_eq!(options.feathering_size_in_pixels, 1.0);
+        });
+    }
 }

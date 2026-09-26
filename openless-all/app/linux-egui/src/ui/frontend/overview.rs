@@ -151,14 +151,18 @@ fn body(
     let heatmap_cols = heatmap_columns(summary.heatmap_year, summary.heatmap.len());
     let ideal_heatmap = heatmap_card_height(width, heatmap_cols);
     let mut heatmap_height = ideal_heatmap;
-    if available - heatmap_height - SECTION_GAP < BOTTOM_MIN_HEIGHT {
-        heatmap_height = (available - BOTTOM_MIN_HEIGHT - SECTION_GAP).max(0.0);
+    // egui advances the cursor by item_spacing after bottom_row's allocated
+    // widget. Without reserving it, the heatmap slips under the white bottom
+    // gutter (the bottom few pixels are clipped by content_panel).
+    let row_spacing = ui.spacing().item_spacing.y;
+    if available - heatmap_height - SECTION_GAP - row_spacing < BOTTOM_MIN_HEIGHT {
+        heatmap_height = (available - BOTTOM_MIN_HEIGHT - SECTION_GAP - row_spacing).max(0.0);
     }
     let has_activity = summary.heatmap.iter().any(|day| day.count > 0);
     let show_heatmap =
         heatmap_height >= HEATMAP_MIN_HEIGHT && vm.settings.activity_heatmap && has_activity;
     let bottom_height = if show_heatmap {
-        (available - heatmap_height - SECTION_GAP).max(BOTTOM_MIN_HEIGHT)
+        (available - heatmap_height - SECTION_GAP - row_spacing).max(BOTTOM_MIN_HEIGHT)
     } else {
         available.max(BOTTOM_MIN_HEIGHT)
     };
@@ -969,6 +973,9 @@ fn heatmap_card(
     lang: Lang,
 ) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    #[cfg(test)]
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(egui::Id::new("openless-overview-heatmap-rect"), rect));
     card_scope(ui, rect, CARD_PADDING, |ui, inner| {
         let painter = ui.painter().with_clip_rect(inner);
         painter.text(

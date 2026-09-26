@@ -8,6 +8,84 @@ use super::view_model::{FrontendAction, FrontendViewModel, MarketplaceSort};
 /// Every marketplace tile has the same height so rows line up.
 const MARKETPLACE_TILE_HEIGHT: f32 = 176.0;
 
+fn my_packs_button(ui: &mut egui::Ui, rect: egui::Rect, label: &str) -> egui::Response {
+    let response = ui.interact(
+        rect,
+        ui.id().with("marketplace-my-packs"),
+        egui::Sense::click(),
+    );
+    let painter = ui.painter().with_clip_rect(rect);
+    painter.rect_filled(rect, egui::CornerRadius::same(9), theme::SURFACE);
+    painter.rect_stroke(
+        rect,
+        egui::CornerRadius::same(9),
+        egui::Stroke::new(0.5, theme::LINE_STRONG),
+        egui::StrokeKind::Inside,
+    );
+    let badge = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + 21.0, rect.center().y),
+        egui::vec2(18.0, 18.0),
+    );
+    painter.rect_filled(badge, egui::CornerRadius::same(9), theme::SURFACE_2);
+    // No verified account identity is exposed by the Linux view model yet;
+    // Tauri shows '?' in this exact badge when not signed in.
+    painter.text(
+        badge.center(),
+        egui::Align2::CENTER_CENTER,
+        "?",
+        egui::FontId::proportional(10.0),
+        theme::INK_2,
+    );
+    let label_pos = egui::pos2(badge.right() + 8.0, rect.center().y);
+    painter.text(
+        label_pos,
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(12.0),
+        theme::INK_2,
+    );
+    #[cfg(test)]
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(
+            egui::Id::new("openless-mine-button-test-rects"),
+            (rect, badge, label_pos),
+        )
+    });
+    response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn my_packs_avatar_is_inside_the_button_before_the_label() {
+        let ctx = egui::Context::default();
+        let button = egui::Rect::from_min_size(egui::pos2(50.0, 60.0), egui::vec2(150.0, 30.0));
+        let _ = crate::ui::frontend::run_pass(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(500.0, 300.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                my_packs_button(ui, button, "Mine");
+            },
+        );
+        let (outer, avatar, text): (egui::Rect, egui::Rect, egui::Pos2) = ctx.data(|data| {
+            data.get_temp(egui::Id::new("openless-mine-button-test-rects"))
+                .unwrap()
+        });
+        assert!(outer.contains_rect(avatar));
+        assert_eq!(avatar.size(), egui::vec2(18.0, 18.0));
+        assert_eq!(text.x - avatar.right(), 8.0);
+        assert!(outer.right() > text.x);
+    }
+}
+
 /// Render the marketplace page. All data comes from the view model; this
 /// function is pure rendering — it reads from `vm` and pushes actions.
 pub fn marketplace_page(
@@ -29,7 +107,8 @@ pub fn marketplace_page(
         Some(tr_l10n(lang, "marketplace.desc")),
     );
     let mine = tr_l10n(lang, "marketplace.my_packs_button_label");
-    let mine_width = layout::text_width(ui, mine, 12.5) + 34.0;
+    // Tauri keeps the '?' avatar *inside* the My Publications button.
+    let mine_width = layout::text_width(ui, mine, 12.0) + 12.0 * 2.0 + 18.0 + 8.0;
     let refresh = tr_l10n(lang, "marketplace.refresh_btn");
     let refresh_width = layout::text_width(ui, refresh, 12.5) + 34.0;
     let refresh_rect = egui::Rect::from_min_size(
@@ -40,31 +119,12 @@ pub fn marketplace_page(
         egui::pos2(refresh_rect.left() - 8.0 - mine_width, header.top() + 22.0),
         egui::vec2(mine_width, 30.0),
     );
-    if layout::action_button(ui, mine_rect, mine, None, layout::ButtonKind::Ghost).clicked() {
+    if my_packs_button(ui, mine_rect, mine)
+        .on_hover_text(tr_l10n(lang, "marketplace.myPacks.buttonTitleEmpty"))
+        .clicked()
+    {
         actions.push(FrontendAction::MarketplaceMyPacks);
     }
-    let help_rect = egui::Rect::from_center_size(
-        egui::pos2(mine_rect.left() - 15.0, mine_rect.center().y),
-        egui::vec2(20.0, 20.0),
-    );
-    let help = ui.interact(
-        help_rect,
-        ui.id().with("marketplace-mine-help"),
-        egui::Sense::hover(),
-    );
-    ui.painter().circle_stroke(
-        help_rect.center(),
-        8.0,
-        egui::Stroke::new(1.0, theme::INK_4),
-    );
-    ui.painter().text(
-        help_rect.center(),
-        egui::Align2::CENTER_CENTER,
-        "?",
-        egui::FontId::proportional(11.0),
-        theme::INK_3,
-    );
-    help.on_hover_text(tr_l10n(lang, "marketplace.myPacks.buttonTitleEmpty"));
     if layout::action_button(
         ui,
         refresh_rect,

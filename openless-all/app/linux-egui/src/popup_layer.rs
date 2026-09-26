@@ -688,6 +688,11 @@ where
         .map_err(|error| format!("egui_glow painter: {error}"))?;
     eprintln!("OpenLess capsule: EGL ready on the layer surface");
     let context = egui::Context::default();
+    // This EGL layer surface is single-sample; feather egui geometry instead.
+    context.tessellation_options_mut(|options| {
+        options.feathering = true;
+        options.feathering_size_in_pixels = 1.0;
+    });
     let scale = 1.0;
     let mut first = true;
 

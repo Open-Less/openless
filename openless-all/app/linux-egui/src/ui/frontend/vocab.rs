@@ -746,7 +746,7 @@ fn quick_add(
             egui::pos2(ui.cursor().min.x, ui.cursor().min.y),
             egui::vec2(add_width, 34.0),
         );
-        if primary_button(ui, rect, add, Some(IconName::Hash)).clicked() {
+        if primary_button(ui, rect, add, Some(IconName::Plus)).clicked() {
             let phrase = vm.vocab_input.trim().to_string();
             if !phrase.is_empty() {
                 actions.push(FrontendAction::VocabAddPhrase(phrase));
