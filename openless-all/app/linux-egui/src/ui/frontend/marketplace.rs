@@ -8,6 +8,14 @@ use super::view_model::{FrontendAction, FrontendViewModel, MarketplaceSort};
 /// Every marketplace tile has the same height so rows line up.
 const MARKETPLACE_TILE_HEIGHT: f32 = 176.0;
 
+/// GitHub device-flow dialog. Tauri's modal is `min(440px, 100%)`; the egui
+/// card keeps the reference's left edge and extends 30px further right so the
+/// browser hint and the授权 status row are not cramped.
+const OAUTH_CARD_WIDTH: f32 = 470.0;
+const OAUTH_CARD_SHIFT_X: f32 = 15.0;
+/// Title size matches the Tauri heading (16px) rather than the 15px body step.
+const OAUTH_TITLE_SIZE: f32 = 16.0;
+
 fn my_packs_button(ui: &mut egui::Ui, rect: egui::Rect, label: &str) -> egui::Response {
     let response = ui.interact(
         rect,
@@ -83,6 +91,52 @@ mod tests {
         assert_eq!(avatar.size(), egui::vec2(18.0, 18.0));
         assert_eq!(text.x - avatar.right(), 8.0);
         assert!(outer.right() > text.x);
+    }
+
+    /// The GitHub device-flow dialog must keep Tauri's left edge, extend to the
+    /// right, use the 16px heading and centre the status row on the card axis.
+    #[test]
+    fn oauth_dialog_widens_right_and_centres_the_status_row() {
+        use super::super::view_model::Page;
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: Lang::ZhCn,
+            active_page: Page::Marketplace,
+            marketplace_loading: false,
+            marketplace_unsupported: false,
+            marketplace_oauth_open: true,
+            marketplace_oauth_user_code: "68A0-0EB0".into(),
+            marketplace_oauth_uri: "https://github.com/login/device".into(),
+            ..Default::default()
+        };
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1240.0, 800.0));
+        // Two frames: the modal `Area` needs one frame to publish its rect.
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            });
+            crate::ui::frontend::render(&ctx, &mut vm, &mut Vec::new());
+            let _ = crate::ui::frontend::end_pass(&ctx);
+        }
+        let card: egui::Rect = ctx
+            .data(|data| data.get_temp(egui::Id::new("openless-marketplace-oauth-card-rect")))
+            .expect("the open dialog must publish its card rect");
+        let body = layout::body_rect(&ctx);
+        assert_eq!(card.width(), OAUTH_CARD_WIDTH);
+        assert_eq!(card.center().x - body.center().x, OAUTH_CARD_SHIFT_X);
+        assert_eq!(card.top(), body.center().y - 165.0);
+        assert!(card.right() <= body.right(), "{card:?} in {body:?}");
+
+        let row: egui::Rect = ctx
+            .data(|data| data.get_temp(egui::Id::new("openless-marketplace-oauth-status-row")))
+            .expect("the pending phase must paint the status row");
+        assert!(
+            (row.center().x - card.center().x).abs() <= 1.0,
+            "the status row must sit on the card's axis: {row:?} in {card:?}"
+        );
+        assert!(row.left() > card.left() + 22.0, "{row:?} in {card:?}");
+        assert_eq!(OAUTH_TITLE_SIZE, 16.0);
     }
 }
 
@@ -695,8 +749,16 @@ fn marketplace_oauth(
     let lang = vm.lang;
     // Keep the dialog's left edge stable while giving the right side a little
     // more breathing room for the browser hint and the status row.
-    let size = egui::vec2((body.width() - 40.0).min(470.0).max(340.0), 330.0);
-    let card = egui::Rect::from_center_size(body.center() + egui::vec2(15.0, 0.0), size);
+    let size = egui::vec2(
+        (body.width() - 40.0).min(OAUTH_CARD_WIDTH).max(340.0),
+        330.0,
+    );
+    let card =
+        egui::Rect::from_center_size(body.center() + egui::vec2(OAUTH_CARD_SHIFT_X, 0.0), size);
+    #[cfg(test)]
+    ctx.data_mut(|data| {
+        data.insert_temp(egui::Id::new("openless-marketplace-oauth-card-rect"), card)
+    });
     egui::Area::new(egui::Id::new("openless-marketplace-oauth-modal"))
         .order(egui::Order::Tooltip)
         .fixed_pos(body.min)
@@ -729,7 +791,7 @@ fn marketplace_oauth(
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new(tr_l10n(lang, "marketplace.oauth.title"))
-                                    .size(16.0)
+                                    .size(OAUTH_TITLE_SIZE)
                                     .strong()
                                     .color(theme::INK),
                             );
@@ -873,29 +935,41 @@ fn marketplace_oauth(
                                 );
                             });
                             ui.add_space(11.0);
-                            ui.with_layout(
-                                egui::Layout::left_to_right(egui::Align::Center)
-                                    .with_main_align(egui::Align::Center),
-                                |ui| {
-                                    let (dot, _) = ui.allocate_exact_size(
-                                        egui::vec2(8.0, 16.0),
-                                        egui::Sense::hover(),
-                                    );
-                                    ui.painter().circle_filled(
-                                        egui::pos2(dot.center().x, dot.center().y),
-                                        3.5,
-                                        theme::BLUE,
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(tr_l10n(
-                                            lang,
-                                            "marketplace.oauth.waiting",
-                                        ))
-                                        .size(11.5)
-                                        .color(theme::INK_4),
-                                    );
-                                },
-                            );
+                            // Tauri centres the 「蓝色圆点 + 等待文案」 group inside the
+                            // card (`justify-content: center`, 8px dot, 6px gap).
+                            // `ui.horizontal` allocates the full width and would pin the
+                            // group to the left edge, so the row is measured and
+                            // allocated at its natural width; `vertical_centered` then
+                            // centres that allocation on the card's axis.
+                            ui.vertical_centered(|ui| {
+                                let label = tr_l10n(lang, "marketplace.oauth.waiting");
+                                const DOT: f32 = 8.0;
+                                const GAP: f32 = 6.0;
+                                let width = DOT + GAP + layout::text_width(ui, label, 11.5);
+                                let (row, _) = ui.allocate_exact_size(
+                                    egui::vec2(width, 16.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().circle_filled(
+                                    egui::pos2(row.left() + DOT / 2.0, row.center().y),
+                                    3.5,
+                                    theme::BLUE,
+                                );
+                                ui.painter().text(
+                                    egui::pos2(row.left() + DOT + GAP, row.center().y),
+                                    egui::Align2::LEFT_CENTER,
+                                    label,
+                                    egui::FontId::proportional(11.5),
+                                    theme::INK_4,
+                                );
+                                #[cfg(test)]
+                                ui.ctx().data_mut(|data| {
+                                    data.insert_temp(
+                                        egui::Id::new("openless-marketplace-oauth-status-row"),
+                                        row,
+                                    )
+                                });
+                            });
                         }
                     });
             });
