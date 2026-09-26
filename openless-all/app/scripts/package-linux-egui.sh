@@ -14,9 +14,26 @@ if [ "$VERSION" != "$EXPECTED_VERSION" ]; then
   exit 1
 fi
 ARCH=${OPENLESS_LINUX_ARCH:-x86_64}
+case "$ARCH" in
+  x86_64)
+    DEB_ARCH=amd64
+    RPM_ARCH=x86_64
+    DEB_LIB_ARCH=x86_64-linux-gnu
+    NODE_ARCH=x64
+    ;;
+  aarch64 | arm64)
+    ARCH=aarch64
+    DEB_ARCH=arm64
+    RPM_ARCH=aarch64
+    DEB_LIB_ARCH=aarch64-linux-gnu
+    NODE_ARCH=arm64
+    ;;
+  *) echo "Unsupported Linux package architecture: $ARCH" >&2; exit 1 ;;
+esac
 TARGET_DIR=${CARGO_TARGET_DIR:-"$APP_ROOT/target"}
 BINARY="$TARGET_DIR/release/openless-linux-egui"
 PLUGIN_ROOT="$APP_ROOT/../scripts/linux-fcitx5-plugin/build"
+PI_BACKEND="$APP_ROOT/src-tauri/resources/pi-backend"
 PACKAGING="$APP_ROOT/linux-egui/packaging"
 OUTPUT="$TARGET_DIR/linux-egui-packages"
 # 图标：与 Tauri 侧共用同一套画（`icon.png` 与 `public/AppIcon.png` 的 md5 相同，
@@ -38,6 +55,13 @@ test -d "$ICON_DIR"
 for spec in "${HICOLOR_ICONS[@]}"; do test -s "$ICON_DIR/${spec#*:}"; done
 test -s "$PLUGIN_ROOT/libopenless.so"
 test -s "$PLUGIN_ROOT/openless.conf"
+if [ -d "$PI_BACKEND" ]; then
+  test -x "$PI_BACKEND/node"
+  test -x "$PI_BACKEND/openless-computer"
+  test -s "$PI_BACKEND/runtime/index.mjs"
+  test -s "$PI_BACKEND/manifest.json"
+  test "$("$PI_BACKEND/node" -p 'process.arch')" = "$NODE_ARCH"
+fi
 test -s "$PACKAGING/openless.desktop"
 test -s "$PACKAGING/top.openless.OpenLess.metainfo.xml"
 command -v dpkg-deb >/dev/null
@@ -96,13 +120,17 @@ stage_common() {
     install -Dm644 "$ICON_DIR/${spec#*:}" \
       "$root/usr/share/icons/hicolor/${spec%%:*}/apps/openless.png"
   done
+  if [ -d "$PI_BACKEND" ]; then
+    mkdir -p "$root/usr/lib/openless/resources/pi-backend"
+    cp -a "$PI_BACKEND/." "$root/usr/lib/openless/resources/pi-backend/"
+  fi
 }
 
 DEB_ROOT="$TARGET_DIR/linux-egui-deb-root"
 rm -rf "$DEB_ROOT"
 stage_common "$DEB_ROOT"
 install -Dm755 "$PLUGIN_ROOT/libopenless.so" \
-  "$DEB_ROOT/usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so"
+  "$DEB_ROOT/usr/lib/$DEB_LIB_ARCH/fcitx5/libopenless.so"
 install -Dm644 "$PLUGIN_ROOT/openless.conf" \
   "$DEB_ROOT/usr/share/fcitx5/addon/openless.conf"
 install -d "$DEB_ROOT/DEBIAN"

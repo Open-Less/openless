@@ -1,5 +1,10 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "resources/pi-backend/": "pi-backend/"
+    }
+  },
   "app": {
     "windows": [
       {
