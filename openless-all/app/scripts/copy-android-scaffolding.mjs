@@ -58,13 +58,23 @@ const KOTLIN_FILES = [
   'OpenLessContentReader.kt',
   'OpenLessContentWriter.kt',
   'OpenLessImeService.kt',
+  'StrokeInputController.kt',
   'StrokeInput.kt',
+  'LitePinyinController.kt',
+  'LitePinyinRepository.kt',
+  'LitePinyinUserFrequency.kt',
+  'LitePinyinLearnedPhrases.kt',
+  'OpenLessSettingsExport.kt',
   'StrokePhraseRepository.kt',
   'StrokeUserFrequency.kt',
+  'EnglishCandidateProvider.kt',
+  'EnglishUserFrequency.kt',
   'OpenLessRuntimeService.kt',
   'OpenLessBackendWarmupActivity.kt',
   'OpenLessClipboardHistory.kt',
   'OpenLessKeyboardSettingsActivity.kt',
+  'OpenLessProcessRestartStats.kt',
+  'OpenLessBuildInfo.kt',
 ];
 
 const KOTLIN_TEST_FILES = [

@@ -32,6 +32,21 @@ const HotkeySettingsContext = createContext<HotkeySettingsContextValue | null>(n
 
 const errorMessage = (error: unknown) => String(error instanceof Error ? error.message : error);
 
+type PreferenceKey = keyof UserPreferences;
+
+const changedPreferenceEntries = (previous: UserPreferences, next: UserPreferences) => {
+  const changes = new Map<PreferenceKey, UserPreferences[PreferenceKey]>();
+  for (const key of Object.keys(next) as PreferenceKey[]) {
+    if (!Object.is(previous[key], next[key])) {
+      changes.set(key, next[key]);
+    }
+  }
+  return changes;
+};
+
+const samePreferences = (left: UserPreferences, right: UserPreferences) =>
+  JSON.stringify(left) === JSON.stringify(right);
+
 export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
   const [prefs, setPrefs] = useState<UserPreferences | null>(null);
   const [capability, setCapability] = useState<HotkeyCapability | null>(null);
@@ -40,24 +55,55 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
   const persistQueueRef = useRef<Promise<void>>(Promise.resolve());
   const latestPrefsRef = useRef<UserPreferences | null>(null);
   const persistedPrefsRef = useRef<UserPreferences | null>(null);
-  const writeGateRef = useRef(new PreferencesWriteGate<UserPreferences>());
+  const writeGateRef = useRef(new PreferencesWriteGate<UserPreferences>(samePreferences));
+  const prefsChangeVersionRef = useRef(0);
+  const pendingLocalChangesRef = useRef(new Map<PreferenceKey, UserPreferences[PreferenceKey]>());
+
+  const applyIncomingPrefs = useCallback(
+    (nextPrefs: UserPreferences, persistedPrefs = nextPrefs) => {
+      prefsChangeVersionRef.current += 1;
+      latestPrefsRef.current = nextPrefs;
+      persistedPrefsRef.current = persistedPrefs;
+      setPrefs(nextPrefs);
+      applyThemeFromPreference(nextPrefs.themeMode ?? 'system');
+      applyStackedLayoutFromPrefs(nextPrefs.stackedRowLayout);
+      applyConservativeLayout(nextPrefs.conservativeLayout === true);
+    },
+    [],
+  );
+
+  const mergePendingLocalChanges = useCallback((incoming: UserPreferences) => {
+    const merged = { ...incoming };
+    for (const [key, value] of pendingLocalChangesRef.current) {
+      Object.assign(merged, { [key]: value });
+    }
+    return merged;
+  }, []);
+
+  const waitForPersistence = useCallback(async () => {
+    while (true) {
+      const observedQueue = persistQueueRef.current;
+      await observedQueue.catch(() => undefined);
+      if (observedQueue === persistQueueRef.current) return;
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
+      await waitForPersistence();
+      const readVersion = prefsChangeVersionRef.current;
       const [prefsResult, capabilityResult] = await Promise.allSettled([
         getSettings(),
         getHotkeyCapability(),
       ]);
       let nextError: string | null = null;
       if (prefsResult.status === 'fulfilled') {
-        latestPrefsRef.current = prefsResult.value;
-        persistedPrefsRef.current = prefsResult.value;
-        setPrefs(prefsResult.value);
-        applyThemeFromPreference(prefsResult.value.themeMode ?? 'system');
-        applyStackedLayoutFromPrefs(prefsResult.value.stackedRowLayout);
-        applyConservativeLayout(prefsResult.value.conservativeLayout === true);
+        if (prefsChangeVersionRef.current === readVersion) {
+          const mergedPrefs = mergePendingLocalChanges(prefsResult.value);
+          applyIncomingPrefs(mergedPrefs, prefsResult.value);
+        }
       } else {
         console.error('[hotkey-settings] failed to load preferences', prefsResult.reason);
         nextError = errorMessage(prefsResult.reason);
@@ -78,20 +124,20 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, []);
-
-  const applyIncomingPrefs = useCallback((nextPrefs: UserPreferences) => {
-    latestPrefsRef.current = nextPrefs;
-    persistedPrefsRef.current = nextPrefs;
-    setPrefs(nextPrefs);
-    applyThemeFromPreference(nextPrefs.themeMode ?? 'system');
-    applyStackedLayoutFromPrefs(nextPrefs.stackedRowLayout);
-    applyConservativeLayout(nextPrefs.conservativeLayout === true);
-  }, []);
+  }, [applyIncomingPrefs, mergePendingLocalChanges, waitForPersistence]);
 
   const queueSetSettings = useCallback(
-    (resolved: UserPreferences) => {
-      const finishWrite = writeGateRef.current.beginWrite();
+    (
+      resolved: UserPreferences,
+      previous: UserPreferences | null = latestPrefsRef.current,
+      trackLocalChanges = true,
+    ) => {
+      if (trackLocalChanges && previous) {
+        for (const [key, value] of changedPreferenceEntries(previous, resolved)) {
+          pendingLocalChangesRef.current.set(key, value);
+        }
+      }
+      const finishWrite = writeGateRef.current.beginWrite(resolved);
       let savedPrefs: UserPreferences | null = null;
       const task = persistQueueRef.current
         .catch(() => undefined)
@@ -102,7 +148,10 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
           persistedPrefsRef.current = savedPrefs;
         })
         .finally(() => {
-          if (finishWrite() && savedPrefs) applyIncomingPrefs(savedPrefs);
+          if (finishWrite(savedPrefs ?? undefined)) {
+            pendingLocalChangesRef.current.clear();
+            if (savedPrefs) applyIncomingPrefs(savedPrefs);
+          }
         });
       persistQueueRef.current = task;
       return task;
@@ -126,8 +175,18 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
           if (!nextPrefs) return;
           // 一次保存的广播先于其 IPC promise resolve 到达。若不拦截，较旧的
           // 排队保存会覆盖较新的乐观点击，让开关看起来「弹回去」。
-          const applicable = writeGateRef.current.receiveIncoming(nextPrefs);
-          if (applicable) applyIncomingPrefs(applicable);
+          const incoming = writeGateRef.current.receiveIncoming(nextPrefs);
+          if (incoming.isOwnWrite) return;
+
+          const mergedPrefs = mergePendingLocalChanges(nextPrefs);
+          applyIncomingPrefs(mergedPrefs, nextPrefs);
+          if (incoming.wasPending) {
+            // The queued full snapshot may still overwrite fields changed by
+            // another window. Re-save the reconciled snapshot after it drains.
+            void queueSetSettings(mergedPrefs, null, false).catch((error) => {
+              console.warn('[settings] reconcile external preference change failed', error);
+            });
+          }
         });
         if (cancelled) {
           handle();
@@ -142,7 +201,7 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       unlisten?.();
     };
-  }, [applyIncomingPrefs]);
+  }, [applyIncomingPrefs, mergePendingLocalChanges, queueSetSettings]);
 
   useEffect(() => {
     latestPrefsRef.current = prefs;
@@ -155,12 +214,12 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
       const resolved = typeof next === 'function' ? next(current) : next;
       if (resolved === current) return;
       setPrefs(resolved);
+      prefsChangeVersionRef.current += 1;
       latestPrefsRef.current = resolved;
       applyStackedLayoutFromPrefs(resolved.stackedRowLayout);
       applyConservativeLayout(resolved.conservativeLayout === true);
       try {
-        await queueSetSettings(resolved);
-        persistedPrefsRef.current = resolved;
+        await queueSetSettings(resolved, current);
       } catch (error) {
         // 兜底（#904）：保存失败必须回滚乐观状态并可见，
         // 不能出现界面显示已切换、重启后回退的“假保存”。

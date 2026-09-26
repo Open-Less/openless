@@ -109,7 +109,7 @@
   </tr>
 </table>
 
-OpenLess 是一款跨平台(macOS 与 Windows)语音输入应用,是 [Typeless](https://www.typeless.com/)、[Wispr Flow](https://wisprflow.ai)、[Lazy](https://heylazy.com)、Superwhisper 等商业工具的完全开源替代品。官网:[openless.top](https://openless.top)。
+OpenLess 是一款跨平台(macOS、Windows 与 Linux)语音输入应用,是 [Typeless](https://www.typeless.com/)、[Wispr Flow](https://wisprflow.ai)、[Lazy](https://heylazy.com)、Superwhisper 等商业工具的完全开源替代品。官网:[openless.top](https://openless.top)。
 
 把光标放在任意文本框中——ChatGPT、Claude、Cursor、Notion、邮件草稿、聊天框——按下一个全局快捷键,然后开口说话。OpenLess 会录音、转写,按你选定的模式润色文本,并将结果插入到光标处。如果插入被阻止,文本会改为复制到剪贴板,你说过的话不会丢失。
 
@@ -204,6 +204,9 @@ OpenLess 只做一件事:**把语音变成可用的书面文字(尤其是 AI 提
 
 ## 当前状态
 
+- **iOS 原生版源码**：新增独立的 SwiftUI 应用与 UIKit 键盘扩展，覆盖听写、文字润色、历史、词典和自定义风格。工程与支持范围见 [iOS README](openless-all/app/ios/README.md)。当前交付为尚未编译验证的源工程，不是已发布的 iOS 安装包。
+- **Android 输入法**：架构、四个面板的使用说明、截图和功能时间线见 [Android 输入法：架构、功能与演进](docs/android-ime.md)。
+
 下面每一项,都是一层已经沉降为默认、你授权一次之后就不必再操心的能力——这就是开屏之后你所站立的基础设施:
 
 - 共享 Rust 后端位于 `openless-core`。macOS 与 Windows 使用薄 Tauri 2 宿主和 React/TypeScript 前端；Android 暂时保留 Tauri mobile 宿主；Linux 使用独立原生宿主，不编译 Tauri 或 WebKitGTK。
@@ -218,9 +221,9 @@ OpenLess 只做一件事:**把语音变成可用的书面文字(尤其是 AI 提
 - **主窗口**:概览 / 历史 / 词典 / 风格 / 市场 / 设置。常驻托盘图标,以及一个浮于屏幕、并跟随你正在输入的显示器的迷你状态胶囊(多显示器)。
 - **本地模型管理**——在设置中管理本地 ASR 模型在磁盘上的存储。
 - **多语言界面**——设置 → 语言 可在 简体中文 / 繁體中文 / English / 日本語 / 한국어 之间切换(首次启动自动检测)。
-- **Tauri 宿主内自动更新**——macOS、Windows 与 Android 通过 设置 → 关于 → 检查 获取签名产物；Linux 使用独立更新清单与 updater 契约。
+- **Tauri 宿主内自动更新**——macOS、Windows 与 Android 通过 设置 → 关于 → 检查 获取签名产物；Linux deb/rpm 不提供应用内更新或 AppImage 更新清单。
 - **Beta 频道(可选加入)**——设置 → 关于 → 加入 Beta 频道,可下载最新预发布版本进行手动安装。Beta 版本绝不会自动推送给 Stable 用户(见[贡献流程](#贡献流程))。
-- **分发渠道**——从 [Releases](../../releases) 直接下载 DMG/EXE、Homebrew Cask(须先添加项目 tap，见下方安装步骤)、Windows 安装包。Linux 包会等独立 egui UI 完成并启用发布门禁后再正式发布。
+- **分发渠道**——从 [Releases](../../releases) 直接下载 DMG/EXE、Homebrew Cask(须先添加项目 tap，见下方安装步骤)、Windows 安装包。Linux deb/rpm 在真机验收、管理员创建发版 tag 后附到共用 Release。
 - **单实例锁**——防止两个 OpenLess 进程争抢同一个快捷键边沿。
 - 词典条目注入到支持热词的 ASR 提供方(Volcengine 的 `context.hotwords`、StepFun 的 `hotwords`、Whisper 兼容的 `prompt`(ZenMux 除外——其 JSON 协议不携带 `prompt`/`hotwords`)、百炼的 vocabulary_id),并在润色时作为语义提示;命中次数按会话累计。讯飞实时语音转写标准版没有请求级热词参数,需在讯飞控制台配置个性化热词。
 - 平台原生全局快捷键:macOS 上为 CGEventTap,Windows 上为低级键盘钩子(`WH_KEYBOARD_LL`)。
@@ -242,7 +245,7 @@ OpenLess 只做一件事:**把语音变成可用的书面文字(尤其是 AI 提
   - 应用内更新（设置 → 关于）读取 `latest-android-{arch}.json`；Beta 用户在高级设置加入 Beta 渠道。
   - 调试包:`OpenLess-android-debug-{abi}-*.apk`（workflow_dispatch 产物）。
   - 不确定时执行 `adb shell getprop ro.product.cpu.abi`，下载对应 ABI 的包。
-- **Linux**:原 Tauri/WebView 构建已退出 Linux 路线。`linux-egui` 现已包含基于共享 Core 2.0 服务的原生 `eframe` UI；正式发布仍需 Linux CI 产物以及 Ubuntu 真实音频、焦点输入、安装、升级和回滚证据。
+- **Linux**：原 Tauri/WebView 构建已退出 Linux 路线。基于共享 Core 2.0 服务的原生 `eframe` 宿主经 CI 和 Ubuntu 真实音频、输入、安装、升级、回滚验收后，随共用 Release 提供 deb/rpm 和 `SHA256SUMS`。要求 glibc ≥ 2.39（Ubuntu 24.04 或同等级发行版）；没有 AppImage 或应用内更新。
 - **macOS(Homebrew)**:
   ```bash
   brew tap Open-Less/openless https://github.com/Open-Less/openless
@@ -267,6 +270,12 @@ OpenLess 只做一件事:**把语音变成可用的书面文字(尤其是 AI 提
 3. 在设置中填入你的 Volcengine ASR + Ark 凭据。
 
 完整的终端用户指南见 [USAGE.md](USAGE.md)。
+
+## Less Computer 内置 PI
+
+桌面版新增随应用打包的 PI 后端，包含独立运行时和 Computer 原生工具，无需另外安装 PI、Node.js 或 Computer MCP。启用 Less Computer 并配置支持图像的模型后，即可通过文字或语音进行截图、点击、滚动和输入。支持 Windows、macOS 与 Linux X11；macOS 需授予系统权限，Wayland 暂不支持桌面控制。
+
+模型配置、权限模式、构建命令与平台限制见 [Less Computer PI 使用说明](docs/less-computer-pi.md)。已有外部 CLI 后端可继续使用。
 
 ## 从源码构建(开发者)
 
@@ -403,7 +412,7 @@ egui UI  ── Linux Adapter（无 Tauri/WebKitGTK）───┘
 
 `openless-core` 负责稳定 DTO、错误、语义事件、repository、凭据契约和面向宿主的 use-case Interface。IPC、窗口、托盘、权限、更新、keyring、fcitx5 与打包资源路径等宿主能力由 Adapter 实现。旧 React command/event 名称只保留在 Tauri 兼容 Adapter；Linux 与 core 同进程，通过类型化 Rust Interface 调用。详细契约见 [`docs/linux-egui-backend-contract.md`](docs/linux-egui-backend-contract.md)。
 
-`v<version>-tauri` / `v<version>-Beta.N-tauri` 工作流发布 macOS、Windows 与 Android 宿主。Linux deb/rpm/AppImage 由 `release-linux-egui.yml` 使用独立 manifest 构建；自动发布仍以产物成功和 Ubuntu 真实安装、运行、升级、回滚证据为门禁。
+`v<version>-tauri` / `v<version>-Beta.N-tauri` 工作流构建 macOS、Windows、Android 宿主以及独立的 Linux egui deb/rpm。Linux 真机验收完成、管理员创建 tag 后，验证过的 Linux 包自动附到共用 Release；Beta 资产先留在草稿中供管理员核对发布。Linux 不提供 AppImage 或应用内更新清单。
 
 听写流水线:`hotkey edge → Recorder.start + ASR.openSession → [audio frames] → hotkey edge → Recorder.stop + ASR.sendLastFrame → Polish → Insert → History.save`。
 
@@ -424,7 +433,7 @@ OpenLess 提供两个发布频道。分支名即频道名(见[贡献流程](#贡
 
 ### 通用准备(两个频道)
 
-- 在 Tauri 应用的**全部五个**位置提升版本号:`package.json`、`package-lock.json`(根级 + `packages.""` 下的嵌套条目)、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`,以及 `src-tauri/Cargo.lock`(查找 `name = "openless"` 块)。否则 CI 的 `Verify version sync` 步骤会使构建失败。根 `Cargo.lock` 只属于 `openless-core` 与 `openless-linux-egui`。
+- 在 Tauri 应用的**全部五个**位置提升版本号:`package.json`、`package-lock.json`(根级 + `packages.""` 下的嵌套条目)、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`,以及 `src-tauri/Cargo.lock`(查找 `name = "openless"` 块)。否则 CI 的 `Verify version sync` 步骤会使构建失败。根 `Cargo.lock` 属于 `openless-core`、`openless-computer` 与 `openless-linux-egui`。
 - 运行 `INSTALL=0 ./scripts/build-mac.sh`,确认 `.app` 能启动。
 - 在干净的机器上做冒烟测试:权限流程、快捷键、录音、ASR、润色、插入,以及剪贴板回退。
 - 确认 `TAURI_SIGNING_PRIVATE_KEY` 以及(macOS 所需的)Apple 签名 / 公证密钥已在仓库中配置。

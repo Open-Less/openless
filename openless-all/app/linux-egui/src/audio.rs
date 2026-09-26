@@ -48,6 +48,8 @@ impl AudioRecorder for LinuxCpalRecorder {
         // audio adapter. Never owned by Core; restore is the guard's Drop.
         let mute_during_recording = context.recording.mute_during_recording;
         let recordings_dir = self.recordings_dir.clone();
+        let require_archive =
+            context.output_target == openless_core::DictationOutputTarget::QuickNote;
         Box::pin(async move {
             #[cfg(target_os = "linux")]
             {
@@ -56,6 +58,7 @@ impl AudioRecorder for LinuxCpalRecorder {
                         session_id,
                         preferred_device_name,
                         recordings_dir,
+                        require_archive,
                         mute_during_recording,
                         consumer,
                         progress,
@@ -92,7 +95,6 @@ struct LinuxActiveRecording {
     mute: Option<crate::audio_mute::AudioMuteGuard>,
 }
 
-#[cfg(target_os = "linux")]
 impl Drop for LinuxActiveRecording {
     fn drop(&mut self) {
         // Taking the guard here forces the field to be consumed (and therefore
@@ -100,10 +102,6 @@ impl Drop for LinuxActiveRecording {
         // dropped directly on an early error or during Core shutdown before it
         // had a chance to call stop. Double restore is harmless because Drop
         // of an already-taken guard is a no-op.
-        self.stop.store(true, std::sync::atomic::Ordering::Release);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
         self.mute.take();
     }
 }
@@ -198,6 +196,7 @@ fn start_linux_recording(
     session_id: SessionId,
     preferred_device_name: Option<String>,
     recordings_dir: Option<std::path::PathBuf>,
+    require_archive: bool,
     mute_during_recording: bool,
     consumer: Arc<dyn AudioConsumer>,
     progress: Arc<dyn RecordingProgressSink>,
@@ -230,10 +229,22 @@ fn start_linux_recording(
                     (Some(Arc::new(std::sync::Mutex::new(writer))), Some(archive))
                 }
                 Err(error) => {
+                    if require_archive {
+                        return Err(BackendError::new(
+                            BackendErrorCode::Persistence,
+                            format!("quick note recording archive is required: {error}"),
+                        ));
+                    }
                     log::warn!("failed to create Linux recording archive: {error}");
                     (None, None)
                 }
             }
+        }
+        None if require_archive => {
+            return Err(BackendError::new(
+                BackendErrorCode::Persistence,
+                "quick note recording archive directory is missing",
+            ))
         }
         None => (None, None),
     };

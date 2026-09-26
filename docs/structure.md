@@ -1,27 +1,31 @@
 # 应用目录与工程结构
 
-状态：canonical；更新：2026-09-23。分层与调用链见 [架构](architecture.md)。
+状态：canonical；更新：2026-09-26。分层与调用链见 [架构](architecture.md)。
 
 ## 仓库与应用工作目录
 
 ```text
-1-app/                            Git 仓库、分支与发布边界
-├── AGENTS.md / docs/              规则、架构、合同说明和平台交接
-├── README.md / README.zh.md       面向使用者和贡献者的双语介绍
-├── RELEASING.md / USAGE.md        发布规则与使用说明
+openless/                         Git 仓库、分支与发布边界
+├── docs/                         架构、合同说明和平台交接
+├── README.md / README.zh.md      面向使用者和贡献者的双语介绍
+├── RELEASING.md / USAGE.md       发布规则与使用说明
+├── LICENSE
 ├── .github/workflows/            CI、Tauri、Android、Linux 发布
 ├── Casks/                        Homebrew 分发定义
 ├── Examples/                     示例数据
-├── assets/ / video-materials/     产品展示材料
+├── assets/                       产品展示材料
 ├── scripts/                      仓库级辅助脚本
 └── openless-all/
     ├── design_handoff_openless/   设计交接材料
     └── app/                      npm 与 Core/Linux Cargo 工作目录
         ├── src/                  React / TypeScript 界面
         ├── crates/openless-core/  共享业务 Rust crate
+        ├── crates/openless-computer/ 内置 PI 的原生桌面工具
+        ├── pi-backend/           随包分发的 PI Node 运行时
         ├── src-tauri/            Tauri Host，独立 Cargo manifest
         ├── linux-egui/           Linux Host 和 egui UI
         ├── android/              Kotlin / AIDL / manifest / 前端片段
+        ├── ios/                  独立 SwiftUI 应用 / UIKit 键盘扩展 / Xcode 工程
         ├── windows-ime/          原生 TSF/IME 工程
         ├── contract/             机器可读 backend-2.0 合同
         ├── scripts/              构建、平台检查与合同测试
@@ -45,7 +49,9 @@
 | 旧手动同步 | Core `cloud_sync.rs`、`cloud_sync_types.rs`、`cloud_sync_validation.rs`、`cloud_sync_transaction.rs` | Tauri `commands/cloud_sync.rs`；仅保留旧有限字段协议，见 [旧同步合同](cloud-sync.md) |
 | Tauri 组装与系统能力 | `src-tauri/src/coordinator.rs`、`core_adapters.rs`、`tauri_coordinator_host.rs` | 窗口、热键、权限、平台输入与生命周期 |
 | Linux 原生接入 | `linux-egui/src/main.rs`、`lib.rs`、`backend.rs` | `audio/credentials/fcitx5/hotkeys/settings` 等 Host 模块；见 [交接](linux-egui-handoff/README.md) |
-| Android 集成 | `android/`、`src-tauri/src/android/` | `@android` 别名与 `merge-android-*.mjs` 生成链 |
+| 内置 PI | `pi-backend/`、`crates/openless-computer/`、`scripts/prepare-pi-backend.mjs` | 桌面包内的 Node 运行时与原生工具；见 [Less Computer：内置 PI](less-computer-pi.md) |
+| Android 集成 | `android/`、`src-tauri/src/android/` | `@android` 别名与 `merge-android-*.mjs` 生成链；输入法见 [Android 输入法](android-ime.md) |
+| iOS 原生应用 | `ios/OpenLess/`、`ios/Keyboard/`、`ios/Shared/` | 独立 Swift 实现；工程、签名和支持范围见 [iOS README](../openless-all/app/ios/README.md) |
 | Windows 输入法 | `windows-ime/`、`src-tauri/src/windows_ime_*.rs` | 原生工程、IPC 协议、目标应用和安装检查 |
 
 Core 其余模块按领域列于 [架构模块地图](architecture.md)。平台缺口、事件签名与验收项由专项文档维护，本文件只提供定位。
@@ -55,7 +61,7 @@ Core 其余模块按领域列于 [架构模块地图](architecture.md)。平台�
 | 文件或目录 | 作用与维护方式 |
 | --- | --- |
 | `package.json` / `package-lock.json` | npm 命令、前端依赖与锁定版本；脚本从应用目录执行 |
-| `Cargo.toml` / `Cargo.lock` | Core 与 Linux workspace；不覆盖 `src-tauri` |
+| `Cargo.toml` / `Cargo.lock` | Core、Computer 与 Linux workspace；不覆盖 `src-tauri` |
 | `src-tauri/Cargo.toml` / `Cargo.lock` | Tauri Host 的独立依赖图；本地 path 子模块须在解析前就绪 |
 | `src-tauri/backend-tests/Cargo.toml` | 独立 Rust 回归 crate，按 CI 选择平台执行 |
 | `vite.config.ts` / `tsconfig.json` | WebView 构建、TypeScript 与 Android 别名 |
@@ -75,4 +81,4 @@ Core 其余模块按领域列于 [架构模块地图](architecture.md)。平台�
 
 Rust 使用 rustfmt，分别覆盖根 workspace、`src-tauri/Cargo.toml` 与 `src-tauri/backend-tests/Cargo.toml`。C/C++ 使用 clang-format 23，遵循应用目录的 `.clang-format`。Android 手写 Kotlin 使用 ktfmt 0.64 的 `--kotlinlang-style --do-not-remove-unused-imports` 选项。
 
-注释说明当前职责、调用约束、生命周期与失败处理；涉及 FFI 时写明所有权和 ABI 前提。已完成任务的过程说明、失效文档引用及重复代码含义的注释应删除。对协议兼容或平台限制的说明保留必要依据。
+代码注释使用英文，只说明当前职责、调用约束、生命周期与失败处理；涉及 FFI 时写明所有权和 ABI 前提。已完成任务的过程说明、失效文档引用及重复代码含义的注释应删除。对协议兼容或平台限制的说明保留必要依据。界面文案留在 `src/i18n/`，不把翻译写进注释。

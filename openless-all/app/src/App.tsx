@@ -30,12 +30,14 @@ const Onboarding = lazy(() =>
   import('./components/Onboarding').then((m) => ({ default: m.Onboarding })),
 );
 const QaPanel = lazy(() => import('./pages/QaPanel').then((m) => ({ default: m.QaPanel })));
-const SelectionPolishPreview = lazy(() =>
-  import('./pages/SelectionPolishPreview').then((m) => ({ default: m.SelectionPolishPreview })),
-);
 const SelectionVoiceIntentPicker = lazy(() =>
   import('./pages/SelectionVoiceIntentPicker').then((m) => ({
     default: m.SelectionVoiceIntentPicker,
+  })),
+);
+const SelectionPolishPreview = lazy(() =>
+  import('./pages/SelectionPolishPreview').then((m) => ({
+    default: m.SelectionPolishPreview,
   })),
 );
 // Tauri 的 Less Computer 面板同时面向 macOS 和 Windows；Linux 由原生 egui 提供。
@@ -55,8 +57,8 @@ const LessComputerGlow = LESS_COMPUTER_BUNDLED
 interface AppProps {
   isCapsule: boolean;
   isQa: boolean;
-  isSelectionPolishPreview: boolean;
   isSelectionVoiceIntent: boolean;
+  isSelectionPolishPreview: boolean;
   isLessComputer: boolean;
   isLessComputerGlow: boolean;
   forcedOs?: OS | null;
@@ -99,8 +101,8 @@ export function App(props: AppProps) {
 function ReadyApp({
   isCapsule,
   isQa,
-  isSelectionPolishPreview,
   isSelectionVoiceIntent,
+  isSelectionPolishPreview,
   isLessComputer,
   isLessComputerGlow,
   forcedOs,
@@ -115,17 +117,17 @@ function ReadyApp({
       </Suspense>
     );
   }
-  if (isSelectionPolishPreview) {
-    return (
-      <Suspense fallback={null}>
-        <SelectionPolishPreview />
-      </Suspense>
-    );
-  }
   if (isSelectionVoiceIntent) {
     return (
       <Suspense fallback={null}>
         <SelectionVoiceIntentPicker />
+      </Suspense>
+    );
+  }
+  if (isSelectionPolishPreview) {
+    return (
+      <Suspense fallback={null}>
+        <SelectionPolishPreview />
       </Suspense>
     );
   }

@@ -45,7 +45,10 @@ assert.deepEqual(invocations[0].args, [
   '/tools/tsx-cli.mjs',
   resolve('/app', 'src/lib/passes.test.ts'),
 ]);
-assert.deepEqual(invocations[1].args, [resolve('/app', 'scripts/fails.test.mjs')]);
+assert.deepEqual(invocations[1].args, [
+  '/tools/tsx-cli.mjs',
+  resolve('/app', 'scripts/fails.test.mjs'),
+]);
 assert.equal(invocations[0].command, process.execPath);
 assert.equal(invocations[1].command, process.execPath);
 assert.equal(invocations[0].options.stdio, 'inherit');

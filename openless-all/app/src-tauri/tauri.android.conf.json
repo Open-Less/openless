@@ -1,6 +1,10 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "identifier": "com.openless.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run check:macos-metal-toolchain && npm run build"
+  },
   "app": {
     "windows": [
       {

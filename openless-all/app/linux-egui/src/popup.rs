@@ -18,25 +18,48 @@ use tokio::process::Command;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc as tokio_mpsc;
 
-pub const POPUP_PROTOCOL_VERSION: u16 = 1;
+pub const POPUP_PROTOCOL_VERSION: u16 = 7;
 pub const MAX_JSONL_LINE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PopupKind {
+    /// 选区助手面板：提问对话 + 润色结果编辑（合并后唯一的选区弹窗）。
     Qa,
-    Preview,
     Capsule,
+    LessComputer,
 }
 
 impl PopupKind {
     pub fn argument(self) -> &'static str {
         match self {
             Self::Qa => "--qa",
-            Self::Preview => "--preview",
             Self::Capsule => "--capsule",
+            Self::LessComputer => "--less-computer",
         }
     }
+}
+
+/// One rendered Less Computer turn entry.
+///
+/// Mirrors Core's `LessComputerEventKind` presentation: the panel prints the
+/// entries in order and never re-derives product intent, so a new Core event
+/// variant only needs a host-side translation into `kind` + display text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LessComputerEntry {
+    /// `user` / `assistant` / `tool` / `compaction` / `error` / `note`.
+    pub kind: String,
+    #[serde(default)]
+    pub text: String,
+}
+
+/// A blocked command waiting for the user's decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LessComputerApproval {
+    pub token: String,
+    pub command: String,
+    #[serde(default)]
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,7 +78,8 @@ pub struct PopupChatMessage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostToPopup {
-    Preview {
+    /// 润色结果：送进**选区助手面板**的「润色结果」模式（不再有独立预览窗口）。
+    PolishPreview {
         version: u16,
         session_id: String,
         sequence: u64,
@@ -74,6 +98,21 @@ pub enum HostToPopup {
         streaming_answer: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        /// 「编辑指令」勾选框状态（Core `QaSnapshot.edit_instruction_mode`）。
+        #[serde(default)]
+        edit_instruction_mode: bool,
+        /// 预览可用：底部出现「预览并确认插入」。
+        #[serde(default)]
+        edit_apply_available: bool,
+        /// 可一键回退：额外出现「保留上一版本」。
+        #[serde(default)]
+        edit_revert_available: bool,
+        /// 固定（不自动关闭）。Tauri `qa.pinTooltip` / `qa.unpinTooltip`。
+        #[serde(default)]
+        pinned: bool,
+        /// GitHub 登录名，用于 `https://github.com/{login}.png` 头像。
+        #[serde(default)]
+        viewer_login: String,
     },
     Capsule {
         version: u16,
@@ -84,11 +123,43 @@ pub enum HostToPopup {
         text: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         audio_level: Option<f32>,
+        /// 正在翻译：药丸上方显示「正在翻译」徽章（Tauri `capsule.translating`）。
+        #[serde(default)]
+        translation_active: bool,
+        /// 胶囊样式：`siri` / `classic` / `typeless`（Tauri `capsuleStyle`）。
+        #[serde(default)]
+        style: String,
     },
     Hide {
         version: u16,
         session_id: String,
         sequence: u64,
+    },
+    /// Less Computer 面板状态（Tauri `LessComputerPanel.tsx`）。
+    ///
+    /// `entries` 是已发生的事件序列（用户指令 / 工具 / 压缩 / 助手正文 / 错误），
+    /// `working` 表示本轮尚未终结，`approval` 是等待用户批准的阻塞命令。
+    LessComputer {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+        entries: Vec<LessComputerEntry>,
+        #[serde(default)]
+        working: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        approval: Option<LessComputerApproval>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    /// 本地热键匹配所需的配置（见 `crate::local_hotkeys` 的模块文档）。
+    ///
+    /// 面板有焦点时 fcitx5 收不到按键，所以面板自己按这份配置匹配，命中后
+    /// 用 [`PopupToHost::Hotkey`] 报回宿主。
+    Hotkeys {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+        bindings: Box<openless_core::HotkeyRuntimeTarget>,
     },
     Shutdown {
         version: u16,
@@ -100,9 +171,11 @@ pub enum HostToPopup {
 impl HostToPopup {
     pub fn version(&self) -> u16 {
         match self {
-            Self::Preview { version, .. }
+            Self::PolishPreview { version, .. }
             | Self::QaSnapshot { version, .. }
             | Self::Capsule { version, .. }
+            | Self::LessComputer { version, .. }
+            | Self::Hotkeys { version, .. }
             | Self::Hide { version, .. }
             | Self::Shutdown { version, .. } => *version,
         }
@@ -110,9 +183,11 @@ impl HostToPopup {
 
     pub fn session_id(&self) -> &str {
         match self {
-            Self::Preview { session_id, .. }
+            Self::PolishPreview { session_id, .. }
             | Self::QaSnapshot { session_id, .. }
             | Self::Capsule { session_id, .. }
+            | Self::LessComputer { session_id, .. }
+            | Self::Hotkeys { session_id, .. }
             | Self::Hide { session_id, .. }
             | Self::Shutdown { session_id, .. } => session_id,
         }
@@ -120,9 +195,11 @@ impl HostToPopup {
 
     pub fn sequence(&self) -> u64 {
         match self {
-            Self::Preview { sequence, .. }
+            Self::PolishPreview { sequence, .. }
             | Self::QaSnapshot { sequence, .. }
             | Self::Capsule { sequence, .. }
+            | Self::LessComputer { sequence, .. }
+            | Self::Hotkeys { sequence, .. }
             | Self::Hide { sequence, .. }
             | Self::Shutdown { sequence, .. } => *sequence,
         }
@@ -130,9 +207,14 @@ impl HostToPopup {
 
     pub fn content_kind(&self) -> Option<PopupKind> {
         match self {
-            Self::Preview { .. } => Some(PopupKind::Preview),
+            // 润色结果现在由选区助手面板承载。
+            Self::PolishPreview { .. } => Some(PopupKind::Qa),
             Self::QaSnapshot { .. } => Some(PopupKind::Qa),
             Self::Capsule { .. } => Some(PopupKind::Capsule),
+            Self::LessComputer { .. } => Some(PopupKind::LessComputer),
+            // 配置不属于任何一种面板内容，
+            // 不能拿它当“这个帧是给谁的”。
+            Self::Hotkeys { .. } => None,
             Self::Hide { .. } | Self::Shutdown { .. } => None,
         }
     }
@@ -148,13 +230,22 @@ pub enum PopupToHost {
         sequence: u64,
         kind: PopupKind,
     },
-    ConfirmPreview {
+    /// 本面板内命中的热键（面板有焦点时 fcitx5 收不到按键）。
+    Hotkey {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+        edge: crate::LocalHotkeyEdge,
+    },
+    /// 确认用编辑后的文本替换选区（由选区助手面板发出）。
+    ConfirmPolish {
         version: u16,
         session_id: String,
         sequence: u64,
         text: String,
     },
-    CancelPreview {
+    /// 取消本次润色（由选区助手面板发出）。
+    CancelPolish {
         version: u16,
         session_id: String,
         sequence: u64,
@@ -180,53 +271,164 @@ pub enum PopupToHost {
         session_id: String,
         sequence: u64,
     },
+    /// 胶囊上的 ✕：放弃这次听写（Tauri `cancelDictation`）。
+    CancelDictation {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+    },
+    /// 胶囊上的 ✓：结束录音并落字（Tauri `stopDictation`）。
+    StopDictation {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+    },
+    /// 划词追问头部图钉：固定后宿主不再自动收起（Tauri `qa.pinTooltip`）。
+    SetPinned {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+        pinned: bool,
+    },
+    /// 输入组左下角「编辑指令」勾选框。
+    SetEditInstructionMode {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+        enabled: bool,
+    },
+    /// 「预览并确认插入」：把编辑结果写回选区（Tauri `qa.editApplyReplace`）。
+    ApplyEdit {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+    },
+    /// 「保留上一版本」：回退这一轮的编辑预览（Tauri `qa.editRevertPrevious`）。
+    RevertEdit {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+    },
+    /// Less Computer 输入框：提交一条指令（Tauri `lessComputerSubmitText`）。
+    SubmitLessComputer {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+        text: String,
+    },
+    /// 批准/拒绝被阻塞的命令（Tauri `lessComputerApprove`）。
+    ApproveLessComputer {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+        token: String,
+        approved: bool,
+    },
+    /// 停止当前这一轮（Esc / 关闭时的收尾，Tauri `less_computer_window_dismiss`）。
+    CancelLessComputer {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+    },
+    /// ✕：只收起面板，不动已完成的对话（Tauri `cancel()` / `minimize()` 语义）。
+    DismissLessComputer {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+    },
 }
 
 impl PopupToHost {
     pub fn version(&self) -> u16 {
         match self {
             Self::Ready { version, .. }
-            | Self::ConfirmPreview { version, .. }
-            | Self::CancelPreview { version, .. }
+            | Self::Hotkey { version, .. }
+            | Self::ConfirmPolish { version, .. }
+            | Self::CancelPolish { version, .. }
             | Self::SubmitQa { version, .. }
             | Self::ToggleQaRecording { version, .. }
             | Self::DismissQa { version, .. }
-            | Self::DismissCapsule { version, .. } => *version,
+            | Self::DismissCapsule { version, .. }
+            | Self::CancelDictation { version, .. }
+            | Self::StopDictation { version, .. }
+            | Self::SetPinned { version, .. }
+            | Self::SetEditInstructionMode { version, .. }
+            | Self::ApplyEdit { version, .. }
+            | Self::RevertEdit { version, .. }
+            | Self::SubmitLessComputer { version, .. }
+            | Self::ApproveLessComputer { version, .. }
+            | Self::CancelLessComputer { version, .. }
+            | Self::DismissLessComputer { version, .. } => *version,
         }
     }
 
     pub fn session_id(&self) -> &str {
         match self {
             Self::Ready { session_id, .. }
-            | Self::ConfirmPreview { session_id, .. }
-            | Self::CancelPreview { session_id, .. }
+            | Self::Hotkey { session_id, .. }
+            | Self::ConfirmPolish { session_id, .. }
+            | Self::CancelPolish { session_id, .. }
             | Self::SubmitQa { session_id, .. }
             | Self::ToggleQaRecording { session_id, .. }
             | Self::DismissQa { session_id, .. }
-            | Self::DismissCapsule { session_id, .. } => session_id,
+            | Self::DismissCapsule { session_id, .. }
+            | Self::CancelDictation { session_id, .. }
+            | Self::StopDictation { session_id, .. }
+            | Self::SetPinned { session_id, .. }
+            | Self::SetEditInstructionMode { session_id, .. }
+            | Self::ApplyEdit { session_id, .. }
+            | Self::RevertEdit { session_id, .. }
+            | Self::SubmitLessComputer { session_id, .. }
+            | Self::ApproveLessComputer { session_id, .. }
+            | Self::CancelLessComputer { session_id, .. }
+            | Self::DismissLessComputer { session_id, .. } => session_id,
         }
     }
 
     pub fn sequence(&self) -> u64 {
         match self {
             Self::Ready { sequence, .. }
-            | Self::ConfirmPreview { sequence, .. }
-            | Self::CancelPreview { sequence, .. }
+            | Self::Hotkey { sequence, .. }
+            | Self::ConfirmPolish { sequence, .. }
+            | Self::CancelPolish { sequence, .. }
             | Self::SubmitQa { sequence, .. }
             | Self::ToggleQaRecording { sequence, .. }
             | Self::DismissQa { sequence, .. }
-            | Self::DismissCapsule { sequence, .. } => *sequence,
+            | Self::DismissCapsule { sequence, .. }
+            | Self::CancelDictation { sequence, .. }
+            | Self::StopDictation { sequence, .. }
+            | Self::SetPinned { sequence, .. }
+            | Self::SetEditInstructionMode { sequence, .. }
+            | Self::ApplyEdit { sequence, .. }
+            | Self::RevertEdit { sequence, .. }
+            | Self::SubmitLessComputer { sequence, .. }
+            | Self::ApproveLessComputer { sequence, .. }
+            | Self::CancelLessComputer { sequence, .. }
+            | Self::DismissLessComputer { sequence, .. } => *sequence,
         }
     }
 
     pub fn kind(&self) -> PopupKind {
         match self {
             Self::Ready { kind, .. } => *kind,
-            Self::ConfirmPreview { .. } | Self::CancelPreview { .. } => PopupKind::Preview,
-            Self::SubmitQa { .. } | Self::ToggleQaRecording { .. } | Self::DismissQa { .. } => {
-                PopupKind::Qa
-            }
-            Self::DismissCapsule { .. } => PopupKind::Capsule,
+            Self::ConfirmPolish { .. } | Self::CancelPolish { .. } => PopupKind::Qa,
+            // 本地热键边沿只由接受键盘的面板发出；`kind()` 的调用方（宿主）
+            // 已先按发消息的面板分支处理，这里给 Qa 只是让类型上有个确定值。
+            Self::Hotkey { .. } => PopupKind::Qa,
+            Self::SubmitQa { .. }
+            | Self::ToggleQaRecording { .. }
+            | Self::DismissQa { .. }
+            | Self::SetPinned { .. }
+            | Self::SetEditInstructionMode { .. }
+            | Self::ApplyEdit { .. }
+            | Self::RevertEdit { .. } => PopupKind::Qa,
+            Self::DismissCapsule { .. }
+            | Self::CancelDictation { .. }
+            | Self::StopDictation { .. } => PopupKind::Capsule,
+            Self::SubmitLessComputer { .. }
+            | Self::ApproveLessComputer { .. }
+            | Self::CancelLessComputer { .. }
+            | Self::DismissLessComputer { .. } => PopupKind::LessComputer,
         }
     }
 }
@@ -242,16 +444,16 @@ struct PopupActionSlot {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct PopupActionGuard {
     qa: PopupActionSlot,
-    preview: PopupActionSlot,
     capsule: PopupActionSlot,
+    less_computer: PopupActionSlot,
 }
 
 impl PopupActionGuard {
     fn slot_mut(&mut self, kind: PopupKind) -> &mut PopupActionSlot {
         match kind {
             PopupKind::Qa => &mut self.qa,
-            PopupKind::Preview => &mut self.preview,
             PopupKind::Capsule => &mut self.capsule,
+            PopupKind::LessComputer => &mut self.less_computer,
         }
     }
 
@@ -442,7 +644,7 @@ where
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct PreviewPopupState {
+pub struct QaPolishState {
     pub text: String,
     pub source: String,
 }
@@ -454,6 +656,13 @@ pub struct QaPopupState {
     pub selection_preview: Option<String>,
     pub streaming_answer: String,
     pub error: Option<String>,
+    pub edit_instruction_mode: bool,
+    /// 润色结果模式：Some = 正在编辑润色结果（替代原来的独立预览窗口）。
+    pub polish: Option<QaPolishState>,
+    pub edit_apply_available: bool,
+    pub edit_revert_available: bool,
+    pub pinned: bool,
+    pub viewer_login: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -461,6 +670,17 @@ pub struct CapsulePopupState {
     pub phase: String,
     pub text: String,
     pub audio_level: Option<f32>,
+    pub translation_active: bool,
+    /// 胶囊样式（`siri` / `classic` / `typeless`）。
+    pub style: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LessComputerPopupState {
+    pub entries: Vec<LessComputerEntry>,
+    pub working: bool,
+    pub approval: Option<LessComputerApproval>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -469,9 +689,11 @@ pub struct PopupState {
     pub last_sequence: u64,
     pub visible: bool,
     pub shutdown_requested: bool,
-    pub preview: PreviewPopupState,
     pub qa: QaPopupState,
     pub capsule: CapsulePopupState,
+    pub less_computer: LessComputerPopupState,
+    /// 宿主下发的本地热键配置；没有它就不做本地匹配。
+    pub hotkeys: Option<openless_core::HotkeyRuntimeTarget>,
     retired_sessions: HashSet<String>,
 }
 
@@ -486,6 +708,12 @@ impl PopupState {
     /// Apply a host event while rejecting late messages from an old session or
     /// duplicate/out-of-order sequence numbers.
     pub fn apply(&mut self, message: HostToPopup) -> ApplyOutcome {
+        // 热键配置不是“会话内容”：它不推进会话、不参与序号排序（宿主可能在面板
+        // 刚重连、还没收到第一条内容帧时先发它），所以在这里提前收下就返回。
+        if let HostToPopup::Hotkeys { bindings, .. } = message {
+            self.hotkeys = Some(*bindings);
+            return ApplyOutcome::Applied;
+        }
         let session_id = message.session_id().to_owned();
         let sequence = message.sequence();
         if let Some(current) = self.session_id.as_deref() {
@@ -496,9 +724,10 @@ impl PopupState {
             } else {
                 let starts_session = matches!(
                     message,
-                    HostToPopup::Preview { .. }
+                    HostToPopup::PolishPreview { .. }
                         | HostToPopup::QaSnapshot { .. }
                         | HostToPopup::Capsule { .. }
+                        | HostToPopup::LessComputer { .. }
                 );
                 if !starts_session || self.retired_sessions.contains(&session_id) {
                     return ApplyOutcome::Stale;
@@ -513,8 +742,9 @@ impl PopupState {
         self.session_id = Some(session_id);
         self.last_sequence = sequence;
         match message {
-            HostToPopup::Preview { text, source, .. } => {
-                self.preview = PreviewPopupState { text, source };
+            HostToPopup::PolishPreview { text, source, .. } => {
+                // 润色结果落到选区助手面板的「润色结果」模式。
+                self.qa.polish = Some(QaPolishState { text, source });
                 self.visible = true;
             }
             HostToPopup::QaSnapshot {
@@ -523,14 +753,25 @@ impl PopupState {
                 selection_preview,
                 streaming_answer,
                 error,
+                edit_instruction_mode,
+                edit_apply_available,
+                edit_revert_available,
+                pinned,
+                viewer_login,
                 ..
             } => {
                 self.qa = QaPopupState {
+                    polish: None,
                     phase,
                     messages,
                     selection_preview,
                     streaming_answer,
                     error,
+                    edit_instruction_mode,
+                    edit_apply_available,
+                    edit_revert_available,
+                    pinned,
+                    viewer_login,
                 };
                 self.visible = true;
             }
@@ -538,12 +779,31 @@ impl PopupState {
                 phase,
                 text,
                 audio_level,
+                translation_active,
+                style,
                 ..
             } => {
                 self.capsule = CapsulePopupState {
                     phase,
                     text,
                     audio_level,
+                    translation_active,
+                    style,
+                };
+                self.visible = true;
+            }
+            HostToPopup::LessComputer {
+                entries,
+                working,
+                approval,
+                error,
+                ..
+            } => {
+                self.less_computer = LessComputerPopupState {
+                    entries,
+                    working,
+                    approval,
+                    error,
                 };
                 self.visible = true;
             }
@@ -553,6 +813,8 @@ impl PopupState {
                 self.shutdown_requested = true;
                 return ApplyOutcome::Shutdown;
             }
+            // 上面已提前收下：热键配置不参与会话与序号排序。
+            HostToPopup::Hotkeys { .. } => {}
         }
         ApplyOutcome::Applied
     }
@@ -599,6 +861,47 @@ enum SupervisorCommand {
     Shutdown,
 }
 
+/// Whether this popup must be pushed onto X11 (XWayland counts).
+///
+/// The capsule may use X11 only in a native X11 session. A Wayland session must
+/// never be routed through XWayland, even when DISPLAY is present.
+pub fn force_x11_for(
+    kind: PopupKind,
+    display: Option<&str>,
+    wayland_display: Option<&str>,
+) -> bool {
+    kind == PopupKind::Capsule
+        && !crate::popup_layer::wayland_display_available(wayland_display)
+        && display.is_some_and(|value| !value.trim().is_empty())
+}
+
+/// Build the popup child command, including the backend choice above.
+pub fn popup_command(
+    executable: impl AsRef<Path>,
+    kind: PopupKind,
+    display: Option<&str>,
+    wayland_display: Option<&str>,
+    layer_shell: bool,
+) -> Command {
+    let mut command = Command::new(executable.as_ref());
+    command.arg("--openless-egui-popup").arg(kind.argument());
+    if force_x11_for(kind, display, wayland_display) {
+        command.env_remove("WAYLAND_DISPLAY");
+        command.env_remove("WAYLAND_SOCKET");
+    } else if kind == PopupKind::Capsule
+        && crate::popup_layer::wayland_display_available(wayland_display)
+    {
+        // Pin the Wayland backend explicitly, even if the parent environment
+        // contains an X11 test override. Without layer-shell, use native
+        // xdg-shell and accept compositor-managed placement.
+        command.env(
+            crate::popup_layer::CAPSULE_PATH_ENV,
+            if layer_shell { "layer" } else { "plain" },
+        );
+    }
+    command
+}
+
 /// Non-blocking handle held by the main egui application.
 pub struct PopupSupervisor {
     commands: tokio_mpsc::Sender<SupervisorCommand>,
@@ -607,9 +910,23 @@ pub struct PopupSupervisor {
 
 impl PopupSupervisor {
     pub fn spawn(runtime: &Handle, executable: impl AsRef<Path>, kind: PopupKind) -> Self {
-        let mut command = Command::new(executable.as_ref());
-        command.arg("--openless-egui-popup").arg(kind.argument());
-        Self::spawn_command(runtime, command)
+        let display = std::env::var("DISPLAY").ok();
+        let wayland_display = std::env::var("WAYLAND_DISPLAY").ok();
+        let layer_shell = crate::popup_layer::layer_shell_available();
+        log::debug!(
+            "popup spawn: kind={kind:?} x11={} layer_shell={layer_shell}",
+            display.as_deref().unwrap_or("none")
+        );
+        Self::spawn_command(
+            runtime,
+            popup_command(
+                executable,
+                kind,
+                display.as_deref(),
+                wayland_display.as_deref(),
+                layer_shell,
+            ),
+        )
     }
 
     /// Low-level construction seam used by tests and alternative launchers.
@@ -861,11 +1178,229 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn less_computer_snapshot(sequence: u64, text: &str) -> HostToPopup {
+        HostToPopup::LessComputer {
+            version: POPUP_PROTOCOL_VERSION,
+            session_id: "session".to_string(),
+            sequence,
+            entries: vec![LessComputerEntry {
+                kind: "assistant".to_string(),
+                text: text.to_string(),
+            }],
+            working: true,
+            approval: None,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn less_computer_snapshots_drive_the_panel_state() {
+        // 面板只呈现宿主序列：应用快照后要能看到条目、working 与可见性。
+        let mut state = PopupState::default();
+        assert_eq!(
+            state.apply(less_computer_snapshot(1, "first")),
+            ApplyOutcome::Applied
+        );
+        assert!(state.visible);
+        assert!(state.less_computer.working);
+        assert_eq!(state.less_computer.entries[0].text, "first");
+
+        // 单调序号：迟到的旧帧不得覆盖新正文。
+        assert_eq!(
+            state.apply(less_computer_snapshot(2, "first+second")),
+            ApplyOutcome::Applied
+        );
+        assert_eq!(state.less_computer.entries[0].text, "first+second");
+        assert_eq!(
+            state.apply(less_computer_snapshot(1, "stale")),
+            ApplyOutcome::Stale
+        );
+        assert_eq!(state.less_computer.entries[0].text, "first+second");
+
+        // Hide 只收起面板，不动对话内容（✕ 的语义）。
+        assert_eq!(
+            state.apply(HostToPopup::Hide {
+                version: POPUP_PROTOCOL_VERSION,
+                session_id: "session".to_string(),
+                sequence: 3,
+            }),
+            ApplyOutcome::Applied
+        );
+        assert!(!state.visible);
+        assert_eq!(state.less_computer.entries[0].text, "first+second");
+    }
+
+    #[test]
+    fn less_computer_actions_are_routed_to_their_kind() {
+        let submit = PopupToHost::SubmitLessComputer {
+            version: POPUP_PROTOCOL_VERSION,
+            session_id: "session".to_string(),
+            sequence: 1,
+            text: "open the editor".to_string(),
+        };
+        assert_eq!(submit.kind(), PopupKind::LessComputer);
+        assert_eq!(PopupKind::LessComputer.argument(), "--less-computer");
+        let approve = PopupToHost::ApproveLessComputer {
+            version: POPUP_PROTOCOL_VERSION,
+            session_id: "session".to_string(),
+            sequence: 2,
+            token: "token".to_string(),
+            approved: false,
+        };
+        assert_eq!(approve.kind(), PopupKind::LessComputer);
+    }
+
+    #[test]
+    fn capsule_uses_x11_only_in_a_native_x11_session() {
+        assert!(force_x11_for(PopupKind::Capsule, Some(":0"), None));
+        assert!(!force_x11_for(PopupKind::Capsule, None, None));
+        assert!(!force_x11_for(PopupKind::Capsule, Some("  "), None));
+        // DISPLAY can be XWayland: never switch away from native Wayland.
+        assert!(!force_x11_for(
+            PopupKind::Capsule,
+            Some(":0"),
+            Some("wayland-0")
+        ));
+        // The panels take keyboard input, so they keep their Wayland windows
+        // （选区助手面板现在也承担润色结果，同样是键盘输入的窗口）。
+        assert!(!force_x11_for(PopupKind::Qa, Some(":0"), None));
+    }
+
+    #[test]
+    fn capsule_command_uses_x11_when_wayland_is_not_running() {
+        let command = popup_command(
+            "/usr/bin/openless-linux-egui",
+            PopupKind::Capsule,
+            Some(":0"),
+            None,
+            false,
+        );
+        let envs: Vec<(String, Option<String>)> = command
+            .as_std()
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        assert!(envs.contains(&("WAYLAND_DISPLAY".to_string(), None)));
+        assert!(envs.contains(&("WAYLAND_SOCKET".to_string(), None)));
+        let args: Vec<String> = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, vec!["--openless-egui-popup", "--capsule"]);
+    }
+
+    /// A Wayland session with XWayland installed remains a native Wayland app: the
+    /// capsule keeps the session's own Wayland display and only gets the layer-shell
+    /// path hint.
+    #[test]
+    fn capsule_command_stays_on_native_wayland_when_layer_shell_is_available() {
+        let command = popup_command(
+            "/usr/bin/openless-linux-egui",
+            PopupKind::Capsule,
+            Some(":0"),
+            Some("wayland-0"),
+            true,
+        );
+        let envs: Vec<_> = command.as_std().get_envs().collect();
+        // `env_remove` would still show up here (with a `None` value), so "no entry at
+        // all" is what proves the child inherits the session's Wayland display.
+        assert!(
+            !envs
+                .iter()
+                .any(|(key, _)| *key == std::ffi::OsStr::new("WAYLAND_DISPLAY")),
+            "the capsule must keep the session's Wayland display: {envs:?}"
+        );
+        assert!(
+            envs.iter().any(|(key, value)| {
+                *key == std::ffi::OsStr::new("OPENLESS_CAPSULE_PATH")
+                    && *value == Some(std::ffi::OsStr::new("layer"))
+            }),
+            "layer-shell availability must reach the capsule: {envs:?}"
+        );
+    }
+
+    #[test]
+    fn qa_command_keeps_the_wayland_backend() {
+        let command = popup_command(
+            "/usr/bin/openless-linux-egui",
+            PopupKind::Qa,
+            Some(":0"),
+            Some("wayland-0"),
+            true,
+        );
+        assert_eq!(command.as_std().get_envs().count(), 0);
+    }
+
+    #[test]
+    fn capsule_command_keeps_wayland_without_an_x_server() {
+        let command = popup_command(
+            "/usr/bin/openless-linux-egui",
+            PopupKind::Capsule,
+            None,
+            None,
+            false,
+        );
+        assert_eq!(command.as_std().get_envs().count(), 0);
+    }
     use std::io::Cursor;
     use std::time::{Duration, Instant};
 
-    fn preview(text: String) -> HostToPopup {
-        HostToPopup::Preview {
+    #[test]
+    fn hotkey_bindings_round_trip_and_do_not_disturb_the_session_sequence() {
+        let bindings =
+            openless_core::HotkeyRuntimeTarget::from(&openless_core::UserPreferences::default());
+        let message = HostToPopup::Hotkeys {
+            version: POPUP_PROTOCOL_VERSION,
+            session_id: "qa".to_owned(),
+            sequence: 7,
+            bindings: Box::new(bindings),
+        };
+        let encoded = serde_json::to_string(&message).expect("encode hotkeys");
+        let decoded: HostToPopup = serde_json::from_str(&encoded).expect("decode hotkeys");
+        assert_eq!(decoded, message);
+
+        let mut state = PopupState::default();
+        assert_eq!(state.apply(message), ApplyOutcome::Applied);
+        assert!(state.hotkeys.is_some());
+        // 配置不是会话内容：后面的内容帧序号照常从 1 开始被采纳。
+        assert_eq!(state.session_id, None);
+        assert_eq!(state.last_sequence, 0);
+        let mut content = polish_preview("x".to_owned());
+        if let HostToPopup::PolishPreview { sequence, .. } = &mut content {
+            *sequence = 1;
+        }
+        assert_eq!(state.apply(content), ApplyOutcome::Applied);
+    }
+
+    #[test]
+    fn a_local_hotkey_edge_round_trips_from_the_popup() {
+        let message = PopupToHost::Hotkey {
+            version: POPUP_PROTOCOL_VERSION,
+            session_id: "qa".to_owned(),
+            sequence: 3,
+            edge: crate::LocalHotkeyEdge {
+                hotkey: crate::LocalHotkey::Dictation,
+                kind: crate::LocalHotkeyEdgeKind::Pressed,
+                press_id: crate::local_hotkeys::LOCAL_PRESS_ID_BASE + 1,
+            },
+        };
+        let encoded = serde_json::to_string(&message).expect("encode edge");
+        let decoded: PopupToHost = serde_json::from_str(&encoded).expect("decode edge");
+        assert_eq!(decoded, message);
+        assert_eq!(decoded.session_id(), "qa");
+        assert_eq!(decoded.sequence(), 3);
+        assert_eq!(decoded.kind(), PopupKind::Qa);
+    }
+
+    fn polish_preview(text: String) -> HostToPopup {
+        HostToPopup::PolishPreview {
             version: POPUP_PROTOCOL_VERSION,
             session_id: "session-一".to_owned(),
             sequence: 7,
@@ -875,8 +1410,110 @@ mod tests {
     }
 
     #[test]
+    fn qa_snapshot_carries_pin_and_edit_state() {
+        let message = HostToPopup::QaSnapshot {
+            version: POPUP_PROTOCOL_VERSION,
+            session_id: "qa".to_owned(),
+            sequence: 11,
+            phase: "IDLE".to_owned(),
+            messages: Vec::new(),
+            selection_preview: None,
+            streaming_answer: String::new(),
+            error: None,
+            edit_instruction_mode: true,
+            edit_apply_available: true,
+            edit_revert_available: false,
+            pinned: true,
+            viewer_login: "octocat".to_owned(),
+        };
+        let mut state = PopupState::default();
+        assert_eq!(state.apply(message.clone()), ApplyOutcome::Applied);
+        assert!(state.qa.edit_instruction_mode);
+        assert!(state.qa.edit_apply_available);
+        assert!(!state.qa.edit_revert_available);
+        assert!(state.qa.pinned);
+        assert_eq!(state.qa.viewer_login, "octocat");
+
+        // 老宿主（协议 v2）没有这些字段时保持默认值，而不是解析失败。
+        let legacy = r#"{"type":"qa_snapshot","version":2,"session_id":"qa","sequence":12,"phase":"IDLE","messages":[],"streaming_answer":""}"#;
+        let legacy: HostToPopup = serde_json::from_str(legacy).expect("legacy snapshot");
+        let mut state = PopupState::default();
+        assert_eq!(state.apply(legacy), ApplyOutcome::Applied);
+        assert!(!state.qa.pinned);
+        assert!(state.qa.viewer_login.is_empty());
+    }
+
+    #[test]
+    fn capsule_carries_translation_active_and_style() {
+        let message = HostToPopup::Capsule {
+            version: POPUP_PROTOCOL_VERSION,
+            session_id: "dictation".to_owned(),
+            sequence: 3,
+            phase: "Recording".to_owned(),
+            text: String::new(),
+            audio_level: Some(0.5),
+            translation_active: true,
+            style: "typeless".to_owned(),
+        };
+        let mut state = PopupState::default();
+        assert_eq!(state.apply(message), ApplyOutcome::Applied);
+        assert!(state.capsule.translation_active);
+        assert_eq!(
+            state.capsule.style, "typeless",
+            "the capsule style must travel with the frame to the popup process"
+        );
+    }
+
+    #[test]
+    fn a_legacy_capsule_frame_without_a_style_still_applies() {
+        // 协议 v4 的帧没有 style 字段：必须按默认（siri）应用，而不是整帧丢弃。
+        let legacy = r#"{"type":"capsule","version":4,"session_id":"dictation","sequence":7,"phase":"Recording","text":"","audio_level":0.3,"translation_active":false}"#;
+        let legacy: HostToPopup = serde_json::from_str(legacy).expect("legacy capsule frame");
+        let mut state = PopupState::default();
+        assert_eq!(state.apply(legacy), ApplyOutcome::Applied);
+        assert_eq!(state.capsule.style, "");
+    }
+
+    #[test]
+    fn qa_actions_are_scoped_to_the_qa_popup_and_accepted_once() {
+        for message in [
+            PopupToHost::SetPinned {
+                version: POPUP_PROTOCOL_VERSION,
+                session_id: "qa".to_owned(),
+                sequence: 1,
+                pinned: true,
+            },
+            PopupToHost::SetEditInstructionMode {
+                version: POPUP_PROTOCOL_VERSION,
+                session_id: "qa".to_owned(),
+                sequence: 2,
+                enabled: true,
+            },
+            PopupToHost::ApplyEdit {
+                version: POPUP_PROTOCOL_VERSION,
+                session_id: "qa".to_owned(),
+                sequence: 3,
+            },
+            PopupToHost::RevertEdit {
+                version: POPUP_PROTOCOL_VERSION,
+                session_id: "qa".to_owned(),
+                sequence: 4,
+            },
+        ] {
+            assert_eq!(message.kind(), PopupKind::Qa);
+            let mut guard = PopupActionGuard::default();
+            assert!(guard.accept(PopupKind::Qa, &message, "qa"));
+            // 同一个 sequence 不能重复执行。
+            assert!(!guard.accept(PopupKind::Qa, &message, "qa"));
+            // 其它弹窗进程的同一 sequence 不受影响（各自独立）。
+            let mut capsule = PopupActionGuard::default();
+            assert!(!capsule.accept(PopupKind::Capsule, &message, "qa"));
+        }
+    }
+
+    #[test]
     fn jsonl_round_trip_escapes_quotes_backslashes_and_unicode() {
-        let expected = preview("他说：\"你好\" C:\\\\tmp\\\\文件".to_owned());
+        let expected = polish_preview("他说：\"你好\" C:\\\\tmp\\\\文件".to_owned());
         let mut bytes = Vec::new();
         write_jsonl(&mut bytes, &expected).unwrap();
         assert_eq!(bytes.last(), Some(&b'\n'));
@@ -903,9 +1540,12 @@ mod tests {
     #[test]
     fn popup_state_rejects_late_and_cross_session_messages() {
         let mut state = PopupState::default();
-        assert_eq!(state.apply(preview("new".into())), ApplyOutcome::Applied);
-        let mut late = preview("late".into());
-        if let HostToPopup::Preview { sequence, .. } = &mut late {
+        assert_eq!(
+            state.apply(polish_preview("new".into())),
+            ApplyOutcome::Applied
+        );
+        let mut late = polish_preview("late".into());
+        if let HostToPopup::PolishPreview { sequence, .. } = &mut late {
             *sequence = 6;
         }
         assert_eq!(state.apply(late), ApplyOutcome::Stale);
@@ -915,10 +1555,18 @@ mod tests {
             sequence: 8,
         };
         assert_eq!(state.apply(other), ApplyOutcome::Stale);
-        assert_eq!(state.preview.text, "new");
+        assert_eq!(
+            state
+                .qa
+                .polish
+                .as_ref()
+                .map(|p| p.text.clone())
+                .unwrap_or_default(),
+            "new"
+        );
 
-        let mut next_session = preview("next".into());
-        if let HostToPopup::Preview {
+        let mut next_session = polish_preview("next".into());
+        if let HostToPopup::PolishPreview {
             session_id,
             sequence,
             ..
@@ -928,12 +1576,20 @@ mod tests {
             *sequence = 1;
         }
         assert_eq!(state.apply(next_session), ApplyOutcome::Applied);
-        let mut retired = preview("retired".into());
-        if let HostToPopup::Preview { sequence, .. } = &mut retired {
+        let mut retired = polish_preview("retired".into());
+        if let HostToPopup::PolishPreview { sequence, .. } = &mut retired {
             *sequence = 99;
         }
         assert_eq!(state.apply(retired), ApplyOutcome::Stale);
-        assert_eq!(state.preview.text, "next");
+        assert_eq!(
+            state
+                .qa
+                .polish
+                .as_ref()
+                .map(|p| p.text.clone())
+                .unwrap_or_default(),
+            "next"
+        );
     }
 
     #[test]
@@ -954,7 +1610,7 @@ mod tests {
             sequence: 1,
         };
         assert!(!guard.accept(PopupKind::Qa, &stale, "qa-session"));
-        assert!(!guard.accept(PopupKind::Preview, &submit, "qa-session"));
+        assert!(!guard.accept(PopupKind::Qa, &submit, "qa-session"));
         assert!(!guard.accept(PopupKind::Qa, &submit, "new-session"));
     }
 
@@ -965,19 +1621,19 @@ mod tests {
             version: POPUP_PROTOCOL_VERSION,
             session_id: "session".into(),
             sequence: 1,
-            kind: PopupKind::Preview,
+            kind: PopupKind::Qa,
         };
-        assert!(guard.accept(PopupKind::Preview, &ready, "session"));
-        assert!(!guard.accept(PopupKind::Preview, &ready, "session"));
-        guard.reset(PopupKind::Preview);
-        assert!(guard.accept(PopupKind::Preview, &ready, "session"));
+        assert!(guard.accept(PopupKind::Qa, &ready, "session"));
+        assert!(!guard.accept(PopupKind::Qa, &ready, "session"));
+        guard.reset(PopupKind::Qa);
+        assert!(guard.accept(PopupKind::Qa, &ready, "session"));
     }
 
     #[test]
     fn popup_messages_are_bound_to_their_process_kind() {
         assert_eq!(
-            preview("text".into()).content_kind(),
-            Some(PopupKind::Preview)
+            polish_preview("text".into()).content_kind(),
+            Some(PopupKind::Qa)
         );
         let hide = HostToPopup::Hide {
             version: POPUP_PROTOCOL_VERSION,
@@ -993,6 +1649,31 @@ mod tests {
         };
         let mut guard = PopupActionGuard::default();
         assert!(!guard.accept(PopupKind::Capsule, &wrong_version, "session"));
+    }
+
+    #[tokio::test]
+    async fn shutdown_ends_the_popup_process_so_nothing_is_left_on_screen() {
+        // 自动收起（听写终态 2 秒/取消立即）靠的是结束弹窗进程：胶囊的
+        // layer surface 只能随进程销毁，进程留着就会有一颗药丸永远贴屏。
+        let mut command = Command::new("/bin/sh");
+        command.arg("-c").arg("sleep 30");
+        let supervisor = PopupSupervisor::spawn_command(&Handle::current(), command);
+        supervisor
+            .request_shutdown()
+            .expect("a fresh supervisor accepts shutdown");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match supervisor.try_recv() {
+                Ok(PopupSupervisorEvent::Exited { crashed, .. }) => {
+                    assert!(!crashed, "a requested shutdown must not look like a crash");
+                    break;
+                }
+                Ok(_) | Err(mpsc::TryRecvError::Empty) if Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                result => panic!("popup process survived shutdown: {result:?}"),
+            }
+        }
     }
 
     #[tokio::test]

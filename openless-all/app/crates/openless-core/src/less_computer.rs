@@ -308,7 +308,11 @@ impl LessComputerService {
         provider: CodingAgentProvider,
         continue_session: bool,
     ) -> Option<String> {
-        if provider != CodingAgentProvider::DshCli || !continue_session {
+        if !matches!(
+            provider,
+            CodingAgentProvider::DshCli | CodingAgentProvider::PiBundled
+        ) || !continue_session
+        {
             return None;
         }
         let turns = self

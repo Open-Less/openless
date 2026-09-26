@@ -1,7 +1,5 @@
 # 07：验收与证据
 
-> 2026-09-11 更新：下文保留 2026-09-07 原始合同及缺口背景。Linux-egui 分支当前实现和验证状态见 [02 状态表](02-gap-register.md) 与 [08 交付记录](08-linux-egui-2.0.md)；本文旧缺口不作为现状结论。
-
 状态：canonical（2026-09-07 以源码为准重写）；更新：2026-09-08。
 
 ## 1. 两个不同的完成门
@@ -17,7 +15,7 @@
 | Core | `cargo test -p openless-core --locked` |
 | Linux Host/合同 | `cargo test -p openless-linux-egui --locked` |
 | Linux 目标编译 | `cargo check -p openless-linux-egui --all-targets --target x86_64-unknown-linux-gnu --locked`（需配置好带 `core/std` 的目标工具链） |
-| 打包 | `release-linux-egui.yml`（deb/rpm/AppImage，独立 manifest） |
+| 打包 | `release-linux-egui.yml`（deb/rpm + `SHA256SUMS`；AppImage 已从该渠道下线） |
 
 ## 3. 真机矩阵（L11/L12）
 
@@ -25,7 +23,7 @@
 - 输入：fcitx5 插件热键路由、PRIMARY 选区、落字目标应用矩阵。
 - 音频：CPAL 设备、系统静音/恢复终态。
 - 凭据：Secret Service（含锁定/未解锁态）。
-- 打包：AppImage / deb / rpm 安装、升级、回滚、卸载残留；签名与分发渠道证据。
+- 打包：deb / rpm 安装、升级、回滚、卸载残留；校验和与分发渠道证据。
 
 ## 4. 记录格式
 

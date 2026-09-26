@@ -306,7 +306,7 @@ fn access_urls(port: u16) -> Vec<String> {
 }
 
 #[cfg(target_os = "linux")]
-#[path = "../../src-tauri/src/remote_server/tls_identity.rs"]
+#[path = "../../shared/remote_tls/tls_identity.rs"]
 mod tls_identity;
 
 #[cfg(target_os = "linux")]

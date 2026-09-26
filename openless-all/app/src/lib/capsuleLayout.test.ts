@@ -82,7 +82,7 @@ const macErrorLayout = getCapsuleMessageLayout('mac', 'error');
 assertEqual(macErrorLayout.lineClamp, 1, 'mac error message stays single-line');
 assertEqual(macErrorLayout.allowWrap, false, 'mac error message stays nowrap');
 
-for (const os of ['mac', 'win', 'linux'] as const) {
+for (const os of ['mac', 'win'] as const) {
   const classic = getCapsuleHostMetrics(os, false, 'classic');
   const typeless = getCapsuleHostMetrics(os, true, 'typeless');
   assertEqual(classic.height, 100, `${os}: classic uses the compact native window`);

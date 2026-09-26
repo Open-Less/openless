@@ -7,23 +7,23 @@
 //! engine 现在由 `LocalAsrCache` 提供——Coordinator 在 build_local_qwen3 里
 //! 取已缓存的引擎再传进来，避免每次会话都重加载 1.2GB+ 模型。
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 use std::sync::Arc;
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 use super::LocalQwenEngine;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 use crate::asr::RawTranscript;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 use anyhow::{Context, Result};
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 use parking_lot::Mutex;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 use tauri::{AppHandle, Emitter};
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 pub struct LocalQwenAsr {
     engine: Arc<LocalQwenEngine>,
     operation_id: u64,
@@ -32,7 +32,7 @@ pub struct LocalQwenAsr {
     app: AppHandle,
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 impl LocalQwenAsr {
     pub fn new(app: AppHandle, engine: Arc<LocalQwenEngine>) -> Self {
         let operation_id = engine.next_operation_id();
@@ -98,14 +98,14 @@ impl LocalQwenAsr {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 impl crate::recorder::AudioConsumer for LocalQwenAsr {
     fn consume_pcm_chunk(&self, pcm: &[u8]) {
         self.buffer.lock().extend_from_slice(pcm);
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 fn i16_le_bytes_to_f32(bytes: &[u8]) -> Vec<f32> {
     bytes
         .chunks_exact(2)
@@ -116,17 +116,17 @@ fn i16_le_bytes_to_f32(bytes: &[u8]) -> Vec<f32> {
         .collect()
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 fn pcm_duration_ms(byte_len: usize) -> u64 {
     (byte_len as u64 / 2) * 1000 / 16_000
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 fn token_emission_enabled(cancelled: &AtomicBool) -> bool {
     !cancelled.load(Ordering::Acquire)
 }
 
-#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
 

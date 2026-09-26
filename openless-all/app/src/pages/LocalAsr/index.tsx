@@ -112,7 +112,7 @@ import type { RemoteSize } from './types';
 // Qwen3 模型管理 UI 仍按桌面端守严，具体后端由平台能力与渠道选择决定。
 const OS = detectOS();
 const IS_WINDOWS = OS === 'win';
-const IS_QWEN_PLATFORM = OS === 'mac' || OS === 'linux';
+const IS_QWEN_PLATFORM = OS === 'mac';
 
 function effectiveModelMirror(modelId: string, mirror: string): LocalAsrMirror {
   if (mirror === 'modelscope' && !modelId.startsWith('qwen3-asr-')) return 'huggingface';

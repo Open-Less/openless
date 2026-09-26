@@ -1,0 +1,11 @@
+{
+  "provider": "openless",
+  "model": "your-vision-model-id",
+  "baseUrl": "https://your-provider.example/v1",
+  "api": "openai-completions",
+  "apiKeyEnv": "OPENLESS_PI_API_KEY",
+  "supportsImages": true,
+  "reasoning": false,
+  "contextWindow": 128000,
+  "maxTokens": 8192
+}

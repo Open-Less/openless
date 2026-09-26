@@ -1,0 +1,38 @@
+pinyin_chars.tsv — attribution, source pinning, and license
+=============================================================
+
+Sources:
+
+1. mozillazg/pinyin-data — kMandarin_8105.txt (character set + primary
+   reading) and pinyin.txt (supplementary readings for polyphones)
+   https://github.com/mozillazg/pinyin-data
+   Commit: 923b108dc5d45dee061324c011b478fb649f8b73
+   Downloaded: 2026-09-25
+   SHA-256 (kMandarin_8105.txt): 1b1546f6e190c0f1cbf23e3bb436b41c3ace16f852be4daebc2c7295636628a4
+   SHA-256 (pinyin.txt):         621f8ca9eff8519f47e2b17b564fd318161e13bca07eea8c8e04993cd5d3b52e
+   License: MIT License, Copyright (c) 2016 mozillazg. Full text:
+            https://github.com/mozillazg/pinyin-data/blob/master/LICENSE
+
+2. rime/rime-pinyin-simp — pinyin_simp.dict.yaml (usage-frequency weight
+   per character+reading; single-character rows only — see
+   pinyin_phrases.LICENSE.txt for this same file's multi-character rows)
+   https://github.com/rime/rime-pinyin-simp
+   Commit: 0c6861ef7420ee780270ca6d993d18d4101049d0
+   Downloaded: 2026-09-25
+   SHA-256: e341598343a0f0f2035bb1aafc34a7f3bb7887deeecb3f60796262aaa2983e6b
+   License: Apache License 2.0. Full text:
+            https://github.com/rime/rime-pinyin-simp/blob/master/LICENSE
+
+Generation: this repo's scripts/generate-pinyin-characters.mjs — see that
+script's own header comment for the exact re-fetch/regenerate commands and
+selection/ranking rules. Covers the full 8105-character 《通用规范汉字表》
+set (raised from an initial ~5000-character cutoff on 2026-09-25, once the
+smaller set proved noticeably incomplete in real use — the plan's own 7.1
+anticipated this: "如果5000字实测仍然很小，可在不改变架构的情况下扩展到
+8105个规范汉字"), primary reading always kept, up to 2 additional "常用"
+polyphone readings kept when their own weight clears a threshold. Output
+rows are tab-separated
+"character<TAB>pinyin<TAB>weight", pinyin lowercase ASCII with ü normalized
+to v and tone marks stripped. No runtime code in OpenLess downloads,
+modifies, or redistributes either original source — only this generated,
+filtered derivative ships in the app.

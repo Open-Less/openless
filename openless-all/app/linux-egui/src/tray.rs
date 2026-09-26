@@ -567,13 +567,8 @@ mod tests {
 
     #[test]
     fn tray_capability_is_not_inferred_from_the_desktop_environment() {
-        let snapshot = crate::LinuxCapabilitySnapshot::from_environment(
-            None,
-            Some(":0"),
-            true,
-            false,
-            crate::LinuxPackageKind::Development,
-        );
+        let snapshot =
+            crate::LinuxCapabilitySnapshot::from_environment(None, Some(":0"), true, false);
         assert!(!snapshot.capabilities.supports_tray);
     }
 }

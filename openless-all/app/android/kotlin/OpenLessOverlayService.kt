@@ -29,7 +29,25 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     private var windowManager: WindowManager? = null
     private var rootView: FrameLayout? = null
     private var layoutParams: WindowManager.LayoutParams? = null
+    // Custom setter, not a plain field: tryPromoteRecordingForeground()
+    // posts the FOREGROUND_SERVICE_TYPE_MICROPHONE "录音中" notification
+    // Android requires while actually recording in the background, but
+    // there used to be exactly one place that tore it back down
+    // (ACTION_HIDE, i.e. only when the whole overlay is dismissed) — every
+    // other path that ends a recording (onCapsuleStateChanged()'s
+    // "transcribing"/"polishing"/"done"/"error"/"cancelled"/"idle"
+    // branches, stopRecordingFromOverlay(), the error branches in
+    // beginDictationFromOverlay()/stopRecordingFromOverlay()) just flipped
+    // this flag to false and left the notification up — which is exactly
+    // the "stuck showing 录音中 even when nothing is recording" bug this
+    // catches structurally: demoting on every true->false transition here
+    // means no call site can forget to do it, present or future.
     private var recording = false
+        set(value) {
+            val wasRecording = field
+            field = value
+            if (wasRecording && !value) demoteFromRecordingForeground()
+        }
     private var processing = false
     private var keyboardVisible = false
     private var armed = false
@@ -77,11 +95,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             }
             ACTION_HIDE -> {
                 hideOverlay()
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                } else {
-                    @Suppress("DEPRECATION") stopForeground(true)
-                }
+                demoteFromRecordingForeground()
                 stopSelf(startId)
             }
             ACTION_REPLACE_OVERLAY -> replaceOverlay()
@@ -635,18 +649,6 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         }
     }
 
-    private fun openQaFromOverlay() {
-        try {
-            Log.i(TAG, "open QA from overlay")
-            OpenLessNative.nativeOpenQaFromOverlay()
-            setArmed(false)
-        } catch (error: Throwable) {
-            Log.w(TAG, "open QA bridge unavailable", error)
-            applyVisualState(OverlayVisualState.Error)
-            showToast("问答服务未就绪，请打开 OpenLess 后重试")
-        }
-    }
-
     private fun finalizeQaFromOverlay() {
         try {
             Log.i(TAG, "finalize QA from overlay")
@@ -687,6 +689,13 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             applyVisualState(OverlayVisualState.Recording)
         } catch (error: Throwable) {
             Log.w(TAG, "start dictation bridge unavailable", error)
+            // recording was never set true on this path (the native start
+            // call itself threw), so the `recording` setter's own
+            // true->false demote never fires — but tryPromoteRecordingForeground()
+            // already posted the notification before this function was even
+            // called, so it needs tearing down here explicitly or it's
+            // orphaned with nothing left to ever clear it.
+            demoteFromRecordingForeground()
             recording = false
             processing = false
             applyVisualState(OverlayVisualState.Error)
@@ -719,6 +728,15 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             processing = false
             applyVisualState(OverlayVisualState.Error)
             showToast("语音服务未就绪，请打开 OpenLess 后重试")
+        }
+    }
+
+    /** Tears down the mic foreground-service notification — see `recording`'s own setter for why every recording-ends path routes through this one place. Safe to call even when not currently foreground-promoted (stopForeground() no-ops then). */
+    private fun demoteFromRecordingForeground() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION") stopForeground(true)
         }
     }
 

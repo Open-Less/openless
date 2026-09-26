@@ -2,7 +2,7 @@
 //!
 //! 与 `hotkey.rs`（modifier-only 听写热键）平行——QA 用的是组合键
 //! `Cmd+Shift+;` / `Ctrl+Shift+;`，所以走 `global-hotkey` crate（macOS 内部
-//! 用 Carbon `RegisterEventHotKey`，Windows 用 `RegisterHotKey`，Linux 用 X11）。
+//! 用 Carbon `RegisterEventHotKey`，Windows 用 `RegisterHotKey`）。
 //!
 //! 仅产出 `QaHotkeyEvent::Pressed` 边沿事件；toggle / 录音生命周期由
 //! coordinator 解释（第一次按 → 开始问答；第二次按 → 结束）。

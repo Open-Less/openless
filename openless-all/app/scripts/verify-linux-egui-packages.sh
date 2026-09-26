@@ -1,62 +1,76 @@
 #!/usr/bin/env bash
-# Package/backend verification only: never starts an egui or desktop UI.
+# Validate exactly what the tag workflow uploads. No GUI session or AppImage required.
 set -euo pipefail
 APP_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-TARGET_DIR=$(realpath -m "${CARGO_TARGET_DIR:-"$APP_ROOT/target"}")
-case "$TARGET_DIR/" in "$APP_ROOT/target/"*) ;; *) echo 'Verification must use app/target' >&2; exit 1;; esac
+TARGET_DIR=${CARGO_TARGET_DIR:-"$APP_ROOT/target"}
 OUTPUT="$TARGET_DIR/linux-egui-packages"
 shopt -s nullglob
-debs=("$OUTPUT"/*.deb); rpms=("$OUTPUT"/*.rpm); appimages=("$OUTPUT"/*.AppImage); components=("$OUTPUT"/*.tar.gz)
+debs=("$OUTPUT"/*.deb)
+rpms=("$OUTPUT"/*.rpm)
+appimages=("$OUTPUT"/*.AppImage)
 test "${#debs[@]}" -eq 1
 test "${#rpms[@]}" -eq 1
-test "${#appimages[@]}" -eq 1
-test "${#components[@]}" -eq 1
-(cd "$OUTPUT"; sha256sum --check --strict SHA256SUMS)
+test "${#appimages[@]}" -eq 0
+test -s "$OUTPUT/SHA256SUMS"
+test "$(wc -l < "$OUTPUT/SHA256SUMS")" -eq 2
+test "$(find "$OUTPUT" -maxdepth 1 \( -type f -o -type l \) | wc -l)" -eq 3
+(
+  cd "$OUTPUT"
+  sha256sum --check --strict SHA256SUMS
+)
 
 check_elf() {
-  local binary=$1 dependencies
-  file "$binary" | grep 'ELF 64-bit.*x86-64' >/dev/null
-  dependencies=$(ldd "$binary")
-  if grep -q 'not found' <<<"$dependencies"; then printf '%s\n' "$dependencies"; return 1; fi
-  if grep -Eqi 'webkit|wry|tauri' <<<"$dependencies"; then printf '%s\n' "$dependencies"; return 1; fi
+  local binary=$1 deps
+  file -L "$binary" | grep -q 'ELF 64-bit.*x86-64'
+  deps=$(ldd "$binary")
+  if grep -q 'not found' <<< "$deps"; then printf '%s\n' "$deps"; return 1; fi
+  if grep -Eqi 'webkit|wry|tauri' <<< "$deps"; then printf '%s\n' "$deps"; return 1; fi
 }
-check_elf "$OUTPUT/openless-linux-egui"
-WORK=$(mktemp -d "$TARGET_DIR/linux-package-check.XXXXXX")
-cleanup() { case "$WORK" in "$TARGET_DIR"/linux-package-check.*) rm -rf -- "$WORK";; esac; }
-trap cleanup EXIT
-dpkg-deb --contents "${debs[0]}" > "$WORK/deb-contents.txt"
-rpm -qlp "${rpms[0]}" > "$WORK/rpm-contents.txt"
-for item in usr/bin/openless usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so usr/lib/openless/resources/qwen-asr/qwen_asr usr/lib/openless/resources/linux-desktop/openless-desktop-bridge; do
-  grep -F "$item" "$WORK/deb-contents.txt" >/dev/null
-done
-for item in /usr/bin/openless /usr/lib64/fcitx5/libopenless.so /usr/lib/openless/resources/qwen-asr/qwen_asr /usr/lib/openless/resources/linux-desktop/openless-desktop-bridge; do
-  grep -Fx "$item" "$WORK/rpm-contents.txt" >/dev/null
-done
+check_elf "$TARGET_DIR/release/openless-linux-egui"
+
+WORK=$(mktemp -d)
+trap 'rm -rf -- "$WORK"' EXIT
 dpkg-deb --extract "${debs[0]}" "$WORK/deb"
+test -x "$WORK/deb/usr/bin/openless"
+test -s "$WORK/deb/usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so"
+test -s "$WORK/deb/usr/share/fcitx5/addon/openless.conf"
+test -s "$WORK/deb/usr/share/openless/fcitx5-addon.sha256"
+DEB_PLUGIN_SHA=$(sha256sum "$WORK/deb/usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so" | cut -d' ' -f1)
+grep -Eq "^openless [^ ]+ fcitx5-addon-sha256 $DEB_PLUGIN_SHA$" \
+  "$WORK/deb/usr/share/openless/fcitx5-addon.sha256"
+for size in 32x32 64x64 128x128 256x256 512x512; do
+  test -s "$WORK/deb/usr/share/icons/hicolor/$size/apps/openless.png"
+done
 desktop-file-validate "$WORK/deb/usr/share/applications/openless.desktop"
 appstreamcli validate --no-net "$WORK/deb/usr/share/metainfo/top.openless.OpenLess.metainfo.xml"
 check_elf "$WORK/deb/usr/bin/openless"
-check_elf "$WORK/deb/usr/lib/openless/resources/linux-desktop/openless-desktop-bridge"
 check_elf "$WORK/deb/usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so"
-(
-  cd "$WORK"
-  "${appimages[0]}" --appimage-extract > extract.log
-)
-ROOT="$WORK/squashfs-root"
-RESOURCES="$ROOT/usr/lib/openless/resources"
-check_elf "$ROOT/usr/bin/openless"
-check_elf "$RESOURCES/qwen-asr/qwen_asr"
-check_elf "$RESOURCES/linux-desktop/openless-desktop-bridge"
-check_elf "$RESOURCES/linux-desktop/plugins/platforms/libqoffscreen.so"
-test -s "$RESOURCES/linux-fcitx5-plugin/libopenless.so"
-test -s "$RESOURCES/linux-fcitx5-plugin/openless.conf"
-test -s "$RESOURCES/fonts/NotoSansCJK-Regular.ttc"
-test -s "$RESOURCES/linux-desktop/gnome/modern/extension.js"
-test -s "$RESOURCES/linux-desktop/gnome/legacy/extension.js"
-test -s "$RESOURCES/linux-desktop/kwin/contents/code/main.js"
-test -s "$RESOURCES/linux-desktop/licenses/libqt5core5a-copyright"
-"$RESOURCES/qwen-asr/qwen_asr" --help >/dev/null 2>&1
-tar -tzf "${components[0]}" > "$WORK/components.txt"
-grep -Fx linux-desktop/install.sh "$WORK/components.txt" >/dev/null
-grep -Fx linux-desktop/licenses/libqt5core5a-copyright "$WORK/components.txt" >/dev/null
-printf 'PASS: ELF, metadata, SHA-256, deb/rpm/AppImage contents and desktop components\n'
+DEB_FILES=$(dpkg-deb --contents "${debs[0]}")
+grep -Fq 'usr/bin/openless' <<< "$DEB_FILES"
+grep -Fq 'fcitx5/libopenless.so' <<< "$DEB_FILES"
+DEB_DEPENDS=$(dpkg-deb --field "${debs[0]}" Depends)
+grep -Fq 'fcitx5' <<< "$DEB_DEPENDS"
+grep -Fq 'libpipewire-0.3-0' <<< "$DEB_DEPENDS"
+
+mkdir -p "$WORK/rpm"
+( cd "$WORK/rpm" && rpm2cpio "${rpms[0]}" | cpio -idm --quiet )
+test -x "$WORK/rpm/usr/bin/openless"
+test -s "$WORK/rpm/usr/lib64/fcitx5/libopenless.so"
+test -s "$WORK/rpm/usr/share/fcitx5/addon/openless.conf"
+test -s "$WORK/rpm/usr/share/openless/fcitx5-addon.sha256"
+RPM_PLUGIN_SHA=$(sha256sum "$WORK/rpm/usr/lib64/fcitx5/libopenless.so" | cut -d' ' -f1)
+grep -Eq "^openless [^ ]+ fcitx5-addon-sha256 $RPM_PLUGIN_SHA$" \
+  "$WORK/rpm/usr/share/openless/fcitx5-addon.sha256"
+test "$DEB_PLUGIN_SHA" = "$RPM_PLUGIN_SHA"
+desktop-file-validate "$WORK/rpm/usr/share/applications/openless.desktop"
+appstreamcli validate --no-net "$WORK/rpm/usr/share/metainfo/top.openless.OpenLess.metainfo.xml"
+check_elf "$WORK/rpm/usr/bin/openless"
+check_elf "$WORK/rpm/usr/lib64/fcitx5/libopenless.so"
+RPM_FILES=$(rpm -qlp "${rpms[0]}")
+grep -Fxq '/usr/bin/openless' <<< "$RPM_FILES"
+grep -Fxq '/usr/lib64/fcitx5/libopenless.so' <<< "$RPM_FILES"
+grep -Fxq '/usr/share/openless/fcitx5-addon.sha256' <<< "$RPM_FILES"
+RPM_DEPENDS=$(rpm -qp --requires "${rpms[0]}")
+grep -Fq 'fcitx5' <<< "$RPM_DEPENDS"
+grep -Fq 'pipewire-libs' <<< "$RPM_DEPENDS"
+printf 'PASS: deb/rpm contents, ELF dependencies, desktop metadata and SHA-256\n'

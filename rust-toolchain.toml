@@ -1,0 +1,4 @@
+# openless-computer uses Rust edition 2024. linux-egui requires rustc 1.95.
+# CI installs stable; local cargo should resolve the same channel.
+[toolchain]
+channel = "stable"
