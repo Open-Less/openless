@@ -506,16 +506,7 @@ fn marketplace_detail(
         .constrain(false)
         .show(ctx, |ui| {
             ui.set_min_size(body_rect.size());
-            ui.painter().rect_filled(
-                body_rect,
-                egui::CornerRadius {
-                    nw: 0,
-                    ne: 0,
-                    sw: 14,
-                    se: 14,
-                },
-                theme::OVERLAY,
-            );
+            layout::paint_blurred_overlay(ctx, ui, body_rect, layout::body_corner_radius(ctx));
             // 点击拦截：吃掉 body 上的点击，下方页面既看不到也点不到。
             let _ = ui.allocate_rect(body_rect, egui::Sense::click());
             ui.scope_builder(egui::UiBuilder::new().max_rect(card_rect), |ui| {
@@ -699,7 +690,7 @@ fn marketplace_mine(
         .constrain(false)
         .show(ctx, |ui| {
             ui.set_min_size(body.size());
-            ui.painter().rect_filled(body, 0, theme::OVERLAY);
+            layout::paint_blurred_overlay(ctx, ui, body, layout::body_corner_radius(ctx));
             let _ = ui.allocate_rect(body, egui::Sense::click());
             ui.scope_builder(egui::UiBuilder::new().max_rect(card), |ui| {
                 ui.set_clip_rect(body.intersect(ui.clip_rect()));

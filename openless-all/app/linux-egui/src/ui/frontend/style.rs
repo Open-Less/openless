@@ -686,14 +686,14 @@ fn editor_overlay(
             ui.set_min_size(body.size());
             // Like Settings, sample this frame's GPU-blurred page and apply the
             // macOS overlay tint. Both layers obey the content area's corners.
-            let corners = layout::body_corner_radius(ctx);
-            if let Some(texture) = crate::ui::backdrop::published(ctx) {
-                ui.painter().add(egui::Shape::Rect(
-                    egui::epaint::RectShape::filled(body, corners, egui::Color32::WHITE)
-                        .with_texture(texture, crate::ui::backdrop::uv_for(ctx, body)),
-                ));
-            }
-            ui.painter().rect_filled(body, corners, theme::OVERLAY);
+            // The drawer starts after the sidebar, so its lower-left edge is
+            // an internal seam and must stay square.
+            layout::paint_blurred_overlay(
+                ctx,
+                ui,
+                body,
+                layout::content_overlay_corner_radius(ctx),
+            );
             // 点击拦截：吃掉 body 上的点击，下方页面既看不到也点不到。
             let _ = ui.allocate_rect(body, egui::Sense::click());
             ui.scope_builder(egui::UiBuilder::new().max_rect(card_rect), |ui| {

@@ -996,25 +996,30 @@ fn new_word_overlay(
             && input
                 .pointer
                 .interact_pos()
-                .is_some_and(|pos| body.contains(pos) && !modal.contains(pos))
+                .is_some_and(|pos| region.contains(pos) && !modal.contains(pos))
     }) {
         close = true;
     }
     egui::Area::new(egui::Id::new("openless-vocab-new-word-area"))
         .order(egui::Order::Foreground)
-        .fixed_pos(body.min)
+        .fixed_pos(region.min)
         .constrain(false)
         .show(ctx, |ui| {
-            ui.set_min_size(body.size());
-            ui.painter().rect_filled(body, 0, theme::OVERLAY);
-            let _ = ui.allocate_rect(body, egui::Sense::click());
+            ui.set_min_size(region.size());
+            layout::paint_blurred_overlay(
+                ctx,
+                ui,
+                region,
+                layout::content_overlay_corner_radius(ctx),
+            );
+            let _ = ui.allocate_rect(region, egui::Sense::click());
             let mut child = ui.new_child(
                 egui::UiBuilder::new()
                     .id_salt("new-word-dialog")
                     .max_rect(modal)
                     .layout(egui::Layout::top_down(egui::Align::Min)),
             );
-            child.set_clip_rect(body);
+            child.set_clip_rect(region);
             let card = egui::Frame::new()
                 .fill(theme::SURFACE)
                 .stroke(egui::Stroke::new(0.5, theme::LINE))

@@ -70,6 +70,37 @@ pub fn body_corner_radius(ctx: &egui::Context) -> egui::CornerRadius {
     }
 }
 
+/// Paint the live blurred page beneath an in-window modal, followed by the
+/// shared macOS-style tint. Keeping this in one helper prevents secondary
+/// overlays (marketplace, vocabulary, history) from silently falling back to
+/// a flat dark rectangle while settings/style use the GPU backdrop.
+pub fn paint_blurred_overlay(
+    ctx: &egui::Context,
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    corners: egui::CornerRadius,
+) {
+    if let Some(texture) = crate::ui::backdrop::published(ctx) {
+        ui.painter().add(egui::Shape::Rect(
+            egui::epaint::RectShape::filled(rect, corners, egui::Color32::WHITE)
+                .with_texture(texture, crate::ui::backdrop::uv_for(ctx, rect)),
+        ));
+    }
+    ui.painter().rect_filled(rect, corners, theme::OVERLAY);
+}
+
+/// Corner shape for overlays scoped to the content pane rather than the full
+/// window. The left edge is an internal sidebar seam, so it must remain square.
+pub fn content_overlay_corner_radius(ctx: &egui::Context) -> egui::CornerRadius {
+    let outer = body_corner_radius(ctx);
+    egui::CornerRadius {
+        nw: 0,
+        ne: 0,
+        sw: 0,
+        se: outer.se,
+    }
+}
+
 pub fn window_rect(ctx: &egui::Context) -> egui::Rect {
     ctx.content_rect().shrink(window_margin(ctx))
 }

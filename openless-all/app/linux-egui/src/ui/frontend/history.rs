@@ -1307,11 +1307,7 @@ fn confirm_overlay(
         .show(ctx, |ui| {
             ui.set_min_size(body.size());
             ui.set_clip_rect(body);
-            ui.painter().rect_filled(
-                body,
-                egui::CornerRadius::ZERO,
-                egui::Color32::from_black_alpha(36),
-            );
+            layout::paint_blurred_overlay(ctx, ui, body, egui::CornerRadius::ZERO);
 
             let dialog = egui::Rect::from_center_size(
                 body.center(),
