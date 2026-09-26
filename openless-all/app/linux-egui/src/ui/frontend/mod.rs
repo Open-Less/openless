@@ -116,7 +116,7 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
         }
 
         // Settings overlay (rendered on top of everything).
-        if vm.settings_open && !settings::waiting_for_capture(ctx) {
+        if vm.settings_open {
             settings::settings_overlay(ctx, vm, actions, body);
         }
     });
@@ -1194,39 +1194,50 @@ mod tests {
         }
     }
 
+    /// 设置页遮罩用的是离屏模糊背板，而不是一层暗色：发布的纹理必须真的落到弹窗图层
+    /// 上，否则用户看到的还是旧的黑遮罩。
     #[test]
-    fn settings_capture_frame_does_not_capture_the_modal_itself() {
+    fn the_settings_overlay_paints_the_published_blurred_backdrop() {
         let ctx = egui::Context::default();
         let mut vm = FrontendViewModel {
             settings_open: true,
             ..Default::default()
         };
-        settings::capture_pending(&ctx, true);
-        ctx.begin_pass(egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(960.0, 640.0),
-            )),
-            ..Default::default()
-        });
-        render(&ctx, &mut vm, &mut Vec::new());
-        assert!(ctx
-            .data(|data| data.get_temp::<egui::Rect>(egui::Id::new("openless-settings-card-rect")))
-            .is_none());
-        let _ = end_pass(&ctx);
-        settings::capture_pending(&ctx, false);
-        ctx.begin_pass(egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(960.0, 640.0),
-            )),
-            ..Default::default()
-        });
-        render(&ctx, &mut vm, &mut Vec::new());
-        assert!(ctx
-            .data(|data| data.get_temp::<egui::Rect>(egui::Id::new("openless-settings-card-rect")))
-            .is_some());
-        let _ = end_pass(&ctx);
+        // Area 首帧只建立屏幕矩形，而且 `Area::fade_in` 会把刚出现的图层整个淡入：
+        // 淡入没走完时 painter 记下的是 `Shape::Noop`，看不到背板。所以推时间跑几帧。
+        for frame in 0..4 {
+            crate::ui::backdrop::publish(&ctx, Some(egui::TextureId::User(9)));
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(960.0, 640.0),
+                )),
+                time: Some(frame as f64 * 0.1),
+                ..Default::default()
+            });
+            render(&ctx, &mut vm, &mut Vec::new());
+            let layer = egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("openless-settings-modal"),
+            );
+            let paints_backdrop = ctx.graphics(|graphics| {
+                graphics.get(layer).is_some_and(|list| {
+                    list.all_entries().any(|entry| match &entry.shape {
+                        egui::Shape::Mesh(mesh) => mesh.texture_id == egui::TextureId::User(9),
+                        _ => false,
+                    })
+                })
+            });
+            if frame == 3 {
+                assert!(paints_backdrop, "the modal layer must sample the backdrop");
+            }
+            // 卡片矩形依然要写进 memory：遮罩换了材质，弹窗几何不能跟着变。
+            assert!(ctx
+                .data(|data| data
+                    .get_temp::<egui::Rect>(egui::Id::new("openless-settings-card-rect")))
+                .is_some());
+            let _ = end_pass(&ctx);
+        }
     }
 
     #[test]

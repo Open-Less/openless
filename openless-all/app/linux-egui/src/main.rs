@@ -6124,6 +6124,11 @@ mod linux_app {
     /// 主窗口的最小内尺寸（UI 进程创建窗口时用它，和 `with_min_inner_size` 同源）。
     const MAIN_WINDOW_MIN_INNER_SIZE: egui::Vec2 = egui::vec2(960.0, 640.0);
 
+    /// MSAA sample count of the main window (`NativeOptions::multisampling`). The
+    /// settings backdrop draws the page offscreen through eframe's renderer, so its
+    /// colour target has to match the pipelines eframe built.
+    const MAIN_MSAA_SAMPLES: u16 = 4;
+
     /// 主窗口的初始尺寸。基准 = macOS（Tauri 的 main 窗口 1300×835）；
     /// 旧的 Linux 专用窗口配置不作为依据。
     const MAIN_WINDOW_INNER_SIZE: [f32; 2] = [1300.0, 835.0];
@@ -7999,7 +8004,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 .with_resizable(true)
                 .with_visible(true),
             renderer: eframe::Renderer::Wgpu,
-            multisampling: 4,
+            multisampling: MAIN_MSAA_SAMPLES,
             ..Default::default()
         };
         let options = vulkan_options(options);
@@ -8008,7 +8013,10 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             options,
             Box::new(move |cc| {
                 theme::install(&cc.egui_ctx);
-                Ok(Box::new(UiClientApp::new(client)))
+                Ok(Box::new(UiClientApp::new(
+                    client,
+                    cc.wgpu_render_state.as_ref(),
+                )))
             }),
         )
         .map_err(|error| error.to_string())
@@ -8080,14 +8088,21 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher,
         /// 本地热键边沿的发送序号（与动作序号分开，便于日志区分）。
         hotkey_sequence: u64,
-        settings_was_open: bool,
-        settings_capture_frames: u8,
+        /// 设置页模糊背板；只有拿到 wgpu 渲染状态（正常 GUI 进程）时存在。
+        backdrop: Option<crate::ui::backdrop::BackdropBlur>,
     }
 
     impl UiClientApp {
-        fn new(client: UiBridgeClient) -> Self {
+        fn new(
+            client: UiBridgeClient,
+            render_state: Option<&eframe::egui_wgpu::RenderState>,
+        ) -> Self {
             Self {
                 client,
+                // 设置页的磨砂背板：把遮罩下方的页面离屏重绘后做真实高斯模糊。
+                backdrop: render_state.map(|state| {
+                    crate::ui::backdrop::BackdropBlur::new(state, MAIN_MSAA_SAMPLES.into())
+                }),
                 view_model: FrontendViewModel::default(),
                 last_sequence: 0,
                 last_adopted: None,
@@ -8100,8 +8115,6 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 hotkeys: None,
                 hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher::default(),
                 hotkey_sequence: 0,
-                settings_was_open: false,
-                settings_capture_frames: 0,
             }
         }
 
@@ -8279,51 +8292,6 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             self.drain_host(&ctx);
             self.poll_local_hotkeys(&ctx);
             theme::apply_visuals(&ctx, self.view_model.theme_mode);
-            // Capture the unobscured page once when settings opens. The capture
-            // is returned as a later input event; until then the old content
-            // stays visible rather than taking a screenshot of the modal itself.
-            if !self.view_model.settings_open {
-                self.settings_was_open = false;
-                self.settings_capture_frames = 0;
-                frontend::settings::capture_pending(&ctx, false);
-                frontend::settings::clear_backdrop(&ctx);
-            } else {
-                if !self.settings_was_open {
-                    self.settings_was_open = true;
-                    self.settings_capture_frames = 1;
-                    frontend::settings::clear_backdrop(&ctx);
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(
-                        frontend::settings::BackdropCapture,
-                    )));
-                }
-                if self.settings_capture_frames > 0 {
-                    let screenshot = ctx.input(|input| {
-                        input.events.iter().find_map(|event| {
-                            if let egui::Event::Screenshot {
-                                user_data, image, ..
-                            } = event
-                            {
-                                if user_data.data.as_ref().is_some_and(|data| {
-                                    data.is::<frontend::settings::BackdropCapture>()
-                                }) {
-                                    return Some(image.clone());
-                                }
-                            }
-                            None
-                        })
-                    });
-                    if let Some(image) = screenshot {
-                        frontend::settings::store_backdrop(&ctx, &image);
-                        self.settings_capture_frames = 0;
-                    } else if self.settings_capture_frames >= 5 {
-                        // A failed/unsupported screenshot must not hide settings.
-                        self.settings_capture_frames = 0;
-                    } else {
-                        self.settings_capture_frames += 1;
-                    }
-                }
-                frontend::settings::capture_pending(&ctx, self.settings_capture_frames > 0);
-            }
             if ctx.input(|input| input.viewport().close_requested()) {
                 self.request_exit(&ctx, "window manager close request");
             }
@@ -8337,8 +8305,24 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                     log::info!("[ui-client] pointer click at {pointer:?}");
                 }
             }
+            // 设置页遮罩改为磨砂背板：先按当前窗口尺寸准备离屏目标，把纹理 id 发布给
+            // 遮罩；页面本身在这一帧稍后离屏重绘并模糊（都在 eframe 绘制之前完成，
+            // 所以遮罩采到的是当前帧的像素，不需要任何“等一帧截图”的补丁）。
+            {
+                let open = self.view_model.settings_open;
+                let texture = self
+                    .backdrop
+                    .as_mut()
+                    .and_then(|backdrop| backdrop.prepare(&ctx, open));
+                crate::ui::backdrop::publish(&ctx, texture);
+            }
             let mut actions = Vec::new();
             frontend::render(&ctx, &mut self.view_model, &mut actions);
+            if self.view_model.settings_open {
+                if let Some(backdrop) = self.backdrop.as_mut() {
+                    backdrop.render_page(&ctx);
+                }
+            }
             if ui_debug_enabled() && !actions.is_empty() {
                 log::info!("[ui-client] actions from the renderer: {actions:?}");
             }
