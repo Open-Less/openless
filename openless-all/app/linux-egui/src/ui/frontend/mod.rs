@@ -1220,16 +1220,27 @@ mod tests {
                 egui::Order::Foreground,
                 egui::Id::new("openless-settings-modal"),
             );
-            let paints_backdrop = ctx.graphics(|graphics| {
-                graphics.get(layer).is_some_and(|list| {
-                    list.all_entries().any(|entry| match &entry.shape {
-                        egui::Shape::Mesh(mesh) => mesh.texture_id == egui::TextureId::User(9),
-                        _ => false,
+            let backdrop_corners = ctx.graphics(|graphics| {
+                graphics.get(layer).and_then(|list| {
+                    list.all_entries().find_map(|entry| match &entry.shape {
+                        // 模糊背板是「带纹理的矩形」，只有这样圆角才跟着内容区走
+                        // （用整块的 `image` 会是直角，底部两角顶出窗口圆角）。
+                        egui::Shape::Rect(rect)
+                            if rect.fill_texture_id() == egui::TextureId::User(9) =>
+                        {
+                            Some(rect.corner_radius)
+                        }
+                        _ => None,
                     })
                 })
             });
             if frame == 3 {
-                assert!(paints_backdrop, "the modal layer must sample the backdrop");
+                let corners = backdrop_corners.expect("the modal layer must sample the backdrop");
+                assert_eq!(
+                    corners,
+                    layout::body_corner_radius(&ctx),
+                    "the blurred backdrop must use the content corners"
+                );
                 // macOS 一致：模糊之上还有一层 `--ol-overlay-bg` 压暗。
                 let paints_tint = ctx.graphics(|graphics| {
                     graphics.get(layer).is_some_and(|list| {
@@ -1461,6 +1472,91 @@ mod tests {
         let _ = end_pass(ctx);
     }
 
+    /// 用户报的复现路径：打开概览页 → 从右下角把窗口拖到最小 → 不再动鼠标就地滚动。
+    /// 四角的拉伸条是 app 自己画的（`BeginResize`），按下那一帧就把这次手势交给了
+    /// 合成器：释放回不来、缩放期间也没有 motion，egui 于是留着「正在拖拉伸条」的状态，
+    /// `ScrollArea` 就不吃滚轮了。
+    #[test]
+    fn resizing_from_the_corner_does_not_leave_the_page_unscrollable() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            active_page: Page::Overview,
+            overview_loading: false,
+            ..Default::default()
+        };
+        vm.settings.activity_heatmap = true;
+        vm.overview = Some(super::view_model::OverviewSummary {
+            asr_provider: "asr".into(),
+            llm_provider: "llm".into(),
+            asr_configured: true,
+            llm_configured: true,
+            chars_today: 42,
+            segments_today: 3,
+            duration_ms_today: 12_000,
+            avg_latency_ms: 1200,
+            history_total: 20,
+            recent: Vec::new(),
+            activity_daily: Vec::new(),
+            heatmap_year: 2026,
+            heatmap: (0..365)
+                .map(|day| super::view_model::OverviewHeatmapDay {
+                    date: format!("2026-01-{day}"),
+                    count: 1,
+                })
+                .collect(),
+        });
+        let large = egui::vec2(1240.0, 800.0);
+        let small = egui::vec2(960.0, 640.0);
+        // 右下角拉伸条：`window_rect` 是客户区内缩 6px，角上 18px 属于 SouthEast。
+        let grip = egui::pos2(large.x - 15.0, large.y - 15.0);
+        for frame in 0..18 {
+            let mut events = Vec::new();
+            if frame < 3 {
+                events.push(egui::Event::PointerMoved(grip));
+            }
+            if frame == 3 {
+                events.push(egui::Event::PointerButton {
+                    pos: grip,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            if frame >= 4 {
+                // 用户缩完窗口就地滚：合成器既不还释放，也不再发 motion。
+                events.push(egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -180.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            let size = if frame >= 4 { small } else { large };
+            frame_with_pointer_routing(
+                &ctx,
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events,
+                    time: Some(frame as f64 / 10.0),
+                    ..Default::default()
+                },
+                &mut vm,
+            );
+        }
+        let (content, visible, offset): (f32, f32, f32) = ctx.data(|data| {
+            data.get_temp(egui::Id::new("overview-scroll-measure"))
+                .expect("the overview must offer page scrolling at the minimum size")
+        });
+        assert!(
+            content > visible,
+            "overview did not offer scrolling: {content}/{visible}"
+        );
+        assert!(
+            offset > 10.0,
+            "a corner resize swallowed the wheel: {content}/{visible}, offset={offset}"
+        );
+    }
+
     #[test]
     fn pointer_routing_only_guesses_when_the_pointer_is_not_in_the_body() {
         let ctx = egui::Context::default();
@@ -1537,7 +1633,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        layout::note_window_drag_handoff(&ctx);
+        layout::note_window_gesture_handoff(&ctx);
         let _ = end_pass(&ctx);
         assert!(ctx.input(|input| input.pointer.any_down()));
 

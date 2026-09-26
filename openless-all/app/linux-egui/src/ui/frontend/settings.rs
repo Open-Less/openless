@@ -104,24 +104,16 @@ pub fn settings_overlay(
             // `--ol-overlay-bg`（`rgba(15,17,22,0.32)`，即 `theme::OVERLAY`）：
             // 只模糊不压暗的话，设置卡片和背板分不开。
             // 拿不到背板时（无 wgpu 渲染状态的回退路径）只压暗色，卡片仍然可读。
+            // 两者都用**内容区的圆角**：遮罩是以直角矩形铺上去的，底部两角会顶出窗口
+            // 圆角之外，看起来就像遮罩和窗口对不上。
+            let mask_corners = layout::body_corner_radius(ctx);
             if let Some(texture) = crate::ui::backdrop::published(ctx) {
-                ui.painter().with_clip_rect(body).image(
-                    texture,
-                    body,
-                    crate::ui::backdrop::uv_for(ctx, body),
-                    egui::Color32::WHITE,
-                );
+                ui.painter().add(egui::Shape::Rect(
+                    egui::epaint::RectShape::filled(body, mask_corners, egui::Color32::WHITE)
+                        .with_texture(texture, crate::ui::backdrop::uv_for(ctx, body)),
+                ));
             }
-            ui.painter().rect_filled(
-                body,
-                egui::CornerRadius {
-                    nw: 0,
-                    ne: 0,
-                    sw: 14,
-                    se: 14,
-                },
-                theme::OVERLAY,
-            );
+            ui.painter().rect_filled(body, mask_corners, theme::OVERLAY);
             let _ = ui.allocate_rect(body, egui::Sense::click());
             // 卡片：同图层内后画 → 永远在遮罩之上。位置用**显式矩形**而不是 anchor：
             // anchor 按上一帧面积（含阴影偏移）定位，卡片会稳定偏下 19.5px，且窗口

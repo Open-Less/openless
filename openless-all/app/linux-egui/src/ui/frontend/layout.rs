@@ -19,8 +19,59 @@ const WINDOW_RADIUS: u8 = 14;
 
 // ── Window geometry helpers ─────────────────────────────────────────────────
 
+/// 窗口是不是铺满了屏幕（最大化/全屏/平铺）。无边框窗口平时四周留一条透明边、四角带
+/// 圆角来假装「浮」在桌面上；铺满屏幕时这条边就变成屏幕边上的一圈空白，必须收起来。
+pub fn window_fills_the_screen(ctx: &egui::Context) -> bool {
+    let surface = ctx.content_rect();
+    ctx.input(|input| {
+        let viewport = input.viewport();
+        if viewport.maximized.unwrap_or(false) || viewport.fullscreen.unwrap_or(false) {
+            return true;
+        }
+        // 平铺（拖到屏幕边缘吸附）时合成器不一定报 maximized，但窗口尺寸就等于屏幕
+        // 尺寸：按尺寸兜底。留 1px 容差给缩放。
+        viewport.monitor_size.is_some_and(|monitor| {
+            let size = viewport.inner_rect.unwrap_or(surface).size();
+            size.x >= monitor.x - 1.0 && size.y >= monitor.y - 1.0
+        })
+    })
+}
+
+/// 窗口四周的透明边（只在不铺满屏幕时留）。
+pub fn window_margin(ctx: &egui::Context) -> f32 {
+    if window_fills_the_screen(ctx) {
+        0.0
+    } else {
+        WINDOW_MARGIN
+    }
+}
+
+/// 整张窗口底板的圆角。
+pub fn window_corner_radius(ctx: &egui::Context) -> egui::CornerRadius {
+    if window_fills_the_screen(ctx) {
+        egui::CornerRadius::ZERO
+    } else {
+        egui::CornerRadius::same(WINDOW_RADIUS)
+    }
+}
+
+/// 内容区（标题栏以下）的圆角：上面两角是直角（顶着标题栏），下面两角跟着窗口圆角。
+/// 遮罩要按这个形状画，否则模糊背板会以直角盖住窗口圆角。
+pub fn body_corner_radius(ctx: &egui::Context) -> egui::CornerRadius {
+    if window_fills_the_screen(ctx) {
+        egui::CornerRadius::ZERO
+    } else {
+        egui::CornerRadius {
+            nw: 0,
+            ne: 0,
+            sw: WINDOW_RADIUS,
+            se: WINDOW_RADIUS,
+        }
+    }
+}
+
 pub fn window_rect(ctx: &egui::Context) -> egui::Rect {
-    ctx.content_rect().shrink(WINDOW_MARGIN)
+    ctx.content_rect().shrink(window_margin(ctx))
 }
 
 pub fn body_rect(ctx: &egui::Context) -> egui::Rect {
@@ -103,35 +154,23 @@ pub fn paint_window_background(ctx: &egui::Context) {
     ));
     // 整张窗口底板：白。内容区就是这块白（Tauri 的 `ol-console-main` 是
     // `--ol-surface`），不要再用灰画 body——否则侧栏/内容的白灰层次正好搞反。
-    painter.rect_filled(
-        window,
-        egui::CornerRadius::same(WINDOW_RADIUS),
-        theme::SURFACE,
-    );
+    painter.rect_filled(window, window_corner_radius(ctx), theme::SURFACE);
     let titlebar = egui::Rect::from_min_max(
         window.min,
         egui::pos2(window.max.x, window.min.y + TITLEBAR_HEIGHT),
     );
+    let radius = window_corner_radius(ctx);
     painter.rect_filled(
         titlebar,
         egui::CornerRadius {
-            nw: WINDOW_RADIUS,
-            ne: WINDOW_RADIUS,
+            nw: radius.nw,
+            ne: radius.ne,
             sw: 0,
             se: 0,
         },
         theme::TITLEBAR,
     );
-    painter.rect_filled(
-        body,
-        egui::CornerRadius {
-            nw: 0,
-            ne: 0,
-            sw: WINDOW_RADIUS,
-            se: WINDOW_RADIUS,
-        },
-        theme::SURFACE,
-    );
+    painter.rect_filled(body, body_corner_radius(ctx), theme::SURFACE);
     painter.line_segment(
         [
             egui::pos2(titlebar.left(), titlebar.bottom()),
@@ -141,7 +180,7 @@ pub fn paint_window_background(ctx: &egui::Context) {
     );
     painter.rect_stroke(
         window,
-        egui::CornerRadius::same(WINDOW_RADIUS),
+        window_corner_radius(ctx),
         egui::Stroke::new(1.0, theme::LINE),
         egui::StrokeKind::Inside,
     );
@@ -206,8 +245,8 @@ pub fn titlebar(ctx: &egui::Context, actions: &mut Vec<FrontendAction>) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
             } else if wants_drag || (holding && !focused) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                // 这次手势的释放大概率回不来（见 `note_window_drag_handoff`）。
-                note_window_drag_handoff(ctx);
+                // 这次手势的释放大概率回不来（见 `note_window_gesture_handoff`）。
+                note_window_gesture_handoff(ctx);
             }
             if drag.double_clicked() {
                 actions.push(FrontendAction::WindowMaximize);
@@ -440,6 +479,9 @@ pub fn resize_handles(ctx: &egui::Context) {
         let _ = &response;
         if response.drag_started() {
             ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
+            // 拉伸和拖标题栏一样：按下那一帧就把这次手势交给合成器了，见
+            // [`note_window_gesture_handoff`]。忘了登记的话，缩完窗口整页都滚不动。
+            note_window_gesture_handoff(ctx);
         }
     }
 }
@@ -802,22 +844,23 @@ fn group(
 
 // ── 合成器拖动留下的指针状态 ────────────────────────────────────────────────
 
-/// 「指针已经交给合成器拖动」的时间戳（见 [`note_window_drag_handoff`]）。
-const WINDOW_DRAG_HANDOFF: &str = "openless-window-drag-handoff";
+/// 「指针已经交给合成器」的时间戳（见 [`note_window_gesture_handoff`]）。
+const WINDOW_GESTURE_HANDOFF: &str = "openless-window-gesture-handoff";
 
 /// 交给合成器后多久还没等到释放，就断定这次释放被合成器吃掉了。够长，不至于把
 /// 正常的「按住标题栏一下」误判成丢事件；够短，用户不会察觉到卡顿。
 const ORPHANED_PRESS_TIMEOUT: f64 = 0.4;
 
-/// 记录「这一帧把指针交给合成器拖动」。
+/// 记录「这一帧把指针交给合成器拖动/拉伸」。
 ///
-/// 标题栏在**按下那一帧**就得请合成器接管（Wayland 的 `xdg_toplevel.move` 只认按下
-/// 那一刻的 serial），代价是这次手势的释放也归合成器，客户端往往**收不到释放**。
-/// egui 于是永远以为自己还按着，`dragged_id` 留在标题栏的拖拽区上，而 `ScrollArea`
-/// 正好用 `ctx.dragged_id().is_none()` 当作吃滚轮的前置条件——「拖过窗口后整页滚不动，
-/// 点一下页面（那一次点击的释放）才恢复」。
-pub fn note_window_drag_handoff(ctx: &egui::Context) {
-    let id = egui::Id::new(WINDOW_DRAG_HANDOFF);
+/// 标题栏和四角的拉伸条都在**按下那一帧**就得请合成器接管（Wayland 的
+/// `xdg_toplevel.move` / `xdg_toplevel.resize` 只认按下那一刻的 serial），代价是这次
+/// 手势的释放也归合成器，客户端往往**收不到释放**——合成器在整个移动/缩放过程中也不
+/// 会再发 motion。egui 于是永远以为自己还按着、`dragged_id` 留在标题栏或拉伸条上，
+/// 而 `ScrollArea` 正好用 `ctx.dragged_id().is_none()` 当作吃滚轮的前置条件——「拖过
+/// 窗口/缩完窗口后整页滚不动，点一下页面（那一次点击的释放）才恢复」。
+pub fn note_window_gesture_handoff(ctx: &egui::Context) {
+    let id = egui::Id::new(WINDOW_GESTURE_HANDOFF);
     let now = ctx.input(|input| input.time);
     ctx.data_mut(|data| {
         // 已经有一次等待中的交接就别把截止时间往后推（`holding && !focused` 那条
@@ -828,10 +871,10 @@ pub fn note_window_drag_handoff(ctx: &egui::Context) {
     });
 }
 
-/// `raw_input_hook` 里每帧修一次指针状态，修的正是合成器拖动留下的两件坏事：
+/// `raw_input_hook` 里每帧修一次指针状态，修的正是合成器接管手势留下的两件坏事：
 ///
-/// 1. **被吃掉的释放**：见 [`note_window_drag_handoff`]。拖窗已经由合成器负责，egui
-///    不需要保留这次按压，补一个释放把 `any_down`/`dragged_id` 清干净。
+/// 1. **被吃掉的释放**：见 [`note_window_gesture_handoff`]。拖窗/拉伸已经由合成器
+///    负责，egui 不需要保留这次按压，补一个释放把 `any_down`/`dragged_id` 清干净。
 /// 2. **失效的坐标**：窗口在指针底下被移动/缩放时，客户端**不会**收到 motion，egui
 ///    手里还是按下那一刻的坐标（通常正落在标题栏上）。滚轮本身证明指针就在窗口里，
 ///    所以坐标不可信时把它放到窗口主体中心；真实的指针事件一来就会立刻覆盖。
@@ -846,7 +889,7 @@ fn pointer_release_event(event: &egui::Event) -> bool {
 }
 
 fn release_orphaned_press(ctx: &egui::Context, raw_input: &mut egui::RawInput) {
-    let id = egui::Id::new(WINDOW_DRAG_HANDOFF);
+    let id = egui::Id::new(WINDOW_GESTURE_HANDOFF);
     let Some(handed_off_at) = ctx.data(|data| data.get_temp::<f64>(id)) else {
         return;
     };

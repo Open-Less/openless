@@ -143,7 +143,7 @@ pub fn polish_result_mode(
             if row.drag_started() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 // 弹窗也是「按下即交给合成器」，同样会丢掉这次手势的释放。
-                super::layout::note_window_drag_handoff(ui.ctx());
+                super::layout::note_window_gesture_handoff(ui.ctx());
             }
         });
     hairline(ui, theme::LINE_SOFT);
@@ -346,7 +346,7 @@ pub fn selection_ask(
                         .interact(egui::Sense::drag());
                     if row.drag_started() {
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                        super::layout::note_window_drag_handoff(ui.ctx());
+                        super::layout::note_window_gesture_handoff(ui.ctx());
                     }
                 });
             hairline(ui, theme::LINE_SOFT);
