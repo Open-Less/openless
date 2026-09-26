@@ -1,0 +1,41 @@
+name: Cache maintenance
+
+# GitHub keeps 10 GB of Actions caches per repository. The platform dependency
+# trees are large (the Windows Tauri tree alone is ~1.6 GB), so unused scopes
+# evict the caches the CI jobs restore - which silently turns every run into a
+# cold build. This job keeps the budget visible and drops the scopes that can
+# never be restored again: pull requests that are already closed or merged.
+#
+# It runs weekly and on demand. It never touches branch or tag scopes, so the
+# caches the release path depends on are safe.
+on:
+  schedule:
+    # Monday 03:17 UTC: after the weekend, before the working week.
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  actions: write # required to delete caches
+  contents: read
+
+concurrency:
+  group: cache-maintenance
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Report and prune caches
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Report cache usage and prune dead pull request scopes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          LIMIT_GB: '8'
+        working-directory: openless-all/app
+        run: bash scripts/ci-cache-usage.sh --prune --repo "$REPO" --limit-gb "$LIMIT_GB"
