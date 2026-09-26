@@ -277,6 +277,25 @@ pub fn apply_visuals(ctx: &egui::Context, mode: openless_core::shared_types::The
     visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(7);
     visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(7);
     visuals.widgets.active.corner_radius = egui::CornerRadius::same(7);
+    // egui derives a widget's padding from
+    // `button_padding + visuals.expansion - visuals.bg_stroke.width`, and its
+    // stock styles have `inactive.bg_stroke.width = 0.0` against
+    // `hovered.bg_stroke.width = 1.0`. A plain `egui::Button` therefore shrinks
+    // by 2×2px the moment the pointer enters it, and every sibling in the row
+    // reflows with it — the "buttons wobble while I hover" report. Pin the
+    // stroke width and expansion across all interactive states so a control's
+    // *size* no longer depends on the pointer, while the fills still light the
+    // hovered/pressed state up.
+    let hairline = egui::Stroke::new(0.5, if dark { LINE } else { LINE_STRONG });
+    for state in [
+        &mut visuals.widgets.inactive,
+        &mut visuals.widgets.hovered,
+        &mut visuals.widgets.active,
+        &mut visuals.widgets.open,
+    ] {
+        state.bg_stroke = hairline;
+        state.expansion = 0.0;
+    }
     ctx.set_visuals(visuals);
 }
 

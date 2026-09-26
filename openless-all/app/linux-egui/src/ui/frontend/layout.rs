@@ -1067,6 +1067,22 @@ pub fn fixed_ui<R>(
 
 /// Width of `text` at `size` points, measured with the live font atlas.
 /// Needed wherever a control is laid out by hand rather than by egui's cursor.
+pub fn mono_text_width(ui: &egui::Ui, text: &str, size: f32) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    ui.fonts_mut(|fonts| {
+        fonts
+            .layout_no_wrap(
+                text.to_owned(),
+                egui::FontId::monospace(size),
+                egui::Color32::PLACEHOLDER,
+            )
+            .size()
+            .x
+    })
+}
+
 pub fn text_width(ui: &egui::Ui, text: &str, size: f32) -> f32 {
     if text.is_empty() {
         return 0.0;

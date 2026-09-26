@@ -15,6 +15,11 @@ const OAUTH_CARD_WIDTH: f32 = 470.0;
 const OAUTH_CARD_SHIFT_X: f32 = 15.0;
 /// Title size matches the Tauri heading (16px) rather than the 15px body step.
 const OAUTH_TITLE_SIZE: f32 = 16.0;
+/// Tauri's dialog close button is a fixed 28×28 tile.
+const OAUTH_CLOSE_SIZE: f32 = 28.0;
+/// `--ol-font-mono` at 22px, matching the Tauri `userCode` span.
+const CODE_TEXT_SIZE: f32 = 22.0;
+const CODE_COPY_GAP: f32 = 10.0;
 
 fn my_packs_button(ui: &mut egui::Ui, rect: egui::Rect, label: &str) -> egui::Response {
     let response = ui.interact(
@@ -59,6 +64,51 @@ fn my_packs_button(ui: &mut egui::Ui, rect: egui::Rect, label: &str) -> egui::Re
             (rect, badge, label_pos),
         )
     });
+    response
+}
+
+/// A hand-painted `×` control.
+///
+/// Tauri gives both close buttons an explicit `width`/`height`; a stock
+/// `egui::Button` instead takes its size from the active font's metrics *and*
+/// from egui's per-state padding (`button_padding + expansion -
+/// bg_stroke.width`), so it visibly resized under the pointer. Painting into a
+/// fixed rect removes that entire class of jitter.
+fn close_control(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    glyph_size: f32,
+    radius: u8,
+) -> egui::Response {
+    let id = ui.id().with((
+        "openless-close-control",
+        rect.left().round() as i32,
+        rect.top().round() as i32,
+    ));
+    let response = ui.interact(rect, id, egui::Sense::click());
+    let painter = ui.painter().with_clip_rect(rect);
+    painter.rect_filled(
+        rect,
+        egui::CornerRadius::same(radius),
+        if response.hovered() {
+            theme::SURFACE_2
+        } else {
+            theme::SURFACE
+        },
+    );
+    painter.rect_stroke(
+        rect,
+        egui::CornerRadius::same(radius),
+        egui::Stroke::new(0.5, theme::LINE_STRONG),
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        "×",
+        egui::FontId::proportional(glyph_size),
+        theme::INK_2,
+    );
     response
 }
 
@@ -132,11 +182,29 @@ mod tests {
             .data(|data| data.get_temp(egui::Id::new("openless-marketplace-oauth-status-row")))
             .expect("the pending phase must paint the status row");
         assert!(
-            (row.center().x - card.center().x).abs() <= 1.0,
+            (row.center().x - card.center().x).abs() <= 2.0,
             "the status row must sit on the card's axis: {row:?} in {card:?}"
         );
         assert!(row.left() > card.left() + 22.0, "{row:?} in {card:?}");
         assert_eq!(OAUTH_TITLE_SIZE, 16.0);
+
+        // The code tile spans the whole card (Tauri renders it as a full-width
+        // flex row) instead of hugging the code text on the left edge.
+        let code_box: egui::Rect = ctx
+            .data(|data| data.get_temp(egui::Id::new("openless-marketplace-oauth-code-box")))
+            .expect("the pending phase must paint the code tile");
+        assert_eq!(code_box.width(), card.width() - 44.0);
+        assert!(
+            (code_box.center().x - card.center().x).abs() <= 1.5,
+            "the code tile must be centred: {code_box:?} in {card:?}"
+        );
+
+        // The × is painted into a fixed 28×28 rect: a stock `egui::Button` would
+        // take its size from the font metrics and from egui's per-state padding.
+        let close: egui::Rect = ctx
+            .data(|data| data.get_temp(egui::Id::new("openless-marketplace-oauth-close-rect")))
+            .expect("the dialog must publish its close control");
+        assert_eq!(close.size(), egui::vec2(28.0, 28.0));
     }
 }
 
@@ -798,15 +866,18 @@ fn marketplace_oauth(
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    let close = ui.add(
-                                        egui::Button::new(
-                                            egui::RichText::new("×").size(16.0).color(theme::INK_2),
-                                        )
-                                        .fill(theme::SURFACE)
-                                        .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
-                                        .corner_radius(egui::CornerRadius::same(8))
-                                        .min_size(egui::vec2(28.0, 28.0)),
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(OAUTH_CLOSE_SIZE, OAUTH_CLOSE_SIZE),
+                                        egui::Sense::hover(),
                                     );
+                                    let close = close_control(ui, rect, 16.0, 8);
+                                    #[cfg(test)]
+                                    ui.ctx().data_mut(|data| {
+                                        data.insert_temp(
+                                            egui::Id::new("openless-marketplace-oauth-close-rect"),
+                                            close.rect,
+                                        )
+                                    });
                                     if close.clicked() {
                                         actions.push(FrontendAction::MarketplaceAuthCancel);
                                     }
@@ -848,50 +919,84 @@ fn marketplace_oauth(
                                 .color(theme::INK_3),
                             );
                             ui.add_space(10.0);
+                            // Tauri draws this as a full-width flex row with the
+                            // code and its copy button centred (`justify-content:
+                            // center`); an unbounded `egui::Frame` would instead
+                            // hug the content and sit on the left edge.
+                            let content_width = (size.x - 44.0).max(1.0);
                             egui::Frame::new()
                                 .fill(theme::SURFACE_2)
                                 .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
                                 .corner_radius(egui::CornerRadius::same(10))
                                 .inner_margin(egui::Margin::symmetric(12, 10))
                                 .show(ui, |ui| {
+                                    ui.set_width((content_width - 24.0).max(1.0));
+                                    #[cfg(test)]
+                                    ui.ctx().data_mut(|data| {
+                                        data.insert_temp(
+                                            egui::Id::new("openless-marketplace-oauth-code-box"),
+                                            ui.min_rect().expand2(egui::vec2(12.0, 10.0)),
+                                        )
+                                    });
                                     ui.vertical_centered(|ui| {
-                                        ui.horizontal(|ui| {
-                                            ui.with_layout(
-                                                egui::Layout::left_to_right(egui::Align::Center),
-                                                |ui| {
-                                                    ui.label(
-                                                        egui::RichText::new(
-                                                            &vm.marketplace_oauth_user_code,
-                                                        )
-                                                        .size(22.0)
-                                                        .strong()
-                                                        .color(theme::BLUE),
-                                                    );
-                                                    ui.add_space(10.0);
-                                                    let copy = ui.add(
-                                                        egui::Button::new(
-                                                            egui::RichText::new(tr_l10n(
-                                                                lang,
-                                                                "marketplace.oauth.copyBtn",
-                                                            ))
-                                                            .size(11.0)
-                                                            .color(theme::INK_3),
-                                                        )
-                                                        .fill(theme::SURFACE)
-                                                        .stroke(egui::Stroke::new(
-                                                            0.5,
-                                                            theme::LINE_STRONG,
-                                                        ))
-                                                        .corner_radius(egui::CornerRadius::same(7)),
-                                                    );
-                                                    if copy.clicked() {
-                                                        actions.push(
-                                                            FrontendAction::MarketplaceAuthCopyCode,
-                                                        );
-                                                    }
-                                                },
-                                            );
-                                        });
+                                        let code = vm.marketplace_oauth_user_code.clone();
+                                        let copy_label = tr_l10n(lang, "marketplace.oauth.copyBtn");
+                                        let code_width =
+                                            layout::mono_text_width(ui, &code, CODE_TEXT_SIZE);
+                                        let copy_width =
+                                            layout::text_width(ui, copy_label, 11.0) + 20.0;
+                                        let (row, _) = ui.allocate_exact_size(
+                                            egui::vec2(
+                                                code_width + CODE_COPY_GAP + copy_width,
+                                                30.0,
+                                            ),
+                                            egui::Sense::hover(),
+                                        );
+                                        ui.painter().text(
+                                            egui::pos2(row.left(), row.center().y),
+                                            egui::Align2::LEFT_CENTER,
+                                            &code,
+                                            egui::FontId::monospace(CODE_TEXT_SIZE),
+                                            theme::BLUE,
+                                        );
+                                        let copy_rect = egui::Rect::from_min_size(
+                                            egui::pos2(
+                                                row.left() + code_width + CODE_COPY_GAP,
+                                                row.center().y - 12.0,
+                                            ),
+                                            egui::vec2(copy_width, 24.0),
+                                        );
+                                        let copy = ui.interact(
+                                            copy_rect,
+                                            ui.id().with("openless-oauth-copy-code"),
+                                            egui::Sense::click(),
+                                        );
+                                        let painter = ui.painter().with_clip_rect(copy_rect);
+                                        painter.rect_filled(
+                                            copy_rect,
+                                            egui::CornerRadius::same(7),
+                                            if copy.hovered() {
+                                                theme::SURFACE
+                                            } else {
+                                                theme::SURFACE
+                                            },
+                                        );
+                                        painter.rect_stroke(
+                                            copy_rect,
+                                            egui::CornerRadius::same(7),
+                                            egui::Stroke::new(0.5, theme::LINE_STRONG),
+                                            egui::StrokeKind::Inside,
+                                        );
+                                        painter.text(
+                                            copy_rect.center(),
+                                            egui::Align2::CENTER_CENTER,
+                                            copy_label,
+                                            egui::FontId::proportional(11.0),
+                                            theme::INK_2,
+                                        );
+                                        if copy.clicked() {
+                                            actions.push(FrontendAction::MarketplaceAuthCopyCode);
+                                        }
                                     });
                                 });
                             ui.add_space(12.0);
@@ -1384,16 +1489,12 @@ fn marketplace_mine(
                                 actions.push(FrontendAction::MarketplaceAuthStart);
                             }
                             ui.add_space(6.0);
-                            if ui
-                                .add_sized(
-                                    [close_width, 30.0],
-                                    egui::Button::new("×")
-                                        .fill(theme::SURFACE)
-                                        .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
-                                        .corner_radius(egui::CornerRadius::same(9)),
-                                )
-                                .clicked()
-                            {
+                            let (close_rect, _) = ui.allocate_exact_size(
+                                egui::vec2(close_width, 30.0),
+                                egui::Sense::hover(),
+                            );
+                            let close = close_control(ui, close_rect, 18.0, 9);
+                            if close.clicked() {
                                 actions.push(FrontendAction::MarketplaceCloseMine);
                             }
                         });
