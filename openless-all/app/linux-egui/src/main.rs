@@ -732,6 +732,7 @@ mod linux_app {
             || vm.style_model.trim() != saved.recommended_model.clone().unwrap_or_default()
             || vm.style_compatible_version.trim()
                 != saved.compatible_app_version.clone().unwrap_or_default()
+            || vm.style_examples != saved.examples
     }
 
     impl OpenLessEguiApp {
@@ -989,6 +990,7 @@ mod linux_app {
             vm.style_version = pack.version.clone();
             vm.style_model = pack.recommended_model.clone().unwrap_or_default();
             vm.style_compatible_version = pack.compatible_app_version.clone().unwrap_or_default();
+            vm.style_examples = pack.examples.clone();
             vm.style_editor_dirty = !exists;
             vm.style_editor_saved = Some(pack.clone());
         }
@@ -5591,6 +5593,7 @@ mod linux_app {
                         version,
                         model,
                         compatible_version,
+                        examples,
                     } => {
                         if let Some(mut pack) = self.style_editor.take() {
                             pack.name = name.trim().to_string();
@@ -5607,6 +5610,7 @@ mod linux_app {
                             pack.compatible_app_version =
                                 Some(compatible_version.trim().to_string())
                                     .filter(|v| !v.is_empty());
+                            pack.examples = examples;
                             pack.tags = tags
                                 .split([',', '，', '\n'])
                                 .map(str::trim)
@@ -8401,10 +8405,7 @@ Internal flags (set by OpenLess itself, not for regular use):
                 return Ok(());
             }
             Some(EarlyExit::Version) => {
-                println!(
-                    "OpenLess {}",
-                    option_env!("OPENLESS_LINUX_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
-                );
+                println!("OpenLess {}", env!("OPENLESS_APP_VERSION"));
                 return Ok(());
             }
             None => {}
@@ -8485,6 +8486,33 @@ Internal flags (set by OpenLess itself, not for regular use):
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn style_example_changes_mark_the_editor_dirty() {
+            let saved = openless_core::StylePack::default();
+            let mut vm = frontend::view_model::FrontendViewModel {
+                style_name: saved.name.clone(),
+                style_description: saved.description.clone(),
+                style_prompt: saved.prompt.clone(),
+                style_selection_prompt: saved.selection_prompt.clone(),
+                style_voice_edit_prompt: saved.voice_edit_prompt.clone(),
+                style_tags: saved.tags.join(", "),
+                style_author: saved.author.clone().unwrap_or_default(),
+                style_version: saved.version.clone(),
+                style_model: saved.recommended_model.clone().unwrap_or_default(),
+                style_compatible_version: saved.compatible_app_version.clone().unwrap_or_default(),
+                style_examples: saved.examples.clone(),
+                style_editor_saved: Some(saved),
+                ..Default::default()
+            };
+            assert!(!style_editor_is_dirty(&vm));
+            vm.style_examples.push(openless_core::StylePackExample {
+                title: Some("demo".into()),
+                input: "raw".into(),
+                output: "polished".into(),
+            });
+            assert!(style_editor_is_dirty(&vm));
+        }
 
         #[test]
         fn the_ui_client_flag_carries_the_bridge_socket() {

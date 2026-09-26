@@ -45,6 +45,10 @@ desktop-file-validate "$WORK/deb/usr/share/applications/openless.desktop"
 appstreamcli validate --no-net "$WORK/deb/usr/share/metainfo/top.openless.OpenLess.metainfo.xml"
 check_elf "$WORK/deb/usr/bin/openless"
 check_elf "$WORK/deb/usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so"
+# Catch stale build-script output: dpkg metadata may say -N while the UI
+# still displays an older revision embedded in the binary.
+DEB_VERSION=$(dpkg-deb --field "${debs[0]}" Version)
+test "$("$WORK/deb/usr/bin/openless" --version)" = "OpenLess $DEB_VERSION"
 DEB_FILES=$(dpkg-deb --contents "${debs[0]}")
 grep -Fq 'usr/bin/openless' <<< "$DEB_FILES"
 grep -Fq 'fcitx5/libopenless.so' <<< "$DEB_FILES"
@@ -66,6 +70,7 @@ desktop-file-validate "$WORK/rpm/usr/share/applications/openless.desktop"
 appstreamcli validate --no-net "$WORK/rpm/usr/share/metainfo/top.openless.OpenLess.metainfo.xml"
 check_elf "$WORK/rpm/usr/bin/openless"
 check_elf "$WORK/rpm/usr/lib64/fcitx5/libopenless.so"
+test "$("$WORK/rpm/usr/bin/openless" --version)" = "OpenLess $DEB_VERSION"
 RPM_FILES=$(rpm -qlp "${rpms[0]}")
 grep -Fxq '/usr/bin/openless' <<< "$RPM_FILES"
 grep -Fxq '/usr/lib64/fcitx5/libopenless.so' <<< "$RPM_FILES"

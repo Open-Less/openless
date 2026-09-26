@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../../..', import.meta.url));
 const load = (path) => readFile(join(root, path), 'utf8');
-const [release, ci, check, pack, verify, gate, manifest, tauri, revisionFile] = await Promise.all([
+const [release, ci, check, pack, verify, gate, manifest, tauri, revisionFile, buildScript, host] = await Promise.all([
   load('.github/workflows/release-linux-egui.yml'),
   load('.github/workflows/ci.yml'),
   load('.github/workflows/check-linux-egui.yml'),
@@ -16,6 +16,8 @@ const [release, ci, check, pack, verify, gate, manifest, tauri, revisionFile] = 
   load('openless-all/app/linux-egui/Cargo.toml'),
   load('.github/workflows/release-tauri.yml'),
   load('openless-all/app/linux-egui/package-revision'),
+  load('openless-all/app/linux-egui/build.rs'),
+  load('openless-all/app/linux-egui/src/main.rs'),
 ]);
 
 // CI must execute the exact test/build/package/checksum path used for tags.
@@ -60,6 +62,12 @@ assert.match(revision, /^[1-9][0-9]*$/, 'Linux package revision must be a positi
 assert.ok(Number(revision) > 79, 'new Linux packages must upgrade the last -79 candidate');
 assert.match(check, /REVISION=\$\(< linux-egui\/package-revision\)/);
 assert.match(check, /version=\$\{VERSION%%\+\*\}-\$REVISION/);
+assert.match(buildScript, /rerun-if-changed=package-revision/);
+assert.match(buildScript, /rerun-if-env-changed=OPENLESS_LINUX_VERSION/);
+assert.match(buildScript, /OPENLESS_APP_VERSION=\{expected\}/);
+assert.match(host, /env!\("OPENLESS_APP_VERSION"\)/);
+assert.match(verify, /DEB_VERSION=\$\(dpkg-deb --field/);
+assert.match(verify, /OpenLess \$DEB_VERSION/);
 assert.match(pack, /linux-egui\/package-revision/);
 assert.match(pack, /if \[ "\$VERSION" != "\$EXPECTED_VERSION" \]/);
 assert.ok(!tauri.includes('build-linux-egui:'), 'Linux does not build Tauri');

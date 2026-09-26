@@ -5242,6 +5242,80 @@ pub const CATALOG: &[Msg] = &[
             "실시간 멀티턴 polish 전용",
         ),
     },
+        Msg {
+        key: "style.pack.metaTitle",
+        text: row(
+            "安装信息",
+            "安裝資訊",
+            "Installation Info",
+            "インストール情報",
+            "설치 정보",
+        ),
+    },
+        Msg {
+        key: "style.pack.metaSource",
+        text: row("来源", "來源", "Source", "ソース", "소스"),
+    },
+        Msg {
+        key: "style.pack.metaBaseMode",
+        text: row("基础模式", "基礎模式", "Base Mode", "ベースモード", "베이스 모드"),
+    },
+        Msg {
+        key: "style.pack.metaUpdatedAt",
+        text: row("更新时间", "更新時間", "Updated", "更新日時", "업데이트"),
+    },
+        Msg {
+        key: "style.pack.examplesTitle",
+        text: row(
+            "效果示例",
+            "效果範例",
+            "Effect Examples",
+            "効果例",
+            "효과 예시",
+        ),
+    },
+        Msg {
+        key: "style.pack.examplesDesc",
+        text: row(
+            "会随风格包一起导出。",
+            "會隨風格包一起匯出。",
+            "Exported with the pack.",
+            "パックと一緒にエクスポートされます。",
+            "팩과 함께 내보내집니다.",
+        ),
+    },
+        Msg {
+        key: "style.pack.addExample",
+        text: row("新增示例", "新增範例", "Add Example", "例を追加", "예시 추가"),
+    },
+        Msg {
+        key: "style.pack.examplesEmpty",
+        text: row(
+            "还没有示例。",
+            "還沒有範例。",
+            "No examples yet.",
+            "まだ例がありません。",
+            "아직 예시가 없습니다.",
+        ),
+    },
+        Msg {
+        key: "style.pack.exampleTitlePlaceholder",
+        text: row(
+            "示例 {} 标题",
+            "範例 {} 標題",
+            "Example {} title",
+            "例 {} のタイトル",
+            "예시 {} 제목",
+        ),
+    },
+        Msg {
+        key: "style.pack.exampleInput",
+        text: row("输入", "輸入", "Input", "入力", "입력"),
+    },
+        Msg {
+        key: "style.pack.exampleOutput",
+        text: row("输出", "輸出", "Output", "出力", "출력"),
+    },
     Msg {
         key: "style.pack.runtimeHistoryEmpty",
         text: row(

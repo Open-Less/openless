@@ -2572,6 +2572,9 @@ mod tests {
         );
         let position = |label: &str| positions.iter().find(|(s, _)| s == label).unwrap().1;
         assert!(position(name).y < scroll.top() + 120.0);
+        assert!((position(name).y - position(label("style.pack.fieldAuthor")).y).abs() < 2.0);
+        assert!((position(name).y - position(label("style.pack.fieldVersion")).y).abs() < 2.0);
+        assert!(position(label("style.pack.fieldTags")).y > position(name).y + 40.0);
         assert!(position(description).y < scroll.top() + 290.0);
         assert!(
             position(prompt).y < scroll.bottom(),
@@ -2580,7 +2583,7 @@ mod tests {
         fn collect_inputs(shape: &egui::Shape, borders: &mut Vec<(egui::Rect, egui::Stroke)>) {
             match shape {
                 egui::Shape::Rect(rect)
-                    if rect.rect.width() > 280.0 && rect.rect.height() >= 30.0 =>
+                    if rect.rect.width() > 180.0 && rect.rect.height() >= 30.0 =>
                 {
                     borders.push((rect.rect, rect.stroke));
                 }

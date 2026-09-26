@@ -817,45 +817,7 @@ fn drawer_body(
                     ui.add_space(18.0);
                     pills_row(ui, content, vm, actions);
                     ui.add_space(SECTION_GAP);
-                    ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.set_width(field_width);
-                            field_label(ui, tr_l10n(lang, "style.pack.fieldName"));
-                            ui.add_sized(
-                                [ui.available_width(), 38.0],
-                                editor_input(&mut vm.style_name),
-                            );
-                        });
-                        ui.vertical(|ui| {
-                            ui.set_width(field_width);
-                            field_label(ui, tr_l10n(lang, "style.pack.fieldAuthor"));
-                            ui.add_sized(
-                                [ui.available_width(), 38.0],
-                                editor_input(&mut vm.style_author)
-                                    .hint_text(tr_l10n(lang, "style.pack.fieldAuthorPlaceholder")),
-                            );
-                        });
-                    });
-                    ui.add_space(SECTION_GAP);
-                    ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.set_width(field_width);
-                            field_label(ui, tr_l10n(lang, "style.pack.fieldVersion"));
-                            ui.add_sized(
-                                [ui.available_width(), 38.0],
-                                editor_input(&mut vm.style_version),
-                            );
-                        });
-                        ui.vertical(|ui| {
-                            ui.set_width(field_width);
-                            field_label(ui, tr_l10n(lang, "style.pack.fieldTags"));
-                            ui.add_sized(
-                                [ui.available_width(), 38.0],
-                                editor_input(&mut vm.style_tags)
-                                    .hint_text(tr_l10n(lang, "style.pack.fieldTagsPlaceholder")),
-                            );
-                        });
-                    });
+                    editor_identity_grid(ui, vm);
                     ui.add_space(SECTION_GAP);
                     field_label(ui, tr_l10n(lang, "style.pack.fieldDescription"));
                     editor_textarea(ui, &mut vm.style_description, 86.0, "description");
@@ -929,6 +891,10 @@ fn drawer_body(
 
                     ui.add_space(18.0);
                     drawer_footer(ui, vm, actions);
+                    ui.add_space(SECTION_GAP);
+                    editor_metadata(ui, vm);
+                    ui.add_space(SECTION_GAP);
+                    editor_examples(ui, vm);
                     ui.add_space(18.0);
                 });
         });
@@ -946,6 +912,204 @@ fn drawer_body(
     });
     #[cfg(not(test))]
     let _ = scroll;
+}
+
+/// CSS repeat(auto-fit, minmax(180px, 1fr)): three identity fields on
+/// the first row at the normal drawer width, and tags on the next row.
+fn editor_identity_grid(ui: &mut egui::Ui, vm: &mut FrontendViewModel) {
+    let lang = vm.lang;
+    let width = ui.available_width();
+    let columns = (((width + FIELD_GAP) / (180.0 + FIELD_GAP)).floor() as usize).clamp(1, 4);
+    let field_width = (width - FIELD_GAP * (columns - 1) as f32) / columns as f32;
+    for start in (0..4).step_by(columns) {
+        if start != 0 {
+            ui.add_space(12.0);
+        }
+        ui.horizontal(|ui| {
+            for index in start..(start + columns).min(4) {
+                ui.vertical(|ui| {
+                    ui.set_width(field_width);
+                    let (label, text, hint) = match index {
+                        0 => ("style.pack.fieldName", &mut vm.style_name, None),
+                        1 => (
+                            "style.pack.fieldAuthor",
+                            &mut vm.style_author,
+                            Some("style.pack.fieldAuthorPlaceholder"),
+                        ),
+                        2 => ("style.pack.fieldVersion", &mut vm.style_version, None),
+                        _ => (
+                            "style.pack.fieldTags",
+                            &mut vm.style_tags,
+                            Some("style.pack.fieldTagsPlaceholder"),
+                        ),
+                    };
+                    field_label(ui, tr_l10n(lang, label));
+                    let mut input = editor_input(text);
+                    if let Some(hint) = hint {
+                        input = input.hint_text(tr_l10n(lang, hint));
+                    }
+                    ui.add_sized([field_width, 38.0], input);
+                });
+            }
+        });
+    }
+}
+
+fn editor_metadata(ui: &mut egui::Ui, vm: &FrontendViewModel) {
+    let lang = vm.lang;
+    let width = ui.available_width();
+    egui::Frame::new()
+        .fill(theme::SURFACE_2)
+        .stroke(egui::Stroke::new(0.5, theme::LINE))
+        .corner_radius(egui::CornerRadius::same(14))
+        .inner_margin(egui::Margin::same(14))
+        .show(ui, |ui| {
+            ui.set_width((width - 28.0).max(80.0));
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(tr_l10n(lang, "style.pack.metaTitle"))
+                        .strong()
+                        .size(13.0),
+                );
+                ui.label(
+                    egui::RichText::new(&vm.style_editor_id)
+                        .size(10.0)
+                        .color(theme::INK_3),
+                );
+            });
+            ui.add_space(10.0);
+            let values = [
+                (
+                    "style.pack.metaSource",
+                    tr_l10n(
+                        lang,
+                        if vm.style_editor_builtin {
+                            "style.pack.builtin"
+                        } else {
+                            "style.pack.imported"
+                        },
+                    )
+                    .to_string(),
+                ),
+                ("style.pack.metaBaseMode", vm.style_editor_mode.clone()),
+                (
+                    "style.pack.metaUpdatedAt",
+                    vm.style_editor_saved
+                        .as_ref()
+                        .and_then(|pack| pack.updated_at.clone())
+                        .unwrap_or_else(|| "—".into()),
+                ),
+            ];
+            let gap = 10.0;
+            let column_width = (ui.available_width() - gap * 2.0) / 3.0;
+            ui.horizontal(|ui| {
+                for (label, value) in values {
+                    egui::Frame::new()
+                        .fill(theme::SURFACE)
+                        .stroke(egui::Stroke::new(0.5, theme::LINE))
+                        .corner_radius(egui::CornerRadius::same(12))
+                        .inner_margin(egui::Margin::symmetric(12, 10))
+                        .show(ui, |ui| {
+                            ui.set_width((column_width - 24.0).max(30.0));
+                            ui.label(
+                                egui::RichText::new(tr_l10n(lang, label))
+                                    .size(11.0)
+                                    .color(theme::INK_4),
+                            );
+                            ui.label(egui::RichText::new(value).size(12.5).color(theme::INK_2));
+                        });
+                }
+            });
+        });
+}
+
+fn editor_examples(ui: &mut egui::Ui, vm: &mut FrontendViewModel) {
+    let lang = vm.lang;
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.label(
+                egui::RichText::new(tr_l10n(lang, "style.pack.examplesTitle"))
+                    .strong()
+                    .size(13.0),
+            );
+            ui.label(
+                egui::RichText::new(tr_l10n(lang, "style.pack.examplesDesc"))
+                    .size(11.5)
+                    .color(theme::INK_4),
+            );
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .button(format!("＋ {}", tr_l10n(lang, "style.pack.addExample")))
+                .clicked()
+            {
+                vm.style_examples.push(Default::default());
+            }
+        });
+    });
+    ui.add_space(12.0);
+    if vm.style_examples.is_empty() {
+        egui::Frame::new()
+            .fill(theme::SURFACE_2)
+            .stroke(egui::Stroke::new(0.5, theme::LINE))
+            .corner_radius(egui::CornerRadius::same(12))
+            .inner_margin(egui::Margin::same(18))
+            .show(ui, |ui| {
+                ui.set_width((ui.available_width() - 36.0).max(80.0));
+                ui.label(
+                    egui::RichText::new(tr_l10n(lang, "style.pack.examplesEmpty"))
+                        .size(12.5)
+                        .color(theme::INK_3),
+                );
+            });
+    }
+    let mut remove = None;
+    let width = ui.available_width();
+    for (index, example) in vm.style_examples.iter_mut().enumerate() {
+        egui::Frame::new()
+            .fill(theme::SURFACE)
+            .stroke(egui::Stroke::new(0.5, theme::LINE))
+            .corner_radius(egui::CornerRadius::same(14))
+            .inner_margin(egui::Margin::same(16))
+            .show(ui, |ui| {
+                ui.set_width((width - 32.0).max(80.0));
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        [ui.available_width() - 72.0, 38.0],
+                        editor_input(example.title.get_or_insert_with(String::new)).hint_text(
+                            fmt_l10n(
+                                lang,
+                                "style.pack.exampleTitlePlaceholder",
+                                &[&(index + 1).to_string()],
+                            ),
+                        ),
+                    );
+                    if ui.button(tr_l10n(lang, "common.delete")).clicked() {
+                        remove = Some(index);
+                    }
+                });
+                ui.add_space(12.0);
+                let field_width = (ui.available_width() - FIELD_GAP) / 2.0;
+                ui.horizontal(|ui| {
+                    for (label, text, id) in [
+                        ("style.pack.exampleInput", &mut example.input, "input"),
+                        ("style.pack.exampleOutput", &mut example.output, "output"),
+                    ] {
+                        ui.vertical(|ui| {
+                            ui.set_width(field_width);
+                            field_label(ui, tr_l10n(lang, label));
+                            ui.push_id((index, id), |ui| {
+                                editor_textarea(ui, text, 120.0, "example")
+                            });
+                        });
+                    }
+                });
+            });
+        ui.add_space(12.0);
+    }
+    if let Some(index) = remove {
+        vm.style_examples.remove(index);
+    }
 }
 
 /// Kind / mode / active / unsaved pills plus export and activate.
@@ -1223,45 +1387,55 @@ fn runtime_row(
     inactive_hint: &str,
     lang: Lang,
 ) {
-    let (row, _) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::hover());
-    let painter = ui.painter().with_clip_rect(row);
-    let pill_text = if active {
-        tr_l10n(lang, "style.pack.runtimeActive")
-    } else {
-        tr_l10n(lang, "style.pack.runtimeInactive")
-    };
-    let pill_size = layout::pill_size(ui, pill_text);
-    let text_width = (row.width() - pill_size.x - 12.0).max(60.0);
-    let title_galley = layout::text_galley(ui, title, theme::INK, 12.0, text_width, 1);
-    painter.galley(
-        egui::pos2(row.left(), row.top() + 2.0),
-        title_galley,
-        theme::INK,
-    );
-    let hint = if active { detail } else { inactive_hint };
-    let hint_galley = layout::text_galley(ui, hint, theme::INK_4, 11.0, text_width, 1);
-    painter.galley(
-        egui::pos2(row.left(), row.top() + 18.0),
-        hint_galley,
-        theme::INK_4,
-    );
-    layout::paint_pill(
-        &painter,
-        egui::Rect::from_min_size(
-            egui::pos2(
-                row.right() - pill_size.x,
-                row.center().y - pill_size.y / 2.0,
-            ),
-            pill_size,
-        ),
-        pill_text,
-        if active {
-            PillTone::Blue
-        } else {
-            PillTone::Gray
-        },
-    );
+    let width = ui.available_width();
+    egui::Frame::new()
+        .fill(theme::SURFACE)
+        .stroke(egui::Stroke::new(0.5, theme::LINE))
+        .corner_radius(egui::CornerRadius::same(12))
+        .inner_margin(egui::Margin::symmetric(12, 8))
+        .show(ui, |ui| {
+            let (row, _) = ui.allocate_exact_size(
+                egui::vec2((width - 24.0).max(80.0), 34.0),
+                egui::Sense::hover(),
+            );
+            let painter = ui.painter().with_clip_rect(row);
+            let pill_text = if active {
+                tr_l10n(lang, "style.pack.runtimeActive")
+            } else {
+                tr_l10n(lang, "style.pack.runtimeInactive")
+            };
+            let pill_size = layout::pill_size(ui, pill_text);
+            let text_width = (row.width() - pill_size.x - 12.0).max(60.0);
+            let title_galley = layout::text_galley(ui, title, theme::INK, 12.0, text_width, 1);
+            painter.galley(
+                egui::pos2(row.left(), row.top() + 2.0),
+                title_galley,
+                theme::INK,
+            );
+            let hint = if active { detail } else { inactive_hint };
+            let hint_galley = layout::text_galley(ui, hint, theme::INK_4, 11.0, text_width, 1);
+            painter.galley(
+                egui::pos2(row.left(), row.top() + 18.0),
+                hint_galley,
+                theme::INK_4,
+            );
+            layout::paint_pill(
+                &painter,
+                egui::Rect::from_min_size(
+                    egui::pos2(
+                        row.right() - pill_size.x,
+                        row.center().y - pill_size.y / 2.0,
+                    ),
+                    pill_size,
+                ),
+                pill_text,
+                if active {
+                    PillTone::Blue
+                } else {
+                    PillTone::Outline
+                },
+            );
+        });
 }
 
 /// Save / revert on the left, reset-or-delete on the right.
@@ -1289,6 +1463,7 @@ fn drawer_footer(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Ve
                 version: vm.style_version.clone(),
                 model: vm.style_model.clone(),
                 compatible_version: vm.style_compatible_version.clone(),
+                examples: vm.style_examples.clone(),
             });
         }
     } else if !vm.style_editor_dirty {

@@ -9,12 +9,23 @@ use std::path::PathBuf;
 
 fn main() {
     println!("cargo:rerun-if-changed=../package.json");
-    let version = std::env::var("OPENLESS_LINUX_VERSION")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(read_package_version)
-        .unwrap_or_else(|| std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".into()));
-    println!("cargo:rustc-env=OPENLESS_APP_VERSION={version}");
+    println!("cargo:rerun-if-changed=package-revision");
+    println!("cargo:rerun-if-env-changed=OPENLESS_LINUX_VERSION");
+    let base = read_package_version().expect("package.json must declare the product version");
+    let revision = std::fs::read_to_string(
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("package-revision"),
+    )
+    .expect("Linux package revision is required");
+    let revision = revision.trim();
+    assert!(
+        !revision.is_empty() && revision.bytes().all(|c| c.is_ascii_digit()),
+        "invalid Linux package revision"
+    );
+    let expected = format!("{}-{revision}", base.split('+').next().unwrap_or(&base));
+    if let Ok(version) = std::env::var("OPENLESS_LINUX_VERSION") {
+        assert_eq!(version, expected, "binary and package versions must match");
+    }
+    println!("cargo:rustc-env=OPENLESS_APP_VERSION={expected}");
 }
 
 /// Extract the top-level `version` field. The build script stays

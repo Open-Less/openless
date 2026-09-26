@@ -134,6 +134,7 @@ pub enum FrontendAction {
         version: String,
         model: String,
         compatible_version: String,
+        examples: Vec<openless_core::StylePackExample>,
     },
     /// Style editor closed.
     StyleCloseEditor,
@@ -720,6 +721,7 @@ pub struct FrontendViewModel {
     pub style_version: String,
     pub style_model: String,
     pub style_compatible_version: String,
+    pub style_examples: Vec<openless_core::StylePackExample>,
     /// Editor chrome: which pack is open, whether it is pristine, and the pills.
     pub style_editor_id: String,
     pub style_editor_builtin: bool,
@@ -895,6 +897,7 @@ impl Default for FrontendViewModel {
             style_version: String::new(),
             style_model: String::new(),
             style_compatible_version: String::new(),
+            style_examples: Vec::new(),
             style_editor_id: String::new(),
             style_editor_builtin: false,
             style_editor_active: false,
