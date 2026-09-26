@@ -160,6 +160,17 @@ a {
   }
 }
 
+@keyframes ol-modal-card-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+}
+
 /* 设置弹窗切换 tab 时右侧内容的轻微淡入。 */
 @keyframes ol-tab-fade {
   from {
@@ -719,7 +730,15 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   border-color: var(--ol-line-strong);
 }
 .ol-word-card[data-disabled='true'] {
-  opacity: 0.55;
+  background: var(--ol-surface-2);
+}
+.ol-word-card[data-disabled='true'] .ol-word-card-text {
+  color: var(--ol-ink-2);
+}
+.ol-word-card-state {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--ol-ink-2);
 }
 .ol-word-card-icon {
   flex-shrink: 0;
@@ -817,7 +836,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   cursor: pointer;
 }
 
-/* 必配服务（语言模型/语音识别）tab 上的状态点：未配置红、已配置黄。 */
+/* 必配服务（语言模型/语音识别）tab 上的状态点：未启用红、已有启用渠道绿。 */
 .ol-service-status-dot {
   width: 7px;
   height: 7px;
@@ -829,7 +848,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   background: var(--ol-red, #ef4444);
 }
 .ol-service-status-dot[data-state='ok'] {
-  background: var(--ol-warn);
+  background: var(--ol-ok, #16a34a);
 }
 
 .ol-service-views > button[aria-pressed='true'] {
@@ -1417,6 +1436,10 @@ html[data-ol-platform='android'] .ol-capsule-pill {
   cursor: pointer;
   flex-shrink: 0;
 }
+.ol-word-card:not([data-selecting='true']) .ol-word-card-select,
+.ol-vocab-select-all[hidden] {
+  display: none;
+}
 .ol-word-card-select {
   margin: 0 0 0 8px;
 }
@@ -1550,7 +1573,19 @@ html:lang(de) {
   font-size: 13px;
 }
 .ol-cloud-sync-backup small {
-  color: var(--ol-ink-3);
+  color: var(--ol-ink-2);
+}
+.ol-cloud-sync-status-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+}
+.ol-cloud-sync-status-line > span,
+.ol-cloud-sync-status-line > p {
+  margin: 0;
+  min-width: 0;
 }
 .ol-cloud-sync-actions {
   display: flex;

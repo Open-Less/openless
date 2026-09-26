@@ -3,8 +3,9 @@
 // 轮询直到 authorized。各阶段内容套同一 minHeight 容器，窗口尺寸恒定，
 // 不再出现「先弹小窗、过会儿变大窗」的跳动。
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { CircleCheckIcon, XIcon } from 'lucide-react';
 import {
   githubDeviceFlowCancel,
   githubDeviceFlowPoll,
@@ -34,10 +35,19 @@ interface GithubLoginModalProps {
   onClose: () => void;
   /** 授权成功回调（拿到 GitHub login）。 */
   onSuccess: (login: string) => void;
+  /** 由调用方的 useExitMount 驱动退场动画。 */
+  closing?: boolean;
+  overlayClassName?: string;
 }
 
-export function GithubLoginModal({ onClose, onSuccess }: GithubLoginModalProps) {
+export function GithubLoginModal({
+  onClose,
+  onSuccess,
+  closing = false,
+  overlayClassName,
+}: GithubLoginModalProps) {
   const { t } = useTranslation();
+  const titleId = useId();
   const [phase, setPhase] = useState<Phase>({ kind: 'starting' });
   const [copied, setCopied] = useState(false);
   const cancelledRef = useRef(false);
@@ -175,7 +185,14 @@ export function GithubLoginModal({ onClose, onSuccess }: GithubLoginModalProps) 
   };
 
   return (
-    <Modal onClose={close} zIndex={60} width="min(440px, 100%)">
+    <Modal
+      onClose={close}
+      zIndex={60}
+      width="min(440px, 100%)"
+      closing={closing}
+      overlayClassName={overlayClassName}
+      labelledBy={titleId}
+    >
       <div
         style={{
           display: 'flex',
@@ -185,7 +202,9 @@ export function GithubLoginModal({ onClose, onSuccess }: GithubLoginModalProps) 
           gap: 12,
         }}
       >
-        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 650 }}>{t('marketplace.oauth.title')}</h2>
+        <h2 id={titleId} style={{ margin: 0, fontSize: 16, fontWeight: 650 }}>
+          {t('marketplace.oauth.title')}
+        </h2>
         <button
           type="button"
           aria-label={t('common.close')}
@@ -194,18 +213,16 @@ export function GithubLoginModal({ onClose, onSuccess }: GithubLoginModalProps) 
           style={{
             width: 28,
             height: 28,
-            borderRadius: 8,
+            borderRadius: 999,
             display: 'inline-grid',
             placeItems: 'center',
             border: '0.5px solid var(--ol-line-strong)',
             background: 'var(--ol-surface)',
             color: 'var(--ol-ink-2)',
             cursor: 'pointer',
-            fontSize: 16,
-            lineHeight: 1,
           }}
         >
-          ×
+          <XIcon size={15} strokeWidth={2} aria-hidden />
         </button>
       </div>
 
@@ -298,8 +315,13 @@ export function GithubLoginModal({ onClose, onSuccess }: GithubLoginModalProps) 
 
         {phase.kind === 'success' && (
           <div style={{ flex: 1, display: 'grid', placeItems: 'center', textAlign: 'center' }}>
-            <div>
-              <div style={{ fontSize: 24, color: 'var(--ol-blue)', marginBottom: 8 }}>✓</div>
+            <div style={{ display: 'grid', justifyItems: 'center' }}>
+              <CircleCheckIcon
+                size={30}
+                strokeWidth={1.8}
+                aria-hidden
+                style={{ color: 'var(--ol-ok, var(--ol-blue))', marginBottom: 10 }}
+              />
               <div style={{ fontSize: 14, fontWeight: 650, color: 'var(--ol-ink)' }}>
                 {t('marketplace.oauth.successAs', { login: phase.login })}
               </div>
@@ -313,9 +335,9 @@ export function GithubLoginModal({ onClose, onSuccess }: GithubLoginModalProps) 
               style={{
                 padding: 12,
                 borderRadius: 10,
-                border: '0.5px solid rgba(239,68,68,0.3)',
-                background: 'rgba(239,68,68,0.06)',
-                color: '#b91c1c',
+                border: '0.5px solid color-mix(in srgb, var(--ol-err) 32%, transparent)',
+                background: 'color-mix(in srgb, var(--ol-err) 8%, transparent)',
+                color: 'var(--ol-err)',
                 fontSize: 12,
                 lineHeight: 1.6,
                 whiteSpace: 'pre-wrap',

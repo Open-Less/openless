@@ -33,6 +33,7 @@ mod hotkey_loops;
 #[cfg(target_os = "macos")]
 mod native_dictation_key;
 mod qa;
+mod restore_runtime;
 #[cfg(all(not(mobile), target_os = "windows"))]
 pub(crate) mod selection_voice_session;
 use capsule_focus::*;
@@ -351,6 +352,39 @@ pub struct Coordinator {
     inner: Arc<Inner>,
 }
 
+fn startup_storage_error() -> openless_core::BackendError {
+    openless_core::BackendError::new(
+        openless_core::BackendErrorCode::Persistence,
+        "local recovery or secure storage is unavailable; restore access and restart OpenLess",
+    )
+    .retryable(true)
+}
+
+fn startup_sync_gate(
+) -> Result<Arc<openless_core::cloud_sync_e2ee_store::SyncWriteGate>, openless_core::BackendError> {
+    let directory = crate::persistence::data_dir().map_err(|_| startup_storage_error())?;
+    openless_core::cloud_sync_e2ee_store::gate::open_for_data_dir(&directory)
+        .map_err(|_| startup_storage_error())
+}
+
+fn startup_store<T, E>(
+    startup_error: &mut Option<openless_core::BackendError>,
+    open: impl FnOnce() -> Result<T, E>,
+    fallback: impl FnOnce() -> T,
+) -> T {
+    if startup_error.is_some() {
+        return fallback();
+    }
+    match open() {
+        Ok(store) => store,
+        Err(_) => {
+            log::error!("[core] local store initialization failed; startup is blocked");
+            *startup_error = Some(startup_storage_error());
+            fallback()
+        }
+    }
+}
+
 fn shared_backend_from_stores(
     history: &HistoryStore,
     activity: &ActivityStore,
@@ -362,6 +396,7 @@ fn shared_backend_from_stores(
     native_asr: crate::core_adapters::TauriNativeAsrDependencies,
     hotkey_status: Arc<Mutex<HotkeyStatus>>,
     qa_context: Arc<TauriQaHostContext>,
+    startup_error: Option<openless_core::BackendError>,
 ) -> Arc<openless_core::OpenLessBackend> {
     let data_dir = crate::persistence::data_dir().unwrap_or_else(|error| {
         log::warn!("[core] data directory unavailable, using fallback config path: {error}");
@@ -371,6 +406,21 @@ fn shared_backend_from_stores(
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "en-US".to_string());
+    let config = openless_core::BackendConfig {
+        cache_dir: data_dir.join("cache"),
+        data_dir,
+        home_dir: std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(std::path::PathBuf::from),
+        resource_dir: None,
+        platform: crate::types::PlatformCapabilities::current(),
+        locale,
+    };
+    if let Some(error) = startup_error {
+        return Arc::new(openless_core::OpenLessBackend::blocked_startup(
+            config, error,
+        ));
+    }
     let repositories = openless_core::BackendRepositories {
         preferences: prefs.core(),
         history: history.core(),
@@ -388,23 +438,28 @@ fn shared_backend_from_stores(
         hotkey_status,
         qa_context,
     );
-    dependencies.marketplace_config = Some(openless_core::MarketplaceConfig::production());
-    let backend = Arc::new(
-        openless_core::OpenLessBackend::new_with_repositories(
-            openless_core::BackendConfig {
-                cache_dir: data_dir.join("cache"),
-                data_dir,
-                home_dir: std::env::var_os("HOME")
-                    .or_else(|| std::env::var_os("USERPROFILE"))
-                    .map(std::path::PathBuf::from),
-                resource_dir: None,
-                platform: crate::types::PlatformCapabilities::current(),
-                locale,
+    dependencies.marketplace_config = Some(
+        openless_core::MarketplaceConfig::production().with_encrypted_sync(
+            openless_core::cloud_sync_e2ee::EncryptedSyncConfig {
+                service_origin: openless_core::cloud_sync_e2ee::DEFAULT_SYNC_SERVICE_ORIGIN.into(),
+                app_version: env!("CARGO_PKG_VERSION").into(),
             },
+        ),
+    );
+    let backend = Arc::new(
+        match openless_core::OpenLessBackend::new_with_repositories(
+            config.clone(),
             dependencies,
             repositories,
-        )
-        .expect("shared backend config always has a non-empty data directory"),
+        ) {
+            Ok(backend) => backend,
+            Err(_) => {
+                log::error!(
+                    "[core] shared backend initialization failed; exposing blocked startup"
+                );
+                openless_core::OpenLessBackend::blocked_startup(config, startup_storage_error())
+            }
+        },
     );
     *backend_slot.lock() = Some(Arc::downgrade(&backend));
     backend
@@ -444,6 +499,7 @@ struct Inner {
     /// 串行化 Tauri 侧“Core 设置事务 + 宿主 effect”以及风格包删除 effect，
     /// 防止两个命令把显式 runtime target 乱序安装。
     settings_host_gate: Mutex<()>,
+    hotkey_resume_started: AtomicBool,
     overlay_qa_handoff: tokio::sync::Mutex<()>,
     inserter: TextInserter,
     /// 建议卡片是不是正占着胶囊窗口。
@@ -539,48 +595,48 @@ impl Coordinator {
 
         #[cfg(not(target_os = "windows"))]
         {
-            #[cfg(target_os = "android")]
-            const PERSIST_DEGRADE_SUFFIX: &str = " (Android 禁止 /data/local/tmp)";
-            #[cfg(not(target_os = "android"))]
-            const PERSIST_DEGRADE_SUFFIX: &str = "";
-
-            let history = HistoryStore::new().unwrap_or_else(|e| {
-                log::error!(
-                    "[coord] HistoryStore init failed: {e}; 降级为空历史记录{PERSIST_DEGRADE_SUFFIX}"
-                );
-                HistoryStore::new_fallback()
-            });
-            let prefs = PreferencesStore::new().unwrap_or_else(|e| {
-                log::error!(
-                    "[coord] PreferencesStore init failed: {e}; 降级为默认偏好设置{PERSIST_DEGRADE_SUFFIX}"
-                );
-                PreferencesStore::new_fallback()
-            });
-            // 启动即同步系统代理开关（issue #869），让首个请求就按用户设置建客户端。
-            crate::net::set_use_system_proxy(prefs.get().use_system_proxy);
-            let style_packs = StylePackStore::new(&prefs).unwrap_or_else(|e| {
-                log::error!(
-                    "[coord] StylePackStore init failed: {e}; 降级为空样式包列表{PERSIST_DEGRADE_SUFFIX}"
-                );
-                StylePackStore::new_fallback()
-            });
-            let vocab = DictionaryStore::new().unwrap_or_else(|e| {
-                log::error!(
-                    "[coord] DictionaryStore init failed: {e}; 降级为空词库{PERSIST_DEGRADE_SUFFIX}"
-                );
-                DictionaryStore::new_fallback()
-            });
-            let correction_rules = CorrectionRuleStore::new().unwrap_or_else(|e| {
-                log::error!(
-                    "[coord] CorrectionRuleStore init failed: {e}; 降级为空纠错规则{PERSIST_DEGRADE_SUFFIX}"
-                );
-                CorrectionRuleStore::new_fallback()
-            });
-
-            let activity = ActivityStore::load().unwrap_or_else(|e| {
-                log::error!("[coord] ActivityStore init failed: {e}; 活动计数降级为内存态");
-                ActivityStore::new_fallback()
-            });
+            let gate = startup_sync_gate();
+            let mut startup_error = gate.as_ref().err().cloned();
+            // Keep the registered barrier alive until Core adopts it. Once any store
+            // fails, later constructors use fallbacks and no real repository is touched.
+            let _sync_gate = gate.ok();
+            let history = startup_store(
+                &mut startup_error,
+                HistoryStore::new,
+                HistoryStore::new_fallback,
+            );
+            let prefs = startup_store(
+                &mut startup_error,
+                PreferencesStore::new,
+                PreferencesStore::new_fallback,
+            );
+            if startup_error.is_none()
+                && _sync_gate
+                    .as_ref()
+                    .is_some_and(|gate| !gate.recovery_required().unwrap_or(true))
+            {
+                crate::net::set_use_system_proxy(prefs.get().use_system_proxy);
+            }
+            let style_packs = startup_store(
+                &mut startup_error,
+                || StylePackStore::new(&prefs),
+                StylePackStore::new_fallback,
+            );
+            let vocab = startup_store(
+                &mut startup_error,
+                DictionaryStore::new,
+                DictionaryStore::new_fallback,
+            );
+            let correction_rules = startup_store(
+                &mut startup_error,
+                CorrectionRuleStore::new,
+                CorrectionRuleStore::new_fallback,
+            );
+            let activity = startup_store(
+                &mut startup_error,
+                ActivityStore::load,
+                ActivityStore::new_fallback,
+            );
 
             let app = crate::core_adapters::app_handle_slot();
             let native_asr = crate::core_adapters::TauriNativeAsrDependencies::new();
@@ -597,6 +653,7 @@ impl Coordinator {
                 native_asr.clone(),
                 Arc::clone(&hotkey_status),
                 Arc::clone(&qa_context),
+                startup_error,
             );
 
             let host = crate::tauri_coordinator_host::TauriCoordinatorHost::new(Arc::clone(&app));
@@ -607,6 +664,7 @@ impl Coordinator {
                 less_computer_voice: Mutex::new(None),
                 hotkey_runtime_target: Mutex::new(hotkey_runtime_target),
                 settings_host_gate: Mutex::new(()),
+                hotkey_resume_started: AtomicBool::new(false),
                 overlay_qa_handoff: tokio::sync::Mutex::new(()),
                 inserter: TextInserter::new(),
                 vocab_card_visible: AtomicBool::new(false),
@@ -660,33 +718,48 @@ impl Coordinator {
         foundry_local_runtime: Arc<FoundryLocalRuntime>,
         sherpa_onnx_runtime: Arc<SherpaOnnxRuntime>,
     ) -> Self {
-        let history = HistoryStore::new().unwrap_or_else(|e| {
-            log::error!("[coord] HistoryStore init failed: {e}; 降级为空历史记录");
-            HistoryStore::new_fallback()
-        });
-        let prefs = PreferencesStore::new().unwrap_or_else(|e| {
-            log::error!("[coord] PreferencesStore init failed: {e}; 降级为默认偏好设置");
-            PreferencesStore::new_fallback()
-        });
-        // 启动即同步系统代理开关（issue #869），让首个请求就按用户设置建客户端。
-        crate::net::set_use_system_proxy(prefs.get().use_system_proxy);
-        let style_packs = StylePackStore::new(&prefs).unwrap_or_else(|e| {
-            log::error!("[coord] StylePackStore init failed: {e}; 降级为空样式包列表");
-            StylePackStore::new_fallback()
-        });
-        let vocab = DictionaryStore::new().unwrap_or_else(|e| {
-            log::error!("[coord] DictionaryStore init failed: {e}; 降级为空词库");
-            DictionaryStore::new_fallback()
-        });
-        let correction_rules = CorrectionRuleStore::new().unwrap_or_else(|e| {
-            log::error!("[coord] CorrectionRuleStore init failed: {e}; 降级为空纠错规则");
-            CorrectionRuleStore::new_fallback()
-        });
-
-        let activity = ActivityStore::load().unwrap_or_else(|e| {
-            log::error!("[coord] ActivityStore init failed: {e}; 活动计数降级为内存态");
-            ActivityStore::new_fallback()
-        });
+        let gate = startup_sync_gate();
+        let mut startup_error = gate.as_ref().err().cloned();
+        // Keep the registered barrier alive until Core adopts it. Once any store
+        // fails, later constructors use fallbacks and no real repository is touched.
+        let _sync_gate = gate.ok();
+        let history = startup_store(
+            &mut startup_error,
+            HistoryStore::new,
+            HistoryStore::new_fallback,
+        );
+        let prefs = startup_store(
+            &mut startup_error,
+            PreferencesStore::new,
+            PreferencesStore::new_fallback,
+        );
+        if startup_error.is_none()
+            && _sync_gate
+                .as_ref()
+                .is_some_and(|gate| !gate.recovery_required().unwrap_or(true))
+        {
+            crate::net::set_use_system_proxy(prefs.get().use_system_proxy);
+        }
+        let style_packs = startup_store(
+            &mut startup_error,
+            || StylePackStore::new(&prefs),
+            StylePackStore::new_fallback,
+        );
+        let vocab = startup_store(
+            &mut startup_error,
+            DictionaryStore::new,
+            DictionaryStore::new_fallback,
+        );
+        let correction_rules = startup_store(
+            &mut startup_error,
+            CorrectionRuleStore::new,
+            CorrectionRuleStore::new_fallback,
+        );
+        let activity = startup_store(
+            &mut startup_error,
+            ActivityStore::load,
+            ActivityStore::new_fallback,
+        );
 
         let app = crate::core_adapters::app_handle_slot();
         let hotkey_status = Arc::new(Mutex::new(HotkeyStatus::default()));
@@ -708,6 +781,7 @@ impl Coordinator {
             ),
             Arc::clone(&hotkey_status),
             Arc::clone(&qa_context),
+            startup_error,
         );
 
         let host = crate::tauri_coordinator_host::TauriCoordinatorHost::new(Arc::clone(&app));
@@ -718,6 +792,7 @@ impl Coordinator {
             less_computer_voice: Mutex::new(None),
             hotkey_runtime_target: Mutex::new(hotkey_runtime_target),
             settings_host_gate: Mutex::new(()),
+            hotkey_resume_started: AtomicBool::new(false),
             overlay_qa_handoff: tokio::sync::Mutex::new(()),
             inserter: TextInserter::new(),
             vocab_card_visible: AtomicBool::new(false),
@@ -752,6 +827,10 @@ impl Coordinator {
         });
         bind_qa_selection_voice_target(&qa_context, &selection_voice_host);
         Self { inner }
+    }
+
+    pub fn startup_error(&self) -> Option<openless_core::BackendError> {
+        self.inner.backend.startup_error()
     }
 
     pub fn backend(&self) -> Arc<openless_core::OpenLessBackend> {
@@ -902,7 +981,60 @@ impl Coordinator {
         self.inner.shutdown.store(true, Ordering::SeqCst);
     }
 
+    /// Call once from RunEvent::Ready, even when recovery is still pending.
+    /// Installation waits for the fence; sleeping never owns the settings gate.
+    pub fn start_hotkey_supervisors_when_ready(&self) {
+        if self
+            .inner
+            .hotkey_resume_started
+            .swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+        let weak = Arc::downgrade(&self.inner);
+        let fallback = weak.clone();
+        if std::thread::Builder::new()
+            .name("openless-hotkey-resume".into())
+            .spawn(move || loop {
+                let Some(inner) = weak.upgrade() else {
+                    return;
+                };
+                if inner.shutdown.load(Ordering::SeqCst) || inner.backend.startup_error().is_some()
+                {
+                    return;
+                }
+                if inner.backend.ensure_runtime_ready().is_ok() {
+                    let coord = Coordinator { inner };
+                    coord.start_hotkey_listener();
+                    coord.start_qa_hotkey_listener();
+                    #[cfg(not(mobile))]
+                    coord.start_selection_polish_hotkey_listener();
+                    coord.start_coding_agent_hotkey_listener();
+                    coord.start_combo_hotkey_listener();
+                    coord.start_translation_hotkey_listener();
+                    coord.start_switch_style_hotkey_listener();
+                    coord.start_open_app_hotkey_listener();
+                    coord.start_quick_note_hotkey_listener();
+                    coord.start_style_pack_hotkey_listeners();
+                    return;
+                }
+                drop(inner);
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            })
+            .is_err()
+        {
+            if let Some(inner) = fallback.upgrade() {
+                inner.hotkey_resume_started.store(false, Ordering::Release);
+            }
+            log::error!("[coord] hotkey resume supervisor could not start");
+        }
+    }
+
     pub fn start_hotkey_listener(&self) {
+        if self.inner.backend.ensure_runtime_ready().is_err() {
+            log::info!("[coord] hotkey startup waits for local recovery");
+            return;
+        }
         // 起一个守护线程，反复尝试安装 hotkey hook。Accessibility 一被授予就立即生效，
         // 用户不需要手动重启 OpenLess。
         let inner = Arc::clone(&self.inner);
@@ -1095,14 +1227,15 @@ impl Coordinator {
         if crate::shortcut_binding::binding_requires_side_aware_hook(&binding) {
             take_combo_hotkey_on_main_thread(&self.inner);
             self.inner.side_aware_combo.lock().take();
-            let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
-            match crate::side_aware_combo::SideAwareComboMonitor::start(binding, tx) {
+            let (tx, rx) = mpsc::channel::<HotkeyEvent>();
+            let combo_tx = spawn_combo_abort_bridge(&self.inner, handle_trigger_combined);
+            match crate::side_aware_combo::SideAwareComboMonitor::start(binding, tx, combo_tx) {
                 Ok(monitor) => {
                     *self.inner.side_aware_combo.lock() = Some(monitor);
                     let bridge_inner = Arc::clone(&self.inner);
                     std::thread::Builder::new()
                         .name("openless-side-combo-bridge".into())
-                        .spawn(move || combo_hotkey_bridge_loop(bridge_inner, rx))
+                        .spawn(move || hotkey_bridge_loop(bridge_inner, rx))
                         .ok();
                     log::info!("[coord] side-aware combo hotkey listener installed (via update)");
                 }
@@ -1377,9 +1510,18 @@ impl Coordinator {
     }
 
     fn ensure_modifier_hotkey_monitor(&self, binding: crate::types::HotkeyBinding) {
+        if let Err(error) = self.try_ensure_modifier_hotkey_monitor(binding) {
+            log::warn!("[coord] modifier hotkey update failed: {error}");
+        }
+    }
+
+    fn try_ensure_modifier_hotkey_monitor(
+        &self,
+        binding: crate::types::HotkeyBinding,
+    ) -> Result<(), String> {
         if let Some(monitor) = self.inner.hotkey.lock().as_ref() {
             monitor.update_binding(binding);
-            return;
+            return Ok(());
         }
         let (tx, rx) = mpsc::channel::<HotkeyEvent>();
         let cancel_tx = spawn_esc_cancel_bridge(&self.inner);
@@ -1387,6 +1529,13 @@ impl Coordinator {
         match HotkeyMonitor::start(binding, tx, cancel_tx, combo_tx) {
             Ok(monitor) => {
                 let adapter = monitor.kind();
+                let inner_clone = Arc::clone(&self.inner);
+                std::thread::Builder::new()
+                    .name("openless-hotkey-bridge".into())
+                    .spawn(move || hotkey_bridge_loop(inner_clone, rx))
+                    .map_err(|error| error.to_string())?;
+                // Publish only after the bridge exists. A failed thread spawn
+                // must drop this monitor, not leave a registered dead sender.
                 *self.inner.hotkey.lock() = Some(monitor);
                 *self.inner.hotkey_status.lock() = HotkeyStatus {
                     adapter,
@@ -1394,21 +1543,18 @@ impl Coordinator {
                     message: Some(format!("{} 已安装", adapter.display_name())),
                     last_error: None,
                 };
-                let inner_clone = Arc::clone(&self.inner);
-                std::thread::Builder::new()
-                    .name("openless-hotkey-bridge".into())
-                    .spawn(move || hotkey_bridge_loop(inner_clone, rx))
-                    .ok();
             }
             Err(e) => {
                 *self.inner.hotkey_status.lock() = HotkeyStatus {
                     adapter: HotkeyMonitor::capability().adapter,
                     state: HotkeyStatusState::Failed,
                     message: Some(e.message.clone()),
-                    last_error: Some(e),
+                    last_error: Some(e.clone()),
                 };
+                return Err(e.message);
             }
         }
+        Ok(())
     }
 
     pub fn update_modifier_shortcut_bindings(&self) {
@@ -1524,6 +1670,51 @@ impl Coordinator {
         finish_less_computer_voice_session(&self.inner, None)
             .await
             .map_err(|error| error.to_string())
+    }
+
+    /// Composer microphone / voice-mode button. Start errors are returned to the
+    /// panel instead of being posted into the conversation stream.
+    pub(crate) async fn start_less_computer_voice_from_panel(
+        &self,
+        mode: openless_core::LessComputerVoiceMode,
+    ) -> Result<(), String> {
+        start_less_computer_capture(
+            &self.inner,
+            openless_core::LessComputerVoiceOptions {
+                mode,
+                publish_start_error: false,
+            },
+        )
+        .await
+        .map(|_| ())
+        .map_err(|error| error.message)
+    }
+
+    pub(crate) fn stop_less_computer_voice_from_panel(
+        &self,
+        session_id: openless_core::SessionId,
+    ) -> Result<(), String> {
+        request_less_computer_voice_stop(&self.inner, session_id)
+            .map(|_| ())
+            .map_err(|error| error.message)
+    }
+
+    pub(crate) async fn cancel_less_computer_voice_from_panel(
+        &self,
+        session_id: openless_core::SessionId,
+    ) -> Result<(), String> {
+        cancel_less_computer_voice_request(&self.inner, session_id)
+            .await
+            .map(|_| ())
+            .map_err(|error| error.message)
+    }
+
+    /// Stop button while an Agent turn runs; the window stays open.
+    pub(crate) async fn cancel_less_computer_task(&self) -> Result<(), String> {
+        cancel_active_less_computer(&self.inner)
+            .await
+            .map(|_| ())
+            .map_err(|error| error.message)
     }
 
     pub(crate) async fn cancel_active_voice(&self) {
@@ -1730,4 +1921,44 @@ fn schedule_selection_polish_capsule_idle(inner: &Arc<Inner>, epoch: u64, delay_
         tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
         hide_selection_polish_capsule_if_current(&inner, epoch);
     });
+}
+
+#[cfg(test)]
+mod startup_restore_tests {
+    use super::*;
+
+    #[test]
+    fn restore_host_denied_store_blocks_later_real_constructors() {
+        let mut failure = None;
+        let first = startup_store(&mut failure, || Err::<u8, _>("denied"), || 7);
+        assert_eq!(first, 7);
+        assert!(failure.is_some());
+        let second = startup_store(
+            &mut failure,
+            || -> Result<u8, ()> { panic!("must not open another real store after failure") },
+            || 9,
+        );
+        assert_eq!(second, 9);
+        let backend = openless_core::OpenLessBackend::blocked_startup(
+            openless_core::BackendConfig::default(),
+            failure.unwrap(),
+        );
+        assert!(backend.startup_error().is_some());
+        assert!(!backend.snapshot().running);
+        assert!(backend.ensure_runtime_ready().is_err());
+    }
+
+    #[test]
+    fn restore_host_healthy_store_does_not_use_fallback() {
+        let mut failure = None;
+        assert_eq!(
+            startup_store(
+                &mut failure,
+                || Ok::<_, ()>(11),
+                || panic!("unexpected fallback")
+            ),
+            11
+        );
+        assert!(failure.is_none());
+    }
 }

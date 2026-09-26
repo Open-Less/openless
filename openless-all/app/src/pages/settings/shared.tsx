@@ -164,10 +164,27 @@ export function SettingRow({ label, desc, children, controlWidth }: SettingRowPr
   );
 }
 
-export function Toggle({ on, onToggle }: { on: boolean; onToggle?: (next: boolean) => void }) {
+export function Toggle({
+  on,
+  onToggle,
+  disabled = false,
+  label,
+}: {
+  on: boolean;
+  onToggle?: (next: boolean) => void;
+  disabled?: boolean;
+  label?: string;
+}) {
   return (
     <button
-      onClick={() => onToggle?.(!on)}
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => {
+        if (!disabled) onToggle?.(!on);
+      }}
       style={{
         position: 'relative',
         // 此前写死 flex: 0 0 36px，在列方向的设置行包装里
@@ -182,7 +199,8 @@ export function Toggle({ on, onToggle }: { on: boolean; onToggle?: (next: boolea
         border: 0,
         background: on ? 'var(--ol-blue)' : 'var(--ol-toggle-off-bg)',
         boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.06)',
-        cursor: 'default',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.45 : 1,
         transition: 'background 0.16s var(--ol-motion-quick)',
       }}
     >

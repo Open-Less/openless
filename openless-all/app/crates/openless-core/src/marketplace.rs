@@ -26,6 +26,7 @@ pub const CLOUD_SYNC_BASE_URL: &str = "https://apic.openless.top:9443";
 
 #[derive(Debug, Clone)]
 pub struct MarketplaceConfig {
+    pub(crate) encrypted_sync_config: Option<crate::cloud_sync_e2ee::EncryptedSyncConfig>,
     pub base_url: reqwest::Url,
     pub cloud_sync_base_url: reqwest::Url,
     pub github_client_id: String,
@@ -59,6 +60,7 @@ impl MarketplaceConfig {
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| "Ov23liyv3nEucG7oMHNE".into());
         Ok(Self {
+            encrypted_sync_config: None,
             base_url: parse(base_url.as_ref(), "marketplace")?,
             cloud_sync_base_url: match cloud_sync_base_url {
                 Some(value) => parse(value, "cloud sync")?,
@@ -80,6 +82,12 @@ impl MarketplaceConfig {
     pub fn production() -> Self {
         Self::with_cloud_sync_base_url(MARKETPLACE_BASE_URL, Some(CLOUD_SYNC_BASE_URL))
             .expect("built-in Marketplace URLs are valid")
+    }
+
+    /// Opt in after the host provides the controlled credential and UI bridges.
+    pub fn with_encrypted_sync(mut self, config: crate::cloud_sync_e2ee::EncryptedSyncConfig) -> Self {
+        self.encrypted_sync_config = Some(config);
+        self
     }
 }
 
@@ -449,6 +457,43 @@ impl MarketplaceService {
             .ok_or_else(Self::authentication_required)
     }
 
+    /// Establish the numeric identity used to bind encrypted snapshots. The
+    /// stored display login is never an authorization or account-isolation key.
+    pub(crate) async fn sync_identity(
+        &self,
+    ) -> Result<(SecretValue, crate::cloud_sync_e2ee_protocol::types::Account), BackendError> {
+        use futures_util::StreamExt;
+        use crate::cloud_sync_e2ee_protocol::types::{Account, GithubId};
+        let token = self.read_access_token().await?;
+        let response = crate::net::credential_http_for_url(self.config.github_user_url.as_str())
+            .get(self.config.github_user_url.clone())
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", "OpenLess-encrypted-sync")
+            .timeout(Duration::from_secs(15))
+            .bearer_auth(token.expose_secret())
+            .send().await.map_err(|_| Self::authentication_required())?;
+        if !response.status().is_success() {
+            return Err(Self::authentication_required());
+        }
+        let mut bytes = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|_| Self::authentication_required())?;
+            if bytes.len().saturating_add(chunk.len()) > 16 * 1024 {
+                return Err(Self::authentication_required());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        #[derive(serde::Deserialize)]
+        struct User { id: u64, login: String }
+        let user: User = serde_json::from_slice(&bytes).map_err(|_| Self::authentication_required())?;
+        if user.login.is_empty() || user.login.len() > 128 || self.read_access_token().await? != token {
+            return Err(Self::authentication_required());
+        }
+        let github_id = GithubId::parse(&user.id.to_string()).map_err(|_| Self::authentication_required())?;
+        Ok((token, Account { github_id, login: user.login }))
+    }
+
     async fn clear_authentication(&self) -> Result<(), BackendError> {
         self.auth_tombstoned.store(true, Ordering::Release);
         let remove_result = self.credential_store.remove(Self::token_key()?).await;
@@ -456,6 +501,10 @@ impl MarketplaceService {
             preferences.marketplace_dev_login.clear();
         });
         remove_result.and(preferences_result)
+    }
+
+    pub(crate) fn invalidate_authentication(&self) {
+        self.auth_tombstoned.store(true, Ordering::Release);
     }
 
     async fn authenticated_response(

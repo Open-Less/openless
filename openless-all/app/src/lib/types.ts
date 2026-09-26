@@ -33,12 +33,7 @@ export type PolishMode = 'raw' | 'light' | 'structured' | 'formal';
  *  两套配置在凭据库中完全隔离，运行时只读当前模式。 */
 export type PipelineMode = 'traditional' | 'multimodal';
 
-export type InsertStatus =
-  | 'inserted'
-  | 'pasteSent'
-  | 'copiedFallback'
-  | 'failed'
-  | 'notRequested';
+export type InsertStatus = 'inserted' | 'pasteSent' | 'copiedFallback' | 'failed' | 'notRequested';
 
 export type HistorySource = 'voice' | 'quick_note' | 'selection_polish' | 'selection_voice_edit';
 
@@ -655,6 +650,12 @@ export type LessComputerEvent =
         phase: 'starting' | 'recording' | 'transcribing' | 'idle';
         level: number;
         elapsedMs: number;
+        /** 缺省按 submit 处理（旧事件与快捷键路径）。 */
+        mode?: LessComputerVoiceMode;
+        /** 本会话迄今的完整转写，录音中随实时识别更新。 */
+        transcript?: string;
+        /** 仅 idle 时出现，描述本次录音如何收尾。 */
+        outcome?: LessComputerVoiceOutcome;
       }
     /** 一轮用户气泡（语音指令转写）。fresh=true 表示新会话（清空历史）；否则追加为后续轮次。 */
     | { kind: 'user'; text: string; fresh?: boolean }
@@ -681,6 +682,11 @@ export type LessComputerEvent =
   };
 
 export type LessComputerVoiceEvent = Extract<LessComputerEvent, { kind: 'voice_state' }>;
+
+/** submit：说完直接交给 Agent；dictate：转写填进输入框，由用户编辑后发送。 */
+export type LessComputerVoiceMode = 'submit' | 'dictate';
+
+export type LessComputerVoiceOutcome = 'submitted' | 'committed' | 'empty' | 'failed' | 'cancelled';
 
 /** `less_computer_sync` 的有界 replay 结果。`truncated=true` 表示调用方的水位
  * 已早于后端仍保留的最老事件，前端必须清空派生视图后再应用 `events`。 */

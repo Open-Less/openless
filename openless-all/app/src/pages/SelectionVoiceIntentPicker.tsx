@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { MessageCircleQuestion, PencilLine } from 'lucide-react';
+import { MessageCircleQuestion, PencilLine, Sparkles } from 'lucide-react';
+import { ToolWindowHeader } from '../components/ui/ToolWindowHeader';
 import {
   cancelSelectionVoiceIntentPrompt,
   confirmSelectionVoiceIntentPrompt,
   getSelectionVoiceIntentPrompt,
+  isTauri,
 } from '../lib/ipc';
 
 export function SelectionVoiceIntentPicker() {
@@ -26,8 +28,14 @@ export function SelectionVoiceIntentPicker() {
       }
     };
     void load();
+    if (!isTauri)
+      return () => {
+        cancelled = true;
+      };
     void import('@tauri-apps/api/event').then(({ listen }) =>
       listen('selection-voice-intent:shown', () => {
+        setBusy(false);
+        setError(null);
         void load();
       }).then((handle) => {
         if (cancelled) handle();
@@ -57,113 +65,59 @@ export function SelectionVoiceIntentPicker() {
   };
 
   return (
-    <main
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100%',
-        boxSizing: 'border-box',
-        padding: 18,
-        background: 'var(--ol-surface)',
-        color: 'var(--ol-ink)',
-      }}
-    >
-      <header style={{ marginBottom: 12 }}>
-        <div style={{ fontSize: 16, fontWeight: 700 }}>{t('selectionVoiceIntent.title')}</div>
-        <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ol-ink-4)' }}>
-          {t('selectionVoiceIntent.subtitle')}
+    <main className="ol-tool-window ol-intent-window">
+      <ToolWindowHeader
+        icon={<Sparkles />}
+        title={t('selectionVoiceIntent.title')}
+        description={t('selectionVoiceIntent.subtitle')}
+        onClose={() => void cancel()}
+        closeLabel={t('selectionVoiceIntent.cancel')}
+        closeDisabled={busy}
+      />
+      <section className="ol-tool-content">
+        <div className="ol-intent-instruction">
+          {instruction || t('selectionVoiceIntent.loading')}
         </div>
-      </header>
-      <div
-        style={{
-          padding: '10px 12px',
-          borderRadius: 9,
-          border: '0.5px solid var(--ol-line-strong)',
-          background: 'var(--ol-control-solid)',
-          fontSize: 14,
-          lineHeight: 1.6,
-          minHeight: 48,
-        }}
-      >
-        {instruction || t('selectionVoiceIntent.loading')}
-      </div>
-      {sourceText && (
-        <div
-          style={{
-            marginTop: 8,
-            maxHeight: 40,
-            overflow: 'hidden',
-            fontSize: 11,
-            lineHeight: 1.5,
-            color: 'var(--ol-ink-4)',
-          }}
-        >
-          {t('selectionVoiceIntent.sourcePrefix')}
-          {sourceText}
+        {sourceText && (
+          <div className="ol-tool-source">
+            {t('selectionVoiceIntent.sourcePrefix')}
+            {sourceText}
+          </div>
+        )}
+        {error && (
+          <div className="ol-tool-error" role="alert">
+            {t('selectionVoiceIntent.errorPrefix')}
+            {error}
+          </div>
+        )}
+      </section>
+      <footer className="ol-intent-footer">
+        <div className="ol-intent-options">
+          <button
+            className="ol-tool-button"
+            disabled={busy}
+            onClick={() => void choose('question')}
+          >
+            <MessageCircleQuestion size={20} />
+            {t('selectionVoiceIntent.question')}
+          </button>
+          <button
+            className="ol-tool-button is-primary"
+            disabled={busy}
+            onClick={() => void choose('edit')}
+          >
+            <PencilLine size={20} />
+            {t('selectionVoiceIntent.edit')}
+          </button>
         </div>
-      )}
-      {error && (
-        <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ol-red, #dc2626)' }}>
-          {t('selectionVoiceIntent.errorPrefix')}
-          {error}
-        </div>
-      )}
-      <footer style={{ display: 'flex', gap: 8, marginTop: 16 }}>
         <button
-          className="ol-focus-ring"
+          className="ol-tool-button ol-intent-cancel"
           disabled={busy}
-          onClick={() => void choose('question')}
-          style={{
-            flex: 1,
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 8,
-            padding: '12px 10px',
-            borderRadius: 9,
-            border: '0.5px solid var(--ol-line-strong)',
-            background: 'var(--ol-control-solid)',
-            fontWeight: 600,
-          }}
+          onClick={() => void cancel()}
         >
-          <MessageCircleQuestion size={18} />
-          {t('selectionVoiceIntent.question')}
-        </button>
-        <button
-          className="ol-focus-ring"
-          disabled={busy}
-          onClick={() => void choose('edit')}
-          style={{
-            flex: 1,
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 8,
-            padding: '12px 10px',
-            borderRadius: 9,
-            background: 'var(--ol-blue)',
-            color: '#fff',
-            fontWeight: 600,
-          }}
-        >
-          <PencilLine size={18} />
-          {t('selectionVoiceIntent.edit')}
+          {t('selectionVoiceIntent.cancel')}
         </button>
       </footer>
-      <button
-        className="ol-focus-ring"
-        disabled={busy}
-        onClick={() => void cancel()}
-        style={{
-          marginTop: 10,
-          alignSelf: 'center',
-          fontSize: 12,
-          color: 'var(--ol-ink-4)',
-          padding: '4px 8px',
-        }}
-      >
-        {t('selectionVoiceIntent.cancel')}
-      </button>
     </main>
   );
 }

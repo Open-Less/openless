@@ -235,6 +235,8 @@ export function Btn({
     sm: { padding: '5px 10px', fontSize: 13 },
     md: { padding: '7px 14px', fontSize: 13.5 },
   };
+  // 主按钮禁用时改成浅灰，避免半透明深色仍像可以点击。
+  const muted = disabled && (variant === 'primary' || variant === 'blue');
   return (
     <button
       onClick={disabled ? undefined : onClick}
@@ -246,15 +248,15 @@ export function Btn({
         display: 'inline-flex',
         alignItems: 'center',
         gap: 6,
-        background: v.bg,
-        color: v.color,
+        background: muted ? 'var(--ol-control-muted)' : v.bg,
+        color: muted ? 'var(--ol-ink-3)' : v.color,
         border: v.bd === 'transparent' ? '0.5px solid transparent' : `0.5px solid ${v.bd}`,
         borderRadius: 8,
-        boxShadow: v.sh,
+        boxShadow: muted ? 'none' : v.sh,
         fontFamily: 'inherit',
         fontWeight: 500,
         cursor: disabled ? 'not-allowed' : 'pointer',
-        opacity: disabled ? 0.55 : 1,
+        opacity: disabled && !muted ? 0.55 : 1,
         transition:
           'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), box-shadow 0.18s var(--ol-motion-soft)',
         ...sizes[size],

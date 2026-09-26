@@ -1,5 +1,5 @@
 import { reconcileLessComputerReplay, reduceLessComputerVoice } from './lessComputerReplay';
-import type { LessComputerEvent, LessComputerSyncResult } from './types';
+import type { LessComputerEvent, LessComputerSyncResult, LessComputerVoiceEvent } from './types';
 import contract from '../../contract/backend-2.0.json';
 
 function assertDeepEqual(actual: unknown, expected: unknown, name: string) {
@@ -96,8 +96,26 @@ assertDeepEqual(
     phase: 'recording',
     level: 0.5,
     elapsedMs: 120,
+    mode: 'dictate',
+    transcript: '打开',
   },
   'React consumes the same serialized Core feedback fixture',
+);
+const liveDictation = contract.lessComputerVoice.sample as LessComputerVoiceEvent;
+const committedDictation = contract.lessComputerVoice.idleSample as LessComputerVoiceEvent;
+const settled = reduceLessComputerVoice(
+  reduceLessComputerVoice(null, liveDictation),
+  committedDictation,
+);
+assertDeepEqual(
+  settled?.kind === 'voice_state' ? [settled.phase, settled.outcome, settled.transcript] : null,
+  ['idle', 'committed', '打开设置'],
+  'the terminal dictation snapshot carries the final transcript for the composer',
+);
+assertDeepEqual(
+  reduceLessComputerVoice(settled, { ...liveDictation, seq: 5, transcript: 'late partial' }),
+  settled,
+  'a late partial cannot reopen a committed dictation',
 );
 
 const truncated: LessComputerSyncResult = {

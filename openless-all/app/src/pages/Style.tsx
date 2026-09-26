@@ -163,6 +163,10 @@ export function Style() {
   const [saveState, setSaveState] = useState<SaveToastState>('idle');
   const [saveMessage, setSaveMessage] = useState('');
   const statusTimer = useRef<number | null>(null);
+  const pendingDeletes = useRef(
+    new Map<string, { pack: StylePack; timer: number; index: number; committing: boolean }>(),
+  );
+  const [undoDelete, setUndoDelete] = useState<{ id: string; name: string } | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorClosing, setEditorClosing] = useState(false);
   const editorCloseTimer = useRef<number | null>(null);
@@ -191,6 +195,11 @@ export function Style() {
     () => () => {
       if (statusTimer.current !== null) window.clearTimeout(statusTimer.current);
       if (editorCloseTimer.current !== null) window.clearTimeout(editorCloseTimer.current);
+      for (const [id, pending] of pendingDeletes.current) {
+        window.clearTimeout(pending.timer);
+        if (!pending.committing) void deleteStylePack(id).catch(() => {});
+      }
+      pendingDeletes.current.clear();
     },
     [],
   );
@@ -219,8 +228,10 @@ export function Style() {
     const initialLoad = !packsLoaded.current;
     if (initialLoad) setBusy('loading');
     try {
-      const next = await listStylePacks();
+      const listed = await listStylePacks();
       if (sequence !== loadSequence.current) return;
+      // A refresh must not resurrect a row whose undo window or delete is active.
+      const next = listed.filter((pack) => !pendingDeletes.current.has(pack.id));
       packsLoaded.current = true;
       setPacks(next);
       const nextSelectedId =
@@ -471,32 +482,51 @@ export function Style() {
     }
   };
 
-  const handleDeleteImportedPack = async (pack: StylePack) => {
-    if (pack.kind !== 'imported') return;
-    if (
-      !window.confirm(
-        t('style.pack.deleteConfirm', { name: getStylePackPresentation(pack, t).name }),
-      )
-    ) {
-      return;
-    }
-    setBusy('deleting');
-    try {
-      await deleteStylePack(pack.id);
-      showSaveStatus(
-        'saved',
-        t('style.pack.deleteSuccess', { name: getStylePackPresentation(pack, t).name }),
-        true,
-      );
-      if (editorOpen && selectedId === pack.id) {
-        startEditorClose();
-      }
-      await loadPacks();
-    } catch (deleteError) {
-      showSaveStatus('failed', t('style.pack.deleteFailed', { err: String(deleteError) }));
-    } finally {
-      setBusy(null);
-    }
+  const restoreDeletedPack = (id: string) => {
+    const pending = pendingDeletes.current.get(id);
+    if (!pending || pending.committing) return;
+    window.clearTimeout(pending.timer);
+    pendingDeletes.current.delete(id);
+    setPacks((current) => {
+      if (current.some((pack) => pack.id === id)) return current;
+      const next = current.slice();
+      next.splice(Math.min(pending.index, next.length), 0, pending.pack);
+      return next;
+    });
+    setUndoDelete((current) => (current?.id === id ? null : current));
+  };
+
+  const commitDeletedPack = (id: string) => {
+    const pending = pendingDeletes.current.get(id);
+    if (!pending || pending.committing) return;
+    pending.committing = true;
+    setUndoDelete((current) => (current?.id === id ? null : current));
+    void deleteStylePack(id)
+      .then(() => {
+        pendingDeletes.current.delete(id);
+        return loadPacks();
+      })
+      .catch((deleteError) => {
+        pendingDeletes.current.delete(id);
+        setPacks((current) => {
+          if (current.some((pack) => pack.id === id)) return current;
+          const next = current.slice();
+          next.splice(Math.min(pending.index, next.length), 0, pending.pack);
+          return next;
+        });
+        showSaveStatus('failed', t('style.pack.deleteFailed', { err: String(deleteError) }));
+      });
+  };
+
+  const handleDeleteImportedPack = (pack: StylePack) => {
+    if (pack.kind !== 'imported' || pendingDeletes.current.has(pack.id)) return;
+    const index = packs.findIndex((item) => item.id === pack.id);
+    const name = getStylePackPresentation(pack, t).name;
+    setPacks((current) => current.filter((item) => item.id !== pack.id));
+    if (editorOpen && selectedId === pack.id) startEditorClose();
+    const timer = window.setTimeout(() => commitDeletedPack(pack.id), 6000);
+    pendingDeletes.current.set(pack.id, { pack, timer, index, committing: false });
+    setUndoDelete({ id: pack.id, name });
   };
 
   const handleDeleteImported = async () => {
@@ -754,7 +784,15 @@ export function Style() {
 
       {/* 控制台卡右上角锚定 —— 与「风格市场 / 刷新 / 导入 ZIP」按钮同区；
           淡蓝 pill 只闪现 0.8s，不长期遮挡按钮。 */}
-      <SavedToast saveState={saveState} message={saveMessage} />
+      <SavedToast
+        saveState={undoDelete ? 'saved' : saveState}
+        message={
+          undoDelete ? t('style.pack.deleteSuccess', { name: undoDelete.name }) : saveMessage
+        }
+        actionLabel={undoDelete ? t('style.pack.undoDelete') : undefined}
+        onAction={undoDelete ? () => restoreDeletedPack(undoDelete.id) : undefined}
+        durationMs={undoDelete ? 6000 : undefined}
+      />
 
       <Card
         padding={0}
@@ -929,7 +967,7 @@ export function Style() {
                       flexDirection: 'column',
                       textAlign: 'left',
                       position: 'relative',
-                      border: '0.5px solid',
+                      border: isCurrentForView ? '1.5px solid' : '0.5px solid',
                       borderColor: isCurrentForView
                         ? 'var(--ol-style-card-border-active)'
                         : 'var(--ol-style-card-border)',
@@ -989,9 +1027,19 @@ export function Style() {
                               </span>
                             )}
                           {isCurrentForView && (
-                            <Pill tone="dark" size="sm">
-                              {t('style.pack.current')}
-                            </Pill>
+                            <span
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 4,
+                                color: 'var(--ol-blue)',
+                              }}
+                            >
+                              <Icon name="check" size={14} />
+                              <Pill tone="outline" size="sm">
+                                {t('style.pack.current')}
+                              </Pill>
+                            </span>
                           )}
                         </div>
                         <div
@@ -1042,17 +1090,27 @@ export function Style() {
                           ? t('style.pack.writtenPolish')
                           : t(`style.modes.${pack.baseMode}.name`)}
                       </Pill>
-                      {presentation.tags.slice(0, 1).map((tag) => (
-                        <Pill key={`${pack.id}-${tag}`} tone="default" size="sm">
-                          {tag}
-                        </Pill>
-                      ))}
+                      {presentation.tags
+                        .filter(
+                          (tag) =>
+                            tag !== presentation.name &&
+                            tag !==
+                              (workflowView === 'selection'
+                                ? t('style.pack.writtenPolish')
+                                : t(`style.modes.${pack.baseMode}.name`)),
+                        )
+                        .slice(0, 1)
+                        .map((tag) => (
+                          <Pill key={`${pack.id}-${tag}`} tone="default" size="sm">
+                            {tag}
+                          </Pill>
+                        ))}
                     </div>
 
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 'auto' }}>
                       <Btn
                         size="sm"
-                        variant={isCurrentForView ? 'soft' : 'ghost'}
+                        variant={isCurrentForView ? 'soft' : 'blue'}
                         disabled={isCurrentForView || busy === 'activating'}
                         onClick={() =>
                           void (workflowView === 'selection'
@@ -1177,7 +1235,7 @@ export function Style() {
               style={{
                 position: 'fixed',
                 inset: 0,
-                background: 'var(--ol-overlay-bg)',
+                background: 'var(--ol-dialog-backdrop)',
                 ...(mobile
                   ? {}
                   : {
@@ -1220,8 +1278,8 @@ export function Style() {
                   display: 'grid',
                   gridTemplateRows: 'auto minmax(0, 1fr)',
                   overflow: 'hidden',
-                  boxShadow: mobile ? 'none' : 'var(--ol-shadow-xl)',
-                  borderRadius: mobile ? 0 : undefined,
+                  boxShadow: mobile ? 'none' : 'var(--ol-dialog-shadow)',
+                  borderRadius: mobile ? 0 : 'var(--ol-dialog-radius)',
                 }}
               >
                 <div style={{ padding: 18, borderBottom: '0.5px solid var(--ol-line)' }}>

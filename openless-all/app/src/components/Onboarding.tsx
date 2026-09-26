@@ -20,6 +20,7 @@ import { getHotkeyTriggerLabel } from '../lib/hotkey';
 import type { PermissionStatus, PlatformCapabilities } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { ProvidersSection } from '../pages/settings/ChannelList';
+import { CloudSyncWelcome } from './CloudSyncSetupPrompt';
 
 interface OnboardingProps {
   onComplete: () => void;
@@ -44,7 +45,12 @@ export function Onboarding({ onComplete }: OnboardingProps) {
     return <AndroidOnboarding onComplete={onComplete} />;
   }
 
-  return <DesktopOnboarding onComplete={onComplete} platformCaps={platformCaps} />;
+  return (
+    <>
+      <DesktopOnboarding onComplete={onComplete} platformCaps={platformCaps} />
+      <CloudSyncWelcome />
+    </>
+  );
 }
 
 function AndroidOnboarding({ onComplete }: OnboardingProps) {

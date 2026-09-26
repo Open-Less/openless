@@ -381,12 +381,12 @@ unsafe fn copy_selected_range(focused: AxUiElementRef) -> Option<CFRange> {
     (ok != 0).then_some(range)
 }
 
-/// Confirms a posted keyboard chunk against the original text control's caret.
+/// Confirms all posted keyboard input against the original text control's caret.
 /// Only metadata is read; the target's document text is never fetched.
 /// Create, wait and drop on the same blocking insertion thread.
 pub(crate) struct KeyboardDelivery {
     element: AxUiElementRef,
-    start: usize,
+    progress: KeyboardDeliveryProgress,
 }
 
 impl KeyboardDelivery {
@@ -402,9 +402,10 @@ impl KeyboardDelivery {
             let GatedElement::Ready(element) = focused_element_passing_the_gate(gate) else {
                 return None;
             };
-            let mut delivery = Self { element, start: 0 };
-            delivery.start = copy_caret_offset(element)?;
-            Some(delivery)
+            Some(Self {
+                element,
+                progress: KeyboardDeliveryProgress::new(copy_caret_offset(element)),
+            })
         }
     }
 
@@ -426,38 +427,48 @@ impl KeyboardDelivery {
         }
     }
 
-    /// False means this target cannot be confirmed; stop probing it for this session.
-    pub(crate) fn wait(self, posted_text: &str) -> bool {
+    /// Account only for the prefix actually posted by the native typer. This
+    /// never reads AX or waits, so another streamed chunk can follow immediately.
+    pub(crate) fn record_posted(
+        &mut self,
+        posted_text: &str,
+        newline_mode: crate::types::MacosNewlineMode,
+    ) {
+        self.progress.record_posted(posted_text, newline_mode);
+    }
+
+    /// One terminal delivery barrier, on the same thread that captured the
+    /// element. Unreadable/stale controls keep the existing posted-input fallback.
+    pub(crate) fn finish(self) -> KeyboardDeliveryOutcome {
         let started = Instant::now();
-        let outcome = wait_for_caret_delivery(
-            self.start,
-            posted_text,
-            || {
-                if crate::unicode_keystroke::is_secure_input_enabled() {
-                    return None;
-                }
-                // SAFETY: self retains the same control throughout this wait.
-                unsafe { copy_selected_range(self.element) }.and_then(|range| {
-                    if range.length < 0 {
+        let outcome = match self.progress.expected() {
+            DeliveryExpectation::NothingPosted => KeyboardDeliveryOutcome::Delivered,
+            DeliveryExpectation::Unavailable => KeyboardDeliveryOutcome::Unavailable,
+            DeliveryExpectation::Caret { start, expected } => wait_for_caret_delivery(
+                start,
+                expected,
+                || {
+                    if crate::unicode_keystroke::is_secure_input_enabled() {
                         return None;
                     }
-                    caret_offset_from_location(range.location).map(|offset| (offset, range.length))
-                })
-            },
-            || {
-                if started.elapsed() >= Duration::from_secs(10) {
-                    return false;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-                true
-            },
+                    // SAFETY: self retains the original control on this worker.
+                    unsafe { copy_selected_range(self.element) }.and_then(|range| {
+                        if range.length < 0 {
+                            return None;
+                        }
+                        caret_offset_from_location(range.location)
+                            .map(|offset| (offset, range.length))
+                    })
+                },
+                || started.elapsed(),
+                || std::thread::sleep(Duration::from_millis(10)),
+            ),
+        };
+        log::info!(
+            "[insertion] final keyboard delivery outcome={outcome:?} elapsed_ms={}",
+            started.elapsed().as_millis()
         );
-        if outcome == KeyboardDeliveryOutcome::TimedOut {
-            log::warn!(
-                "[insertion] target caret did not acknowledge posted keyboard input within 10s"
-            );
-        }
-        outcome == KeyboardDeliveryOutcome::Delivered
+        outcome
     }
 }
 
@@ -468,118 +479,250 @@ impl Drop for KeyboardDelivery {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum KeyboardDeliveryOutcome {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeyboardDeliveryOutcome {
     Delivered,
     Unavailable,
+    NoProgress,
     TimedOut,
+}
+
+const DELIVERY_NO_PROGRESS_BUDGET: Duration = Duration::from_millis(250);
+const DELIVERY_TOTAL_BUDGET: Duration = Duration::from_secs(10);
+
+#[derive(Debug, PartialEq, Eq)]
+enum DeliveryExpectation {
+    NothingPosted,
+    Unavailable,
+    Caret { start: usize, expected: usize },
+}
+
+/// Pure accounting, independent of AX ownership. A terminal capture cannot
+/// substitute for this cumulative offset: previously posted keys may still queue.
+#[derive(Debug)]
+struct KeyboardDeliveryProgress {
+    start: Option<usize>,
+    expected: Option<usize>,
+    posted: bool,
+}
+
+impl KeyboardDeliveryProgress {
+    fn new(start: Option<usize>) -> Self {
+        Self {
+            start,
+            expected: start,
+            posted: false,
+        }
+    }
+
+    fn record_posted(&mut self, text: &str, newline_mode: crate::types::MacosNewlineMode) {
+        let mut units = 0usize;
+        for ch in text.chars().filter(|ch| *ch != '\r') {
+            self.posted = true;
+            units = units.saturating_add(ch.len_utf16());
+            if ch == '\n' && newline_mode == crate::types::MacosNewlineMode::Return {
+                // A submitting Return can clear the field or move focus. Keep
+                // its keys, but never wait for a monotonically increasing caret.
+                self.expected = None;
+            }
+        }
+        self.expected = self.expected.and_then(|offset| offset.checked_add(units));
+    }
+
+    fn expected(&self) -> DeliveryExpectation {
+        if !self.posted {
+            return DeliveryExpectation::NothingPosted;
+        }
+        match (self.start, self.expected) {
+            (Some(start), Some(expected)) => DeliveryExpectation::Caret { start, expected },
+            _ => DeliveryExpectation::Unavailable,
+        }
+    }
 }
 
 fn wait_for_caret_delivery(
     start: usize,
-    posted_text: &str,
+    expected: usize,
     mut read: impl FnMut() -> Option<(usize, isize)>,
-    mut wait: impl FnMut() -> bool,
+    mut elapsed: impl FnMut() -> Duration,
+    mut pause: impl FnMut(),
 ) -> KeyboardDeliveryOutcome {
-    // AX offsets count UTF-16 units. CR is consumed without posting a key.
-    let units = posted_text
-        .chars()
-        .filter(|ch| *ch != '\r')
-        .map(char::len_utf16)
-        .sum();
-    if units == 0 {
-        return KeyboardDeliveryOutcome::Delivered;
-    }
-    let Some(expected) = start.checked_add(units) else {
-        return KeyboardDeliveryOutcome::Unavailable;
-    };
+    let mut high_water = start;
+    let mut last_progress = Duration::ZERO;
     loop {
+        let now = elapsed();
+        if now >= DELIVERY_TOTAL_BUDGET {
+            return KeyboardDeliveryOutcome::TimedOut;
+        }
+        if now.saturating_sub(last_progress) >= DELIVERY_NO_PROGRESS_BUDGET {
+            return KeyboardDeliveryOutcome::NoProgress;
+        }
         let Some((offset, selected_length)) = read() else {
             return KeyboardDeliveryOutcome::Unavailable;
         };
+        let now = elapsed();
+        if now >= DELIVERY_TOTAL_BUDGET {
+            return KeyboardDeliveryOutcome::TimedOut;
+        }
         if selected_length == 0 && offset >= expected {
             return KeyboardDeliveryOutcome::Delivered;
         }
-        if !wait() {
-            return KeyboardDeliveryOutcome::TimedOut;
+        if offset > high_water {
+            high_water = offset;
+            last_progress = now;
         }
+        if now.saturating_sub(last_progress) >= DELIVERY_NO_PROGRESS_BUDGET {
+            return KeyboardDeliveryOutcome::NoProgress;
+        }
+        pause();
     }
 }
 
 #[cfg(test)]
 mod keyboard_delivery_tests {
     use super::*;
+    use crate::types::MacosNewlineMode;
+    use std::cell::Cell;
 
     #[test]
-    fn posted_input_waits_until_target_consumes_the_last_character() {
-        // A selected range / intermediate caret is not an insertion receipt.
+    fn cumulative_receipt_counts_only_posted_unicode_and_ignores_swallowed_cr() {
+        let mut progress = KeyboardDeliveryProgress::new(Some(7));
+        assert_eq!(progress.expected(), DeliveryExpectation::NothingPosted);
+        progress.record_posted("A🙂\r", MacosNewlineMode::ShiftReturn);
+        progress.record_posted("\n界", MacosNewlineMode::ShiftReturn);
+        assert_eq!(
+            progress.expected(),
+            DeliveryExpectation::Caret {
+                start: 7,
+                expected: 12
+            }
+        );
+    }
+
+    #[test]
+    fn submitting_return_and_unknown_offsets_keep_posted_input_fallback() {
+        let mut progress = KeyboardDeliveryProgress::new(Some(5));
+        progress.record_posted("first", MacosNewlineMode::Return);
+        progress.record_posted("\nsecond", MacosNewlineMode::Return);
+        progress.record_posted("more", MacosNewlineMode::Return);
+        assert_eq!(progress.expected(), DeliveryExpectation::Unavailable);
+        let mut unknown = KeyboardDeliveryProgress::new(None);
+        unknown.record_posted("text", MacosNewlineMode::ShiftReturn);
+        assert_eq!(unknown.expected(), DeliveryExpectation::Unavailable);
+        let mut cr = KeyboardDeliveryProgress::new(None);
+        cr.record_posted("\r", MacosNewlineMode::Return);
+        assert_eq!(cr.expected(), DeliveryExpectation::NothingPosted);
+    }
+
+    #[test]
+    fn delivery_offset_overflow_does_not_wrap_into_a_false_receipt() {
+        let mut progress = KeyboardDeliveryProgress::new(Some(usize::MAX));
+        progress.record_posted("x", MacosNewlineMode::ShiftReturn);
+        assert_eq!(progress.expected(), DeliveryExpectation::Unavailable);
+    }
+
+    #[test]
+    fn final_delivery_waits_for_the_cumulative_end_not_a_selected_range() {
         let mut samples = [(120, 20), (101, 0), (119, 0), (120, 0)].into_iter();
-        let mut waits = 0;
+        let clock = Cell::new(Duration::ZERO);
         assert_eq!(
             wait_for_caret_delivery(
                 100,
-                &"字".repeat(20),
+                120,
                 || samples.next(),
-                || {
-                    waits += 1;
-                    true
-                }
+                || clock.get(),
+                || clock.set(clock.get() + Duration::from_millis(10))
             ),
             KeyboardDeliveryOutcome::Delivered
         );
-        assert_eq!(waits, 3);
+        assert_eq!(clock.get(), Duration::from_millis(30));
     }
 
     #[test]
-    fn unavailable_or_stalled_targets_do_not_wait_forever() {
+    fn stale_readable_caret_stops_after_short_no_progress_budget() {
+        let clock = Cell::new(Duration::ZERO);
         assert_eq!(
             wait_for_caret_delivery(
-                0,
-                "input",
-                || None,
-                || panic!("unavailable target must stop")
+                100,
+                120,
+                || Some((100, 0)),
+                || clock.get(),
+                || clock.set(clock.get() + Duration::from_millis(10))
             ),
-            KeyboardDeliveryOutcome::Unavailable
+            KeyboardDeliveryOutcome::NoProgress
         );
-        let mut waits = 0;
+        assert_eq!(clock.get(), DELIVERY_NO_PROGRESS_BUDGET);
+    }
+
+    #[test]
+    fn progressing_target_can_take_longer_than_one_no_progress_budget() {
+        let clock = Cell::new(Duration::ZERO);
+        let offset = Cell::new(0);
         assert_eq!(
             wait_for_caret_delivery(
                 0,
-                "input",
-                || Some((3, 0)),
+                5,
                 || {
-                    waits += 1;
-                    waits < 3
-                }
+                    offset.set(offset.get() + 1);
+                    Some((offset.get(), 0))
+                },
+                || clock.get(),
+                || clock.set(clock.get() + Duration::from_millis(200))
+            ),
+            KeyboardDeliveryOutcome::Delivered
+        );
+        assert_eq!(clock.get(), Duration::from_millis(800));
+    }
+
+    #[test]
+    fn even_progressing_targets_have_a_hard_deadline() {
+        let clock = Cell::new(Duration::ZERO);
+        let offset = Cell::new(0);
+        assert_eq!(
+            wait_for_caret_delivery(
+                0,
+                usize::MAX,
+                || {
+                    offset.set(offset.get() + 1);
+                    Some((offset.get(), 0))
+                },
+                || clock.get(),
+                || clock.set(clock.get() + Duration::from_millis(100))
             ),
             KeyboardDeliveryOutcome::TimedOut
         );
-        assert_eq!(waits, 3);
+        assert_eq!(clock.get(), DELIVERY_TOTAL_BUDGET);
     }
 
     #[test]
-    fn unicode_and_crlf_wait_for_the_actual_utf16_end() {
-        let mut samples = [(11, 0), (12, 0)].into_iter();
-        let mut waits = 0;
+    fn unavailable_range_never_waits() {
         assert_eq!(
             wait_for_caret_delivery(
-                7,
-                "A🙂\r\n界",
-                || samples.next(),
-                || {
-                    waits += 1;
-                    true
-                }
+                0,
+                5,
+                || None,
+                || Duration::ZERO,
+                || panic!("unavailable target must not wait")
             ),
-            KeyboardDeliveryOutcome::Delivered
+            KeyboardDeliveryOutcome::Unavailable
         );
+    }
+
+    #[test]
+    fn a_slow_ax_read_cannot_extend_the_total_deadline() {
+        let clock = Cell::new(Duration::ZERO);
         assert_eq!(
-            waits, 1,
-            "must neither stop at a scalar offset nor wait for swallowed CR"
-        );
-        assert_eq!(
-            wait_for_caret_delivery(7, "\r", || panic!("no keys were posted"), || false),
-            KeyboardDeliveryOutcome::Delivered
+            wait_for_caret_delivery(
+                0,
+                5,
+                || {
+                    clock.set(DELIVERY_TOTAL_BUDGET);
+                    Some((5, 0))
+                },
+                || clock.get(),
+                || panic!("deadline already elapsed"),
+            ),
+            KeyboardDeliveryOutcome::TimedOut
         );
     }
 }

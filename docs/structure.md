@@ -41,7 +41,8 @@
 | 共享业务入口 | `crates/openless-core/src/api.rs` | `events.rs`、`ports.rs`、`domains.rs`、`config.rs` |
 | 听写和服务 | Core `dictation_engine.rs`、`provider_*`、`asr/`、`polish.rs` | Host 的录音、插入和本地模型适配 |
 | 历史、词库、纠错、风格包 | Core `history.rs`、`vocabulary.rs`、`correction.rs`、`style_pack_store.rs` | Tauri `persistence/` 与对应 command |
-| 官方云同步 | Core `cloud_sync.rs`、`cloud_sync_types.rs`、`cloud_sync_validation.rs`、`cloud_sync_transaction.rs` | Tauri `commands/cloud_sync.rs`；GitHub 身份、有限字段与版本冲突见 [云同步合同](cloud-sync.md) |
+| 加密云同步 | Core `cloud_sync_e2ee/`、`cloud_sync_e2ee_protocol/`、`cloud_sync_e2ee_documents/`、`cloud_sync_e2ee_store/` | Tauri `commands/cloud_sync_e2ee.rs`、系统凭据适配及 `src/lib/encryptedSyncUiBridge.ts`；见 [客户端边界](encrypted-cloud-sync.md) |
+| 旧手动同步 | Core `cloud_sync.rs`、`cloud_sync_types.rs`、`cloud_sync_validation.rs`、`cloud_sync_transaction.rs` | Tauri `commands/cloud_sync.rs`；仅保留旧有限字段协议，见 [旧同步合同](cloud-sync.md) |
 | Tauri 组装与系统能力 | `src-tauri/src/coordinator.rs`、`core_adapters.rs`、`tauri_coordinator_host.rs` | 窗口、热键、权限、平台输入与生命周期 |
 | Linux 原生接入 | `linux-egui/src/main.rs`、`lib.rs`、`backend.rs` | `audio/credentials/fcitx5/hotkeys/settings` 等 Host 模块；见 [交接](linux-egui-handoff/README.md) |
 | Android 集成 | `android/`、`src-tauri/src/android/` | `@android` 别名与 `merge-android-*.mjs` 生成链 |

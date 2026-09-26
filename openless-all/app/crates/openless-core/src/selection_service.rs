@@ -55,6 +55,7 @@ struct SelectionServiceInner {
     activity: Arc<ActivityStore>,
     credential_store: Arc<dyn CredentialStore>,
     state: RwLock<SelectionState>,
+    runtime_work: Arc<crate::voice_session::RuntimeActivityGate>,
 }
 
 pub(crate) struct SelectionService {
@@ -97,12 +98,41 @@ impl SelectionService {
                 activity: dependencies.activity,
                 credential_store: dependencies.credential_store,
                 state: RwLock::new(SelectionState::default()),
+                runtime_work: Arc::new(crate::voice_session::RuntimeActivityGate::default()),
             }),
         }
     }
 }
 
 impl SelectionServiceInner {
+    fn begin_runtime_work(
+        &self,
+    ) -> Result<crate::voice_session::RuntimeActivityHold, BackendError> {
+        let state = self.state.write().expect("selection state lock poisoned");
+        if matches!(
+            state.snapshot.phase,
+            SelectionPhase::Capturing | SelectionPhase::Preview | SelectionPhase::Applying
+        ) || state.reverting
+        {
+            Ok(self.runtime_work.existing_work())
+        } else {
+            self.runtime_work.acquire()
+        }
+    }
+
+    async fn cancel_runtime_best_effort(&self, session_id: SessionId) {
+        let polisher = Arc::clone(&self.polisher);
+        let runtime = Arc::clone(&self.runtime);
+        let _ = self
+            .runtime_work
+            .cleanup(Box::pin(async move {
+                let _ = polisher.cancel(session_id).await;
+                let _ = runtime.cancel(session_id).await;
+                Ok(())
+            }))
+            .await;
+    }
+
     fn hide_preview(&self) {
         if let Err(error) = self.host_actions.request(HostAction::HideSelectionPreview) {
             log::warn!("failed to hide selection preview: {error}");
@@ -581,6 +611,27 @@ impl SelectionServiceInner {
 }
 
 impl SelectionApi for SelectionService {
+    fn bind_runtime_restore_guard(
+        &self,
+        guard: crate::domains::RuntimeRestoreGuard,
+        spawner: Arc<dyn crate::config::TaskSpawner>,
+    ) -> Result<(), BackendError> {
+        self.inner.runtime_work.bind(guard, spawner)
+    }
+
+    fn runtime_restore_idle(&self) -> bool {
+        self.inner.state.read().is_ok_and(|state| {
+            matches!(
+                state.snapshot.phase,
+                SelectionPhase::Idle
+                    | SelectionPhase::Completed
+                    | SelectionPhase::Cancelled
+                    | SelectionPhase::Failed
+            ) && !state.reverting
+                && self.inner.runtime_work.runtime_restore_idle()
+        })
+    }
+
     fn snapshot(&self) -> BoxFuture<'static, Result<SelectionSnapshot, BackendError>> {
         let inner = Arc::clone(&self.inner);
         Box::pin(async move {
@@ -599,6 +650,7 @@ impl SelectionApi for SelectionService {
     ) -> BoxFuture<'static, Result<SessionId, BackendError>> {
         let inner = Arc::clone(&self.inner);
         Box::pin(async move {
+            let _runtime = inner.begin_runtime_work()?;
             let session_id = inner.begin(&request)?;
             let result = async {
                 let capture = inner
@@ -695,8 +747,7 @@ impl SelectionApi for SelectionService {
             }
             .await;
             if result.is_err() && inner.fail_if_active(session_id) {
-                let _ = inner.polisher.cancel(session_id).await;
-                let _ = inner.runtime.cancel(session_id).await;
+                inner.cancel_runtime_best_effort(session_id).await;
                 inner.hide_preview();
             }
             result
@@ -710,6 +761,7 @@ impl SelectionApi for SelectionService {
     ) -> BoxFuture<'static, Result<(), BackendError>> {
         let inner = Arc::clone(&self.inner);
         Box::pin(async move {
+            let _runtime = inner.begin_runtime_work()?;
             let (source_text, replacement_text) = inner.applying_text(session_id, text)?;
             let replacement_text = inner.corrected_replacement(session_id, replacement_text)?;
             let result = inner
@@ -727,8 +779,7 @@ impl SelectionApi for SelectionService {
                     // 平台错误（焦点恢复 / 目标复核抖动）保持 preview 可重试——
                     // 否则窗口被隐藏、busy 卡死，表现为「点确认没反应」。
                     if inner.settle_confirm_failure(session_id, &error) {
-                        let _ = inner.polisher.cancel(session_id).await;
-                        let _ = inner.runtime.cancel(session_id).await;
+                        inner.cancel_runtime_best_effort(session_id).await;
                         inner.hide_preview();
                     }
                     Err(error)
@@ -742,7 +793,7 @@ impl SelectionApi for SelectionService {
         session_id: Option<SessionId>,
     ) -> BoxFuture<'static, Result<(), BackendError>> {
         let inner = Arc::clone(&self.inner);
-        Box::pin(async move {
+        self.inner.runtime_work.cleanup(Box::pin(async move {
             let active_session = {
                 let mut state = inner.state.write().expect("selection state lock poisoned");
                 let Some(active_session) = state.snapshot.session_id else {
@@ -771,12 +822,13 @@ impl SelectionApi for SelectionService {
             let runtime_result = inner.runtime.cancel(active_session).await;
             polish_result?;
             runtime_result
-        })
+        }))
     }
 
     fn revert(&self, session_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
         let inner = Arc::clone(&self.inner);
         Box::pin(async move {
+            let _runtime = inner.begin_runtime_work()?;
             inner.begin_revert(session_id)?;
             match inner.runtime.revert(session_id).await {
                 Ok(outcome) => inner.finish_revert(session_id, outcome),

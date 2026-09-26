@@ -296,6 +296,19 @@ impl CloudSyncService {
     }
 
     fn restore_local(&self, payload: &CloudSyncPayload) -> Result<(), BackendError> {
+        // The legacy four-command protocol has no encrypted crash journal or Host-effect
+        // convergence. It must never bypass an installed E2EE repository write barrier.
+        if crate::cloud_sync_e2ee_store::gate::gate_for_path(
+            self.repositories.preferences.persistence_path(),
+        )
+        .map_err(|error| BackendError::new(BackendErrorCode::InvalidState, error.to_string()))?
+        .is_some()
+        {
+            return Err(BackendError::new(
+                BackendErrorCode::Unsupported,
+                "当前仓库暂不支持旧版云端恢复，请使用加密云同步的确认恢复流程。",
+            ));
+        }
         validate_payload(payload).map_err(|_| invalid_remote())?;
         let mut next_packs = validated_native_packs(payload)?;
         let dictionary: Vec<DictionaryEntry> = payload
@@ -625,5 +638,96 @@ fn validate_base_revision(revision: u64) -> Result<(), BackendError> {
         Err(invalid("云端版本号无效，请先刷新云端状态。"))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod encrypted_gate_tests {
+    use super::*;
+    struct Temp(PathBuf);
+    impl Temp {
+        fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("legacy-sync-gate-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    fn service(repositories: BackendRepositories) -> CloudSyncService {
+        let marketplace = MarketplaceService::new(
+            crate::MarketplaceConfig::new("https://market.example.test").unwrap(),
+            Arc::new(crate::InMemoryCredentialStore::default()),
+            repositories.preferences.clone(),
+            repositories.style_packs.clone(),
+            crate::events::BackendEventPublisher::new(Arc::new(crate::events::EventBus::new(8))),
+            Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        )
+        .unwrap();
+        CloudSyncService::new(
+            Arc::new(marketplace),
+            repositories,
+            Arc::new(Mutex::new(())),
+        )
+    }
+    #[test]
+    fn registered_encrypted_repositories_reject_legacy_restore_even_when_gate_is_idle() {
+        for hold_exclusive in [false, true] {
+            let temp = Temp::new();
+            let gate = crate::cloud_sync_e2ee_store::gate::open_for_data_dir(&temp.0).unwrap();
+            let repositories = BackendRepositories::open(&temp.0).unwrap();
+            let sync = service(repositories.clone());
+            let mut payload = sync.capture(CloudSyncUiPreferences::default()).unwrap();
+            payload.dictionary.push(SyncDictionaryEntry {
+                id: "legacy-extra".into(),
+                phrase: "must not persist".into(),
+                note: None,
+                enabled: true,
+                hits: 0,
+                created_at: "2026-09-26T00:00:00Z".into(),
+            });
+            let generation = gate.generation().unwrap();
+            let preferences = std::fs::read(temp.0.join("preferences.json")).ok();
+            let styles = std::fs::read(temp.0.join("style-packs.json")).unwrap();
+            let _permit = hold_exclusive.then(|| gate.try_exclusive().unwrap());
+            assert_eq!(
+                sync.restore_local(&payload).unwrap_err().code,
+                BackendErrorCode::Unsupported
+            );
+            assert!(repositories.vocabulary.list().unwrap().is_empty());
+            assert_eq!(
+                std::fs::read(temp.0.join("preferences.json")).ok(),
+                preferences
+            );
+            assert_eq!(
+                std::fs::read(temp.0.join("style-packs.json")).unwrap(),
+                styles
+            );
+            assert_eq!(gate.generation().unwrap(), generation);
+        }
+    }
+    #[test]
+    fn standalone_legacy_repositories_without_an_encrypted_gate_keep_their_existing_restore() {
+        let temp = Temp::new();
+        let repositories = BackendRepositories::open(&temp.0).unwrap();
+        let sync = service(repositories.clone());
+        let mut payload = sync.capture(CloudSyncUiPreferences::default()).unwrap();
+        payload.dictionary.push(SyncDictionaryEntry {
+            id: "legacy-extra".into(),
+            phrase: "standalone restore".into(),
+            note: None,
+            enabled: true,
+            hits: 0,
+            created_at: "2026-09-26T00:00:00Z".into(),
+        });
+        sync.restore_local(&payload).unwrap();
+        assert_eq!(
+            repositories.vocabulary.list().unwrap()[0].phrase,
+            "standalone restore"
+        );
     }
 }

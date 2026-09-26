@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use chrono::Utc;
 
 use crate::errors::{BackendError, BackendErrorCode};
-use crate::persistence::{atomic_write, persistence_error, read_or_default};
+use crate::persistence::{atomic_write, persistence_error};
 use crate::shared_types::LEARNED_VOCAB_NOTE;
 use crate::types::{DictionaryEntry, VocabPreset, VocabPresetStore};
 
@@ -81,7 +81,28 @@ impl DictionaryStore {
 
     pub fn list(&self) -> Result<Vec<DictionaryEntry>, BackendError> {
         let _guard = self.lock_store()?;
-        read_or_default(&self.path)
+        crate::persistence::read_lossless_rows(&self.path, &["notes", "hitCount"])
+    }
+
+    pub(crate) fn sync_snapshot(
+        &self,
+        permit: &crate::cloud_sync_e2ee_store::gate::ExclusivePermit,
+    ) -> Result<Vec<DictionaryEntry>, BackendError> {
+        crate::cloud_sync_e2ee_store::gate::require_exclusive(&self.path, permit)?;
+        let _guard = self.lock_store()?;
+        crate::persistence::read_lossless_rows(&self.path, &["notes", "hitCount"])
+    }
+
+    pub(crate) fn sync_replace_all(
+        &self,
+        records: &[DictionaryEntry],
+        permit: &crate::cloud_sync_e2ee_store::gate::ExclusivePermit,
+    ) -> Result<(), BackendError> {
+        crate::cloud_sync_e2ee_store::gate::require_exclusive(&self.path, permit)?;
+        let _guard = self.lock_store()?;
+        let bytes = serde_json::to_vec_pretty(records)
+            .map_err(|_| persistence_error("encode restored dictionary"))?;
+        crate::persistence::atomic_write_for_sync(&self.path, &bytes, permit)
     }
 
     /// Cloud restore locks every participating store before preparing or replacing any file.
@@ -97,12 +118,18 @@ impl DictionaryStore {
         phrase: String,
         note: Option<String>,
     ) -> Result<DictionaryEntry, BackendError> {
-        let _guard = self.lock_store()?;
-        let mut entries = self.read_locked()?;
-        let entry = new_entry(phrase, note);
-        entries.insert(0, entry.clone());
-        self.write_locked(&entries)?;
-        Ok(entry)
+        crate::cloud_sync_e2ee_store::gate::with_registered_mutation(
+            &self.path,
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let _guard = self.lock_store()?;
+                let mut entries = self.read_locked()?;
+                let entry = new_entry(phrase, note);
+                entries.insert(0, entry.clone());
+                self.write_locked(&entries)?;
+                Ok(entry)
+            },
+        )
     }
 
     /// Learned entries are deduplicated and appended behind manual entries.
@@ -111,111 +138,141 @@ impl DictionaryStore {
         phrase: String,
         note: Option<String>,
     ) -> Result<Option<DictionaryEntry>, BackendError> {
-        let phrase = phrase.trim().to_string();
-        if phrase.is_empty() {
-            return Ok(None);
-        }
-        let _guard = self.lock_store()?;
-        let mut entries = self.read_locked()?;
-        if entries.iter().any(|entry| entry.phrase == phrase) {
-            return Ok(None);
-        }
-        let entry = new_entry(phrase, note);
-        entries.push(entry.clone());
-        self.write_locked(&entries)?;
-        Ok(Some(entry))
+        crate::cloud_sync_e2ee_store::gate::with_registered_mutation(
+            &self.path,
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let phrase = phrase.trim().to_string();
+                if phrase.is_empty() {
+                    return Ok(None);
+                }
+                let _guard = self.lock_store()?;
+                let mut entries = self.read_locked()?;
+                if entries.iter().any(|entry| entry.phrase == phrase) {
+                    return Ok(None);
+                }
+                let entry = new_entry(phrase, note);
+                entries.push(entry.clone());
+                self.write_locked(&entries)?;
+                Ok(Some(entry))
+            },
+        )
     }
 
     pub fn remove(&self, id: &str) -> Result<(), BackendError> {
-        let _guard = self.lock_store()?;
-        let mut entries = self.read_locked()?;
-        let before = entries.len();
-        entries.retain(|entry| entry.id != id);
-        if entries.len() != before {
-            self.write_locked(&entries)?;
-        }
-        Ok(())
+        crate::cloud_sync_e2ee_store::gate::with_registered_mutation(
+            &self.path,
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let _guard = self.lock_store()?;
+                let mut entries = self.read_locked()?;
+                let before = entries.len();
+                entries.retain(|entry| entry.id != id);
+                if entries.len() != before {
+                    self.write_locked(&entries)?;
+                }
+                Ok(())
+            },
+        )
     }
 
     pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<(), BackendError> {
-        let _guard = self.lock_store()?;
-        let mut entries = self.read_locked()?;
-        let entry = entries
-            .iter_mut()
-            .find(|entry| entry.id == id)
-            .ok_or_else(|| {
-                BackendError::new(
-                    BackendErrorCode::InvalidArgument,
-                    "dictionary entry not found",
-                )
-            })?;
-        if entry.enabled != enabled {
-            entry.enabled = enabled;
-            self.write_locked(&entries)?;
-        }
-        Ok(())
+        crate::cloud_sync_e2ee_store::gate::with_registered_mutation(
+            &self.path,
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let _guard = self.lock_store()?;
+                let mut entries = self.read_locked()?;
+                let entry = entries
+                    .iter_mut()
+                    .find(|entry| entry.id == id)
+                    .ok_or_else(|| {
+                        BackendError::new(
+                            BackendErrorCode::InvalidArgument,
+                            "dictionary entry not found",
+                        )
+                    })?;
+                if entry.enabled != enabled {
+                    entry.enabled = enabled;
+                    self.write_locked(&entries)?;
+                }
+                Ok(())
+            },
+        )
     }
 
     /// Rename an entry in place so its id / hits / enabled state survive the edit.
     /// Empty phrases and phrases colliding with another entry are rejected.
     pub fn update_phrase(&self, id: &str, phrase: String) -> Result<(), BackendError> {
-        let phrase = phrase.trim().to_string();
-        if phrase.is_empty() {
-            return Err(BackendError::new(
-                BackendErrorCode::InvalidArgument,
-                "dictionary phrase is empty",
-            ));
-        }
-        let _guard = self.lock_store()?;
-        let mut entries = self.read_locked()?;
-        if entries
-            .iter()
-            .any(|entry| entry.id != id && entry.phrase == phrase)
-        {
-            return Err(BackendError::new(
-                BackendErrorCode::InvalidArgument,
-                "dictionary phrase already exists",
-            ));
-        }
-        let entry = entries
-            .iter_mut()
-            .find(|entry| entry.id == id)
-            .ok_or_else(|| {
-                BackendError::new(
-                    BackendErrorCode::InvalidArgument,
-                    "dictionary entry not found",
-                )
-            })?;
-        if entry.phrase != phrase {
-            entry.phrase = phrase;
-            self.write_locked(&entries)?;
-        }
-        Ok(())
+        crate::cloud_sync_e2ee_store::gate::with_registered_mutation(
+            &self.path,
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let phrase = phrase.trim().to_string();
+                if phrase.is_empty() {
+                    return Err(BackendError::new(
+                        BackendErrorCode::InvalidArgument,
+                        "dictionary phrase is empty",
+                    ));
+                }
+                let _guard = self.lock_store()?;
+                let mut entries = self.read_locked()?;
+                if entries
+                    .iter()
+                    .any(|entry| entry.id != id && entry.phrase == phrase)
+                {
+                    return Err(BackendError::new(
+                        BackendErrorCode::InvalidArgument,
+                        "dictionary phrase already exists",
+                    ));
+                }
+                let entry = entries
+                    .iter_mut()
+                    .find(|entry| entry.id == id)
+                    .ok_or_else(|| {
+                        BackendError::new(
+                            BackendErrorCode::InvalidArgument,
+                            "dictionary entry not found",
+                        )
+                    })?;
+                if entry.phrase != phrase {
+                    entry.phrase = phrase;
+                    self.write_locked(&entries)?;
+                }
+                Ok(())
+            },
+        )
     }
 
     /// Count case-insensitive, non-overlapping occurrences in final output.
     pub fn record_hits(&self, text: &str) -> Result<u64, BackendError> {
-        if text.is_empty() {
-            return Ok(0);
-        }
-        let _guard = self.lock_store()?;
-        let mut entries = self.read_locked()?;
-        let haystack = text.to_lowercase();
-        let mut total = 0_u64;
-        let mut changed = false;
-        for entry in entries.iter_mut().filter(|entry| entry.enabled) {
-            let needle = entry.phrase.trim().to_lowercase();
-            let count = count_occurrences(&haystack, &needle);
-            if count > 0 {
-                entry.hits = entry.hits.saturating_add(count);
-                total = total.saturating_add(count);
-                changed = true;
-            }
-        }
-        if changed {
-            self.write_locked(&entries)?;
-        }
-        Ok(total)
+        crate::cloud_sync_e2ee_store::gate::with_registered_mutation(
+            &self.path,
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                if text.is_empty() {
+                    return Ok(0);
+                }
+                let _guard = self.lock_store()?;
+                let mut entries = self.read_locked()?;
+                let haystack = text.to_lowercase();
+                let mut total = 0_u64;
+                let mut changed = false;
+                for entry in entries.iter_mut().filter(|entry| entry.enabled) {
+                    let needle = entry.phrase.trim().to_lowercase();
+                    let count = count_occurrences(&haystack, &needle);
+                    if count > 0 {
+                        entry.hits = entry.hits.saturating_add(count);
+                        total = total.saturating_add(count);
+                        changed = true;
+                    }
+                }
+                if changed {
+                    self.write_locked(&entries)?;
+                }
+                Ok(total)
+            },
+        )
     }
 
     fn lock_store(&self) -> Result<std::sync::MutexGuard<'_, ()>, BackendError> {
@@ -225,7 +282,7 @@ impl DictionaryStore {
     }
 
     fn read_locked(&self) -> Result<Vec<DictionaryEntry>, BackendError> {
-        read_or_default(&self.path)
+        crate::persistence::read_lossless_rows(&self.path, &["notes", "hitCount"])
     }
 
     fn write_locked(&self, entries: &[DictionaryEntry]) -> Result<(), BackendError> {
@@ -263,7 +320,7 @@ fn count_occurrences(haystack: &str, needle: &str) -> u64 {
 }
 
 pub fn list_vocab_presets(data_dir: &Path) -> Result<VocabPresetStore, BackendError> {
-    read_or_default(&data_dir.join("vocab-presets.json"))
+    crate::persistence::read_lossless_object(&data_dir.join("vocab-presets.json"))
 }
 
 pub fn builtin_vocab_presets() -> Vec<VocabPreset> {
@@ -295,9 +352,29 @@ pub fn resolve_vocab_presets(store: &VocabPresetStore) -> Vec<VocabPreset> {
 }
 
 pub fn save_vocab_presets(data_dir: &Path, store: &VocabPresetStore) -> Result<(), BackendError> {
-    let json = serde_json::to_vec_pretty(store)
-        .map_err(|_| persistence_error("encode vocabulary presets"))?;
-    atomic_write(&data_dir.join("vocab-presets.json"), &json)
+    crate::cloud_sync_e2ee_store::gate::with_registered_mutation(
+        &data_dir.join("vocab-presets.json"),
+        crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+        || {
+            // A typed replacement may not erase fields introduced by a newer app.
+            let _: VocabPresetStore =
+                crate::persistence::read_lossless_object(&data_dir.join("vocab-presets.json"))?;
+            let json = serde_json::to_vec_pretty(store)
+                .map_err(|_| persistence_error("encode vocabulary presets"))?;
+            atomic_write(&data_dir.join("vocab-presets.json"), &json)
+        },
+    )
+}
+
+pub(crate) fn save_vocab_presets_for_sync(
+    data_dir: &Path,
+    store: &VocabPresetStore,
+    permit: &crate::cloud_sync_e2ee_store::gate::ExclusivePermit,
+) -> Result<(), BackendError> {
+    let path = data_dir.join("vocab-presets.json");
+    let bytes = serde_json::to_vec_pretty(store)
+        .map_err(|_| persistence_error("encode restored vocabulary presets"))?;
+    crate::persistence::atomic_write_for_sync(&path, &bytes, permit)
 }
 
 #[cfg(test)]

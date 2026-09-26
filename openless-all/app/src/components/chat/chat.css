@@ -350,10 +350,159 @@
 
 /* Opaque backing prevents desktop text from bleeding through the floating panel. */
 .olchat-shell {
-  background-color: #fbfbfc;
-  background-image:
-    linear-gradient(rgba(251, 251, 252, 0.985), rgba(248, 248, 250, 0.985)), var(--ol-frost-grain);
-  color: #18181b;
+  --ol-surface: #ffffff;
+  --ol-ink: #202937;
+  --ol-ink-2: #455166;
+  --ol-ink-3: #68758a;
+  --ol-line: #e7ebf1;
+  --ol-line-soft: #f0f3f7;
+  --ol-blue: #3164d6;
+  --ol-blue-soft: #edf3ff;
+  --ol-control-muted: #edf1f7;
+  --ol-dialog-wash: #f6f8fd;
+  --foreground: #202937;
+  --muted-foreground: #68758a;
+  --muted: #f1f4f8;
+  --primary: #3164d6;
+  --primary-foreground: #ffffff;
+  --border: #e3e9f1;
+  --input: #dce3ed;
+  padding: 0;
+  background: #fff;
+  color: #202937;
   isolation: isolate;
+  border: 1px solid #dfe5ee;
+  border-radius: 22px;
+  box-shadow: inset 0 1px 0 #fff;
+}
+.olchat-shell.olchat-embedded {
+  border: 0;
+  border-radius: 0;
+}
+.olchat-shell > [data-slot='card-content'] {
+  min-height: 0;
+  background: linear-gradient(180deg, #fafbfd 0, #fff 100px);
+}
+.olchat-shell [data-slot='message-scroller-content'] {
+  padding: 20px;
+}
+.olchat-shell [data-slot='message'] {
+  gap: 10px;
+}
+.olchat-shell [data-slot='message-avatar'] {
+  align-self: flex-start;
+  margin-top: 3px;
+  width: 27px;
+  min-width: 27px;
+  height: 27px;
+  box-shadow: 0 0 0 2px #fff;
+}
+.olchat-shell [data-slot='bubble'] {
+  max-width: 90%;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+.olchat-shell [data-slot='message'][data-align='end'] [data-slot='bubble-content'] {
+  color: #24416e;
+  background: #edf3ff;
+  border: 1px solid #e2eaff;
+  border-radius: 15px 15px 5px 15px;
+}
+.olchat-shell [data-slot='bubble'][data-variant='secondary'] [data-slot='bubble-content'] {
+  background: #f4f6f9;
+  border-color: #eef1f5;
+  border-radius: 12px;
+  color: #68758a;
+}
+.olchat-shell [data-slot='bubble-content'] {
+  font-size: 13px;
+  line-height: 1.65;
+}
+.olchat-shell .olchat-answer {
+  font-size: 13px;
+  line-height: 1.75;
+  color: #29364a;
+}
+.olchat-shell .olchat-answer p {
+  margin-bottom: 9px;
+}
+.olchat-shell .olchat-answer li {
+  margin: 4px 0;
+}
+.olchat-shell > [data-slot='card-footer'] {
+  flex-shrink: 0;
+  padding: 14px 16px 16px;
+  background: linear-gradient(180deg, #fff, #f7f9fd);
+  border-top: 1px solid #f0f3f7;
+}
+.olchat-composer[data-slot='input-group'] {
+  min-height: 83px;
+  border: 1px solid #dce3ed;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 3px 12px rgba(25, 46, 80, 0.035);
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+.olchat-composer[data-slot='input-group']:focus-within {
+  border-color: #8ba9eb;
+  box-shadow: 0 0 0 3px rgba(49, 100, 214, 0.09);
+}
+.olchat-composer input:not([type='checkbox']) {
+  min-height: 42px;
+  padding: 12px 14px 7px;
+  font-size: 13px;
+  color: #26344a;
+}
+.olchat-composer input::placeholder {
+  color: #8490a2;
+}
+.olchat-composer [data-slot='input-group-addon'] {
+  padding: 0 10px 10px;
+  gap: 8px;
+}
+.olchat-composer button {
+  min-width: 30px;
+  height: 30px;
+  border-radius: 10px;
+}
+.olchat-composer button[type='submit']:not(:disabled) {
+  box-shadow: 0 3px 7px rgba(49, 100, 214, 0.18);
+}
+.olchat-composer input[type='checkbox'] {
+  accent-color: #3164d6;
+}
+.olchat-composer:has([data-slot='input-group-addon']) {
+  --radius-2xl: 16px;
+}
+.olchat-empty {
+  padding: 30px 24px;
+}
+.olchat-empty [data-slot='empty-media'] {
+  width: 56px;
+  height: 56px;
+  margin-bottom: 8px;
+  border: 1px solid #e0e9fb;
   border-radius: 18px;
+  color: #5680d7;
+  background: linear-gradient(145deg, #fff, #edf3ff);
+  box-shadow: 0 7px 20px rgba(30, 64, 120, 0.04);
+}
+.olchat-empty [data-slot='empty-title'] {
+  font-size: 15px;
+  font-weight: 600;
+}
+.olchat-empty [data-slot='empty-description'] {
+  max-width: 245px;
+  font-size: 12px;
+  line-height: 1.75;
+}
+@media (prefers-reduced-motion: reduce) {
+  .olchat-shell-out,
+  .olchat-composer {
+    animation: none;
+    transition: none;
+  }
 }

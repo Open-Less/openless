@@ -50,6 +50,9 @@
       "history_changed",
       "vocabulary_changed",
       "style_packs_changed",
+      "cloud_sync_state_changed",
+      "cloud_sync_conflict_detected",
+      "cloud_sync_restore_completed",
       "download_progress",
       "permission_changed",
       "hotkey_status_changed",
@@ -82,6 +85,9 @@
       "history_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "history_changed", "payload": {"revision": 1}}},
       "vocabulary_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "vocabulary_changed", "payload": {"revision": 1}}},
       "style_packs_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "style_packs_changed", "payload": {"revision": 1}}},
+      "cloud_sync_state_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "cloud_sync_state_changed", "payload": {"sequence": "1", "accountId": null, "vaultId": null, "taskId": null, "status": {"sequence": "1", "enabled": false, "authState": "signed_out", "keyState": "locked", "syncState": "disabled", "account": null, "vaultId": null, "keyId": null, "localGeneration": "0", "lastSyncedLocalGeneration": null, "remoteRevision": null, "lastSuccessfulSyncAt": null, "pendingOperationId": null, "lastError": null, "recoveryRequired": false, "hasCloudSnapshot": null, "taskId": null, "serviceOrigin": "https://apic.openless.top:9443", "consentVersion": null, "backupRetentionDays": null}}}},
+      "cloud_sync_conflict_detected": {"sequence": 1, "sessionId": null, "kind": {"type": "cloud_sync_conflict_detected", "payload": {"sequence": "1", "accountId": "118526", "vaultId": "11111111-1111-4111-8111-111111111111", "taskId": null, "preview": {"previewId": "22222222-2222-4222-8222-222222222222", "unconfirmedOperationId": null, "observedRevision": "1", "localGeneration": "1", "counts": {}, "deviceSettingsToReview": [], "conflicts": []}}}},
+      "cloud_sync_restore_completed": {"sequence": 1, "sessionId": null, "kind": {"type": "cloud_sync_restore_completed", "payload": {"sequence": "1", "accountId": "118526", "vaultId": "11111111-1111-4111-8111-111111111111", "taskId": null, "localGeneration": "1", "uiPreferences": {"locale": "zh-CN", "fontScale": "medium"}}}},
       "download_progress": {"sequence": 1, "sessionId": null, "kind": {"type": "download_progress", "payload": {"resourceId": "model", "completedBytes": 1, "totalBytes": null}}},
       "permission_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "permission_changed", "payload": {"microphone": "unknown", "accessibility": "unknown"}}},
       "hotkey_status_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "hotkey_status_changed", "payload": {"adapter": "unavailable", "state": "starting", "message": null, "lastError": null}}},
@@ -101,7 +107,11 @@
   },
   "lessComputerVoice": {
     "phases": ["starting", "recording", "transcribing", "idle"],
-    "sample": {"seq": 3, "kind": "voice_state", "sessionId": "00000000-0000-4000-8000-000000000000", "phase": "recording", "level": 0.5, "elapsedMs": 120}
+    "modes": ["submit", "dictate"],
+    "outcomes": ["submitted", "committed", "empty", "failed", "cancelled"],
+    "sample": {"seq": 3, "kind": "voice_state", "sessionId": "00000000-0000-4000-8000-000000000000", "phase": "recording", "level": 0.5, "elapsedMs": 120, "mode": "dictate", "transcript": "打开"},
+    "idleSample": {"seq": 4, "kind": "voice_state", "sessionId": "00000000-0000-4000-8000-000000000000", "phase": "idle", "level": 0.0, "elapsedMs": 120, "mode": "dictate", "transcript": "打开设置", "outcome": "committed"},
+    "legacySample": {"seq": 2, "kind": "voice_state", "sessionId": "00000000-0000-4000-8000-000000000000", "phase": "starting", "level": 0.0, "elapsedMs": 0}
   },
   "androidJni": {
     "fields": ["contractVersion", "ok", "payload", "error"],

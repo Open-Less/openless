@@ -178,7 +178,7 @@ assert.match(
 );
 assert.match(
   lessComputerPanel,
-  /reconciled\.reset\) \{\s*setTurns\(\[\]\);\s*setVoice\(null\)/,
+  /reconciled\.reset\) \{[^}]*?setTurns\(\[\]\);\s*setVoice\(null\)/,
   'a truncated replay must reset both the conversation and voice presentation',
 );
 
@@ -507,6 +507,29 @@ assert.doesNotMatch(
   coordinator,
   /pub fn less_computer_(?:window_dismiss|window_open|submit_text)\(/,
   'Coordinator must not own Less Computer command business or window wrappers',
+);
+for (const [command, args] of [
+  ['less_computer_voice_start', '{ mode }'],
+  ['less_computer_voice_stop', '{ sessionId }'],
+  ['less_computer_voice_cancel', '{ sessionId }'],
+  ['less_computer_task_cancel', 'undefined'],
+]) {
+  assert(lessComputerIpc.includes(`'${command}', ${args}`), `${command} wire drifted`);
+  assert.match(
+    qaCommand,
+    new RegExp(`pub (?:async )?fn ${command}\\([^]*?require_less_computer_window\\(&window\\)\\?`),
+    `${command} must only accept the Less Computer window`,
+  );
+}
+assert.match(
+  qaCommand,
+  /less_computer_voice_start\([^]*?mode: openless_core::LessComputerVoiceMode[^]*?start_less_computer_voice_from_panel\(mode\)/,
+  'panel voice must pass its delivery mode to the shared Host capture',
+);
+assert.match(
+  coordinator,
+  /start_less_computer_voice_from_panel\([^]*?publish_start_error: false/,
+  'panel voice start errors are returned to the composer, not posted into the conversation',
 );
 assert.match(
   stylePacksCommand,

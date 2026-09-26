@@ -129,6 +129,16 @@ pub enum LessComputerEventKind {
         phase: LessComputerVoicePhase,
         level: f32,
         elapsed_ms: u64,
+        /// `dictate` sessions deliver the transcript to the host composer
+        /// instead of starting an Agent turn.
+        #[serde(default)]
+        mode: LessComputerVoiceMode,
+        /// Full transcript observed so far, including live partial results.
+        #[serde(default)]
+        transcript: String,
+        /// Present only on the terminal `idle` snapshot of a capture.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<LessComputerVoiceOutcome>,
     },
     User {
         text: String,
@@ -165,6 +175,29 @@ pub enum LessComputerVoicePhase {
     Recording,
     Transcribing,
     Idle,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LessComputerVoiceMode {
+    /// Hotkey semantics: the final transcript becomes an Agent turn.
+    #[default]
+    Submit,
+    /// Composer dictation: the final transcript is returned for editing only.
+    Dictate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LessComputerVoiceOutcome {
+    /// The transcript was handed to the Agent.
+    Submitted,
+    /// A dictation transcript is ready for the composer.
+    Committed,
+    /// Recognition finished without any text.
+    Empty,
+    Failed,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -377,6 +410,9 @@ pub enum BackendEventKind {
     HistoryChanged(HistoryChange),
     VocabularyChanged(VocabularyChange),
     StylePacksChanged(StylePackChange),
+    CloudSyncStateChanged(crate::cloud_sync_e2ee::EncryptedSyncEvent),
+    CloudSyncConflictDetected(crate::cloud_sync_e2ee::EncryptedSyncConflictEvent),
+    CloudSyncRestoreCompleted(crate::cloud_sync_e2ee::EncryptedSyncRestoreEvent),
     DownloadProgress(DownloadProgress),
     PermissionChanged(PermissionSnapshot),
     HotkeyStatusChanged(HotkeyStatus),
@@ -763,6 +799,9 @@ mod tests {
                         phase,
                         level: 0.0,
                         elapsed_ms: 120,
+                        mode: LessComputerVoiceMode::Submit,
+                        transcript: String::new(),
+                        outcome: None,
                     },
                 }),
             );

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::errors::{BackendError, BackendErrorCode};
-use crate::persistence::{atomic_write, persistence_error, read_or_default};
+use crate::persistence::{atomic_write, persistence_error};
 use crate::types::{DictationSession, HistorySource};
 
 pub const HISTORY_CAP: usize = 200;
@@ -31,17 +31,45 @@ impl HistoryStore {
         self.read_locked()
     }
 
+    pub(crate) fn sync_snapshot(
+        &self,
+        permit: &crate::cloud_sync_e2ee_store::gate::ExclusivePermit,
+    ) -> Result<Vec<DictationSession>, BackendError> {
+        crate::cloud_sync_e2ee_store::gate::require_exclusive(&self.path, permit)?;
+        let _guard = self.lock_store()?;
+        crate::persistence::read_lossless_rows(&self.path, &[])
+    }
+
+    /// Whole logical replacement deliberately bypasses both age and entry-count retention.
+    pub(crate) fn sync_replace_all(
+        &self,
+        records: &[DictationSession],
+        permit: &crate::cloud_sync_e2ee_store::gate::ExclusivePermit,
+    ) -> Result<(), BackendError> {
+        crate::cloud_sync_e2ee_store::gate::require_exclusive(&self.path, permit)?;
+        let _guard = self.lock_store()?;
+        let bytes = serde_json::to_vec_pretty(records)
+            .map_err(|_| persistence_error("encode restored history"))?;
+        crate::persistence::atomic_write_for_sync(&self.path, &bytes, permit)
+    }
+
     pub fn append_with_retention(
         &self,
         session: DictationSession,
         retention_days: u32,
         max_entries: Option<u32>,
     ) -> Result<(), BackendError> {
-        let _guard = self.lock_store()?;
-        let mut sessions = self.read_locked()?;
-        sessions.insert(0, session);
-        retain_with_policy(&mut sessions, retention_days, max_entries);
-        self.write_locked(&sessions)
+        crate::cloud_sync_e2ee_store::gate::with_registered_mutation(
+            &self.path,
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let _guard = self.lock_store()?;
+                let mut sessions = self.read_locked()?;
+                sessions.insert(0, session);
+                retain_with_policy(&mut sessions, retention_days, max_entries);
+                self.write_locked(&sessions)
+            },
+        )
     }
 
     /// Replace an in-progress record when its terminal result arrives, or
@@ -52,19 +80,25 @@ impl HistoryStore {
         retention_days: u32,
         max_entries: Option<u32>,
     ) -> Result<(), BackendError> {
-        let _guard = self.lock_store()?;
-        let mut sessions = self.read_locked()?;
-        if let Some(existing) = sessions.iter_mut().find(|item| item.id == session.id) {
-            let mut replacement = session;
-            if replacement.has_audio_recording.is_none() {
-                replacement.has_audio_recording = existing.has_audio_recording;
-            }
-            *existing = replacement;
-        } else {
-            sessions.insert(0, session);
-        }
-        retain_with_policy(&mut sessions, retention_days, max_entries);
-        self.write_locked(&sessions)
+        crate::cloud_sync_e2ee_store::gate::with_registered_mutation(
+            &self.path,
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let _guard = self.lock_store()?;
+                let mut sessions = self.read_locked()?;
+                if let Some(existing) = sessions.iter_mut().find(|item| item.id == session.id) {
+                    let mut replacement = session;
+                    if replacement.has_audio_recording.is_none() {
+                        replacement.has_audio_recording = existing.has_audio_recording;
+                    }
+                    *existing = replacement;
+                } else {
+                    sessions.insert(0, session);
+                }
+                retain_with_policy(&mut sessions, retention_days, max_entries);
+                self.write_locked(&sessions)
+            },
+        )
     }
 
     pub fn contains(&self, id: &str) -> Result<bool, BackendError> {
@@ -101,35 +135,54 @@ impl HistoryStore {
     }
 
     pub fn delete(&self, id: &str) -> Result<(), BackendError> {
-        let _guard = self.lock_store()?;
-        let mut sessions = self.read_locked()?;
-        let before = sessions.len();
-        sessions.retain(|session| session.id != id);
-        if sessions.len() != before {
-            self.write_locked(&sessions)?;
-        }
-        Ok(())
+        crate::cloud_sync_e2ee_store::gate::with_registered_mutation(
+            &self.path,
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let _guard = self.lock_store()?;
+                let mut sessions = self.read_locked()?;
+                let before = sessions.len();
+                sessions.retain(|session| session.id != id);
+                if sessions.len() != before {
+                    self.write_locked(&sessions)?;
+                }
+                Ok(())
+            },
+        )
     }
 
     pub fn update_entry(&self, updated: DictationSession) -> Result<bool, BackendError> {
-        let _guard = self.lock_store()?;
-        let mut sessions = self.read_locked()?;
-        let Some(slot) = sessions.iter_mut().find(|session| session.id == updated.id) else {
-            return Ok(false);
-        };
-        *slot = updated;
-        self.write_locked(&sessions)?;
-        Ok(true)
+        crate::cloud_sync_e2ee_store::gate::with_registered_mutation(
+            &self.path,
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let _guard = self.lock_store()?;
+                let mut sessions = self.read_locked()?;
+                let Some(slot) = sessions.iter_mut().find(|session| session.id == updated.id)
+                else {
+                    return Ok(false);
+                };
+                *slot = updated;
+                self.write_locked(&sessions)?;
+                Ok(true)
+            },
+        )
     }
 
     pub fn clear(&self) -> Result<(), BackendError> {
-        let _guard = self.lock_store()?;
-        let quick_notes = self
-            .read_locked()?
-            .into_iter()
-            .filter(|session| session.source == HistorySource::QuickNote)
-            .collect::<Vec<_>>();
-        self.write_locked(&quick_notes)
+        crate::cloud_sync_e2ee_store::gate::with_registered_mutation(
+            &self.path,
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let _guard = self.lock_store()?;
+                let quick_notes = self
+                    .read_locked()?
+                    .into_iter()
+                    .filter(|session| session.source == HistorySource::QuickNote)
+                    .collect::<Vec<_>>();
+                self.write_locked(&quick_notes)
+            },
+        )
     }
 
     fn lock_store(&self) -> Result<std::sync::MutexGuard<'_, ()>, BackendError> {
@@ -139,7 +192,7 @@ impl HistoryStore {
     }
 
     fn read_locked(&self) -> Result<Vec<DictationSession>, BackendError> {
-        read_or_default(&self.path)
+        crate::persistence::read_lossless_rows(&self.path, &[])
     }
 
     fn write_locked(&self, sessions: &[DictationSession]) -> Result<(), BackendError> {

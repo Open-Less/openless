@@ -75,11 +75,7 @@ pub async fn marketplace_auth_status(
 
 #[tauri::command]
 pub async fn marketplace_logout(core: CoreState<'_>) -> Result<(), String> {
-    core.services()
-        .marketplace
-        .logout()
-        .await
-        .map_err(command_error)
+    core.sign_out_account().await.map_err(command_error)
 }
 
 #[cfg(test)]

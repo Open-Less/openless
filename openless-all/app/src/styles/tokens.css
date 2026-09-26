@@ -31,10 +31,9 @@
   /* Ink（zinc 阶梯） */
   --ol-ink: #09090b;
   --ol-ink-2: #3f3f46;
-  --ol-ink-3: #71717a;
-  /* zinc 规格：ink-4 取 zinc-400（对白底约 2.6:1），仅用于占位符/装饰性弱文字；
-     需要满足 AA 的弱化正文请用 ink-3（zinc-500，对白底约 4.7:1）及以上。 */
-  --ol-ink-4: #a1a1aa;
+  --ol-ink-3: #52525b;
+  /* 辅助说明至少要达到小字号的对比度。占位符仍用 ink-4。 */
+  --ol-ink-4: #71717a;
   --ol-ink-5: #d4d4d8;
 
   /* Blue accent */
@@ -191,9 +190,9 @@
   --ol-overlay-bg: rgba(15, 17, 22, 0.32);
 
   --ol-style-card-bg: #fafafa;
-  --ol-style-card-bg-active: #e4e4e7;
+  --ol-style-card-bg-active: #ffffff;
   --ol-style-card-border: #e4e4e7;
-  --ol-style-card-border-active: #bfc0c5;
+  --ol-style-card-border-active: #2563eb;
   --ol-style-card-ink: #09090b;
   --ol-style-card-icon-bg: rgba(228, 228, 231, 0.62);
   --ol-style-card-icon-bg-active: #d4d4d8;
@@ -347,9 +346,9 @@
   --ol-overlay-bg: rgba(5, 8, 13, 0.64);
 
   --ol-style-card-bg: #252528;
-  --ol-style-card-bg-active: #37373c;
+  --ol-style-card-bg-active: #252528;
   --ol-style-card-border: rgba(226, 232, 240, 0.09);
-  --ol-style-card-border-active: #62626a;
+  --ol-style-card-border-active: #74b7ff;
   --ol-style-card-ink: #fafafa;
   --ol-style-card-icon-bg: rgba(226, 232, 240, 0.07);
   --ol-style-card-icon-bg-active: #45454d;

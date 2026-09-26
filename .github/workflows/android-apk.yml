@@ -5,13 +5,27 @@ name: Android APK (debug)
 #   - workflow_dispatch → signed release APK when ANDROID_KEYSTORE_* secrets exist
 #     (overlay install + user data preserved); otherwise unsigned debug APK (annotated, non-blocking)
 #
-# Scope: full overlay/accessibility APK for ADB testing and tag releases.
+# #1103 build-time changes:
+#   - Do not wipe Cargo/Gradle/target before cache post-save (removed Free disk step).
+#   - Bump rust-cache prefix-key so old half-cold caches are not reused.
+#   - Dispatch defaults to aarch64 only; tag builds all ABIs in a parallel matrix.
+#   - Optional dispatch fast_profile (disable LTO / raise codegen-units); tag never uses it.
+#   - Tauri still runs plugin-init cargo + android-studio-script per ABI (first ABI twice).
 
 on:
   push:
     tags:
       - 'v*-tauri'
   workflow_dispatch:
+    inputs:
+      abis:
+        description: 'ABIs to build (comma-separated: aarch64,armv7,i686,x86_64) or all'
+        required: false
+        default: 'aarch64'
+      fast_profile:
+        description: 'Dispatch-only fast release profile (no LTO, codegen-units=16). Ignored on tags.'
+        type: boolean
+        default: false
 
 # 同一 tag 重复推送只跑最新一次；workflow_dispatch 用 run_id 隔离避免互相取消。
 concurrency:
@@ -19,24 +33,26 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
-  build-android-apk:
+  plan:
+    name: Plan Android ABI matrix
     permissions:
-      contents: write
+      contents: read
     runs-on: ubuntu-latest
-    env:
-      CI: true
-      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      OPENLESS_RELEASE_CHANNEL: ${{ (endsWith(github.ref_name, '-beta-tauri') || contains(github.ref_name, '-Beta.')) && 'beta' || 'stable' }}
+    outputs:
+      is_tag_release: ${{ steps.mode.outputs.is_tag_release }}
+      mode: ${{ steps.mode.outputs.mode }}
+      label: ${{ steps.mode.outputs.label }}
+      signing: ${{ steps.mode.outputs.signing }}
+      signing_label: ${{ steps.mode.outputs.signing_label }}
+      matrix: ${{ steps.abis.outputs.matrix }}
+      abi_list: ${{ steps.abis.outputs.abi_list }}
+      gradle_abi_list: ${{ steps.abis.outputs.gradle_abi_list }}
+      fast_profile: ${{ steps.abis.outputs.fast_profile }}
+      release_channel: ${{ steps.mode.outputs.release_channel }}
     steps:
       - uses: actions/checkout@v4
         with:
-          # Android 不使用本地 Qwen3/Whisper C 子模块。
           submodules: false
-
-      - name: Disable macOS-only Qwen3 MLX dependency
-        run: node openless-all/app/scripts/ci-disable-macos-qwen3.mjs
-
 
       - name: Detect build mode
         id: mode
@@ -53,6 +69,12 @@ jobs:
             is_tag=true
           fi
           echo "is_tag_release=$is_tag" >> "$GITHUB_OUTPUT"
+
+          channel=stable
+          if [[ "${{ github.ref_name }}" == *-beta-tauri ]] || [[ "${{ github.ref_name }}" == *-Beta.* ]]; then
+            channel=beta
+          fi
+          echo "release_channel=$channel" >> "$GITHUB_OUTPUT"
 
           has_keystore=true
           for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
@@ -80,8 +102,58 @@ jobs:
             echo "::notice title=Unsigned debug APK::ANDROID_KEYSTORE_* secrets not configured. Building debug APK without release signing. Overlay install and user data preservation require the release keystore; uninstall before installing if replacing a signed build."
           fi
 
+      - name: Resolve ABI matrix
+        id: abis
+        shell: bash
+        env:
+          INPUT_ABIS: ${{ github.event.inputs.abis }}
+          INPUT_FAST_PROFILE: ${{ github.event.inputs.fast_profile }}
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.mode.outputs.is_tag_release }}" = "true" ]; then
+            raw=all
+            fast=false
+          else
+            raw="${INPUT_ABIS:-aarch64}"
+            fast="${INPUT_FAST_PROFILE:-false}"
+          fi
+          matrix="$(node openless-all/app/scripts/android-abi-matrix.mjs parse "$raw")"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          abi_list="$(node -e 'const m=JSON.parse(process.argv[1]); process.stdout.write(m.map(x=>x.abi).join(","))' "$matrix")"
+          gradle_list="$(node -e 'const m=JSON.parse(process.argv[1]); process.stdout.write(m.map(x=>x.gradle_abi).join(","))' "$matrix")"
+          echo "abi_list=$abi_list" >> "$GITHUB_OUTPUT"
+          echo "gradle_abi_list=$gradle_list" >> "$GITHUB_OUTPUT"
+          echo "fast_profile=$fast" >> "$GITHUB_OUTPUT"
+          echo "Resolved ABIs: $abi_list (fast_profile=$fast)"
+
+  build-android-apk:
+    name: Build Android (${{ matrix.abi }})
+    needs: plan
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.matrix) }}
+    env:
+      CI: true
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      OPENLESS_RELEASE_CHANNEL: ${{ needs.plan.outputs.release_channel }}
+      OPENLESS_ANDROID_TARGETS: ${{ matrix.abi }}
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Android 不使用本地 Qwen3/Whisper C 子模块。
+          submodules: false
+
+      - name: Disable macOS-only Qwen3 MLX dependency
+        run: node openless-all/app/scripts/ci-disable-macos-qwen3.mjs
+
       - name: Check updater signing availability (tag release)
-        if: steps.mode.outputs.is_tag_release == 'true'
+        if: needs.plan.outputs.is_tag_release == 'true'
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -92,7 +164,7 @@ jobs:
           fi
 
       - name: Check Android keystore secrets (tag release)
-        if: steps.mode.outputs.is_tag_release == 'true'
+        if: needs.plan.outputs.is_tag_release == 'true'
         shell: bash
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -111,6 +183,16 @@ jobs:
             echo "::error::Configure ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD in repo secrets."
             exit 1
           fi
+
+      - name: Apply dispatch fast profile
+        if: needs.plan.outputs.fast_profile == 'true' && needs.plan.outputs.is_tag_release != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Override [profile.release] for this job only; tag builds never take this path.
+          echo "CARGO_PROFILE_RELEASE_LTO=false" >> "$GITHUB_ENV"
+          echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16" >> "$GITHUB_ENV"
+          echo "::notice title=Fast profile::Dispatch fast_profile enabled (LTO off, codegen-units=16)"
 
       - name: Setup Java 17 (Zulu)
         uses: actions/setup-java@v4
@@ -152,26 +234,28 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: >-
-            aarch64-linux-android,
-            armv7-linux-androideabi,
-            i686-linux-android,
-            x86_64-linux-android
+          targets: ${{ matrix.rust_target }}
 
       - name: Cache Cargo
+        id: rust-cache
         uses: swatinem/rust-cache@v2
         with:
+          # #1103: bump prefix so previously truncated / half-cold caches are not reused.
+          prefix-key: v1-rust-android-1103
+          shared-key: android-${{ matrix.abi }}
           workspaces: openless-all/app/src-tauri -> target
+          cache-on-failure: true
 
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          # Keep Gradle caches for post-job save; do not wipe ~/.gradle before post.
+          cache-read-only: false
 
       - name: Install npm deps
         working-directory: openless-all/app
         run: npm ci
 
-      - name: Build frontend
-        working-directory: openless-all/app
-        run: npm run build
+      # Frontend is built by tauri beforeBuildCommand; skip a duplicate standalone build (#1103).
 
       - name: Initialize Android project
         working-directory: openless-all/app
@@ -202,7 +286,7 @@ jobs:
         run: node scripts/merge-android-updater-manifest.mjs
 
       - name: Configure Android release signing
-        if: steps.mode.outputs.mode == 'release'
+        if: needs.plan.outputs.mode == 'release'
         working-directory: openless-all/app
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -227,127 +311,167 @@ jobs:
           exit 1
 
       - name: Build Android debug APK
-        if: steps.mode.outputs.mode == 'debug'
+        if: needs.plan.outputs.mode == 'debug'
         working-directory: openless-all/app
         run: npm run tauri:android:build:debug
 
       - name: Build Android release APK
-        if: steps.mode.outputs.mode == 'release'
+        if: needs.plan.outputs.mode == 'release'
         working-directory: openless-all/app
+        env:
+          # Resolve signing credentials at execution time; compiled Gradle scripts
+          # are cached and must never contain secret literals.
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: npm run tauri:android:build:release
 
-      - name: Free disk before artifact upload
+      - name: Record cache / duplicate-compile notes
+        if: always()
         shell: bash
-        working-directory: openless-all/app
         run: |
           set -euo pipefail
-          rm -rf src-tauri/target
-          rm -rf ~/.cargo/registry ~/.cargo/git ~/.gradle/caches
-          df -h
-
+          {
+            echo "### Cache / compile notes (\`${{ matrix.abi }}\`)"
+            echo
+            echo "- Rust cache hit: \`${{ steps.rust-cache.outputs.cache-hit }}\`"
+            echo "- Tauri runs plugin-init cargo for the first ABI, then \`android-studio-script\` per ABI (first ABI may compile twice)."
+            echo "- Do not wipe \`target\` / Cargo registry / Gradle caches before action post-save (#1103)."
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Collect split APKs
         id: apk
         shell: bash
         working-directory: openless-all/app
         env:
-          OPENLESS_APK_MODE: ${{ steps.mode.outputs.mode }}
-          OPENLESS_APK_LABEL: ${{ steps.mode.outputs.label }}
+          OPENLESS_APK_MODE: ${{ needs.plan.outputs.mode }}
+          OPENLESS_APK_LABEL: ${{ needs.plan.outputs.label }}
+          OPENLESS_EXPECTED_GRADLE_ABIS: ${{ matrix.gradle_abi }}
+        run: node scripts/collect-android-split-apks.mjs
+
+      - name: Upload Android APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.plan.outputs.mode == 'release' && format('openless-android-release-{0}', matrix.gradle_abi) || format('openless-android-debug-{0}', matrix.gradle_abi) }}
+          path: ${{ steps.apk.outputs.apk_path }}
+          if-no-files-found: error
+
+      - name: Write build summary
+        if: always()
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" << EOF
+          ### Android APK build (\`${{ matrix.abi }}\`)
+
+          | Field | Value |
+          |-------|-------|
+          | Gradle mode | \`${{ needs.plan.outputs.mode }}\` |
+          | Signing | ${{ needs.plan.outputs.signing_label }} |
+          | Artifact label | \`${{ needs.plan.outputs.label }}\` |
+          | Fast profile | \`${{ needs.plan.outputs.fast_profile }}\` |
+          | Rust cache hit | \`${{ steps.rust-cache.outputs.cache-hit }}\` |
+
+          EOF
+          if [ "${{ needs.plan.outputs.signing }}" = "debug-fallback" ]; then
+            cat >> "$GITHUB_STEP_SUMMARY" << 'EOF'
+          > **Unsigned debug APK.** Debug builds use a CI-only signature. Use `adb install -r` only when replacing the same debug build. To upgrade from a signed release without losing user data, configure `ANDROID_KEYSTORE_*` repo secrets and re-run this workflow.
+          EOF
+          elif [ "${{ needs.plan.outputs.signing }}" = "dispatch-release" ]; then
+            cat >> "$GITHUB_STEP_SUMMARY" << 'EOF'
+          > **Signed release APK** (manual dispatch). Same keystore as tag releases — supports overlay install and preserves user data when upgrading from an existing signed install.
+          EOF
+          fi
+
+  publish-android-release:
+    name: Publish Android release assets
+    if: needs.plan.outputs.is_tag_release == 'true'
+    needs: [plan, build-android-apk]
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      OPENLESS_RELEASE_CHANNEL: ${{ needs.plan.outputs.release_channel }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: openless-all/app/package-lock.json
+
+      - name: Install npm deps
+        working-directory: openless-all/app
+        run: npm ci
+
+      - name: Download all ABI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: openless-android-release-*
+          path: ${{ runner.temp }}/android-release-apks
+          merge-multiple: true
+
+      - name: Verify full ABI set and stage files
+        id: stage
+        shell: bash
+        working-directory: openless-all/app
+        env:
+          OPENLESS_STAGE_DIR: ${{ runner.temp }}/android-release-apks
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import json
-          import os
-          import shutil
-          import sys
-          import zipfile
-          from pathlib import Path
-
-          expected = {
-              "arm64-v8a": "arm64_v8a",
-              "armeabi-v7a": "armeabi_v7a",
-              "x86": "x86",
-              "x86_64": "x86_64",
-          }
-          arch_map = {
-              "arm64-v8a": "aarch64",
-              "armeabi-v7a": "armv7",
-              "x86": "i686",
-              "x86_64": "x86_64",
-          }
-          root = Path("src-tauri/gen/android")
-          mode = os.environ["OPENLESS_APK_MODE"]
-          label = os.environ["OPENLESS_APK_LABEL"]
-          version = json.loads(Path("package.json").read_text(encoding="utf-8"))["version"]
-          out_dir = Path(os.environ["RUNNER_TEMP"]) / f"openless-android-{mode}-split"
-          out_dir.mkdir(parents=True, exist_ok=True)
-          found = {}
-          candidates = [
-              apk for apk in sorted(root.rglob("*.apk"))
-              if "outputs" in apk.parts
-          ]
-          if not candidates:
-              print("::error::No APK found under src-tauri/gen/android/**/outputs/")
-              for apk in sorted(root.rglob("*.apk")):
-                  print(apk)
-              sys.exit(1)
-          for apk in candidates:
-              with zipfile.ZipFile(apk) as archive:
-                  abis = sorted({
-                      name.split("/")[1]
-                      for name in archive.namelist()
-                      if name.startswith("lib/") and len(name.split("/")) >= 3
-                  })
-              if len(abis) != 1:
-                  print(f"::error::{apk} contains ABI directories {abis}; expected exactly one ABI per APK")
-                  sys.exit(1)
-              abi = abis[0]
-              if abi not in expected:
-                  print(f"::error::{apk} contains unexpected ABI {abi}")
-                  sys.exit(1)
-              if abi in found:
-                  print(f"::error::Duplicate APKs for ABI {abi}: {found[abi]} and {apk}")
-                  sys.exit(1)
-              if mode == "release":
-                  dest = out_dir / f"OpenLess_{version}_{abi}.apk"
-              else:
-                  dest = out_dir / f"OpenLess-android-debug-{abi}-{label}.apk"
-              shutil.copy2(apk, dest)
-              found[abi] = dest
-              print(f"Collected {abi}: {apk} -> {dest}")
-          missing = sorted(set(expected) - set(found))
-          if missing:
-              print(f"::error::Missing split APKs for ABI(s): {', '.join(missing)}")
-              sys.exit(1)
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              for abi, key in expected.items():
-                  output.write(f"{key}_path={found[abi]}\n")
-                  output.write(f"{key}_arch={arch_map[abi]}\n")
-              output.write(f"out_dir={out_dir}\n")
-              output.write("release_files<<EOF\n")
-              for abi in expected:
-                  output.write(f"{found[abi]}\n")
-              output.write("EOF\n")
-          PY
+          version="$(node -p "require('./package.json').version")"
+          out_dir="${{ runner.temp }}/openless-android-release-split"
+          mkdir -p "$out_dir"
+          expected=(arm64-v8a armeabi-v7a x86 x86_64)
+          missing=()
+          for abi in "${expected[@]}"; do
+            src="$OPENLESS_STAGE_DIR/OpenLess_${version}_${abi}.apk"
+            if [ ! -f "$src" ]; then
+              # download-artifact may nest by artifact name
+              src="$(find "$OPENLESS_STAGE_DIR" -type f -name "OpenLess_${version}_${abi}.apk" | head -n 1 || true)"
+            fi
+            if [ -z "${src:-}" ] || [ ! -f "$src" ]; then
+              missing+=("$abi")
+              continue
+            fi
+            cp -f "$src" "$out_dir/OpenLess_${version}_${abi}.apk"
+            echo "Staged $abi from $src"
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Tag release missing ABI APK(s): ${missing[*]}"
+            find "$OPENLESS_STAGE_DIR" -type f -name '*.apk' -print || true
+            exit 1
+          fi
+          echo "out_dir=$out_dir" >> "$GITHUB_OUTPUT"
+          {
+            echo "release_files<<EOF"
+            for abi in "${expected[@]}"; do
+              echo "$out_dir/OpenLess_${version}_${abi}.apk"
+            done
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Sign release APKs (minisign)
-        if: steps.mode.outputs.is_tag_release == 'true'
         working-directory: openless-all/app
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
+          out_dir="${{ steps.stage.outputs.out_dir }}"
+          version="$(node -p "require('./package.json').version")"
           node scripts/sign-android-apks.mjs \
-            "${{ steps.apk.outputs.arm64_v8a_path }}" \
-            "${{ steps.apk.outputs.armeabi_v7a_path }}" \
-            "${{ steps.apk.outputs.x86_path }}" \
-            "${{ steps.apk.outputs.x86_64_path }}"
+            "$out_dir/OpenLess_${version}_arm64-v8a.apk" \
+            "$out_dir/OpenLess_${version}_armeabi-v7a.apk" \
+            "$out_dir/OpenLess_${version}_x86.apk" \
+            "$out_dir/OpenLess_${version}_x86_64.apk"
 
       - name: Write Android updater manifests
-        if: steps.mode.outputs.is_tag_release == 'true'
         working-directory: openless-all/app
         env:
-          OPENLESS_UPDATE_APK_DIR: ${{ steps.apk.outputs.out_dir }}
+          OPENLESS_UPDATE_APK_DIR: ${{ steps.stage.outputs.out_dir }}
           OPENLESS_UPDATE_REPO: Open-Less/openless
           OPENLESS_UPDATE_MIRROR_BASE_URL: https://fastgit.cc/https://github.com
           OPENLESS_RELEASE_CHANNEL: ${{ env.OPENLESS_RELEASE_CHANNEL }}
@@ -360,14 +484,13 @@ jobs:
           done
 
       - name: Append release files (manifests + signatures)
-        if: steps.mode.outputs.is_tag_release == 'true'
         id: release_assets
         shell: bash
         run: |
           set -euo pipefail
-          out_dir="${{ steps.apk.outputs.out_dir }}"
+          out_dir="${{ steps.stage.outputs.out_dir }}"
           {
-            echo "${{ steps.apk.outputs.release_files }}"
+            echo "${{ steps.stage.outputs.release_files }}"
             for f in "$out_dir"/*.apk.sig "$out_dir"/latest-android-*.json; do
               [ -e "$f" ] && echo "$f"
             done
@@ -376,36 +499,7 @@ jobs:
           cat "$RUNNER_TEMP/android-release-files.txt" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
 
-      - name: Upload Android APK artifact (arm64-v8a)
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.mode.outputs.mode == 'release' && 'openless-android-release-arm64-v8a' || 'openless-android-debug-arm64-v8a' }}
-          path: ${{ steps.apk.outputs.arm64_v8a_path }}
-          if-no-files-found: error
-
-      - name: Upload Android APK artifact (armeabi-v7a)
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.mode.outputs.mode == 'release' && 'openless-android-release-armeabi-v7a' || 'openless-android-debug-armeabi-v7a' }}
-          path: ${{ steps.apk.outputs.armeabi_v7a_path }}
-          if-no-files-found: error
-
-      - name: Upload Android APK artifact (x86)
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.mode.outputs.mode == 'release' && 'openless-android-release-x86' || 'openless-android-debug-x86' }}
-          path: ${{ steps.apk.outputs.x86_path }}
-          if-no-files-found: error
-
-      - name: Upload Android APK artifact (x86_64)
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.mode.outputs.mode == 'release' && 'openless-android-release-x86_64' || 'openless-android-debug-x86_64' }}
-          path: ${{ steps.apk.outputs.x86_64_path }}
-          if-no-files-found: error
-
       - name: Prepare Android release body
-        if: steps.mode.outputs.is_tag_release == 'true'
         shell: bash
         run: |
           cat > "$RUNNER_TEMP/android-release-body.md" << 'EOF'
@@ -423,7 +517,6 @@ jobs:
           EOF
 
       - name: Attach Android assets to GitHub Release
-        if: steps.mode.outputs.is_tag_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
@@ -435,26 +528,3 @@ jobs:
           append_body: true
           body_path: ${{ runner.temp }}/android-release-body.md
           files: ${{ steps.release_assets.outputs.files }}
-
-      - name: Write build summary
-        if: always() && steps.mode.outputs.signing != ''
-        run: |
-          cat >> "$GITHUB_STEP_SUMMARY" << EOF
-          ### Android APK build
-
-          | Field | Value |
-          |-------|-------|
-          | Gradle mode | \`${{ steps.mode.outputs.mode }}\` |
-          | Signing | ${{ steps.mode.outputs.signing_label }} |
-          | Artifact label | \`${{ steps.mode.outputs.label }}\` |
-
-          EOF
-          if [ "${{ steps.mode.outputs.signing }}" = "debug-fallback" ]; then
-            cat >> "$GITHUB_STEP_SUMMARY" << 'EOF'
-          > **Unsigned debug APK.** Debug builds use a CI-only signature. Use `adb install -r` only when replacing the same debug build. To upgrade from a signed release without losing user data, configure `ANDROID_KEYSTORE_*` repo secrets and re-run this workflow.
-          EOF
-          elif [ "${{ steps.mode.outputs.signing }}" = "dispatch-release" ]; then
-            cat >> "$GITHUB_STEP_SUMMARY" << 'EOF'
-          > **Signed release APK** (manual dispatch). Same keystore as tag releases — supports overlay install and preserves user data when upgrading from an existing signed install.
-          EOF
-          fi

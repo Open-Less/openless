@@ -1,5 +1,5 @@
 import { invokeOrMock } from './shared';
-import type { LessComputerSyncResult } from '../types';
+import type { LessComputerSyncResult, LessComputerVoiceMode } from '../types';
 
 /** 用户点 ✕ / 按 Esc 关闭 Less Computer 浮窗（隐藏窗口）。 */
 export function lessComputerWindowDismiss(): Promise<void> {
@@ -19,6 +19,27 @@ export function lessComputerApprove(token: string, approved: boolean): Promise<v
 /** 浮窗打字输入：文字指令直接进入 Less Computer 执行链（与语音同护栏/审批/连续会话）。 */
 export function lessComputerSubmitText(text: string): Promise<void> {
   return invokeOrMock('less_computer_submit_text', { text }, () => undefined);
+}
+
+/** 面板内开麦。dictate：转写只填进输入框；submit：说完直接交给 Agent（与快捷键一致）。
+ *  启动失败（麦克风权限、其它语音会话占用）以 reject 返回，面板内联提示。 */
+export function lessComputerVoiceStart(mode: LessComputerVoiceMode): Promise<void> {
+  return invokeOrMock('less_computer_voice_start', { mode }, () => undefined);
+}
+
+/** 只结束指定录音并按其 mode 收尾；迟到请求不会停止后来开始的会话。 */
+export function lessComputerVoiceStop(sessionId: string): Promise<void> {
+  return invokeOrMock('less_computer_voice_stop', { sessionId }, () => undefined);
+}
+
+/** 只取消指定录音会话，不会波及其它会话或已在运行的任务。 */
+export function lessComputerVoiceCancel(sessionId: string): Promise<void> {
+  return invokeOrMock('less_computer_voice_cancel', { sessionId }, () => undefined);
+}
+
+/** 停止正在运行的 Agent 任务。 */
+export function lessComputerTaskCancel(): Promise<void> {
+  return invokeOrMock('less_computer_task_cancel', undefined, () => undefined);
 }
 
 /** 浮窗 mount 时拉取当前会话的事件缓冲（seq 升序），重放 webview 冷加载期间

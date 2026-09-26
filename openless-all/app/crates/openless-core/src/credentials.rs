@@ -3,9 +3,80 @@ use std::fmt;
 use std::sync::RwLock;
 
 use futures_util::future::BoxFuture;
+use zeroize::Zeroize;
 
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::shared_types::{CredentialsStatus, UserPreferences};
+
+pub use crate::cloud_sync_e2ee_documents::{
+    ChannelRecord as SyncChannel, ProviderCredentialRecord as SyncCredentialRecord, SyncNamespace,
+};
+pub use crate::cloud_sync_e2ee_store::gate::{
+    ChangeOrigin, ExclusivePermit, MutationPermit, SyncWriteGate,
+};
+
+/// A single coherent native vault capture. It deliberately has no serde support:
+/// only the explicit encrypted document exporter may serialize provider secrets.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SyncCredentials {
+    pub channels: Vec<SyncChannel>,
+    pub credentials: Vec<SyncCredentialRecord>,
+}
+
+impl SyncCredentials {
+    pub fn validate(&self) -> Result<(), BackendError> {
+        crate::cloud_sync_e2ee_documents::validate_credential_set(&self.channels, &self.credentials)
+            .map_err(|_| {
+                BackendError::new(
+                    BackendErrorCode::InvalidArgument,
+                    "invalid encrypted sync credential set",
+                )
+            })
+    }
+}
+
+impl fmt::Debug for SyncCredentials {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SyncCredentials([REDACTED])")
+    }
+}
+
+/// Only two app-owned E2EE key namespaces may reach the system-secret adapter.
+/// The digest binds native service/account/vault/key/device context; callers can
+/// never use this interface to enumerate or read arbitrary Keychain accounts.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct SyncSecretAccount(String);
+
+impl SyncSecretAccount {
+    pub fn new(value: impl Into<String>) -> Result<Self, BackendError> {
+        let value = value.into();
+        let suffix = value
+            .strip_prefix("cloud-sync.e2ee.local.")
+            .or_else(|| value.strip_prefix("cloud-sync.e2ee.key."));
+        if !suffix.is_some_and(|digest| {
+            digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        }) {
+            return Err(BackendError::new(
+                BackendErrorCode::InvalidArgument,
+                "invalid local encrypted sync key account",
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for SyncSecretAccount {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SyncSecretAccount([REDACTED])")
+    }
+}
 
 macro_rules! provider_identifier {
     ($name:ident, $label:literal) => {
@@ -255,8 +326,14 @@ impl SecretValue {
         &self.0
     }
 
-    pub fn into_exposed(self) -> String {
-        self.0
+    pub fn into_exposed(mut self) -> String {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for SecretValue {
+    fn drop(&mut self) {
+        self.0.zeroize();
     }
 }
 
@@ -267,6 +344,56 @@ impl fmt::Debug for SecretValue {
 }
 
 pub trait CredentialStore: Send + Sync {
+    fn bind_sync_gate(&self, _gate: std::sync::Arc<SyncWriteGate>) -> Result<(), BackendError> {
+        Ok(())
+    }
+
+    /// Capture one coherent vault image without holding the global restore gate.
+    /// The caller must verify the shared capture epoch before and after reading
+    /// all repositories; this method only guarantees consistency within the vault.
+    fn export_sync_credentials_readonly(
+        &self,
+    ) -> BoxFuture<'static, Result<SyncCredentials, BackendError>> {
+        unsupported_credentials()
+    }
+
+    fn export_sync_credentials(
+        &self,
+        _permit: &ExclusivePermit,
+    ) -> BoxFuture<'static, Result<SyncCredentials, BackendError>> {
+        unsupported_credentials()
+    }
+
+    fn replace_sync_credentials(
+        &self,
+        _snapshot: SyncCredentials,
+        _permit: &ExclusivePermit,
+    ) -> BoxFuture<'static, Result<(), BackendError>> {
+        unsupported_credentials()
+    }
+
+    fn read_sync_secret(
+        &self,
+        _account: SyncSecretAccount,
+    ) -> BoxFuture<'static, Result<Option<SecretValue>, BackendError>> {
+        unsupported_credentials()
+    }
+
+    fn write_sync_secret(
+        &self,
+        _account: SyncSecretAccount,
+        _value: SecretValue,
+    ) -> BoxFuture<'static, Result<(), BackendError>> {
+        unsupported_credentials()
+    }
+
+    fn remove_sync_secret(
+        &self,
+        _account: SyncSecretAccount,
+    ) -> BoxFuture<'static, Result<(), BackendError>> {
+        unsupported_credentials()
+    }
+
     fn status(
         &self,
         preferences: UserPreferences,
@@ -1023,6 +1150,66 @@ fn unsupported_credentials<T>() -> BoxFuture<'static, Result<T, BackendError>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sync_secret_accounts_cannot_reach_provider_or_other_app_credentials() {
+        for prefix in ["cloud-sync.e2ee.local.", "cloud-sync.e2ee.key."] {
+            let accepted = format!("{prefix}{}", "0123456789abcdef".repeat(4));
+            let account = SyncSecretAccount::new(&accepted).unwrap();
+            assert_eq!(account.as_str(), accepted);
+            assert!(!format!("{account:?}").contains(&accepted));
+        }
+        for value in [
+            "credentials.v2".into(),
+            "cloud-sync.e2ee.local.".into(),
+            format!("cloud-sync.e2ee.local.{}", "a".repeat(63)),
+            format!("cloud-sync.e2ee.local.{}", "a".repeat(65)),
+            format!("cloud-sync.e2ee.local.{}", "A".repeat(64)),
+            format!("cloud-sync.e2ee.local.{}", "g".repeat(64)),
+            format!("cloud-sync.e2ee.local.{}\n", "a".repeat(64)),
+            format!("cloud-sync.e2ee.local.{}", "../".repeat(22)),
+        ] {
+            assert!(SyncSecretAccount::new(value).is_err());
+        }
+        let secret = SecretValue::new("private-canary-secret");
+        assert_eq!(format!("{secret:?}"), "SecretValue([REDACTED])");
+        assert_eq!(secret.into_exposed(), "private-canary-secret");
+    }
+
+    #[tokio::test]
+    async fn sync_secret_defaults_fail_closed_on_hosts_without_an_adapter() {
+        let store = UnsupportedCredentialStore;
+        assert_eq!(
+            store
+                .export_sync_credentials_readonly()
+                .await
+                .unwrap_err()
+                .code,
+            BackendErrorCode::Unsupported
+        );
+        let account =
+            SyncSecretAccount::new(format!("cloud-sync.e2ee.local.{}", "a".repeat(64))).unwrap();
+        assert_eq!(
+            store
+                .read_sync_secret(account.clone())
+                .await
+                .unwrap_err()
+                .code,
+            BackendErrorCode::Unsupported
+        );
+        assert_eq!(
+            store
+                .write_sync_secret(account.clone(), SecretValue::new("private-canary-secret"))
+                .await
+                .unwrap_err()
+                .code,
+            BackendErrorCode::Unsupported
+        );
+        assert_eq!(
+            store.remove_sync_secret(account).await.unwrap_err().code,
+            BackendErrorCode::Unsupported
+        );
+    }
 
     fn summary(id: &str, order: u32, enabled: bool) -> ChannelSummary {
         ChannelSummary {

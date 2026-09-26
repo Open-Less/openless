@@ -1,0 +1,3 @@
+# Last versions compatible with the Python 3.9 shipped in Xcode command-line tools.
+ds_store==1.3.1 --hash=sha256:fbacbb0bd5193ab3e66e5a47fff63619f15e374ffbec8ae29744251a6c8f05b5
+mac_alias==2.2.2 --hash=sha256:504ab8ac546f35bbd75ad014d6ad977c426660aa721f2cd3acf3dc2f664141bd

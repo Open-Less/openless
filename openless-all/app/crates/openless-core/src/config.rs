@@ -51,6 +51,17 @@ impl Default for BackendConfig {
     }
 }
 
+/// Absolute, idempotent Host convergence during a journalled sync restore.
+/// Called only after the complete repository target is installed and while
+/// the restore fence still blocks runtime admission. A failure must propagate
+/// so the journal can reinstall and reconcile its previous target.
+pub trait RestoreRuntimeEffects: Send + Sync {
+    fn apply_target(
+        &self,
+        target: crate::shared_types::UserPreferences,
+    ) -> BoxFuture<'static, Result<(), BackendError>>;
+}
+
 pub trait TaskSpawner: Send + Sync {
     fn spawn(&self, task: BoxFuture<'static, ()>);
 }

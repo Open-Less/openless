@@ -141,6 +141,15 @@ export function ServicesTab() {
               type="button"
               aria-pressed={selectedView === id}
               onClick={() => setView(id)}
+              aria-label={
+                required
+                  ? `${t(`modal.serviceViews.${id}`)}。${t(
+                      configured
+                        ? 'modal.serviceViews.statusConfigured'
+                        : 'modal.serviceViews.statusMissing',
+                    )}`
+                  : t(`modal.serviceViews.${id}`)
+              }
               title={
                 required
                   ? t(

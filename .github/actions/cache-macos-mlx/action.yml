@@ -1,0 +1,45 @@
+name: Cache macOS MLX native build
+description: Preserve vendored MLX CMake output before rust-cache removes in-tree path dependencies.
+inputs:
+  profile:
+    description: Cargo output profile directory (debug or release)
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Fingerprint MLX native toolchain
+      id: native
+      shell: bash
+      working-directory: openless-all/app
+      env:
+        OPENLESS_MLX_PROFILE: ${{ inputs.profile }}
+      run: |
+        set -euo pipefail
+        case "$OPENLESS_MLX_PROFILE" in
+          debug|release) ;;
+          *) echo "::error::Unsupported MLX cache profile"; exit 1 ;;
+        esac
+        fingerprint=$({
+          rustc -vV
+          xcrun clang --version
+          # Downloadable Metal toolchains can change independently of Clang.
+          # Their InstalledDir may contain a per-boot mount identifier.
+          xcrun --sdk macosx metal --version | sed '/^InstalledDir:/d'
+          xcrun --sdk macosx --show-sdk-version
+          cmake --version
+          git -C src-tauri/vendor/qwen3-asr-rs rev-parse HEAD
+          git -C src-tauri/vendor/qwen3-asr-rs/mlx-c rev-parse HEAD
+          for name in CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_TEST_DEBUG CARGO_PROFILE_RELEASE_CODEGEN_UNITS CARGO_PROFILE_RELEASE_STRIP RUSTFLAGS CARGO_ENCODED_RUSTFLAGS CC CXX CFLAGS CXXFLAGS SDKROOT DEVELOPER_DIR MACOSX_DEPLOYMENT_TARGET CMAKE_GENERATOR CMAKE_TOOLCHAIN_FILE; do
+            printf '%s=%s\n' "$name" "${!name-}"
+          done
+        } | shasum -a 256 | awk '{print $1}')
+        echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+
+    # Call this action AFTER rust-cache: post actions run in reverse order,
+    # so MLX is saved before rust-cache prunes src-tauri/vendor path packages.
+    # Cache only CMake output, not Cargo fingerprints: Cargo still reruns the
+    # build script and CMake validates its native inputs on every clean checkout.
+    - uses: actions/cache@v4
+      with:
+        path: openless-all/app/src-tauri/target/${{ inputs.profile }}/build/qwen3-asr-rs-*/out
+        key: macos-mlx-v1-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.native.outputs.fingerprint }}-${{ hashFiles('openless-all/app/src-tauri/Cargo.toml', 'openless-all/app/src-tauri/Cargo.lock', 'openless-all/app/src-tauri/tauri*.json', '.cargo/config.toml', '.github/actions/cache-macos-mlx/action.yml') }}

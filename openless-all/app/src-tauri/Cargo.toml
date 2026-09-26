@@ -1,6 +1,6 @@
 [package]
 name = "openless"
-version = "2.0.0-Beta.2+build.20260924"
+version = "2.0.0-Beta.3+build.20260926"
 license = "AGPL-3.0-only"
 description = "OpenLess — local voice input that types where your cursor is"
 authors = ["OpenLess"]
@@ -17,6 +17,7 @@ tauri-build = { version = "2", features = [] }
 cc = "1.1"
 
 [dependencies]
+zeroize = "1"
 # Framework-independent business core.  Tauri remains an adapter and owns the
 # window/plugin/IPC concerns; Linux must depend on the same crate directly.
 openless-core = { path = "../crates/openless-core" }

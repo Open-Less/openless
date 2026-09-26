@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock, Weak};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 
 use futures_util::future::BoxFuture;
 
@@ -134,6 +135,8 @@ pub(crate) struct SelectionVoiceService {
     voice_sessions: Arc<crate::voice_session::VoiceSessionGate>,
     qa: Arc<RwLock<Option<Weak<dyn QaApi>>>>,
     auto_press_at: Arc<RwLock<Option<std::time::Instant>>>,
+    runtime_work: Arc<crate::voice_session::RuntimeActivityGate>,
+    applying_work: Arc<Mutex<HashMap<SessionId, crate::voice_session::RuntimeActivityHold>>>,
 }
 
 struct SelectionVoiceWorkflow {
@@ -197,6 +200,29 @@ impl SelectionVoiceService {
             voice_sessions,
             qa: Arc::new(RwLock::new(None)),
             auto_press_at: Arc::new(RwLock::new(None)),
+            runtime_work: Arc::new(crate::voice_session::RuntimeActivityGate::default()),
+            applying_work: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn begin_runtime_work(
+        &self,
+    ) -> Result<crate::voice_session::RuntimeActivityHold, BackendError> {
+        let state = self
+            .state
+            .write()
+            .expect("selection voice state lock poisoned");
+        if matches!(
+            state.phase,
+            SelectionVoicePhase::Recording
+                | SelectionVoicePhase::Processing
+                | SelectionVoicePhase::AwaitingIntent
+                | SelectionVoicePhase::Preview
+                | SelectionVoicePhase::Applying
+        ) {
+            Ok(self.runtime_work.existing_work())
+        } else {
+            self.runtime_work.acquire()
         }
     }
 
@@ -219,6 +245,7 @@ impl SelectionVoiceService {
         capture: SelectionCapture,
         phase: SelectionVoicePhase,
     ) -> Result<SessionId, BackendError> {
+        let _runtime = self.begin_runtime_work()?;
         if capture.text.trim().is_empty() {
             return Err(BackendError::new(
                 BackendErrorCode::InvalidArgument,
@@ -618,6 +645,26 @@ impl SelectionVoicePersistence {
 }
 
 impl SelectionVoiceApi for SelectionVoiceService {
+    fn bind_runtime_restore_guard(
+        &self,
+        guard: crate::domains::RuntimeRestoreGuard,
+        spawner: Arc<dyn crate::config::TaskSpawner>,
+    ) -> Result<(), BackendError> {
+        self.runtime_work.bind(guard, spawner)
+    }
+
+    fn runtime_restore_idle(&self) -> bool {
+        self.state.read().is_ok_and(|state| {
+            matches!(
+                state.phase,
+                SelectionVoicePhase::Idle
+                    | SelectionVoicePhase::Completed
+                    | SelectionVoicePhase::Cancelled
+                    | SelectionVoicePhase::Failed
+            ) && self.runtime_work.runtime_restore_idle()
+        })
+    }
+
     fn bind_qa(&self, qa: Weak<dyn QaApi>) {
         *self
             .qa
@@ -803,6 +850,7 @@ impl SelectionVoiceApi for SelectionVoiceService {
     ) -> BoxFuture<'static, Result<SelectionVoiceDisposition, BackendError>> {
         let service = self.clone();
         Box::pin(async move {
+            let _runtime = service.begin_runtime_work()?;
             {
                 let state = service
                     .state
@@ -948,6 +996,7 @@ impl SelectionVoiceApi for SelectionVoiceService {
     ) -> BoxFuture<'static, Result<SelectionVoiceRoute, BackendError>> {
         let service = self.clone();
         Box::pin(async move {
+            let _runtime = service.begin_runtime_work()?;
             let session_id = match &disposition {
                 SelectionVoiceDisposition::AwaitingIntent { prompt } => prompt.session_id,
                 SelectionVoiceDisposition::Question { session_id, .. }
@@ -1006,6 +1055,7 @@ impl SelectionVoiceApi for SelectionVoiceService {
     ) -> BoxFuture<'static, Result<SelectionVoiceEditAction, BackendError>> {
         let service = self.clone();
         Box::pin(async move {
+            let _runtime = service.begin_runtime_work()?;
             let (selection, instruction) = {
                 let state = service
                     .state
@@ -1067,6 +1117,7 @@ impl SelectionVoiceApi for SelectionVoiceService {
     ) -> BoxFuture<'static, Result<SelectionVoiceEditPreviewResult, BackendError>> {
         let service = self.clone();
         Box::pin(async move {
+            let _runtime = service.begin_runtime_work()?;
             let instruction = request.instruction.trim().to_string();
             if instruction.is_empty() {
                 return Err(BackendError::new(
@@ -1279,6 +1330,7 @@ impl SelectionVoiceApi for SelectionVoiceService {
         owner_session_id: Option<SessionId>,
         text: String,
     ) -> Result<SelectionVoiceApplyTicket, BackendError> {
+        let _runtime = self.begin_runtime_work()?;
         let replacement_text = self.persistence.corrected_text(text.trim().to_string());
         if replacement_text.is_empty() {
             return Err(BackendError::new(
@@ -1314,6 +1366,13 @@ impl SelectionVoiceApi for SelectionVoiceService {
             summary,
             source_app: selection.source_app.clone(),
         };
+        // The native apply can outlive logical cancellation. Its ticket owns
+        // this lease until the Host reports completion, even if cancel clears
+        // the visible preview and the old ticket becomes stale.
+        self.applying_work
+            .lock()
+            .expect("selection voice apply work lock poisoned")
+            .insert(ticket.ticket_id, _runtime);
         state.applying_ticket = Some(ticket.clone());
         state.apply_outcome = None;
         state.phase = SelectionVoicePhase::Applying;
@@ -1335,8 +1394,15 @@ impl SelectionVoiceApi for SelectionVoiceService {
         let events = self.events.clone();
         let persistence = Arc::clone(&self.persistence);
         let voice_sessions = Arc::clone(&self.voice_sessions);
+        let runtime_work = Arc::clone(&self.runtime_work);
+        let applying_work = Arc::clone(&self.applying_work);
         Box::pin(async move {
+            let _apply = applying_work
+                .lock()
+                .expect("selection voice apply work lock poisoned")
+                .remove(&ticket_id);
             let mut state = state.write().expect("selection voice state lock poisoned");
+            let _runtime = runtime_work.existing_work();
             let ticket = state
                 .applying_ticket
                 .as_ref()
@@ -1414,7 +1480,7 @@ impl SelectionVoiceApi for SelectionVoiceService {
         let events = self.events.clone();
         let polisher = self.workflow.polisher.clone();
         let voice_sessions = Arc::clone(&self.voice_sessions);
-        Box::pin(async move {
+        self.runtime_work.cleanup(Box::pin(async move {
             let (active_session, snapshot, control) = {
                 let mut state = state.write().expect("selection voice state lock poisoned");
                 let Some(active_session) = state.session_id else {
@@ -1451,7 +1517,7 @@ impl SelectionVoiceApi for SelectionVoiceService {
                 }
             }
             host_result
-        })
+        }))
     }
 }
 

@@ -668,7 +668,7 @@ export function RecordingInputSection() {
       )}
       {/* ─── 启动（折叠） ──────────────────────────────────────────── */}
       {showDesktopStartup && (
-        <Collapsible title={t('settings.recording.startupGroupTitle')}>
+        <Collapsible title={t('settings.recording.startupGroupTitle')} defaultOpen>
           <AutostartRow />
           <SettingRow label={t('settings.recording.startMinimizedLabel')}>
             <Toggle on={prefs.startMinimized} onToggle={onStartMinimizedChange} />
@@ -728,7 +728,10 @@ function AutostartRow() {
   };
 
   return (
-    <SettingRow label={t('settings.recording.startupAtBoot')}>
+    <SettingRow
+      label={t('settings.recording.startupAtBoot')}
+      desc={t('settings.recording.startupAtBootDesc')}
+    >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         {loaded ? <Toggle on={enabled} onToggle={onToggle} /> : null}
         {error && (

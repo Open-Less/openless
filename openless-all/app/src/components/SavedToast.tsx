@@ -14,6 +14,9 @@ interface SavedToastProps {
   message: string;
   offsetStyle?: Pick<CSSProperties, 'top' | 'right' | 'left' | 'bottom' | 'position'>;
   slideFrom?: ToastSlideFrom;
+  actionLabel?: string;
+  onAction?: () => void;
+  durationMs?: number;
 }
 
 export function SavedToast({
@@ -21,6 +24,9 @@ export function SavedToast({
   message,
   offsetStyle,
   slideFrom = 'right',
+  actionLabel,
+  onAction,
+  durationMs,
 }: SavedToastProps) {
   // 维护内部状态，使通知可以自己倒计时关闭（即使用户父组件的 timer 长于 0.8s）
   const [internalVisible, setInternalVisible] = useState(false);
@@ -28,12 +34,14 @@ export function SavedToast({
   useEffect(() => {
     if (saveState !== 'idle') {
       setInternalVisible(true);
-      // 满足用户要求：弹出后约 0.8 秒自动收回
-      const timer = window.setTimeout(() => setInternalVisible(false), 800);
+      const timer = window.setTimeout(
+        () => setInternalVisible(false),
+        durationMs ?? (onAction ? 6000 : 800),
+      );
       return () => window.clearTimeout(timer);
     }
     setInternalVisible(false);
-  }, [saveState, message]);
+  }, [saveState, message, durationMs, onAction]);
 
   const failed = saveState === 'failed';
 
@@ -59,7 +67,7 @@ export function SavedToast({
       : '0 4px 12px -8px rgba(37,99,235,.26)',
     backdropFilter: 'blur(12px) saturate(160%)',
     WebkitBackdropFilter: 'blur(12px) saturate(160%)',
-    pointerEvents: 'none',
+    pointerEvents: onAction ? 'auto' : 'none',
     whiteSpace: 'nowrap',
     display: 'flex',
     alignItems: 'center',
@@ -83,6 +91,24 @@ export function SavedToast({
           style={style}
         >
           {failed ? '⚠️' : '✓'} {message}
+          {actionLabel && onAction && (
+            <button
+              type="button"
+              onClick={onAction}
+              style={{
+                marginLeft: 4,
+                border: 0,
+                background: 'transparent',
+                color: 'inherit',
+                font: 'inherit',
+                fontWeight: 700,
+                textDecoration: 'underline',
+                cursor: 'pointer',
+              }}
+            >
+              {actionLabel}
+            </button>
+          )}
         </motion.div>
       )}
     </AnimatePresence>

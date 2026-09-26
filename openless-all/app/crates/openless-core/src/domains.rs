@@ -23,6 +23,10 @@ use crate::local_asr_catalog::{
 use crate::style_packs::StylePack;
 use crate::types::{PolishMode, SessionId};
 
+/// Fast, synchronous restore admission check. Implementations must not do I/O
+/// or acquire repository locks; Core calls it while holding a runtime state lock.
+pub type RuntimeRestoreGuard = Arc<dyn Fn() -> Result<(), BackendError> + Send + Sync>;
+
 fn unsupported<T>(domain: &'static str) -> BoxFuture<'static, Result<T, BackendError>> {
     Box::pin(async move {
         Err(BackendError::new(
@@ -398,6 +402,21 @@ pub struct SelectionPolishRequest {
 }
 
 pub trait SelectionApi: Send + Sync {
+    /// Bind restore admission before the service is exposed to runtime callers.
+    /// Legacy custom services remain source compatible, but conservatively do
+    /// not report restore-safe idleness until they implement both methods.
+    #[doc(hidden)]
+    fn bind_runtime_restore_guard(
+        &self,
+        _guard: RuntimeRestoreGuard,
+        _spawner: Arc<dyn crate::config::TaskSpawner>,
+    ) -> Result<(), BackendError> {
+        Ok(())
+    }
+    #[doc(hidden)]
+    fn runtime_restore_idle(&self) -> bool {
+        false
+    }
     fn snapshot(&self) -> BoxFuture<'static, Result<SelectionSnapshot, BackendError>>;
     fn begin_polish(
         &self,
@@ -648,6 +667,21 @@ impl SelectionVoiceApplyOutcome {
 }
 
 pub trait SelectionVoiceApi: Send + Sync {
+    /// Bind restore admission before the service is exposed to runtime callers.
+    /// Legacy custom services remain source compatible, but conservatively do
+    /// not report restore-safe idleness until they implement both methods.
+    #[doc(hidden)]
+    fn bind_runtime_restore_guard(
+        &self,
+        _guard: RuntimeRestoreGuard,
+        _spawner: Arc<dyn crate::config::TaskSpawner>,
+    ) -> Result<(), BackendError> {
+        Ok(())
+    }
+    #[doc(hidden)]
+    fn runtime_restore_idle(&self) -> bool {
+        false
+    }
     #[doc(hidden)]
     fn bind_qa(&self, _qa: std::sync::Weak<dyn QaApi>) {}
     /// Register the Host's capture/target cleanup before asynchronous startup.
@@ -944,6 +978,21 @@ pub trait QaRuntimeAdapter: Send + Sync {
 }
 
 pub trait QaApi: Send + Sync {
+    /// Bind restore admission before the service is exposed to runtime callers.
+    /// Legacy custom services remain source compatible, but conservatively do
+    /// not report restore-safe idleness until they implement both methods.
+    #[doc(hidden)]
+    fn bind_runtime_restore_guard(
+        &self,
+        _guard: RuntimeRestoreGuard,
+        _spawner: Arc<dyn crate::config::TaskSpawner>,
+    ) -> Result<(), BackendError> {
+        Ok(())
+    }
+    #[doc(hidden)]
+    fn runtime_restore_idle(&self) -> bool {
+        false
+    }
     #[doc(hidden)]
     fn bind_event_publisher(&self, _publisher: crate::events::BackendEventPublisher) {}
     /// Show the QA surface without implicitly starting a recording or creating
@@ -967,6 +1016,10 @@ pub trait QaApi: Send + Sync {
         unsupported("QA")
     }
     fn submit_text(&self, text: String) -> BoxFuture<'static, Result<(), BackendError>>;
+    /// Check the displayed conversation and claim the new turn atomically.
+    fn submit_text_in_context(&self, _text: String, _expected_session: Option<SessionId>) -> BoxFuture<'static, Result<(), BackendError>> {
+        Box::pin(async { Err(BackendError::new(BackendErrorCode::Unsupported, "scoped QA submission is unavailable")) })
+    }
     fn submit_captured_text(
         &self,
         _input: QaInput,
@@ -1641,6 +1694,9 @@ impl LocalAsrApi for UnsupportedDomainServices {
 }
 
 impl SelectionApi for UnsupportedDomainServices {
+    fn runtime_restore_idle(&self) -> bool {
+        true
+    }
     fn snapshot(&self) -> BoxFuture<'static, Result<SelectionSnapshot, BackendError>> {
         unsupported("selection")
     }
@@ -1666,6 +1722,9 @@ impl SelectionApi for UnsupportedDomainServices {
 }
 
 impl SelectionVoiceApi for UnsupportedDomainServices {
+    fn runtime_restore_idle(&self) -> bool {
+        true
+    }
     fn snapshot(&self) -> BoxFuture<'static, Result<SelectionVoiceSnapshot, BackendError>> {
         unsupported("selection voice")
     }
@@ -1760,6 +1819,9 @@ impl SelectionVoiceApi for UnsupportedDomainServices {
 }
 
 impl QaApi for UnsupportedDomainServices {
+    fn runtime_restore_idle(&self) -> bool {
+        true
+    }
     fn show(&self) -> BoxFuture<'static, Result<(), BackendError>> {
         unsupported("QA")
     }

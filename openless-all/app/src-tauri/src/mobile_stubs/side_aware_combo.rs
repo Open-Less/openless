@@ -2,7 +2,8 @@
 
 use std::sync::mpsc::Sender;
 
-use crate::combo_hotkey::{ComboHotkeyError, ComboHotkeyEvent};
+use crate::combo_hotkey::ComboHotkeyError;
+use crate::hotkey::{HotkeyCombinedEdge, HotkeyEvent};
 use crate::types::ShortcutBinding;
 
 #[derive(Debug, Clone, Copy)]
@@ -22,7 +23,8 @@ pub struct SideAwareComboMonitor;
 impl SideAwareComboMonitor {
     pub fn start(
         _binding: ShortcutBinding,
-        _tx: Sender<ComboHotkeyEvent>,
+        _tx: Sender<HotkeyEvent>,
+        _combo_tx: Sender<HotkeyCombinedEdge>,
     ) -> Result<Self, ComboHotkeyError> {
         Err(ComboHotkeyError::RegisterFailed(
             "Side-specific combo hotkeys are not available on mobile".into(),
@@ -33,6 +35,8 @@ impl SideAwareComboMonitor {
 pub fn handle_side_modifier(_side: SideModifier, _pressed: bool) {}
 
 pub fn handle_primary_key(_primary: &str, _pressed: bool) {}
+
+pub fn handle_companion_key_down() {}
 
 #[cfg(target_os = "macos")]
 pub mod platform {

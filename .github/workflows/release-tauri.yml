@@ -21,6 +21,12 @@ on:
     tags:
       - 'v*-tauri'
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Desktop platforms to build (manual builds do not publish a release)
+        type: choice
+        options: [all, macos]
+        default: all
 
 # 同一 tag 重复推送只跑最新一次；workflow_dispatch 用 run_id 隔离避免互相取消。
 concurrency:
@@ -34,19 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: macos-latest
-            rust-target: aarch64-apple-darwin
-            updater-target: darwin
-            updater-arch: aarch64
-          - platform: macos-15-intel
-            rust-target: x86_64-apple-darwin
-            updater-target: darwin
-            updater-arch: x86_64
-          - platform: windows-latest
-            rust-target: x86_64-pc-windows-msvc
-            updater-target: windows
-            updater-arch: x86_64
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"},{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"}]' || '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"},{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"},{"platform":"windows-latest","rust-target":"x86_64-pc-windows-msvc","updater-target":"windows","updater-arch":"x86_64"}]') }}
     runs-on: ${{ matrix.platform }}
     env:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -79,10 +73,30 @@ jobs:
         with:
           targets: ${{ matrix.rust-target }}
 
+      # 在恢复缓存前设置实际编译环境，让 cache key 包含 macOS profile。
+      - name: Configure macOS build environment
+        if: startsWith(matrix.platform, 'macos')
+        working-directory: openless-all/app
+        run: bash scripts/macos-build-env.sh
+
       - name: Cache Cargo
+        if: matrix.platform == 'windows-latest'
         uses: swatinem/rust-cache@v2
         with:
           workspaces: 'openless-all/app/src-tauri -> target'
+
+      - name: Cache macOS release dependencies
+        if: startsWith(matrix.platform, 'macos')
+        uses: swatinem/rust-cache@v2
+        with:
+          key: macos-release-v1
+          workspaces: 'openless-all/app/src-tauri -> target'
+
+      - name: Cache macOS MLX native build
+        if: matrix.updater-arch == 'aarch64'
+        uses: ./.github/actions/cache-macos-mlx
+        with:
+          profile: release
 
       - name: Prepare Windows Sherpa static libraries
         if: matrix.platform == 'windows-latest'
@@ -191,6 +205,14 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bash scripts/build-mac.sh
+
+      - name: Upload macOS Cargo timings
+        if: always() && startsWith(matrix.platform, 'macos')
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-cargo-timings-${{ matrix.updater-arch }}
+          path: openless-all/app/src-tauri/target/cargo-timings/*.html
+          if-no-files-found: ignore
 
       # ── Windows：先 build OpenLessIme.dll(x64+x86)，再跑 tauri bundle。
       #    openless-ime.wxs 用 $(env.OPENLESS_IME_DLL_X64) / _X86 拿绝对路径，
@@ -427,6 +449,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: openless-macos-${{ matrix.updater-arch }}
+          compression-level: 0
           path: |
             openless-all/app/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
@@ -436,6 +459,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: openless-macos-${{ matrix.updater-arch }}-updater
+          compression-level: 0
           path: |
             openless-all/app/src-tauri/target/release/bundle/macos/*.app.tar.gz
             openless-all/app/src-tauri/target/release/bundle/macos/*.app.tar.gz.sig

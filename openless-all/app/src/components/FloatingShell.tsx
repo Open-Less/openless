@@ -8,6 +8,7 @@ import { Tooltip } from './Tooltip';
 import { WindowChrome, detectOS, type OS } from './WindowChrome';
 import { AudioCueListener } from './AudioCue';
 import { SettingsModal } from './SettingsModal';
+import { CloudSyncSetupPrompt } from './CloudSyncSetupPrompt';
 import { Overview } from '../pages/Overview';
 import { History } from '../pages/History';
 import { Vocab } from '../pages/Vocab';
@@ -17,7 +18,7 @@ import { Translation } from '../pages/Translation';
 import { SelectionAsk } from '../pages/SelectionAsk';
 import { QuickNote } from '../pages/QuickNote';
 import { Corrections } from '../pages/Corrections';
-import { APP_VERSION_LABEL, IS_BETA_BUILD } from '../lib/appVersion';
+import { IS_BETA_BUILD } from '../lib/appVersion';
 import {
   HOTKEY_MODE_MIGRATION_ACK_KEY,
   HOTKEY_MODE_MIGRATION_DEFERRED_KEY,
@@ -356,8 +357,6 @@ function FloatingShellBody({
                   {t('shell.betaTag')}
                 </span>
               )}
-
-              <span>{t('shell.footer.version', { version: APP_VERSION_LABEL })}</span>
             </div>
 
             {/* nav — 扁平项 + 可展开分组（用户拍板结构）。扁平项：概览/历史/词汇。
@@ -635,6 +634,10 @@ function FloatingShellBody({
           closing={providerPromptMount.closing}
           onLater={rememberProviderPrompt}
           onOpenSettings={openProviderSettings}
+          onRestore={() => {
+            rememberProviderPrompt();
+            openSettings('privacy');
+          }}
         />
       ) : hotkeyPromptMount.mounted ? (
         <HotkeyModeMigrationPrompt
@@ -643,6 +646,10 @@ function FloatingShellBody({
           onOpenSettings={openHotkeyRecordingSettings}
         />
       ) : null}
+      <CloudSyncSetupPrompt
+        blocked={settingsMount.mounted || providerPromptMount.mounted || hotkeyPromptMount.mounted}
+        onSetup={() => openSettings('privacy')}
+      />
       <AudioCueListener />
 
       {/* tab 切换 + provider prompt + footer popover 公用的入场关键帧 */}
@@ -899,10 +906,12 @@ function ProviderSetupPrompt({
   closing = false,
   onLater,
   onOpenSettings,
+  onRestore,
 }: {
   closing?: boolean;
   onLater: () => void;
   onOpenSettings: () => void;
+  onRestore: () => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -915,7 +924,7 @@ function ProviderSetupPrompt({
         alignItems: 'center',
         justifyContent: 'center',
         padding: 28,
-        background: 'rgba(15,17,22,0.28)',
+        background: 'var(--ol-dialog-backdrop)',
         backdropFilter: 'blur(6px) saturate(140%)',
         WebkitBackdropFilter: 'blur(6px) saturate(140%)',
         animation: closing
@@ -926,10 +935,10 @@ function ProviderSetupPrompt({
       <div
         style={{
           width: 360,
-          borderRadius: 12,
+          borderRadius: 'var(--ol-dialog-radius)',
           background: 'var(--ol-surface)',
-          border: '0.5px solid rgba(0,0,0,.08)',
-          boxShadow: '0 24px 70px -24px rgba(15,17,22,.38), 0 0 0 0.5px rgba(0,0,0,.06)',
+          border: '1px solid var(--ol-dialog-border)',
+          boxShadow: 'var(--ol-dialog-shadow)',
           padding: 20,
           animation: closing
             ? 'ol-prompt-pop 0.18s var(--ol-motion-soft) reverse both'
@@ -959,6 +968,14 @@ function ProviderSetupPrompt({
         <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.55 }}>
           {t('shell.providerPrompt.body')}
         </div>
+        <button
+          type="button"
+          className="ol-tool-button"
+          onClick={onRestore}
+          style={{ marginTop: 16, width: '100%' }}
+        >
+          {t('cloudSync.restore')}
+        </button>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
           <button
             onClick={onLater}
@@ -1024,7 +1041,7 @@ function HotkeyModeMigrationPrompt({
         alignItems: 'center',
         justifyContent: 'center',
         padding: 28,
-        background: 'rgba(15,17,22,0.28)',
+        background: 'var(--ol-dialog-backdrop)',
         backdropFilter: 'blur(6px) saturate(140%)',
         WebkitBackdropFilter: 'blur(6px) saturate(140%)',
         animation: closing
@@ -1035,10 +1052,10 @@ function HotkeyModeMigrationPrompt({
       <div
         style={{
           width: 380,
-          borderRadius: 12,
+          borderRadius: 'var(--ol-dialog-radius)',
           background: 'var(--ol-surface)',
-          border: '0.5px solid rgba(0,0,0,.08)',
-          boxShadow: '0 24px 70px -24px rgba(15,17,22,.38), 0 0 0 0.5px rgba(0,0,0,.06)',
+          border: '1px solid var(--ol-dialog-border)',
+          boxShadow: 'var(--ol-dialog-shadow)',
           padding: 20,
           animation: closing
             ? 'ol-prompt-pop 0.18s var(--ol-motion-soft) reverse both'

@@ -17,12 +17,16 @@
 
 ## 接口契约
 
+- [加密云同步客户端](encrypted-cloud-sync.md)：Beta 3 新协议、受控数据范围、系统凭据库、恢复与验证边界。
+
 - [官方云同步](cloud-sync.md)：可同步字段、GitHub 身份边界、版本冲突、本地恢复与验证。
 - [云同步服务端交接](cloud-sync-server-handoff.md)：同步服务地址与端口（apic.openless.top:9443）、客户端请求行为、状态码映射与服务端验收清单。
 - [Linux egui 后端契约](linux-egui-backend-contract.md)：`contract/backend-2.0.json`、启动快照、事件面与公开签名。
 
 ## 平台与运营
 
+- [macOS CI 与打包耗时](macos-build-performance.md)：基线日志、Rust 编译优化、缓存边界与仅 macOS 验证入口。
+- [Android APK 编译耗时调研与实现](android-build-time-research-1103.md)：ABI 并行、缓存回写和发布验证。
 - [Android APK / 悬浮窗计划](android-mobile-apk-overlay-plan.md)（实施中）
 - [火山引擎 ASR 配置](volcengine-setup.md)
 - [讯飞（iflytek）ASR 配置](xfyun-asr.md)
@@ -38,6 +42,8 @@
 - `src-tauri` 及 `backend-tests` 被 workspace exclude，按平台独立构建。源码构建 Tauri 前初始化子模块：`git submodule update --init --recursive`；Core/Linux 独立检查不依赖 Tauri 子模块。
 
 ## 本地集成记录
+
+- [2026-09-25 Beta 3 集成](local-builds/2026-09-25-beta3.md)：最新 PR 整合、审查修复、CI 加速与平台范围。
 
 - [2026-09-23 2.0 PR 审查与构建](local-builds/2026-09-23-2.0.md)：PR 取舍、客户端修复及平台验证范围。
 

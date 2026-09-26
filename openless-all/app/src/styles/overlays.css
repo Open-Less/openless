@@ -1,0 +1,338 @@
+/* Utility windows and dialogs share a quiet, opaque surface and precise controls. */
+:root {
+  --ol-dialog-radius: 22px;
+  --ol-dialog-border: color-mix(in srgb, var(--ol-ink) 12%, var(--ol-surface));
+  --ol-dialog-shadow:
+    0 32px 90px -24px rgba(18, 28, 48, 0.26), 0 8px 28px -12px rgba(18, 28, 48, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  --ol-dialog-backdrop: color-mix(in srgb, var(--ol-overlay-bg) 80%, transparent);
+  --ol-dialog-wash: color-mix(in srgb, var(--ol-blue) 3%, var(--ol-surface));
+}
+
+.ol-dialog-overlay {
+  backdrop-filter: blur(8px) saturate(115%);
+  -webkit-backdrop-filter: blur(8px) saturate(115%);
+  animation: ol-modal-backdrop-in 0.18s var(--ol-motion-soft) both;
+}
+.ol-dialog-overlay.is-closing {
+  animation: ol-modal-backdrop-out 0.18s var(--ol-motion-soft) both;
+}
+.ol-dialog-card {
+  color: var(--ol-ink);
+  isolation: isolate;
+  background-image: linear-gradient(150deg, var(--ol-surface) 45%, var(--ol-dialog-wash));
+  animation: ol-modal-card-in 0.26s var(--ol-motion-spring) both;
+}
+.ol-dialog-overlay.is-closing .ol-dialog-card {
+  animation: ol-modal-card-out 0.18s var(--ol-motion-soft) both;
+}
+.ol-dialog-card :is(button, input, textarea, select):focus-visible {
+  outline: 2px solid var(--ol-blue);
+  outline-offset: 3px;
+}
+
+.ol-tool-window {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+  background: var(--ol-surface);
+  color: var(--ol-ink);
+  border: 1px solid var(--ol-dialog-border);
+  border-radius: var(--ol-dialog-radius);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+}
+.ol-tool-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 12px;
+  min-height: 82px;
+  box-sizing: border-box;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--ol-line);
+  background: linear-gradient(120deg, var(--ol-surface) 45%, var(--ol-dialog-wash));
+}
+.ol-tool-header[data-tauri-drag-region] {
+  cursor: grab;
+}
+.ol-tool-header[data-tauri-drag-region]:active {
+  cursor: grabbing;
+}
+.ol-tool-mark {
+  display: grid;
+  place-items: center;
+  flex: 0 0 38px;
+  height: 38px;
+  border: 1px solid color-mix(in srgb, var(--ol-blue) 13%, var(--ol-surface));
+  border-radius: 12px;
+  color: var(--ol-blue);
+  background: linear-gradient(145deg, var(--ol-surface), var(--ol-blue-soft));
+  box-shadow:
+    0 2px 5px rgba(30, 64, 120, 0.035),
+    inset 0 1px 0 rgba(255, 255, 255, 0.65);
+}
+.ol-tool-mark svg {
+  width: 19px;
+  height: 19px;
+  pointer-events: none;
+}
+.ol-tool-heading {
+  min-width: 0;
+  flex: 1;
+}
+.ol-tool-heading h1 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.3px;
+  line-height: 1.35;
+}
+.ol-tool-description {
+  margin-top: 4px;
+  color: var(--ol-ink-3);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.ol-tool-description > * {
+  pointer-events: none;
+}
+.ol-tool-close {
+  display: grid;
+  place-items: center;
+  flex: 0 0 30px;
+  height: 30px;
+  align-self: flex-start;
+  margin: -3px -5px 0 0;
+  border-radius: 9px;
+  color: var(--ol-ink-3);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    transform 0.15s ease;
+}
+.ol-tool-close:hover {
+  color: var(--ol-ink);
+  background: var(--ol-control-muted);
+}
+.ol-tool-close:active {
+  transform: scale(0.94);
+}
+.ol-tool-close:focus-visible {
+  outline: 2px solid var(--ol-blue);
+  outline-offset: 2px;
+}
+.ol-tool-close svg {
+  pointer-events: none;
+}
+.ol-tool-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  overflow: auto;
+}
+.ol-tool-editor {
+  flex: 1;
+  min-height: 110px;
+  width: 100%;
+  resize: none;
+  box-sizing: border-box;
+  border: 1px solid var(--ol-line);
+  border-radius: 14px;
+  padding: 16px;
+  background: var(--ol-control-solid);
+  color: var(--ol-ink);
+  font: 14px/1.8 var(--ol-font-sans);
+  outline: none;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+.ol-tool-editor:focus {
+  border-color: var(--ol-blue);
+  box-shadow: 0 0 0 3px var(--ol-blue-ring);
+}
+.ol-tool-source {
+  padding: 10px 12px;
+  border-left: 2px solid color-mix(in srgb, var(--ol-blue) 40%, var(--ol-line));
+  border-radius: 0 8px 8px 0;
+  background: var(--ol-dialog-wash);
+  color: var(--ol-ink-3);
+  font-size: 12px;
+  line-height: 1.65;
+  max-height: 62px;
+  overflow: auto;
+  flex-shrink: 0;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.ol-tool-error {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ol-err) 6%, var(--ol-surface));
+  color: var(--ol-err);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.ol-tool-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 20px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--ol-line-soft);
+  background: var(--ol-dialog-wash);
+}
+.ol-tool-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 8px 15px;
+  border: 1px solid var(--ol-line);
+  border-radius: 10px;
+  background: var(--ol-surface);
+  color: var(--ol-ink-2);
+  font: 550 12.5px/1.4 var(--ol-font-sans);
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.15s ease;
+}
+.ol-tool-button:hover:not(:disabled) {
+  background: var(--ol-surface-2);
+  border-color: var(--ol-line-strong);
+}
+.ol-tool-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.ol-tool-button:focus-visible {
+  outline: 2px solid var(--ol-blue);
+  outline-offset: 3px;
+}
+.ol-tool-button.is-primary {
+  background: var(--ol-blue);
+  border-color: var(--ol-blue);
+  color: #fff;
+  box-shadow: 0 3px 7px rgba(37, 99, 235, 0.14);
+}
+.ol-tool-button.is-primary:hover:not(:disabled) {
+  background: var(--ol-blue-hover);
+  border-color: var(--ol-blue-hover);
+}
+.ol-tool-button:disabled,
+.ol-tool-close:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.ol-intent-instruction {
+  padding: 16px;
+  border: 1px solid var(--ol-line);
+  border-radius: 14px;
+  background: var(--ol-control-solid);
+  font-size: 14px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.ol-intent-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.ol-intent-options .ol-tool-button {
+  min-height: 38px;
+  gap: 8px;
+  padding: 8px 10px;
+}
+.ol-intent-window .ol-tool-header {
+  min-height: 64px;
+  padding: 12px 16px;
+}
+.ol-intent-window .ol-tool-content {
+  padding: 12px 16px;
+  gap: 8px;
+}
+.ol-intent-window .ol-intent-instruction {
+  padding: 10px 12px;
+  font-size: 13px;
+}
+.ol-intent-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 10px 16px 8px;
+  border-top: 1px solid var(--ol-line-soft);
+  background: var(--ol-dialog-wash);
+}
+.ol-intent-cancel {
+  align-self: center;
+  border: 0;
+  min-height: 28px;
+  background: transparent;
+  color: var(--ol-ink-3);
+}
+
+/* Embedded settings/model editors retain their own focus, scrolling and mobile layouts. */
+.ol-model-dialog-overlay {
+  backdrop-filter: blur(8px) saturate(115%);
+  -webkit-backdrop-filter: blur(8px) saturate(115%);
+}
+.ol-model-dialog {
+  border-radius: var(--ol-dialog-radius);
+  box-shadow: var(--ol-dialog-shadow);
+}
+.ol-channel-dialog:not(.ol-channel-dialog-embedded) {
+  background: var(--ol-surface);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-tool-window,
+  .ol-tool-close,
+  .ol-tool-button,
+  .ol-dialog-overlay,
+  .ol-dialog-card {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+@media (max-width: 380px) {
+  .ol-tool-header {
+    padding: 16px;
+    gap: 10px;
+  }
+  .ol-tool-content {
+    padding: 16px;
+  }
+  .ol-tool-footer {
+    padding: 12px 16px;
+  }
+}
+@media (max-height: 360px) {
+  .ol-tool-header {
+    min-height: 64px;
+    padding: 12px 16px;
+  }
+  .ol-tool-content {
+    padding: 12px 16px;
+    gap: 10px;
+  }
+  .ol-tool-footer {
+    padding: 10px 16px;
+  }
+}

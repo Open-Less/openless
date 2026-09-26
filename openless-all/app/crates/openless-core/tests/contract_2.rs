@@ -71,22 +71,72 @@ fn runtime_wire_rejects_non_2_contracts() {
 
 #[test]
 fn less_computer_voice_feedback_matches_the_shared_wire_contract() {
-    use openless_core::{LessComputerEvent, LessComputerEventKind, LessComputerVoicePhase};
+    use openless_core::{
+        LessComputerEvent, LessComputerEventKind, LessComputerVoiceMode, LessComputerVoiceOutcome,
+        LessComputerVoicePhase,
+    };
     let fixture = fixture();
     let event: LessComputerEvent =
         serde_json::from_value(fixture["lessComputerVoice"]["sample"].clone()).unwrap();
     assert!(matches!(
-        event.kind,
+        &event.kind,
         LessComputerEventKind::VoiceState {
             phase: LessComputerVoicePhase::Recording,
-            level: 0.5,
+            level,
             elapsed_ms: 120,
+            mode: LessComputerVoiceMode::Dictate,
+            transcript,
+            outcome: None,
             ..
-        }
+        } if *level == 0.5 && transcript == "打开"
     ));
     assert_eq!(
         serde_json::to_value(event).unwrap(),
         fixture["lessComputerVoice"]["sample"]
+    );
+    let idle: LessComputerEvent =
+        serde_json::from_value(fixture["lessComputerVoice"]["idleSample"].clone()).unwrap();
+    assert!(matches!(
+        &idle.kind,
+        LessComputerEventKind::VoiceState {
+            phase: LessComputerVoicePhase::Idle,
+            outcome: Some(LessComputerVoiceOutcome::Committed),
+            ..
+        }
+    ));
+    assert_eq!(
+        serde_json::to_value(idle).unwrap(),
+        fixture["lessComputerVoice"]["idleSample"]
+    );
+    let legacy: LessComputerEvent =
+        serde_json::from_value(fixture["lessComputerVoice"]["legacySample"].clone()).unwrap();
+    assert!(matches!(
+        &legacy.kind,
+        LessComputerEventKind::VoiceState {
+            mode: LessComputerVoiceMode::Submit,
+            transcript,
+            outcome: None,
+            ..
+        } if transcript.is_empty()
+    ));
+    assert_eq!(
+        serde_json::to_value([
+            LessComputerVoiceMode::Submit,
+            LessComputerVoiceMode::Dictate
+        ])
+        .unwrap(),
+        fixture["lessComputerVoice"]["modes"]
+    );
+    assert_eq!(
+        serde_json::to_value([
+            LessComputerVoiceOutcome::Submitted,
+            LessComputerVoiceOutcome::Committed,
+            LessComputerVoiceOutcome::Empty,
+            LessComputerVoiceOutcome::Failed,
+            LessComputerVoiceOutcome::Cancelled,
+        ])
+        .unwrap(),
+        fixture["lessComputerVoice"]["outcomes"]
     );
     assert_eq!(
         serde_json::to_value([

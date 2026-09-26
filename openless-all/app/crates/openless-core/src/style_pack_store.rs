@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::errors::{BackendError, BackendErrorCode};
-use crate::persistence::{atomic_write, persistence_error, read_or_default};
+use crate::persistence::{atomic_write, persistence_error};
 use crate::shared_types::UserPreferences;
 use crate::style_pack_archive::{
     cleanup_style_pack_asset_dir, persist_style_pack_icon, read_style_pack_archive,
@@ -24,6 +24,18 @@ pub struct StylePackStore {
     path: Option<PathBuf>,
     asset_root: Option<PathBuf>,
     state: Mutex<Vec<StylePack>>,
+}
+
+/// New asset paths have no live references until the index commits. Keep them only
+/// on a confirmed or uncertain index commit; all earlier errors clean them up.
+#[derive(Default)]
+struct UncommittedSyncIcons(Vec<PathBuf>);
+impl Drop for UncommittedSyncIcons {
+    fn drop(&mut self) {
+        for path in &self.0 {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 impl StylePackStore {
@@ -65,20 +77,45 @@ impl StylePackStore {
         asset_root: PathBuf,
         preferences: Option<&UserPreferences>,
     ) -> Result<Self, BackendError> {
-        let mut packs: Vec<StylePack> = read_or_default(&path)?;
-        let mut changed = preferences
-            .map(|preferences| migrate_style_packs_from_preferences(&mut packs, preferences))
-            .unwrap_or(false);
-        changed |= reconcile_builtin_packs(&mut packs) | ensure_at_least_one_enabled(&mut packs);
-        sort_packs(&mut packs);
-        if changed {
-            write_packs(&path, &packs)?;
+        let operation_path = path.clone();
+        if crate::cloud_sync_e2ee_store::gate::recovery_pending_for_path(&path) {
+            let packs = crate::persistence::read_lossless_rows(&path, &[])?;
+            return Ok(Self {
+                path: Some(path),
+                asset_root: Some(asset_root),
+                state: Mutex::new(packs),
+            });
         }
-        Ok(Self {
-            path: Some(path),
-            asset_root: Some(asset_root),
-            state: Mutex::new(packs),
-        })
+        crate::cloud_sync_e2ee_store::gate::with_registered_mutation(
+            &operation_path,
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let mut packs: Vec<StylePack> = crate::persistence::read_lossless_rows(&path, &[])?;
+                if crate::cloud_sync_e2ee_store::gate::recovery_pending_for_path(&path) {
+                    return Ok(Self {
+                        path: Some(path),
+                        asset_root: Some(asset_root),
+                        state: Mutex::new(packs),
+                    });
+                }
+                let mut changed = preferences
+                    .map(|preferences| {
+                        migrate_style_packs_from_preferences(&mut packs, preferences)
+                    })
+                    .unwrap_or(false);
+                changed |=
+                    reconcile_builtin_packs(&mut packs) | ensure_at_least_one_enabled(&mut packs);
+                sort_packs(&mut packs);
+                if changed {
+                    write_packs(&path, &packs)?;
+                }
+                Ok(Self {
+                    path: Some(path),
+                    asset_root: Some(asset_root),
+                    state: Mutex::new(packs),
+                })
+            },
+        )
     }
 
     pub fn in_memory() -> Self {
@@ -93,6 +130,136 @@ impl StylePackStore {
 
     pub fn list(&self) -> Result<Vec<StylePack>, BackendError> {
         Ok(self.lock()?.clone())
+    }
+
+    pub(crate) fn sync_snapshot(
+        &self,
+        permit: &crate::cloud_sync_e2ee_store::gate::ExclusivePermit,
+    ) -> Result<Vec<crate::cloud_sync_e2ee_documents::StylePackRecord>, BackendError> {
+        let path = self
+            .path
+            .as_deref()
+            .ok_or_else(|| persistence_error("style pack persistence unavailable"))?;
+        crate::cloud_sync_e2ee_store::gate::require_exclusive(path, permit)?;
+        self.sync_snapshot_readonly()
+    }
+
+    pub(crate) fn sync_snapshot_readonly(
+        &self,
+    ) -> Result<Vec<crate::cloud_sync_e2ee_documents::StylePackRecord>, BackendError> {
+        let path = self
+            .path
+            .as_deref()
+            .ok_or_else(|| persistence_error("style pack persistence unavailable"))?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| persistence_error("style pack state poisoned"))?;
+        let packs: Vec<StylePack> = crate::persistence::read_lossless_rows(path, &[])?;
+        *state = packs.clone();
+        packs
+            .iter()
+            .map(|pack| {
+                let icon = match self.icon_data_url_for_pack(pack)? {
+                    Some(data) => {
+                        let (mime, base64) = data
+                            .strip_prefix("data:")
+                            .and_then(|value| value.split_once(";base64,"))
+                            .ok_or_else(|| persistence_error("invalid controlled icon response"))?;
+                        Some(crate::cloud_sync_e2ee_documents::IconAsset {
+                            mime: mime.into(),
+                            base64: base64.into(),
+                        })
+                    }
+                    None if pack.icon_path.is_some() => {
+                        return Err(persistence_error("registered style icon is missing"))
+                    }
+                    None => None,
+                };
+                Ok(crate::cloud_sync_e2ee_documents::StylePackRecord {
+                    pack: crate::cloud_sync_e2ee_documents::SecretJson::from_serializable(pack)
+                        .map_err(|_| persistence_error("encode style pack snapshot"))?,
+                    icon,
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn sync_replace_all(
+        &self,
+        records: &[crate::cloud_sync_e2ee_documents::StylePackRecord],
+        permit: &crate::cloud_sync_e2ee_store::gate::ExclusivePermit,
+    ) -> Result<(), BackendError> {
+        let path = self
+            .path
+            .as_deref()
+            .ok_or_else(|| persistence_error("style pack persistence unavailable"))?;
+        let asset_root = self
+            .asset_root
+            .as_deref()
+            .ok_or_else(|| persistence_error("style pack assets unavailable"))?;
+        crate::cloud_sync_e2ee_store::gate::require_exclusive(path, permit)?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| persistence_error("style pack state poisoned"))?;
+        let mut prepared = Vec::with_capacity(records.len());
+        // Validate all resource bytes before allocating paths or mutating the index.
+        for record in records {
+            let mut pack: StylePack = serde_json::from_value(record.pack.expose().clone())
+                .map_err(|_| persistence_error("decode restored style pack"))?;
+            pack.icon_path = None;
+            pack.active = false;
+            if let Some(icon) = &record.icon {
+                crate::cloud_sync_e2ee_documents::validate_icon(icon)
+                    .map_err(|_| persistence_error("validate restored icon"))?;
+            }
+            prepared.push((pack, record.icon.as_ref()));
+        }
+        let mut restored = Vec::with_capacity(prepared.len());
+        let mut created = UncommittedSyncIcons::default();
+        for (mut pack, icon) in prepared {
+            if let Some(icon) = icon {
+                let expected = format!("data:{};base64,{}", icon.mime, icon.base64);
+                if let Some(existing) = state.iter().find(|old| old.id == pack.id) {
+                    if self.icon_data_url_for_pack(existing)?.as_deref() == Some(expected.as_str())
+                    {
+                        pack.icon_path = existing.icon_path.clone();
+                    }
+                }
+                if pack.icon_path.is_none() {
+                    let extension = match icon.mime.as_str() {
+                        "image/png" => "png",
+                        "image/jpeg" => "jpg",
+                        "image/webp" => "webp",
+                        _ => return Err(persistence_error("unsupported restored icon")),
+                    };
+                    let destination = asset_root.join(format!(
+                        "sync-{}.{}",
+                        uuid::Uuid::new_v4().simple(),
+                        extension
+                    ));
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(&icon.base64)
+                        .map_err(|_| persistence_error("decode restored icon"))?;
+                    created.0.push(destination.clone());
+                    crate::persistence::atomic_write_for_sync(&destination, &bytes, permit)?;
+                    pack.icon_path = Some(destination.to_string_lossy().into_owned());
+                }
+            }
+            restored.push(pack);
+        }
+        let bytes = serde_json::to_vec_pretty(&restored)
+            .map_err(|_| persistence_error("encode restored styles"))?;
+        if let Err(error) = crate::persistence::atomic_write_for_sync(path, &bytes, permit) {
+            if error.code == BackendErrorCode::OutcomeUnknown {
+                created.0.clear();
+            }
+            return Err(error);
+        }
+        created.0.clear();
+        *state = restored;
+        Ok(())
     }
 
     pub(crate) fn cloud_sync_access(
@@ -143,49 +310,65 @@ impl StylePackStore {
     }
 
     pub fn create(&self, mut pack: StylePack) -> Result<StylePack, BackendError> {
-        let mut packs = self.lock()?;
-        let requested = if pack.id.trim().is_empty() {
-            format!("imported-{}", uuid::Uuid::new_v4().simple())
-        } else {
-            pack.id.clone()
-        };
-        pack.id = unique_imported_id(&packs, &requested);
-        pack.name = required_text(&pack.name, "style pack name")?;
-        pack.kind = StylePackKind::Imported;
-        pack.active = false;
-        pack.enabled = true;
-        let now = chrono::Utc::now().to_rfc3339();
-        pack.created_at = Some(now.clone());
-        pack.updated_at = Some(now);
-        pack.version = normalized_version(&pack.version);
-        pack.examples = normalized_examples(pack.examples);
-        pack.tags = normalized_tags(&pack.tags);
-        packs.push(pack.clone());
-        self.persist_locked(&packs)?;
-        Ok(pack)
+        crate::cloud_sync_e2ee_store::gate::with_optional_mutation(
+            self.path.as_deref(),
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let mut live = self.lock_for_mutation()?;
+                let mut packs = live.clone();
+                let requested = if pack.id.trim().is_empty() {
+                    format!("imported-{}", uuid::Uuid::new_v4().simple())
+                } else {
+                    pack.id.clone()
+                };
+                pack.id = unique_imported_id(&packs, &requested);
+                pack.name = required_text(&pack.name, "style pack name")?;
+                pack.kind = StylePackKind::Imported;
+                pack.active = false;
+                pack.enabled = true;
+                let now = chrono::Utc::now().to_rfc3339();
+                pack.created_at = Some(now.clone());
+                pack.updated_at = Some(now);
+                pack.version = normalized_version(&pack.version);
+                pack.examples = normalized_examples(pack.examples);
+                pack.tags = normalized_tags(&pack.tags);
+                packs.push(pack.clone());
+                self.persist_locked(&packs)?;
+                *live = packs;
+                Ok(pack)
+            },
+        )
     }
 
     pub fn update(&self, incoming: StylePack) -> Result<StylePack, BackendError> {
-        let mut packs = self.lock()?;
-        let slot = packs
-            .iter_mut()
-            .find(|pack| pack.id == incoming.id)
-            .ok_or_else(|| not_found(&incoming.id))?;
-        slot.name = required_text(&incoming.name, "style pack name")?;
-        slot.description = incoming.description.trim().to_string();
-        slot.author = normalized_optional(incoming.author);
-        slot.version = normalized_version(&incoming.version);
-        slot.selection_prompt = incoming.selection_prompt;
-        slot.voice_edit_prompt = incoming.voice_edit_prompt;
-        slot.prompt = incoming.prompt;
-        slot.examples = normalized_examples(incoming.examples);
-        slot.tags = normalized_tags(&incoming.tags);
-        slot.recommended_model = normalized_optional(incoming.recommended_model);
-        slot.compatible_app_version = normalized_optional(incoming.compatible_app_version);
-        slot.updated_at = Some(chrono::Utc::now().to_rfc3339());
-        let updated = slot.clone();
-        self.persist_locked(&packs)?;
-        Ok(updated)
+        crate::cloud_sync_e2ee_store::gate::with_optional_mutation(
+            self.path.as_deref(),
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let mut live = self.lock_for_mutation()?;
+                let mut packs = live.clone();
+                let slot = packs
+                    .iter_mut()
+                    .find(|pack| pack.id == incoming.id)
+                    .ok_or_else(|| not_found(&incoming.id))?;
+                slot.name = required_text(&incoming.name, "style pack name")?;
+                slot.description = incoming.description.trim().to_string();
+                slot.author = normalized_optional(incoming.author);
+                slot.version = normalized_version(&incoming.version);
+                slot.selection_prompt = incoming.selection_prompt;
+                slot.voice_edit_prompt = incoming.voice_edit_prompt;
+                slot.prompt = incoming.prompt;
+                slot.examples = normalized_examples(incoming.examples);
+                slot.tags = normalized_tags(&incoming.tags);
+                slot.recommended_model = normalized_optional(incoming.recommended_model);
+                slot.compatible_app_version = normalized_optional(incoming.compatible_app_version);
+                slot.updated_at = Some(chrono::Utc::now().to_rfc3339());
+                let updated = slot.clone();
+                self.persist_locked(&packs)?;
+                *live = packs;
+                Ok(updated)
+            },
+        )
     }
 
     /// Save a PNG icon in this pack's owned asset directory, or clear it with `None`.
@@ -197,76 +380,86 @@ impl StylePackStore {
     /// Returns an error for an unknown/invalid pack ID, an invalid PNG, an image
     /// over 64 KiB, an unavailable asset directory, or a failed filesystem write.
     pub fn update_icon(&self, id: &str, png: Option<&[u8]>) -> Result<StylePack, BackendError> {
-        if id.is_empty()
-            || id == "."
-            || id == ".."
-            || !id
-                .bytes()
-                .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
-        {
-            return Err(invalid_icon("invalid style pack id"));
-        }
-        let mut packs = self.lock()?;
-        let index = packs
-            .iter()
-            .position(|pack| pack.id == id)
-            .ok_or_else(|| not_found(id))?;
-        let old_path = packs[index].icon_path.clone();
-        let new_path = if let Some(bytes) = png {
-            if bytes.len() > MAX_ICON_BYTES {
-                return Err(invalid_icon("style pack icon exceeds 64 KiB"));
-            }
-            validate_icon_content("png", bytes).map_err(archive_error)?;
-            let root = self
-                .asset_root
-                .as_ref()
-                .filter(|root| !root.as_os_str().is_empty())
-                .ok_or_else(|| invalid_icon("style pack asset root unavailable"))?;
-            fs::create_dir_all(root)
-                .map_err(|_| persistence_error("create style pack asset root"))?;
-            let root = root
-                .canonicalize()
-                .map_err(|_| persistence_error("resolve style pack asset root"))?;
-            let directory = root.join(id);
-            fs::create_dir_all(&directory)
-                .map_err(|_| persistence_error("create style pack icon directory"))?;
-            let directory = directory
-                .canonicalize()
-                .map_err(|_| persistence_error("resolve style pack icon directory"))?;
-            if !directory.starts_with(&root) {
-                return Err(invalid_icon(
-                    "style pack icon directory is outside its asset root",
-                ));
-            }
-            // A new filename keeps the previous image valid until metadata commits.
-            let target = directory.join(format!("icon-{}.png", uuid::Uuid::new_v4().simple()));
-            atomic_write(&target, bytes)?;
-            Some(target)
-        } else {
-            None
-        };
-        let mut next = packs.clone();
-        next[index].icon_path = new_path
-            .as_ref()
-            .map(|path| path.to_string_lossy().into_owned());
-        next[index].updated_at = Some(chrono::Utc::now().to_rfc3339());
-        if let Err(error) = self.persist_locked(&next) {
-            if let Some(path) = new_path {
-                let _ = fs::remove_file(path);
-            }
-            return Err(error);
-        }
-        let saved = next[index].clone();
-        *packs = next;
-        if let (Some(root), Some(old)) = (&self.asset_root, old_path) {
-            let old = Path::new(&old);
-            if let (Ok(owned), Some(parent)) = (root.join(id).canonicalize(), old.parent()) {
-                if parent.canonicalize().ok().as_ref() == Some(&owned) {
-                    let _ = fs::remove_file(old);
+        crate::cloud_sync_e2ee_store::gate::with_optional_mutation(
+            self.path.as_deref(),
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                if id.is_empty()
+                    || id == "."
+                    || id == ".."
+                    || !id
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+                {
+                    return Err(invalid_icon("invalid style pack id"));
                 }
-            }
-        }
-        Ok(saved)
+                let mut packs = self.lock_for_mutation()?;
+                let index = packs
+                    .iter()
+                    .position(|pack| pack.id == id)
+                    .ok_or_else(|| not_found(id))?;
+                let old_path = packs[index].icon_path.clone();
+                let new_path = if let Some(bytes) = png {
+                    if bytes.len() > MAX_ICON_BYTES {
+                        return Err(invalid_icon("style pack icon exceeds 64 KiB"));
+                    }
+                    validate_icon_content("png", bytes).map_err(archive_error)?;
+                    let root = self
+                        .asset_root
+                        .as_ref()
+                        .filter(|root| !root.as_os_str().is_empty())
+                        .ok_or_else(|| invalid_icon("style pack asset root unavailable"))?;
+                    fs::create_dir_all(root)
+                        .map_err(|_| persistence_error("create style pack asset root"))?;
+                    let root = root
+                        .canonicalize()
+                        .map_err(|_| persistence_error("resolve style pack asset root"))?;
+                    let directory = root.join(id);
+                    fs::create_dir_all(&directory)
+                        .map_err(|_| persistence_error("create style pack icon directory"))?;
+                    let directory = directory
+                        .canonicalize()
+                        .map_err(|_| persistence_error("resolve style pack icon directory"))?;
+                    if !directory.starts_with(&root) {
+                        return Err(invalid_icon(
+                            "style pack icon directory is outside its asset root",
+                        ));
+                    }
+                    // A new filename keeps the previous image valid until metadata commits.
+                    let target =
+                        directory.join(format!("icon-{}.png", uuid::Uuid::new_v4().simple()));
+                    atomic_write(&target, bytes)?;
+                    Some(target)
+                } else {
+                    None
+                };
+                let mut next = packs.clone();
+                next[index].icon_path = new_path
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned());
+                next[index].updated_at = Some(chrono::Utc::now().to_rfc3339());
+                if let Err(error) = self.persist_locked(&next) {
+                    if error.code != BackendErrorCode::OutcomeUnknown {
+                        if let Some(path) = new_path {
+                            let _ = fs::remove_file(path);
+                        }
+                    }
+                    return Err(error);
+                }
+                let saved = next[index].clone();
+                *packs = next;
+                if let (Some(root), Some(old)) = (&self.asset_root, old_path) {
+                    let old = Path::new(&old);
+                    if let (Ok(owned), Some(parent)) = (root.join(id).canonicalize(), old.parent())
+                    {
+                        if parent.canonicalize().ok().as_ref() == Some(&owned) {
+                            let _ = fs::remove_file(old);
+                        }
+                    }
+                }
+                Ok(saved)
+            },
+        )
     }
 
     /// Read a pack icon as a PNG/JPEG/WebP data URL without exposing filesystem access.
@@ -336,84 +529,128 @@ impl StylePackStore {
         origin_pack_id: Option<String>,
         origin_author_login: Option<String>,
     ) -> Result<StylePack, BackendError> {
-        let mut packs = self.lock()?;
-        let slot = packs
-            .iter_mut()
-            .find(|pack| pack.id == id)
-            .ok_or_else(|| not_found(id))?;
-        slot.origin_pack_id = normalized_optional(origin_pack_id);
-        slot.origin_author_login = normalized_optional(origin_author_login);
-        slot.updated_at = Some(chrono::Utc::now().to_rfc3339());
-        let updated = slot.clone();
-        self.persist_locked(&packs)?;
-        Ok(updated)
+        crate::cloud_sync_e2ee_store::gate::with_optional_mutation(
+            self.path.as_deref(),
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let mut live = self.lock_for_mutation()?;
+                let mut packs = live.clone();
+                let slot = packs
+                    .iter_mut()
+                    .find(|pack| pack.id == id)
+                    .ok_or_else(|| not_found(id))?;
+                slot.origin_pack_id = normalized_optional(origin_pack_id);
+                slot.origin_author_login = normalized_optional(origin_author_login);
+                slot.updated_at = Some(chrono::Utc::now().to_rfc3339());
+                let updated = slot.clone();
+                self.persist_locked(&packs)?;
+                *live = packs;
+                Ok(updated)
+            },
+        )
     }
 
     pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<StylePack, BackendError> {
-        let mut packs = self.lock()?;
-        let index = packs
-            .iter()
-            .position(|pack| pack.id == id)
-            .ok_or_else(|| not_found(id))?;
-        packs[index].enabled = enabled;
-        packs[index].updated_at = Some(chrono::Utc::now().to_rfc3339());
-        ensure_at_least_one_enabled(&mut packs);
-        let updated = packs[index].clone();
-        self.persist_locked(&packs)?;
-        Ok(updated)
+        crate::cloud_sync_e2ee_store::gate::with_optional_mutation(
+            self.path.as_deref(),
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let mut live = self.lock_for_mutation()?;
+                let mut packs = live.clone();
+                let index = packs
+                    .iter()
+                    .position(|pack| pack.id == id)
+                    .ok_or_else(|| not_found(id))?;
+                packs[index].enabled = enabled;
+                packs[index].updated_at = Some(chrono::Utc::now().to_rfc3339());
+                ensure_at_least_one_enabled(&mut packs);
+                let updated = packs[index].clone();
+                self.persist_locked(&packs)?;
+                *live = packs;
+                Ok(updated)
+            },
+        )
     }
 
     pub fn reset_builtin(&self, id: &str) -> Result<StylePack, BackendError> {
-        let mode = builtin_mode(id).ok_or_else(|| {
-            BackendError::new(
-                BackendErrorCode::InvalidArgument,
-                "style pack is not builtin",
-            )
-        })?;
-        let mut packs = self.lock()?;
-        let index = packs
-            .iter()
-            .position(|pack| pack.id == id)
-            .ok_or_else(|| not_found(id))?;
-        let existing = &packs[index];
-        let mut reset = builtin_style_pack_for_mode(mode);
-        reset.enabled = existing.enabled;
-        reset.created_at = existing.created_at.clone();
-        reset.updated_at = Some(chrono::Utc::now().to_rfc3339());
-        packs[index] = reset.clone();
-        self.persist_locked(&packs)?;
-        Ok(reset)
+        crate::cloud_sync_e2ee_store::gate::with_optional_mutation(
+            self.path.as_deref(),
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let mode = builtin_mode(id).ok_or_else(|| {
+                    BackendError::new(
+                        BackendErrorCode::InvalidArgument,
+                        "style pack is not builtin",
+                    )
+                })?;
+                let mut live = self.lock_for_mutation()?;
+                let mut packs = live.clone();
+                let index = packs
+                    .iter()
+                    .position(|pack| pack.id == id)
+                    .ok_or_else(|| not_found(id))?;
+                let existing = &packs[index];
+                let mut reset = builtin_style_pack_for_mode(mode);
+                reset.enabled = existing.enabled;
+                reset.created_at = existing.created_at.clone();
+                reset.updated_at = Some(chrono::Utc::now().to_rfc3339());
+                packs[index] = reset.clone();
+                self.persist_locked(&packs)?;
+                *live = packs;
+                Ok(reset)
+            },
+        )
     }
 
     pub fn remove_imported(&self, id: &str) -> Result<(), BackendError> {
-        let mut packs = self.lock()?;
-        let index = packs
-            .iter()
-            .position(|pack| pack.id == id)
-            .ok_or_else(|| not_found(id))?;
-        if packs[index].kind == StylePackKind::Builtin {
-            return Err(BackendError::new(
-                BackendErrorCode::InvalidArgument,
-                "builtin style pack cannot be deleted",
-            ));
-        }
-        let removed = packs.remove(index);
-        ensure_at_least_one_enabled(&mut packs);
-        self.persist_locked(&packs)?;
-        if let Some(asset_root) = &self.asset_root {
-            cleanup_style_pack_asset_dir(asset_root, &removed.id);
-        }
-        Ok(())
+        crate::cloud_sync_e2ee_store::gate::with_optional_mutation(
+            self.path.as_deref(),
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let mut live = self.lock_for_mutation()?;
+                let mut packs = live.clone();
+                let index = packs
+                    .iter()
+                    .position(|pack| pack.id == id)
+                    .ok_or_else(|| not_found(id))?;
+                if packs[index].kind == StylePackKind::Builtin {
+                    return Err(BackendError::new(
+                        BackendErrorCode::InvalidArgument,
+                        "builtin style pack cannot be deleted",
+                    ));
+                }
+                let removed = packs.remove(index);
+                ensure_at_least_one_enabled(&mut packs);
+                self.persist_locked(&packs)?;
+                *live = packs;
+                if let Some(asset_root) = &self.asset_root {
+                    cleanup_style_pack_asset_dir(asset_root, &removed.id);
+                }
+                Ok(())
+            },
+        )
     }
 
     pub fn import_from_zip(&self, path: &Path) -> Result<StylePack, BackendError> {
-        let parsed = read_style_pack_archive(path).map_err(archive_error)?;
-        self.import_parsed_archive(parsed)
+        crate::cloud_sync_e2ee_store::gate::with_optional_mutation(
+            self.path.as_deref(),
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let parsed = read_style_pack_archive(path).map_err(archive_error)?;
+                self.import_parsed_archive(parsed)
+            },
+        )
     }
 
     pub fn import_from_zip_bytes(&self, bytes: &[u8]) -> Result<StylePack, BackendError> {
-        let parsed = read_style_pack_archive_bytes(bytes).map_err(archive_error)?;
-        self.import_parsed_archive(parsed)
+        crate::cloud_sync_e2ee_store::gate::with_optional_mutation(
+            self.path.as_deref(),
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let parsed = read_style_pack_archive_bytes(bytes).map_err(archive_error)?;
+                self.import_parsed_archive(parsed)
+            },
+        )
     }
 
     /// Imports a validated Marketplace archive while committing its remote
@@ -426,10 +663,16 @@ impl StylePackStore {
         origin_pack_id: String,
         origin_author_login: Option<String>,
     ) -> Result<StylePack, BackendError> {
-        let mut parsed = read_style_pack_archive_bytes(bytes).map_err(archive_error)?;
-        parsed.manifest.origin_pack_id = Some(origin_pack_id);
-        parsed.manifest.origin_author_login = origin_author_login;
-        self.import_parsed_archive(parsed)
+        crate::cloud_sync_e2ee_store::gate::with_optional_mutation(
+            self.path.as_deref(),
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
+            || {
+                let mut parsed = read_style_pack_archive_bytes(bytes).map_err(archive_error)?;
+                parsed.manifest.origin_pack_id = Some(origin_pack_id);
+                parsed.manifest.origin_author_login = origin_author_login;
+                self.import_parsed_archive(parsed)
+            },
+        )
     }
 
     fn import_parsed_archive(
@@ -437,7 +680,7 @@ impl StylePackStore {
         parsed: ParsedStylePackArchive,
     ) -> Result<StylePack, BackendError> {
         let manifest = parsed.manifest;
-        let mut packs = self.lock()?;
+        let mut packs = self.lock_for_mutation()?;
         let pack_id = unique_imported_id(&packs, &manifest.id);
         let icon_path = match (parsed.icon, self.asset_root.as_deref()) {
             (Some(icon), Some(asset_root)) => {
@@ -478,7 +721,7 @@ impl StylePackStore {
         let mut next = packs.clone();
         next.insert(0, pack.clone());
         if let Err(error) = self.persist_locked(&next) {
-            if pack.icon_path.is_some() {
+            if error.code != BackendErrorCode::OutcomeUnknown && pack.icon_path.is_some() {
                 if let Some(asset_root) = &self.asset_root {
                     cleanup_style_pack_asset_dir(asset_root, &pack.id);
                 }
@@ -566,6 +809,16 @@ impl StylePackStore {
         self.state.lock().map_err(|_| {
             BackendError::new(BackendErrorCode::Internal, "style pack store lock poisoned")
         })
+    }
+
+    fn lock_for_mutation(&self) -> Result<std::sync::MutexGuard<'_, Vec<StylePack>>, BackendError> {
+        let mut state = self.lock()?;
+        if let Some(path) = &self.path {
+            if path.exists() {
+                *state = crate::persistence::read_lossless_rows(path, &[])?;
+            }
+        }
+        Ok(state)
     }
 
     fn persist_locked(&self, packs: &[StylePack]) -> Result<(), BackendError> {

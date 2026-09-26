@@ -50,12 +50,65 @@ pub async fn qa_toggle_recording(core: CoreState<'_>) -> Result<(), String> {
 
 /// QA 面板键盘输入：复用语音 QA 的 LLM 管线，只替换问题来源。
 #[tauri::command]
-pub async fn qa_submit_text(core: CoreState<'_>, text: String) -> Result<(), String> {
-    core.services()
+pub async fn qa_submit_text(
+    core: CoreState<'_>,
+    text: String,
+    expected_session_id: Option<openless_core::SessionId>,
+    enforce_context: Option<bool>,
+) -> Result<(), String> {
+    if enforce_context.unwrap_or(false) {
+        core.services()
+            .qa
+            .submit_text_in_context(text, expected_session_id)
+            .await
+            .map_err(|error| error.message)
+    } else {
+        core.services()
+            .qa
+            .submit_text(text)
+            .await
+            .map_err(|error| error.message)
+    }
+}
+
+#[tauri::command]
+pub async fn qa_get_snapshot(
+    window: Window,
+    core: CoreState<'_>,
+) -> Result<openless_core::events::QaStateEvent, String> {
+    if !matches!(window.label(), "qa" | "main") {
+        return Err("qa_window_required".into());
+    }
+    let snapshot = core
+        .services()
         .qa
-        .submit_text(text)
+        .snapshot()
         .await
-        .map_err(|error| error.message)
+        .map_err(|_| "qa_snapshot_unavailable")?;
+    let mut event = openless_core::events::QaStateEvent::from_snapshot(&snapshot);
+    event.edit_instruction_mode = Some(snapshot.edit_instruction_mode);
+    event.edit_apply_available = Some(snapshot.edit_apply_available);
+    event.edit_revert_available = Some(snapshot.edit_revert_available);
+    Ok(event)
+}
+
+#[tauri::command]
+pub async fn qa_window_set_expanded(window: Window, expanded: bool) -> Result<(), String> {
+    use tauri::Manager;
+    if window.label() != "qa" {
+        return Err("qa_window_required".into());
+    }
+    let app = window.app_handle().clone();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    window
+        .app_handle()
+        .run_on_main_thread(move || {
+            let _ = sender.send(crate::set_qa_window_expanded(&app, expanded));
+        })
+        .map_err(|_| "qa_main_thread_unavailable".to_string())?;
+    receiver
+        .await
+        .map_err(|_| "qa_resize_cancelled".to_string())?
 }
 
 /// 划词提问面板「编辑指令」复选框。
@@ -147,6 +200,59 @@ pub fn less_computer_submit_text(core: CoreState<'_>, coord: CoordinatorState<'_
             log::warn!("[less-computer] text submit run failed: {error}");
         }
     });
+}
+
+fn require_less_computer_window(window: &Window) -> Result<(), String> {
+    if window.label() != "less-computer" {
+        return Err("voice input can only be controlled from the Less Computer window".to_string());
+    }
+    Ok(())
+}
+
+/// 输入框麦克风（dictate：转写只回填输入框）/ 语音模式按钮（submit：与快捷键一致）。
+/// 启动失败直接返回给面板内联提示，不写入对话流。
+#[tauri::command]
+pub async fn less_computer_voice_start(
+    window: Window,
+    coord: CoordinatorState<'_>,
+    mode: openless_core::LessComputerVoiceMode,
+) -> Result<(), String> {
+    require_less_computer_window(&window)?;
+    coord.start_less_computer_voice_from_panel(mode).await
+}
+
+/// 结束当前录音，按会话自己的 mode 收尾；收尾在后台执行，不等待 Agent 跑完。
+#[tauri::command]
+pub fn less_computer_voice_stop(
+    window: Window,
+    coord: CoordinatorState<'_>,
+    session_id: openless_core::SessionId,
+) -> Result<(), String> {
+    require_less_computer_window(&window)?;
+    coord.stop_less_computer_voice_from_panel(session_id)
+}
+
+/// 只取消面板指定的那次录音。
+#[tauri::command]
+pub async fn less_computer_voice_cancel(
+    window: Window,
+    coord: CoordinatorState<'_>,
+    session_id: openless_core::SessionId,
+) -> Result<(), String> {
+    require_less_computer_window(&window)?;
+    coord
+        .cancel_less_computer_voice_from_panel(session_id)
+        .await
+}
+
+/// 停止正在运行的 Agent 任务，浮窗保持打开。
+#[tauri::command]
+pub async fn less_computer_task_cancel(
+    window: Window,
+    coord: CoordinatorState<'_>,
+) -> Result<(), String> {
+    require_less_computer_window(&window)?;
+    coord.cancel_less_computer_task().await
 }
 
 /// 主设置页的文字测试入口。浮窗自身无需也不允许反向调用这个命令。

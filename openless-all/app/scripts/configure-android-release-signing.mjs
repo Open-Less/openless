@@ -2,7 +2,7 @@
 /**
  * Decode ANDROID_KEYSTORE_* env vars and patch gen/android signing for release APK builds.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -21,39 +21,46 @@ function requireEnv(name) {
 
 function main() {
   const base64 = requireEnv('ANDROID_KEYSTORE_BASE64');
-  const storePassword = requireEnv('ANDROID_KEYSTORE_PASSWORD');
-  const keyAlias = requireEnv('ANDROID_KEY_ALIAS');
-  const keyPassword = requireEnv('ANDROID_KEY_PASSWORD');
+  requireEnv('ANDROID_KEYSTORE_PASSWORD');
+  requireEnv('ANDROID_KEY_ALIAS');
+  requireEnv('ANDROID_KEY_PASSWORD');
 
   if (!existsSync(gradlePath)) {
     throw new Error(`Gradle file not found: ${gradlePath} (run tauri android init first)`);
   }
 
   mkdirSync(dirname(keystorePath), { recursive: true });
-  writeFileSync(keystorePath, Buffer.from(base64, 'base64'));
-
-  const escapedStore = storePassword.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  const escapedKey = keyPassword.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  const escapedAlias = keyAlias.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  const escapedKeystore = keystorePath.replace(/\\/g, '/');
+  writeFileSync(keystorePath, Buffer.from(base64, 'base64'), { mode: 0o600 });
+  chmodSync(keystorePath, 0o600);
 
   let content = readFileSync(gradlePath, 'utf8');
-  if (content.includes('openlessRelease')) {
-    console.log('Release signing already configured in build.gradle.kts');
-    return;
+  if (!/android\s*\{/.test(content)) {
+    throw new Error('Android Gradle configuration block not found');
   }
 
+  const releaseSigningConfig = `create("openlessRelease") {
+            storeFile = rootProject.file("openless-release.keystore")
+            storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+            keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+        }`;
   const signingConfigsBlock = `
     signingConfigs {
-        create("openlessRelease") {
-            storeFile = file("${escapedKeystore}")
-            storePassword = "${escapedStore}"
-            keyAlias = "${escapedAlias}"
-            keyPassword = "${escapedKey}"
-        }
+        ${releaseSigningConfig}
     }`;
 
-  if (!/signingConfigs\s*\{/.test(content)) {
+  // Migrate an existing generated block too, so local rebuilds cannot retain
+  // the old password literals in cacheable Kotlin DSL source.
+  if (/create\("openlessRelease"\)\s*\{/.test(content)) {
+    const block = /create\("openlessRelease"\)\s*\{(?:[^{}"]|"(?:\\.|[^"\\])*")*\}/;
+    if (!block.test(content)) throw new Error('Unrecognized existing release signing block');
+    content = content.replace(block, () => releaseSigningConfig);
+  } else if (/signingConfigs\s*\{/.test(content)) {
+    content = content.replace(
+      /signingConfigs\s*\{/,
+      `signingConfigs {\n        ${releaseSigningConfig}`,
+    );
+  } else {
     content = content.replace(/android\s*\{/, `android {${signingConfigsBlock}`);
   }
 
@@ -70,10 +77,8 @@ function main() {
       `buildTypes {\n        getByName("release") {\n            signingConfig = signingConfigs.getByName("openlessRelease")\n        }`,
     );
   } else {
-    content = content.replace(
-      /android\s*\{/,
-      `android {${signingConfigsBlock}\n    buildTypes {\n        getByName("release") {\n            signingConfig = signingConfigs.getByName("openlessRelease")\n        }\n    }`,
-    );
+    // Create the signing config before looking it up in this later block.
+    content += `\nandroid {\n    buildTypes {\n        getByName("release") {\n            signingConfig = signingConfigs.getByName("openlessRelease")\n        }\n    }\n}\n`;
   }
 
   writeFileSync(gradlePath, content);
