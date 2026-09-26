@@ -816,10 +816,22 @@ pub fn content_panel(ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::U
         // Buttons and text fields inside the panel register their own hit targets.
         .sense(egui::Sense::hover())
         .fixed_pos(content.min)
-        .show(ctx, |ui| {
-            ui.set_min_size(content.size());
-            ui.set_max_size(content.size());
+        .show(ctx, |area| {
+            // Area starts each frame with its *previous* measured size. A resize
+            // from a large window therefore leaves its root Ui's minimum width
+            // and height too large; set_max_size cannot shrink an existing min
+            // rect. Build a fresh child with the CURRENT viewport instead of
+            // letting yesterday's geometry drive today's scroll/hit testing.
+            let mut ui = area.new_child(
+                egui::UiBuilder::new()
+                    .id_salt("current-content-viewport")
+                    .max_rect(content),
+            );
             ui.set_clip_rect(content);
+            #[cfg(test)]
+            ctx.data_mut(|data| {
+                data.insert_temp(egui::Id::new("content-available-size"), ui.available_size());
+            });
             let scroll = &mut ui.style_mut().spacing.scroll;
             scroll.floating = true;
             scroll.bar_width = 8.0;
@@ -835,7 +847,10 @@ pub fn content_panel(ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::U
             visuals.inactive.corner_radius = egui::CornerRadius::same(6);
             visuals.hovered.corner_radius = egui::CornerRadius::same(6);
             visuals.active.corner_radius = egui::CornerRadius::same(6);
-            add_contents(ui);
+            add_contents(&mut ui);
+            // Keep the Area's hit-test bounds aligned to the resized viewport;
+            // the child does not advance its parent cursor automatically.
+            area.set_min_size(content.size());
         });
 }
 

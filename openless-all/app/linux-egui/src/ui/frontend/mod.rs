@@ -116,7 +116,7 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
         }
 
         // Settings overlay (rendered on top of everything).
-        if vm.settings_open {
+        if vm.settings_open && !settings::waiting_for_capture(ctx) {
             settings::settings_overlay(ctx, vm, actions, body);
         }
     });
@@ -1190,6 +1190,81 @@ mod tests {
                     bounds.right() <= small.right() + 2.0,
                     "{label} painted right of the window: {bounds:?} (window {small:?})"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn settings_capture_frame_does_not_capture_the_modal_itself() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            settings_open: true,
+            ..Default::default()
+        };
+        settings::capture_pending(&ctx, true);
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(960.0, 640.0),
+            )),
+            ..Default::default()
+        });
+        render(&ctx, &mut vm, &mut Vec::new());
+        assert!(ctx
+            .data(|data| data.get_temp::<egui::Rect>(egui::Id::new("openless-settings-card-rect")))
+            .is_none());
+        let _ = end_pass(&ctx);
+        settings::capture_pending(&ctx, false);
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(960.0, 640.0),
+            )),
+            ..Default::default()
+        });
+        render(&ctx, &mut vm, &mut Vec::new());
+        assert!(ctx
+            .data(|data| data.get_temp::<egui::Rect>(egui::Id::new("openless-settings-card-rect")))
+            .is_some());
+        let _ = end_pass(&ctx);
+    }
+
+    #[test]
+    fn shrinking_without_clicking_rebuilds_the_content_viewport_immediately() {
+        for page in [
+            Page::Overview,
+            Page::History,
+            Page::QuickNote,
+            Page::Translation,
+        ] {
+            let ctx = egui::Context::default();
+            let mut vm = FrontendViewModel {
+                active_page: page,
+                ..Default::default()
+            };
+            for (width, height) in [(1500.0, 950.0), (960.0, 640.0)] {
+                ctx.begin_pass(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, height),
+                    )),
+                    ..Default::default()
+                });
+                render(&ctx, &mut vm, &mut Vec::new());
+                let available: egui::Vec2 = ctx.data(|data| {
+                    data.get_temp(egui::Id::new("content-available-size"))
+                        .unwrap()
+                });
+                let expected = layout::body_rect(&ctx).size()
+                    - egui::vec2(
+                        layout::SIDEBAR_WIDTH + 30.0,
+                        layout::PAGE_TOP_PADDING + layout::PAGE_BOTTOM_PADDING,
+                    );
+                assert!((available.x - expected.x).abs() < 1.0,
+                    "{page:?} still uses old width after resize: {available:?}, expected {expected:?}");
+                assert!((available.y - expected.y).abs() < 1.0,
+                    "{page:?} still uses old height after resize: {available:?}, expected {expected:?}");
+                let _ = end_pass(&ctx);
             }
         }
     }

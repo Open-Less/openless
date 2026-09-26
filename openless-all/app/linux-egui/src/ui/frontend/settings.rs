@@ -68,8 +68,67 @@ impl SettingsSection {
     }
 }
 
-/// Paint the in-window settings modal. Returns true when the caller should
-/// close it. Actions are pushed into the provided vec.
+// The WGPU screenshot is taken on the first open frame *before* drawing the
+// modal, then blurred at reduced resolution once. This is a real blurred
+// backdrop, rather than a larger, darker card shadow pretending to be one.
+#[derive(Clone, Copy)]
+pub struct BackdropCapture;
+
+const BACKDROP_ID: &str = "openless-settings-blurred-backdrop";
+const CAPTURE_PENDING_ID: &str = "openless-settings-capture-pending";
+
+pub fn capture_pending(ctx: &egui::Context, pending: bool) {
+    ctx.data_mut(|data| data.insert_temp(egui::Id::new(CAPTURE_PENDING_ID), pending));
+}
+
+pub fn waiting_for_capture(ctx: &egui::Context) -> bool {
+    ctx.data(|data| {
+        data.get_temp(egui::Id::new(CAPTURE_PENDING_ID))
+            .unwrap_or(false)
+    })
+}
+
+pub fn clear_backdrop(ctx: &egui::Context) {
+    ctx.data_mut(|data| {
+        data.remove::<egui::TextureHandle>(egui::Id::new(BACKDROP_ID));
+    });
+}
+
+fn blurred_backdrop(screenshot: &egui::ColorImage) -> Option<egui::ColorImage> {
+    let [width, height] = screenshot.size;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let rgba: Vec<u8> = screenshot
+        .pixels
+        .iter()
+        .flat_map(|pixel| pixel.to_array())
+        .collect();
+    let source = image::RgbaImage::from_raw(width as u32, height as u32, rgba)?;
+    // Blur at quarter resolution: approx. 8px of softness at native scale,
+    // while avoiding a full-frame Gaussian convolution on every modal open.
+    let small = image::imageops::resize(
+        &source,
+        (width as u32 / 4).max(1),
+        (height as u32 / 4).max(1),
+        image::imageops::FilterType::Triangle,
+    );
+    let blurred = image::imageops::blur(&small, 2.0);
+    Some(egui::ColorImage::from_rgba_unmultiplied(
+        [blurred.width() as usize, blurred.height() as usize],
+        blurred.as_raw(),
+    ))
+}
+
+pub fn store_backdrop(ctx: &egui::Context, screenshot: &egui::ColorImage) {
+    let Some(blurred) = blurred_backdrop(screenshot) else {
+        return;
+    };
+    let texture = ctx.load_texture(BACKDROP_ID, blurred, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|data| data.insert_temp(egui::Id::new(BACKDROP_ID), texture));
+}
+
+/// Paint the in-window settings modal. Actions are pushed into the provided vec.
 pub fn settings_overlay(
     ctx: &egui::Context,
     vm: &mut FrontendViewModel,
@@ -100,7 +159,19 @@ pub fn settings_overlay(
         .fixed_pos(body.min)
         .constrain(false)
         .show(ctx, |ui| {
-            // 先把遮罩画在本图层最底下，并把 body 上的点击吃掉（下方页面既看不到也点不到）。
+            // Blur the already painted page, but only inside the content mask;
+            // titlebar and sidebar remain sharp, as in the desktop design.
+            if let Some(texture) =
+                ctx.data(|data| data.get_temp::<egui::TextureHandle>(egui::Id::new(BACKDROP_ID)))
+            {
+                ui.painter().with_clip_rect(body).image(
+                    texture.id(),
+                    ctx.content_rect(),
+                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+            }
+            // Tint and swallow input above the blur, below the settings card.
             ui.painter().rect_filled(
                 body,
                 egui::CornerRadius {
@@ -123,10 +194,10 @@ pub fn settings_overlay(
                     .stroke(egui::Stroke::new(0.5, theme::LINE))
                     .corner_radius(egui::CornerRadius::same(14))
                     .shadow(egui::Shadow {
-                        offset: [0, 18],
-                        blur: 32,
+                        offset: [0, 4],
+                        blur: 12,
                         spread: 0,
-                        color: egui::Color32::from_black_alpha(96),
+                        color: egui::Color32::from_black_alpha(32),
                     })
                     .show(ui, |ui| {
                         ui.set_min_size(size);
@@ -3691,6 +3762,32 @@ pub(crate) fn test_render_shortcuts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_backdrop_blurs_content_and_releases_its_texture_on_close() {
+        let ctx = egui::Context::default();
+        ctx.begin_pass(egui::RawInput::default());
+        let mut source = egui::ColorImage::new([64, 32], vec![egui::Color32::BLACK; 64 * 32]);
+        for y in 0..32 {
+            for x in 32..64 {
+                source[(x, y)] = egui::Color32::WHITE;
+            }
+        }
+        let blurred = blurred_backdrop(&source).unwrap();
+        assert_eq!(blurred.size, [16, 8]);
+        let edge = blurred[(8, 4)].r();
+        assert!(edge > 0 && edge < 255, "edge should be blurred, got {edge}");
+        store_backdrop(&ctx, &source);
+        assert!(ctx
+            .data(|data| data.get_temp::<egui::TextureHandle>(egui::Id::new(BACKDROP_ID)))
+            .is_some());
+        clear_backdrop(&ctx);
+        assert!(ctx
+            .data(|data| data.get_temp::<egui::TextureHandle>(egui::Id::new(BACKDROP_ID)))
+            .is_none());
+        // Headless tests do not have a texture renderer: consume pending deltas.
+        let _ = super::super::end_pass(&ctx);
+    }
 
     #[test]
     fn the_shortcut_section_hides_without_a_hotkey_backend() {

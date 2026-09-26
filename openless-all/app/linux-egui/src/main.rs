@@ -8080,6 +8080,8 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher,
         /// 本地热键边沿的发送序号（与动作序号分开，便于日志区分）。
         hotkey_sequence: u64,
+        settings_was_open: bool,
+        settings_capture_frames: u8,
     }
 
     impl UiClientApp {
@@ -8098,6 +8100,8 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 hotkeys: None,
                 hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher::default(),
                 hotkey_sequence: 0,
+                settings_was_open: false,
+                settings_capture_frames: 0,
             }
         }
 
@@ -8275,6 +8279,51 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             self.drain_host(&ctx);
             self.poll_local_hotkeys(&ctx);
             theme::apply_visuals(&ctx, self.view_model.theme_mode);
+            // Capture the unobscured page once when settings opens. The capture
+            // is returned as a later input event; until then the old content
+            // stays visible rather than taking a screenshot of the modal itself.
+            if !self.view_model.settings_open {
+                self.settings_was_open = false;
+                self.settings_capture_frames = 0;
+                frontend::settings::capture_pending(&ctx, false);
+                frontend::settings::clear_backdrop(&ctx);
+            } else {
+                if !self.settings_was_open {
+                    self.settings_was_open = true;
+                    self.settings_capture_frames = 1;
+                    frontend::settings::clear_backdrop(&ctx);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(
+                        frontend::settings::BackdropCapture,
+                    )));
+                }
+                if self.settings_capture_frames > 0 {
+                    let screenshot = ctx.input(|input| {
+                        input.events.iter().find_map(|event| {
+                            if let egui::Event::Screenshot {
+                                user_data, image, ..
+                            } = event
+                            {
+                                if user_data.data.as_ref().is_some_and(|data| {
+                                    data.is::<frontend::settings::BackdropCapture>()
+                                }) {
+                                    return Some(image.clone());
+                                }
+                            }
+                            None
+                        })
+                    });
+                    if let Some(image) = screenshot {
+                        frontend::settings::store_backdrop(&ctx, &image);
+                        self.settings_capture_frames = 0;
+                    } else if self.settings_capture_frames >= 5 {
+                        // A failed/unsupported screenshot must not hide settings.
+                        self.settings_capture_frames = 0;
+                    } else {
+                        self.settings_capture_frames += 1;
+                    }
+                }
+                frontend::settings::capture_pending(&ctx, self.settings_capture_frames > 0);
+            }
             if ctx.input(|input| input.viewport().close_requested()) {
                 self.request_exit(&ctx, "window manager close request");
             }
