@@ -8,12 +8,12 @@
 
 | 层 | 位置 | 职责 |
 | --- | --- | --- |
-| 界面（Win/mac/Android） | `src/`（React/TypeScript/i18next，八种界面语言） | 页面、设置、窗口分支；调用 typed IPC，展示快照与事件 |
-| Host（Win/mac/Android） | `src-tauri/`（crate `openless`） | `src/lib.rs` 注册命令；适配窗口、热键、音频、凭据、插入、IME 和生命周期 |
+| 界面（Win/mac/Android/iOS） | `src/`（React/TypeScript/i18next，八种界面语言） | 页面、设置、窗口分支；调用 typed IPC，展示快照与事件 |
+| Host（Win/mac/Android/iOS） | `src-tauri/`（crate `openless`） | `src/lib.rs` 注册命令；适配窗口、热键、音频、凭据、插入、IME 和生命周期 |
 | 共享 Core | `crates/openless-core/` | 业务规则、会话、服务调用和数据仓储；通过 trait 接入 Host 能力 |
 | Linux Host + UI | `linux-egui/`（crate `openless-linux-egui`） | `backend.rs` 组装 `OpenLessBackend`，`main.rs` 实现 egui/eframe UI，不依赖 Tauri/WebKitGTK |
 
-Android 侧：`src-tauri/src/android/`（JNI/桥接）+ `android/`（aidl、kotlin、manifests、frontend）；`android/frontend` 经 Vite 别名 `@android` 被 `src/` 引用；manifest 由 `scripts/merge-android-*.mjs` 合成。Linux 已有可复用 Host/UI 起点，剩余能力与产品验收见 [交接目录](linux-egui-handoff/README.md)。
+Android 侧：`src-tauri/src/android/`（JNI/桥接）+ `android/`（aidl、kotlin、manifests、frontend）；`android/frontend` 经 Vite 别名 `@android` 被 `src/` 引用；manifest 由 `scripts/merge-android-*.mjs` 合成。iOS 侧（进行中）：`src-tauri/src/ios/`（剪贴板、键盘扩展状态）+ `ios/`（Swift 模板、frontend）；`tauri.ios.conf.json` 覆盖 iOS 版本与窗口，脚手架链见 `ios/README.md`；跨应用文字插入由自定义键盘扩展承载（M3）。Linux 已有可复用 Host/UI 起点，剩余能力与产品验收见 [交接目录](linux-egui-handoff/README.md)。
 
 ## 2. 数据流
 

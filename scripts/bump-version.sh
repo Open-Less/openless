@@ -33,10 +33,11 @@ APP="$REPO_ROOT/openless-all/app"
 PKG_JSON="$APP/package.json"
 PKG_LOCK="$APP/package-lock.json"
 TAURI_CONF="$APP/src-tauri/tauri.conf.json"
+IOS_CONF="$APP/src-tauri/tauri.ios.conf.json"
 CARGO_TOML="$APP/src-tauri/Cargo.toml"
 CARGO_LOCK="$APP/src-tauri/Cargo.lock"
 
-for f in "$PKG_JSON" "$PKG_LOCK" "$TAURI_CONF" "$CARGO_TOML" "$CARGO_LOCK"; do
+for f in "$PKG_JSON" "$PKG_LOCK" "$TAURI_CONF" "$IOS_CONF" "$CARGO_TOML" "$CARGO_LOCK"; do
   if [ ! -f "$f" ]; then
     echo "错误：找不到 $f" >&2
     exit 1
@@ -54,6 +55,15 @@ sed -E -i.bak \
   "s/\"version\":[[:space:]]*\"[0-9]+\.[0-9]+\.[0-9]+\"/\"version\": \"$NEW\"/" \
   "$TAURI_CONF"
 rm "$TAURI_CONF.bak"
+
+# tauri.ios.conf.json：iOS 侧版本（CFBundleShortVersionString/CFBundleVersion 要求
+# 三段纯数字），两个键都要同步：根 version 覆盖 + bundle.iOS.bundleVersion。
+echo "▶ 升 tauri.ios.conf.json → $NEW"
+sed -E -i.bak \
+  -e "s/\"version\":[[:space:]]*\"[0-9]+\.[0-9]+\.[0-9]+\"/\"version\": \"$NEW\"/" \
+  -e "s/\"bundleVersion\":[[:space:]]*\"[0-9]+\.[0-9]+\.[0-9]+\"/\"bundleVersion\": \"$NEW\"/" \
+  "$IOS_CONF"
+rm "$IOS_CONF.bak"
 
 # Cargo.toml：用 awk 替换 [package] 段里的 version = "X.Y.Z" 行。
 # 必须锚定 [package] 段：文件里先出现的纯 X.Y.Z 版本行可能是依赖版本
@@ -74,13 +84,16 @@ mv "$CARGO_TOML.tmp" "$CARGO_TOML"
 echo "▶ 同步 Cargo.lock"
 ( cd "$APP/src-tauri" && cargo update -p openless 2>&1 | tail -5 )
 
-# 校验五处一致（package.json / package-lock.json / tauri.conf.json / Cargo.toml / Cargo.lock）
+# 校验六处一致（package.json / package-lock.json / tauri.conf.json / tauri.ios.conf.json
+# 的 version + bundleVersion / Cargo.toml / Cargo.lock）
 echo
 echo "===== 验证版本一致性 ====="
 PKG=$(node -p "require('$PKG_JSON').version")
 LOCK_ROOT=$(node -p "require('$PKG_LOCK').version")
 LOCK_NESTED=$(node -p "require('$PKG_LOCK').packages[''].version")
 TAU=$(node -p "require('$TAURI_CONF').version")
+IOS_VER=$(node -p "require('$IOS_CONF').version")
+IOS_BUNDLE=$(node -p "require('$IOS_CONF').bundle.iOS.bundleVersion")
 CRG=$(grep -E '^version = ' "$CARGO_TOML" | head -1 | sed -E 's/^version = "(.+)"$/\1/')
 CARGO_LOCK_VER=$(awk '/^name = "openless"$/{getline; if (match($0, /version = "([0-9.]+)"/, a)) {print a[1]; exit}}' "$CARGO_LOCK" 2>/dev/null \
   || awk 'BEGIN{found=0} /^name = "openless"$/{found=1; next} found && /^version = /{gsub(/"/,""); print $3; exit}' "$CARGO_LOCK")
@@ -89,6 +102,8 @@ printf '%-22s %s\n' 'package.json:'        "$PKG"
 printf '%-22s %s\n' 'package-lock root:'   "$LOCK_ROOT"
 printf '%-22s %s\n' 'package-lock nested:' "$LOCK_NESTED"
 printf '%-22s %s\n' 'tauri.conf.json:'     "$TAU"
+printf '%-22s %s\n' 'ios conf version:'    "$IOS_VER"
+printf '%-22s %s\n' 'ios bundleVersion:'   "$IOS_BUNDLE"
 printf '%-22s %s\n' 'Cargo.toml:'          "$CRG"
 printf '%-22s %s\n' 'Cargo.lock (openless):' "$CARGO_LOCK_VER"
 
@@ -96,6 +111,7 @@ mismatch=0
 for v in "$LOCK_ROOT" "$LOCK_NESTED" "$TAU" "$CRG" "$CARGO_LOCK_VER"; do
   if [ "$v" != "$NEW" ]; then mismatch=1; fi
 done
+if [ "$IOS_VER" != "$NEW" ] || [ "$IOS_BUNDLE" != "$NEW" ]; then mismatch=1; fi
 
 if [ "$mismatch" -ne 0 ] || [ "$PKG" != "$NEW" ]; then
   echo

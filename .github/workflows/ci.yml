@@ -349,11 +349,13 @@ jobs:
       - name: Compile backend tests with Rust 1.88 MSRV
         run: cargo +1.88.0 test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --no-run
 
-      - name: Verify version sync across all 5 files
+      - name: Verify version sync across all files
         # 两个平台都跑这个校验：Windows runner 自带 git-bash，跨 shell 表现一致。
         # 一旦版本号 drift 立刻 fail，避免发版时再发现漏改。
-        # 校验 5 处：package.json / package-lock.json (root + nested) /
-        # tauri.conf.json / Cargo.toml / Cargo.lock 的 [openless] 包。
+        # 校验：package.json / package-lock.json (root + nested) /
+        # tauri.conf.json / tauri.ios.conf.json (version + bundleVersion，须等于
+        # 主版本的 X.Y.Z 前缀——iOS CFBundleShortVersionString 只允许三段纯数字，
+        # Beta 预发布号与 build 元数据不进 iOS bundle 版本) / Cargo.toml / Cargo.lock。
         shell: bash
         run: |
           PKG=$(node -p "require('./package.json').version")
@@ -363,18 +365,27 @@ jobs:
           CRG=$(grep -E '^version = ' src-tauri/Cargo.toml | head -1 | sed -E 's/^version = "(.+)"$/\1/')
           # Cargo.lock：找 [openless] 包紧跟的 version 行
           CARGO_LOCK_VER=$(awk 'BEGIN{found=0} /^name = "openless"$/{found=1; next} found && /^version = /{gsub(/"/,""); print $3; exit}' src-tauri/Cargo.lock)
+          IOS_VER=$(node -p "require('./src-tauri/tauri.ios.conf.json').version")
+          IOS_BUNDLE=$(node -p "require('./src-tauri/tauri.ios.conf.json').bundle.iOS.bundleVersion")
+          # 主版本的 X.Y.Z 前缀（剥掉 prerelease/build 元数据）
+          PKG_XYZ=$(echo "$PKG" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
           echo "package.json         = $PKG"
           echo "package-lock root    = $LOCK_ROOT"
           echo "package-lock nested  = $LOCK_NESTED"
           echo "tauri.conf.json      = $TAU"
           echo "Cargo.toml           = $CRG"
           echo "Cargo.lock openless  = $CARGO_LOCK_VER"
+          echo "ios conf (X.Y.Z)     = $IOS_VER"
+          echo "ios bundle (X.Y.Z)   = $IOS_BUNDLE"
+          echo "required X.Y.Z       = $PKG_XYZ"
           mismatch=0
           for v in "$LOCK_ROOT" "$LOCK_NESTED" "$TAU" "$CRG" "$CARGO_LOCK_VER"; do
             if [ "$v" != "$PKG" ]; then mismatch=1; fi
           done
+          # iOS bundle 版本只需与 X.Y.Z 前缀一致（Beta/日期元数据不进 iOS）
+          if [ "$IOS_VER" != "$PKG_XYZ" ] || [ "$IOS_BUNDLE" != "$PKG_XYZ" ]; then mismatch=1; fi
           if [ "$mismatch" -ne 0 ]; then
             echo "::error::版本号未对齐 — 请用 scripts/bump-version.sh 同步更新"
             exit 1
           fi
-          echo "[ok] 全部 5 处版本号一致：$PKG"
+          echo "[ok] 版本号一致（iOS 侧按 X.Y.Z 前缀）：$PKG"

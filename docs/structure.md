@@ -9,7 +9,7 @@
 ├── AGENTS.md / docs/              规则、架构、合同说明和平台交接
 ├── README.md / README.zh.md       面向使用者和贡献者的双语介绍
 ├── RELEASING.md / USAGE.md        发布规则与使用说明
-├── .github/workflows/            CI、Tauri、Android、Linux 发布
+├── .github/workflows/            CI、Tauri、Android、iOS、Linux 发布
 ├── Casks/                        Homebrew 分发定义
 ├── Examples/                     示例数据
 ├── assets/ / video-materials/     产品展示材料
@@ -22,6 +22,7 @@
         ├── src-tauri/            Tauri Host，独立 Cargo manifest
         ├── linux-egui/           Linux Host 和 egui UI
         ├── android/              Kotlin / AIDL / manifest / 前端片段
+        ├── ios/                  Swift 模板 / Info.plist 片段 / 前端片段（iOS）
         ├── windows-ime/          原生 TSF/IME 工程
         ├── contract/             机器可读 backend-2.0 合同
         ├── scripts/              构建、平台检查与合同测试
@@ -45,6 +46,7 @@
 | Tauri 组装与系统能力 | `src-tauri/src/coordinator.rs`、`core_adapters.rs`、`tauri_coordinator_host.rs` | 窗口、热键、权限、平台输入与生命周期 |
 | Linux 原生接入 | `linux-egui/src/main.rs`、`lib.rs`、`backend.rs` | `audio/credentials/fcitx5/hotkeys/settings` 等 Host 模块；见 [交接](linux-egui-handoff/README.md) |
 | Android 集成 | `android/`、`src-tauri/src/android/` | `@android` 别名与 `merge-android-*.mjs` 生成链 |
+| iOS 集成 | `ios/`、`src-tauri/src/ios/`、`src-tauri/tauri.ios.conf.json` | `@ios` 别名、`copy-ios-scaffolding.mjs`（project.yml patch + xcodegen）；键盘扩展计划见 `ios/README.md` |
 | Windows 输入法 | `windows-ime/`、`src-tauri/src/windows_ime_*.rs` | 原生工程、IPC 协议、目标应用和安装检查 |
 
 Core 其余模块按领域列于 [架构模块地图](architecture.md)。平台缺口、事件签名与验收项由专项文档维护，本文件只提供定位。
@@ -57,13 +59,13 @@ Core 其余模块按领域列于 [架构模块地图](architecture.md)。平台�
 | `Cargo.toml` / `Cargo.lock` | Core 与 Linux workspace；不覆盖 `src-tauri` |
 | `src-tauri/Cargo.toml` / `Cargo.lock` | Tauri Host 的独立依赖图；本地 path 子模块须在解析前就绪 |
 | `src-tauri/backend-tests/Cargo.toml` | 独立 Rust 回归 crate，按 CI 选择平台执行 |
-| `vite.config.ts` / `tsconfig.json` | WebView 构建、TypeScript 与 Android 别名 |
+| `vite.config.ts` / `tsconfig.json` | WebView 构建、TypeScript 与 Android/iOS 别名 |
 | `src-tauri/tauri.conf.json` / `src-tauri/capabilities/` | 应用元数据、初始窗口、打包与 Tauri 能力权限 |
 | `src-tauri/vendor/` | 原生 ASR 引擎与子模块；升级按 [qwen-asr 清单](qwen-asr-submodule-upgrade-checklist.md) |
 | `src/lib/ipc/provider-descriptors.generated.json` | Core 导出的公开 provider 目录；生成命令见 [架构](architecture.md) |
 | `assets/remote-input/` / `assets/vocab-presets.json` | Tauri 与 Linux 共用的手机输入页面及内置词表；测试和格式化均读取这份资源 |
 | `contract/language-catalog.json` | 工作语言的原生保存值、显示代码、ASR 代码与 Apple locale；前端及 Core 直接共用，新增语种不分别修改三份映射 |
-| `src-tauri/gen/` | Tauri 平台生成目录；Android 手写源与合成脚本保留在 `android/`、`scripts/` |
+| `src-tauri/gen/` | Tauri 平台生成目录；Android 手写源与合成脚本保留在 `android/`、`scripts/`，iOS 保留在 `ios/` |
 | `node_modules/`、`dist/`、各 `target/` | 依赖和构建产物，不作为源码或 docs 的事实来源 |
 
 检查命令集中在 [架构的验证入口](architecture.md)，版本与发布流程集中在 [RELEASING.md](../RELEASING.md)。不要在目录说明中复制易变的命令数量、分支领先数或单次测试结果。

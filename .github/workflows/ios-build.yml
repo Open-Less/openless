@@ -1,0 +1,108 @@
+name: iOS App (simulator, unsigned)
+
+# Triggers:
+#   - workflow_dispatch → unsigned debug simulator build (.app zip → artifact)
+#
+# Scope: 无签名模拟器构建门禁。真机/设备包与 App Store 分发需要 Apple Developer
+# 账号签名（OPENLESS_IOS_DEVELOPMENT_TEAM / Xcode 归档导出），不在本工作流范围。
+
+on:
+  workflow_dispatch:
+
+# workflow_dispatch 用 run_id 隔离避免互相取消。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  build-ios-simulator:
+    runs-on: macos-latest
+    env:
+      CI: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # iOS 不编译本地 Qwen3/Whisper C 子模块（移动端命令白名单不含本地 ASR）。
+          submodules: false
+
+      - name: Disable macOS-only Qwen3 MLX dependency
+        run: node openless-all/app/scripts/ci-disable-macos-qwen3.mjs
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: openless-all/app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: openless-all/app/src-tauri -> target
+
+      - name: Install iOS toolchain helpers
+        # tauri ios init 依赖 xcodegen 生成工程；模板含 pods 时需要 cocoapods。
+        run: |
+          set -euo pipefail
+          brew install xcodegen cocoapods
+
+      - name: Install npm deps
+        working-directory: openless-all/app
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: openless-all/app
+        run: npm run build
+
+      - name: Initialize iOS project
+        working-directory: openless-all/app
+        run: npm run tauri -- ios init
+
+      - name: Copy iOS scaffolding (patch project.yml + regenerate)
+        working-directory: openless-all/app
+        run: npm run copy:ios-scaffolding
+
+      - name: Build iOS simulator app (unsigned debug)
+        working-directory: openless-all/app
+        run: npm run tauri -- ios build --target aarch64-sim --debug
+
+      - name: Collect simulator app bundle
+        id: app
+        working-directory: openless-all/app
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle_path="src-tauri/gen/apple/build/arm64-sim/OpenLess.app"
+          if [ ! -d "$bundle_path" ]; then
+            echo "::error::Simulator app bundle not found at $bundle_path"
+            find src-tauri/gen/apple/build -maxdepth 3 -name "*.app" || true
+            exit 1
+          fi
+          out_dir="$RUNNER_TEMP/openless-ios-sim"
+          mkdir -p "$out_dir"
+          ditto -ck "$bundle_path" "$out_dir/OpenLess-ios-sim-debug.zip"
+          echo "zip_path=$out_dir/OpenLess-ios-sim-debug.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Upload iOS simulator artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openless-ios-simulator-debug
+          path: ${{ steps.app.outputs.zip_path }}
+          if-no-files-found: error
+
+      - name: Write build summary
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" << 'EOF'
+          ### iOS simulator build
+
+          | Field | Value |
+          |-------|-------|
+          | Target | `aarch64-apple-ios-sim` (debug) |
+          | Signing | unsigned (`CODE_SIGNING_ALLOWED=NO`) |
+          | Artifact | `openless-ios-simulator-debug` (.app zip) |
+
+          > 无签名模拟器构建。真机调试键盘扩展与 App Group 需要 Apple Developer
+          > Team；本机开发见 `openless-all/app/ios/README.md`。
+          EOF
