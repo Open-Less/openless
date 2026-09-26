@@ -1039,8 +1039,6 @@ export function Marketplace() {
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <motion.button
-                    whileTap={{ scale: 0.75 }}
-                    transition={{ type: 'spring', stiffness: 400, damping: 17 }}
                     onClick={() => void onLike()}
                     aria-label={marketplaceSignedIn ? undefined : t('marketplace.oauth.loginBtn')}
                     style={{

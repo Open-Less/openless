@@ -80,9 +80,7 @@
   background: var(--ol-typeless-button-bg);
   color: var(--ol-typeless-ink);
   cursor: pointer;
-  transition:
-    background 120ms ease,
-    transform 120ms ease;
+  transition: background 120ms ease;
 }
 
 .ol-typeless-confirm {
@@ -95,9 +93,6 @@
 .ol-typeless-confirm:hover {
   background: var(--ol-typeless-confirm-bg);
   opacity: 0.85;
-}
-.ol-typeless-action:active {
-  transform: scale(0.94);
 }
 .ol-typeless-action:focus-visible,
 .ol-typeless-stop:focus-visible {

@@ -693,8 +693,10 @@ fn marketplace_oauth(
     nested: bool,
 ) {
     let lang = vm.lang;
-    let size = egui::vec2((body.width() - 40.0).min(440.0).max(320.0), 330.0);
-    let card = egui::Rect::from_center_size(body.center(), size);
+    // Keep the dialog's left edge stable while giving the right side a little
+    // more breathing room for the browser hint and the status row.
+    let size = egui::vec2((body.width() - 40.0).min(470.0).max(340.0), 330.0);
+    let card = egui::Rect::from_center_size(body.center() + egui::vec2(15.0, 0.0), size);
     egui::Area::new(egui::Id::new("openless-marketplace-oauth-modal"))
         .order(egui::Order::Tooltip)
         .fixed_pos(body.min)
@@ -727,7 +729,7 @@ fn marketplace_oauth(
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new(tr_l10n(lang, "marketplace.oauth.title"))
-                                    .size(15.0)
+                                    .size(16.0)
                                     .strong()
                                     .color(theme::INK),
                             );
@@ -871,8 +873,10 @@ fn marketplace_oauth(
                                 );
                             });
                             ui.add_space(11.0);
-                            ui.vertical_centered(|ui| {
-                                ui.horizontal(|ui| {
+                            ui.with_layout(
+                                egui::Layout::left_to_right(egui::Align::Center)
+                                    .with_main_align(egui::Align::Center),
+                                |ui| {
                                     let (dot, _) = ui.allocate_exact_size(
                                         egui::vec2(8.0, 16.0),
                                         egui::Sense::hover(),
@@ -890,8 +894,8 @@ fn marketplace_oauth(
                                         .size(11.5)
                                         .color(theme::INK_4),
                                     );
-                                });
-                            });
+                                },
+                            );
                         }
                     });
             });

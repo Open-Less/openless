@@ -367,7 +367,6 @@ export function ShortcutRecorder({
               {value && <KbdGroup keys={formatComboParts(value)} />}
               <div style={controlsGroupStyle}>
                 <motion.button
-                  whileTap={{ scale: 0.9 }}
                   onClick={() => setMenuOpen((open) => !open)}
                   aria-label={t('settings.recording.comboMenuToggle', 'More options')}
                   aria-expanded={menuOpen}
@@ -427,8 +426,6 @@ export function ShortcutRecorder({
                       initial={{ y: 4, opacity: 0 }}
                       animate={{ y: 0, opacity: 1 }}
                       transition={{ duration: 0.16, ease: menuEase }}
-                      whileHover={{ y: -1 }}
-                      whileTap={{ scale: 0.96 }}
                       onClick={startRecording}
                       style={menuPrimaryStyle}
                     >
@@ -439,8 +436,6 @@ export function ShortcutRecorder({
                         initial={{ y: 4, opacity: 0 }}
                         animate={{ y: 0, opacity: 1 }}
                         transition={{ duration: 0.16, ease: menuEase, delay: 0.03 }}
-                        whileHover={{ y: -1 }}
-                        whileTap={{ scale: 0.96 }}
                         onClick={doReset}
                         style={menuButtonStyle}
                       >
@@ -451,8 +446,6 @@ export function ShortcutRecorder({
                       initial={{ y: 4, opacity: 0 }}
                       animate={{ y: 0, opacity: 1 }}
                       transition={{ duration: 0.16, ease: menuEase, delay: 0.06 }}
-                      whileHover={canDisable ? { y: -1 } : undefined}
-                      whileTap={canDisable ? { scale: 0.96 } : undefined}
                       onClick={canDisable ? doDisable : undefined}
                       title={canDisable ? undefined : disableHint}
                       style={canDisable ? menuButtonStyle : disabledMenuButtonStyle}
