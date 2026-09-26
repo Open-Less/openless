@@ -20,10 +20,12 @@ const appRoot = fileURLToPath(new URL('..', import.meta.url));
 const genAppleRoot = join(appRoot, 'src-tauri/gen/apple');
 const projectYmlPath = join(genAppleRoot, 'project.yml');
 const swiftRoot = join(appRoot, 'ios/swift');
-const swiftDestRoot = join(genAppleRoot, 'Sources');
+const appSwiftDestRoot = join(genAppleRoot, 'Sources');
+const keyboardSwiftDestRoot = join(genAppleRoot, 'KeyboardExtension');
 
 // Xcode 27 的 iOS SDK 只接受 15.0+ 部署目标（swift-rs 同样把 Swift 编译目标钳到 15）。
 const DEPLOYMENT_TARGET = '15.0';
+const APP_GROUP = 'group.com.openless.app';
 
 // 签名策略：未提供 Team ID 时禁用签名（模拟器构建不需要）；提供后走自动签名。
 // 真机调试键盘扩展必须提供 OPENLESS_IOS_DEVELOPMENT_TEAM（付费开发者账号）。
@@ -171,6 +173,73 @@ function patchProjectYml(dryRun) {
     throw new Error('project.yml: 未找到 ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES 锚点');
   }
 
+  // 5. 主 App entitlements：App Group（键盘扩展共享数据）。
+  const appEntitlementsAnchor = '    entitlements:\n      path: openless_iOS/openless_iOS.entitlements';
+  if (content.includes('com.apple.security.application-groups')) {
+    console.log('App entitlements already patched; skipping.');
+  } else if (content.includes(appEntitlementsAnchor)) {
+    content = content.replace(
+      appEntitlementsAnchor,
+      `${appEntitlementsAnchor}\n      properties:\n        com.apple.security.application-groups:\n          - ${APP_GROUP}`,
+    );
+    console.log('Added App Group to app entitlements.');
+  } else {
+    throw new Error('project.yml: 未找到主 App entitlements 锚点');
+  }
+
+  // 6. 主 App dependencies：嵌入键盘扩展（PlugIns/*.appex）。
+  const appDepsAnchor = '    dependencies:\n      - framework: libapp.a';
+  if (content.includes('- target: OpenLessKeyboard')) {
+    console.log('App dependencies already patched; skipping.');
+  } else if (content.includes(appDepsAnchor)) {
+    content = content.replace(
+      appDepsAnchor,
+      '    dependencies:\n      - target: OpenLessKeyboard\n        embed: true\n      - framework: libapp.a',
+    );
+    console.log('Added keyboard extension embed to app dependencies.');
+  } else {
+    throw new Error('project.yml: 未找到主 App dependencies 锚点');
+  }
+
+  // 7. 键盘扩展 target：追加到 openless_iOS target 之后（其最后一个键是
+  //    preBuildScripts 的 arm64 outputFiles）。
+  const appTargetEndAnchor =
+    '          - $(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a';
+  const keyboardTargetBlock = `          - \$(SRCROOT)/Externals/arm64/\${CONFIGURATION}/libapp.a
+  OpenLessKeyboard:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: KeyboardExtension
+    info:
+      path: KeyboardExtension/Info.plist
+      properties:
+        CFBundleDisplayName: OpenLess 键盘
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.keyboard-service
+          NSExtensionPrincipalClass: \$(PRODUCT_MODULE_NAME).KeyboardViewController
+        RequestsOpenAccess: true
+        NSMicrophoneUsageDescription: OpenLess 键盘需要使用麦克风进行语音输入转写。
+    entitlements:
+      path: KeyboardExtension/OpenLessKeyboard.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - ${APP_GROUP}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.openless.app.OpenLessKeyboard
+        ENABLE_BITCODE: false
+        ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: true
+${signingSettingsLines('        ').join('\n')}`;
+  if (content.includes('  OpenLessKeyboard:')) {
+    console.log('Keyboard extension target already present; skipping.');
+  } else if (content.includes(appTargetEndAnchor)) {
+    content = content.replace(appTargetEndAnchor, keyboardTargetBlock);
+    console.log('Added OpenLessKeyboard extension target.');
+  } else {
+    throw new Error('project.yml: 未找到 Build Rust Code 锚点，无法追加扩展 target');
+  }
+
   if (content === original) {
     return;
   }
@@ -211,8 +280,20 @@ function main() {
 
   patchProjectYml(dryRun);
 
+  // ios/swift/KeyboardExtension → gen/apple/KeyboardExtension（扩展 target 源）；
+  // 其余（ios/swift/App 等）→ gen/apple/Sources（主 App target 源）。
   if (existsSync(swiftRoot)) {
-    copyDirectoryContents(swiftRoot, swiftDestRoot, dryRun);
+    for (const entry of readdirSync(swiftRoot)) {
+      const src = join(swiftRoot, entry);
+      if (!statSync(src).isDirectory()) {
+        continue;
+      }
+      if (entry === 'KeyboardExtension') {
+        copyDirectoryContents(src, keyboardSwiftDestRoot, dryRun);
+      } else {
+        copyDirectoryContents(src, join(appSwiftDestRoot, entry), dryRun);
+      }
+    }
   }
 
   regenerateXcodeProject(dryRun);

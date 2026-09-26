@@ -57,6 +57,25 @@ brew install xcodegen cocoapods
 xcodebuild -downloadComponent MetalToolchain   # Xcode 27 拆分的组件，桌面构建需要
 ```
 
+## 键盘扩展（M3 v1）
+
+结构：`ios/swift/KeyboardExtension/`（Swift 源，复制到 `gen/apple/KeyboardExtension/`）
++ project.yml 注入的 `OpenLessKeyboard` 扩展 target（App Group entitlement、
+`RequestsOpenAccess`）。主 App 设置页写入 App Group 的 `kb-config.json`，
+键盘读取后直连 OpenAI 兼容 `/audio/transcriptions` 转写并插入光标。
+
+手动验证（模拟器/真机，均需手动操作）：
+
+1. 构建安装后：系统设置 → 通用 → 键盘 → 键盘 → 添加新键盘 → OpenLess；
+2. 进入扩展设置开启「允许完全访问」（网络 + 麦克风必需）；
+3. 打开任意可输入应用（如备忘录），切到 OpenLess 键盘；
+4. 主 App 设置 → 权限 → 键盘转写配置里填端点/Key/模型并保存；
+5. 按住麦克风说话，松开后转写文本应插入输入框。
+
+v1 限制：apiKey 明文存于 App Group JSON（真机分发需换 Keychain access
+group）；无润色/纠错管线（Rust C ABI 桥为 M3+）；仅支持 OpenAI 兼容转写
+端点。
+
 ## CI
 
 Workflow：`.github/workflows/ci.yml` 的 `ios-check` job（aarch64-apple-ios

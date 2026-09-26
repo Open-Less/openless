@@ -17,10 +17,11 @@
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
     "paths": {
-      "@android/*": ["android/frontend/*"]
+      "@android/*": ["android/frontend/*"],
+      "@ios/*": ["ios/frontend/*"]
     }
   },
-  "include": ["src", "android/frontend"],
+  "include": ["src", "android/frontend", "ios/frontend"],
   "references": [
     {
       "path": "./tsconfig.node.json"

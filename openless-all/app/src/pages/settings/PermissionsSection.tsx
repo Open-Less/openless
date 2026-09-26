@@ -4,6 +4,7 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AndroidPermissionsPanel } from '@android/components/AndroidPermissionsPanel';
+import { IosKeyboardPanel } from '@ios/components/IosKeyboardPanel';
 import { Icon } from '../../components/Icon';
 import {
   checkAccessibilityPermission,
@@ -253,6 +254,7 @@ export function PermissionsSection() {
       {platformCaps?.supportsOverlay && platformCaps.platform === 'android' && (
         <AndroidPermissionsPanel />
       )}
+      {platformCaps?.platform === 'mobile' && <IosKeyboardPanel />}
       {windowsIme?.state !== 'notWindows' && platformCaps?.platform !== 'android' && (
         <SettingRow label={t('settings.permissions.windowsImeLabel')}>
           <div style={permissionActionsStyle}>

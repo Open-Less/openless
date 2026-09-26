@@ -242,6 +242,47 @@ pub async fn get_ios_keyboard_status(
     }
 }
 
+/// 键盘扩展共享配置（App Group 容器）。非 iOS 平台返回默认未配置状态，
+/// 便于前端在桌面/Android 上保持组件树不变。
+#[tauri::command]
+pub fn get_ios_keyboard_config() -> Result<crate::ios::KeyboardConfig, String> {
+    #[cfg(target_os = "ios")]
+    {
+        Ok(crate::ios::load_keyboard_config())
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        Ok(crate::ios::KeyboardConfig::default())
+    }
+}
+
+/// 写入键盘扩展共享配置。非 iOS 平台恒失败（前端不暴露入口）。
+#[tauri::command]
+pub fn set_ios_keyboard_config(config: crate::ios::KeyboardConfig) -> Result<(), String> {
+    #[cfg(target_os = "ios")]
+    {
+        crate::ios::store_keyboard_config(&config)
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        let _ = config;
+        Err("set_ios_keyboard_config is only supported on iOS".to_string())
+    }
+}
+
+/// App Group 容器可用性（设置页诊断）。
+#[tauri::command]
+pub fn get_ios_app_group_status() -> Result<bool, String> {
+    #[cfg(target_os = "ios")]
+    {
+        Ok(crate::ios::app_group_available())
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        Ok(false)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

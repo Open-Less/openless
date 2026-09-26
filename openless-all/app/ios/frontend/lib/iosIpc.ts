@@ -1,4 +1,4 @@
-// iOS 平台 Tauri IPC 门面。类型与 src-tauri/src/ios/keyboard_status.rs 对齐；
+// iOS 平台 Tauri IPC 门面。类型与 src-tauri/src/ios/ 对齐；
 // 在非 iOS 平台调用会返回后端错误字符串，由调用方捕获处理。
 
 import { invoke } from '@tauri-apps/api/core';
@@ -12,4 +12,23 @@ export interface IosKeyboardExtensionStatus {
 
 export function getIosKeyboardStatus(): Promise<IosKeyboardExtensionStatus> {
   return invoke('get_ios_keyboard_status');
+}
+
+export interface IosKeyboardConfig {
+  endpoint: string;
+  apiKey: string;
+  model: string;
+  prompt: string;
+}
+
+export function getIosKeyboardConfig(): Promise<IosKeyboardConfig> {
+  return invoke('get_ios_keyboard_config');
+}
+
+export function setIosKeyboardConfig(config: IosKeyboardConfig): Promise<void> {
+  return invoke('set_ios_keyboard_config', { config });
+}
+
+export function getIosAppGroupStatus(): Promise<boolean> {
+  return invoke('get_ios_app_group_status');
 }

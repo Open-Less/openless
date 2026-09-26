@@ -16,23 +16,9 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2_foundation::{ns_string, NSString};
 
-use serde::{Deserialize, Serialize};
+use super::KeyboardExtensionStatus;
 
 pub(crate) const KEYBOARD_BUNDLE_ID_PREFIX: &str = "com.openless.app.";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KeyboardExtensionStatus {
-    /// 键盘扩展是否已在系统设置中启用（设置 → 通用 → 键盘 → 键盘）。
-    pub enabled: bool,
-    /// 找到的 OpenLess 输入模式 identifier（诊断用）。
-    pub identifier: Option<String>,
-}
-
-/// 查询失败时的错误载体（当前实现不产生错误，为命令层契约预留）。
-#[derive(Debug)]
-pub struct IsKeyboardExtensionEnabledError {
-    pub message: String,
-}
 
 /// 检测 OpenLess 键盘扩展是否启用。必须在主线程调用。
 pub(crate) fn detect_keyboard_extension_status() -> KeyboardExtensionStatus {
