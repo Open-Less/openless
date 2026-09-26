@@ -240,6 +240,21 @@ ${signingSettingsLines('        ').join('\n')}`;
     throw new Error('project.yml: 未找到 Build Rust Code 锚点，无法追加扩展 target');
   }
 
+  // 8. Build Rust Code 脚本的 PATH：从 Dock/Finder 启动的 Xcode 只有最小 PATH
+  //    （/usr/bin:/bin:...），找不到 homebrew 的 npm 与 ~/.cargo/bin 的 cargo，
+  //    PhaseScriptExecution 直接失败。脚本内自举 PATH，CLI/GUI/CI 三态通用。
+  const scriptPathAnchor = '      - script: npm run -- tauri ios xcode-script';
+  const scriptPathReplacement =
+    '      - script: export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" && npm run -- tauri ios xcode-script';
+  if (content.includes(scriptPathReplacement)) {
+    console.log('Build script PATH already patched; skipping.');
+  } else if (content.includes(scriptPathAnchor)) {
+    content = content.replace(scriptPathAnchor, scriptPathReplacement);
+    console.log('Added PATH bootstrap to Build Rust Code script.');
+  } else {
+    throw new Error('project.yml: 未找到 Build Rust Code 脚本锚点，无法注入 PATH');
+  }
+
   if (content === original) {
     return;
   }
