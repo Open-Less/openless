@@ -80,6 +80,8 @@ mod linux_app {
             result: Result<String, String>,
         },
         MarketplaceLikes(Result<Vec<String>, String>),
+        MarketplaceAuth(Result<bool, String>),
+        MarketplacePublish(Result<String, String>),
         MarketplaceDetail(Result<openless_core::MarketplaceDetail, String>),
         MarketplaceMine(Result<(Vec<openless_core::MarketplaceMyPackItem>, Vec<String>), String>),
         Microphones(Result<Vec<openless_core::MicrophoneDevice>, String>),
@@ -992,6 +994,7 @@ mod linux_app {
             vm.style_compatible_version = pack.compatible_app_version.clone().unwrap_or_default();
             vm.style_examples = pack.examples.clone();
             vm.style_editor_dirty = !exists;
+            vm.style_editor_publishing = false;
             vm.style_editor_saved = Some(pack.clone());
         }
 
@@ -2068,6 +2071,23 @@ mod linux_app {
                 return;
             }
             self.load_marketplace();
+        }
+
+        fn load_marketplace_auth(&self) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let result = backend
+                    .services()
+                    .marketplace
+                    .auth_status()
+                    .await
+                    .map(|status| status.signed_in)
+                    .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::MarketplaceAuth(result));
+            });
         }
 
         fn load_marketplace_mine(&self) {
@@ -3545,6 +3565,16 @@ mod linux_app {
                     UiResult::MarketplaceLikes(Err(error)) => {
                         // Not signed in / offline: keep the previous like set.
                         log::debug!("marketplace likes unavailable: {error}");
+                    }
+                    UiResult::MarketplaceAuth(result) => {
+                        self.frontend_vm.marketplace_signed_in = result.unwrap_or(false);
+                    }
+                    UiResult::MarketplacePublish(result) => {
+                        self.frontend_vm.style_editor_publishing = false;
+                        match result {
+                            Ok(message) => self.status = message,
+                            Err(error) => self.frontend_vm.style_notice = Some(error),
+                        }
                     }
                     UiResult::SettingsChannels(Ok(rows)) => {
                         self.settings_channels = rows;
@@ -5527,7 +5557,77 @@ mod linux_app {
                         if let Some(pack) = self.style_packs.get(index).cloned() {
                             self.style_editor = Some(pack.clone());
                             self.hydrate_style_editor(&pack, true);
+                            self.load_marketplace_auth();
                         }
+                    }
+                    frontend::view_model::FrontendAction::StylePublishMarketplace => {
+                        if self.frontend_vm.style_editor_publishing
+                            || self.frontend_vm.style_editor_builtin
+                            || !self.frontend_vm.marketplace_signed_in
+                        {
+                            return;
+                        }
+                        let Some(mut pack) = self.style_editor.clone() else {
+                            return;
+                        };
+                        let needs_save = self.frontend_vm.style_editor_dirty;
+                        if needs_save {
+                            pack.name = self.frontend_vm.style_name.trim().to_string();
+                            pack.description =
+                                self.frontend_vm.style_description.trim().to_string();
+                            pack.prompt = self.frontend_vm.style_prompt.clone();
+                            pack.selection_prompt = self.frontend_vm.style_selection_prompt.clone();
+                            pack.voice_edit_prompt =
+                                self.frontend_vm.style_voice_edit_prompt.clone();
+                            pack.author = Some(self.frontend_vm.style_author.trim().to_string())
+                                .filter(|value| !value.is_empty());
+                            pack.version = self.frontend_vm.style_version.trim().to_string();
+                            pack.recommended_model =
+                                Some(self.frontend_vm.style_model.trim().to_string())
+                                    .filter(|value| !value.is_empty());
+                            pack.compatible_app_version =
+                                Some(self.frontend_vm.style_compatible_version.trim().to_string())
+                                    .filter(|value| !value.is_empty());
+                            pack.tags = self
+                                .frontend_vm
+                                .style_tags
+                                .split([',', '，', '\n'])
+                                .map(str::trim)
+                                .filter(|value| !value.is_empty())
+                                .map(ToOwned::to_owned)
+                                .collect();
+                            pack.examples = self.frontend_vm.style_examples.clone();
+                        }
+                        let exists = self.style_packs.iter().any(|item| item.id == pack.id);
+                        let Some(backend) = self.backend() else {
+                            return;
+                        };
+                        self.frontend_vm.style_editor_publishing = true;
+                        let tx = self.tx.clone();
+                        self.tokio.spawn(async move {
+                            let result = async {
+                                if needs_save {
+                                    if exists {
+                                        backend
+                                            .update_style_pack(pack.clone())
+                                            .map_err(|error| error.to_string())?;
+                                    } else {
+                                        backend
+                                            .create_style_pack(pack.clone())
+                                            .map_err(|error| error.to_string())?;
+                                    }
+                                }
+                                backend
+                                    .services()
+                                    .marketplace
+                                    .upload(pack.id.clone(), pack.origin_pack_id.clone())
+                                    .await
+                                    .map(|uploaded| uploaded.message)
+                                    .map_err(|error| error.to_string())
+                            }
+                            .await;
+                            let _ = tx.send(UiResult::MarketplacePublish(result));
+                        });
                     }
                     frontend::view_model::FrontendAction::StyleRevertDraft => {
                         if let Some(pack) = self.style_editor.clone() {

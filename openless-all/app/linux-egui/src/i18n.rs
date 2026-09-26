@@ -5398,6 +5398,16 @@ pub const CATALOG: &[Msg] = &[
         key: "vocab.newWordTemplateCount",
         text: row("{} 词", "{} 詞", "{} words", "{} 語", "{}개 단어"),
     },
+    Msg {
+        key: "style.pack.publishMarketplace",
+        text: row(
+            "发布到风格市场",
+            "發布到風格市場",
+            "Publish to Marketplace",
+            "マーケットに公開",
+            "마켓에 게시",
+        ),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

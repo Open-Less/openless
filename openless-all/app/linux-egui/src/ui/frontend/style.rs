@@ -804,6 +804,7 @@ fn drawer_body(
     let field_width = (content.width() - 36.0 - FIELD_GAP) / 2.0;
     let scroll = egui::ScrollArea::vertical()
         .id_salt("style-editor-fields")
+        .max_width(content.width())
         .max_height(content.height().max(120.0))
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -958,6 +959,7 @@ fn editor_identity_grid(ui: &mut egui::Ui, vm: &mut FrontendViewModel) {
 fn editor_metadata(ui: &mut egui::Ui, vm: &FrontendViewModel) {
     let lang = vm.lang;
     let width = ui.available_width();
+    ui.spacing_mut().item_spacing.x = FIELD_GAP;
     egui::Frame::new()
         .fill(theme::SURFACE_2)
         .stroke(egui::Stroke::new(0.5, theme::LINE))
@@ -1000,7 +1002,7 @@ fn editor_metadata(ui: &mut egui::Ui, vm: &FrontendViewModel) {
                         .unwrap_or_else(|| "—".into()),
                 ),
             ];
-            let gap = 10.0;
+            let gap = FIELD_GAP;
             let column_width = (ui.available_width() - gap * 2.0) / 3.0;
             ui.horizontal(|ui| {
                 for (label, value) in values {
@@ -1074,8 +1076,9 @@ fn editor_examples(ui: &mut egui::Ui, vm: &mut FrontendViewModel) {
             .show(ui, |ui| {
                 ui.set_width((width - 32.0).max(80.0));
                 ui.horizontal(|ui| {
+                    let title_width = (ui.available_width() - 8.0 - 32.0).max(120.0);
                     ui.add_sized(
-                        [ui.available_width() - 72.0, 38.0],
+                        [title_width, 38.0],
                         editor_input(example.title.get_or_insert_with(String::new)).hint_text(
                             fmt_l10n(
                                 lang,
@@ -1084,12 +1087,23 @@ fn editor_examples(ui: &mut egui::Ui, vm: &mut FrontendViewModel) {
                             ),
                         ),
                     );
-                    if ui.button(tr_l10n(lang, "common.delete")).clicked() {
+                    ui.add_space(8.0);
+                    let (delete_rect, delete_response) =
+                        ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::click());
+                    if delete_response.clicked() {
                         remove = Some(index);
                     }
+                    ui.painter().rect_stroke(
+                        delete_rect,
+                        egui::CornerRadius::same(8),
+                        egui::Stroke::new(0.5, theme::LINE_STRONG),
+                        egui::StrokeKind::Inside,
+                    );
+                    icons::draw_icon(ui, delete_rect.center(), IconName::Trash, theme::INK_2);
                 });
                 ui.add_space(12.0);
                 let field_width = (ui.available_width() - FIELD_GAP) / 2.0;
+                ui.spacing_mut().item_spacing.x = FIELD_GAP;
                 ui.horizontal(|ui| {
                     for (label, text, id) in [
                         ("style.pack.exampleInput", &mut example.input, "input"),
@@ -1133,7 +1147,7 @@ fn pills_row(
     let mut x = row.left();
     let pill = |text: &str, tone: PillTone, x: &mut f32| {
         let size = layout::pill_size(ui, text);
-        if *x + size.x > row.right() - 200.0 {
+        if *x + size.x > row.right() - 300.0 {
             return;
         }
         layout::paint_pill(
@@ -1186,11 +1200,20 @@ fn pills_row(
         egui::pos2(row.right() - activate_width, row.center().y - 14.0),
         egui::vec2(activate_width, 28.0),
     );
+    let publish = tr_l10n(lang, "style.pack.publishMarketplace");
+    let publish_width = layout::text_width(ui, publish, 11.5) + 42.0;
+    let publish_rect = egui::Rect::from_min_size(
+        egui::pos2(
+            activate_rect.left() - 8.0 - publish_width,
+            row.center().y - 14.0,
+        ),
+        egui::vec2(publish_width, 28.0),
+    );
     let export = tr_l10n(lang, "style.pack.exportZip");
     let export_width = layout::text_width(ui, export, 11.5) + 42.0;
     let export_rect = egui::Rect::from_min_size(
         egui::pos2(
-            activate_rect.left() - 8.0 - export_width,
+            publish_rect.left() - 8.0 - export_width,
             row.center().y - 14.0,
         ),
         egui::vec2(export_width, 28.0),
@@ -1207,6 +1230,26 @@ fn pills_row(
         if let Some(index) = index {
             actions.push(FrontendAction::StyleExport(index));
         }
+    }
+    let publish_kind =
+        if vm.style_editor_builtin || !vm.marketplace_signed_in || vm.style_editor_publishing {
+            ButtonKind::Disabled
+        } else {
+            ButtonKind::Ghost
+        };
+    if layout::action_button(
+        ui,
+        publish_rect,
+        publish,
+        Some(IconName::Cloud),
+        publish_kind,
+    )
+    .clicked()
+        && !vm.style_editor_builtin
+        && vm.marketplace_signed_in
+        && !vm.style_editor_publishing
+    {
+        actions.push(FrontendAction::StylePublishMarketplace);
     }
     if layout::action_button(
         ui,
@@ -1232,6 +1275,7 @@ fn pills_row(
 fn editor_input(text: &mut String) -> egui::TextEdit<'_> {
     egui::TextEdit::singleline(text)
         .font(egui::FontId::proportional(12.5))
+        .vertical_align(egui::Align::Center)
         .margin(egui::Margin::symmetric(11, 9))
         .frame(
             egui::Frame::new()
@@ -1441,6 +1485,9 @@ fn runtime_row(
 /// Save / revert on the left, reset-or-delete on the right.
 fn drawer_footer(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
     let lang = vm.lang;
+    // Keep the destructive action on the same baseline as Save/Revert, as in
+    // Tauri. Imported packs show Delete; built-ins intentionally show Reset.
+    ui.spacing_mut().item_spacing.x = 8.0;
     let row_width = ui.available_width();
     let (row, _) = ui.allocate_exact_size(egui::vec2(row_width, 32.0), egui::Sense::hover());
     let save = tr_l10n(lang, "style.pack.save");

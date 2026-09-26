@@ -114,6 +114,8 @@ pub enum FrontendAction {
     StyleResetIcon(usize),
     /// Style pack exported.
     StyleExport(usize),
+    /// Publish the open style pack to the Marketplace.
+    StylePublishMarketplace,
     /// Style pack editor opened.
     StyleEdit(usize),
     /// Reset a built-in pack to Core's shipped prompt (`reset_builtin_style_pack`).
@@ -728,6 +730,8 @@ pub struct FrontendViewModel {
     pub style_editor_active: bool,
     pub style_editor_mode: String,
     pub style_editor_dirty: bool,
+    pub style_editor_publishing: bool,
+    pub marketplace_signed_in: bool,
     /// The stored pack the draft is compared against (dirty check + Revert).
     pub style_editor_saved: Option<openless_core::StylePack>,
     /// Live runtime directives of the draft (dictation workflow only).
@@ -903,6 +907,8 @@ impl Default for FrontendViewModel {
             style_editor_active: false,
             style_editor_mode: String::new(),
             style_editor_dirty: false,
+            style_editor_publishing: false,
+            marketplace_signed_in: false,
             style_editor_saved: None,
             style_runtime: None,
             style_notice: None,

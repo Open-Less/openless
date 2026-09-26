@@ -2599,19 +2599,25 @@ mod tests {
         for clipped in &output.shapes {
             collect_inputs(&clipped.shape, &mut borders);
         }
+        let editor_borders: Vec<_> = borders
+            .iter()
+            .filter(|(rect, stroke)| {
+                rect.left() >= card.left() + 16.0
+                    && rect.width() < card.width() - 20.0
+                    && card.contains(rect.center())
+                    && stroke.width >= 0.5
+                    && stroke.color.a() >= 50
+            })
+            .collect();
         assert!(
-            borders
-                .iter()
-                .filter(|(rect, stroke)| {
-                    rect.left() >= card.left() + 16.0
-                        && rect.width() < card.width() - 20.0
-                        && card.contains(rect.center())
-                        && stroke.width >= 0.5
-                        && stroke.color.a() >= 50
-                })
-                .count()
-                >= 7,
+            editor_borders.len() >= 7,
             "editor inputs and textareas need visible outlines, got {borders:?}"
+        );
+        assert!(
+            editor_borders
+                .iter()
+                .all(|(rect, _)| rect.right() <= card.right() + 1.0),
+            "editor content must keep a right inset: {editor_borders:?}, card={card:?}"
         );
     }
 
