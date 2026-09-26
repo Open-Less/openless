@@ -24,8 +24,10 @@ impl ClipPlayer {
     /// Play `pcm` (16 kHz mono little-endian i16 bytes).
     pub fn play(pcm: &[u8]) -> Result<Self, String> {
         let mono: Vec<f32> = pcm
-            .chunks_exact(2)
-            .map(|pair| i16::from_le_bytes([pair[0], pair[1]]) as f32 / 32_768.0)
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| i16::from_le_bytes(*pair) as f32 / 32_768.0)
             .collect();
         if mono.is_empty() {
             return Err("empty recording".to_string());
