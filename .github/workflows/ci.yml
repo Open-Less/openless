@@ -93,6 +93,10 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: 'openless-all/app/src-tauri -> target'
+          # 仓库缓存上限 10 GB，超出后按 LRU 淘汰。过去每个 PR 都会各存一份
+          # ~1.6 GB 的依赖树，把其他 job 的缓存挤掉，导致每次运行都从零编译。
+          # 现在 PR 只从基线分支恢复，只有分支推送和 tag 才写入缓存。
+          save-if: ${{ github.event_name != 'pull_request' }}
 
       - uses: gradle/actions/setup-gradle@v4
 
@@ -229,12 +233,14 @@ jobs:
         if: runner.os == 'Windows'
         with:
           workspaces: 'openless-all/app/src-tauri -> target'
+          save-if: ${{ github.event_name != 'pull_request' }}
 
       - name: Cache macOS stable dependencies
         if: runner.os == 'macOS'
         uses: swatinem/rust-cache@v2
         with:
           key: macos-stable-v1
+          save-if: ${{ github.event_name != 'pull_request' }}
           workspaces: |
             openless-all/app -> target
             openless-all/app/src-tauri -> target
@@ -378,6 +384,7 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           key: macos-msrv-v1
+          save-if: ${{ github.event_name != 'pull_request' }}
           workspaces: |
             openless-all/app/src-tauri -> target
             openless-all/app/src-tauri/backend-tests -> target
