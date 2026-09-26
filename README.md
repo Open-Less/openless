@@ -267,7 +267,7 @@ For the full end-user walkthrough, see [USAGE.md](USAGE.md).
 
 The active workspace lives in `openless-all/app/`. `crates/openless-core` is the framework-independent backend, `src-tauri` hosts macOS/Windows/Android, and `linux-egui` contains the native Linux UI and its platform adapters. Initialize submodules before a Tauri source build: its manifest resolves local path dependencies even when their target-specific code is not compiled. These include macOS ASR engines such as [`Open-Less/qwen-asr`](https://github.com/Open-Less/qwen-asr) under `src-tauri/vendor/`. The root Core/Linux workspace excludes `src-tauri`, so its independent checks do not parse the Tauri manifest or require those submodules. Start with the [documentation index](docs/index.md), [architecture](docs/architecture.md), and [source structure](docs/structure.md).
 
-Rust 1.88 is the minimum supported toolchain for source builds; the latest stable Rust is recommended. CI verifies both Rust 1.88 and stable on macOS, Windows, and Linux.
+Rust 1.88 is the minimum supported toolchain for the desktop application sources (`openless-core`, `src-tauri`); the latest stable Rust is recommended. CI verifies both Rust 1.88 and stable on macOS and Windows; the Linux egui host requires Rust 1.95 and is verified on stable.
 
 On Apple Silicon, compiling the optional Qwen3-ASR MLX backend requires Xcode's MetalToolchain component. Install it with `xcodebuild -downloadComponent MetalToolchain` and verify it with `xcrun --find metal`. This is a source-build dependency; packaged OpenLess applications do not require it at runtime.
 

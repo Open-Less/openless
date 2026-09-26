@@ -26,10 +26,38 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # 判定这次改动能不能影响到各平台门禁。只有“改动物理上够不到”的变更才会
+  # 跳过对应 job：判定脚本对任何未知情况（没有基线、git 失败、空 diff）都返回
+  # true。push / tag / 手动运行不带基线，因此始终全量验证。
+  changes:
+    name: Changed areas
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tauri: ${{ steps.detect.outputs.tauri }}
+      msrv: ${{ steps.detect.outputs.msrv }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 需要基线提交才能算出差异，客户端不再重复 fetch。
+          fetch-depth: 0
+
+      - name: Detect changed areas
+        id: detect
+        working-directory: openless-all/app
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          echo "tauri=$(bash scripts/ci-changed-areas.sh tauri "$BASE_SHA")" >> "$GITHUB_OUTPUT"
+          echo "msrv=$(bash scripts/ci-changed-areas.sh msrv "$BASE_SHA")" >> "$GITHUB_OUTPUT"
+
   android-check:
-    if: github.event_name != 'workflow_dispatch' || inputs.platform != 'macos'
+    needs: [changes]
+    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.tauri == 'true'
     name: Android cargo check
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: openless-all/app
@@ -188,6 +216,8 @@ jobs:
     uses: ./.github/workflows/check-linux-egui.yml
 
   cross-platform:
+    needs: [changes]
+    if: needs.changes.outputs.tauri == 'true'
     name: ${{ matrix.label }} checks
     strategy:
       # 一个平台挂掉不阻塞其他平台拿到验证结果。
@@ -195,6 +225,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '[{"os":"macos-latest","label":"macOS","preflight":false}]' || '[{"os":"macos-latest","label":"macOS","preflight":false},{"os":"windows-latest","label":"Windows","preflight":true}]') }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     env:
       # 新增 shared Core 后，macOS 首次编译同时构建 MLX C++ 依赖和完整
       # Tauri test binary；限制并发避免 arm64 runner 在峰值内存处被系统终止。
@@ -361,8 +392,11 @@ jobs:
           echo "[ok] 全部 5 处版本号一致：$PKG"
 
   macos-msrv:
+    needs: [changes]
+    if: needs.changes.outputs.msrv == 'true'
     name: macOS Rust 1.88 MSRV
     runs-on: macos-latest
+    timeout-minutes: 60
     env:
       CARGO_BUILD_JOBS: 2
       CARGO_PROFILE_DEV_DEBUG: 0
