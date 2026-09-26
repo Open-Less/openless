@@ -2474,6 +2474,39 @@ mod linux_app {
             });
         }
 
+        /// Phone-input status panel used by the CA fingerprint contract test.
+        /// Keep the fingerprint copy aligned with the desktop Remote Input settings.
+        fn remote_ui(&mut self, ui: &mut egui::Ui) {
+            ui.heading("手机输入");
+            if let Some((remote, _pin)) = &self.remote_access {
+                if remote.enabled && remote.running && !remote.urls_stale {
+                    // 首次信任前必须核对根证书指纹：网页与描述文件名称不能证明身份。
+                    ui.label("本机根证书 SHA-256");
+                    match remote.ca_fingerprint_sha256.as_ref().filter(|value| {
+                        value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    }) {
+                        Some(fingerprint) => {
+                            let display = fingerprint
+                                .as_bytes()
+                                .chunks(2)
+                                .map(|pair| std::str::from_utf8(pair).unwrap().to_ascii_uppercase())
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(&display).monospace()).wrap(),
+                            );
+                            if ui.button("复制完整指纹").clicked() {
+                                ui.ctx().copy_text(display);
+                            }
+                        }
+                        None => {
+                            ui.label("完整指纹不可用。请勿安装或信任下载的证书。");
+                        }
+                    }
+                }
+            }
+        }
+
         fn provider_management_ui(&mut self, ui: &mut egui::Ui) {
             let lang = self.lang;
             ui.horizontal(|ui| {
@@ -5456,6 +5489,41 @@ mod linux_app {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        fn disconnected_app() -> OpenLessEguiApp {
+            OpenLessEguiApp::new(
+                Arc::new(tokio::runtime::Runtime::new().unwrap()),
+                Err("fixture: plugin unavailable".into()),
+                None,
+                LinuxUpdateSupport::ManualOnly {
+                    releases_url: openless_linux_egui::RELEASES_URL,
+                },
+            )
+        }
+
+        fn rendered_text(mut draw: impl FnMut(&mut egui::Ui)) -> String {
+            let ctx = egui::Context::default();
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(720.0, 1800.0),
+                )),
+                ..Default::default()
+            });
+            egui::CentralPanel::default().show(&ctx, |ui| {
+                draw(ui);
+            });
+            let output = ctx.end_pass();
+            output
+                .shapes
+                .into_iter()
+                .filter_map(|clipped| match clipped.shape {
+                    egui::epaint::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
 
         #[test]
         fn running_remote_status_shows_ca_fingerprint_or_unavailable_warning() {
