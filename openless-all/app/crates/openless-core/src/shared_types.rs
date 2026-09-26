@@ -2263,6 +2263,8 @@ impl PlatformCapabilities {
             not(target_os = "android")
         ))]
         {
+            // iOS：应用内听写可用（录音 → 云端 ASR → 润色 → 剪贴板），与 Android
+            // v1 对齐；跨应用输入由键盘扩展承载（M3），不通过 supports_ime_input 暴露。
             Self {
                 platform: "mobile".to_string(),
                 supports_ime_input: false,
@@ -2271,7 +2273,7 @@ impl PlatformCapabilities {
                 supports_tray: false,
                 supports_local_asr: false,
                 supports_local_qwen3_mlx: false,
-                supports_in_app_dictation: false,
+                supports_in_app_dictation: true,
                 supports_auto_update: false,
             }
         }

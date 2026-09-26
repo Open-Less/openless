@@ -311,9 +311,100 @@ mod platform {
     }
 }
 
-// ─────────────────────────── Windows / Linux / 其他 ───────────────────────────
+// ─────────────────────────── iOS ───────────────────────────
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+// AVFAudio 类族在 iOS 上位于 AVFoundation；显式链接保证 AVAudioSession 类在
+// AnyClass::get 前已注册（不依赖 UIKit/WebKit 间接加载）。
+#[cfg(target_os = "ios")]
+#[link(name = "AVFoundation", kind = "framework")]
+extern "C" {}
+
+#[cfg(target_os = "ios")]
+mod platform {
+    use super::PermissionStatus;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    pub fn check_accessibility() -> PermissionStatus {
+        PermissionStatus::NotApplicable
+    }
+
+    pub fn request_accessibility() -> PermissionStatus {
+        PermissionStatus::NotApplicable
+    }
+
+    // AVAudioSessionRecordPermission 与 macOS AVAudioApplicationRecordPermission
+    // 同为 NS_ENUM(NSInteger, ...) FourCC：
+    //   'grnt' = 1735552628 / 'deny' = 1684368761 / 'undt' = 1970168948
+    fn check_microphone_via_avaudio_session() -> Option<PermissionStatus> {
+        use objc2::msg_send;
+        use objc2::runtime::{AnyClass, AnyObject};
+
+        let cls = AnyClass::get("AVAudioSession")?;
+        let shared: *mut AnyObject = unsafe { msg_send![cls, sharedInstance] };
+        if shared.is_null() {
+            log::warn!("[mic] AVAudioSession sharedInstance returned null");
+            return None;
+        }
+        let perm: i64 = unsafe { msg_send![shared, recordPermission] };
+        let mapped = match perm {
+            0x6772_6e74 => PermissionStatus::Granted,
+            0x6465_6e79 => PermissionStatus::Denied,
+            0x756e_6474 => PermissionStatus::NotDetermined,
+            _ => PermissionStatus::NotDetermined,
+        };
+        log::info!("[mic] AVAudioSession.recordPermission raw=0x{perm:x} → {mapped:?}");
+        Some(mapped)
+    }
+
+    pub fn check_microphone() -> PermissionStatus {
+        check_microphone_via_avaudio_session().unwrap_or(PermissionStatus::NotDetermined)
+    }
+
+    pub fn request_microphone() -> PermissionStatus {
+        use block2::RcBlock;
+        use objc2::msg_send;
+        use objc2::runtime::{AnyClass, AnyObject, Bool};
+
+        let Some(cls) = AnyClass::get("AVAudioSession") else {
+            return PermissionStatus::NotDetermined;
+        };
+        let shared: *mut AnyObject = unsafe { msg_send![cls, sharedInstance] };
+        if shared.is_null() {
+            log::warn!("[mic] AVAudioSession sharedInstance returned null");
+            return PermissionStatus::NotDetermined;
+        }
+
+        let (tx, rx) = mpsc::channel();
+        let block = RcBlock::new(move |granted: Bool| {
+            let _ = tx.send(granted.as_bool());
+        });
+        log::info!("[mic] requesting via AVAudioSession.requestRecordPermission");
+        unsafe {
+            let _: () = msg_send![shared, requestRecordPermission: &*block];
+        }
+
+        let mapped = match rx.recv_timeout(Duration::from_secs(8)) {
+            Ok(true) => PermissionStatus::Granted,
+            Ok(false) => PermissionStatus::Denied,
+            Err(err) => {
+                log::warn!("[mic] AVAudioSession request timeout/error: {err}");
+                check_microphone_via_avaudio_session()
+                    .unwrap_or(PermissionStatus::NotDetermined)
+            }
+        };
+        log::info!("[mic] AVAudioSession.requestRecordPermission → {mapped:?}");
+        mapped
+    }
+}
+
+// ─────────────────────── Windows / Linux / 其他 ───────────────────────
+
+#[cfg(all(
+    not(target_os = "macos"),
+    not(target_os = "android"),
+    not(target_os = "ios")
+))]
 mod platform {
     use super::PermissionStatus;
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -504,12 +595,16 @@ pub use platform::{
     check_accessibility, check_microphone, request_accessibility, request_microphone,
 };
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(target_os = "android"),
+    not(target_os = "ios")
+))]
 pub use platform::has_microphone_input_device;
 
-#[cfg(any(target_os = "macos", target_os = "android"))]
+#[cfg(any(target_os = "macos", target_os = "android", target_os = "ios"))]
 pub fn has_microphone_input_device() -> bool {
-    // macOS / Android 的权限检查走系统授权回调，不依赖这里；
+    // macOS / Android / iOS 的权限检查走系统授权回调，不依赖这里；
     // 录音启动失败路径另有 NoInputDevice 兜底文案。
     false
 }

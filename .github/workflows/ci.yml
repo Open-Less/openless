@@ -156,7 +156,7 @@ jobs:
           api-level: 35
           target: google_apis
           arch: x86_64
-          # The instrumentation suite exercises AndroidKeyStore without launching Tauri.
+          # The instrumentation suite exercises AndroidKeystore without launching Tauri.
           script: >-
             cd openless-all/app &&
             src-tauri/gen/android/gradlew
@@ -164,6 +164,46 @@ jobs:
             :app:connectedX86_64DebugAndroidTest
             -x :app:rustBuildX86_64Debug
             --no-daemon
+
+  ios-check:
+    name: iOS cargo check
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: openless-all/app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # iOS 不编译本地 ASR（移动端命令白名单不含本地引擎）；与 Android 相同，
+          # 只需 ci-disable-macos-qwen3.mjs 删掉 qwen3-asr-rs path 依赖行。
+          submodules: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: openless-all/app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'openless-all/app/src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend (tsc + vite)
+        # generate_context! requires frontendDist (../dist) to exist on iOS too.
+        run: npm run build
+
+      - name: Disable macOS-only Qwen3 MLX dependency
+        run: node scripts/ci-disable-macos-qwen3.mjs
+
+      - name: Check Tauri backend (iOS target)
+        run: cargo check --locked --manifest-path src-tauri/Cargo.toml --target aarch64-apple-ios
 
   linux-core-contract:
     name: Linux core tests

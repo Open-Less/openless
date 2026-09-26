@@ -76,7 +76,7 @@ pub(crate) fn data_dir() -> Result<PathBuf> {
         Ok(PathBuf::from(appdata).join("OpenLess"))
     }
 
-    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android"), not(target_os = "ios")))]
     {
         if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
             if !xdg.is_empty() {
@@ -87,6 +87,17 @@ pub(crate) fn data_dir() -> Result<PathBuf> {
         Ok(PathBuf::from(home)
             .join(".local")
             .join("share")
+            .join("OpenLess"))
+    }
+
+    #[cfg(target_os = "ios")]
+    {
+        // iOS 沙盒：HOME 即 App 容器根，惯用数据位置是 <Home>/Library/Application
+        // Support/<App>。目录不存在时由写入侧 ensure_dir 创建。
+        let home = std::env::var("HOME").context("HOME not set")?;
+        Ok(PathBuf::from(home)
+            .join("Library")
+            .join("Application Support")
             .join("OpenLess"))
     }
 

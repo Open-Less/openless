@@ -113,15 +113,33 @@ libc = "0.2"
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus = "0.9"
 gtk = "0.18"
-[target.'cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))'.dependencies.keyring]
+# iOS 必须显式排除：unix 规则会兜住 iOS，把 Linux keyring 后端错配上去导致编译失败。
+[target.'cfg(all(unix, not(target_os = "macos"), not(target_os = "android"), not(target_os = "ios")))'.dependencies.keyring]
 version = "3.6.3"
 default-features = false
 features = ["linux-native-sync-persistent", "crypto-rust"]
+
+# iOS 与 macOS 同属 apple-native（Keychain）；iOS 上 keyring 走 Data Protection Keychain。
+[target.'cfg(target_os = "ios")'.dependencies.keyring]
+version = "3.6.3"
+default-features = false
+features = ["apple-native"]
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
 ndk-context = "0.1"
 tao = "0.35"
+
+[target.'cfg(target_os = "ios")'.dependencies]
+# 剪贴板（UIPasteboard）、键盘启用状态（UITextInputMode）与麦克风权限。
+# 版本与 macOS 段对齐（objc2 0.5 / 0.2.x 家族），避免依赖树出现两套 objc2。
+# 麦克风权限不走 objc2-avf-audio：该 crate 最低 0.3（objc2 0.6 家族），为一次
+# AVAudioSession 调用引入第二套运行时不划算，改为在本 crate 内手写 msg_send。
+objc2 = { version = "0.5", features = ["exception"] }
+objc2-foundation = "0.2"
+# UITextInputMode 类在 objc2-ui-kit 0.2 无绑定，键盘状态检测走 raw msg_send。
+objc2-ui-kit = { version = "0.2", features = ["UIPasteboard"] }
+block2 = "0.5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.5"
