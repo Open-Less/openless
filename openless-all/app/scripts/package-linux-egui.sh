@@ -33,7 +33,7 @@ esac
 TARGET_DIR=${CARGO_TARGET_DIR:-"$APP_ROOT/target"}
 BINARY="$TARGET_DIR/release/openless-linux-egui"
 PLUGIN_ROOT="$APP_ROOT/../scripts/linux-fcitx5-plugin/build"
-PI_BACKEND="$APP_ROOT/src-tauri/resources/pi-backend"
+PI_BACKEND="$APP_ROOT/resources/pi-backend"
 PACKAGING="$APP_ROOT/linux-egui/packaging"
 OUTPUT="$TARGET_DIR/linux-egui-packages"
 # Icons match the Tauri set byte for byte (512×512). This script must stay

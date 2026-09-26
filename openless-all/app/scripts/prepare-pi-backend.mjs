@@ -3,7 +3,20 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import { access, chmod, copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  access,
+  chmod,
+  copyFile,
+  cp,
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Readable } from 'node:stream';
@@ -53,14 +66,25 @@ export function resolveTarget(target, platform = process.platform, arch = proces
 
 export function assertWithin(root, path) {
   const delta = relative(resolve(root), resolve(path));
-  if (!delta || delta === '..' || delta.startsWith(`..${sep}`) || delta.includes(':') || resolve(root) === resolve(path)) {
+  if (
+    !delta ||
+    delta === '..' ||
+    delta.startsWith(`..${sep}`) ||
+    delta.includes(':') ||
+    resolve(root) === resolve(path)
+  ) {
     throw new Error(`拒绝修改构建目录以外的路径：${path}`);
   }
   return path;
 }
 
 async function exists(path) {
-  try { await access(path); return true; } catch { return false; }
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function verifyDigest(buffer, expected, label = 'Node archive') {
@@ -75,7 +99,10 @@ export async function pruneDevelopmentFiles(directory) {
     const path = assertWithin(directory, join(directory, entry.name));
     if (entry.isDirectory()) {
       removed += await pruneDevelopmentFiles(path);
-    } else if (entry.isFile() && /(?:\.d\.(?:ts|mts|cts)|\.(?:js|mjs|cjs|ts|mts|cts)\.map)$/.test(entry.name)) {
+    } else if (
+      entry.isFile() &&
+      /(?:\.d\.(?:ts|mts|cts)|\.(?:js|mjs|cjs|ts|mts|cts)\.map)$/.test(entry.name)
+    ) {
       // Node executes JavaScript/native modules; declarations and source maps
       // can exceed NSIS MAX_PATH in otherwise ordinary Windows checkouts.
       await rm(path);
@@ -91,7 +118,9 @@ async function validateWindowsBundlePaths(staging, output) {
       const path = join(directory, entry.name);
       if (entry.isDirectory()) await visit(path);
       else if (join(output, relative(staging, path)).length >= 260) {
-        throw new Error(`NSIS 资源路径超过 Windows 长度限制，请将源码移至更短的目录：${relative(staging, path)}`);
+        throw new Error(
+          `NSIS 资源路径超过 Windows 长度限制，请将源码移至更短的目录：${relative(staging, path)}`,
+        );
       }
     }
   }
@@ -100,7 +129,10 @@ async function validateWindowsBundlePaths(staging, output) {
 
 function run(executable, args, options = {}) {
   const result = spawnSync(executable, args, {
-    cwd: APP_ROOT, stdio: 'inherit', windowsHide: true, ...options,
+    cwd: APP_ROOT,
+    stdio: 'inherit',
+    windowsHide: true,
+    ...options,
   });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${executable} 执行失败，退出码 ${result.status}`);
@@ -113,14 +145,22 @@ async function sourceFingerprint(target) {
     const metadata = await stat(path);
     if (metadata.isDirectory()) {
       for (const name of (await readdir(path)).sort()) {
-        if (!['node_modules', 'target', 'test', 'tests', '.git'].includes(name)) await visit(join(path, name));
+        if (!['node_modules', 'target', 'test', 'tests', '.git'].includes(name))
+          await visit(join(path, name));
       }
     } else {
       hash.update(relative(APP_ROOT, path));
       hash.update(await readFile(path));
     }
   }
-  for (const path of ['pi-backend', 'crates/openless-computer', 'Cargo.toml', 'Cargo.lock', 'scripts/prepare-pi-backend.mjs', 'scripts/pi-node-entitlements.plist']) {
+  for (const path of [
+    'pi-backend',
+    'crates/openless-computer',
+    'Cargo.toml',
+    'Cargo.lock',
+    'scripts/prepare-pi-backend.mjs',
+    'scripts/pi-node-entitlements.plist',
+  ]) {
     await visit(join(APP_ROOT, path));
   }
   return hash.digest('hex');
@@ -128,7 +168,7 @@ async function sourceFingerprint(target) {
 
 async function downloadNode(target, cache) {
   const archive = assertWithin(cache, join(cache, target.archive));
-  if (!await exists(archive)) {
+  if (!(await exists(archive))) {
     console.log(`[pi] 下载 Node ${NODE_VERSION} (${target.id})`);
     const response = await fetch(`https://nodejs.org/dist/v${NODE_VERSION}/${target.archive}`, {
       signal: AbortSignal.timeout(180_000),
@@ -170,47 +210,67 @@ async function signMacPayload(directory) {
       for (const name of await readdir(path)) await visit(join(path, name));
     } else if (metadata.mode & 0o111 || path.endsWith('.node') || path.endsWith('.dylib')) {
       const header = (await readFile(path)).subarray(0, 4).toString('hex');
-      if (['cffaedfe', 'cefaedfe', 'feedfacf', 'feedface', 'cafebabe', 'bebafeca'].includes(header)) executables.push(path);
+      if (['cffaedfe', 'cefaedfe', 'feedfacf', 'feedface', 'cafebabe', 'bebafeca'].includes(header))
+        executables.push(path);
     }
   }
   await visit(directory);
   for (const executable of executables) {
     const args = ['--force', '--sign', identity];
     if (identity !== '-') args.push('--options', 'runtime', '--timestamp');
-    if (executable === join(directory, 'node')) args.push('--entitlements', join(APP_ROOT, 'scripts/pi-node-entitlements.plist'));
+    if (executable === join(directory, 'node'))
+      args.push('--entitlements', join(APP_ROOT, 'scripts/pi-node-entitlements.plist'));
     run('codesign', [...args, executable]);
   }
 }
 
 export async function prepare(argv = process.argv.slice(2)) {
   if (argv.includes('--help')) {
-    console.log('node scripts/prepare-pi-backend.mjs [--target RUST_TARGET] [--force]\n在本机平台构建并缓存完整 PI + Node + Computer 安装资源。');
+    console.log(
+      'node scripts/prepare-pi-backend.mjs [--target RUST_TARGET] [--force]\n在本机平台构建并缓存完整 PI + Node + Computer 安装资源。',
+    );
     return;
   }
   const targetFlag = argv.indexOf('--target');
   if (targetFlag !== -1 && !argv[targetFlag + 1]) throw new Error('--target 缺少 Rust target');
-  let requested = targetFlag === -1
-    ? process.env.TAURI_ENV_TARGET_TRIPLE || process.env.CARGO_BUILD_TARGET
-    : argv[targetFlag + 1];
+  let requested =
+    targetFlag === -1
+      ? process.env.TAURI_ENV_TARGET_TRIPLE || process.env.CARGO_BUILD_TARGET
+      : argv[targetFlag + 1];
   if (!requested) {
     const rustc = run('rustc', ['-vV'], { stdio: 'pipe', encoding: 'utf8' });
     requested = rustc.stdout.match(/^host: (.+)$/m)?.[1]?.trim();
   }
   const target = resolveTarget(requested);
-  if (!target || process.env.TAURI_ENV_PLATFORM === 'android' || process.env.TAURI_ENV_PLATFORM === 'ios') {
+  if (
+    !target ||
+    process.env.TAURI_ENV_PLATFORM === 'android' ||
+    process.env.TAURI_ENV_PLATFORM === 'ios'
+  ) {
     console.log('[pi] 移动端不包含桌面 Computer 后端');
     return;
   }
   const cache = join(APP_ROOT, '.cache/pi-backend');
   const output = join(APP_ROOT, 'src-tauri/resources/pi-backend');
   await mkdir(cache, { recursive: true });
+  const publishShared = () => publishSharedPiBackend(output);
   const fingerprint = await sourceFingerprint(target);
   let previous;
-  try { previous = JSON.parse(await readFile(join(output, 'manifest.json'), 'utf8')); } catch { /* fresh build */ }
-  if (!argv.includes('--force') && previous?.fingerprint === fingerprint &&
-      await exists(join(output, target.nodeName)) && await exists(join(output, target.computerName)) &&
-      await exists(join(output, 'runtime/index.mjs')) && await exists(join(output, 'runtime/node_modules'))) {
+  try {
+    previous = JSON.parse(await readFile(join(output, 'manifest.json'), 'utf8'));
+  } catch {
+    /* fresh build */
+  }
+  if (
+    !argv.includes('--force') &&
+    previous?.fingerprint === fingerprint &&
+    (await exists(join(output, target.nodeName))) &&
+    (await exists(join(output, target.computerName))) &&
+    (await exists(join(output, 'runtime/index.mjs'))) &&
+    (await exists(join(output, 'runtime/node_modules')))
+  ) {
     await signMacPayload(output);
+    await publishShared();
     console.log(`[pi] 使用已准备的 ${target.id} 安装资源`);
     return;
   }
@@ -223,39 +283,79 @@ export async function prepare(argv = process.argv.slice(2)) {
     const runtime = join(staging, 'runtime');
     await cp(source, runtime, {
       recursive: true,
-      filter: (path) => !relative(source, path).split(sep).some((name) => ['node_modules', 'test', 'tests', '.git'].includes(name)),
+      filter: (path) =>
+        !relative(source, path)
+          .split(sep)
+          .some((name) => ['node_modules', 'test', 'tests', '.git'].includes(name)),
     });
     const node = join(extracted, target.id.startsWith('win-') ? 'node.exe' : 'bin/node');
     await copyFile(node, join(staging, target.nodeName));
     await copyFile(join(extracted, 'LICENSE'), join(staging, 'NODE-LICENSE'));
     await chmod(join(staging, target.nodeName), 0o755);
-    run(process.execPath, [await npmCli(), 'ci', '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund'], { cwd: runtime });
+    run(
+      process.execPath,
+      [await npmCli(), 'ci', '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund'],
+      { cwd: runtime },
+    );
     const pruned = await pruneDevelopmentFiles(join(runtime, 'node_modules'));
     console.log(`[pi] 移除 ${pruned} 个运行时无需使用的类型声明与源码映射`);
     console.log('[pi] 编译原生 Computer 后端');
-    run('cargo', ['build', '--locked', '--release', '-p', 'openless-computer', '--target', target.target]);
+    run('cargo', [
+      'build',
+      '--locked',
+      '--release',
+      '-p',
+      'openless-computer',
+      '--target',
+      target.target,
+    ]);
     const cargoTarget = resolve(APP_ROOT, process.env.CARGO_TARGET_DIR || 'target');
-    await copyFile(join(cargoTarget, target.target, 'release', target.computerName), join(staging, target.computerName));
+    await copyFile(
+      join(cargoTarget, target.target, 'release', target.computerName),
+      join(staging, target.computerName),
+    );
     await chmod(join(staging, target.computerName), 0o755);
     await signMacPayload(staging);
     run(join(staging, target.nodeName), [join(runtime, 'index.mjs'), '--health'], {
       env: { ...process.env, OPENLESS_COMPUTER_BIN: join(staging, target.computerName) },
     });
     run(join(staging, target.computerName), ['--capabilities']);
-    await writeFile(join(staging, 'manifest.json'), `${JSON.stringify({
-      format: 1, target: target.target, node: NODE_VERSION, fingerprint,
-    }, null, 2)}\n`, 'utf8');
+    await writeFile(
+      join(staging, 'manifest.json'),
+      `${JSON.stringify(
+        {
+          format: 1,
+          target: target.target,
+          node: NODE_VERSION,
+          fingerprint,
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    );
     if (target.id.startsWith('win-')) await validateWindowsBundlePaths(staging, output);
     await mkdir(dirname(output), { recursive: true });
     assertWithin(join(APP_ROOT, 'src-tauri/resources'), output);
     await rm(output, { recursive: true, force: true });
     await rename(staging, output);
+    await publishShared();
     console.log(`[pi] 完整安装资源已就绪：${output}`);
   } finally {
     await rm(staging, { recursive: true, force: true });
   }
 }
 
+export async function publishSharedPiBackend(output) {
+  const shared = join(APP_ROOT, 'resources/pi-backend');
+  await mkdir(dirname(shared), { recursive: true });
+  await rm(shared, { recursive: true, force: true });
+  await symlink(output, shared, process.platform === 'win32' ? 'junction' : 'dir');
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  prepare().catch((error) => { console.error(`[pi] ${error.message}`); process.exitCode = 1; });
+  prepare().catch((error) => {
+    console.error(`[pi] ${error.message}`);
+    process.exitCode = 1;
+  });
 }

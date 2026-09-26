@@ -5,14 +5,15 @@
 ## 仓库与应用工作目录
 
 ```text
-1-app/                            Git 仓库、分支与发布边界
-├── AGENTS.md / docs/              规则、架构、合同说明和平台交接
-├── README.md / README.zh.md       面向使用者和贡献者的双语介绍
-├── RELEASING.md / USAGE.md        发布规则与使用说明
+openless/                         Git 仓库、分支与发布边界
+├── docs/                         架构、合同说明和平台交接
+├── README.md / README.zh.md      面向使用者和贡献者的双语介绍
+├── RELEASING.md / USAGE.md       发布规则与使用说明
+├── LICENSE
 ├── .github/workflows/            CI、Tauri、Android、Linux 发布
 ├── Casks/                        Homebrew 分发定义
 ├── Examples/                     示例数据
-├── assets/ / video-materials/     产品展示材料
+├── assets/                       产品展示材料
 ├── scripts/                      仓库级辅助脚本
 └── openless-all/
     ├── design_handoff_openless/   设计交接材料
@@ -60,7 +61,7 @@ Core 其余模块按领域列于 [架构模块地图](architecture.md)。平台�
 | 文件或目录 | 作用与维护方式 |
 | --- | --- |
 | `package.json` / `package-lock.json` | npm 命令、前端依赖与锁定版本；脚本从应用目录执行 |
-| `Cargo.toml` / `Cargo.lock` | Core 与 Linux workspace；不覆盖 `src-tauri` |
+| `Cargo.toml` / `Cargo.lock` | Core、Computer 与 Linux workspace；不覆盖 `src-tauri` |
 | `src-tauri/Cargo.toml` / `Cargo.lock` | Tauri Host 的独立依赖图；本地 path 子模块须在解析前就绪 |
 | `src-tauri/backend-tests/Cargo.toml` | 独立 Rust 回归 crate，按 CI 选择平台执行 |
 | `vite.config.ts` / `tsconfig.json` | WebView 构建、TypeScript 与 Android 别名 |

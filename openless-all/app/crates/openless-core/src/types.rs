@@ -59,8 +59,6 @@ pub enum HistorySource {
     QuickNote,
     SelectionPolish,
     SelectionVoiceEdit,
-    /// Kept for history written by the legacy quick-note feature.
-    QuickNote,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

@@ -41,11 +41,9 @@ export function runTestFiles(
   for (const testFile of testFiles) {
     const absoluteTestFile = resolve(appRoot, testFile);
     let args;
-    if (testFile.endsWith('.test.ts')) {
+    if (testFile.endsWith('.test.ts') || testFile.endsWith('.mjs')) {
       resolvedTsxCli ??= fileURLToPath(import.meta.resolve('tsx/cli'));
       args = [resolvedTsxCli, absoluteTestFile];
-    } else if (testFile.endsWith('.mjs')) {
-      args = [absoluteTestFile];
     } else {
       log(`[frontend-tests] unsupported test file: ${testFile}`);
       return 1;

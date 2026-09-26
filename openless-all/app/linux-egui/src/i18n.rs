@@ -5514,20 +5514,40 @@ mod tests {
 
     #[test]
     fn system_preference_resolves_from_the_host_locale() {
+        let variables = ["LC_ALL", "LC_MESSAGES", "LANG"];
+        let saved: Vec<_> = variables
+            .iter()
+            .map(|name| (name.to_string(), std::env::var(name).ok()))
+            .collect();
+        let restore = || {
+            for (name, value) in &saved {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        };
         for (variable, value, expected) in [
             ("LC_ALL", "zh_TW.UTF-8", Lang::ZhTw),
             ("LC_MESSAGES", "ko_KR.UTF-8", Lang::Ko),
             ("LANG", "ja_JP", Lang::Ja),
         ] {
-            // LocalePref::System must route through env-based detection.
-            let prev = std::env::var(variable).ok();
-            std::env::set_var(variable, value);
-            assert_eq!(LocalePref::System.resolve(), expected);
-            match prev {
-                Some(value) => std::env::set_var(variable, value),
-                None => std::env::remove_var(variable),
+            for name in variables {
+                std::env::remove_var(name);
             }
+            std::env::set_var(variable, value);
+            let resolved = LocalePref::System.resolve();
+            restore();
+            assert_eq!(resolved, expected, "{variable}");
         }
+        for name in variables {
+            std::env::remove_var(name);
+        }
+        std::env::set_var("LC_ALL", "en_US.UTF-8");
+        std::env::set_var("LC_MESSAGES", "ko_KR.UTF-8");
+        let resolved = LocalePref::System.resolve();
+        restore();
+        assert_eq!(resolved, Lang::En);
     }
 
     #[test]

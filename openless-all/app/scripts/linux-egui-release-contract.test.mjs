@@ -27,11 +27,18 @@ assert.deepEqual(
   'PR CI must expose one Linux job, including Core and remote TLS checks',
 );
 assert.match(release, /uses: \.\/\.github\/workflows\/check-linux-egui\.yml/);
-assert.match(check, /^on:\n  workflow_call:/m, 'the reusable check must not run as a duplicate standalone workflow');
+assert.match(
+  check,
+  /^on:\n  workflow_call:/m,
+  'the reusable check must not run as a duplicate standalone workflow',
+);
 assert.match(check, /contents: read/);
 assert.match(check, /runs-on: ubuntu-24\.04/);
 assert.match(check, /cargo test --locked -p openless-core/);
-assert.match(check, /cargo test --locked --manifest-path src-tauri\/backend-tests\/Cargo\.toml --test remote_tls/);
+assert.match(
+  check,
+  /cargo test --locked --manifest-path src-tauri\/backend-tests\/Cargo\.toml --test remote_tls/,
+);
 assert.match(check, /cargo test --locked -p openless-linux-egui --all-targets/);
 assert.match(check, /cargo check --locked -p openless-linux-egui --all-targets/);
 assert.match(check, /check-core-deps\.ps1 openless-linux-egui/);
@@ -47,7 +54,10 @@ assert.doesNotMatch(ci + check, /libgtk-3|webkit2gtk|libwebkit/);
 // An admin's existing Tauri tag launches an independent Linux build. No PR or
 // manual dispatch can attach assets; Beta remains a shared draft for review.
 assert.match(release, /tags:\s*\n\s*- 'v\*-tauri'/);
-assert.match(release, /if: github\.event_name == 'push' && startsWith\(github\.ref, 'refs\/tags\/v'\) && endsWith\(github\.ref, '-tauri'\)/);
+assert.match(
+  release,
+  /if: github\.event_name == 'push' && startsWith\(github\.ref, 'refs\/tags\/v'\) && endsWith\(github\.ref, '-tauri'\)/,
+);
 assert.match(release, /needs: build-linux-egui/);
 assert.match(release, /contents: write/);
 assert.match(release, /softprops\/action-gh-release@v2/);
@@ -69,7 +79,8 @@ assert.ok(!release.includes('release_tag:'), 'the manual build cannot target a R
 // fcitx5 addon. No AppImage, minisign, embedded downloader or Qwen ASR runtime.
 assert.match(pack, /dpkg-deb --build/);
 assert.match(pack, /rpmbuild --define/);
-assert.match(pack, /x86_64-linux-gnu\/fcitx5\/libopenless\.so/);
+assert.match(pack, /DEB_LIB_ARCH=x86_64-linux-gnu/);
+assert.match(pack, /usr\/lib\/\$DEB_LIB_ARCH\/fcitx5\/libopenless\.so/);
 assert.match(pack, /\/usr\/lib64\/fcitx5\/libopenless\.so/);
 assert.doesNotMatch(pack, /appimagetool|AppImage|qwen-asr|qwen_asr/i);
 assert.doesNotMatch(release + check, /appimagetool|APPIMAGE_|MINISIGN|latest-linux-egui/i);
@@ -91,8 +102,11 @@ for (const dep of ['fcitx5', 'pipewire-libs', 'libglvnd-egl', 'libwayland-egl.so
   assert.ok(rpmDeps.includes(dep), `rpm must require ${dep}`);
 }
 for (const [file, size] of [
-  ['32x32.png', '32x32'], ['64x64.png', '64x64'], ['128x128.png', '128x128'],
-  ['128x128@2x.png', '256x256'], ['icon.png', '512x512'],
+  ['32x32.png', '32x32'],
+  ['64x64.png', '64x64'],
+  ['128x128.png', '128x128'],
+  ['128x128@2x.png', '256x256'],
+  ['icon.png', '512x512'],
 ]) {
   const [copy, shared] = await Promise.all([
     readFile(join(root, 'openless-all/app/linux-egui/packaging/icons', file)),
@@ -102,5 +116,8 @@ for (const [file, size] of [
   assert.ok(pack.includes(`${size}:${file}`));
 }
 assert.doesNotMatch(pack + release, /src-tauri/);
-assert.doesNotMatch(check, /cargo (?:build|check|test) --locked --manifest-path src-tauri\/Cargo\.toml/);
+assert.doesNotMatch(
+  check,
+  /cargo (?:build|check|test) --locked --manifest-path src-tauri\/Cargo\.toml/,
+);
 console.log('linux-egui-release-contract.test.mjs passed');

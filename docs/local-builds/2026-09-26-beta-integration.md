@@ -33,6 +33,20 @@
 - 代码注释约定为英文，并说明当前约束；界面文案仍在 `src/i18n/`。本次把 Linux 打包脚本里的注释改成英文。全仓库历史注释没有在同一次集成里逐文件重写，避免把集成差异淹没在注释翻译中。
 - 删除了不参与构建的 `memory-graph.md`。
 
-## 未在本环境执行的验证
+## 测试后整理
 
-本环境的默认编译器是 Rust 1.83，而 Linux egui 与 `openless-computer` 需要更新的 toolchain。已用 Rust 1.98 确认 workspace `cargo metadata --locked` 能解析 `openless-core`、`openless-computer` 和 `openless-linux-egui`。没有跑完整 `cargo test` 或桌面打包。
+- `HistorySource` 只保留一个 `QuickNote`。重复变体让 `openless-core` 无法编译。
+- 选区润色预览仍是独立工具窗。前端按 `?window=selection-polish-preview` 渲染 `SelectionPolishPreview`，能力表同时授权该窗口和语音意图窗。预览是否有效由 pending 标志决定。
+- Linux 开发与打包从 `resources/pi-backend` 读取已准备的 PI 资源。准备脚本仍写入 `src-tauri/resources/pi-backend` 供 Tauri 打包，再链接到上述目录。Linux 源码和打包脚本不出现 Tauri 路径。
+- CI 只保留 `linux-egui-package`。Core 与 remote TLS 已在可复用的 Linux workflow 里执行。
+- 仓库根增加 `rust-toolchain.toml`，频道为 `stable`，避免默认 Cargo 1.83 解析不了 edition 2024。
+- 去掉指向不存在的 `vendor/wayland-scanner` 的补丁。`wry` 的本地补丁保留。
+- Tauri 宿主里的 Linux `cfg` 仍保留。支持的 Linux 产品是 egui；React 侧不再长出第二套 Linux 界面。契约按这个边界检查，而不是要求 Tauri 在 Linux 上 `compile_error!`。
+- 前端测试运行器对 `.mjs` 也使用 `tsx`，这样合同测试可以导入 TypeScript 模块。
+- 目录说明改为真实仓库根，并写上 workspace 的三个成员。
+
+## 本环境验证
+
+Rust 1.98.1（`stable`）。`cargo test --locked -p openless-core`：17 个测试二进制，1211 通过，0 失败，1 忽略。热键边界测试 `shared_hotkey_edges_own_hold_auto_and_combo_abort_semantics` 通过。`openless-computer` 11 通过。`src-tauri/backend-tests` 的 `remote_tls` 10 通过。`openless-linux-egui --lib`：186 通过，1 个忽略（需要真实 Wayland/X11 会话）。locale 测试先清掉 `LC_ALL`、`LC_MESSAGES` 和 `LANG`，避免宿主已有的 `LC_ALL` 盖过被测变量。前端 `npm run build` 后跑完除该热键门禁以外的 107 个发现测试，退出码 0；热键门禁单独通过。
+
+未在本环境完成的部分：Tauri 桌面宿主、iOS 工程、Android 模拟器未构建；deb/rpm 未打包；`linux-egui` 只跑了库测试，没有跑全部 target 或发布包。

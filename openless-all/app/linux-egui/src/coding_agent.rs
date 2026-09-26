@@ -24,7 +24,7 @@ fn resolve_bundled_pi(request: &mut AgentCommand) -> Result<bool, openless_core:
     #[cfg(debug_assertions)]
     let directory = {
         let development =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src-tauri/resources/pi-backend");
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../resources/pi-backend");
         if development.join("runtime/index.mjs").is_file() {
             development
         } else {

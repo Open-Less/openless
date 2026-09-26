@@ -17,6 +17,7 @@ const windowKind = params.get('window');
 const isCapsule = windowKind === 'capsule';
 const isQa = windowKind === 'qa';
 const isSelectionVoiceIntent = windowKind === 'selection-voice-intent';
+const isSelectionPolishPreview = windowKind === 'selection-polish-preview';
 const isLessComputer = windowKind === 'less-computer';
 const isLessComputerGlow = windowKind === 'less-computer-glow';
 // 开屏 PV 只属于主窗口（无 ?window= 参数的路由）：胶囊 / QA / Less Computer 等
@@ -37,6 +38,7 @@ const renderApp = () => {
         isCapsule={isCapsule}
         isQa={isQa}
         isSelectionVoiceIntent={isSelectionVoiceIntent}
+        isSelectionPolishPreview={isSelectionPolishPreview}
         isLessComputer={isLessComputer}
         isLessComputerGlow={isLessComputerGlow}
         forcedOs={os}

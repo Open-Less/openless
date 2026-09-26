@@ -56,7 +56,7 @@ node scripts/prepare-pi-backend.mjs
 npm run build
 ```
 
-准备脚本下载固定版本 Node 并验证固定 SHA-256，使用 lockfile 安装 PI 生产依赖，编译原生 Computer 工具，再进行无桌面操作的健康检查。只有检查通过才写入 `src-tauri/resources/pi-backend`。后续构建按源码指纹复用缓存，首次构建需要网络。
+准备脚本下载固定版本 Node 并验证固定 SHA-256，使用 lockfile 安装 PI 生产依赖，编译原生 Computer 工具，再进行无桌面操作的健康检查。只有检查通过才写入 `src-tauri/resources/pi-backend`，并链接 `resources/pi-backend` 给 Linux 开发与打包使用。Linux 源码和打包脚本不引用 Tauri 目录。后续构建按源码指纹复用缓存，首次构建需要网络。
 
 macOS / Windows 的 Tauri 开发和发布构建会自动调用准备脚本。安装资源包含：
 

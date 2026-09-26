@@ -35,6 +35,11 @@ const SelectionVoiceIntentPicker = lazy(() =>
     default: m.SelectionVoiceIntentPicker,
   })),
 );
+const SelectionPolishPreview = lazy(() =>
+  import('./pages/SelectionPolishPreview').then((m) => ({
+    default: m.SelectionPolishPreview,
+  })),
+);
 // Tauri 的 Less Computer 面板同时面向 macOS 和 Windows；Linux 由原生 egui 提供。
 // TAURI_ENV_PLATFORM 是编译期字面量，不支持该 WebView 的平台可裁掉对应 import，
 // 避免把不能显示的面板 chunk 带入移动端构建。
@@ -53,6 +58,7 @@ interface AppProps {
   isCapsule: boolean;
   isQa: boolean;
   isSelectionVoiceIntent: boolean;
+  isSelectionPolishPreview: boolean;
   isLessComputer: boolean;
   isLessComputerGlow: boolean;
   forcedOs?: OS | null;
@@ -96,6 +102,7 @@ function ReadyApp({
   isCapsule,
   isQa,
   isSelectionVoiceIntent,
+  isSelectionPolishPreview,
   isLessComputer,
   isLessComputerGlow,
   forcedOs,
@@ -114,6 +121,13 @@ function ReadyApp({
     return (
       <Suspense fallback={null}>
         <SelectionVoiceIntentPicker />
+      </Suspense>
+    );
+  }
+  if (isSelectionPolishPreview) {
+    return (
+      <Suspense fallback={null}>
+        <SelectionPolishPreview />
       </Suspense>
     );
   }

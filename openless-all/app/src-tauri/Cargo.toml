@@ -193,10 +193,6 @@ codegen-units = 1
 # Xcode 27 beta 的 strip 会损坏 proc-macro dylib；本地构建加 CARGO_PROFILE_RELEASE_STRIP=none。
 strip = "symbols"
 
-# issue #801: wayland-scanner 0.31.10 still pins vulnerable quick-xml 0.39.
-# This local copy backports upstream security commit d07c4f91f28b without
-# pulling the breaking, unreleased wayland-rs master branch.
-#
 # wry 0.55.1's Android CreateWebView path (src/android/main_pipe.rs) drops
 # the message silently — a debug_assertions-only eprintln!() to stderr,
 # never reaching Android logcat — when ACTIVITY_PROXY has no entry for the
@@ -206,5 +202,4 @@ strip = "symbols"
 # black screen investigated in the feature/android-runtime-lifecycle
 # branch. Purely additive logging — no behavior change otherwise.
 [patch.crates-io]
-wayland-scanner = { path = "vendor/wayland-scanner" }
 wry = { path = "vendor/wry-0.55.1" }

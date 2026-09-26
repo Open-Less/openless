@@ -3,7 +3,15 @@
   "identifier": "default",
   "description": "Default capabilities for OpenLess windows",
   "platforms": ["macOS", "windows", "linux"],
-  "windows": ["main", "capsule", "qa", "less-computer", "less-computer-glow"],
+  "windows": [
+    "main",
+    "capsule",
+    "qa",
+    "less-computer",
+    "less-computer-glow",
+    "selection-polish-preview",
+    "selection-voice-intent"
+  ],
   "permissions": [
     "core:default",
     "core:window:default",

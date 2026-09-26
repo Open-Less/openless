@@ -343,7 +343,6 @@ macro_rules! app_invoke_handler_desktop {
             #[cfg(all(not(mobile), target_os = "windows"))]
             commands::confirm_selection_voice_preview,
             #[cfg(all(not(mobile), target_os = "windows"))]
-            #[cfg(all(not(mobile), target_os = "windows"))]
             commands::revert_selection_voice_preview,
             commands::validate_shortcut_binding,
             commands::set_dictation_hotkey,
@@ -2849,6 +2848,21 @@ pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     hide_chat_window_animated(app, "qa", &QA_PANEL_EPOCH);
 }
 
+static SELECTION_POLISH_PREVIEW_PENDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn selection_polish_preview_pending() -> bool {
+    SELECTION_POLISH_PREVIEW_PENDING.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+pub(crate) fn mark_selection_polish_preview_pending() {
+    SELECTION_POLISH_PREVIEW_PENDING.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub(crate) fn clear_selection_polish_preview_pending() {
+    SELECTION_POLISH_PREVIEW_PENDING.store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// 选区润色预览是独立、可编辑的小窗：模型结果不会直接覆盖，用户确认后才回到原选区粘贴。
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn ensure_selection_polish_preview_window<R: tauri::Runtime>(
@@ -3085,6 +3099,7 @@ pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R
     let Some(window) = ensure_selection_polish_preview_window(app) else {
         return;
     };
+    mark_selection_polish_preview_pending();
     let _ = app.emit_to(
         "selection-polish-preview",
         "selection-polish-preview:shown",
@@ -3142,6 +3157,7 @@ pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R
 pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(_app: &AppHandle<R>) {}
 
 pub(crate) fn hide_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R>) {
+    clear_selection_polish_preview_pending();
     let Some(window) = app.get_webview_window("selection-polish-preview") else {
         return;
     };

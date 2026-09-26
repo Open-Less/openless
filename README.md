@@ -104,7 +104,7 @@
   </tr>
 </table>
 
-OpenLess is a cross-platform (macOS and Windows) voice-input application — a fully open-source alternative to commercial tools such as [Typeless](https://www.typeless.com/), [Wispr Flow](https://wisprflow.ai), [Lazy](https://heylazy.com), and Superwhisper. Official site: [openless.top](https://openless.top).
+OpenLess is a cross-platform (macOS, Windows, and Linux) voice-input application — a fully open-source alternative to commercial tools such as [Typeless](https://www.typeless.com/), [Wispr Flow](https://wisprflow.ai), [Lazy](https://heylazy.com), and Superwhisper. Official site: [openless.top](https://openless.top).
 
 Place your cursor in any text field — ChatGPT, Claude, Cursor, Notion, an email draft, a chat box — press a single global hotkey, and speak. OpenLess records the audio, transcribes it, polishes the text in the mode you selected, and inserts the result at the cursor. If insertion is blocked, the text is copied to the clipboard instead, so nothing you said is lost.
 
@@ -425,7 +425,7 @@ OpenLess ships two release channels. The branch name equals the channel name (se
 
 ### Common prep (both channels)
 
-- Bump the Tauri application version in **all five** locations: `package.json`, `package-lock.json` (root + nested entry under `packages.""`), `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and `src-tauri/Cargo.lock` (look for the `name = "openless"` block). CI's `Verify version sync` step will otherwise fail the build. The root `Cargo.lock` belongs only to `openless-core` and `openless-linux-egui`.
+- Bump the Tauri application version in **all five** locations: `package.json`, `package-lock.json` (root + nested entry under `packages.""`), `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and `src-tauri/Cargo.lock` (look for the `name = "openless"` block). CI's `Verify version sync` step will otherwise fail the build. The root `Cargo.lock` belongs to `openless-core`, `openless-computer`, and `openless-linux-egui`.
 - Run `INSTALL=0 ./scripts/build-mac.sh` and confirm the `.app` launches.
 - Smoke-test on a clean machine: permission flow, hotkey, recording, ASR, polish, insertion, and clipboard fallback.
 - Confirm that `TAURI_SIGNING_PRIVATE_KEY` and (for macOS) the Apple signing/notarization secrets are set on the repo.

@@ -109,7 +109,7 @@
   </tr>
 </table>
 
-OpenLess 是一款跨平台(macOS 与 Windows)语音输入应用,是 [Typeless](https://www.typeless.com/)、[Wispr Flow](https://wisprflow.ai)、[Lazy](https://heylazy.com)、Superwhisper 等商业工具的完全开源替代品。官网:[openless.top](https://openless.top)。
+OpenLess 是一款跨平台(macOS、Windows 与 Linux)语音输入应用,是 [Typeless](https://www.typeless.com/)、[Wispr Flow](https://wisprflow.ai)、[Lazy](https://heylazy.com)、Superwhisper 等商业工具的完全开源替代品。官网:[openless.top](https://openless.top)。
 
 把光标放在任意文本框中——ChatGPT、Claude、Cursor、Notion、邮件草稿、聊天框——按下一个全局快捷键,然后开口说话。OpenLess 会录音、转写,按你选定的模式润色文本,并将结果插入到光标处。如果插入被阻止,文本会改为复制到剪贴板,你说过的话不会丢失。
 
@@ -433,7 +433,7 @@ OpenLess 提供两个发布频道。分支名即频道名(见[贡献流程](#贡
 
 ### 通用准备(两个频道)
 
-- 在 Tauri 应用的**全部五个**位置提升版本号:`package.json`、`package-lock.json`(根级 + `packages.""` 下的嵌套条目)、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`,以及 `src-tauri/Cargo.lock`(查找 `name = "openless"` 块)。否则 CI 的 `Verify version sync` 步骤会使构建失败。根 `Cargo.lock` 只属于 `openless-core` 与 `openless-linux-egui`。
+- 在 Tauri 应用的**全部五个**位置提升版本号:`package.json`、`package-lock.json`(根级 + `packages.""` 下的嵌套条目)、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`,以及 `src-tauri/Cargo.lock`(查找 `name = "openless"` 块)。否则 CI 的 `Verify version sync` 步骤会使构建失败。根 `Cargo.lock` 属于 `openless-core`、`openless-computer` 与 `openless-linux-egui`。
 - 运行 `INSTALL=0 ./scripts/build-mac.sh`,确认 `.app` 能启动。
 - 在干净的机器上做冒烟测试:权限流程、快捷键、录音、ASR、润色、插入,以及剪贴板回退。
 - 确认 `TAURI_SIGNING_PRIVATE_KEY` 以及(macOS 所需的)Apple 签名 / 公证密钥已在仓库中配置。
