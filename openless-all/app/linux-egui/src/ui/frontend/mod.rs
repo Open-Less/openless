@@ -2104,6 +2104,132 @@ mod tests {
         );
     }
 
+    /// Tauri's pack card pins the icon picker to the *right* end of the header
+    /// row (`justify-content: space-between`), renders a 40×40 grey tile with a
+    /// pencil badge, and shows the four shipped packs with the *localized* mode
+    /// copy instead of the Chinese text stored in Core.
+    #[test]
+    fn style_cards_put_the_icon_picker_on_the_right_and_localize_builtin_copy() {
+        let ctx = egui::Context::default();
+        let zh = openless_linux_egui::Lang::ZhCn;
+        let mut vm = FrontendViewModel {
+            lang: zh,
+            active_page: Page::Style,
+            style_unsupported: false,
+            ..Default::default()
+        };
+        // `builtin.raw` is presented as the 「原文」 tab, never as a card.
+        vm.style_packs = [
+            openless_core::PolishMode::Light,
+            openless_core::PolishMode::Structured,
+            openless_core::PolishMode::Formal,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, mode)| {
+            let shipped = openless_core::builtin_style_pack_for_mode(mode);
+            super::view_model::StylePack {
+                id: shipped.id.clone(),
+                icon_path: None,
+                icon_data_url: None,
+                base_mode: match mode {
+                    openless_core::PolishMode::Raw => "raw",
+                    openless_core::PolishMode::Light => "light",
+                    openless_core::PolishMode::Structured => "structured",
+                    openless_core::PolishMode::Formal => "formal",
+                }
+                .into(),
+                name: shipped.name.clone(),
+                description: shipped.description.clone(),
+                tags: shipped.tags.clone(),
+                is_builtin: true,
+                enabled: true,
+                is_active: index == 0,
+                selection_active: false,
+            }
+        })
+        .collect();
+
+        let mut painted = String::new();
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(viewport()),
+                ..Default::default()
+            });
+            let mut actions = Vec::new();
+            render(&ctx, &mut vm, &mut actions);
+            let output = crate::ui::frontend::end_pass(&ctx);
+            painted = painted_text(&output);
+        }
+
+        // The shipped copy is translated; the raw Core text must not leak.
+        let light_desc = openless_linux_egui::tr_l10n(zh, "style.modes.light.desc");
+        assert!(
+            painted.contains(light_desc),
+            "the builtin card must show the localized mode description {light_desc:?}"
+        );
+        let shipped_light =
+            openless_core::builtin_style_pack_for_mode(openless_core::PolishMode::Light);
+        assert!(
+            !painted.contains(&shipped_light.description),
+            "the raw Core description must not be painted for a pristine builtin pack"
+        );
+        // English proves the shipped tags are translated rather than echoed:
+        // in zh-CN the localized values happen to equal the stored ones.
+        vm.lang = openless_linux_egui::Lang::En;
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(viewport()),
+                ..Default::default()
+            });
+            let mut actions = Vec::new();
+            render(&ctx, &mut vm, &mut actions);
+            let output = crate::ui::frontend::end_pass(&ctx);
+            painted = painted_text(&output);
+        }
+        let en = openless_linux_egui::Lang::En;
+        for key in [
+            "style.modes.structured.desc",
+            "style.pack.builtinTags.aiCoding",
+            "overview.mode_structured",
+        ] {
+            let expected = openless_linux_egui::tr_l10n(en, key);
+            assert!(
+                painted.contains(expected),
+                "the card must paint the localized {key} ({expected:?})"
+            );
+        }
+        let shipped_structured =
+            openless_core::builtin_style_pack_for_mode(openless_core::PolishMode::Structured);
+        assert!(
+            !painted.contains(&shipped_structured.description),
+            "the raw Core description must not survive translation"
+        );
+        assert!(
+            !painted.contains(&shipped_structured.tags[0]),
+            "the raw Core tag must not survive translation"
+        );
+
+        // The tile is a 40×40 square flush with the card's right inner edge.
+        let published: Vec<(usize, egui::Rect, egui::Rect, String)> = ctx
+            .data(|data| data.get_temp(egui::Id::new("openless-style-card-icon-rects")))
+            .expect("the style cards must publish their icon tiles");
+        assert_eq!(
+            published.len(),
+            3,
+            "every pack card must publish a tile: {published:?}"
+        );
+        for (index, icon, inner, name) in published {
+            assert_eq!(icon.size(), egui::vec2(40.0, 40.0), "card {index} ({name})");
+            assert_eq!(
+                icon.right(),
+                inner.right(),
+                "card {index} ({name}) must pin the tile to the right edge"
+            );
+            assert_eq!(icon.top(), inner.top(), "card {index} ({name})");
+        }
+    }
+
     #[test]
     fn style_page_marks_only_the_active_pack_as_current() {
         // Regression: the page used to treat its page-local `style_selected`

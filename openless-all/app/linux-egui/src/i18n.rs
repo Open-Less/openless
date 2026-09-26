@@ -5602,6 +5602,83 @@ pub const CATALOG: &[Msg] = &[
             "브라우저에서 인증을 기다리는 중…",
         ),
     },
+    Msg {
+        key: "style.modes.raw.desc",
+        text: row(
+            "只补标点和必要分句，不改写不扩写。",
+            "只補標點和必要分句，不改寫不擴寫。",
+            "Only adds punctuation and natural breaks — no rewriting or expansion.",
+            "句読点と必要な区切りのみ補い、書き換えや拡張はしません。",
+            "구두점과 필요한 문장 구분만 보충하고 다시 쓰거나 확장하지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "style.modes.light.desc",
+        text: row(
+            "去口癖、补标点，整理为可发送的自然文字。",
+            "去口癖、補標點，整理為可傳送的自然文字。",
+            "Drops fillers, adds punctuation, and produces sendable natural prose.",
+            "口癖の除去、句読点の補完、自然な送信可能テキストへの整理。",
+            "입버릇 제거, 구두점 보충, 자연스럽게 보낼 수 있는 텍스트로 정리합니다.",
+        ),
+    },
+    Msg {
+        key: "style.modes.structured.desc",
+        text: row(
+            "面向编程协作、技术排障和产品反馈，准确保留术语并梳理结构。",
+            "多個主題或步驟時，自動組織為分點列表。",
+            "Organize coding discussions, troubleshooting and product feedback with precise terminology.",
+            "開発の相談、技術的な問題解決、製品への意見を、用語を正確に保って整理します。",
+            "개발 협업, 기술 문제 해결, 제품 피드백을 정확한 용어와 명확한 구조로 정리합니다.",
+        ),
+    },
+    Msg {
+        key: "style.modes.formal.desc",
+        text: row(
+            "工作沟通和邮件场景，更专业更完整。",
+            "工作溝通和郵件場景，更專業更完整。",
+            "Email and workplace tone — more complete, more professional.",
+            "業務コミュニケーションやメール用途向け。よりプロフェッショナルで完成度の高い文体。",
+            "업무 커뮤니케이션과 메일에 적합. 더 전문적이고 완성도 높은 문체.",
+        ),
+    },
+    Msg {
+        key: "style.pack.builtinTags.minimalEdits",
+        text: row("最小改写", "最小改寫", "Minimal edits", "最小限の修正", "최소 수정"),
+    },
+    Msg {
+        key: "style.pack.builtinTags.strongCorrection",
+        text: row("强纠错", "強糾錯", "Strong corrections", "誤認識を補正", "정확한 교정"),
+    },
+    Msg {
+        key: "style.pack.builtinTags.communication",
+        text: row("沟通", "溝通", "Communication", "コミュニケーション", "의사소통"),
+    },
+    Msg {
+        key: "style.pack.builtinTags.natural",
+        text: row("自然", "自然", "Natural", "自然な文章", "자연스러움"),
+    },
+    Msg {
+        key: "style.pack.builtinTags.organized",
+        text: row("条理", "條理", "Organized", "整理", "체계적 정리"),
+    },
+    Msg {
+        key: "style.pack.builtinTags.workplaceCommunication",
+        text: row("工作沟通", "工作溝通", "Work communication", "仕事のやり取り", "업무 소통"),
+    },
+    Msg {
+        key: "style.pack.builtinTags.aiCoding",
+        text: row("AI 编程", "AI 程式開發", "AI coding", "AIコーディング", "AI 코딩"),
+    },
+    Msg {
+        key: "style.pack.builtinTags.technicalStructure",
+        text: row("技术结构化", "技術結構化", "Technical structure", "技術内容の構造化", "기술 내용 구조화"),
+    },
+    Msg {
+        key: "style.pack.writtenPolish",
+        text: row("书面润色", "書面潤色", "Written polish", "書面の推敲", "서면 다듬기"),
+    },
+
 ];
 
 fn lang_index(lang: Lang) -> usize {

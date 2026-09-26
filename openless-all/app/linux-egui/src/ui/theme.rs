@@ -40,6 +40,11 @@ pub const LINE_STRONG: egui::Color32 = egui::Color32::from_rgb(212, 212, 216);
 pub const RAIL_BG: egui::Color32 = egui::Color32::from_rgb(240, 240, 241);
 /// Tauri `--ol-settings-content-bg`: 设置弹窗内容区底色（卡片是白色的）。
 pub const CONTENT_BG: egui::Color32 = egui::Color32::from_rgb(247, 247, 248);
+/// Tauri `--ol-style-card-icon-bg`: 风格包图标按钮的灰底。
+pub const STYLE_CARD_ICON_BG: egui::Color32 =
+    egui::Color32::from_rgba_premultiplied(141, 141, 143, 158);
+/// Tauri `--ol-style-card-icon-bg-active`: 悬停时的灰底。
+pub const STYLE_CARD_ICON_BG_ACTIVE: egui::Color32 = egui::Color32::from_rgb(212, 212, 216);
 /// Tauri `--ol-nav-hover-bg`: 侧栏/导航项悬停底色。
 pub const NAV_HOVER: egui::Color32 = egui::Color32::from_rgba_premultiplied(0, 0, 0, 10);
 /// Tauri `--ol-toggle-off-bg`: 关闭态开关轨道。

@@ -301,7 +301,16 @@ fn pack_grid(
                             } else {
                                 pack.is_active
                             };
-                            style_pack_card(ui, rect, &pack, index, active, lang, actions);
+                            style_pack_card(
+                                ui,
+                                rect,
+                                &pack,
+                                index,
+                                active,
+                                vm.style_selection_workflow,
+                                lang,
+                                actions,
+                            );
                         }
                     }
                     ui.add_space(GAP);
@@ -309,6 +318,108 @@ fn pack_grid(
                 }
             });
     });
+}
+
+/// Tauri `stylePackPresentation.ts`: the four shipped packs are displayed with
+/// the *localized* mode copy instead of the Chinese text baked into Core.
+///
+/// A pack only gets that treatment while it still carries the shipped name /
+/// description / tags, so a user's rename, edit or tag change is never
+/// overwritten by a translation.
+fn is_shipped_builtin(pack: &StylePack) -> bool {
+    pack.is_builtin
+        && pack.id
+            == openless_core::builtin_style_pack_id(match pack.base_mode.as_str() {
+                "raw" => openless_core::PolishMode::Raw,
+                "light" => openless_core::PolishMode::Light,
+                "structured" => openless_core::PolishMode::Structured,
+                "formal" => openless_core::PolishMode::Formal,
+                _ => return false,
+            })
+}
+
+fn mode_of(pack: &StylePack) -> Option<openless_core::PolishMode> {
+    Some(match pack.base_mode.as_str() {
+        "raw" => openless_core::PolishMode::Raw,
+        "light" => openless_core::PolishMode::Light,
+        "structured" => openless_core::PolishMode::Structured,
+        "formal" => openless_core::PolishMode::Formal,
+        _ => return None,
+    })
+}
+
+/// Localized card title: the mode name for a pristine builtin pack, otherwise
+/// the stored name.
+fn pack_display_name(lang: Lang, pack: &StylePack) -> String {
+    if is_shipped_builtin(pack) {
+        if let Some(mode) = mode_of(pack) {
+            let shipped = openless_core::builtin_style_pack_for_mode(mode);
+            if pack.name == shipped.name {
+                return openless_linux_egui::tr_l10n(
+                    lang,
+                    match mode {
+                        openless_core::PolishMode::Raw => "overview.mode_raw",
+                        openless_core::PolishMode::Light => "overview.mode_light",
+                        openless_core::PolishMode::Structured => "overview.mode_structured",
+                        openless_core::PolishMode::Formal => "overview.mode_formal",
+                    },
+                )
+                .to_string();
+            }
+        }
+    }
+    pack.name.clone()
+}
+
+/// Localized description, but only while the pack still carries the shipped one.
+fn pack_display_description(lang: Lang, pack: &StylePack) -> String {
+    if is_shipped_builtin(pack) {
+        if let Some(mode) = mode_of(pack) {
+            let shipped = openless_core::builtin_style_pack_for_mode(mode);
+            if pack.description == shipped.description {
+                return openless_linux_egui::tr_l10n(
+                    lang,
+                    match mode {
+                        openless_core::PolishMode::Raw => "style.modes.raw.desc",
+                        openless_core::PolishMode::Light => "style.modes.light.desc",
+                        openless_core::PolishMode::Structured => "style.modes.structured.desc",
+                        openless_core::PolishMode::Formal => "style.modes.formal.desc",
+                    },
+                )
+                .to_string();
+            }
+        }
+    }
+    pack.description.clone()
+}
+
+/// Localized tags: shipped tags map onto catalog keys, edited ones stay as-is.
+fn pack_display_tags(lang: Lang, pack: &StylePack) -> Vec<String> {
+    let Some(mode) = is_shipped_builtin(pack).then(|| mode_of(pack)).flatten() else {
+        return pack.tags.clone();
+    };
+    let shipped = openless_core::builtin_style_pack_for_mode(mode);
+    pack.tags
+        .iter()
+        .map(|tag| {
+            let Some(position) = shipped.tags.iter().position(|shipped| shipped == tag) else {
+                return tag.clone();
+            };
+            let key = match (mode, position) {
+                (openless_core::PolishMode::Raw, 0) => "overview.mode_raw",
+                (openless_core::PolishMode::Raw, _) => "style.pack.builtinTags.minimalEdits",
+                (openless_core::PolishMode::Light, 0) => "overview.mode_light",
+                (openless_core::PolishMode::Light, _) => "style.pack.builtinTags.strongCorrection",
+                (openless_core::PolishMode::Structured, 0) => "style.pack.builtinTags.aiCoding",
+                (openless_core::PolishMode::Structured, _) => {
+                    "style.pack.builtinTags.technicalStructure"
+                }
+                (openless_core::PolishMode::Formal, 0) => "overview.mode_formal",
+                (openless_core::PolishMode::Formal, _) => "style.pack.builtinTags.strongCorrection",
+            };
+            openless_linux_egui::tr_l10n(lang, key).to_string()
+        })
+        .collect()
 }
 
 /// One style-pack card. Highlighted only when the host reports it as active.
@@ -320,6 +431,7 @@ fn style_pack_card(
     // Whether this pack is the active one for the workflow currently shown
     // (dictation/ASR vs selection polish).
     active: bool,
+    selection_workflow: bool,
     lang: Lang,
     actions: &mut Vec<FrontendAction>,
 ) {
@@ -345,17 +457,48 @@ fn style_pack_card(
     );
 
     let inner = rect.shrink(PACK_CARD_PADDING);
-    // Icon picker (Tauri `StylePackIconPicker`): a 24px icon button with a
-    // pencil badge, plus a reset cross once a custom icon is stored.
-    let icon_rect = egui::Rect::from_min_size(inner.min, egui::vec2(24.0, 24.0));
+    let lang_name = pack_display_name(lang, pack);
+
+    // Icon picker (Tauri `StylePackIconPicker`). It is the *last* item of the
+    // header row — the row is `justify-content: space-between`, so the tile is
+    // pinned to the right edge and the text runs left, not the other way round.
+    let icon_size = 40.0;
+    let icon_rect = egui::Rect::from_min_size(
+        egui::pos2(inner.right() - icon_size, inner.top()),
+        egui::vec2(icon_size, icon_size),
+    );
+    let icon_response = ui.interact(
+        icon_rect,
+        ui.id().with(("style-icon", index)),
+        egui::Sense::click(),
+    );
+    // `.ol-style-icon-button`: 40×40, 1px `--ol-line-strong`, radius 11, and a
+    // grey fill; a stored icon turns the fill opaque.
+    painter.rect_filled(
+        icon_rect,
+        egui::CornerRadius::same(11),
+        if icon_response.hovered() {
+            theme::STYLE_CARD_ICON_BG_ACTIVE
+        } else if pack.icon_data_url.is_some() {
+            theme::SURFACE_2
+        } else {
+            theme::STYLE_CARD_ICON_BG
+        },
+    );
+    painter.rect_stroke(
+        icon_rect,
+        egui::CornerRadius::same(11),
+        egui::Stroke::new(1.0, theme::LINE_STRONG),
+        egui::StrokeKind::Inside,
+    );
     if let Some(texture) = pack
         .icon_data_url
         .as_deref()
         .and_then(|url| layout::style_pack_icon_texture(ui.ctx(), &pack.id, url))
     {
-        ui.painter().image(
+        painter.image(
             texture.id(),
-            icon_rect,
+            egui::Rect::from_center_size(icon_rect.center(), egui::vec2(24.0, 24.0)),
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE,
         );
@@ -368,29 +511,49 @@ fn style_pack_card(
         };
         icons::draw_icon(ui, icon_rect.center(), default, theme::INK_2);
     }
-    icons::draw_icon(
-        ui,
-        icon_rect.right_bottom() - egui::vec2(3.0, 3.0),
-        IconName::Pencil,
-        theme::INK_3,
+    // `.ol-style-icon-edit`: a 16×16 pencil badge hanging off the bottom-right
+    // corner (right/bottom: -3px).
+    let pencil_rect = egui::Rect::from_center_size(
+        icon_rect.right_bottom() - egui::vec2(5.0, 5.0),
+        egui::vec2(16.0, 16.0),
     );
-    if ui
-        .interact(
-            icon_rect,
-            ui.id().with(("style-icon", index)),
-            egui::Sense::click(),
-        )
-        .on_hover_text(fmt_l10n(lang, "style.pack.uploadIcon", &[&pack.name]))
+    painter.rect_filled(pencil_rect, egui::CornerRadius::same(5), theme::SURFACE);
+    painter.rect_stroke(
+        pencil_rect,
+        egui::CornerRadius::same(5),
+        egui::Stroke::new(1.0, theme::LINE_STRONG),
+        egui::StrokeKind::Inside,
+    );
+    icons::draw_icon(ui, pencil_rect.center(), IconName::Pencil, theme::INK_2);
+    #[cfg(test)]
+    ui.ctx().data_mut(|data| {
+        let key = egui::Id::new("openless-style-card-icon-rects");
+        let mut published: Vec<(usize, egui::Rect, egui::Rect, String)> =
+            data.get_temp(key).unwrap_or_default();
+        published.retain(|(slot, ..)| *slot != index);
+        published.push((index, icon_rect, inner, lang_name.clone()));
+        data.insert_temp(key, published);
+    });
+    if icon_response
+        .on_hover_text(fmt_l10n(lang, "style.pack.uploadIcon", &[&lang_name]))
         .clicked()
     {
         actions.push(FrontendAction::StyleChooseIcon(index));
     }
     if pack.icon_data_url.is_some() {
+        // `.ol-style-icon-reset`: right/top -5px.
         let reset_rect = egui::Rect::from_min_size(
-            egui::pos2(inner.right() - 16.0, inner.top()),
+            egui::pos2(inner.right() - 16.0 + 5.0, inner.top() - 5.0),
             egui::vec2(16.0, 16.0),
         );
-        icons::draw_icon(ui, reset_rect.center(), IconName::Close, theme::INK_3);
+        painter.rect_filled(reset_rect, egui::CornerRadius::same(5), theme::SURFACE);
+        painter.rect_stroke(
+            reset_rect,
+            egui::CornerRadius::same(5),
+            egui::Stroke::new(1.0, theme::LINE_STRONG),
+            egui::StrokeKind::Inside,
+        );
+        icons::draw_icon(ui, reset_rect.center(), IconName::Close, theme::INK_2);
         if ui
             .interact(
                 reset_rect,
@@ -404,16 +567,17 @@ fn style_pack_card(
         }
     }
 
-    // Name, then the builtin / current badges.
-    let mut x = inner.left() + 32.0;
+    // Name, then the builtin / current badges. Tauri's header is 15px/600.
+    let text_right = icon_rect.left() - 8.0;
+    let mut x = inner.left();
     painter.text(
         egui::pos2(x, inner.top()),
         egui::Align2::LEFT_TOP,
-        &pack.name,
-        egui::FontId::proportional(14.0),
+        &lang_name,
+        theme::medium_font(15.0),
         theme::INK,
     );
-    x += layout::text_width(ui, &pack.name, 14.0) + 8.0;
+    x += layout::text_width(ui, &lang_name, 15.0) + 8.0;
     for (text, tone) in std::iter::once((
         if pack.is_builtin {
             tr_l10n(lang, "style.pack.builtin")
@@ -425,7 +589,7 @@ fn style_pack_card(
     .chain(active.then_some((tr_l10n(lang, "style.pack.current"), PillTone::Gray)))
     {
         let size = layout::pill_size(ui, text);
-        if x + size.x > inner.right() {
+        if x + size.x > text_right {
             break;
         }
         layout::paint_pill(
@@ -437,30 +601,52 @@ fn style_pack_card(
         x += size.x + 6.0;
     }
 
-    // Description.
-    let description =
-        layout::text_galley(ui, &pack.description, theme::INK_3, 12.0, inner.width(), 4);
+    // Description: 12.5px, three lines, in the text column beside the tile.
+    let description = pack_display_description(lang, pack);
+    let description_width = (text_right - inner.left()).max(80.0);
+    let galley = layout::text_galley(ui, &description, theme::INK_3, 12.5, description_width, 3);
+    let description_top = inner.top() + icon_size + 8.0;
+    let description_height = galley.size().y.max(60.0);
     painter.galley(
-        egui::pos2(inner.left(), inner.top() + 28.0),
-        description.clone(),
+        egui::pos2(inner.left(), description_top),
+        galley.clone(),
         theme::INK_3,
     );
 
-    // Mode / tag pill.
-    if let Some(tag) = pack.tags.first() {
-        let size = layout::pill_size(ui, tag);
+    // Tags row: the workflow's mode pill, then the pack's first tag — both the
+    // plain `default` tone used by Tauri's `Pill`.
+    let mode_pill = if selection_workflow {
+        tr_l10n(lang, "style.pack.writtenPolish").to_string()
+    } else {
+        mode_of(pack)
+            .map(|mode| {
+                tr_l10n(
+                    lang,
+                    match mode {
+                        openless_core::PolishMode::Raw => "overview.mode_raw",
+                        openless_core::PolishMode::Light => "overview.mode_light",
+                        openless_core::PolishMode::Structured => "overview.mode_structured",
+                        openless_core::PolishMode::Formal => "overview.mode_formal",
+                    },
+                )
+                .to_string()
+            })
+            .unwrap_or_else(|| pack.name.clone())
+    };
+    let mut pill_x = inner.left();
+    let pill_y = description_top + description_height + 12.0;
+    for tag in std::iter::once(mode_pill).chain(pack_display_tags(lang, pack).into_iter().take(1)) {
+        let size = layout::pill_size(ui, &tag);
+        if pill_x + size.x > inner.right() {
+            break;
+        }
         layout::paint_pill(
             &painter,
-            egui::Rect::from_min_size(
-                egui::pos2(
-                    inner.left(),
-                    inner.top() + 28.0 + description.size().y + 10.0,
-                ),
-                size,
-            ),
-            tag,
-            PillTone::Outline,
+            egui::Rect::from_min_size(egui::pos2(pill_x, pill_y), size),
+            &tag,
+            PillTone::Gray,
         );
+        pill_x += size.x + 8.0;
     }
 
     // Actions row.
