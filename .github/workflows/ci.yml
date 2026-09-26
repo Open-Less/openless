@@ -3,8 +3,9 @@ name: CI
 # 多平台跨语言质量门禁。release-tauri.yml 是发版流水线（仅打包构建），这里负责
 # 在合并前快速验证两件事：
 #   1. 全部前端/契约测试与 vite bundle 通过（捕获行为、合同及跨 locale 类型 drift）
-#   2. Tauri 后端在 macOS / Windows、移动端在 Android 编译；Linux 只测试共享 core。
-# 跑 build-mac.sh / windows-package-msvc.ps1 / Tauri bundle 太重；只跑轻量 cargo check + vite build。
+#   2. Tauri 后端在 macOS / Windows、移动端在 Android 编译；Linux Core、
+#      remote_tls、egui 和 deb/rpm 统一使用发版构建链检查（PR 不上传 Release）。
+# macOS/Windows/Android 不跑完整 Tauri bundle；Linux 则运行完整 deb/rpm 发版构建校验。
 
 on:
   push:
@@ -195,6 +196,11 @@ jobs:
 
       - name: Test remote input TLS identity and Unix key permissions
         run: cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --test remote_tls
+  linux-egui-package:
+    name: Linux Core, egui and deb/rpm checks
+    permissions:
+      contents: read
+    uses: ./.github/workflows/check-linux-egui.yml
 
   cross-platform:
     name: ${{ matrix.label }} checks

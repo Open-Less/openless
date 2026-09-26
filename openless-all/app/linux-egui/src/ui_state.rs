@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use crate::desktop::atomic_save;
-use crate::i18n::{LocalePref, FOLLOW_SYSTEM};
+use crate::i18n::LocalePref;
 
 const STATE_FILE: &str = "linux-ui-state.json";
 
@@ -77,6 +77,26 @@ pub fn load_locale_pref() -> LocalePref {
 /// state cannot be written at all; unknown environments (no HOME) simply leave
 /// the preference unsaved and are reported as a recoverable failure.
 pub fn save_locale_pref(pref: LocalePref) -> Result<(), UiStateError> {
+    write_state_value("locale", serde_json::Value::String(pref.to_tag()))
+}
+
+/// The state document as a JSON object. Unreadable or non-object content
+/// degrades to an empty map so one bad field can never wedge the whole file.
+fn read_state_object() -> serde_json::Map<String, serde_json::Value> {
+    let Some(path) = ui_state_path() else {
+        return serde_json::Map::new();
+    };
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return serde_json::Map::new();
+    };
+    match serde_json::from_str::<serde_json::Value>(&raw) {
+        Ok(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    }
+}
+
+/// Merge one key into the state document, leaving every other key intact.
+fn write_state_value(key: &str, value: serde_json::Value) -> Result<(), UiStateError> {
     let Some(dir) = ui_state_dir() else {
         return Err(io_error(
             "resolve ui-state directory",
@@ -90,17 +110,9 @@ pub fn save_locale_pref(pref: LocalePref) -> Result<(), UiStateError> {
         ));
     };
     std::fs::create_dir_all(&dir).map_err(|error| io_error("create ui-state directory", error))?;
-    let tag = match pref {
-        LocalePref::System => FOLLOW_SYSTEM.to_string(),
-        LocalePref::Lang(lang) => lang.tag().to_string(),
-    };
-    let mut document = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .filter(|value| value.is_object())
-        .unwrap_or_else(|| serde_json::json!({}));
-    document["locale"] = serde_json::json!(tag);
-    let bytes = serde_json::to_vec_pretty(&document)
+    let mut document = read_state_object();
+    document.insert(key.to_string(), value);
+    let bytes = serde_json::to_vec_pretty(&serde_json::Value::Object(document))
         .map_err(|error| UiStateError::Json(error.to_string()))?;
     atomic_save(&path, &bytes)
         .map(|_| ())
@@ -113,30 +125,20 @@ pub fn save_locale_pref(pref: LocalePref) -> Result<(), UiStateError> {
         })
 }
 
-pub fn load_ui_value(key: &str) -> Option<serde_json::Value> {
-    let path = ui_state_path()?;
-    let document: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
-    document.get(key).cloned()
+/// Whether the user dismissed the shortcut card on the Quick Note page.
+/// A missing key keeps the card visible, matching the upstream default.
+pub fn load_quick_note_shortcut_hidden() -> bool {
+    read_state_object()
+        .get("quick_note_shortcut_hidden")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
 }
-pub fn save_ui_value(key: &str, value: serde_json::Value) -> Result<(), UiStateError> {
-    let path = ui_state_path()
-        .ok_or_else(|| UiStateError::Json("UI state directory unavailable".into()))?;
-    let mut document = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .filter(|v| v.is_object())
-        .unwrap_or_else(|| serde_json::json!({}));
-    document[key] = value;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| io_error("create UI state directory", error))?;
-    }
-    let bytes = serde_json::to_vec_pretty(&document)
-        .map_err(|error| UiStateError::Json(error.to_string()))?;
-    atomic_save(&path, &bytes)
-        .map(|_| ())
-        .map_err(|error| UiStateError::Json(error.to_string()))
+
+pub fn save_quick_note_shortcut_hidden(hidden: bool) -> Result<(), UiStateError> {
+    write_state_value(
+        "quick_note_shortcut_hidden",
+        serde_json::Value::Bool(hidden),
+    )
 }
 
 #[cfg(test)]
@@ -190,6 +192,22 @@ mod tests {
             assert_eq!(load_locale_pref(), LocalePref::System);
             save_locale_pref(LocalePref::Lang(Lang::Ko)).unwrap();
             assert_eq!(load_locale_pref(), LocalePref::Lang(Lang::Ko));
+        });
+    }
+
+    #[test]
+    fn quick_note_shortcut_visibility_roundtrips_without_clobbering_locale() {
+        with_tmp_state(|_dir| {
+            // Absent key = the card is visible, matching the upstream default.
+            assert!(!load_quick_note_shortcut_hidden());
+            save_locale_pref(LocalePref::Lang(Lang::Ja)).unwrap();
+            save_quick_note_shortcut_hidden(true).unwrap();
+            assert!(load_quick_note_shortcut_hidden());
+            // Writing one key must not drop the other.
+            assert_eq!(load_locale_pref(), LocalePref::Lang(Lang::Ja));
+            save_quick_note_shortcut_hidden(false).unwrap();
+            assert!(!load_quick_note_shortcut_hidden());
+            assert_eq!(load_locale_pref(), LocalePref::Lang(Lang::Ja));
         });
     }
 

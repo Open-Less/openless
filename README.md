@@ -213,9 +213,9 @@ Every item below is one more layer sedimented into a default — a capability yo
 - **Main window**: Overview / History / Vocab / Style / Marketplace / Settings. Persistent tray icon, plus a mini status capsule that floats on screen and follows the display you are typing on (multi-monitor).
 - **Local model management** — manage on-disk local-ASR model storage from Settings.
 - **Multilingual UI** — Settings → Language switches between 简体中文 / 繁體中文 / English / 日本語 / 한국어 (auto-detected on first launch).
-- **In-app auto-update on the Tauri hosts** — Settings → About → Check; signed updater artifacts via the Tauri updater plugin on macOS, Windows, and Android. Linux has an independent manifest and updater contract.
+- **In-app auto-update on the Tauri hosts** — Settings → About → Check; signed updater artifacts via the Tauri updater plugin on macOS, Windows, and Android. Linux deb/rpm packages have no in-app updater or AppImage manifest.
 - **Beta channel (opt-in)** — Settings → About → Join Beta channel exposes the latest pre-release build for manual download. Beta releases never reach Stable users automatically (see [Contributing workflow](#contributing-workflow)).
-- **Distribution channels** — direct DMG/EXE from [Releases](../../releases), Homebrew Cask (add the project tap first; see installation below), and a Windows installer. Linux packages are not published until the separate egui UI is complete and its release gate is enabled.
+- **Distribution channels** — direct DMG/EXE from [Releases](../../releases), Homebrew Cask (add the project tap first; see installation below), and a Windows installer. Linux deb/rpm packages attach to the shared Release only after device acceptance and an admin's release tag.
 - **Single-instance lock** — prevents two OpenLess processes from racing the same hotkey edge.
 - Dictionary entries are injected as Volcengine ASR `context.hotwords` and as semantic hints during polish; hits accumulate per session.
 - Platform-native global hotkey: CGEventTap on macOS, low-level keyboard hook (`WH_KEYBOARD_LL`) on Windows.
@@ -237,7 +237,7 @@ Go to [Releases](../../releases) and download:
   - In-app updates (Settings → About) use `latest-android-{arch}.json` manifests; Beta users join Beta in Advanced settings.
   - Debug smoke builds: `OpenLess-android-debug-{abi}-*.apk` from workflow_dispatch artifacts.
   - If unsure, run `adb shell getprop ro.product.cpu.abi` and pick the matching APK.
-- **Linux**: the Tauri/WebView build has been retired. `linux-egui` now contains a native `eframe` UI backed by the shared Core 2.0 services. Production release still requires Linux CI artifacts plus real Ubuntu audio, focus/input, install, upgrade, and rollback evidence.
+- **Linux**: the Tauri/WebView build has been retired. The native `eframe` host uses the shared Core 2.0 services. After CI and real Ubuntu audio, input, install, upgrade and rollback acceptance, the shared release includes deb/rpm packages and `SHA256SUMS`. Linux requires glibc ≥ 2.39 (Ubuntu 24.04 or a comparable distribution); there is no AppImage or in-app updater.
 - **macOS (Homebrew)**:
   ```bash
   brew tap Open-Less/openless https://github.com/Open-Less/openless
@@ -398,7 +398,7 @@ egui UI  ── Linux Adapter (no Tauri/WebKitGTK) ────┘
 
 `openless-core` owns the stable DTOs, errors, semantic events, repositories, credentials contract, and host-facing use-case Interface. Host-only concerns—IPC, windows, tray, permissions, updater, keyring, fcitx5, and package resource paths—are implemented by Adapters. Legacy React command/event names stay in the Tauri compatibility Adapter; Linux calls the typed Rust Interface in process. See [`docs/linux-egui-backend-contract.md`](docs/linux-egui-backend-contract.md).
 
-The `v<version>-tauri` / `v<version>-Beta.N-tauri` workflows publish the macOS, Windows, and Android hosts. Linux deb/rpm/AppImage assets are built by `release-linux-egui.yml` with an independent manifest; automatic release remains gated on successful artifacts and real Ubuntu install/runtime/upgrade/rollback evidence.
+The `v<version>-tauri` / `v<version>-Beta.N-tauri` workflows build the macOS, Windows and Android hosts alongside the independent Linux egui deb/rpm workflow. After Linux device acceptance and an admin's tag, verified Linux packages attach to the shared Release; Beta assets remain in a draft until an admin publishes them. Linux has no AppImage or in-app updater manifest.
 
 The dictation pipeline: `hotkey edge → Recorder.start + ASR.openSession → [audio frames] → hotkey edge → Recorder.stop + ASR.sendLastFrame → Polish → Insert → History.save`.
 

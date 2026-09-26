@@ -7,9 +7,6 @@ use openless_core::{
 };
 
 trait LinuxSelectionBridge: Send + Sync + 'static {
-    fn source_app(&self, _session_id: SessionId) -> Option<String> {
-        None
-    }
     fn capture_target(&self, session_id: SessionId) -> Result<String, BackendError>;
     fn apply_target(
         &self,
@@ -24,14 +21,6 @@ trait LinuxSelectionBridge: Send + Sync + 'static {
 struct Fcitx5SelectionBridge;
 
 impl LinuxSelectionBridge for Fcitx5SelectionBridge {
-    fn source_app(&self, session_id: SessionId) -> Option<String> {
-        use crate::context::ContextReader;
-        crate::context::NativeContextReader
-            .read(Some(&session_id.to_string()), false)
-            .ok()
-            .map(|s| s.application)
-            .filter(|s| !s.is_empty())
-    }
     fn capture_target(&self, session_id: SessionId) -> Result<String, BackendError> {
         crate::fcitx5::capture_selection_target(&session_id.to_string())
     }
@@ -128,9 +117,20 @@ impl SelectionRuntimeAdapter for LinuxSelectionRuntime {
                     source_text: text.clone(),
                     replacement_text: None,
                 });
+                // Honest `source_app`: fcitx5 exposes the surrounding text via
+                // DBus but gives the host no reliable foreground-application
+                // identity that holds across both X11 and Wayland clients, and
+                // the PRIMARY/clipboard cannot prove the original control is
+                // still the current focus. There is no IBus/global-hotkey
+                // fallback by design (Linux supports fcitx5 only), so we report
+                // the app as unknown instead of faking an identity. Post-insertion
+                // edit observation for streamed dictation is likewise unsupported
+                // on Linux: Core's Noop HostContextAdapter/EditObservationAdapter
+                // (the factory does not inject real ones) keep those use-cases on
+                // the explicit `Unsupported` path rather than simulating edits.
                 Ok(SelectionCapture {
                     text,
-                    source_app: bridge.source_app(session_id),
+                    source_app: None,
                 })
             })
             .await

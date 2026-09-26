@@ -8,8 +8,7 @@ use openless_core::{
     TextInsertionSession,
 };
 
-use crate::{LinuxPackageKind, LinuxResourceLayout, FCITX_PLUGIN_CONFIG, FCITX_PLUGIN_LIBRARY};
-use openless_core::ResourceResolver;
+use crate::LinuxResourceLayout;
 
 #[cfg(target_os = "linux")]
 pub(crate) const DESTINATION: &str = "org.fcitx.Fcitx5";
@@ -19,38 +18,31 @@ pub(crate) const OBJECT_PATH: &str = "/openless";
 pub(crate) const INTERFACE: &str = "org.fcitx.Fcitx.OpenLess1";
 #[cfg(target_os = "linux")]
 const TIMEOUT: Duration = Duration::from_secs(3);
+/// fcitx5's own management interface. `Restart` makes the daemon replace
+/// itself in place: the call returns immediately and nothing of ours is
+/// inherited, unlike the `fcitx5 -r` command (see `reload_running_fcitx5`).
+#[cfg(target_os = "linux")]
+pub(crate) const CONTROLLER_PATH: &str = "/controller";
+#[cfg(target_os = "linux")]
+pub(crate) const CONTROLLER_INTERFACE: &str = "org.fcitx.Fcitx.Controller1";
+#[cfg(target_os = "linux")]
+const CONTROLLER_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FcitxPluginInstallPlan {
-    pub source_library: Option<PathBuf>,
-    pub source_config: Option<PathBuf>,
     pub target_library: PathBuf,
     pub target_config: PathBuf,
-    pub copy_required: bool,
 }
 
 impl FcitxPluginInstallPlan {
     pub fn for_layout(layout: &LinuxResourceLayout, home: &Path) -> Result<Self, BackendError> {
         let target_library = home.join(".local/lib/fcitx5/libopenless.so");
         let target_config = home.join(".local/share/fcitx5/addon/openless.conf");
-        if layout.package_kind == LinuxPackageKind::AppImage {
-            let resolver = layout.resolver()?;
-            Ok(Self {
-                source_library: Some(resolver.resolve(Path::new(FCITX_PLUGIN_LIBRARY))?),
-                source_config: Some(resolver.resolve(Path::new(FCITX_PLUGIN_CONFIG))?),
-                target_library,
-                target_config,
-                copy_required: true,
-            })
-        } else {
-            Ok(Self {
-                source_library: None,
-                source_config: None,
-                target_library,
-                target_config,
-                copy_required: false,
-            })
-        }
+        let _ = layout;
+        Ok(Self {
+            target_library,
+            target_config,
+        })
     }
 }
 
@@ -58,137 +50,16 @@ impl FcitxPluginInstallPlan {
 pub enum FcitxPluginStatus {
     Ready,
     Missing,
-    Updated,
 }
 
 pub fn ensure_plugin_installed(
     plan: &FcitxPluginInstallPlan,
 ) -> Result<FcitxPluginStatus, BackendError> {
-    if !plan.copy_required {
-        return if system_plugin_available() || user_plugin_available(plan) {
-            Ok(FcitxPluginStatus::Ready)
-        } else {
-            Ok(FcitxPluginStatus::Missing)
-        };
+    if system_plugin_available() || user_plugin_available(plan) {
+        Ok(FcitxPluginStatus::Ready)
+    } else {
+        Ok(FcitxPluginStatus::Missing)
     }
-    let source_library = plan.source_library.as_ref().ok_or_else(|| {
-        BackendError::new(
-            BackendErrorCode::InvalidArgument,
-            "AppImage plugin plan is missing the bundled library",
-        )
-    })?;
-    let source_config = plan.source_config.as_ref().ok_or_else(|| {
-        BackendError::new(
-            BackendErrorCode::InvalidArgument,
-            "AppImage plugin plan is missing the bundled config",
-        )
-    })?;
-    let library = read_non_empty(source_library)?;
-    let config = read_non_empty(source_config)?;
-    let library_changed = target_differs(&plan.target_library, &library)?;
-    let config_changed = target_differs(&plan.target_config, &config)?;
-    if !library_changed && !config_changed {
-        return Ok(FcitxPluginStatus::Ready);
-    }
-    if library_changed {
-        atomic_write(&plan.target_library, &library, true)?;
-    }
-    if config_changed {
-        atomic_write(&plan.target_config, &config, false)?;
-    }
-    Ok(FcitxPluginStatus::Updated)
-}
-
-fn read_non_empty(path: &Path) -> Result<Vec<u8>, BackendError> {
-    let bytes = std::fs::read(path).map_err(|error| {
-        BackendError::new(
-            BackendErrorCode::Platform,
-            format!("failed to read fcitx5 resource {}: {error}", path.display()),
-        )
-    })?;
-    if bytes.is_empty() {
-        return Err(BackendError::new(
-            BackendErrorCode::Platform,
-            format!("fcitx5 resource {} is empty", path.display()),
-        ));
-    }
-    Ok(bytes)
-}
-
-fn target_differs(path: &Path, expected: &[u8]) -> Result<bool, BackendError> {
-    match std::fs::read(path) {
-        Ok(actual) => Ok(actual != expected),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
-        Err(error) => Err(BackendError::new(
-            BackendErrorCode::Platform,
-            format!(
-                "failed to read existing fcitx5 file {}: {error}",
-                path.display()
-            ),
-        )),
-    }
-}
-
-fn atomic_write(path: &Path, bytes: &[u8], executable: bool) -> Result<(), BackendError> {
-    let parent = path.parent().ok_or_else(|| {
-        BackendError::new(
-            BackendErrorCode::InvalidArgument,
-            "fcitx5 target has no parent directory",
-        )
-    })?;
-    std::fs::create_dir_all(parent).map_err(|error| {
-        BackendError::new(
-            BackendErrorCode::Platform,
-            format!("failed to create fcitx5 target directory: {error}"),
-        )
-    })?;
-    let temporary = parent.join(format!(
-        ".{}.{}.tmp",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("openless"),
-        std::process::id()
-    ));
-    std::fs::write(&temporary, bytes).map_err(|error| {
-        BackendError::new(
-            BackendErrorCode::Platform,
-            format!("failed to stage fcitx5 resource: {error}"),
-        )
-    })?;
-    #[cfg(unix)]
-    if executable {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o755)).map_err(
-            |error| {
-                BackendError::new(
-                    BackendErrorCode::Platform,
-                    format!("failed to set fcitx5 plugin permissions: {error}"),
-                )
-            },
-        )?;
-    }
-    #[cfg(not(unix))]
-    let _ = executable;
-    // POSIX rename replaces an existing file atomically, so the previously
-    // working plugin remains available if staging or commit fails. The
-    // non-Unix branch exists only for portable unit tests/tooling, where the
-    // platform rename API may require explicitly removing the destination.
-    #[cfg(not(unix))]
-    if path.exists() {
-        std::fs::remove_file(path).map_err(|error| {
-            BackendError::new(
-                BackendErrorCode::Platform,
-                format!("failed to replace fcitx5 resource: {error}"),
-            )
-        })?;
-    }
-    std::fs::rename(&temporary, path).map_err(|error| {
-        let _ = std::fs::remove_file(&temporary);
-        BackendError::new(
-            BackendErrorCode::Platform,
-            format!("failed to commit fcitx5 resource: {error}"),
-        )
-    })
 }
 
 fn user_plugin_available(plan: &FcitxPluginInstallPlan) -> bool {
@@ -223,6 +94,385 @@ fn system_plugin_available() -> bool {
         .any(|dir| dir.join("libopenless.so").is_file())
 }
 
+/// Path of the installed addon library the running fcitx5 would load: the user
+/// install wins over the system one because fcitx5 searches it first.
+/// Which copy of the addon fcitx5 will actually load.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PluginSource {
+    /// The package's `/usr/.../fcitx5/libopenless.so`.
+    System,
+    /// A per-user copy in `~/.local/` (manual install / AppImage).
+    User,
+    None,
+}
+
+/// The package copy wins over a per-user copy. fcitx5 searches the user addon
+/// directory first, so a leftover `~/.local` copy from an older manual install
+/// would otherwise keep shadowing every package upgrade forever.
+pub(crate) fn resolve_plugin_source(system: Option<&Path>, user: &Path) -> PluginSource {
+    if system.is_some() {
+        PluginSource::System
+    } else if user.is_file() {
+        PluginSource::User
+    } else {
+        PluginSource::None
+    }
+}
+
+/// A per-user copy is stale when the package already provides the addon and the
+/// per-user files are still there to shadow it.
+pub(crate) fn shadows_package_plugin(system_present: bool, user_library: &Path) -> bool {
+    system_present && user_library.is_file()
+}
+
+/// Reasons fcitx5 has to be restarted before a plugin change takes effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReloadReason {
+    /// The installed plugin's content differs from the one we last loaded.
+    ContentChanged,
+    /// Same content, but the file is newer than the running daemon (a package
+    /// upgrade replaced the image the daemon still holds).
+    NewerThanDaemon,
+    /// The daemon has a *different* library mapped (a stale manual install, or
+    /// the pre-upgrade package image). Restarting is the only way to make it
+    /// pick up the copy we ship.
+    DaemonHoldsOtherCopy,
+}
+
+/// Whether the running fcitx5 must be restarted.
+///
+/// `marker` is the fingerprint of the plugin content recorded the last time the
+/// host looked at it; a missing marker means "unknown baseline" and is treated
+/// as a change (one restart, then the marker exists and the check is exact).
+pub(crate) fn reload_reason(
+    marker: Option<&str>,
+    current: &str,
+    newer_than_daemon: bool,
+    daemon_holds_installed_copy: bool,
+) -> Option<ReloadReason> {
+    if !daemon_holds_installed_copy {
+        return Some(ReloadReason::DaemonHoldsOtherCopy);
+    }
+    if marker != Some(current) {
+        return Some(ReloadReason::ContentChanged);
+    }
+    if newer_than_daemon {
+        return Some(ReloadReason::NewerThanDaemon);
+    }
+    None
+}
+
+/// Where the fingerprint of the plugin content last handed to fcitx5 lives.
+pub fn plugin_fingerprint_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("fcitx5-plugin.sha256")
+}
+
+/// sha256 of a file, or `None` when it cannot be read.
+pub(crate) fn file_fingerprint(path: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path).ok()?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Some(format!("{:x}", hasher.finalize()))
+}
+
+/// Drop a per-user copy that would shadow the package's addon, so a package
+/// upgrade always wins. Best effort: a failure is a warning, never fatal.
+fn remove_shadowing_user_copy(plan: &FcitxPluginInstallPlan, system_present: bool) -> bool {
+    if !shadows_package_plugin(system_present, &plan.target_library) {
+        return false;
+    }
+    log::warn!(
+        "[fcitx] removing the per-user addon copy {} — the package provides a newer \
+         plugin and fcitx5 loads the user copy first",
+        plan.target_library.display()
+    );
+    let mut removed = false;
+    for path in [&plan.target_library, &plan.target_config] {
+        match std::fs::remove_file(path) {
+            Ok(()) => removed = true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => log::warn!("[fcitx] could not remove {}: {error}", path.display()),
+        }
+    }
+    removed
+}
+
+fn installed_plugin_library(plan: &FcitxPluginInstallPlan) -> Option<PathBuf> {
+    let system = system_plugin_library();
+    match resolve_plugin_source(system.as_deref(), &plan.target_library) {
+        PluginSource::System => system,
+        PluginSource::User => Some(plan.target_library.clone()),
+        PluginSource::None => None,
+    }
+}
+
+/// Addon-library search order, mirroring how fcitx5 resolves `Library=`.
+///
+/// The packaging prefix (Debian multiarch, e.g. `/usr/lib/x86_64-linux-gnu`)
+/// comes first because that is where the .deb/.rpm puts the plugin and what
+/// package upgrades replace. A manually installed `/usr/local` copy is last on
+/// purpose: it is never upgraded by the package manager, so treating it as
+/// "the packaged plugin" made every start believe the plugin had changed.
+pub(crate) fn plugin_library_search_dirs(usr_lib_subdirs: &[String]) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut push = |dir: PathBuf| {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    };
+    for subdir in usr_lib_subdirs {
+        push(PathBuf::from("/usr/lib").join(subdir).join("fcitx5"));
+    }
+    push(PathBuf::from("/usr/lib/fcitx5"));
+    push(PathBuf::from("/usr/lib64/fcitx5"));
+    // /usr/local is deliberately *not* a package path: anything there is a
+    // leftover manual install that dpkg never replaces. Treating it as "the
+    // packaged plugin" made every start believe the addon had changed and
+    // kept a stale build live; `report_stale_manual_plugin` removes it instead.
+    dirs
+}
+
+/// Sub-directory names of `/usr/lib` (the multiarch triples).
+fn usr_lib_subdirs() -> Vec<String> {
+    std::fs::read_dir("/usr/lib")
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| entry.path().is_dir())
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The package's addon library, found through the same directories fcitx5 uses.
+fn system_plugin_library() -> Option<PathBuf> {
+    plugin_library_search_dirs(&usr_lib_subdirs())
+        .into_iter()
+        .map(|dir| dir.join("libopenless.so"))
+        .find(|candidate| candidate.is_file())
+}
+
+/// Which `libopenless.so` the running daemon actually mapped, read from
+/// `/proc/<pid>/maps`. This is the authoritative answer to "what is live".
+pub(crate) fn parse_maps_plugin_path(maps: &str) -> Option<PathBuf> {
+    maps.lines().find_map(|line| {
+        let path = line.split_whitespace().last()?;
+        path.ends_with("/libopenless.so")
+            .then(|| PathBuf::from(path))
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn running_daemon_plugin() -> Option<PathBuf> {
+    let pid = fcitx5_process_id()?;
+    let maps = std::fs::read_to_string(format!("/proc/{pid}/maps")).ok()?;
+    parse_maps_plugin_path(&maps)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn running_daemon_plugin() -> Option<PathBuf> {
+    None
+}
+
+/// Point out (and drop when we may) an OpenLess plugin left behind by an older
+/// manual install under `/usr/local`: dpkg never replaces it, it can shadow the
+/// packaged copy for fcitx5, and it makes fingerprint checks ambiguous.
+/// Only our own `libopenless.so` / `openless.conf` are ever touched.
+fn report_stale_manual_plugin(installed: &Path, installed_fingerprint: &str) {
+    let library = PathBuf::from("/usr/local/lib/fcitx5/libopenless.so");
+    let config = PathBuf::from("/usr/local/share/fcitx5/addon/openless.conf");
+    if library == installed || !library.is_file() {
+        return;
+    }
+    let Some(fingerprint) = file_fingerprint(&library) else {
+        return;
+    };
+    if fingerprint == installed_fingerprint {
+        return;
+    }
+    match std::fs::remove_file(&library) {
+        Ok(()) => {
+            log::warn!(
+                "[fcitx] removed the stale manual addon {} — the packaged plugin {} wins",
+                library.display(),
+                installed.display()
+            );
+            // The addon conf in the same prefix shadows the packaged one; with
+            // the library gone fcitx5 would fail to load `openless` at all, so
+            // drop it as well (only ever our own file).
+            match std::fs::remove_file(&config) {
+                Ok(()) => log::warn!("[fcitx] removed the stale manual addon config {}", config.display()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => log::warn!(
+                    "[fcitx] could not remove {}: {error}; sudo rm -f {} {}",
+                    config.display(),
+                    library.display(),
+                    config.display()
+                ),
+            }
+        }
+        Err(error) => log::warn!(
+            "[fcitx] the manual addon {} (fingerprint {}) differs from the packaged plugin \
+             and is not replaced by the package manager; remove it with: sudo rm -f {} {} ({error})",
+            library.display(),
+            &fingerprint[..fingerprint.len().min(12)],
+            library.display(),
+            config.display()
+        ),
+    }
+}
+
+/// `/proc/stat` -> `btime` (boot time as a UNIX timestamp in seconds).
+pub(crate) fn parse_boot_time(proc_stat: &str) -> Option<u64> {
+    proc_stat.lines().find_map(|line| {
+        line.strip_prefix("btime ")
+            .and_then(|value| value.trim().parse::<u64>().ok())
+    })
+}
+
+/// `/proc/<pid>/stat` -> process start time in clock ticks since boot.
+///
+/// The second field is the executable name in parentheses and may contain
+/// spaces, so split after the last ')' before counting fields.
+pub(crate) fn parse_process_start_ticks(proc_pid_stat: &str) -> Option<u64> {
+    let after_comm = proc_pid_stat.rsplit_once(')')?.1;
+    let mut fields = after_comm.split_whitespace();
+    // After the comm field, state is field 3; starttime is field 22 => the 20th
+    // field of the remaining slice.
+    fields.nth(19)?.parse::<u64>().ok()
+}
+
+/// USER_HZ for /proc values is 100 on Linux regardless of the kernel HZ.
+const PROC_CLOCK_TICKS: u64 = 100;
+
+/// True when the installed addon library is newer than the running fcitx5, i.e.
+/// a package upgrade replaced the .so while the daemon still holds the old
+/// image. Without a restart the new matching rules never take effect.
+pub(crate) fn plugin_is_newer_than_running_fcitx5(
+    plugin_modified: u64,
+    boot_time: u64,
+    process_start_ticks: u64,
+) -> bool {
+    let process_started = boot_time + process_start_ticks / PROC_CLOCK_TICKS;
+    // One second of slack: both timestamps are second-resolution.
+    plugin_modified > process_started.saturating_add(1)
+}
+
+/// Restart fcitx5 when the installed addon is newer than the running daemon so
+/// an upgraded plugin is actually loaded. Returns true when fcitx5 was replaced.
+pub fn reload_fcitx5_if_plugin_updated(plan: &FcitxPluginInstallPlan, data_dir: &Path) -> bool {
+    let system = system_plugin_library();
+    // A leftover per-user copy shadows the package plugin in fcitx5's search
+    // order, so drop it first and judge the package's copy.
+    remove_shadowing_user_copy(plan, system.is_some());
+    let Some(library) = installed_plugin_library(plan) else {
+        return false;
+    };
+    let Some(current) = file_fingerprint(&library) else {
+        return false;
+    };
+    let fingerprint_path = plugin_fingerprint_path(data_dir);
+    let marker = std::fs::read_to_string(&fingerprint_path)
+        .ok()
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty());
+    let newer = plugin_written_after_running_daemon(&library);
+    // Judge the copy fcitx5 actually mapped: a leftover manual install in a
+    // legacy prefix is never replaced by the package manager.
+    let loaded = running_daemon_plugin();
+    let daemon_loaded = loaded.as_deref();
+    report_stale_manual_plugin(&library, &current);
+    let daemon_holds_installed_copy = match daemon_loaded {
+        Some(loaded) => file_fingerprint(loaded).as_deref() == Some(current.as_str()),
+        None => true,
+    };
+    log::info!(
+        "[fcitx] addon {} fingerprint={} loaded={} recorded={} newer_than_daemon={}",
+        library.display(),
+        &current[..current.len().min(12)],
+        daemon_loaded
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "<not running>".to_string()),
+        marker
+            .as_deref()
+            .map(|value| &value[..value.len().min(12)])
+            .unwrap_or("<none>"),
+        newer,
+    );
+    let reason = reload_reason(
+        marker.as_deref(),
+        &current,
+        newer,
+        daemon_holds_installed_copy,
+    );
+    // Record the fingerprint *before* asking for the restart (and also when no
+    // restart is needed): a daemon that never comes back, or a start that had
+    // nothing to do, must not make the next start repeat the decision.
+    if let Some(parent) = fingerprint_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(error) = std::fs::write(&fingerprint_path, &current) {
+        log::warn!("[fcitx] could not record the plugin fingerprint: {error}");
+    }
+    let Some(reason) = reason else {
+        return false;
+    };
+    log::info!("[fcitx] restarting fcitx5 to load the addon update ({reason:?})");
+    reload_running_fcitx5()
+}
+
+/// Whether the addon file is newer than the running fcitx5 process.
+fn plugin_written_after_running_daemon(library: &Path) -> bool {
+    let Some(modified) = std::fs::metadata(library)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs())
+    else {
+        return false;
+    };
+    let (Some(proc_stat), Some(pid)) = (
+        std::fs::read_to_string("/proc/stat").ok(),
+        fcitx5_process_id(),
+    ) else {
+        return false;
+    };
+    let Some(proc_pid_stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok() else {
+        return false;
+    };
+    let (Some(boot_time), Some(start_ticks)) = (
+        parse_boot_time(&proc_stat),
+        parse_process_start_ticks(&proc_pid_stat),
+    ) else {
+        return false;
+    };
+    plugin_is_newer_than_running_fcitx5(modified, boot_time, start_ticks)
+}
+
+/// PID of the running fcitx5, by scanning /proc for the process name.
+#[cfg(target_os = "linux")]
+fn fcitx5_process_id() -> Option<u32> {
+    for entry in std::fs::read_dir("/proc").ok()?.flatten() {
+        let name = entry.file_name();
+        let pid = name.to_string_lossy().parse::<u32>().ok();
+        let Some(pid) = pid else { continue };
+        let Ok(comm) = std::fs::read_to_string(entry.path().join("comm")) else {
+            continue;
+        };
+        if comm.trim() == "fcitx5" {
+            return Some(pid);
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+fn fcitx5_process_id() -> Option<u32> {
+    None
+}
+
 #[derive(Debug, Clone)]
 pub struct Fcitx5TextInserter {
     clipboard_fallback: bool,
@@ -249,7 +499,6 @@ impl TextInserter for Fcitx5TextInserter {
                 // A missing native target is a supported clipboard fallback,
                 // not permission to choose a new window after transcription.
                 let _ = tokio::task::spawn_blocking(move || {
-                    crate::desktop_bridge::remember_focus("_dictation_screen");
                     send_bool_message("CaptureDictationTarget", |message| {
                         message.append1(capture_ticket)
                     })
@@ -587,7 +836,6 @@ pub fn commit_text(_: &str) -> Result<(), BackendError> {
 
 #[cfg(target_os = "linux")]
 pub(crate) fn capture_selection_target(session_id: &str) -> Result<String, BackendError> {
-    crate::desktop_bridge::remember_focus(session_id);
     send_string_message("CaptureSelectionTarget", |message| {
         message.append1(session_id)
     })
@@ -607,7 +855,6 @@ pub(crate) fn apply_selection_target(
     source: &str,
     replacement: &str,
 ) -> Result<(), BackendError> {
-    crate::desktop_bridge::restore_bound_focus(session_id)?;
     if send_bool_message("ApplySelectionTarget", |message| {
         message.append3(session_id, source, replacement)
     })? {
@@ -630,7 +877,6 @@ pub(crate) fn apply_selection_target(_: &str, _: &str, _: &str) -> Result<(), Ba
 
 #[cfg(target_os = "linux")]
 pub(crate) fn revert_selection_target(session_id: &str) -> Result<(), BackendError> {
-    crate::desktop_bridge::restore_bound_focus(session_id)?;
     if send_bool_message("RevertSelectionTarget", |message| {
         message.append1(session_id)
     })? {
@@ -653,7 +899,6 @@ pub(crate) fn revert_selection_target(_: &str) -> Result<(), BackendError> {
 
 #[cfg(target_os = "linux")]
 pub(crate) fn cancel_selection_target(session_id: &str) -> Result<(), BackendError> {
-    crate::desktop_bridge::forget_focus(session_id);
     let _ = send_bool_message("CancelSelectionTarget", |message| {
         message.append1(session_id)
     })?;
@@ -671,7 +916,6 @@ pub(crate) fn cancel_selection_target(_: &str) -> Result<(), BackendError> {
 #[cfg(target_os = "linux")]
 pub(crate) fn rekey_selection_target(from: &str, to: &str) -> Result<(), BackendError> {
     if send_bool_message("RekeySelectionTarget", |message| message.append2(from, to))? {
-        crate::desktop_bridge::rekey_focus(from, to);
         Ok(())
     } else {
         Err(BackendError::new(
@@ -784,17 +1028,63 @@ pub fn reload_running_fcitx5() -> bool {
     if !fcitx5_name_has_owner() {
         return false;
     }
-    match std::process::Command::new("fcitx5").arg("-r").status() {
-        Ok(status) if status.success() => {
-            log::info!("[fcitx] reloaded fcitx5 after addon update");
-            true
-        }
-        Ok(status) => {
-            log::warn!("[fcitx] fcitx5 -r failed with status {status}");
+    if restart_fcitx5_via_dbus() {
+        log::info!("[fcitx] reloaded fcitx5 after addon update");
+        return true;
+    }
+    spawn_detached_fcitx5_restart()
+}
+
+/// `org.fcitx.Fcitx.Controller1.Restart` on `/controller`: the daemon replaces
+/// itself, the call returns as soon as the method is dispatched, and nothing of
+/// ours is inherited.
+#[cfg(target_os = "linux")]
+pub(crate) fn restart_fcitx5_via_dbus() -> bool {
+    use dbus::blocking::BlockingSender;
+    let Ok(connection) = dbus::blocking::Connection::new_session() else {
+        return false;
+    };
+    let Ok(message) = dbus::Message::new_method_call(
+        DESTINATION,
+        CONTROLLER_PATH,
+        CONTROLLER_INTERFACE,
+        "Restart",
+    ) else {
+        return false;
+    };
+    match connection.send_with_reply_and_block(message, CONTROLLER_TIMEOUT) {
+        Ok(_) => true,
+        Err(error) => {
+            log::warn!(
+                "[fcitx] D-Bus Restart unavailable ({error}); falling back to a detached fcitx5 -r"
+            );
             false
         }
+    }
+}
+
+/// Last resort when the controller interface is missing: spawn `fcitx5 -r`
+/// fully detached. `fcitx5 -r` *becomes* the daemon and keeps running in the
+/// foreground, so `.status()`/`.wait()` would block the caller forever — the
+/// child is deliberately dropped instead.
+#[cfg(target_os = "linux")]
+fn spawn_detached_fcitx5_restart() -> bool {
+    use std::process::Stdio;
+    match std::process::Command::new("fcitx5")
+        .arg("-r")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => {
+            let pid = child.id();
+            drop(child);
+            log::info!("[fcitx] spawned a detached fcitx5 -r (pid {pid})");
+            true
+        }
         Err(error) => {
-            log::warn!("[fcitx] could not run fcitx5 -r: {error}");
+            log::warn!("[fcitx] could not spawn fcitx5 -r: {error}");
             false
         }
     }
@@ -851,14 +1141,6 @@ pub fn copy_to_clipboard(text: &str) -> Result<(), BackendError> {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
-pub fn copy_to_clipboard(_text: &str) -> Result<(), BackendError> {
-    Err(BackendError::new(
-        BackendErrorCode::Unsupported,
-        "fcitx5 clipboard requires Linux",
-    ))
-}
-
 #[cfg(target_os = "linux")]
 fn dbus_error(error: dbus::Error) -> BackendError {
     BackendError::new(
@@ -875,6 +1157,229 @@ fn platform_error(message: String) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boot_time_and_process_start_are_parsed_from_proc() {
+        let stat = "cpu  1 2 3\nbtime 1700000000\nprocesses 42\n";
+        assert_eq!(parse_boot_time(stat), Some(1_700_000_000));
+        assert_eq!(parse_boot_time("cpu 1 2 3\n"), None);
+
+        // Field 2 is the comm in parentheses and may contain spaces/parens; the
+        // 22nd field (starttime) sits 20 fields after it. Line copied from a real
+        // /proc/<pid>/stat of this machine (starttime = 284037).
+        let pid_stat = "38066 (bash) S 32218 38066 38066 0 -1 4194304 245 0 0 0 0 0 0 0 20 0 1 0 284037 10760192 917 18446744073709551615 93845596229632";
+        assert_eq!(parse_process_start_ticks(pid_stat), Some(284037));
+        // A comm containing a closing parenthesis must not shift the fields.
+        let paren_comm =
+            "999 (fcitx5 (5.1)) S 1 999 999 0 -1 4194304 1 0 0 0 0 0 0 0 20 0 1 0 77777 13";
+        assert_eq!(parse_process_start_ticks(paren_comm), Some(77777));
+        assert_eq!(parse_process_start_ticks(""), None);
+        assert_eq!(parse_process_start_ticks("1 (short) S 1"), None);
+    }
+
+    #[test]
+    fn a_plugin_newer_than_the_running_fcitx5_asks_for_a_restart() {
+        // fcitx5 started at boot + 2500 ticks (25 s).
+        let boot = 1_700_000_000;
+        let started = 2500;
+        // Plugin written before the daemon started: nothing to do.
+        assert!(!plugin_is_newer_than_running_fcitx5(
+            boot + 10,
+            boot,
+            started
+        ));
+        // Same second (the daemon read the file it just got): nothing to do.
+        assert!(!plugin_is_newer_than_running_fcitx5(
+            boot + 25,
+            boot,
+            started
+        ));
+        // Plugin replaced by a package upgrade while the daemon kept running.
+        assert!(plugin_is_newer_than_running_fcitx5(
+            boot + 600,
+            boot,
+            started
+        ));
+    }
+
+    #[test]
+    fn a_daemon_holding_another_copy_always_asks_for_a_restart() {
+        // Even with a matching fingerprint, a daemon that mapped a different
+        // libopenless.so (stale manual /usr/local install, pre-upgrade image)
+        // keeps the old matching rules until it is restarted.
+        assert_eq!(
+            reload_reason(Some("abc"), "abc", false, false),
+            Some(ReloadReason::DaemonHoldsOtherCopy)
+        );
+        // Steady state: nothing mapped differently, fingerprint recorded.
+        assert_eq!(reload_reason(Some("abc"), "abc", false, true), None);
+    }
+
+    #[test]
+    fn the_packaged_addon_is_searched_before_a_manual_install() {
+        let dirs = plugin_library_search_dirs(&["x86_64-linux-gnu".to_string()]);
+        // A manual /usr/local install is never treated as a package path; it is
+        // cleaned up separately, otherwise every start thinks the addon changed.
+        assert!(
+            !dirs.contains(&PathBuf::from("/usr/local/lib/fcitx5")),
+            "a manual install must not masquerade as the packaged addon: {dirs:?}"
+        );
+        let multiarch = dirs
+            .iter()
+            .position(|dir| dir == Path::new("/usr/lib/x86_64-linux-gnu/fcitx5"))
+            .expect("multiarch addon dir");
+        assert!(
+            multiarch == 0,
+            "the multiarch package dir must be searched first: {dirs:?}"
+        );
+        // No duplicate entries when /usr/lib scans repeat a prefix.
+        let twice = plugin_library_search_dirs(&[
+            "x86_64-linux-gnu".to_string(),
+            "x86_64-linux-gnu".to_string(),
+        ]);
+        assert_eq!(twice, dirs);
+    }
+
+    #[test]
+    fn the_daemon_maps_the_plugin_we_read_from_proc() {
+        let maps = "7f00-8000 r-xp 00000000 08:01 42 /usr/lib/fcitx5/libother.so
+\
+                    8000-9000 r-xp 00000000 08:01 43 /usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so
+";
+        assert_eq!(
+            parse_maps_plugin_path(maps),
+            Some(PathBuf::from(
+                "/usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so"
+            ))
+        );
+        assert_eq!(parse_maps_plugin_path(""), None);
+        assert_eq!(
+            parse_maps_plugin_path("1-2 r-xp 0 00:00 0 /usr/lib/fcitx5/libopenless.so.old"),
+            None
+        );
+    }
+
+    #[test]
+    fn the_package_plugin_wins_over_a_per_user_copy() {
+        let system = Path::new("/usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so");
+        let user = Path::new("/home/u/.local/lib/fcitx5/libopenless.so");
+        assert_eq!(
+            resolve_plugin_source(Some(system), user),
+            PluginSource::System
+        );
+        // No package plugin: fall back to the per-user copy (AppImage/manual).
+        let missing = Path::new("/definitely/not/here/libopenless.so");
+        assert_eq!(
+            resolve_plugin_source(None, &PathBuf::from("/tmp/x")),
+            PluginSource::None
+        );
+        assert!(!missing.is_file());
+        // The decision itself must not depend on the user copy existing.
+        assert_eq!(
+            resolve_plugin_source(None, Path::new("/definitely/not/here")),
+            PluginSource::None
+        );
+    }
+
+    #[test]
+    fn a_per_user_copy_only_shadows_when_the_package_has_the_addon() {
+        // Both branches need a real per-user file, but never a real *package*
+        // file: asserting on `/usr/lib/.../libopenless.so` only held on a
+        // machine that had the deb installed and failed on clean CI runners.
+        let home = tempfile::tempdir().expect("temp home");
+        let user = home.path().join(".local/lib/fcitx5/libopenless.so");
+        assert!(!shadows_package_plugin(true, &user));
+        assert!(!shadows_package_plugin(false, &user));
+        std::fs::create_dir_all(user.parent().expect("user addon dir"))
+            .expect("create user addon dir");
+        std::fs::write(&user, b"stale per-user copy").expect("write user addon");
+        // Presence of the package copy plus an existing user file is the case
+        // that used to keep an upgraded package plugin from ever loading.
+        assert!(shadows_package_plugin(true, &user));
+        // Without a package copy there is nothing to shadow: the per-user file
+        // is the AppImage/manual plugin fcitx5 is meant to load.
+        assert!(!shadows_package_plugin(false, &user));
+    }
+
+    #[test]
+    fn reload_is_driven_by_content_before_mtime() {
+        // Same content, daemon older than the file: mtime still asks for a reload.
+        assert_eq!(
+            reload_reason(Some("abc"), "abc", true, true),
+            Some(ReloadReason::NewerThanDaemon)
+        );
+        // Same content, daemon newer: nothing to do (steady state every start).
+        assert_eq!(reload_reason(Some("abc"), "abc", false, true), None);
+        // Different content: reload regardless of timestamps (downgrades, files
+        // restored from a backup, same-second package upgrades).
+        assert_eq!(
+            reload_reason(Some("abc"), "def", false, true),
+            Some(ReloadReason::ContentChanged)
+        );
+        // Unknown baseline (first run of this check): reload once, then exact.
+        assert_eq!(
+            reload_reason(None, "abc", false, true),
+            Some(ReloadReason::ContentChanged)
+        );
+    }
+
+    #[test]
+    fn probing_the_plugin_never_writes_anything() {
+        // 用户拍板的策略：运行时只校验、绝不二次安装。这里把「探测不写入」
+        // 锁进测试：两个目标路径都不存在时必须返回 Missing，且目录里不留任何
+        // 新文件（旧实现会往 ~/.local 拷一份，反而盖过 deb 装的插件）。
+        let home = tempfile::tempdir().unwrap();
+        let layout = LinuxResourceLayout {
+            package_kind: crate::LinuxPackageKind::SystemPackage,
+            resource_root: PathBuf::from("/usr/lib/openless/resources"),
+        };
+        let plan = FcitxPluginInstallPlan::for_layout(&layout, home.path()).unwrap();
+        let library_dir = plan.target_library.parent().unwrap().to_path_buf();
+        let config_dir = plan.target_config.parent().unwrap().to_path_buf();
+
+        // The probe itself must not create the per-user addon tree.
+        assert!(
+            !library_dir.exists(),
+            "probe must not create {}",
+            library_dir.display()
+        );
+        assert!(
+            !config_dir.exists(),
+            "probe must not create {}",
+            config_dir.display()
+        );
+    }
+
+    #[test]
+    fn removing_a_shadowing_copy_leaves_other_addons_alone() {
+        let home = tempfile::tempdir().unwrap();
+        let layout = LinuxResourceLayout {
+            package_kind: crate::LinuxPackageKind::SystemPackage,
+            resource_root: PathBuf::from("/usr/lib/openless/resources"),
+        };
+        let plan = FcitxPluginInstallPlan::for_layout(&layout, home.path()).unwrap();
+        for path in [&plan.target_library, &plan.target_config] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"stale").unwrap();
+        }
+        // A neighbouring addon from another project must survive the cleanup.
+        let neighbour = plan
+            .target_config
+            .parent()
+            .unwrap()
+            .join("other-addon.conf");
+        std::fs::write(&neighbour, b"keep me").unwrap();
+
+        // Without a package plugin the per-user copy is the only one: keep it.
+        assert!(!remove_shadowing_user_copy(&plan, false));
+        assert!(plan.target_library.is_file());
+
+        // With the package plugin present the stale copy would shadow it: remove.
+        assert!(remove_shadowing_user_copy(&plan, true));
+        assert!(!plan.target_library.exists());
+        assert!(!plan.target_config.exists());
+        assert_eq!(std::fs::read(&neighbour).unwrap(), b"keep me");
+    }
 
     #[test]
     fn plugin_plan_is_probe_only_for_system_packages() {

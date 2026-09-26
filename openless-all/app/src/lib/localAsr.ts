@@ -16,8 +16,7 @@ export function isLocalAsrModelSupportedOnOs(
   if (model.runtime === 'foundry' || model.runtime === 'sherpa_onnx') return os === 'win';
   if (model.runtime !== 'generic') return false;
   if (model.family === 'whisper') return os === 'mac';
-  if (model.family === 'qwen3' || model.family === 'qwen3_asr')
-    return os === 'mac' || os === 'linux';
+  if (model.family === 'qwen3' || model.family === 'qwen3_asr') return os === 'mac';
   return false;
 }
 
@@ -29,7 +28,7 @@ export interface LocalAsrSettings {
   mirror: string;
   modelsBaseDir: string | null;
   modelsRootDir: string;
-  /** macOS/Linux 编入 C 引擎；MLX 仅在 macOS 可用。 */
+  /** Tauri 仅 macOS 编入本地 C 引擎；MLX 仅在 macOS 可用。 */
   engineAvailable: boolean;
 }
 

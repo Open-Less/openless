@@ -1,7 +1,3 @@
-#![cfg_attr(
-    target_os = "linux",
-    allow(dead_code, unused_imports, unused_variables)
-)]
 //! 本地 Qwen3-ASR 引擎缓存。
 //!
 //! 用途：避免每次 dictation 都重加载 1.2GB+ 模型。引擎一次 load 后驻留在内存，
@@ -12,7 +8,7 @@
 //! `last_used`——如果中间又被使用过则不释放，否则 drop 引擎让 OS 回收 RAM。
 
 use std::path::Path;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -20,19 +16,19 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use parking_lot::Mutex;
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 use super::{LocalQwenEngine, QwenBackend};
 
 pub struct LocalAsrCache {
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     inner: Mutex<Option<CachedEngine>>,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     load_generation: AtomicU64,
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(target_os = "macos"))]
     _phantom: (),
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 struct CachedEngine {
     model_id: String,
     backend: QwenBackend,
@@ -50,18 +46,18 @@ impl Default for LocalAsrCache {
 impl LocalAsrCache {
     pub fn new() -> Self {
         Self {
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(target_os = "macos")]
             inner: Mutex::new(None),
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(target_os = "macos")]
             load_generation: AtomicU64::new(0),
-            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+            #[cfg(not(target_os = "macos"))]
             _phantom: (),
         }
     }
 
     /// 取已缓存的同 id 引擎，没有就加载（**阻塞、可能数秒**——调用方应放
     /// `spawn_blocking`）。模型 id 不同则把旧的 drop 再加载新的。
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     pub fn get_or_load(
         &self,
         backend: QwenBackend,
@@ -71,7 +67,7 @@ impl LocalAsrCache {
         self.get_or_load_for_lease(backend, model_id, model_dir, None)
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     pub(crate) fn get_or_load_for_lease(
         &self,
         backend: QwenBackend,
@@ -133,7 +129,7 @@ impl LocalAsrCache {
     }
 
     /// 在激活新模型前认领原缓存，也使尚未完成的旧 loader 失去写回 cache 的资格。
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     pub(crate) fn claim_lease(&self, model_id: &str, generation: u64) {
         let mut slot = self.inner.lock();
         self.load_generation.fetch_add(1, Ordering::AcqRel);
@@ -143,7 +139,7 @@ impl LocalAsrCache {
     }
 
     /// Core 只释放自己激活的那一代；同 ID 的新实例或普通 preload 都不属于旧 lease。
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     pub(crate) fn release_lease(&self, model_id: &str, generation: u64) {
         let taken = {
             let mut slot = self.inner.lock();
@@ -166,7 +162,7 @@ impl LocalAsrCache {
     /// 标记最近使用时间——end_session 在调过 transcribe 之后调一下，
     /// 让 release 计时器从这一刻重新算。
     pub fn touch(&self) {
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(target_os = "macos")]
         {
             if let Some(cached) = self.inner.lock().as_mut() {
                 cached.last_used = Instant::now();
@@ -176,7 +172,7 @@ impl LocalAsrCache {
 
     /// Session 只允许清理自己实际借出且未被新激活认领的引擎。新激活可能复用
     /// 同一个 Arc，仍需保留它的 owner；下一次普通 get_or_load 才撤销该保护。
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     pub fn finish_use(&self, engine: &Arc<LocalQwenEngine>, discard: bool) {
         let mut slot = self.inner.lock();
         if slot.as_ref().is_some_and(|cached| {
@@ -191,7 +187,7 @@ impl LocalAsrCache {
     }
 
     /// Timer 只保留 Weak，用户“立即释放”后不会被旧定时器额外占用数分钟 RAM。
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     pub fn release_current_if_idle(
         &self,
         engine: &std::sync::Weak<LocalQwenEngine>,
@@ -210,7 +206,7 @@ impl LocalAsrCache {
 
     /// 如果空闲时长 ≥ threshold，释放引擎。返回是否真释放了。
     pub fn release_if_idle(&self, idle_threshold: Duration) -> bool {
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(target_os = "macos")]
         {
             let taken = {
                 let mut slot = self.inner.lock();
@@ -251,7 +247,7 @@ impl LocalAsrCache {
     }
 
     fn release_now_inner(&self, abort_in_use: bool) {
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(target_os = "macos")]
         {
             let taken = {
                 let mut slot = self.inner.lock();
@@ -268,12 +264,12 @@ impl LocalAsrCache {
                 pressure_relief();
             }
         }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(not(target_os = "macos"))]
         let _ = abort_in_use;
     }
 
     pub fn loaded_model_id(&self) -> Option<String> {
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(target_os = "macos")]
         {
             return self
                 .inner
@@ -282,12 +278,12 @@ impl LocalAsrCache {
                 .filter(|cached| cached.engine.is_healthy())
                 .map(|cached| cached.model_id.clone());
         }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(not(target_os = "macos"))]
         None
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(not(target_os = "macos"))]
 fn pressure_relief() {}
 
 /// drop MLX Qwen 引擎后调一次：让 macOS libmalloc 把 freelist 上的物理页归还内核。

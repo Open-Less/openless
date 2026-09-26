@@ -68,7 +68,7 @@ Tauri 在 `src-tauri/src/coordinator.rs` 构造 Core，`core_adapters.rs` 组装
 
 ## 5. 窗口体系
 
-`src-tauri/tauri.conf.json` 声明 `main`、`capsule` 两个窗口。`src/main.tsx` 读取 `?window=`，`src/App.tsx` 按类型加载胶囊、`qa`、`selection-polish-preview`、`selection-voice-intent`、`less-computer` 和 `less-computer-glow`；未指定类型时进入主界面。各 WebView 共用前端入口，重页面按需加载；移动端再依据平台能力选择布局。Linux 单实例由 `linux-egui/src/single_instance.rs` 守护并转发启动意图。
+`src-tauri/tauri.conf.json` 声明 `main`、`capsule` 两个窗口。`src/main.tsx` 读取 `?window=`，`src/App.tsx` 按类型加载胶囊、`qa`（含复用它的「润色结果」模式）、`selection-voice-intent`、`less-computer` 和 `less-computer-glow`；未指定类型时进入主界面。各 WebView 共用前端入口，重页面按需加载；移动端再依据平台能力选择布局。Linux 单实例由 `linux-egui/src/single_instance.rs` 守护并转发启动意图。
 
 主窗口默认逻辑尺寸为 1300×835，允许用户调整；macOS 原生窗口按钮左侧和顶部均留出 16px，前端保留 44px 拖动区。桌面侧栏宽 226px，主内容从版本行下方开始，设置面板单独限制高度并在内部滚动。
 
