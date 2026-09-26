@@ -21,55 +21,72 @@ pub struct LinuxNativeRuntime {
     host: std::sync::Arc<LinuxHost>,
     startup: openless_core::StartupSnapshot,
     host_actions: std::sync::Arc<LinuxHostActions>,
-    broker: Option<SingleInstanceBroker>,
+    broker: Option<std::sync::Arc<SingleInstanceBroker>>,
     hotkeys: Option<Fcitx5HotkeyListener>,
 }
 
 impl LinuxNativeRuntime {
     pub async fn start(
         backend: LinuxBackendRuntime,
-        broker: Option<SingleInstanceBroker>,
+        broker: Option<std::sync::Arc<SingleInstanceBroker>>,
         hotkeys: Option<Fcitx5HotkeyListener>,
     ) -> Result<Self, BackendError> {
-        // fcitx5 starts with no OpenLess shortcuts on a clean installation.
-        // Hydrate its native registrations from the same Core target used by
-        // settings transactions before accepting any input. Equal previous/next
-        // values intentionally force the effect without rewriting preferences.
-        let target = openless_core::HotkeyRuntimeTarget::from(&backend.backend.get_preferences());
-        backend
-            .settings_runtime
-            .commit(
-                &openless_core::SettingsEffectPlan {
-                    hotkeys: Some(openless_core::SettingsValueChange {
-                        previous: target.clone(),
-                        next: target,
-                    }),
-                    ..Default::default()
-                },
-                &mut openless_core::SettingsEffectReceipt::default(),
-            )
-            .map_err(|failure| failure.error)?;
-        let startup = backend.backend.start().await?;
-        openless_core::require_backend_contract_version(&startup.contract_version)?;
-        let preferences = backend.backend.get_preferences();
-        backend
-            .backend
-            .services()
-            .remote_input
-            .set_locale(
-                crate::remote_input::remote_input_locale(&backend.backend.config().locale)
-                    .to_string(),
-            )
-            .await?;
-        backend
-            .backend
-            .services()
-            .remote_input
-            .configure(openless_core::RemoteInputConfig {
-                enabled: preferences.remote_input_enabled,
-                port: preferences.remote_input_port,
-            })
-            .await?;
+        let initialized = async {
+            // fcitx5 starts with no OpenLess shortcuts on a clean installation.
+            // Hydrate its native registrations from the same Core target used by
+            // settings transactions before accepting any input. Equal previous/next
+            // values intentionally force the effect without rewriting preferences.
+            let target =
+                openless_core::HotkeyRuntimeTarget::from(&backend.backend.get_preferences());
+            backend
+                .settings_runtime
+                .commit(
+                    &openless_core::SettingsEffectPlan {
+                        hotkeys: Some(openless_core::SettingsValueChange {
+                            previous: target.clone(),
+                            next: target,
+                        }),
+                        ..Default::default()
+                    },
+                    &mut openless_core::SettingsEffectReceipt::default(),
+                )
+                .map_err(|failure| failure.error)?;
+            let startup = backend.backend.start().await?;
+            openless_core::require_backend_contract_version(&startup.contract_version)?;
+            let preferences = backend.backend.get_preferences();
+            backend
+                .backend
+                .services()
+                .remote_input
+                .set_locale(
+                    crate::remote_input::remote_input_locale(&backend.backend.config().locale)
+                        .to_string(),
+                )
+                .await?;
+            backend
+                .backend
+                .services()
+                .remote_input
+                .configure(openless_core::RemoteInputConfig {
+                    enabled: preferences.remote_input_enabled,
+                    port: preferences.remote_input_port,
+                })
+                .await?;
+            Ok::<_, BackendError>(startup)
+        }
+        .await;
+        let startup = match initialized {
+            Ok(startup) => startup,
+            Err(mut error) => {
+                drop(hotkeys);
+                if let Err(cleanup) = backend.backend.shutdown().await {
+                    error
+                        .message
+                        .push_str(&format!("; startup cleanup failed: {cleanup}"));
+                }
+                return Err(error);
+            }
+        };
         Ok(Self {
             host: std::sync::Arc::new(LinuxHost::with_settings_runtime(
                 backend.backend,
@@ -183,7 +200,10 @@ mod tests {
     use super::*;
 
     #[derive(Default)]
-    struct StartupHotkeys(std::sync::Mutex<Vec<openless_core::HotkeyRuntimeTarget>>);
+    struct StartupHotkeys(
+        std::sync::Mutex<Vec<openless_core::HotkeyRuntimeTarget>>,
+        bool,
+    );
 
     impl crate::LinuxSettingsEffects for StartupHotkeys {
         fn apply_hotkeys(
@@ -191,6 +211,12 @@ mod tests {
             target: &openless_core::HotkeyRuntimeTarget,
         ) -> Result<(), BackendError> {
             self.0.lock().unwrap().push(target.clone());
+            if self.1 {
+                return Err(BackendError::new(
+                    BackendErrorCode::Platform,
+                    "required hotkey registration failed",
+                ));
+            }
             Ok(())
         }
 
@@ -199,27 +225,14 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn native_runtime_starts_pumps_and_shuts_down_without_ui() {
-        let data_dir = std::env::temp_dir().join(format!(
-            "openless-linux-native-runtime-{}-{}",
-            std::process::id(),
-            uuid::Uuid::new_v4().simple()
-        ));
-        let host_actions = Arc::new(LinuxHostActions::default());
-        // LinuxNativeRuntime is a production shell: even when Remote Input is
-        // disabled it synchronizes locale/config through the real Core service.
-        // Supplying that boundary here keeps the test honest and prevents an
-        // Unsupported fallback from silently returning to production startup.
-        let mut services = BackendServices::unsupported();
-        services.remote_input = Arc::new(
-            RemoteInputService::new(Arc::new(RecordingRemoteInputRuntime::default()), 8443, "en")
-                .unwrap(),
-        );
-        let backend = Arc::new(
+    fn fixture_backend(
+        data_dir: &std::path::Path,
+        services: BackendServices,
+    ) -> Arc<OpenLessBackend> {
+        Arc::new(
             OpenLessBackend::new(
                 BackendConfig {
-                    data_dir: data_dir.clone(),
+                    data_dir: data_dir.to_path_buf(),
                     ..BackendConfig::default()
                 },
                 BackendDependencies {
@@ -241,7 +254,27 @@ mod tests {
                 },
             )
             .unwrap(),
+        )
+    }
+
+    #[tokio::test]
+    async fn native_runtime_starts_pumps_and_shuts_down_without_ui() {
+        let data_dir = std::env::temp_dir().join(format!(
+            "openless-linux-native-runtime-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let host_actions = Arc::new(LinuxHostActions::default());
+        // LinuxNativeRuntime is a production shell: even when Remote Input is
+        // disabled it synchronizes locale/config through the real Core service.
+        // Supplying that boundary here keeps the test honest and prevents an
+        // Unsupported fallback from silently returning to production startup.
+        let mut services = BackendServices::unsupported();
+        services.remote_input = Arc::new(
+            RemoteInputService::new(Arc::new(RecordingRemoteInputRuntime::default()), 8443, "en")
+                .unwrap(),
         );
+        let backend = fixture_backend(&data_dir, services);
         let hotkeys = Arc::new(StartupHotkeys::default());
         let runtime = LinuxNativeRuntime::start(
             LinuxBackendRuntime {
@@ -277,5 +310,57 @@ mod tests {
         runtime.shutdown().await.unwrap();
         assert!(!backend.snapshot().running);
         let _ = std::fs::remove_dir_all(data_dir);
+    }
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn startup_failures_stop_core_and_keep_the_outer_lock_until_the_error_window_closes() {
+        for fail_hotkeys in [true, false] {
+            let dir = std::env::temp_dir()
+                .join(format!("openless-startup-failure-{}", uuid::Uuid::new_v4()));
+            let backend = fixture_backend(&dir, BackendServices::unsupported());
+            let lock = dir.join("openless.lock");
+            let broker = match crate::SingleInstanceBroker::acquire_or_forward(
+                &lock,
+                &dir.join("openless.sock"),
+                crate::LinuxLaunchIntent::ShowMain,
+            )
+            .unwrap()
+            {
+                crate::SingleInstanceRole::Primary(broker) => Arc::new(broker),
+                crate::SingleInstanceRole::Forwarded => panic!("isolated test must own its lock"),
+            };
+            let mut events = backend.subscribe();
+            let result = LinuxNativeRuntime::start(
+                LinuxBackendRuntime {
+                    backend: backend.clone(),
+                    host_actions: Arc::new(LinuxHostActions::default()),
+                    settings_runtime: Arc::new(crate::LinuxSettingsRuntime::with_effects(
+                        Arc::new(StartupHotkeys(Default::default(), fail_hotkeys)),
+                    )),
+                },
+                Some(broker.clone()),
+                None,
+            )
+            .await;
+            assert!(result.is_err());
+            assert!(!backend.snapshot().running);
+            let mut started = false;
+            while let Ok(event) = events.try_recv() {
+                started |= matches!(event.kind, openless_core::BackendEventKind::BackendStarted);
+            }
+            assert_eq!(
+                started, !fail_hotkeys,
+                "registration must precede Core startup"
+            );
+            assert!(crate::SingleInstanceGuard::acquire(&lock)
+                .unwrap()
+                .is_none());
+            drop(broker);
+            assert!(crate::SingleInstanceGuard::acquire(&lock)
+                .unwrap()
+                .is_some());
+            drop(backend);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
     }
 }

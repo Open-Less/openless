@@ -16,6 +16,9 @@ use crate::cloud_sync_e2ee_store::{
 
 use super::{document_error, local::LocalStorage, service::SyncServiceData, SyncResult};
 
+// Composition boundary: keep the existing injected services explicit rather than
+// adding a second dependency bundle solely for this constructor.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build(
     config: super::EncryptedSyncConfig,
     data_dir: &Path,

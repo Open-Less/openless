@@ -78,8 +78,8 @@ pub fn settings_overlay(
     // Mask the content area (not the sidebar/titlebar) and centre the card in
     // it — the same backdrop the marketplace detail uses.
     let size = egui::vec2(
-        (body.width() - 40.0).max(320.0).min(960.0),
-        (body.height() - 40.0).max(280.0).min(680.0),
+        (body.width() - 40.0).clamp(320.0, 960.0),
+        (body.height() - 40.0).clamp(280.0, 680.0),
     );
 
     // 遮罩、点击拦截与卡片必须是**同一个 Area**。egui 在 Area 被按下时会把它抬到同层
@@ -414,6 +414,7 @@ fn panel(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
                 .size(13.0)
                 .color(theme::INK_3),
             );
+            save_state(ui, vm, actions);
             if let Some(notice) = &vm.settings_notice {
                 ui.add_space(4.0);
                 ui.label(egui::RichText::new(notice).size(11.0).color(theme::BLUE));
@@ -432,6 +433,25 @@ fn panel(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
                     SettingsSection::About => about(ui, vm, actions),
                 });
         });
+}
+
+pub(super) fn save_state(
+    ui: &mut egui::Ui,
+    vm: &FrontendViewModel,
+    actions: &mut Vec<FrontendAction>,
+) {
+    if vm.settings_saving {
+        ui.label(tr_l10n(vm.lang, "common.saving"));
+    }
+    if let Some(error) = &vm.settings_save_error {
+        ui.colored_label(theme::ERR, tr_l10n(vm.lang, "style.pack.unsaved"));
+        ui.label(error);
+        if ui.button(tr_l10n(vm.lang, "common.retry")).clicked() {
+            actions.push(FrontendAction::SettingsAction(
+                SettingsActionField::RetrySave,
+            ));
+        }
+    }
 }
 
 /// Title + description of the open 实验与扩展 sub-page (`None` on the list page).
@@ -1013,7 +1033,7 @@ pub(super) fn shortcut_control(
     }
     // Tauri `ShortcutRecorder`: 录制控件宽度上限 360px，值靠左，展开符贴**同一行**
     // 的最右缘。过去先画箭头再画键帽，速记卡片里箭头挤在键帽左侧。
-    let width = ui.available_width().min(360.0).max(26.0);
+    let width = ui.available_width().clamp(26.0, 360.0);
     let (line, _) = ui.allocate_exact_size(egui::vec2(width, 26.0), egui::Sense::hover());
     let arrow = egui::Rect::from_min_size(
         egui::pos2(line.right() - 26.0, line.top()),
@@ -2684,13 +2704,14 @@ fn provider_model_block(
                 actions.push(FrontendAction::SettingsProviderModelCustom(false));
             }
         }
-        if editor.model.trim().is_empty() && !editor.default_model.is_empty() {
-            if provider_small_button(ui, lang, "settings.providers.fillDefault", false) {
-                actions.push(FrontendAction::SettingsProviderField(
-                    SettingsProviderField::Model,
-                    editor.default_model.clone(),
-                ));
-            }
+        if editor.model.trim().is_empty()
+            && !editor.default_model.is_empty()
+            && provider_small_button(ui, lang, "settings.providers.fillDefault", false)
+        {
+            actions.push(FrontendAction::SettingsProviderField(
+                SettingsProviderField::Model,
+                editor.default_model.clone(),
+            ));
         }
     });
 

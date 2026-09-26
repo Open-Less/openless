@@ -105,11 +105,13 @@ jobs:
         working-directory: openless-all/app
         run: |
           cargo test --locked -p openless-core
-          cargo clippy --locked -p openless-core --all-targets
+          cargo clippy --locked -p openless-core --all-targets -- -D warnings
           cargo test --locked -p openless-linux-egui --all-targets
+          cargo clippy --locked -p openless-linux-egui --all-targets -- -D warnings
           cargo check --locked -p openless-linux-egui --all-targets
           node scripts/linux-egui-tauri-free-contract.test.mjs
           node scripts/linux-egui-release-contract.test.mjs
+          node scripts/ci-changed-areas.test.mjs
           node scripts/tauri-linux-free-contract.test.mjs
           pwsh -NoProfile -File ./scripts/check-core-deps.ps1
           pwsh -NoProfile -File ./scripts/check-core-deps.ps1 openless-linux-egui

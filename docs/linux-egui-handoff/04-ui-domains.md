@@ -12,7 +12,7 @@
 | Selection | 划词润色预览/撤回（`selection.rs`） | Selection Voice 生产触发/捕获/意图路由（L04） |
 | Agent | Less Computer 工具调用、审批固定在页面外、后台事件保留 | Agent 检测/模型/路径/权限配置（L09） |
 | Services | AI 服务配置、渠道管理（`settings.rs` + Core provider 面） | Omni 有效模式配置入口完整性（L09） |
-| Models | 本地 Qwen 下载/激活/取消 | 完整模型管理：路径/镜像/详情/删除/预载/释放（L08） |
+| 本地 ASR | 明确不支持；Linux 不包含 Qwen 推理运行时 | 保持能力声明与 UI 一致，不作为待设备验证功能 |
 | Remote | 手机输入独立页、连接状态、陈旧地址处理 | — |
 | History | 只读最近条目 | 完整历史/统计/录音操作（L07，依赖 L03） |
 | Settings | 现有设置独立页 | 词典/纠错/风格包/市场无页面（L05/L06）；多数设置缺实际消费者（L09） |

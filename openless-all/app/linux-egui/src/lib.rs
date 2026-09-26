@@ -23,6 +23,7 @@ mod logging;
 mod popup;
 mod popup_layer;
 mod popup_window;
+mod preference_patch;
 mod qa;
 mod recordings;
 mod remote_input;
@@ -50,6 +51,8 @@ pub use dictation_feedback::{
     capsule_outcome, is_backend_error_code, is_expected_stop_error, normalize_stop_result,
     phase_shows_capsule, CapsuleOutcome, CAPSULE_AUTO_HIDE_DELAY_MS,
 };
+#[cfg(target_os = "linux")]
+pub use fcitx5::prepare_fcitx5;
 pub use fcitx5::{
     available as fcitx5_available, commit_text as fcitx5_commit_text,
     copy_to_clipboard as fcitx5_copy_to_clipboard,
@@ -103,6 +106,7 @@ pub use popup_window::{
 };
 
 pub use openless_core::contract::*;
+pub use preference_patch::patch_preferences;
 pub use recordings::{read_recording_wav, recording_path, recording_pcm, RecordingError};
 pub use resources::{
     LinuxPackageKind, LinuxResourceLayout, LinuxResourceResolver, FCITX_PLUGIN_CONFIG,

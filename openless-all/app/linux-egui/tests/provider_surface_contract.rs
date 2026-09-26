@@ -5,7 +5,12 @@
 //! 复制到 Rust 测试里：某次合并或清理把实现覆盖掉时，本机 `cargo test` 就会
 //! 直接失败，而不是等到发布流水线第 8 步才发现（历史上有一次正是这样丢的）。
 
-const MAIN: &str = include_str!("../src/main.rs");
+const MAIN: &str = concat!(
+    include_str!("../src/main.rs"),
+    include_str!("../src/linux_app/settings_save.rs"),
+    include_str!("../src/linux_app/window.rs"),
+    include_str!("../src/linux_app/history.rs"),
+);
 
 /// 每个 token 都对应 Linux 设置页真实发出的 Core 调用。
 #[test]

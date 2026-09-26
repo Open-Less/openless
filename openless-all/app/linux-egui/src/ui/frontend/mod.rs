@@ -118,6 +118,16 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
         // Settings overlay (rendered on top of everything).
         if vm.settings_open {
             settings::settings_overlay(ctx, vm, actions, body);
+        } else if vm.settings_saving || vm.settings_save_error.is_some() {
+            egui::Area::new(egui::Id::new("preference-save-state"))
+                .order(egui::Order::Foreground)
+                .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-20.0, 52.0))
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.set_max_width(420.0);
+                        settings::save_state(ui, vm, actions);
+                    });
+                });
         }
     });
 }
@@ -162,8 +172,36 @@ mod tests {
         let mut vm = FrontendViewModel::default();
         let mut actions = Vec::new();
         render(ctx, &mut vm, &mut actions);
-        let _ = crate::ui::frontend::end_pass(&ctx);
+        let _ = crate::ui::frontend::end_pass(ctx);
         actions
+    }
+
+    #[test]
+    fn failed_preference_saves_offer_retry_without_opening_settings() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: openless_linux_egui::Lang::En,
+            active_page: Page::Translation,
+            settings_save_error: Some("fixture registration failed".into()),
+            ..Default::default()
+        };
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(viewport()),
+                ..Default::default()
+            });
+            render(&ctx, &mut vm, &mut Vec::new());
+            let _ = end_pass(&ctx);
+        }
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(viewport()),
+            ..Default::default()
+        });
+        render(&ctx, &mut vm, &mut Vec::new());
+        let text = painted_text(&end_pass(&ctx));
+        for expected in ["Unsaved", "Retry", "fixture registration failed"] {
+            assert!(text.contains(expected), "{text}");
+        }
     }
 
     #[test]
@@ -982,35 +1020,37 @@ mod tests {
     #[test]
     fn style_pack_hotkey_rows_render_their_pack_and_keycaps() {
         let zh = openless_linux_egui::Lang::ZhCn;
-        let mut vm = FrontendViewModel::default();
-        vm.style_packs = vec![
-            super::view_model::StylePack {
-                icon_path: None,
-                icon_data_url: None,
-                base_mode: "light".into(),
-                id: "builtin-polish".into(),
-                name: "Polish".into(),
-                description: String::new(),
-                tags: Vec::new(),
-                is_builtin: true,
-                enabled: true,
-                is_active: true,
-                selection_active: false,
-            },
-            super::view_model::StylePack {
-                icon_path: None,
-                icon_data_url: None,
-                base_mode: "formal".into(),
-                id: "custom-legal".into(),
-                name: "Legal".into(),
-                description: String::new(),
-                tags: Vec::new(),
-                is_builtin: false,
-                enabled: false,
-                is_active: false,
-                selection_active: false,
-            },
-        ];
+        let mut vm = FrontendViewModel {
+            style_packs: vec![
+                super::view_model::StylePack {
+                    icon_path: None,
+                    icon_data_url: None,
+                    base_mode: "light".into(),
+                    id: "builtin-polish".into(),
+                    name: "Polish".into(),
+                    description: String::new(),
+                    tags: Vec::new(),
+                    is_builtin: true,
+                    enabled: true,
+                    is_active: true,
+                    selection_active: false,
+                },
+                super::view_model::StylePack {
+                    icon_path: None,
+                    icon_data_url: None,
+                    base_mode: "formal".into(),
+                    id: "custom-legal".into(),
+                    name: "Legal".into(),
+                    description: String::new(),
+                    tags: Vec::new(),
+                    is_builtin: false,
+                    enabled: false,
+                    is_active: false,
+                    selection_active: false,
+                },
+            ],
+            ..Default::default()
+        };
         vm.settings.style_pack_hotkeys = vec![super::view_model::StylePackHotkeyRow {
             pack_id: "custom-legal".into(),
             name: "Legal".into(),
@@ -2353,7 +2393,7 @@ mod tests {
                 "modal must be vertically centred at {width}x{height}: modal={modal:?} body={body:?}"
             );
             // 卡片不会被内容撑宽（撑宽就会把居中算歪）。
-            let expected_width = (body.width() - 40.0).max(320.0).min(960.0);
+            let expected_width = (body.width() - 40.0).clamp(320.0, 960.0);
             assert!(
                 (modal.width() - expected_width).abs() <= 2.0,
                 "the content must fit the requested modal width {expected_width}: {modal:?}"
@@ -2374,7 +2414,7 @@ mod tests {
         });
         let mut actions = Vec::new();
         render(ctx, vm, &mut actions);
-        let _ = crate::ui::frontend::end_pass(&ctx);
+        let _ = crate::ui::frontend::end_pass(ctx);
         actions
     }
 
@@ -2387,6 +2427,7 @@ mod tests {
     ///    egui memory 里的 Area 矩形作基准，而不是 `layout::body_rect`）；
     ///  * 遮罩上的点也落在弹窗自己的图层（点击不会漏到下方页面）；
     ///  * 点一下遮罩之后，卡片既不移位、也不会被抬起的遮罩盖住。
+    ///
     /// 弹窗卡片相对遮罩区的位置。上游 Beta.2 里市场详情/历史确认是居中的
     /// `Modal`，风格编辑器是贴右边的抽屉（`top/right/bottom: 16`，
     /// `width: min(760px, 100vw - 32px)`）。
@@ -3252,8 +3293,8 @@ mod tests {
             states.push(painted.contains("GROUPCONTENT"));
         }
         assert!(states[0], "collapsible groups start expanded, like Tauri");
-        assert_eq!(
-            states[3], false,
+        assert!(
+            !states[3],
             "the group must collapse after its header is clicked: states={states:?}"
         );
     }

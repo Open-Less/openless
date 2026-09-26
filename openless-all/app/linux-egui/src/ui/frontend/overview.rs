@@ -210,7 +210,7 @@ fn body(
         available.max(BOTTOM_MIN_HEIGHT)
     };
 
-    bottom_row(ui, width, bottom_height, vm, summary, lang, actions, mobile);
+    bottom_row(ui, width, bottom_height, vm, summary, actions, mobile);
 
     if show_heatmap {
         ui.add_space(SECTION_GAP);
@@ -561,10 +561,10 @@ fn bottom_row(
     height: f32,
     vm: &FrontendViewModel,
     summary: &OverviewSummary,
-    lang: Lang,
     actions: &mut Vec<FrontendAction>,
     mobile: bool,
 ) {
+    let lang = vm.lang;
     if !mobile {
         let (row, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
         let left_width = ((width - GAP) / 2.4).max(220.0);
@@ -1323,7 +1323,7 @@ fn format_number(value: u64) -> String {
     let bytes = raw.as_bytes();
     let mut out = String::with_capacity(raw.len() + raw.len() / 3);
     for (index, byte) in bytes.iter().enumerate() {
-        if index > 0 && (bytes.len() - index) % 3 == 0 {
+        if index > 0 && (bytes.len() - index).is_multiple_of(3) {
             out.push(',');
         }
         out.push(*byte as char);

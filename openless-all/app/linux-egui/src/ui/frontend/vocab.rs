@@ -1342,8 +1342,10 @@ mod tests {
     #[test]
     fn bottom_panel_stays_at_viewport_bottom_and_grows_upward() {
         let ctx = egui::Context::default();
-        let mut vm = FrontendViewModel::default();
-        vm.vocab_unsupported = false;
+        let mut vm = FrontendViewModel {
+            vocab_unsupported: false,
+            ..Default::default()
+        };
         let mut actions = Vec::new();
         let mut collapsed_top = 0.0;
         for expanded in [false, true] {
@@ -1413,8 +1415,10 @@ mod tests {
     #[test]
     fn new_word_dialog_uses_tauri_card_and_real_presets() {
         let ctx = egui::Context::default();
-        let mut vm = FrontendViewModel::default();
-        vm.lang = openless_linux_egui::Lang::ZhCn;
+        let mut vm = FrontendViewModel {
+            lang: openless_linux_egui::Lang::ZhCn,
+            ..Default::default()
+        };
         let presets: Vec<_> = [
             ("programmer", "PR、CI、Rust"),
             ("chef", "heat、knife"),

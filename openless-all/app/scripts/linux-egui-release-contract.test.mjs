@@ -33,6 +33,9 @@ assert.match(check, /^on:\n  workflow_call:/m, 'the reusable check must not run 
 assert.match(check, /contents: read/);
 assert.match(check, /runs-on: ubuntu-24\.04/);
 assert.match(check, /cargo test --locked -p openless-core/);
+for (const crate of ['openless-core', 'openless-linux-egui']) {
+  assert.ok(check.includes(`cargo clippy --locked -p ${crate} --all-targets -- -D warnings`));
+}
 assert.match(check, /cargo test --locked --manifest-path src-tauri\/backend-tests\/Cargo\.toml --test remote_tls/);
 assert.match(check, /cargo test --locked -p openless-linux-egui --all-targets/);
 assert.match(check, /cargo check --locked -p openless-linux-egui --all-targets/);

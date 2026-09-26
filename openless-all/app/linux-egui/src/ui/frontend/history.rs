@@ -997,7 +997,7 @@ enum HistoryMenuItem {
         icon: IconName,
         label: String,
         danger: bool,
-        action: FrontendAction,
+        action: Box<FrontendAction>,
     },
 }
 
@@ -1016,20 +1016,20 @@ fn history_action_menu(
             icon: IconName::Play,
             label: tr_l10n(lang, "history.play_recording").to_string(),
             danger: false,
-            action: FrontendAction::HistoryPlay(index),
+            action: Box::new(FrontendAction::HistoryPlay(index)),
         });
         items.push(HistoryMenuItem::Action {
             icon: IconName::Download,
             label: tr_l10n(lang, "history.export").to_string(),
             danger: false,
-            action: FrontendAction::HistoryExport(index),
+            action: Box::new(FrontendAction::HistoryExport(index)),
         });
         items.push(HistoryMenuItem::Separator);
         items.push(HistoryMenuItem::Action {
             icon: IconName::Refresh,
             label: tr_l10n(lang, "history.retranscribe").to_string(),
             danger: false,
-            action: FrontendAction::HistoryRetranscribe(index),
+            action: Box::new(FrontendAction::HistoryRetranscribe(index)),
         });
     }
     if !entry.raw_transcript.trim().is_empty() {
@@ -1037,7 +1037,7 @@ fn history_action_menu(
             icon: IconName::Sparkle,
             label: tr_l10n(lang, "history.repolish.title").to_string(),
             danger: false,
-            action: FrontendAction::HistoryRepolishOpen(index),
+            action: Box::new(FrontendAction::HistoryRepolishOpen(index)),
         });
         items.push(HistoryMenuItem::Separator);
     }
@@ -1045,7 +1045,7 @@ fn history_action_menu(
         icon: IconName::Trash,
         label: tr_l10n(lang, "common.delete").to_string(),
         danger: true,
-        action: FrontendAction::HistoryRequestDelete(index),
+        action: Box::new(FrontendAction::HistoryRequestDelete(entry.id.clone())),
     });
 
     let height = MENU_PADDING * 2.0
@@ -1128,7 +1128,7 @@ fn history_action_menu(
                         color,
                     );
                     if response.clicked() {
-                        actions.push(action);
+                        actions.push(*action);
                         ui.ctx().data_mut(|data| {
                             data.insert_temp(
                                 egui::Id::new(("openless-history-menu", entry.id.as_str())),
@@ -1319,7 +1319,7 @@ fn confirm_overlay(
             });
             paint_card(ui.painter(), dialog);
             let painter = ui.painter().with_clip_rect(dialog);
-            let message = match vm.history_confirm {
+            let message = match &vm.history_confirm {
                 Some(HistoryConfirm::Clear) => {
                     fmt_l10n(lang, "history.confirm_clear", &[&vm.history_entries.len()])
                 }
@@ -1381,21 +1381,6 @@ fn playback_clock(ms: u64) -> String {
     format!("{}:{:02}", seconds / 60, seconds % 60)
 }
 
-#[cfg(test)]
-mod playback_tests {
-    use super::*;
-
-    #[test]
-    fn seek_uses_track_coordinates_and_clamps_drag_outside_it() {
-        let track = egui::Rect::from_min_max(egui::pos2(100.0, 10.0), egui::pos2(300.0, 16.0));
-        assert_eq!(seek_position_ms(100.0, track, 90_000), 0);
-        assert_eq!(seek_position_ms(200.0, track, 90_000), 45_000);
-        assert_eq!(seek_position_ms(400.0, track, 90_000), 90_000);
-        assert_eq!(seek_position_ms(-50.0, track, 90_000), 0);
-        assert_eq!(playback_clock(45_900), "0:45");
-    }
-}
-
 fn paint_card(painter: &egui::Painter, rect: egui::Rect) {
     painter.rect_filled(rect, egui::CornerRadius::same(14), theme::SURFACE);
     painter.rect_stroke(
@@ -1435,4 +1420,19 @@ fn layout_text(
         },
     );
     ui.fonts_mut(|fonts| fonts.layout_job(job))
+}
+
+#[cfg(test)]
+mod playback_tests {
+    use super::*;
+
+    #[test]
+    fn seek_uses_track_coordinates_and_clamps_drag_outside_it() {
+        let track = egui::Rect::from_min_max(egui::pos2(100.0, 10.0), egui::pos2(300.0, 16.0));
+        assert_eq!(seek_position_ms(100.0, track, 90_000), 0);
+        assert_eq!(seek_position_ms(200.0, track, 90_000), 45_000);
+        assert_eq!(seek_position_ms(400.0, track, 90_000), 90_000);
+        assert_eq!(seek_position_ms(-50.0, track, 90_000), 0);
+        assert_eq!(playback_clock(45_900), "0:45");
+    }
 }

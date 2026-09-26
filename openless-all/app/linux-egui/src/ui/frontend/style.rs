@@ -294,19 +294,11 @@ fn pack_grid(
                         } else {
                             let index = pack_indices[slot];
                             let pack = vm.style_packs[index].clone();
-                            // The active pack depends on the workflow tab:
-                            // dictation/ASR or selection polish.
-                            let active = if vm.style_selection_workflow {
-                                pack.selection_active
-                            } else {
-                                pack.is_active
-                            };
                             style_pack_card(
                                 ui,
                                 rect,
                                 &pack,
                                 index,
-                                active,
                                 vm.style_selection_workflow,
                                 lang,
                                 actions,
@@ -428,13 +420,17 @@ fn style_pack_card(
     rect: egui::Rect,
     pack: &StylePack,
     index: usize,
-    // Whether this pack is the active one for the workflow currently shown
-    // (dictation/ASR vs selection polish).
-    active: bool,
     selection_workflow: bool,
     lang: Lang,
     actions: &mut Vec<FrontendAction>,
 ) {
+    // The active pack depends on the workflow tab:
+    // dictation/ASR or selection polish.
+    let active = if selection_workflow {
+        pack.selection_active
+    } else {
+        pack.is_active
+    };
     let response = ui.interact(
         rect,
         ui.id().with(("style-pack-card", index)),

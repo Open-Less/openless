@@ -76,7 +76,7 @@ pub enum FrontendAction {
     /// Ask for confirmation before clearing all history.
     HistoryRequestClear,
     /// Ask for confirmation before deleting one entry.
-    HistoryRequestDelete(usize),
+    HistoryRequestDelete(String),
     /// Confirm the pending destructive history action.
     HistoryConfirmAction,
     /// Dismiss the pending confirmation dialog.
@@ -510,6 +510,7 @@ pub enum SettingsTextField {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug)]
 pub enum SettingsActionField {
+    RetrySave,
     /// 试听录音提示音（Tauri `audioCuePreview` 按钮）。
     PreviewAudioCue,
     ExportDiagnostics,
@@ -557,10 +558,10 @@ pub struct HistoryPlayback {
 }
 
 /// A pending destructive action that needs an in-window confirmation.
-#[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug, PartialEq, Eq)]
 pub enum HistoryConfirm {
     Clear,
-    Delete(usize),
+    Delete(String),
 }
 
 /// One history row plus everything the detail panel shows.
@@ -849,6 +850,8 @@ pub struct FrontendViewModel {
     /// Expanded drill-in row in the 实验与扩展 section (`usize::MAX` = none).
     pub advanced_open: usize,
     pub settings_notice: Option<String>,
+    pub settings_saving: bool,
+    pub settings_save_error: Option<String>,
     pub settings: SettingsFields,
 
     // Selection ask
@@ -992,6 +995,8 @@ impl Default for FrontendViewModel {
             shortcut_pending_modifier: None,
             advanced_open: usize::MAX,
             settings_notice: None,
+            settings_saving: false,
+            settings_save_error: None,
             settings: SettingsFields::default(),
             qa_save_history: false,
             selection_unsupported: true,

@@ -1,17 +1,17 @@
 # Linux egui / Tauri 2 parity tracker
 
-This local stack is based on PR #1019 head `5f668b1d`. Linux ships one
+This stack is maintained in PR #1060 (review baseline `227374ea`). Linux ships one
 `openless-linux-egui` executable and does not link Tauri, Wry, or WebKitGTK.
 Windows, macOS, and Android remain on Tauri.
 
 ## Implemented on the native Core 2.0 path
 
-- eframe/egui 0.33.3 shell, system CJK fallback, single instance, minimized
+- eframe/egui 0.36.2 (wgpu 30.0.1, CPAL 0.18.2) shell, system CJK fallback, single instance, minimized
   startup, close-to-tray, safe shutdown, XDG autostart, notifications, external
   URLs, file dialogs, file logging, and diagnostic-log export
 - fcitx5 dictation, QA, selection polish, translation, style switching, main
   window, style-pack direct, and applicable Coding Agent hotkeys; settings use
-  strict collision checks and survive fcitx5 restart
+  strict collision checks; startup waits for plugin reload before registration
 - CPAL recording with canonical WAV archives, Core retention policy, history
   playback/export and failed-session retranscription
 - Native `mute_during_recording` (PipeWire `wpctl`/PulseAudio `pactl`) with
@@ -24,9 +24,7 @@ Windows, macOS, and Android remain on Tauri.
   style-pack CRUD/reset/prompt diagnostics/ZIP import-export/direct hotkeys
 - provider channel CRUD/order/enable/activation, credential metadata, endpoint,
   model listing, validation, and revision-aware settings conflict merging
-- Qwen catalog/download/cancel/delete/activate/prepare/preload/release/test and
-  progress; Remote Input TLS service, URLs, PIN, locale, connection count, and
-  error events
+- Remote Input TLS service, URLs, PIN, locale, connection count, and error events
 - Marketplace list/detail/install/download/upload/update/delete, likes, authored
   packs, GitHub device flow, polling, cancel, and logout
 - dictation, QA text/voice, selection polish preview/confirm/cancel/revert, and
@@ -37,28 +35,41 @@ Windows, macOS, and Android remain on Tauri.
 - ~~stable/beta AppImage checks, scheduling, byte progress, SHA-256/minisign
   verification, atomic replace~~ — not ported: AppImage is retired from the Linux
   channel and deb/rpm cannot replace themselves, so the host keeps no update path
-- Remote Input assets, Qwen vendor files, shared icons, version parsing, packaging,
+- Remote Input assets, shared icons, version parsing, packaging,
   and release workflow are independent of `src-tauri`
 
-## Automated evidence
+The backend host remains alive when its independent UI process closes. Internal
+UI JSONL protocol v2 requires Hello/Ready, rejects mismatches, and resends bindings
+and a full snapshot on reconnect. Explicit tray/launcher/open-window requests
+create a missing UI or send FocusMain; Wayland activation remains compositor policy.
+Core retains contract 2.0.0. Settings field patches are serialized and rebased onto
+Core revisions; history and WAV probes run in one event-driven blocking task,
+with cached results shared by History and Overview.
+
+## Automated verification commands
 
 - `cargo test -p openless-core --locked`
-- `cargo test -p openless-linux-egui --locked`
+- `cargo test -p openless-linux-egui --locked --all-targets`
+- `cargo clippy --locked -p openless-core --all-targets -- -D warnings`
+- `cargo check --locked -p openless-linux-egui --all-targets`
 - `cargo clippy --locked -p openless-linux-egui --all-targets -- -D warnings`
 - PR #1019 Core/public-surface/dependency contract scripts
 - fcitx5 C++ build plus `input_target_contract`
 - `cargo tree` and release ELF `ldd` checks for Tauri/Wry/WebKitGTK
 - Linux Tauri-free source, packaging, workflow, production-mock, capability, popup,
-  settings-conflict, updater-validation, lifecycle, and staged-file gates
+  settings-conflict, IPC handshake/reconnect, lifecycle, and staged-file gates
 
 ## Deliberate limits and device evidence still required
 
-- Linux supports fcitx5 only; there is no IBus or global-hotkey fallback.
+- fcitx5 is a startup requirement: missing addon, unavailable session D-Bus or
+  failed required shortcut registration prevents Backend startup. An error window
+  explains recovery; closing it exits nonzero while releasing the process lock.
+  There is no IBus or global-hotkey fallback.
 - Selection Voice remains hidden because the Linux production target/intent adapter
   is not implemented. It must not be advertised through capabilities. Selection
   polish and QA remain available.
-- Generic Qwen is the Linux local runtime. Windows Foundry and Apple MLX are not
-  Linux parity requirements.
+- Local ASR is unsupported on Linux, including Generic Qwen, Foundry and MLX.
+  No inference runtime is shipped; this is not an awaiting-device-verification item.
 - Foreground-application identity and native post-insertion edit observation
   are explicit `Unsupported` on Linux: fcitx5 exposes surrounding text but no
   reliable app/control identity across X11/Wayland, PRIMARY cannot prove an
@@ -73,9 +84,9 @@ Windows, macOS, and Android remain on Tauri.
   does not disturb the session or trigger unexpected volume OSD.
 - X11 and Wayland device runs are still required for focus, Unicode insertion,
   popup positioning, tray, fcitx5 reload/rebind, microphone unplug/recovery,
-  Secret Service, real phone Remote Input, and real Qwen inference. Ignored hardware tests or a green build are not
+  Secret Service, real phone Remote Input, and startup failure/recovery. Ignored hardware tests or a green build are not
   recorded as device proof.
 
 The automated scope is complete only when every command above passes at the
-current PR #1019 head. The device-only rows remain “implemented, awaiting device
+current PR #1060 head. The device-only rows remain “implemented, awaiting device
 evidence” or “explicit unsupported” and must not be described as verified.

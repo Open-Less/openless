@@ -142,7 +142,7 @@ impl OverlayEnvironment {
     /// pointer, else that monitor, else the first monitor.
     pub fn placement_area(&self) -> Option<X11Rect> {
         let monitor = monitor_containing(&self.monitors, self.cursor)
-            .or_else(|| self.work_area)
+            .or(self.work_area)
             .or_else(|| self.monitors.first().copied())?;
         // `_NET_WORKAREA` is a single rectangle for the whole virtual desktop;
         // intersect it with the chosen monitor so the pill lands on the screen
@@ -238,28 +238,23 @@ pub fn select_overlay_window(
             .iter()
             .filter(|candidate| candidate.pid.is_none())
     };
-    if let Some(candidate) = unowned()
-        .filter(|candidate| {
-            candidate
-                .wm_class
-                .as_deref()
-                .is_some_and(|class| class.to_ascii_lowercase().contains("openless"))
-        })
-        // The popup is created after every other OpenLess window, and the tree
-        // lists children in creation order, so the last match is ours.
-        .last()
+    if let Some(candidate) = unowned().rfind(|candidate| {
+        candidate
+            .wm_class
+            .as_deref()
+            .is_some_and(|class| class.to_ascii_lowercase().contains("openless"))
+    })
+    // The popup is created after every other OpenLess window, and the tree
+    // lists children in creation order, so the last match is ours.
     {
         return Some((candidate.window, WindowMatch::Class));
     }
-    if let Some(candidate) = unowned()
-        .filter(|candidate| {
-            candidate
-                .name
-                .as_deref()
-                .is_some_and(|name| name.eq_ignore_ascii_case("openless"))
-        })
-        .last()
-    {
+    if let Some(candidate) = unowned().rfind(|candidate| {
+        candidate
+            .name
+            .as_deref()
+            .is_some_and(|name| name.eq_ignore_ascii_case("openless"))
+    }) {
         return Some((candidate.window, WindowMatch::Name));
     }
     None
@@ -1007,7 +1002,8 @@ mod tests {
         );
         let area = monitor(0, 0, 1920, 1080);
         let (_, capsule_y) = bottom_center(area, CAPSULE_WINDOW_SIZE, CAPSULE_BOTTOM_GAP);
-        for kind in [PopupKind::Qa] {
+        {
+            let kind = PopupKind::Qa;
             let (_, y) = popup_position(&environment(), kind).expect("centred");
             let height = popup_size(kind).1 as i32;
             assert!(
@@ -1117,8 +1113,8 @@ mod tests {
         };
         let placement = place_overlay(&mut x11, 1, &environment(), PopupKind::Capsule);
         assert!(placement.applied());
-        assert!(placement.focus_was_stolen == false);
-        assert!(placement.focus_restored == false);
+        assert!(!placement.focus_was_stolen);
+        assert!(!placement.focus_restored);
         assert!(x11.calls.contains(&"active_window".to_string()));
         assert!(!x11.calls.iter().any(|call| call.starts_with("focus(")));
         assert!(placement.warnings.is_empty());

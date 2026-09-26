@@ -372,7 +372,10 @@ fn linux_public_settings_contract_is_validated_transactional_and_runtime_backed(
     conflicting.translation_hotkey = conflicting.dictation_hotkey.clone();
 
     let error = host
-        .update_settings_strict(conflicting, revision)
+        .update_preference_fields(&std::collections::BTreeMap::from([(
+            "/translationHotkey".into(),
+            serde_json::to_value(conflicting.translation_hotkey).unwrap(),
+        )]))
         .expect_err("Linux host must receive the shared shortcut conflict");
 
     assert_eq!(error.code, BackendErrorCode::InvalidArgument);
@@ -393,7 +396,16 @@ fn linux_public_settings_contract_is_validated_transactional_and_runtime_backed(
     };
     runtime_failure.launch_at_login = true;
     let error = host
-        .update_settings_strict(runtime_failure, revision)
+        .update_preference_fields(&std::collections::BTreeMap::from([
+            (
+                "/dictationHotkey".into(),
+                serde_json::to_value(runtime_failure.dictation_hotkey).unwrap(),
+            ),
+            (
+                "/launchAtLogin".into(),
+                serde_json::Value::Bool(runtime_failure.launch_at_login),
+            ),
+        ]))
         .expect_err("Linux runtime failure must fail the settings transaction");
     assert_eq!(error.code, BackendErrorCode::Platform);
     assert_eq!(backend.snapshot().preferences_revision, revision);

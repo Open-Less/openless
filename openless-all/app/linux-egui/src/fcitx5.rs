@@ -52,6 +52,19 @@ pub enum FcitxPluginStatus {
     Missing,
 }
 
+#[cfg(any(target_os = "linux", test))]
+impl FcitxPluginStatus {
+    fn require_ready(self) -> Result<(), BackendError> {
+        match self {
+            Self::Ready => Ok(()),
+            Self::Missing => Err(BackendError::new(
+                BackendErrorCode::Platform,
+                "OpenLess fcitx5 plugin is missing; reinstall the OpenLess package and enable its addon",
+            )),
+        }
+    }
+}
+
 pub fn ensure_plugin_installed(
     plan: &FcitxPluginInstallPlan,
 ) -> Result<FcitxPluginStatus, BackendError> {
@@ -1005,6 +1018,69 @@ pub fn available() -> bool {
         .is_ok()
 }
 
+/// Production startup barrier: install, request at most one reload, then wait
+/// for the new owner's addon interface before registering any shortcuts.
+#[cfg(target_os = "linux")]
+pub fn prepare_fcitx5(plan: &FcitxPluginInstallPlan, data_dir: &Path) -> Result<(), BackendError> {
+    use dbus::blocking::BlockingSender;
+    ensure_plugin_installed(plan)?.require_ready()?;
+    let connection = dbus::blocking::Connection::new_session().map_err(dbus_error)?;
+    let owner = |timeout| -> Result<String, BackendError> {
+        let message = dbus::Message::new_method_call(
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "GetNameOwner",
+        )
+        .map_err(dbus_error)?
+        .append1(DESTINATION);
+        connection
+            .send_with_reply_and_block(message, timeout)
+            .map_err(dbus_error)?
+            .read1::<String>()
+            .map_err(dbus_error)
+    };
+    let previous_owner = owner(TIMEOUT)?;
+    let reloaded = reload_fcitx5_if_plugin_updated(plan, data_dir);
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(BackendError::new(BackendErrorCode::Platform,
+                "fcitx5 OpenLess interface did not become ready within 15 seconds; enable the addon and restart fcitx5"));
+        }
+        let current_owner = owner(TIMEOUT.min(remaining));
+        if current_owner
+            .as_ref()
+            .is_ok_and(|current| !reloaded || *current != previous_owner)
+        {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                continue;
+            }
+            let message = dbus::Message::new_method_call(
+                DESTINATION,
+                OBJECT_PATH,
+                "org.freedesktop.DBus.Introspectable",
+                "Introspect",
+            )
+            .map_err(dbus_error)?;
+            if connection
+                .send_with_reply_and_block(message, TIMEOUT.min(remaining))
+                .ok()
+                .and_then(|reply| reply.read1::<String>().ok())
+                .is_some_and(|xml| xml.contains(INTERFACE))
+            {
+                return Ok(());
+            }
+        }
+        std::thread::sleep(
+            Duration::from_millis(100)
+                .min(deadline.saturating_duration_since(std::time::Instant::now())),
+        );
+    }
+}
+
 #[cfg(not(target_os = "linux"))]
 pub fn available() -> bool {
     false
@@ -1020,8 +1096,8 @@ pub fn available() -> bool {
 /// semantics are preserved). On an update the running instance is restarted so
 /// the new `.so` is actually loaded (restart semantics).
 ///
-/// Failures are logged and never fatal: startup continues down the fcitx5
-/// DBus path instead of degrading to a global-hotkey fallback. Returns true
+/// Reload failures are logged; the production startup barrier still requires
+/// a ready addon and successful required hotkey registration. Returns true
 /// when a reload was issued against a live instance.
 #[cfg(target_os = "linux")]
 pub fn reload_running_fcitx5() -> bool {
@@ -1142,7 +1218,7 @@ pub fn copy_to_clipboard(text: &str) -> Result<(), BackendError> {
 }
 
 #[cfg(target_os = "linux")]
-fn dbus_error(error: dbus::Error) -> BackendError {
+fn dbus_error(error: impl std::fmt::Display) -> BackendError {
     BackendError::new(
         BackendErrorCode::Unsupported,
         format!("fcitx5 DBus service is unavailable: {error}"),
@@ -1157,6 +1233,14 @@ fn platform_error(message: String) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_plugin_is_a_startup_error_with_recovery_instructions() {
+        let error = FcitxPluginStatus::Missing.require_ready().unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::Platform);
+        assert!(error.message.contains("reinstall"));
+        assert!(FcitxPluginStatus::Ready.require_ready().is_ok());
+    }
 
     #[test]
     fn boot_time_and_process_start_are_parsed_from_proc() {

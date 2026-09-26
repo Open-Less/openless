@@ -112,102 +112,6 @@ fn close_control(
     response
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn my_packs_avatar_is_inside_the_button_before_the_label() {
-        let ctx = egui::Context::default();
-        let button = egui::Rect::from_min_size(egui::pos2(50.0, 60.0), egui::vec2(150.0, 30.0));
-        let _ = crate::ui::frontend::run_pass(
-            &ctx,
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(500.0, 300.0),
-                )),
-                ..Default::default()
-            },
-            |ui| {
-                my_packs_button(ui, button, "Mine");
-            },
-        );
-        let (outer, avatar, text): (egui::Rect, egui::Rect, egui::Pos2) = ctx.data(|data| {
-            data.get_temp(egui::Id::new("openless-mine-button-test-rects"))
-                .unwrap()
-        });
-        assert!(outer.contains_rect(avatar));
-        assert_eq!(avatar.size(), egui::vec2(18.0, 18.0));
-        assert_eq!(text.x - avatar.right(), 8.0);
-        assert!(outer.right() > text.x);
-    }
-
-    /// The GitHub device-flow dialog must keep Tauri's left edge, extend to the
-    /// right, use the 16px heading and centre the status row on the card axis.
-    #[test]
-    fn oauth_dialog_widens_right_and_centres_the_status_row() {
-        use super::super::view_model::Page;
-        let ctx = egui::Context::default();
-        let mut vm = FrontendViewModel {
-            lang: Lang::ZhCn,
-            active_page: Page::Marketplace,
-            marketplace_loading: false,
-            marketplace_unsupported: false,
-            marketplace_oauth_open: true,
-            marketplace_oauth_user_code: "68A0-0EB0".into(),
-            marketplace_oauth_uri: "https://github.com/login/device".into(),
-            ..Default::default()
-        };
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1240.0, 800.0));
-        // Two frames: the modal `Area` needs one frame to publish its rect.
-        for _ in 0..2 {
-            ctx.begin_pass(egui::RawInput {
-                screen_rect: Some(screen),
-                ..Default::default()
-            });
-            crate::ui::frontend::render(&ctx, &mut vm, &mut Vec::new());
-            let _ = crate::ui::frontend::end_pass(&ctx);
-        }
-        let card: egui::Rect = ctx
-            .data(|data| data.get_temp(egui::Id::new("openless-marketplace-oauth-card-rect")))
-            .expect("the open dialog must publish its card rect");
-        let body = layout::body_rect(&ctx);
-        assert_eq!(card.width(), OAUTH_CARD_WIDTH);
-        assert_eq!(card.center().x - body.center().x, OAUTH_CARD_SHIFT_X);
-        assert_eq!(card.top(), body.center().y - 165.0);
-        assert!(card.right() <= body.right(), "{card:?} in {body:?}");
-
-        let row: egui::Rect = ctx
-            .data(|data| data.get_temp(egui::Id::new("openless-marketplace-oauth-status-row")))
-            .expect("the pending phase must paint the status row");
-        assert!(
-            (row.center().x - card.center().x).abs() <= 2.0,
-            "the status row must sit on the card's axis: {row:?} in {card:?}"
-        );
-        assert!(row.left() > card.left() + 22.0, "{row:?} in {card:?}");
-        assert_eq!(OAUTH_TITLE_SIZE, 16.0);
-
-        // The code tile spans the whole card (Tauri renders it as a full-width
-        // flex row) instead of hugging the code text on the left edge.
-        let code_box: egui::Rect = ctx
-            .data(|data| data.get_temp(egui::Id::new("openless-marketplace-oauth-code-box")))
-            .expect("the pending phase must paint the code tile");
-        assert_eq!(code_box.width(), card.width() - 44.0);
-        assert!(
-            (code_box.center().x - card.center().x).abs() <= 1.5,
-            "the code tile must be centred: {code_box:?} in {card:?}"
-        );
-
-        // The × is painted into a fixed 28×28 rect: a stock `egui::Button` would
-        // take its size from the font metrics and from egui's per-state padding.
-        let close: egui::Rect = ctx
-            .data(|data| data.get_temp(egui::Id::new("openless-marketplace-oauth-close-rect")))
-            .expect("the dialog must publish its close control");
-        assert_eq!(close.size(), egui::vec2(28.0, 28.0));
-    }
-}
-
 /// Render the marketplace page. All data comes from the view model; this
 /// function is pure rendering — it reads from `vm` and pushes actions.
 pub fn marketplace_page(
@@ -453,19 +357,7 @@ pub fn marketplace_page(
     // Detail modal
     if let Some(index) = vm.marketplace_selected {
         if let Some(pack) = vm.marketplace_packs.get(index) {
-            marketplace_detail(
-                ui.ctx(),
-                lang,
-                pack,
-                index,
-                pack.liked,
-                vm.marketplace_detail_prompt.as_deref(),
-                vm.marketplace_installing
-                    .as_deref()
-                    .is_some_and(|installing| installing == pack.id),
-                body_rect,
-                actions,
-            );
+            marketplace_detail(ui.ctx(), vm, pack, index, body_rect, actions);
         }
     }
     if vm.marketplace_upload_open {
@@ -614,15 +506,19 @@ fn marketplace_card(
 
 fn marketplace_detail(
     ctx: &egui::Context,
-    lang: Lang,
+    vm: &FrontendViewModel,
     pack: &super::view_model::MarketplacePack,
     index: usize,
-    liked: bool,
-    prompt: Option<&str>,
-    installing: bool,
     body_rect: egui::Rect,
     actions: &mut Vec<FrontendAction>,
 ) {
+    let lang = vm.lang;
+    let liked = pack.liked;
+    let prompt = vm.marketplace_detail_prompt.as_deref();
+    let installing = vm
+        .marketplace_installing
+        .as_deref()
+        .is_some_and(|id| id == pack.id);
     // The Tauri Modal uses a 560px card. Keep the same centred dimensions
     // while content changes; only shrink to fit genuinely small windows.
     let modal_width = (body_rect.width() - 40.0).min(560.0);
@@ -817,10 +713,7 @@ fn marketplace_oauth(
     let lang = vm.lang;
     // Keep the dialog's left edge stable while giving the right side a little
     // more breathing room for the browser hint and the status row.
-    let size = egui::vec2(
-        (body.width() - 40.0).min(OAUTH_CARD_WIDTH).max(340.0),
-        330.0,
-    );
+    let size = egui::vec2((body.width() - 40.0).clamp(340.0, OAUTH_CARD_WIDTH), 330.0);
     let card =
         egui::Rect::from_center_size(body.center() + egui::vec2(OAUTH_CARD_SHIFT_X, 0.0), size);
     #[cfg(test)]
@@ -975,11 +868,7 @@ fn marketplace_oauth(
                                         painter.rect_filled(
                                             copy_rect,
                                             egui::CornerRadius::same(7),
-                                            if copy.hovered() {
-                                                theme::SURFACE
-                                            } else {
-                                                theme::SURFACE
-                                            },
+                                            theme::SURFACE,
                                         );
                                         painter.rect_stroke(
                                             copy_rect,
@@ -1089,8 +978,8 @@ fn marketplace_upload(
 ) {
     let lang = vm.lang;
     let target_name = vm.marketplace_upload_target_name.clone();
-    let card_width = (body.width() - 40.0).min(560.0).max(320.0);
-    let card_height = (body.height() * 0.82).min(560.0).max(300.0);
+    let card_width = (body.width() - 40.0).clamp(320.0, 560.0);
+    let card_height = (body.height() * 0.82).clamp(300.0, 560.0);
     let card = egui::Rect::from_center_size(body.center(), egui::vec2(card_width, card_height));
     egui::Area::new(egui::Id::new("openless-marketplace-upload-modal"))
         .order(egui::Order::Foreground)
@@ -1339,7 +1228,7 @@ fn marketplace_mine(
         .iter()
         .filter(|entry| entry.state == "pending")
         .count();
-    let modal_width = (body.width() - 40.0).min(560.0).max(320.0);
+    let modal_width = (body.width() - 40.0).clamp(320.0, 560.0);
     let natural_height = if signed_in && pack_count > 0 {
         280.0 + pack_count as f32 * 144.0
     } else if signed_in {
@@ -1829,4 +1718,100 @@ fn marketplace_mine(
                     });
             });
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn my_packs_avatar_is_inside_the_button_before_the_label() {
+        let ctx = egui::Context::default();
+        let button = egui::Rect::from_min_size(egui::pos2(50.0, 60.0), egui::vec2(150.0, 30.0));
+        let _ = crate::ui::frontend::run_pass(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(500.0, 300.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                my_packs_button(ui, button, "Mine");
+            },
+        );
+        let (outer, avatar, text): (egui::Rect, egui::Rect, egui::Pos2) = ctx.data(|data| {
+            data.get_temp(egui::Id::new("openless-mine-button-test-rects"))
+                .unwrap()
+        });
+        assert!(outer.contains_rect(avatar));
+        assert_eq!(avatar.size(), egui::vec2(18.0, 18.0));
+        assert_eq!(text.x - avatar.right(), 8.0);
+        assert!(outer.right() > text.x);
+    }
+
+    /// The GitHub device-flow dialog must keep Tauri's left edge, extend to the
+    /// right, use the 16px heading and centre the status row on the card axis.
+    #[test]
+    fn oauth_dialog_widens_right_and_centres_the_status_row() {
+        use super::super::view_model::Page;
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: Lang::ZhCn,
+            active_page: Page::Marketplace,
+            marketplace_loading: false,
+            marketplace_unsupported: false,
+            marketplace_oauth_open: true,
+            marketplace_oauth_user_code: "68A0-0EB0".into(),
+            marketplace_oauth_uri: "https://github.com/login/device".into(),
+            ..Default::default()
+        };
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1240.0, 800.0));
+        // Two frames: the modal `Area` needs one frame to publish its rect.
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            });
+            crate::ui::frontend::render(&ctx, &mut vm, &mut Vec::new());
+            let _ = crate::ui::frontend::end_pass(&ctx);
+        }
+        let card: egui::Rect = ctx
+            .data(|data| data.get_temp(egui::Id::new("openless-marketplace-oauth-card-rect")))
+            .expect("the open dialog must publish its card rect");
+        let body = layout::body_rect(&ctx);
+        assert_eq!(card.width(), OAUTH_CARD_WIDTH);
+        assert_eq!(card.center().x - body.center().x, OAUTH_CARD_SHIFT_X);
+        assert_eq!(card.top(), body.center().y - 165.0);
+        assert!(card.right() <= body.right(), "{card:?} in {body:?}");
+
+        let row: egui::Rect = ctx
+            .data(|data| data.get_temp(egui::Id::new("openless-marketplace-oauth-status-row")))
+            .expect("the pending phase must paint the status row");
+        assert!(
+            (row.center().x - card.center().x).abs() <= 2.0,
+            "the status row must sit on the card's axis: {row:?} in {card:?}"
+        );
+        assert!(row.left() > card.left() + 22.0, "{row:?} in {card:?}");
+        assert_eq!(OAUTH_TITLE_SIZE, 16.0);
+
+        // The code tile spans the whole card (Tauri renders it as a full-width
+        // flex row) instead of hugging the code text on the left edge.
+        let code_box: egui::Rect = ctx
+            .data(|data| data.get_temp(egui::Id::new("openless-marketplace-oauth-code-box")))
+            .expect("the pending phase must paint the code tile");
+        assert_eq!(code_box.width(), card.width() - 44.0);
+        assert!(
+            (code_box.center().x - card.center().x).abs() <= 1.5,
+            "the code tile must be centred: {code_box:?} in {card:?}"
+        );
+
+        // The × is painted into a fixed 28×28 rect: a stock `egui::Button` would
+        // take its size from the font metrics and from egui's per-state padding.
+        let close: egui::Rect = ctx
+            .data(|data| data.get_temp(egui::Id::new("openless-marketplace-oauth-close-rect")))
+            .expect("the dialog must publish its close control");
+        assert_eq!(close.size(), egui::vec2(28.0, 28.0));
+    }
 }

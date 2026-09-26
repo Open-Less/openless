@@ -9,6 +9,11 @@ mod ui;
 
 #[cfg(target_os = "linux")]
 mod linux_app {
+    mod history;
+    use history::HistoryCache;
+    mod settings_save;
+    mod window;
+    use settings_save::SettingsSave;
     use std::future::Future;
     use std::sync::mpsc;
     use std::sync::Arc;
@@ -32,17 +37,22 @@ mod linux_app {
         save_locale_pref, tr_l10n, CapsuleOutcome, Lang, LocalePref,
     };
     use openless_linux_egui::{
-        drain_events, ensure_fcitx5_plugin_installed, fcitx5_copy_to_clipboard, notify,
-        open_external, write_jsonl, EventDrainOutcome, Fcitx5HotkeyListener,
-        FcitxPluginInstallPlan, FcitxPluginStatus, HostToPopup, LinuxBackendBuilder,
-        LinuxCapabilitySnapshot, LinuxHotkeyEvent, LinuxLaunchIntent, LinuxNativeRuntime,
-        LinuxResourceLayout, Notification, PopupActionGuard, PopupChatMessage, PopupKind,
-        PopupState, PopupSupervisor, PopupSupervisorEvent, PopupToHost, SingleInstanceBroker,
-        SingleInstanceRole, POPUP_PROTOCOL_VERSION,
+        drain_events, fcitx5_copy_to_clipboard, notify, open_external, write_jsonl,
+        EventDrainOutcome, Fcitx5HotkeyListener, FcitxPluginInstallPlan, HostToPopup,
+        LinuxBackendBuilder, LinuxCapabilitySnapshot, LinuxHotkeyEvent, LinuxLaunchIntent,
+        LinuxNativeRuntime, LinuxResourceLayout, Notification, PopupActionGuard, PopupChatMessage,
+        PopupKind, PopupState, PopupSupervisor, PopupSupervisorEvent, PopupToHost,
+        SingleInstanceBroker, SingleInstanceRole, POPUP_PROTOCOL_VERSION,
     };
+    use window::*;
 
     enum UiResult {
         Message(String),
+        HistoryLoaded {
+            generation: u64,
+            revision: u64,
+            result: Result<Vec<openless_core::DictationSession>, String>,
+        },
         HistoryRepolish {
             id: String,
             result: Result<String, String>,
@@ -72,7 +82,10 @@ mod linux_app {
         },
         Library(Result<LibraryPanel, String>),
         LibraryRefresh,
-        SettingsSaved(Box<Result<openless_core::SettingsUpdateOutcome, String>>),
+        SettingsSaved {
+            request: u64,
+            result: Result<(), String>,
+        },
         Marketplace(u64, Result<Vec<openless_core::MarketplaceListItem>, String>),
         /// 安装结束（成功或失败）：清掉「安装中…」状态并给出提示。
         MarketplaceInstallFinished {
@@ -148,105 +161,6 @@ mod linux_app {
             if let Some(value) = state.edit_revert_available {
                 self.revert_available = value;
             }
-        }
-    }
-
-    #[derive(Default, Clone, Copy)]
-    struct SettingsDirty {
-        streaming_insert: bool,
-        stable_transcription: bool,
-        coding_agent_enabled: bool,
-        start_minimized: bool,
-        launch_at_login: bool,
-        auto_update_check: bool,
-        remote_input_enabled: bool,
-        remote_input_port: bool,
-        recording: bool,
-        microphone: bool,
-        appearance: bool,
-        hotkeys: bool,
-    }
-
-    impl SettingsDirty {
-        fn any(&self) -> bool {
-            self.streaming_insert
-                || self.stable_transcription
-                || self.coding_agent_enabled
-                || self.start_minimized
-                || self.launch_at_login
-                || self.auto_update_check
-                || self.remote_input_enabled
-                || self.remote_input_port
-                || self.recording
-                || self.microphone
-                || self.appearance
-                || self.hotkeys
-        }
-
-        fn merge(&self, latest: &UserPreferences, draft: &UserPreferences) -> UserPreferences {
-            let mut merged = latest.clone();
-            if self.streaming_insert {
-                merged.streaming_insert = draft.streaming_insert;
-            }
-            if self.stable_transcription {
-                merged.stable_transcription_enabled = draft.stable_transcription_enabled;
-            }
-            if self.coding_agent_enabled {
-                merged.coding_agent_enabled = draft.coding_agent_enabled;
-            }
-            if self.start_minimized {
-                merged.start_minimized = draft.start_minimized;
-            }
-            if self.launch_at_login {
-                merged.launch_at_login = draft.launch_at_login;
-            }
-            if self.auto_update_check {
-                merged.auto_update_check = draft.auto_update_check;
-            }
-            if self.remote_input_enabled {
-                merged.remote_input_enabled = draft.remote_input_enabled;
-            }
-            if self.remote_input_port {
-                merged.remote_input_port = draft.remote_input_port;
-            }
-            if self.recording {
-                merged.hotkey.mode = draft.hotkey.mode;
-                merged.silence_auto_stop_enabled = draft.silence_auto_stop_enabled;
-                merged.silence_auto_stop_seconds = draft.silence_auto_stop_seconds;
-                merged.mute_during_recording = draft.mute_during_recording;
-                merged.audio_cue_on_record = draft.audio_cue_on_record;
-                merged.record_audio_for_debug = draft.record_audio_for_debug;
-                merged.restore_clipboard_after_paste = draft.restore_clipboard_after_paste;
-                merged.paste_shortcut = draft.paste_shortcut;
-                merged.history_retention_days = draft.history_retention_days;
-                merged.history_max_entries = draft.history_max_entries;
-                merged.remote_input_default_mode = draft.remote_input_default_mode.clone();
-            }
-            if self.microphone {
-                merged.microphone_device_name = draft.microphone_device_name.clone();
-            }
-            if self.appearance {
-                merged.theme_mode = draft.theme_mode;
-                merged.show_overview_activity_heatmap = draft.show_overview_activity_heatmap;
-                merged.qa_save_history = draft.qa_save_history;
-                merged.stacked_row_layout = draft.stacked_row_layout;
-                merged.conservative_layout = draft.conservative_layout;
-                merged.use_system_proxy = draft.use_system_proxy;
-                merged.multimodal_pipeline_enabled = draft.multimodal_pipeline_enabled;
-                merged.selection_voice_enabled = draft.selection_voice_enabled;
-            }
-            if self.hotkeys {
-                merged.dictation_hotkey = draft.dictation_hotkey.clone();
-                merged.hotkey = draft.hotkey.clone();
-                merged.qa_hotkey = draft.qa_hotkey.clone();
-                merged.quick_note_hotkey = draft.quick_note_hotkey.clone();
-                merged.translation_hotkey = draft.translation_hotkey.clone();
-                merged.switch_style_hotkey = draft.switch_style_hotkey.clone();
-                merged.open_app_hotkey = draft.open_app_hotkey.clone();
-                merged.selection_polish_hotkey = draft.selection_polish_hotkey.clone();
-                merged.coding_agent_voice_hotkey = draft.coding_agent_voice_hotkey.clone();
-            }
-            merged
         }
     }
 
@@ -588,7 +502,7 @@ mod linux_app {
         subscription: Option<openless_core::EventSubscription>,
         snapshot: Option<BackendSnapshot>,
         preferences: Option<UserPreferences>,
-        settings_dirty: SettingsDirty,
+        settings_save: SettingsSave,
         settings_channel_kind: openless_core::ChannelKind,
         settings_channels: Vec<SettingsChannelRow>,
         settings_channels_loading: bool,
@@ -659,17 +573,7 @@ mod linux_app {
         exit_requested: bool,
         /// 上次打「泵心跳」日志的时间。
         last_pump_heartbeat: std::time::Instant,
-        /// 用户是否希望主窗口开着。窗口本体在独立的 UI 进程里，宿主只负责
-        /// 拉起来、看着它退出、再按需重拉。
-        window_should_be_open: bool,
-        /// 当前 UI 窗口进程；它退出后置空（窗口与任务栏条目随之消失）。
-        ui_window: Option<std::process::Child>,
-        /// 上次拉起 UI 进程的时刻：防抖，连续点托盘菜单不会拉出两个窗口。
-        ui_window_spawned_at: Option<std::time::Instant>,
-        /// 上一次发给 UI 的快照指纹；内容没变就不重复发。
-        last_snapshot_fingerprint: Option<u64>,
-        /// 上一次发快照的时间（长连接保活）。
-        last_snapshot_at: std::time::Instant,
+        window: WindowState,
         /// 本帧从 UI 收到、待宿主执行的动作（按到达顺序）。
         pending_ui_actions: Vec<frontend::view_model::FrontendAction>,
         /// 本帧从 UI 窗口/面板收到、待处理的本地热键边沿（按到达时刻）。
@@ -688,6 +592,7 @@ mod linux_app {
         /// 本帧从 UI 收到、待回包的延迟探针序号。
         pending_ui_pongs: Vec<u64>,
         /// Currently playing history recording (session id + player handle).
+        history: HistoryCache,
         history_clip: Option<(String, openless_linux_egui::ClipPlayer)>,
         marketplace_items: Vec<openless_core::MarketplaceListItem>,
         /// True once a marketplace list request has completed (ok or error), so
@@ -771,14 +676,15 @@ mod linux_app {
                     let backend = native.host().backend();
                     let snapshot = backend.snapshot();
                     let preferences = backend.get_preferences();
+                    let history = HistoryCache::new(&preferences);
                     let subscription = backend.subscribe();
                     let app = Self {
                         tokio,
                         native: Some(native),
                         subscription: Some(subscription),
                         snapshot: Some(snapshot),
+                        settings_save: SettingsSave::new(&preferences),
                         preferences: Some(preferences),
-                        settings_dirty: SettingsDirty::default(),
                         settings_channel_kind: openless_core::ChannelKind::Llm,
                         settings_channels: Vec::new(),
                         settings_channels_loading: false,
@@ -830,11 +736,7 @@ mod linux_app {
                         tray,
                         exit_requested: false,
                         last_pump_heartbeat: std::time::Instant::now(),
-                        window_should_be_open,
-                        ui_window: None,
-                        ui_window_spawned_at: None,
-                        last_snapshot_fingerprint: None,
-                        last_snapshot_at: std::time::Instant::now(),
+                        window: WindowState::new(window_should_be_open),
                         pending_ui_actions: Vec::new(),
                         pending_local_hotkeys: Vec::new(),
                         hotkey_dedupe: openless_linux_egui::HotkeyDeduplicator::default(),
@@ -842,6 +744,7 @@ mod linux_app {
                         popup_restarts: [PopupRestartBudget::default(); POPUP_KIND_COUNT],
                         hotkeys_sent: None,
                         pending_ui_pongs: Vec::new(),
+                        history,
                         history_clip: None,
                         marketplace_items: Vec::new(),
                         marketplace_attempted: false,
@@ -878,7 +781,7 @@ mod linux_app {
                     snapshot: None,
                     hydrate_text_fields: true,
                     preferences: None,
-                    settings_dirty: SettingsDirty::default(),
+                    settings_save: SettingsSave::default(),
                     settings_channel_kind: openless_core::ChannelKind::Llm,
                     settings_channels: Vec::new(),
                     settings_channels_loading: false,
@@ -929,11 +832,7 @@ mod linux_app {
                     tray,
                     exit_requested: false,
                     last_pump_heartbeat: std::time::Instant::now(),
-                    window_should_be_open,
-                    ui_window: None,
-                    ui_window_spawned_at: None,
-                    last_snapshot_fingerprint: None,
-                    last_snapshot_at: std::time::Instant::now(),
+                    window: WindowState::new(window_should_be_open),
                     pending_ui_actions: Vec::new(),
                     pending_local_hotkeys: Vec::new(),
                     hotkey_dedupe: openless_linux_egui::HotkeyDeduplicator::default(),
@@ -941,6 +840,7 @@ mod linux_app {
                     popup_restarts: [PopupRestartBudget::default(); POPUP_KIND_COUNT],
                     hotkeys_sent: None,
                     pending_ui_pongs: Vec::new(),
+                    history: HistoryCache::default(),
                     history_clip: None,
                     marketplace_items: Vec::new(),
                     marketplace_attempted: false,
@@ -2200,17 +2100,7 @@ mod linux_app {
             self.tokio.spawn(async move {
                 let result = async {
                     let credentials = backend.get_credentials_status().await?;
-                    let history_backend = Arc::clone(&backend);
                     let activity_backend = Arc::clone(&backend);
-                    let history =
-                        tokio::task::spawn_blocking(move || history_backend.list_history())
-                            .await
-                            .map_err(|error| {
-                                BackendError::new(
-                                    openless_core::BackendErrorCode::Internal,
-                                    error.to_string(),
-                                )
-                            })??;
                     let activity =
                         tokio::task::spawn_blocking(move || activity_backend.list_activity())
                             .await
@@ -2222,7 +2112,7 @@ mod linux_app {
                             })??;
                     Ok::<_, BackendError>(OverviewData {
                         credentials,
-                        history,
+                        history: Vec::new(),
                         activity,
                     })
                 }
@@ -2262,16 +2152,9 @@ mod linux_app {
                         }
                     }
                     openless_linux_egui::TrayCommand::SelectMicrophone(name) => {
-                        if let Some(backend) = self.backend() {
-                            let selected = if name.is_empty() {
-                                tr_l10n(lang, "settings.system_default").to_string()
-                            } else {
-                                name.clone()
-                            };
-                            self.spawn(async move {
-                                backend.select_microphone_device(name)?;
-                                Ok(fmt_l10n(lang, "status.mic_selected", &[&selected]))
-                            });
+                        if let Some(preferences) = &mut self.preferences {
+                            preferences.microphone_device_name = name;
+                            self.save_settings_if_dirty();
                         }
                     }
                     openless_linux_egui::TrayCommand::Quit => {
@@ -2640,17 +2523,19 @@ mod linux_app {
                         }
                     }
                 }
+                BackendEventKind::HistoryChanged(change) => {
+                    self.history.observe(change.revision);
+                    self.load_overview();
+                }
                 BackendEventKind::PreferencesChanged(_) => {
                     // 外部改动（Core 事件 / 托盘 / 另一窗口）要重新灌一次文本行。
                     self.hydrate_text_fields = true;
                     if let Some(backend) = self.backend() {
                         let latest = backend.get_preferences();
-                        self.preferences = Some(match self.preferences.as_ref() {
-                            Some(draft) if self.settings_dirty.any() => {
-                                self.settings_dirty.merge(&latest, draft)
-                            }
-                            _ => latest,
-                        });
+                        if self.history.policy_changed(&latest) {
+                            self.history.request(backend.snapshot().history_revision);
+                        }
+                        self.preferences = Some(self.settings_save.rebase(&latest));
                     }
                     self.load_remote_status();
                     self.load_library();
@@ -2794,8 +2679,8 @@ mod linux_app {
             let _ = ctx;
             log::info!(
                 "[pump] heartbeat window_process={} window_wanted={} tray={} recording={}",
-                self.ui_window.is_some(),
-                self.window_should_be_open,
+                self.window.child.is_some(),
+                self.window.should_be_open,
                 self.tray.is_some(),
                 self.recording_phase_active,
             );
@@ -2920,6 +2805,10 @@ mod linux_app {
         /// 宿主自己处理掉的热键（不发往 Core）。返回 true 表示已处理。
         fn intercept_hotkey(&mut self, event: &LinuxHotkeyEvent) -> bool {
             match event {
+                LinuxHotkeyEvent::OpenAppPressed => {
+                    self.request_main_window();
+                    true
+                }
                 LinuxHotkeyEvent::QuickNotePressed => {
                     self.toggle_quick_note();
                     true
@@ -3093,7 +2982,7 @@ mod linux_app {
                     }
                     LocalHotkey::OpenApp => {
                         if single_shot {
-                            events.push(LinuxHotkeyEvent::OpenAppPressed);
+                            self.request_main_window();
                         }
                     }
                     LocalHotkey::StylePack(pack_id) => {
@@ -3349,6 +3238,7 @@ mod linux_app {
                     let replay = backend.replay_events_after(self.last_event_sequence);
                     let snapshot = backend.snapshot();
                     if replay.truncated {
+                        self.history.request(snapshot.history_revision);
                         // The bounded tail cannot reconstruct derived text/UI
                         // state. Reset it before applying the authoritative tail
                         // so no stale transcript, approval or preview survives.
@@ -3379,6 +3269,17 @@ mod linux_app {
             }
             while let Ok(result) = self.rx.try_recv() {
                 match result {
+                    UiResult::HistoryLoaded {
+                        generation,
+                        revision,
+                        result,
+                    } => {
+                        if self.history.finish(generation, revision, result) {
+                            if let OverviewState::Loaded(data) = &mut self.overview {
+                                data.history = self.history.entries.clone();
+                            }
+                        }
+                    }
                     UiResult::Message(message) => self.status = message,
                     UiResult::HistoryRepolish { id, result } => {
                         self.frontend_vm.history_repolish_running = false;
@@ -3558,32 +3459,9 @@ mod linux_app {
                         self.vocab_presets = library.vocab_presets;
                     }
                     UiResult::Library(Err(error)) => self.status = error,
-                    UiResult::SettingsSaved(result) => match *result {
-                        Ok(outcome) => {
-                            self.preferences = Some(outcome.preferences.clone());
-                            // Core 可能夹取过值（例如条数下限 5），保存后重新灌一次文本行。
-                            self.hydrate_text_fields = true;
-                            if let Some(native) = &self.native {
-                                self.snapshot = Some(native.host().snapshot());
-                            }
-                            self.settings_dirty = SettingsDirty::default();
-                            self.status = tr_l10n(lang, "status.settings_saved").to_string();
-                            // Appearance (e.g. the Overview heatmap toggle) and any
-                            // provider/credential edits may change Overview state.
-                            self.load_overview();
-                            if let Some(backend) = self.backend() {
-                                let config = openless_core::RemoteInputConfig {
-                                    enabled: outcome.preferences.remote_input_enabled,
-                                    port: outcome.preferences.remote_input_port,
-                                };
-                                self.spawn(async move {
-                                    backend.services().remote_input.configure(config).await?;
-                                    Ok(tr_l10n(lang, "status.remote_updated").to_string())
-                                });
-                            }
-                        }
-                        Err(error) => self.status = error,
-                    },
+                    UiResult::SettingsSaved { request, result } => {
+                        self.finish_settings_save(request, result);
+                    }
                     UiResult::Marketplace(seq, result) => {
                         // Latest request wins: a slow earlier response must not
                         // replace the results of the query the user sees now.
@@ -3802,7 +3680,10 @@ mod linux_app {
                         self.microphone_error = Some(error.clone());
                         self.status = error;
                     }
-                    UiResult::Overview(Ok(data)) => self.overview = OverviewState::Loaded(data),
+                    UiResult::Overview(Ok(mut data)) => {
+                        data.history = self.history.entries.clone();
+                        self.overview = OverviewState::Loaded(data);
+                    }
                     UiResult::Overview(Err(error)) => {
                         self.status = error.clone();
                         self.overview = OverviewState::Failed(error);
@@ -3811,8 +3692,10 @@ mod linux_app {
             }
             if let Some(backend) = self.backend() {
                 self.snapshot = Some(backend.snapshot());
+                self.history.observe(backend.snapshot().history_revision);
             }
             self.reconcile_capsule_liveness();
+            self.load_history();
         }
 
         /// 兜底：Core 有错误路径只 reset 会话、不发布终态事件，宿主就永远等不到
@@ -3857,15 +3740,14 @@ mod linux_app {
             });
         }
 
-        /// The language selector row shown in Settings. Changing it re-renders
-        /// the whole window immediately (shell, headings, labels, popups later
-        /// pick it up from the persisted UI state on their next launch).
         // ── Frontend bridge ─────────────────────────────────────────────────
 
         /// Sync backend state into the frontend view model each frame before
         /// rendering. Only fields that have real data sources are populated;
         /// unwired fields remain in their default empty / loading state.
         fn sync_view_model(&mut self) {
+            self.frontend_vm.settings_saving = self.settings_save.in_flight.is_some();
+            self.frontend_vm.settings_save_error = self.settings_save.error.clone();
             // Capture overview error before taking a mutable borrow on frontend_vm.
             let overview_err = self.overview_error();
             let backend = self.backend();
@@ -4249,85 +4131,62 @@ mod linux_app {
                 }
             });
 
-            // History: wire from Core when backend is available.
-            if let Some(backend) = backend {
-                match backend.list_history() {
-                    Ok(history) => {
-                        // The wav on disk is the real source of truth: older records
-                        // carry no `has_audio_recording` flag, so the detail panel's
-                        // play/export/retranscribe actions would disappear.
-                        let recordings_dir = backend.config().data_dir.clone();
-                        // Core stores history newest-first; keep that order.
-                        vm.history_entries = history
-                            .into_iter()
-                            .map(|item| {
-                                let has_audio = item.has_audio_recording.unwrap_or(false)
-                                    || openless_linux_egui::recording_path(
-                                        &recordings_dir,
-                                        &item.id,
-                                    )
-                                    .map(|path| path.exists())
-                                    .unwrap_or(false);
-                                frontend::view_model::HistoryEntry {
-                                    quick_note: item.source
-                                        == openless_core::HistorySource::QuickNote,
-                                    error_code: item.error_code,
-                                    id: item.id,
-                                    created_at: item.created_at,
-                                    mode: overview_mode(item.mode),
-                                    // History carries the exact style-pack id. Prefer the
-                                    // catalog name so imported packs do not collapse into the
-                                    // four base-mode labels; old records without an id still
-                                    // use the mode fallback.
-                                    style_label: item
-                                        .style_pack_id
-                                        .as_deref()
-                                        .and_then(|id| {
-                                            self.style_packs.iter().find(|pack| pack.id == id)
-                                        })
-                                        .map(|pack| {
-                                            let builtin_default =
-                                                openless_core::builtin_style_pack_for_mode(
-                                                    pack.base_mode,
-                                                )
-                                                .name;
-                                            if pack.kind == openless_core::StylePackKind::Builtin
-                                                && pack.id
-                                                    == openless_core::builtin_style_pack_id(
-                                                        pack.base_mode,
-                                                    )
-                                                && pack.name == builtin_default
-                                            {
-                                                polish_mode_label(lang, pack.base_mode).to_string()
-                                            } else {
-                                                pack.name.clone()
-                                            }
-                                        })
-                                        .unwrap_or_else(|| {
-                                            polish_mode_label(lang, item.mode).to_string()
-                                        }),
-                                    raw_transcript: item.raw_transcript,
-                                    final_text: item.final_text,
-                                    duration_ms: item.duration_ms,
-                                    has_audio,
-                                    asr_provider: item.asr_provider,
-                                    asr_model: item.asr_model,
-                                    asr_ms: item.asr_ms,
-                                    llm_provider: item.llm_provider,
-                                    app_name: item.app_name,
-                                    dictionary_count: item.dictionary_entry_count,
+            // Rebuild display labels from the shared in-memory history cache.
+            let selected_id = vm
+                .history_entries
+                .get(vm.history_selected)
+                .map(|entry| entry.id.clone());
+            let history = self.history.entries.clone();
+            vm.history_entries = history
+                .into_iter()
+                .map(|item| {
+                    let has_audio = item.has_audio_recording.unwrap_or(false);
+                    frontend::view_model::HistoryEntry {
+                        quick_note: item.source == openless_core::HistorySource::QuickNote,
+                        error_code: item.error_code,
+                        id: item.id,
+                        created_at: item.created_at,
+                        mode: overview_mode(item.mode),
+                        // History carries the exact style-pack id. Prefer the
+                        // catalog name so imported packs do not collapse into the
+                        // four base-mode labels; old records without an id still
+                        // use the mode fallback.
+                        style_label: item
+                            .style_pack_id
+                            .as_deref()
+                            .and_then(|id| self.style_packs.iter().find(|pack| pack.id == id))
+                            .map(|pack| {
+                                let builtin_default =
+                                    openless_core::builtin_style_pack_for_mode(pack.base_mode).name;
+                                if pack.kind == openless_core::StylePackKind::Builtin
+                                    && pack.id
+                                        == openless_core::builtin_style_pack_id(pack.base_mode)
+                                    && pack.name == builtin_default
+                                {
+                                    polish_mode_label(lang, pack.base_mode).to_string()
+                                } else {
+                                    pack.name.clone()
                                 }
                             })
-                            .collect();
-                        vm.history_loading = false;
-                        vm.history_error = None;
+                            .unwrap_or_else(|| polish_mode_label(lang, item.mode).to_string()),
+                        raw_transcript: item.raw_transcript,
+                        final_text: item.final_text,
+                        duration_ms: item.duration_ms,
+                        has_audio,
+                        asr_provider: item.asr_provider,
+                        asr_model: item.asr_model,
+                        asr_ms: item.asr_ms,
+                        llm_provider: item.llm_provider,
+                        app_name: item.app_name,
+                        dictionary_count: item.dictionary_entry_count,
                     }
-                    Err(error) => {
-                        vm.history_loading = false;
-                        vm.history_error = Some(error.to_string());
-                    }
-                }
-            }
+                })
+                .collect();
+            vm.history_loading = self.history.loading();
+            vm.history_error = self.history.error.clone();
+            vm.history_selected = selected_id
+                .and_then(|id| vm.history_entries.iter().position(|entry| entry.id == id))
+                .unwrap_or(0);
 
             // In-app playback progress (dropped once the clip finishes).
             if self
@@ -4470,585 +4329,6 @@ mod linux_app {
                 } else {
                     PermissionState::Unknown
                 },
-            }
-        }
-
-        fn apply_settings_toggle(&mut self, field: frontend::view_model::SettingsField) {
-            let Some(preferences) = self.preferences.as_mut() else {
-                return;
-            };
-            match field {
-                frontend::view_model::SettingsField::StreamingInsert => {
-                    preferences.streaming_insert = !preferences.streaming_insert;
-                    self.settings_dirty.streaming_insert = true;
-                }
-                frontend::view_model::SettingsField::StableTranscription => {
-                    preferences.stable_transcription_enabled =
-                        !preferences.stable_transcription_enabled;
-                    self.settings_dirty.stable_transcription = true;
-                }
-                frontend::view_model::SettingsField::StartMinimized => {
-                    preferences.start_minimized = !preferences.start_minimized;
-                    self.settings_dirty.start_minimized = true;
-                }
-                frontend::view_model::SettingsField::AutoUpdate => {
-                    preferences.auto_update_check = !preferences.auto_update_check;
-                    self.settings_dirty.auto_update_check = true;
-                }
-                frontend::view_model::SettingsField::RemoteInput => {
-                    preferences.remote_input_enabled = !preferences.remote_input_enabled;
-                    self.settings_dirty.remote_input_enabled = true;
-                }
-                frontend::view_model::SettingsField::ActivityHeatmap => {
-                    preferences.show_overview_activity_heatmap =
-                        !preferences.show_overview_activity_heatmap;
-                    self.settings_dirty.appearance = true;
-                }
-                frontend::view_model::SettingsField::RestoreClipboard => {
-                    preferences.restore_clipboard_after_paste =
-                        !preferences.restore_clipboard_after_paste;
-                    self.settings_dirty.recording = true;
-                }
-                frontend::view_model::SettingsField::SystemProxy => {
-                    preferences.use_system_proxy = !preferences.use_system_proxy;
-                    self.settings_dirty.appearance = true;
-                }
-                frontend::view_model::SettingsField::Multimodal => {
-                    preferences.multimodal_pipeline_enabled =
-                        !preferences.multimodal_pipeline_enabled;
-                    self.settings_dirty.appearance = true;
-                }
-                frontend::view_model::SettingsField::LessComputer => {
-                    preferences.coding_agent_enabled = !preferences.coding_agent_enabled;
-                    self.settings_dirty.appearance = true;
-                }
-                frontend::view_model::SettingsField::SilenceAutoStop => {
-                    preferences.silence_auto_stop_enabled = !preferences.silence_auto_stop_enabled;
-                    self.settings_dirty.recording = true;
-                }
-                frontend::view_model::SettingsField::AudioCue => {
-                    preferences.audio_cue_on_record = !preferences.audio_cue_on_record;
-                    self.settings_dirty.recording = true;
-                }
-                frontend::view_model::SettingsField::ShowCapsule => {
-                    preferences.show_capsule = !preferences.show_capsule;
-                    self.settings_dirty.recording = true;
-                    // 关掉就要立刻收起，否则药丸会留在屏幕上直到下一次录音。
-                    if !preferences.show_capsule {
-                        self.dismiss_capsule();
-                    }
-                }
-                frontend::view_model::SettingsField::MuteWhileRecording => {
-                    preferences.mute_during_recording = !preferences.mute_during_recording;
-                    self.settings_dirty.recording = true;
-                }
-                frontend::view_model::SettingsField::RecordAudioForDebug => {
-                    preferences.record_audio_for_debug = !preferences.record_audio_for_debug;
-                    self.settings_dirty.recording = true;
-                }
-                frontend::view_model::SettingsField::StreamingSaveClipboard => {
-                    preferences.streaming_insert_save_clipboard =
-                        !preferences.streaming_insert_save_clipboard;
-                    self.settings_dirty.streaming_insert = true;
-                }
-                frontend::view_model::SettingsField::LaunchAtLogin => {
-                    preferences.launch_at_login = !preferences.launch_at_login;
-                    self.settings_dirty.launch_at_login = true;
-                }
-            }
-            self.save_settings_if_dirty();
-        }
-
-        /// Apply a settings combo change from the frontend.
-        fn apply_settings_combo(
-            &mut self,
-            field: frontend::view_model::SettingsComboField,
-            index: usize,
-        ) {
-            let Some(preferences) = self.preferences.as_mut() else {
-                return;
-            };
-            match field {
-                frontend::view_model::SettingsComboField::Theme => {
-                    preferences.theme_mode = match index {
-                        0 => openless_core::shared_types::ThemeMode::System,
-                        1 => openless_core::shared_types::ThemeMode::Light,
-                        2 => openless_core::shared_types::ThemeMode::Dark,
-                        _ => return,
-                    };
-                    self.settings_dirty.appearance = true;
-                    self.frontend_vm.settings.theme = index;
-                }
-                frontend::view_model::SettingsComboField::Language => {
-                    let pref = match index {
-                        0 => LocalePref::System,
-                        1 => LocalePref::Lang(Lang::ZhCn),
-                        2 => LocalePref::Lang(Lang::ZhTw),
-                        3 => LocalePref::Lang(Lang::En),
-                        4 => LocalePref::Lang(Lang::Ja),
-                        5 => LocalePref::Lang(Lang::Ko),
-                        _ => return,
-                    };
-                    self.apply_locale_pref(pref);
-                    self.frontend_vm.settings.language = index;
-                }
-                frontend::view_model::SettingsComboField::RecordingMode => {
-                    // Tauri 的三档：切换式 / 按住说话 / 自动识别。
-                    preferences.hotkey.mode = match index {
-                        1 => openless_core::shared_types::HotkeyMode::Hold,
-                        2 => openless_core::shared_types::HotkeyMode::Auto,
-                        _ => openless_core::shared_types::HotkeyMode::Toggle,
-                    };
-                    self.settings_dirty.recording = true;
-                }
-                frontend::view_model::SettingsComboField::CodingAgentProvider => {
-                    preferences.coding_agent_provider = match index {
-                        1 => "opencode-cli",
-                        2 => "codex-cli",
-                        3 => "dsh-cli",
-                        _ => "claude-code-cli",
-                    }
-                    .to_string();
-                    self.settings_dirty.coding_agent_enabled = true;
-                }
-                frontend::view_model::SettingsComboField::CodingAgentPermission => {
-                    preferences.coding_agent_permission_mode = match index {
-                        1 => "plan",
-                        2 => "default",
-                        3 => "bypassPermissions",
-                        _ => "acceptEdits",
-                    }
-                    .to_string();
-                    self.settings_dirty.coding_agent_enabled = true;
-                }
-                frontend::view_model::SettingsComboField::SelectionPolishDelivery => {
-                    preferences.selection_polish_output_mode = match index {
-                        1 => openless_core::shared_types::SelectionPolishOutputMode::PreviewConfirm,
-                        _ => openless_core::shared_types::SelectionPolishOutputMode::DirectReplace,
-                    };
-                    self.settings_dirty.recording = true;
-                }
-                frontend::view_model::SettingsComboField::SilenceSeconds => {
-                    preferences.silence_auto_stop_seconds = index as f32 + 1.0;
-                    self.settings_dirty.recording = true;
-                }
-                frontend::view_model::SettingsComboField::CapsuleStyle => {
-                    preferences.capsule_style = match index {
-                        1 => openless_core::shared_types::CapsuleStyle::Classic,
-                        2 => openless_core::shared_types::CapsuleStyle::Typeless,
-                        _ => openless_core::shared_types::CapsuleStyle::Siri,
-                    };
-                    self.settings_dirty.recording = true;
-                }
-                frontend::view_model::SettingsComboField::Microphone => {
-                    preferences.microphone_device_name = if index == 0 {
-                        String::new()
-                    } else {
-                        self.frontend_vm
-                            .settings
-                            .microphone_options
-                            .get(index - 1)
-                            .cloned()
-                            .unwrap_or_default()
-                    };
-                    self.settings_dirty.microphone = true;
-                }
-                frontend::view_model::SettingsComboField::RemoteDefaultMode => {
-                    preferences.remote_input_default_mode = if index == 1 {
-                        "hold".to_string()
-                    } else {
-                        "toggle".to_string()
-                    };
-                    self.settings_dirty.remote_input_enabled = true;
-                }
-            }
-            self.save_settings_if_dirty();
-        }
-
-        /// 快捷键录入完成：写入对应偏好，并以 strict 模式保存以便立即应用热键副作用。
-        fn apply_shortcut_captured(
-            &mut self,
-            field: frontend::view_model::ShortcutField,
-            primary: String,
-            modifiers: Vec<String>,
-        ) {
-            let binding = openless_core::shared_types::ShortcutBinding { primary, modifiers };
-            if let Err(error) = openless_core::validate_shortcut_binding(&binding) {
-                self.frontend_vm.settings_notice = Some(fmt_l10n(
-                    self.lang,
-                    "settings.recording.combo_conflict",
-                    &[&error.to_string()],
-                ));
-                self.frontend_vm.shortcut_recording = None;
-                return;
-            }
-            // 修饰键触发（按住说话）照常保存：插件只观察不吞修饰键，
-            // 按住期间若又按了别的键就判定为组合键、放弃触发。
-            let draft_pack_id = self
-                .frontend_vm
-                .style_packs
-                .get(self.frontend_vm.style_hotkey_draft_pack)
-                .map(|pack| pack.id.clone());
-            let Some(preferences) = self.preferences.as_mut() else {
-                self.frontend_vm.shortcut_recording = None;
-                self.frontend_vm.shortcut_pending_modifier = None;
-                return;
-            };
-            use frontend::view_model::ShortcutField;
-            match field {
-                ShortcutField::Dictation => preferences.dictation_hotkey = binding,
-                ShortcutField::Translation => preferences.translation_hotkey = binding,
-                ShortcutField::Qa => preferences.qa_hotkey = Some(binding),
-                ShortcutField::QuickNote => preferences.quick_note_hotkey = Some(binding),
-                ShortcutField::SwitchStyle => preferences.switch_style_hotkey = Some(binding),
-                ShortcutField::OpenApp => preferences.open_app_hotkey = Some(binding),
-                ShortcutField::CodingAgentVoice => {
-                    preferences.coding_agent_voice_hotkey = Some(binding);
-                    // 「按住说话」有了触发键，Agent 也就该启用（Tauri 同样顺带打开）。
-                    preferences.coding_agent_enabled = true;
-                }
-                ShortcutField::SelectionPolish => {
-                    preferences.selection_polish_hotkey = Some(binding)
-                }
-                ShortcutField::StylePack(index) => {
-                    if let Some(row) = preferences.style_pack_hotkeys.get_mut(index) {
-                        row.binding = binding;
-                    }
-                }
-                ShortcutField::StyleDraft => {
-                    if let Some(pack_id) = draft_pack_id {
-                        preferences
-                            .style_pack_hotkeys
-                            .retain(|entry| entry.pack_id != pack_id);
-                        preferences.style_pack_hotkeys.push(
-                            openless_core::shared_types::StylePackHotkey { pack_id, binding },
-                        );
-                        self.frontend_vm.style_hotkey_draft_open = false;
-                    }
-                }
-            }
-            self.settings_dirty.hotkeys = true;
-            self.frontend_vm.shortcut_recording = None;
-            self.frontend_vm.shortcut_menu = None;
-            self.save_settings_if_dirty();
-        }
-
-        /// 停用某个快捷键绑定（核心录音快捷键没有停用，UI 里也不给按钮）。
-        fn apply_shortcut_disable(&mut self, field: frontend::view_model::ShortcutField) {
-            let Some(preferences) = self.preferences.as_mut() else {
-                return;
-            };
-            use frontend::view_model::ShortcutField;
-            match field {
-                ShortcutField::Qa => preferences.qa_hotkey = None,
-                ShortcutField::QuickNote => preferences.quick_note_hotkey = None,
-                ShortcutField::SwitchStyle => preferences.switch_style_hotkey = None,
-                ShortcutField::OpenApp => preferences.open_app_hotkey = None,
-                ShortcutField::CodingAgentVoice => preferences.coding_agent_voice_hotkey = None,
-                ShortcutField::SelectionPolish => preferences.selection_polish_hotkey = None,
-                ShortcutField::StylePack(index) => {
-                    if let Some(row) = preferences.style_pack_hotkeys.get(index) {
-                        let pack_id = row.pack_id.clone();
-                        preferences
-                            .style_pack_hotkeys
-                            .retain(|entry| entry.pack_id != pack_id);
-                    }
-                }
-                // 录音/翻译必须保留一个绑定；草稿行还没有内容。
-                ShortcutField::Dictation
-                | ShortcutField::Translation
-                | ShortcutField::StyleDraft => {
-                    return;
-                }
-            }
-            self.settings_dirty.hotkeys = true;
-            self.frontend_vm.shortcut_menu = None;
-            self.save_settings_if_dirty();
-        }
-
-        fn apply_style_hotkey_remove(&mut self, index: usize) {
-            let pack_id = self
-                .frontend_vm
-                .settings
-                .style_pack_hotkeys
-                .get(index)
-                .map(|row| row.pack_id.clone());
-            let Some(pack_id) = pack_id else {
-                return;
-            };
-            if let Some(preferences) = self.preferences.as_mut() {
-                preferences
-                    .style_pack_hotkeys
-                    .retain(|entry| entry.pack_id != pack_id);
-            }
-            self.settings_dirty.hotkeys = true;
-            self.frontend_vm.shortcut_menu = None;
-            self.save_settings_if_dirty();
-        }
-
-        /// 换绑到另一个风格包（目标包已有绑定时忽略，与 Tauri 的下拉置灰同义）。
-        fn apply_style_hotkey_repack(&mut self, index: usize, pack_index: usize) {
-            let pack_id = self
-                .frontend_vm
-                .settings
-                .style_pack_hotkeys
-                .get(index)
-                .map(|row| row.pack_id.clone());
-            let target = self
-                .frontend_vm
-                .style_packs
-                .get(pack_index)
-                .map(|pack| pack.id.clone());
-            let (Some(current), Some(target)) = (pack_id, target) else {
-                return;
-            };
-            if current == target {
-                return;
-            }
-            if let Some(preferences) = self.preferences.as_mut() {
-                if preferences
-                    .style_pack_hotkeys
-                    .iter()
-                    .any(|entry| entry.pack_id == target)
-                {
-                    return;
-                }
-                if let Some(entry) = preferences
-                    .style_pack_hotkeys
-                    .iter_mut()
-                    .find(|entry| entry.pack_id == current)
-                {
-                    entry.pack_id = target;
-                }
-            }
-            self.settings_dirty.hotkeys = true;
-            self.save_settings_if_dirty();
-        }
-
-        /// Apply a settings text field change from the frontend.
-        fn apply_settings_text(
-            &mut self,
-            field: frontend::view_model::SettingsTextField,
-            text: String,
-        ) {
-            let Some(preferences) = self.preferences.as_mut() else {
-                return;
-            };
-            match field {
-                frontend::view_model::SettingsTextField::RemotePort => {
-                    if let Ok(port) = text.parse::<u16>() {
-                        preferences.remote_input_port = port;
-                        self.settings_dirty.remote_input_port = true;
-                        self.frontend_vm.settings.remote_port = text;
-                    }
-                }
-                frontend::view_model::SettingsTextField::RetentionDays => {
-                    let parsed = text.trim().parse::<u32>().unwrap_or(0).min(365);
-                    preferences.history_retention_days = parsed;
-                    self.settings_dirty.recording = true;
-                    self.frontend_vm.settings.retention_days = parsed.to_string();
-                }
-                frontend::view_model::SettingsTextField::PolishContextWindow => {
-                    let parsed = text.trim().parse::<u32>().unwrap_or(0).min(60);
-                    preferences.polish_context_window_minutes = parsed;
-                    self.settings_dirty.recording = true;
-                    self.frontend_vm.settings.polish_context_window = parsed.to_string();
-                }
-                frontend::view_model::SettingsTextField::AudioRecordingMaxEntries => {
-                    preferences.audio_recording_max_entries = text
-                        .trim()
-                        .parse::<u32>()
-                        .ok()
-                        .map(|value| value.clamp(1, 200));
-                    self.settings_dirty.recording = true;
-                    self.frontend_vm.settings.audio_recording_max_entries = text;
-                }
-                frontend::view_model::SettingsTextField::CodingAgentModel => {
-                    preferences.coding_agent_model = if text.trim().is_empty() {
-                        None
-                    } else {
-                        Some(text.trim().to_string())
-                    };
-                    self.settings_dirty.coding_agent_enabled = true;
-                    self.frontend_vm.settings.coding_agent_model = text;
-                }
-                frontend::view_model::SettingsTextField::CodingAgentWorkdir => {
-                    preferences.coding_agent_workdir = if text.trim().is_empty() {
-                        None
-                    } else {
-                        Some(text.trim().to_string())
-                    };
-                    self.settings_dirty.coding_agent_enabled = true;
-                    self.frontend_vm.settings.coding_agent_workdir = text;
-                }
-                frontend::view_model::SettingsTextField::CodingAgentExe => {
-                    preferences.coding_agent_exe = if text.trim().is_empty() {
-                        None
-                    } else {
-                        Some(text.trim().to_string())
-                    };
-                    self.settings_dirty.coding_agent_enabled = true;
-                    self.frontend_vm.settings.coding_agent_exe = text;
-                }
-                frontend::view_model::SettingsTextField::HistoryMaxEntries => {
-                    preferences.history_max_entries = text
-                        .trim()
-                        .parse::<u32>()
-                        .ok()
-                        .map(|value| value.clamp(5, 200));
-                    self.settings_dirty.recording = true;
-                    self.frontend_vm.settings.history_max_entries = text;
-                }
-            }
-            self.save_settings_if_dirty();
-        }
-
-        /// Apply a settings action button from the frontend.
-        fn apply_settings_action(&mut self, field: frontend::view_model::SettingsActionField) {
-            match field {
-                frontend::view_model::SettingsActionField::ExportDiagnostics => {
-                    if let Some(backend) = self.backend() {
-                        let source = openless_linux_egui::log_path(&backend.config().data_dir);
-                        let lang = self.lang;
-                        self.spawn(async move {
-                            let destination = tokio::task::spawn_blocking(|| {
-                                rfd::FileDialog::new()
-                                    .add_filter("Log", &["log"])
-                                    .set_file_name("openless.log")
-                                    .save_file()
-                            })
-                            .await
-                            .map_err(|error| {
-                                BackendError::new(
-                                    openless_core::BackendErrorCode::Internal,
-                                    error.to_string(),
-                                )
-                            })?
-                            .ok_or_else(|| {
-                                BackendError::new(
-                                    openless_core::BackendErrorCode::Cancelled,
-                                    tr_l10n(lang, "dialog.export_log_cancelled"),
-                                )
-                            })?;
-                            tokio::task::spawn_blocking(move || {
-                                openless_linux_egui::export_error_log(&source, &destination)
-                            })
-                            .await
-                            .map_err(|error| {
-                                BackendError::new(
-                                    openless_core::BackendErrorCode::Internal,
-                                    error.to_string(),
-                                )
-                            })?
-                            .map_err(|error| {
-                                BackendError::new(
-                                    openless_core::BackendErrorCode::Platform,
-                                    error.to_string(),
-                                )
-                            })?;
-                            Ok(tr_l10n(lang, "status.export_log_done").to_string())
-                        });
-                    }
-                }
-                frontend::view_model::SettingsActionField::CopyCertFingerprint => {
-                    let fingerprint = self
-                        .remote_access
-                        .as_ref()
-                        .and_then(|(status, _)| status.ca_fingerprint_sha256.clone());
-                    match fingerprint {
-                        Some(fingerprint) => match fcitx5_copy_to_clipboard(&fingerprint) {
-                            Ok(()) => {
-                                self.frontend_vm.settings_notice =
-                                    Some(tr_l10n(self.lang, "status.copied").to_string());
-                            }
-                            Err(error) => {
-                                self.frontend_vm.settings_notice =
-                                    Some(fmt_l10n(self.lang, "status.copy_failed", &[&error]));
-                            }
-                        },
-                        None => {
-                            self.frontend_vm.settings_notice = Some(
-                                tr_l10n(
-                                    self.lang,
-                                    "settings.remote_input.cert_fingerprint_unavailable",
-                                )
-                                .to_string(),
-                            );
-                        }
-                    }
-                }
-                frontend::view_model::SettingsActionField::PreviewAudioCue => {
-                    // 与真实录音开始时同一段合成提示音（Tauri `playRecordStartCue`）。
-                    openless_linux_egui::play_cue_start();
-                }
-                frontend::view_model::SettingsActionField::OpenGitHub => {
-                    let _ = open_external("https://github.com/earendil-works/openless");
-                }
-                frontend::view_model::SettingsActionField::OpenHelp => {
-                    let _ = open_external("https://github.com/earendil-works/openless");
-                }
-                frontend::view_model::SettingsActionField::OpenReleaseNotes => {
-                    let _ = open_external("https://github.com/earendil-works/openless/releases");
-                }
-                frontend::view_model::SettingsActionField::OpenFeedback => {
-                    let _ = open_external("https://github.com/earendil-works/openless/issues");
-                }
-                frontend::view_model::SettingsActionField::CopyQQ => {
-                    match fcitx5_copy_to_clipboard("1078960553") {
-                        Ok(()) => {
-                            self.frontend_vm.settings_notice =
-                                Some(tr_l10n(self.lang, "status.copied").to_string());
-                        }
-                        Err(error) => {
-                            self.frontend_vm.settings_notice = Some(fmt_l10n(
-                                self.lang,
-                                "status.copy_failed",
-                                &[&error.to_string()],
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-
-        /// Persist dirty settings if any fields have been changed.
-        fn save_settings_if_dirty(&mut self) {
-            if !self.settings_dirty.any() {
-                return;
-            }
-            if let (Some(native), Some(draft), Some(snapshot)) =
-                (&self.native, self.preferences.clone(), &self.snapshot)
-            {
-                let host = native.host_arc();
-                let revision = snapshot.preferences_revision;
-                let dirty = self.settings_dirty;
-                let tx = self.tx.clone();
-                self.tokio.spawn(async move {
-                    let outcome = tokio::task::spawn_blocking(move || {
-                        let save = |preferences, revision| {
-                            if dirty.hotkeys {
-                                host.update_settings_strict(preferences, revision)
-                            } else {
-                                host.save_settings(preferences, revision)
-                            }
-                        };
-                        match save(draft.clone(), revision) {
-                            Err(error) if error.code == openless_core::BackendErrorCode::Busy => {
-                                let latest_snapshot = host.snapshot();
-                                let latest = host.backend().get_preferences();
-                                save(
-                                    dirty.merge(&latest, &draft),
-                                    latest_snapshot.preferences_revision,
-                                )
-                            }
-                            result => result,
-                        }
-                    })
-                    .await
-                    .map_err(|error| error.to_string())
-                    .and_then(|result| result.map_err(|error| error.to_string()));
-                    let _ = tx.send(UiResult::SettingsSaved(Box::new(outcome)));
-                });
             }
         }
 
@@ -5454,8 +4734,12 @@ mod linux_app {
                         self.set_quick_note_shortcut_hidden(hidden);
                     }
                     frontend::view_model::FrontendAction::HistoryRefresh => {
-                        self.frontend_vm.history_loading = true;
-                        self.frontend_vm.history_error = None;
+                        self.history.request(
+                            self.snapshot
+                                .as_ref()
+                                .map_or(0, |snapshot| snapshot.history_revision),
+                        );
+                        self.load_history();
                         self.frontend_vm.history_confirm = None;
                     }
                     frontend::view_model::FrontendAction::HistorySelect(index) => {
@@ -5465,9 +4749,9 @@ mod linux_app {
                         self.frontend_vm.history_confirm =
                             Some(frontend::view_model::HistoryConfirm::Clear);
                     }
-                    frontend::view_model::FrontendAction::HistoryRequestDelete(index) => {
+                    frontend::view_model::FrontendAction::HistoryRequestDelete(id) => {
                         self.frontend_vm.history_confirm =
-                            Some(frontend::view_model::HistoryConfirm::Delete(index));
+                            Some(frontend::view_model::HistoryConfirm::Delete(id));
                     }
                     frontend::view_model::FrontendAction::HistoryCancelConfirm => {
                         self.frontend_vm.history_confirm = None;
@@ -5483,17 +4767,13 @@ mod linux_app {
                                     });
                                 }
                             }
-                            Some(frontend::view_model::HistoryConfirm::Delete(index)) => {
+                            Some(frontend::view_model::HistoryConfirm::Delete(id)) => {
                                 if let Some(backend) = self.backend() {
-                                    if let Some(entry) = self.frontend_vm.history_entries.get(index)
-                                    {
-                                        let id = entry.id.clone();
-                                        let lang = self.lang;
-                                        self.spawn(async move {
-                                            backend.delete_history(&id)?;
-                                            Ok(tr_l10n(lang, "status.history_deleted").to_string())
-                                        });
-                                    }
+                                    let lang = self.lang;
+                                    self.spawn(async move {
+                                        backend.delete_history(&id)?;
+                                        Ok(tr_l10n(lang, "status.history_deleted").to_string())
+                                    });
                                 }
                             }
                             None => {}
@@ -5834,7 +5114,6 @@ mod linux_app {
                             // (`prefs.selection_polish_style_pack_id`).
                             if let Some(preferences) = self.preferences.as_mut() {
                                 preferences.selection_polish_style_pack_id = id;
-                                self.settings_dirty.appearance = true;
                             }
                             self.save_settings_if_dirty();
                         } else if let Some(backend) = self.backend() {
@@ -6140,7 +5419,7 @@ mod linux_app {
                     frontend::view_model::FrontendAction::SelectionAskToggleHistory => {
                         if let Some(preferences) = self.preferences.as_mut() {
                             preferences.qa_save_history = !preferences.qa_save_history;
-                            self.settings_dirty.appearance = true;
+
                             self.frontend_vm.qa_save_history = preferences.qa_save_history;
                             self.save_settings_if_dirty();
                         }
@@ -6157,14 +5436,12 @@ mod linux_app {
                                 }
                                 None => preferences.working_languages.push(language),
                             }
-                            self.settings_dirty.appearance = true;
                         }
                         self.save_settings_if_dirty();
                     }
                     frontend::view_model::FrontendAction::TranslationSetTarget(language) => {
                         if let Some(preferences) = self.preferences.as_mut() {
                             preferences.translation_target_language = language;
-                            self.settings_dirty.appearance = true;
                         }
                         self.save_settings_if_dirty();
                     }
@@ -6587,179 +5864,6 @@ mod linux_app {
         {
             SingleInstanceRole::Primary(broker) => Ok(BrokerAcquisition::Primary(broker)),
             SingleInstanceRole::Forwarded => Ok(BrokerAcquisition::Forwarded),
-        }
-    }
-
-    /// 主窗口的最小内尺寸（UI 进程创建窗口时用它，和 `with_min_inner_size` 同源）。
-    const MAIN_WINDOW_MIN_INNER_SIZE: egui::Vec2 = egui::vec2(960.0, 640.0);
-
-    /// MSAA sample count of the main window (`NativeOptions::multisampling`). The
-    /// settings backdrop draws the page offscreen through eframe's renderer, so its
-    /// colour target has to match the pipelines eframe built.
-    const MAIN_MSAA_SAMPLES: u16 = 4;
-
-    /// 主窗口的初始尺寸。基准 = macOS（Tauri 的 main 窗口 1300×835）；
-    /// 旧的 Linux 专用窗口配置不作为依据。
-    const MAIN_WINDOW_INNER_SIZE: [f32; 2] = [1300.0, 835.0];
-
-    /// 视图模型载荷指纹（FNV-1a 64）。够快，用来判断「要不要重发快照」：
-    /// 内容没变就不发，UI 慢的时候也不会被无意义的帧糊住。
-    fn snapshot_fingerprint(payload: &[u8]) -> u64 {
-        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-        for byte in payload {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        hash
-    }
-
-    impl OpenLessEguiApp {
-        /// 与渲染无关的宿主心跳：原生事件、托盘命令、自动更新检查、泵心跳日志。
-        ///
-        /// 宿主循环（`run_host`）每 50ms 调它一次。窗口是独立进程，所以热键消费
-        /// 与弹窗拉起完全不依赖「窗口是否在绘制」——窗口关掉、最小化、压根没开，
-        /// 后台照样收键、照样把弹窗进程拉起来。
-        fn tick(&mut self, ctx: &egui::Context) {
-            self.poll(ctx);
-            self.drain_tray(ctx);
-            self.log_pump_heartbeat(ctx);
-        }
-
-        /// 「显示主窗口」：宿主只记意图，由 `run_host` 拉起/抬起 UI 窗口进程。
-        fn request_main_window(&mut self) {
-            self.window_should_be_open = true;
-        }
-
-        /// UI 窗口进程是否还活着（顺带回收已经退出的子进程）。
-        fn ui_window_alive(&mut self) -> bool {
-            let Some(child) = self.ui_window.as_mut() else {
-                return false;
-            };
-            match child.try_wait() {
-                Ok(None) => true,
-                Ok(Some(status)) => {
-                    log::info!("[ui-host] UI window process exited ({status}); host keeps running");
-                    self.ui_window = None;
-                    false
-                }
-                Err(error) => {
-                    log::warn!("[ui-host] UI window process wait failed: {error}");
-                    self.ui_window = None;
-                    false
-                }
-            }
-        }
-
-        /// 拉起 UI 窗口进程。
-        ///
-        /// 时序：调用方保证宿主已经 bind 好桥 socket（UI 进程连不上就直接报错退出，
-        /// 不会自己抢单实例锁或打开数据目录）。
-        fn spawn_ui_window(&mut self, socket: &std::path::Path) -> Result<(), String> {
-            let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-            let mut command = std::process::Command::new(executable);
-            command
-                .arg(UI_CLIENT_FLAG)
-                .arg(UI_SOCKET_FLAG)
-                .arg(socket)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                // 让 panic / winit 警告走宿主自己的 stderr（终端或 journal），
-                // 否则「窗口没起来」会变成一条无声的失败。
-                .stderr(std::process::Stdio::inherit());
-            let child = command.spawn().map_err(|error| error.to_string())?;
-            log::info!(
-                "[ui-host] spawned UI window process pid={} socket={}",
-                child.id(),
-                socket.display()
-            );
-            self.ui_window = Some(child);
-            self.ui_window_spawned_at = Some(std::time::Instant::now());
-            Ok(())
-        }
-
-        /// 窗口当前是否需要一个 UI 进程：用户想开着，而且现在没有活着的窗口。
-        /// 刚拉起的 800ms 内不重复拉起，避免连点托盘菜单拉出两个窗口。
-        fn should_spawn_ui_window(&mut self) -> bool {
-            if !self.window_should_be_open {
-                return false;
-            }
-            if self.ui_window_alive() {
-                return false;
-            }
-            if let Some(spawned_at) = self.ui_window_spawned_at {
-                if spawned_at.elapsed() < Duration::from_millis(800) {
-                    return false;
-                }
-            }
-            true
-        }
-
-        /// 处理 UI 进程发来的消息（含断连语义）。
-        ///
-        /// 时序：`Bye`/断开只把窗口标记为关闭，**不动**后端、会话与弹窗；
-        /// 没有托盘时则连宿主一起退出 —— 否则用户再也找不到这个进程。
-        fn apply_window_messages(&mut self, messages: Vec<WindowToHost>, tray_available: bool) {
-            for message in messages {
-                match message {
-                    WindowToHost::Hello { version } => {
-                        if version != UI_BRIDGE_VERSION {
-                            log::warn!(
-                                "[ui-host] UI window speaks protocol {version}, host speaks {UI_BRIDGE_VERSION}"
-                            );
-                        } else {
-                            log::info!("[ui-host] UI window handshake ok (protocol {version})");
-                        }
-                        // 窗口进程刚起来（可能是重启）：热键配置必须无条件重发一份，
-                        // 否则新窗口拿不到绑定，它自己就没法匹配本地热键。
-                        self.hotkeys_sent = None;
-                    }
-                    WindowToHost::Action { sequence, action } => {
-                        log::debug!("[ui-host] UI action #{sequence}: {action:?}");
-                        self.pending_ui_actions.push(action);
-                    }
-                    WindowToHost::Hotkey { sequence, edge } => {
-                        log::info!("[hotkey] local edge from the UI window #{sequence}: {edge:?}");
-                        self.pending_local_hotkeys
-                            .push((std::time::Instant::now(), edge));
-                    }
-                    WindowToHost::Ping { sequence } => {
-                        self.pending_ui_pongs.push(sequence);
-                    }
-                    WindowToHost::Bye => {
-                        log::info!("[ui-host] UI window said goodbye; host keeps running");
-                        self.window_should_be_open = false;
-                    }
-                }
-            }
-            if !self.window_should_be_open && !tray_available {
-                // 没有托盘就没有重新打开的入口，窗口退出等于应用退出。
-                log::info!("[ui-host] no tray to reopen the window; exiting with it");
-                self.exit_requested = true;
-            }
-        }
-
-        /// 把当前视图模型发给 UI 进程：内容变过、或距上次超过 2s（保活）才发。
-        fn publish_view_model(&mut self, bridge: &mut UiBridgeHost) {
-            if !bridge.is_connected() {
-                // UI 不在：清掉指纹，等它回来时无条件发一份完整快照。
-                self.last_snapshot_fingerprint = None;
-                return;
-            }
-            let payload = match serde_json::to_vec(&self.frontend_vm) {
-                Ok(payload) => payload,
-                Err(error) => {
-                    log::warn!("[ui-host] view model serialization failed: {error}");
-                    return;
-                }
-            };
-            let fingerprint = snapshot_fingerprint(&payload);
-            let keepalive = self.last_snapshot_at.elapsed() >= Duration::from_secs(2);
-            if Some(fingerprint) == self.last_snapshot_fingerprint && !keepalive {
-                return;
-            }
-            self.last_snapshot_fingerprint = Some(fingerprint);
-            self.last_snapshot_at = std::time::Instant::now();
-            bridge.send_snapshot_encoded(&payload);
         }
     }
 
@@ -7277,7 +6381,7 @@ mod linux_app {
             .ok_or_else(|| "HOME/XDG_DATA_HOME is unavailable".to_string())
     }
 
-    fn backend_config(tray_available: bool) -> Result<BackendConfig, String> {
+    fn backend_config() -> Result<BackendConfig, String> {
         let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
         let data_dir = openless_data_dir()?;
         let cache_dir = std::env::var_os("XDG_CACHE_HOME")
@@ -7287,7 +6391,6 @@ mod linux_app {
             .join("OpenLess");
         std::fs::create_dir_all(&data_dir).map_err(|error| error.to_string())?;
         std::fs::create_dir_all(&cache_dir).map_err(|error| error.to_string())?;
-        let capabilities = LinuxCapabilitySnapshot::detect(tray_available).capabilities;
         Ok(BackendConfig {
             data_dir,
             cache_dir,
@@ -7295,7 +6398,7 @@ mod linux_app {
             resource_dir: std::env::current_exe()
                 .ok()
                 .and_then(|path| path.parent().map(std::path::Path::to_path_buf)),
-            platform: capabilities,
+            platform: Default::default(),
             locale: std::env::var("LANG").unwrap_or_else(|_| "en-US".to_string()),
         })
     }
@@ -7308,37 +6411,8 @@ mod linux_app {
         let layout = LinuxResourceLayout::detect(None).map_err(|error| error.to_string())?;
         let plan =
             FcitxPluginInstallPlan::for_layout(&layout, home).map_err(|error| error.to_string())?;
-        let status = ensure_fcitx5_plugin_installed(&plan).map_err(|error| error.to_string())?;
-        // 安装包升级会替换 libopenless.so，但运行中的 fcitx5 仍持有旧映像 ——
-        // 不重启它，新的热键匹配规则就不会生效。只在插件确实更新过时重启，
-        // 并且**绝不放在启动关键路径上**：`fcitx5 -r` 会变成常驻的守护进程，
-        // 早先在这里等它直接导致主窗口出不来。现在丢到后台线程，启动只做纯计算。
-        let reload_plan = plan.clone();
-        let reload_data_dir = config.data_dir.clone();
-        std::thread::spawn(move || {
-            openless_linux_egui::reload_fcitx5_if_plugin_updated(&reload_plan, &reload_data_dir);
-        });
-        reconcile_fcitx5_install(status)
-    }
-
-    /// Map an fcitx5 addon install result onto startup.
-    ///
-    /// A ready addon lets startup continue down the normal fcitx5 DBus path —
-    /// never a global-hotkey fallback — and only a genuinely missing plugin
-    /// aborts startup.
-    /// 插件缺失/未就绪 **绝不是** 启动失败：主窗口必须照常出现，只是全局热键
-    /// 暂时不可用。早先这里 `Err(...)?` 会把整个启动打断，表现就是「主窗口不显示」。
-    fn reconcile_fcitx5_install(status: FcitxPluginStatus) -> Result<(), String> {
-        match status {
-            FcitxPluginStatus::Ready => Ok(()),
-            FcitxPluginStatus::Missing => {
-                log::warn!(
-                    "[fcitx] no OpenLess fcitx5 addon found in the package paths; \
-                     global hotkeys stay unavailable until the package is reinstalled"
-                );
-                Ok(())
-            }
-        }
+        openless_linux_egui::prepare_fcitx5(&plan, &config.data_dir)
+            .map_err(|error| error.to_string())
     }
 
     /// 划词追问头像：登录名变化时后台取 `github.com/{login}.png`，解码后上传成
@@ -8388,18 +7462,18 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
     fn run_host(
         runtime_dir: &std::path::Path,
         tokio: Arc<tokio::runtime::Runtime>,
-        native: Result<LinuxNativeRuntime, String>,
+        native: LinuxNativeRuntime,
         tray: Option<openless_linux_egui::LinuxTray>,
         start_minimized: bool,
     ) -> Result<(), String> {
         let socket = bridge::ui_socket_path(runtime_dir);
-        let mut ui_bridge = UiBridgeHost::bind(socket.clone())
-            .map_err(|error| format!("UI bridge bind failed: {error}"))?;
         let tray_available = tray.is_some();
         // 没有托盘时必须开窗，否则关掉就再也找不回来。
         let window_should_be_open = !start_minimized || !tray_available;
         let ctx = egui::Context::default();
-        let mut app = OpenLessEguiApp::new(tokio, native, tray, window_should_be_open);
+        let mut app = OpenLessEguiApp::new(tokio, Ok(native), tray, window_should_be_open);
+        let mut ui_bridge = UiBridgeHost::bind(socket.clone())
+            .map_err(|error| format!("UI bridge bind failed: {error}"))?;
         log::info!(
             "[ui-host] host started (no window in this process); bridge={} window_should_be_open={window_should_be_open} tray={tray_available}",
             ui_bridge.path().display()
@@ -8415,9 +7489,10 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             app.poll_marketplace_oauth();
             app.tick(&ctx);
             if app.should_spawn_ui_window() {
-                if let Err(error) = app.spawn_ui_window(&socket) {
-                    log::warn!("[ui-host] cannot start the UI window: {error}");
-                }
+                app.spawn_ui_window(&socket)?;
+            }
+            if let Some(error) = app.window.error.take() {
+                return Err(error);
             }
             let actions = std::mem::take(&mut app.pending_ui_actions);
             if !actions.is_empty() {
@@ -8429,6 +7504,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             app.sync_view_model();
             app.sync_hotkey_bindings(&mut ui_bridge);
             app.publish_view_model(&mut ui_bridge);
+            app.focus_main_window(&mut ui_bridge);
             if app.exit_requested {
                 break;
             }
@@ -8437,401 +7513,6 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         log::info!("[ui-host] host exiting; asking the UI window to close");
         ui_bridge.shutdown();
         Ok(())
-    }
-
-    /// UI 窗口进程入口：只渲染。
-    ///
-    /// 它不构造 Core 后端、不打开数据目录、不抢单实例锁、不注册托盘与热键 ——
-    /// 关掉它等于「关掉一个窗口」，宿主与所有后台能力原地不动。
-    fn vulkan_options(mut options: eframe::NativeOptions) -> eframe::NativeOptions {
-        if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup
-        {
-            setup.instance_descriptor.backends = eframe::egui_wgpu::wgpu::Backends::VULKAN;
-        }
-        options
-    }
-
-    fn run_ui_client(socket: std::path::PathBuf) -> Result<(), String> {
-        // UI 进程不复用宿主的日志器对象，但写到同一个文件里，
-        // 排查「窗口进程怎么没了」时两端日志在同一处。
-        if let Ok(data_dir) = openless_data_dir() {
-            if let Err(error) = openless_linux_egui::init_file_logger(&data_dir) {
-                eprintln!("OpenLess UI window logger unavailable: {error}");
-            }
-        }
-        let client = UiBridgeClient::connect(&socket)?;
-        log::info!(
-            "[ui-client] connected to the host bridge at {}",
-            socket.display()
-        );
-        let options = eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default()
-                .with_title("OpenLess")
-                .with_inner_size(MAIN_WINDOW_INNER_SIZE)
-                .with_min_inner_size(MAIN_WINDOW_MIN_INNER_SIZE)
-                .with_decorations(false)
-                .with_transparent(true)
-                .with_resizable(true)
-                .with_visible(true),
-            renderer: eframe::Renderer::Wgpu,
-            multisampling: MAIN_MSAA_SAMPLES,
-            ..Default::default()
-        };
-        let options = vulkan_options(options);
-        eframe::run_native(
-            "OpenLess",
-            options,
-            Box::new(move |cc| {
-                theme::install(&cc.egui_ctx);
-                Ok(Box::new(UiClientApp::new(
-                    client,
-                    cc.wgpu_render_state.as_ref(),
-                )))
-            }),
-        )
-        .map_err(|error| error.to_string())
-    }
-
-    /// 诊断开关：`OPENLESS_UI_DEBUG=1` 时 UI 进程把指针点击与动作记进日志。
-    /// 用来分辨「按钮没反应」是没收到指针事件，还是动作没能送到宿主。
-    fn ui_debug_enabled() -> bool {
-        std::env::var("OPENLESS_UI_DEBUG").is_ok_and(|value| value == "1")
-    }
-
-    /// 是否采纳这一份快照：序号必须**严格递增**（重复、乱序、回退统统丢弃），
-    /// 否则 UI 会把新状态画成旧状态。
-    fn snapshot_supersedes(last_sequence: u64, sequence: u64) -> bool {
-        sequence > last_sequence
-    }
-
-    /// 三方合并：`base` = 宿主上一份快照，`local` = 本地（用户可能正在输入的）
-    /// 视图模型，`incoming` = 宿主新快照。
-    ///
-    /// 用户可见文本全都直接绑在视图模型的字段上（`TextEdit::singleline(&mut
-    /// vm.…)×`），而宿主每 2s、以及任何状态变化时都会推一份完整快照；UI 侧原先
-    /// 是整份替换，于是「打好字还没提交」的输入会被下一份快照抹掉 —— 用户看到的
-    /// 就是「输入一秒后文字自己消失」。这里按字段判断：宿主相对上一份快照**改过**
-    /// 的字段以宿主为准（打开编辑器时 hydrate、提交后回写、宿主侧列表刷新都走这条），
-    /// **没改过**的字段保留本地值（用户正在输入的内容）。
-    fn merge_local_edits(
-        local: &serde_json::Value,
-        base: &serde_json::Value,
-        incoming: &serde_json::Value,
-    ) -> serde_json::Value {
-        if let serde_json::Value::Object(incoming_fields) = incoming {
-            let mut merged = serde_json::Map::new();
-            for (key, incoming_value) in incoming_fields {
-                let base_value = base.get(key).unwrap_or(&serde_json::Value::Null);
-                let value = match local.get(key) {
-                    Some(local_value) => merge_local_edits(local_value, base_value, incoming_value),
-                    None => incoming_value.clone(),
-                };
-                merged.insert(key.clone(), value);
-            }
-            serde_json::Value::Object(merged)
-        } else if incoming == base {
-            // 宿主没动这个字段：本地值（可能是没提交的输入）留下。
-            local.clone()
-        } else {
-            incoming.clone()
-        }
-    }
-
-    /// UI 进程侧的 eframe 应用：收快照 → 渲染 → 把动作发回宿主。
-    struct UiClientApp {
-        client: UiBridgeClient,
-        view_model: FrontendViewModel,
-        /// 已采纳的最大快照序号。
-        last_sequence: u64,
-        /// 宿主上一份快照的 JSON：用来分辨「宿主改了这个字段」和「用户还没提交的
-        /// 本地输入」。
-        last_adopted: Option<serde_json::Value>,
-        /// 已发出的动作序号（宿主可据此看出重复或丢失）。
-        action_sequence: u64,
-        ping_sequence: u64,
-        ping_sent_at: Option<std::time::Instant>,
-        last_ping_at: std::time::Instant,
-        latency_samples: Vec<u128>,
-        exited: bool,
-        /// 宿主下发的本地热键配置（窗口有焦点时插件收不到按键）。
-        hotkeys: Option<openless_core::HotkeyRuntimeTarget>,
-        hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher,
-        /// 本地热键边沿的发送序号（与动作序号分开，便于日志区分）。
-        hotkey_sequence: u64,
-        /// 设置页模糊背板；只有拿到 wgpu 渲染状态（正常 GUI 进程）时存在。
-        backdrop: Option<crate::ui::backdrop::BackdropBlur>,
-    }
-
-    impl UiClientApp {
-        fn new(
-            client: UiBridgeClient,
-            render_state: Option<&eframe::egui_wgpu::RenderState>,
-        ) -> Self {
-            Self {
-                client,
-                // 设置页的磨砂背板：把遮罩下方的页面离屏重绘后做真实高斯模糊。
-                backdrop: render_state.map(|state| {
-                    crate::ui::backdrop::BackdropBlur::new(state, MAIN_MSAA_SAMPLES.into())
-                }),
-                view_model: FrontendViewModel::default(),
-                last_sequence: 0,
-                last_adopted: None,
-                action_sequence: 0,
-                ping_sequence: 0,
-                ping_sent_at: None,
-                last_ping_at: std::time::Instant::now(),
-                latency_samples: Vec::new(),
-                exited: false,
-                hotkeys: None,
-                hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher::default(),
-                hotkey_sequence: 0,
-            }
-        }
-
-        /// 采纳一份快照，但保留用户还没提交、而宿主也没有改动的输入。
-        fn adopt_snapshot(&mut self, sequence: u64, incoming: FrontendViewModel) {
-            self.last_sequence = sequence;
-            let incoming_json = serde_json::to_value(&incoming).ok();
-            let adopted = match (&self.last_adopted, &incoming_json) {
-                (Some(base), Some(incoming_json)) => serde_json::to_value(&self.view_model)
-                    .ok()
-                    .and_then(|local| {
-                        serde_json::from_value(merge_local_edits(&local, base, incoming_json)).ok()
-                    })
-                    .unwrap_or(incoming),
-                // 第一份快照没有可比对的基准：整份采纳。
-                _ => incoming,
-            };
-            self.view_model = adopted;
-            self.last_adopted = incoming_json;
-        }
-
-        /// 收宿主的帧。快照按序号采纳；`Shutdown` 与断连都表示「宿主走了」，
-        /// 此时 UI 必须自己退出（没有宿主就没有数据可渲染）。
-        fn drain_host(&mut self, ctx: &egui::Context) {
-            loop {
-                match self.client.try_recv() {
-                    Ok(HostToWindow::Ready { version }) => {
-                        log::info!("[ui-client] host ready (protocol {version})");
-                    }
-                    Ok(HostToWindow::Hotkeys { bindings, .. }) => {
-                        // 窗口有焦点时 fcitx5 收不到按键，本地匹配全靠这份配置。
-                        log::info!("[ui-client] local hotkey bindings received");
-                        self.hotkeys = Some(*bindings);
-                    }
-                    Ok(HostToWindow::Snapshot {
-                        sequence,
-                        view_model,
-                    }) => {
-                        if snapshot_supersedes(self.last_sequence, sequence) {
-                            self.adopt_snapshot(sequence, *view_model);
-                        } else {
-                            log::debug!("[ui-client] dropped stale snapshot #{sequence}");
-                        }
-                    }
-                    Ok(HostToWindow::Pong { sequence }) => {
-                        if let Some(sent_at) = self.ping_sent_at.take() {
-                            let rtt = sent_at.elapsed().as_millis();
-                            self.latency_samples.push(rtt);
-                            if self.latency_samples.len() >= 20 {
-                                let count = self.latency_samples.len();
-                                let max = self.latency_samples.iter().copied().max().unwrap_or(0);
-                                let sum: u128 = self.latency_samples.iter().sum();
-                                log::info!(
-                                    "[ui-client] ipc round-trip avg={}ms max={max}ms over {count} probes (last #{sequence})",
-                                    sum / count as u128
-                                );
-                                self.latency_samples.clear();
-                            }
-                        }
-                    }
-                    Ok(HostToWindow::Shutdown) => {
-                        log::info!("[ui-client] host asked to shut down; closing the window");
-                        self.exited = true;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                    Err(mpsc::TryRecvError::Empty) => break,
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        log::warn!("[ui-client] host connection lost; closing the window");
-                        self.exited = true;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        break;
-                    }
-                }
-            }
-        }
-
-        /// 本窗口内命中的热键作为边沿报给宿主。
-        ///
-        /// 只读 `InputState`（不消费事件），命中才发一帧；正在录制快捷键时跳过，
-        /// 否则用户在设置里录「Alt+A」会顺手触发一次听写。
-        fn poll_local_hotkeys(&mut self, ctx: &egui::Context) {
-            let Some(bindings) = self.hotkeys.as_ref() else {
-                return;
-            };
-            if self.view_model.shortcut_recording.is_some() {
-                return;
-            }
-            let Some(edge) = self.hotkey_matcher.poll(ctx, bindings) else {
-                return;
-            };
-            self.hotkey_sequence += 1;
-            if let Err(error) = self.client.send(WindowToHost::Hotkey {
-                sequence: self.hotkey_sequence,
-                edge,
-            }) {
-                log::warn!("[ui-client] cannot forward a local hotkey to the host: {error}");
-            }
-        }
-
-        fn ping_if_due(&mut self) {
-            if self.last_ping_at.elapsed() < Duration::from_secs(2) {
-                return;
-            }
-            self.last_ping_at = std::time::Instant::now();
-            self.ping_sequence += 1;
-            self.ping_sent_at = Some(std::time::Instant::now());
-            let _ = self.client.send(WindowToHost::Ping {
-                sequence: self.ping_sequence,
-            });
-        }
-
-        /// 关窗 = 本进程退出。宿主仍在，会话、录音、弹窗都不受影响。
-        fn request_exit(&mut self, ctx: &egui::Context, reason: &str) {
-            if self.exited {
-                return;
-            }
-            log::info!("[ui-client] {reason}: exiting the window process (host keeps running)");
-            self.exited = true;
-            let _ = self.client.send(WindowToHost::Bye);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        }
-
-        /// 把渲染层产生的动作分发出去：窗口控制就地处理，其余发给宿主。
-        fn dispatch(
-            &mut self,
-            actions: Vec<frontend::view_model::FrontendAction>,
-            ctx: &egui::Context,
-        ) {
-            for action in actions {
-                match action {
-                    frontend::view_model::FrontendAction::WindowClose => {
-                        self.request_exit(&ctx, "close button");
-                    }
-                    frontend::view_model::FrontendAction::WindowMinimize => {
-                        // 最小化在 Wayland 上是单向门（winit 明确拒绝取消最小化），
-                        // 而宿主已经接管热键与弹窗，所以按「关窗回托盘」处理：
-                        // 窗口进程退出，任务栏条目消失，托盘随时能再开一个。
-                        self.request_exit(&ctx, "minimize button");
-                    }
-                    frontend::view_model::FrontendAction::WindowMaximize => {
-                        let maximized =
-                            ctx.input(|input| input.viewport().maximized.unwrap_or(false));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
-                    }
-                    other => {
-                        self.action_sequence += 1;
-                        if let Err(error) = self.client.send(WindowToHost::Action {
-                            sequence: self.action_sequence,
-                            action: other,
-                        }) {
-                            log::warn!("[ui-client] cannot forward action to the host: {error}");
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    impl Drop for UiClientApp {
-        fn drop(&mut self) {
-            // 关窗即退出：告别帧让宿主立刻作废窗口句柄，收尾读写线程
-            // 以免宿主一直等到 EOF。
-            let _ = self.client.send(WindowToHost::Bye);
-            self.client.shutdown();
-        }
-    }
-
-    impl eframe::App for UiClientApp {
-        fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-            egui::Color32::TRANSPARENT.to_normalized_gamma_f32()
-        }
-
-        /// 合成器拖窗（标题栏按下即交给它）会吃掉释放事件、并且不在拖动期间发 motion，
-        /// egui 的按压/拖拽状态与指针坐标都会留在原地——页面因此滚不动，直到用户点一下。
-        /// `raw_input_hook` 是唯一能赶在这一次 pass 之前修补事件的地方。
-        fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
-            frontend::layout::route_pointer_before_pass(ctx, raw_input);
-        }
-
-        fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-            let ctx = ui.ctx().clone();
-            self.drain_host(&ctx);
-            self.poll_local_hotkeys(&ctx);
-            theme::apply_visuals(&ctx, self.view_model.theme_mode);
-            if ctx.input(|input| input.viewport().close_requested()) {
-                self.request_exit(&ctx, "window manager close request");
-            }
-            if self.exited {
-                return;
-            }
-            if ui_debug_enabled() {
-                let (pointer, clicked) =
-                    ctx.input(|input| (input.pointer.interact_pos(), input.pointer.any_click()));
-                if clicked {
-                    log::info!("[ui-client] pointer click at {pointer:?}");
-                }
-            }
-            // 所有前端弹窗共用实时磨砂背板：先按当前窗口尺寸准备离屏目标，
-            // 把纹理 id 发布给遮罩；页面在这一帧稍后离屏重绘并模糊（都在 eframe 绘制之前完成，
-            // 所以遮罩采到的是当前帧的像素，不需要任何“等一帧截图”的补丁）。
-            {
-                let open = self.view_model.settings_open
-                    || self.view_model.style_editor_open
-                    || self.view_model.marketplace_selected.is_some()
-                    || self.view_model.marketplace_mine_open
-                    || self.view_model.marketplace_upload_open
-                    || self.view_model.marketplace_confirm_withdraw.is_some()
-                    || self.view_model.history_confirm.is_some()
-                    || (self.view_model.active_page == frontend::view_model::Page::Vocab
-                        && frontend::vocab::new_word_overlay_open(&ctx));
-                let texture = self
-                    .backdrop
-                    .as_mut()
-                    .and_then(|backdrop| backdrop.prepare(&ctx, open));
-                crate::ui::backdrop::publish(&ctx, texture);
-            }
-            let mut actions = Vec::new();
-            frontend::render(&ctx, &mut self.view_model, &mut actions);
-            let modal_open = self.view_model.settings_open
-                || self.view_model.style_editor_open
-                || self.view_model.marketplace_selected.is_some()
-                || self.view_model.marketplace_mine_open
-                || self.view_model.marketplace_upload_open
-                || self.view_model.marketplace_confirm_withdraw.is_some()
-                || self.view_model.history_confirm.is_some()
-                || (self.view_model.active_page == frontend::view_model::Page::Vocab
-                    && frontend::vocab::new_word_overlay_open(&ctx));
-            if modal_open {
-                if let Some(backdrop) = self.backdrop.as_mut() {
-                    backdrop.render_page(&ctx);
-                }
-            }
-            if ui_debug_enabled() && !actions.is_empty() {
-                log::info!("[ui-client] actions from the renderer: {actions:?}");
-            }
-            self.dispatch(actions, &ctx);
-            self.ping_if_due();
-            // Shortcut capture is sampled from egui input events; refresh its
-            // inline recorder promptly so capture/cancel closes in the same
-            // perceptual beat as the key press. Idle settings keep the 30ms cap.
-            let repaint_ms = if self.view_model.shortcut_recording.is_some() {
-                12
-            } else {
-                30
-            };
-            ctx.request_repaint_after(Duration::from_millis(repaint_ms));
-        }
     }
 
     /// 只需要打印就退出的参数。以前 `--help` 会被当成普通启动参数，结果是
@@ -8903,39 +7584,20 @@ Internal flags (set by OpenLess itself, not for regular use):
                     .map(|cache| cache.join("OpenLess/runtime"))
             })
             .ok_or_else(|| "HOME/XDG_RUNTIME_DIR is unavailable".to_string())?;
-        // 常态启动时托盘先于能力快照存在；形态切换（--takeover）时旧进程可能还
-        // 占着托盘名，所以接管到单实例锁之后再重试一次。
-        let mut tray = openless_linux_egui::LinuxTray::start().ok();
         let broker = match acquire_broker(&runtime_dir, &args)? {
-            BrokerAcquisition::Primary(broker) => Some(broker),
+            BrokerAcquisition::Primary(broker) => Arc::new(broker),
             BrokerAcquisition::Forwarded => return Ok(()),
         };
-        if tray.is_none() {
-            tray = openless_linux_egui::LinuxTray::start().ok();
-        }
+        let tray = openless_linux_egui::LinuxTray::start().ok();
         let tray_available = tray.is_some();
-        let config = backend_config(tray_available)?;
-        if let Err(error) = openless_linux_egui::init_file_logger(&config.data_dir) {
-            eprintln!("OpenLess file logger unavailable: {error}");
-        }
         let native = (|| {
-            // AppImage may need to materialize its bundled plugin into the
-            // per-user fcitx5 search path. Do that before opening the DBus
-            // listener: otherwise the first run can wait forever for signals
-            // from a plugin fcitx5 has never loaded.
-            // fcitx5 只是「全局热键」这一条能力：它缺席、插件过旧、DBus 不通
-            // 都**不能**拖死后端与主窗口（否则用户看到的就是「跟后端完全没连上」）。
-            if let Err(error) = ensure_fcitx5_ready(&config) {
-                log::warn!("[fcitx] addon readiness check failed, continuing without it: {error}");
+            let mut config = backend_config()?;
+            if let Err(error) = openless_linux_egui::init_file_logger(&config.data_dir) {
+                eprintln!("OpenLess file logger unavailable: {error}");
             }
-            let hotkeys = match Fcitx5HotkeyListener::start() {
-                Ok(listener) => Some(listener),
-                Err(error) => {
-                    // fcitx5 没在跑 / DBus 不通：热键暂时不可用，其余功能照常。
-                    log::warn!("[fcitx] hotkey listener unavailable, continuing: {error}");
-                    None
-                }
-            };
+            ensure_fcitx5_ready(&config)?;
+            let hotkeys = Some(Fcitx5HotkeyListener::start().map_err(|error| error.to_string())?);
+            config.platform = LinuxCapabilitySnapshot::detect(tray_available).capabilities;
             let backend = {
                 // Construction captures the existing executor for cpal/native
                 // callbacks. The GUI thread leaves its context before block_on;
@@ -8947,11 +7609,26 @@ Internal flags (set by OpenLess itself, not for regular use):
                     .map_err(|error| error.to_string())?
             };
             tokio
-                .block_on(LinuxNativeRuntime::start(backend, broker, hotkeys))
+                .block_on(LinuxNativeRuntime::start(
+                    backend,
+                    Some(Arc::clone(&broker)),
+                    hotkeys,
+                ))
                 .map_err(|error| error.to_string())
         })();
         // 常驻宿主：本进程不再创建窗口，窗口交给独立的 UI 进程。
-        run_host(&runtime_dir, tokio, native, tray, start_minimized)?;
+        let native = match native {
+            Ok(native) => native,
+            Err(error) => {
+                drop(tray);
+                window::show_startup_error(&error, Arc::clone(&broker));
+                return Err(error);
+            }
+        };
+        if let Err(error) = run_host(&runtime_dir, tokio, native, tray, start_minimized) {
+            window::show_startup_error(&error, Arc::clone(&broker));
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -9027,7 +7704,7 @@ Internal flags (set by OpenLess itself, not for regular use):
             let mut app = fixture_app(true);
             app.apply_window_messages(vec![WindowToHost::Bye], true);
             // 关窗只关窗口：宿主不退出、后端与会话不动。
-            assert!(!app.window_should_be_open);
+            assert!(!app.window.should_be_open);
             assert!(!app.exit_requested);
         }
 
@@ -9042,7 +7719,7 @@ Internal flags (set by OpenLess itself, not for regular use):
             assert!(!app.should_spawn_ui_window());
             // 托盘「显示主窗口」是显式意图，必须重新拉起一个窗口进程。
             app.request_main_window();
-            assert!(app.window_should_be_open);
+            assert!(app.window.should_be_open);
             assert!(app.should_spawn_ui_window());
         }
 
@@ -9051,10 +7728,10 @@ Internal flags (set by OpenLess itself, not for regular use):
             let mut app = fixture_app(false);
             app.request_main_window();
             // 模拟「刚拉起过」：防抖窗口内不得再拉第二个窗口进程。
-            app.ui_window_spawned_at = Some(std::time::Instant::now());
+            app.window.spawned_at = Some(std::time::Instant::now());
             assert!(!app.should_spawn_ui_window());
             // 防抖过期且没有活着的子进程时，允许重拉。
-            app.ui_window_spawned_at = Some(std::time::Instant::now() - Duration::from_secs(5));
+            app.window.spawned_at = Some(std::time::Instant::now() - Duration::from_secs(5));
             assert!(app.should_spawn_ui_window());
         }
 
@@ -9075,13 +7752,107 @@ Internal flags (set by OpenLess itself, not for regular use):
             app.apply_window_messages(
                 vec![WindowToHost::Action {
                     sequence: 1,
-                    action: frontend::view_model::FrontendAction::WindowClose,
+                    action: Box::new(frontend::view_model::FrontendAction::WindowClose),
                 }],
                 true,
             );
             // 窗口控制由 UI 进程处理；即便漏到宿主，也只是入队后由
             // apply_frontend_actions 记一条日志，不改变窗口意图。
-            assert!(app.window_should_be_open);
+            assert!(app.window.should_be_open);
+        }
+
+        #[test]
+        fn reconnect_resends_state_and_focus_waits_for_the_handshake() {
+            let dir = std::env::temp_dir()
+                .join(format!("openless-window-focus-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut bridge = UiBridgeHost::bind(dir.join("ui.sock")).unwrap();
+            let mut app = fixture_app(false);
+            app.preferences = Some(UserPreferences::default());
+            app.transcript = "ongoing session".into();
+            let pid = std::process::id();
+            let mut previous_sequence = 0;
+            for _ in 0..2 {
+                app.request_main_window();
+                let mut client = UiBridgeClient::connect(bridge.path()).unwrap();
+                bridge.accept_pending();
+                app.focus_main_window(&mut bridge);
+                assert!(
+                    app.window.focus_requested,
+                    "focus must survive an unfinished handshake"
+                );
+                let deadline = std::time::Instant::now() + Duration::from_secs(3);
+                while !bridge.is_connected() {
+                    app.apply_window_messages(bridge.drain(), true);
+                    assert!(std::time::Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                app.sync_hotkey_bindings(&mut bridge);
+                app.publish_view_model(&mut bridge);
+                app.focus_main_window(&mut bridge);
+                let (mut ready, mut hotkeys, mut snapshot, mut focus) =
+                    (false, false, false, false);
+                while !(ready && hotkeys && snapshot && focus) {
+                    match client.try_recv() {
+                        Ok(HostToWindow::Ready { .. }) => ready = true,
+                        Ok(HostToWindow::Hotkeys { .. }) => {
+                            assert!(ready);
+                            hotkeys = true;
+                        }
+                        Ok(HostToWindow::Snapshot { sequence, .. }) => {
+                            assert!(ready && sequence > previous_sequence);
+                            previous_sequence = sequence;
+                            snapshot = true;
+                        }
+                        Ok(HostToWindow::FocusMain) => {
+                            assert!(ready);
+                            focus = true;
+                        }
+                        Err(mpsc::TryRecvError::Empty) => {
+                            std::thread::sleep(Duration::from_millis(2))
+                        }
+                        other => panic!("unexpected frame: {other:?}"),
+                    }
+                    assert!(std::time::Instant::now() < deadline);
+                }
+                assert!(!app.window.focus_requested);
+                app.apply_window_messages(vec![WindowToHost::Bye], true);
+                drop(client);
+                while bridge.is_connected() {
+                    bridge.drain();
+                    assert!(std::time::Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                assert_eq!(app.transcript, "ongoing session");
+                assert_eq!(std::process::id(), pid);
+                assert!(!app.exit_requested);
+            }
+            bridge.shutdown();
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+
+        #[test]
+        fn history_refresh_preserves_selection_and_delete_identity() {
+            let mut app = fixture_app(false);
+            let mut selected = session_entry("2026-09-27T12:00:00Z", "selected", None);
+            selected.id = "selected-id".into();
+            app.history.entries = vec![selected.clone()];
+            app.sync_view_model();
+            app.apply_frontend_actions(
+                vec![frontend::view_model::FrontendAction::HistoryRequestDelete(
+                    selected.id.clone(),
+                )],
+                &egui::Context::default(),
+            );
+            let mut newest = selected.clone();
+            newest.id = "newest-id".into();
+            app.history.entries.insert(0, newest);
+            app.sync_view_model();
+            assert_eq!(app.frontend_vm.history_selected, 1);
+            assert_eq!(
+                app.frontend_vm.history_confirm,
+                Some(frontend::view_model::HistoryConfirm::Delete(selected.id))
+            );
         }
 
         /// 润色与语音快捷键的补充说明必须出现在快捷键页。
@@ -9133,9 +7904,10 @@ Internal flags (set by OpenLess itself, not for regular use):
         /// 之前的实现是整份替换视图模型，界面上表现为「打完字一秒后文字消失」。
         #[test]
         fn a_pending_edit_survives_the_next_snapshot() {
-            let mut base = FrontendViewModel::default();
-            base.settings_query = String::new();
-            base.style_name = "原始名字".into();
+            let base = FrontendViewModel {
+                style_name: "原始名字".into(),
+                ..Default::default()
+            };
             let mut local = base.clone();
             // 用户正在输入：改了搜索框和风格名，都还没提交（未失焦/未回车）。
             local.settings_query = "润色上下文".into();
@@ -9540,29 +8312,6 @@ Internal flags (set by OpenLess itself, not for regular use):
             assert_eq!(state.messages.as_ref().unwrap()[0].content, "question");
         }
 
-        #[test]
-        fn settings_conflict_merge_preserves_only_dirty_draft_fields() {
-            let latest = UserPreferences {
-                remote_input_port: 9443,
-                streaming_insert: false,
-                ..Default::default()
-            };
-            let draft = UserPreferences {
-                remote_input_port: 7777,
-                streaming_insert: true,
-                ..Default::default()
-            };
-            let dirty = SettingsDirty {
-                streaming_insert: true,
-                ..Default::default()
-            };
-
-            let merged = dirty.merge(&latest, &draft);
-
-            assert!(merged.streaming_insert);
-            assert_eq!(merged.remote_input_port, 9443);
-        }
-
         /// 仅测试用：生产路径（设置页的 style-pack 快捷键行）直接改
         /// `preferences.style_pack_hotkeys`，见 `main.rs` 的 `StyleHotkey` 分支。
         fn set_style_pack_hotkey(
@@ -9601,78 +8350,6 @@ Internal flags (set by OpenLess itself, not for regular use):
             assert_eq!(preferences.style_pack_hotkeys.len(), 1);
             assert_eq!(preferences.style_pack_hotkeys[0].pack_id, "second");
             assert_eq!(preferences.style_pack_hotkeys[0].binding, second);
-        }
-
-        #[test]
-        fn settings_conflict_merge_preserves_hotkey_drafts_as_one_domain() {
-            let latest = UserPreferences::default();
-            let mut draft = latest.clone();
-            draft.open_app_hotkey = Some(openless_core::shared_types::ShortcutBinding {
-                primary: "O".into(),
-                modifiers: vec!["ctrl".into(), "shift".into()],
-            });
-            let dirty = SettingsDirty {
-                hotkeys: true,
-                ..Default::default()
-            };
-
-            let merged = dirty.merge(&latest, &draft);
-
-            assert_eq!(merged.open_app_hotkey, draft.open_app_hotkey);
-        }
-
-        #[test]
-        fn settings_conflict_merge_preserves_recording_device_and_appearance_domains() {
-            let latest = UserPreferences {
-                remote_input_port: 9443,
-                ..Default::default()
-            };
-            let mut draft = latest.clone();
-            draft.hotkey.mode = openless_core::shared_types::HotkeyMode::Auto;
-            draft.silence_auto_stop_enabled = true;
-            draft.silence_auto_stop_seconds = 1.5;
-            draft.mute_during_recording = true;
-            draft.audio_cue_on_record = false;
-            draft.microphone_device_name = "USB microphone".into();
-            draft.theme_mode = openless_core::shared_types::ThemeMode::Dark;
-            draft.show_overview_activity_heatmap = false;
-            draft.remote_input_port = 7777;
-            let dirty = SettingsDirty {
-                recording: true,
-                microphone: true,
-                appearance: true,
-                ..Default::default()
-            };
-
-            let merged = dirty.merge(&latest, &draft);
-
-            assert_eq!(merged.hotkey.mode, draft.hotkey.mode);
-            assert!(merged.silence_auto_stop_enabled);
-            assert_eq!(merged.silence_auto_stop_seconds, 1.5);
-            assert!(merged.mute_during_recording);
-            assert!(!merged.audio_cue_on_record);
-            assert_eq!(merged.microphone_device_name, "USB microphone");
-            assert_eq!(
-                merged.theme_mode,
-                openless_core::shared_types::ThemeMode::Dark
-            );
-            assert!(!merged.show_overview_activity_heatmap);
-            assert_eq!(merged.remote_input_port, 9443);
-        }
-
-        #[test]
-        fn ready_install_needs_no_reload_but_continues() {
-            assert!(reconcile_fcitx5_install(FcitxPluginStatus::Ready).is_ok());
-        }
-
-        /// 插件缺失只影响全局热键，**绝不能** 让启动失败 —— 早先这里返回 Err 并
-        /// 用 `?` 中断启动，用户看到的就是「主窗口不显示」。
-        #[test]
-        fn missing_install_still_starts_the_window() {
-            assert!(
-                reconcile_fcitx5_install(FcitxPluginStatus::Missing).is_ok(),
-                "a missing fcitx5 addon must never abort startup"
-            );
         }
 
         // ---- Overview summary (Tauri parity) -----------------------------

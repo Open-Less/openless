@@ -1546,6 +1546,322 @@ pub fn inserted_message(lang: Lang, chars: usize) -> String {
     fmt_l10n(lang, "capsule.inserted", &[&chars])
 }
 
+// ── Less Computer 面板 ──────────────────────────────────────────────────────
+
+/// Less Computer 浮窗的动作（宿主转成 `PopupToHost` 消息）。
+pub enum LessComputerAction {
+    None,
+    /// ✕ → 只收起面板（已完成的一轮保留）。
+    Dismiss,
+    /// Esc / 停止 → 取消当前这一轮。
+    Cancel,
+    /// 输入框回车 / 发送。
+    Submit(String),
+    /// 阻塞命令的批准或拒绝。
+    Approve {
+        token: String,
+        approved: bool,
+    },
+}
+
+/// Less Computer 语音 Agent 浮窗（Tauri `LessComputerPanel.tsx`）。
+///
+/// 面板只呈现宿主推来的事件序列（`LessComputerPopupState::entries`），不解释产品意图：
+/// 用户指令是右对齐气泡、工具调用与上下文压缩是行内标记、助手正文走 markdown，
+/// 阻塞命令在输入框上方给出批准 / 拒绝。
+pub fn less_computer(
+    root_ui: &mut egui::Ui,
+    state: &LessComputerPopupState,
+    composer: &mut String,
+    lang: Lang,
+) -> LessComputerAction {
+    let mut action = LessComputerAction::None;
+    egui::CentralPanel::default()
+        .frame(
+            egui::Frame::NONE
+                .fill(theme::SURFACE)
+                .corner_radius(egui::CornerRadius::same(14))
+                .stroke(egui::Stroke::new(0.5, theme::LINE))
+                .inner_margin(egui::Margin::same(CARD_SPACING as i8)),
+        )
+        .show(root_ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(
+                        egui::RichText::new(tr_l10n(lang, "less_computer.title"))
+                            .size(16.0)
+                            .strong()
+                            .color(theme::INK),
+                    );
+                    ui.add_space(3.0);
+                    // 运行中显示「执行中…」，否则是那句「想让电脑做什么？」的副标题。
+                    let subtitle = if state.working {
+                        tr_l10n(lang, "less_computer.working")
+                    } else {
+                        tr_l10n(lang, "less_computer.subtitle")
+                    };
+                    ui.label(egui::RichText::new(subtitle).size(12.0).color(theme::INK_4));
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    if icon_button(ui, icons::IconName::Close, theme::INK_3).clicked() {
+                        action = LessComputerAction::Dismiss;
+                    }
+                });
+            });
+            ui.add_space(10.0);
+
+            // 审批卡的实际高度随命令/警告文字行数变化（警告会换行到两行），预留值取
+            // “单行标题 + 等宽命令 + 两行警告 + 按钮行 + 内边距”。取小了会把
+            // 底部输入框挤出卡片外（越出窗口下缘），这是实测发现的。
+            let approval_height = if state.approval.is_some() { 158.0 } else { 0.0 };
+            let list_height =
+                (ui.available_height() - COMPOSER_HEIGHT - approval_height - 12.0).max(120.0);
+            ui.allocate_ui(egui::vec2(ui.available_width(), list_height), |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("openless-less-computer")
+                    .auto_shrink([false, false])
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        if state.entries.is_empty() && !state.working {
+                            ui.add_space(24.0);
+                            ui.vertical_centered(|ui| {
+                                ui.label(
+                                    egui::RichText::new(tr_l10n(lang, "less_computer.subtitle"))
+                                        .size(13.0)
+                                        .color(theme::INK_4),
+                                );
+                            });
+                        }
+                        for entry in &state.entries {
+                            match entry.kind.as_str() {
+                                "user" => user_bubble(ui, &entry.text),
+                                "assistant" => {
+                                    ui.add_space(2.0);
+                                    render_markdown(ui, &entry.text);
+                                    ui.add_space(2.0);
+                                }
+                                "tool" | "note" => marker_row(ui, &entry.text, theme::INK_3),
+                                "compaction" => compaction_marker(ui, &entry.text),
+                                "error" => {
+                                    ui.label(
+                                        egui::RichText::new(&entry.text)
+                                            .size(12.5)
+                                            .color(theme::ERR),
+                                    );
+                                }
+                                _ => marker_row(ui, &entry.text, theme::INK_3),
+                            }
+                        }
+                        if state.working {
+                            ui.add_space(2.0);
+                            marker_row(ui, tr_l10n(lang, "less_computer.working"), theme::INK_3);
+                        }
+                    });
+            });
+
+            if let Some(approval) = &state.approval {
+                ui.add_space(6.0);
+                egui::Frame::new()
+                    .fill(theme::WARN_SOFT)
+                    .stroke(egui::Stroke::new(0.5, theme::WARN))
+                    .corner_radius(egui::CornerRadius::same(10))
+                    .inner_margin(egui::Margin::same(10))
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(tr_l10n(lang, "less_computer.approval_title"))
+                                .size(12.5)
+                                .strong()
+                                .color(theme::INK),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new(&approval.command)
+                                .font(egui::FontId::monospace(11.5))
+                                .color(theme::INK_2),
+                        );
+                        if !approval.reason.is_empty() {
+                            ui.add_space(3.0);
+                            ui.label(
+                                egui::RichText::new(&approval.reason)
+                                    .size(11.0)
+                                    .color(theme::INK_3),
+                            );
+                        }
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            if small_action_button(ui, tr_l10n(lang, "less_computer.approve"), true)
+                                .clicked()
+                            {
+                                action = LessComputerAction::Approve {
+                                    token: approval.token.clone(),
+                                    approved: true,
+                                };
+                            }
+                            if small_action_button(ui, tr_l10n(lang, "less_computer.deny"), false)
+                                .clicked()
+                            {
+                                action = LessComputerAction::Approve {
+                                    token: approval.token.clone(),
+                                    approved: false,
+                                };
+                            }
+                        });
+                    });
+            }
+
+            ui.add_space(6.0);
+            let width = ui.available_width();
+            let (rect, _) =
+                ui.allocate_exact_size(egui::vec2(width, COMPOSER_HEIGHT), egui::Sense::hover());
+            ui.painter()
+                .rect_filled(rect, egui::CornerRadius::same(12), theme::SURFACE);
+            ui.painter().rect_stroke(
+                rect,
+                egui::CornerRadius::same(12),
+                egui::Stroke::new(0.5, theme::LINE_STRONG),
+                egui::StrokeKind::Inside,
+            );
+            let send_rect = egui::Rect::from_center_size(
+                egui::pos2(rect.right() - 20.0, rect.center().y),
+                egui::vec2(28.0, 28.0),
+            );
+            let send = ui
+                .interact(
+                    send_rect,
+                    egui::Id::new("less-computer-send"),
+                    egui::Sense::click(),
+                )
+                .on_hover_text(tr_l10n(lang, "less_computer.send"));
+            if !composer.trim().is_empty() {
+                ui.painter().rect_filled(
+                    send_rect,
+                    egui::CornerRadius::same(14),
+                    if send.hovered() {
+                        theme::INK_2
+                    } else {
+                        theme::INK
+                    },
+                );
+                icons::draw_icon(
+                    ui,
+                    send_rect.center(),
+                    icons::IconName::Send,
+                    theme::SURFACE,
+                );
+            }
+            let text_rect = egui::Rect::from_min_max(
+                egui::pos2(rect.left() + 12.0, rect.top()),
+                egui::pos2(send_rect.left() - 6.0, rect.bottom()),
+            );
+            let mut child = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt("less-computer-composer")
+                    .max_rect(text_rect)
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            );
+            let response = child.add(
+                egui::TextEdit::singleline(composer)
+                    .id(egui::Id::new("less-computer-composer-input"))
+                    .hint_text(tr_l10n(lang, "less_computer.input_placeholder"))
+                    .font(egui::FontId::proportional(13.5))
+                    .text_color(theme::INK)
+                    .frame(egui::Frame::NONE)
+                    .desired_width(text_rect.width())
+                    .vertical_align(egui::Align::Center),
+            );
+            let submitted =
+                response.lost_focus() && child.input(|input| input.key_pressed(egui::Key::Enter));
+            if submitted || send.clicked() {
+                let text = composer.trim().to_string();
+                if !text.is_empty() {
+                    action = LessComputerAction::Submit(text);
+                }
+            }
+            // Esc 取消当前这一轮（Tauri 面板的 Esc 语义）。
+            if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                action = LessComputerAction::Cancel;
+            }
+        });
+    action
+}
+
+/// 右对齐的用户指令气泡（Tauri `Bubble align="end"`）。
+fn user_bubble(ui: &mut egui::Ui, text: &str) {
+    ui.add_space(2.0);
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+        let max = (ui.available_width() * 0.82).max(80.0);
+        ui.set_max_width(max);
+        egui::Frame::new()
+            .fill(theme::BLUE_SOFT)
+            .corner_radius(egui::CornerRadius::same(10))
+            .inner_margin(egui::Margin::symmetric(9, 6))
+            .show(ui, |ui| {
+                ui.set_max_width(max - 18.0);
+                ui.label(egui::RichText::new(text).size(12.5).color(theme::INK));
+            });
+    });
+    ui.add_space(2.0);
+}
+
+/// 行内标记：小圆点 + 辅助色文字（Tauri `Marker`）。
+fn marker_row(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+        ui.painter().circle_filled(rect.center(), 2.0, color);
+        ui.label(egui::RichText::new(text).size(11.5).color(color));
+    });
+}
+
+/// 上下文压缩标记（Tauri `Marker variant="separator"`）。
+fn compaction_marker(ui: &mut egui::Ui, text: &str) {
+    ui.add_space(2.0);
+    ui.horizontal(|ui| {
+        let width = ui.available_width();
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 16.0), egui::Sense::hover());
+        ui.painter().line_segment(
+            [rect.left_center(), rect.right_center()],
+            egui::Stroke::new(0.5, theme::LINE_SOFT),
+        );
+        let galley = ui.painter().layout_no_wrap(
+            text.to_owned(),
+            egui::FontId::proportional(11.0),
+            theme::INK_4,
+        );
+        let center = rect.center();
+        ui.painter().rect_filled(
+            egui::Rect::from_center_size(center, galley.size() + egui::vec2(10.0, 0.0)),
+            egui::CornerRadius::same(7),
+            theme::SURFACE,
+        );
+        ui.painter().galley(
+            egui::pos2(
+                center.x - galley.rect.width() / 2.0,
+                center.y - galley.rect.height() / 2.0,
+            ),
+            galley,
+            theme::INK_4,
+        );
+    });
+    ui.add_space(2.0);
+}
+
+/// 批准 / 拒绝按钮（Tauri `Button`）。
+fn small_action_button(ui: &mut egui::Ui, label: &str, primary: bool) -> egui::Response {
+    let text = egui::RichText::new(label).size(11.5);
+    let button = if primary {
+        egui::Button::new(text.color(theme::SURFACE)).fill(theme::INK)
+    } else {
+        egui::Button::new(text.color(theme::INK_2))
+            .fill(theme::SURFACE)
+            .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
+    };
+    ui.add(
+        button
+            .corner_radius(egui::CornerRadius::same(7))
+            .min_size(egui::vec2(56.0, 26.0)),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2353,320 +2669,4 @@ mod tests {
             "{painted}"
         );
     }
-}
-
-// ── Less Computer 面板 ──────────────────────────────────────────────────────
-
-/// Less Computer 浮窗的动作（宿主转成 `PopupToHost` 消息）。
-pub enum LessComputerAction {
-    None,
-    /// ✕ → 只收起面板（已完成的一轮保留）。
-    Dismiss,
-    /// Esc / 停止 → 取消当前这一轮。
-    Cancel,
-    /// 输入框回车 / 发送。
-    Submit(String),
-    /// 阻塞命令的批准或拒绝。
-    Approve {
-        token: String,
-        approved: bool,
-    },
-}
-
-/// Less Computer 语音 Agent 浮窗（Tauri `LessComputerPanel.tsx`）。
-///
-/// 面板只呈现宿主推来的事件序列（`LessComputerPopupState::entries`），不解释产品意图：
-/// 用户指令是右对齐气泡、工具调用与上下文压缩是行内标记、助手正文走 markdown，
-/// 阻塞命令在输入框上方给出批准 / 拒绝。
-pub fn less_computer(
-    root_ui: &mut egui::Ui,
-    state: &LessComputerPopupState,
-    composer: &mut String,
-    lang: Lang,
-) -> LessComputerAction {
-    let mut action = LessComputerAction::None;
-    egui::CentralPanel::default()
-        .frame(
-            egui::Frame::NONE
-                .fill(theme::SURFACE)
-                .corner_radius(egui::CornerRadius::same(14))
-                .stroke(egui::Stroke::new(0.5, theme::LINE))
-                .inner_margin(egui::Margin::same(CARD_SPACING as i8)),
-        )
-        .show(root_ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    ui.label(
-                        egui::RichText::new(tr_l10n(lang, "less_computer.title"))
-                            .size(16.0)
-                            .strong()
-                            .color(theme::INK),
-                    );
-                    ui.add_space(3.0);
-                    // 运行中显示「执行中…」，否则是那句「想让电脑做什么？」的副标题。
-                    let subtitle = if state.working {
-                        tr_l10n(lang, "less_computer.working")
-                    } else {
-                        tr_l10n(lang, "less_computer.subtitle")
-                    };
-                    ui.label(egui::RichText::new(subtitle).size(12.0).color(theme::INK_4));
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                    if icon_button(ui, icons::IconName::Close, theme::INK_3).clicked() {
-                        action = LessComputerAction::Dismiss;
-                    }
-                });
-            });
-            ui.add_space(10.0);
-
-            // 审批卡的实际高度随命令/警告文字行数变化（警告会换行到两行），预留值取
-            // “单行标题 + 等宽命令 + 两行警告 + 按钮行 + 内边距”。取小了会把
-            // 底部输入框挤出卡片外（越出窗口下缘），这是实测发现的。
-            let approval_height = if state.approval.is_some() { 158.0 } else { 0.0 };
-            let list_height =
-                (ui.available_height() - COMPOSER_HEIGHT - approval_height - 12.0).max(120.0);
-            ui.allocate_ui(egui::vec2(ui.available_width(), list_height), |ui| {
-                egui::ScrollArea::vertical()
-                    .id_salt("openless-less-computer")
-                    .auto_shrink([false, false])
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        if state.entries.is_empty() && !state.working {
-                            ui.add_space(24.0);
-                            ui.vertical_centered(|ui| {
-                                ui.label(
-                                    egui::RichText::new(tr_l10n(lang, "less_computer.subtitle"))
-                                        .size(13.0)
-                                        .color(theme::INK_4),
-                                );
-                            });
-                        }
-                        for entry in &state.entries {
-                            match entry.kind.as_str() {
-                                "user" => user_bubble(ui, &entry.text),
-                                "assistant" => {
-                                    ui.add_space(2.0);
-                                    render_markdown(ui, &entry.text);
-                                    ui.add_space(2.0);
-                                }
-                                "tool" | "note" => marker_row(ui, &entry.text, theme::INK_3),
-                                "compaction" => compaction_marker(ui, &entry.text),
-                                "error" => {
-                                    ui.label(
-                                        egui::RichText::new(&entry.text)
-                                            .size(12.5)
-                                            .color(theme::ERR),
-                                    );
-                                }
-                                _ => marker_row(ui, &entry.text, theme::INK_3),
-                            }
-                        }
-                        if state.working {
-                            ui.add_space(2.0);
-                            marker_row(ui, tr_l10n(lang, "less_computer.working"), theme::INK_3);
-                        }
-                    });
-            });
-
-            if let Some(approval) = &state.approval {
-                ui.add_space(6.0);
-                egui::Frame::new()
-                    .fill(theme::WARN_SOFT)
-                    .stroke(egui::Stroke::new(0.5, theme::WARN))
-                    .corner_radius(egui::CornerRadius::same(10))
-                    .inner_margin(egui::Margin::same(10))
-                    .show(ui, |ui| {
-                        ui.label(
-                            egui::RichText::new(tr_l10n(lang, "less_computer.approval_title"))
-                                .size(12.5)
-                                .strong()
-                                .color(theme::INK),
-                        );
-                        ui.add_space(4.0);
-                        ui.label(
-                            egui::RichText::new(&approval.command)
-                                .font(egui::FontId::monospace(11.5))
-                                .color(theme::INK_2),
-                        );
-                        if !approval.reason.is_empty() {
-                            ui.add_space(3.0);
-                            ui.label(
-                                egui::RichText::new(&approval.reason)
-                                    .size(11.0)
-                                    .color(theme::INK_3),
-                            );
-                        }
-                        ui.add_space(6.0);
-                        ui.horizontal(|ui| {
-                            if small_action_button(ui, tr_l10n(lang, "less_computer.approve"), true)
-                                .clicked()
-                            {
-                                action = LessComputerAction::Approve {
-                                    token: approval.token.clone(),
-                                    approved: true,
-                                };
-                            }
-                            if small_action_button(ui, tr_l10n(lang, "less_computer.deny"), false)
-                                .clicked()
-                            {
-                                action = LessComputerAction::Approve {
-                                    token: approval.token.clone(),
-                                    approved: false,
-                                };
-                            }
-                        });
-                    });
-            }
-
-            ui.add_space(6.0);
-            let width = ui.available_width();
-            let (rect, _) =
-                ui.allocate_exact_size(egui::vec2(width, COMPOSER_HEIGHT), egui::Sense::hover());
-            ui.painter()
-                .rect_filled(rect, egui::CornerRadius::same(12), theme::SURFACE);
-            ui.painter().rect_stroke(
-                rect,
-                egui::CornerRadius::same(12),
-                egui::Stroke::new(0.5, theme::LINE_STRONG),
-                egui::StrokeKind::Inside,
-            );
-            let send_rect = egui::Rect::from_center_size(
-                egui::pos2(rect.right() - 20.0, rect.center().y),
-                egui::vec2(28.0, 28.0),
-            );
-            let send = ui
-                .interact(
-                    send_rect,
-                    egui::Id::new("less-computer-send"),
-                    egui::Sense::click(),
-                )
-                .on_hover_text(tr_l10n(lang, "less_computer.send"));
-            if !composer.trim().is_empty() {
-                ui.painter().rect_filled(
-                    send_rect,
-                    egui::CornerRadius::same(14),
-                    if send.hovered() {
-                        theme::INK_2
-                    } else {
-                        theme::INK
-                    },
-                );
-                icons::draw_icon(
-                    ui,
-                    send_rect.center(),
-                    icons::IconName::Send,
-                    theme::SURFACE,
-                );
-            }
-            let text_rect = egui::Rect::from_min_max(
-                egui::pos2(rect.left() + 12.0, rect.top()),
-                egui::pos2(send_rect.left() - 6.0, rect.bottom()),
-            );
-            let mut child = ui.new_child(
-                egui::UiBuilder::new()
-                    .id_salt("less-computer-composer")
-                    .max_rect(text_rect)
-                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
-            );
-            let response = child.add(
-                egui::TextEdit::singleline(composer)
-                    .id(egui::Id::new("less-computer-composer-input"))
-                    .hint_text(tr_l10n(lang, "less_computer.input_placeholder"))
-                    .font(egui::FontId::proportional(13.5))
-                    .text_color(theme::INK)
-                    .frame(egui::Frame::NONE)
-                    .desired_width(text_rect.width())
-                    .vertical_align(egui::Align::Center),
-            );
-            let submitted =
-                response.lost_focus() && child.input(|input| input.key_pressed(egui::Key::Enter));
-            if submitted || send.clicked() {
-                let text = composer.trim().to_string();
-                if !text.is_empty() {
-                    action = LessComputerAction::Submit(text);
-                }
-            }
-            // Esc 取消当前这一轮（Tauri 面板的 Esc 语义）。
-            if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
-                action = LessComputerAction::Cancel;
-            }
-        });
-    action
-}
-
-/// 右对齐的用户指令气泡（Tauri `Bubble align="end"`）。
-fn user_bubble(ui: &mut egui::Ui, text: &str) {
-    ui.add_space(2.0);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-        let max = (ui.available_width() * 0.82).max(80.0);
-        ui.set_max_width(max);
-        egui::Frame::new()
-            .fill(theme::BLUE_SOFT)
-            .corner_radius(egui::CornerRadius::same(10))
-            .inner_margin(egui::Margin::symmetric(9, 6))
-            .show(ui, |ui| {
-                ui.set_max_width(max - 18.0);
-                ui.label(egui::RichText::new(text).size(12.5).color(theme::INK));
-            });
-    });
-    ui.add_space(2.0);
-}
-
-/// 行内标记：小圆点 + 辅助色文字（Tauri `Marker`）。
-fn marker_row(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
-    ui.horizontal(|ui| {
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
-        ui.painter().circle_filled(rect.center(), 2.0, color);
-        ui.label(egui::RichText::new(text).size(11.5).color(color));
-    });
-}
-
-/// 上下文压缩标记（Tauri `Marker variant="separator"`）。
-fn compaction_marker(ui: &mut egui::Ui, text: &str) {
-    ui.add_space(2.0);
-    ui.horizontal(|ui| {
-        let width = ui.available_width();
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 16.0), egui::Sense::hover());
-        ui.painter().line_segment(
-            [rect.left_center(), rect.right_center()],
-            egui::Stroke::new(0.5, theme::LINE_SOFT),
-        );
-        let galley = ui.painter().layout_no_wrap(
-            text.to_owned(),
-            egui::FontId::proportional(11.0),
-            theme::INK_4,
-        );
-        let center = rect.center();
-        ui.painter().rect_filled(
-            egui::Rect::from_center_size(center, galley.size() + egui::vec2(10.0, 0.0)),
-            egui::CornerRadius::same(7),
-            theme::SURFACE,
-        );
-        ui.painter().galley(
-            egui::pos2(
-                center.x - galley.rect.width() / 2.0,
-                center.y - galley.rect.height() / 2.0,
-            ),
-            galley,
-            theme::INK_4,
-        );
-    });
-    ui.add_space(2.0);
-}
-
-/// 批准 / 拒绝按钮（Tauri `Button`）。
-fn small_action_button(ui: &mut egui::Ui, label: &str, primary: bool) -> egui::Response {
-    let text = egui::RichText::new(label).size(11.5);
-    let button = if primary {
-        egui::Button::new(text.color(theme::SURFACE)).fill(theme::INK)
-    } else {
-        egui::Button::new(text.color(theme::INK_2))
-            .fill(theme::SURFACE)
-            .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
-    };
-    ui.add(
-        button
-            .corner_radius(egui::CornerRadius::same(7))
-            .min_size(egui::vec2(56.0, 26.0)),
-    )
 }

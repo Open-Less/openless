@@ -1119,6 +1119,18 @@ pub const CATALOG: &[Msg] = &[
             "시작 실패",
         ),
     },
+    Msg {
+        key: "startup.fcitx_help",
+        text: row(
+            "请安装并启动 fcitx5，启用 OpenLess 插件，并确认当前桌面会话的 D-Bus 可用。必要时重新安装 OpenLess 软件包。修复后关闭此窗口并重新启动应用。",
+            "請安裝並啟動 fcitx5，啟用 OpenLess 插件，並確認目前桌面工作階段的 D-Bus 可用。必要時重新安裝 OpenLess 套件。修復後關閉此視窗並重新啟動應用程式。",
+            "Install and start fcitx5, enable the OpenLess addon, and check the current desktop session's D-Bus. Reinstall the OpenLess package if needed. Close this window and restart the application after fixing the environment.",
+            "fcitx5 を起動し、OpenLess アドオンとデスクトップセッションの D-Bus を有効にしてください。必要なら OpenLess を再インストールしてください。修正後、このウィンドウを閉じてアプリを再起動してください。",
+            "fcitx5를 설치하고 시작한 후 OpenLess 애드온과 현재 데스크톱 세션의 D-Bus를 활성화하세요. 필요하면 OpenLess를 다시 설치하세요. 환경을 수정한 후 이 창을 닫고 앱을 다시 시작하세요。",
+        ),
+    },
+    Msg { key: "common.saving", text: row("正在保存…", "正在儲存…", "Saving…", "保存中…", "저장 중…") },
+    Msg { key: "startup.connecting", text: row("正在连接 OpenLess…", "正在連線 OpenLess…", "Connecting to OpenLess…", "OpenLess に接続中…", "OpenLess에 연결 중…") },
     // ---- Buttons (models / providers / vocab / styles / marketplace / history)
 
     Msg { key: "btn.add", text: row("添加", "新增", "Add", "追加", "추가") },

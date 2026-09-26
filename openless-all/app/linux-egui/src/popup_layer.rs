@@ -382,11 +382,12 @@ impl Dispatch<wl_seat::WlSeat, ()> for LayerState {
         _connection: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        if let wl_seat::Event::Capabilities { capabilities } = event {
-            if let WEnum::Value(capabilities) = capabilities {
-                if capabilities.contains(wl_seat::Capability::Pointer) && state.pointer.is_none() {
-                    state.pointer = Some(seat.get_pointer(qh, ()));
-                }
+        if let wl_seat::Event::Capabilities {
+            capabilities: WEnum::Value(capabilities),
+        } = event
+        {
+            if capabilities.contains(wl_seat::Capability::Pointer) && state.pointer.is_none() {
+                state.pointer = Some(seat.get_pointer(qh, ()));
             }
         }
     }
@@ -542,7 +543,7 @@ impl GlSurface {
                 let symbol = std::ffi::CString::new(symbol)
                     .map_err(|_| ())
                     .unwrap_or_default();
-                display.get_proc_address(symbol.as_c_str()) as *const c_void
+                display.get_proc_address(symbol.as_c_str())
             })
         };
         Ok(Self {

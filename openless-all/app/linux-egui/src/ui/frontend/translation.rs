@@ -233,7 +233,7 @@ fn language_row(
     painter.rect_stroke(
         rect,
         egui::CornerRadius::same(10),
-        egui::Stroke::new(0.8, if selected { theme::LINE } else { theme::LINE }),
+        egui::Stroke::new(0.8, theme::LINE),
         egui::StrokeKind::Inside,
     );
     let checkbox = egui::Rect::from_center_size(
@@ -548,6 +548,22 @@ fn usage(ui: &mut egui::Ui, width: f32, vm: &FrontendViewModel) {
     });
 }
 
+/// Full-width card that sizes itself to its contents. Returns its height.
+fn card(ui: &mut egui::Ui, width: f32, contents: impl FnOnce(&mut egui::Ui)) -> f32 {
+    egui::Frame::new()
+        .fill(theme::SURFACE)
+        .stroke(egui::Stroke::new(1.0, theme::LINE))
+        .corner_radius(egui::CornerRadius::same(14))
+        .inner_margin(egui::Margin::same(CARD_PADDING as i8))
+        .show(ui, |ui| {
+            ui.set_width((width - CARD_PADDING * 2.0).max(1.0));
+            contents(ui);
+        })
+        .response
+        .rect
+        .height()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,12 +584,14 @@ mod tests {
             is_active,
             selection_active: false,
         };
-        let mut vm = FrontendViewModel::default();
-        vm.style_selected = 0;
-        vm.style_packs = vec![
-            pack("builtin.light", "轻度润色", false),
-            pack("custom", "My translation style", true),
-        ];
+        let vm = FrontendViewModel {
+            style_selected: 0,
+            style_packs: vec![
+                pack("builtin.light", "轻度润色", false),
+                pack("custom", "My translation style", true),
+            ],
+            ..Default::default()
+        };
 
         assert_eq!(
             translation_style_name(&vm, Lang::ZhCn),
@@ -641,20 +659,4 @@ mod tests {
             },
         );
     }
-}
-
-/// Full-width card that sizes itself to its contents. Returns its height.
-fn card(ui: &mut egui::Ui, width: f32, contents: impl FnOnce(&mut egui::Ui)) -> f32 {
-    egui::Frame::new()
-        .fill(theme::SURFACE)
-        .stroke(egui::Stroke::new(1.0, theme::LINE))
-        .corner_radius(egui::CornerRadius::same(14))
-        .inner_margin(egui::Margin::same(CARD_PADDING as i8))
-        .show(ui, |ui| {
-            ui.set_width((width - CARD_PADDING * 2.0).max(1.0));
-            contents(ui);
-        })
-        .response
-        .rect
-        .height()
 }
