@@ -85,6 +85,10 @@ docs/plans/
 /AGENTS.md
 /issue-*-plan.md
 
+# 本地会话记录（Claude Code 对话存档），仅供本人下次取用，不入库
+/SESSION_NOTES.md
+/SESSION_TRANSCRIPT.jsonl
+
 # .github 内部协作 + 审计报告（ISSUE_TEMPLATE / workflows / pr template 仍保留发布）
 .github/COOPER_*.md
 .github/BUILD_TEST_REPORT.md

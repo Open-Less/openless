@@ -2013,6 +2013,13 @@ export const ja: typeof zhCN = {
         notWindows: 'Windows のみ利用可能。',
       },
     },
+    inputMethod: {
+      guidanceTitle: 'OpenLess 入力方法',
+      enableSystemIme:
+        'Android の設定 → キーボード / 入力方法で OpenLess Voice を有効にし、必要に応じて切り替えてください。',
+      longPressLogo:
+        'OpenLess キーボードの左上にあるロゴを長押しすると、端末のキーボード設定を開けます。',
+    },
     advanced: {
       multimodalPipelineTitle: 'マルチモーダル認識パイプライン',
       multimodalPipelineTitleHint:
@@ -2239,6 +2246,7 @@ export const ja: typeof zhCN = {
     },
     descriptions: {
       general: 'マイク、録音方法、文字入力を設定し、スマートフォンからの入力を接続します。',
+      inputMethod: 'Android のオーバーレイと入力方法を設定します。',
       shortcuts: '各機能のショートカットと、テキスト選択後の操作を設定します。',
       services: '音声認識と文章処理のサービス、チャンネル、ローカルモデル、接続を管理します。',
       appearance: 'テーマ、レイアウト、表示言語を読みやすく調整します。',
@@ -2248,6 +2256,7 @@ export const ja: typeof zhCN = {
     },
     searchKeywords: {
       general: 'マイク 録音 入力 スマホ リモート LAN PIN カプセル ミュート 起動',
+      inputMethod: '入力方法 IME キーボード オーバーレイ Android',
       shortcuts: 'ショートカット ホットキー キー 選択 推敲 音声編集',
       services: 'ASR LLM API チャンネル モデル クラウド ローカル ネットワーク プロキシ マーケット',
       appearance: 'テーマ ダーク ライト 言語 フォント 文字 サイズ レイアウト ヒートマップ',
@@ -2260,6 +2269,7 @@ export const ja: typeof zhCN = {
       appearance: '外観と言語',
       shortcuts: 'ショートカットと選択',
       general: '録音と入力',
+      inputMethod: '入力方法',
       services: 'AI サービスとモデル',
       privacy: '権限とデータ',
       advanced: '実験機能と拡張',

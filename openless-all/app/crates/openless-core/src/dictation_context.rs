@@ -65,10 +65,14 @@ impl Default for DictationStartOptions {
 /// Android's overlay keeps the existing gesture contract where a left swipe
 /// while recording means "finish and translate". All mutable settings remain
 /// frozen at start; this option may only select between the already captured
-/// normal and translation polish paths.
+/// normal and translation polish paths. `raw_requested` follows the same
+/// contract for the IME keyboard's own swipe-up-on-mic gesture: `Some(true)`
+/// switches the already-captured context to PolishMode::Raw ("原文") instead
+/// of whatever style pack/mode the session actually started with.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DictationStopOptions {
     pub translation_requested: Option<bool>,
+    pub raw_requested: Option<bool>,
     /// `Some(true)` finishes the active capture as a quick note;
     /// `Some(false)` explicitly finishes it as ordinary dictation.
     /// `None` preserves the current target, resolving Android's undecided
@@ -450,6 +454,23 @@ impl DictationContext {
             &updated.polish.translation_target_language,
             &updated.polish.working_languages,
         );
+        updated
+    }
+
+    /// Switches to the built-in Raw ("原文") style at stop time, the same
+    /// way with_translation_requested() switches translation on — matches
+    /// the exact mode+prompt pair uses_llm_polisher() checks for the
+    /// "untouched built-in Raw style" passthrough case, so this genuinely
+    /// skips the LLM polish step (not just prompts it to pass the text
+    /// through unchanged).
+    pub(crate) fn with_raw_requested(&self, requested: bool) -> Self {
+        if !requested {
+            return self.clone();
+        }
+        let mut updated = self.clone();
+        updated.polish.mode = PolishMode::Raw;
+        updated.polish.style_system_prompt =
+            crate::style_packs::default_style_system_prompt_for_mode(PolishMode::Raw);
         updated
     }
 }

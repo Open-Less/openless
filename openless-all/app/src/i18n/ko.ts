@@ -1997,6 +1997,13 @@ export const ko: typeof zhCN = {
         notWindows: 'Windows 만 사용 가능.',
       },
     },
+    inputMethod: {
+      guidanceTitle: 'OpenLess 입력 방법',
+      enableSystemIme:
+        'Android 설정 → 키보드 / 입력 방법에서 OpenLess Voice를 활성화하고 필요할 때 선택하세요.',
+      longPressLogo:
+        'OpenLess 키보드의 왼쪽 위 로고를 길게 누르면 기본 키보드 설정을 열 수 있습니다.',
+    },
     advanced: {
       multimodalPipelineTitle: '멀티모달 인식 파이프라인 ',
       multimodalPipelineTitleHint:
@@ -2220,6 +2227,7 @@ export const ko: typeof zhCN = {
     },
     descriptions: {
       general: '마이크, 녹음 방식, 텍스트 입력을 설정하고 휴대폰 입력을 연결합니다.',
+      inputMethod: 'Android 오버레이와 입력 방법을 설정합니다.',
       shortcuts: '기능별 단축키와 텍스트 선택 후 동작을 설정합니다.',
       services: '음성 인식과 텍스트 처리 서비스, 채널, 로컬 모델 및 연결을 관리합니다.',
       appearance: '테마, 페이지 배치, 인터페이스 언어를 편하게 읽도록 조정합니다.',
@@ -2229,6 +2237,7 @@ export const ko: typeof zhCN = {
     },
     searchKeywords: {
       general: '마이크 녹음 입력 휴대폰 원격 LAN PIN 캡슐 음소거 시작 자동시작',
+      inputMethod: '입력 방법 IME 키보드 오버레이 Android',
       shortcuts: '단축키 핫키 키 조합 선택 다듬기 음성 편집',
       services: 'ASR LLM API 채널 모델 클라우드 로컬 네트워크 프록시 마켓',
       appearance: '테마 다크 라이트 언어 글꼴 글자 크기 배치 레이아웃 히트맵',
@@ -2241,6 +2250,7 @@ export const ko: typeof zhCN = {
       appearance: '모양 및 언어',
       shortcuts: '단축키 및 선택',
       general: '녹음 및 입력',
+      inputMethod: '입력 방법',
       services: 'AI 서비스 및 모델',
       privacy: '권한 및 데이터',
       advanced: '실험 기능 및 확장',

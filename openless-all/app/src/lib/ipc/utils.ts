@@ -28,22 +28,27 @@ export async function openExternal(url: string): Promise<void> {
  * 让用户选 save 路径并把当前会话日志（openless.log）复制过去。
  * 浏览器开发模式下走 mock 不实际写盘。返回最终 save 的绝对路径，取消选择则返回 null。
  *
- * Android：省略 filters——部分 ROM 上 CREATE_DOCUMENT + EXTRA_MIME_TYPES 不稳定；
- * 文件名已带 .log，足够标识类型。
+ * Android：不打开 dialog，直接交给 MediaStore 写入公共 Downloads；部分 ROM 上
+ * CREATE_DOCUMENT + EXTRA_MIME_TYPES 不稳定，且用户只需要一个可分享的日志文件。
  */
 export async function exportErrorLog(suggestedFileName: string): Promise<string | null> {
   if (!isTauri) {
     return `~/Downloads/${suggestedFileName}`;
   }
-  const { save } = await import('@tauri-apps/plugin-dialog');
   const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent || '');
+  if (isAndroid) {
+    return invokeOrMock<string>(
+      'export_error_log_to_downloads',
+      { fileName: suggestedFileName },
+      () => `~/Downloads/${suggestedFileName}`,
+    );
+  }
+  const { save } = await import('@tauri-apps/plugin-dialog');
   const target = await save(
-    isAndroid
-      ? { defaultPath: suggestedFileName }
-      : {
-          defaultPath: suggestedFileName,
-          filters: [{ name: 'Log', extensions: ['log', 'txt'] }],
-        },
+    {
+      defaultPath: suggestedFileName,
+      filters: [{ name: 'Log', extensions: ['log', 'txt'] }],
+    },
   );
   if (!target) return null;
   await invokeOrMock<void>('export_error_log', { targetPath: target }, () => undefined);

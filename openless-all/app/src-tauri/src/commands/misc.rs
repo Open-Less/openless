@@ -207,6 +207,17 @@ pub fn export_error_log(target_path: String) -> Result<(), String> {
     }
 }
 
+/// Android：直接把当前会话日志写入公共 Downloads，绕过部分 ROM 上
+/// 无法正常弹出的 CREATE_DOCUMENT / SAF 保存对话框。
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub fn export_error_log_to_downloads(file_name: String) -> Result<String, String> {
+    let src = resolve_openless_log_path()?;
+    let bytes = std::fs::read(&src).map_err(|e| format!("读取日志失败：{e}"))?;
+    crate::android::jni::android::write_public_download(&file_name, &bytes)
+        .map_err(|e| format!("导出日志失败：{e}"))
+}
+
 fn resolve_openless_log_path() -> Result<std::path::PathBuf, String> {
     let mut candidates = Vec::new();
     #[cfg(target_os = "android")]

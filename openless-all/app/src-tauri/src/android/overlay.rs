@@ -105,10 +105,24 @@ mod android_impl {
     use crate::android::types::{AndroidOverlayPermissionState, AndroidOverlayStatus as Status};
 
     pub fn get_android_overlay_status() -> AndroidOverlayStatus {
-        let granted = crate::android::jni::android::with_android_env(|env, context| {
+        let granted = match crate::android::jni::android::with_android_env(|env, context| {
             crate::android::jni::android::can_draw_overlays(env, context)
-        })
-        .unwrap_or(false);
+        }) {
+            Ok(granted) => granted,
+            Err(error) => {
+                // #region agent log
+                log::warn!(
+                    "[OpenLessDbg58c22b] {{\"sessionId\":\"58c22b\",\"hypothesisId\":\"A\",\"location\":\"overlay::get_android_overlay_status\",\"message\":\"status query failed\",\"data\":{{\"error\":\"{error}\"}},\"timestamp\":{}}}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis())
+                        .unwrap_or(0)
+                );
+                // #endregion
+                log::warn!("[android-overlay] status query failed: {error}");
+                false
+            }
+        };
         Status {
             permission: if granted {
                 AndroidOverlayPermissionState::Granted

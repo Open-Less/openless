@@ -2,7 +2,14 @@ import type { OS } from '../../components/WindowChrome';
 import type { PlatformKind } from '../../lib/types';
 
 export type SettingsSectionId =
-  'general' | 'shortcuts' | 'appearance' | 'services' | 'privacy' | 'advanced' | 'about';
+  | 'general'
+  | 'inputMethod'
+  | 'shortcuts'
+  | 'appearance'
+  | 'services'
+  | 'privacy'
+  | 'advanced'
+  | 'about';
 
 export const ADVANCED_PAGES = [
   { id: 'lessComputer', icon: 'mac', titleKey: 'settings.codingAgent.title' },
@@ -30,6 +37,7 @@ export interface SettingsNavigationItem {
 
 export const SETTINGS_SECTIONS: SettingsNavigationItem[] = [
   { id: 'general', icon: 'mic' },
+  { id: 'inputMethod', icon: 'keyboard' },
   { id: 'shortcuts', icon: 'bolt' },
   { id: 'services', icon: 'cloud' },
   { id: 'appearance', icon: 'settings' },
@@ -38,8 +46,15 @@ export const SETTINGS_SECTIONS: SettingsNavigationItem[] = [
   { id: 'about', icon: 'info' },
 ];
 
-export function visibleSettingsSections(supportsDesktopHotkey: boolean): SettingsNavigationItem[] {
-  return SETTINGS_SECTIONS.filter((item) => item.id !== 'shortcuts' || supportsDesktopHotkey);
+export function visibleSettingsSections(
+  supportsDesktopHotkey: boolean,
+  platform?: PlatformKind,
+): SettingsNavigationItem[] {
+  return SETTINGS_SECTIONS.filter((item) => {
+    if (item.id === 'shortcuts') return supportsDesktopHotkey;
+    if (item.id === 'inputMethod') return platform === 'android';
+    return true;
+  });
 }
 
 export interface SearchableSettingsSection extends SettingsNavigationItem {

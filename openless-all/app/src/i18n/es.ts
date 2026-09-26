@@ -2079,6 +2079,13 @@ export const es: typeof zhCN = {
         notWindows: 'Solo disponible en Windows.',
       },
     },
+    inputMethod: {
+      guidanceTitle: 'Método de entrada de OpenLess',
+      enableSystemIme:
+        'En Ajustes de Android → Teclado / Métodos de entrada, activa OpenLess Voice y selecciónalo cuando lo necesites.',
+      longPressLogo:
+        'En el teclado de OpenLess, mantén pulsado el logo de la esquina superior izquierda para abrir los ajustes nativos del teclado.',
+    },
     advanced: {
       multimodalPipelineTitle: 'Reconocimiento multimodal (experimental)',
       multimodalPipelineTitleHint:
@@ -2312,6 +2319,7 @@ export const es: typeof zhCN = {
     },
     descriptions: {
       general: 'Elige un micrófono, ajusta la grabación y la entrada de texto o conecta tu móvil.',
+      inputMethod: 'Configura la superposición y el método de entrada de Android.',
       shortcuts: 'Configura atajos y elige qué sucede al seleccionar texto.',
       services:
         'Elige servicios de reconocimiento de voz y procesamiento de texto. Administra canales, modelos locales y conexiones.',
@@ -2325,6 +2333,7 @@ export const es: typeof zhCN = {
     searchKeywords: {
       general:
         'micrófono grabación entrada teléfono remoto LAN PIN cápsula silenciar inicio automático',
+      inputMethod: 'método de entrada IME teclado superposición Android',
       shortcuts: 'atajo tecla combinación selección mejorar voz edición',
       services: 'ASR LLM API canal modelo nube local sin conexión red proxy catálogo',
       appearance: 'tema oscuro claro idioma fuente texto tamaño diseño mapa actividad',
@@ -2337,6 +2346,7 @@ export const es: typeof zhCN = {
       appearance: 'Apariencia e idioma',
       shortcuts: 'Atajos y selección',
       general: 'Grabación y entrada',
+      inputMethod: 'Método de entrada',
       services: 'Servicios y modelos de IA',
       privacy: 'Permisos y datos',
       advanced: 'Experimentos y extensiones',

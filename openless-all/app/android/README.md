@@ -40,6 +40,10 @@ Manifest 合并脚本：
 - [`scripts/merge-android-shizuku-manifest.mjs`](../scripts/merge-android-shizuku-manifest.mjs) — Shizuku Provider / 授权 Activity
 - [`scripts/patch-android-shizuku-deps.mjs`](../scripts/patch-android-shizuku-deps.mjs) — Shizuku Gradle 依赖
 
+### 轻量拼音输入（Pinyin，可选模式）
+
+英文键盘长按空格可在英文 / 拼音之间切换。拼音模式为离线精确匹配查找（单字全拼 + 高频简拼词语），不含 NDK / JNI / librime / 语言模型，不新增联网权限。核心类：`LitePinyinController`（编码缓冲 + 查询）、`LitePinyinRepository`（词库索引 + 排序）、`LitePinyinUserFrequency`（本地选择频率）。词库资源 `android/assets/pinyin_chars.tsv`（约 8105 字）与 `pinyin_phrases.tsv`（约 2000 词），由 [`scripts/generate-pinyin-characters.mjs`](../scripts/generate-pinyin-characters.mjs) / [`scripts/generate-pinyin-phrases.mjs`](../scripts/generate-pinyin-phrases.mjs) 从三方开源数据生成，来源、版本与许可证见同目录下的 `pinyin_chars.LICENSE.txt` / `pinyin_phrases.LICENSE.txt`。
+
 ## 前端（`android/frontend/`，别名 `@android`）
 
 | 路径 | 职责 |

@@ -2040,6 +2040,13 @@ export const en: typeof zhCN = {
         notWindows: 'Only available on Windows.',
       },
     },
+    inputMethod: {
+      guidanceTitle: 'OpenLess input method',
+      enableSystemIme:
+        'In Android Settings → Keyboard / Input methods, enable OpenLess Voice and switch to it when needed.',
+      longPressLogo:
+        'In the OpenLess keyboard, long-press the logo in the upper-left corner to open native keyboard settings.',
+    },
     advanced: {
       multimodalPipelineTitle: 'Multimodal recognition pipeline',
       multimodalPipelineTitleHint:
@@ -2267,6 +2274,7 @@ export const en: typeof zhCN = {
     },
     descriptions: {
       general: 'Choose a microphone, adjust recording and text input, or connect your phone.',
+      inputMethod: 'Configure the Android overlay and input method for phone typing.',
       shortcuts: 'Set up shortcuts and choose what happens when you select text.',
       services:
         'Choose speech recognition and text processing services. Manage channels, local models and connections.',
@@ -2278,6 +2286,7 @@ export const en: typeof zhCN = {
     },
     searchKeywords: {
       general: 'microphone recording input phone remote LAN PIN capsule mute startup autostart',
+      inputMethod: 'input method IME keyboard overlay Android',
       shortcuts: 'shortcut hotkey key combination selection polish voice editing',
       services: 'ASR LLM API channel model cloud local offline network proxy marketplace',
       appearance: 'theme dark light language font text size layout heatmap',
@@ -2290,6 +2299,7 @@ export const en: typeof zhCN = {
       appearance: 'Appearance & language',
       shortcuts: 'Shortcuts & selection',
       general: 'Recording & input',
+      inputMethod: 'Input method',
       services: 'AI services & models',
       privacy: 'Permissions & data',
       advanced: 'Experiments & extensions',

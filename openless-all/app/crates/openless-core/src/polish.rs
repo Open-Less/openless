@@ -2545,7 +2545,11 @@ mod tests {
                             LlmRequestFormat::Responses => json!({"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"你好"}]}]}),
                             LlmRequestFormat::Messages => json!({"stop_reason":"end_turn","content":[{"type":"text","text":"你好"}]}),
                         }.to_string();
-                        write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
+                        let _ = write!(
+                            stream,
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+                            response.len()
+                        );
                     } else {
                         assert_eq!(body["stream"], true);
                         let response = match format {
@@ -2744,17 +2748,27 @@ mod tests {
     }
 
     fn write_chunked_sse_response(stream: &mut std::net::TcpStream, chunks: &[&[u8]]) {
-        stream
+        // Client may finish/drop before the trailing chunk; treat BrokenPipe as done.
+        if stream
             .write_all(
                 b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
             )
-            .unwrap();
-        for chunk in chunks {
-            write!(stream, "{:X}\r\n", chunk.len()).unwrap();
-            stream.write_all(chunk).unwrap();
-            stream.write_all(b"\r\n").unwrap();
+            .is_err()
+        {
+            return;
         }
-        stream.write_all(b"0\r\n\r\n").unwrap();
+        for chunk in chunks {
+            if write!(stream, "{:X}\r\n", chunk.len()).is_err() {
+                return;
+            }
+            if stream.write_all(chunk).is_err() {
+                return;
+            }
+            if stream.write_all(b"\r\n").is_err() {
+                return;
+            }
+        }
+        let _ = stream.write_all(b"0\r\n\r\n");
     }
 
     #[tokio::test]

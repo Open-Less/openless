@@ -1929,6 +1929,11 @@ export const zhCN = {
         notWindows: '仅 Windows 可用。',
       },
     },
+    inputMethod: {
+      guidanceTitle: 'OpenLess 输入法',
+      enableSystemIme: '请在系统设置 → 键盘 / 输入法中启用 OpenLess Voice，并在需要时切换到它。',
+      longPressLogo: '在 OpenLess 输入法键盘中长按左上角的 logo，可打开原生键盘设置。',
+    },
     advanced: {
       multimodalPipelineTitle: '多模态识别管线',
       multimodalPipelineTitleHint:
@@ -2144,6 +2149,7 @@ export const zhCN = {
     },
     descriptions: {
       general: '选择麦克风、设置录音方式与文字输入，也可连接手机输入。',
+      inputMethod: '配置 Android 悬浮窗和输入法，快速开始手机端输入。',
       shortcuts: '设置各功能的触发方式，以及选中文字后的操作。',
       services: '选择语音识别与文字处理服务，管理渠道、本地模型和网络连接。',
       appearance: '调整主题、页面排版和界面语言，让阅读更舒服。',
@@ -2153,6 +2159,7 @@ export const zhCN = {
     },
     searchKeywords: {
       general: '麦克风 录音 输入 手机 远程 局域网 PIN 胶囊 静音 自启 开机',
+      inputMethod: '输入法 IME 键盘 悬浮窗 Android 安卓',
       shortcuts: '快捷键 热键 组合键 选区 润色 语音编辑',
       services: 'ASR LLM API 渠道 模型 云 本地 网络 代理 市场',
       appearance: '主题 深色 浅色 暗色 语言 字号 排版 布局 热力图',
@@ -2165,6 +2172,7 @@ export const zhCN = {
       appearance: '外观与语言',
       shortcuts: '快捷键与选区',
       general: '录音与输入',
+      inputMethod: '输入方式',
       services: 'AI 服务与模型',
       privacy: '权限与数据',
       advanced: '实验与扩展',

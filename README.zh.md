@@ -204,6 +204,8 @@ OpenLess 只做一件事:**把语音变成可用的书面文字(尤其是 AI 提
 
 ## 当前状态
 
+本 Fork 的 Android 输入法架构、四个面板的使用说明、截图和从 fork 基线开始的功能时间线，见 [Android 输入法：架构、功能与 fork 演进](docs/android-ime.md)。
+
 下面每一项,都是一层已经沉降为默认、你授权一次之后就不必再操心的能力——这就是开屏之后你所站立的基础设施:
 
 - 共享 Rust 后端位于 `openless-core`。macOS 与 Windows 使用薄 Tauri 2 宿主和 React/TypeScript 前端；Android 暂时保留 Tauri mobile 宿主；Linux 使用独立原生宿主，不编译 Tauri 或 WebKitGTK。

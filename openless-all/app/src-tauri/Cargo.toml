@@ -196,5 +196,15 @@ strip = "symbols"
 # issue #801: wayland-scanner 0.31.10 still pins vulnerable quick-xml 0.39.
 # This local copy backports upstream security commit d07c4f91f28b without
 # pulling the breaking, unreleased wayland-rs master branch.
+#
+# wry 0.55.1's Android CreateWebView path (src/android/main_pipe.rs) drops
+# the message silently — a debug_assertions-only eprintln!() to stderr,
+# never reaching Android logcat — when ACTIVITY_PROXY has no entry for the
+# target activity_id; this local copy swaps that (and the equivalent
+# .expect() panic risk in src/android/mod.rs's InnerWebView::new()) for
+# visible log::warn!()/log::info!() calls, to diagnose the settings-reopen
+# black screen investigated in the feature/android-runtime-lifecycle
+# branch. Purely additive logging — no behavior change otherwise.
 [patch.crates-io]
 wayland-scanner = { path = "vendor/wayland-scanner" }
+wry = { path = "vendor/wry-0.55.1" }

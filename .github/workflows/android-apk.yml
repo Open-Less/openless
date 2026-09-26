@@ -1,9 +1,11 @@
 name: Android APK (debug)
 
 # Triggers:
-#   - push v*-tauri tag → signed release APK + minisign + updater manifest → GitHub Release
-#   - workflow_dispatch → signed release APK when ANDROID_KEYSTORE_* secrets exist
+#   - push v*-tauri tag 鈫?signed release APK + minisign + updater manifest 鈫?GitHub Release
+#   - workflow_dispatch 鈫?signed release APK when ANDROID_KEYSTORE_* secrets exist
 #     (overlay install + user data preserved); otherwise unsigned debug APK (annotated, non-blocking)
+#   - workflow_dispatch + signed_debug=true — debug APK signed with the release
+#     keystore (when secrets exist); artifact remains openless-android-debug-*.
 #
 # #1103 build-time changes:
 #   - Do not wipe Cargo/Gradle/target before cache post-save (removed Free disk step).
@@ -26,9 +28,12 @@ on:
         description: 'Dispatch-only fast release profile (no LTO, codegen-units=16). Ignored on tags.'
         type: boolean
         default: false
+      signed_debug:
+        description: 'Build debug mode but sign it with the release keystore (requires ANDROID_KEYSTORE_* secrets).'
+        type: boolean
+        default: false
 
-# 同一 tag 重复推送只跑最新一次；workflow_dispatch 用 run_id 隔离避免互相取消。
-concurrency:
+# 鍚屼竴 tag 閲嶅鎺ㄩ€佸彧璺戞渶鏂颁竴娆★紱workflow_dispatch 鐢?run_id 闅旂閬垮厤浜掔浉鍙栨秷銆?concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'push' }}
 
@@ -62,6 +67,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          INPUT_SIGNED_DEBUG: ${{ github.event.inputs.signed_debug }}
         run: |
           set -euo pipefail
           is_tag=false
@@ -89,6 +95,11 @@ jobs:
             echo "label=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
             echo "signing=tag-release" >> "$GITHUB_OUTPUT"
             echo "signing_label=Tag release with release keystore" >> "$GITHUB_OUTPUT"
+          elif [[ "${INPUT_SIGNED_DEBUG:-false}" == "true" ]] && $has_keystore; then
+            echo "mode=debug" >> "$GITHUB_OUTPUT"
+            echo "label=signed-debug-run-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "signing=signed-debug" >> "$GITHUB_OUTPUT"
+            echo "signing_label=Manual dispatch debug APK signed with release keystore" >> "$GITHUB_OUTPUT"
           elif $has_keystore; then
             echo "mode=release" >> "$GITHUB_OUTPUT"
             echo "label=dispatch-run-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
@@ -100,6 +111,9 @@ jobs:
             echo "signing=debug-fallback" >> "$GITHUB_OUTPUT"
             echo "signing_label=Unsigned debug fallback (no keystore secrets)" >> "$GITHUB_OUTPUT"
             echo "::notice title=Unsigned debug APK::ANDROID_KEYSTORE_* secrets not configured. Building debug APK without release signing. Overlay install and user data preservation require the release keystore; uninstall before installing if replacing a signed build."
+            if [[ "${INPUT_SIGNED_DEBUG:-false}" == "true" ]]; then
+              echo "::warning::signed_debug was requested but Android keystore secrets are incomplete; falling back to an unsigned debug APK."
+            fi
           fi
 
       - name: Resolve ABI matrix
@@ -146,8 +160,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Android 不使用本地 Qwen3/Whisper C 子模块。
-          submodules: false
+          # Android 涓嶄娇鐢ㄦ湰鍦?Qwen3/Whisper C 瀛愭ā鍧椼€?          submodules: false
 
       - name: Disable macOS-only Qwen3 MLX dependency
         run: node openless-all/app/scripts/ci-disable-macos-qwen3.mjs
@@ -286,13 +299,15 @@ jobs:
         run: node scripts/merge-android-updater-manifest.mjs
 
       - name: Configure Android release signing
-        if: needs.plan.outputs.mode == 'release'
+        if: needs.plan.outputs.mode == 'release' || needs.plan.outputs.signing == 'signed-debug'
         working-directory: openless-all/app
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          # signed_debug: also wire debug buildType to the release keystore
+          OPENLESS_SIGN_DEBUG: ${{ needs.plan.outputs.signing == 'signed-debug' && 'true' || 'false' }}
         run: node scripts/configure-android-release-signing.mjs
 
       - name: Prime Gradle wrapper
@@ -313,6 +328,10 @@ jobs:
       - name: Build Android debug APK
         if: needs.plan.outputs.mode == 'debug'
         working-directory: openless-all/app
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: npm run tauri:android:build:debug
 
       - name: Build Android release APK
@@ -377,6 +396,10 @@ jobs:
           elif [ "${{ needs.plan.outputs.signing }}" = "dispatch-release" ]; then
             cat >> "$GITHUB_STEP_SUMMARY" << 'EOF'
           > **Signed release APK** (manual dispatch). Same keystore as tag releases — supports overlay install and preserves user data when upgrading from an existing signed install.
+          EOF
+          elif [ "${{ needs.plan.outputs.signing }}" = "signed-debug" ]; then
+            cat >> "$GITHUB_STEP_SUMMARY" << 'EOF'
+          > **Signed debug APK** (manual dispatch). Debug mode is retained for diagnostics; the release keystore is used so `adb install -r` can upgrade the matching signed app without changing the debug artifact name.
           EOF
           fi
 
@@ -503,18 +526,12 @@ jobs:
         shell: bash
         run: |
           cat > "$RUNNER_TEMP/android-release-body.md" << 'EOF'
-          ### Android 安装说明
+          ### Android 瀹夎璇存槑
 
-          - **推荐**：真机下载 `OpenLess_<version>_arm64-v8a.apk`（arm64 设备）。
-          - **模拟器**：x86_64 模拟器用 `OpenLess_<version>_x86_64.apk`。
-          - 首次安装需在系统设置中允许「安装未知应用」；应用内更新会拉起系统安装器。
-          - adb 调试：`adb install -r OpenLess_<version>_arm64-v8a.apk`
+          - **鎺ㄨ崘**锛氱湡鏈轰笅杞?`OpenLess_<version>_arm64-v8a.apk`锛坅rm64 璁惧锛夈€?          - **妯℃嫙鍣?*锛歺86_64 妯℃嫙鍣ㄧ敤 `OpenLess_<version>_x86_64.apk`銆?          - 棣栨瀹夎闇€鍦ㄧ郴缁熻缃腑鍏佽銆屽畨瑁呮湭鐭ュ簲鐢ㄣ€嶏紱搴旂敤鍐呮洿鏂颁細鎷夎捣绯荤粺瀹夎鍣ㄣ€?          - adb 璋冭瘯锛歚adb install -r OpenLess_<version>_arm64-v8a.apk`
 
-          ### Android 应用内更新
-
-          - Stable 用户检查 `latest-android-aarch64.json`（及 mirror 变体）。
-          - Beta 用户（设置 → 高级 → 加入 Beta）检查带 `-beta` 后缀的 manifest。
-          EOF
+          ### Android 搴旂敤鍐呮洿鏂?
+          - Stable 鐢ㄦ埛妫€鏌?`latest-android-aarch64.json`锛堝強 mirror 鍙樹綋锛夈€?          - Beta 鐢ㄦ埛锛堣缃?鈫?楂樼骇 鈫?鍔犲叆 Beta锛夋鏌ュ甫 `-beta` 鍚庣紑鐨?manifest銆?          EOF
 
       - name: Attach Android assets to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -528,3 +545,4 @@ jobs:
           append_body: true
           body_path: ${{ runner.temp }}/android-release-body.md
           files: ${{ steps.release_assets.outputs.files }}
+

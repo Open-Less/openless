@@ -581,6 +581,8 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::open_system_settings,
             $crate::commands::trigger_microphone_prompt,
             $crate::commands::export_error_log,
+            #[cfg(target_os = "android")]
+            $crate::commands::export_error_log_to_downloads,
             $crate::commands::get_update_channel,
             $crate::commands::set_update_channel,
             $crate::commands::fetch_latest_beta_release,
@@ -2513,21 +2515,11 @@ pub(crate) fn set_qa_window_expanded<R: tauri::Runtime>(app: &AppHandle<R>, expa
 pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind: &str) {
     #[cfg(target_os = "android")]
     {
-        const FLAG_ACTIVITY_NEW_TASK: i32 = 0x10000000;
-        const FLAG_ACTIVITY_REORDER_TO_FRONT: i32 = 0x00020000;
-        const FLAG_ACTIVITY_SINGLE_TOP: i32 = 0x20000000;
-        let flags =
-            FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_REORDER_TO_FRONT | FLAG_ACTIVITY_SINGLE_TOP;
         match crate::android::jni::android::with_android_env(|env, context| {
-            crate::android::jni::android::start_activity_class_with_flags(
-                env,
-                context,
-                "com.openless.app.MainActivity",
-                flags,
-            )
+            crate::android::jni::android::open_qa_host(env, context)
         }) {
-            Ok(()) => log::info!("[qa] android requested MainActivity foreground for QA"),
-            Err(error) => log::warn!("[qa] android failed to foreground MainActivity: {error}"),
+            Ok(()) => log::info!("[qa] android requested WarmupActivity foreground for QA"),
+            Err(error) => log::warn!("[qa] android failed to foreground WarmupActivity: {error}"),
         }
         log::info!("[qa] android publish qa:state to main kind={content_kind}");
         tauri_events::publish(

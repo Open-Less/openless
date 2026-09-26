@@ -3,6 +3,7 @@
 
 import { useTranslation } from 'react-i18next';
 import { useEffect, useRef, useState } from 'react';
+import { AndroidPermissionsPanel } from '@android/components/AndroidPermissionsPanel';
 import { Icon } from '../../components/Icon';
 import { RecordingInputSection } from './RecordingInputSection';
 import { RemoteInputSection } from './RemoteInputSection';
@@ -29,6 +30,7 @@ import { getPlatformCapabilities } from '../../lib/platform';
 import { listChannels } from '../../lib/ipc';
 import type { PlatformCapabilities } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
+import { Card } from '../_atoms';
 import {
   availableServiceViews,
   resolveServiceView,
@@ -57,6 +59,30 @@ export function GeneralTab() {
     <>
       <RecordingInputSection />
       {showRemoteInput && <RemoteInputSection />}
+    </>
+  );
+}
+
+export function InputMethodTab() {
+  const { t } = useTranslation();
+  return (
+    <>
+      <Card>
+        <AndroidPermissionsPanel mode="overlayConfig" />
+      </Card>
+      <Card>
+        <div style={{ display: 'grid', gap: 8 }}>
+          <strong style={{ fontSize: 13, color: 'var(--ol-ink)' }}>
+            {t('settings.inputMethod.guidanceTitle')}
+          </strong>
+          <p style={{ margin: 0, fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.6 }}>
+            {t('settings.inputMethod.enableSystemIme')}
+          </p>
+          <p style={{ margin: 0, fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.6 }}>
+            {t('settings.inputMethod.longPressLogo')}
+          </p>
+        </div>
+      </Card>
     </>
   );
 }

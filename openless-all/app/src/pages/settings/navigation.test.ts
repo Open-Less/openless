@@ -69,6 +69,16 @@ assert.equal(
   'desktop retains shortcuts',
 );
 assert.equal(
+  visibleSettingsSections(false, 'android').some((item) => item.id === 'inputMethod'),
+  true,
+  'Android exposes input method settings',
+);
+assert.equal(
+  visibleSettingsSections(true, 'desktop').some((item) => item.id === 'inputMethod'),
+  false,
+  'desktop hides Android input method settings',
+);
+assert.equal(
   visibleAdvancedPages('desktop', 'win').some((item) => item.id === 'lessComputer'),
   true,
   'Windows retains Less Computer configuration',

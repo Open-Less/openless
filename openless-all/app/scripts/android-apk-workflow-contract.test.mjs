@@ -123,6 +123,9 @@ assert.doesNotMatch(workflow, /rm -rf ~\/\.gradle\/caches/);
 assert.match(workflow, /abis:/);
 assert.match(workflow, /default:\s*['"]aarch64['"]/);
 assert.match(workflow, /fast_profile:/);
+assert.match(workflow, /signed_debug:/);
+assert.match(workflow, /signing=signed-debug/);
+assert.match(workflow, /mode == 'release' \|\| needs\.plan\.outputs\.signing == 'signed-debug'/);
 assert.match(workflow, /strategy:[\s\S]*matrix:/);
 assert.match(workflow, /OPENLESS_ANDROID_TARGETS/);
 assert.match(workflow, /CARGO_PROFILE_RELEASE_LTO/);
@@ -132,3 +135,4 @@ assert.match(workflow, /download-artifact/);
 assert.match(workflow, /Rust cache/);
 
 console.log('android-apk-workflow-contract checks passed');
+
