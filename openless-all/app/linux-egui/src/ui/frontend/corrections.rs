@@ -169,6 +169,14 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
             .filter(|(_, rule)| !vm.vocab_rules_only_learned || rule.learned)
             .map(|(index, _)| index)
             .collect();
+        super::paging::load_more_footer(
+            ui,
+            lang,
+            super::paging::Collection::CorrectionRules,
+            vm,
+            vm.vocab_rules_only_learned,
+            actions,
+        );
         if visible.is_empty() {
             ui.label(
                 egui::RichText::new(tr_l10n(lang, "vocab.corrections_empty"))

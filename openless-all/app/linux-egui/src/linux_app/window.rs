@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashSet;
 
 pub(super) struct WindowState {
     pub(super) should_be_open: bool,
@@ -61,9 +62,19 @@ fn snapshot_soft_limit() -> usize {
         .unwrap_or(SNAPSHOT_SOFT_LIMIT)
 }
 
-/// 裁剪阶梯：历史列表最新在前，所以 `truncate` 丢掉的就是最旧的。
-/// 一档不够就再降一档，直到载荷落回软上限。
-pub(super) const HISTORY_TRIM_LADDER: [usize; 4] = [4_000, 1_000, 200, 0];
+/// 第一页的降档阶梯：正常情况下快照只带每个集合的第一页（很小），
+/// 只有病态数据（单条超大的转写、巨大的图标 data URL）才会走到这里。
+/// 一档不够就再降一档，直到载荷落回软上限；`*_total` 不动，条目仍可被加载回来。
+pub(super) const FIRST_PAGE_LADDER: [usize; 5] = [200, 100, 40, 10, 0];
+
+/// 把某个集合的第一页缩到 `keep` 条。返回是否真的裁了。
+fn trim_page<T>(list: &mut Vec<T>, keep: usize) -> bool {
+    if list.len() <= keep {
+        return false;
+    }
+    list.truncate(keep);
+    true
+}
 
 /// 视图模型载荷指纹（FNV-1a 64）。够快，用来判断「要不要重发快照」：
 /// 内容没变就不发，UI 慢的时候也不会被无意义的帧糊住。
@@ -227,7 +238,7 @@ impl OpenLessEguiApp {
         let Some(payload) = encode_view_model(
             &mut self.frontend_vm,
             snapshot_soft_limit(),
-            &HISTORY_TRIM_LADDER,
+            &FIRST_PAGE_LADDER,
         ) else {
             log::warn!("[ui-host] view model serialization failed");
             return;
@@ -243,11 +254,12 @@ impl OpenLessEguiApp {
     }
 }
 
-/// 序列化视图模型，必要时把最旧的历史裁掉，让快照回到 `soft_limit` 以内。
+/// 序列化视图模型，必要时把五个可增长集合的第一页一起降档，让快照回到
+/// `soft_limit` 以内。
 ///
-/// 裁的是宿主持有的这份 VM（窗口发过来的历史索引要对齐同一份列表），下一 tick 的
-/// [`OpenLessEguiApp::sync_view_model`] 会从真实缓存重新填满，所以裁掉的内容只是
-/// 「这一帧不发」，不是永久丢弃。`ladder` 的最后一项应当能裁到空列表。
+/// 裁的是宿主持有的这份 VM，下一 tick 的 [`OpenLessEguiApp::sync_view_model`] 会从
+/// 真实缓存重新填满第一页，所以裁掉的内容只是「这一帧不发」；总数仍在，窗口可用
+/// `LoadMore` 按需取回，不是永久丢弃。`ladder` 的最后一项应当能裁到空列表。
 ///
 /// 返回 `None` 只表示序列化本身失败；裁完仍然超过软上限时会照常返回载荷，由调用方
 /// 交给桥层按硬上限处理（丢帧，但不断连）。
@@ -258,25 +270,23 @@ fn encode_view_model(
 ) -> Option<Vec<u8>> {
     let mut payload = serde_json::to_vec(view_model).ok()?;
     if payload.len() <= soft_limit {
-        view_model.history_truncated = None;
         return Some(payload);
     }
-    // 隐藏条数要相对**原始**条数算：阶梯会一路降档，按当前长度算只会数到最后一步。
-    let total = view_model.history_entries.len();
     for keep in ladder.iter().copied() {
-        if total <= keep {
-            continue;
+        let mut trimmed = trim_page(&mut view_model.history_entries, keep);
+        trimmed |= trim_page(&mut view_model.vocab_entries, keep);
+        trimmed |= trim_page(&mut view_model.vocab_rules, keep);
+        trimmed |= trim_page(&mut view_model.marketplace_packs, keep);
+        trimmed |= trim_page(&mut view_model.style_packs, keep);
+        if !trimmed {
+            break;
         }
-        view_model.history_entries.truncate(keep);
-        if view_model.history_selected >= keep {
-            // 选中的那条被裁掉了：回到最新一条，别让详情栏空着。
+        if view_model.history_selected >= view_model.history_entries.len() {
+            // 选中的那条这一帧没发出去：回到最新一条，别让详情栏空着。
             view_model.history_selected = 0;
         }
-        let hidden = total - keep;
-        view_model.history_truncated = Some(u32::try_from(hidden).unwrap_or(u32::MAX));
         log::warn!(
-            "[ui-host] snapshot is over {} bytes; trimming history to {keep} entries ({hidden} hidden)",
-            soft_limit
+            "[ui-host] snapshot is over {soft_limit} bytes; first pages cut to {keep} entries"
         );
         payload = serde_json::to_vec(view_model).ok()?;
         if payload.len() <= soft_limit {
@@ -406,6 +416,8 @@ pub(super) struct UiClientApp {
     hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher,
     /// 本地热键边沿的发送序号（与动作序号分开，便于日志区分）。
     hotkey_sequence: u64,
+    /// 自动加载时去重尚未回来的页请求，避免一帧一个重复 action。
+    pending_collection_pages: HashSet<(frontend::paging::Collection, usize)>,
     /// 设置页模糊背板；只有拿到 wgpu 渲染状态（正常 GUI 进程）时存在。
     backdrop: Option<crate::ui::backdrop::BackdropBlur>,
 }
@@ -435,6 +447,7 @@ impl UiClientApp {
             hotkeys: None,
             hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher::default(),
             hotkey_sequence: 0,
+            pending_collection_pages: HashSet::new(),
         }
     }
 
@@ -476,6 +489,25 @@ impl UiClientApp {
                     // 窗口有焦点时 fcitx5 收不到按键，本地匹配全靠这份配置。
                     log::info!("[ui-client] local hotkey bindings received");
                     self.hotkeys = Some(*bindings);
+                }
+                Ok(HostToWindow::CollectionPage {
+                    collection,
+                    offset,
+                    total,
+                    items,
+                    ..
+                }) => {
+                    self.pending_collection_pages.remove(&(collection, offset));
+                    if self
+                        .view_model
+                        .apply_page(collection, offset, total, *items)
+                    {
+                        log::debug!(
+                            "[ui-client] {} page at {offset} applied ({} loaded)",
+                            collection.tag(),
+                            collection.loaded(&self.view_model)
+                        );
+                    }
                 }
                 Ok(HostToWindow::Snapshot {
                     sequence,
@@ -587,6 +619,13 @@ impl UiClientApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
                 }
                 other => {
+                    if let frontend::view_model::FrontendAction::LoadMore { collection, offset } =
+                        &other
+                    {
+                        if !self.pending_collection_pages.insert((*collection, *offset)) {
+                            continue;
+                        }
+                    }
                     self.action_sequence += 1;
                     if let Err(error) = self.client.send(WindowToHost::Action {
                         sequence: self.action_sequence,
@@ -775,7 +814,7 @@ pub(super) fn show_startup_error(error: &str, broker: Arc<SingleInstanceBroker>)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::frontend::view_model::{FrontendViewModel, HistoryEntry};
+    use crate::ui::frontend::view_model::{FrontendViewModel, HistoryEntry, VocabEntry};
 
     /// 一条体量接近真实长转写的假历史（列表最新在前，id 递增 = 越来越旧）。
     fn fake_entry(index: usize) -> HistoryEntry {
@@ -797,18 +836,17 @@ mod tests {
     #[test]
     fn a_snapshot_that_fits_is_sent_whole() {
         let mut view_model = view_model_with(4);
-        let payload = encode_view_model(&mut view_model, usize::MAX, &HISTORY_TRIM_LADDER).unwrap();
+        let payload = encode_view_model(&mut view_model, usize::MAX, &FIRST_PAGE_LADDER).unwrap();
         assert_eq!(
             view_model.history_entries.len(),
             4,
             "nothing may be dropped"
         );
-        assert_eq!(view_model.history_truncated, None);
         assert!(!payload.is_empty());
     }
 
     #[test]
-    fn an_oversized_snapshot_sheds_the_oldest_history_and_reports_how_many() {
+    fn an_oversized_snapshot_cuts_the_first_pages_but_keeps_the_totals() {
         // 软上限只装得下 8 条左右：第一档 25 太大，第二档 5 刚好。
         let empty = serde_json::to_vec(&FrontendViewModel::default())
             .unwrap()
@@ -816,42 +854,56 @@ mod tests {
         let one_entry = serde_json::to_vec(&fake_entry(0)).unwrap().len();
         let soft_limit = empty + one_entry * 8;
         let mut view_model = view_model_with(30);
+        view_model.history_list_total = 30;
         view_model.history_selected = 29;
 
         let payload = encode_view_model(&mut view_model, soft_limit, &[25, 5, 0]).unwrap();
 
         assert!(
             payload.len() <= soft_limit,
-            "a trimmed snapshot must fit the soft limit"
+            "a cut snapshot must fit the soft limit"
         );
         assert_eq!(
             view_model.history_entries.len(),
             5,
             "the first ladder step that fits wins"
         );
-        // 隐藏条数按原始 30 条算，而不是按上一步的 25 条算。
-        assert_eq!(view_model.history_truncated, Some(25));
-        // 列表最新在前：裁掉的是尾部（最旧），最新的 5 条必须留下。
+        // 总数不动：切掉的条目仍然能通过「加载更多」拉回来。
+        assert_eq!(view_model.history_list_total, 30);
+        // 列表最新在前：切掉的是尾部（最旧），最新的 5 条必须留下。
         assert_eq!(view_model.history_entries[0].id, "entry-0");
         assert_eq!(view_model.history_entries[4].id, "entry-4");
-        // 选中的那条被裁掉后回到最新一条，而不是指向不存在的下标。
+        // 选中的那条这一帧没发出去：回到最新一条。
         assert_eq!(view_model.history_selected, 0);
     }
 
     #[test]
-    fn trimming_stops_at_the_first_ladder_step_that_fits() {
+    fn every_collection_shares_the_same_ladder_step() {
+        // 病态数据可能出在任何一个集合上，降档必须一起切。
+        let mut view_model = view_model_with(30);
+        view_model.vocab_entries = (0..30)
+            .map(|index| VocabEntry {
+                phrase: "x".repeat(2_000),
+                hits: index,
+                enabled: true,
+                learned: false,
+            })
+            .collect();
+        view_model.vocab_total = 30;
         let empty = serde_json::to_vec(&FrontendViewModel::default())
             .unwrap()
             .len();
-        let one_entry = serde_json::to_vec(&fake_entry(0)).unwrap().len();
-        // 只够装 10 条：阶梯第一档 25 太大，第二档 5 装得下 → 停在 5，不再往 0 裁。
-        let soft_limit = empty + one_entry * 10;
-        let mut view_model = view_model_with(30);
+        // 只装得下 5 条左右：第一档 25 还是太大，第二档 5 刚好 —— 两个集合
+        // 必须落在同一个档位上，不能一个切到 5、另一个还留着 25。
+        let soft_limit = empty + 80_000;
 
         let payload = encode_view_model(&mut view_model, soft_limit, &[25, 5, 0]).unwrap();
 
         assert!(payload.len() <= soft_limit);
         assert_eq!(view_model.history_entries.len(), 5);
-        assert_eq!(view_model.history_truncated, Some(25));
+        assert_eq!(view_model.vocab_entries.len(), 5);
+        // 总数不动：切掉的条目仍能通过「加载更多」拉回来。
+        assert_eq!(view_model.history_list_total, 0);
+        assert_eq!(view_model.vocab_total, 30);
     }
 }

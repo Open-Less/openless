@@ -591,6 +591,9 @@ mod linux_app {
         quick_note_shortcut_hidden: bool,
         /// 本帧从 UI 收到、待回包的延迟探针序号。
         pending_ui_pongs: Vec<u64>,
+        /// `LoadMore` 触发的分页回包：动作处理阶段拿不到桥，先排队，
+        /// 由宿主循环在 `apply_frontend_actions` 之后发出（同 `pending_ui_pongs`）。
+        pending_collection_pages: Vec<HostToWindow>,
         /// Currently playing history recording (session id + player handle).
         history: HistoryCache,
         history_clip: Option<(String, openless_linux_egui::ClipPlayer)>,
@@ -744,6 +747,7 @@ mod linux_app {
                         popup_restarts: [PopupRestartBudget::default(); POPUP_KIND_COUNT],
                         hotkeys_sent: None,
                         pending_ui_pongs: Vec::new(),
+                        pending_collection_pages: Vec::new(),
                         history,
                         history_clip: None,
                         marketplace_items: Vec::new(),
@@ -840,6 +844,7 @@ mod linux_app {
                     popup_restarts: [PopupRestartBudget::default(); POPUP_KIND_COUNT],
                     hotkeys_sent: None,
                     pending_ui_pongs: Vec::new(),
+                    pending_collection_pages: Vec::new(),
                     history: HistoryCache::default(),
                     history_clip: None,
                     marketplace_items: Vec::new(),
@@ -4136,57 +4141,28 @@ mod linux_app {
                 .history_entries
                 .get(vm.history_selected)
                 .map(|entry| entry.id.clone());
-            let history = self.history.entries.clone();
-            vm.history_entries = history
-                .into_iter()
-                .map(|item| {
-                    let has_audio = item.has_audio_recording.unwrap_or(false);
-                    frontend::view_model::HistoryEntry {
-                        quick_note: item.source == openless_core::HistorySource::QuickNote,
-                        error_code: item.error_code,
-                        id: item.id,
-                        created_at: item.created_at,
-                        mode: overview_mode(item.mode),
-                        // History carries the exact style-pack id. Prefer the
-                        // catalog name so imported packs do not collapse into the
-                        // four base-mode labels; old records without an id still
-                        // use the mode fallback.
-                        style_label: item
-                            .style_pack_id
-                            .as_deref()
-                            .and_then(|id| self.style_packs.iter().find(|pack| pack.id == id))
-                            .map(|pack| {
-                                let builtin_default =
-                                    openless_core::builtin_style_pack_for_mode(pack.base_mode).name;
-                                if pack.kind == openless_core::StylePackKind::Builtin
-                                    && pack.id
-                                        == openless_core::builtin_style_pack_id(pack.base_mode)
-                                    && pack.name == builtin_default
-                                {
-                                    polish_mode_label(lang, pack.base_mode).to_string()
-                                } else {
-                                    pack.name.clone()
-                                }
-                            })
-                            .unwrap_or_else(|| polish_mode_label(lang, item.mode).to_string()),
-                        raw_transcript: item.raw_transcript,
-                        final_text: item.final_text,
-                        duration_ms: item.duration_ms,
-                        has_audio,
-                        asr_provider: item.asr_provider,
-                        asr_model: item.asr_model,
-                        asr_ms: item.asr_ms,
-                        llm_provider: item.llm_provider,
-                        app_name: item.app_name,
-                        dictionary_count: item.dictionary_entry_count,
-                    }
-                })
+            // 历史按页下发：快照只带第一页，其余由窗口的 `LoadMore` 拉取
+            // （见 `frontend::paging`），所以快照不会随历史增长而膨胀。
+            vm.history_list_total = self.history.entries.len();
+            vm.history_entries = self
+                .history
+                .entries
+                .iter()
+                .take(frontend::paging::page_limit())
+                .cloned()
+                .map(|item| history_entry_view(item, &self.style_packs, lang))
                 .collect();
             vm.history_loading = self.history.loading();
             vm.history_error = self.history.error.clone();
-            vm.history_selected = selected_id
+            // 分页之后宿主手里只有第一页：选中项在页内就按 id 重新定位；
+            // 不在页内（用户已经加载了更后面的页）就保持原下标不动 —— 那是窗口
+            // 自己那份列表的下标，宿主无权按页去改，否则会把选中项弄丢。
+            if let Some(index) = selected_id
+                .as_deref()
                 .and_then(|id| vm.history_entries.iter().position(|entry| entry.id == id))
-                .unwrap_or(0);
+            {
+                vm.history_selected = index;
+            }
 
             // In-app playback progress (dropped once the clip finishes).
             if self
@@ -4208,25 +4184,19 @@ mod linux_app {
             // Vocabulary + correction rules: the library path is always wired, so
             // an empty store is an empty list — never an "unsupported" page.
             vm.vocab_unsupported = false;
+            vm.vocab_total = self.vocabulary.len();
             vm.vocab_entries = self
                 .vocabulary
                 .iter()
-                .map(|entry| frontend::view_model::VocabEntry {
-                    phrase: entry.phrase.clone(),
-                    hits: entry.hits as usize,
-                    enabled: entry.enabled,
-                    learned: false,
-                })
+                .take(frontend::paging::page_limit())
+                .map(vocab_entry_view)
                 .collect();
+            vm.correction_rule_total = self.correction_rules.len();
             vm.vocab_rules = self
                 .correction_rules
                 .iter()
-                .map(|rule| frontend::view_model::CorrectionRule {
-                    pattern: rule.pattern.clone(),
-                    replacement: rule.replacement.clone(),
-                    enabled: rule.enabled,
-                    learned: false,
-                })
+                .take(frontend::paging::page_limit())
+                .map(correction_rule_view)
                 .collect();
             vm.vocab_saved_presets = self
                 .vocab_presets
@@ -4238,33 +4208,26 @@ mod linux_app {
                 .collect();
 
             // Style packs: wired too; an empty list is a valid state.
+            // 图标是 base64 data URL，最占体积，同样按页下发。
             vm.style_unsupported = false;
+            let selection_polish_style_pack_id = self
+                .preferences
+                .as_ref()
+                .map(|prefs| prefs.selection_polish_style_pack_id.as_str())
+                .filter(|id| !id.is_empty());
+            vm.style_pack_total = self.style_packs.len();
             vm.style_packs = self
                 .style_packs
                 .iter()
+                .take(frontend::paging::page_limit())
                 .enumerate()
-                .map(|(index, pack)| frontend::view_model::StylePack {
-                    id: pack.id.clone(),
-                    icon_path: pack.icon_path.clone(),
-                    icon_data_url: style_icon_urls.get(index).cloned().flatten(),
-                    base_mode: match pack.base_mode {
-                        openless_core::PolishMode::Raw => "raw",
-                        openless_core::PolishMode::Light => "light",
-                        openless_core::PolishMode::Structured => "structured",
-                        openless_core::PolishMode::Formal => "formal",
-                    }
-                    .to_string(),
-                    name: pack.name.clone(),
-                    description: pack.description.clone(),
-                    // Localized mode label (Core's display_name is zh-only).
-                    tags: vec![polish_mode_label(lang, pack.base_mode).to_string()],
-                    is_builtin: pack.kind == openless_core::StylePackKind::Builtin,
-                    enabled: pack.enabled,
-                    is_active: pack.active,
-                    selection_active: self
-                        .preferences
-                        .as_ref()
-                        .is_some_and(|prefs| prefs.selection_polish_style_pack_id == pack.id),
+                .map(|(index, pack)| {
+                    style_pack_view(
+                        pack,
+                        style_icon_urls.get(index).and_then(|url| url.as_deref()),
+                        selection_polish_style_pack_id,
+                        lang,
+                    )
                 })
                 .collect();
 
@@ -4278,21 +4241,13 @@ mod linux_app {
             vm.marketplace_loading = !self.marketplace_attempted;
             if !self.marketplace_items.is_empty() {
                 vm.marketplace_loading = false;
+                vm.marketplace_total = self.marketplace_items.len();
                 vm.marketplace_packs = self
                     .marketplace_items
                     .iter()
-                    .map(|item| frontend::view_model::MarketplacePack {
-                        id: item.id.clone(),
-                        name: item.name.clone(),
-                        version: item.version.clone(),
-                        description: item.description.clone(),
-                        mode: item.base_mode.clone(),
-                        author: item.author_login.clone(),
-                        origin_author_login: item.origin_author_login.clone(),
-                        tags: item.tags.clone(),
-                        likes: item.like_count as u32,
-                        downloads: item.download_count as u32,
-                        liked: self.marketplace_my_likes.contains(&item.id),
+                    .take(frontend::paging::page_limit())
+                    .map(|item| {
+                        marketplace_pack_view(item, self.marketplace_my_likes.contains(&item.id))
                     })
                     .collect();
             }
@@ -4333,6 +4288,84 @@ mod linux_app {
         }
 
         /// Dispatch frontend actions to existing Core / backend methods.
+        /// 切一页给窗口。顺序必须与快照第一页完全一致（都是宿主存储的前缀），
+        /// 否则窗口按 `offset` 拼接会把两段不同的数据接在一起。
+        fn collection_page(
+            &mut self,
+            collection: frontend::paging::Collection,
+            offset: usize,
+        ) -> (usize, frontend::paging::CollectionItems) {
+            use frontend::paging::{slice_page, Collection, CollectionItems};
+            let lang = self.lang;
+            let limit = frontend::paging::page_limit();
+            match collection {
+                Collection::History => {
+                    let items = slice_page(&self.history.entries, offset, limit)
+                        .into_iter()
+                        .map(|item| history_entry_view(item, &self.style_packs, lang))
+                        .collect();
+                    (self.history.entries.len(), CollectionItems::History(items))
+                }
+                Collection::Vocabulary => {
+                    let items = slice_page(&self.vocabulary, offset, limit)
+                        .iter()
+                        .map(vocab_entry_view)
+                        .collect();
+                    (self.vocabulary.len(), CollectionItems::Vocabulary(items))
+                }
+                Collection::CorrectionRules => {
+                    let items = slice_page(&self.correction_rules, offset, limit)
+                        .iter()
+                        .map(correction_rule_view)
+                        .collect();
+                    (
+                        self.correction_rules.len(),
+                        CollectionItems::CorrectionRules(items),
+                    )
+                }
+                Collection::Marketplace => {
+                    let items = slice_page(&self.marketplace_items, offset, limit)
+                        .iter()
+                        .map(|item| {
+                            marketplace_pack_view(
+                                item,
+                                self.marketplace_my_likes.contains(&item.id),
+                            )
+                        })
+                        .collect();
+                    (
+                        self.marketplace_items.len(),
+                        CollectionItems::Marketplace(items),
+                    )
+                }
+                Collection::StylePacks => {
+                    // 图标 data URL 由 `style_icon_urls` 缓存，按 index 取。
+                    let icons = self.style_icon_urls();
+                    let selection = self
+                        .preferences
+                        .as_ref()
+                        .map(|prefs| prefs.selection_polish_style_pack_id.clone())
+                        .filter(|id| !id.is_empty());
+                    let items = self
+                        .style_packs
+                        .iter()
+                        .enumerate()
+                        .skip(offset)
+                        .take(limit)
+                        .map(|(index, pack)| {
+                            style_pack_view(
+                                pack,
+                                icons.get(index).and_then(|url| url.as_deref()),
+                                selection.as_deref(),
+                                lang,
+                            )
+                        })
+                        .collect();
+                    (self.style_packs.len(), CollectionItems::StylePacks(items))
+                }
+            }
+        }
+
         fn apply_frontend_actions(
             &mut self,
             actions: Vec<frontend::view_model::FrontendAction>,
@@ -4741,6 +4774,19 @@ mod linux_app {
                         );
                         self.load_history();
                         self.frontend_vm.history_confirm = None;
+                    }
+                    frontend::view_model::FrontendAction::LoadMore { collection, offset } => {
+                        let (total, items) = self.collection_page(collection, offset);
+                        self.pending_collection_pages
+                            .push(HostToWindow::CollectionPage {
+                                // 回显请求偏移：同一偏移重复请求幂等；窗口据此
+                                // 丢掉晚到的旧回包（见 `apply_page`）。
+                                request_id: offset as u64,
+                                collection,
+                                offset,
+                                total,
+                                items: Box::new(items),
+                            });
                     }
                     frontend::view_model::FrontendAction::HistorySelect(index) => {
                         self.frontend_vm.history_selected = index;
@@ -5894,6 +5940,122 @@ mod linux_app {
     }
 
     /// Core polish mode -> frontend display enum.
+    /// 历史记录 → 窗口展示条目。每帧只投影第一页，后续页按需投影
+    /// （见 `frontend::paging`）；两处共用这一份映射，字段与顺序不会走偏。
+    fn history_entry_view(
+        item: openless_core::DictationSession,
+        style_packs: &[openless_core::StylePack],
+        lang: Lang,
+    ) -> frontend::view_model::HistoryEntry {
+        let has_audio = item.has_audio_recording.unwrap_or(false);
+        frontend::view_model::HistoryEntry {
+            quick_note: item.source == openless_core::HistorySource::QuickNote,
+            error_code: item.error_code,
+            id: item.id,
+            created_at: item.created_at,
+            mode: overview_mode(item.mode),
+            // History carries the exact style-pack id. Prefer the catalog name so
+            // imported packs do not collapse into the four base-mode labels; old
+            // records without an id still use the mode fallback.
+            style_label: item
+                .style_pack_id
+                .as_deref()
+                .and_then(|id| style_packs.iter().find(|pack| pack.id == id))
+                .map(|pack| {
+                    let builtin_default =
+                        openless_core::builtin_style_pack_for_mode(pack.base_mode).name;
+                    if pack.kind == openless_core::StylePackKind::Builtin
+                        && pack.id == openless_core::builtin_style_pack_id(pack.base_mode)
+                        && pack.name == builtin_default
+                    {
+                        polish_mode_label(lang, pack.base_mode).to_string()
+                    } else {
+                        pack.name.clone()
+                    }
+                })
+                .unwrap_or_else(|| polish_mode_label(lang, item.mode).to_string()),
+            raw_transcript: item.raw_transcript,
+            final_text: item.final_text,
+            duration_ms: item.duration_ms,
+            has_audio,
+            asr_provider: item.asr_provider,
+            asr_model: item.asr_model,
+            asr_ms: item.asr_ms,
+            llm_provider: item.llm_provider,
+            app_name: item.app_name,
+            dictionary_count: item.dictionary_entry_count,
+        }
+    }
+
+    fn vocab_entry_view(
+        entry: &openless_core::DictionaryEntry,
+    ) -> frontend::view_model::VocabEntry {
+        frontend::view_model::VocabEntry {
+            phrase: entry.phrase.clone(),
+            hits: entry.hits as usize,
+            enabled: entry.enabled,
+            learned: false,
+        }
+    }
+
+    fn correction_rule_view(
+        rule: &openless_core::CorrectionRule,
+    ) -> frontend::view_model::CorrectionRule {
+        frontend::view_model::CorrectionRule {
+            pattern: rule.pattern.clone(),
+            replacement: rule.replacement.clone(),
+            enabled: rule.enabled,
+            learned: false,
+        }
+    }
+
+    fn style_pack_view(
+        pack: &openless_core::StylePack,
+        icon_data_url: Option<&str>,
+        selection_polish_style_pack_id: Option<&str>,
+        lang: Lang,
+    ) -> frontend::view_model::StylePack {
+        frontend::view_model::StylePack {
+            id: pack.id.clone(),
+            icon_path: pack.icon_path.clone(),
+            icon_data_url: icon_data_url.map(str::to_string),
+            base_mode: match pack.base_mode {
+                openless_core::PolishMode::Raw => "raw",
+                openless_core::PolishMode::Light => "light",
+                openless_core::PolishMode::Structured => "structured",
+                openless_core::PolishMode::Formal => "formal",
+            }
+            .to_string(),
+            name: pack.name.clone(),
+            description: pack.description.clone(),
+            // Localized mode label (Core's display_name is zh-only).
+            tags: vec![polish_mode_label(lang, pack.base_mode).to_string()],
+            is_builtin: pack.kind == openless_core::StylePackKind::Builtin,
+            enabled: pack.enabled,
+            is_active: pack.active,
+            selection_active: selection_polish_style_pack_id == Some(pack.id.as_str()),
+        }
+    }
+
+    fn marketplace_pack_view(
+        item: &openless_core::MarketplaceListItem,
+        liked: bool,
+    ) -> frontend::view_model::MarketplacePack {
+        frontend::view_model::MarketplacePack {
+            id: item.id.clone(),
+            name: item.name.clone(),
+            version: item.version.clone(),
+            description: item.description.clone(),
+            mode: item.base_mode.clone(),
+            author: item.author_login.clone(),
+            origin_author_login: item.origin_author_login.clone(),
+            tags: item.tags.clone(),
+            likes: item.like_count as u32,
+            downloads: item.download_count as u32,
+            liked,
+        }
+    }
+
     fn overview_mode(mode: openless_core::PolishMode) -> frontend::view_model::OverviewMode {
         match mode {
             openless_core::PolishMode::Raw => frontend::view_model::OverviewMode::Raw,
@@ -7500,6 +7662,10 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             }
             for sequence in std::mem::take(&mut app.pending_ui_pongs) {
                 ui_bridge.send(HostToWindow::Pong { sequence });
+            }
+            // 分页回包与请求同一个 tick 送出：列表不会因为等下一帧而闪一下。
+            for page in std::mem::take(&mut app.pending_collection_pages) {
+                ui_bridge.send(page);
             }
             app.sync_view_model();
             app.sync_hotkey_bindings(&mut ui_bridge);

@@ -6,6 +6,7 @@ pub mod layout;
 pub mod marketplace;
 pub mod overview;
 pub mod pages;
+pub mod paging;
 pub mod popups;
 pub mod selection_ask;
 pub mod settings;
@@ -3410,17 +3411,17 @@ mod tests {
             "a focused window must not re-ask every frame: {focused:?}"
         );
     }
-    /// 宿主截断历史时，**整页**必须把横幅画出来。只测 `truncated_notice` 自己不够：
-    /// 真正会漏掉的是 `list_card` 里那句接线。
+    /// 宿主分页下发历史时，**整页**必须画出「已载入 X / 共 Y」并给出继续加载的入口。
+    /// 只测 `load_more_footer` 自己不够：真正会漏掉的是 `list_card` 里那句接线。
     #[test]
-    fn history_page_paints_the_truncated_notice_when_the_host_trims_entries() {
+    fn history_page_paints_the_paging_footer_when_more_entries_exist() {
         let ctx = egui::Context::default();
         let zh = openless_linux_egui::Lang::ZhCn;
         let mut vm = FrontendViewModel {
             lang: zh,
             active_page: Page::History,
             history_loading: false,
-            history_truncated: Some(23),
+            history_list_total: 1_234,
             history_entries: vec![super::view_model::HistoryEntry {
                 id: "a".into(),
                 created_at: "2026-01-15T12:34:00+00:00".into(),
@@ -3433,24 +3434,25 @@ mod tests {
             ..Default::default()
         };
         let mut painted = String::new();
+        let mut actions = Vec::new();
         // 滚动区域要一帧才发布尺寸，所以多跑两帧再取最终画面。
         for _ in 0..3 {
             ctx.begin_pass(egui::RawInput {
                 screen_rect: Some(viewport()),
                 ..Default::default()
             });
-            let mut actions = Vec::new();
+            actions.clear();
             render(&ctx, &mut vm, &mut actions);
             painted = painted_text(&crate::ui::frontend::end_pass(&ctx));
         }
-        let expected = openless_linux_egui::fmt_l10n(zh, "history.truncated", &[&1, &23]);
+        let expected = openless_linux_egui::fmt_l10n(zh, "common.loaded_of_total", &[&1, &1_234]);
         assert!(
             painted.contains(&expected),
-            "the history page must paint the truncation notice ({expected:?}): {painted}"
+            "the history page must show paging progress ({expected:?}): {painted}"
         );
         assert!(
-            painted.contains(openless_linux_egui::tr_l10n(zh, "history.truncated_hint")),
-            "the notice must point at the setting that shrinks history"
+            painted.contains(openless_linux_egui::tr_l10n(zh, "common.load_more")),
+            "the history page must offer the way to load the rest"
         );
     }
 }

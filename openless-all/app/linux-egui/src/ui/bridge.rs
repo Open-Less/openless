@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use super::frontend::view_model::{FrontendAction, FrontendViewModel};
 
 /// 协议版本：宿主与 UI 进程对不上就直接拒绝启动 UI（避免半懂不懂地渲染）。
-pub const UI_BRIDGE_VERSION: u32 = 2;
+pub const UI_BRIDGE_VERSION: u32 = 3;
 
 /// 单帧上限。视图模型快照含历史列表，比弹窗协议大得多。
 const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
@@ -53,9 +53,23 @@ pub enum HostToWindow {
         bindings: Box<openless_core::HotkeyRuntimeTarget>,
     },
     /// 完整视图模型快照；`sequence` 单调递增。
+    ///
+    /// 里面的大集合只是**第一页**（见 `frontend::paging`），其余由窗口用
+    /// `FrontendAction::LoadMore` 按需拉取 —— 快照因此不会随数据增长而膨胀。
     Snapshot {
         sequence: u64,
         view_model: Box<FrontendViewModel>,
+    },
+    /// 某个集合的一页数据。
+    ///
+    /// 与快照分开走，因为写出线程只合并快照（丢帧安全）；分页回包一旦被丢掉，
+    /// 这一页就永远缺了。`request_id` 回显请求，便于日志对账。
+    CollectionPage {
+        request_id: u64,
+        collection: crate::ui::frontend::paging::Collection,
+        offset: usize,
+        total: usize,
+        items: Box<crate::ui::frontend::paging::CollectionItems>,
     },
     /// 延迟探针回包。
     Pong {
@@ -970,6 +984,41 @@ mod tests {
         ));
         assert!(read_frame::<HostToWindow>(&mut reader).unwrap().is_none());
     }
+    /// 分页回包不能被「只留最新快照」的合并逻辑吃掉：丢掉一页就意味着那段
+    /// 数据在窗口里永远缺一块（快照只带第一页）。
+    #[test]
+    fn a_page_frame_is_never_coalesced_away_by_a_pending_snapshot() {
+        use crate::ui::frontend::paging::{Collection, CollectionItems};
+
+        let (mut writer, reader) = UnixStream::pair().unwrap();
+        let (tx, rx) = mpsc::channel();
+        tx.send(Outgoing::Encoded(b"first snapshot".to_vec()))
+            .unwrap();
+        tx.send(Outgoing::Frame(HostToWindow::CollectionPage {
+            request_id: 200,
+            collection: Collection::History,
+            offset: 200,
+            total: 900,
+            items: Box::new(CollectionItems::History(Vec::new())),
+        }))
+        .unwrap();
+        tx.send(Outgoing::Frame(HostToWindow::Shutdown)).unwrap();
+        write_outgoing(&mut writer, rx);
+        drop(writer);
+
+        let mut reader = BufReader::new(reader);
+        // 页面帧抢在待发快照之前发出（快照被 Shutdown 丢掉，页面帧不受影响）。
+        assert!(matches!(
+            read_frame::<HostToWindow>(&mut reader).unwrap(),
+            Some(HostToWindow::CollectionPage { offset: 200, .. })
+        ));
+        assert!(matches!(
+            read_frame::<HostToWindow>(&mut reader).unwrap(),
+            Some(HostToWindow::Shutdown)
+        ));
+        assert!(read_frame::<HostToWindow>(&mut reader).unwrap().is_none());
+    }
+
     #[test]
     fn eof_stops_both_client_workers_before_the_client_is_dropped() {
         let dir = temp_dir("eof-workers");
