@@ -93,15 +93,15 @@ pub use popup::{
 pub use popup_layer::{
     capsule_geometry, capsule_path_override, choose_capsule_path, detect_capsule_path,
     has_layer_shell, layer_shell_available, pointer_events, probe_layer_shell, run_layer_capsule,
-    CapsuleGeometry, CapsulePath, LayerFrame, CAPSULE_PATH_ENV, CONFIGURE_TIMEOUT, LAYER_NAMESPACE,
-    LAYER_SHELL_GLOBAL, MAX_FRAME_PAUSE,
+    wayland_display_available, CapsuleGeometry, CapsulePath, LayerFrame, CAPSULE_PATH_ENV,
+    CONFIGURE_TIMEOUT, LAYER_NAMESPACE, LAYER_SHELL_GLOBAL, MAX_FRAME_PAUSE,
 };
 #[cfg(all(target_os = "linux", feature = "x11-overlay"))]
 pub use popup_window::X11Overlay;
 pub use popup_window::{
-    bottom_center, clamp_to_area, monitor_containing, place_overlay, popup_position, popup_size,
-    select_overlay_window, x11_available, OverlayEnvironment, OverlayPlacement, OverlayX11,
-    WindowCandidate, WindowMatch, X11Rect, CAPSULE_BOTTOM_GAP, CAPSULE_WINDOW_SIZE,
+    bottom_center, clamp_to_area, monitor_containing, place_overlay, place_panel, popup_position,
+    popup_size, select_overlay_window, x11_available, OverlayEnvironment, OverlayPlacement,
+    OverlayX11, WindowCandidate, WindowMatch, X11Rect, CAPSULE_BOTTOM_GAP, CAPSULE_WINDOW_SIZE,
     LESS_COMPUTER_WINDOW_SIZE, QA_WINDOW_SIZE,
 };
 

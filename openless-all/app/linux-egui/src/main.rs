@@ -6698,8 +6698,8 @@ mod linux_app {
     mod popup_overlay {
         use super::*;
         use openless_linux_egui::{
-            place_overlay, popup_position, OverlayEnvironment, OverlayPlacement, OverlayX11,
-            X11Overlay,
+            place_overlay, place_panel, popup_position, OverlayEnvironment, OverlayPlacement,
+            OverlayX11, X11Overlay,
         };
 
         pub struct PopupOverlay {
@@ -6717,7 +6717,15 @@ mod linux_app {
 
         impl PopupOverlay {
             pub fn probe(kind: PopupKind) -> Option<Self> {
-                // 原生 Wayland 不做任何 X11 处理。
+                // XWayland may expose DISPLAY in a native Wayland session, but
+                // an xdg-toplevel is not an X11 window. Do not feed its
+                // coordinates to winit or pretend that X11 can place it.
+                if openless_linux_egui::wayland_display_available(
+                    std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
+                ) {
+                    log::debug!("popup x11: native Wayland session, keeping compositor placement");
+                    return None;
+                }
                 if !openless_linux_egui::x11_available(std::env::var("DISPLAY").ok().as_deref()) {
                     log::debug!("popup x11: no DISPLAY, keeping the compositor placement");
                     return None;
@@ -6806,10 +6814,42 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             }
 
             pub fn place(&mut self, ctx: &egui::Context, visible: bool) {
-                // 只有胶囊需要「永不聚焦 + 置顶 + 不进任务栏」；两个面板要键盘输入，
-                // 位置已经由 `with_position` 在创建时给过，X11 变更一概不做。
                 if self.kind != PopupKind::Capsule {
-                    self.placed = true;
+                    // Interactive panels keep normal focus/taskbar behaviour, but
+                    // winit's initial position is only a hint. Re-apply the
+                    // work-area position once after the X11 window is managed so
+                    // a panel cannot be placed over a reserved taskbar.
+                    if !self.placed {
+                        self.attempts = self.attempts.saturating_add(1);
+                        let placement = place_panel(
+                            &mut self.connection,
+                            std::process::id(),
+                            &self.environment,
+                            self.kind,
+                        );
+                        if placement.applied() {
+                            self.placed = true;
+                            log::info!(
+                                "popup x11 (panel-post-map): kind={:?} window={:?} matched={} moved_to={:?} warnings={:?}",
+                                self.kind,
+                                placement.window,
+                                placement
+                                    .matched
+                                    .map(openless_linux_egui::WindowMatch::as_str)
+                                    .unwrap_or("none"),
+                                placement.moved_to,
+                                placement.warnings
+                            );
+                        } else if self.attempts >= 100 {
+                            self.placed = true;
+                            log::warn!(
+                                "popup x11: panel window not found, keeping compositor placement kind={:?}",
+                                self.kind
+                            );
+                        } else {
+                            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                        }
+                    }
                     return;
                 }
                 if !self.placed {

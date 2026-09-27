@@ -302,6 +302,52 @@ impl OverlayPlacement {
     }
 }
 
+/// Place an interactive panel in the requested work area without changing its
+/// focus or taskbar policy. This is only a best-effort X11 post-map correction:
+/// Wayland clients cannot choose an xdg-toplevel position.
+pub fn place_panel(
+    x11: &mut dyn OverlayX11,
+    pid: u32,
+    environment: &OverlayEnvironment,
+    kind: crate::popup::PopupKind,
+) -> OverlayPlacement {
+    let mut placement = OverlayPlacement::default();
+    let (window, matched) = match x11.find_own_window(pid) {
+        Ok(Some(found)) => found,
+        Ok(None) => {
+            placement
+                .warnings
+                .push("own X11 window not found yet".to_string());
+            return placement;
+        }
+        Err(error) => {
+            placement
+                .warnings
+                .push(format!("window lookup failed: {error}"));
+            return placement;
+        }
+    };
+    placement.window = Some(window);
+    placement.matched = Some(matched);
+
+    if let Err(error) = x11.mark_self_placed(window) {
+        placement
+            .warnings
+            .push(format!("position hint failed: {error}"));
+    }
+    if let Some(position) = popup_position(environment, kind) {
+        match x11.move_window(window, position) {
+            Ok(()) => placement.moved_to = Some(position),
+            Err(error) => placement.warnings.push(format!("move failed: {error}")),
+        }
+    } else {
+        placement
+            .warnings
+            .push("no usable work area or monitor".to_string());
+    }
+    placement
+}
+
 /// Point the popup's own X11 window at the bottom centre of the work area and
 /// make sure it never holds the keyboard.
 ///
@@ -1064,6 +1110,24 @@ mod tests {
         assert!(placement.focus_restored);
         assert!(placement.warnings.is_empty());
         assert!(placement.applied());
+    }
+
+    #[test]
+    fn place_panel_moves_without_changing_focus_or_overlay_state() {
+        let mut x11 = FakeX11 {
+            window: Some(0x2a),
+            ..Default::default()
+        };
+        let placement = place_panel(&mut x11, 4242, &environment(), PopupKind::Qa);
+        assert_eq!(
+            x11.calls,
+            vec!["find(4242)", "self_placed(42)", "move(42,750,270)"]
+        );
+        assert_eq!(placement.window, Some(0x2a));
+        assert_eq!(placement.moved_to, Some((750, 270)));
+        assert!(!placement.focus_was_stolen);
+        assert!(!placement.focus_restored);
+        assert!(placement.warnings.is_empty());
     }
 
     #[test]
