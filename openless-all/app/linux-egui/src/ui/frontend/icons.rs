@@ -151,6 +151,17 @@ fn rasterize_mask(source: &str) -> Option<egui::ColorImage> {
 /// Draw the same SVG outlines used by Tauri, recolored for this surface.
 /// Texture handles live in egui's context and are reused across frames/windows.
 pub fn draw_icon(ui: &egui::Ui, center: egui::Pos2, icon: IconName, color: egui::Color32) {
+    draw_icon_sized(ui, center, icon, color, ICON_SIZE);
+}
+
+/// Draw an icon at a caller-selected CSS-equivalent size.
+pub fn draw_icon_sized(
+    ui: &egui::Ui,
+    center: egui::Pos2,
+    icon: IconName,
+    color: egui::Color32,
+    size: f32,
+) {
     let Some((name, svg)) = lucide_svg(icon) else {
         // Not part of Icon.tsx: the account avatar fallback is deliberately
         // separate from the monochrome Lucide interface controls.
@@ -176,7 +187,7 @@ pub fn draw_icon(ui: &egui::Ui, center: egui::Pos2, icon: IconName, color: egui:
     if let Some(texture) = texture {
         ui.painter().image(
             texture.id(),
-            egui::Rect::from_center_size(center, egui::vec2(ICON_SIZE, ICON_SIZE)),
+            egui::Rect::from_center_size(center, egui::vec2(size, size)),
             egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
             color,
         );

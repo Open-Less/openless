@@ -78,10 +78,16 @@ const PILL_HEIGHT: f32 = 42.0;
 const ROUND_BUTTON: f32 = 28.0;
 /// Tauri `getCapsuleHostMetrics(.., 'classic').bottomInset`。
 const CAPSULE_BOTTOM_INSET: f32 = 16.0;
-/// Typeless 胶囊（Tauri `CapsuleStyles.css`：176×64、46×46 圆形按钮、11 根波形）。
-const TYPELESS_WIDTH: f32 = 176.0;
-const TYPELESS_HEIGHT: f32 = 64.0;
-const TYPELESS_BUTTON: f32 = 46.0;
+/// Typeless 胶囊由 Tauri 的 460×128 基准舞台按 `zoom: 0.447` 缩放，
+/// 因此录音态为 232×64 → 104×29，空闲态为 176×64 → 79×29，
+/// 错误态为 300×64 → 134×29，按钮为 46×46 → 21×21。
+const TYPELESS_SCALE: f32 = 0.447;
+const TYPELESS_IDLE_WIDTH: f32 = 176.0 * TYPELESS_SCALE;
+const TYPELESS_RECORDING_WIDTH: f32 = 232.0 * TYPELESS_SCALE;
+const TYPELESS_ERROR_WIDTH: f32 = 300.0 * TYPELESS_SCALE;
+const TYPELESS_HEIGHT: f32 = 64.0 * TYPELESS_SCALE;
+const TYPELESS_BUTTON: f32 = 46.0 * TYPELESS_SCALE;
+const TYPELESS_STOP_BUTTON: f32 = 24.0 * TYPELESS_SCALE;
 /// `.ol-typeless-*` 调色板。
 const TYPELESS_BG: egui::Color32 = egui::Color32::from_rgb(0x18, 0x18, 0x1b);
 const TYPELESS_BORDER: egui::Color32 = egui::Color32::from_rgb(0x52, 0x52, 0x5b);
@@ -1001,16 +1007,14 @@ fn hairline(ui: &mut egui::Ui, color: egui::Color32) {
 
 /// 药丸上方的「正在翻译」徽章（Tauri `ClassicCapsule` 的 `capsule.translating`）：
 /// 蓝点 + 蓝字、圆角胶囊、`--ol-capsule-badge-bg` 底、`--ol-capsule-badge-border` 边。
-fn translating_badge(ui: &mut egui::Ui, pill: egui::Rect, lang: Lang) {
+fn translating_badge(ui: &mut egui::Ui, pill: egui::Rect, lang: Lang, scale: f32) {
     let label = tr_l10n(lang, "capsule.translating");
-    let text_width = layout::text_width(ui, label, 10.5);
-    let width = text_width + 5.0 + 5.0 + 20.0;
-    let height = 19.0;
+    let text_width = layout::text_width(ui, label, 10.5 * scale);
+    let width = text_width + (5.0 + 5.0 + 20.0) * scale;
+    let height = 19.0 * scale;
+    let gap = CAPSULE_BADGE_GAP * scale;
     let rect = egui::Rect::from_center_size(
-        egui::pos2(
-            pill.center().x,
-            pill.top() - CAPSULE_BADGE_GAP - height / 2.0,
-        ),
+        egui::pos2(pill.center().x, pill.top() - gap - height / 2.0),
         egui::vec2(width, height),
     );
     let painter = ui.painter();
@@ -1025,13 +1029,13 @@ fn translating_badge(ui: &mut egui::Ui, pill: egui::Rect, lang: Lang) {
         egui::Stroke::new(0.5, theme::CAPSULE_BADGE_BORDER),
         egui::StrokeKind::Inside,
     );
-    let dot = egui::pos2(rect.left() + 10.0, rect.center().y);
-    painter.circle_filled(dot, 2.5, theme::BLUE);
+    let dot = egui::pos2(rect.left() + 10.0 * scale, rect.center().y);
+    painter.circle_filled(dot, 2.5 * scale, theme::BLUE);
     painter.text(
-        egui::pos2(dot.x + 5.0 + 2.5, rect.center().y),
+        egui::pos2(dot.x + (5.0 + 2.5) * scale, rect.center().y),
         egui::Align2::LEFT_CENTER,
         label,
-        egui::FontId::proportional(10.5),
+        egui::FontId::proportional(10.5 * scale),
         theme::BLUE,
     );
 }
@@ -1055,7 +1059,12 @@ pub fn dictation_capsule(
             // 未知/空值走 siri（默认样式），只有显式选择 classic 才关掉 GPU 光效。
             let use_gpu = !typeless && style != "classic";
             let (pill_width, pill_height, button, bar_count) = if typeless {
-                (TYPELESS_WIDTH, TYPELESS_HEIGHT, TYPELESS_BUTTON, 11)
+                let width = match phase.as_str() {
+                    "recording" => TYPELESS_RECORDING_WIDTH,
+                    "failed" => TYPELESS_ERROR_WIDTH,
+                    _ => TYPELESS_IDLE_WIDTH,
+                };
+                (width, TYPELESS_HEIGHT, TYPELESS_BUTTON, 11)
             } else {
                 (PILL_WIDTH, PILL_HEIGHT, ROUND_BUTTON, 5)
             };
@@ -1076,20 +1085,22 @@ pub fn dictation_capsule(
             let rect = egui::Rect::from_min_size(
                 egui::pos2(
                     available.center().x - pill_width / 2.0,
-                    available.bottom() - CAPSULE_BOTTOM_INSET - pill_height,
+                    available.bottom()
+                        - if typeless { 0.0 } else { CAPSULE_BOTTOM_INSET }
+                        - pill_height,
                 ),
                 egui::vec2(pill_width, pill_height),
             );
             let _ = ui.allocate_rect(rect, egui::Sense::hover());
             if state.translation_active {
-                translating_badge(ui, rect, lang);
+                translating_badge(ui, rect, lang, if typeless { TYPELESS_SCALE } else { 1.0 });
             }
             // Tauri 的经典药丸只有「1px 中性描边」+「随音量轻微放大」两件事
             // （Capsule.tsx 的 ClassicPill：border 1px var(--ol-capsule-pill-border)、
             // transform scale(1 + ambient * 0.018)），**没有**任何外圈扫光/描边颜色变化。
             // 所以这里不再把录音相位画成红圈（那是本仓自己加的，用户报「有一个红边」）；
             // 运动感只保留药丸中心的音量波形。
-            let ambient = if phase == "recording" {
+            let ambient = if phase == "recording" && !typeless {
                 state.audio_level.unwrap_or(0.0).clamp(0.0, 1.0)
             } else {
                 0.0
@@ -1105,14 +1116,48 @@ pub fn dictation_capsule(
                 ui.painter().rect_stroke(
                     pill,
                     egui::CornerRadius::same((pill_height / 2.0) as u8),
-                    egui::Stroke::new(1.0, pill_border),
+                    egui::Stroke::new(if typeless { 0.5 } else { 1.0 }, pill_border),
                     egui::StrokeKind::Inside,
                 );
             }
-            // Siri is a clean, transparent listening indicator. The cancel /
-            // confirm affordances belong to the classic and Typeless capsules.
+            let processing = matches!(
+                phase.as_str(),
+                "starting" | "transcribing" | "polishing" | "inserting"
+            );
+            // Siri is a clean, transparent listening indicator. Classic keeps
+            // both actions visible; Typeless follows Tauri and shows the two
+            // large actions only while recording, then only its small stop
+            // action while processing.
             let center = if siri {
                 rect.shrink(3.0)
+            } else if typeless && phase != "recording" {
+                if processing {
+                    let stop_rect = egui::Rect::from_center_size(
+                        egui::pos2(
+                            rect.right() - 7.0 - TYPELESS_STOP_BUTTON / 2.0,
+                            rect.center().y,
+                        ),
+                        egui::vec2(TYPELESS_STOP_BUTTON, TYPELESS_STOP_BUTTON),
+                    );
+                    let stop = ui.interact(
+                        stop_rect,
+                        ui.id().with("openless-typeless-stop"),
+                        egui::Sense::click(),
+                    );
+                    round_button(
+                        ui,
+                        stop_rect,
+                        icons::IconName::Close,
+                        stop.hovered(),
+                        TYPELESS_BUTTON_BG,
+                        TYPELESS_INK,
+                        (0.0, 13.0 * TYPELESS_SCALE),
+                    );
+                    if stop.clicked() {
+                        action = CapsuleAction::Cancel;
+                    }
+                }
+                rect.shrink(4.0)
             } else {
                 let inset = if typeless { 7.0 } else { 8.0 };
                 let cancel_rect = egui::Rect::from_center_size(
@@ -1136,6 +1181,14 @@ pub fn dictation_capsule(
                     cancel.hovered(),
                     cancel_fill,
                     pill_ink,
+                    (
+                        if typeless { 0.0 } else { 0.8 },
+                        if typeless {
+                            24.0 * TYPELESS_SCALE
+                        } else {
+                            13.0
+                        },
+                    ),
                 );
                 if cancel.clicked() {
                     action = CapsuleAction::Cancel;
@@ -1161,6 +1214,14 @@ pub fn dictation_capsule(
                     confirm.hovered(),
                     confirm_fill,
                     confirm_ink,
+                    (
+                        if typeless { 0.0 } else { 0.8 },
+                        if typeless {
+                            24.0 * TYPELESS_SCALE
+                        } else {
+                            13.0
+                        },
+                    ),
                 );
                 if confirm.clicked() {
                     action = CapsuleAction::Confirm;
@@ -1170,10 +1231,6 @@ pub fn dictation_capsule(
                     egui::pos2(confirm_rect.left() - 4.0, rect.bottom() - 4.0),
                 )
             };
-            let processing = matches!(
-                phase.as_str(),
-                "starting" | "transcribing" | "polishing" | "inserting"
-            );
             if phase == "recording" {
                 // Siri capsules are a transparent overlay. Draw the spectral
                 // ribbons with egui primitives so they work on the Vulkan path
@@ -1221,7 +1278,11 @@ pub fn dictation_capsule(
                         center.center(),
                         egui::Align2::CENTER_CENTER,
                         tr_l10n(lang, "capsule.thinking"),
-                        egui::FontId::proportional(17.0),
+                        egui::FontId::proportional(if typeless {
+                            16.0 * TYPELESS_SCALE
+                        } else {
+                            17.0
+                        }),
                         theme::INK,
                     );
                 }
@@ -1235,7 +1296,13 @@ pub fn dictation_capsule(
                 } else {
                     tr_l10n(lang, "capsule.thinking")
                 };
-                let size = if processing { 17.0 } else { 11.0 };
+                let size = if typeless {
+                    16.0 * TYPELESS_SCALE
+                } else if processing {
+                    17.0
+                } else {
+                    11.0
+                };
                 ui.painter().text(
                     center.center(),
                     egui::Align2::CENTER_CENTER,
@@ -1251,8 +1318,20 @@ pub fn dictation_capsule(
                 );
             } else {
                 // 11px/500 单行居中，超长省略（Tauri `getCapsuleMessageLayout`）。
-                let galley =
-                    layout::text_galley(ui, &state.text, pill_ink, 11.0, center.width(), 1);
+                let galley = layout::text_galley(
+                    ui,
+                    &state.text,
+                    pill_ink,
+                    if typeless {
+                        16.0 * TYPELESS_SCALE
+                    } else {
+                        11.0
+                    },
+                    center
+                        .width()
+                        .min(if typeless { TYPELESS_IDLE_WIDTH } else { 84.0 }),
+                    1,
+                );
                 ui.painter().galley(
                     egui::pos2(
                         center.center().x - galley.rect.width() / 2.0,
@@ -1266,7 +1345,7 @@ pub fn dictation_capsule(
     action
 }
 
-/// 28×28 圆形按钮（Tauri `CircleButton`）。
+/// 圆形按钮（classic 为 28×28；Typeless 按 Tauri 的 zoom 比例缩放）。
 fn round_button(
     ui: &egui::Ui,
     rect: egui::Rect,
@@ -1274,7 +1353,9 @@ fn round_button(
     hovered: bool,
     fill: egui::Color32,
     ink: egui::Color32,
+    button_metrics: (f32, f32),
 ) {
+    let (stroke_width, icon_size) = button_metrics;
     ui.painter().circle_filled(
         rect.center(),
         rect.width() / 2.0,
@@ -1287,9 +1368,9 @@ fn round_button(
     ui.painter().circle_stroke(
         rect.center(),
         rect.width() / 2.0,
-        egui::Stroke::new(0.8, theme::LINE),
+        egui::Stroke::new(stroke_width, theme::LINE),
     );
-    icons::draw_icon(ui, rect.center(), icon, ink);
+    icons::draw_icon_sized(ui, rect.center(), icon, ink, icon_size);
 }
 
 /// 音量条：Tauri `AudioBars`（5 根 3px 竖条，包络 0.55/0.85/1/0.85/0.55，
@@ -1305,9 +1386,14 @@ fn audio_bars(ui: &egui::Ui, rect: egui::Rect, level: f32, bar_count: usize, ink
     } else {
         &CLASSIC_ENVELOPE
     };
-    const BASE: f32 = 2.0;
+    let scale = if bar_count > CLASSIC_ENVELOPE.len() {
+        TYPELESS_SCALE
+    } else {
+        1.0
+    };
+    let base = 2.0 * scale;
     let max = if bar_count > CLASSIC_ENVELOPE.len() {
-        26.0
+        28.0 * scale
     } else {
         24.0
     };
@@ -1315,12 +1401,12 @@ fn audio_bars(ui: &egui::Ui, rect: egui::Rect, level: f32, bar_count: usize, ink
     let gated = ((voice - 0.012) / (0.34 - 0.012)).clamp(0.0, 1.0);
     let eased = gated * gated * (3.0 - 2.0 * gated);
     let visual = eased.powf(0.42);
-    let bar_width = 3.0;
-    let gap = 3.0;
+    let bar_width = 3.0 * scale;
+    let gap = 3.0 * scale;
     let total = envelope.len() as f32 * bar_width + (envelope.len() - 1) as f32 * gap;
     let mut x = rect.center().x - total / 2.0;
     for envelope in envelope {
-        let height = BASE + (max - BASE) * visual * envelope;
+        let height = base + (max - base) * visual * envelope;
         ui.painter().rect_filled(
             egui::Rect::from_center_size(
                 egui::pos2(x + bar_width / 2.0, rect.center().y),
