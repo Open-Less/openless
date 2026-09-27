@@ -7868,7 +7868,11 @@ Internal flags (set by OpenLess itself, not for regular use):
             Ok(native) => native,
             Err(error) => {
                 drop(tray);
-                window::show_startup_error(&error, Arc::clone(&broker));
+                // Fatal startup errors are reported to stderr/journal only. Do
+                // not create a second egui window: recoverable integration
+                // failures (such as fcitx5) are rendered by the main UI's
+                // runtime-warning overlay instead.
+                log::error!("OpenLess startup failed: {error}");
                 return Err(error);
             }
         };
@@ -7880,7 +7884,10 @@ Internal flags (set by OpenLess itself, not for regular use):
             start_minimized,
             runtime_warning,
         ) {
-            window::show_startup_error(&error, Arc::clone(&broker));
+            // The UI process owns all user-facing recoverable warnings. A
+            // fatal host/UI failure must not fall back to a standalone popup;
+            // that popup was a second, misleading application window.
+            log::error!("OpenLess host failed: {error}");
             return Err(error);
         }
         Ok(())

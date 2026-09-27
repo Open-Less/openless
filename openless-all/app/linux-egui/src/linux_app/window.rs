@@ -757,63 +757,6 @@ impl eframe::App for UiClientApp {
     }
 }
 
-struct StartupErrorApp {
-    error: String,
-    lang: Lang,
-    broker: Arc<SingleInstanceBroker>,
-}
-
-impl eframe::App for StartupErrorApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let mut focus = false;
-        self.broker.drain(|_| focus = true);
-        if focus {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
-        }
-        ui.heading(tr_l10n(self.lang, "status.startup_failed"));
-        ui.add_space(12.0);
-        ui.label(&self.error);
-        ui.add_space(12.0);
-        ui.label(tr_l10n(self.lang, "startup.fcitx_help"));
-        if ui.button(tr_l10n(self.lang, "common.close")).clicked() {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-        }
-        ui.ctx().request_repaint_after(Duration::from_millis(100));
-    }
-}
-
-pub(super) fn show_startup_error(error: &str, broker: Arc<SingleInstanceBroker>) {
-    eprintln!("OpenLess startup failed: {error}");
-    if ["DISPLAY", "WAYLAND_DISPLAY"]
-        .iter()
-        .all(|name| std::env::var(name).unwrap_or_default().is_empty())
-    {
-        return;
-    }
-    let lang = load_locale_pref().resolve();
-    let error = error.to_string();
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(tr_l10n(lang, "status.startup_failed"))
-            .with_inner_size([560.0, 300.0]),
-        ..Default::default()
-    };
-    if let Err(failure) = eframe::run_native(
-        "OpenLess",
-        options,
-        Box::new(move |cc| {
-            theme::install(&cc.egui_ctx);
-            Ok(Box::new(StartupErrorApp {
-                error,
-                lang,
-                broker,
-            }))
-        }),
-    ) {
-        eprintln!("OpenLess startup error window failed: {failure}");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
