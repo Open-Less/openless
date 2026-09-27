@@ -17,6 +17,7 @@ pub mod view_model;
 pub mod vocab;
 
 use eframe::egui;
+use openless_linux_egui::tr_l10n;
 use view_model::{FrontendAction, FrontendViewModel, Page};
 
 /// Re-export the theme module from the parent ui module.
@@ -131,6 +132,65 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
                 });
         }
     });
+
+    if vm.runtime_warning.is_some() {
+        runtime_warning_overlay(ctx, vm, actions);
+    }
+}
+
+fn runtime_warning_overlay(
+    ctx: &egui::Context,
+    vm: &mut FrontendViewModel,
+    actions: &mut Vec<FrontendAction>,
+) {
+    let Some(warning) = vm.runtime_warning.as_deref() else {
+        return;
+    };
+    let screen = ctx.input(|input| input.viewport_rect());
+    let card_width = screen.width().clamp(280.0, 600.0);
+    let card_height = screen.height().clamp(220.0, 360.0);
+    let card = egui::Rect::from_center_size(screen.center(), egui::vec2(card_width, card_height));
+
+    egui::Area::new(egui::Id::new("openless-runtime-warning-overlay"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(screen.min)
+        .constrain(false)
+        .show(ctx, |ui| {
+            ui.set_min_size(screen.size());
+            ui.set_max_size(screen.size());
+            let _ = ui.allocate_rect(screen, egui::Sense::click());
+            ui.painter().rect_filled(
+                screen,
+                egui::CornerRadius::ZERO,
+                egui::Color32::from_black_alpha(150),
+            );
+            ui.scope_builder(egui::UiBuilder::new().max_rect(card), |ui| {
+                egui::Frame::new()
+                    .fill(theme::SURFACE)
+                    .stroke(egui::Stroke::new(1.0, theme::LINE))
+                    .corner_radius(egui::CornerRadius::same(14))
+                    .shadow(egui::Shadow {
+                        offset: [0, 10],
+                        blur: 24,
+                        spread: 0,
+                        color: egui::Color32::from_black_alpha(48),
+                    })
+                    .show(ui, |ui| {
+                        ui.set_min_size(card.size());
+                        ui.set_max_size(card.size());
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(28.0);
+                            ui.heading(tr_l10n(vm.lang, "startup.input_method_unavailable_title"));
+                            ui.add_space(16.0);
+                            ui.label(warning);
+                            ui.add_space(20.0);
+                            if ui.button(tr_l10n(vm.lang, "common.close")).clicked() {
+                                actions.push(FrontendAction::DismissRuntimeWarning);
+                            }
+                        });
+                    });
+            });
+        });
 }
 
 /// egui 0.36 起 `FullOutput` 里的 `TexturesDelta` 必须被消费，未应用就 drop 会
@@ -203,6 +263,38 @@ mod tests {
         for expected in ["Unsaved", "Retry", "fixture registration failed"] {
             assert!(text.contains(expected), "{text}");
         }
+    }
+
+    #[test]
+    fn unavailable_input_method_renders_a_localized_dismissible_overlay() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: openless_linux_egui::Lang::En,
+            runtime_warning: Some("fixture input method error".into()),
+            ..Default::default()
+        };
+        let mut actions = Vec::new();
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(viewport()),
+                ..Default::default()
+            });
+            render(&ctx, &mut vm, &mut actions);
+            let _ = end_pass(&ctx);
+        }
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(viewport()),
+            ..Default::default()
+        });
+        render(&ctx, &mut vm, &mut actions);
+        let painted = painted_text(&end_pass(&ctx));
+        assert!(
+            painted.contains(tr_l10n(vm.lang, "startup.input_method_unavailable_title")),
+            "painted output: {painted}"
+        );
+        assert!(painted.contains("fixture input method error"));
+        assert!(painted.contains(tr_l10n(vm.lang, "common.close")));
+        assert!(actions.is_empty(), "the overlay only dismisses on a click");
     }
 
     #[test]

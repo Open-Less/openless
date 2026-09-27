@@ -621,6 +621,8 @@ mod linux_app {
         style_editor: Option<openless_core::StylePack>,
         status: String,
         startup_error: Option<String>,
+        /// Non-fatal startup/runtime warning shown in the UI overlay.
+        runtime_warning: Option<String>,
         locale_pref: LocalePref,
         lang: Lang,
         active_page: shell::Page,
@@ -764,6 +766,7 @@ mod linux_app {
                         style_editor: None,
                         status: tr_l10n(lang, "status.core_started").to_string(),
                         startup_error: None,
+                        runtime_warning: None,
                         locale_pref,
                         lang,
                         active_page: shell::Page::Overview,
@@ -861,6 +864,7 @@ mod linux_app {
                     style_editor: None,
                     status: tr_l10n(lang, "status.startup_failed").to_string(),
                     startup_error: Some(error),
+                    runtime_warning: None,
                     locale_pref,
                     lang,
                     active_page: shell::Page::Overview,
@@ -3803,6 +3807,7 @@ mod linux_app {
             };
 
             vm.status = self.status.clone();
+            vm.runtime_warning = self.runtime_warning.clone();
             vm.quick_note_recording = backend.as_ref().is_some_and(|backend| {
                 backend.dictation_output_target()
                     == Some(openless_core::DictationOutputTarget::QuickNote)
@@ -4413,6 +4418,9 @@ mod linux_app {
                     frontend::view_model::FrontendAction::CloseSettings => {
                         self.frontend_vm.settings_open = false;
                         self.frontend_vm.active_page = frontend::view_model::Page::Overview;
+                    }
+                    frontend::view_model::FrontendAction::DismissRuntimeWarning => {
+                        self.runtime_warning = None;
                     }
                     frontend::view_model::FrontendAction::SidebarToggleStyle => {
                         self.frontend_vm.style_open = !self.frontend_vm.style_open;
@@ -7627,6 +7635,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         native: LinuxNativeRuntime,
         tray: Option<openless_linux_egui::LinuxTray>,
         start_minimized: bool,
+        runtime_warning: Option<String>,
     ) -> Result<(), String> {
         let socket = bridge::ui_socket_path(runtime_dir);
         let tray_available = tray.is_some();
@@ -7634,6 +7643,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         let window_should_be_open = !start_minimized || !tray_available;
         let ctx = egui::Context::default();
         let mut app = OpenLessEguiApp::new(tokio, Ok(native), tray, window_should_be_open);
+        app.runtime_warning = runtime_warning;
         let mut ui_bridge = UiBridgeHost::bind(socket.clone())
             .map_err(|error| format!("UI bridge bind failed: {error}"))?;
         log::info!(
@@ -7761,8 +7771,33 @@ Internal flags (set by OpenLess itself, not for regular use):
             if let Err(error) = openless_linux_egui::init_file_logger(&config.data_dir) {
                 eprintln!("OpenLess file logger unavailable: {error}");
             }
-            ensure_fcitx5_ready(&config)?;
-            let hotkeys = Some(Fcitx5HotkeyListener::start().map_err(|error| error.to_string())?);
+            // fcitx5 is an optional integration: a missing daemon, addon, or
+            // session bus must not prevent the Core/UI from starting.
+            let lang = load_locale_pref().resolve();
+            let mut input_method_error = match ensure_fcitx5_ready(&config) {
+                Ok(()) => None,
+                Err(error) => {
+                    log::warn!(
+                        "[fcitx] degraded startup (readiness check failed); global hotkeys disabled: {error}"
+                    );
+                    Some(error)
+                }
+            };
+            let hotkeys = if input_method_error.is_none() {
+                match Fcitx5HotkeyListener::start() {
+                    Ok(listener) => Some(listener),
+                    Err(error) => {
+                        let error = error.to_string();
+                        log::warn!(
+                            "[fcitx] degraded startup (listener failed); global hotkeys disabled: {error}"
+                        );
+                        input_method_error = Some(error);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             config.platform = LinuxCapabilitySnapshot::detect(tray_available).capabilities;
             let backend = {
                 // Construction captures the existing executor for cpal/native
@@ -7774,16 +7809,19 @@ Internal flags (set by OpenLess itself, not for regular use):
                     .build()
                     .map_err(|error| error.to_string())?
             };
-            tokio
+            let native = tokio
                 .block_on(LinuxNativeRuntime::start(
                     backend,
                     Some(Arc::clone(&broker)),
                     hotkeys,
                 ))
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string())?;
+            let runtime_warning = input_method_error
+                .map(|error| fmt_l10n(lang, "startup.input_method_unavailable", &[&error]));
+            Ok::<_, String>((native, runtime_warning))
         })();
         // 常驻宿主：本进程不再创建窗口，窗口交给独立的 UI 进程。
-        let native = match native {
+        let (native, runtime_warning) = match native {
             Ok(native) => native,
             Err(error) => {
                 drop(tray);
@@ -7791,7 +7829,14 @@ Internal flags (set by OpenLess itself, not for regular use):
                 return Err(error);
             }
         };
-        if let Err(error) = run_host(&runtime_dir, tokio, native, tray, start_minimized) {
+        if let Err(error) = run_host(
+            &runtime_dir,
+            tokio,
+            native,
+            tray,
+            start_minimized,
+            runtime_warning,
+        ) {
             window::show_startup_error(&error, Arc::clone(&broker));
             return Err(error);
         }
@@ -7863,6 +7908,17 @@ Internal flags (set by OpenLess itself, not for regular use):
             let b = br#"{"active_page":"History"}"#.to_vec();
             assert_eq!(snapshot_fingerprint(&a), snapshot_fingerprint(&a));
             assert_ne!(snapshot_fingerprint(&a), snapshot_fingerprint(&b));
+        }
+
+        #[test]
+        fn the_runtime_warning_can_be_dismissed_without_stopping_the_host() {
+            let mut app = fixture_app(true);
+            app.runtime_warning = Some("fixture warning".into());
+            app.apply_frontend_actions(
+                vec![frontend::view_model::FrontendAction::DismissRuntimeWarning],
+                &egui::Context::default(),
+            );
+            assert!(app.runtime_warning.is_none());
         }
 
         #[test]

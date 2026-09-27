@@ -1130,6 +1130,26 @@ pub const CATALOG: &[Msg] = &[
         ),
     },
     Msg {
+        key: "startup.input_method_unavailable_title",
+        text: row(
+            "输入法服务不可用",
+            "輸入法服務無法使用",
+            "Input method unavailable",
+            "入力メソッドを利用できません",
+            "입력기 서비스를 사용할 수 없음",
+        ),
+    },
+    Msg {
+        key: "startup.input_method_unavailable",
+        text: row(
+            "输入法服务当前不可用。应用仍会继续运行，但全局快捷键和划词功能暂不可用。请安装并启动 fcitx5、启用 OpenLess 插件，并确认当前桌面会话的 D-Bus 可用。详情：{}",
+            "輸入法服務目前無法使用。應用程式仍會繼續執行，但全域快捷鍵和選取文字功能暫時無法使用。請安裝並啟動 fcitx5、啟用 OpenLess 插件，並確認目前桌面工作階段的 D-Bus 可用。詳情：{}",
+            "The input method service is unavailable. The app will continue running, but global hotkeys and selection tools are temporarily unavailable. Install and start fcitx5, enable the OpenLess addon, and check the desktop session's D-Bus. Details: {}",
+            "入力メソッドサービスを利用できません。アプリは起動を続けますが、グローバルショートカットと選択ツールは一時的に利用できません。fcitx5 と OpenLess アドオンを有効にし、デスクトップセッションの D-Bus を確認してください。詳細：{}",
+            "입력기 서비스를 사용할 수 없습니다. 앱은 계속 실행되지만 전역 단축키와 선택 도구를 일시적으로 사용할 수 없습니다. fcitx5와 OpenLess 애드온을 설치·시작하고 데스크톱 세션의 D-Bus를 확인하세요. 세부 정보: {}",
+        ),
+    },
+    Msg {
         key: "common.load_more",
         text: row("加载更多", "載入更多", "Load more", "もっと読み込む", "더 불러오기"),
     },

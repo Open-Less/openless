@@ -249,6 +249,8 @@ pub enum FrontendAction {
     OverviewPeriod(usize),
     /// Overview: metric toggle (0 = count, 1 = chars, 2 = duration).
     OverviewMetric(usize),
+    /// Dismiss a non-fatal runtime warning overlay.
+    DismissRuntimeWarning,
     /// Window close requested.
     WindowClose,
     /// Window maximize/minimize toggle.
@@ -686,6 +688,9 @@ pub struct FrontendViewModel {
     pub tools_open: bool,
     pub settings_open: bool,
 
+    /// Localized non-fatal runtime warning (for example, unavailable fcitx5).
+    pub runtime_warning: Option<String>,
+
     /// Resolved UI language, injected by the host each frame so the pure
     /// renderer can look up localized strings without touching global state.
     #[serde(with = "lang_tag")]
@@ -915,6 +920,7 @@ impl Default for FrontendViewModel {
             style_open: true,
             tools_open: true,
             settings_open: false,
+            runtime_warning: None,
             overview_loading: true,
             overview_error: None,
             overview: None,
