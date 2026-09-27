@@ -78,16 +78,14 @@ const PILL_HEIGHT: f32 = 42.0;
 const ROUND_BUTTON: f32 = 28.0;
 /// Tauri `getCapsuleHostMetrics(.., 'classic').bottomInset`。
 const CAPSULE_BOTTOM_INSET: f32 = 16.0;
-/// Typeless 胶囊由 Tauri 的 460×128 基准舞台按 `zoom: 0.447` 缩放，
-/// 因此录音态为 232×64 → 104×29，空闲态为 176×64 → 79×29，
-/// 错误态为 300×64 → 134×29，按钮为 46×46 → 21×21。
-const TYPELESS_SCALE: f32 = 0.447;
-const TYPELESS_IDLE_WIDTH: f32 = 176.0 * TYPELESS_SCALE;
-const TYPELESS_RECORDING_WIDTH: f32 = 232.0 * TYPELESS_SCALE;
-const TYPELESS_ERROR_WIDTH: f32 = 300.0 * TYPELESS_SCALE;
-const TYPELESS_HEIGHT: f32 = 64.0 * TYPELESS_SCALE;
-const TYPELESS_BUTTON: f32 = 46.0 * TYPELESS_SCALE;
-const TYPELESS_STOP_BUTTON: f32 = 24.0 * TYPELESS_SCALE;
+/// Linux egui 让 Typeless 复用 OpenLess 经典药丸的可见 footprint，避免录音、thinking、
+/// 完成和错误状态之间发生尺寸跳变；颜色、11 根波形和状态按钮仍保留 Typeless 风格。
+const TYPELESS_SCALE: f32 = 1.0;
+const TYPELESS_WIDTH: f32 = PILL_WIDTH;
+const TYPELESS_HEIGHT: f32 = PILL_HEIGHT;
+const TYPELESS_BUTTON: f32 = ROUND_BUTTON;
+const TYPELESS_STOP_BUTTON: f32 = 24.0;
+const TYPELESS_TEXT_SIZE: f32 = 16.0;
 /// `.ol-typeless-*` 调色板。
 const TYPELESS_BG: egui::Color32 = egui::Color32::from_rgb(0x18, 0x18, 0x1b);
 const TYPELESS_BORDER: egui::Color32 = egui::Color32::from_rgb(0x52, 0x52, 0x5b);
@@ -1059,12 +1057,7 @@ pub fn dictation_capsule(
             // 未知/空值走 siri（默认样式），只有显式选择 classic 才关掉 GPU 光效。
             let use_gpu = !typeless && style != "classic";
             let (pill_width, pill_height, button, bar_count) = if typeless {
-                let width = match phase.as_str() {
-                    "recording" => TYPELESS_RECORDING_WIDTH,
-                    "failed" => TYPELESS_ERROR_WIDTH,
-                    _ => TYPELESS_IDLE_WIDTH,
-                };
-                (width, TYPELESS_HEIGHT, TYPELESS_BUTTON, 11)
+                (TYPELESS_WIDTH, TYPELESS_HEIGHT, TYPELESS_BUTTON, 11)
             } else {
                 (PILL_WIDTH, PILL_HEIGHT, ROUND_BUTTON, 5)
             };
@@ -1085,9 +1078,7 @@ pub fn dictation_capsule(
             let rect = egui::Rect::from_min_size(
                 egui::pos2(
                     available.center().x - pill_width / 2.0,
-                    available.bottom()
-                        - if typeless { 0.0 } else { CAPSULE_BOTTOM_INSET }
-                        - pill_height,
+                    available.bottom() - CAPSULE_BOTTOM_INSET - pill_height,
                 ),
                 egui::vec2(pill_width, pill_height),
             );
@@ -1279,7 +1270,7 @@ pub fn dictation_capsule(
                         egui::Align2::CENTER_CENTER,
                         tr_l10n(lang, "capsule.thinking"),
                         egui::FontId::proportional(if typeless {
-                            16.0 * TYPELESS_SCALE
+                            TYPELESS_TEXT_SIZE
                         } else {
                             17.0
                         }),
@@ -1297,7 +1288,7 @@ pub fn dictation_capsule(
                     tr_l10n(lang, "capsule.thinking")
                 };
                 let size = if typeless {
-                    16.0 * TYPELESS_SCALE
+                    TYPELESS_TEXT_SIZE
                 } else if processing {
                     17.0
                 } else {
@@ -1322,14 +1313,8 @@ pub fn dictation_capsule(
                     ui,
                     &state.text,
                     pill_ink,
-                    if typeless {
-                        16.0 * TYPELESS_SCALE
-                    } else {
-                        11.0
-                    },
-                    center
-                        .width()
-                        .min(if typeless { TYPELESS_IDLE_WIDTH } else { 84.0 }),
+                    if typeless { TYPELESS_TEXT_SIZE } else { 11.0 },
+                    center.width().min(84.0),
                     1,
                 );
                 ui.painter().galley(
