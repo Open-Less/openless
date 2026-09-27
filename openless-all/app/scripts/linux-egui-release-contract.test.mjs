@@ -78,6 +78,11 @@ assert.ok(!release.includes('release_tag:'), 'the manual build cannot target a R
 
 // Keep deb/rpm only, including dynamically-loaded desktop libraries and the
 // fcitx5 addon. No AppImage, minisign, embedded downloader or Qwen ASR runtime.
+//
+// Rendering is Vulkan-only: the GL/EGL paths were removed (`refactor: remove
+// Linux egui OpenGL rendering`), so the packages depend on the Vulkan loader
+// and nothing dlopens libEGL / libwayland-egl any more. If libegl1 or
+// libwayland-egl1 comes back, a GL renderer was reintroduced.
 assert.match(pack, /dpkg-deb --build/);
 assert.match(pack, /rpmbuild --define/);
 assert.match(pack, /x86_64-linux-gnu\/fcitx5\/libopenless\.so/);
@@ -94,13 +99,20 @@ assert.match(verify, /fcitx5\/libopenless\.so/);
 assert.ok(!existsSync(join(root, 'openless-all/app/linux-egui/src/updater.rs')));
 assert.doesNotMatch(manifest, /minisign-verify/);
 const debDeps = pack.match(/^Depends: ([^\n]+)/m)?.[1].split(/,\s*/) ?? [];
-for (const dep of ['fcitx5', 'libpipewire-0.3-0', 'libegl1', 'liblzma5', 'libwayland-egl1']) {
+for (const dep of ['fcitx5', 'libpipewire-0.3-0', 'libvulkan1', 'liblzma5', 'libwayland-client0']) {
   assert.ok(debDeps.includes(dep), `deb must require ${dep}`);
 }
+for (const removed of ['libegl1', 'libgl1', 'libwayland-egl1']) {
+  assert.ok(!debDeps.includes(removed), `deb must not require ${removed} after the Vulkan migration`);
+}
 const rpmDeps = pack.match(/^Requires: ([^\n]+)/m)?.[1].split(/,\s*/) ?? [];
-for (const dep of ['fcitx5', 'pipewire-libs', 'libglvnd-egl', 'libwayland-egl.so.1()(64bit)']) {
+for (const dep of ['fcitx5', 'pipewire-libs', 'vulkan-loader', 'libwayland-client']) {
   assert.ok(rpmDeps.includes(dep), `rpm must require ${dep}`);
 }
+for (const removed of ['libglvnd-egl', 'libwayland-egl.so.1()(64bit)']) {
+  assert.ok(!rpmDeps.includes(removed), `rpm must not require ${removed} after the Vulkan migration`);
+}
+assert.match(pack, /^Recommends: mesa-vulkan-drivers$/m, 'packages must recommend a Vulkan driver');
 for (const [file, size] of [
   ['32x32.png', '32x32'], ['64x64.png', '64x64'], ['128x128.png', '128x128'],
   ['128x128@2x.png', '256x256'], ['icon.png', '512x512'],
