@@ -289,7 +289,7 @@ struct SiriGpu {
     uniform: egui_wgpu::wgpu::Buffer,
 }
 
-fn uniform_bytes(uniforms: SiriUniforms) -> [u8; 56] {
+fn uniform_bytes(uniforms: SiriUniforms) -> [u8; 64] {
     let mode = match uniforms.effect.mode {
         SiriMode::Wave => 0.0,
         SiriMode::Orb => 1.0,
@@ -311,7 +311,10 @@ fn uniform_bytes(uniforms: SiriUniforms) -> [u8; 56] {
         uniforms.size[0],
         uniforms.size[1],
     ];
-    let mut bytes = [0_u8; 56];
+    // WGSL's uniform layout rounds the trailing `vec2` padding to 16-byte
+    // alignment: 14 values (56 bytes) are followed by `_pad2: vec2<f32>`.
+    // wgpu validates the complete binding size when this callback is drawn.
+    let mut bytes = [0_u8; 64];
     for (index, value) in values.into_iter().enumerate() {
         bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_ne_bytes());
     }
@@ -326,7 +329,7 @@ fn create_gpu(
     use egui_wgpu::wgpu;
     let uniform = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("openless-siri-uniform"),
-        size: 56,
+        size: 64,
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -540,6 +543,15 @@ mod tests {
             1.0 / 60.0,
         );
         assert!(after.time - before < 0.06);
+    }
+
+    #[test]
+    fn uniform_buffer_matches_wgsl_alignment() {
+        let bytes = uniform_bytes(SiriUniforms {
+            effect: SiriEffect::default(),
+            size: [320.0, 80.0],
+        });
+        assert_eq!(bytes.len(), 64);
     }
 
     #[test]
