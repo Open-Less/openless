@@ -7577,8 +7577,8 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 openless_linux_egui::LESS_COMPUTER_WINDOW_SIZE.0 as f32,
                 openless_linux_egui::LESS_COMPUTER_WINDOW_SIZE.1 as f32,
             ],
-            // 经典药丸 176×42 + 16px 下边距 + 8px 间距 + 「正在翻译」徽章
-            // （Tauri `getCapsuleHostMetrics(.., 'classic')` 的 100 高度）。
+            // Fixed 460×180 Siri stage; classic pills keep their own smaller
+            // painted bounds inside it. No phase-dependent host resizing.
             PopupKind::Capsule => [
                 openless_linux_egui::CAPSULE_WINDOW_SIZE.0 as f32,
                 openless_linux_egui::CAPSULE_WINDOW_SIZE.1 as f32,

@@ -1113,7 +1113,9 @@ pub fn dictation_capsule(
             // large actions only while recording, then only its small stop
             // action while processing.
             let center = if siri {
-                rect.shrink(3.0)
+                // Siri is a full 460×180 light stage, not a wave squeezed
+                // inside the classic 176×42 pill. All phases share this host.
+                available
             } else if typeless && phase != "recording" {
                 if processing {
                     let stop_rect = egui::Rect::from_center_size(
@@ -2639,6 +2641,35 @@ mod tests {
                 action, expected,
                 "clicking {position:?} must report {expected:?}"
             );
+        }
+    }
+
+    #[test]
+    fn siri_recording_and_thinking_use_the_full_stage() {
+        for phase in ["recording", "transcribing"] {
+            let ctx = egui::Context::default();
+            let stage = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(460.0, 180.0));
+            let state = CapsulePopupState {
+                phase: phase.into(),
+                style: "siri".into(),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(stage),
+                    ..Default::default()
+                },
+                |ui| {
+                    dictation_capsule(ui, &state, Lang::ZhCn);
+                },
+            );
+            assert!(
+                output.shapes.iter().any(|shape| matches!(
+                    &shape.shape, egui::Shape::Callback(callback) if callback.rect == stage
+                )),
+                "{phase} must not shrink the Siri callback into the classic pill"
+            );
+            output.textures_delta.clear();
         }
     }
 

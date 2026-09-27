@@ -15,7 +15,26 @@ fn draw(
     effects: &[(SiriEffect, [f32; 2])],
     clipped: bool,
 ) -> Vec<u8> {
-    let format = wgpu::TextureFormat::Rgba8Unorm;
+    draw_format(
+        device,
+        queue,
+        samples,
+        scale,
+        effects,
+        clipped,
+        wgpu::TextureFormat::Rgba8Unorm,
+    )
+}
+
+fn draw_format(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    samples: u32,
+    scale: f32,
+    effects: &[(SiriEffect, [f32; 2])],
+    clipped: bool,
+    format: wgpu::TextureFormat,
+) -> Vec<u8> {
     let mut renderer = egui_wgpu::Renderer::new(
         device,
         format,
@@ -175,6 +194,42 @@ fn vulkan_effects_are_visible_local_independent_and_transparent() {
     let (device, queue) = runtime
         .block_on(adapter.request_device(&Default::default()))
         .unwrap();
+    // Reference values evaluated independently from SiriGL.tsx's wave formula
+    // at pixel centers in a 128×96 canvas, t=1.35, level=0.52. These catch lost
+    // band fill, missing per-channel normalization and framebuffer gamma drift.
+    for format in [
+        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+    ] {
+        let pixels = draw_format(
+            &device,
+            &queue,
+            1,
+            1.0,
+            &[(SiriEffect::wave(1.35, 0.52), [0.0, 0.0])],
+            false,
+            format,
+        );
+        for (x, y, rgba) in [
+            (32, 48, [58u8, 57, 73, 73]),
+            (48, 40, [69, 59, 44, 69]),
+            (56, 48, [206, 255, 255, 255]),
+            (64, 48, [255, 255, 255, 255]),
+            (72, 56, [52, 79, 57, 79]),
+            (80, 40, [52, 33, 39, 52]),
+            (96, 48, [66, 67, 63, 67]),
+            (64, 20, [12, 11, 10, 12]),
+        ] {
+            let offset = ((y * WIDTH + x) * 4) as usize;
+            for channel in 0..4 {
+                assert!(
+                    pixels[offset + channel].abs_diff(rgba[channel]) <= 2,
+                    "SiriGL color mismatch at {x},{y} on {format:?}: {:?} != {rgba:?}",
+                    &pixels[offset..offset + 4]
+                );
+            }
+        }
+    }
     let effects = [
         (SiriEffect::wave(1.35, 0.52), [32.0, 128.0]),
         (SiriEffect::orb(0.7, 0.5), [192.0, 128.0]),

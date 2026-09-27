@@ -212,28 +212,40 @@ fn wave(frag: vec2<f32>) -> vec4<f32> {
     let envelope = pow(max(cos(pi * 0.5 * min(abs(0.9 * x_norm), 1.0)), 0.0), 2.0);
     let a1 = 0.32 * mix(0.14, 1.0, level) + 0.01 * low * 6.0;
     let a2 = a1 + mid * 0.05 + high * 0.06;
-    let drift = u.time * 2.4;
+    let drift = (u.time % (20.0 * pi)) * 2.4;
     let aberr = (2.6 + mid * 0.8 + high * 0.5) * res;
     let soft = 0.01 * res * max(0.0, 2.5 + mid * 0.4);
     let unres = max(length(p) - mix(0.14, 0.14, res), 0.0);
     let y_main = a1 * envelope * res * sin(pw.x * 1.1 + drift);
-    var col = vec3<f32>(0.0);
+    // Keep the original SiriGL spectral normalization and filled ribbons.
+    // Summing the four hues without dividing by their weights biases yellow.
+    let thickness = mix(0.1, 0.03, res);
+    let intensity = mix(0.1, 0.01 * (2.0 + low * 1.5), res);
+    let band_amount = 3.0 * intensity;
+    var numerator = vec3<f32>(0.0);
+    var denominator = vec3<f32>(0.0);
     for (var s: i32 = 0; s < 4; s = s + 1) {
         let hue = mix(vec3<f32>(1.0), spectral4(s), res);
         let ab = mix(-aberr, aberr, f32(s) / 3.0);
         let y_line = a2 * envelope * res * sin(pw.x + drift + ab);
         let distance = mix(unres, abs(p.y - y_line), res);
-        let line = (0.01 * (2.0 + low * 1.5)) / (sqrt(distance * distance + soft * soft) + mix(0.1, 0.03, res));
-        col += hue * line;
+        let lorentz = mix(1.0 / (1.0 + pow(0.02 * distance, 2.0)), 1.0, res);
+        let line = intensity / (sqrt(distance * distance + soft * soft) + thickness);
+        let band_distance = max(0.0, max(p.y - max(y_main, y_line), min(y_main, y_line) - p.y));
+        let band = band_amount / (band_distance + 0.08);
+        numerator += hue * lorentz * (line + band);
+        denominator += hue;
     }
     let main_distance = mix(unres, abs(p.y - y_main), res);
-    let halo = 0.5 * (0.01 * (2.0 + low * 1.5)) / (sqrt(main_distance * main_distance + soft * soft) + 0.03);
-    col += vec3<f32>(halo * (1.0 + (1.0 - res) * (3.0 * low + 1.2)));
-    let edge_t = clamp((abs(y_screen) - 1.0 + 0.4) / -0.4, 0.0, 1.0);
+    let main_lorentz = mix(1.0 / (1.0 + pow(0.02 * main_distance, 2.0)), 1.0, res);
+    let boost = (1.0 - res) * (3.0 * low + 1.2);
+    var col = numerator / denominator;
+    col += vec3<f32>(0.5 * intensity * (main_lorentz + boost) / (sqrt(main_distance * main_distance + soft * soft) + thickness));
+    col = pow(max(col, vec3<f32>(0.0)), vec3<f32>(1.5));
+    let edge_t = clamp((abs(y_screen) - 1.0) / -0.4, 0.0, 1.0);
     let edge = edge_t * edge_t * (3.0 - 2.0 * edge_t);
     let gaussian = exp(-pow(x_norm * 1.7, 2.0));
     col *= edge * gaussian * mix(0.55, 1.0, res);
-    col = pow(max(col, vec3<f32>(0.0)), vec3<f32>(1.5));
     col = clamp(col, vec3<f32>(0.0), vec3<f32>(1.0));
     let alpha = clamp(max(col.r, max(col.g, col.b)), 0.0, 1.0);
     return vec4<f32>(col, alpha);
@@ -283,6 +295,20 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     if u.mode < 0.5 { return wave(local); }
     if u.mode < 1.5 { return orb(local); }
     return ring(local);
+}
+
+// Match egui's framebuffer handling: an sRGB target will encode RGB again,
+// so decode our gamma-space Siri colors first. Alpha is always linear.
+@fragment
+fn fs_main_linear(in: VertexOut) -> @location(0) vec4<f32> {
+    let local = in.uv * u.size;
+    var color: vec4<f32>;
+    if u.mode < 0.5 { color = wave(local); }
+    else if u.mode < 1.5 { color = orb(local); }
+    else { color = ring(local); }
+    let lower = color.rgb / 12.92;
+    let higher = pow((color.rgb + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4));
+    return vec4<f32>(select(higher, lower, color.rgb < vec3<f32>(0.04045)), color.a);
 }
 "#;
 
@@ -374,7 +400,11 @@ fn create_gpu(
         },
         fragment: Some(wgpu::FragmentState {
             module: &module,
-            entry_point: Some("fs_main"),
+            entry_point: Some(if format.is_srgb() {
+                "fs_main_linear"
+            } else {
+                "fs_main"
+            }),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,

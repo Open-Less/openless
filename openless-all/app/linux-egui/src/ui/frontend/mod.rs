@@ -3309,14 +3309,26 @@ mod tests {
         vm.dictation_hotkey = "Alt+A".to_string();
         vm.settings.microphone_options = vec!["USB microphone".to_string()];
         let mut painted = String::new();
-        for _ in 0..2 {
+        // The full-aspect Siri preview makes this section taller. Verify the
+        // rows across scrolling rather than assuming they all fit above fold.
+        for frame in 0..8 {
+            let mut events = vec![egui::Event::PointerMoved(egui::pos2(900.0, 500.0))];
+            if frame == 2 {
+                events.push(egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -240.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::default(),
+                });
+            }
             ctx.begin_pass(egui::RawInput {
                 screen_rect: Some(viewport()),
+                events,
                 ..Default::default()
             });
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
-            painted = painted_text(&crate::ui::frontend::end_pass(&ctx));
+            painted.push_str(&painted_text(&crate::ui::frontend::end_pass(&ctx)));
         }
         for key in [
             "settings.recording.hotkey_label",

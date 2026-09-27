@@ -3553,7 +3553,14 @@ fn remote_mode_row(ui: &mut egui::Ui, lang: Lang, selected: usize, on_select: im
 fn capsule_style_preview(ui: &mut egui::Ui, style: usize) {
     ui.horizontal(|ui| {
         ui.add_space(216.0);
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(164.0, 42.0), egui::Sense::hover());
+        // Half-size Siri stage, matching Tauri's 230×90 preview. Keep its
+        // aspect ratio instead of squeezing the ribbons into a pill.
+        let size = if style == 0 {
+            egui::vec2(230.0, 90.0)
+        } else {
+            egui::vec2(164.0, 42.0)
+        };
+        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
         match style {
             0 => {
                 // Match the transparent, drifting spectral ribbons used by the
@@ -3758,6 +3765,26 @@ pub(crate) fn test_render_shortcuts(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn siri_preview_uses_half_of_the_full_stage() {
+        let ctx = eframe::egui::Context::default();
+        let mut output = ctx.run_ui(
+            eframe::egui::RawInput {
+                screen_rect: Some(eframe::egui::Rect::from_min_size(
+                    eframe::egui::Pos2::ZERO,
+                    eframe::egui::vec2(800.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| super::capsule_style_preview(ui, 0),
+        );
+        assert!(output.shapes.iter().any(|shape| matches!(
+            &shape.shape, eframe::egui::Shape::Callback(callback)
+                if callback.rect.size() == eframe::egui::vec2(230.0, 90.0)
+        )));
+        output.textures_delta.clear();
+    }
+
     use super::*;
 
     #[test]
