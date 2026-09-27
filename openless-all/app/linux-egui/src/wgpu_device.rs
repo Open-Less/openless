@@ -50,7 +50,9 @@ mod tests {
             device_descriptor().required_limits.max_texture_dimension_2d,
             MAX_TEXTURE_DIMENSION_2D
         );
-        assert!(MAX_TEXTURE_DIMENSION_2D >= 3840);
+        // 3840 宽是 egui 在 4K 表面下的硬需求；常量断言放在 const 块里，
+        // 编译期就能拦住把上限调小的改动。
+        const { assert!(MAX_TEXTURE_DIMENSION_2D >= 3840) };
     }
 
     #[test]
