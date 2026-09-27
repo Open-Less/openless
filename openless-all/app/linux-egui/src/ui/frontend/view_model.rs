@@ -699,6 +699,9 @@ pub struct FrontendViewModel {
     pub history_query: String,
     pub history_selected: usize,
     pub history_entries: Vec<HistoryEntry>,
+    /// 宿主因为 IPC 快照体积上限、没有把全部历史发给窗口时，这里是被隐藏的条数；
+    /// `None` 表示窗口看到的就是全部历史。
+    pub history_truncated: Option<u32>,
     pub quick_note_recording: bool,
     /// Whether the dismissible shortcut card on the Quick Note page is hidden.
     pub quick_note_shortcut_hidden: bool,
@@ -904,6 +907,7 @@ impl Default for FrontendViewModel {
             history_query: String::new(),
             history_selected: 0,
             history_entries: Vec::new(),
+            history_truncated: None,
             quick_note_recording: false,
             quick_note_shortcut_hidden: false,
             history_loading: true,

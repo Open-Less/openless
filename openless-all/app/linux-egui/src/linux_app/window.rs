@@ -47,6 +47,24 @@ pub(super) const MAIN_MSAA_SAMPLES: u16 = 4;
 /// 旧的 Linux 专用窗口配置不作为依据。
 pub(super) const MAIN_WINDOW_INNER_SIZE: [f32; 2] = [1300.0, 835.0];
 
+/// 快照的软上限：到这个体积就先裁历史，仍留出余量给桥层的硬上限（[`crate::ui::bridge`] 的帧上限）。
+/// 视图模型里唯一会随使用无限膨胀的就是历史列表，所以超限时只裁它。
+pub(super) const SNAPSHOT_SOFT_LIMIT: usize = 12 * 1024 * 1024;
+
+/// 软上限的实际取值。`OPENLESS_UI_SNAPSHOT_LIMIT=<字节>` 可以压低它，用来在设备上
+/// 演练「历史过大」的降级路径（否则要攒到 12 MiB 历史才能看到横幅）。
+fn snapshot_soft_limit() -> usize {
+    std::env::var("OPENLESS_UI_SNAPSHOT_LIMIT")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(SNAPSHOT_SOFT_LIMIT)
+}
+
+/// 裁剪阶梯：历史列表最新在前，所以 `truncate` 丢掉的就是最旧的。
+/// 一档不够就再降一档，直到载荷落回软上限。
+pub(super) const HISTORY_TRIM_LADDER: [usize; 4] = [4_000, 1_000, 200, 0];
+
 /// 视图模型载荷指纹（FNV-1a 64）。够快，用来判断「要不要重发快照」：
 /// 内容没变就不发，UI 慢的时候也不会被无意义的帧糊住。
 pub(super) fn snapshot_fingerprint(payload: &[u8]) -> u64 {
@@ -206,12 +224,13 @@ impl OpenLessEguiApp {
             self.window.last_snapshot_fingerprint = None;
             return;
         }
-        let payload = match serde_json::to_vec(&self.frontend_vm) {
-            Ok(payload) => payload,
-            Err(error) => {
-                log::warn!("[ui-host] view model serialization failed: {error}");
-                return;
-            }
+        let Some(payload) = encode_view_model(
+            &mut self.frontend_vm,
+            snapshot_soft_limit(),
+            &HISTORY_TRIM_LADDER,
+        ) else {
+            log::warn!("[ui-host] view model serialization failed");
+            return;
         };
         let fingerprint = snapshot_fingerprint(&payload);
         let keepalive = self.window.last_snapshot_at.elapsed() >= Duration::from_secs(2);
@@ -222,6 +241,49 @@ impl OpenLessEguiApp {
         self.window.last_snapshot_at = std::time::Instant::now();
         bridge.send_snapshot_encoded(&payload);
     }
+}
+
+/// 序列化视图模型，必要时把最旧的历史裁掉，让快照回到 `soft_limit` 以内。
+///
+/// 裁的是宿主持有的这份 VM（窗口发过来的历史索引要对齐同一份列表），下一 tick 的
+/// [`OpenLessEguiApp::sync_view_model`] 会从真实缓存重新填满，所以裁掉的内容只是
+/// 「这一帧不发」，不是永久丢弃。`ladder` 的最后一项应当能裁到空列表。
+///
+/// 返回 `None` 只表示序列化本身失败；裁完仍然超过软上限时会照常返回载荷，由调用方
+/// 交给桥层按硬上限处理（丢帧，但不断连）。
+fn encode_view_model(
+    view_model: &mut FrontendViewModel,
+    soft_limit: usize,
+    ladder: &[usize],
+) -> Option<Vec<u8>> {
+    let mut payload = serde_json::to_vec(view_model).ok()?;
+    if payload.len() <= soft_limit {
+        view_model.history_truncated = None;
+        return Some(payload);
+    }
+    // 隐藏条数要相对**原始**条数算：阶梯会一路降档，按当前长度算只会数到最后一步。
+    let total = view_model.history_entries.len();
+    for keep in ladder.iter().copied() {
+        if total <= keep {
+            continue;
+        }
+        view_model.history_entries.truncate(keep);
+        if view_model.history_selected >= keep {
+            // 选中的那条被裁掉了：回到最新一条，别让详情栏空着。
+            view_model.history_selected = 0;
+        }
+        let hidden = total - keep;
+        view_model.history_truncated = Some(u32::try_from(hidden).unwrap_or(u32::MAX));
+        log::warn!(
+            "[ui-host] snapshot is over {} bytes; trimming history to {keep} entries ({hidden} hidden)",
+            soft_limit
+        );
+        payload = serde_json::to_vec(view_model).ok()?;
+        if payload.len() <= soft_limit {
+            return Some(payload);
+        }
+    }
+    Some(payload)
 }
 
 /// UI 窗口进程入口：只渲染。
@@ -707,5 +769,89 @@ pub(super) fn show_startup_error(error: &str, broker: Arc<SingleInstanceBroker>)
         }),
     ) {
         eprintln!("OpenLess startup error window failed: {failure}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::frontend::view_model::{FrontendViewModel, HistoryEntry};
+
+    /// 一条体量接近真实长转写的假历史（列表最新在前，id 递增 = 越来越旧）。
+    fn fake_entry(index: usize) -> HistoryEntry {
+        HistoryEntry {
+            id: format!("entry-{index}"),
+            raw_transcript: "transcript ".repeat(300),
+            final_text: "polished draft ".repeat(300),
+            ..Default::default()
+        }
+    }
+
+    fn view_model_with(entries: usize) -> FrontendViewModel {
+        FrontendViewModel {
+            history_entries: (0..entries).map(fake_entry).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_snapshot_that_fits_is_sent_whole() {
+        let mut view_model = view_model_with(4);
+        let payload = encode_view_model(&mut view_model, usize::MAX, &HISTORY_TRIM_LADDER).unwrap();
+        assert_eq!(
+            view_model.history_entries.len(),
+            4,
+            "nothing may be dropped"
+        );
+        assert_eq!(view_model.history_truncated, None);
+        assert!(!payload.is_empty());
+    }
+
+    #[test]
+    fn an_oversized_snapshot_sheds_the_oldest_history_and_reports_how_many() {
+        // 软上限只装得下 8 条左右：第一档 25 太大，第二档 5 刚好。
+        let empty = serde_json::to_vec(&FrontendViewModel::default())
+            .unwrap()
+            .len();
+        let one_entry = serde_json::to_vec(&fake_entry(0)).unwrap().len();
+        let soft_limit = empty + one_entry * 8;
+        let mut view_model = view_model_with(30);
+        view_model.history_selected = 29;
+
+        let payload = encode_view_model(&mut view_model, soft_limit, &[25, 5, 0]).unwrap();
+
+        assert!(
+            payload.len() <= soft_limit,
+            "a trimmed snapshot must fit the soft limit"
+        );
+        assert_eq!(
+            view_model.history_entries.len(),
+            5,
+            "the first ladder step that fits wins"
+        );
+        // 隐藏条数按原始 30 条算，而不是按上一步的 25 条算。
+        assert_eq!(view_model.history_truncated, Some(25));
+        // 列表最新在前：裁掉的是尾部（最旧），最新的 5 条必须留下。
+        assert_eq!(view_model.history_entries[0].id, "entry-0");
+        assert_eq!(view_model.history_entries[4].id, "entry-4");
+        // 选中的那条被裁掉后回到最新一条，而不是指向不存在的下标。
+        assert_eq!(view_model.history_selected, 0);
+    }
+
+    #[test]
+    fn trimming_stops_at_the_first_ladder_step_that_fits() {
+        let empty = serde_json::to_vec(&FrontendViewModel::default())
+            .unwrap()
+            .len();
+        let one_entry = serde_json::to_vec(&fake_entry(0)).unwrap().len();
+        // 只够装 10 条：阶梯第一档 25 太大，第二档 5 装得下 → 停在 5，不再往 0 裁。
+        let soft_limit = empty + one_entry * 10;
+        let mut view_model = view_model_with(30);
+
+        let payload = encode_view_model(&mut view_model, soft_limit, &[25, 5, 0]).unwrap();
+
+        assert!(payload.len() <= soft_limit);
+        assert_eq!(view_model.history_entries.len(), 5);
+        assert_eq!(view_model.history_truncated, Some(25));
     }
 }

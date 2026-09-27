@@ -338,9 +338,15 @@ impl UiBridgeHost {
     ///
     /// 宿主为了判断「视图模型变没变」已经序列化过一次，这里直接拼帧、不再二次
     /// 序列化；`sequence` 由桥推进，保证单调递增。
-    pub fn send_snapshot_encoded(&mut self, payload: &[u8]) {
+    /// 发一份编码好的快照。返回是否真的发出去了。
+    ///
+    /// 超过 [`MAX_FRAME_BYTES`] 的快照**不能**发：读端以同样的上限拒收，所以发出去的
+    /// 结果是窗口读帧失败后退出。但这里也**不能**因此断开连接 —— 宿主会把窗口退出
+    /// 当成「用户关窗」，紧接着重开一个，于是「超限 → 断连 → 窗口退出 → 重开」变成
+    /// 每秒闪一次的循环。丢一帧只是让窗口继续显示上一份状态，宿主还会按保活节奏重试。
+    pub fn send_snapshot_encoded(&mut self, payload: &[u8]) -> bool {
         if !self.is_connected() {
-            return;
+            return false;
         }
         let sequence = self.next_sequence;
         self.next_sequence += 1;
@@ -351,15 +357,20 @@ impl UiBridgeHost {
         frame.extend_from_slice(payload);
         frame.extend_from_slice(b"}}");
         if frame.len() > MAX_FRAME_BYTES {
-            log::error!("[ui-host] snapshot exceeds the UI frame limit");
-            self.connection = None;
-            return;
+            log::error!(
+                "[ui-host] snapshot of {} bytes exceeds the {} byte UI frame limit; kept the connection, skipped this frame",
+                frame.len(),
+                MAX_FRAME_BYTES
+            );
+            return false;
         }
         if let Some(connection) = self.connection.as_ref() {
             if connection.outgoing.send(Outgoing::Encoded(frame)).is_err() {
                 self.connection = None;
+                return false;
             }
         }
+        true
     }
 
     pub fn send(&mut self, frame: HostToWindow) {

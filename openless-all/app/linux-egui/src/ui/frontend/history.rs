@@ -384,6 +384,12 @@ fn list_card(
                         }
                         return;
                     }
+                    // 宿主只把最新的一批历史发过来时，列表里没有的条目必须说明白，
+                    // 否则用户会以为记录丢了。
+                    if vm.history_truncated.is_some() {
+                        truncated_notice(ui, vm, lang);
+                        ui.add_space(8.0);
+                    }
                     if filtered.is_empty() {
                         let query = vm.history_query.trim();
                         let message = if query.is_empty() {
@@ -421,6 +427,32 @@ fn list_card(
             let _ = scroll_output;
         });
     });
+}
+
+/// 历史被宿主截断时的警告条：说清楚「只载入了多少 / 还有多少没载入」，
+/// 并指向设置里能真正减少历史的地方。
+fn truncated_notice(ui: &mut egui::Ui, vm: &FrontendViewModel, lang: Lang) {
+    let Some(hidden) = vm.history_truncated else {
+        return;
+    };
+    let loaded = vm.history_entries.len();
+    egui::Frame::new()
+        .fill(theme::WARN_SOFT)
+        .stroke(egui::Stroke::new(0.5, theme::WARN))
+        .corner_radius(egui::CornerRadius::same(10))
+        .inner_margin(egui::Margin::symmetric(12, 8))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(fmt_l10n(lang, "history.truncated", &[&loaded, &hidden]))
+                    .size(11.5)
+                    .color(theme::WARN),
+            );
+            ui.label(
+                egui::RichText::new(tr_l10n(lang, "history.truncated_hint"))
+                    .size(11.0)
+                    .color(theme::WARN),
+            );
+        });
 }
 
 fn hint(ui: &mut egui::Ui, width: f32, text: &str) {
@@ -1434,5 +1466,75 @@ mod playback_tests {
         assert_eq!(seek_position_ms(400.0, track, 90_000), 90_000);
         assert_eq!(seek_position_ms(-50.0, track, 90_000), 0);
         assert_eq!(playback_clock(45_900), "0:45");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 一次 pass 里画出的所有文字，用来断言横幅真的被渲染出来。
+    fn painted_text(output: &egui::FullOutput) -> String {
+        output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_truncated_history_paints_the_counts_and_the_way_to_fix_it() {
+        let ctx = egui::Context::default();
+        let view_model = FrontendViewModel {
+            history_truncated: Some(23),
+            history_entries: (0..7)
+                .map(|index| HistoryEntry {
+                    id: index.to_string(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let output = crate::ui::frontend::run_pass(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(560.0, 240.0),
+                )),
+                ..Default::default()
+            },
+            |ui| truncated_notice(ui, &view_model, Lang::ZhCn),
+        );
+
+        let text = painted_text(&output);
+        let expected = fmt_l10n(Lang::ZhCn, "history.truncated", &[&7, &23]);
+        assert!(text.contains(&expected), "the notice must print the loaded/hidden counts: {text}");
+        assert!(
+            text.contains(tr_l10n(Lang::ZhCn, "history.truncated_hint")),
+            "the notice must point at the setting that shrinks history: {text}"
+        );
+    }
+
+    #[test]
+    fn a_complete_history_paints_no_notice() {
+        let ctx = egui::Context::default();
+        let view_model = FrontendViewModel::default();
+        let output = crate::ui::frontend::run_pass(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(560.0, 240.0),
+                )),
+                ..Default::default()
+            },
+            |ui| truncated_notice(ui, &view_model, Lang::ZhCn),
+        );
+        assert_eq!(painted_text(&output).trim(), "");
     }
 }

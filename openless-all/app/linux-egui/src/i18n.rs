@@ -887,6 +887,26 @@ pub const CATALOG: &[Msg] = &[
             "기록 로드 실패: {}",
         ),
     },
+    Msg {
+        key: "history.truncated",
+        text: row(
+            "历史记录过大：仅载入最近 {} 条，另有 {} 条未载入",
+            "歷史記錄過大：僅載入最近 {} 條，另有 {} 條未載入",
+            "History is too large: only the newest {} entries are loaded, {} more are not",
+            "履歴が大きすぎます：最新 {} 件のみ読み込み、{} 件は未読み込みです",
+            "기록이 너무 큽니다: 최신 {}개만 불러왔고 {}개는 불러오지 않았습니다",
+        ),
+    },
+    Msg {
+        key: "history.truncated_hint",
+        text: row(
+            "可在「设置 → 录音 → 历史与上下文」里调低「历史条数上限」",
+            "可在「設定 → 錄音 → 歷史與上下文」調低「歷史條數上限」",
+            "Lower “Max history entries” under Settings → Recording → History & context",
+            "「設定 → 録音 → 履歴とコンテキスト」で「履歴件数の上限」を下げてください",
+            "설정 → 녹음 → 기록 및 컨텍스트에서 “기록 개수 상한”을 낮추세요",
+        ),
+    },
             Msg {
         key: "history.select_hint",
         text: row(
@@ -1129,7 +1149,10 @@ pub const CATALOG: &[Msg] = &[
             "fcitx5를 설치하고 시작한 후 OpenLess 애드온과 현재 데스크톱 세션의 D-Bus를 활성화하세요. 필요하면 OpenLess를 다시 설치하세요. 환경을 수정한 후 이 창을 닫고 앱을 다시 시작하세요。",
         ),
     },
-    Msg { key: "common.saving", text: row("正在保存…", "正在儲存…", "Saving…", "保存中…", "저장 중…") },
+        Msg {
+        key: "common.saving",
+        text: row("保存中", "儲存中", "Saving…", "保存中", "저장 중"),
+    },
     Msg { key: "startup.connecting", text: row("正在连接 OpenLess…", "正在連線 OpenLess…", "Connecting to OpenLess…", "OpenLess に接続中…", "OpenLess에 연결 중…") },
     // ---- Buttons (models / providers / vocab / styles / marketplace / history)
 
