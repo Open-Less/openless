@@ -3565,11 +3565,23 @@ fn capsule_style_preview(ui: &mut egui::Ui, style: usize) {
             0 => {
                 // Match the transparent, drifting spectral ribbons used by the
                 // live Siri capsule instead of showing unrelated loading dots.
+                let dt = ui.input(|input| input.stable_dt);
+                let clock = super::siri_wgpu::tick(
+                    ui.ctx(),
+                    "settings-siri-preview",
+                    super::siri_wgpu::SiriDrive {
+                        level: 0.18,
+                        ..Default::default()
+                    },
+                    dt,
+                );
                 let _ = super::siri_wgpu::paint(
                     ui,
                     rect,
-                    super::siri_wgpu::SiriEffect::wave(1.35, 0.52),
+                    super::siri_wgpu::SiriEffect::wave(clock.time, clock.level),
                 );
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(16));
             }
             1 => {
                 let pill = egui::Rect::from_center_size(rect.center(), egui::vec2(152.0, 34.0));
@@ -3765,6 +3777,40 @@ pub(crate) fn test_render_shortcuts(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn siri_preview_advances_and_requests_animation_frames() {
+        let ctx = eframe::egui::Context::default();
+        let mut previous = 0.0;
+        for frame in 0..4 {
+            let mut output = ctx.run_ui(
+                eframe::egui::RawInput {
+                    screen_rect: Some(eframe::egui::Rect::from_min_size(
+                        eframe::egui::Pos2::ZERO,
+                        eframe::egui::vec2(800.0, 600.0),
+                    )),
+                    time: Some(frame as f64 / 60.0),
+                    ..Default::default()
+                },
+                |ui| super::capsule_style_preview(ui, 0),
+            );
+            let clock = ctx
+                .data(|data| {
+                    data.get_temp::<super::super::siri_wgpu::SiriClock>(eframe::egui::Id::new((
+                        "openless-siri-clock",
+                        "settings-siri-preview",
+                    )))
+                })
+                .expect("preview animation clock");
+            assert!(clock.time > previous);
+            previous = clock.time;
+            assert!(
+                output.viewport_output[&eframe::egui::ViewportId::ROOT].repaint_delay
+                    <= std::time::Duration::from_millis(16)
+            );
+            output.textures_delta.clear();
+        }
+    }
+
     #[test]
     fn siri_preview_uses_half_of_the_full_stage() {
         let ctx = eframe::egui::Context::default();

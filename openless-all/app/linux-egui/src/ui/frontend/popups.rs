@@ -1259,7 +1259,28 @@ pub fn dictation_capsule(
                 // 0.3s 全聚圆心接住 wave 收拢的光点，再缓缓散开成环。
                 let gather = (1.0 - (clock.time / 0.9).clamp(0.0, 1.0)).clamp(0.0, 1.0);
                 let effect = siri_wgpu::SiriEffect::orb(clock.time, gather);
-                if !use_gpu || !siri_wgpu::paint(ui, center, effect) {
+                if siri {
+                    let _ = siri_wgpu::paint(ui, center, effect);
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(16));
+                    // Keep the processing caption below the orb, with enough
+                    // contrast on any desktop, without resizing the stage.
+                    let label = ui.painter().layout_no_wrap(
+                        tr_l10n(lang, "capsule.thinking").to_string(),
+                        egui::FontId::proportional(17.0),
+                        theme::INK,
+                    );
+                    let label_rect = egui::Rect::from_center_size(
+                        center.center() + egui::vec2(0.0, center.height() * 0.32),
+                        label.size(),
+                    );
+                    ui.painter().rect_filled(
+                        label_rect.expand2(egui::vec2(8.0, 3.0)),
+                        egui::CornerRadius::same(10),
+                        theme::SURFACE,
+                    );
+                    ui.painter().galley(label_rect.min, label, theme::INK);
+                } else {
                     ui.painter().text(
                         center.center(),
                         egui::Align2::CENTER_CENTER,
@@ -2645,6 +2666,27 @@ mod tests {
     }
 
     #[test]
+    fn siri_processing_caption_is_localized_in_every_processing_phase() {
+        for lang in [Lang::ZhCn, Lang::En] {
+            for phase in ["starting", "transcribing", "polishing", "inserting"] {
+                let state = CapsulePopupState {
+                    phase: phase.into(),
+                    style: "siri".into(),
+                    ..Default::default()
+                };
+                let painted = run(egui::vec2(460.0, 180.0), |ui| {
+                    dictation_capsule(ui, &state, lang);
+                    String::new()
+                });
+                assert!(
+                    has(&painted, tr_l10n(lang, "capsule.thinking")),
+                    "{phase} must show the localized processing caption: {painted}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn siri_recording_and_thinking_use_the_full_stage() {
         for phase in ["recording", "transcribing"] {
             let ctx = egui::Context::default();
@@ -2706,8 +2748,7 @@ mod tests {
             "{painted}"
         );
 
-        // siri 样式：中心交给 Siri 的 WGPU effect callback，
-        // 所以不再叠一行「思考中」文字——与 GPU 就绪后的终态一致。
+        // Siri keeps both its WGPU orb and localized processing caption.
         let transcribing_siri = CapsulePopupState {
             phase: "Transcribing".to_string(),
             style: "siri".to_string(),
@@ -2718,8 +2759,8 @@ mod tests {
             String::new()
         });
         assert!(
-            !has(&painted, tr_l10n(Lang::ZhCn, "capsule.thinking")),
-            "siri transcribing paints the orb instead of the label: {painted}"
+            has(&painted, tr_l10n(Lang::ZhCn, "capsule.thinking")),
+            "siri transcribing must retain the processing label: {painted}"
         );
 
         let done = CapsulePopupState {
