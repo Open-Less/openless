@@ -5,6 +5,7 @@
 //! Wayland layer-shell renderer both use the same WGSL pipeline.
 
 use std::borrow::Cow;
+use std::sync::OnceLock;
 
 use eframe::egui;
 use eframe::egui_wgpu;
@@ -157,7 +158,10 @@ struct Uniforms {
 };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
-struct VertexOut { @builtin(position) position: vec4<f32> };
+struct VertexOut {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
 
 @vertex
 fn vs_main(@builtin(vertex_index) index: u32) -> VertexOut {
@@ -167,7 +171,11 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOut {
         vec2<f32>(-1.0,  3.0)
     );
     var out: VertexOut;
-    out.position = vec4<f32>(points[index], 0.0, 1.0);
+    let point = points[index];
+    out.position = vec4<f32>(point, 0.0, 1.0);
+    // Interpolated local coordinates, independent of the callback's viewport
+    // origin, DPI, clipping and offscreen backdrop scale.
+    out.uv = vec2<f32>((point.x + 1.0) * 0.5, (1.0 - point.y) * 0.5);
     return out;
 }
 
@@ -270,10 +278,11 @@ fn ring(frag: vec2<f32>) -> vec4<f32> {
 }
 
 @fragment
-fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    if u.mode < 0.5 { return wave(position.xy); }
-    if u.mode < 1.5 { return orb(position.xy); }
-    return ring(position.xy);
+fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+    let local = in.uv * u.size;
+    if u.mode < 0.5 { return wave(local); }
+    if u.mode < 1.5 { return orb(local); }
+    return ring(local);
 }
 "#;
 
@@ -285,8 +294,7 @@ struct SiriUniforms {
 
 struct SiriGpu {
     pipeline: egui_wgpu::wgpu::RenderPipeline,
-    bind_group: egui_wgpu::wgpu::BindGroup,
-    uniform: egui_wgpu::wgpu::Buffer,
+    bind_layout: egui_wgpu::wgpu::BindGroupLayout,
 }
 
 fn uniform_bytes(uniforms: SiriUniforms) -> [u8; 64] {
@@ -327,12 +335,6 @@ fn create_gpu(
     msaa_samples: u32,
 ) -> SiriGpu {
     use egui_wgpu::wgpu;
-    let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("openless-siri-uniform"),
-        size: 64,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
     let bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("openless-siri-bind-layout"),
         entries: &[wgpu::BindGroupLayoutEntry {
@@ -341,17 +343,9 @@ fn create_gpu(
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
-                min_binding_size: None,
+                min_binding_size: wgpu::BufferSize::new(64),
             },
             count: None,
-        }],
-    });
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("openless-siri-bind-group"),
-        layout: &bind_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: uniform.as_entire_binding(),
         }],
     });
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -393,8 +387,7 @@ fn create_gpu(
     });
     SiriGpu {
         pipeline,
-        bind_group,
-        uniform,
+        bind_layout,
     }
 }
 
@@ -425,19 +418,37 @@ pub fn install_renderer(
 
 struct SiriCallback {
     uniforms: SiriUniforms,
+    // egui prepares every callback before painting any of them. A shared
+    // queue-written uniform would make every draw use the last effect's data.
+    binding: OnceLock<egui_wgpu::wgpu::BindGroup>,
 }
 
 impl egui_wgpu::CallbackTrait for SiriCallback {
     fn prepare(
         &self,
-        _device: &egui_wgpu::wgpu::Device,
-        queue: &egui_wgpu::wgpu::Queue,
+        device: &egui_wgpu::wgpu::Device,
+        _queue: &egui_wgpu::wgpu::Queue,
         _screen: &egui_wgpu::ScreenDescriptor,
         _encoder: &mut egui_wgpu::wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<egui_wgpu::wgpu::CommandBuffer> {
-        if let Some(gpu) = resources.get_mut::<SiriGpu>() {
-            queue.write_buffer(&gpu.uniform, 0, &uniform_bytes(self.uniforms));
+        if let Some(gpu) = resources.get::<SiriGpu>() {
+            self.binding.get_or_init(|| {
+                use egui_wgpu::wgpu::{self, util::DeviceExt as _};
+                let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("openless-siri-uniform"),
+                    contents: &uniform_bytes(self.uniforms),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("openless-siri-bind-group"),
+                    layout: &gpu.bind_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uniform.as_entire_binding(),
+                    }],
+                })
+            });
         }
         Vec::new()
     }
@@ -451,8 +462,11 @@ impl egui_wgpu::CallbackTrait for SiriCallback {
         let Some(gpu) = resources.get::<SiriGpu>() else {
             return;
         };
+        let Some(binding) = self.binding.get() else {
+            return;
+        };
         render_pass.set_pipeline(&gpu.pipeline);
-        render_pass.set_bind_group(0, &gpu.bind_group, &[]);
+        render_pass.set_bind_group(0, binding, &[]);
         render_pass.draw(0..3, 0..1);
     }
 }
@@ -467,6 +481,7 @@ pub fn paint(ui: &egui::Ui, rect: egui::Rect, effect: SiriEffect) -> bool {
     let callback = egui_wgpu::Callback::new_paint_callback(
         rect,
         SiriCallback {
+            binding: OnceLock::new(),
             uniforms: SiriUniforms {
                 effect,
                 size: [rect.width() * scale, rect.height() * scale],
@@ -476,6 +491,10 @@ pub fn paint(ui: &egui::Ui, rect: egui::Rect, effect: SiriEffect) -> bool {
     ui.painter().add(egui::Shape::Callback(callback));
     true
 }
+
+#[cfg(test)]
+#[path = "siri_wgpu_gpu_tests.rs"]
+mod gpu_tests;
 
 #[cfg(test)]
 mod tests {
@@ -548,7 +567,7 @@ mod tests {
     #[test]
     fn uniform_buffer_matches_wgsl_alignment() {
         let bytes = uniform_bytes(SiriUniforms {
-            effect: SiriEffect::default(),
+            effect: SiriEffect::wave(1.35, 0.52),
             size: [320.0, 80.0],
         });
         assert_eq!(bytes.len(), 64);

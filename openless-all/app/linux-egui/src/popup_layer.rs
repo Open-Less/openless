@@ -468,6 +468,19 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for LayerState {
 
 // ── Vulkan/WGPU plumbing ────────────────────────────────────────────────────
 
+fn capsule_alpha_mode(
+    supported: &[eframe::egui_wgpu::wgpu::CompositeAlphaMode],
+) -> Result<eframe::egui_wgpu::wgpu::CompositeAlphaMode, String> {
+    use eframe::egui_wgpu::wgpu::CompositeAlphaMode;
+    if supported.contains(&CompositeAlphaMode::PreMultiplied) {
+        Ok(CompositeAlphaMode::PreMultiplied)
+    } else {
+        Err(format!(
+            "Vulkan capsule surface lacks premultiplied transparency: {supported:?}"
+        ))
+    }
+}
+
 struct WgpuSurface {
     _instance: eframe::egui_wgpu::wgpu::Instance,
     surface: eframe::egui_wgpu::wgpu::Surface<'static>,
@@ -531,9 +544,9 @@ impl WgpuSurface {
         let mut config = surface
             .get_default_config(&adapter, size.0.max(1), size.1.max(1))
             .ok_or("Wayland surface has no Vulkan format")?;
-        // The capsule is transparent. Auto lets the compositor select the
-        // premultiplied alpha mode supported by the Vulkan surface.
-        config.alpha_mode = wgpu::CompositeAlphaMode::Auto;
+        // Auto may select Opaque: clearing to transparent would then present
+        // a black rectangle. Both egui and Siri output premultiplied alpha.
+        config.alpha_mode = capsule_alpha_mode(&surface.get_capabilities(&adapter).alpha_modes)?;
         surface.configure(&device, &config);
         let format = config.format;
         let mut renderer = eframe::egui_wgpu::Renderer::new(
@@ -569,11 +582,22 @@ impl WgpuSurface {
             self.config.height = height;
             self.surface.configure(&self.device, &self.config);
         }
+        // Texture deltas are incremental (not re-sent next frame). Upload them
+        // even if surface acquisition times out, so fonts/icons aren't lost.
+        for (id, deltas) in &textures_delta.set {
+            for delta in deltas {
+                self.renderer
+                    .update_texture(&self.device, &self.queue, *id, delta);
+            }
+        }
         let output = match self.surface.get_current_texture() {
             eframe::egui_wgpu::wgpu::CurrentSurfaceTexture::Success(texture)
             | eframe::egui_wgpu::wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
             eframe::egui_wgpu::wgpu::CurrentSurfaceTexture::Timeout
             | eframe::egui_wgpu::wgpu::CurrentSurfaceTexture::Occluded => {
+                for id in &textures_delta.free {
+                    self.renderer.free_texture(id);
+                }
                 textures_delta.clear();
                 return Ok(());
             }
@@ -627,6 +651,9 @@ impl WgpuSurface {
         self.queue.submit(std::iter::once(encoder.finish()));
         // In wgpu 30 presentation belongs to the queue, not SurfaceTexture.
         self.queue.present(output);
+        for id in &textures_delta.free {
+            self.renderer.free_texture(id);
+        }
         textures_delta.clear();
         Ok(())
     }
@@ -899,6 +926,23 @@ mod tests {
             assert_eq!(forced == Some(CapsulePath::LayerShell), layer_shell);
             // …and what the child derives from the same value.
             assert_eq!(forced, Some(path));
+        }
+    }
+
+    #[test]
+    fn capsule_requires_explicit_premultiplied_transparency() {
+        use eframe::egui_wgpu::wgpu::CompositeAlphaMode as Alpha;
+        assert_eq!(
+            capsule_alpha_mode(&[Alpha::Opaque, Alpha::PreMultiplied]).unwrap(),
+            Alpha::PreMultiplied,
+        );
+        for modes in [
+            vec![],
+            vec![Alpha::Opaque],
+            vec![Alpha::Auto],
+            vec![Alpha::PostMultiplied],
+        ] {
+            assert!(capsule_alpha_mode(&modes).is_err());
         }
     }
 
