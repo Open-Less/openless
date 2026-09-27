@@ -303,6 +303,10 @@ fn encode_view_model(
 pub(super) fn vulkan_options(mut options: eframe::NativeOptions) -> eframe::NativeOptions {
     if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup {
         setup.instance_descriptor.backends = eframe::egui_wgpu::wgpu::Backends::VULKAN;
+        // 显存优先的设备描述，与原生 layer-shell 胶囊同源（见 `wgpu_device`）：
+        // wgpu 默认的 `Performance` hints 会让每个渲染进程预占约 180 MiB。
+        setup.device_descriptor =
+            std::sync::Arc::new(|_adapter| openless_linux_egui::wgpu_device::device_descriptor());
     }
     options
 }
@@ -430,6 +434,10 @@ impl UiClientApp {
         client: UiBridgeClient,
         render_state: Option<&eframe::egui_wgpu::RenderState>,
     ) -> Self {
+        let mut view_model = FrontendViewModel::default();
+        // QA：OPENLESS_FPS_SETTINGS=1 时开机就打开设置面板，直接测最重的渲染路径
+        // （磨砂背板 + 离屏 4×MSAA 重绘 + 动画预览）。见 `frame_stats` 模块文档。
+        view_model.settings_open |= openless_linux_egui::frame_stats::settings_open_on_start();
         Self {
             client,
             connecting_since: std::time::Instant::now(),
@@ -438,7 +446,7 @@ impl UiClientApp {
             backdrop: render_state.map(|state| {
                 crate::ui::backdrop::BackdropBlur::new(state, MAIN_MSAA_SAMPLES.into())
             }),
-            view_model: FrontendViewModel::default(),
+            view_model,
             last_sequence: 0,
             last_adopted: None,
             action_sequence: 0,
@@ -664,6 +672,7 @@ impl eframe::App for UiClientApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        openless_linux_egui::frame_stats::tick("ui-client");
         let ctx = ui.ctx().clone();
         if self.connection_error.is_none() {
             self.drain_host(&ctx);

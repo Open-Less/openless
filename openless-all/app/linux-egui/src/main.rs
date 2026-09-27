@@ -7152,6 +7152,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         }
 
         fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+            openless_linux_egui::frame_stats::tick("popup");
             let ctx = ui.ctx().clone();
             // Overlay placement first: it must run before the window is shown so
             // the compositor never gives the capsule the keyboard.
@@ -7476,6 +7477,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let started_in_frame = Arc::clone(&started);
         let result = openless_linux_egui::run_layer_capsule(geometry, move |ctx, raw, first| {
+            openless_linux_egui::frame_stats::tick("capsule-layer");
             if app.is_none() {
                 match popup_stdio() {
                     Ok((incoming, outgoing)) => {

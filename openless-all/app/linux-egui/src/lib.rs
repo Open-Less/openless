@@ -15,6 +15,7 @@ mod credentials;
 mod desktop;
 mod dictation_feedback;
 mod fcitx5;
+pub mod frame_stats;
 mod host_actions;
 mod hotkeys;
 mod i18n;
@@ -34,6 +35,7 @@ mod settings;
 mod single_instance;
 mod tray;
 mod ui_state;
+pub mod wgpu_device;
 
 // Shared by the eframe windows and the native Wayland layer-shell renderer so
 // every Vulkan surface uses the exact same WGPU callback resource type.

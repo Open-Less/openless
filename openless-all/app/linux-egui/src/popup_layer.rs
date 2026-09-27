@@ -539,7 +539,7 @@ impl WgpuSurface {
             }))
             .map_err(|error| format!("vulkan adapter: {error}"))?;
         let (device, queue) = runtime
-            .block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+            .block_on(adapter.request_device(&crate::wgpu_device::device_descriptor()))
             .map_err(|error| format!("vulkan device: {error}"))?;
         let mut config = surface
             .get_default_config(&adapter, size.0.max(1), size.1.max(1))
