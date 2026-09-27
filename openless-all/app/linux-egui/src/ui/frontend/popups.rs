@@ -14,7 +14,7 @@
 
 use eframe::egui;
 
-use super::{icons, layout, siri_gl, theme};
+use super::{icons, layout, siri_wgpu, theme};
 use openless_linux_egui::{
     fmt_l10n, tr_l10n, CapsulePopupState, Lang, LessComputerPopupState, PopupChatMessage,
     QaPolishState, QaPopupState,
@@ -536,7 +536,7 @@ pub fn selection_ask(
                         } else {
                             color_to_f32(theme::INK)
                         };
-                        let drive = siri_gl::SiriDrive {
+                        let drive = siri_wgpu::SiriDrive {
                             level: 0.0,
                             resolved: if recording { 1.0 } else { 0.0 },
                             // 思考态转得更快，和 Tauri 的 state→speed 语义一致。
@@ -544,14 +544,14 @@ pub fn selection_ask(
                             warming: false,
                         };
                         let dt = ui.input(|input| input.stable_dt);
-                        let clock = siri_gl::tick(ui.ctx(), "qa-composer-ring", drive, dt);
-                        let glow = siri_gl::SiriGlow::ring(
+                        let clock = siri_wgpu::tick(ui.ctx(), "qa-composer-ring", drive, dt);
+                        let effect = siri_wgpu::SiriEffect::ring(
                             clock.time,
                             12.0,
                             if recording { 2.0 } else { 1.6 },
                         )
                         .with_tint(tint);
-                        if !siri_gl::paint(ui, rect.expand(3.0), glow) {
+                        if !siri_wgpu::paint(ui, rect.expand(3.0), effect) {
                             spinner_ring(ui, rect, if recording { theme::ERR } else { theme::INK });
                         }
                     }
@@ -982,7 +982,7 @@ fn rounded_rect_points(rect: egui::Rect, radius: f32, segments: usize) -> Vec<eg
 }
 
 /// egui color → the shader's `uTint` (linear 0..1, gamma-space value is fine
-/// here because the glow is additive on a translucent window).
+/// here because the effect is additive on a translucent window).
 fn color_to_f32(color: egui::Color32) -> [f32; 3] {
     [
         f32::from(color.r()) / 255.0,
@@ -1086,18 +1086,11 @@ pub fn dictation_capsule(
             if state.translation_active {
                 translating_badge(ui, rect, lang, if typeless { TYPELESS_SCALE } else { 1.0 });
             }
-            // Tauri 的经典药丸只有「1px 中性描边」+「随音量轻微放大」两件事
-            // （Capsule.tsx 的 ClassicPill：border 1px var(--ol-capsule-pill-border)、
-            // transform scale(1 + ambient * 0.018)），**没有**任何外圈扫光/描边颜色变化。
-            // 所以这里不再把录音相位画成红圈（那是本仓自己加的，用户报「有一个红边」）；
-            // 运动感只保留药丸中心的音量波形。
-            let ambient = if phase == "recording" && !typeless {
-                state.audio_level.unwrap_or(0.0).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            let pill =
-                egui::Rect::from_center_size(rect.center(), rect.size() * (1.0 + ambient * 0.018));
+            // The capsule footprint is invariant across recording, thinking and
+            // terminal frames. The old volume scale made the pill visibly jump
+            // smaller when thinking ended, just before the hide deadline.
+            // Motion belongs to the centre effect, never to the host geometry.
+            let pill = rect;
             if !siri {
                 ui.painter().rect_filled(
                     pill,
@@ -1223,22 +1216,22 @@ pub fn dictation_capsule(
                 )
             };
             if phase == "recording" {
-                // Siri capsules are a transparent overlay. Draw the spectral
-                // ribbons with egui primitives so they work on the Vulkan path
-                // too (the legacy GL shader callback is unavailable there).
-                let drive = siri_gl::SiriDrive {
+                // Siri capsules are transparent overlays. Queue the spectral
+                // ribbon through the shared WGPU callback used by both eframe
+                // windows and the native layer-shell surface.
+                let drive = siri_wgpu::SiriDrive {
                     level: state.audio_level.unwrap_or_default(),
                     resolved: 1.0,
                     speed: 1.0,
                     warming: state.audio_level.is_none(),
                 };
                 let dt = ui.input(|input| input.stable_dt);
-                let clock = siri_gl::tick(ui.ctx(), "capsule-siri-wave", drive, dt);
+                let clock = siri_wgpu::tick(ui.ctx(), "capsule-siri-wave", drive, dt);
                 if siri {
-                    let _ = siri_gl::paint(
+                    let _ = siri_wgpu::paint(
                         ui,
                         center,
-                        siri_gl::SiriGlow::wave(clock.time, clock.level),
+                        siri_wgpu::SiriEffect::wave(clock.time, clock.level),
                     );
                     ui.ctx()
                         .request_repaint_after(std::time::Duration::from_millis(16));
@@ -1253,18 +1246,18 @@ pub fn dictation_capsule(
                 }
             } else if processing {
                 // 思考中：Siri 流体圆点（orb），从 wave 收拢的光点化开成环。
-                let drive = siri_gl::SiriDrive {
+                let drive = siri_wgpu::SiriDrive {
                     level: 0.0,
                     resolved: 0.0,
                     speed: 1.3,
                     warming: false,
                 };
                 let dt = ui.input(|input| input.stable_dt);
-                let clock = siri_gl::tick(ui.ctx(), "capsule-siri-orb", drive, dt);
+                let clock = siri_wgpu::tick(ui.ctx(), "capsule-siri-orb", drive, dt);
                 // 0.3s 全聚圆心接住 wave 收拢的光点，再缓缓散开成环。
                 let gather = (1.0 - (clock.time / 0.9).clamp(0.0, 1.0)).clamp(0.0, 1.0);
-                let glow = siri_gl::SiriGlow::orb(clock.time, gather);
-                if !use_gpu || !siri_gl::paint(ui, center, glow) {
+                let effect = siri_wgpu::SiriEffect::orb(clock.time, gather);
+                if !use_gpu || !siri_wgpu::paint(ui, center, effect) {
                     ui.painter().text(
                         center.center(),
                         egui::Align2::CENTER_CENTER,
@@ -1289,7 +1282,11 @@ pub fn dictation_capsule(
                 };
                 let size = if typeless {
                     TYPELESS_TEXT_SIZE
-                } else if processing {
+                } else if processing || matches!(phase.as_str(), "completed" | "done" | "idle") {
+                    // A terminal snapshot can briefly have no result text. Keep
+                    // its thinking placeholder at the processing size until the
+                    // popup is actually dismissed; never render a tiny final
+                    // "thinking" frame.
                     17.0
                 } else {
                     11.0
@@ -1982,7 +1979,7 @@ mod tests {
     /// return everything it painted.
     fn run(size: egui::Vec2, mut render: impl FnMut(&mut egui::Ui) -> String) -> String {
         // Every popup test renders the same frontend as the GPU-state tests, so
-        // they share the process-global glow flags and must not run in parallel.
+        // they share the process-global effect flags and must not run in parallel.
         let ctx = egui::Context::default();
         let mut painted = String::new();
         for _ in 0..2 {
@@ -2260,16 +2257,10 @@ mod tests {
         );
     }
 
-    /// 录音/思考的中心视觉现在由 CPU 画法承担（着色器路径已从渲染路径摘除，见
-    /// `siri_gl` 文件头）：这两种状态都不许再排 GPU 回调，但中心不能是空的；
-    /// 终态则一个光效都没有。
-    ///
-    /// 以前录音还会多排一个**外圈红扫光**、思考多一个黑扫光。Tauri 的经典药丸只有
-    /// 1px 中性描边（Capsule.tsx 的 `border: 1px var(--ol-capsule-pill-border)`），
-    /// 没有外圈扫光——用户报「语音输入弹窗有一个红边」就是它，所以这里继续锁死。
+    /// Recording and thinking each queue exactly one WGPU centre effect. Terminal
+    /// states must not leave a callback behind while the popup waits to dismiss.
     #[test]
-    fn capsule_keeps_the_centre_glow_off_the_gpu_path() {
-        // The GPU state is process-global; take the shared test guard.
+    fn capsule_queues_only_the_active_wgpu_centre_effect() {
         let frame = |state: CapsulePopupState| {
             let ctx = egui::Context::default();
             let output = crate::ui::frontend::run_pass(
@@ -2290,15 +2281,11 @@ mod tests {
                 .iter()
                 .filter(|clipped| matches!(clipped.shape, egui::Shape::Callback(_)))
                 .count();
-            let mut glow = 0;
-            for clipped in &output.shapes {
-                count_centre_glow(&clipped.shape, &mut glow);
-            }
-            (callbacks, glow)
+            (callbacks,)
         };
         for (label, state, wants_centre) in [
             (
-                "recording = CPU wave only, no perimeter ring",
+                "recording = one WGPU wave, no perimeter ring",
                 CapsulePopupState {
                     phase: "recording".into(),
                     audio_level: Some(0.2),
@@ -2307,7 +2294,7 @@ mod tests {
                 true,
             ),
             (
-                "thinking = CPU orb only, no perimeter ring",
+                "thinking = one WGPU orb, no perimeter ring",
                 CapsulePopupState {
                     phase: "transcribing".into(),
                     ..Default::default()
@@ -2315,7 +2302,7 @@ mod tests {
                 true,
             ),
             (
-                "terminal capsule paints no glow",
+                "terminal capsule paints no WGPU effect",
                 CapsulePopupState {
                     phase: "inserted".into(),
                     text: "hello".into(),
@@ -2324,14 +2311,8 @@ mod tests {
                 false,
             ),
         ] {
-            let (callbacks, glow) = frame(state);
-            assert_eq!(
-                callbacks, 0,
-                "{label}: the shader path is off, no GPU callback may be queued"
-            );
-            if wants_centre {
-                assert!(glow > 0, "{label}: the centre glow must still be painted");
-            }
+            let (callbacks,) = frame(state);
+            assert_eq!(callbacks, usize::from(wants_centre), "{label}");
         }
     }
 
@@ -2500,12 +2481,12 @@ mod tests {
     }
 
     /// Render one capsule frame and collect the colours, the GPU callback count
-    /// and the number of centre glow strokes (the CPU wave lines).
+    /// and the number of centre effect strokes (the CPU wave lines).
     fn capsule_frame(state: &CapsulePopupState) -> (Vec<egui::Color32>, usize, usize) {
         let ctx = egui::Context::default();
         let mut colors = Vec::new();
         let mut callbacks = 0;
-        let mut glow = 0;
+        let mut effect = 0;
         for _ in 0..2 {
             let output = crate::ui::frontend::run_pass(
                 &ctx,
@@ -2522,28 +2503,27 @@ mod tests {
             );
             colors.clear();
             callbacks = 0;
-            glow = 0;
+            effect = 0;
             for clipped in &output.shapes {
                 painted_colors(&clipped.shape, &mut colors);
-                count_centre_glow(&clipped.shape, &mut glow);
+                count_centre_effect(&clipped.shape, &mut effect);
                 if matches!(clipped.shape, egui::Shape::Callback(_)) {
                     callbacks += 1;
                 }
             }
         }
-        (colors, callbacks, glow)
+        (colors, callbacks, effect)
     }
 
-    /// 录音相位的「中心运动感」现在由 CPU 画法承担（着色器路径已从渲染路径摘除，
-    /// 见 `siri_gl` 文件头）：波形是一串 49 点的折线，思考是流体圆点，两者都
-    /// 算中心光效（CPU 竖条走的是小圆角矩形，不在这里）。
-    fn count_centre_glow(shape: &egui::Shape, out: &mut usize) {
+    /// Classic fallback primitives still expose a centre visual for tests; Siri
+    /// states are represented by one WGPU callback instead.
+    fn count_centre_effect(shape: &egui::Shape, out: &mut usize) {
         match shape {
             egui::Shape::Path(path) if path.points.len() >= 8 => *out += 1,
             egui::Shape::Circle(_) => *out += 1,
             egui::Shape::Vec(shapes) => {
                 for shape in shapes {
-                    count_centre_glow(shape, out);
+                    count_centre_effect(shape, out);
                 }
             }
             _ => {}
@@ -2558,7 +2538,7 @@ mod tests {
     #[test]
     fn recording_capsule_paints_no_coloured_outline() {
         // Tauri 的经典药丸只有 1px 中性描边（Capsule.tsx：border 1px
-        // var(--ol-capsule-pill-border)），录音时只把药丸随音量放大 1.8%。
+        // var(--ol-capsule-pill-border)）；录音音量只驱动中心波形。
         // 外圈红/黑扫光是本仓自己加的，用户报「语音输入弹窗有一个红边」——
         // 这条测试锁死它不许回来。
         for phase in ["Recording", "Transcribing", "Polishing"] {
@@ -2593,13 +2573,13 @@ mod tests {
             translation_active: false,
             style: "siri".to_string(),
         };
-        let (colors, callbacks, glow) = capsule_frame(&state);
+        let (colors, callbacks, effect) = capsule_frame(&state);
         // 音量竖条是 3px 宽的小圆角矩形：数一下细长条形的填充个数。
         let fills = colors.iter().filter(|color| color.a() > 0).count();
         assert!(
-            callbacks > 0 || fills >= 6 || glow > 0,
+            callbacks > 0 || fills >= 6 || effect > 0,
             "recording capsule must keep the centre visual \
-             (callbacks={callbacks}, fills={fills}, glow={glow})"
+             (callbacks={callbacks}, fills={fills}, effect={effect})"
         );
     }
 
@@ -2695,7 +2675,7 @@ mod tests {
             "{painted}"
         );
 
-        // siri 样式：中心交给 Siri 光效（现在由 CPU 画，见 `siri_gl` 文件头），
+        // siri 样式：中心交给 Siri 的 WGPU effect callback，
         // 所以不再叠一行「思考中」文字——与 GPU 就绪后的终态一致。
         let transcribing_siri = CapsulePopupState {
             phase: "Transcribing".to_string(),

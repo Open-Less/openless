@@ -35,6 +35,11 @@ mod single_instance;
 mod tray;
 mod ui_state;
 
+// Shared by the eframe windows and the native Wayland layer-shell renderer so
+// every Vulkan surface uses the exact same WGPU callback resource type.
+#[path = "ui/frontend/siri_wgpu.rs"]
+pub mod siri_wgpu;
+
 pub use audio::LinuxCpalRecorder;
 pub use audio_cue::{play_cue_start, play_cue_stop, CueTone};
 pub use audio_mute::AudioMuteGuard;

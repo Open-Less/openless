@@ -250,7 +250,7 @@ pub fn install(ctx: &egui::Context) {
 }
 
 /// Feather shape edges in physical pixels on both the WGPU windows (which also
-/// use 4x MSAA) and the single-sample EGL layer surface.
+/// use 4x MSAA) and the single-sample Vulkan layer surface.
 pub fn enable_antialiasing(ctx: &egui::Context) {
     ctx.tessellation_options_mut(|options| {
         options.feathering = true;

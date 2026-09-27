@@ -7459,7 +7459,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
     }
 
     /// 胶囊在实现了 `zwlr_layer_shell_v1` 的合成器上跑原生 layer surface
-    /// （贴底居中、键盘焦点不可能、不占工作区）；协议缺失、EGL 起不来或
+    /// （贴底居中、键盘焦点不可能、不占工作区）；协议缺失、Vulkan 初始化失败或
     /// configure 超时都会返回 Err；不会回退到普通焦点窗口或 XWayland。
     fn run_capsule_layer_process() -> Result<(), LayerCapsuleFailure> {
         let geometry = openless_linux_egui::capsule_geometry(
@@ -7469,7 +7469,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         );
         // The host pipe is opened lazily, on the first frame the runner asks
         // for: the runner only calls back once the layer surface is configured
-        // and EGL is live, so a preflight failure leaves stdin untouched for the
+        // and Vulkan is live, so a preflight failure leaves stdin untouched for the
         // fallback window. `started` records that the pipe is in use, which
         // makes a late failure fatal instead of a (broken) second attempt.
         let mut app: Option<NativePopupApp> = None;
@@ -7630,6 +7630,9 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             options,
             Box::new(move |cc| {
                 theme::install(&cc.egui_ctx);
+                if let Some(state) = cc.wgpu_render_state.as_ref() {
+                    crate::ui::frontend::siri_wgpu::install_wgpu(state, 4);
+                }
                 Ok(Box::new(NativePopupApp {
                     kind,
                     state: PopupState::default(),

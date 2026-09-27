@@ -10,7 +10,7 @@ pub mod paging;
 pub mod popups;
 pub mod selection_ask;
 pub mod settings;
-pub mod siri_gl;
+pub use openless_linux_egui::siri_wgpu;
 pub mod style;
 pub mod translation;
 pub mod view_model;

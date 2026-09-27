@@ -339,6 +339,9 @@ pub(super) fn run_ui_client(socket: std::path::PathBuf) -> Result<(), String> {
         options,
         Box::new(move |cc| {
             theme::install(&cc.egui_ctx);
+            if let Some(state) = cc.wgpu_render_state.as_ref() {
+                crate::ui::frontend::siri_wgpu::install_wgpu(state, MAIN_MSAA_SAMPLES.into());
+            }
             Ok(Box::new(UiClientApp::new(
                 client,
                 cc.wgpu_render_state.as_ref(),
