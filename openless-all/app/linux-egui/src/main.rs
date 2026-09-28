@@ -553,6 +553,11 @@ mod linux_app {
         providers: ProvidersState,
         selected_channel_id: Option<String>,
         provider_editor: ProviderEditorState,
+        /// 当前编辑器是「添加渠道」草稿（Tauri `isDraft`）：标题换成「添加渠道」，
+        /// 且完全没交互就关闭时要把这张空渠道回收掉。
+        editor_draft: bool,
+        /// 草稿是否被用户动过（任一字段/保存/供应商切换）。
+        draft_touched: bool,
         /// Draft mirrored into the view model while the editor is open.
         provider_editor_form: Option<ProviderEditorForm>,
         provider_models: Vec<String>,
@@ -728,6 +733,8 @@ mod linux_app {
                         providers: ProvidersState::Loading,
                         selected_channel_id: None,
                         provider_editor: ProviderEditorState::Idle,
+                        editor_draft: false,
+                        draft_touched: false,
                         provider_editor_form: None,
                         provider_models: Vec::new(),
                         new_provider_type: String::new(),
@@ -826,6 +833,8 @@ mod linux_app {
                     providers: ProvidersState::Loading,
                     selected_channel_id: None,
                     provider_editor: ProviderEditorState::Idle,
+                    editor_draft: false,
+                    draft_touched: false,
                     provider_editor_form: None,
                     provider_models: Vec::new(),
                     new_provider_type: String::new(),
@@ -2231,6 +2240,8 @@ mod linux_app {
             self.provider_editor = ProviderEditorState::Idle;
             self.provider_editor_form = None;
             self.frontend_vm.provider_editor = None;
+            self.editor_draft = false;
+            self.draft_touched = false;
         }
 
         /// Core owns the model catalog; the host only forwards the request.
@@ -4119,6 +4130,7 @@ mod linux_app {
                 frontend::view_model::SettingsProviderEditor {
                     channel_id: form.channel_id.clone(),
                     is_asr: matches!(form.kind, openless_core::ChannelKind::Asr),
+                    is_draft: self.editor_draft,
                     provider: form.label.clone(),
                     provider_type: form.provider_type.clone(),
                     name: form.name.clone(),
@@ -5536,39 +5548,30 @@ mod linux_app {
                             self.load_providers(kind);
                         }
                     }
-                    frontend::view_model::FrontendAction::SettingsChannelFormOpen(open) => {
-                        self.frontend_vm.channel_form_open = open;
-                        if open {
-                            self.frontend_vm.channel_form_name.clear();
-                            self.frontend_vm.channel_provider_index = 0;
-                        }
-                    }
-                    frontend::view_model::FrontendAction::SettingsChannelProvider(index) => {
-                        self.frontend_vm.channel_provider_index = index;
-                    }
-                    frontend::view_model::FrontendAction::SettingsChannelName(name) => {
-                        self.frontend_vm.channel_form_name = name;
-                    }
-                    frontend::view_model::FrontendAction::SettingsChannelCreate => {
+                    // Tauri `startCreate`：点「添加渠道」先在后台建一张空渠道（名字留空），
+                    // 再打开同一个编辑器——草稿卡片只是为了让凭据有渠道 id 可落盘；
+                    // 用户完全没交互就关掉时会被回收（见 `SettingsProviderClose`）。
+                    frontend::view_model::FrontendAction::SettingsChannelDraft => {
                         let kind = self.settings_channel_kind;
+                        // 供应商面板还没加载完时也照 Tauri 的 `presets[0]?.id ?? ''` 建
+                        // 一张空供应商的草稿：弹窗里可以再选。
                         let provider_type = self
                             .frontend_vm
                             .channel_providers
-                            .get(self.frontend_vm.channel_provider_index)
-                            .map(|provider| provider.provider_type.clone());
-                        let name = self.frontend_vm.channel_form_name.trim().to_string();
-                        if let (Some(backend), Some(provider_type)) =
-                            (self.backend(), provider_type)
-                        {
+                            .first()
+                            .map(|provider| provider.provider_type.clone())
+                            .unwrap_or_default();
+                        if let Some(backend) = self.backend() {
+                            self.editor_draft = true;
+                            self.draft_touched = false;
                             let tx = self.tx.clone();
                             self.tokio.spawn(async move {
                                 let result = backend
-                                    .create_channel(kind, provider_type, name)
+                                    .create_channel(kind, provider_type, String::new())
                                     .await
                                     .map_err(|error| error.to_string());
                                 let _ = tx.send(UiResult::ChannelCreated { kind, result });
                             });
-                            self.frontend_vm.channel_form_open = false;
                         }
                     }
                     frontend::view_model::FrontendAction::ShortcutMenu(field) => {
@@ -5626,6 +5629,8 @@ mod linux_app {
                         self.apply_style_hotkey_repack(index, pack_index);
                     }
                     frontend::view_model::FrontendAction::SettingsChannelSelect(index) => {
+                        self.editor_draft = false;
+                        self.draft_touched = false;
                         self.open_provider_editor(index);
                     }
                     frontend::view_model::FrontendAction::SettingsChannelMove { index, delta } => {
@@ -5690,6 +5695,7 @@ mod linux_app {
                         }
                     }
                     frontend::view_model::FrontendAction::SettingsProviderField(field, value) => {
+                        self.draft_touched = true;
                         if let Some(form) = self.provider_editor_form.as_mut() {
                             match field {
                                 frontend::view_model::SettingsProviderField::Name => {
@@ -5717,6 +5723,7 @@ mod linux_app {
                         }
                     }
                     frontend::view_model::FrontendAction::SettingsProviderSave => {
+                        self.draft_touched = true;
                         if let Some(editor) = self.editor_from_form() {
                             if let Some(backend) = self.backend() {
                                 let lang = self.lang;
@@ -5806,6 +5813,25 @@ mod linux_app {
                         }
                     }
                     frontend::view_model::FrontendAction::SettingsProviderClose => {
+                        let recycle = self.editor_draft && !self.draft_touched;
+                        let channel_id = self
+                            .provider_editor_form
+                            .as_ref()
+                            .map(|form| form.channel_id.clone());
+                        if recycle {
+                            if let (Some(backend), Some(channel_id)) = (self.backend(), channel_id)
+                            {
+                                let kind = self.settings_channel_kind;
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    backend.delete_channel(kind, channel_id).await?;
+                                    Ok(tr_l10n(lang, "status.channel_deleted").to_string())
+                                });
+                                self.load_settings_channels();
+                                self.load_service_configured();
+                                self.load_providers(kind);
+                            }
+                        }
                         self.close_provider_editor();
                     }
                     frontend::view_model::FrontendAction::SettingsChannelToggle(index) => {

@@ -667,7 +667,9 @@ mod tests {
             "the typed value must actually be painted"
         );
 
-        // 3) 添加渠道表单里的名称输入框（AI 服务与模型 → 语音识别）
+        // 3) 渠道编辑器（右栏覆盖）里的「渠道名称」输入框：输入立刻推
+        //    `SettingsProviderField`，宿主写回草稿并自动保存；这里按宿主的行为把
+        //    动作回灌到 VM，验证字段吃字、并且画得出来。
         let ctx = egui::Context::default();
         let mut vm = FrontendViewModel {
             lang: zh,
@@ -675,10 +677,31 @@ mod tests {
             settings_open: true,
             settings_section: super::view_model::SettingsSection::Services,
             services_view: 1,
-            channel_form_open: true,
+            provider_editor: Some(super::view_model::SettingsProviderEditor {
+                channel_id: "channel".to_string(),
+                is_asr: false,
+                is_draft: true,
+                provider: "DeepSeek".to_string(),
+                provider_type: "deepseek".to_string(),
+                name: String::new(),
+                endpoint: String::new(),
+                model: String::new(),
+                resource_id: String::new(),
+                auth_mode: String::new(),
+                auth: super::view_model::SettingsProviderAuth::ApiKey,
+                primary_secret: String::new(),
+                secondary_secret: String::new(),
+                models: Vec::new(),
+                models_loading: false,
+                static_models: Vec::new(),
+                default_model: String::new(),
+                has_models_url: false,
+                custom_model: false,
+                busy: false,
+            }),
             ..Default::default()
         };
-        let id = egui::Id::new("openless-settings-channel-name");
+        let id = egui::Id::new(("openless-settings-provider-field", "Name".to_string()));
         let mut painted = String::new();
         for _ in 0..2 {
             ctx.begin_pass(egui::RawInput {
@@ -699,14 +722,29 @@ mod tests {
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
             painted = painted_text(&crate::ui::frontend::end_pass(&ctx));
+            // 宿主行为：把字段写回草稿（自动保存只负责落盘，不改草稿值）。
+            for action in actions {
+                if let super::view_model::FrontendAction::SettingsProviderField(
+                    super::view_model::SettingsProviderField::Name,
+                    value,
+                ) = action
+                {
+                    if let Some(editor) = vm.provider_editor.as_mut() {
+                        editor.name = value;
+                    }
+                }
+            }
         }
         assert_eq!(
-            vm.channel_form_name, "my",
-            "the add-channel form must accept typed characters"
+            vm.provider_editor
+                .as_ref()
+                .map(|editor| editor.name.clone()),
+            Some("my".to_string()),
+            "the channel editor must accept typed characters"
         );
         assert!(
             painted.contains("my"),
-            "the add-channel form must paint what was typed"
+            "the channel editor must paint what was typed"
         );
     }
 

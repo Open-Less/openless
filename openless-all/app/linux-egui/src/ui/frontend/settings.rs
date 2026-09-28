@@ -2018,14 +2018,11 @@ fn services(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                                 channel_row(ui, channel, index, lang, actions);
                             }
                         }
-                        if vm.channel_form_open {
-                            ui.add_space(8.0);
-                            add_channel_form(ui, vm, actions);
-                        }
                     },
                 );
                 if add_clicked {
-                    actions.push(FrontendAction::SettingsChannelFormOpen(true));
+                    // Tauri `startCreate`：先建空渠道再开同一个弹窗（草稿模式）。
+                    actions.push(FrontendAction::SettingsChannelDraft);
                 }
             }
             ui.label(
@@ -2911,6 +2908,7 @@ fn provider_model_block(
                     }
                 });
             if pick != editor.model {
+                editor_mark_dirty(ui);
                 actions.push(FrontendAction::SettingsProviderField(
                     SettingsProviderField::Model,
                     pick,
@@ -2924,6 +2922,7 @@ fn provider_model_block(
                 let id = egui::Id::new("openless-settings-provider-model");
                 let width = ui.available_width().min(420.0);
                 if layout::text_input_sized(ui, &mut draft, id, "", width, 38.0, false).changed() {
+                    editor_mark_dirty(ui);
                     actions.push(FrontendAction::SettingsProviderField(
                         SettingsProviderField::Model,
                         draft,
@@ -3029,6 +3028,7 @@ fn provider_field(
         if layout::text_input_sized(ui, &mut draft, id, "", width, MODAL_INPUT_HEIGHT, password)
             .changed()
         {
+            editor_mark_dirty(ui);
             actions.push(FrontendAction::SettingsProviderField(field, draft));
         }
     };
@@ -3059,6 +3059,50 @@ fn provider_small_button(ui: &mut egui::Ui, lang: Lang, key: &'static str, prima
     .clicked()
 }
 
+/// 自动保存的临时状态：存在即「有未落盘的改动」，值是防抖截止时刻（egui 时间轴）。
+fn editor_autosave_id() -> egui::Id {
+    egui::Id::new("openless-channel-editor-autosave")
+}
+
+/// 记一次改动并按 Tauri 的节奏安排落盘：输入停下 300ms（这里取 0.4s 留点余量）后保存。
+fn editor_mark_dirty(ui: &egui::Ui) {
+    const AUTO_SAVE_DELAY: f64 = 0.4;
+    let deadline = ui.input(|input| input.time) + AUTO_SAVE_DELAY;
+    ui.data_mut(|data| data.insert_temp(editor_autosave_id(), deadline));
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(400));
+}
+
+/// 到点就落盘。返回是否推了保存。
+fn editor_auto_save(ui: &egui::Ui, actions: &mut Vec<FrontendAction>) -> bool {
+    let Some(deadline) = ui.data(|data| data.get_temp::<f64>(editor_autosave_id())) else {
+        return false;
+    };
+    let now = ui.input(|input| input.time);
+    if now < deadline {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(
+                ((deadline - now) * 1000.0).clamp(16.0, 400.0) as u64,
+            ));
+        return false;
+    }
+    ui.data_mut(|data| data.remove_temp::<f64>(editor_autosave_id()));
+    actions.push(FrontendAction::SettingsProviderSave);
+    true
+}
+
+/// 关闭编辑器：先把还没落盘的改动冲掉（Tauri 的 flush-on-leave），再关。
+fn editor_close(ui: &egui::Ui, actions: &mut Vec<FrontendAction>) {
+    if ui
+        .data(|data| data.get_temp::<f64>(editor_autosave_id()))
+        .is_some()
+    {
+        ui.data_mut(|data| data.remove_temp::<f64>(editor_autosave_id()));
+        actions.push(FrontendAction::SettingsProviderSave);
+    }
+    actions.push(FrontendAction::SettingsProviderClose);
+}
+
 /// Tauri 的渠道编辑器在桌面端是 **embedded**：`ChannelModal` 被 portal 进右侧内容栏
 /// （`.ol-settings-content-pane`），靠 `.ol-channel-dialog-embedded { position: absolute;
 /// inset: 0; background: var(--ol-sidebar-bg) }` 整栏盖住——不是全窗口遮罩加居中卡片。
@@ -3086,6 +3130,9 @@ fn channel_editor_panel(
         return;
     };
     let lang = vm.lang;
+    // Tauri：字段修改后自动保存（300ms 防抖 + 失焦/离开前 flush）。这里到点就推一次
+    // `SettingsProviderSave`；没到点则请求下一帧再看。
+    editor_auto_save(ui, actions);
     let edited = vm
         .channels
         .iter()
@@ -3152,19 +3199,24 @@ fn channel_editor_panel(
         18.0,
     );
     if back_response.clicked() {
-        actions.push(FrontendAction::SettingsProviderClose);
+        editor_close(ui, actions);
     }
     let heading_left = back.right() + 14.0;
     let title_painter = ui.painter().clone();
     let title_y = column.top() + 18.0;
+    let title_key = if editor.is_draft {
+        "settings.channels.create_title"
+    } else {
+        "settings.channels.edit_title"
+    };
     title_painter.text(
         egui::pos2(heading_left, title_y),
         egui::Align2::LEFT_TOP,
-        tr_l10n(lang, "settings.channels.edit_title"),
+        tr_l10n(lang, title_key),
         egui::FontId::proportional(21.0),
         theme::INK,
     );
-    let title_width = layout::text_width(ui, tr_l10n(lang, "settings.channels.edit_title"), 21.0);
+    let title_width = layout::text_width(ui, tr_l10n(lang, title_key), 21.0);
     let kind_title = tr_l10n(
         lang,
         if editor.is_asr {
@@ -3309,7 +3361,6 @@ fn channel_editor_panel(
     );
     let done_width =
         layout::text_width(&footer_ui, tr_l10n(lang, "settings.channels.done"), 12.0) + 30.0;
-    let save_width = layout::text_width(&footer_ui, tr_l10n(lang, "btn.save_fields"), 11.5) + 22.0;
     let clear_width =
         layout::text_width(&footer_ui, tr_l10n(lang, "btn.clear_secret"), 11.5) + 22.0;
     let mut cursor = footer.right() - SIDE_PADDING - done_width;
@@ -3317,12 +3368,7 @@ fn channel_editor_panel(
         egui::pos2(cursor, footer.center().y - 17.0),
         egui::vec2(done_width, 34.0),
     );
-    cursor -= 16.0 + save_width;
-    let save_rect = egui::Rect::from_min_size(
-        egui::pos2(cursor, footer.center().y - 14.0),
-        egui::vec2(save_width, 28.0),
-    );
-    cursor -= 8.0 + clear_width;
+    cursor -= 16.0 + clear_width;
     let clear_rect = egui::Rect::from_min_size(
         egui::pos2(cursor, footer.center().y - 14.0),
         egui::vec2(clear_width, 28.0),
@@ -3357,22 +3403,7 @@ fn channel_editor_panel(
         theme::SURFACE,
     );
     if done.clicked() {
-        actions.push(FrontendAction::SettingsProviderClose);
-    }
-    let save = footer_ui.interact(
-        save_rect,
-        egui::Id::new("openless-channel-editor-save"),
-        egui::Sense::click(),
-    );
-    paint_ghost_small_button(
-        &footer_ui,
-        save_rect,
-        save.hovered(),
-        tr_l10n(lang, "btn.save_fields"),
-        11.5,
-    );
-    if save.clicked() {
-        actions.push(FrontendAction::SettingsProviderSave);
+        editor_close(ui, actions);
     }
     let clear = footer_ui.interact(
         clear_rect,
@@ -3581,6 +3612,7 @@ fn provider_editor_body(
                     });
             });
             if mode != editor.auth_mode {
+                editor_mark_dirty(ui);
                 actions.push(FrontendAction::SettingsProviderField(
                     SettingsProviderField::AuthMode,
                     mode.clone(),
@@ -3701,87 +3733,6 @@ fn modal_form_row<R>(
     .inner
 }
 
-fn add_channel_form(
-    ui: &mut egui::Ui,
-    vm: &mut FrontendViewModel,
-    actions: &mut Vec<FrontendAction>,
-) {
-    let lang = vm.lang;
-    ui.horizontal(|ui| {
-        let options: Vec<String> = vm
-            .channel_providers
-            .iter()
-            .map(|provider| provider.label.clone())
-            .collect();
-        let selected = vm
-            .channel_provider_index
-            .min(options.len().saturating_sub(1));
-        let mut new_selection = selected;
-        egui::ComboBox::from_id_salt("settings-new-channel-provider")
-            .selected_text(options.get(selected).cloned().unwrap_or_default())
-            .show_ui(ui, |ui| {
-                for (index, option) in options.iter().enumerate() {
-                    if ui.selectable_label(index == selected, option).clicked() {
-                        new_selection = index;
-                        ui.close();
-                    }
-                }
-            });
-        if new_selection != selected {
-            actions.push(FrontendAction::SettingsChannelProvider(new_selection));
-        }
-        // 推的是编辑后的值：推编辑前的拷贝会让宿主把旧值写回字段，每敲一个字
-        // 就被回灌一次（渠道名、下划线搜索框都踩过这个坑）。
-        let response = layout::text_input(
-            ui,
-            &mut vm.channel_form_name,
-            egui::Id::new("openless-settings-channel-name"),
-            tr_l10n(lang, "settings.channels.name_placeholder"),
-            200.0,
-            false,
-        );
-        if response.changed() {
-            actions.push(FrontendAction::SettingsChannelName(
-                vm.channel_form_name.clone(),
-            ));
-        }
-        if ui
-            .add(
-                egui::Button::new(
-                    egui::RichText::new(tr_l10n(lang, "settings.channels.create"))
-                        .color(theme::SURFACE)
-                        .size(11.5),
-                )
-                .fill(theme::INK)
-                .stroke(egui::Stroke::NONE)
-                .corner_radius(egui::CornerRadius::same(8))
-                .min_size(egui::vec2(0.0, 26.0)),
-            )
-            .clicked()
-        {
-            actions.push(FrontendAction::SettingsChannelCreate);
-        }
-        if ui
-            .add(
-                egui::Button::new(egui::RichText::new(tr_l10n(lang, "common.cancel")).size(11.5))
-                    .fill(theme::SURFACE_2)
-                    .stroke(egui::Stroke::new(0.8, theme::LINE))
-                    .corner_radius(egui::CornerRadius::same(8))
-                    .min_size(egui::vec2(0.0, 26.0)),
-            )
-            .clicked()
-        {
-            actions.push(FrontendAction::SettingsChannelFormOpen(false));
-        }
-    });
-    ui.label(
-        egui::RichText::new(tr_l10n(lang, "settings.channels.name_hint"))
-            .size(11.0)
-            .color(theme::INK_4),
-    );
-}
-
-/// A row whose value is a button that opens a link / performs an action.
 fn link_row(
     ui: &mut egui::Ui,
     label: &str,
@@ -4736,6 +4687,7 @@ mod tests {
             let editor = SettingsProviderEditor {
                 channel_id: "channel".to_string(),
                 is_asr: false,
+                is_draft: false,
                 provider: "volcengine".to_string(),
                 provider_type: "volcengine".to_string(),
                 name: "main".to_string(),
@@ -4774,6 +4726,7 @@ mod tests {
             SettingsProviderEditor {
                 channel_id: "channel".to_string(),
                 is_asr: false,
+                is_draft: false,
                 provider: "volcengine".to_string(),
                 provider_type: "volcengine".to_string(),
                 name: "main".to_string(),
@@ -4828,6 +4781,71 @@ mod tests {
         );
     }
 
+    /// Tauri 的自动保存：字段改动后防抖落盘；关闭前先把未落盘的改动冲掉。
+    #[test]
+    fn editor_auto_save_debounces_and_flushes_before_closing() {
+        let ctx = egui::Context::default();
+        let mut actions = Vec::new();
+        let raw = |time: f64| egui::RawInput {
+            time: Some(time),
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(700.0, 680.0),
+            )),
+            ..Default::default()
+        };
+
+        // 第一帧：标脏，未到防抖截止 → 不保存。
+        crate::ui::frontend::run_pass(&ctx, raw(10.0), |ui| {
+            editor_mark_dirty(ui);
+            assert!(
+                !editor_auto_save(ui, &mut actions),
+                "the debounce window must not save yet"
+            );
+        });
+        assert!(
+            actions.is_empty(),
+            "nothing may be saved during the debounce"
+        );
+
+        // 时间推进到截止之后 → 推一次保存，并且只推一次。
+        crate::ui::frontend::run_pass(&ctx, raw(11.0), |ui| {
+            assert!(
+                editor_auto_save(ui, &mut actions),
+                "the settled edit must be saved"
+            );
+            assert!(
+                !editor_auto_save(ui, &mut actions),
+                "an already saved edit must not save twice"
+            );
+        });
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], FrontendAction::SettingsProviderSave));
+
+        // 关闭时：脏则先保存再关；干净则只关。
+        actions.clear();
+        crate::ui::frontend::run_pass(&ctx, raw(12.0), |ui| {
+            editor_mark_dirty(ui);
+        });
+        crate::ui::frontend::run_pass(&ctx, raw(12.1), |ui| {
+            editor_close(ui, &mut actions);
+        });
+        assert_eq!(
+            actions.len(),
+            2,
+            "closing must flush the pending edit first"
+        );
+        assert!(matches!(actions[0], FrontendAction::SettingsProviderSave));
+        assert!(matches!(actions[1], FrontendAction::SettingsProviderClose));
+
+        actions.clear();
+        crate::ui::frontend::run_pass(&ctx, raw(13.0), |ui| {
+            editor_close(ui, &mut actions);
+        });
+        assert_eq!(actions.len(), 1, "a clean editor closes without saving");
+        assert!(matches!(actions[0], FrontendAction::SettingsProviderClose));
+    }
+
     /// 渠道编辑器在桌面端是**右栏覆盖**（Tauri 的 embedded 形态）：整栏画灰底、
     /// 头部是返回按钮而不是关闭按钮，正文是白底圆角表单卡，底部有删除与完成。
     #[test]
@@ -4840,6 +4858,7 @@ mod tests {
             provider_editor: Some(SettingsProviderEditor {
                 channel_id: "channel".to_string(),
                 is_asr: false,
+                is_draft: false,
                 provider: "DeepSeek".to_string(),
                 provider_type: "deepseek".to_string(),
                 name: "DeepSeek".to_string(),
@@ -4916,6 +4935,35 @@ mod tests {
         assert!(
             !painted(&format!("{section_title}服务")),
             "the settings section body must not show through the editor"
+        );
+
+        // 草稿模式（Tauri `isDraft`）：标题换成「添加渠道」。
+        let mut draft_vm = vm;
+        if let Some(editor) = draft_vm.provider_editor.as_mut() {
+            editor.is_draft = true;
+        }
+        let output = crate::ui::frontend::run_pass(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(700.0, 680.0),
+                )),
+                ..Default::default()
+            },
+            |ui| channel_editor_panel(ui, &draft_vm, &mut actions),
+        );
+        let mut draft_text = String::new();
+        for clipped in &output.shapes {
+            collect_shape_text(&clipped.shape, &mut draft_text);
+        }
+        assert!(
+            draft_text.contains(tr_l10n(Lang::ZhCn, "settings.channels.create_title")),
+            "a draft editor is titled as a new channel, got {draft_text:?}"
+        );
+        assert!(
+            !draft_text.contains(tr_l10n(Lang::ZhCn, "settings.channels.edit_title")),
+            "a draft editor must not say it is editing an existing channel"
         );
     }
 

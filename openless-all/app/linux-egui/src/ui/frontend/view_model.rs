@@ -191,13 +191,11 @@ pub enum FrontendAction {
     /// Delete a channel (index into `settings.channels`).
     SettingsChannelDelete(usize),
     /// Open/close the "add channel" form.
-    SettingsChannelFormOpen(bool),
+    /// 「添加渠道」：宿主先建一张空渠道，再打开同一个编辑器（草稿模式）。
+    SettingsChannelDraft,
     /// Provider picked in the add-channel form.
-    SettingsChannelProvider(usize),
     /// Channel name typed in the add-channel form.
-    SettingsChannelName(String),
     /// Create the channel described by the form.
-    SettingsChannelCreate,
     /// Select a channel and open its provider editor (index into `channels`).
     SettingsChannelSelect(usize),
     /// Move a channel up/down; Core's `reorder_channels` owns the order.
@@ -420,6 +418,8 @@ pub struct SettingsProviderEditor {
     pub channel_id: String,
     /// 渠道种类：弹窗副标题在「文字处理渠道 / 语音识别渠道」之间切换。
     pub is_asr: bool,
+    /// 草稿（刚从「添加渠道」建出来）：标题是「添加渠道」，且未交互就关闭时要回收。
+    pub is_draft: bool,
     /// Localized provider label (read-only).
     pub provider: String,
     pub provider_type: String,
@@ -875,9 +875,6 @@ pub struct FrontendViewModel {
     /// Provider kinds offered by the add-channel form.
     pub channel_providers: Vec<SettingsChannelProvider>,
     pub channels_loading: bool,
-    pub channel_form_open: bool,
-    pub channel_form_name: String,
-    pub channel_provider_index: usize,
     /// Open provider editor, or `None` when the channel list is the whole view.
     pub provider_editor: Option<SettingsProviderEditor>,
     /// Rail search query in the settings modal.
@@ -1030,9 +1027,6 @@ impl Default for FrontendViewModel {
             channels: Vec::new(),
             channel_providers: Vec::new(),
             channels_loading: false,
-            channel_form_open: false,
-            channel_form_name: String::new(),
-            channel_provider_index: 0,
             provider_editor: None,
             settings_query: String::new(),
             shortcut_pending_modifier: None,
