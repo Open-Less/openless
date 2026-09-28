@@ -63,9 +63,9 @@ pub fn start(app: AppHandle, backend: Arc<OpenLessBackend>) {
         if backend.ensure_runtime_ready().is_err() {
             return;
         }
+        let preferences = backend.get_preferences();
         #[cfg(target_os = "windows")]
         {
-            let preferences = backend.get_preferences();
             let target = openless_core::WindowsKeyboardRuntimeTarget::from(&preferences);
             if let Err(error) = crate::windows_ime_profile::apply_windows_openless_keyboard_list(
                 target.openless_language_profile_enabled,
