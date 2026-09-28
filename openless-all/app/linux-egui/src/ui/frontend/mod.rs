@@ -927,6 +927,108 @@ mod tests {
         lines
     }
 
+    /// 识别管线（Tauri `ProvidersSection` 的 pipelineMode 行）：行本身、两个模式
+    /// 选项和“两套凭据互相独立”的说明；只有实验性开关
+    /// （`multimodalPipelineEnabled` → 这里的 `multimodal_view`）打开后才出现。
+    #[test]
+    fn the_pipeline_mode_row_only_shows_with_the_experimental_switch() {
+        let zh = openless_linux_egui::Lang::ZhCn;
+        let mut vm = FrontendViewModel {
+            multimodal_view: true,
+            pipeline_multimodal: false,
+            ..Default::default()
+        };
+        let on = painted_settings_lines(super::view_model::SettingsSection::Services, &mut vm);
+        for key in [
+            "settings.providers.pipeline_mode_label",
+            "settings.providers.pipeline_mode_traditional",
+            "settings.providers.pipeline_mode_multimodal",
+            "settings.providers.pipeline_isolation_notice",
+        ] {
+            let text = openless_linux_egui::tr_l10n(zh, key);
+            assert!(
+                on.iter().any(|line| line == text),
+                "{key} must be painted when the switch is on: {on:?}"
+            );
+        }
+
+        vm.multimodal_view = false;
+        let off = painted_settings_lines(super::view_model::SettingsSection::Services, &mut vm);
+        for key in [
+            "settings.providers.pipeline_mode_label",
+            "settings.providers.pipeline_isolation_notice",
+        ] {
+            let text = openless_linux_egui::tr_l10n(zh, key);
+            assert!(
+                !off.iter().any(|line| line == text),
+                "{key} must disappear when the experimental switch is off"
+            );
+        }
+    }
+
+    /// 渠道卡片的状态块（Tauri `ChannelTestStatus`）：失败的渠道要给出错误、
+    /// 「不会自动停用」的说明、多久以前，以及超过 24 小时的过期提示；有结果
+    /// 时验证按钮变成「重新验证」。
+    #[test]
+    fn a_failed_channel_card_explains_the_failure_and_the_stale_result() {
+        let zh = openless_linux_egui::Lang::ZhCn;
+        let mut vm = FrontendViewModel {
+            channels: vec![super::view_model::SettingsChannel {
+                id: "deepseek-1".into(),
+                name: "DeepSeek".into(),
+                provider: "DeepSeek".into(),
+                provider_type: "deepseek".into(),
+                model: "deepseek-v4-flash".into(),
+                is_active: true,
+                enabled: true,
+                last_ok: Some(false),
+                last_error: Some("-401".into()),
+                last_latency_ms: None,
+                // 25 小时前：既要有「1 天前」，也要有过期提示。
+                last_check_age_seconds: Some(25 * 60 * 60),
+            }],
+            ..Default::default()
+        };
+        let lines = painted_settings_lines(super::view_model::SettingsSection::Services, &mut vm);
+        let painted = |text: &str| lines.iter().any(|line| line.contains(text));
+        for text in [
+            openless_linux_egui::tr_l10n(zh, "settings.channels.last_check"),
+            &openless_linux_egui::fmt_l10n(zh, "settings.channels.failed", &[&"-401"]),
+            openless_linux_egui::tr_l10n(zh, "settings.channels.failure_keeps_enabled"),
+            openless_linux_egui::tr_l10n(zh, "settings.channels.reverify"),
+            &openless_linux_egui::fmt_l10n(zh, "settings.channels.days_ago", &[&1]),
+            openless_linux_egui::tr_l10n(zh, "settings.channels.stale_result"),
+        ] {
+            assert!(painted(text), "{text:?} must be painted: {lines:?}");
+        }
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.trim()
+                    == openless_linux_egui::tr_l10n(zh, "settings.channels.verify")),
+            "a channel with a past result offers a re-check, not a first check"
+        );
+
+        // 从未验证过的渠道：只说「尚未验证」，不给出过期/失败字样。
+        vm.channels[0].last_ok = None;
+        vm.channels[0].last_error = None;
+        vm.channels[0].last_check_age_seconds = None;
+        let fresh = painted_settings_lines(super::view_model::SettingsSection::Services, &mut vm);
+        let painted = |text: &str| fresh.iter().any(|line| line.contains(text));
+        assert!(painted(openless_linux_egui::tr_l10n(
+            zh,
+            "settings.channels.not_verified"
+        )));
+        assert!(!painted(openless_linux_egui::tr_l10n(
+            zh,
+            "settings.channels.stale_result"
+        )));
+        assert!(!painted(openless_linux_egui::tr_l10n(
+            zh,
+            "settings.channels.reverify"
+        )));
+    }
+
     #[test]
     fn shortcut_menu_reveals_record_and_disable() {
         let zh = openless_linux_egui::Lang::ZhCn;

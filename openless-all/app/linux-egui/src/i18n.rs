@@ -2969,6 +2969,158 @@ pub const CATALOG: &[Msg] = &[
         ),
     },
     Msg {
+        key: "settings.channels.provider_label",
+        text: row("供应商", "供應商", "Provider", "プロバイダー", "공급자"),
+    },
+    Msg {
+        key: "settings.channels.drag_hint",
+        text: row(
+            "按住拖动可调整优先级",
+            "按住拖曳可調整優先順序",
+            "Drag to change priority",
+            "ドラッグで優先順位を変更",
+            "드래그해서 우선순위 변경",
+        ),
+    },
+    Msg {
+        key: "settings.channels.delete_confirm",
+        text: row(
+            "删除后该渠道保存的密钥也会一并清除。",
+            "刪除後該渠道儲存的金鑰也會一併清除。",
+            "Deleting also clears the keys stored for this channel.",
+            "削除するとこのチャネルに保存された鍵も消去されます。",
+            "삭제하면 이 채널에 저장된 키도 함께 지워집니다.",
+        ),
+    },
+    Msg {
+        key: "settings.channels.confirm_delete",
+        text: row("确认删除", "確認刪除", "Delete", "削除する", "삭제"),
+    },
+    Msg {
+        key: "settings.channels.last_check",
+        text: row(
+            "上次验证",
+            "上次驗證",
+            "Last check",
+            "前回の接続確認",
+            "마지막 확인",
+        ),
+    },
+    Msg {
+        key: "settings.channels.verifying",
+        text: row(
+            "正在验证…",
+            "正在驗證…",
+            "Checking…",
+            "確認中…",
+            "확인 중…",
+        ),
+    },
+    Msg {
+        key: "settings.channels.reverify",
+        text: row("重新验证", "重新驗證", "Check again", "再確認", "다시 확인"),
+    },
+    Msg {
+        key: "settings.channels.failed_plain",
+        text: row("验证失败", "驗證失敗", "Check failed", "確認に失敗", "확인 실패"),
+    },
+    Msg {
+        key: "settings.channels.failure_keeps_enabled",
+        text: row(
+            "验证失败不会自动停用。请求仍使用列表中第一个已启用的渠道，不会自动改用下一个。",
+            "驗證失敗不會自動停用。請求仍使用列表中第一個已啟用的渠道，不會自動改用下一個。",
+            "A failed check does not turn this service off. Requests still use the first enabled service and do not switch to the next one.",
+            "確認に失敗しても、このサービスは自動では停止しません。リクエストは有効な一覧の先頭を使い、次へは自動で切り替わりません。",
+            "확인에 실패해도 이 서비스는 자동으로 꺼지지 않습니다. 요청은 켜진 목록의 첫 항목을 쓰며, 다음 항목으로 자동 전환되지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.channels.stale_result",
+        text: row(
+            "结果已超过 24 小时",
+            "結果已超過 24 小時",
+            "Result is over 24 hours old",
+            "24 時間以上前の結果",
+            "24시간이 지난 결과",
+        ),
+    },
+    Msg {
+        key: "settings.channels.just_now",
+        text: row("刚刚", "剛剛", "just now", "たった今", "방금"),
+    },
+    Msg {
+        key: "settings.channels.minutes_ago",
+        text: row("{} 分钟前", "{} 分鐘前", "{}m ago", "{}分前", "{}분 전"),
+    },
+    Msg {
+        key: "settings.channels.hours_ago",
+        text: row("{} 小时前", "{} 小時前", "{}h ago", "{}時間前", "{}시간 전"),
+    },
+    Msg {
+        key: "settings.channels.days_ago",
+        text: row("{} 天前", "{} 天前", "{}d ago", "{}日前", "{}일 전"),
+    },
+    Msg {
+        key: "settings.channels.model_not_set",
+        text: row(
+            "模型未单独设置",
+            "未單獨設定模型",
+            "No model set explicitly",
+            "モデルの個別設定なし",
+            "모델을 별도로 설정하지 않음",
+        ),
+    },
+    Msg {
+        key: "settings.providers.pipeline_mode_label",
+        text: row(
+            "识别管线",
+            "識別管線",
+            "Pipeline mode",
+            "認識パイプライン",
+            "인식 파이프라인",
+        ),
+    },
+    Msg {
+        key: "settings.providers.pipeline_mode_hint",
+        text: row(
+            "传统 = ASR 转写 + LLM 润色两段式；多模态 = 单个多模态模型一次完成。",
+            "傳統 = ASR 轉寫 + LLM 潤色兩段式；多模態 = 單一多模態模型一次完成。",
+            "Traditional = ASR + LLM two-stage. Multimodal = a single audio-capable model in one pass.",
+            "従来 = ASR 文字起こし + LLM 整形の2段式。マルチモーダル = 音声対応モデルが1回で完了。",
+            "전통 = ASR 전사 + LLM 다듬기 2단계. 멀티모달 = 오디오 지원 모델이 한 번에 처리.",
+        ),
+    },
+    Msg {
+        key: "settings.providers.pipeline_mode_traditional",
+        text: row(
+            "传统模式",
+            "傳統模式",
+            "Traditional",
+            "従来モード",
+            "전통 모드",
+        ),
+    },
+    Msg {
+        key: "settings.providers.pipeline_mode_multimodal",
+        text: row(
+            "多模态模式",
+            "多模態模式",
+            "Multimodal",
+            "マルチモーダルモード",
+            "멀티모달 모드",
+        ),
+    },
+    Msg {
+        key: "settings.providers.pipeline_isolation_notice",
+        text: row(
+            "两种模式使用完全独立的凭据配置。切换模式不会删除另一套配置，只是暂时停用；切回即恢复。",
+            "兩種模式使用完全獨立的憑證設定。切換模式不會刪除另一套設定，只是暫時停用；切回即還原。",
+            "The two modes keep fully separate credentials. Switching modes keeps the other set stored but unused; switching back restores it.",
+            "2つのモードは完全に独立した認証情報を使用します。切り替えてももう一方の設定は削除されず、切り戻せば復元されます。",
+            "두 모드는 완전히 분리된 자격 증명을 사용합니다. 전환해도 다른 쪽 설정은 삭제되지 않으며, 다시 전환하면 복원됩니다.",
+        ),
+    },
+    Msg {
         key: "settings.recording.audio_cue_label",
         text: row(
             "录音提示音",
@@ -5718,6 +5870,10 @@ pub const CATALOG: &[Msg] = &[
         text: row("书面润色", "書面潤色", "Written polish", "書面の推敲", "서면 다듬기"),
     },
 
+    Msg {
+        key: "settings.channels.edit",
+        text: row("编辑", "編輯", "Edit", "編集", "편집"),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

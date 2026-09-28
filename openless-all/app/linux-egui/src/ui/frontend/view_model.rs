@@ -359,6 +359,8 @@ pub enum ShortcutField {
 /// One credential channel shown in the AI-services settings tab.
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug, Default)]
 pub struct SettingsChannel {
+    /// 渠道 id。宿主用它定位编辑目标（Tauri 的 `Channel.id` 同义）。
+    pub id: String,
     pub name: String,
     /// Model / endpoint summary shown under the channel name.
     pub model: String,
@@ -369,8 +371,14 @@ pub struct SettingsChannel {
     /// True for the channel currently serving requests.
     pub is_active: bool,
     pub enabled: bool,
-    /// Human-readable result of the last validation, if any.
-    pub last_check: Option<String>,
+    /// 最近一次验证是否通过；`None` = 从未验证（Tauri 的 `lastTest`）。
+    pub last_ok: Option<bool>,
+    /// 失败时的错误文本，Core 原样回显，不在这里二次解释。
+    pub last_error: Option<String>,
+    /// 通过时的往返耗时（毫秒）。
+    pub last_latency_ms: Option<u32>,
+    /// 距最近一次验证过了多少秒。宿主用 epoch 秒算好，窗口只负责本地化。
+    pub last_check_age_seconds: Option<i64>,
 }
 
 /// A field of the provider editor. Secret fields are write-only: opening an
@@ -495,6 +503,9 @@ pub enum SettingsComboField {
     RemoteDefaultMode,
     /// 选区润色交付方式：0 = 直接替换，1 = 预览确认。
     SelectionPolishDelivery,
+    /// 识别管线模式：0 = 传统（ASR + LLM 两段），1 = 多模态（单模型一步）。
+    /// 与 Tauri 的 `pipelineMode` 同义：切换只改偏好，不动另一套凭据。
+    PipelineMode,
     /// Less Computer 的 Agent 后端（0 = Claude Code, 1 = OpenCode, 2 = Codex, 3 = dsh）。
     CodingAgentProvider,
     /// Less Computer 权限模式（0 = 放行, 1 = 只读/计划, 2 = 默认, 3 = 完全放行）。

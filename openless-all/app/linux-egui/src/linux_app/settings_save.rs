@@ -273,6 +273,15 @@ impl OpenLessEguiApp {
                     _ => openless_core::shared_types::SelectionPolishOutputMode::DirectReplace,
                 };
             }
+            frontend::view_model::SettingsComboField::PipelineMode => {
+                // 与 Tauri 的 `onPipelineModeChange` 一致：只改偏好。两套模式的
+                // 凭据都留在凭据库里，运行时只读当前模式。
+                preferences.pipeline_mode = if index == 1 {
+                    openless_core::shared_types::PipelineMode::Multimodal
+                } else {
+                    openless_core::shared_types::PipelineMode::Traditional
+                };
+            }
             frontend::view_model::SettingsComboField::SilenceSeconds => {
                 preferences.silence_auto_stop_seconds = index as f32 + 1.0;
             }

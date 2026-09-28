@@ -38,6 +38,9 @@ pub enum IconName {
     Layout,
     Doc,
     Pencil,
+    /// 渠道卡片左侧的拖拽手柄（Tauri 用字符 `⠿`；egui 这边用同一套 Lucide
+    /// 图标的 GripVertical，字形风险比外字符小）。
+    Grip,
     Cloud,
     Shield,
     Info,
@@ -109,6 +112,7 @@ fn lucide_svg(icon: IconName) -> Option<(&'static str, &'static str)> {
         IconName::Layout => ("Layout", include_str!("../../../assets/lucide/Layout.svg")),
         IconName::Doc => ("Doc", include_str!("../../../assets/lucide/Doc.svg")),
         IconName::Pencil => ("Pencil", include_str!("../../../assets/lucide/Pencil.svg")),
+        IconName::Grip => ("Grip", include_str!("../../../assets/lucide/Grip.svg")),
         IconName::Cloud => ("Cloud", include_str!("../../../assets/lucide/Cloud.svg")),
         IconName::Shield => ("Shield", include_str!("../../../assets/lucide/Shield.svg")),
         IconName::Info => ("Info", include_str!("../../../assets/lucide/Info.svg")),

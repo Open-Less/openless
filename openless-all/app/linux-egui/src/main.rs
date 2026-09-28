@@ -135,6 +135,8 @@ mod linux_app {
         last_ok: Option<bool>,
         last_latency_ms: Option<u32>,
         last_error: Option<String>,
+        /// 最近一次验证的时间（epoch **秒**，与 Tauri `lastTest.at` 同一量纲）。
+        last_test_at: Option<i64>,
     }
 
     /// 追问编辑态：Core 只在变化时下发 `Some(..)`，所以逐字段合并。
@@ -1910,6 +1912,7 @@ mod linux_app {
                                 .last_test
                                 .as_ref()
                                 .and_then(|test| test.error.clone()),
+                            last_test_at: channel.last_test.as_ref().map(|test| test.at),
                         });
                     }
                     Ok::<_, BackendError>(rows)
@@ -4083,6 +4086,7 @@ mod linux_app {
                 .iter()
                 .enumerate()
                 .map(|(index, channel)| frontend::view_model::SettingsChannel {
+                    id: channel.id.clone(),
                     name: channel.name.clone(),
                     provider: localized_provider_label(
                         lang,
@@ -4093,26 +4097,16 @@ mod linux_app {
                     model: channel.model.clone(),
                     is_active: index == active_channel,
                     enabled: channel.enabled,
-                    last_check: match (
-                        channel.last_ok,
-                        channel.last_latency_ms,
-                        channel.last_error.as_deref(),
-                    ) {
-                        (Some(true), Some(ms), _) => Some(format!(
-                            "{} · {}",
-                            tr_l10n(lang, "settings.channels.passed"),
-                            fmt_l10n(lang, "settings.channels.elapsed", &[&ms]),
-                        )),
-                        (Some(true), None, _) => {
-                            Some(tr_l10n(lang, "settings.channels.passed").to_string())
-                        }
-                        (Some(false), _, error) => Some(fmt_l10n(
-                            lang,
-                            "settings.channels.failed",
-                            &[&error.unwrap_or_default()],
-                        )),
-                        _ => None,
-                    },
+                    last_ok: channel.last_ok,
+                    last_error: channel.last_error.clone(),
+                    last_latency_ms: channel.last_latency_ms,
+                    last_check_age_seconds: channel.last_test_at.map(|at| {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|elapsed| elapsed.as_secs() as i64)
+                            .unwrap_or(at);
+                        (now - at).max(0)
+                    }),
                 })
                 .collect();
 

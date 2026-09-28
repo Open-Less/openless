@@ -21,7 +21,7 @@ export const icons = {
   Chat: 'MessageSquare', More: 'Ellipsis', ChevronRight: 'ChevronRight',
   Feather: 'Feather', Layout: 'PanelLeft', Doc: 'FileText', Pencil: 'Pencil',
   Cloud: 'Cloud', Shield: 'ShieldCheck', Info: 'Info', Help: 'CircleHelp',
-  External: 'ExternalLink', Monitor: 'Monitor',
+  External: 'ExternalLink', Monitor: 'Monitor', Grip: 'GripVertical',
 };
 const version = JSON.parse(readFileSync(resolve(root, 'node_modules/lucide-react/package.json'), 'utf8')).version;
 const check = process.argv.includes('--check');
