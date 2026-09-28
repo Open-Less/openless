@@ -462,6 +462,20 @@ impl UiClientApp {
         }
     }
 
+    /// 把单槽位里最新的快照搬进视图模型。
+    ///
+    /// 正常情况下一帧只有一份；`while` 是为了把极端情况下「取的过程中又来了
+    /// 一份」也收干净（旧的那份会被 `snapshot_supersedes` 丢掉）。
+    fn adopt_latest_snapshot(&mut self) {
+        while let Some((sequence, view_model)) = self.client.take_snapshot() {
+            if snapshot_supersedes(self.last_sequence, sequence) {
+                self.adopt_snapshot(sequence, *view_model);
+            } else {
+                log::debug!("[ui-client] dropped stale snapshot #{sequence}");
+            }
+        }
+    }
+
     /// 采纳一份快照，但保留用户还没提交、而宿主也没有改动的输入。
     pub(super) fn adopt_snapshot(&mut self, sequence: u64, incoming: FrontendViewModel) {
         self.last_sequence = sequence;
@@ -482,7 +496,12 @@ impl UiClientApp {
 
     /// 收宿主的帧。快照按序号采纳；`Shutdown` 与断连都表示「宿主走了」，
     /// 此时 UI 必须自己退出（没有宿主就没有数据可渲染）。
+    ///
+    /// 快照不在通道里（见 `UiBridgeClient` 的快照单槽位），所以本函数只在
+    /// egui pass 真正跑的时候被调用 —— 窗口被遮挡时宿主发多少保活快照都不会
+    /// 堆内存。
     pub(super) fn drain_host(&mut self, ctx: &egui::Context) {
+        self.adopt_latest_snapshot();
         loop {
             match self.client.try_recv() {
                 Ok(HostToWindow::Ready { version }) => {
@@ -520,14 +539,14 @@ impl UiClientApp {
                         );
                     }
                 }
+                // 快照正常不进通道（见 `UiBridgeClient` 的快照单槽位）；这里兜底：
+                // 万一哪条路径真把它推进来了，也不能丢状态。
                 Ok(HostToWindow::Snapshot {
                     sequence,
                     view_model,
                 }) => {
                     if snapshot_supersedes(self.last_sequence, sequence) {
                         self.adopt_snapshot(sequence, *view_model);
-                    } else {
-                        log::debug!("[ui-client] dropped stale snapshot #{sequence}");
                     }
                 }
                 Ok(HostToWindow::Pong { sequence }) => {

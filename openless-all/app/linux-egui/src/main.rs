@@ -8067,6 +8067,12 @@ Internal flags (set by OpenLess itself, not for regular use):
                 let (mut ready, mut hotkeys, mut snapshot, mut focus) =
                     (false, false, false, false);
                 while !(ready && hotkeys && snapshot && focus) {
+                    // 快照走单槽位，不从通道出。
+                    if let Some((sequence, _)) = client.take_snapshot() {
+                        assert!(ready && sequence > previous_sequence);
+                        previous_sequence = sequence;
+                        snapshot = true;
+                    }
                     match client.try_recv() {
                         Ok(HostToWindow::Ready { .. }) => ready = true,
                         Ok(HostToWindow::Hotkeys { .. }) => {

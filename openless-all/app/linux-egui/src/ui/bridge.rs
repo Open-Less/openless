@@ -17,12 +17,19 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use super::frontend::view_model::{FrontendAction, FrontendViewModel};
+
+/// 最新一份快照的单一槽位：`(sequence, view_model)`。
+///
+/// 取名是为了表达意图，也让 clippy 的 `type_complexity` 不再对
+/// `Arc<Mutex<Option<...>>>` 报错。
+pub type LatestSnapshot = Arc<Mutex<Option<(u64, Box<FrontendViewModel>)>>>;
 
 /// 协议版本：宿主与 UI 进程对不上就直接拒绝启动 UI（避免半懂不懂地渲染）。
 pub const UI_BRIDGE_VERSION: u32 = 3;
@@ -534,6 +541,15 @@ fn spawn_connection(stream: UnixStream) -> std::io::Result<UiConnection> {
 /// UI 进程侧连接：连上宿主、收快照、发动作。
 pub struct UiBridgeClient {
     incoming: Receiver<HostToWindow>,
+    /// 最新一份视图模型快照的单一槽位。
+    ///
+    /// 快照**不走** `incoming`：宿主每 2 秒发一份保活快照
+    /// （`publish_view_model`），而窗口被遮挡 / 最小化时 eframe 会完全跳过
+    /// egui pass（eframe 的 `if !show_ui`），`ui()` 根本不会被调用，也就不会
+    /// 排空任何队列。快照若是进无界通道，遮挡一晚上就是上万份堆在内存里
+    /// （现场实测：21 小时 5.8 GB，窗口恢复可见后还要逐份消化，表现为卡死）。
+    /// 只留最新一份即可 —— 中间那些本来就会被后一份覆盖，没有任何价值。
+    latest_snapshot: LatestSnapshot,
     outgoing: Sender<Outgoing>,
     reader: Option<JoinHandle<()>>,
     writer: Option<JoinHandle<()>>,
@@ -580,6 +596,8 @@ impl UiBridgeClient {
         let (incoming_tx, incoming_rx) = mpsc::channel();
         let (outgoing_tx, outgoing_rx) = mpsc::channel::<Outgoing>();
         let reader_outgoing = outgoing_tx.clone();
+        let latest_snapshot: LatestSnapshot = Arc::new(Mutex::new(None));
+        let reader_snapshot = Arc::clone(&latest_snapshot);
         let reader = std::thread::Builder::new()
             .name("openless-ui-client-reader".into())
             .spawn(move || {
@@ -612,11 +630,22 @@ impl UiBridgeClient {
                 }
                 loop {
                     match read_frame::<HostToWindow>(&mut reader) {
-                        Ok(Some(frame)) => {
-                            if incoming_tx.send(frame).is_err() {
-                                break;
+                        Ok(Some(frame)) => match frame {
+                            // 快照只进单槽位，覆盖旧的那份；其余帧照走通道。
+                            HostToWindow::Snapshot {
+                                sequence,
+                                view_model,
+                            } => {
+                                if let Ok(mut slot) = reader_snapshot.lock() {
+                                    *slot = Some((sequence, view_model));
+                                }
                             }
-                        }
+                            other => {
+                                if incoming_tx.send(other).is_err() {
+                                    break;
+                                }
+                            }
+                        },
                         Ok(None) => break,
                         Err(error) => {
                             log::warn!("[ui-client] host frame error: {error}");
@@ -645,6 +674,7 @@ impl UiBridgeClient {
         };
         Ok(Self {
             incoming: incoming_rx,
+            latest_snapshot,
             outgoing: outgoing_tx,
             reader: Some(reader),
             writer: Some(writer),
@@ -668,6 +698,17 @@ impl UiBridgeClient {
             self.ready = true;
         }
         Ok(frame)
+    }
+
+    /// 取走当前最新的视图模型快照；没有新快照就返回 `None`。
+    ///
+    /// 取走即清空槽位，所以窗口每帧调用一次就能拿到「最后一次覆盖后的状态」，
+    /// 内存占用与「宿主发过多少份」无关。
+    pub fn take_snapshot(&mut self) -> Option<(u64, Box<FrontendViewModel>)> {
+        self.latest_snapshot
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take())
     }
 
     pub fn send(&mut self, frame: WindowToHost) -> Result<(), String> {
@@ -755,23 +796,14 @@ mod tests {
         };
         let payload = serde_json::to_vec(&view_model).unwrap();
         host.send_snapshot_encoded(&payload);
-        let frame = loop {
-            match client.try_recv() {
-                Ok(frame) => break frame,
-                Err(TryRecvError::Empty) => std::thread::sleep(Duration::from_millis(10)),
-                Err(TryRecvError::Disconnected) => panic!("client disconnected early"),
-            }
-        };
-        match frame {
-            HostToWindow::Snapshot {
-                sequence,
-                view_model,
-            } => {
-                assert_eq!(sequence, 1, "first snapshot is sequence 1");
-                assert_eq!(view_model.active_page, Page::History);
-            }
-            other => panic!("unexpected frame {other:?}"),
-        }
+        // 快照从单槽位取（不进通道），所以这里轮询 `take_snapshot`。
+        let (sequence, view_model) = wait_for(|| client.take_snapshot());
+        assert_eq!(sequence, 1, "first snapshot is sequence 1");
+        assert_eq!(view_model.active_page, Page::History);
+        assert!(
+            client.take_snapshot().is_none(),
+            "taking a snapshot must empty the slot"
+        );
         host.shutdown();
         client.shutdown();
         let _ = std::fs::remove_dir_all(&dir);
@@ -801,11 +833,10 @@ mod tests {
         // 连发三份快照：写线程可能合并掉中间那些（UI 卡顿时宁可跳帧），
         // 但**到达 UI 的序号必须严格递增**，而且最后一份必然是最新的。
         while std::time::Instant::now() < deadline {
-            match client.try_recv() {
-                Ok(HostToWindow::Snapshot { sequence, .. }) => sequences.push(sequence),
-                Ok(_) => {}
-                Err(TryRecvError::Empty) => std::thread::sleep(Duration::from_millis(10)),
-                Err(TryRecvError::Disconnected) => break,
+            if let Some((sequence, _)) = client.take_snapshot() {
+                sequences.push(sequence);
+            } else {
+                std::thread::sleep(Duration::from_millis(10));
             }
             if sequences.last().copied() == Some(3) {
                 break;
@@ -819,6 +850,50 @@ mod tests {
         assert!(
             sequences.windows(2).all(|pair| pair[0] < pair[1]),
             "snapshot sequences must never go backwards: {sequences:?}"
+        );
+        host.shutdown();
+        client.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_undrained_window_keeps_only_the_newest_snapshot() {
+        // 现场：窗口被遮挡时 eframe **完全跳过 egui pass**（`if !show_ui`），
+        // `ui()` 不会被调用，而宿主每 2 秒发一份保活快照。21 小时≈3.7 万份，
+        // 堆在无界通道里就是 5.8 GB。这里连发 40 份且一份不取，验证内存只由
+        // 「最新一份」决定：槽位里只有一份，通道里一句快照也没有。
+        let dir = temp_dir("undrained");
+        let path = ui_socket_path(&dir);
+        let mut host = UiBridgeHost::bind(path.clone()).unwrap();
+        let mut client = UiBridgeClient::connect(&path).unwrap();
+        host.accept_pending();
+        wait_for(|| {
+            host.drain();
+            host.is_connected().then_some(())
+        });
+        assert!(matches!(
+            wait_for(|| client.try_recv().ok()),
+            HostToWindow::Ready { .. }
+        ));
+
+        let payload = serde_json::to_vec(&FrontendViewModel {
+            active_page: Page::History,
+            ..Default::default()
+        })
+        .unwrap();
+        for _ in 0..40 {
+            host.send_snapshot_encoded(&payload);
+        }
+        // 中间那些必须被覆盖掉，只留最后一份（序号 40）。
+        let (sequence, _) = wait_for(|| client.take_snapshot().filter(|(seq, _)| *seq == 40));
+        assert_eq!(sequence, 40);
+        assert!(
+            client.take_snapshot().is_none(),
+            "taking a snapshot must empty the slot"
+        );
+        assert!(
+            matches!(client.try_recv(), Err(TryRecvError::Empty)),
+            "snapshots must never queue in the unbounded channel"
         );
         host.shutdown();
         client.shutdown();
