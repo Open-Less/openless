@@ -583,8 +583,6 @@ mod linux_app {
         capsule_session: Option<String>,
         /// 已经为哪个会话排过收起计时，避免重复计时。
         capsule_dismissal_scheduled: Option<String>,
-        /// 流式输出速率计量：润色增量字符数 → 胶囊光点转速（见 `stream_rate` 模块）。
-        stream_rate: frontend::stream_rate::StreamRate,
         tray: Option<openless_linux_egui::LinuxTray>,
         exit_requested: bool,
         /// 上次打「泵心跳」日志的时间。
@@ -757,7 +755,6 @@ mod linux_app {
                         popup_action_guard: PopupActionGuard::default(),
                         capsule_session: None,
                         capsule_dismissal_scheduled: None,
-                        stream_rate: frontend::stream_rate::StreamRate::default(),
                         tray,
                         exit_requested: false,
                         last_pump_heartbeat: std::time::Instant::now(),
@@ -859,7 +856,6 @@ mod linux_app {
                     popup_action_guard: PopupActionGuard::default(),
                     capsule_session: None,
                     capsule_dismissal_scheduled: None,
-                    stream_rate: frontend::stream_rate::StreamRate::default(),
                     tray,
                     exit_requested: false,
                     last_pump_heartbeat: std::time::Instant::now(),
@@ -1334,7 +1330,6 @@ mod linux_app {
                 CapsuleOutcome::Progress(text) => text,
             };
             let style = self.capsule_style_tag();
-            let stream_rate = self.stream_rate.rate(frontend::stream_rate::now_seconds());
             self.send_popup(
                 PopupKind::Capsule,
                 HostToPopup::Capsule {
@@ -1346,7 +1341,6 @@ mod linux_app {
                     audio_level: Some(snapshot.level),
                     translation_active: snapshot.translation_active,
                     style,
-                    stream_rate: Some(stream_rate),
                 },
             );
             self.schedule_capsule_dismissal(&session_id.to_string(), snapshot.phase);
@@ -1374,7 +1368,6 @@ mod linux_app {
                     audio_level: None,
                     translation_active: false,
                     style: self.capsule_style_tag(),
-                    stream_rate: None,
                 },
             );
             self.schedule_capsule_dismissal(session_id, DictationPhase::Failed);
@@ -2389,8 +2382,6 @@ mod linux_app {
                         self.transcript_state = TranscriptAccumulator::default();
                         self.transcript.clear();
                         self.transcript_session = state.session_id;
-                        // 新会话：速率样本清空，避免上一轮的尾巴把首帧转速抬起来。
-                        self.stream_rate.reset();
                     }
                     // 终态不写状态栏：`Failed` / `Completed` / `Cancelled` 是 Core 的
                     // 内部词，用户已经能从胶囊看到本地化文案（Tauri 也只在那里显示）。
@@ -2421,8 +2412,6 @@ mod linux_app {
                             _ => String::new(),
                         };
                         let style = self.capsule_style_tag();
-                        let stream_rate =
-                            self.stream_rate.rate(frontend::stream_rate::now_seconds());
                         self.send_popup(
                             PopupKind::Capsule,
                             HostToPopup::Capsule {
@@ -2434,7 +2423,6 @@ mod linux_app {
                                 audio_level: Some(state.level),
                                 translation_active: state.translation_active,
                                 style,
-                                stream_rate: Some(stream_rate),
                             },
                         );
                         // 终态：按 Tauri 时序安排自动收起，否则药丸会一直贴在屏幕上。
@@ -2447,17 +2435,8 @@ mod linux_app {
                 {
                     self.transcript = self.transcript_state.text().to_string();
                 }
-                BackendEventKind::PolishDelta(delta) => {
-                    if delta.is_final {
-                        self.transcript = delta.text;
-                        // 流结束：样本清空，胶囊立刻回落基线转速。
-                        self.stream_rate.reset();
-                    } else {
-                        // 用户诉求：润色时光点跟着模型的吐字速度转。这里只做「增量字符数 →
-                        // 字符/秒」，随时间衰减与转速映射在胶囊窗口侧（见 stream_rate 模块）。
-                        self.stream_rate
-                            .observe_text(frontend::stream_rate::now_seconds(), &delta.text);
-                    }
+                BackendEventKind::PolishDelta(delta) if delta.is_final => {
+                    self.transcript = delta.text;
                 }
                 BackendEventKind::DictationCompleted(result) => {
                     self.transcript = result.polished_text;
@@ -7016,6 +6995,10 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         overlay: Option<PopupOverlay>,
         /// 面板有焦点时插件收不到按键，所以面板自己也要匹配本地热键。
         hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher,
+        /// 本次会话「预备态（麦克风还没吐第一帧 PCM）」的开始时刻：用来学习 warmupMs。
+        warming_started: Option<std::time::Instant>,
+        /// 学出来的「预备 → 就绪」平均耗时（ms），驱动光条的预测式展开。
+        warmup_ms: f32,
     }
 
     impl NativePopupApp {
@@ -7158,6 +7141,30 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             }
         }
 
+        /// 学习「预备态持续多久」= 麦克风就绪耗时，EMA 更新并落盘（Tauri 用
+        /// localStorage 的 `ol-capsule-warmup-ms`，公式一致；异常样本在
+        /// `learn_capsule_warmup_ms` 里被过滤）。
+        fn track_capsule_warmup(&mut self, warming: bool, phase: &str) {
+            let warming = warming
+                && matches!(
+                    phase.to_ascii_lowercase().as_str(),
+                    "starting" | "recording"
+                );
+            if warming {
+                if self.warming_started.is_none() {
+                    self.warming_started = Some(std::time::Instant::now());
+                }
+                return;
+            }
+            let Some(started) = self.warming_started.take() else {
+                return;
+            };
+            let observed_ms = started.elapsed().as_secs_f32() * 1000.0;
+            if let Some(next) = openless_linux_egui::learn_capsule_warmup_ms(observed_ms) {
+                self.warmup_ms = next;
+            }
+        }
+
         /// One capsule frame on a layer surface: same view, same protocol and
         /// same send / exit rules as the eframe window, minus viewport
         /// commands (a layer surface is sized by the compositor).
@@ -7180,7 +7187,8 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             let lang = self.lang;
             let mut action = frontend::popups::CapsuleAction::None;
             let output = ctx.run_ui(raw, |ui| {
-                action = frontend::popups::dictation_capsule(ui, &capsule, lang);
+                self.track_capsule_warmup(capsule.audio_level.is_none(), &capsule.phase);
+                action = frontend::popups::dictation_capsule(ui, &capsule, lang, self.warmup_ms);
             });
             match action {
                 frontend::popups::CapsuleAction::None => {}
@@ -7417,7 +7425,15 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                         capsule_phase.as_str(),
                         "starting" | "recording" | "transcribing" | "polishing" | "inserting"
                     );
-                    let action = frontend::popups::dictation_capsule(ui, &self.state.capsule, lang);
+                    let warming = self.state.capsule.audio_level.is_none();
+                    let warming_phase = self.state.capsule.phase.clone();
+                    self.track_capsule_warmup(warming, &warming_phase);
+                    let action = frontend::popups::dictation_capsule(
+                        ui,
+                        &self.state.capsule,
+                        lang,
+                        self.warmup_ms,
+                    );
                     let message = match action {
                         frontend::popups::CapsuleAction::Cancel => {
                             Some(PopupToHost::CancelDictation {
@@ -7564,6 +7580,8 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                             less_computer_input: String::new(),
                             outgoing_sequence: 0,
                             ready_sent: false,
+                            warming_started: None,
+                            warmup_ms: openless_linux_egui::load_capsule_warmup_ms(),
                             avatar: QaAvatar::default(),
                             lang: load_locale_pref().resolve(),
                             overlay: None,
@@ -7717,6 +7735,8 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                     less_computer_input: String::new(),
                     outgoing_sequence: 0,
                     ready_sent: false,
+                    warming_started: None,
+                    warmup_ms: openless_linux_egui::load_capsule_warmup_ms(),
                     avatar: QaAvatar::default(),
                     // The popup is a separate process, so it re-reads the
                     // persisted UI-locale preference rather than sharing state.
@@ -8470,6 +8490,8 @@ Internal flags (set by OpenLess itself, not for regular use):
                 less_computer_input: String::new(),
                 outgoing_sequence: 0,
                 ready_sent: false,
+                warming_started: None,
+                warmup_ms: openless_linux_egui::load_capsule_warmup_ms(),
                 avatar: QaAvatar::default(),
                 lang: Lang::ZhCn,
                 overlay: None,
@@ -8501,7 +8523,6 @@ Internal flags (set by OpenLess itself, not for regular use):
                 audio_level: Some(0.2),
                 translation_active: false,
                 style: "siri".into(),
-                stream_rate: None,
             })
             .expect("channel is open");
             assert!(!app.pump(None), "a progress frame must not exit");

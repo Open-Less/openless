@@ -31,6 +31,8 @@ pub struct SiriEffect {
     pub radius: f32,
     pub thickness: f32,
     pub tint: [f32; 3],
+    /// 整体不透明度（预乘 alpha）：wave→orb 交叉淡出用，`1.0` = 原样。
+    pub opacity: f32,
 }
 
 impl SiriEffect {
@@ -44,6 +46,7 @@ impl SiriEffect {
             radius: 0.0,
             thickness: 2.0,
             tint: [1.0; 3],
+            opacity: 1.0,
         }
     }
 
@@ -57,6 +60,7 @@ impl SiriEffect {
             radius: 0.0,
             thickness: 2.0,
             tint: [1.0; 3],
+            opacity: 1.0,
         }
     }
 
@@ -70,11 +74,18 @@ impl SiriEffect {
             radius,
             thickness,
             tint: [1.0; 3],
+            opacity: 1.0,
         }
     }
 
     pub fn with_tint(mut self, tint: [f32; 3]) -> Self {
         self.tint = tint;
+        self
+    }
+
+    /// 预乘 alpha 的整体淡出（wave→orb 交叉淡出；Tauri `opacity .6s ease-out .55s`）。
+    pub fn with_opacity(mut self, opacity: f32) -> Self {
+        self.opacity = opacity.clamp(0.0, 1.0);
         self
     }
 }
@@ -86,6 +97,10 @@ pub struct SiriDrive {
     pub resolved: f32,
     pub speed: f32,
     pub warming: bool,
+    /// 预备态预期时长（ms），驱动光条的「预测式展开」（Tauri `warmupMs`）。
+    pub warmup_ms: f32,
+    /// 思考圆点的收尾：`true` 时六点干脆合回中央一颗圆（Tauri `merging`）。
+    pub merging: bool,
 }
 
 impl Default for SiriDrive {
@@ -95,6 +110,8 @@ impl Default for SiriDrive {
             resolved: 1.0,
             speed: 1.0,
             warming: false,
+            warmup_ms: DEFAULT_WARMUP_MS,
+            merging: false,
         }
     }
 }
@@ -105,7 +122,24 @@ pub struct SiriClock {
     pub level: f32,
     pub resolved: f32,
     pub speed: f32,
+    /// 预备态展开进度（0 = 收拢/加载中，1 = 展开到位）。对齐 Tauri `warmProgress`。
+    pub warm_progress: f32,
+    /// 思考圆点的「聚拢度」：1 = 六点全在圆心（出场那一拍），0 = 散开成环。
+    pub gather: f32,
+    /// 该时钟存活了多久（真实秒，不乘 speed）：驱动 `gather` 的 hold 计时。
+    pub elapsed: f32,
 }
+
+/// 预备态光条的「收拢度」：wave 停在 0.2 —— 光条明显还没展开（「加载中」）。
+/// 与 Tauri `SiriGL.tsx` 的 `WARMING_RESOLVED` 同值。
+pub const WARMING_RESOLVED: f32 = 0.2;
+/// 思考圆点出场时「全聚圆心」保持的时长，之后才缓缓散开成环（Tauri `GATHER_HOLD_S`）。
+const GATHER_HOLD_SECONDS: f32 = 0.3;
+/// 预备态预期时长的默认值（Tauri `WARMUP_MS_DEFAULT`）。
+pub const DEFAULT_WARMUP_MS: f32 = 150.0;
+/// 学习出来的预热时长上下限（Tauri `readWarmupMs` 的 clamp）。
+pub const MIN_WARMUP_MS: f32 = 60.0;
+pub const MAX_WARMUP_MS: f32 = 600.0;
 
 pub fn visual_voice(raw: f32) -> f32 {
     const GATE: f32 = 0.012;
@@ -122,24 +156,79 @@ pub fn tick(ctx: &egui::Context, id: &str, drive: SiriDrive, dt: f32) -> SiriClo
         data.get_temp::<SiriClock>(key).unwrap_or(SiriClock {
             time: 0.0,
             level: 0.0,
-            resolved: drive.resolved,
+            // 预备态一上场就从收拢态起步（未成形 = 加载中），避免「先展开一下又收拢」。
+            resolved: if drive.warming {
+                WARMING_RESOLVED
+            } else {
+                drive.resolved
+            },
             speed: drive.speed,
+            warm_progress: if drive.warming { 0.0 } else { 1.0 },
+            // 圆点出场那一拍：六点全聚在圆心。
+            gather: 1.0,
+            elapsed: 0.0,
         })
     });
     clock.speed += (drive.speed - clock.speed) * (1.0 - (-dt * 2.5).exp());
     clock.time += dt * clock.speed;
-    let target = if drive.warming {
+    clock.elapsed += dt;
+
+    // 预测式展开（Tauri 用户方案）：入场不再死等就绪信号，而是按历史平均加载时长
+    // `warmup_ms` 从按下就平滑推进；未就绪 cap 在 0.9（留一截给就绪收尾），一旦就绪
+    // 快速补到 1 —— 就绪早 = 剩得多，看上去「迅速展开完成」。
+    let warmup_sec = (drive.warmup_ms.clamp(MIN_WARMUP_MS, MAX_WARMUP_MS) / 1000.0).max(0.06);
+    if drive.warming {
+        clock.warm_progress = (clock.warm_progress + dt / warmup_sec).min(0.9);
+    } else {
+        clock.warm_progress += (1.0 - clock.warm_progress) * (1.0 - (-dt * 9.0).exp());
+    }
+
+    // resolved：思考态（0）走 Tauri 原版的「从容汇聚」；入场/录音由 warmProgress
+    // 从收拢态展开到满。
+    let thinking = drive.resolved < 0.5;
+    let resolved_target = if thinking {
+        drive.resolved
+    } else {
+        WARMING_RESOLVED + (1.0 - WARMING_RESOLVED) * clock.warm_progress
+    };
+    let resolved_k = if thinking { 2.2 } else { 9.0 };
+    clock.resolved += (resolved_target - clock.resolved) * (1.0 - (-dt * resolved_k).exp());
+
+    let level_target = if drive.warming {
         0.12 + 0.06 * (clock.time * 3.0).sin()
-    } else if drive.resolved < 0.5 {
+    } else if thinking {
         0.14 + 0.07 * (clock.time * 2.2).sin()
     } else {
         visual_voice(drive.level)
     };
-    let attack = if target > clock.level { 14.0 } else { 5.0 };
-    clock.level += (target - clock.level) * (1.0 - (-dt * attack).exp());
-    clock.resolved += (drive.resolved - clock.resolved) * (1.0 - (-dt * 3.0).exp());
+    let attack = if level_target > clock.level {
+        14.0
+    } else {
+        5.0
+    };
+    clock.level += (level_target - clock.level) * (1.0 - (-dt * attack).exp());
+
+    // 圆点环的生命周期（Tauri 用户拍板）：出场全聚圆心接住 wave 收缩成的光点 →
+    // 稳住一拍后缓缓「从中心散开」成环转动 → `merging`（终态）时干脆地合回中央一颗圆。
+    if drive.merging {
+        clock.gather += (1.0 - clock.gather) * (1.0 - (-dt * 4.0).exp());
+    } else if clock.elapsed > GATHER_HOLD_SECONDS {
+        clock.gather += (0.0 - clock.gather) * (1.0 - (-dt * 1.6).exp());
+    }
+
     ctx.data_mut(|data| data.insert_temp(key, clock));
     clock
+}
+
+/// 丢掉某个时钟，让入场动画（wave 展开 / 圆点聚拢）从头走一遍。
+///
+/// Tauri 里胶囊组件每次会话重新挂载，动画状态天然是新的；Linux 这边两个窗口进程都
+/// 常驻，所以由调用方在新会话开始时显式复位。
+pub fn reset(ctx: &egui::Context, id: &str) {
+    let key = egui::Id::new(("openless-siri-clock", id));
+    ctx.data_mut(|data| {
+        data.remove::<SiriClock>(key);
+    });
 }
 
 const SIRI_WGSL: &str = r#"
@@ -292,6 +381,17 @@ fn ring(frag: vec2<f32>) -> vec4<f32> {
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let local = in.uv * u.size;
+    return fade(mode_color(local));
+}
+
+// 预乘 alpha 的整体淡出：`u.tint.a` 是 opacity（RGB 与 alpha 一起缩，
+// 才能让 PREMULTIPLIED_ALPHA_BLENDING 下的淡出走对）。
+fn fade(color: vec4<f32>) -> vec4<f32> {
+    let opacity = clamp(u.tint.a, 0.0, 1.0);
+    return vec4<f32>(color.rgb * opacity, color.a * opacity);
+}
+
+fn mode_color(local: vec2<f32>) -> vec4<f32> {
     if u.mode < 0.5 { return wave(local); }
     if u.mode < 1.5 { return orb(local); }
     return ring(local);
@@ -302,13 +402,11 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_main_linear(in: VertexOut) -> @location(0) vec4<f32> {
     let local = in.uv * u.size;
-    var color: vec4<f32>;
-    if u.mode < 0.5 { color = wave(local); }
-    else if u.mode < 1.5 { color = orb(local); }
-    else { color = ring(local); }
+    let color = mode_color(local);
     let lower = color.rgb / 12.92;
     let higher = pow((color.rgb + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4));
-    return vec4<f32>(select(higher, lower, color.rgb < vec3<f32>(0.04045)), color.a);
+    let linear = vec4<f32>(select(higher, lower, color.rgb < vec3<f32>(0.04045)), color.a);
+    return fade(linear);
 }
 "#;
 
@@ -341,7 +439,7 @@ fn uniform_bytes(uniforms: SiriUniforms) -> [u8; 64] {
         uniforms.effect.tint[0],
         uniforms.effect.tint[1],
         uniforms.effect.tint[2],
-        1.0,
+        uniforms.effect.opacity.clamp(0.0, 1.0),
         uniforms.size[0],
         uniforms.size[1],
     ];
@@ -592,6 +690,171 @@ mod tests {
             1.0 / 60.0,
         );
         assert!(after.time - before < 0.06);
+    }
+
+    /// 预备态：光条从收拢态起步，按 `warmup_ms` 预测式展开，就绪后快速补满。
+    #[test]
+    fn the_wave_expands_on_the_learned_warmup_schedule() {
+        let ctx = egui::Context::default();
+        let predict = |elapsed_ms: f32| {
+            let ctx = egui::Context::default();
+            let mut clock = tick(
+                &ctx,
+                "warm",
+                SiriDrive {
+                    warming: true,
+                    warmup_ms: 200.0,
+                    ..Default::default()
+                },
+                0.0,
+            );
+            let frames = (elapsed_ms / 1000.0 / (1.0 / 60.0)) as usize;
+            for _ in 0..frames {
+                clock = tick(
+                    &ctx,
+                    "warm",
+                    SiriDrive {
+                        warming: true,
+                        warmup_ms: 200.0,
+                        ..Default::default()
+                    },
+                    1.0 / 60.0,
+                );
+            }
+            clock.resolved
+        };
+        // 挂载那一帧：收拢（未成形），而不是直接展开。
+        let mount = tick(
+            &ctx,
+            "mount",
+            SiriDrive {
+                warming: true,
+                ..Default::default()
+            },
+            0.0,
+        );
+        assert!((mount.resolved - WARMING_RESOLVED).abs() < 1e-6);
+        assert_eq!(mount.warm_progress, 0.0);
+        // 200ms 的预期时长：越等越展开，但未就绪时封在 0.9 的 cap 之下。
+        let early = predict(0.0);
+        let halfway = predict(100.0);
+        let capped = predict(400.0);
+        assert!(
+            early < halfway && halfway < capped,
+            "{early} {halfway} {capped}"
+        );
+        assert!(
+            capped < 1.0,
+            "warming must stay short of fully open: {capped}"
+        );
+        // 就绪：快速补到满。
+        let mut clock = tick(
+            &ctx,
+            "ready",
+            SiriDrive {
+                warming: true,
+                warmup_ms: 200.0,
+                ..Default::default()
+            },
+            0.0,
+        );
+        for _ in 0..60 {
+            clock = tick(
+                &ctx,
+                "ready",
+                SiriDrive {
+                    warming: true,
+                    warmup_ms: 200.0,
+                    ..Default::default()
+                },
+                1.0 / 60.0,
+            );
+        }
+        for _ in 0..60 {
+            clock = tick(&ctx, "ready", SiriDrive::default(), 1.0 / 60.0);
+        }
+        assert!(
+            clock.resolved > 0.99,
+            "a ready microphone must open the ribbon: {}",
+            clock.resolved
+        );
+    }
+
+    /// 思考圆点：出场全聚圆心 → 稳住 0.3s → 散开成环；终态 `merging` 时合回一颗圆。
+    #[test]
+    fn the_orb_gathers_then_spreads_and_merges_at_the_end() {
+        let ctx = egui::Context::default();
+        let orb = |merging: bool| SiriDrive {
+            level: 0.0,
+            resolved: 0.0,
+            speed: 1.5,
+            warming: false,
+            warmup_ms: DEFAULT_WARMUP_MS,
+            merging,
+        };
+        let mount = tick(&ctx, "orb", orb(false), 0.0);
+        assert_eq!(mount.gather, 1.0, "the six dots start merged in the centre");
+        let mut clock = mount;
+        // 0.2s（还在 hold 里）：仍是全聚。
+        for _ in 0..12 {
+            clock = tick(&ctx, "orb", orb(false), 1.0 / 60.0);
+        }
+        assert!(clock.elapsed < GATHER_HOLD_SECONDS);
+        assert!(clock.gather > 0.99, "hold: {}", clock.gather);
+        // 又过了 1.5s：应该已经散开成环。
+        for _ in 0..90 {
+            clock = tick(&ctx, "orb", orb(false), 1.0 / 60.0);
+        }
+        assert!(clock.gather < 0.2, "spread into a ring: {}", clock.gather);
+        // 终态：合回中央一颗圆。
+        for _ in 0..60 {
+            clock = tick(&ctx, "orb", orb(true), 1.0 / 60.0);
+        }
+        assert!(
+            clock.gather > 0.9,
+            "merging into one circle: {}",
+            clock.gather
+        );
+    }
+
+    /// 新会话复位：时钟丢掉之后，下一帧回到「刚出场」的状态。
+    #[test]
+    fn resetting_the_clock_replays_the_entry_animation() {
+        let ctx = egui::Context::default();
+        for _ in 0..30 {
+            let _ = tick(&ctx, "session", SiriDrive::default(), 1.0 / 60.0);
+        }
+        reset(&ctx, "session");
+        let fresh = tick(
+            &ctx,
+            "session",
+            SiriDrive {
+                warming: true,
+                ..Default::default()
+            },
+            0.0,
+        );
+        assert_eq!(fresh.time, 0.0);
+        assert_eq!(fresh.elapsed, 0.0);
+        assert_eq!(fresh.warm_progress, 0.0);
+        assert_eq!(fresh.gather, 1.0);
+        assert!((fresh.resolved - WARMING_RESOLVED).abs() < 1e-6);
+    }
+
+    /// 整体不透明度（预乘 alpha）写进 tint 的第四个分量。
+    #[test]
+    fn opacity_lands_in_the_tint_alpha_channel() {
+        let opaque = uniform_bytes(SiriUniforms {
+            effect: SiriEffect::wave(1.0, 0.5),
+            size: [64.0, 64.0],
+        });
+        let faded = uniform_bytes(SiriUniforms {
+            effect: SiriEffect::wave(1.0, 0.5).with_opacity(0.25),
+            size: [64.0, 64.0],
+        });
+        let read = |bytes: &[u8; 64]| f32::from_ne_bytes(bytes[44..48].try_into().unwrap());
+        assert_eq!(read(&opaque), 1.0);
+        assert_eq!(read(&faded), 0.25);
     }
 
     #[test]

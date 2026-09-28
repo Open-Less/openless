@@ -1,3 +1,4 @@
+pub mod capsule_motion;
 pub mod corrections;
 pub mod format;
 pub mod history;
@@ -11,7 +12,6 @@ pub mod popups;
 pub mod selection_ask;
 pub mod settings;
 pub use openless_linux_egui::siri_wgpu;
-pub mod stream_rate;
 pub mod style;
 pub mod translation;
 pub mod view_model;

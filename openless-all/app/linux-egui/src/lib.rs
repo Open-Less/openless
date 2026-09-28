@@ -127,7 +127,8 @@ pub use single_instance::{
 };
 pub use tray::{LinuxTray, TrayCommand, TrayError, TrayMicrophone};
 pub use ui_state::{
-    load_locale_pref, load_quick_note_shortcut_hidden, save_locale_pref,
+    learn_capsule_warmup_ms, load_capsule_warmup_ms, load_locale_pref,
+    load_quick_note_shortcut_hidden, save_capsule_warmup_ms, save_locale_pref,
     save_quick_note_shortcut_hidden, ui_state_dir, ui_state_path, UiStateError,
 };
 
