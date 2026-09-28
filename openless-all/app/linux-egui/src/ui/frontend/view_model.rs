@@ -418,6 +418,8 @@ pub enum SettingsProviderAuth {
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct SettingsProviderEditor {
     pub channel_id: String,
+    /// 渠道种类：弹窗副标题在「文字处理渠道 / 语音识别渠道」之间切换。
+    pub is_asr: bool,
     /// Localized provider label (read-only).
     pub provider: String,
     pub provider_type: String,

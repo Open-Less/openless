@@ -399,6 +399,8 @@ mod linux_app {
     /// clobbers what the user is typing.
     struct ProviderEditorForm {
         channel_id: String,
+        /// 渠道种类（LLM / ASR）：弹窗副标题「文字处理渠道 / 语音识别渠道」用它。
+        kind: openless_core::ChannelKind,
         provider_type: String,
         label: String,
         auth: frontend::view_model::SettingsProviderAuth,
@@ -425,6 +427,7 @@ mod linux_app {
         fn from_editor(editor: &ProviderEditor, lang: Lang) -> Self {
             Self {
                 channel_id: editor.channel.id.clone(),
+                kind: editor.kind,
                 provider_type: editor.descriptor.provider_type.as_str().to_string(),
                 label: localized_provider_label(
                     lang,
@@ -4115,6 +4118,7 @@ mod linux_app {
             vm.provider_editor = self.provider_editor_form.as_ref().map(|form| {
                 frontend::view_model::SettingsProviderEditor {
                     channel_id: form.channel_id.clone(),
+                    is_asr: matches!(form.kind, openless_core::ChannelKind::Asr),
                     provider: form.label.clone(),
                     provider_type: form.provider_type.clone(),
                     name: form.name.clone(),

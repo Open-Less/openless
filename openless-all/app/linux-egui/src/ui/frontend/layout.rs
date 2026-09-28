@@ -1413,8 +1413,30 @@ pub fn text_input(
     width: f32,
     password: bool,
 ) -> egui::Response {
-    let width = width.clamp(80.0, INPUT_MAX_WIDTH);
-    let (outer, _) = ui.allocate_exact_size(egui::vec2(width, INPUT_HEIGHT), egui::Sense::hover());
+    text_input_sized(
+        ui,
+        value,
+        id,
+        hint,
+        width.clamp(80.0, INPUT_MAX_WIDTH),
+        INPUT_HEIGHT,
+        password,
+    )
+}
+
+/// 与 [`text_input`] 相同，但宽高由调用方给：渠道编辑弹窗里的字段照 Tauri 是
+/// 整列宽、38px 高，比设置行里的紧凑输入框大一号。
+pub fn text_input_sized(
+    ui: &mut egui::Ui,
+    value: &mut String,
+    id: egui::Id,
+    hint: &str,
+    width: f32,
+    height: f32,
+    password: bool,
+) -> egui::Response {
+    let width = width.clamp(80.0, 640.0);
+    let (outer, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     ui.painter()
         .rect_filled(outer, egui::CornerRadius::same(8), theme::SURFACE);
     ui.painter().rect_stroke(

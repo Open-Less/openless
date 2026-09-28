@@ -2,6 +2,13 @@ use super::*;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+/// 设置页里的外链目标，与 Tauri 的 `AboutSection` / `SettingsModal` 一字不差
+/// （`HELP_URL` / `RELEASE_NOTES_URL` 及仓库、issue 页）。
+pub(crate) const REPOSITORY_URL: &str = "https://github.com/Open-Less/openless";
+pub(crate) const HELP_URL: &str = "https://github.com/Open-Less/openless#readme";
+pub(crate) const RELEASE_NOTES_URL: &str = "https://github.com/Open-Less/openless/releases";
+pub(crate) const ISSUES_URL: &str = "https://github.com/Open-Less/openless/issues";
+
 type Patch = BTreeMap<String, Value>;
 
 #[derive(Default)]
@@ -635,16 +642,16 @@ impl OpenLessEguiApp {
                 openless_linux_egui::play_cue_start();
             }
             frontend::view_model::SettingsActionField::OpenGitHub => {
-                let _ = open_external("https://github.com/earendil-works/openless");
+                let _ = open_external(REPOSITORY_URL);
             }
             frontend::view_model::SettingsActionField::OpenHelp => {
-                let _ = open_external("https://github.com/earendil-works/openless");
+                let _ = open_external(HELP_URL);
             }
             frontend::view_model::SettingsActionField::OpenReleaseNotes => {
-                let _ = open_external("https://github.com/earendil-works/openless/releases");
+                let _ = open_external(RELEASE_NOTES_URL);
             }
             frontend::view_model::SettingsActionField::OpenFeedback => {
-                let _ = open_external("https://github.com/earendil-works/openless/issues");
+                let _ = open_external(ISSUES_URL);
             }
             frontend::view_model::SettingsActionField::CopyQQ => {
                 match fcitx5_copy_to_clipboard("1078960553") {
@@ -744,5 +751,17 @@ mod tests {
             serde_json::to_value(draft).unwrap()
         );
         assert!(edits.contains_key("/hotkey/mode"));
+    }
+
+    /// 外链必须指向与 Tauri 相同的仓库/页面（回归：曾经指向 earendil-works）。
+    #[test]
+    fn settings_links_match_the_tauri_targets() {
+        assert_eq!(REPOSITORY_URL, "https://github.com/Open-Less/openless");
+        assert_eq!(HELP_URL, "https://github.com/Open-Less/openless#readme");
+        assert_eq!(
+            RELEASE_NOTES_URL,
+            "https://github.com/Open-Less/openless/releases"
+        );
+        assert_eq!(ISSUES_URL, "https://github.com/Open-Less/openless/issues");
     }
 }

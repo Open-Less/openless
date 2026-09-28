@@ -34,6 +34,7 @@ pub enum IconName {
     Github,
     More,
     ChevronRight,
+    ChevronLeft,
     Feather,
     Layout,
     Doc,
@@ -104,6 +105,10 @@ fn lucide_svg(icon: IconName) -> Option<(&'static str, &'static str)> {
         IconName::ChevronRight => (
             "ChevronRight",
             include_str!("../../../assets/lucide/ChevronRight.svg"),
+        ),
+        IconName::ChevronLeft => (
+            "ChevronLeft",
+            include_str!("../../../assets/lucide/ChevronLeft.svg"),
         ),
         IconName::Feather => (
             "Feather",
@@ -232,6 +237,7 @@ mod tests {
             IconName::Chat,
             IconName::More,
             IconName::ChevronRight,
+            IconName::ChevronLeft,
             IconName::Feather,
             IconName::Layout,
             IconName::Doc,

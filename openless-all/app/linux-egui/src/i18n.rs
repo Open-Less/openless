@@ -2717,6 +2717,60 @@ pub const CATALOG: &[Msg] = &[
         ),
     },
     Msg {
+        key: "settings.channels.connection_title",
+        text: row(
+            "服务连接",
+            "服務連線",
+            "Service connection",
+            "サービス接続",
+            "서비스 연결",
+        ),
+    },
+    Msg {
+        key: "settings.channels.edit_title",
+        text: row(
+            "编辑渠道",
+            "編輯渠道",
+            "Edit channel",
+            "チャネルを編集",
+            "채널 편집",
+        ),
+    },
+    Msg {
+        key: "settings.channels.create_title",
+        text: row(
+            "添加渠道",
+            "新增渠道",
+            "Add channel",
+            "チャネルを追加",
+            "채널 추가",
+        ),
+    },
+    Msg {
+        key: "settings.channels.auto_save_hint",
+        text: row(
+            "字段修改后自动保存；完成配置后，可手动验证连接。",
+            "修改欄位後會自動儲存；完成設定後，可手動驗證連線。",
+            "Changes save automatically. Once configured, you can check the connection manually.",
+            "変更は自動保存されます。設定が終わったら、手動で接続を確認できます。",
+            "변경 사항은 자동으로 저장됩니다. 설정을 마친 후 연결을 직접 확인할 수 있습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.channels.name_label",
+        text: row(
+            "渠道名称（可选）",
+            "名稱",
+            "Channel name (optional)",
+            "チャネル名（任意）",
+            "채널 이름 (선택)",
+        ),
+    },
+    Msg {
+        key: "settings.channels.done",
+        text: row("完成", "完成", "Done", "完了", "완료"),
+    },
+    Msg {
         key: "settings.channels.llm_title",
         text: row(
             "文字处理渠道",
