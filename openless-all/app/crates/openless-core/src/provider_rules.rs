@@ -63,6 +63,7 @@ const LLM_PROVIDER_TYPES: &[(&str, &str)] = &[
     ("cometapi", "cometapi"),
     ("openrouterFree", "openrouterFree"),
     ("requesty", "requesty"),
+    ("api-route", "apiRoute"),
     ("orcarouter", "orcarouter"),
     ("alibabaCoding", "alibabaCoding"),
     ("codingPlanX", "codingPlanX"),
@@ -603,6 +604,7 @@ pub fn default_llm_endpoint(provider_type: &str) -> Option<&'static str> {
         "cometapi" => Some("https://api.cometapi.com/v1"),
         "openrouterFree" => Some("https://openrouter.ai/api/v1"),
         "requesty" => Some("https://router.requesty.ai/v1"),
+        "api-route" => Some("https://global.api-route.com/v1"),
         "orcarouter" => Some(crate::asr::mimo::ORCAROUTER_DEFAULT_ENDPOINT),
         "alibabaCoding" => Some("https://coding-intl.dashscope.aliyuncs.com/v1"),
         "codingPlanX" => Some("https://api.codingplanx.ai/v1"),
@@ -626,6 +628,7 @@ pub fn default_llm_model(provider_type: &str) -> Option<&'static str> {
         "mimo" => Some("xiaomi/mimo-v2-flash"),
         "openrouterFree" => Some("qwen/qwen3-coder:free"),
         "requesty" => Some("openai/gpt-4o-mini"),
+        "api-route" => Some("deepseek-v4-flash"),
         "orcarouter" => Some("orcarouter/fusion-flash"),
         "alibabaCoding" => Some("qwen3-coder-plus"),
         "codingPlanX" => Some("gpt-5-mini"),
@@ -1385,6 +1388,42 @@ mod tests {
         assert!(!llm_configured("requesty", &configuration));
         configuration.llm_api_key = true;
         assert!(llm_configured("requesty", &configuration));
+    }
+
+    #[test]
+    fn api_route_descriptor_supplies_defaults_formats_and_credentials() {
+        use crate::llm_protocol::LlmRequestFormat;
+        assert!(crate::cloud_providers::SHARED_CLOUD_LLM_PROVIDER_TYPES.contains(&"api-route"));
+        let descriptor = provider_descriptor(ProviderKind::Llm, "api-route").unwrap();
+        assert_eq!(descriptor.label_key, "apiRoute");
+        assert_eq!(
+            descriptor.default_endpoint.as_deref(),
+            Some("https://global.api-route.com/v1")
+        );
+        assert_eq!(
+            descriptor.default_model.as_deref(),
+            Some("deepseek-v4-flash")
+        );
+        assert_eq!(
+            descriptor.default_request_format,
+            Some(LlmRequestFormat::ChatCompletions)
+        );
+        assert_eq!(descriptor.supported_request_formats, LlmRequestFormat::ALL);
+        assert_eq!(descriptor.validation_probe, ValidationProbe::LlmText);
+        assert!(api_key_required(
+            ProviderKind::Llm,
+            "api-route",
+            Some("https://global.api-route.com/v1/chat/completions")
+        ));
+        let mut configuration = CredentialConfiguration {
+            llm_endpoint: true,
+            llm_api_key_required: true,
+            llm_model: true,
+            ..CredentialConfiguration::default()
+        };
+        assert!(!llm_configured("api-route", &configuration));
+        configuration.llm_api_key = true;
+        assert!(llm_configured("api-route", &configuration));
     }
 
     #[test]

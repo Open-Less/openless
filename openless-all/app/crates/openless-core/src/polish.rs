@@ -191,6 +191,7 @@ fn is_builtin_llm_provider(provider_id: &str) -> bool {
             | "cometapi"
             | "openrouterFree"
             | "requesty"
+            | "api-route"
             | "orcarouter"
             | "alibabaCoding"
             | "codingPlanX"
@@ -3097,7 +3098,11 @@ mod tests {
 
     #[tokio::test]
     async fn polish_request_sends_default_temperature_only_for_builtin_provider() {
-        for (provider_id, expected_temperature) in [("custom", None), ("ark", Some("0.3"))] {
+        for (provider_id, expected_temperature) in [
+            ("custom", None),
+            ("ark", Some("0.3")),
+            ("api-route", Some("0.3")),
+        ] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
             let server = thread::spawn(move || {

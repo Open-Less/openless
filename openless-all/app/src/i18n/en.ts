@@ -1603,6 +1603,7 @@ export const en: typeof zhCN = {
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter (free models)',
         requesty: 'Requesty',
+        apiRoute: 'API Route',
         orcarouter: 'OrcaRouter',
         alibabaCoding: 'Alibaba Cloud Coding Plan',
         codingPlanX: 'CodingPlanX',

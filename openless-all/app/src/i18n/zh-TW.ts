@@ -1525,6 +1525,7 @@ export const zhTW: typeof zhCN = {
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter（免費模型）',
         requesty: 'Requesty',
+        apiRoute: 'API Route',
         orcarouter: 'OrcaRouter',
         alibabaCoding: '阿里雲 Coding Plan',
         codingPlanX: 'CodingPlanX',

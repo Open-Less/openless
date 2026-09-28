@@ -60,6 +60,7 @@ const LLM_NAME_KEY_BY_ID: Record<string, string> = {
   cometapi: 'cometapi',
   openrouterFree: 'openrouterFree',
   requesty: 'requesty',
+  'api-route': 'apiRoute',
   orcarouter: 'orcarouter',
   alibabaCoding: 'alibabaCoding',
   codingPlanX: 'codingPlanX',

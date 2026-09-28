@@ -79,6 +79,7 @@ pub const SHARED_CLOUD_LLM_PROVIDER_TYPES: &[&str] = &[
     "cometapi",
     "openrouterFree",
     "requesty",
+    "api-route",
     "orcarouter",
     "alibabaCoding",
     "codingPlanX",

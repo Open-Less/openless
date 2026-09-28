@@ -1524,6 +1524,7 @@ export const zhCN = {
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter（免费模型）',
         requesty: 'Requesty',
+        apiRoute: 'API Route',
         orcarouter: 'OrcaRouter',
         alibabaCoding: '阿里云 Coding Plan',
         codingPlanX: 'CodingPlanX',
