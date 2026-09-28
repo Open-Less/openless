@@ -556,6 +556,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mouse_shortcuts_are_rejected_by_the_linux_host() {
+        for primary in ["Mouse4", "Mouse5"] {
+            let binding = ShortcutBinding {
+                primary: primary.into(),
+                modifiers: vec!["ctrl".into()],
+            };
+            assert_eq!(
+                shortcut_to_raw(&binding).unwrap_err().code,
+                BackendErrorCode::Unsupported
+            );
+        }
+    }
+
+    #[test]
     fn raw_shortcut_conversion_covers_default_linux_actions() {
         let qa = ShortcutBinding {
             primary: ";".into(),

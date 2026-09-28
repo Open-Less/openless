@@ -56,12 +56,29 @@ pub fn binding_requires_side_aware_hook(binding: &ShortcutBinding) -> bool {
             .any(|tag| is_side_specific_modifier_tag(tag))
 }
 
+pub fn is_mouse_button_primary(primary: &str) -> bool {
+    matches!(
+        primary.trim().to_ascii_uppercase().as_str(),
+        "MOUSE4" | "MOUSE5"
+    )
+}
+
+pub fn binding_requires_mouse_hook(binding: &ShortcutBinding) -> bool {
+    is_mouse_button_primary(&binding.primary)
+}
+
 pub const SIDE_SPECIFIC_NON_DICTATION_MSG: &str =
     "Side-specific modifier shortcuts are only supported for dictation start/stop.";
+
+pub const MOUSE_NON_DICTATION_MSG: &str =
+    "Mouse button shortcuts are only supported for dictation start/stop.";
 
 pub fn reject_side_specific_non_dictation(binding: &ShortcutBinding) -> Result<(), String> {
     if binding.primary == "MacDictationKey" {
         return Err("The Mac Dictation key is only supported for dictation start/stop.".into());
+    }
+    if binding_requires_mouse_hook(binding) {
+        return Err(MOUSE_NON_DICTATION_MSG.to_string());
     }
     if binding_requires_side_aware_hook(binding) {
         return Err(SIDE_SPECIFIC_NON_DICTATION_MSG.to_string());
@@ -234,6 +251,12 @@ pub fn validate_shortcut_binding(binding: &ShortcutBinding) -> Result<(), Shortc
         return Ok(());
     }
 
+    if binding_requires_mouse_hook(binding) && binding_requires_side_aware_hook(binding) {
+        return Err(ShortcutBindingError::UnsupportedModifier(
+            "mouse button bindings do not support side-specific modifiers".into(),
+        ));
+    }
+
     validate_primary(&binding.primary)?;
     for raw in &binding.modifiers {
         if binding_requires_side_aware_hook(binding) {
@@ -264,6 +287,8 @@ pub fn validate_shortcut_binding(binding: &ShortcutBinding) -> Result<(), Shortc
 }
 
 fn validate_primary(raw: &str) -> Result<(), ShortcutBindingError> {
+    // Literal space character must not be trimmed to empty (#1109).
+    let raw = if raw == " " { "Space" } else { raw };
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(ShortcutBindingError::UnsupportedKey("(空)".into()));
@@ -300,6 +325,8 @@ fn validate_primary(raw: &str) -> Result<(), ShortcutBindingError> {
             | "LEFT"
             | "ARROWRIGHT"
             | "RIGHT"
+            | "MOUSE4"
+            | "MOUSE5"
             | "F1"
             | "F2"
             | "F3"
@@ -887,6 +914,24 @@ mod tests {
     }
 
     #[test]
+    fn mouse_bindings_are_dictation_only_and_reject_side_modifiers() {
+        for primary in ["Mouse4", "Mouse5"] {
+            let binding = combo(primary, &["ctrl"]);
+            assert!(validate_shortcut_binding(&binding).is_ok());
+            assert_eq!(
+                reject_side_specific_non_dictation(&binding).unwrap_err(),
+                MOUSE_NON_DICTATION_MSG
+            );
+            assert!(validate_shortcut_binding(&combo(primary, &["ctrl-left"])).is_err());
+            let preferences = UserPreferences {
+                qa_hotkey: Some(binding),
+                ..UserPreferences::default()
+            };
+            assert!(reject_hotkey_collisions(&preferences).is_err());
+        }
+    }
+
+    #[test]
     fn side_specific_rules_are_shared_by_all_hosts() {
         let side_specific = combo("D", &["cmd-left", "shift-right"]);
         assert!(validate_shortcut_binding(&side_specific).is_ok());
@@ -906,7 +951,9 @@ mod tests {
         assert!(is_modifier_chord_binding(&chord));
 
         assert!(validate_shortcut_binding(&combo("ModifierChord", &["ctrl-left"])).is_err());
-        assert!(validate_shortcut_binding(&combo("ModifierChord", &["ctrl", "super-left"])).is_err());
+        assert!(
+            validate_shortcut_binding(&combo("ModifierChord", &["ctrl", "super-left"])).is_err()
+        );
         assert!(
             validate_shortcut_binding(&combo("ModifierChord", &["cmd-left", "super-left"]))
                 .is_err()

@@ -16,6 +16,23 @@ struct TauriSettingsRuntime<'a> {
     coord: &'a Coordinator,
 }
 
+fn settings_save_error(error: openless_core::BackendError) -> String {
+    let mut message = error.message;
+    if let Some(failures) = error
+        .details
+        .as_ref()
+        .and_then(|details| details.get("compensationErrors"))
+        .and_then(serde_json::Value::as_array)
+    {
+        for failure in failures {
+            if let Some(reason) = failure.get("message").and_then(serde_json::Value::as_str) {
+                message.push_str(&format!("; rollback failed: {reason}"));
+            }
+        }
+    }
+    message
+}
+
 impl<'a> TauriSettingsRuntime<'a> {
     fn new(coord: &'a Coordinator) -> Self {
         Self { coord }
@@ -167,7 +184,7 @@ fn persist_settings_with_host_lock_held(
                 );
             }
         })
-        .map_err(|error| error.to_string())
+        .map_err(settings_save_error)
 }
 
 fn persist_settings_preserving_update_channel(
@@ -194,7 +211,7 @@ pub(crate) fn persist_strict_settings(
             &TauriSettingsRuntime::new(coord),
         )
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(settings_save_error)
 }
 
 async fn invalidate_llm_tests_if_thinking_changed(
@@ -312,6 +329,21 @@ pub async fn set_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shortcut_save_reports_registration_and_rollback_failure() {
+        let mut error = openless_core::BackendError::new(
+            openless_core::BackendErrorCode::Platform,
+            "hook installation failed",
+        );
+        error.details = Some(serde_json::json!({
+            "compensationErrors": [{"message": "old binding restore failed"}]
+        }));
+        assert_eq!(
+            settings_save_error(error),
+            "hook installation failed; rollback failed: old binding restore failed"
+        );
+    }
 
     #[test]
     fn settings_save_preserves_current_style_preferences_before_write() {
@@ -721,11 +753,11 @@ pub(crate) fn replace_dictation_hotkey(
             if coord.dictation_shortcut_is_busy() {
                 return Err("macDictationKeyBusy".into());
             }
-            if binding == prefs.dictation_hotkey {
-                // No settings effect is generated for an unchanged binding.
-                return coord.try_update_native_dictation_binding();
-            }
         }
+    }
+    if binding == prefs.dictation_hotkey {
+        // Re-saving an unchanged binding must retry a failed startup listener.
+        return coord.try_update_native_dictation_binding();
     }
     prefs.dictation_hotkey = binding;
     sync_dictation_hotkey_legacy_fields(&mut prefs);
@@ -738,5 +770,5 @@ pub(crate) fn replace_dictation_hotkey(
             &TauriSettingsRuntime::new(coord),
         )
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(settings_save_error)
 }

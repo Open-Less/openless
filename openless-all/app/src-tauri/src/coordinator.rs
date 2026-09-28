@@ -30,7 +30,6 @@ mod capsule_focus;
 #[path = "coordinator/dictation_core.rs"]
 mod dictation;
 mod hotkey_loops;
-#[cfg(target_os = "macos")]
 mod native_dictation_key;
 mod qa;
 mod restore_runtime;
@@ -42,6 +41,7 @@ pub(crate) use capsule_focus::{
     restore_focus_target_if_possible,
 };
 use hotkey_loops::*;
+use native_dictation_key::try_install_mouse_dictation;
 
 // Instance-local Less Computer replay source used by the compatibility command.
 pub(crate) use dictation::{less_computer_event_replay_after, LessComputerEventReplay};
@@ -519,6 +519,8 @@ struct Inner {
     /// 代替 modifier-only 的 hotkey monitor。`None` 表示不使用自定义组合键或还没成功安装。
     combo_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     side_aware_combo: Mutex<Option<crate::side_aware_combo::SideAwareComboMonitor>>,
+    /// Mouse4/Mouse5 听写监听（WH_MOUSE_LL）；与 combo / side-aware 互斥。
+    mouse_dictation: Mutex<Option<crate::mouse_dictation::MouseDictationMonitor>>,
     translation_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     switch_style_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     open_app_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
@@ -676,6 +678,7 @@ impl Coordinator {
                 less_computer_combo_pending_press: Mutex::new(None),
                 combo_hotkey: Mutex::new(None),
                 side_aware_combo: Mutex::new(None),
+                mouse_dictation: Mutex::new(None),
                 translation_hotkey: Mutex::new(None),
                 switch_style_hotkey: Mutex::new(None),
                 open_app_hotkey: Mutex::new(None),
@@ -804,6 +807,7 @@ impl Coordinator {
             less_computer_combo_pending_press: Mutex::new(None),
             combo_hotkey: Mutex::new(None),
             side_aware_combo: Mutex::new(None),
+            mouse_dictation: Mutex::new(None),
             translation_hotkey: Mutex::new(None),
             switch_style_hotkey: Mutex::new(None),
             open_app_hotkey: Mutex::new(None),
@@ -979,6 +983,7 @@ impl Coordinator {
     #[allow(dead_code)]
     pub fn request_shutdown(&self) {
         self.inner.shutdown.store(true, Ordering::SeqCst);
+        self.inner.mouse_dictation.lock().take();
     }
 
     /// Call once from RunEvent::Ready, even when recovery is still pending.
@@ -1207,82 +1212,6 @@ impl Coordinator {
         try_sync_style_pack_hotkeys_on_main_thread(&self.inner)
     }
 
-    /// 用户在设置里改了自定义组合键时调用。
-    pub(crate) fn update_combo_hotkey_binding(&self) {
-        let target = hotkey_runtime_target(&self.inner);
-        if crate::shortcut_binding::legacy_modifier_trigger(&target.dictation).is_some() {
-            take_combo_hotkey_on_main_thread(&self.inner);
-            self.inner.side_aware_combo.lock().take();
-            log::info!("[coord] combo hotkey 已关闭（modifier-only）");
-            return;
-        }
-        let binding = target.dictation;
-        if is_unconfigured_shortcut(&binding) {
-            take_combo_hotkey_on_main_thread(&self.inner);
-            self.inner.side_aware_combo.lock().take();
-            log::info!("[coord] combo hotkey 已关闭（无绑定）");
-            return;
-        }
-
-        if crate::shortcut_binding::binding_requires_side_aware_hook(&binding) {
-            take_combo_hotkey_on_main_thread(&self.inner);
-            self.inner.side_aware_combo.lock().take();
-            let (tx, rx) = mpsc::channel::<HotkeyEvent>();
-            let combo_tx = spawn_combo_abort_bridge(&self.inner, handle_trigger_combined);
-            match crate::side_aware_combo::SideAwareComboMonitor::start(binding, tx, combo_tx) {
-                Ok(monitor) => {
-                    *self.inner.side_aware_combo.lock() = Some(monitor);
-                    let bridge_inner = Arc::clone(&self.inner);
-                    std::thread::Builder::new()
-                        .name("openless-side-combo-bridge".into())
-                        .spawn(move || hotkey_bridge_loop(bridge_inner, rx))
-                        .ok();
-                    log::info!("[coord] side-aware combo hotkey listener installed (via update)");
-                }
-                Err(e) => {
-                    log::warn!("[coord] update side-aware combo binding 失败: {e}");
-                }
-            }
-            return;
-        }
-
-        self.inner.side_aware_combo.lock().take();
-        let inner_clone = Arc::clone(&self.inner);
-        let binding_for_main = binding.clone();
-        if self
-            .inner
-            .host
-            .run_on_main_thread(move || {
-                if let Some(monitor) = inner_clone.combo_hotkey.lock().as_ref() {
-                    if let Err(e) = monitor.update_binding(binding_for_main.clone()) {
-                        log::warn!("[coord] update combo hotkey binding 失败: {e}");
-                    }
-                    return;
-                }
-                let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
-                match ComboHotkeyMonitor::start(binding_for_main, tx) {
-                    Ok(monitor) => {
-                        *inner_clone.combo_hotkey.lock() = Some(monitor);
-                        log::info!(
-                            "[coord] combo hotkey listener installed on main thread (via update)"
-                        );
-                        let bridge_inner = Arc::clone(&inner_clone);
-                        std::thread::Builder::new()
-                            .name("openless-combo-hotkey-bridge".into())
-                            .spawn(move || combo_hotkey_bridge_loop(bridge_inner, rx))
-                            .ok();
-                    }
-                    Err(e) => {
-                        log::warn!("[coord] update combo hotkey binding 失败: {e}");
-                    }
-                }
-            })
-            .is_err()
-        {
-            log::warn!("[coord] update combo hotkey binding: AppHandle 未 bind，跳过");
-        }
-    }
-
     /// 用户在设置里改了 QA 组合键时调用。先持久化（由 prefs.set 完成），
     /// 然后通知活着的 monitor 重新注册；monitor 不存在时 supervisor 会自然
     /// 在下一次循环里读到新的 prefs。
@@ -1492,29 +1421,6 @@ impl Coordinator {
         report_insert_fallback_card_height(&self.inner, presentation_id, height)
     }
 
-    pub(crate) fn update_hotkey_binding(&self) {
-        let target = hotkey_runtime_target(&self.inner);
-        let dictation_trigger = crate::shortcut_binding::legacy_modifier_trigger(&target.dictation);
-        let binding = crate::types::HotkeyBinding {
-            trigger: dictation_trigger.unwrap_or(crate::types::HotkeyTrigger::Custom),
-            mode: target.dictation_mode,
-            keys: None,
-        };
-        if dictation_trigger.is_some() {
-            take_combo_hotkey_on_main_thread(&self.inner);
-        } else {
-            self.update_combo_hotkey_binding();
-        }
-        self.ensure_modifier_hotkey_monitor(binding);
-        self.update_modifier_shortcut_bindings();
-    }
-
-    fn ensure_modifier_hotkey_monitor(&self, binding: crate::types::HotkeyBinding) {
-        if let Err(error) = self.try_ensure_modifier_hotkey_monitor(binding) {
-            log::warn!("[coord] modifier hotkey update failed: {error}");
-        }
-    }
-
     fn try_ensure_modifier_hotkey_monitor(
         &self,
         binding: crate::types::HotkeyBinding,
@@ -1591,28 +1497,9 @@ impl Coordinator {
         if previous.style_packs != next.style_packs {
             self.try_update_style_pack_hotkey_bindings()?;
         }
-        #[cfg(target_os = "macos")]
-        let native_transition = previous.dictation.primary == crate::macos_dictation_key::PRIMARY
-            || next.dictation.primary == crate::macos_dictation_key::PRIMARY;
-        #[cfg(not(target_os = "macos"))]
-        let native_transition = false;
-        if native_transition {
-            #[cfg(target_os = "macos")]
-            if previous.dictation != next.dictation
-                || previous.dictation_mode != next.dictation_mode
-            {
-                self.try_update_native_dictation_binding()?;
-                self.update_modifier_shortcut_bindings();
-            }
-        } else {
-            if previous.dictation != next.dictation
-                || previous.dictation_mode != next.dictation_mode
-            {
-                self.update_hotkey_binding();
-            }
-            if previous.dictation != next.dictation {
-                self.update_combo_hotkey_binding();
-            }
+        if previous.dictation != next.dictation || previous.dictation_mode != next.dictation_mode {
+            self.try_update_native_dictation_binding()?;
+            self.update_modifier_shortcut_bindings();
         }
         if previous.qa != next.qa {
             self.update_qa_hotkey_binding();

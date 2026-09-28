@@ -1377,6 +1377,7 @@ pub(super) fn combo_hotkey_supervisor_loop(inner: Arc<Inner>) {
         if crate::shortcut_binding::legacy_modifier_trigger(&target.dictation).is_some() {
             take_combo_hotkey_on_main_thread(&inner);
             inner.side_aware_combo.lock().take();
+            inner.mouse_dictation.lock().take();
             return;
         }
 
@@ -1384,97 +1385,19 @@ pub(super) fn combo_hotkey_supervisor_loop(inner: Arc<Inner>) {
         if is_unconfigured_shortcut(&binding) {
             take_combo_hotkey_on_main_thread(&inner);
             inner.side_aware_combo.lock().take();
+            inner.mouse_dictation.lock().take();
             return;
         }
 
-        if crate::shortcut_binding::binding_requires_side_aware_hook(&binding) {
-            take_combo_hotkey_on_main_thread(&inner);
-            if inner.side_aware_combo.lock().is_some() {
-                return;
-            }
-            let (tx, rx) = mpsc::channel::<HotkeyEvent>();
-            let combo_tx = spawn_combo_abort_bridge(&inner, handle_trigger_combined);
-            match crate::side_aware_combo::SideAwareComboMonitor::start(binding, tx, combo_tx) {
-                Ok(monitor) => {
-                    *inner.side_aware_combo.lock() = Some(monitor);
-                    let inner_clone = Arc::clone(&inner);
-                    std::thread::Builder::new()
-                        .name("openless-side-combo-bridge".into())
-                        .spawn(move || hotkey_bridge_loop(inner_clone, rx))
-                        .ok();
-                    return;
-                }
-                Err(e) => {
-                    attempts += 1;
-                    if attempts <= 3 || attempts % 10 == 0 {
-                        log::warn!(
-                            "[coord] side-aware combo 第 {attempts} 次注册失败: {e}; 3s 后重试"
-                        );
-                    }
-                    drop(registration);
-                    std::thread::sleep(std::time::Duration::from_secs(3));
-                    continue;
-                }
-            }
-        }
-
-        inner.side_aware_combo.lock().take();
-
-        if inner.combo_hotkey.lock().is_some() {
-            return;
-        }
-
-        let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
-        let (init_tx, init_rx) =
-            mpsc::sync_channel::<Result<ComboHotkeyMonitor, ComboHotkeyError>>(0);
-        let binding_for_main = binding.clone();
-        if inner
-            .host
-            .run_on_main_thread(move || {
-                let result = ComboHotkeyMonitor::start(binding_for_main, tx);
-                let _ = init_tx.send(result);
-            })
-            .is_err()
-        {
-            drop(registration);
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            continue;
-        }
-
-        let init_result = match init_rx.recv_timeout(std::time::Duration::from_secs(5)) {
-            Ok(r) => r,
-            Err(_) => {
-                drop(init_rx);
-                attempts += 1;
-                if attempts <= 3 || attempts % 10 == 0 {
-                    log::warn!(
-                        "[coord] combo hotkey 第 {attempts} 次注册超时（主线程未回执）；3s 后重试"
-                    );
-                }
-                drop(registration);
-                std::thread::sleep(std::time::Duration::from_secs(3));
-                continue;
-            }
+        let coordinator = Coordinator {
+            inner: Arc::clone(&inner),
         };
-
-        match init_result {
-            Ok(monitor) => {
-                *inner.combo_hotkey.lock() = Some(monitor);
-                log::info!(
-                    "[coord] combo hotkey listener installed on main thread (after {} attempt(s))",
-                    attempts + 1
-                );
-                let inner_clone = Arc::clone(&inner);
-                std::thread::Builder::new()
-                    .name("openless-combo-hotkey-bridge".into())
-                    .spawn(move || combo_hotkey_bridge_loop(inner_clone, rx))
-                    .ok();
-                return;
-            }
-            Err(e) => {
+        match coordinator.try_update_native_dictation_binding() {
+            Ok(()) => return,
+            Err(error) => {
                 attempts += 1;
                 if attempts <= 3 || attempts % 10 == 0 {
-                    log::warn!("[coord] combo hotkey 第 {attempts} 次注册失败: {e}; 3s 后重试");
+                    log::warn!("[coord] dictation shortcut registration attempt {attempts} failed: {error}; retrying in 3s");
                 }
                 drop(registration);
                 std::thread::sleep(std::time::Duration::from_secs(3));
@@ -2469,6 +2392,7 @@ pub(crate) mod less_computer_test_support {
             less_computer_combo_pending_press: Mutex::new(None),
             combo_hotkey: Mutex::new(None),
             side_aware_combo: Mutex::new(None),
+            mouse_dictation: Mutex::new(None),
             translation_hotkey: Mutex::new(None),
             switch_style_hotkey: Mutex::new(None),
             open_app_hotkey: Mutex::new(None),

@@ -26,6 +26,10 @@ impl openless_core::config::RestoreRuntimeEffects for RestoreHost {
                 .ok_or_else(|| failure("restore_host_unavailable"))?;
             openless_core::reject_hotkey_collisions(&target)
                 .map_err(|_| failure("restore_hotkey_conflict"))?;
+            if crate::shortcut_binding::binding_requires_mouse_hook(&target.dictation_hotkey) {
+                crate::shortcut_binding::validate_binding(&target.dictation_hotkey)
+                    .map_err(|_| failure("restore_mouse_hotkey_unsupported"))?;
+            }
             let coord = Coordinator {
                 inner: Arc::clone(&inner),
             };
@@ -197,7 +201,12 @@ fn reconcile_hotkeys_on_main(
     let trigger = crate::shortcut_binding::legacy_modifier_trigger(&target.dictation);
     if trigger.is_some() || is_unconfigured_shortcut(&target.dictation) {
         inner.side_aware_combo.lock().take();
+        inner.mouse_dictation.lock().take();
+    } else if crate::shortcut_binding::binding_requires_mouse_hook(&target.dictation) {
+        inner.side_aware_combo.lock().take();
+        try_install_mouse_dictation(inner, target.dictation.clone())?;
     } else if crate::shortcut_binding::binding_requires_side_aware_hook(&target.dictation) {
+        inner.mouse_dictation.lock().take();
         let mut side_slot = inner.side_aware_combo.lock();
         if let Some(monitor) = side_slot.as_ref() {
             monitor
@@ -221,6 +230,7 @@ fn reconcile_hotkeys_on_main(
         }
     } else {
         inner.side_aware_combo.lock().take();
+        inner.mouse_dictation.lock().take();
         let (send, receive) = mpsc::channel();
         let monitor = ComboHotkeyMonitor::start(target.dictation.clone(), send)
             .map_err(|error| error.to_string())?;

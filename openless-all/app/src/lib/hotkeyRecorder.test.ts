@@ -1,7 +1,10 @@
 import {
   createHotkeyRecorderState,
+  formatShortcutSaveError,
+  shortcutFromMouseEvent,
   functionKeyPrimaryFromEvent,
   orderHotkeyCodes,
+  primaryFromKeyboardEvent,
   updateHotkeyRecorderState,
 } from './hotkeyRecorder';
 
@@ -11,6 +14,28 @@ function assertEqual<T>(actual: T, expected: T, name: string) {
   }
 }
 
+for (const message of [
+  'RegisterFailed',
+  'ManagerInitFailed',
+  'Windows only',
+  'Conflict',
+  'unexpected backend failure',
+]) {
+  assertEqual(formatShortcutSaveError(message, 'Save failed'), message, 'preserves backend error');
+  assertEqual(
+    formatShortcutSaveError(new Error(message), 'Save failed'),
+    message,
+    'preserves Error message',
+  );
+}
+for (const reason of ['', '  ', null, undefined, {}]) {
+  assertEqual(
+    formatShortcutSaveError(reason, 'Save failed'),
+    'Save failed',
+    'empty error fallback',
+  );
+}
+
 function assertDeepEqual(actual: unknown, expected: unknown, name: string) {
   const actualJson = JSON.stringify(actual);
   const expectedJson = JSON.stringify(expected);
@@ -18,6 +43,45 @@ function assertDeepEqual(actual: unknown, expected: unknown, name: string) {
     throw new Error(`${name}: expected ${expectedJson}, got ${actualJson}`);
   }
 }
+
+for (const [button, primary] of [
+  [3, 'Mouse4'],
+  [4, 'Mouse5'],
+] as const) {
+  assertDeepEqual(
+    shortcutFromMouseEvent({
+      button,
+      ctrlKey: true,
+      altKey: false,
+      shiftKey: false,
+      metaKey: false,
+    }),
+    { primary, modifiers: ['ctrl'] },
+    'mouse event preserves a modifier held before recording',
+  );
+  assertDeepEqual(
+    shortcutFromMouseEvent({
+      button,
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+      metaKey: false,
+    }),
+    { primary, modifiers: [] },
+    'bare mouse side button',
+  );
+}
+assertEqual(
+  shortcutFromMouseEvent({
+    button: 0,
+    ctrlKey: true,
+    altKey: false,
+    shiftKey: false,
+    metaKey: false,
+  }),
+  null,
+  'ordinary click cannot become a shortcut',
+);
 
 function apply(state = createHotkeyRecorderState(), code: string, pressed: boolean) {
   const next = updateHotkeyRecorderState(state, code, pressed);
@@ -132,3 +196,16 @@ assertEqual(
   null,
   'printable key preserved',
 );
+
+assertEqual(
+  primaryFromKeyboardEvent({ code: 'Space', key: ' ' }),
+  'Space',
+  'Space key normalizes to named Space (not literal space)',
+);
+assertEqual(
+  primaryFromKeyboardEvent({ code: 'Space', key: 'Space' }),
+  'Space',
+  'Space code with Space key name',
+);
+assertEqual(primaryFromKeyboardEvent({ code: 'KeyA', key: 'a' }), 'A', 'letter from code');
+assertEqual(primaryFromKeyboardEvent({ code: 'Digit1', key: '!' }), '1', 'digit from code');

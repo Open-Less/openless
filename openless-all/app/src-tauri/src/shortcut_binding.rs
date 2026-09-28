@@ -7,13 +7,22 @@ use crate::types::HotkeyTrigger;
 use crate::types::ShortcutBinding;
 
 pub use openless_core::{
-    binding_requires_side_aware_hook, bindings_overlap, is_side_specific_modifier_tag,
-    legacy_modifier_trigger, normalize_side_modifier_tag, reject_side_specific_non_dictation,
-    ShortcutBindingError, SIDE_SPECIFIC_NON_DICTATION_MSG,
+    binding_requires_mouse_hook, binding_requires_side_aware_hook, bindings_overlap,
+    is_side_specific_modifier_tag, legacy_modifier_trigger, normalize_side_modifier_tag,
+    reject_side_specific_non_dictation, ShortcutBindingError, SIDE_SPECIFIC_NON_DICTATION_MSG,
 };
 
 pub fn validate_binding(binding: &ShortcutBinding) -> Result<(), ShortcutBindingError> {
     openless_core::validate_shortcut_binding(binding)?;
+    if binding_requires_mouse_hook(binding) {
+        return if cfg!(target_os = "windows") {
+            Ok(())
+        } else {
+            Err(ShortcutBindingError::UnsupportedKey(
+                "Mouse4/Mouse5 global shortcuts require Windows".into(),
+            ))
+        };
+    }
     #[cfg(target_os = "macos")]
     if binding.primary == crate::macos_dictation_key::PRIMARY {
         return Ok(());
@@ -61,6 +70,7 @@ fn normalize_modifier_tag(raw: &str) -> String {
 }
 
 pub fn parse_primary(raw: &str) -> Result<Code, ShortcutBindingError> {
+    let raw = if raw == " " { "Space" } else { raw };
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(ShortcutBindingError::UnsupportedKey("(空)".into()));
@@ -266,6 +276,44 @@ mod tests {
         };
         assert!(binding_requires_side_aware_hook(&binding));
         assert!(validate_binding(&binding).is_ok());
+    }
+
+    #[test]
+    fn mouse_button_skips_global_hotkey_parse() {
+        let binding = ShortcutBinding {
+            primary: "Mouse4".into(),
+            modifiers: vec![],
+        };
+        assert!(binding_requires_mouse_hook(&binding));
+        assert_eq!(
+            validate_binding(&binding).is_ok(),
+            cfg!(target_os = "windows")
+        );
+        assert!(parse_global_hotkey(&binding).is_err());
+    }
+
+    #[test]
+    fn mouse_with_ctrl_validates_without_registerhotkey() {
+        let binding = ShortcutBinding {
+            primary: "Mouse5".into(),
+            modifiers: vec!["ctrl".into()],
+        };
+        assert!(binding_requires_mouse_hook(&binding));
+        assert_eq!(
+            validate_binding(&binding).is_ok(),
+            cfg!(target_os = "windows")
+        );
+    }
+
+    #[test]
+    fn literal_space_primary_normalizes() {
+        let binding = ShortcutBinding {
+            primary: " ".into(),
+            modifiers: vec!["ctrl".into()],
+        };
+        assert!(validate_binding(&binding).is_ok());
+        let parsed = parse_global_hotkey(&binding).expect("space parses");
+        assert_eq!(parsed.key, Code::Space);
     }
 
     #[test]

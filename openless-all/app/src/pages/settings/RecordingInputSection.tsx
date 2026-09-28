@@ -258,11 +258,15 @@ export function RecordingInputSection() {
           </div>
         )}
         {showDesktopHotkey && (
-          <SettingRow label={t('settings.recording.hotkeyLabel')}>
+          <SettingRow
+            label={t('settings.recording.hotkeyLabel')}
+            desc={os !== 'win' ? t('settings.recording.mouseSideHint') : undefined}
+          >
             <ShortcutRecorder
               value={prefs.dictationHotkey}
               sideSpecificModifiers
               allowMacDictationKey={os === 'mac'}
+              allowMouseButtons={os === 'win'}
               // 录音快捷键是核心热键，Rust 端不接受 null，不可停用——置灰并提示。
               disableDisabled
               disableHint={t('settings.recording.comboDisableHint')}

@@ -1432,6 +1432,8 @@ export const ja: typeof zhCN = {
       comboRecorded: '記録済み',
       comboClear: 'クリア',
       comboConflict: 'このショートカットの組み合わせは使用できません',
+      shortcutSaveFailed: 'ショートカットの保存に失敗しました',
+      mouseSideHint: 'マウスサイドボタン Mouse4 / Mouse5 は Windows でグローバルなディクテーションホットキーとして使えます',
       allowNonTsfFallbackLabel: '非 TSF フォールバックを許可',
       allowNonTsfFallbackDesc:
         'Windows：TSF 入力が失敗した時は分割した Unicode SendInput を使い、それも失敗した場合はクリップボードへコピーします。',

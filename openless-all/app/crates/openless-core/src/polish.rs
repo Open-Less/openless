@@ -798,11 +798,11 @@ impl OpenAICompatibleLLMProvider {
             "messages": messages,
         });
         if let Some(temperature) = self.config.temperature {
-            // OpenAI 官方 gpt-5 系列在 Chat Completions 只接受默认 temperature=1，
-            // 传 0.3 会被 400 拒绝（issue #857）。官方渠道的 gpt-5* 不下发该字段，
+            // OpenAI 官方 gpt-5 / gpt-6 系列在 Chat Completions 只接受默认 temperature=1，
+            // 传 0.3 会被 400 拒绝（issue #857 / #1101）。官方渠道的这些模型不下发该字段，
             // 让服务端用默认值；其余模型保持原行为。
             if !(self.config.provider_id.trim() == "openai"
-                && openai_model_is_gpt5_family(&self.config.model))
+                && openai_model_omits_custom_temperature(&self.config.model))
             {
                 body["temperature"] = temperature_json(temperature);
             }
@@ -1993,24 +1993,29 @@ pub(crate) fn openai_compatible_thinking_control_for_base_url(
     None
 }
 
-/// OpenAI 官方 gpt-5 系列（gpt-5 / gpt-5-mini / gpt-5-nano / gpt-5.5 等）在
-/// Chat Completions 中只接受默认 temperature=1，传其它值会返回 400（issue #857）。
-/// 模型名归一化规则与 `openai_chat_reasoning_effort` 保持一致。
-pub(crate) fn openai_model_is_gpt5_family(model: &str) -> bool {
+fn normalize_openai_model_id(model: &str) -> String {
     model
         .trim()
         .strip_prefix("openai/")
         .unwrap_or_else(|| model.trim())
         .to_ascii_lowercase()
-        .starts_with("gpt-5")
+}
+
+/// OpenAI 官方 gpt-5 系列（gpt-5 / gpt-5-mini / gpt-5-nano / gpt-5.5 等）。
+/// 模型名归一化规则与 `openai_chat_reasoning_effort` 保持一致。
+pub(crate) fn openai_model_is_gpt5_family(model: &str) -> bool {
+    normalize_openai_model_id(model).starts_with("gpt-5")
+}
+
+/// OpenAI 官方渠道下应省略自定义 `temperature` 的模型族。
+/// gpt-5*（#857）与 gpt-6*（#1101，含 Astra/Sol/Luna）只接受服务端默认值。
+/// API 模型 ID 如 `gpt-6-astra` 归一化后以 `gpt-6` 开头，一并覆盖。
+pub(crate) fn openai_model_omits_custom_temperature(model: &str) -> bool {
+    openai_model_is_gpt5_family(model) || normalize_openai_model_id(model).starts_with("gpt-6")
 }
 
 fn openai_chat_reasoning_effort(model: &str, thinking_enabled: bool) -> Option<&'static str> {
-    let normalized = model
-        .trim()
-        .strip_prefix("openai/")
-        .unwrap_or_else(|| model.trim())
-        .to_ascii_lowercase();
+    let normalized = normalize_openai_model_id(model);
 
     if normalized.starts_with("gpt-5-pro") {
         return Some("high");
@@ -3395,6 +3400,32 @@ mod tests {
     }
 
     #[test]
+    fn chat_body_omits_temperature_for_openai_gpt6_api_ids() {
+        for model in [
+            "gpt-6-astra",
+            "gpt-6-sol",
+            "gpt-6-luna",
+            "openai/gpt-6-astra",
+        ] {
+            let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+                "openai",
+                "OpenAI",
+                "https://api.openai.com/v1",
+                "k",
+                model,
+            ));
+
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+            assert_eq!(body["model"], model);
+            assert!(
+                body.get("temperature").is_none(),
+                "{model} must not receive temperature (issue #1101)"
+            );
+        }
+    }
+
+    #[test]
     fn chat_body_keeps_default_temperature_for_openai_non_gpt5_models() {
         for model in ["gpt-4o", "gpt-4o-mini", "gpt-4.1"] {
             let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
@@ -3409,6 +3440,24 @@ mod tests {
 
             assert_eq!(body["temperature"].to_string(), "0.3");
         }
+    }
+
+    #[test]
+    fn chat_body_keeps_custom_temperature_for_gpt6_on_custom_provider() {
+        let provider = OpenAICompatibleLLMProvider::new(
+            OpenAICompatibleConfig::new(
+                "custom",
+                "Custom",
+                "https://api.openai.com/v1",
+                "k",
+                "gpt-6-astra",
+            )
+            .with_temperature(Some(1.0)),
+        );
+
+        let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+        assert_eq!(body["temperature"], json!(1.0));
     }
 
     #[test]

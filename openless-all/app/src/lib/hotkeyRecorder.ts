@@ -1,3 +1,6 @@
+import type { ShortcutBinding } from './types';
+import { windowMouseHotkeyCode } from './windowHotkeyFallback';
+
 export interface HotkeyRecorderState {
   pressedCodes: string[];
   draftCodes: string[];
@@ -115,4 +118,73 @@ export function functionKeyPrimaryFromEvent(event: { code: string; key: string }
   if (supported.test(event.code)) return event.code;
   if (supported.test(event.key)) return event.key;
   return null;
+}
+
+/**
+ * Normalize a keyboard event into the ShortcutBinding primary string.
+ * Space must use the named code — `e.key === ' '` is length 1 and would otherwise
+ * be trimmed to empty by backend validate_primary/parse_primary (#1109).
+ */
+export function primaryFromKeyboardEvent(event: { code: string; key: string }): string {
+  const functionKey = functionKeyPrimaryFromEvent(event);
+  if (functionKey) return functionKey;
+  const printable = primaryFromPrintableCode(event.code);
+  if (printable) return printable;
+  if (event.code === 'Space' || event.key === ' ') return 'Space';
+  if (event.key.length === 1) return event.key;
+  const codeToName: Record<string, string> = {
+    Space: 'Space',
+    Enter: 'Enter',
+    Tab: 'Tab',
+    Backspace: 'Backspace',
+    Delete: 'Delete',
+    ArrowUp: 'ArrowUp',
+    ArrowDown: 'ArrowDown',
+    ArrowLeft: 'ArrowLeft',
+    ArrowRight: 'ArrowRight',
+    Home: 'Home',
+    End: 'End',
+    PageUp: 'PageUp',
+    PageDown: 'PageDown',
+  };
+  if (/^F\d{1,2}$/.test(event.key)) return event.key;
+  return codeToName[event.code] || event.key;
+}
+
+function primaryFromPrintableCode(code: string): string {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  const codeToPrimary: Record<string, string> = {
+    Backquote: '`',
+    Minus: '-',
+    Equal: '=',
+    BracketLeft: '[',
+    BracketRight: ']',
+    Backslash: '\\',
+    Semicolon: ';',
+    Quote: "'",
+    Comma: ',',
+    Period: '.',
+    Slash: '/',
+    IntlBackslash: '\\',
+  };
+  return codeToPrimary[code] || '';
+}
+/** Preserve backend failure details without classifying localized strings. */
+export function formatShortcutSaveError(reason: unknown, fallback: string): string {
+  const message =
+    reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : '';
+  return message.trim() || fallback;
+}
+export function shortcutFromMouseEvent(
+  event: Pick<MouseEvent, 'button' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey'>,
+): ShortcutBinding | null {
+  const primary = windowMouseHotkeyCode(event.button);
+  if (!primary) return null;
+  const modifiers: string[] = [];
+  if (event.ctrlKey) modifiers.push('ctrl');
+  if (event.altKey) modifiers.push('alt');
+  if (event.shiftKey) modifiers.push('shift');
+  if (event.metaKey) modifiers.push('super');
+  return { primary, modifiers };
 }

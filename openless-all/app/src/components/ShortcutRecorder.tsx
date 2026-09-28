@@ -8,7 +8,11 @@ import {
   MODIFIER_CHORD_PRIMARY,
   modifiersFromPressedCodes,
 } from '../lib/hotkey';
-import { functionKeyPrimaryFromEvent } from '../lib/hotkeyRecorder';
+import {
+  primaryFromKeyboardEvent,
+  formatShortcutSaveError,
+  shortcutFromMouseEvent,
+} from '../lib/hotkeyRecorder';
 import { KbdGroup } from './Kbd';
 import { setShortcutRecordingActive, validateShortcutBinding } from '../lib/ipc';
 import type { ShortcutBinding } from '../lib/types';
@@ -35,6 +39,7 @@ export function ShortcutRecorder({
   comboOnly = false,
   sideSpecificModifiers = false,
   allowMacDictationKey = false,
+  allowMouseButtons = false,
 }: {
   value: ShortcutBinding | null;
   onSave: (binding: ShortcutBinding) => Promise<void>;
@@ -54,6 +59,8 @@ export function ShortcutRecorder({
   sideSpecificModifiers?: boolean;
   /** macOS dictation only: choose the dedicated key as the single trigger. */
   allowMacDictationKey?: boolean;
+  /** Windows dictation only; other shortcut consumers cannot install mouse hooks. */
+  allowMouseButtons?: boolean;
 }) {
   const { t } = useTranslation();
   const [recording, setRecording] = useState(false);
@@ -131,10 +138,7 @@ export function ShortcutRecorder({
       setRecording(false);
       setError(null);
     } catch (reason) {
-      const message = String(reason);
-      setError(
-        message.includes('macDictationKey') ? message : t('settings.recording.comboConflict'),
-      );
+      setError(formatShortcutSaveError(reason, t('settings.recording.shortcutSaveFailed')));
     }
   };
 
@@ -168,12 +172,23 @@ export function ShortcutRecorder({
         console.warn('[shortcut] recording state sync failed', error);
       }
     })();
+    const onMouseDown = (e: MouseEvent) => {
+      if (cancelled || !allowMouseButtons) return;
+      const binding = shortcutFromMouseEvent(e);
+      if (!binding) return;
+      e.preventDefault();
+      e.stopPropagation();
+      clearPendingModifier();
+      void finishRef.current(binding);
+    };
+    window.addEventListener('mousedown', onMouseDown, true);
     return () => {
       cancelled = true;
       unlisten?.();
+      window.removeEventListener('mousedown', onMouseDown, true);
       void setShortcutRecordingActive(false);
     };
-  }, [recording]);
+  }, [recording, allowMouseButtons]);
 
   /** 开始录入：同时收起菜单——「录制快捷键」按下后，重置/停用两个按钮随之消失。 */
   const startRecording = () => {
@@ -261,10 +276,7 @@ export function ShortcutRecorder({
     try {
       await onReset?.();
     } catch (reason) {
-      const message = String(reason);
-      setError(
-        message.includes('macDictationKey') ? message : t('settings.recording.comboConflict'),
-      );
+      setError(formatShortcutSaveError(reason, t('settings.recording.shortcutSaveFailed')));
     }
   };
 
@@ -376,6 +388,7 @@ export function ShortcutRecorder({
             {t('settings.recording.comboRecordHint')}
             <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 4 }}>
               Esc · {t('common.cancel')}
+              {allowMouseButtons && <> · {t('settings.recording.mouseSideHint')}</>}
             </div>
           </motion.div>
         ) : (
@@ -508,49 +521,4 @@ function modifierPrimaryFromCode(code: string, key: string): string {
   if (code === 'MetaLeft') return 'LeftCommand';
   if (key === 'Shift') return 'Shift';
   return '';
-}
-
-function primaryFromKeyboardEvent(e: KeyboardEvent): string {
-  const functionKey = functionKeyPrimaryFromEvent(e);
-  if (functionKey) return functionKey;
-  const printable = primaryFromPrintableCode(e.code);
-  if (printable) return printable;
-  if (e.key.length === 1) return e.key;
-  const codeToName: Record<string, string> = {
-    Space: 'Space',
-    Enter: 'Enter',
-    Tab: 'Tab',
-    Backspace: 'Backspace',
-    Delete: 'Delete',
-    ArrowUp: 'ArrowUp',
-    ArrowDown: 'ArrowDown',
-    ArrowLeft: 'ArrowLeft',
-    ArrowRight: 'ArrowRight',
-    Home: 'Home',
-    End: 'End',
-    PageUp: 'PageUp',
-    PageDown: 'PageDown',
-  };
-  if (/^F\d{1,2}$/.test(e.key)) return e.key;
-  return codeToName[e.code] || e.key;
-}
-
-function primaryFromPrintableCode(code: string): string {
-  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
-  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
-  const codeToPrimary: Record<string, string> = {
-    Backquote: '`',
-    Minus: '-',
-    Equal: '=',
-    BracketLeft: '[',
-    BracketRight: ']',
-    Backslash: '\\',
-    Semicolon: ';',
-    Quote: "'",
-    Comma: ',',
-    Period: '.',
-    Slash: '/',
-    IntlBackslash: '\\',
-  };
-  return codeToPrimary[code] || '';
 }

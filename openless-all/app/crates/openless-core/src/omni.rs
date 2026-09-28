@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use crate::polish::{
     append_utf8_sse_chunk, apply_openai_compatible_thinking_control, chat_completions_url,
     extract_assistant_content, finish_utf8_sse_chunks, http_client_builder,
-    openai_model_is_gpt5_family, safe_str_slice, send_with_transient_retry, LLMError,
+    openai_model_omits_custom_temperature, safe_str_slice, send_with_transient_retry, LLMError,
 };
 
 pub const OMNI_GEMINI_PROVIDER_ID: &str = "gemini";
@@ -89,9 +89,9 @@ impl OpenAICompatibleOmni {
             "messages": messages,
         });
         if let Some(temperature) = self.config.temperature {
-            // OpenAI 官方 gpt-5 系列只接受默认 temperature=1（issue #857），同润色路径。
+            // OpenAI 官方 gpt-5 / gpt-6 只接受默认 temperature=1（#857 / #1101），同润色路径。
             if !(self.config.provider_id.trim() == "openai"
-                && openai_model_is_gpt5_family(&self.config.model))
+                && openai_model_omits_custom_temperature(&self.config.model))
             {
                 body["temperature"] = json!(temperature);
             }
@@ -551,6 +551,21 @@ mod tests {
         assert_eq!(body["model"], "gpt-4o-audio-preview");
         // temperature 以 f32 存（0.3f32 序列化后是 0.30000001192092896），用容差比较。
         assert!((body["temperature"].as_f64().unwrap() - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn omni_body_omits_temperature_for_openai_gpt6_api_ids() {
+        for model in ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"] {
+            let mut omni = config();
+            omni.model = model.into();
+            let provider = OpenAICompatibleOmni::new(omni);
+            let body = provider.omni_body(false, vec![json!({"role": "user", "content": "x"})]);
+
+            assert!(
+                body.get("temperature").is_none(),
+                "{model} must not receive temperature (issue #1101)"
+            );
+        }
     }
 
     #[test]
