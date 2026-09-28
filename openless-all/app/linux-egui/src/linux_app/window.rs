@@ -437,6 +437,7 @@ impl UiClientApp {
         let mut view_model = FrontendViewModel::default();
         // QA：OPENLESS_FPS_SETTINGS=1 时开机就打开设置面板，直接测最重的渲染路径
         // （磨砂背板 + 离屏 4×MSAA 重绘 + 动画预览）。见 `frame_stats` 模块文档。
+        // 真正的置位在每帧采纳快照之后（见 `ui()`）：宿主快照会把这里覆盖掉。
         view_model.settings_open |= openless_linux_egui::frame_stats::settings_open_on_start();
         Self {
             client,
@@ -695,6 +696,11 @@ impl eframe::App for UiClientApp {
         let ctx = ui.ctx().clone();
         if self.connection_error.is_none() {
             self.drain_host(&ctx);
+        }
+        // QA 开关要在**采纳快照之后**再压一次：宿主每帧/每次保活都会重发 view model，
+        // 只在初始化时置位会被随后到达的快照覆盖掉（这个开关以前就是这么失效的）。
+        if openless_linux_egui::frame_stats::settings_open_on_start() {
+            self.view_model.settings_open = true;
         }
         if !self.client.is_ready() || self.connection_error.is_some() {
             if self.connection_error.is_none()

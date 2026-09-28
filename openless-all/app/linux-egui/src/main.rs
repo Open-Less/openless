@@ -552,6 +552,10 @@ mod linux_app {
         provider_kind: openless_core::ChannelKind,
         providers: ProvidersState,
         selected_channel_id: Option<String>,
+        /// 用户（或刚建好的草稿）要求打开渠道编辑器。面板加载时只有当它为真才打开：
+        /// 以前只要面板加载就会为「当前选中的渠道」把编辑器拉起来，改成整栏覆盖后就是
+        /// 「一进设置只见模型编辑器、别的设置都改不了」。
+        editor_requested: bool,
         provider_editor: ProviderEditorState,
         /// 当前编辑器是「添加渠道」草稿（Tauri `isDraft`）：标题换成「添加渠道」，
         /// 且完全没交互就关闭时要把这张空渠道回收掉。
@@ -732,6 +736,7 @@ mod linux_app {
                         provider_kind: openless_core::ChannelKind::Asr,
                         providers: ProvidersState::Loading,
                         selected_channel_id: None,
+                        editor_requested: false,
                         provider_editor: ProviderEditorState::Idle,
                         editor_draft: false,
                         draft_touched: false,
@@ -832,6 +837,7 @@ mod linux_app {
                     provider_kind: openless_core::ChannelKind::Asr,
                     providers: ProvidersState::Loading,
                     selected_channel_id: None,
+                    editor_requested: false,
                     provider_editor: ProviderEditorState::Idle,
                     editor_draft: false,
                     draft_touched: false,
@@ -2214,6 +2220,7 @@ mod linux_app {
         /// provider rules, so the UI never invents a field shape; without one
         /// the editor stays closed instead of guessing.
         fn open_provider_editor(&mut self, index: usize) {
+            self.editor_requested = true;
             let Some(channel_id) = self
                 .settings_channels
                 .get(index)
@@ -2236,12 +2243,37 @@ mod linux_app {
             self.load_provider_editor(kind, channel, descriptor);
         }
 
+        /// 关闭渠道编辑器；完全没交互过的草稿在这条路径上被回收
+        /// （Tauri `shouldRecycleDraft` + `deleteChannelIfBlank`）。
+        fn request_provider_editor_close(&mut self) {
+            let recycle = self.editor_draft && !self.draft_touched;
+            let channel_id = self
+                .provider_editor_form
+                .as_ref()
+                .map(|form| form.channel_id.clone());
+            if recycle {
+                if let (Some(backend), Some(channel_id)) = (self.backend(), channel_id) {
+                    let kind = self.settings_channel_kind;
+                    let lang = self.lang;
+                    self.spawn(async move {
+                        backend.delete_channel(kind, channel_id).await?;
+                        Ok(tr_l10n(lang, "status.channel_deleted").to_string())
+                    });
+                    self.load_settings_channels();
+                    self.load_service_configured();
+                    self.load_providers(kind);
+                }
+            }
+            self.close_provider_editor();
+        }
+
         fn close_provider_editor(&mut self) {
             self.provider_editor = ProviderEditorState::Idle;
             self.provider_editor_form = None;
             self.frontend_vm.provider_editor = None;
             self.editor_draft = false;
             self.draft_touched = false;
+            self.editor_requested = false;
         }
 
         /// Core owns the model catalog; the host only forwards the request.
@@ -3373,6 +3405,10 @@ mod linux_app {
                         }
                         self.providers = ProvidersState::Loaded(panel.clone());
                         self.provider_models.clear();
+                        // 只把「面板刚加载好」当成一个时机，是否打开编辑器看用户意图：
+                        // 保存 / 验证 / 切换页面都会刷新面板，不能顺手把编辑器拉起来。
+                        let editor_wanted = self.editor_requested;
+                        self.editor_requested = false;
                         if let Some(channel_id) = selected {
                             // A refresh (enable toggle, save, validation) must not
                             // throw away the editor draft the user is editing: only
@@ -3382,7 +3418,7 @@ mod linux_app {
                                 ProviderEditorState::Loaded(editor)
                                     if editor.channel.id == channel_id
                             );
-                            if !already_loaded {
+                            if !already_loaded && editor_wanted {
                                 if let Some((channel, descriptor)) =
                                     provider_channel_descriptor(&panel, &channel_id)
                                 {
@@ -3634,8 +3670,12 @@ mod linux_app {
                         Ok(channel_id) => {
                             self.settings_channel_kind = kind;
                             self.provider_kind = kind;
-                            self.selected_channel_id = Some(channel_id);
+                            // 草稿：面板加载完就自动打开编辑器，未交互关闭时回收。
                             self.close_provider_editor();
+                            self.selected_channel_id = Some(channel_id);
+                            self.editor_draft = true;
+                            self.draft_touched = false;
+                            self.editor_requested = true;
                             self.load_settings_channels();
                             self.load_service_configured();
                             self.load_providers(kind);
@@ -5522,6 +5562,13 @@ mod linux_app {
                         self.apply_settings_action(field);
                     }
                     frontend::view_model::FrontendAction::SettingsSection(section) => {
+                        // 编辑器只属于「AI 服务与模型」这一页：切到别的分区就收起
+                        // （Tauri 的 modal 宿主挂在服务页里，切页即卸载）。
+                        if section != frontend::view_model::SettingsSection::Services
+                            && self.provider_editor_form.is_some()
+                        {
+                            self.request_provider_editor_close();
+                        }
                         self.frontend_vm.settings_section = section;
                     }
                     frontend::view_model::FrontendAction::SettingsServicesView(view) => {
@@ -5813,26 +5860,7 @@ mod linux_app {
                         }
                     }
                     frontend::view_model::FrontendAction::SettingsProviderClose => {
-                        let recycle = self.editor_draft && !self.draft_touched;
-                        let channel_id = self
-                            .provider_editor_form
-                            .as_ref()
-                            .map(|form| form.channel_id.clone());
-                        if recycle {
-                            if let (Some(backend), Some(channel_id)) = (self.backend(), channel_id)
-                            {
-                                let kind = self.settings_channel_kind;
-                                let lang = self.lang;
-                                self.spawn(async move {
-                                    backend.delete_channel(kind, channel_id).await?;
-                                    Ok(tr_l10n(lang, "status.channel_deleted").to_string())
-                                });
-                                self.load_settings_channels();
-                                self.load_service_configured();
-                                self.load_providers(kind);
-                            }
-                        }
-                        self.close_provider_editor();
+                        self.request_provider_editor_close();
                     }
                     frontend::view_model::FrontendAction::SettingsChannelToggle(index) => {
                         let kind = self.settings_channel_kind;

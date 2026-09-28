@@ -748,6 +748,70 @@ mod tests {
         );
     }
 
+    /// 回归：渠道编辑器只能盖住「AI 服务与模型」这一页的右栏。以前只要
+    /// `provider_editor` 有值就整栏覆盖，用户一进设置只看得到模型编辑器，
+    /// 其它设置页全都改不了。
+    #[test]
+    fn the_channel_editor_never_covers_other_settings_sections() {
+        let ctx = egui::Context::default();
+        let zh = openless_linux_egui::Lang::ZhCn;
+        let editor = || {
+            Some(super::view_model::SettingsProviderEditor {
+                channel_id: "channel".to_string(),
+                is_asr: false,
+                is_draft: false,
+                provider: "DeepSeek".to_string(),
+                provider_type: "deepseek".to_string(),
+                name: "DeepSeek".to_string(),
+                endpoint: String::new(),
+                model: "deepseek-v4-flash".to_string(),
+                resource_id: String::new(),
+                auth_mode: String::new(),
+                auth: super::view_model::SettingsProviderAuth::ApiKey,
+                primary_secret: String::new(),
+                secondary_secret: String::new(),
+                models: Vec::new(),
+                models_loading: false,
+                static_models: Vec::new(),
+                default_model: String::new(),
+                has_models_url: false,
+                custom_model: false,
+                busy: false,
+            })
+        };
+        for section in [
+            super::view_model::SettingsSection::General,
+            super::view_model::SettingsSection::Appearance,
+            super::view_model::SettingsSection::About,
+        ] {
+            let mut vm = FrontendViewModel {
+                lang: zh,
+                active_page: Page::Settings,
+                settings_open: true,
+                settings_section: section,
+                provider_editor: editor(),
+                ..Default::default()
+            };
+            let mut painted = String::new();
+            for _ in 0..2 {
+                ctx.begin_pass(egui::RawInput {
+                    screen_rect: Some(viewport()),
+                    ..Default::default()
+                });
+                let mut actions = Vec::new();
+                render(&ctx, &mut vm, &mut actions);
+                painted = painted_text(&crate::ui::frontend::end_pass(&ctx));
+            }
+            assert!(
+                !painted.contains(openless_linux_egui::tr_l10n(
+                    zh,
+                    "settings.channels.edit_title"
+                )),
+                "an open channel editor must not cover the {section:?} section"
+            );
+        }
+    }
+
     #[test]
     fn settings_overlay_opens_from_every_page() {
         // Regression: Overview / Style / History returned early from `render`, so

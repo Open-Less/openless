@@ -188,10 +188,13 @@ pub fn settings_overlay(
                                 egui::Layout::top_down(egui::Align::Min),
                                 |ui| {
                                     ui.set_min_height(body_height);
-                                    // Tauri 桌面端把渠道编辑器 portal 进右栏并 `inset: 0`
-                                    // 盖住整栏（`.ol-channel-dialog-embedded`），而不是
-                                    // 全窗口遮罩；所以这里按同一栏矩形覆盖。
-                                    if vm.provider_editor.is_some() {
+                                    // Tauri 桌面端把渠道编辑器 portal 进「AI 服务与模型」
+                                    // 这一页的右栏并 `inset: 0` 盖住整栏，不是全窗口遮罩。
+                                    // 覆盖范围必须跟着分区走：否则别页也会被编辑器盖住，
+                                    // 用户会觉得「打开设置只有模型编辑器、别的都改不了」。
+                                    let editor_here = vm.provider_editor.is_some()
+                                        && vm.settings_section == SettingsSection::Services;
+                                    if editor_here {
                                         channel_editor_panel(ui, vm, actions);
                                     } else {
                                         panel(ui, vm, actions);
