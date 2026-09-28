@@ -633,7 +633,7 @@ fn run_desktop() {
     #[cfg(not(target_os = "windows"))]
     let coordinator = Arc::new(coordinator::Coordinator::new());
     let core_backend = coordinator.backend();
-    // Runtime effects and active-provider mirroring follow Core startup/recovery
+    // Runtime effects follow Core startup/recovery
     // in tauri_events::start; pending restore must not mutate the old vault here.
     let builder = tauri::Builder::default();
     // macOS：胶囊要叠到别的 app 的全屏 Space 之上，必须是「非激活 NSPanel」(普通
