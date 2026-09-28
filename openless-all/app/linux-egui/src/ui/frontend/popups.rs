@@ -14,7 +14,7 @@
 
 use eframe::egui;
 
-use super::{icons, layout, siri_wgpu, theme};
+use super::{icons, layout, siri_wgpu, stream_rate, theme};
 use openless_linux_egui::{
     fmt_l10n, tr_l10n, CapsulePopupState, Lang, LessComputerPopupState, PopupChatMessage,
     QaPolishState, QaPopupState,
@@ -1108,6 +1108,17 @@ pub fn dictation_capsule(
                 phase.as_str(),
                 "starting" | "transcribing" | "polishing" | "inserting"
             );
+            // 思考光点转速的速率响应状态：只在思考态累积，离开思考态复位（下次从头开始）。
+            let orb_speed_id = egui::Id::new("openless-capsule-orb-speed");
+            if !processing {
+                let mut responder = ui.ctx().data_mut(|data| {
+                    data.get_temp::<stream_rate::OrbSpeed>(orb_speed_id)
+                        .unwrap_or_default()
+                });
+                responder.reset();
+                ui.ctx()
+                    .data_mut(|data| data.insert_temp(orb_speed_id, responder));
+            }
             // Siri is a clean, transparent listening indicator. Classic keeps
             // both actions visible; Typeless follows Tauri and shows the two
             // large actions only while recording, then only its small stop
@@ -1248,10 +1259,25 @@ pub fn dictation_capsule(
                 }
             } else if processing {
                 // 思考中：Siri 流体圆点（orb），从 wave 收拢的光点化开成环。
+                // 转速跟着流式输出速率（用户诉求：润色时按大模型的吐字速度转）：没有速率
+                // 数据时是 `BASE_SPEED`（= Tauri 的固定 1.5），有增量就往上加，流停了再衰减
+                // 回基线。映射与衰减都在 `stream_rate` 模块里，可单测。
+                let now = ui.input(|input| input.time);
+                let dt = ui.input(|input| input.stable_dt);
+                let speed = {
+                    let mut responder = ui.ctx().data_mut(|data| {
+                        data.get_temp::<stream_rate::OrbSpeed>(orb_speed_id)
+                            .unwrap_or_default()
+                    });
+                    let speed = responder.tick(now, dt, state.stream_rate);
+                    ui.ctx()
+                        .data_mut(|data| data.insert_temp(orb_speed_id, responder));
+                    speed
+                };
                 let drive = siri_wgpu::SiriDrive {
                     level: 0.0,
                     resolved: 0.0,
-                    speed: 1.3,
+                    speed,
                     warming: false,
                 };
                 let dt = ui.input(|input| input.stable_dt);
@@ -2503,6 +2529,57 @@ mod tests {
         }
     }
 
+    /// 用户诉求：润色时光点要按大模型的吐字速度转。这条测试走完整渲染路径（同一个 egui
+    /// Context、逐帧推进时间），比较「没有速率」与「高速率」两种情况下 Siri 时钟推进了多少
+    /// —— 时钟走得快就是光点转得快；没有速率时必须落在 Tauri 的基线转速上。
+    #[test]
+    fn the_orb_spins_faster_while_the_model_streams() {
+        fn orb_clock_after(frames: usize, rate: Option<f32>) -> f32 {
+            let ctx = egui::Context::default();
+            for frame in 0..frames {
+                let state = CapsulePopupState {
+                    phase: "Polishing".to_string(),
+                    text: String::new(),
+                    audio_level: None,
+                    translation_active: false,
+                    style: "siri".to_string(),
+                    stream_rate: rate,
+                };
+                let _ = crate::ui::frontend::run_pass(
+                    &ctx,
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(200.0, 100.0),
+                        )),
+                        time: Some(frame as f64 * 0.05),
+                        predicted_dt: 0.05,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let _ = dictation_capsule(ui, &state, Lang::ZhCn);
+                    },
+                );
+            }
+            ctx.data(|data| {
+                data.get_temp::<siri_wgpu::SiriClock>(egui::Id::new((
+                    "openless-siri-clock",
+                    "capsule-siri-orb",
+                )))
+                .map(|clock| clock.time)
+                .unwrap_or_default()
+            })
+        }
+
+        let idle = orb_clock_after(20, None);
+        assert!(idle > 0.0, "the orb clock must advance: {idle}");
+        let streaming = orb_clock_after(20, Some(60.0));
+        assert!(
+            streaming > idle * 1.2,
+            "a fast model stream must spin the orb faster: idle={idle} streaming={streaming}"
+        );
+    }
+
     /// Render one capsule frame and collect the colours, the GPU callback count
     /// and the number of centre effect strokes (the CPU wave lines).
     fn capsule_frame(state: &CapsulePopupState) -> (Vec<egui::Color32>, usize, usize) {
@@ -2571,6 +2648,7 @@ mod tests {
                 audio_level: Some(0.6),
                 translation_active: false,
                 style: "classic".to_string(),
+                stream_rate: None,
             };
             let (colors, _, _) = capsule_frame(&state);
             let reddish: Vec<_> = colors
@@ -2595,6 +2673,7 @@ mod tests {
             audio_level: Some(0.6),
             translation_active: false,
             style: "siri".to_string(),
+            stream_rate: None,
         };
         let (colors, callbacks, effect) = capsule_frame(&state);
         // 音量竖条是 3px 宽的小圆角矩形：数一下细长条形的填充个数。
@@ -2723,6 +2802,7 @@ mod tests {
             audio_level: Some(0.4),
             translation_active: false,
             style: "siri".to_string(),
+            stream_rate: None,
         };
         let painted = run(egui::vec2(200.0, 60.0), |ctx| {
             dictation_capsule(ctx, &recording, Lang::ZhCn);
@@ -2769,6 +2849,7 @@ mod tests {
             audio_level: None,
             translation_active: false,
             style: "siri".to_string(),
+            stream_rate: None,
         };
         let painted = run(egui::vec2(200.0, 60.0), |ctx| {
             dictation_capsule(ctx, &done, Lang::ZhCn);
@@ -2782,6 +2863,7 @@ mod tests {
             audio_level: None,
             translation_active: false,
             style: "siri".to_string(),
+            stream_rate: None,
         };
         let painted = run(egui::vec2(200.0, 60.0), |ctx| {
             dictation_capsule(ctx, &failed, Lang::ZhCn);

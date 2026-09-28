@@ -129,6 +129,10 @@ pub enum HostToPopup {
         /// 胶囊样式：`siri` / `classic` / `typeless`（Tauri `capsuleStyle`）。
         #[serde(default)]
         style: String,
+        /// 流式输出速率（字符/秒），驱动思考光点的转速。宿主每条流式增量重算一次；
+        /// 缺省（老宿主 / 还没有增量）= 用 Tauri 的基线转速。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stream_rate: Option<f32>,
     },
     Hide {
         version: u16,
@@ -673,6 +677,8 @@ pub struct CapsulePopupState {
     pub translation_active: bool,
     /// 胶囊样式（`siri` / `classic` / `typeless`）。
     pub style: String,
+    /// 流式输出速率（字符/秒）：思考态光点转速跟着它走，`None` = 用基线转速。
+    pub stream_rate: Option<f32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -781,6 +787,7 @@ impl PopupState {
                 audio_level,
                 translation_active,
                 style,
+                stream_rate,
                 ..
             } => {
                 self.capsule = CapsulePopupState {
@@ -789,6 +796,7 @@ impl PopupState {
                     audio_level,
                     translation_active,
                     style,
+                    stream_rate,
                 };
                 self.visible = true;
             }
@@ -1454,10 +1462,12 @@ mod tests {
             audio_level: Some(0.5),
             translation_active: true,
             style: "typeless".to_owned(),
+            stream_rate: Some(42.0),
         };
         let mut state = PopupState::default();
         assert_eq!(state.apply(message), ApplyOutcome::Applied);
         assert!(state.capsule.translation_active);
+        assert_eq!(state.capsule.stream_rate, Some(42.0));
         assert_eq!(
             state.capsule.style, "typeless",
             "the capsule style must travel with the frame to the popup process"
