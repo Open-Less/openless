@@ -33,7 +33,11 @@ export function CoreStartupScreen({
             fontWeight: 600,
           }}
         >
-          {!compact && <Icon name={error ? 'info' : 'refresh'} size={22} />}
+          {!compact && (
+            <span className={error ? undefined : 'ol-loading-spinner'} aria-hidden="true">
+              <Icon name={error ? 'info' : 'refresh'} size={22} />
+            </span>
+          )}
           {t(error ? 'startup.failed' : 'startup.loading')}
         </div>
         {!compact && (

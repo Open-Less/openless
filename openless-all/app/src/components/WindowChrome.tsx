@@ -1,7 +1,4 @@
-import {
-  type CSSProperties,
-  type ReactNode,
-} from 'react';
+import { type CSSProperties, type ReactNode } from 'react';
 
 export type OS = 'mac' | 'win' | 'android';
 
@@ -48,6 +45,7 @@ export function WindowChrome({ os = 'mac', children, height = 800 }: WindowChrom
           width: '100%',
           height,
           position: 'relative',
+          isolation: 'isolate',
           borderRadius: 'var(--ol-window-shell-radius)',
           boxShadow: os === 'win' ? 'none' : 'var(--ol-shadow-xl)',
           overflow: 'hidden',
@@ -60,10 +58,9 @@ export function WindowChrome({ os = 'mac', children, height = 800 }: WindowChrom
           backdropFilter: 'none',
           WebkitBackdropFilter: 'none',
           animation:
-            os === 'win' ? undefined : 'ol-window-enter 0.42s var(--ol-motion-spring) both',
+            os === 'win' ? undefined : 'ol-window-enter 0.24s var(--ol-motion-spring) backwards',
           transition:
             'box-shadow 0.28s var(--ol-motion-soft), border-color 0.28s var(--ol-motion-soft)',
-          willChange: 'opacity, transform',
         } as CSSProperties
       }
     >

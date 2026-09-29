@@ -34,6 +34,7 @@ import {
 } from '../pages/settings/navigation';
 import { ChannelEditorHostContext } from '../pages/settings/ChannelEditorHostContext';
 import { ProviderLeaveContext, useProviderForm } from '../pages/settings/ProviderForm';
+import { useContentMotion, useOverlayMotion } from '../lib/motion';
 
 export type { SettingsSectionId } from '../pages/settings/navigation';
 
@@ -41,8 +42,7 @@ interface SettingsModalProps {
   os: OS;
   onClose: () => void;
   initialSettingsSection?: SettingsSectionId;
-  /** true plays the enter animation in reverse; FloatingShell's
-   *  useExitMount gates it, unmounting only after the animation finishes. */
+  /** Keeps the closing surface mounted until its exit finishes. */
   closing?: boolean;
 }
 
@@ -69,6 +69,9 @@ export function SettingsModal({
   const [platformCaps, setPlatformCaps] = useState(getCachedPlatformCapabilities);
   const savedToast = useSavedToastListener();
   const surfaceRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  useOverlayMotion(overlayRef, closing, 'backdrop', !mobile);
+  useOverlayMotion(surfaceRef, closing, mobile ? 'sheet' : 'card');
   const scrollRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -85,13 +88,16 @@ export function SettingsModal({
     });
   };
   const supportsShortcuts = platformCaps?.supportsDesktopHotkey ?? os !== 'android';
-  const sections = visibleSettingsSections(supportsShortcuts, platformCaps?.platform).map((item) => ({
-    ...item,
-    title: t(`modal.sections.${item.id}`),
-    description: t(`modal.descriptions.${item.id}`),
-    keywords: t(`modal.searchKeywords.${item.id}`),
-  }));
+  const sections = visibleSettingsSections(supportsShortcuts, platformCaps?.platform).map(
+    (item) => ({
+      ...item,
+      title: t(`modal.sections.${item.id}`),
+      description: t(`modal.descriptions.${item.id}`),
+      keywords: t(`modal.searchKeywords.${item.id}`),
+    }),
+  );
   const searching = query.trim().length > 0;
+  useContentMotion(scrollRef, `${section}:${searching ? 'search' : (advancedPage ?? 'root')}`);
   const results = searchSettingsSections(sections, query);
   const advancedPages = visibleAdvancedPages(platformCaps?.platform, os);
   const activeAdvancedPage =
@@ -165,7 +171,7 @@ export function SettingsModal({
       previousFocusRef.current = document.activeElement;
     }
     // Do not summon a software keyboard when opening mobile settings.
-    (mobile ? closeRef.current : searchRef.current)?.focus();
+    (mobile ? closeRef.current : searchRef.current)?.focus({ preventScroll: true });
     return () => {
       mountedRef.current = false;
       window.requestAnimationFrame(() => {
@@ -302,11 +308,9 @@ export function SettingsModal({
   return (
     <ProviderLeaveContext.Provider value={providerForm.register}>
       <div
+        ref={overlayRef}
         className={mobile ? undefined : 'ol-dialog-overlay'}
-        onClick={mobile ? undefined : closeSettings}
-        // Open animation: backdrop fades in + panel pops in (global.css ol-modal-*
-        // keyframes, pure opacity/transform, compositor-friendly). The settings panel
-        // used to appear instantly.
+        onClick={mobile || closing ? undefined : closeSettings}
         style={{
           position: mobile ? 'fixed' : 'absolute',
           inset: 0,
@@ -316,11 +320,7 @@ export function SettingsModal({
           justifyContent: 'center',
           padding: mobile ? 0 : '64px 28px 24px',
           zIndex: mobile ? 70 : 50,
-          animation: mobile
-            ? undefined
-            : closing
-              ? 'ol-modal-backdrop-in 0.18s var(--ol-motion-soft) reverse both'
-              : 'ol-modal-backdrop-in 0.2s var(--ol-motion-soft) both',
+          pointerEvents: closing ? 'none' : undefined,
         }}
       >
         <div
@@ -346,13 +346,6 @@ export function SettingsModal({
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
-            animation: mobile
-              ? closing
-                ? 'ol-mobile-sheet-up 0.22s var(--ol-motion-soft) reverse both'
-                : 'ol-mobile-sheet-up 0.26s var(--ol-motion-spring) both'
-              : closing
-                ? 'ol-modal-card-in 0.2s var(--ol-motion-soft) reverse both'
-                : 'ol-modal-card-in 0.28s var(--ol-motion-spring) both',
           }}
         >
           {/* Desktop no longer has a title bar spanning both columns;
@@ -426,17 +419,17 @@ export function SettingsModal({
                 {!mobile && railThumb && (
                   <div
                     aria-hidden="true"
+                    className="ol-settings-rail-thumb"
                     style={{
                       position: 'absolute',
                       left: 0,
                       right: 0,
-                      top: railThumb.top,
+                      top: 0,
+                      transform: `translate3d(0, ${railThumb.top}px, 0)`,
                       height: railThumb.height,
                       borderRadius: 8,
                       background: 'var(--ol-blue-soft)',
                       pointerEvents: 'none',
-                      transition:
-                        'top 0.26s var(--ol-motion-spring), height 0.2s var(--ol-motion-soft)',
                     }}
                   />
                 )}
@@ -685,15 +678,13 @@ export function SettingsModal({
                         )}
                       </div>
                     )}
-                    {/* key={section} remounts → a subtle fade-in (ol-tab-fade) on every
-                  category switch, matching the tab-switch animation language. */}
+                    {/* Category replacement keeps each form's lifecycle separate. */}
                     <div
                       key={section}
                       style={{
                         display: searching ? 'none' : 'flex',
                         flexDirection: 'column',
                         gap: 16,
-                        animation: 'ol-tab-fade 0.22s var(--ol-motion-soft) both',
                       }}
                     >
                       {section === 'general' && <GeneralTab />}

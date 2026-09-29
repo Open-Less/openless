@@ -1,13 +1,12 @@
 // Modal — centered dialog: backdrop + card. Marketplace details / upload / my
 // listings / GitHub login all share this popup logic instead of each writing its own.
 //
-// Animation lives on overlays.css's .ol-dialog-overlay / .ol-dialog-card (pure
-// opacity + transform, no blur). Exit uses dedicated *-out keyframes: reversing an
-// already-finished animation doesn't replay it — it jumps to the start frame and
-// vanishes with a pop.
+// Shared opacity/transform motion preserves the current pose when interrupted.
 
-import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useOverlayMotion } from '../../lib/motion';
+import { useExitMount } from '../../lib/useExitMount';
 
 interface ModalProps {
   children: ReactNode;
@@ -49,6 +48,12 @@ export function Modal({
   labelledBy,
 }: ModalProps) {
   const cardRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  useOverlayMotion(overlayRef, closing, 'backdrop');
+  useOverlayMotion(cardRef, closing);
+  useLayoutEffect(() => {
+    if (cardRef.current) cardRef.current.inert = closing;
+  }, [closing]);
 
   useEffect(() => {
     const id = Symbol('modal');
@@ -58,6 +63,10 @@ export function Modal({
     if (card && !card.contains(document.activeElement)) card.focus({ preventScroll: true });
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Tab' || !card || openModals[openModals.length - 1] !== id) return;
+      if (card.inert) {
+        event.preventDefault();
+        return;
+      }
       const items = focusableWithin(card);
       const active = document.activeElement;
       if (items.length === 0) {
@@ -88,15 +97,16 @@ export function Modal({
 
   // Portal to document.body: dialogs often trigger from inside panels (settings /
   // marketplace), and the window chrome (WindowChrome) and page containers carry a
-  // persistent `will-change: transform`, creating a containing block — rendered in
+  // temporary transforms while animating, creating a containing block — rendered in
   // place, the backdrop's `position: fixed` would anchor to that ancestor instead of
   // the viewport, covering only the triggering panel (e.g. GitHub login floating over
   // a still-bright settings page). Portaled out, fixed anchors to the viewport and
   // the overlay covers the whole window. Same approach as Tooltip / SelectLite.
   return createPortal(
     <div
+      ref={overlayRef}
       className={`ol-dialog-overlay${closing ? ' is-closing' : ''}${overlayClassName ? ` ${overlayClassName}` : ''}`}
-      onClick={onClose}
+      onClick={closing ? undefined : onClose}
       style={{
         position: 'fixed',
         inset: 0,
@@ -105,7 +115,6 @@ export function Modal({
         placeItems: 'center',
         zIndex,
         padding: 20,
-        pointerEvents: closing ? 'none' : undefined,
       }}
     >
       <div
@@ -133,5 +142,26 @@ export function Modal({
       </div>
     </div>,
     document.body,
+  );
+}
+
+/** Preserve the last visible content while its non-interactive exit finishes. */
+export function PresenceModal({
+  open,
+  render,
+  ...props
+}: Omit<ModalProps, 'children' | 'closing'> & { open: boolean; render: () => ReactNode }) {
+  const presence = useExitMount(open);
+  const previous = useRef<{ render: () => ReactNode; props: typeof props } | null>(null);
+  const content = open ? { render, props } : previous.current;
+  useLayoutEffect(() => {
+    if (open) previous.current = { render, props };
+    else if (!presence.mounted) previous.current = null;
+  });
+  if (!presence.mounted || !content) return null;
+  return (
+    <Modal {...content.props} closing={presence.closing}>
+      {content.render()}
+    </Modal>
   );
 }

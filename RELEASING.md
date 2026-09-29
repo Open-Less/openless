@@ -7,7 +7,7 @@ day-to-day development.
 
 **Only repository administrators may create version tags and publish releases.**
 
-- Only an admin may create a release tag (`v*-tauri`) or publish a GitHub Release. Linux assets are attached automatically by the tag workflow after product acceptance.
+- Only an admin may create a release tag (`v*-tauri`) or publish a GitHub Release. Linux assets require a separate accepted build and explicit administrator upload.
 - Contributors (including AI agents) **must not** create release tags, publish
   releases, or trigger release automation. If a release is needed, **request an admin
   to cut it** — open an issue or ping a maintainer with the target version and the
@@ -43,13 +43,19 @@ component, which is a 16-bit field. The full version still appears in the app an
 updater manifest; NSIS uses its supported numeric fallback for file metadata.
 See [the pinned NSIS bundler](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.10.1/crates/tauri-bundler/src/bundle/windows/nsis/mod.rs#L149).
 
-These tags build the macOS, Windows, and Android Tauri hosts and the independent Linux egui host in parallel. Linux is not part of the Tauri matrix: `.github/workflows/release-linux-egui.yml` builds only deb/rpm, attaches them to the same Release draft and publishes no in-app updater manifest or AppImage. Linux product acceptance must be completed **before** an admin pushes the shared tag. CI runs the same Linux packaging and verification path on PRs without attaching release assets.
+These tags build the macOS, Windows, and Android Tauri hosts in parallel. Linux is
+independent: `.github/workflows/release-linux-egui.yml` is manual-only, runs the
+same Core/host/deb/rpm verification as CI, and uploads Actions artifacts. It does
+not react to Tauri tags or change a GitHub Release. After Linux product acceptance,
+an administrator may run it against the accepted existing release tag, verify its
+commit and package checksums, and explicitly attach the deb/rpm files to that
+Release. Linux has no in-app updater manifest or AppImage.
 For each new Linux package candidate, increment `openless-all/app/linux-egui/package-revision`
 from the last `-N` suffix (for example `2.0.0-Beta.2-79` → `2.0.0-Beta.2-80`).
 Both local packaging and the shared CI/tag build use this explicit revision; never drop
 it or derive it from the Tauri tag, whose SemVer remains `2.0.0-Beta.2`.
 
-Under the [2026-09-06 2.0 requirements](docs/2.0-requirements.md), Windows and macOS must fully retain their respective Tauri 1.x features. The egui team owns Linux Host/UI work and Linux product acceptance. Although Linux application gaps did not previously block Windows/macOS delivery, this shared-tag workflow now attaches Linux packages automatically: do not cut a shared release tag until Linux is accepted as well. Existing Android builds do not expand this scope into a new full-support commitment.
+Under the [2026-09-06 2.0 requirements](docs/2.0-requirements.md), Windows and macOS must fully retain their respective Tauri 1.x features. The egui team owns Linux Host/UI work and Linux product acceptance. Linux application gaps do not block the Windows/macOS delivery, but shared Core defects do. Linux packages must not be attached before their own product acceptance. Existing Android builds do not expand this scope into a new full-support commitment.
 
 ## Version-sync gate
 
@@ -80,24 +86,25 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
 3. CI is green on the commit being tagged.
 4. The applicable [desktop feature and device acceptance](docs/2.0-desktop-acceptance.md), signing, and distribution requirements are met; green builds alone do not establish product readiness. Linux acceptance below is required before including Linux assets.
 5. Then, and only then, push the release tag.
-6. Beta tag workflows upload Tauri, Android and Linux egui assets to a shared draft.
-   Wait for **all three** workflows to succeed, verify the packages, Linux deb/rpm
-   checksums and Beta updater manifests, then publish that draft as a prerelease.
+6. Beta tag workflows upload Tauri and Android assets to a shared draft.
+   Wait for **both** workflows to succeed, verify the packages and Beta updater
+   manifests, then publish that draft as a prerelease.
    Do not rerun an asset workflow after publication without first returning the release to draft.
 
-Before pushing a tag that will automatically attach Linux assets, additionally require all of the following:
+Before independently attaching Linux assets, additionally require all of the following:
 
 1. The egui team has completed the [Linux Host/UI gaps and acceptance](docs/linux-egui-handoff/07-acceptance.md). The existing `eframe::App` is a starting implementation; its presence and successful packaging alone do not establish product completeness.
 2. Linux core/host tests, dependency gates, and secret-surface gates are green on Ubuntu.
 3. The Linux workflow verifies ELF dependencies, deb/rpm contents, desktop metadata, fcitx5 plugin paths and package SHA-256 checksums. There is no AppImage, minisign key or Linux updater manifest.
-4. The shared tag points to the same commit whose CI and Linux product acceptance were reviewed. A `workflow_dispatch` build only uploads Actions artifacts, never Release assets.
+4. The manual build targets the same existing tag whose commit, CI and Linux product acceptance were reviewed. `workflow_dispatch` only uploads Actions artifacts; an administrator separately uploads the verified packages to that Release.
+5. Attach the Linux checksum file as `SHA256SUMS-linux` so it does not replace an existing desktop/Android checksum file.
 
 ## Process summary
 
 1. Land work on `beta` via PRs (open PRs against `beta`, never `main`).
 2. For a Stable release, a maintainer merges `beta → main`.
 3. An **admin** bumps the Tauri version (five-location sync), verifies CI is green,
-   and pushes the release tag, which triggers the macOS/Windows/Android and Linux
-   asset workflows (only supported platforms generate auto-update manifests).
-4. After Linux product acceptance and the shared tag's Tauri, Android and Linux
-   workflows pass, an admin reviews all assets and publishes the shared draft.
+   and pushes the release tag, which triggers the macOS/Windows/Android asset
+   workflows and their channel-specific updater manifests.
+4. After both release workflows pass, an admin verifies and publishes the shared
+   draft. Linux packages are attached independently only after Linux acceptance.

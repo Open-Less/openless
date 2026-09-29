@@ -26,6 +26,7 @@ import {
 import type { DictionaryEntry, VocabPreset } from '../lib/types';
 import { DEFAULT_VOCAB_PRESETS, loadVocabPresets, persistVocabPresets } from '../lib/vocabPresets';
 import { useExitMount } from '../lib/useExitMount';
+import { useOverlayMotion } from '../lib/motion';
 import { useMobileLayout } from '../lib/useMobileLayout';
 import { Btn, Card, Collapsible, PageHeader } from './_atoms';
 
@@ -930,8 +931,8 @@ export function Vocab() {
 
       <style>{`
         @keyframes ol-chip-in {
-          from { opacity: 0; transform: scale(.92); filter: blur(5px); }
-          to   { opacity: 1; transform: scale(1); filter: blur(0); }
+          from { opacity: 0; transform: scale(.97); }
+          to   { opacity: 1; transform: scale(1); }
         }
       `}</style>
     </div>
@@ -1015,8 +1016,7 @@ function WordCard({
 interface ModalShellProps {
   title: string;
   desc?: string;
-  /** When true, plays the entrance animation in reverse (exit), paired with useExitMount
-      for the reverse-of-entry effect. */
+  /** Keeps the closing card mounted until its exit finishes. */
   closing?: boolean;
   onClose: () => void;
   children: React.ReactNode;
@@ -1025,6 +1025,10 @@ interface ModalShellProps {
 /** Page-level mini modal: backdrop fade-in + card spring pop-out; closes on Esc or backdrop click. */
 function ModalShell({ title, desc, closing = false, onClose, children }: ModalShellProps) {
   const { t } = useTranslation();
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  useOverlayMotion(overlayRef, closing, 'backdrop');
+  useOverlayMotion(cardRef, closing);
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -1034,7 +1038,8 @@ function ModalShell({ title, desc, closing = false, onClose, children }: ModalSh
   }, [onClose]);
   return (
     <div
-      onClick={onClose}
+      ref={overlayRef}
+      onClick={closing ? undefined : onClose}
       style={{
         position: 'fixed',
         inset: 0,
@@ -1046,12 +1051,11 @@ function ModalShell({ title, desc, closing = false, onClose, children }: ModalSh
         background: 'var(--ol-dialog-backdrop)',
         backdropFilter: 'blur(6px) saturate(140%)',
         WebkitBackdropFilter: 'blur(6px) saturate(140%)',
-        animation: closing
-          ? 'ol-prompt-fade 0.2s var(--ol-motion-soft) reverse both'
-          : 'ol-prompt-fade 0.2s var(--ol-motion-soft)',
+        pointerEvents: closing ? 'none' : undefined,
       }}
     >
       <div
+        ref={cardRef}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -1064,9 +1068,6 @@ function ModalShell({ title, desc, closing = false, onClose, children }: ModalSh
           border: '1px solid var(--ol-dialog-border)',
           boxShadow: 'var(--ol-dialog-shadow)',
           padding: 20,
-          animation: closing
-            ? 'ol-prompt-pop 0.2s var(--ol-motion-soft) reverse both'
-            : 'ol-prompt-pop 0.26s var(--ol-motion-spring)',
         }}
       >
         <div

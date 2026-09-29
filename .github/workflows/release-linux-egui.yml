@@ -1,12 +1,9 @@
 name: Release Linux egui
 
-# An admin pushes v*-tauri only after CI and Linux device acceptance. This
-# workflow calls the exact same deb/rpm build used by CI, then attaches its
-# verified assets to the shared Tauri/Android Release (Beta remains a draft).
+# Independent Linux builds retain the same tests and deb/rpm packaging as CI.
+# After product acceptance, an administrator builds the accepted release tag and
+# explicitly attaches the verified Actions artifacts to that existing Release.
 on:
-  push:
-    tags:
-      - 'v*-tauri'
   workflow_dispatch:
 
 permissions:
@@ -21,34 +18,3 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/check-linux-egui.yml
-
-  publish-linux-egui:
-    # Manual builds only upload Actions artifacts; they never change a Release.
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
-    needs: build-linux-egui
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          name: openless-linux-egui-x86_64
-          path: linux-egui-packages
-
-      - name: Verify downloaded release assets
-        run: |
-          set -euo pipefail
-          test "$(find linux-egui-packages -maxdepth 1 -name '*.deb' | wc -l)" -eq 1
-          test "$(find linux-egui-packages -maxdepth 1 -name '*.rpm' | wc -l)" -eq 1
-          test "$(find linux-egui-packages -maxdepth 1 -name '*.AppImage' | wc -l)" -eq 0
-          ( cd linux-egui-packages && sha256sum --check --strict SHA256SUMS )
-
-      - name: Attach Linux assets to the shared release draft
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          draft: ${{ endsWith(github.ref_name, '-beta-tauri') || contains(github.ref_name, '-Beta.') }}
-          prerelease: ${{ endsWith(github.ref_name, '-beta-tauri') || contains(github.ref_name, '-Beta.') }}
-          files: linux-egui-packages/*
-          fail_on_unmatched_files: true

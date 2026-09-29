@@ -1,6 +1,10 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import type { CSSProperties } from 'react';
 import { useEffect, useState } from 'react';
+import { useReducedMotion } from '../lib/motion';
+import { Icon } from './Icon';
+
+const TOAST_TRANSITION = { type: 'spring' as const, damping: 26, stiffness: 320 };
 
 export type SaveToastState = 'idle' | 'saving' | 'saved' | 'failed';
 
@@ -32,10 +36,12 @@ export function SavedToast({
   // Internal state lets the toast time itself out (even if the parent's timer runs
   // longer than 0.8s).
   const [internalVisible, setInternalVisible] = useState(false);
+  const reduced = useReducedMotion();
 
   useEffect(() => {
     if (saveState !== 'idle') {
       setInternalVisible(true);
+      if (saveState === 'saving') return;
       const timer = window.setTimeout(
         () => setInternalVisible(false),
         durationMs ?? (onAction ? 6000 : 800),
@@ -80,21 +86,33 @@ export function SavedToast({
   // "Leave the way you came": enter start == exit end; direction comes from slideFrom.
   // Both branches spell out x / y so the motion variant stays complete — no axis
   // falling back to an implicit default.
-  const offscreen =
-    slideFrom === 'top' ? { opacity: 0, x: 0, y: '-220%' } : { opacity: 0, x: '120%', y: 0 };
+  const offscreen = reduced
+    ? { opacity: 0, x: 0, y: 0 }
+    : slideFrom === 'top'
+      ? { opacity: 0, x: 0, y: '-220%' }
+      : { opacity: 0, x: '120%', y: 0 };
 
   return (
     <AnimatePresence>
       {internalVisible && (
         <motion.div
           role={failed ? 'alert' : 'status'}
-          initial={{ ...offscreen, filter: 'blur(8px)' }}
-          animate={{ opacity: 1, x: 0, y: 0, filter: 'blur(0px)' }}
-          exit={{ ...offscreen, filter: 'blur(4px)' }}
-          transition={{ type: 'spring', damping: 20, stiffness: 260 }}
+          initial={offscreen}
+          animate={{ opacity: 1, x: 0, y: 0 }}
+          exit={offscreen}
+          transition={reduced ? { duration: 0 } : TOAST_TRANSITION}
           style={style}
         >
-          {failed ? '⚠️' : '✓'} {message}
+          {saveState === 'saving' ? (
+            <span className="ol-loading-spinner" aria-hidden="true">
+              <Icon name="refresh" size={12} />
+            </span>
+          ) : failed ? (
+            '⚠️'
+          ) : (
+            '✓'
+          )}{' '}
+          {message}
           {actionLabel && onAction && (
             <button
               type="button"

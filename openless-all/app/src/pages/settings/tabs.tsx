@@ -33,6 +33,7 @@ import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { emitSaved } from '../../lib/savedEvent';
 import { SettingRow, segmentedTrackStyle } from './shared';
 import { Card } from '../_atoms';
+import { useContentMotion } from '../../lib/motion';
 import {
   availableServiceViews,
   isServiceViewInactive,
@@ -122,6 +123,7 @@ export function ServicesTab() {
   const views = availableServiceViews(showLocalModel);
   const selectedView = resolveServiceView(view, views, multimodal);
   const contentRef = useRef<HTMLDivElement>(null);
+  useContentMotion(contentRef, selectedView);
   const setPipelineMode = (mode: 'traditional' | 'multimodal') => {
     if (!prefs || (multimodal ? 'multimodal' : 'traditional') === mode) return;
     void updatePrefs((current) => ({

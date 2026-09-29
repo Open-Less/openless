@@ -52,7 +52,6 @@ export function AutoUpdateGate() {
 
   if (platformCaps?.supportsAutoUpdate !== true) return null;
 
-  if (!isDialogStatus(u.status)) return null;
   return (
     <UpdateDialog
       status={u.status}

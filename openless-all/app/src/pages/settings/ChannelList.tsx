@@ -16,6 +16,7 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { Modal } from '../../components/ui/Modal';
+import { useOverlayMotion } from '../../lib/motion';
 import { SelectLite } from '../../components/ui/SelectLite';
 import { detectOS, type OS } from '../../components/WindowChrome';
 import { testLocalAsrChannel } from '../../lib/localAsr';
@@ -972,7 +973,7 @@ function ChannelModal({
   /** Draft card in the create flow: title says "add channel"; recyclable while untouched. */
   isDraft: boolean;
   mobile: boolean;
-  /** Exiting: forwarded to Modal to play the entrance animation in reverse (useExitMount gates unmount). */
+  /** Keeps the editor mounted until its exit finishes. */
   closing?: boolean;
   onClose: () => void;
   onChanged: () => void | Promise<void>;
@@ -990,6 +991,7 @@ function ChannelModal({
   const nameId = useId();
   const editorHost = useContext(ChannelEditorHostContext);
   const embedded = Boolean(editorHost?.container && editorHost.background);
+  useOverlayMotion(dialogRef, closing, 'drawer', embedded);
   const closeRequestedRef = useRef(false);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -1015,7 +1017,7 @@ function ChannelModal({
     const wasInert = background?.inert ?? false;
     (
       dialog?.querySelector<HTMLElement>('[role="combobox"], input:not([disabled])') ?? dialog
-    )?.focus();
+    )?.focus({ preventScroll: true });
     // Keep body-portaled provider menus accessible while disabling the covered
     // settings surface. aria-modal would hide those existing sibling portals.
     if (background) background.inert = true;

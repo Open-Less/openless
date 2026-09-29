@@ -453,9 +453,6 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 .ol-advanced-settings-detail[hidden] {
   display: none;
 }
-.ol-advanced-settings-detail:not([hidden]) {
-  animation: ol-settings-detail-in 200ms var(--ol-motion-soft) both;
-}
 @keyframes ol-settings-detail-in {
   from {
     opacity: 0;
@@ -493,6 +490,9 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   transition:
     color 0.16s var(--ol-motion-quick),
     background 0.16s var(--ol-motion-quick);
+}
+.ol-settings-rail-thumb {
+  transition: transform 240ms var(--ol-motion-spring);
 }
 .ol-settings-rail-btn:not([aria-current='page']):hover {
   background: var(--ol-nav-hover-bg);
@@ -827,6 +827,9 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   font: inherit;
   font-size: 12px;
   cursor: pointer;
+  transition:
+    color 140ms var(--ol-motion-quick),
+    background 140ms var(--ol-motion-quick);
 }
 
 .ol-service-pipeline-option[aria-pressed='true'] {
@@ -871,6 +874,9 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   font-weight: 500;
   color: var(--ol-ink-3);
   cursor: pointer;
+  transition:
+    color 140ms var(--ol-motion-quick),
+    border-color 140ms var(--ol-motion-quick);
 }
 
 /* 必配服务（语言模型/语音识别）tab 上的状态点：未启用红、已有启用渠道绿。 */
@@ -1041,10 +1047,6 @@ html[data-ol-platform='android'] .ol-capsule-pill {
   width: 100%;
   height: 100%;
   background: var(--ol-sidebar-bg);
-  animation: ol-settings-detail-in 200ms var(--ol-motion-soft) both;
-}
-.ol-channel-dialog-embedded[data-closing='true'] {
-  animation: ol-channel-detail-out 180ms var(--ol-motion-soft) both;
 }
 .ol-channel-dialog-embedded .ol-channel-dialog-header {
   padding: 18px 24px;
@@ -1652,4 +1654,25 @@ html:lang(de) {
 .ol-cloud-sync .ol-cloud-sync-scope {
   margin: 0;
   font-size: 12px;
+}
+
+.ol-loading-spinner {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--ol-blue);
+  animation: ol-spin 900ms linear infinite;
+}
+
+/* Retain final states and completion events while removing decorative motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
 }

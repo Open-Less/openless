@@ -17,7 +17,8 @@
 // Lifecycle: rAF starts on mount; unmount cancels it and releases GL resources
 // (invisible means zero GPU, same principle as #470).
 
-import { useEffect, useRef, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useRef, type CSSProperties } from 'react';
+import { useReducedMotion } from '../lib/motion';
 
 export type SiriGLMode = 'wave' | 'orb';
 
@@ -307,6 +308,8 @@ export function SiriGL({
   style,
 }: SiriGLProps) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const reducedMotion = useReducedMotion();
+  const redrawRef = useRef<(() => void) | null>(null);
   // 60Hz level updates go through a ref bridge: render only syncs the value and the
   // draw loop reads it in rAF, so the GL pipeline is never rebuilt for prop changes.
   const levelRef = useRef(0);
@@ -321,6 +324,10 @@ export function SiriGL({
   mergingRef.current = merging === true ? 1 : 0;
   warmingRef.current = warming === true ? 1 : 0;
   warmupMsRef.current = warmupMs ?? 150;
+
+  useLayoutEffect(() => {
+    if (reducedMotion) redrawRef.current?.();
+  }, [level, resolved, warming, warmupMs, speed, merging, reducedMotion]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -413,7 +420,13 @@ export function SiriGL({
     let last = performance.now();
 
     const frame = (now: number) => {
-      const dt = Math.min(0.05, (now - last) / 1000);
+      const dt = reducedMotion ? 0 : Math.min(0.05, (now - last) / 1000);
+      if (reducedMotion) {
+        smoothLevel = visualVoice(levelRef.current);
+        smoothResolved = warmingRef.current > 0.5 ? WARMING_RESOLVED : resolvedRef.current;
+        warmProgress = warmingRef.current > 0.5 ? 0 : 1;
+        gather = mergingRef.current > 0.5 ? 1 : 0;
+      }
       last = now;
       elapsed += dt;
       smoothSpeed += (speedRef.current - smoothSpeed) * (1 - Math.exp(-dt * 2.5));
@@ -478,13 +491,20 @@ export function SiriGL({
       if (uLevelLoc) gl.uniform1f(uLevelLoc, smoothLevel);
       if (uGatherLoc) gl.uniform1f(uGatherLoc, gather);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
-      raf = requestAnimationFrame(frame);
+      if (!reducedMotion) raf = requestAnimationFrame(frame);
     };
     // Draw the first frame synchronously (don't wait for the next vsync): visuals
     // exist at mount, one frame less hotkey latency.
     frame(performance.now());
+    const redraw = () => frame(performance.now());
+    // Only static effects expose redraw; normal effects own a single RAF chain.
+    redrawRef.current = reducedMotion ? redraw : null;
+    const resize = reducedMotion ? new ResizeObserver(redraw) : null;
+    resize?.observe(host);
 
     return () => {
+      if (redrawRef.current === redraw) redrawRef.current = null;
+      resize?.disconnect();
       cancelAnimationFrame(raf);
       gl.deleteBuffer(buffer);
       gl.deleteProgram(program);
@@ -493,7 +513,7 @@ export function SiriGL({
       gl.getExtension('WEBGL_lose_context')?.loseContext();
       canvas.remove();
     };
-  }, [mode]);
+  }, [mode, reducedMotion]);
 
   return (
     <div

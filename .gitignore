@@ -26,6 +26,8 @@ promo-openless/
 promo-openless-v2/
 docs/old-promo/
 .worktrees/
+openless-all/app/test-results/
+openless-all/app/playwright-report/
 # 宣传录屏 / 素材根目录（GB 级二进制，绝不入版本库）
 video-materials/
 

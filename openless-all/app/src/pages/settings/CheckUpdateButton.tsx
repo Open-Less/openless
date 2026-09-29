@@ -6,7 +6,7 @@ import { useEffect } from 'react';
 import { btnGhostStyle } from './shared';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
-import { isDialogStatus, UpdateDialog, useAutoUpdate } from '../../components/AutoUpdate';
+import { UpdateDialog, useAutoUpdate } from '../../components/AutoUpdate';
 import type { UpdateChannel } from '../../lib/ipc';
 
 export function CheckUpdateButton({
@@ -117,19 +117,17 @@ export function CheckUpdateButton({
           {label}
         </span>
       </button>
-      {isDialogStatus(status) && (
-        <UpdateDialog
-          status={status}
-          currentVersion={updater.currentVersion}
-          version={updater.version}
-          progress={updater.progress}
-          downloaded={updater.downloaded}
-          contentLength={updater.contentLength}
-          errorMessage={updater.errorMessage}
-          onInstall={() => void updater.installUpdate()}
-          onClose={() => void updater.dismissDialog()}
-        />
-      )}
+      <UpdateDialog
+        status={status}
+        currentVersion={updater.currentVersion}
+        version={updater.version}
+        progress={updater.progress}
+        downloaded={updater.downloaded}
+        contentLength={updater.contentLength}
+        errorMessage={updater.errorMessage}
+        onInstall={() => void updater.installUpdate()}
+        onClose={() => void updater.dismissDialog()}
+      />
     </>
   );
 }

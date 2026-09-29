@@ -26,6 +26,7 @@ import {
 } from '../lib/hotkeyMigration';
 import { applyFontScale, readFontScale } from '../lib/fontScale';
 import { useExitMount } from '../lib/useExitMount';
+import { useOverlayMotion, usePageTransition } from '../lib/motion';
 import { getCredentials } from '../lib/ipc';
 import {
   PROVIDER_SETUP_PROMPT_DEFERRED_KEY,
@@ -130,8 +131,7 @@ function FloatingShellBody({
   >();
   const [providerPromptOpen, setProviderPromptOpen] = useState(false);
   const [hotkeyModePromptOpen, setHotkeyModePromptOpen] = useState(false);
-  // Exit-animation gate: on close, play the enter animation in reverse before unmounting.
-  const settingsMount = useExitMount(settingsOpen, 220);
+  const settingsMount = useExitMount(settingsOpen);
   const providerPromptMount = useExitMount(providerPromptOpen);
   const hotkeyPromptMount = useExitMount(hotkeyModePromptOpen);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -140,23 +140,11 @@ function FloatingShellBody({
 
   // The dialog records and moves focus before its background becomes inert.
   useEffect(() => {
-    if (shellRef.current) shellRef.current.inert = settingsOpen;
-  }, [settingsOpen]);
+    if (shellRef.current) shellRef.current.inert = settingsMount.mounted;
+  }, [settingsMount.mounted]);
 
-  // Tab-switch cross-fade: the old page blurs+fades out (180ms), then the new page
-  // mounts (ol-page-slide enter). displayTab is the rendered tab; currentTab is the
-  // user's target tab.
-  const [displayTab, setDisplayTab] = useState<AppTab>(initialTab);
-  const [tabPhase, setTabPhase] = useState<'idle' | 'exiting'>('idle');
-  useEffect(() => {
-    if (currentTab === displayTab) return;
-    setTabPhase('exiting');
-    const id = window.setTimeout(() => {
-      setDisplayTab(currentTab);
-      setTabPhase('idle');
-    }, 180);
-    return () => window.clearTimeout(id);
-  }, [currentTab, displayTab]);
+  const pageRef = useRef<HTMLDivElement>(null);
+  const displayTab = usePageTransition(currentTab, pageRef, mobile);
 
   // Font scale — applied once from localStorage at startup; later changes come from
   // the Settings "personalization" section.
@@ -510,17 +498,15 @@ function FloatingShellBody({
               flexDirection: 'column',
             }}
           >
-            {/* key={displayTab} remounts this subtree on every switch, retriggering the
-                ol-page-slide keyframe. On exit the old tab doesn't unmount immediately:
-                it plays ol-page-fadeout (blur+fade) first, then after 180ms switches to
-                the new tab and plays the enter animation. See the displayTab/tabPhase effect.
-                padding + overflow:auto live on this wrapper:
+            {/* Padding and overflow live on the transitioning page wrapper:
                   - naturally-sized pages (Overview / Vocab / Style): the wrapper scrolls
                     when the page content overflows
                   - height:100% pages (History's two columns): 100% resolves against the
                     wrapper's fixed height so each column's own overflow:auto can scroll */}
             <div
+              ref={pageRef}
               key={displayTab}
+              data-ol-page={displayTab}
               // issue #243: all tabs allow overflow:auto so bottom content stays
               //   reachable when the window shrinks or copy grows (Codex P1: overview
               //   used hidden, leaving the Recent card fully invisible after shrinking).
@@ -548,14 +534,6 @@ function FloatingShellBody({
                 // top:16 right:16 to this console card's corner instead of stretching
                 // across the page header as a full-width banner.
                 position: 'relative',
-                animation: mobile
-                  ? tabPhase === 'exiting'
-                    ? 'ol-page-fadeout-mobile 0.18s var(--ol-motion-soft) forwards'
-                    : 'ol-page-fade-mobile 0.22s var(--ol-motion-soft) both'
-                  : tabPhase === 'exiting'
-                    ? 'ol-page-fadeout 0.18s var(--ol-motion-soft) forwards'
-                    : 'ol-page-slide 0.34s var(--ol-motion-spring) both',
-                willChange: mobile ? 'opacity' : 'opacity, transform',
                 display: 'flex',
                 flexDirection: 'column',
               }}
@@ -688,40 +666,6 @@ function FloatingShellBody({
         .ol-nav-btn:not(.ol-nav-btn-active):hover {
           background: var(--ol-surface-2);
           color: var(--ol-ink);
-        }
-        /* Animate opacity/transform only (compositor-friendly): filter:blur re-rasterizes
-           the whole page every frame and was the tab-switch jank culprit — removed. */
-        @keyframes ol-page-slide {
-          from { opacity: 0; transform: translate3d(10px, 0, 0) scale(.996); }
-          to   { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
-        }
-        @keyframes ol-page-fadeout {
-          from { opacity: 1; transform: translate3d(0, 0, 0); }
-          to   { opacity: 0; transform: translate3d(-6px, 0, 0); }
-        }
-        @keyframes ol-page-fade-mobile {
-          from { opacity: 0; }
-          to   { opacity: 1; }
-        }
-        @keyframes ol-page-fadeout-mobile {
-          from { opacity: 1; }
-          to   { opacity: 0; }
-        }
-        @keyframes ol-mobile-sheet-backdrop {
-          from { opacity: 0; }
-          to   { opacity: 1; }
-        }
-        @keyframes ol-mobile-sheet-up {
-          from { opacity: 0; transform: translate3d(0, 12px, 0); }
-          to   { opacity: 1; transform: translate3d(0, 0, 0); }
-        }
-        @keyframes ol-prompt-fade {
-          from { opacity: 0; backdrop-filter: blur(0); -webkit-backdrop-filter: blur(0); }
-          to   { opacity: 1; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
-        }
-        @keyframes ol-prompt-pop {
-          from { opacity: 0; transform: translateY(6px) scale(.97); filter: blur(6px); }
-          to   { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
         }
       `}</style>
     </div>
@@ -929,8 +873,13 @@ function ProviderSetupPrompt({
   onRestore: () => void;
 }) {
   const { t } = useTranslation();
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  useOverlayMotion(overlayRef, closing, 'backdrop');
+  useOverlayMotion(cardRef, closing);
   return (
     <div
+      ref={overlayRef}
       style={{
         position: 'absolute',
         inset: 0,
@@ -942,12 +891,11 @@ function ProviderSetupPrompt({
         background: 'var(--ol-dialog-backdrop)',
         backdropFilter: 'blur(6px) saturate(140%)',
         WebkitBackdropFilter: 'blur(6px) saturate(140%)',
-        animation: closing
-          ? 'ol-prompt-fade 0.18s var(--ol-motion-soft) reverse both'
-          : 'ol-prompt-fade 0.2s var(--ol-motion-soft)',
+        pointerEvents: closing ? 'none' : undefined,
       }}
     >
       <div
+        ref={cardRef}
         style={{
           width: 360,
           borderRadius: 'var(--ol-dialog-radius)',
@@ -955,9 +903,6 @@ function ProviderSetupPrompt({
           border: '1px solid var(--ol-dialog-border)',
           boxShadow: 'var(--ol-dialog-shadow)',
           padding: 20,
-          animation: closing
-            ? 'ol-prompt-pop 0.18s var(--ol-motion-soft) reverse both'
-            : 'ol-prompt-pop 0.26s var(--ol-motion-spring)',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
@@ -1046,8 +991,13 @@ function HotkeyModeMigrationPrompt({
   onOpenSettings: () => void;
 }) {
   const { t } = useTranslation();
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  useOverlayMotion(overlayRef, closing, 'backdrop');
+  useOverlayMotion(cardRef, closing);
   return (
     <div
+      ref={overlayRef}
       style={{
         position: 'absolute',
         inset: 0,
@@ -1059,12 +1009,11 @@ function HotkeyModeMigrationPrompt({
         background: 'var(--ol-dialog-backdrop)',
         backdropFilter: 'blur(6px) saturate(140%)',
         WebkitBackdropFilter: 'blur(6px) saturate(140%)',
-        animation: closing
-          ? 'ol-prompt-fade 0.18s var(--ol-motion-soft) reverse both'
-          : 'ol-prompt-fade 0.2s var(--ol-motion-soft)',
+        pointerEvents: closing ? 'none' : undefined,
       }}
     >
       <div
+        ref={cardRef}
         style={{
           width: 380,
           borderRadius: 'var(--ol-dialog-radius)',
@@ -1072,9 +1021,6 @@ function HotkeyModeMigrationPrompt({
           border: '1px solid var(--ol-dialog-border)',
           boxShadow: 'var(--ol-dialog-shadow)',
           padding: 20,
-          animation: closing
-            ? 'ol-prompt-pop 0.18s var(--ol-motion-soft) reverse both'
-            : 'ol-prompt-pop 0.26s var(--ol-motion-spring)',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>

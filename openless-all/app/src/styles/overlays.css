@@ -12,19 +12,11 @@
 .ol-dialog-overlay {
   backdrop-filter: blur(8px) saturate(115%);
   -webkit-backdrop-filter: blur(8px) saturate(115%);
-  animation: ol-modal-backdrop-in 0.18s var(--ol-motion-soft) both;
-}
-.ol-dialog-overlay.is-closing {
-  animation: ol-modal-backdrop-out 0.18s var(--ol-motion-soft) both;
 }
 .ol-dialog-card {
   color: var(--ol-ink);
   isolation: isolate;
   background-image: linear-gradient(150deg, var(--ol-surface) 45%, var(--ol-dialog-wash));
-  animation: ol-modal-card-in 0.26s var(--ol-motion-spring) both;
-}
-.ol-dialog-overlay.is-closing .ol-dialog-card {
-  animation: ol-modal-card-out 0.18s var(--ol-motion-soft) both;
 }
 .ol-dialog-card :is(button, input, textarea, select):focus-visible {
   outline: 2px solid var(--ol-blue);
