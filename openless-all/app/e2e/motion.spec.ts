@@ -22,7 +22,10 @@ test('rapid return to the current page cannot leave it transparent or inert', as
     await expect(page.getByRole('heading', { name: '今日概览', exact: true })).toBeVisible();
     await expect(content).toHaveCSS('opacity', '1');
     expect(await content.evaluate((element) => (element as HTMLElement).inert)).toBe(false);
-    expect(await content.evaluate((element) => (element as HTMLElement).style.willChange)).toBe('');
+    // WebKit may deliver the animation completion after its last painted frame.
+    await expect
+      .poll(() => content.evaluate((element) => (element as HTMLElement).style.willChange))
+      .toBe('');
   }
 });
 
