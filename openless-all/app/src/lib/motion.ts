@@ -46,7 +46,10 @@ function animate(element: HTMLElement, from: Frame, to: Frame, duration: number,
     fill: 'both',
   });
   animation.id = exiting ? 'ol-surface-exit' : 'ol-surface-enter';
+  let released = false;
   const releaseLayer = () => {
+    if (released) return;
+    released = true;
     element.style.willChange = previousWillChange;
   };
   return {
@@ -120,21 +123,82 @@ export function useOverlayMotion(
 export function useContentMotion(ref: RefObject<HTMLElement>, key: string) {
   const reduced = useReducedMotion();
   const previous = useRef(key);
+  const interrupted = useRef<{ element: HTMLElement; frame: Frame } | null>(null);
   useLayoutEffect(() => {
     const changed = previous.current !== key;
     previous.current = key;
     const element = ref.current;
-    if (!changed || !element || reduced || typeof element.animate !== 'function') return;
-    const motion = animate(
-      element,
-      { opacity: 0, transform: 'translate3d(0, 4px, 0)' },
-      VISIBLE,
-      CONTENT_MS,
-      false,
-    );
+    if (!element || reduced || typeof element.animate !== 'function') {
+      interrupted.current = null;
+      return;
+    }
+    if (!changed) return;
+    const from =
+      interrupted.current?.element === element
+        ? interrupted.current.frame
+        : { opacity: 0, transform: 'translate3d(0, 6px, 0)' };
+    interrupted.current = null;
+    const motion = animate(element, from, VISIBLE, ENTER_MS, false);
     void motion.animation.finished.then(motion.cancel).catch(() => {});
-    return motion.cancel;
+    return () => {
+      interrupted.current =
+        motion.animation.playState === 'running' || motion.animation.playState === 'paused'
+          ? { element, frame: currentFrame(element) }
+          : null;
+      motion.cancel();
+    };
   }, [ref, key, reduced]);
+}
+
+/** A shared highlight moves between selected controls without animating their layout. */
+export function useSelectionMotion(
+  groupRef: RefObject<HTMLElement>,
+  indicatorRef: RefObject<HTMLElement>,
+  selection: string,
+  underline = false,
+) {
+  const reduced = useReducedMotion();
+  const previous = useRef<string | null>(null);
+  const interrupted = useRef<Frame | null>(null);
+  useLayoutEffect(() => {
+    const group = groupRef.current;
+    const indicator = indicatorRef.current;
+    if (!group || !indicator) return;
+    let motion: ReturnType<typeof animate> | undefined;
+    let lastTarget = '';
+    const position = (moving: boolean) => {
+      const button = group.querySelector<HTMLElement>(':scope > button[aria-pressed="true"]');
+      if (!button) {
+        indicator.style.visibility = 'hidden';
+        return;
+      }
+      // Layout offsets stay correct while the parent dialog is scaled on entry.
+      const y = underline ? group.clientHeight - 2 : button.offsetTop;
+      const target = `translate3d(${button.offsetLeft}px, ${y}px, 0) scaleX(${button.offsetWidth / 100})`;
+      if (target === lastTarget) return;
+      const from = interrupted.current ?? currentFrame(indicator);
+      interrupted.current = null;
+      motion?.cancel();
+      indicator.style.transform = target;
+      indicator.style.height = `${underline ? 2 : button.offsetHeight}px`;
+      indicator.style.visibility = 'visible';
+      lastTarget = target;
+      if (moving && !reduced && typeof indicator.animate === 'function') {
+        motion = animate(indicator, from, { opacity: 1, transform: target }, ENTER_MS, false);
+        motion.animation.id = 'ol-selection-move';
+        void motion.animation.finished.then(motion.cancel).catch(() => {});
+      }
+    };
+    position(previous.current !== null && previous.current !== selection);
+    previous.current = selection;
+    const observer = new ResizeObserver(() => position(false));
+    observer.observe(group);
+    return () => {
+      interrupted.current = currentFrame(indicator);
+      observer.disconnect();
+      motion?.cancel();
+    };
+  }, [groupRef, indicatorRef, selection, underline, reduced]);
 }
 
 /** Only the latest navigation may replace the page, including a rapid return to the current page. */

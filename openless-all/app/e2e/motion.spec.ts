@@ -182,7 +182,7 @@ test('multimodal settings fit one desktop page and keep inactive notices below l
       return {
         verticalOverflow: scroll.scrollHeight - scroll.clientHeight,
         horizontalOverflow: navigation.scrollWidth - navigation.clientWidth,
-        entries: navigation.children.length,
+        entries: navigation.querySelectorAll(':scope > button').length,
         badgesBelowLabels: [...navigation.querySelectorAll('.ol-service-inactive-tag')].every(
           (badge) =>
             badge.getBoundingClientRect().top >=
@@ -204,4 +204,108 @@ test('multimodal settings fit one desktop page and keep inactive notices below l
   await expect(card.getByRole('button', { name: '验证', exact: true })).toBeInViewport({
     ratio: 1,
   });
+});
+
+test('selection highlights move and settle correctly after a rapid mode return', async ({
+  page,
+}) => {
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  await dialog.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
+  await page.evaluate(() => {
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (...args) {
+      const animation = animate.apply(this, args);
+      queueMicrotask(() => {
+        if (animation.id === 'ol-selection-move') {
+          const frames = (animation.effect as KeyframeEffect).getKeyframes();
+          if (frames[0].transform !== frames.at(-1)!.transform) {
+            document.body.dataset.selectionMoved = 'true';
+          }
+          const indicator = this as HTMLElement;
+          if (!indicator.dataset.testSelectionPose) {
+            animation.pause();
+            animation.currentTime = 72;
+            indicator.dataset.testSelectionPose = getComputedStyle(indicator).transform;
+          } else {
+            indicator.dataset.testSelectionFrom = String(frames[0].transform);
+          }
+        }
+      });
+      return animation;
+    };
+  });
+  await dialog.getByRole('button', { name: '多模态模式', exact: true }).press('Enter');
+  await expect(page.locator('body')).toHaveAttribute('data-selection-moved', 'true');
+  await dialog.getByRole('button', { name: '传统模式', exact: true }).press('Enter');
+  for (const selector of ['.ol-service-pipeline-indicator', '.ol-service-view-indicator']) {
+    const indicator = dialog.locator(selector);
+    await expect(indicator).toHaveAttribute('data-test-selection-from', /.+/);
+    expect(await indicator.getAttribute('data-test-selection-from')).toBe(
+      await indicator.getAttribute('data-test-selection-pose'),
+    );
+    await expect
+      .poll(() =>
+        dialog.locator(selector).evaluate((indicator) => {
+          const selected = indicator.parentElement!.querySelector<HTMLElement>(
+            'button[aria-pressed="true"]',
+          )!;
+          return Math.abs(
+            indicator.getBoundingClientRect().left - selected.getBoundingClientRect().left,
+          );
+        }),
+      )
+      .toBeLessThan(1);
+    await expect
+      .poll(() =>
+        dialog.locator(selector).evaluate((element) => (element as HTMLElement).style.willChange),
+      )
+      .toBe('');
+  }
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await dialog.getByRole('button', { name: '多模态模式', exact: true }).click();
+  expect(
+    await dialog.evaluate(
+      (element) =>
+        element
+          .getAnimations({ subtree: true })
+          .filter((animation) => animation.id === 'ol-selection-move').length,
+    ),
+  ).toBe(0);
+});
+
+test('provider changes reveal configuration and validation feedback', async ({ page }) => {
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  await dialog.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
+  await dialog.getByRole('button', { name: '多模态模式', exact: true }).click();
+  const form = dialog.locator('.ol-omni-settings > div');
+  // Retain the actual entrance at an intermediate frame for deterministic inspection.
+  await page.evaluate(() => {
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (...args) {
+      const animation = animate.apply(this, args);
+      if (this.matches('.ol-omni-settings > div')) {
+        animation.pause();
+        animation.currentTime = 72;
+      }
+      return animation;
+    };
+  });
+  await dialog.getByRole('combobox', { name: '供应商', exact: true }).click();
+  await page.getByRole('option', { name: '阿里云百炼 Omni', exact: true }).click();
+  await expect(dialog.getByLabel('额外 Headers', { exact: true })).toHaveCount(0);
+  const opacity = Number(await form.evaluate((element) => getComputedStyle(element).opacity));
+  expect(opacity).toBeGreaterThan(0);
+  expect(opacity).toBeLessThan(1);
+  await form.evaluate((element) =>
+    element.getAnimations().forEach((animation) => animation.play()),
+  );
+  await expect
+    .poll(() => form.evaluate((element) => (element as HTMLElement).style.willChange))
+    .toBe('');
+  await dialog.getByRole('button', { name: '验证', exact: true }).click();
+  await expect(dialog.locator('.ol-provider-result')).toHaveAttribute('data-status', 'success');
+  await expect(dialog.locator('.ol-provider-result')).toHaveCSS('animation-name', 'ol-feedback-in');
+  await expect(dialog.getByRole('button', { name: '验证', exact: true })).toBeEnabled();
 });

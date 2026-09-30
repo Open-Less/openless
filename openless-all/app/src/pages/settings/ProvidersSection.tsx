@@ -32,6 +32,7 @@ import { LlmProtocolFields } from './LlmProtocolFields';
 import { ProviderFormContext } from './ProviderForm';
 import { LocalModelPicker } from './models/LocalModelPicker';
 import { emitSaved } from '../../lib/savedEvent';
+import { useContentMotion } from '../../lib/motion';
 import { useLayoutStack, useConservativeLayout } from '../../lib/useMobileLayout';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite, type SelectOption } from '../../components/ui/SelectLite';
@@ -1274,7 +1275,11 @@ function CatalogModelField({
             style={iconBtnStyle}
             disabled={status === 'loading'}
           >
-            <Icon name="refresh" size={13} />
+            <Icon
+              name="refresh"
+              size={13}
+              className={status === 'loading' ? 'ol-loading-spinner' : undefined}
+            />
           </button>
           {trailing}
         </div>
@@ -1439,6 +1444,7 @@ function ProviderTools({
   const resultMessage = message && (
     <div
       className="ol-provider-result"
+      key={`${operation}:${status}`}
       data-status={status}
       role="status"
       style={{
@@ -1457,6 +1463,7 @@ function ProviderTools({
       <Icon
         name={status === 'success' ? 'check' : status === 'loading' ? 'refresh' : 'info'}
         size={15}
+        className={status === 'loading' ? 'ol-loading-spinner' : undefined}
       />
       <span>{message}</span>
     </div>
@@ -1474,7 +1481,13 @@ function ProviderTools({
               style={miniBtnStyle}
               disabled={disabled || status === 'loading'}
             >
-              <Icon name={modelsUrl ? 'external' : 'refresh'} size={14} />
+              <Icon
+                name={modelsUrl ? 'external' : 'refresh'}
+                size={14}
+                className={
+                  status === 'loading' && operation === 'models' ? 'ol-loading-spinner' : undefined
+                }
+              />
               {modelsUrl
                 ? t('settings.providers.viewModels')
                 : status === 'loading' && operation === 'models'
@@ -1500,7 +1513,13 @@ function ProviderTools({
             style={{ ...miniBtnStyle, color: 'var(--ol-blue)', borderColor: 'var(--ol-blue)' }}
             disabled={disabled || status === 'loading'}
           >
-            <Icon name="play" size={13} />
+            <Icon
+              name={status === 'loading' && operation === 'validate' ? 'refresh' : 'play'}
+              size={13}
+              className={
+                status === 'loading' && operation === 'validate' ? 'ol-loading-spinner' : undefined
+              }
+            />
             {status === 'loading' && operation === 'validate'
               ? t('settings.channels.verifying')
               : t('settings.channels.verify')}
@@ -1534,7 +1553,13 @@ function ProviderTools({
               style={miniBtnStyle}
               disabled={disabled || status === 'loading'}
             >
-              <Icon name={modelsUrl ? 'external' : 'refresh'} size={14} />
+              <Icon
+                name={modelsUrl ? 'external' : 'refresh'}
+                size={14}
+                className={
+                  status === 'loading' && operation === 'models' ? 'ol-loading-spinner' : undefined
+                }
+              />
               {modelsUrl
                 ? t('settings.providers.viewModels')
                 : status === 'loading' && operation === 'models'
@@ -1579,7 +1604,13 @@ function ProviderTools({
             }}
             disabled={disabled || status === 'loading'}
           >
-            <Icon name="play" size={13} />
+            <Icon
+              name={status === 'loading' && operation === 'validate' ? 'refresh' : 'play'}
+              size={13}
+              className={
+                status === 'loading' && operation === 'validate' ? 'ol-loading-spinner' : undefined
+              }
+            />
             {status === 'loading' && operation === 'validate'
               ? t('settings.channels.verifying')
               : t('settings.channels.verify')}
@@ -2076,6 +2107,8 @@ export function OmniChannelSection() {
   const [committedOmniProvider, setCommittedOmniProvider] = useState('custom');
   const omniSwitchSeqRef = useRef(0);
   const [omniModelRevision, setOmniModelRevision] = useState(0);
+  const formRef = useRef<HTMLDivElement>(null);
+  useContentMotion(formRef, committedOmniProvider);
 
   useEffect(() => {
     void listProviderDescriptors('omni')
@@ -2151,69 +2184,71 @@ export function OmniChannelSection() {
 
   return (
     <Card className="ol-omni-settings" padding={16}>
-      <div style={{ marginBottom: 4 }}>
-        <SectionTitle>{t('settings.providers.omniTitle')}</SectionTitle>
-      </div>
-      <div className="ol-omni-primary-fields">
-        <ChannelFormRow label={t('settings.providers.providerLabel')}>
-          <SelectLite
-            value={omniProvider}
-            onChange={(next) => onOmniProviderChange(next)}
-            options={omniPresets.map((p) => ({
-              value: p.id,
-              label: t(`settings.providers.presets.${p.nameKey}`),
-            }))}
-            ariaLabel={t('settings.providers.providerLabel')}
-            style={{ ...inputStyle, width: '100%', maxWidth: '100%', height: 38 }}
-          />
-        </ChannelFormRow>
-        <CredentialField
-          key={`${committedOmniProvider}:model:${omniModelRevision}`}
-          label={t('settings.providers.modelLabel')}
-          account="omni.model"
-          placeholder={omniPreset?.modelPlaceholder || 'model-name'}
-          mono
-        />
-      </div>
-      <CredentialField
-        key={`${committedOmniProvider}:api_key`}
-        label={t('settings.providers.apiKeyLabel')}
-        account="omni.api_key"
-        mono
-        mask
-      />
-      <CredentialField
-        key={`${committedOmniProvider}:endpoint`}
-        label={t('settings.providers.baseUrlLabel')}
-        account="omni.endpoint"
-        placeholder={omniPreset?.baseUrl || 'https://your-endpoint/v1'}
-      />
-      {committedOmniProvider === 'custom' && (
-        <div className="ol-omni-advanced-fields">
+      <div ref={formRef}>
+        <div style={{ marginBottom: 4 }}>
+          <SectionTitle>{t('settings.providers.omniTitle')}</SectionTitle>
+        </div>
+        <div className="ol-omni-primary-fields">
+          <ChannelFormRow label={t('settings.providers.providerLabel')}>
+            <SelectLite
+              value={omniProvider}
+              onChange={(next) => onOmniProviderChange(next)}
+              options={omniPresets.map((p) => ({
+                value: p.id,
+                label: t(`settings.providers.presets.${p.nameKey}`),
+              }))}
+              ariaLabel={t('settings.providers.providerLabel')}
+              style={{ ...inputStyle, width: '100%', maxWidth: '100%', height: 38 }}
+            />
+          </ChannelFormRow>
           <CredentialField
-            key="omni:temperature"
-            label={t('settings.providers.temperatureLabel')}
-            account="omni.temperature"
-            placeholder={t('settings.providers.temperaturePlaceholder')}
+            key={`${committedOmniProvider}:model:${omniModelRevision}`}
+            label={t('settings.providers.modelLabel')}
+            account="omni.model"
+            placeholder={omniPreset?.modelPlaceholder || 'model-name'}
             mono
-          />
-          <CredentialField
-            key="omni:extra_headers"
-            label={t('settings.providers.extraHeadersLabel')}
-            account="omni.extra_headers"
-            placeholder={t('settings.providers.extraHeadersPlaceholder')}
-            mono
-            mask
           />
         </div>
-      )}
-      <ProviderTools
-        key={`omni:${committedOmniProvider}`}
-        kind="omni"
-        modelAccount="omni.model"
-        onModelSelected={() => setOmniModelRevision((v) => v + 1)}
-        compact
-      />
+        <CredentialField
+          key={`${committedOmniProvider}:api_key`}
+          label={t('settings.providers.apiKeyLabel')}
+          account="omni.api_key"
+          mono
+          mask
+        />
+        <CredentialField
+          key={`${committedOmniProvider}:endpoint`}
+          label={t('settings.providers.baseUrlLabel')}
+          account="omni.endpoint"
+          placeholder={omniPreset?.baseUrl || 'https://your-endpoint/v1'}
+        />
+        {committedOmniProvider === 'custom' && (
+          <div className="ol-omni-advanced-fields">
+            <CredentialField
+              key="omni:temperature"
+              label={t('settings.providers.temperatureLabel')}
+              account="omni.temperature"
+              placeholder={t('settings.providers.temperaturePlaceholder')}
+              mono
+            />
+            <CredentialField
+              key="omni:extra_headers"
+              label={t('settings.providers.extraHeadersLabel')}
+              account="omni.extra_headers"
+              placeholder={t('settings.providers.extraHeadersPlaceholder')}
+              mono
+              mask
+            />
+          </div>
+        )}
+        <ProviderTools
+          key={`omni:${committedOmniProvider}`}
+          kind="omni"
+          modelAccount="omni.model"
+          onModelSelected={() => setOmniModelRevision((v) => v + 1)}
+          compact
+        />
+      </div>
     </Card>
   );
 }

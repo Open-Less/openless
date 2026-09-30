@@ -844,9 +844,39 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 }
 
 .ol-service-pipeline-option[aria-pressed='true'] {
-  background: var(--ol-segmented-active-bg);
+  background: transparent;
   color: var(--ol-ink);
+  box-shadow: none;
+}
+
+.ol-service-pipeline-track {
+  position: relative;
+  isolation: isolate;
+}
+.ol-service-pipeline-option {
+  position: relative;
+  z-index: 1;
+}
+.ol-service-pipeline-indicator,
+.ol-service-view-indicator {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100px;
+  transform-origin: left top;
+  visibility: hidden;
+  pointer-events: none;
+}
+.ol-service-pipeline-indicator {
+  background: var(--ol-segmented-active-bg);
   box-shadow: var(--ol-segmented-active-shadow);
+  border-radius: 6px;
+  z-index: 0;
+}
+.ol-service-view-indicator {
+  background: var(--ol-blue);
+  border-radius: 2px;
+  z-index: 1;
 }
 
 .ol-service-pipeline-option:disabled {
@@ -920,7 +950,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 
 .ol-service-views > button[aria-pressed='true'] {
   color: var(--ol-blue);
-  border-bottom-color: var(--ol-blue);
+  border-bottom-color: transparent;
   font-weight: 650;
 }
 
@@ -996,6 +1026,34 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   color: var(--ol-ink-3);
   font-size: 11px;
   line-height: 1.5;
+}
+.ol-service-inactive-tag,
+.ol-provider-result,
+.ol-channel-model-tools[data-populated='true'] {
+  animation: ol-feedback-in 200ms var(--ol-motion-spring) both;
+}
+@keyframes ol-feedback-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 3px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.ol-service-views > button,
+.ol-service-pipeline-option,
+.ol-omni-tools-actions > button {
+  transition:
+    color 140ms var(--ol-motion-quick),
+    background 140ms var(--ol-motion-quick),
+    transform 140ms var(--ol-motion-quick);
+}
+.ol-service-views > button:active:not(:disabled),
+.ol-service-pipeline-option:active:not(:disabled),
+.ol-omni-tools-actions > button:active:not(:disabled) {
+  transform: scale(0.97);
 }
 @media (max-width: 720px) {
   .ol-service-views {

@@ -33,7 +33,7 @@ import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { emitSaved } from '../../lib/savedEvent';
 import { SettingRow, segmentedTrackStyle } from './shared';
 import { Card } from '../_atoms';
-import { useContentMotion } from '../../lib/motion';
+import { useContentMotion, useSelectionMotion } from '../../lib/motion';
 import {
   availableServiceViews,
   isServiceViewInactive,
@@ -124,6 +124,17 @@ export function ServicesTab() {
   const selectedView = resolveServiceView(view, views, multimodal);
   const contentRef = useRef<HTMLDivElement>(null);
   useContentMotion(contentRef, selectedView);
+  const pipelineRef = useRef<HTMLDivElement>(null);
+  const pipelineIndicatorRef = useRef<HTMLSpanElement>(null);
+  const navigationRef = useRef<HTMLDivElement>(null);
+  const navigationIndicatorRef = useRef<HTMLSpanElement>(null);
+  useSelectionMotion(pipelineRef, pipelineIndicatorRef, multimodal ? 'multimodal' : 'traditional');
+  useSelectionMotion(
+    navigationRef,
+    navigationIndicatorRef,
+    `${selectedView}:${views.length}`,
+    true,
+  );
   const setPipelineMode = (mode: 'traditional' | 'multimodal') => {
     if (!prefs || (multimodal ? 'multimodal' : 'traditional') === mode) return;
     void updatePrefs((current) => ({
@@ -176,10 +187,17 @@ export function ServicesTab() {
             desc={t('settings.providers.pipelineModeHint')}
           >
             <div
+              ref={pipelineRef}
+              className="ol-service-pipeline-track"
               role="group"
               aria-label={t('settings.providers.pipelineModeLabel')}
               style={segmentedTrackStyle}
             >
+              <span
+                ref={pipelineIndicatorRef}
+                aria-hidden
+                className="ol-service-pipeline-indicator"
+              />
               {(['traditional', 'multimodal'] as const).map((mode) => (
                 <button
                   key={mode}
@@ -201,11 +219,13 @@ export function ServicesTab() {
           </p>
         </div>
         <div
+          ref={navigationRef}
           role="group"
           aria-label={t('modal.serviceViews.label')}
           className="ol-service-views"
           style={{ gridTemplateColumns: `repeat(${views.length}, minmax(0, 1fr))` }}
         >
+          <span ref={navigationIndicatorRef} aria-hidden className="ol-service-view-indicator" />
           {views.map((id) => {
             const inactive = isServiceViewInactive(id, multimodal);
             const required = !inactive && (id === 'llm' || id === 'asr');
