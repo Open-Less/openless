@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { getHotkeyCapability, getSettings, isTauri, setSettings } from '../lib/ipc';
+import { getHotkeyCapability, getSettingsSnapshot, isTauri, updateSettingFields } from '../lib/ipc';
 import type { HotkeyBinding, HotkeyCapability, UserPreferences } from '../lib/types';
 import { applyThemeFromPreference } from '../lib/themeMode';
 import { applyStackedLayoutFromPrefs } from '../lib/stackedLayout';
@@ -37,83 +37,52 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
   const [capability, setCapability] = useState<HotkeyCapability | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const persistQueueRef = useRef<Promise<void>>(Promise.resolve());
   const latestPrefsRef = useRef<UserPreferences | null>(null);
-  const persistedPrefsRef = useRef<UserPreferences | null>(null);
-  const writeGateRef = useRef(new PreferencesWriteGate<UserPreferences>());
+  const persistQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const gate = useRef(new PreferencesWriteGate<UserPreferences>());
+  const readRequest = useRef<Promise<void> | null>(null);
+  const readAgain = useRef(false);
+
+  const applyPrefs = useCallback((value: UserPreferences) => {
+    latestPrefsRef.current = value;
+    setPrefs(value);
+    applyThemeFromPreference(value.themeMode ?? 'system');
+    applyStackedLayoutFromPrefs(value.stackedRowLayout);
+    applyConservativeLayout(value.conservativeLayout === true);
+  }, []);
+
+  // Events invalidate the snapshot; values alone cannot identify who wrote them.
+  const reloadPreferences = useCallback((): Promise<void> => {
+    readAgain.current = true;
+    if (readRequest.current) return readRequest.current;
+    const task = (async () => {
+      do {
+        readAgain.current = false;
+        applyPrefs(gate.current.receiveIncoming(await getSettingsSnapshot()));
+      } while (readAgain.current);
+    })().finally(() => {
+      readRequest.current = null;
+    });
+    readRequest.current = task;
+    return task;
+  }, [applyPrefs]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [prefsResult, capabilityResult] = await Promise.allSettled([
-        getSettings(),
-        getHotkeyCapability(),
-      ]);
-      let nextError: string | null = null;
-      if (prefsResult.status === 'fulfilled') {
-        latestPrefsRef.current = prefsResult.value;
-        persistedPrefsRef.current = prefsResult.value;
-        setPrefs(prefsResult.value);
-        applyThemeFromPreference(prefsResult.value.themeMode ?? 'system');
-        applyStackedLayoutFromPrefs(prefsResult.value.stackedRowLayout);
-        applyConservativeLayout(prefsResult.value.conservativeLayout === true);
-      } else {
-        console.error('[hotkey-settings] failed to load preferences', prefsResult.reason);
-        nextError = errorMessage(prefsResult.reason);
-      }
-      if (capabilityResult.status === 'fulfilled') {
-        setCapability(capabilityResult.value);
-      } else {
-        console.error(
-          '[hotkey-settings] failed to load hotkey capability',
-          capabilityResult.reason,
-        );
-        nextError = errorMessage(capabilityResult.reason);
-      }
-      setError(nextError);
+      const [, nextCapability] = await Promise.all([reloadPreferences(), getHotkeyCapability()]);
+      setCapability(nextCapability);
     } catch (error) {
-      console.error('[hotkey-settings] failed to refresh hotkey settings', error);
       setError(errorMessage(error));
     } finally {
       setLoading(false);
     }
-  }, []);
-
-  const applyIncomingPrefs = useCallback((nextPrefs: UserPreferences) => {
-    latestPrefsRef.current = nextPrefs;
-    persistedPrefsRef.current = nextPrefs;
-    setPrefs(nextPrefs);
-    applyThemeFromPreference(nextPrefs.themeMode ?? 'system');
-    applyStackedLayoutFromPrefs(nextPrefs.stackedRowLayout);
-    applyConservativeLayout(nextPrefs.conservativeLayout === true);
-  }, []);
-
-  const queueSetSettings = useCallback(
-    (resolved: UserPreferences) => {
-      const finishWrite = writeGateRef.current.beginWrite();
-      let savedPrefs: UserPreferences | null = null;
-      const task = persistQueueRef.current
-        .catch(() => undefined)
-        .then(async () => {
-          savedPrefs = await setSettings(resolved);
-        })
-        .then(() => {
-          persistedPrefsRef.current = savedPrefs;
-        })
-        .finally(() => {
-          if (finishWrite() && savedPrefs) applyIncomingPrefs(savedPrefs);
-        });
-      persistQueueRef.current = task;
-      return task;
-    },
-    [applyIncomingPrefs],
-  );
+  }, [reloadPreferences]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
   useEffect(() => {
     if (!isTauri) return;
     let cancelled = false;
@@ -121,58 +90,48 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
     void (async () => {
       try {
         const { listen } = await import('@tauri-apps/api/event');
-        const handle = await listen<UserPreferences>('prefs:changed', (event) => {
-          const nextPrefs = event.payload;
-          if (!nextPrefs) return;
-          // 一次保存的广播先于其 IPC promise resolve 到达。若不拦截，较旧的
-          // 排队保存会覆盖较新的乐观点击，让开关看起来「弹回去」。
-          const applicable = writeGateRef.current.receiveIncoming(nextPrefs);
-          if (applicable) applyIncomingPrefs(applicable);
+        const stop = await listen('prefs:changed', () => {
+          void reloadPreferences().catch((error) => setError(errorMessage(error)));
         });
-        if (cancelled) {
-          handle();
-        } else {
-          unlisten = handle;
-        }
+        if (cancelled) stop();
+        else unlisten = stop;
       } catch (error) {
-        console.warn('[settings] prefs:changed listener setup failed', error);
+        setError(errorMessage(error));
       }
     })();
     return () => {
       cancelled = true;
       unlisten?.();
     };
-  }, [applyIncomingPrefs]);
-
-  useEffect(() => {
-    latestPrefsRef.current = prefs;
-  }, [prefs]);
+  }, [reloadPreferences]);
 
   const updatePrefs = useCallback(
     async (next: UserPreferences | ((current: UserPreferences) => UserPreferences)) => {
-      const current = latestPrefsRef.current;
-      if (!current) return;
-      const resolved = typeof next === 'function' ? next(current) : next;
-      if (resolved === current) return;
-      setPrefs(resolved);
-      latestPrefsRef.current = resolved;
-      applyStackedLayoutFromPrefs(resolved.stackedRowLayout);
-      applyConservativeLayout(resolved.conservativeLayout === true);
-      try {
-        await queueSetSettings(resolved);
-        persistedPrefsRef.current = resolved;
-      } catch (error) {
-        // 兜底（#904）：保存失败必须回滚乐观状态并可见，
-        // 不能出现界面显示已切换、重启后回退的“假保存”。
-        const fallback = persistedPrefsRef.current ?? current;
-        latestPrefsRef.current = fallback;
-        setPrefs(fallback);
-        console.error('[hotkey-settings] save failed, rolled back', error);
-        emitSaved('failed', errorMessage(error));
-        throw error;
+      const previous = latestPrefsRef.current;
+      if (!previous) return;
+      const resolved = typeof next === 'function' ? next(previous) : next;
+      const write = gate.current.beginWrite(previous, resolved);
+      if (Object.keys(write.edits).length === 0) {
+        gate.current.finishWrite(write.id);
+        return;
       }
+      applyPrefs(gate.current.current());
+      const task = persistQueueRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          try {
+            const saved = await updateSettingFields(write.edits);
+            applyPrefs(gate.current.finishWrite(write.id, saved));
+          } catch (error) {
+            applyPrefs(gate.current.finishWrite(write.id));
+            emitSaved('failed', errorMessage(error));
+            throw error;
+          }
+        });
+      persistQueueRef.current = task;
+      await task;
     },
-    [queueSetSettings],
+    [applyPrefs],
   );
 
   const value = useMemo<HotkeySettingsContextValue>(

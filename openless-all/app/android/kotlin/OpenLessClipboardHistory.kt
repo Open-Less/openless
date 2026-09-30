@@ -81,7 +81,8 @@ object OpenLessClipboardHistory {
      * the same text is moved to the front and its timestamp refreshed
      * instead of creating a second row). Also used to bump an existing
      * history entry to the front when the user pastes it from the history
-     * browser, per the "选中上屏后调整剪贴板中的顺序为第一条" requirement.
+     * browser, per the "after a selected clip is committed, move it to the front of the
+     * clipboard history" requirement.
      */
     @Synchronized
     fun recordCopy(context: Context, text: String) {
@@ -109,6 +110,13 @@ object OpenLessClipboardHistory {
     @Synchronized
     fun delete(context: Context, text: String) {
         val current = load(context).filterNot { it.text == text }
+        save(context, current)
+    }
+
+    /** Removes every non-favorited entry — the history browser's "清空" (Clear) tab. Favorited entries are kept. */
+    @Synchronized
+    fun clearNonFavorites(context: Context) {
+        val current = load(context).filter { it.favorite }
         save(context, current)
     }
 }

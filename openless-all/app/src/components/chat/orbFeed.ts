@@ -1,22 +1,24 @@
-// orbFeed.ts — 共享的胶囊思考 orb 渲染源。
+// orbFeed.ts — shared render source for the capsule's thinking orb.
 //
-// 需求：每条助手消息的头像都要显示**旋转中的**胶囊思考动画（SiriGL orb，
-// 6 白色 metaball 圆点交错转动）。若每个头像各挂一个 SiriGL，就是每头像一个
-// WebGL context —— 浏览器上限 ~16 个，长对话必炸。
+// Requirement: every assistant message avatar shows the rotating capsule thinking
+// animation (SiriGL orb, 6 white metaball dots weaving). One SiriGL per avatar means
+// one WebGL context per avatar — the browser caps ~16, so long chats would blow up.
 //
-// 方案：模块级单例。首个订阅者到来时创建一块**离屏 canvas + 唯一 GL context**
-// 跑 orb 渲染循环（shader 与 SiriGL 完全同源，speed=1.5 与胶囊思考一致）；
-// 每帧渲染完成后**同步**回调所有订阅者，订阅者用 2D drawImage 把源画面镜像到
-// 自己的小 canvas（同一任务内拷贝，无需 preserveDrawingBuffer）。最后一个订阅者
-// 离开时停表并释放 GL 资源。窗口隐藏时 rAF 被 WebKit/Chromium 挂起，循环自然停。
+// Approach: module-level singleton. The first subscriber creates an offscreen canvas
+// with the single GL context running the orb loop (shader identical to SiriGL,
+// speed=1.5 matching capsule thinking). After each frame it synchronously notifies
+// all subscribers, who mirror the source via 2D drawImage onto their own small
+// canvas (same-task copy, no preserveDrawingBuffer needed). When the last subscriber
+// leaves, stop the loop and release GL resources. With the window hidden, rAF is
+// suspended by WebKit/Chromium and the loop naturally pauses.
 
 import { ORB_FRAGMENT_SRC, VERTEX_SRC } from '../SiriGL';
 
 type FrameSubscriber = (source: HTMLCanvasElement) => void;
 
-/** 源分辨率：头像最大 ~40px@2x，96 足够清晰且渲染开销可忽略。 */
+/** Source resolution: avatars are at most ~40px@2x; 96 is plenty sharp at negligible render cost. */
 const SOURCE_SIZE = 96;
-/** 与胶囊思考态一致的转速（Capsule.tsx: transcribing/polishing → speed 1.5）。 */
+/** Rotation speed matching the capsule thinking state (Capsule.tsx: transcribing/polishing → speed 1.5). */
 const SPEED = 1.5;
 
 interface Feed {
@@ -87,10 +89,12 @@ function startFeed(): Feed | null {
     shaderTime += dt * SPEED;
     gl.uniform2f(uResolution, SOURCE_SIZE, SOURCE_SIZE);
     gl.uniform1f(uTime, shaderTime);
-    // 头像形态常驻散开转动（不做出场聚拢：镜像目标随时挂载/卸载）。
+    // Avatar form stays spread out and rotating (no entrance gather: mirror targets
+    // mount/unmount anytime).
     if (uGather) gl.uniform1f(uGather, 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
-    // 同一任务内通知订阅者 drawImage —— WebGL 画面在本任务结束前有效。
+    // Notify subscribers to drawImage within the same task — the WebGL frame stays
+    // valid until this task ends.
     for (const cb of subscribers) cb(canvas);
     raf = requestAnimationFrame(frame);
   };
@@ -110,8 +114,9 @@ function startFeed(): Feed | null {
 }
 
 /**
- * 订阅共享 orb：每帧渲染后回调（参数是源 canvas，同步 drawImage 拷贝）。
- * 返回退订函数。GL 不可用时返回 null（调用方自行降级）。
+ * Subscribe to the shared orb: called after each frame (arg is the source canvas;
+ * copy synchronously via drawImage). Returns an unsubscribe function, or null when
+ * GL is unavailable (caller degrades on its own).
  */
 export function subscribeOrbFrames(cb: FrameSubscriber): (() => void) | null {
   if (!feed) {

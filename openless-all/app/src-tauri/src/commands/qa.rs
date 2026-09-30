@@ -9,9 +9,10 @@ pub fn get_qa_hotkey_label(core: CoreState<'_>) -> String {
         .unwrap_or_default()
 }
 
-/// 设置 QA 快捷键并热更新 monitor。
-/// 传入 `None` 形式的字段不在这里支持——前端用 `binding == null` 时调下面的
-/// "disable" 写法（写 prefs.qa_hotkey = None）即可。
+/// Sets the QA hotkey and hot-updates the monitor.
+/// `None`-form fields are not supported here — when the frontend passes
+/// `binding == null`, it calls the "disable" form below (writing
+/// prefs.qa_hotkey = None).
 #[tauri::command]
 pub fn set_qa_hotkey(
     coord: CoordinatorState<'_>,
@@ -28,7 +29,7 @@ pub fn set_qa_hotkey(
     super::settings::persist_strict_settings(&coord, prefs)
 }
 
-/// 用户点 ✕ / 按 Esc 关 QA 浮窗。
+/// User clicks ✕ or presses Esc to close the QA panel.
 #[tauri::command]
 pub async fn qa_window_dismiss(core: CoreState<'_>) -> Result<(), String> {
     core.services()
@@ -38,7 +39,8 @@ pub async fn qa_window_dismiss(core: CoreState<'_>) -> Result<(), String> {
         .map_err(|error| error.message)
 }
 
-/// 移动端 QA 面板录音按钮：Idle -> begin_qa_session，Recording -> end_qa_session。
+/// Mobile QA panel record button: Idle -> begin_qa_session, Recording ->
+/// end_qa_session.
 #[tauri::command]
 pub async fn qa_toggle_recording(core: CoreState<'_>) -> Result<(), String> {
     core.services()
@@ -48,7 +50,8 @@ pub async fn qa_toggle_recording(core: CoreState<'_>) -> Result<(), String> {
         .map_err(|error| error.message)
 }
 
-/// QA 面板键盘输入：复用语音 QA 的 LLM 管线，只替换问题来源。
+/// QA panel keyboard input: reuses the voice-QA LLM pipeline, replacing only
+/// the question source.
 #[tauri::command]
 pub async fn qa_submit_text(
     core: CoreState<'_>,
@@ -111,7 +114,7 @@ pub async fn qa_window_set_expanded(window: Window, expanded: bool) -> Result<()
         .map_err(|_| "qa_resize_cancelled".to_string())?
 }
 
-/// 划词提问面板「编辑指令」复选框。
+/// Selection QA panel "edit instruction" checkbox.
 #[tauri::command]
 pub async fn qa_set_edit_instruction_mode(
     core: CoreState<'_>,
@@ -124,22 +127,27 @@ pub async fn qa_set_edit_instruction_mode(
         .map_err(|error| error.message)
 }
 
-/// 用户点 ✕ / 按 Esc 关 Less Computer 浮窗。
+/// User clicks ✕ or presses Esc to close the Less Computer panel.
 #[tauri::command]
 pub async fn less_computer_window_dismiss(coord: CoordinatorState<'_>) -> Result<(), String> {
     coord.dismiss_less_computer().await
 }
 
-/// 聊天面板（qa / less-computer）请求键盘焦点。
+/// Chat panels (qa / less-computer) request keyboard focus.
 ///
-/// 两个浮窗都以「不抢前台」方式显示（macOS orderFrontRegardless，从不 makeKey），
-/// 窗口不是 key window 时按键根本进不了 webview —— 「点了输入框却打不出字」的根因。
+/// Both panels display without stealing the foreground (macOS
+/// orderFrontRegardless, never makeKey), so keystrokes never reach the webview
+/// while the window is not the key window — the root cause of "clicked the
+/// input box but cannot type".
 ///
-/// macOS：窗口已转「非激活 NSPanel」（make_chat_window_panel_macos），makeKeyAndOrderFront
-/// 只给面板键盘焦点、**不激活 app**（Spotlight 同款）—— 之前用 window.set_focus() 会激活
-/// 整个 app，把主窗口（设置页）一起带到前台，且 frontmost 变成 OpenLess、AX 读不到原 app
-/// 选区。其它平台仍走 set_focus。仅允许两个聊天面板窗口调用（与 less_computer_approve
-/// 同款收紧）。
+/// macOS: the window is already a non-activating NSPanel
+/// (make_chat_window_panel_macos), so makeKeyAndOrderFront gives the panel
+/// keyboard focus without activating the app (same as Spotlight) — the earlier
+/// window.set_focus() activated the whole app, dragged the main window
+/// (settings) to the front, and made OpenLess frontmost so AX could not read
+/// the original app's selection. Other platforms still use set_focus. Only the
+/// two chat panel windows may call this (same tightening as
+/// less_computer_approve).
 #[tauri::command]
 pub fn chat_panel_focus_keyboard(window: Window) -> Result<(), String> {
     let label = window.label();
@@ -151,7 +159,9 @@ pub fn chat_panel_focus_keyboard(window: Window) -> Result<(), String> {
         use tauri::Manager;
         let label = label.to_string();
         let app = window.app_handle().clone();
-        // NSWindow 操作必须在主线程（macOS 26 硬断言）；异常兜底防 AppKit raise 穿透。
+        // NSWindow operations must run on the main thread (macOS 26 hard
+        // assertion); the exception guard keeps an AppKit raise from punching
+        // through.
         let _ = window.app_handle().run_on_main_thread(move || {
             use objc2::msg_send;
             use objc2::runtime::AnyObject;
@@ -166,8 +176,9 @@ pub fn chat_panel_focus_keyboard(window: Window) -> Result<(), String> {
             if ns.is_null() {
                 return;
             }
-            // SAFETY: 闭包内只有一次无返回值的 ObjC 消息发送，无需运行 Rust 析构，
-            // 异常展开跳过闭包帧不破坏内存安全。
+            // SAFETY: the closure performs a single ObjC message send with no
+            // return value and runs no Rust destructors; unwinding past the
+            // closure frame preserves memory safety.
             let result = unsafe {
                 objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
                     let nil: *mut AnyObject = std::ptr::null_mut();
@@ -186,7 +197,8 @@ pub fn chat_panel_focus_keyboard(window: Window) -> Result<(), String> {
     }
 }
 
-/// 浮窗打字输入：文字指令直接进入 Less Computer 执行链（跳过录音与 ASR）。
+/// Panel typed input: a text instruction goes straight into the Less Computer
+/// execution chain (skipping recording and ASR).
 #[tauri::command]
 pub fn less_computer_submit_text(core: CoreState<'_>, coord: CoordinatorState<'_>, text: String) {
     let text = text.trim().to_string();
@@ -209,8 +221,9 @@ fn require_less_computer_window(window: &Window) -> Result<(), String> {
     Ok(())
 }
 
-/// 输入框麦克风（dictate：转写只回填输入框）/ 语音模式按钮（submit：与快捷键一致）。
-/// 启动失败直接返回给面板内联提示，不写入对话流。
+/// Input-box microphone (dictate: transcription only fills the input box) /
+/// voice-mode button (submit: same as the hotkey). Start failures return
+/// directly to the panel as an inline hint, not into the conversation stream.
 #[tauri::command]
 pub async fn less_computer_voice_start(
     window: Window,
@@ -221,7 +234,8 @@ pub async fn less_computer_voice_start(
     coord.start_less_computer_voice_from_panel(mode).await
 }
 
-/// 结束当前录音，按会话自己的 mode 收尾；收尾在后台执行，不等待 Agent 跑完。
+/// Ends the current recording and finalizes per the session's own mode; the
+/// finalize runs in the background without waiting for the Agent to finish.
 #[tauri::command]
 pub fn less_computer_voice_stop(
     window: Window,
@@ -232,7 +246,7 @@ pub fn less_computer_voice_stop(
     coord.stop_less_computer_voice_from_panel(session_id)
 }
 
-/// 只取消面板指定的那次录音。
+/// Cancels only the recording the panel names.
 #[tauri::command]
 pub async fn less_computer_voice_cancel(
     window: Window,
@@ -245,7 +259,7 @@ pub async fn less_computer_voice_cancel(
         .await
 }
 
-/// 停止正在运行的 Agent 任务，浮窗保持打开。
+/// Stops the running Agent task; the panel stays open.
 #[tauri::command]
 pub async fn less_computer_task_cancel(
     window: Window,
@@ -255,7 +269,8 @@ pub async fn less_computer_task_cancel(
     coord.cancel_less_computer_task().await
 }
 
-/// 主设置页的文字测试入口。浮窗自身无需也不允许反向调用这个命令。
+/// Text testing entry from the main settings page. The panel itself neither
+/// needs nor is allowed to call this command in reverse.
 #[tauri::command]
 pub fn less_computer_window_open(
     window: Window,
@@ -268,12 +283,17 @@ pub fn less_computer_window_open(
     Ok(())
 }
 
-/// 浮窗 mount 时拉取当前会话的事件缓冲（seq 升序）。
+/// Pulls the current session's event buffer (seq ascending) when the panel
+/// mounts.
 ///
-/// 浮窗首次创建时 webview 冷加载，后端事件（尤其第一条 `user` —— 用户说的话）
-/// 先于前端 listener 注册被丢，表现为「AI 在干活但面板上没有我说的话」。前端
-/// mount 后先注册 listener 再调本命令重放积压，按 seq 去重衔接实时流。
-/// 会话内容敏感，仅允许 less-computer 窗口调用（与 less_computer_approve 同款收紧）。
+/// The panel's webview cold-loads on first creation, so backend events
+/// (especially the first `user` — what the user said) are dropped before the
+/// frontend registers its listener, showing "the AI is working but the panel
+/// lacks what I said". After mounting, the frontend registers the listener
+/// first and then calls this command to replay the backlog, deduplicating by
+/// seq to join the live stream.
+/// Session content is sensitive; only the less-computer window may call this
+/// (same tightening as less_computer_approve).
 #[tauri::command]
 pub fn less_computer_sync(
     window: Window,
@@ -289,10 +309,13 @@ pub fn less_computer_sync(
     ))
 }
 
-/// 内联审批卡的 Approve / Deny 回执。token 关联到等待中的拦截动作。
+/// Approve / Deny receipt of the inline approval card. The token is bound to
+/// the pending interception action.
 ///
-/// 安全：审批 UI 渲染在 less-computer 窗口（LessComputerPanel），故仅允许该窗口提交，
-/// 拦截 main / capsule / qa / glow 等其它窗口伪造审批 —— 把可调用窗口从 5 个收紧到 1 个。
+/// Security: the approval UI renders in the less-computer window
+/// (LessComputerPanel), so only that window may submit, blocking main /
+/// capsule / qa / glow and other windows from forging approvals — narrowing
+/// the callable windows from 5 to 1.
 #[tauri::command]
 pub async fn less_computer_approve(
     window: Window,

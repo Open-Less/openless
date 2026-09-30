@@ -1,4 +1,4 @@
-// 权限/连通性面板：麦克风 / 辅助功能 / 全局热键 / Windows IME / 网络。
+// Permissions / connectivity panel: microphone / accessibility / global hotkey / Windows IME / network.
 // Normal states use localized labels; failed native checks retain their diagnostic details.
 
 import { useEffect, useState, type CSSProperties } from 'react';
@@ -99,8 +99,9 @@ export function PermissionsSection() {
       refreshWindowsIme();
     }
     refreshNetwork();
-    // issue #470：热键状态改为纯事件驱动，去掉每秒轮询，靠下方 focus/visibilitychange 刷新。
-    // 麦克风检查会短暂打开输入流，避免每秒探测导致隐私指示器频繁闪烁。
+    // issue #470: hotkey status became purely event-driven, removing the per-second poll and
+    // relying on the focus/visibilitychange refreshes below. The microphone check briefly opens
+    // an input stream, so per-second probing would flicker the privacy indicator.
     const permissionId = window.setInterval(refreshPermissions, 10000);
     const networkId = window.setInterval(refreshNetwork, 30000);
     const refreshAll = () => {
@@ -129,7 +130,7 @@ export function PermissionsSection() {
 
   const reRequestAccessibility = async () => {
     const result = await requestAccessibilityPermission();
-    // 如果 TCC 弹窗已拒绝（或之前已拒绝不再弹），引导用户到系统设置
+    // If the TCC prompt was denied (or previously denied and no longer shown), guide the user to system settings.
     if (result !== 'granted') {
       await openSystemSettings('accessibility');
     }
@@ -251,7 +252,7 @@ export function PermissionsSection() {
         </SettingRow>
       )}
       {platformCaps?.supportsOverlay && platformCaps.platform === 'android' && (
-        <AndroidPermissionsPanel />
+        <AndroidPermissionsPanel mode="permissionsOnly" />
       )}
       {windowsIme?.state !== 'notWindows' && platformCaps?.platform !== 'android' && (
         <SettingRow label={t('settings.permissions.windowsImeLabel')}>

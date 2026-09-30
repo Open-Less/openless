@@ -860,6 +860,10 @@ async fn demote_failed_archive(
     output_target: DictationOutputTarget,
     has_audio_recording: &mut Option<bool>,
 ) {
+    if output_target == DictationOutputTarget::CloudNote {
+        discard_ephemeral_archive(archive, has_audio_recording).await;
+        return;
+    }
     if output_target == DictationOutputTarget::QuickNote {
         return;
     }

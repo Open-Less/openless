@@ -27,8 +27,9 @@ const PIN_GLOBAL_WINDOW_SECS: u64 = 60;
 const RECOVERY_SESSION_CAP: usize = 64;
 const RECOVERY_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
-/// 意外断线后由宿主继续轮询原来的 stop，避免丢弃识别和历史记录收尾。
-/// 主动取消及撤销配对权限仍直接调用 disconnect，不经过此路径。
+/// After an unexpected disconnect the host keeps polling the original stop, so the
+/// recognition and history close-out are not discarded. Deliberate cancellation and
+/// un-pairing still call disconnect directly, not through this path.
 pub async fn finish_remote_input_connection(
     remote: &dyn RemoteInputApi,
     connection_id: SessionId,
@@ -143,7 +144,8 @@ struct RemoteInputState {
     locale: String,
     pairing_pin: Option<SecretValue>,
     connections: HashMap<SessionId, RemoteConnectionState>,
-    // 恢复凭据与会话 ID 分离，不能凭公开状态中的会话 ID 读取文字。
+    // Credential recovery is separate from sessions; session IDs in the public state
+    // must not grant access to text.
     recoverable_sessions: VecDeque<(SessionId, SecretValue, std::time::Instant)>,
     pin_fails: HashMap<String, (u32, Option<std::time::Instant>)>,
     global_pin_fails: (u32, std::time::Instant),
@@ -753,7 +755,8 @@ impl RemoteInputApi for RemoteInputService {
                 .state
                 .lock()
                 .expect("remote input state lock poisoned");
-            // 查询过程中取消、关闭服务或重置 PIN，必须立即撤销恢复权限。
+            // Cancellation, service shutdown, or a PIN reset during the query must
+            // revoke recovery access immediately.
             if !allowed(&state) {
                 return Ok(RemoteInputRecovery::Unavailable);
             }

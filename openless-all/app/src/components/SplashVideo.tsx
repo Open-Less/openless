@@ -1,24 +1,27 @@
 import { useEffect, useRef, useState } from 'react';
 import { takeSplashPlayback } from '../lib/ipc';
 
-/** 随包发行的 2.0 开屏 PV（public/ 静态资源，Vite 原样打进 dist）。 */
+/** Bundled 2.0 splash video (public/ static asset, Vite copies it into dist as-is). */
 const SPLASH_SRC = '/openless-2.0-splash.mp4';
-/** 播放结束后整层渐隐的时长，与 global.css 的 ol-splash-out 保持一致。 */
+/** Fade duration for the whole layer after playback, matching global.css's ol-splash-out. */
 const FADE_MS = 1200;
-/** 看门狗：`ended` / `error` 双双失灵（损坏编码、后台节流挂起）时，
- *  开屏层最多占用 25s 也必须渐隐让位，绝不把用户永久挡在动画后面。 */
+/** Watchdog: if both `ended` / `error` fail (corrupt encoding, background throttling),
+ *  the splash must fade out after at most 25s — never trap the user behind the
+ *  animation. */
 const SPLASH_WATCHDOG_MS = 25_000;
 
 type SplashPhase = 'pending' | 'playing' | 'fading' | 'done';
 
 /**
- * 2.0 开屏 PV：仅在「配置文件里没有本大版本标记」的首启播放一次。
- * 标记由 Rust `take_splash_playback` 读写 preferences.json（浏览器开发模式用
- * localStorage 同语义模拟），播放判定发生在组件挂载时，因此每个 webview
- * 进程只会消费一次。
+ * 2.0 splash video: plays once, only on the first launch lacking this major version's
+ * marker. The marker is read/written in preferences.json by Rust
+ * `take_splash_playback` (browser dev mode emulates it with localStorage, same
+ * semantics). The play decision happens at mount, so each webview process consumes
+ * it exactly once.
  *
- * 表现要求：全屏铺满（任意窗口比例下 object-fit: cover 裁切填满，无黑边）；
- * 播完从最后一帧画面开始整体渐隐到透明消失（ol-splash-out）。
+ * Presentation: full-screen cover (object-fit: cover crops to fill at any window
+ * ratio, no letterboxing); after playback the whole layer fades from the last frame
+ * to transparent (ol-splash-out).
  */
 export function SplashVideo() {
   const [phase, setPhase] = useState<SplashPhase>('pending');
@@ -31,7 +34,8 @@ export function SplashVideo() {
         if (!cancelled) setPhase(shouldPlay ? 'playing' : 'done');
       })
       .catch(() => {
-        // 判定 IPC 失败 = 不播。开屏动画是锦上添花，绝不因它挡住应用本身。
+        // Decision IPC failure = don't play. The splash is a garnish; it must never
+        // block the app itself.
         if (!cancelled) setPhase('done');
       });
     return () => {
@@ -55,8 +59,8 @@ export function SplashVideo() {
     if (phase !== 'playing') return;
     const video = videoRef.current;
     if (!video) return;
-    // autoPlay 属性先尝试有声播放；WKWebView 拒绝带音频的自动播放时降级为
-    // 静音续播——保证动画画面永远完整，声音能出则出。
+    // autoPlay tries with sound first; when WKWebView rejects audio autoplay, fall
+    // back to muted playback — the animation always completes, sound if allowed.
     video.play().catch(() => {
       video.muted = true;
       video.play().catch(() => setPhase('fading'));

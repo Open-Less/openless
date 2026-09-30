@@ -1,14 +1,16 @@
-//! 麦克风采集：cpal 拉流 → 16 kHz 单声道 Int16 PCM → 喂给 `AudioConsumer`。
+//! Microphone capture: cpal stream pull -> 16 kHz mono Int16 PCM -> fed to `AudioConsumer`.
 //!
-//! 与 Swift 版 `OpenLessRecorder/Recorder.swift` 行为对齐：
-//! - 输出格式固定为 16 kHz 单声道小端 Int16，方便 ASR 直接消费。
-//! - 多声道输入 → 算术平均下混到单声道；非 16 kHz → 线性插值重采样。
-//! - 每个 buffer 计算 RMS 归一化到 0..1（再乘以 4 并 clamp），用于胶囊电平动画。
-//! - 每 ~50 个回调打一行诊断日志，包含峰值 RMS。
+//! Behavior-aligned with the Swift version `OpenLessRecorder/Recorder.swift`:
+//! - Output is fixed at 16 kHz mono little-endian Int16 so ASR can consume it directly.
+//! - Multi-channel input is downmixed to mono by arithmetic average; non-16 kHz input is
+//!   resampled by linear interpolation.
+//! - Each buffer computes RMS normalized to 0..1 (times 4, clamped) for the capsule level animation.
+//! - Every ~50 callbacks one diagnostic log line is emitted, including peak RMS.
 //!
-//! 线程模型：
-//! - cpal `Stream` 是 `!Send`，所以独立线程持有它。
-//! - 主线程通过 `AtomicBool` 通知"该停了"，并 `join` 线程；线程内 `drop` Stream。
+//! Threading model:
+//! - cpal `Stream` is `!Send`, so a dedicated thread owns it.
+//! - The main thread signals "stop" via `AtomicBool` and `join`s the thread; the stream is
+//!   `drop`ped inside that thread.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -22,20 +24,21 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use thiserror::Error;
 
-/// 目标采样率（与 Swift 端常量一致；不要改）。
+/// Target sample rate (matches the Swift-side constant; do not change).
 const TARGET_SAMPLE_RATE: u32 = 16_000;
-/// 每多少个回调打一次诊断日志。
+/// Emit one diagnostic log line every N callbacks.
 const LOG_EVERY_N_CALLBACKS: usize = 50;
-/// RMS → UI 电平的放大系数，与 Swift 端 `min(1.0, rms * 4)` 一致。
+/// RMS -> UI level gain, matching Swift's `min(1.0, rms * 4)`.
 const LEVEL_RMS_GAIN: f32 = 4.0;
-/// 归档写线程的最大待写 PCM 块数。满载时丢弃新的归档块而不阻塞实时回调；
-/// 识别链路仍继续收到完整 PCM，停止时已接受的归档消息会被完整刷完。
+/// Max queued PCM chunks for the archive writer thread. When full, new archive chunks are
+/// dropped instead of blocking the realtime callback; ASR still receives the full PCM, and
+/// archive messages accepted before stop are fully flushed.
 const WAV_ARCHIVE_QUEUE_CAPACITY: usize = 256;
 
-/// 接收已重采样 Int16 PCM 字节流（小端）的下游。
+/// Downstream that receives resampled Int16 PCM bytes (little-endian).
 pub trait AudioConsumer: Send + Sync {
-    /// 每次拿到的是若干 Int16 样本拼成的 little-endian 字节序列。
-    /// 长度一定是 2 的倍数。
+    /// Each delivery is a little-endian byte sequence of Int16 samples;
+    /// the length is always a multiple of 2.
     fn consume_pcm_chunk(&self, pcm: &[u8]);
 }
 
@@ -57,7 +60,7 @@ pub struct MicrophoneDevice {
     pub is_default: bool,
 }
 
-/// 采集器错误。
+/// Capture error.
 #[derive(Debug, Error)]
 pub enum RecorderError {
     #[error("microphone permission denied")]
@@ -69,8 +72,8 @@ pub enum RecorderError {
 }
 
 impl RecorderError {
-    /// 面向用户的启动错误文案：无设备 / 无权限给出明确指引，
-    /// 其余保留原始引擎错误便于排查。
+    /// User-facing startup error message: clear guidance for missing device / permission,
+    /// original engine error text preserved for the rest to ease diagnosis.
     pub fn user_message(&self) -> String {
         match self {
             RecorderError::NoInputDevice => "未检测到麦克风，请连接麦克风后重试".to_string(),
@@ -87,8 +90,9 @@ enum WavArchiveMessage {
     Finish,
 }
 
-/// 非实时音频回调中的 WAV 归档入口。回调只负责复制 PCM 并把消息放进
-/// 有界 channel；文件写入、seek 和 sync 全部在专用线程执行。
+/// WAV archive entry point off the realtime audio callback. The callback only copies PCM and
+/// pushes messages into a bounded channel; file writing, seek, and sync all run on a dedicated
+/// thread.
 struct WavArchiveWriter {
     sender: SyncSender<WavArchiveMessage>,
     join_handle: Mutex<Option<JoinHandle<()>>>,
@@ -149,7 +153,7 @@ fn run_wav_archive_writer(mut archiver: WavArchiver, receiver: Receiver<WavArchi
     }
 }
 
-/// 采集器句柄。Drop 时不会自动停止——必须显式调用 `stop`。
+/// Capture handle. Dropping does not stop it — call `stop` explicitly.
 pub struct Recorder {
     stop_flag: Arc<AtomicBool>,
     join_handle: Mutex<Option<JoinHandle<()>>>,
@@ -157,32 +161,37 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    /// 启动采集。`consumer` 收到 16 kHz/Mono/Int16-LE 的 PCM；
-    /// `level_handler` 收到 0..1 的 RMS 电平。
-    /// `audio_archive_path` 不为 None 时，同样的 16 kHz/Mono/Int16-LE 旁路写入 WAV 文件，
-    /// 用于 debug 麦克风灵敏度 / ASR 误识别。专用写线程负责落盘，Drop 时自动回填
-    /// RIFF / data 长度。
+    /// Start capture. `consumer` receives 16 kHz/Mono/Int16-LE PCM;
+    /// `level_handler` receives RMS levels in 0..1.
+    /// When `audio_archive_path` is not None, the same 16 kHz/Mono/Int16-LE stream is also
+    /// written to a WAV file for debugging mic sensitivity / ASR misrecognition. A dedicated
+    /// writer thread persists it and backfills the RIFF / data lengths on Drop.
     ///
-    /// 返回值第三个 `bool` = "archive 实际成功创建"：caller 写 history 时应当用这个值
-    /// 决定 `has_audio_recording`，而不是 prefs 开关。开关打开但写盘失败（路径不存在 /
-    /// 权限不足 / 磁盘满）时仍返回 false，避免前端渲染播放按钮后端却 404。
+    /// The third return value `bool` = "archive actually created successfully": callers should
+    /// use it, not the prefs switch, to set `has_audio_recording` in history. If the switch is
+    /// on but writing failed (missing path / no permission / disk full), it still returns false
+    /// so the frontend does not render a play button that would 404.
     ///
-    /// 实际的 cpal Stream 在独立线程里构造、播放、最终析构——因为它 `!Send`。
+    /// The actual cpal Stream is constructed, played, and finally destroyed on a separate
+    /// thread because it is `!Send`.
     pub fn start(
         microphone_device_name: Option<String>,
         consumer: Arc<dyn AudioConsumer>,
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
         audio_archive_path: Option<PathBuf>,
     ) -> Result<(Self, Receiver<RecorderError>, bool), RecorderError> {
-        // 启动信号：子线程构造 Stream 完成后通过 startup_tx 报告结果。
+        // Startup signal: the child thread reports the result via startup_tx once the Stream
+        // is constructed.
         let (startup_tx, startup_rx) = channel::<Result<(), RecorderError>>();
-        // 运行期错误：Stream 已成功启动后，cpal 通过 err_cb 异步上报。
+        // Runtime errors: once the Stream has started successfully, cpal reports them
+        // asynchronously via err_cb.
         let (runtime_error_tx, runtime_error_rx) = channel::<RecorderError>();
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_for_thread = Arc::clone(&stop_flag);
 
-        // 同步路径上尝试创建 WavArchiveWriter——成功 / 失败都立刻知道，传给 caller 决定
-        // 是否在 history 标 has_audio_recording。失败仅 log::warn 不抛错，主路径继续。
+        // Try creating WavArchiveWriter on the synchronous path — success/failure is known
+        // immediately and passed to the caller to decide whether history marks
+        // has_audio_recording. Failure only logs a warning, no error; the main path continues.
         let archive_writer =
             audio_archive_path.and_then(|path| match WavArchiveWriter::create(&path) {
                 Ok(writer) => Some(Arc::new(writer)),
@@ -218,8 +227,8 @@ impl Recorder {
             }
         };
 
-        // 等待子线程报告启动结果。子线程要么 Send Ok 后继续 park，
-        // 要么 Send Err 后立即退出——两种情况都保证 recv 能解锁。
+        // Wait for the child thread to report startup. It either sends Ok and keeps running,
+        // or sends Err and exits immediately — recv unblocks in both cases.
         let startup_result = match startup_rx.recv() {
             Ok(result) => result,
             Err(error) => {
@@ -249,9 +258,9 @@ impl Recorder {
         ))
     }
 
-    /// 停止采集并等待音频线程退出。
+    /// Stop capture and wait for the audio thread to exit.
     ///
-    /// 用 `self`（消费）签名，与 Swift API 语义一致——一次性资源。
+    /// Takes `self` (consuming), matching the Swift API semantics — a one-shot resource.
     pub fn stop(self) {
         let Recorder {
             stop_flag,
@@ -296,9 +305,9 @@ pub fn list_input_devices() -> Result<Vec<MicrophoneDevice>, RecorderError> {
     Ok(result)
 }
 
-/// 音频线程主体：构造 Stream → 通过 startup_tx 报告 → 循环到 stop_flag。
-/// `archiver` 由 caller 在同步路径上已经尝试创建好（成功 → Some / 失败 → None），
-/// 这里只负责把它穿透到 build_input_stream 给 cpal callback 用。
+/// Audio thread body: build Stream -> report via startup_tx -> loop until stop_flag.
+/// `archiver` was already attempted by the caller on the synchronous path (Ok -> Some /
+/// failed -> None); this only threads it through to build_input_stream for the cpal callback.
 fn run_audio_thread(
     microphone_device_name: Option<String>,
     consumer: Arc<dyn AudioConsumer>,
@@ -317,7 +326,7 @@ fn run_audio_thread(
     ) {
         Ok(s) => s,
         Err(err) => {
-            // 启动失败：通知主线程后即退出。
+            // Startup failed: notify the main thread and exit.
             let _ = startup_tx.send(Err(err));
             return;
         }
@@ -328,24 +337,29 @@ fn run_audio_thread(
         return;
     }
 
-    // 启动成功。
+    // Startup succeeded.
     let _ = startup_tx.send(Ok(()));
 
-    // 启动 liveness watchdog 线程：检测录音回调是否静默停止
-    const WATCHDOG_CHECK_INTERVAL_MS: u64 = 1000; // 每秒检查一次
-    /// 一次「检查间隔」被切成这么碎的若干觉来睡，每觉醒来都重看 stop_flag。
+    // Startup succeeded.
+    let _ = startup_tx.send(Ok(()));
+
+    // Start the liveness watchdog: detect the capture callback silently stopping.
+    const WATCHDOG_CHECK_INTERVAL_MS: u64 = 1000; // check once per second
+    /// Each check interval is slept in slices of this size, re-reading stop_flag after each.
     ///
-    /// 为什么不直接 sleep 满 1000ms：`Recorder::stop()` 要 join 音频线程，音频线程退出前
-    /// 要 join 本 watchdog —— watchdog 睡多沉，停采就要等多久。实测停一次录音因此要
-    /// 0.8~1 秒，而 `cancel_session` 又在拆完 recorder 才收胶囊，用户按 Option+Q / Esc
-    /// 看到的就是「取消了但胶囊还赖着一秒」。切碎后 stop 的等待从最坏 1000ms 降到 50ms。
+    /// Sleeping the full 1000ms would stall `Recorder::stop()`: it joins the audio thread,
+    /// which joins this watchdog first, so the deeper the sleep the slower capture stops
+    /// (measured at 0.8~1s, and `cancel_session` tears down the recorder before collecting the
+    /// capsule, so the user sees "cancelled but the capsule lingers for a second"). Slicing
+    /// reduces the worst-case stop wait from 1000ms to 50ms.
     ///
-    /// 检查的判据（下面两个 SECS）用的是真实时间差，不是「醒了几次」，所以睡眠粒度变化
-    /// 不改变 watchdog 的灵敏度：仍然是回调静默超过 CALLBACK_TIMEOUT_SECS 才报错。
-    /// 代价只是录音期间线程多醒几次（醒来只读一个时间戳）。
+    /// The checks (the SECS constants below) use real elapsed time, not wake counts, so the
+    /// sleep granularity does not change watchdog sensitivity: an error is still raised only
+    /// after the callback is silent for CALLBACK_TIMEOUT_SECS. The cost is a few extra wakes
+    /// during recording (each just reads a timestamp).
     const WATCHDOG_SLEEP_SLICE_MS: u64 = 50;
-    const CALLBACK_TIMEOUT_SECS: u64 = 3; // 3 秒没有回调视为异常
-    const FIRST_CALLBACK_DEADLINE_SECS: u64 = 5; // 5 秒内必须收到首次回调
+    const CALLBACK_TIMEOUT_SECS: u64 = 3; // no callback for 3s counts as abnormal
+    const FIRST_CALLBACK_DEADLINE_SECS: u64 = 5; // first callback must arrive within 5s
 
     let stop_flag_for_watchdog = Arc::clone(&stop_flag);
     let state_for_watchdog = Arc::clone(&state);
@@ -354,12 +368,14 @@ fn run_audio_thread(
     let watchdog_handle = thread::Builder::new()
         .name("openless-recorder-watchdog".into())
         .spawn(move || {
-            // 记录 watchdog 启动时间，确保首次回调截止时间从播放真正开始时计时
+            // Record the watchdog start time so the first-callback deadline counts from when
+            // playback actually starts.
             let watchdog_start_time = std::time::Instant::now();
 
             while !stop_flag_for_watchdog.load(Ordering::SeqCst) {
-                // 一个检查间隔切成 WATCHDOG_SLEEP_SLICE_MS 的碎觉睡完，中途 stop 就立刻退出
-                // （见 WATCHDOG_SLEEP_SLICE_MS：停采要 join 本线程，睡沉了停采就慢）。
+                // Sleep one check interval in WATCHDOG_SLEEP_SLICE_MS slices, exiting early on
+                // stop (see WATCHDOG_SLEEP_SLICE_MS: stopping joins this thread, so a deep
+                // sleep would slow it down).
                 let mut slept_ms = 0;
                 while slept_ms < WATCHDOG_CHECK_INTERVAL_MS {
                     if stop_flag_for_watchdog.load(Ordering::SeqCst) {
@@ -370,19 +386,21 @@ fn run_audio_thread(
                     slept_ms += slice;
                 }
 
-                // 关键：sleep 醒来后必须重新检查 stop_flag，再去看 elapsed。
+                // Critical: after sleeping, re-check stop_flag before looking at elapsed.
                 //
-                // 否则会与 hotkey-release 停采路径产生竞态：
-                //   1. 用户松开 hotkey → end_session 调 rec.stop() → 设置 stop_flag
-                //      → audio 线程 pause 了 cpal Stream → 回调真的静默
-                //   2. 但 watchdog 此时正卡在上面的 1 秒 sleep 里
-                //   3. sleep 结束后，若不重新检查 stop_flag，
-                //      就会读到 last_callback_time 已经"老 4 秒"，
-                //      把"我们主动停掉的录音"错报成 EngineFailed("录音回调静默停止 N 秒")，
-                //      coordinator 收到错误后会终止 session、胶囊弹错。
+                // Otherwise this races with the hotkey-release stop path:
+                //   1. User releases the hotkey -> end_session calls rec.stop() -> sets
+                //      stop_flag -> audio thread pauses the cpal Stream -> callbacks really go
+                //      silent
+                //   2. But the watchdog is stuck inside the 1s sleep above
+                //   3. When the sleep ends, without re-checking stop_flag it would read a
+                //      last_callback_time "4s stale" and misreport the recording we stopped
+                //      ourselves as EngineFailed("callback silent for N seconds"), causing the
+                //      coordinator to kill the session and surface an error on the capsule.
                 //
-                // 修复方式是 sleep 后立即再 load 一次：进入 stop 流程后 watchdog 静默退出，
-                // 不影响 watchdog 在真正活动期捕获 CoreAudio 设备掉线等真故障。
+                // The fix is to load stop_flag once more right after sleep: during stop the
+                // watchdog exits silently, while real faults (e.g. CoreAudio device
+                // disconnection) during active recording are still caught.
                 if stop_flag_for_watchdog.load(Ordering::SeqCst) {
                     break;
                 }
@@ -390,7 +408,7 @@ fn run_audio_thread(
                 let last_callback = *state_for_watchdog.last_callback_time.lock();
                 match last_callback {
                     Some(last_time) => {
-                        // 已收到首次回调，检查是否停止
+                        // First callback received; check for it stopping
                         let elapsed = last_time.elapsed();
                         if elapsed.as_secs() > CALLBACK_TIMEOUT_SECS {
                             log::error!(
@@ -401,11 +419,11 @@ fn run_audio_thread(
                                 runtime_error_tx_for_watchdog.send(RecorderError::EngineFailed(
                                     format!("录音回调静默停止 {} 秒", elapsed.as_secs()),
                                 ));
-                            break; // 只报告一次
+                            break; // report only once
                         }
                     }
                     None => {
-                        // 尚未收到首次回调，检查是否超过截止时间
+                        // First callback not yet received; check the deadline
                         let elapsed = watchdog_start_time.elapsed();
                         if elapsed.as_secs() > FIRST_CALLBACK_DEADLINE_SECS {
                             log::error!(
@@ -416,7 +434,7 @@ fn run_audio_thread(
                                 runtime_error_tx_for_watchdog.send(RecorderError::EngineFailed(
                                     format!("录音启动后 {} 秒内未收到回调", elapsed.as_secs()),
                                 ));
-                            break; // 只报告一次
+                            break; // report only once
                         }
                     }
                 }
@@ -424,31 +442,32 @@ fn run_audio_thread(
         })
         .ok();
 
-    // 自旋等待停止信号——cpal 自身没有 wait API，sleep 50ms 完全够用。
+    // Spin until the stop signal — cpal has no wait API, a 50ms sleep suffices.
     while !stop_flag.load(Ordering::SeqCst) {
         thread::sleep(std::time::Duration::from_millis(50));
     }
 
-    // 显式 pause 再 drop。
-    // 实测 cpal 0.15 在 macOS coreaudio 上单纯 drop(Stream) 不会同步调用
-    // AudioOutputUnitStop，AudioUnit 的 render callback 会继续被系统调，
-    // process_callback 仍然以 ~5 ms / 帧的速率打 cb# 日志，macOS 一直认为
-    // 我们在用 mic（橙点不灭）。pause() 走的是 StreamTrait::pause —— 在
-    // coreaudio backend 里直接 AudioOutputUnitStop，同步终止 callback。
-    // 之后 drop 处理 dispose / 资源释放。pause 失败时仅 warn，不阻塞 drop。
+    // Pause explicitly before drop.
+    // On macOS coreaudio, cpal 0.15's plain drop(Stream) does not synchronously call
+    // AudioOutputUnitStop, so the AudioUnit render callback keeps firing and process_callback
+    // still logs cb# lines at ~5ms/frame, making macOS think the mic is still in use (the
+    // orange dot never turns off). pause() goes through StreamTrait::pause — on the coreaudio
+    // backend it calls AudioOutputUnitStop directly, terminating the callback synchronously.
+    // The subsequent drop handles dispose / resource release. If pause fails, warn only and
+    // do not block the drop.
     if let Err(err) = stream.pause() {
         log::warn!("[recorder] cpal Stream pause before drop failed: {err}");
     }
     drop(stream);
     log::info!("[recorder] cpal Stream dropped (mic released)");
 
-    // 等待 watchdog 线程退出
+    // Wait for the watchdog thread to exit
     if let Some(handle) = watchdog_handle {
         let _ = handle.join();
     }
 }
 
-/// 选默认输入设备 + 默认配置 + 构造 Stream。
+/// Select default input device + default config + build the Stream.
 fn build_input_stream(
     microphone_device_name: Option<String>,
     consumer: Arc<dyn AudioConsumer>,
@@ -556,8 +575,9 @@ fn select_input_device(
         .ok_or(RecorderError::NoInputDevice)
 }
 
-/// 启动期 default_input_config 失败：依靠错误字符串关键字粗判权限问题。
-/// cpal 在 macOS 没拿到 mic 授权时通常返回 `BackendSpecific`，我们尽力识别。
+/// Startup-time default_input_config failure: coarsely classify permission issues via error
+/// string keywords. cpal usually returns `BackendSpecific` when macOS mic authorization is
+/// missing; best-effort recognition.
 fn classify_default_config_err(msg: String) -> RecorderError {
     let lower = msg.to_lowercase();
     if is_no_device_error(&lower) {
@@ -570,7 +590,7 @@ fn classify_default_config_err(msg: String) -> RecorderError {
     }
 }
 
-/// 启动期 build_stream 失败：同上，可能是权限问题。
+/// Startup-time build_stream failure: same classification as above; may be a permission issue.
 fn classify_build_stream_err(err: cpal::BuildStreamError) -> RecorderError {
     let msg = err.to_string();
     let lower = msg.to_lowercase();
@@ -584,9 +604,9 @@ fn classify_build_stream_err(err: cpal::BuildStreamError) -> RecorderError {
     }
 }
 
-/// 错误字符串是否暗示“当前没有可用输入设备”（区别于权限被拒）。
-/// 与 permissions.rs::is_no_device_error 保持同一套关键字；backend-tests
-/// harness 单独编译本模块，所以不跨模块引用。
+/// Whether the error string implies "no usable input device right now" (as opposed to
+/// permission denied). Keyword set kept in sync with permissions.rs::is_no_device_error; the
+/// backend-tests harness compiles this module standalone, so no cross-module reference.
 fn is_no_device_error(lower: &str) -> bool {
     [
         "no default input device",
@@ -603,8 +623,8 @@ fn is_no_device_error(lower: &str) -> bool {
     .any(|pattern| lower.contains(pattern))
 }
 
-/// `SupportedStreamConfig` → 对应 SampleFormat 的具体 build 调用。
-/// 只支持 cpal 常见的浮点和整型格式；其它格式 fallback 报错。
+/// `SupportedStreamConfig` -> the concrete build call for that SampleFormat.
+/// Only common cpal float and integer formats are supported; others fall back to an error.
 #[allow(clippy::too_many_arguments)]
 fn build_stream_for_format(
     device: &cpal::Device,
@@ -674,16 +694,18 @@ fn build_stream_for_format(
     }
 }
 
-/// 跨回调维持的状态：上一帧残留（重采样），诊断计数与峰值。
+/// State carried across callbacks: resample leftovers, diagnostic counters and peak.
 struct StreamState {
-    /// 上一回调没被消费完的"小数位置"。线性插值重采样会跨 buffer。
+    /// Fractional position left unconsumed by the previous callback; linear-interpolation
+    /// resampling spans buffers.
     resample_phase: Mutex<f64>,
-    /// 上一回调最后一帧（单声道下混后），下一回调插值起点。
+    /// Last frame of the previous callback (after mono downmix); interpolation start for the
+    /// next callback.
     last_sample: Mutex<f32>,
     callback_count: AtomicUsize,
     peak_input_rms_milli: AtomicUsize,
     peak_output_rms_milli: AtomicUsize,
-    /// 最后一次成功调用 consumer 的时间戳（用于 liveness 检测）
+    /// Timestamp of the last successful consumer call (for liveness detection)
     last_callback_time: Mutex<Option<std::time::Instant>>,
 }
 
@@ -695,13 +717,14 @@ impl StreamState {
             callback_count: AtomicUsize::new(0),
             peak_input_rms_milli: AtomicUsize::new(0),
             peak_output_rms_milli: AtomicUsize::new(0),
-            // 初始化为 None，只有在第一次回调后才开始计时，避免误报慢启动设备
+            // Start as None: timing begins only after the first callback, avoiding false
+            // positives for slow-starting devices
             last_callback_time: Mutex::new(None),
         }
     }
 }
 
-/// 单次回调：下混 → 重采样 → 量化为 i16 → 算 RMS → 喂下游。
+/// Per-callback pipeline: downmix -> resample -> quantize to i16 -> compute RMS -> feed downstream.
 fn process_callback(
     interleaved: &[f32],
     channels: usize,
@@ -732,10 +755,10 @@ fn process_callback(
     }
     level_handler(level);
 
-    // 更新最后一次成功调用的时间戳（用于 liveness 检测）
+    // Update the last successful call timestamp (for liveness detection)
     *state.last_callback_time.lock() = Some(std::time::Instant::now());
 
-    // 诊断：峰值 + 周期性日志。
+    // Diagnostics: peak tracking + periodic log.
     let count = state.callback_count.fetch_add(1, Ordering::Relaxed) + 1;
     update_peak(&state.peak_input_rms_milli, input_rms);
     update_peak(&state.peak_output_rms_milli, output_rms);
@@ -754,7 +777,7 @@ fn process_callback(
     }
 }
 
-/// 多声道交错样本 → 单声道（算术平均）。
+/// Multi-channel interleaved samples -> mono (arithmetic mean).
 fn downmix_to_mono(interleaved: &[f32], channels: usize) -> Vec<f32> {
     if channels == 1 {
         return interleaved.to_vec();
@@ -772,17 +795,17 @@ fn downmix_to_mono(interleaved: &[f32], channels: usize) -> Vec<f32> {
     out
 }
 
-/// 线性插值重采样到目标采样率，状态跨 buffer 保留。
+/// Linear-interpolation resampling to the target sample rate; state spans buffers.
 ///
-/// 算法说明：把上一回调的尾样本作为本回调起点，避免缝隙；用浮点
-/// `phase` 记录"已经走到上一帧的多少位置"，每输出一个目标样本前进
-/// `step = src_sr / dst_sr`。
+/// Algorithm: the previous callback's tail sample seeds this callback to avoid gaps; a float
+/// `phase` tracks "how far past the previous frame we are" and advances by
+/// `step = src_sr / dst_sr` per output sample.
 fn resample_to_target(samples: &[f32], src_sr: u32, dst_sr: u32, state: &StreamState) -> Vec<f32> {
     if samples.is_empty() {
         return Vec::new();
     }
     if src_sr == dst_sr {
-        // 直通——但仍需更新 last_sample，便于切换设备时不抖。
+        // Pass-through — still update last_sample so switching devices doesn't glitch.
         if let Some(&last) = samples.last() {
             *state.last_sample.lock() = last;
         }
@@ -793,12 +816,12 @@ fn resample_to_target(samples: &[f32], src_sr: u32, dst_sr: u32, state: &StreamS
     let mut phase = *state.resample_phase.lock();
     let prev = *state.last_sample.lock();
 
-    // 估容量：dst_len ≈ src_len / step。
+    // Estimate capacity: dst_len ≈ src_len / step.
     let estimated = ((samples.len() as f64) / step).ceil() as usize + 1;
     let mut out = Vec::with_capacity(estimated);
 
-    // 把 prev 作为虚拟索引 -1 的样本。
-    // phase 表示"距离当前段起点还差多少"，区间 [0, 1)。
+    // Treat prev as the sample at virtual index -1.
+    // phase means "distance to the start of the current segment", in [0, 1).
     while phase < samples.len() as f64 {
         let idx_floor = phase.floor() as isize;
         let frac = (phase - phase.floor()) as f32;
@@ -809,7 +832,8 @@ fn resample_to_target(samples: &[f32], src_sr: u32, dst_sr: u32, state: &StreamS
         };
         let b_index = (idx_floor + 1) as usize;
         if b_index >= samples.len() {
-            // 没有下一帧可插值——把当前帧填进去并退出，让下一回调接力。
+            // No next frame to interpolate — emit the current frame and stop; the next
+            // callback continues from here.
             out.push(a);
             phase += step;
             break;
@@ -819,7 +843,7 @@ fn resample_to_target(samples: &[f32], src_sr: u32, dst_sr: u32, state: &StreamS
         phase += step;
     }
 
-    // 把 phase 折回到"相对于下一回调起点"——减去当前 buffer 长度。
+    // Fold phase back to "relative to the next callback's start" — subtract this buffer's length.
     let new_phase = phase - samples.len() as f64;
     *state.resample_phase.lock() = new_phase.max(0.0);
     *state.last_sample.lock() = *samples.last().unwrap_or(&0.0);
@@ -827,7 +851,7 @@ fn resample_to_target(samples: &[f32], src_sr: u32, dst_sr: u32, state: &StreamS
     out
 }
 
-/// f32 → i16 little-endian 字节流，并顺手算 RMS（归一化到 0..1）。
+/// f32 -> i16 little-endian byte stream; also computes RMS (normalized to 0..1).
 fn quantize_to_i16_le(samples: &[f32]) -> (Vec<u8>, f32) {
     let mut bytes = Vec::with_capacity(samples.len() * 2);
     let mut sum_sq = 0.0f64;
@@ -846,7 +870,7 @@ fn quantize_to_i16_le(samples: &[f32]) -> (Vec<u8>, f32) {
     (bytes, rms)
 }
 
-/// f32 切片 RMS（归一化到 0..1，假设输入已在 [-1, 1]）。
+/// RMS of an f32 slice (normalized to 0..1; input assumed already in [-1, 1]).
 fn rms(samples: &[f32]) -> f32 {
     if samples.is_empty() {
         return 0.0;
@@ -859,7 +883,7 @@ fn rms(samples: &[f32]) -> f32 {
     (sum_sq / samples.len() as f64).sqrt() as f32
 }
 
-/// 用毫单位整数原子值近似存储 f32 峰值（避免引入额外锁）。
+/// Store the f32 peak approximately as an integer atomic in milli units (avoids an extra lock).
 fn update_peak(slot: &AtomicUsize, current: f32) {
     let scaled = (current * 1000.0).round().max(0.0) as usize;
     let mut prev = slot.load(Ordering::Relaxed);
@@ -871,9 +895,10 @@ fn update_peak(slot: &AtomicUsize, current: f32) {
     }
 }
 
-/// 16 kHz / mono / 16-bit PCM WAV 的简易追加写入器。
-/// 构造时写一个 data_size=0 的 header 占位，每次 append 把 i16 PCM bytes 追加到文件，
-/// Drop 时 seek 回 0 把 RIFF / data 长度字段回填——避免依赖外部 finalize 调用点。
+/// Simple append-only writer for 16 kHz / mono / 16-bit PCM WAV.
+/// Writes a placeholder header with data_size=0 at construction, appends i16 PCM bytes on each
+/// append, and on Drop seeks back to 0 to backfill the RIFF / data length fields — no external
+/// finalize call site required.
 struct WavArchiver {
     file: std::fs::File,
     bytes_written: u32,
@@ -939,7 +964,7 @@ impl Drop for WavArchiver {
 }
 
 fn build_wav_header(data_size: u32) -> [u8; 44] {
-    // RIFF/WAVE PCM 标准 44-byte header，16 kHz / mono / 16-bit 写死。
+    // Standard 44-byte RIFF/WAVE PCM header, hardcoded for 16 kHz / mono / 16-bit.
     let total_size = data_size.saturating_add(36);
     let mut h = [0u8; 44];
     h[0..4].copy_from_slice(b"RIFF");

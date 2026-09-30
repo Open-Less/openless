@@ -1,16 +1,20 @@
-// GlobalDownloadProgress.tsx —— 全局下载进度浮层。
+// GlobalDownloadProgress.tsx — global download progress overlay.
 //
-// 主窗口任何页面常驻显示（portal 到 document.body，fixed 右上角）：下载开始即
-// 出现、结束前一直显示，切页面 / 开关设置弹窗都不影响它。组件自包含——自己
-// 订阅三套本地 ASR 引擎的下载进度事件并维护本地 state，与页面状态解耦，页面
-// 重渲染不会拖累它，它也不会让页面跟随每个进度事件重渲染。
+// Persistently visible on every main-window page (portaled to document.body, fixed
+// top-right): appears when a download starts and stays until it ends; page switches
+// and settings-modal toggles don't affect it. Self-contained — it subscribes to the
+// three local ASR engines' progress events and keeps its own state, decoupled from
+// page state: page re-renders don't drag it, and it doesn't re-render pages on every
+// progress event.
 //
-// 事件在 Core ModelStore 内已按 ≥150ms 节流，
-// 进度条不会因高频 IPC 抖动；这里只做展示 + 取消入口，不参与模型状态管理。
+// Events are already throttled to ≥150ms in Core's ModelStore, so the bar doesn't
+// jitter on high-frequency IPC; this component only displays + offers cancel, it
+// doesn't manage model state.
 //
-// portal 到 body 的原因与 DownloadDialog 相同：WindowChrome 根节点的常驻
-// transform / will-change 会为 position:fixed 后代创建 containing block，不
-// portal 的话 fixed 会相对设置弹窗而非视口定位（灰屏 + 点不到的经典 bug）。
+// Same portal-to-body reason as DownloadDialog: WindowChrome's root carries persistent
+// transform / will-change, creating a containing block for position:fixed descendants;
+// without the portal, fixed anchors to the settings dialog instead of the viewport
+// (the classic gray screen + unclickable bug).
 
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -29,7 +33,7 @@ type Engine = 'qwen3' | 'sherpa' | 'foundry';
 
 interface ProgressItem {
   key: string;
-  /** 引擎侧模型 id / alias（调用对应 cancel 命令用）。 */
+  /** Engine-side model id / alias (for calling the matching cancel command). */
   id: string;
   name: string;
   percent: number | null;
@@ -105,7 +109,8 @@ export function GlobalDownloadProgress() {
               delete next[key];
               return next;
             }
-            // phase 切换事件（runtime→model→load）不带进度，保留原条目不刷。
+            // Phase-switch events (runtime→model→load) carry no progress; keep the
+            // existing entry unrefreshed.
             if (p.percent == null) return prev;
             return {
               ...prev,

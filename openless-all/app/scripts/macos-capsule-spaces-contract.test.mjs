@@ -6,9 +6,9 @@ function assertMatch(source, pattern, name) {
   }
 }
 
-// 契约函数 show_capsule_window_no_activate 位于显式 Tauri Host Module。
-// 契约必须校验真正编译的那份，否则会出现
-// 「测试绿、线上坏」的假信心。
+// The contract function show_capsule_window_no_activate lives in the explicit Tauri Host Module.
+// The contract must validate the copy that is actually compiled, otherwise tests can be green
+// while production is broken.
 const capsuleFocusRs = (
   await readFile(new URL('../src-tauri/src/coordinator/capsule_focus.rs', import.meta.url), 'utf-8')
 ).replace(/\r\n/g, '\n');
@@ -50,12 +50,14 @@ for (const forbidden of ['window.show()', 'set_focus', 'NSApp.activate', 'makeKe
   }
 }
 
-// === 胶囊跟随「鼠标光标所在屏」契约（多屏 / 多 Space）===
-// 根因：定位用 AX caret、layout 去重缓存却用胶囊自己的 current_monitor，两者看
-// 不同的屏；光标移到另一块屏时缓存误判「没变化」→ 跳过重新定位 → 胶囊被锁死
-// 在第一块屏（别屏只闪一下）。修复后两条路径必须共用 capsule_target_monitor，
-// 且以鼠标光标为首选信号。这些不变量纯靠源码 grep 守护，无法在无多屏硬件的
-// 单测里覆盖，正是契约测试的用武之地。
+// === Contract: the capsule follows "the screen the mouse cursor is on" (multi-screen / Space) ===
+// Root cause: positioning used the AX caret while the layout dedup cache used the capsule's own
+// current_monitor — the two look at different screens. When the cursor moves to another screen,
+// the cache misjudges "nothing changed" → skips repositioning → the capsule is locked to the
+// first screen (only flashing on the other). After the fix both paths must share
+// capsule_target_monitor, with the mouse cursor as the preferred signal. These invariants are
+// guarded purely by source grep and cannot be covered by unit tests without multi-screen
+// hardware — exactly what contract tests are for.
 const libRs = (
   await readFile(new URL('../src-tauri/src/lib.rs', import.meta.url), 'utf-8')
 ).replace(/\r\n/g, '\n');
@@ -68,7 +70,7 @@ assertMatch(
 
 assertMatch(
   libRs,
-  /跟随鼠标光标所在显示器[\s\S]*?if let Some\(mon\) = capsule_target_monitor\(window\)/,
+  /follow the monitor under the mouse cursor[\s\S]*?if let Some\(mon\) = capsule_target_monitor\(window\)/,
   'macOS capsule positioning must follow capsule_target_monitor (the mouse screen), not its own current_monitor',
 );
 
@@ -78,24 +80,28 @@ assertMatch(
   'macOS capsule layout cache key must reuse capsule_target_monitor, or it will skip repositioning when the cursor moves to another screen',
 );
 
-// === 卡片借走胶囊窗口后必须完整归还（位置！）契约 ===
+// === Contract: a card that borrows the capsule window must return it fully (position!) ===
 //
-// 词条卡片和落字回退卡片都不是自己的窗口 —— 它们借用录音胶囊那一个 "capsule"
-// 窗口，弹出时把它缩到卡片大小、挪到右下角。收起时必须原样还回去。
+// The vocab suggestion card and the insert-fallback card have no windows of their own — they
+// borrow the recording capsule's single "capsule" window, shrinking it to card size and moving it
+// to the bottom-right while shown. On dismiss it must be returned exactly as it was.
 //
-// 「还位置」这一步曾经漏过一次，真机表现是：用过一次带添加词的卡片之后，
-// 下一次录音的胶囊出现在右下角，再也回不到底部居中。漏这一步之所以致命，
-// 是因为 maybe_position_capsule_bottom_center 的去重缓存只记「显示器 + 翻译态」，
-// 卡片这一挪它一无所知 —— 下次录音拿到相同的显示器快照就判定「没变化」，
-// 直接跳过重新定位。窗口被挪走了，而唯一会把它挪回来的那段代码以为自己不用动。
+// The "return the position" step was missed once; on real hardware, after using the
+// add-word card once, the next recording's capsule appeared bottom-right and never went back to
+// bottom-center. The miss was fatal because maybe_position_capsule_bottom_center's dedup cache
+// only records "monitor + translation state" and knows nothing about the card moving the window —
+// the next recording got the same monitor snapshot, judged "no change", and skipped repositioning
+// outright. The window had been moved, while the only code that would move it back thought it had
+// nothing to do.
 //
-// 所以复位和清缓存两件事都要做，各堵一个方向；穿透状态同理（emit_capsule 靠
-// capsule_cursor_passthrough 跳过重复调用，缓存与窗口真实状态分家就会跳过
-// 该调的那一次，表现是胶囊上的 ✓/✕ 点不动）。
+// So both reset and cache invalidation are required, each blocking one direction; the same applies
+// to passthrough state (emit_capsule relies on capsule_cursor_passthrough to skip redundant calls;
+// if the cache and the window's real state diverge, a needed call gets skipped and the ✓/✕ buttons
+// on the capsule stop responding).
 //
-// 这段修复在 2026-08 丢过一次（只存在于未合并的本地分支上，主线重新长回了
-// 漏位置的版本），靠单测抓不到 —— 它全是 Tauri 窗口调用，跑在 main thread
-// 闭包里。契约测试是唯一能钉住它的手段。
+// This fix was lost once in 2026-08 (it existed only on an unmerged local branch; main regrew the
+// version missing the position restore) and unit tests cannot catch it — it is all Tauri window
+// calls running inside main-thread closures. A contract test is the only way to pin it.
 const coordinatorRs = (
   await readFile(new URL('../src-tauri/src/coordinator.rs', import.meta.url), 'utf-8')
 ).replace(/\r\n/g, '\n');
@@ -113,7 +119,7 @@ function extractFn(source, name) {
   return match[0];
 }
 
-// 弹卡片 = 把共享窗口挪走，去重缓存必须当场作废。
+// Showing a card = moving the shared window away; the dedup cache must be invalidated on the spot.
 for (const name of ['show_vocab_suggestion_card', 'show_insert_fallback_card']) {
   const body = extractFn(coordinatorRs, name);
   assertMatch(
@@ -128,7 +134,7 @@ for (const name of ['show_vocab_suggestion_card', 'show_insert_fallback_card']) 
   );
 }
 
-// 收卡片 = 把窗口完整还回去：穿透、尺寸、位置，一样都不能少。
+// Dismissing a card = returning the window fully: passthrough, size, position — nothing skipped.
 for (const name of ['hide_vocab_suggestion_card', 'hide_insert_fallback_card']) {
   const body = extractFn(coordinatorRs, name);
   assertMatch(
@@ -151,8 +157,9 @@ for (const name of ['hide_vocab_suggestion_card', 'hide_insert_fallback_card']) 
     /position_capsule_bottom_center\(false\)/,
     `${name} must move the capsule window back to bottom-center; restoring size alone leaves it in the card's bottom-right corner`,
   );
-  // 顺序不变量：尺寸和位置要一起动，窗口还亮着时改就有概率被合成出一帧
-  //「卡片被拉宽、还横着飞过半个屏幕」。
+  // Ordering invariant: size and position must change together; changing them while the window is
+  // still visible can composite a frame of "card stretched wide, still flying across half the
+  // screen".
   const hideAt = body.indexOf('capsule.hide()');
   const resizeAt = body.indexOf('set_size');
   if (hideAt === -1 || hideAt > resizeAt) {

@@ -7,9 +7,10 @@
 
 use super::*;
 
-/// 与 capture_focus_target 类似，但前台窗口属于本进程（即用户停在 QA / capsule / main
-/// 等自家窗口）时返回 None，让 caller 区分"用户没切到别处" vs "用户切到了另一个真正的
-/// 外部 app"。issue #466 多轮场景下用来刷新 qa_focus_target。
+/// Like capture_focus_target, but returns None when the foreground window belongs to this
+/// process (the user is on one of our own windows such as QA / capsule / main), letting the
+/// caller distinguish "user didn't switch away" from "user switched to another real external
+/// app". Used to refresh qa_focus_target in issue #466's multi-turn flow.
 #[cfg(target_os = "windows")]
 pub(crate) fn capture_external_focus_target() -> Option<usize> {
     use windows::Win32::System::Threading::GetCurrentProcessId;
@@ -51,16 +52,16 @@ pub(crate) fn capture_focus_target() -> Option<usize> {
     None
 }
 
-/// 捕获用户开始 dictation 时的前台 app 标签（"localizedName (bundle.id)"），用作 LLM
-/// polish/translate 的上下文前提，让模型按 app 调风格。详见 issue #116。
+/// Capture the foreground app label at dictation start ("localizedName (bundle.id)"), used as
+/// context for LLM polish/translate so the model can adapt style per app. See issue #116.
 ///
-/// macOS 走 NSWorkspace.frontmostApplication（公开 API，无需额外权限）；
-/// Windows 复用前台 HWND 拿窗口标题；Linux/其他平台返回 None。
+/// macOS uses NSWorkspace.frontmostApplication (public API, no extra permission);
+/// Windows reuses the foreground HWND for the window title; Linux and other platforms return None.
 pub(crate) fn capture_frontmost_app() -> Option<String> {
-    // 曾经这里有一份和 `selection.rs` 逐字重复的 NSWorkspace/Win32 实现（三个 cfg
-    // 分支、连 nsstring 转换 helper 都是复制的）。收口到 selection：那边现在把取值
-    // 拆成了结构化的 `current_front_app_parts`，`host_document` 的 bundle 黑名单要用。
-    // 一处实现，三个消费方。
+    // This once held an NSWorkspace/Win32 implementation duplicated verbatim from
+    // `selection.rs` (three cfg branches, even the nsstring conversion helper). Consolidated
+    // into selection: it now exposes the structured `current_front_app_parts`, which the
+    // `host_document` bundle blocklist also needs. One implementation, three consumers.
     match crate::selection::current_front_app_parts() {
         (Some(name), Some(bundle)) => Some(format!("{name} ({bundle})")),
         (Some(name), None) => Some(name),
@@ -114,9 +115,11 @@ pub(crate) fn restore_focus_target_if_possible(_target: Option<usize>) -> bool {
     true
 }
 
-/// Esc 独占判定：胶囊显示「进行中」（录音/转写/润色）且确为 dictation 会话（phase 非
-/// Idle）时为 true——tap/hook 吞掉 Esc 不透传宿主应用。phase 条件专门排除 QA：QA 也走
-/// 胶囊，但它的 Esc 由聚焦浮窗处理（#161），全局吞键反而会把它挡掉。纯函数便于表格测试。
+/// Esc exclusivity decision: true when the capsule shows an in-progress state
+/// (recording/transcribing/polishing) and this is really a dictation session (phase not
+/// Idle) — tap/hook swallows Esc without passing it to the host app. The phase condition
+/// specifically excludes QA: QA also uses the capsule, but its Esc is handled by the focused
+/// floating window (#161); global swallowing would block it instead. Pure function for table tests.
 fn esc_exclusive_for_capsule(state: CapsuleState, session_active: bool) -> bool {
     matches!(
         state,
@@ -143,8 +146,8 @@ pub(super) fn emit_capsule(
     )
 }
 
-/// 选区润色复用原有无焦点 capsule 窗口，但用独立标记让前端显示一行轻量状态提示，
-/// 不污染语音/QA 的光效和终态文案。
+/// Selection polish reuses the existing no-focus capsule window, with a dedicated flag so the
+/// frontend shows one lightweight status line without polluting voice/QA effects and terminal text.
 pub(super) fn emit_selection_polish_capsule(
     inner: &Arc<Inner>,
     state: CapsuleState,
@@ -178,8 +181,9 @@ fn defer_capsule_payload_if_fallback_active(inner: &Arc<Inner>, payload: &Capsul
     inner.host.defer_capsule_if_fallback_active(payload)
 }
 
-/// `capsule_event_lock` 已由调用方持有的内部实现。自动隐藏路径必须能在验证 epoch
-/// 后、发出 Idle 前一直持锁，才能保证旧 timer 不会盖掉刚到的新 payload。
+/// Internal implementation with `capsule_event_lock` already held by the caller. The auto-hide
+/// path must hold the lock from the epoch check until Idle is emitted, guaranteeing an old
+/// timer cannot overwrite a just-arrived new payload.
 fn emit_capsule_with_context_locked(
     inner: &Arc<Inner>,
     state: CapsuleState,
@@ -211,8 +215,8 @@ fn emit_capsule_with_context_locked(
     emit_capsule_payload_locked(inner, payload)
 }
 
-/// Core 反馈完整进入同一个原生显示出口；包括 warming、translation 等字段，
-/// 不经过旧的“按 Host 状态重建 payload”路径。
+/// Core feedback enters the same native display outlet wholesale, including warming,
+/// translation and other fields; it bypasses the old "rebuild payload from Host state" path.
 pub(super) fn emit_core_capsule(
     inner: &Arc<Inner>,
     payload: CapsulePayload,
@@ -251,8 +255,9 @@ pub(super) fn hide_core_capsule_if_current(inner: &Arc<Inner>, expected_epoch: u
 fn emit_capsule_payload_locked(inner: &Arc<Inner>, payload: CapsulePayload) -> u64 {
     let state = payload.state;
     let selection_polish = payload.selection_polish;
-    // 每次 payload 都推进代数。这样一个选区润色终态的旧 timer 在之后出现任何
-    // selection / voice / QA 状态时都失效，不会把新的可见状态强行收回 Idle。
+    // Advance the epoch on every payload. That way an old selection-polish terminal timer is
+    // invalidated by any later selection / voice / QA state and cannot force the new visible
+    // state back to Idle.
     let event_epoch = inner
         .capsule_event_epoch
         .fetch_add(1, Ordering::SeqCst)
@@ -260,15 +265,19 @@ fn emit_capsule_payload_locked(inner: &Arc<Inner>, payload: CapsulePayload) -> u
     inner
         .selection_polish_capsule_active
         .store(selection_polish, Ordering::SeqCst);
-    // 在 app 句柄校验之前记录，便于无 GUI 的测试断言「按下热键 → 弹了哪种胶囊」。
-    // replace 顺带取回上一帧 state，用于判断本次是不是「入场帧」（见下方 defer_capsule_emit）。
+    // Recorded before the app-handle check so headless tests can assert "hotkey pressed → which
+    // capsule appeared". `replace` also fetches the previous frame's state, used to detect an
+    // entrance frame (see defer_capsule_emit below).
     let prev_state = inner.last_capsule_state.lock().replace(state);
-    // Esc 独占窗口：胶囊显示进行中（录音/转写/润色）且确为 dictation 会话（phase 非
-    // Idle）时，tap/hook 吞掉 Esc 不透传宿主应用——此刻 Esc 的语义是「取消这个会话」，
-    // 双重派发会顺带触发宿主应用的 Esc（如取消 Claude 正在生成的回复）。phase 条件排除
-    // QA：QA 会话也走胶囊，但它的 Esc 由聚焦的浮窗窗口处理，吞键反而会把它挡掉。
-    // 终止帧（Done/Cancelled/Error/Idle）自然清除。emit_capsule 是所有会话状态变化的
-    // 单一出口（含 #77 审计保证的全部终止路径），在此维护不会漏路径。
+    // Esc-exclusive window: while the capsule shows an in-progress state
+    // (recording/transcribing/polishing) and this is really a dictation session (phase not
+    // Idle), tap/hook swallows Esc without passing it to the host app — at that moment Esc
+    // means "cancel this session", and double dispatch would also hit the host app's Esc (e.g.
+    // cancelling a Claude reply being generated). The phase condition excludes QA: QA sessions
+    // also use the capsule, but their Esc is handled by the focused floating window; swallowing
+    // the key would block it instead. Terminal frames (Done/Cancelled/Error/Idle) clear it
+    // naturally. emit_capsule is the single outlet for all session state changes (including all
+    // termination paths per the #77 audit), so maintaining it here misses no path.
     #[cfg(all(not(mobile), target_os = "windows"))]
     let selection_voice_active = inner.selection_voice_capture.lock().is_some();
     #[cfg(not(all(not(mobile), target_os = "windows")))]
@@ -279,7 +288,8 @@ fn emit_capsule_payload_locked(inner: &Arc<Inner>, payload: CapsulePayload) -> u
         || selection_voice_active;
     let esc_exclusive = esc_exclusive_for_capsule(state, session_active);
     crate::hotkey::set_esc_exclusive(esc_exclusive);
-    // 即使窗口尚未绑定，也保留卡片期间最新的完整反馈，重显时不能倒退到旧准备态。
+    // Keep the latest full feedback during a fallback card, even before the window handle is
+    // validated; a re-show must not regress to an old preparing state.
     defer_capsule_payload_if_fallback_active(inner, &payload);
     let Some(capsule) = inner.host.capsule_window() else {
         return event_epoch;
@@ -288,9 +298,10 @@ fn emit_capsule_payload_locked(inner: &Arc<Inner>, payload: CapsulePayload) -> u
     #[cfg(target_os = "android")]
     crate::android::notify_capsule_state(&payload);
 
-    // visible / translation 是「这一帧 capsule:state event 的 payload」内容 ——
-    // 必须在 call-site（即音频线程触发 emit_capsule 时）就算定，否则 main thread
-    // 闭包里读到的将是「下一帧」的 state，跟实际下发给 JS 的 payload 不一致。
+    // visible / translation are part of "this frame's capsule:state event payload" — they must
+    // be computed at the call site (i.e. when the audio thread triggers emit_capsule); reading
+    // them inside the main-thread closure would see the next frame's state, mismatching the
+    // payload actually delivered to JS.
     let visible = !matches!(state, CapsuleState::Idle);
     // 入场帧：胶囊从不可见第一次变可见。按平时的「同步 emit + 异步 show」，前端会在窗口
     // 还隐藏时就起播 capsule-in，等窗口真 show 出来动画早已播完 → 用户看到胶囊「凭空出
@@ -299,18 +310,21 @@ fn emit_capsule_payload_locked(inner: &Arc<Inner>, payload: CapsulePayload) -> u
     let was_visible = matches!(prev_state, Some(s) if !matches!(s, CapsuleState::Idle));
     let defer_capsule_emit = visible && !was_visible;
 
-    // emit_capsule 会被 cpal process_callback（音频回调线程）调用 ~30 Hz —— 在该
-    // 线程上调用 NSWindow / HWND API 会撞 macOS dispatch_assert_queue_fail SIGTRAP
-    // 或者 Win32 SendMessage 死锁。把 window.show/hide + 位置调整 marshal 到主线程；
-    // app.emit_to 走 Tauri 内部事件总线，本身线程安全，保留同步调用。详见 audit 3.2.2。
+    // emit_capsule is called from the cpal process_callback (audio callback thread) at ~30 Hz —
+    // calling NSWindow / HWND APIs on that thread hits the macOS dispatch_assert_queue_fail
+    // SIGTRAP or a Win32 SendMessage deadlock. Marshal window.show/hide + position updates to
+    // the main thread; app.emit_to uses Tauri's internal event bus, which is thread-safe, so it
+    // stays synchronous. See audit 3.2.2.
     //
-    // show_capsule（用户偏好）在主线程执行时再读 —— 用户可以在录音过程中改设置，
-    // 闭包入队到真正跑之间窗口上限是一两帧（~16-33ms），用最新值消除 stale-pref
-    // 闪烁。pr_agent 关注点 — 见 audit follow-up。
+    // show_capsule (user preference) is read on the main thread: users can change settings
+    // mid-recording, and the window between queueing the closure and running it is one or two
+    // frames (~16-33ms); the latest value avoids stale-pref flicker. pr_agent concern — see
+    // audit follow-up.
     let host_for_main = inner.host.clone();
     let backend_for_main = Arc::clone(&inner.backend);
-    // 入场帧要在 window.show 之后、闭包内部把 state 回发给前端，需要 payload 的独立副本
-    // move 进闭包；非入场帧走闭包外的即时同步 emit（下方），这里就是 None。
+    // An entrance frame must re-send the state to the frontend after window.show, inside the
+    // closure, so it needs its own payload clone moved in; non-entrance frames use the
+    // immediate synchronous emit outside the closure (below), so this is None.
     let payload_for_deferred_emit = if defer_capsule_emit {
         Some(payload.clone())
     } else {
@@ -329,8 +343,9 @@ fn emit_capsule_payload_locked(inner: &Arc<Inner>, payload: CapsulePayload) -> u
             preferences.capsule_style,
             payload_for_deferred_emit.is_some(),
         );
-        // 入场帧：窗口刚 show（或本次用户关了胶囊显示走了 hide 分支），此刻再把 state 发给
-        // capsule 前端 —— 前端起播 capsule-in 时窗口已可见，入场动画从头完整播放。
+        // Entrance frame: the window has just shown (or the user disabled capsule display and we
+        // took the hide branch); only now send the state to the capsule frontend — the
+        // capsule-in animation starts while the window is visible and plays from the beginning.
         if let Some(mut payload) = payload_for_deferred_emit {
             payload.capsule_style = preferences.capsule_style;
             host_for_main.emit_capsule_state_to_capsule(&payload);
@@ -342,16 +357,17 @@ fn emit_capsule_payload_locked(inner: &Arc<Inner>, payload: CapsulePayload) -> u
     if !defer_capsule_emit {
         inner.host.emit_capsule_state_to_capsule(&payload);
     }
-    // 主窗口也需要 capsule:state 事件：AudioCueListener 用它触发录音提示音。
-    // Linux 上胶囊隐藏时提示音仍应工作，所以同时发给 main 窗口。始终即时，与胶囊窗口
-    // 显示时机解耦。
+    // The main window also needs the capsule:state event: AudioCueListener uses it to trigger
+    // recording cues. On Linux the cue must still work while the capsule is hidden, so it is
+    // also sent to the main window. Always immediate, decoupled from capsule window show timing.
     inner.host.emit_capsule_state_to_main(&payload);
     event_epoch
 }
 
-/// 返回一个选区润色终态 timer 是否仍有资格收起 capsule。
+/// Whether a selection-polish terminal timer is still eligible to collapse the capsule.
 ///
-/// 该判断同时覆盖两类竞态：同一功能的新一轮触发，以及随后开始的语音/QA 会话。
+/// This covers two races at once: a new trigger of the same feature, and a voice/QA session
+/// that started afterwards.
 pub(super) fn selection_polish_capsule_epoch_is_current(
     inner: &Arc<Inner>,
     expected_epoch: u64,
@@ -360,11 +376,12 @@ pub(super) fn selection_polish_capsule_epoch_is_current(
         && inner.capsule_event_epoch.load(Ordering::SeqCst) == expected_epoch
 }
 
-/// 旧 dictation/QA timer 的收起路径。它与所有 emit 共享一把短锁：如果 Selection
-/// Polish 已经显示，就让路；如果新语音/QA 先一步发了状态，也会在锁序上排在 Idle 前。
+/// Collapse path for old dictation/QA timers. It shares one short lock with all emits: it
+/// yields if Selection Polish is showing, and if a new voice/QA session emitted first, that
+/// emission is ordered before Idle by the lock.
 pub(super) fn hide_capsule_if_all_sessions_idle(inner: &Arc<Inner>) {
-    // 先读 session state，再进 capsule lock。event epoch 负责在两次读取之间
-    // 有任何新 payload 时取消本次 Idle。
+    // Read session state first, then enter the capsule lock. The event epoch cancels this Idle
+    // if any new payload arrived between the two reads.
     #[cfg(all(not(mobile), target_os = "windows"))]
     let selection_voice_idle = inner.selection_voice_capture.lock().is_none();
     #[cfg(not(all(not(mobile), target_os = "windows")))]
@@ -387,8 +404,9 @@ pub(super) fn hide_capsule_if_all_sessions_idle(inner: &Arc<Inner>) {
     }
 }
 
-/// 只在同一代 Selection Polish 终态仍是最新可见 capsule 时收起它。锁会让“检查 +
-/// 发送 Idle”成为一个不可插队的顺序点，因此旧 timer 不可能在新会话之后覆盖 UI。
+/// Collapse Selection Polish only if the same generation's terminal state is still the latest
+/// visible capsule. The lock makes "check + send Idle" an unpreemptable sequence, so an old
+/// timer can never overwrite the UI after a new session.
 pub(super) fn hide_selection_polish_capsule_if_current(inner: &Arc<Inner>, expected_epoch: u64) {
     let _event_guard = inner.capsule_event_lock.lock();
     if selection_polish_capsule_epoch_is_current(inner, expected_epoch) {
@@ -474,7 +492,7 @@ mod tests {
 
     #[test]
     fn esc_exclusive_flag_matches_capsule_and_phase() {
-        // 进行中胶囊 + dictation phase 非 Idle → 独占 Esc（不透传宿主应用）。
+        // In-progress capsule + dictation phase not Idle → exclusive Esc (not passed to the host app).
         for (state, phase) in [
             (CapsuleState::Recording, SessionPhase::Listening),
             (CapsuleState::Transcribing, SessionPhase::Processing),
@@ -487,7 +505,7 @@ mod tests {
             );
         }
 
-        // 终止帧（Done/Cancelled/Error/Idle）→ 清除独占。
+        // Terminal frames (Done/Cancelled/Error/Idle) → clear exclusivity.
         for (state, phase) in [
             (CapsuleState::Done, SessionPhase::Idle),
             (CapsuleState::Cancelled, SessionPhase::Idle),
@@ -500,7 +518,7 @@ mod tests {
             );
         }
 
-        // QA 场景：胶囊显示进行中但 dictation phase=Idle → 不独占（Esc 归浮窗，#161）。
+        // QA scenario: capsule in progress but dictation phase=Idle → not exclusive (Esc belongs to the floating window, #161).
         for (state, phase) in [
             (CapsuleState::Recording, SessionPhase::Idle),
             (CapsuleState::Transcribing, SessionPhase::Idle),

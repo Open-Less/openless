@@ -1,7 +1,9 @@
-//! Coding Agent 的 Tauri compatibility commands。
+//! Tauri compatibility commands for the Coding Agent.
 //!
-//! 主窗口授权和旧 JSON wire 形状属于 Tauri host；provider 规则、参数校验、运行状态与取消
-//! 统一通过 `openless-core::CodingAgentApi`，避免命令层保留第二份业务实现。
+//! Main-window authorization and the legacy JSON wire shape belong to the
+//! Tauri host; provider rules, argument validation, run state, and
+//! cancellation all go through `openless-core::CodingAgentApi` so the command
+//! layer keeps no second business implementation.
 
 use std::path::PathBuf;
 use std::sync::Arc;

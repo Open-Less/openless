@@ -1,24 +1,30 @@
-//! 托盘麦克风设备变更的 OS 原生监听（issue #470）。
+//! OS-native watching of tray microphone device changes (issue #470).
 //!
-//! 目的：替代「每 10s 轮询 `list_input_devices()`」这条空闲唤醒。改用各平台原生的设备
-//! 变更通知，空闲时零唤醒，设备插拔/默认设备切换时由 OS 回调实时触发刷新。
+//! Purpose: replace the "poll `list_input_devices()` every 10s" idle wakeup with
+//! platform-native device-change notifications — zero wakeups while idle, with the OS
+//! callback triggering a refresh in real time on device plug/unplug or default-device switch.
 //!
-//! 平台分流：
-//! - macOS：CoreAudio `AudioObjectAddPropertyListener` 监听
-//!   `kAudioHardwarePropertyDevices`，专用线程跑 `CFRunLoop` 常驻。
-//! - Windows / Linux：暂返回 `false`，由 `lib.rs` 的 60s 慢速兜底轮询负责。
-//!   （Windows 原生 `IMMNotificationClient` 通知留作后续，需 Windows 开发机验证。）
+//! Platform split:
+//! - macOS: CoreAudio `AudioObjectAddPropertyListener` on `kAudioHardwarePropertyDevices`,
+//!   with a dedicated thread running a resident `CFRunLoop`.
+//! - Windows / Linux: returns `false` for now; `lib.rs`'s 60s slow polling fallback covers
+//!   them. (Native Windows `IMMNotificationClient` notifications are left for later; they
+//!   need a Windows dev machine to verify.)
 //!
-//! 三平台共用契约：`spawn_native_watcher(app, on_change)`。`on_change` 是 `lib.rs` 提供
-//! 的去抖闭包（内部复用 `microphone_device_signature()`，真正变化才刷新+emit）。回调里
-//! 只调用 `on_change`，不做别的。注册失败一律返回 `false`（只 warn 不 panic），交由
-//! 兜底轮询兜底，保证三平台都「永远能检测到设备」。
+//! Contract shared by all three platforms: `spawn_native_watcher(app, on_change)`.
+//! `on_change` is the debounce closure provided by `lib.rs` (it internally reuses
+//! `microphone_device_signature()` so it only refreshes+emits on real changes). The callback
+//! does nothing but call `on_change`. Registration failure always returns `false` (warn
+//! only, no panic) and the fallback polling takes over, guaranteeing devices are always
+//! detected on all three platforms.
 
 use tauri::AppHandle;
 
-/// 注册 OS 原生设备变更监听。成功返回 `true`，平台不支持或注册失败返回 `false`。
+/// Registers the OS-native device-change watcher. Returns `true` on success, `false` when
+/// the platform is unsupported or registration fails.
 ///
-/// `on_change` 在 OS 回调线程上被调用（可能并发/重复），其内部负责去抖与线程派发。
+/// `on_change` is invoked on the OS callback thread (possibly concurrent/duplicated); its
+/// internals handle debouncing and thread dispatch.
 #[cfg(target_os = "macos")]
 pub(crate) fn spawn_native_watcher<F>(_app: AppHandle, on_change: F) -> bool
 where
@@ -27,8 +33,9 @@ where
     macos::spawn(on_change)
 }
 
-/// 非 macOS（Windows / Linux）：暂无本地验证过的原生路径，返回 `false`，纯靠 `lib.rs`
-/// 的 60s 慢速兜底轮询。Windows 原生 `IMMNotificationClient` 留作后续（需 Windows 开发机验证）。
+/// Non-macOS (Windows / Linux): no locally verified native path yet; returns `false` and
+/// relies entirely on `lib.rs`'s 60s slow polling fallback. Native Windows
+/// `IMMNotificationClient` is left for later (needs a Windows dev machine to verify).
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn spawn_native_watcher<F>(_app: AppHandle, _on_change: F) -> bool
 where
@@ -56,32 +63,38 @@ mod macos {
 
     use super::super::TRAY_MICROPHONE_WATCHER_STOPPING;
 
-    /// 把用户闭包（胖指针）经单个 `*mut c_void` 传进 C 回调的双重间接封装。
-    /// 照抄 cpal 的 `PropertyListenerCallbackWrapper` 模式
-    /// (cpal-0.15.3/src/host/coreaudio/macos/property_listener.rs)。
+    /// Double-indirection wrapper that passes the user closure (a fat pointer) into the C
+    /// callback through a single `*mut c_void`.
+    /// Mirrors cpal's `PropertyListenerCallbackWrapper` pattern
+    /// (cpal-0.15.3/src/host/coreaudio/macos/property_listener.rs).
     struct ListenerWrapper(Box<dyn Fn() + Send + Sync>);
 
-    /// CoreAudio 属性监听回调 shim：把 `*mut c_void` 还原成用户闭包并调用。
-    /// 照抄 cpal 的 `property_listener_handler_shim`。
+    /// CoreAudio property-listener callback shim: reconstructs the user closure from the
+    /// `*mut c_void` and invokes it.
+    /// Mirrors cpal's `property_listener_handler_shim`.
     ///
     /// # Safety
-    /// `user_data` 必须是 `spawn` 里 `AudioObjectAddPropertyListener` 注册时传入、且在监听
-    /// 存活期间一直有效的 `*const ListenerWrapper`（由常驻线程持有，不会提前释放）。
+    /// `user_data` must be the `*const ListenerWrapper` passed at registration time in
+    /// `spawn`'s `AudioObjectAddPropertyListener` call, and it must stay valid for the
+    /// lifetime of the listener (held by the resident thread, never freed early).
     unsafe extern "C" fn listener_shim(
         _object: AudioObjectID,
         _num_addresses: UInt32,
         _addresses: *const AudioObjectPropertyAddress,
         user_data: *mut c_void,
     ) -> OSStatus {
-        // SAFETY: user_data 是注册时传入的 &ListenerWrapper（见下方 SAFETY 注释），
-        // 监听存活期间常驻线程一直持有它，故此处解引用有效。
+        // SAFETY: user_data is the &ListenerWrapper passed at registration time (see the
+        // SAFETY comment below); the resident thread holds it for the listener's lifetime,
+        // so this dereference is valid.
         let wrapper = &*(user_data as *const ListenerWrapper);
         (wrapper.0)();
         0
     }
 
-    /// 在专用线程注册 CoreAudio 设备变更监听并跑 CFRunLoop 常驻。
-    /// 成功返回 `true`（线程已起且监听已注册）；注册失败返回 `false`。
+    /// Registers the CoreAudio device-change listener on a dedicated thread and runs a
+    /// resident CFRunLoop.
+    /// Returns `true` on success (thread started and listener registered); `false` on
+    /// registration failure.
     pub(super) fn spawn<F>(on_change: F) -> bool
     where
         F: Fn() + Send + Sync + 'static,
@@ -90,7 +103,8 @@ mod macos {
         let spawn_result = std::thread::Builder::new()
             .name("openless-mic-coreaudio".into())
             .spawn(move || {
-                // wrapper 必须活过整个监听期，故 leak/常驻在本线程栈上直到 runloop 退出。
+                // The wrapper must outlive the whole listener period, so it leaks/resides
+                // on this thread's stack until the runloop exits.
                 let wrapper = ListenerWrapper(Box::new(on_change));
                 let address = AudioObjectPropertyAddress {
                     mSelector: kAudioHardwarePropertyDevices,
@@ -98,10 +112,11 @@ mod macos {
                     mElement: kAudioObjectPropertyElementMain,
                 };
 
-                // SAFETY: kAudioObjectSystemObject 是合法的系统级 AudioObjectID；address 指向
-                // 本栈上有效结构；listener_shim 是 'static extern "C" 回调；&wrapper 在整个
-                // runloop 期间存活（直到本线程退出），满足 CoreAudio 对 user_data 生命周期的
-                // 要求。返回值是 OSStatus，0 表示成功。
+                // SAFETY: kAudioObjectSystemObject is a valid system-level AudioObjectID;
+                // address points to a valid struct on this stack; listener_shim is a
+                // 'static extern "C" callback; &wrapper outlives the whole runloop (until
+                // this thread exits), satisfying CoreAudio's user_data lifetime
+                // requirement. The return value is an OSStatus where 0 means success.
                 let status: OSStatus = unsafe {
                     AudioObjectAddPropertyListener(
                         kAudioObjectSystemObject as AudioObjectID,
@@ -120,23 +135,28 @@ mod macos {
                 }
                 let _ = tx.send(true);
 
-                // CFRunLoop 常驻。用 `run_in_mode` 短超时轮转代替 `CFRunLoopRun()`，
-                // 每 1s 醒来一次检查退出 flag——避免跨线程 CFRunLoopStop 的竞态与线程泄漏。
-                // CoreAudio 回调照常在 run_in_mode 内被派发（属于 default mode）。
+                // Resident CFRunLoop. Instead of `CFRunLoopRun()`, rotate `run_in_mode`
+                // with a short timeout, waking every 1s to check the exit flag — avoiding
+                // the race of a cross-thread CFRunLoopStop and thread leaks. CoreAudio
+                // callbacks are still dispatched inside run_in_mode (they belong to the
+                // default mode).
                 while !TRAY_MICROPHONE_WATCHER_STOPPING.load(Ordering::Relaxed) {
-                    // SAFETY: kCFRunLoopDefaultMode 是 CoreFoundation 提供的 'static 常量字符串。
+                    // SAFETY: kCFRunLoopDefaultMode is a 'static constant string provided
+                    // by CoreFoundation.
                     let mode = unsafe { kCFRunLoopDefaultMode };
                     let result = CFRunLoop::run_in_mode(mode, Duration::from_secs(1), false);
-                    // Finished 表示 runloop 立即返回（没有任何 input source）。CoreAudio 监听
-                    // 本身会给 default mode 装上 source，正常不会走到这里；但极端情况下用一小段
-                    // sleep 避免空转 busy loop，再回到顶部按退出 flag 判断。
+                    // Finished means the runloop returned immediately (no input source).
+                    // The CoreAudio listener itself installs a source on the default mode,
+                    // so this normally never happens; but in extreme cases sleep briefly to
+                    // avoid a busy loop, then loop back to the exit-flag check.
                     if matches!(result, CFRunLoopRunResult::Finished) {
                         std::thread::sleep(Duration::from_millis(200));
                     }
                 }
 
-                // SAFETY: 与注册时同一组 (object, address, shim, user_data)，且 wrapper 仍存活。
-                // 退出前移除监听，避免 CoreAudio 持有悬垂指针。
+                // SAFETY: same (object, address, shim, user_data) tuple as registration,
+                // and the wrapper is still alive. Remove the listener before exiting so
+                // CoreAudio never holds a dangling pointer.
                 let remove_status: OSStatus = unsafe {
                     AudioObjectRemovePropertyListener(
                         kAudioObjectSystemObject as AudioObjectID,
@@ -150,7 +170,8 @@ mod macos {
                         "[device_watch] AudioObjectRemovePropertyListener failed: OSStatus={remove_status}"
                     );
                 }
-                // wrapper 在此 drop——此时监听已移除，C 侧不再回调，安全。
+                // The wrapper drops here — the listener is already removed, so the C side
+                // will not call back anymore; safe.
                 let _ = &wrapper;
             });
 
@@ -159,7 +180,8 @@ mod macos {
             return false;
         }
 
-        // 等线程报告注册结果（注册是同步的、瞬时的）。线程崩溃/通道断开按失败处理。
+        // Wait for the thread to report the registration result (registration is
+        // synchronous and instantaneous). A crashed thread / broken channel counts as failure.
         rx.recv().unwrap_or(false)
     }
 }

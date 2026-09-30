@@ -20,7 +20,7 @@ on:
         options: [all, macos]
         default: all
 
-# 同一 PR 快速重复推送时取消旧运行；workflow_dispatch 用 run_id 隔离。
+# Cancel old runs when the same PR is pushed repeatedly; workflow_dispatch is isolated by run_id.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -56,6 +56,34 @@ jobs:
             echo "$area=$( [ "$verdict" = 'false' ] && echo false || echo true )" >> "$GITHUB_OUTPUT"
           done
 
+  ui-motion:
+    name: UI motion (Chromium + WebKit)
+    needs: [changes]
+    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.tauri != 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: openless-all/app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: openless-all/app/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npm run test:ui-motion
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ui-motion-failure
+          path: |
+            openless-all/app/test-results/
+            openless-all/app/playwright-report/
+
   android-check:
     needs: [changes]
     if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.tauri != 'false'
@@ -68,14 +96,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Android 不使用任何桌面本地 ASR 子模块；macOS MLX 依赖不进入此任务。
+          # Android uses no desktop local-ASR submodules; the macOS MLX dependency stays out of
+          # this job.
           submodules: false
 
-        # Android 不编译任何本地 ASR C 代码：build.rs 按 TARGET 解析排除
-        # Android triple（不调 build_qwen_asr）。qwen3-asr-rs 是 path 依赖，
-        # Cargo 解析器跨所有 target 都要读它的 manifest——所以由下方的
-        # ci-disable-macos-qwen3.mjs 删掉该依赖行，否则 cargo check 硬失败。
-        # 去掉递归拉取省一次网络 fetch + 失败点。
+        # Android compiles no local-ASR C code: build.rs excludes the Android triple by TARGET
+        # (does not call build_qwen_asr). qwen3-asr-rs is a path dependency, and the Cargo
+        # resolver must read its manifest for all targets — so the ci-disable-macos-qwen3.mjs
+        # step below removes that dependency line, otherwise cargo check hard-fails.
+        # Dropping recursive fetch saves one network fetch and one failure point.
       - name: Setup Android SDK + NDK
         uses: android-actions/setup-android@v3
         with:
@@ -229,15 +258,16 @@ jobs:
     if: needs.changes.outputs.tauri != 'false'
     name: ${{ matrix.label }} checks
     strategy:
-      # 一个平台挂掉不阻塞其他平台拿到验证结果。
+      # One platform failing must not block other platforms from getting verification results.
       fail-fast: false
       matrix:
         include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '[{"os":"macos-latest","label":"macOS","preflight":false}]' || '[{"os":"macos-latest","label":"macOS","preflight":false},{"os":"windows-latest","label":"Windows","preflight":true}]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
-      # 新增 shared Core 后，macOS 首次编译同时构建 MLX C++ 依赖和完整
-      # Tauri test binary；限制并发避免 arm64 runner 在峰值内存处被系统终止。
+      # With the shared Core in place, macOS's first build compiles the MLX C++ dependencies and
+      # the full Tauri test binary together; limit concurrency so the arm64 runner is not OOM-killed
+      # at peak memory.
       CARGO_BUILD_JOBS: 2
       CARGO_PROFILE_TEST_DEBUG: 0
       CMAKE_BUILD_PARALLEL_LEVEL: 2
@@ -247,7 +277,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # 只在 macOS 初始化 MLX 子模块；Windows 不解析该依赖。
+          # Initialize the MLX submodule on macOS only; Windows does not resolve that dependency.
           submodules: ${{ matrix.os == 'macos-latest' && 'recursive' || 'false' }}
       - name: Disable macOS-only Qwen3 MLX dependency
         if: runner.os != 'macOS'
@@ -259,7 +289,7 @@ jobs:
           cache: npm
           cache-dependency-path: openless-all/app/package-lock.json
 
-      # macOS MSRV 在独立 job 并行检查；Windows 保留原有检查顺序。
+      # macOS MSRV is checked in a separate parallel job; Windows keeps the original check order.
       - uses: dtolnay/rust-toolchain@1.88.0
         if: runner.os == 'Windows'
 
@@ -343,22 +373,25 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo check --locked --manifest-path src-tauri/Cargo.toml
 
-      # test 编译并运行 lib/bin，覆盖原 cargo check 的生产 binary 路径。
-      # 避免先 metadata-only check、再为同一依赖图做一次 codegen。
+      # test compiles and runs lib/bin, covering the production binary paths that plain cargo
+      # check misses. Avoids a metadata-only check followed by another codegen pass over the same
+      # dependency graph.
       - name: Run Rust backend unit tests
         if: runner.os != 'Windows'
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --bins --timings
 
       - name: Compile Rust backend unit tests (Windows)
-        # Windows runner 能链接 lib test binary，但干净镜像缺少可选 native runtime
-        # DLL entrypoint 时，进程会在 test harness 启动前退出。这里保留 cfg/link
-        # 覆盖；共享 Core 的公开 compatibility contract 由下一步实际执行。
+        # A Windows runner can link the lib test binary, but on a clean image lacking an optional
+        # native runtime DLL entrypoint, the process exits before the test harness starts. Keep
+        # the cfg/link coverage here; the shared Core's public compatibility contract is actually
+        # executed in the next step.
         if: runner.os == 'Windows'
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --no-run
 
       - name: Run Rust-only backend unit tests (Windows)
-        # 独立 test crate 不链接完整 Tauri app lib，只验证公开 Core contract。
-        # Windows 专属 Tauri 测试在此 runner 只做上一步的 cfg/link 编译覆盖。
+        # The standalone test crate does not link the full Tauri app lib; it verifies the public
+        # Core contract only. Windows-specific Tauri tests on this runner only get the cfg/link
+        # compile coverage from the step above.
         if: runner.os == 'Windows'
         run: cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml
 
@@ -371,10 +404,10 @@ jobs:
         run: cargo +1.88.0 test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --no-run
 
       - name: Verify version sync across all 5 files
-        # 两个平台都跑这个校验：Windows runner 自带 git-bash，跨 shell 表现一致。
-        # 一旦版本号 drift 立刻 fail，避免发版时再发现漏改。
-        # 校验 5 处：package.json / package-lock.json (root + nested) /
-        # tauri.conf.json / Cargo.toml / Cargo.lock 的 [openless] 包。
+        # Runs on both platforms: the Windows runner ships git-bash, giving consistent behavior
+        # across shells. Fail immediately on version drift instead of discovering it at release.
+        # Checks 5 places: package.json / package-lock.json (root + nested) /
+        # tauri.conf.json / Cargo.toml / the [openless] package in Cargo.lock.
         shell: bash
         run: |
           PKG=$(node -p "require('./package.json').version")
@@ -382,7 +415,7 @@ jobs:
           LOCK_NESTED=$(node -p "require('./package-lock.json').packages[''].version")
           TAU=$(node -p "require('./src-tauri/tauri.conf.json').version")
           CRG=$(grep -E '^version = ' src-tauri/Cargo.toml | head -1 | sed -E 's/^version = "(.+)"$/\1/')
-          # Cargo.lock：找 [openless] 包紧跟的 version 行
+          # Cargo.lock: find the version line right after the [openless] package name
           CARGO_LOCK_VER=$(awk 'BEGIN{found=0} /^name = "openless"$/{found=1; next} found && /^version = /{gsub(/"/,""); print $3; exit}' src-tauri/Cargo.lock)
           echo "package.json         = $PKG"
           echo "package-lock root    = $LOCK_ROOT"

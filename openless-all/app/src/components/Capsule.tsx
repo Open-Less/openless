@@ -32,9 +32,9 @@ import {
   type TranscriptViewState,
 } from '../lib/backendEvent';
 
-// 胶囊 keyframes 注入一次到 document.head，而不是放在组件 JSX 里。否则录音时音量
-// 每帧（~60Hz）setLevel 都会让 React 重新创建/reconcile 这个 <style> 元素 —— 纯属
-// 浪费，因为这些 keyframes 是静态的。与 QaPanel / LessComputerPanel 注入方式一致。
+// Inject the capsule keyframes once into document.head instead of rendering them in
+// JSX: per-frame (~60Hz) setLevel during recording would otherwise recreate this
+// static <style> element on every render. Same approach as QaPanel / LessComputerPanel.
 const CAPSULE_KEYFRAMES = `
   @keyframes capsule-in {
     from { opacity: 0; transform: scale(.46) translateY(18px); }
@@ -45,8 +45,9 @@ const CAPSULE_KEYFRAMES = `
     from { opacity: 1; transform: scale(1)   translateY(0); }
     to   { opacity: 0; transform: scale(.46) translateY(18px); }
   }
-  /* 思考圆点（fluid dots）出场：纯淡入接住光条汇聚成的光点 —— 圆点自身的
-     「从圆心散开」动画由 shader 的 uGather 驱动，这里不做任何缩放冲击。 */
+  /* Thinking dots (fluid dots) entrance: pure fade-in that catches the light orb —
+     the dots' own "spread from center" motion is driven by the shader's uGather,
+     so no scale punch here. */
   @keyframes siri-orb-in {
     from { opacity: 0; }
     to   { opacity: 1; }
@@ -54,9 +55,9 @@ const CAPSULE_KEYFRAMES = `
   @keyframes selection-polish-spinner {
     to { transform: rotate(360deg); }
   }
-  /* 经典药丸（Openless 默认风格）专属：
-     - cap-shine：转写/润色中"thinking" 文字的蓝光扫过；
-     - cap-state-enter：状态内容切换时的淡入。 */
+  /* Classic pill (Openless default style) only:
+     - cap-shine: blue light sweep over the "thinking" text during transcribe/polish;
+     - cap-state-enter: fade-in when state content switches. */
   @keyframes cap-shine {
     0%   { background-position: 200% center; }
     100% { background-position: -200% center; }
@@ -80,8 +81,9 @@ interface SelectionPolishNoticeProps {
 }
 
 /**
- * 选区润色专用的一行无交互提示。它处在同一扇 Windows no-activate + mouse-passthrough
- * capsule 窗口中，因此不会把焦点从用户当前输入框抢走，也不会遮挡点击。
+ * Non-interactive one-line notice for selection polish. Lives in the same Windows
+ * no-activate + mouse-passthrough capsule window, so it never steals focus from the
+ * user's input field and never blocks clicks.
  */
 function SelectionPolishNotice({ state, message }: SelectionPolishNoticeProps) {
   const { t } = useTranslation();
@@ -175,9 +177,10 @@ function SelectionPolishNotice({ state, message }: SelectionPolishNoticeProps) {
   );
 }
 
-// ───────── 经典药丸（Openless 默认风格）───────────────────────────────
-// 从 1.3.14 的胶囊实现恢复：毛玻璃药丸 + 音量条 + 取消/确认按钮。尺寸与当时
-// capsuleLayout 的常量保持一致（Siri 光效舞台是 460×180 全幅，经典版是居中小药丸）。
+// ───────── Classic pill (Openless default style) ────────────────────────
+// Restored from the 1.3.14 capsule: frosted pill + volume bars + cancel/confirm
+// buttons. Sizes match the capsuleLayout constants of that release (the Siri orb
+// stage is full-bleed 460×180; the classic pill is a small centered pill).
 
 interface ClassicPillMetrics {
   width: number;
@@ -235,9 +238,10 @@ function AudioBars({ level }: { level: number }) {
             background: 'var(--ol-blue)',
             opacity: 0.82,
             transformOrigin: 'center',
-            // 0.08s 在 60Hz audio-level 更新下太快，每次 re-render 都重启 transition，
-            // 视觉上是阶梯式跳变。延长到 0.18s 让多次 update 在曲线内平滑混合，
-            // easeOutExpo-like 缓动让圆点→长条的形变自然顺滑（用户原话"圆形跳成矩形"）。
+            // 0.08s is too fast at 60Hz audio-level updates: every re-render restarts
+            // the transition, reading as stepped jumps. 0.18s lets successive updates
+            // blend smoothly within the curve; easeOutExpo-like easing keeps the
+            // dot→bar morph natural.
             transition: 'height 0.18s cubic-bezier(0.22, 1, 0.36, 1)',
           }}
         />
@@ -286,8 +290,9 @@ interface CircleButtonProps {
   onClick: () => void;
 }
 
-// memo:录音时 level 每帧(~60Hz)变化会重渲 Pill;cancel/confirm 两个 SVG 按钮跟
-// level 无关,memo + 稳定的 onClick 让它们在录音期间跳过重渲(只剩音量条真正更新)。
+// memo: level changes every frame (~60Hz) while recording, re-rendering the pill; the
+// cancel/confirm SVG buttons don't depend on level, so memo + stable onClick lets them
+// skip re-renders during recording (only the volume bars actually update).
 const CircleButton = memo(function CircleButton({ variant, enabled, onClick }: CircleButtonProps) {
   const { t } = useTranslation();
   const isCancel = variant === 'cancel';
@@ -352,9 +357,9 @@ function ClassicPill({
   const cancelEnabled = state === 'recording' || state === 'transcribing' || state === 'polishing';
   const confirmEnabled = state === 'recording';
 
-  // "thinking" 扫光速度：进入 transcribing/polishing 的头 2 秒走快速（0.9s/cycle，提示
-  // 「流式刚开始」），之后切回慢速（2.4s）作为稳态。切回 idle / done / 其他 state 也复位
-  // 为 fast，下次进入时从头开始 burst。
+  // "thinking" shine speed: fast (0.9s/cycle) for the first 2s of transcribing/polishing
+  // (signals "stream just started"), then slow (2.4s) as the steady state. Also resets
+  // to fast on idle/done/other states so the next entry bursts from the start.
   const [shineFast, setShineFast] = useState(true);
   useEffect(() => {
     if (state === 'transcribing' || state === 'polishing') {
@@ -378,25 +383,27 @@ function ClassicPill({
           style={{
             display: 'inline-flex',
             alignItems: 'center',
-            // 左右 4px 内边距 + 外层 gap 已经让 "thinking" ↔ ✗/✓ 视觉间距落在 ~4-5px。
+            // 4px side padding + outer gap already puts the "thinking" ↔ ✗/✓ visual
+            // spacing at ~4-5px.
             padding: '0 4px',
             width: '100%',
             maxWidth: metrics.textWidth,
             minWidth: 0,
             justifyContent: 'center',
-            // state 进入动画 —— 用户从 recording 切到 polishing 时多一道淡入提示，
-            // 比纯切换 center 内容更容易被感知。
+            // State-entry animation: an extra fade cue when going recording → polishing,
+            // easier to perceive than swapping the center content alone.
             animation: 'cap-state-enter 220ms var(--ol-motion-soft) both',
           }}
         >
           <span
             style={{
-              // v1.3.1-7 用户拍板：黑色底字 + 蓝色扫光（亮黄太显眼，黑底更稳）。
-              // 字号保持 17，字重 700 → 600 稍细一些。
+              // Settled in v1.3.1-7: dark ink text + blue shine (bright yellow too loud,
+              // dark ink steadier). Font size stays 17; weight 700 → 600, slightly lighter.
               fontSize: 17,
               fontWeight: 600,
               letterSpacing: 0.3,
-              // line-height: 1 下 g/y/p 等下伸字符会被 clip，给 padding 留 descender 空间。
+              // At line-height 1, descenders (g/y/p) get clipped; this padding leaves
+              // descender room.
               paddingBlock: 1,
               color: 'var(--ol-ink-2)',
               backgroundImage:
@@ -405,8 +412,9 @@ function ClassicPill({
               WebkitBackgroundClip: 'text',
               backgroundClip: 'text',
               WebkitTextFillColor: 'transparent',
-              // 进入流式的头 ~2 秒用 0.9s 高速扫光（视觉提示「刚开始」），之后 React 副作用
-              // 切到 2.4s 慢速。duration 变化时浏览器不重启动画，会平滑减速。
+              // First ~2s of streaming uses the 0.9s fast shine ("just started" cue),
+              // then a React effect switches to 2.4s slow. The browser doesn't restart
+              // the animation on a duration change; it decelerates smoothly.
               animation: `cap-shine ${shineFast ? '0.9s' : '2.4s'} linear infinite`,
               minWidth: 0,
               textAlign: 'center',
@@ -455,8 +463,9 @@ function ClassicPill({
   const shadowAlpha = 0.2 + ambient * 0.1;
 
   return (
-    // 非 Linux 走假毛玻璃；Linux 禁用透明窗口后由 .ol-frost 平台规则退成不透明面。
-    // 不写 backdrop-filter —— webview 模糊不了透明窗口背后的桌面（Tauri 上游限制）。
+    // Non-Linux uses fake frost; on Linux with transparent windows disabled, .ol-frost
+    // platform rules fall back to an opaque surface. No backdrop-filter: the webview
+    // can't blur the desktop behind a transparent window (Tauri upstream limitation).
     <div
       className="ol-frost ol-capsule-pill"
       style={{
@@ -510,8 +519,9 @@ interface ClassicCapsuleProps {
 }
 
 /**
- * 经典药丸 + 「正在翻译」徽章（与 1.3.14 一致）。取消/确认按钮直接调 dictation
- * 命令（胶囊窗口本身不抢焦点，按钮交互只出现在录音进行中）。
+ * Classic pill + "translating" badge (matching 1.3.14). Cancel/confirm call the
+ * dictation commands directly (the capsule window never takes focus, so button
+ * interaction only appears while recording).
  */
 function ClassicCapsule({
   os,
@@ -539,10 +549,11 @@ function ClassicCapsule({
 
   return (
     <>
-      {/* "正在翻译" 徽章 — 嵌套两层：
-          外层只负责"绝对定位 + 水平居中（translateX(-50%)）"，不参与动画；
-          内层只负责"垂直位移 + 渐变透明度"——这样不会跟 translateX(-50%) 冲突，
-          也不存在 keyframe 与 inline transform 互相覆盖导致的视觉跳变。 */}
+      {/* "Translating" badge — two nested layers:
+          the outer layer only does absolute positioning + horizontal centering
+          (translateX(-50%)) with no animation; the inner layer only does vertical
+          shift + fade. This avoids conflicting with translateX(-50%) and avoids
+          keyframe vs inline transform overrides causing visual jumps. */}
       <div
         style={{
           position: 'absolute',
@@ -563,13 +574,14 @@ function ClassicCapsule({
             fontWeight: 600,
             color: 'var(--ol-blue)',
             background: 'var(--ol-capsule-badge-bg)',
-            // issue #470：去掉无效的 backdrop-filter —— webview 模糊不了透明窗口背后的桌面
-            // （Tauri 上游限制，同 pill 注释），纯空耗合成，删除零视觉变化。
+            // issue #470: remove the useless backdrop-filter — the webview can't blur
+            // the desktop behind a transparent window (Tauri upstream limitation, same
+            // as the pill comment); pure wasted compositing, removing it changes nothing.
             border: '0.5px solid var(--ol-capsule-badge-border)',
             boxShadow: '0 4px 12px -4px rgba(37, 99, 235, 0.25), 0 0 0 0.5px rgba(0,0,0,0.04)',
             letterSpacing: '0.02em',
             whiteSpace: 'nowrap',
-            // 隐藏：从 pill 中线偏下出发；显示：归位到 pill 上方。
+            // Hidden: starts just below the pill's midline; shown: settles above the pill.
             opacity: translation ? 1 : 0,
             transform: translation ? 'translateY(0) scale(1)' : 'translateY(40px) scale(.88)',
             transformOrigin: 'center bottom',
@@ -614,14 +626,16 @@ function ClassicCapsule({
   );
 }
 
-// 与 @keyframes capsule-out 的时长一致——必须同步，否则定时器先于动画结束就 unmount →
-// 用户看到半截动画被截断。两种样式沿用同一组 capsule-in/out keyframes，只是时长不同：
-// Siri 光效 520ms（现状），经典药丸 360ms（与 1.3.14 一致）。
+// Must stay in sync with the @keyframes capsule-out duration — otherwise the timer
+// unmounts before the animation ends and the user sees it cut off mid-flight. Both
+// styles share the same capsule-in/out keyframes with different durations: Siri orb
+// 520ms (as-is), classic pill 360ms (matching 1.3.14).
 const EXIT_ANIM_MS_SIRI = 520;
 const EXIT_ANIM_MS_CLASSIC = 360;
 
-// 胶囊「预备→就绪」的平均耗时（ms），驱动入场展开动画的预测节奏（见 SiriGL warmProgress）：
-// 每次录音就绪后按 EMA 更新并存 localStorage 跨会话学习。默认 150ms，clamp [60,600]。
+// Average capsule warm→ready duration (ms), driving the predicted pace of the entry
+// expand animation (see SiriGL warmProgress): EMA-updated after each recording becomes
+// ready and persisted to localStorage across sessions. Default 150ms, clamped [60,600].
 const WARMUP_MS_KEY = 'ol-capsule-warmup-ms';
 const WARMUP_MS_DEFAULT = 150;
 function readWarmupMs(): number {
@@ -629,7 +643,8 @@ function readWarmupMs(): number {
   const raw = Number(localStorage.getItem(WARMUP_MS_KEY));
   return Number.isFinite(raw) && raw > 0 ? Math.min(600, Math.max(60, raw)) : WARMUP_MS_DEFAULT;
 }
-// #470 诊断 v2：模块级一次性门，只在 webview 收到第一个 capsule:state 事件时打 log。
+// #470 diagnostics v2: module-level one-shot gate; log only when the webview receives
+// its first capsule:state event.
 let capsuleStateFirstLogged = false;
 
 const CAPSULE_PREVIEW_STATES: CapsuleState[] = [
@@ -642,7 +657,7 @@ const CAPSULE_PREVIEW_STATES: CapsuleState[] = [
   'error',
 ];
 
-/** 参考视频里的插入节奏：分片到达、全部并发、远处更晚启动。 */
+/** Insert cadence from the reference video: chunks arrive, all concurrent, later ones start later. */
 const INSERT_DEMO_CHUNKS = [
   '帮我',
   '帮我查找一',
@@ -716,44 +731,54 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const capsuleStateRef = useRef<CapsuleState>(preview.state);
   const [translation, setTranslation] = useState<boolean>(preview.translation);
   const [selectionPolish, setSelectionPolish] = useState<boolean>(preview.selectionPolish);
-  // 偏好事件即时换肤；录音状态携带同一个样式，保证首次显示也能正确呈现。
+  // Preference events restyle live; recording state carries the same style so the
+  // first show also renders correctly.
   const [capsuleStyle, setCapsuleStyle] = useState<CapsuleStyle>(preview.style);
   const stylePreferenceReadyRef = useRef(false);
   const isClassic = capsuleStyle === 'classic';
   const isTypeless = capsuleStyle === 'typeless';
-  // 预备态：麦克风尚未吐第一帧 PCM。true 时录音光条走「待命」呼吸形态（见 SiriGL warming）。
+  // Warming: the mic hasn't produced its first PCM frame yet. When true, the orb runs
+  // its standby breathing form (see SiriGL warming).
   const [warming, setWarming] = useState<boolean>(preview.warming);
-  // 预备→就绪耗时的移动平均，驱动光条展开动画的预测节奏（见 SiriGL warmProgress）。
+  // Moving average of warm→ready duration, driving the predicted expand pace of the
+  // orb (see SiriGL warmProgress).
   const [warmupMs, setWarmupMs] = useState<number>(() => readWarmupMs());
   const warmStartRef = useRef<number | null>(null);
-  // 经典药丸专属：done 态的「已插入 N 字」与 thinking/using 文案。payload 只在状态变化
-  // 时到达，用 ref 保存即可 —— 触发重渲的是 setState，这里只是给渲染读取终态值。
+  // Classic pill only: done-state "inserted N chars" and thinking/using copy. The
+  // payload only arrives on state change, so a ref suffices — setState triggers the
+  // re-render; the ref just holds the final value for rendering.
   const insertedCharsRef = useRef(0);
   const operatingRef = useRef(false);
-  // `leaving` 与 `lastVisibleState` 协同实现「退出动画」：
-  // - 当 state 从非 idle 变成 idle 时，不立即卸载，而是把 leaving 置为 true 并保留
-  //   最后一帧的可见 state（lastVisibleState），让胶囊用 capsule-out 动画收缩淡出。
-  // - 动画结束（EXIT_ANIM_MS）后再把 leaving 置回 false，组件回到「真正未挂载」分支。
-  // - 若期间 state 又切回非 idle（例如用户连按热键），立刻中止 leaving 并恢复显示。
+  // `leaving` + `lastVisibleState` implement the exit animation:
+  // - On non-idle → idle, don't unmount immediately; set leaving=true and keep the last
+  //   visible state (lastVisibleState) so the capsule shrinks/fades via capsule-out.
+  // - After the animation (EXIT_ANIM_MS), set leaving=false to return to the truly
+  //   unmounted branch.
+  // - If state flips back to non-idle meanwhile (e.g. hotkey pressed again), abort
+  //   leaving immediately and restore display.
   const [leaving, setLeaving] = useState<boolean>(false);
   const [lastVisibleState, setLastVisibleState] = useState<CapsuleState>(preview.state);
   const [lastVisibleSelectionPolish, setLastVisibleSelectionPolish] = useState<boolean>(
     preview.selectionPolish,
   );
   const [lastVisibleMessage, setLastVisibleMessage] = useState<string | undefined>(preview.message);
-  // 退出动画时长跟随样式；leaving effect 故意只依赖 state，所以经 ref 读取最新值。
+  // Exit duration follows the style; the leaving effect deliberately depends only on
+  // state, so read the latest value through the ref.
   const exitMsRef = useRef(capsuleStyle === 'siri' ? EXIT_ANIM_MS_SIRI : EXIT_ANIM_MS_CLASSIC);
   exitMsRef.current = capsuleStyle === 'siri' ? EXIT_ANIM_MS_SIRI : EXIT_ANIM_MS_CLASSIC;
   const exitMs = exitMsRef.current;
-  // 词条建议卡片。走独立事件通道，不进会话状态机 —— 那套状态机身上挂着 Esc 独占、
-  // Space 贴附、多屏定位一整串逻辑，加一个非会话状态进去只会污染它。
+  // Vocab suggestion card. Uses its own event channel, not the session state machine —
+  // that machine carries Esc capture, Space attachment, multi-monitor positioning, and
+  // a non-session state would only pollute it.
   const [suggestions, setSuggestions] = useState<PendingCorrection[]>([]);
-  // 落字失败兜底卡片。与词条卡片同一套路：独立事件通道，不进会话状态机。
+  // Insert-failure fallback card. Same pattern as the vocab card: own event channel,
+  // not part of the session state machine.
   const [insertFallback, setInsertFallback] = useState<InsertFallbackCardPayload | null>(null);
   const hostMetrics = getCapsuleHostMetrics(os, translation, capsuleStyle);
   const badgeBottom = Math.round(metrics.height * 0.73);
 
-  // 空闲预热 shader 编译缓存：首次按下热键时光条不用现场编译（响应延迟反馈）。
+  // Warm up the shader compile cache while idle so the first hotkey press doesn't
+  // compile on the spot (perceived response latency).
   useEffect(() => {
     const idle = (window as Window & { requestIdleCallback?: (cb: () => void) => number })
       .requestIdleCallback;
@@ -775,8 +800,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         const p = event.payload;
         if (!capsuleStateFirstLogged) {
           capsuleStateFirstLogged = true;
-          // #470 诊断 v2：确认 capsule webview 确实收到了后端事件 —— 区分「后端没
-          // emit」与「emit 了但窗口没显示/没渲染」。配合后端 [capsule] 日志定位根因。
+          // #470 diagnostics v2: confirm the capsule webview really received the backend
+          // event — distinguishes "backend never emitted" from "emitted but the window
+          // didn't show/render". Pair with backend [capsule] logs to locate the cause.
           console.info('[capsule] first capsule:state received in webview, state=', p.state);
         }
         setState(p.state);
@@ -784,12 +810,11 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         setMessage(p.message ?? undefined);
         const previous = capsuleStateRef.current;
         capsuleStateRef.current = p.state;
-        if (
-          p.state === 'recording' &&
-          previous !== 'recording' &&
-          previous !== 'transcribing' &&
-          previous !== 'polishing'
-        ) {
+        // Any new recording session must drop prior ASR text — including when
+        // the previous capsule was still transcribing/polishing/done from
+        // dictation (selection-voice Start used to keep the stale stream).
+        if (p.state === 'recording' && previous !== 'recording') {
+          transcriptViewRef.current = { sessionId: null, sequence: 0, text: '' };
           setLocalAsrText('');
         }
         setTranslation(p.translation === true);
@@ -834,7 +859,8 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     };
   }, []);
 
-  // 先订阅再读取偏好，兼顾隐藏窗口首次加载和已经播放中的即时换肤。
+  // Subscribe before reading preferences, covering both the first load of a hidden
+  // window and a live restyle mid-session.
   useEffect(() => {
     if (!isTauri) return;
     let unlisten: (() => void) | undefined;
@@ -873,21 +899,22 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     };
   }, []);
 
-  // 退出动画调度：在 state 真正进入 idle 时，先用 capsule-out 播放
-  // EXIT_ANIM_MS_SIRI / EXIT_ANIM_MS_CLASSIC（按当前样式，经 exitMsRef 读取），再卸载。
-  // 设计要点：
-  // 1. 进入非 idle：清掉 leaving，记录最新可见 state；
-  // 2. 进入 idle 且之前可见：开启 leaving 并启动定时器；
-  // 3. 期间又被打回非 idle：cleanup 直接 clearTimeout，定时器不会触发，
-  //    新一轮 effect 会立即恢复可见态，避免错误地把可见状态切到 idle。
+  // Exit animation schedule: when state truly enters idle, play capsule-out for
+  // EXIT_ANIM_MS_SIRI / EXIT_ANIM_MS_CLASSIC (per current style, read via exitMsRef),
+  // then unmount. Design notes:
+  // 1. Entering non-idle: clear leaving, record the latest visible state;
+  // 2. Entering idle while previously visible: set leaving and start the timer;
+  // 3. Flipped back to non-idle meanwhile: cleanup clearTimeout, the timer never fires,
+  //    and the next effect run restores the visible state — never switching a visible
+  //    state to idle by mistake.
   useEffect(() => {
     if (state !== 'idle') {
-      // 立即恢复可见，并取消上一轮可能挂着的离场。
+      // Restore visibility immediately and cancel any pending exit from the last round.
       if (leaving) setLeaving(false);
       setLastVisibleState(state);
       return undefined;
     }
-    // state === 'idle'：判断是不是从可见态过渡过来。
+    // state === 'idle': only proceed when transitioning from a visible state.
     if (lastVisibleState === 'idle') return undefined;
     setLeaving(true);
     const timer = setTimeout(() => {
@@ -895,20 +922,22 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       setLastVisibleState('idle');
     }, exitMsRef.current);
     return () => clearTimeout(timer);
-    // 故意只依赖 state —— lastVisibleState / leaving 是内部派生量，
-    // 把它们加进依赖会让定时器被反复重建。
+    // Deliberately depends only on state — lastVisibleState / leaving are internal
+    // derived values; adding them to deps would rebuild the timer repeatedly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
 
-  // Idle payload 不携带终态文案。保留最近一帧可见 selection 提示，才能让 auto-hide
-  // 触发后的离场动画继续显示“已替换 / 未选中内容”等正确反馈，而不闪回语音舞台。
+  // Idle payloads carry no final-state copy. Keeping the last visible selection notice
+  // lets the exit animation after auto-hide continue showing "replaced / no selection"
+  // feedback instead of flashing back to the voice stage.
   useEffect(() => {
     if (state === 'idle') return;
     setLastVisibleSelectionPolish(selectionPolish);
     setLastVisibleMessage(message);
   }, [state, selectionPolish, message]);
 
-  // 学习「预备态持续多久」= 麦克风就绪耗时，EMA 更新 warmupMs（预测展开的基准时长）。
+  // Learn how long the warm phase lasts (= mic-ready time); EMA-update warmupMs, the
+  // baseline for the predicted expand duration.
   useEffect(() => {
     if (warming) {
       warmStartRef.current = performance.now();
@@ -917,7 +946,8 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     if (warmStartRef.current == null) return;
     const loadMs = performance.now() - warmStartRef.current;
     warmStartRef.current = null;
-    // 过滤异常样本：<20ms 多半不是真入场；>3s 多半首次 TCC / 卡顿，不代表常态。
+    // Filter outliers: <20ms is likely not a real entry; >3s is likely first-run TCC or
+    // a stall, not the norm.
     if (loadMs < 20 || loadMs > 3000) return;
     setWarmupMs((prev) => {
       const next = Math.min(600, Math.max(60, prev * 0.7 + loadMs * 0.3));
@@ -949,25 +979,29 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     };
   }, [preview.insertDemo]);
 
-  // 兜底卡片排在最前：它是在会话收尾那一刻弹的，那一帧胶囊还在渲染 Done/Error 终态，
-  // 而这次会话的结果恰恰是「没落进去」—— 让终态盖在上面等于报了个假的成功。
-  // 后端那边同步让路：卡片可见时 idle 隐藏不收窗口（见 capsule_focus.rs）。
+  // Fallback card comes first: it pops the moment the session ends, while the capsule
+  // is still rendering the Done/Error terminal state — and the session's outcome was
+  // exactly "didn't insert", so letting the terminal state cover it would report a
+  // false success. The backend yields in sync: while the card is visible, idle hides
+  // without closing the window (see capsule_focus.rs).
   if (insertFallback) {
     return <InsertFallbackCard payload={insertFallback} />;
   }
 
-  // 卡片优先：它和胶囊共用一个窗口，但时序上不冲突 —— 卡片在改完字之后才弹，那时
-  // 会话早已收尾；新一轮听写开始时后端会先把卡片收起来（见 begin_session_as）。
+  // Card takes priority: it shares the window with the capsule but the timing doesn't
+  // conflict — it pops after the text is corrected, when the session has long ended;
+  // the backend dismisses it when a new dictation starts (see begin_session_as).
   if (suggestions.length > 0) {
     return <VocabSuggestionCard suggestions={suggestions} />;
   }
 
-  // 真正卸载：state 已是 idle，且不在离场动画中。
+  // Truly unmounted: state is idle and no exit animation is running.
   if (state === 'idle' && !leaving) {
     return <div style={{ width: 0, height: 0 }} />;
   }
 
-  // 离场时用 lastVisibleState 渲染最后一帧内容，避免把 idle 当作无波形状态。
+  // During exit, render the last frame from lastVisibleState so idle isn't treated as
+  // a no-waveform state.
   const renderedState: CapsuleState = state === 'idle' ? lastVisibleState : state;
   const renderedSelectionPolish = state === 'idle' ? lastVisibleSelectionPolish : selectionPolish;
   const renderedMessage =
@@ -1002,8 +1036,8 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
           : 'transparent',
         animation: leaving
           ? `capsule-out ${exitMs}ms cubic-bezier(.55,.06,.68,.19) forwards`
-          : // .68s 的入场被反馈「按下之后有延迟」：压到 .38s，曲线保持轻微弹性，
-            // 光条几乎跟手出现。
+          : // The .68s entry got "delay after keypress" feedback: cut to .38s with the
+            // curve keeping a slight bounce, so the orb appears almost immediately.
             'capsule-in .38s cubic-bezier(.3,1.2,.4,1) both',
         transformOrigin: 'center',
         willChange: 'transform, opacity',
@@ -1036,10 +1070,11 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
           />
         ) : (
           <>
-            {/* "正在翻译" 徽章 — 嵌套两层：
-          外层只负责"绝对定位 + 水平居中（translateX(-50%)）"，不参与动画；
-          内层只负责"垂直位移 + 渐变透明度"——这样不会跟 translateX(-50%) 冲突，
-          也不存在 keyframe 与 inline transform 互相覆盖导致的视觉跳变。 */}
+            {/* "Translating" badge — two nested layers:
+          the outer layer only does absolute positioning + horizontal centering
+          (translateX(-50%)) with no animation; the inner layer only does vertical
+          shift + fade. This avoids conflicting with translateX(-50%) and avoids
+          keyframe vs inline transform overrides causing visual jumps. */}
             <div
               style={{
                 position: 'absolute',
@@ -1063,7 +1098,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
                   padding: '4px 10px',
                   letterSpacing: '0.02em',
                   whiteSpace: 'nowrap',
-                  // 隐藏：从光条附近偏下出发；显示：归位到光条上方。
+                  // Hidden: starts just below the orb; shown: settles above the orb.
                   opacity: translation ? 1 : 0,
                   transform: translation ? 'translateY(0) scale(1)' : 'translateY(40px) scale(.88)',
                   transformOrigin: 'center bottom',

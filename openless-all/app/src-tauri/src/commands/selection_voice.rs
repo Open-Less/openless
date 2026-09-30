@@ -109,8 +109,9 @@ pub async fn cancel_selection_voice_intent_prompt(core: CoreState<'_>) -> Result
         .map_err(selection_voice_error)?
         .session_id
     else {
-        // 没有当时的 generation 就没有资源可取消；不能让一次迟到
-        // 的无目标请求在 await 之后清掉用户刚开启的新会话。
+        // Without the generation captured at that moment there is nothing to
+        // cancel; a late target-less request must not clear the session the
+        // user just started after its await resolves.
         return Ok(());
     };
     core.services()

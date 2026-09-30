@@ -1,11 +1,14 @@
-//! 渠道卡片管理的 IPC 面。
+//! IPC surface for channel card management.
 //!
-//! 一张卡片 = 一份可命名、可排序、可开关的供应商配置。同一家厂商可以有多张卡片
-//! （多把 key），此时渠道 id 与 `providerType` 分离 —— 前者是 map key，后者决定
-//! 协议路由。详见 `persistence::credentials` 里 `ChannelMeta` 的说明。
+//! One card = one nameable, reorderable, toggleable provider configuration. A
+//! single vendor can have multiple cards (multiple keys); the channel id and
+//! `providerType` are then separate — the former is the map key, the latter
+//! decides protocol routing. See the `ChannelMeta` docs in
+//! `persistence::credentials`.
 //!
-//! 凭据本身不走这里：前端按渠道 id 调 `read_credential` / `set_credential`
-//! （`provider` 参数传渠道 id），避免密钥随列表批量出栈。
+//! Credentials themselves do not flow through here: the frontend calls
+//! `read_credential` / `set_credential` per channel id (passing the channel id
+//! as the `provider` argument), keeping secrets out of bulk list responses.
 
 use super::*;
 use openless_core::{ChannelKind, ChannelSummary};
@@ -54,7 +57,8 @@ pub async fn set_channel_provider_type(
         .map_err(|error| error.to_string())
 }
 
-/// 关闭「添加渠道」弹窗时回收没填任何内容的草稿卡片；返回是否真的删了。
+/// Reclaims a draft card left completely blank when the "add channel" dialog
+/// closes; returns whether it was actually deleted.
 #[tauri::command]
 pub async fn delete_channel_if_blank(
     core: CoreState<'_>,
@@ -122,9 +126,11 @@ pub async fn reorder_channels(
         .map_err(|error| error.to_string())
 }
 
-/// 记录一次「测试连通」的结果，供卡片显示延迟或标红。
+/// Records one "test connection" result for the card to show latency or mark
+/// failure.
 ///
-/// 时间戳在后端取，不信任前端传入 —— 前端时钟错乱会让"3 分钟前"显示成负数。
+/// The timestamp is taken in the backend, never trusted from the frontend — a
+/// skewed frontend clock would render "3 minutes ago" as negative.
 #[tauri::command]
 pub async fn record_channel_test(
     core: CoreState<'_>,

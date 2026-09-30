@@ -2,6 +2,8 @@
 
 pub mod accessibility;
 #[cfg(target_os = "android")]
+pub mod edit_observation;
+#[cfg(target_os = "android")]
 pub mod insert;
 pub mod insert_tiers;
 pub mod jni;
@@ -20,6 +22,8 @@ pub use accessibility::{
 };
 #[cfg(target_os = "android")]
 pub use insert::android_insert_with_strategy;
+#[cfg(target_os = "android")]
+pub use native_bridge::register_android_app_handle;
 pub use native_bridge::{
     hide_overlay, is_overlay_visible, notify_capsule_state, refresh_overlay_if_visible,
     refresh_overlay_layout, register_android_backend, register_android_coordinator,

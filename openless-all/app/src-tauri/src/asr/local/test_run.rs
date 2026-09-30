@@ -1,11 +1,12 @@
 //! 本地 Qwen3-ASR 一键"加载 + 测试"实现。
 //!
-//! 流程：
-//!   1. 用 antirez 项目自带的 `samples/test_speech.wav` 作输入（编进二进制）
-//!   2. WAV 解析（16kHz mono 16-bit PCM，但 fmt 后面可能有 LIST/INFO 等
-//!      非 data chunk，必须按 RIFF 标准走 chunk 链找 "data"，不能 +44 硬偏移）
-//!   3. 加载模型，跑 batch transcribe，分别记录 load_ms / transcribe_ms
-//!   4. 给前端用：用户点击「加载并测试」按钮立即知道模型是否能跑、有多快、识别什么
+//! Flow:
+//!   1. Use the antirez project's bundled `samples/test_speech.wav` as input (compiled in)
+//!   2. WAV parsing (16kHz mono 16-bit PCM, but LIST/INFO and other non-data chunks may follow
+//!      fmt, so the "data" chunk must be found by walking the RIFF chunk chain — no hard +44 offset)
+//!   3. Load the model, run batch transcribe, recording load_ms / transcribe_ms separately
+//!   4. For the frontend: the "Load and test" button immediately shows whether the model runs,
+//!      how fast, and what it recognizes
 
 #[cfg(target_os = "macos")]
 use std::path::Path;
@@ -24,7 +25,7 @@ use super::models::ModelId;
 #[cfg(target_os = "macos")]
 const TEST_WAV: &[u8] = include_bytes!("../../../vendor/qwen-asr/samples/test_speech.wav");
 
-/// 测试结果给前端展示。
+/// Test result shown to the frontend.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TestResult {
@@ -54,10 +55,10 @@ pub async fn run_test(
         anyhow::bail!("模型目录不存在：{}（请先下载）", dir.display());
     }
 
-    // ── 模型文件完整性检查 ────────────────────────────────────────────
-    // 在调 native 引擎之前先检查关键文件是否齐全、尺寸是否合理，避免因下载不完整
-    // 或文件损坏导致模型加载失败。tokenizer.json 会在 MLX 引擎首次加载时从
-    // vocab.json / merges.txt 本地生成。
+    // ── Model file integrity check ────────────────────────────────────────────
+    // Verify key files exist and have plausible sizes before calling the native engine, so an
+    // incomplete download or corrupted file does not cause a model load failure. tokenizer.json
+    // is generated locally from vocab.json / merges.txt on the MLX engine's first load.
     let required_files = ["config.json", "vocab.json", "merges.txt"];
     for fname in &required_files {
         let path = dir.join(fname);
@@ -73,7 +74,7 @@ pub async fn run_test(
             anyhow::bail!("模型文件为空：{fname}，请重新下载");
         }
     }
-    // safetensors 可能是单文件 model.safetensors 或分片 model-00001-of-NNNN.safetensors
+    // safetensors may be a single model.safetensors or sharded model-00001-of-NNNN.safetensors
     let has_safetensors: Vec<_> = std::fs::read_dir(&dir)
         .map_err(|e| anyhow::anyhow!("读取模型目录失败：{e}"))?
         .filter_map(|entry| entry.ok())
@@ -97,7 +98,8 @@ pub async fn run_test(
     let samples = decode_wav_16k_mono(TEST_WAV)?;
     let audio_ms = (samples.len() as u64) * 1000 / 16_000;
 
-    // 本地模型加载是同步阻塞调用且较慢（数秒）；扔到 spawn_blocking 不阻塞 tokio runtime。
+    // Local model loading is a synchronous blocking call and slow (seconds); push it to
+    // spawn_blocking so the tokio runtime is not blocked.
     let load_start = Instant::now();
     let dir_for_blocking = dir.clone();
     let engine =
@@ -106,7 +108,7 @@ pub async fn run_test(
             .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e:#}"))??;
     let load_ms = load_start.elapsed().as_millis() as u64;
 
-    // batch transcribe 也是阻塞 + 重活，同样扔到 blocking pool。
+    // batch transcribe is also blocking + heavy; send it to the blocking pool too.
     let trans_start = Instant::now();
     let engine_clone = Arc::clone(&engine);
     let transcribe =
@@ -193,8 +195,8 @@ fn load_engine(backend: super::QwenBackend, dir: &Path) -> Result<Arc<super::Loc
     Ok(Arc::new(engine))
 }
 
-/// 严格按 RIFF 走 chunk 链找 "data" —— jfk.wav / test_speech.wav 都在
-/// fmt chunk 后面带了 LIST/INFO 元数据，硬编码 +44 会读到垃圾。
+/// Walk the RIFF chunk chain strictly to find "data" — both jfk.wav and test_speech.wav carry
+/// LIST/INFO metadata after the fmt chunk, so a hardcoded +44 offset reads garbage.
 fn decode_wav_16k_mono(bytes: &[u8]) -> Result<Vec<f32>> {
     if bytes.len() < 44 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
         anyhow::bail!("不是有效的 RIFF/WAVE 文件");
@@ -234,9 +236,9 @@ fn decode_wav_16k_mono(bytes: &[u8]) -> Result<Vec<f32>> {
                 data_size = size;
                 break;
             }
-            _ => { /* LIST / INFO / 其它 metadata —— 跳过 */ }
+            _ => { /* LIST / INFO / other metadata — skip */ }
         }
-        // chunk 体长度需按偶数对齐
+        // Chunk body length must be even-aligned.
         let advance = size + (size & 1);
         cursor = body_start + advance;
     }

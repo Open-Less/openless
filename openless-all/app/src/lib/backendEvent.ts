@@ -28,6 +28,17 @@ export function applyTranscriptEvent(
     }
     return { ...state, sequence: event.sequence };
   }
+  if (event.kind.type === 'selection_voice_state_changed') {
+    const payload = event.kind.payload as { phase?: string; sessionId?: string | null } | undefined;
+    if (payload?.phase === 'recording') {
+      return {
+        sessionId: payload.sessionId ?? event.sessionId,
+        sequence: event.sequence,
+        text: '',
+      };
+    }
+    return { ...state, sequence: event.sequence };
+  }
   if (event.kind.type !== 'transcript_delta') return { ...state, sequence: event.sequence };
   if (state.sessionId !== null && event.sessionId !== state.sessionId) return state;
   const delta = event.kind.payload as TranscriptDelta | undefined;

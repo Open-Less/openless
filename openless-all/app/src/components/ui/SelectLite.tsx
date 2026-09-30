@@ -1,20 +1,23 @@
-// SelectLite — 三平台统一的自定义下拉，替代 native <select>，避开 Win32 ComboBox
-// 直角丑框（issue #418）以及 WKWebView 上原生 NSPopUpButton 的视觉割裂。
+// SelectLite — custom dropdown unified across the three platforms, replacing native
+// <select> to avoid the ugly square Win32 ComboBox frame (issue #418) and the visual
+// mismatch of the native NSPopUpButton on WKWebView.
 //
-// 设计：
-// - 触发器是 button（chevron + 当前值），样式可被 `style` 覆盖
-// - popover 用 portal 渲染到 document.body，避开父容器 overflow:hidden
-// - 键盘：ArrowDown/ArrowUp 切换高亮，Enter 确认，Esc 关闭
-// - 点击外部 / 滚动外部容器都会关闭（popover 内部 scroll 不关闭）
-// - 关闭有 .14s exit 动画
-// - 二次定位走 popoverMounted state + useLayoutEffect 同步完成，整轮在 paint 前
-//   收敛成最终 anchor，避免「兜底位置 paint 一次 + 真实位置再 paint 一次」的闪动
-// - CSS `zoom` 补偿（关键）：fontScale.ts 通过 `html.style.zoom` 整体缩放页面。
-//   WKWebView 在 zoom 下双标：getBoundingClientRect 返回 post-zoom（视觉）坐标，
-//   而 position:fixed 的 left/top/width 被当 pre-zoom（布局）坐标处理。直接
-//   `left=rect.left` 会让 popover 视觉位置 = rect.left × zoom，右偏
-//   rect.left × (zoom-1) 像素。修法是 setAnchor 时把视觉坐标除以 zoom 转回布局
-//   坐标，让浏览器渲染时 ×zoom 后回到正确视觉位置。详见 positionPopover。
+// Design:
+// - Trigger is a button (chevron + current value), style overridable via `style`
+// - Popover renders into document.body via portal, dodging parent overflow:hidden
+// - Keyboard: ArrowDown/ArrowUp move highlight, Enter confirms, Esc closes
+// - Clicking or scrolling outside closes (scroll inside the popover doesn't)
+// - Close plays a .14s exit animation
+// - Second positioning runs via popoverMounted state + useLayoutEffect synchronously;
+//   the whole round converges to the final anchor before paint, avoiding the
+//   "paint at the fallback position, then paint again at the real one" flicker
+// - CSS `zoom` compensation (critical): fontScale.ts scales the page via
+//   `html.style.zoom`. WKWebView is inconsistent under zoom: getBoundingClientRect
+//   returns post-zoom (visual) coords, while position:fixed left/top/width are treated
+//   as pre-zoom (layout) coords. Setting `left=rect.left` directly renders the popover
+//   at rect.left × zoom — off by rect.left × (zoom-1) px. Fix: divide visual coords by
+//   zoom in setAnchor to get layout coords, so rendering ×zoom lands at the correct
+//   visual position. See positionPopover.
 
 import {
   useCallback,
@@ -35,9 +38,9 @@ export interface SelectOption {
   value: string;
   label: string;
   disabled?: boolean;
-  /** 搜索期间仍保留操作项，例如自定义输入入口。 */
+  /** Stays visible during search, e.g. a custom-input entry. */
   alwaysVisible?: boolean;
-  /** 可选：渲染在选项标签右侧、勾选标记左侧（如麦克风音量条）。 */
+  /** Optional: rendered right of the label, left of the check mark (e.g. mic volume bar). */
   trailing?: ReactNode;
 }
 
@@ -49,9 +52,9 @@ interface SelectLiteProps {
   disabled?: boolean;
   style?: CSSProperties;
   ariaLabel?: string;
-  /** 下拉打开 / 关闭时回调 —— 让调用方按开合状态启停副作用（如电平监听）。 */
+  /** Called on dropdown open/close — lets the caller start/stop side effects (e.g. level listening) per state. */
   onOpenChange?: (open: boolean) => void;
-  /** 长列表可在 popover 顶部显示搜索框；筛选只匹配 label/value，不改原 options。 */
+  /** Long lists can show a search box at the top of the popover; filtering matches label/value only, never mutates options. */
   searchable?: boolean;
   searchPlaceholder?: string;
   emptyMessage?: string;
@@ -92,7 +95,8 @@ export function SelectLite({
   emptyMessage = 'No matching options',
 }: SelectLiteProps) {
   const [open, setOpen] = useState(false);
-  // leaving 让 popover 在卸载前播完 exit keyframe（用户报"没有收缩动画"——之前直接 unmount）
+  // leaving lets the popover finish its exit keyframe before unmount (reported as
+  // "no shrink animation" — it used to unmount directly)
   const [leaving, setLeaving] = useState(false);
   const [highlight, setHighlight] = useState<number>(-1);
   const [query, setQuery] = useState('');
@@ -101,8 +105,9 @@ export function SelectLite({
   const searchRef = useRef<HTMLInputElement>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const [anchor, setAnchor] = useState<{ left: number; top: number; width: number } | null>(null);
-  // popoverMounted 让 useLayoutEffect 在 popover 实际进入 DOM 后再触发一次 positionPopover，
-  // 而且整轮发生在 paint 之前——见下方 useLayoutEffect 注释。
+  // popoverMounted makes useLayoutEffect run positionPopover once more after the
+  // popover actually enters the DOM, still before paint — see the useLayoutEffect
+  // note below.
   const [popoverMounted, setPopoverMounted] = useState(false);
 
   const selected = useMemo(() => options.find((opt) => opt.value === value), [options, value]);
@@ -123,23 +128,28 @@ export function SelectLite({
     const trigger = triggerRef.current;
     if (!trigger) return;
     const rect = trigger.getBoundingClientRect();
-    // popover 高度只用真实测量；fallback 280 仅在首帧 popover 还没挂载时用。
+    // Popover height only from real measurement; the 280 fallback applies only on the
+    // first frame before mount.
     const popoverHeight = popoverRef.current?.getBoundingClientRect().height ?? 280;
-    // 纵向：默认在触发器下方；若下方空间放不下 popover，翻转向上避免被视口裁剪。
+    // Vertical: below the trigger by default; flip above when there isn't room,
+    // avoiding viewport clipping.
     const spaceBelow = window.innerHeight - rect.bottom;
     const flipUp = spaceBelow < popoverHeight + 8 && rect.top > popoverHeight + 8;
     const visualTop = flipUp ? rect.top - popoverHeight - 4 : rect.bottom + 4;
-    // popover 强制 width=trigger.width（见下方 style），所以 maxLeft 用 rect.width 算；
-    // popover 没挂载和挂载后两帧 left 一致，避免 first-paint 跳位。
+    // The popover is forced to width=trigger.width (see style below), so maxLeft uses
+    // rect.width; left stays identical across the unmounted/mounted frames, avoiding
+    // a first-paint jump.
     const minLeft = 8;
     const maxLeft = Math.max(minLeft, window.innerWidth - rect.width - 8);
     const visualLeft = Math.min(Math.max(rect.left, minLeft), maxLeft);
-    // ── CSS zoom 补偿（root cause of 位置偏移） ──
-    // fontScale 通过 `document.documentElement.style.zoom` 整体缩放页面（见 fontScale.ts）。
-    // WKWebView 在 zoom 下双标：getBoundingClientRect 返回 post-zoom（视觉）坐标，
-    // 而 position:fixed 的 left/top/width 被当 pre-zoom（布局）坐标处理，渲染时再 × zoom。
-    // 如果直接 set left=rect.left，popover 视觉会偏到 rect.left × zoom 处（右移 rect.left×(zoom-1)）。
-    // 这里把视觉坐标除以 zoom 转回布局坐标，让 position:fixed 渲染回到正确视觉位置。
+    // ── CSS zoom compensation (root cause of the offset) ──
+    // fontScale scales the page via `document.documentElement.style.zoom` (see fontScale.ts).
+    // WKWebView is inconsistent under zoom: getBoundingClientRect returns post-zoom
+    // (visual) coords, while position:fixed left/top/width are treated as pre-zoom
+    // (layout) coords and multiplied by zoom at render. Setting left=rect.left directly
+    // shifts the popover visually to rect.left × zoom (right by rect.left×(zoom-1)).
+    // Divide the visual coords by zoom to get layout coords, so position:fixed renders
+    // back at the correct visual position.
     const zoomStr = document.documentElement.style.zoom;
     const zoom = zoomStr ? parseFloat(zoomStr) || 1 : 1;
     setAnchor({
@@ -149,30 +159,32 @@ export function SelectLite({
     });
   }, []);
 
-  // popover ref callback：每次 popover DOM mount/unmount 调一次，只翻 popoverMounted。
-  // 真正的二次定位由下方 useLayoutEffect 拿 popoverMounted 的依赖触发——这样第二次
-  // positionPopover 同步发生在 paint 之前，而不是之前的 requestAnimationFrame（RAF 已
-  // 在 paint 之后），避免「先用 280 高度兜底 paint 一次，再校正成真实位置 paint 一次」
-  // 的双 paint 闪动（flipUp 决策在 280 fallback vs. 真实高度间可能反转）。
+  // Popover ref callback: runs on each popover DOM mount/unmount, only flips
+  // popoverMounted. The actual second positioning is triggered by the useLayoutEffect
+  // below via the popoverMounted dep — so the second positionPopover runs synchronously
+  // before paint instead of in requestAnimationFrame (already after paint), avoiding
+  // the double-paint flicker of "paint once at the 280 fallback, then again at the real
+  // position" (the flipUp decision can flip between the 280 fallback and real height).
   const setPopoverRef = useCallback((node: HTMLDivElement | null) => {
     popoverRef.current = node;
     setPopoverMounted(!!node);
   }, []);
 
-  // 两阶段定位都同步在 paint 前完成：
-  // 1) open 由 false→true：popoverRef 还是 null，positionPopover 用 280 高度兜底设
-  //    一次 anchor，让 portal 条件 `open && anchor` 通过、popover 进 DOM（避免 v1.3.1-8
-  //    之前 anchor=null 永不渲染的死锁）。
-  // 2) popoverMounted 由 false→true：popoverRef 已经指向真实 DOM，positionPopover
-  //    用真实高度算出最终 anchor。整轮 commit→layoutEffect→re-commit→layoutEffect
-  //    都在浏览器 paint 之前完成，用户只看到一帧最终位置，没有闪动。
+  // Both positioning phases run synchronously before paint:
+  // 1) open false→true: popoverRef is still null, positionPopover sets an anchor using
+  //    the 280 fallback so the portal condition `open && anchor` passes and the popover
+  //    enters the DOM (avoiding the pre-v1.3.1-8 deadlock where anchor=null never rendered).
+  // 2) popoverMounted false→true: popoverRef now points at the real DOM, positionPopover
+  //    computes the final anchor from the real height. The whole
+  //    commit→layoutEffect→re-commit→layoutEffect round finishes before browser paint,
+  //    so the user sees a single frame at the final position with no flicker.
   useLayoutEffect(() => {
     if (!open) return;
     positionPopover();
   }, [open, popoverMounted, positionPopover]);
 
-  // 键盘 ArrowUp/Down 改 highlight 后把高亮项 scroll into view —— 长 dropdown 超过
-  // maxHeight 280 时键盘用户能看到当前高亮。
+  // After ArrowUp/Down changes the highlight, scroll it into view — keyboard users can
+  // follow the highlight on long dropdowns exceeding the 280 maxHeight.
   useEffect(() => {
     if (!open || highlight < 0) return;
     const target = popoverRef.current?.querySelector(
@@ -204,7 +216,7 @@ export function SelectLite({
     );
   }, [filteredOptions, open, value]);
 
-  // 点击外部 / 滚动外部 → 关闭。popover 内部 scroll 保持打开。
+  // Click/scroll outside → close. Scroll inside the popover stays open.
   useEffect(() => {
     if (!open) return;
     const handlePointerDown = (event: MouseEvent) => {
@@ -214,14 +226,15 @@ export function SelectLite({
       if (popoverRef.current?.contains(target)) return;
       closeMenu();
     };
-    // 用户在 popover 外部任何位置滚动（wheel 或 scroll 事件）→ 关闭。
-    // popover 内部滚动（长列表 scroll）popover.contains(target) → 保留打开。
+    // Scrolling anywhere outside the popover (wheel or scroll event) → close.
+    // Scrolling inside (long-list scroll) hits popover.contains(target) → stays open.
     const handleScrollOutside = (event: Event) => {
       const target = event.target as Node | null;
       if (target && popoverRef.current?.contains(target)) return;
       closeMenu();
     };
-    // 窗口尺寸变化时保持展开并重新锚定，避免桌面窗口轻微调整就丢失当前筛选。
+    // Stay open and re-anchor on window resize, so minor desktop window tweaks don't
+    // drop the current filter.
     const handleResize = () => positionPopover();
 
     document.addEventListener('mousedown', handlePointerDown);
@@ -234,7 +247,7 @@ export function SelectLite({
       window.removeEventListener('wheel', handleScrollOutside, true);
       window.removeEventListener('resize', handleResize);
     };
-    // closeMenu 是稳定引用（无 React state 依赖），不放 deps。
+    // closeMenu is a stable reference (no React state deps), so it's omitted from deps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, positionPopover]);
 
@@ -383,8 +396,9 @@ export function SelectLite({
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
             color: selected ? 'var(--ol-ink)' : 'var(--ol-ink-4)',
-            // 值切换动画：key 变化让 span 重挂载，重放 ol-select-value-in
-            //（global.css）。仅选中值变化时触发一次，不是常驻动画。
+            // Value-change animation: the key change remounts the span, replaying
+            // ol-select-value-in (global.css). Fires once per value change, not a
+            // looping animation.
             animation: 'ol-select-value-in .16s var(--ol-motion-quick)',
           }}
         >
@@ -401,8 +415,8 @@ export function SelectLite({
               position: 'fixed',
               left: anchor.left,
               top: anchor.top,
-              // 锁到 trigger 宽（不是 minWidth），避免 content 撑大让 popover 跑出
-              // trigger 范围；长 label 走 textOverflow:ellipsis 截断。
+              // Locked to the trigger width (not minWidth) so content can't stretch the
+              // popover beyond the trigger; long labels truncate via textOverflow:ellipsis.
               width: anchor.width,
               maxHeight: searchable ? 320 : 280,
               overflow: 'hidden',

@@ -26,9 +26,9 @@ use super::frame::{self, Flags, MessageType, Serialization};
 use super::{AudioConsumer, DictionaryHotword, RawTranscript};
 use crate::ports::{TextStreamChunk, TextStreamSink};
 
-/// 官方「大模型流式语音识别 API」（双向流式·优化版）端点：
-/// https://www.volcengine.com/docs/6561/1354869
-/// 新旧两种鉴权模式共享同一端点，仅握手鉴权头不同。
+/// Official "bigmodel streaming ASR API" (bidirectional streaming, optimized)
+/// endpoint: https://www.volcengine.com/docs/6561/1354869
+/// Both auth modes share this endpoint; only the handshake auth headers differ.
 const ENDPOINT_APP_ID_TOKEN: &str = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async";
 const ENDPOINT_API_KEY: &str = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async";
 /// Agent Plan uses a dedicated subscription endpoint with API-key authentication.
@@ -41,22 +41,28 @@ const BYTES_PER_MS: f64 = 32.0;
 const HOTWORD_CAP: usize = 80;
 const FINAL_RESULT_TIMEOUT: Duration = Duration::from_secs(12);
 
-/// 弱网下 TLS/WebSocket 握手可能一直挂到 OS 级 TCP 超时（几十秒），期间用户卡在
-/// 「Starting」无法语音输入。协调器的全局超时只覆盖 `await_final_result`，**不**覆盖
-/// `open_session`，所以这里必须自己给握手设上限：超时即快速失败并重试，而不是冻结。
+/// On a poor network the TLS/WebSocket handshake can hang until the OS-level TCP
+/// timeout (tens of seconds), leaving the user stuck on "Starting" with no voice
+/// input. The coordinator's global timeout covers only `await_final_result`, not
+/// `open_session`, so the handshake needs its own cap here: fail fast and retry on
+/// timeout instead of freezing.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-/// 单次网络抖动（连接被重置 / 瞬时 DNS 失败）以前会直接让整次听写失败。重试几次让
-/// 抖动可恢复。`AuthRejected`（凭据被拒）不在重试之列——重试也不会变好，只会拖慢报错。
+/// A single network blip (connection reset / transient DNS failure) used to fail the
+/// whole dictation; a few retries make blips recoverable. `AuthRejected` (bad
+/// credentials) is excluded — retrying never helps, it only delays the error.
 const CONNECT_MAX_ATTEMPTS: usize = 3;
 const CONNECT_RETRY_BACKOFF: Duration = Duration::from_millis(250);
 
-/// Volcengine ASR 鉴权模式。
+/// Volcengine ASR authentication mode.
 ///
-/// - `AppIdToken`：旧版语音控制台应用，使用 `X-Api-App-Key` + `X-Api-Access-Key` 双表头鉴权。
-/// - `ApiKey`：普通服务 API Key 或 Agent Plan 专属 API Key，使用单个 `X-Api-Key` 表头鉴权。
+/// - `AppIdToken`: legacy voice-console apps, authenticated with the
+///   `X-Api-App-Key` + `X-Api-Access-Key` header pair.
+/// - `ApiKey`: normal service API key or the Agent Plan-specific API key,
+///   authenticated with a single `X-Api-Key` header.
 ///
-/// 普通服务下，两种模式共享 WebSocket 端点与二进制帧协议，仅握手鉴权头不同。
-/// Agent Plan 按服务选择专属端点，并固定使用 ApiKey 鉴权。
+/// On the normal service, both modes share the WebSocket endpoint and binary frame
+/// protocol; only the handshake auth headers differ. Agent Plan selects its dedicated
+/// endpoint per service and always uses ApiKey auth.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VolcengineAuthMode {
     AppIdToken,
@@ -78,13 +84,16 @@ impl VolcengineAuthMode {
         }
     }
 
-    /// 当前模式下所需凭据是否齐备（统一 trim 语义）。
+    /// Whether the credentials required by the current mode are complete (uniform
+    /// trim semantics).
     ///
-    /// `secret` 的语义随模式：AppIdToken = Access Token（旧版语音控制台），
-    /// ApiKey = 普通服务或 Agent Plan 的 ASR API Key。`app_id` 仅在 AppIdToken 模式要求非空。
+    /// `secret` semantics depend on the mode: AppIdToken = Access Token (legacy voice
+    /// console), ApiKey = normal service or Agent Plan ASR API key. `app_id` is only
+    /// required non-empty in AppIdToken mode.
     ///
-    /// 所有按模式判定凭据完整性的入口（`open_session`、`volcengine_configured`、
-    /// `ensure_asr_credentials`）都应复用此方法，避免三处规则漂移。
+    /// Every entry point that judges credential completeness per mode (`open_session`,
+    /// `volcengine_configured`, `ensure_asr_credentials`) should reuse this method so
+    /// the three rules cannot drift.
     pub fn auth_ok(&self, app_id: &str, secret: &str) -> bool {
         let app_id_ok = match self {
             Self::AppIdToken => !app_id.trim().is_empty(),
@@ -123,9 +132,9 @@ impl VolcengineService {
 pub struct VolcengineCredentials {
     pub service: VolcengineService,
     pub auth_mode: VolcengineAuthMode,
-    /// App ID（AppIdToken 模式使用；ApiKey 模式下为空）。
+    /// App ID (AppIdToken mode; empty in ApiKey mode).
     pub app_id: String,
-    /// Access Token（AppIdToken 模式下）或 API Key（ApiKey 模式下）。
+    /// Access Token (AppIdToken mode) or API Key (ApiKey mode).
     pub access_token: String,
     pub resource_id: String,
 }
@@ -135,14 +144,16 @@ impl VolcengineCredentials {
         "volc.seedasr.sauc.duration"
     }
 
-    /// 未配置或仅含空白字符时使用默认 Resource ID；保留非空配置的原始值。
+    /// Uses the default Resource ID when unconfigured or whitespace-only; keeps the
+    /// original value of a non-empty configuration.
     pub fn resolve_resource_id(configured: Option<String>) -> String {
         configured
             .filter(|resource_id| !resource_id.trim().is_empty())
             .unwrap_or_else(|| Self::default_resource_id().to_string())
     }
 
-    /// 凭据是否满足当前鉴权模式的要求（统一 trim 语义，见 [`VolcengineAuthMode::auth_ok`]）。
+    /// Whether the credentials satisfy the current auth mode (uniform trim semantics,
+    /// see [`VolcengineAuthMode::auth_ok`]).
     pub fn auth_ok(&self) -> bool {
         self.service
             .auth_mode(self.auth_mode.clone())
@@ -156,16 +167,20 @@ pub enum VolcengineASRError {
     CredentialsMissing,
     #[error("connection failed: {0}")]
     ConnectionFailed(String),
-    /// WebSocket 握手阶段服务端返回 401 / 403：凭据被拒。
-    /// 区分自 `ConnectionFailed`（DNS/TLS/网络层失败）—— 前者通常是 App ID / Access
-    /// Token / Resource ID 错或账号没开通 bigmodel；后者是网络断 / 防火墙 / DNS。
-    /// 文案简短，原因在文档里说明，capsule 不堆长引导。
+    /// WebSocket handshake returned 401 / 403: credentials rejected. Distinguished
+    /// from `ConnectionFailed` (DNS/TLS/network-layer failure) — the former usually
+    /// means a wrong App ID / Access Token / Resource ID or bigmodel not enabled for
+    /// the account; the latter means network down / firewall / DNS. The message is
+    /// short; the reasons are documented rather than piling long guidance into the
+    /// capsule.
     #[error("凭据被拒（{0}）")]
     AuthRejected(u16),
-    /// WebSocket 握手阶段服务端返回 429：请求过多 / 账号被限流。
-    /// 单独归类而非落入 `ConnectionFailed` —— 后者会被 `connect_with_retry` 当网络抖动
-    /// 立即重试 3 次，反而加剧限流、且文案含糊指向「网络失败」误导用户。此类与
-    /// `AuthRejected` 一样**短路不重试**：立即回带明确文案，让用户知道是限流不是断网。
+    /// WebSocket handshake returned 429: too many requests / account throttled.
+    /// Classified separately instead of falling into `ConnectionFailed` — the latter
+    /// would be retried immediately 3 times by `connect_with_retry` as a network blip,
+    /// worsening the throttle and showing a vague "network failure" message. Like
+    /// `AuthRejected`, this short-circuits without retry and returns a clear message
+    /// so the user knows it is throttling, not a disconnect.
     #[error("请求过多，账号被限流（{0}）")]
     RateLimited(u16),
     #[error("no final result")]
@@ -192,9 +207,10 @@ struct SyncState {
     is_connected: bool,
     final_tx: Option<oneshot::Sender<Result<RawTranscript, VolcengineASRError>>>,
     start: Option<Instant>,
-    /// 最近一次 partial（非 final）的累积 transcript。服务端在 final 帧到达前
-    /// 关闭连接 / 网络中断时，作为 fallback 回给上层，避免「用户的话已经识别出来
-    /// 但没拿到 final」就丢光。
+    /// Accumulated transcript of the latest partial (non-final). Returned to the
+    /// caller as a fallback when the server closes the connection or the network
+    /// drops before the final frame, so recognized text is not lost just because no
+    /// final arrived.
     last_partial_text: String,
 }
 
@@ -208,14 +224,16 @@ pub struct VolcengineStreamingASR {
     /// of the lifetime of any particular `&self` borrow.
     writer: SharedWriter,
     final_rx: ParkingMutex<Option<oneshot::Receiver<Result<RawTranscript, VolcengineASRError>>>>,
-    /// 单 worker 模式：consume_pcm_chunk 把 (seq, chunk) 入队这个 channel，
-    /// open_session 里 spawn 出的唯一 worker 串行 recv + send_binary，
-    /// 保证 seq 顺序严格等于实际发送顺序。session 结束时 take() 掉这个 sender，
-    /// worker 的 recv() 返回 None 自动退出。
+    /// Single-worker mode: consume_pcm_chunk enqueues (seq, chunk) into this channel
+    /// and the single worker spawned in open_session serially recvs and send_binary,
+    /// guaranteeing seq order equals actual send order. At session end the sender is
+    /// take()n; the worker's recv() returns None and it exits.
     audio_tx: ParkingMutex<Option<AudioFrameSender>>,
-    /// 队列里 + worker 在飞的 audio 帧总数。consume +N，worker send 完一帧 -1。
-    /// send_last_frame 必须等它降到 0 才能安全发末帧，否则末帧可能被服务端先收到
-    /// 而把后续 chunk 当成「stream 已结束」之后的多余数据丢弃 → 尾句丢失。
+    /// Total audio frames queued plus in flight in the worker. consume adds N, the
+    /// worker subtracts 1 after sending a frame. send_last_frame must wait for this
+    /// to reach 0 before sending the final frame, otherwise the server could receive
+    /// the final frame first and treat later chunks as data after "stream ended",
+    /// dropping them — losing the tail sentence.
     pending_sends: Arc<AtomicUsize>,
     send_done: Arc<Notify>,
     partial_sink: ParkingMutex<Option<Arc<dyn TextStreamSink>>>,
@@ -251,8 +269,9 @@ impl VolcengineStreamingASR {
 
     pub async fn open_session(self: &Arc<Self>) -> Result<(), VolcengineASRError> {
         let creds = &self.credentials;
-        // 统一走 VolcengineCredentials::auth_ok（trim 语义），与概览页凭据状态检测、
-        // dictation 预检保持同一判定规则。
+        // Route through VolcengineCredentials::auth_ok (trim semantics) so this stays
+        // the same rule as the overview-page credential status check and the dictation
+        // preflight.
         if !creds.auth_ok() || creds.resource_id.trim().is_empty() {
             return Err(VolcengineASRError::CredentialsMissing);
         }
@@ -279,10 +298,10 @@ impl VolcengineStreamingASR {
         *self.final_rx.lock() = Some(rx);
         *self.writer.lock().await = Some(write);
 
-        // 起一个唯一的 audio worker：consume_pcm_chunk 把 (seq, chunk) 推到 audio_tx，
-        // worker 这边 FIFO recv 然后串行 send_binary。session 结束后调用方
-        // (cancel / handle_frame error / fallback_to_partial_or_error) 会 take 掉
-        // self.audio_tx，channel 关闭，worker 自然退出。
+        // Spawn the single audio worker: consume_pcm_chunk pushes (seq, chunk) into
+        // audio_tx; the worker FIFO-recvs and sends serially. At session end the
+        // caller (cancel / handle_frame error / fallback_to_partial_or_error) takes
+        // self.audio_tx, closing the channel so the worker exits naturally.
         let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<(i32, Vec<u8>)>();
         *self.audio_tx.lock() = Some(audio_tx);
         let writer_for_worker = Arc::clone(&self.writer);
@@ -338,14 +357,16 @@ impl VolcengineStreamingASR {
                         }
                     }
                     Ok(Message::Close(_)) => {
-                        // 服务端没发 final 就关连接 → 用最近一次 partial 兜底，不丢已识别的文字。
+                        // Server closed without sending final -> fall back to the
+                        // latest partial so recognized text is not lost.
                         this.fallback_to_partial_or_error(VolcengineASRError::NoFinalResult);
                         break;
                     }
                     Ok(_) => { /* ignore text/ping/pong */ }
                     Err(e) => {
                         log::error!("[asr] receive loop error: {}", e);
-                        // 网络中断同样回退到 partial，让用户至少拿到已经识别的部分。
+                        // On network interruption, also fall back to the partial so
+                        // the user at least keeps the recognized portion.
                         this.fallback_to_partial_or_error(VolcengineASRError::ConnectionFailed(
                             e.to_string(),
                         ));
@@ -383,9 +404,9 @@ impl VolcengineStreamingASR {
             .map_err(|e| VolcengineASRError::ConnectionFailed(e.to_string()))?;
         let headers = request.headers_mut();
 
-        // 根据鉴权模式选择表头：
-        // - AppIdToken：X-Api-App-Key + X-Api-Access-Key（旧版语音控制台）
-        // - ApiKey：X-Api-Key（普通服务或 Agent Plan 的 ASR API Key，单头即可）
+        // Headers per auth mode:
+        // - AppIdToken: X-Api-App-Key + X-Api-Access-Key (legacy voice console)
+        // - ApiKey: X-Api-Key (normal service or Agent Plan ASR API key, single header)
         match auth_mode {
             VolcengineAuthMode::AppIdToken => {
                 headers.insert(
@@ -418,9 +439,10 @@ impl VolcengineStreamingASR {
             HeaderValue::from_str(connect_id)
                 .map_err(|e| VolcengineASRError::ConnectionFailed(e.to_string()))?,
         );
-        // 官方鉴权表（docs/6561/1354869）要求其余两个头：
-        // X-Api-Request-Id（任务 ID，官方推荐随机 UUID；每次握手尝试独立生成）与
-        // X-Api-Sequence（发包序号，固定值 -1）。
+        // The official auth table (docs/6561/1354869) requires two more headers:
+        // X-Api-Request-Id (task ID; officially a random UUID is recommended, generated
+        // independently per connect attempt) and X-Api-Sequence (send sequence, fixed
+        // at -1).
         headers.insert(
             "X-Api-Request-Id",
             HeaderValue::from_str(request_id)
@@ -486,9 +508,10 @@ impl VolcengineStreamingASR {
     }
 
     pub async fn send_last_frame(&self) -> Result<(), VolcengineASRError> {
-        // 等所有 fire-and-forget 发送完成。否则末帧（NegativeSequence）可能比尾部
-        // chunk 先到服务端，被识别为「流已结束」之后再到的 chunk 全部丢弃 = 尾句吞掉。
-        // 给一个 800ms 上限避免极端网络下永远等。
+        // Wait for all fire-and-forget sends to complete. Otherwise the final frame
+        // (NegativeSequence) could reach the server before the tail chunks, which are
+        // then treated as data after "stream ended" and dropped = tail sentence lost.
+        // An 800ms cap avoids waiting forever on an extreme network.
         let drain_deadline = Instant::now() + std::time::Duration::from_millis(800);
         while self.pending_sends.load(Ordering::SeqCst) > 0 {
             let remaining = drain_deadline.saturating_duration_since(Instant::now());
@@ -499,7 +522,8 @@ impl VolcengineStreamingASR {
                 );
                 break;
             }
-            // notified() 返回 future，被 timeout 包住 → 等待发送完成或超时
+            // notified() returns a future; wrapped in timeout -> wait for sends to
+            // drain or time out.
             let _ = tokio::time::timeout(remaining, self.send_done.notified()).await;
         }
 
@@ -532,7 +556,8 @@ impl VolcengineStreamingASR {
         }
 
         // Final frame: negativeSequence + negative seq number signals stream end.
-        // 末帧用 negativeSequence + 负序号收尾，告诉服务端"流到此结束"。
+        // Final frame uses negativeSequence + negative seq number to tell the server
+        // "the stream ends here".
         let final_seq = {
             let mut st = self.state.lock();
             let s = -st.next_sequence;
@@ -595,7 +620,8 @@ impl VolcengineStreamingASR {
             st.is_connected = false;
             st.pending_audio.clear();
         }
-        // Drop audio sender → worker.recv() 返回 None → worker 退出，不再 hold writer。
+        // Dropping the audio sender -> worker.recv() returns None -> worker exits and
+        // stops holding the writer.
         *self.audio_tx.lock() = None;
         // Close the writer asynchronously so the receive loop sees EOF. The
         // host-provided spawner also handles synchronous teardown callers.
@@ -686,10 +712,11 @@ impl VolcengineStreamingASR {
             return true;
         };
 
-        // 流结束信号只信帧头 flags（lastPacket / negativeSequence）。
-        // 之前误把 utterance.definite=true 当成流结束——但那只代表"这一段语音已固化"，
-        // 用户可能还在继续说。结果一收到第一个 definite=true 就关掉接收，
-        // 后面用户讲的内容全部丢失（实测丢了 9 秒）。
+        // Trust only the frame-header flags (lastPacket / negativeSequence) for the
+        // stream-end signal. utterance.definite=true was previously mistaken for end
+        // of stream — but it only means "this segment's audio is settled"; the user
+        // may still be talking. Closing the receive loop on the first definite=true
+        // lost everything said afterwards (measured: 9 seconds lost).
         let has_final = parsed.is_final();
         let mut full_text = result
             .get("text")
@@ -698,8 +725,8 @@ impl VolcengineStreamingASR {
             .to_string();
 
         if let Some(utterances) = result.get("utterances").and_then(|v| v.as_array()) {
-            // --- 声纹过滤：只保留主要说话人（说话时长最长的） ---
-            // 1. 统计每个 speaker 的说话时长
+            // --- Speaker filtering: keep only the primary speaker (longest talk time) ---
+            // 1. Tally each speaker's total talk time.
             let mut speaker_durations: std::collections::HashMap<String, u64> =
                 std::collections::HashMap::new();
             for u in utterances.iter() {
@@ -713,13 +740,14 @@ impl VolcengineStreamingASR {
                 }
             }
 
-            // 2. 找到说话时长最长的 speaker（即"主要说话人"）
+            // 2. Pick the speaker with the longest talk time (the primary speaker).
             let primary_speaker: Option<String> = speaker_durations
                 .iter()
                 .max_by_key(|(_, &dur)| dur)
                 .map(|(s, _)| s.clone());
 
-            // 3. 只拼接主要说话人的文本；如果没有任何 speaker 标签，回退到全量拼接
+            // 3. Join only the primary speaker's text; with no speaker tags at all,
+            // fall back to joining everything.
             let pieces: Vec<&str> = if let Some(ref primary) = primary_speaker {
                 utterances
                     .iter()
@@ -727,7 +755,7 @@ impl VolcengineStreamingASR {
                         u.get("speaker")
                             .and_then(|s| s.as_str())
                             .map(|s| s == primary.as_str())
-                            .unwrap_or(true) // 无 speaker 字段的 utterance 保留
+                            .unwrap_or(true) // utterances without a speaker field are kept
                     })
                     .filter_map(|u| u.get("text").and_then(|t| t.as_str()))
                     .collect()
@@ -801,8 +829,10 @@ impl VolcengineStreamingASR {
         }
     }
 
-    /// 服务端 close / 网络中断时调用：如果有缓存的 partial 文本，作为 transcript
-    /// 兜底返回；否则才报错。配合 `last_partial_text` 实现「至少不丢用户已识别出的话」。
+    /// Called on server close / network interruption: returns cached partial text as
+    /// a fallback transcript if available, errors otherwise. Works with
+    /// `last_partial_text` to guarantee "at least no loss of already-recognized
+    /// speech".
     fn fallback_to_partial_or_error(&self, err: VolcengineASRError) {
         let (partial, duration_ms) = {
             let st = self.state.lock();
@@ -833,9 +863,10 @@ impl VolcengineStreamingASR {
 
 impl AudioConsumer for VolcengineStreamingASR {
     fn consume_pcm_chunk(&self, pcm: &[u8]) {
-        // 单 worker 串行 send 模式：在 state 锁内 drain 并分配 seq（seq 单调），
-        // 然后把 (seq, chunk) push 进 mpsc。worker 端按入队顺序 send，
-        // 哪怕跨多个 consume 调用、多个 spawn 也不会再有 writer 锁竞争。
+        // Single-worker serial send mode: drain and allocate seq inside the state lock
+        // (seq monotonic), then push (seq, chunk) into the mpsc. The worker sends in
+        // enqueue order, so even across multiple consume calls and spawns there is no
+        // writer lock contention.
         let chunks: Vec<(i32, Vec<u8>)> = {
             let mut st = self.state.lock();
             if !st.is_connected {
@@ -863,12 +894,12 @@ impl AudioConsumer for VolcengineStreamingASR {
         };
 
         for entry in chunks {
-            // pending_sends 必须在 tx.send 之前 +1：否则 worker 可能先 recv + 发送 +
-            // 减 1，把 usize 计数器 underflow。
+            // pending_sends must be incremented before tx.send: otherwise the worker
+            // could recv + send + decrement first, underflowing the usize counter.
             self.pending_sends.fetch_add(1, Ordering::SeqCst);
             if tx.send(entry).is_err() {
-                // worker 已退出（cancel / 错误路径里 audio_tx 被 take）。
-                // 撤销刚才的 +1，避免 send_last_frame 的 wait 永远等不到 0。
+                // The worker already exited (cancel / error path took audio_tx).
+                // Undo the increment so send_last_frame's wait can reach 0.
                 if self.pending_sends.fetch_sub(1, Ordering::SeqCst) == 1 {
                     self.send_done.notify_waiters();
                 }
@@ -916,10 +947,12 @@ fn normalized_result(json: &Value) -> Option<&Value> {
     None
 }
 
-/// 把 tokio-tungstenite 的 connect 错误分类：握手收到 HTTP 401 / 403 → `AuthRejected`
-/// （凭据被拒，要 user 检查 App ID / Access Token / 账号资源开通状态）；429 →
-/// `RateLimited`（请求过多 / 限流，重试只会火上浇油，短路报明确文案）；其它 → 通用
-/// `ConnectionFailed`（DNS / TLS / 网络层）。让 capsule 文案能跟泛泛 HTTP error 区分。
+/// Classifies tokio-tungstenite connect errors: HTTP 401 / 403 during the handshake
+/// -> `AuthRejected` (credentials rejected; user should check App ID / Access Token /
+/// account resource enablement); 429 -> `RateLimited` (too many requests; retrying
+/// only adds fuel, so short-circuit with a clear message); anything else -> generic
+/// `ConnectionFailed` (DNS / TLS / network layer). Lets the capsule message be
+/// distinguished from a generic HTTP error.
 fn classify_connect_error(err: tokio_tungstenite::tungstenite::Error) -> VolcengineASRError {
     use tokio_tungstenite::tungstenite::Error as WsError;
     if let WsError::Http(resp) = &err {
@@ -934,9 +967,10 @@ fn classify_connect_error(err: tokio_tungstenite::tungstenite::Error) -> Volceng
     VolcengineASRError::ConnectionFailed(err.to_string())
 }
 
-/// 握手错误是否「重试也无益」，`connect_with_retry` 据此短路。凭据被拒（401/403）
-/// 与限流（429）都属此类：前者重试不会变对，后者重试只会加剧限流。其余（网络层）
-/// 才值得在抖动时重试。
+/// Whether a handshake error is pointless to retry; `connect_with_retry` short-circuits
+/// on these. Rejected credentials (401/403) and throttling (429) both qualify: the
+/// former never becomes correct on retry, the latter only gets worse. Network-layer
+/// errors are the ones worth retrying on a blip.
 fn is_non_retryable(err: &VolcengineASRError) -> bool {
     matches!(
         err,
@@ -1095,7 +1129,7 @@ mod tests {
         assert_eq!(
             VolcengineAuthMode::parse(""),
             VolcengineAuthMode::AppIdToken
-        ); // 默认回退
+        ); // default fallback
         assert_eq!(VolcengineAuthMode::ApiKey.as_str(), "api_key");
         assert_eq!(VolcengineAuthMode::AppIdToken.as_str(), "app_id_token");
     }
@@ -1104,13 +1138,14 @@ mod tests {
     fn auth_ok_matches_mode_requirements() {
         let app_id_token = VolcengineAuthMode::AppIdToken;
         let api_key = VolcengineAuthMode::ApiKey;
-        // AppIdToken：需要 app_id + secret 都非空。
+        // AppIdToken: both app_id and secret must be non-empty.
         assert!(app_id_token.auth_ok("app", "token"));
         assert!(!app_id_token.auth_ok("", "token"));
         assert!(!app_id_token.auth_ok("app", ""));
-        // 全空格视为未配置（统一 trim 语义，与 volcengine_configured / 预检一致）。
+        // Whitespace-only counts as unconfigured (uniform trim semantics, matching
+        // volcengine_configured / preflight).
         assert!(!app_id_token.auth_ok("   ", "   "));
-        // ApiKey：只需 API Key，app_id 可为空。
+        // ApiKey: only the API key is required; app_id may be empty.
         assert!(api_key.auth_ok("", "key"));
         assert!(api_key.auth_ok("app", "key"));
         assert!(!api_key.auth_ok("app", ""));
@@ -1124,15 +1159,15 @@ mod tests {
                 VolcengineService::Standard,
                 VolcengineAuthMode::AppIdToken,
                 ENDPOINT_APP_ID_TOKEN,
-                true,  // 双表头（X-Api-App-Key / X-Api-Access-Key）
-                false, // 不应带 X-Api-Key
+                true,  // both headers (X-Api-App-Key / X-Api-Access-Key)
+                false, // must not carry X-Api-Key
             ),
             (
                 VolcengineService::Standard,
                 VolcengineAuthMode::ApiKey,
                 ENDPOINT_API_KEY,
-                false, // 不应带双表头
-                true,  // 单表头 X-Api-Key
+                false, // must not carry the header pair
+                true,  // single header X-Api-Key
             ),
             (
                 VolcengineService::AgentPlan,
@@ -1184,10 +1219,11 @@ mod tests {
                 expects_api_key,
                 "mode={mode:?} X-Api-Key"
             );
-            // 两种模式都必须携带资源与连接标识头。
+            // Both modes must carry the resource and connect-id headers.
             assert!(headers.contains_key("X-Api-Resource-Id"));
             assert_eq!(headers.get("X-Api-Connect-Id").unwrap(), "connect-id");
-            // 官方鉴权表要求的其余头（docs/6561/1354869）。
+            // The remaining headers required by the official auth table
+            // (docs/6561/1354869).
             assert_eq!(headers.get("X-Api-Request-Id").unwrap(), "request-id");
             assert_ne!(
                 headers.get("X-Api-Request-Id"),
@@ -1196,8 +1232,9 @@ mod tests {
             );
             assert_eq!(headers.get("X-Api-Sequence").unwrap(), "-1");
         }
-        // 回归：新旧两种鉴权模式共享同一官方端点（docs/6561/1354869），
-        // 曾因 ApiKey 模式误用 /api/v3/plan/... 路径导致 45000010 AuthenticationError。
+        // Regression: both auth modes share the same official endpoint
+        // (docs/6561/1354869); ApiKey mode previously used the /api/v3/plan/... path,
+        // causing 45000010 AuthenticationError.
         assert_eq!(ENDPOINT_API_KEY, ENDPOINT_APP_ID_TOKEN);
         assert_eq!(
             ENDPOINT_API_KEY,
@@ -1205,7 +1242,8 @@ mod tests {
         );
     }
 
-    /// 构造一个握手阶段返回给定 HTTP 状态码的 tungstenite 错误，用于分类测试。
+    /// Builds a tungstenite error whose handshake phase returns the given HTTP status,
+    /// for classification tests.
     fn http_ws_error(status: u16) -> tokio_tungstenite::tungstenite::Error {
         use tokio_tungstenite::tungstenite::http::Response;
         let resp = Response::builder()
@@ -1238,7 +1276,8 @@ mod tests {
 
     #[test]
     fn network_errors_stay_retryable() {
-        // 通用网络失败仍应重试（抖动可恢复）——不能被误判成短路。
+        // Generic network failures must stay retryable (blips recover) — they must not
+        // be misjudged as short-circuit.
         assert!(!is_non_retryable(&VolcengineASRError::ConnectionFailed(
             "dns fail".into()
         )));
@@ -1247,7 +1286,8 @@ mod tests {
 
     #[test]
     fn classify_401_403_still_auth_rejected() {
-        // 回归：新增 429 分类不影响既有 401 / 403 → AuthRejected。
+        // Regression: adding the 429 classification does not affect the existing
+        // 401 / 403 -> AuthRejected.
         assert!(matches!(
             classify_connect_error(http_ws_error(401)),
             VolcengineASRError::AuthRejected(401)
@@ -1260,7 +1300,8 @@ mod tests {
 
     #[test]
     fn rate_limited_message_mentions_throttling_not_network() {
-        // 文案必须明确指向「限流/请求过多」，不是含糊的「网络失败」。
+        // The message must clearly point to throttling / too many requests, not a
+        // vague "network failure".
         let msg = VolcengineASRError::RateLimited(429).to_string();
         assert!(
             msg.contains("限流") || msg.contains("请求过多"),

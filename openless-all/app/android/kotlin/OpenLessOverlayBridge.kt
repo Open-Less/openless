@@ -11,7 +11,7 @@ object OpenLessOverlayBridge {
 
     @Volatile var listener: OverlayStateListener? = null
     @Volatile var imeListener: OverlayStateListener? = null
-    @Volatile var imeTextListener: ((String) -> Unit)? = null
+    @Volatile var imeSessionListener: ((String) -> Unit)? = null
 
     interface OverlayStateListener {
         fun onCapsuleStateChanged(state: String, message: String?, level: Float)
@@ -28,10 +28,8 @@ object OpenLessOverlayBridge {
 
     @Keep
     @JvmStatic
-    fun onImeTextReady(text: String) {
-        mainHandler.post {
-            imeTextListener?.invoke(text)
-        }
+    fun onImeSessionEvent(json: String) {
+        mainHandler.post { imeSessionListener?.invoke(json) }
     }
 
     @Keep

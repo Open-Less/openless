@@ -1,4 +1,5 @@
-//! 跨平台「划词捕获」工具：在用户触发 QA 快捷键时尝试拿到当前前台 app 的选区文本。
+//! Cross-platform "selection capture" utilities: on a QA shortcut press, try to obtain the
+//! selected text of the current foreground app.
 //!
 //! 平台路径：
 //! 1. **macOS** AX：`AXUIElementCopyAttributeValue(focused, kAXSelectedTextAttribute)`
@@ -6,8 +7,8 @@
 //! 2. **macOS / Windows** Cmd+C / Ctrl+C：snapshot 用户原剪贴板 → 模拟复制 → 80ms
 //!    后读出新内容 → 还原原剪贴板。
 //!
-//! 截断策略：超过 4000 字符的选区只保留首 2000 + 尾 2000 + `[…truncated…]` 标记，
-//! 避免给 LLM 灌过长 context。
+//! Truncation policy: selections over 4000 chars keep head 2000 + tail 2000 + the
+//! `[…truncated…]` marker, avoiding an overly long LLM context.
 //!
 //! 模块依赖：`arboard`（跨平台剪贴板）+ libc + 平台 native 框架。
 //! Linux 桌面已改由 egui 前端（`openless-all/app/linux-egui`）承担，Tauri 版不再提供
@@ -22,8 +23,9 @@ const SELECTION_TRUNCATE_HEAD: usize = 2000;
 const SELECTION_TRUNCATE_TAIL: usize = 2000;
 const SELECTION_TRUNCATED_MARKER: &str = "\n[…truncated…]\n";
 
-/// 从前台 app 读到的选区上下文。
-/// `text` 已经过截断处理；`source_app` 是前台 app 的人类可读标签（可空）。
+/// Selection context read from the foreground app.
+/// `text` is already truncated; `source_app` is a human-readable label for the foreground app
+/// (optional).
 #[derive(Debug, Clone)]
 pub struct SelectionContext {
     pub text: String,
@@ -68,9 +70,10 @@ struct WindowsSelectionTarget {
 #[cfg(target_os = "macos")]
 #[derive(Debug, Clone)]
 struct MacosSelectionTarget {
-    /// 捕获时的前台应用（NSWorkspace frontmostApplication，`name (bundle)` 形式）。
+    /// Foreground app at capture time (NSWorkspace frontmostApplication, `name (bundle)` form).
     front_app: Option<String>,
-    /// 捕获时的前台应用 pid —— 预览确认后用它把焦点交还原应用。
+    /// Foreground app pid at capture time — used to return focus to the original app after the
+    /// preview is confirmed.
     front_app_pid: Option<i32>,
 }
 
@@ -105,8 +108,9 @@ struct PrefetchedSelectionWorkspace {
     insertion_target: SelectionInsertionTarget,
 }
 
-/// 选区抓取失败 / 命中原因，写入用户可导出的 openless.log，便于区分
-/// 「真的没选区」vs「模拟复制未覆盖剪贴板」vs「剪贴板 API 失败」。
+/// Why a selection capture failed / was skipped. Written to the user-exportable openless.log to
+/// distinguish "no selection at all" vs "simulated copy did not overwrite the clipboard" vs
+/// "clipboard API failure".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SelectionCaptureMissReason {
     Ok,
@@ -168,7 +172,8 @@ impl SelectionCaptureDiag {
 static PREFETCHED_SELECTION_WORKSPACE: std::sync::Mutex<Option<PrefetchedSelectionWorkspace>> =
     std::sync::Mutex::new(None);
 
-/// 在修饰键热键边沿、目标应用尚未因 Alt 菜单等副作用丢失选区之前，抢先快照选区。
+/// Snapshot the selection early, on the modifier hotkey edge, before the target app can lose its
+/// selection as a side effect (e.g. an Alt menu opening).
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn prefetch_selection_workspace_capture() {
     let insertion_target = capture_selection_insertion_target();
@@ -221,7 +226,7 @@ pub(crate) fn take_prefetched_selection_workspace(
     None
 }
 
-/// 优先消费热键边沿预取的选区；若无预取则回退到即时捕获。
+/// Consume the selection prefetched at the hotkey edge first; fall back to live capture if none.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn resolve_selection_workspace_capture(
 ) -> (Option<SelectionContext>, SelectionInsertionTarget) {
@@ -409,8 +414,9 @@ pub(crate) fn validate_selection_insertion_target(
         let Some(captured) = target.macos.as_ref() else {
             return SelectionInsertionTargetValidation::TargetUnavailable;
         };
-        // 前台应用一致性：云端等待期间用户切到别的应用 = 目标变更，拒绝粘贴
-        //（预览确认模式在 validate 前已 reactivate 回原应用，此处应一致）。
+        // Foreground app consistency: the user switching apps while the cloud request is pending
+        // = target change; reject the paste (preview-confirm mode has already reactivated the
+        // original app before validate, so this should match).
         let front_now = current_front_app();
         if captured
             .front_app
@@ -419,7 +425,8 @@ pub(crate) fn validate_selection_insertion_target(
         {
             return SelectionInsertionTargetValidation::TargetChanged;
         }
-        // 选区文本一致性：AX 直读（与捕获同路径），失败再走模拟 Cmd+C 兜底。
+        // Selection text consistency: AX direct read (same path as capture), falling back to
+        // simulated Cmd+C.
         let current_selection = read_selection_for_validation();
         if !selection_text_matches(expected_selection, current_selection.as_deref()) {
             return SelectionInsertionTargetValidation::SelectionChanged;
@@ -433,9 +440,10 @@ pub(crate) fn validate_selection_insertion_target(
     }
 }
 
-/// macOS 专用：以与捕获时相同的形式（trim + truncate）重读当前选区，供
-/// validate 与 expected_selection 比较。AX 未授权或直读失败时退化为模拟
-/// Cmd+C + 剪贴板快照（与 `capture_selection_with_status` 的兜底一致）。
+/// macOS only: re-read the current selection in the same form as at capture time (trim +
+/// truncate) for validate to compare against expected_selection. Degrades to simulated
+/// Cmd+C + clipboard snapshot when AX is unauthorized or the direct read fails (same fallback as
+/// `capture_selection_with_status`).
 #[cfg(target_os = "macos")]
 fn read_selection_for_validation() -> Option<String> {
     if let Some(text) = macos_ax::read_selected_text() {
@@ -449,8 +457,10 @@ fn read_selection_for_validation() -> Option<String> {
     (!trimmed.is_empty()).then(|| truncate_selection(trimmed))
 }
 
-/// 把确认预览后的焦点交还给最初的选区目标。预览窗允许编辑，因此确认时必然不再是
-/// 原应用的前台窗口；这里先恢复原目标，再沿用上面的严格选区校验，避免盲目粘贴。
+/// Return focus to the original selection target after the preview is confirmed. The preview
+/// window allows editing, so at confirm time it is necessarily no longer the original app's
+/// foreground window; restore the original target first, then run the strict selection validation
+/// above, avoiding a blind paste.
 pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionTarget) -> bool {
     #[cfg(target_os = "windows")]
     {
@@ -471,8 +481,9 @@ pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionT
             let _ = SetForegroundWindow(foreground);
         }
         std::thread::sleep(Duration::from_millis(80));
-        // Windows 的防抢焦点规则可能拒绝 SetForegroundWindow。只有重新捕获到完全一致的
-        // 窗口/控件指纹才算恢复成功；不能因为激活调用返回了就向当前应用盲目粘贴。
+        // Windows' focus-stealing rules may reject SetForegroundWindow. Recovery counts only if
+        // the exact same window/control fingerprint is re-captured; do not blindly paste into the
+        // current app just because the activation call returned.
         return capture_windows_selection_target().as_ref() == Some(&captured);
     }
 
@@ -490,21 +501,23 @@ pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionT
         if current_front_app_pid() == Some(pid) {
             return true;
         }
-        // 预览窗是 OpenLess 自己的窗口，确认后需要把焦点交还原应用再粘贴。
-        // NSRunningApplication activate 是 best-effort，且部分 app（Electron、
-        // 自绘窗口）恢复 key window 需要 >120ms——固定 sleep 一次就核 pid 会
-        // 偶发把「还在恢复中」误判为「恢复失败」。改成短轮询：pid 一稳定立刻
-        // 返回，最多等 ~320ms。
+        // The preview window is OpenLess's own window; after confirm, focus must go back to the
+        // original app before pasting. NSRunningApplication activate is best-effort, and some
+        // apps (Electron, custom-drawn windows) need >120ms to restore their key window — a
+        // single fixed sleep followed by one pid check can misread "still restoring" as
+        // "restore failed". Use short polling instead: return as soon as the pid is stable, at
+        // most ~320ms.
         for _attempt in 0..4 {
-            // 每轮都补一次 activate：NSRunningApplication activate 对「前台被
-            // 其他 app 抢走」的情况可能不生效，重复调用是幂等的。
+            // Re-activate each round: NSRunningApplication activate may not take effect when the
+            // foreground was stolen by another app; repeated calls are idempotent.
             activate_app_by_pid(pid);
             std::thread::sleep(Duration::from_millis(80));
             if current_front_app_pid() == Some(pid) {
                 return true;
             }
         }
-        // 仍未成为前台：必须明确失败，不能向此刻偶然持有焦点的应用盲写。
+        // Still not foreground: fail explicitly; never write blindly into whatever app happens to
+        // hold focus.
         false
     }
 
@@ -515,9 +528,9 @@ pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionT
     }
 }
 
-/// macOS 专用：把指定 pid 的应用带回前台（NSRunningApplication activate，
-/// NSApplicationActivateIgnoringOtherApps = 1）。失败静默——validate 仍会
-/// 以选区文本一致性兜底。
+/// macOS only: bring the app with the given pid back to the foreground (NSRunningApplication
+/// activate, NSApplicationActivateIgnoringOtherApps = 1). Silent on failure — validate still
+/// falls back to selection-text consistency.
 #[cfg(target_os = "macos")]
 fn activate_app_by_pid(pid: i32) {
     use objc2::msg_send;
@@ -535,11 +548,12 @@ fn activate_app_by_pid(pid: i32) {
     }
 }
 
-/// macOS 专用：贴上前一刻的最终防线。`validate_selection_insertion_target`
-/// 的 simulate_copy 兜底最长含 200ms 重试，期间前台焦点可能跳到别的窗口或
-/// 应用（而对方恰好暴露相同选区文本时，仅靠文本比对会放行）。这里在
-/// `insert()` 之前立即重读前台应用 pid+name 并与捕获时比对，任何变化都拒绝
-/// 粘贴——宁可替换失败，不能写错目标。
+/// macOS only: the last line of defense right before pasting. `validate_selection_insertion_target`'s
+/// simulate_copy fallback retries for up to 200ms, during which foreground focus may jump to
+/// another window or app (and text comparison alone would let it through if that target happens
+/// to expose the same selection text). Immediately before `insert()`, re-read the foreground
+/// app's pid+name and compare with capture time; any change rejects the paste — a failed
+/// replacement is acceptable, writing into the wrong target is not.
 #[cfg(target_os = "macos")]
 pub(crate) fn selection_target_still_front(target: &SelectionInsertionTarget) -> bool {
     let Some(captured) = target.macos.as_ref() else {
@@ -567,7 +581,7 @@ pub fn capture_selection_with_status() -> SelectionCaptureOutcome {
 fn capture_selection_with_status_diag() -> (SelectionCaptureOutcome, SelectionCaptureMissReason) {
     let source_app = current_front_app();
 
-    // 1. macOS AX 直读
+    // 1. macOS AX direct read
     #[cfg(target_os = "macos")]
     if let Some(text) = macos_ax::read_selected_text() {
         let trimmed = text.trim();
@@ -599,7 +613,7 @@ fn capture_selection_with_status_diag() -> (SelectionCaptureOutcome, SelectionCa
         );
     }
 
-    // 2. 模拟复制 fallback（macOS / Windows）
+    // 2. Simulated-copy fallback (macOS / Windows)
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         match simulate_copy_and_read_diag() {
@@ -657,7 +671,7 @@ fn capture_selection_with_status_diag() -> (SelectionCaptureOutcome, SelectionCa
     )
 }
 
-/// 长度截断到首 + 尾 + 标记。
+/// Truncate lengthwise to head + tail + marker.
 fn truncate_selection(text: &str) -> String {
     let total: usize = text.chars().count();
     if total <= SELECTION_MAX_CHARS {
@@ -669,7 +683,7 @@ fn truncate_selection(text: &str) -> String {
     format!("{head}{SELECTION_TRUNCATED_MARKER}{tail}")
 }
 
-// ─────────────────────────── 模拟复制 fallback (mac/win) ───────────────────────────
+// ─────────────────────────── Simulated-copy fallback (mac/win) ───────────────────────────
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn simulate_copy_and_read() -> Option<String> {
@@ -678,7 +692,7 @@ fn simulate_copy_and_read() -> Option<String> {
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
-    // a) snapshot 当前剪贴板（用作还原原状态的备份）
+    // a) Snapshot the current clipboard (backup used to restore the original state)
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(c) => c,
         Err(e) => {
@@ -694,8 +708,9 @@ fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
         }
     };
 
-    // b) 写一个 sentinel 进剪贴板 — 之后用来检查模拟复制是否真的有覆盖（如果还是
-    //    sentinel 说明 Cmd+C 没生效或目标 app 没选区）。
+    // b) Write a sentinel into the clipboard — used afterwards to check whether the simulated
+    //    copy actually overwrote it (if it is still the sentinel, Cmd+C did not take effect or
+    //    the target app has no selection).
     let sentinel = format!("__openless_qa_sentinel_{}__", uuid_like_token());
     if let Err(e) = clipboard.set_text(sentinel.clone()) {
         log::warn!("[selection] clipboard set_text(sentinel) failed: {e}");
@@ -708,7 +723,7 @@ fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
     #[cfg(target_os = "windows")]
     windows_wait_clipboard_settle_after_write();
 
-    // c) 模拟 Cmd+C / Ctrl+C
+    // c) Simulate Cmd+C / Ctrl+C
     let mut post_ok = post_copy_shortcut();
     log::info!(
         "[selection] post_copy: post_ok={} original_was_some={}",
@@ -717,10 +732,12 @@ fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
     );
     if !post_ok {
         log::warn!("[selection] post_copy_shortcut failed");
-        // 不立刻 return：剪贴板可能已经被某些路径污染，按下方还原流程恢复。
+        // Do not return immediately: the clipboard may already have been clobbered by some path;
+        // restore it via the flow below.
     }
 
-    // d) 等剪贴板更新；Windows 在开启剪贴板历史时需要轮询 + 必要时重发 Ctrl+C。
+    // d) Wait for the clipboard to update; Windows with clipboard history needs polling and,
+    //    if necessary, re-sending Ctrl+C.
     #[cfg(not(target_os = "windows"))]
     {
         std::thread::sleep(Duration::from_millis(80));
@@ -731,13 +748,14 @@ fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
     #[cfg(not(target_os = "windows"))]
     let captured = clipboard.get_text().ok();
 
-    // f) 还原原剪贴板
+    // f) Restore the original clipboard
     if let Some(ref prev) = original {
         if let Err(e) = clipboard.set_text(prev) {
             log::warn!("[selection] clipboard restore failed: {e}");
         }
     } else {
-        // 用户原剪贴板就是空 → 把 sentinel / 选区清掉，避免污染。
+        // The user's original clipboard was empty → clear the sentinel / selection to avoid
+        // polluting it.
         if let Err(e) = clipboard.set_text("") {
             log::warn!("[selection] clipboard clear failed: {e}");
         }
@@ -902,16 +920,17 @@ mod macos_ax {
 
     const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 
-    /// 调 system-wide AX 树拿 focused element，再读它的 selected text。
-    /// 失败（权限缺失 / 没焦点 / 该控件不支持选区属性）时返回 None。
+    /// Query the system-wide AX tree for the focused element, then read its selected text.
+    /// Returns None on failure (missing permission / no focus / control lacks the selection
+    /// attribute).
     pub fn read_selected_text() -> Option<String> {
         unsafe {
             let system = AXUIElementCreateSystemWide();
             if system.is_null() {
                 return None;
             }
-            // 注意：这里不能直接用 CFSTR 宏（Rust 没有），改用 CFStringCreateWithCString
-            // 临时构造 attribute key。
+            // Note: the CFSTR macro is not available in Rust, so build the attribute key
+            // temporarily with CFStringCreateWithCString.
             let focused_attr =
                 cfstring_from_static(b"AXFocusedUIElement\0").unwrap_or(std::ptr::null());
             let selected_attr =
@@ -1217,14 +1236,15 @@ mod windows_paste {
 
 // ─────────────────────────── front-app label ───────────────────────────
 
-/// 前台 app 的 **结构化** 标识：`(localizedName, bundleIdentifier)`。
+/// The foreground app's **structured** identity: `(localizedName, bundleIdentifier)`.
 ///
-/// [`current_front_app`] 那个 `"Safari (com.apple.Safari)"` 显示串是给 LLM prompt 看的，
-/// 程序判定（比如 `host_document` 的 bundle 黑名单）没法用 —— 从显示串里再把 bundle
-/// 抠出来既脆又蠢。所以真正的取值放在这里，显示串由它拼装。
+/// [`current_front_app`]'s `"Safari (com.apple.Safari)"` display string is for the LLM prompt;
+/// programmatic decisions (e.g. `host_document`'s bundle denylist) cannot use it — re-extracting
+/// the bundle from the display string is fragile and ugly. The real value lives here, and the
+/// display string is assembled from it.
 ///
-/// 这也是全仓唯一一处「读前台 app」的实现：`coordinator::capsule_focus` 曾有一份近乎
-/// 逐字重复的副本，现已改为调用本函数。
+/// This is also the only place in the repo that "reads the front app": `coordinator::capsule_focus`
+/// used to carry a near-verbatim duplicate and now calls this function.
 #[cfg(target_os = "macos")]
 pub(crate) fn current_front_app_parts() -> (Option<String>, Option<String>) {
     use objc2::msg_send;
@@ -1248,17 +1268,18 @@ pub(crate) fn current_front_app_parts() -> (Option<String>, Option<String>) {
     }
 }
 
-/// **某个进程**的 bundle id —— 不是「谁在最前面」，是「这个 pid 是谁」。
+/// The bundle id of **one process** — not "who is frontmost" but "who is this pid".
 ///
-/// `host_document` 的安全闸门要判的是**手里这个 AX 元素属于哪个 app**。用前台 app 顶替
-/// 有两个问题，后者是安全问题：
+/// `host_document`'s security gate must decide **which app owns this AX element in hand**.
+/// Substituting the front app has two problems, the second being a security issue:
 ///
-/// 1. 焦点元素的归属和「谁在最前面」本来就可能不一致；
-/// 2. 更要命的是时间差 —— bundle 在取元素**之前**采样，而每个 AX 调用都可能阻塞到
-///    `AX_MESSAGING_TIMEOUT_SECS`。用户在这中间切了 app，闸门就会拿旧 app 的身份，去
-///    放行一个属于新 app 的元素。终端、密码管理器正是靠 bundle 黑名单拦的。
+/// 1. The focused element's owner and "who is frontmost" may legitimately differ;
+/// 2. More importantly, the timing gap — the bundle is sampled **before** fetching the element,
+///    and every AX call can block up to `AX_MESSAGING_TIMEOUT_SECS`. If the user switches apps in
+///    between, the gate would use the old app's identity to admit an element belonging to the new
+///    app. Terminals and password managers are exactly what the bundle denylist blocks.
 ///
-/// 拿元素自己的 pid 来问，这个窗口就不存在了。
+/// Asking via the element's own pid removes this window entirely.
 #[cfg(target_os = "macos")]
 pub(crate) fn bundle_id_for_pid(pid: i32) -> Option<String> {
     use objc2::msg_send;
@@ -1280,7 +1301,7 @@ pub(crate) fn current_front_app_parts() -> (Option<String>, Option<String>) {
     use windows::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
     };
-    // Windows 上没有 bundle id 这个概念，窗口标题是我们唯一能免费拿到的标识。
+    // Windows has no bundle id concept; the window title is the only identity we get for free.
     unsafe {
         let hwnd = GetForegroundWindow();
         if hwnd.0.is_null() {
@@ -1309,8 +1330,8 @@ pub(crate) fn current_front_app_parts() -> (Option<String>, Option<String>) {
     (None, None)
 }
 
-/// 前台 app 的显示串，形如 `"Safari (com.apple.Safari)"`（Windows 上是窗口标题）。
-/// 只作展示 / 进 prompt 用；要做判定请用 [`current_front_app_parts`]。
+/// The foreground app's display string, like `"Safari (com.apple.Safari)"` (the window title on
+/// Windows). For display / prompt use only; for decisions use [`current_front_app_parts`].
 pub(crate) fn current_front_app() -> Option<String> {
     match current_front_app_parts() {
         (Some(name), Some(bundle)) => Some(format!("{name} ({bundle})")),
@@ -1379,7 +1400,7 @@ mod tests {
         assert!(out.contains("[…truncated…]"));
         assert!(out.starts_with(&"a".repeat(50)));
         assert!(out.ends_with(&"c".repeat(50)));
-        // 中段 b 应被裁掉
+        // The middle "b" run must be cut
         assert!(!out.contains(&"b".repeat(20)));
     }
 

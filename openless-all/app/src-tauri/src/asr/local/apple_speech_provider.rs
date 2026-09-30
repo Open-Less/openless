@@ -1,19 +1,21 @@
-//! Apple Speech 本地 ASR 适配器（macOS，issue #574）。
+//! Apple Speech local ASR adapter (macOS, issue #574).
 //!
-//! 把 Apple 的 `SFSpeechRecognizer` 当作第 4 个本地 provider，接入链路与
-//! `LocalQwenAsr` 完全同形：实现 `crate::recorder::AudioConsumer` 把 PCM
-//! 累进缓冲，`transcribe()` 返回 `RawTranscript{text, duration_ms}`。
+//! Wraps Apple's `SFSpeechRecognizer` as a 4th local provider with the same
+//! shape as `LocalQwenAsr`: implements `crate::recorder::AudioConsumer` to
+//! accumulate PCM into a buffer, and `transcribe()` returns
+//! `RawTranscript{text, duration_ms}`.
 //!
-//! **首版批处理**：把缓冲的 16k/mono/16-bit PCM 用 `encode_wav_16k_mono`
-//! 写成临时 wav，喂给 `SFSpeechURLRecognitionRequest`。这样避开
-//! `AVAudioPCMBuffer` / `AVAudioFormat` 的 objc2 桥接，换取实现确定性。
-//! 实时 partial 流式列为后续增量，不在本次范围。
+//! Batch processing: buffered 16k/mono/16-bit PCM is written to a temp wav via
+//! `encode_wav_16k_mono` and fed to `SFSpeechURLRecognitionRequest`, avoiding
+//! the objc2 bridging of `AVAudioPCMBuffer` / `AVAudioFormat`. Real-time
+//! partial streaming is future work.
 //!
-//! 权限走 `SFSpeechRecognizer.requestAuthorization:`（completion handler
-//! block），范式照抄 `permissions.rs` 的 `requestAccessForMediaType:`。
-//! 未授权时 `transcribe()` 返回清晰错误。
+//! Authorization uses `SFSpeechRecognizer.requestAuthorization:` (completion
+//! handler block), mirroring `requestAccessForMediaType:` in `permissions.rs`.
+//! `transcribe()` returns a clear error when unauthorized.
 //!
-//! 非 macOS 平台不编译本模块（见 `mod.rs` 的 cfg 门控）。
+//! This module is not compiled on non-macOS platforms (see the cfg gate in
+//! `mod.rs`).
 
 #![cfg(target_os = "macos")]
 
@@ -31,66 +33,89 @@ use parking_lot::Mutex;
 use crate::asr::wav::encode_wav_16k_mono;
 use crate::asr::RawTranscript;
 
-/// `SFSpeechRecognizerAuthorizationStatus`（NS_ENUM(NSInteger)）。
+/// `SFSpeechRecognizerAuthorizationStatus` (NS_ENUM(NSInteger)).
 const SF_AUTH_NOT_DETERMINED: i64 = 0;
 const SF_AUTH_DENIED: i64 = 1;
 const SF_AUTH_RESTRICTED: i64 = 2;
 const SF_AUTH_AUTHORIZED: i64 = 3;
 
-/// 等待识别回调的兜底超时**下限**。识别本身另有 coordinator 侧动态超时；这里只防
-/// block 永不回调导致线程永久阻塞。长录音按音频时长放大，见 `recognition_wait_budget`。
+/// Lower bound for the recognition callback wait. Recognition also has a
+/// coordinator-side dynamic timeout; this only guards against the block never
+/// firing and the thread blocking forever. Scaled with audio length; see
+/// `recognition_wait_budget`.
 const RECOGNITION_WAIT: Duration = Duration::from_secs(60);
-/// 识别等待的轮询步长。每轮之间检查 `cancel_flag` 与任务状态：取消 / 上层超时后阻塞
-/// 线程最多再等这一步长（~100ms）就退出，而不是傻等满整个等待预算。
+/// Polling interval for the recognition wait. Each round checks `cancel_flag`
+/// and task state, so after cancel/timeout the blocked thread exits within one
+/// interval (~100ms) instead of waiting out the full budget.
 const RECOGNITION_POLL: Duration = Duration::from_millis(100);
-/// `SFSpeechRecognitionTaskState`（NS_ENUM(NSInteger)）的 completed。任务终结
-/// （成功、失败或取消）后进入该状态，是「不会再有回调」的权威信号。
+/// `completed` value of `SFSpeechRecognitionTaskState` (NS_ENUM(NSInteger)).
+/// Entered once the task finishes (success, failure, or cancel) — the
+/// authoritative "no more callbacks" signal.
 const SF_TASK_STATE_COMPLETED: i64 = 4;
-/// 观察到任务 completed 后再等这一小段，让已经在飞的最后一次 resultHandler 回调
-/// 落进累积器，避免「state 先翻转、回调后到」的竞态把最后一个话段截掉。
+/// Grace period after observing task completion, so an in-flight final
+/// resultHandler callback still lands in the accumulator instead of the
+/// "state flips first, callback arrives later" race dropping the last segment.
 const COMPLETION_GRACE: Duration = Duration::from_millis(250);
-/// 后备终止条件：已见 isFinal 且此后静默这么久，视为识别结束。只防 `state` 轮询
-/// 因系统差异拿不到 completed 时无限等待；正常路径由 completed + COMPLETION_GRACE
-/// 快速收账，不受此值影响。取 5s 是因为多话段场景 isFinal 可能逐话段出现，话段间
-/// 的回调空窗（对应音频里的长停顿）必须远小于该阈值，否则会提前收账截掉后文——
-/// 批处理识别消化静音远快于实时，5s 空窗足够安全。
+/// Fallback finish condition: recognition ends after isFinal plus this much
+/// callback silence. Only guards against `state` polling never observing
+/// completed; the normal path settles via completed + COMPLETION_GRACE. With
+/// multiple segments isFinal can appear per utterance, and inter-utterance
+/// callback gaps (long pauses in the audio) must stay far below this
+/// threshold, or late text would be cut off.
 const FINAL_QUIESCENCE: Duration = Duration::from_secs(5);
 const AUTHORIZATION_WAIT: Duration = Duration::from_secs(30);
-/// 识别引擎就绪（isAvailable）的轮询等待：刚 init 的 recognizer 常瞬时不可用（异步
-/// 加载语言资源），稍等即就绪。等满仍不可用才报错——修「有时用不了」的竞态。
+/// Poll wait for engine availability (isAvailable): a freshly initialized
+/// recognizer is often briefly unavailable while language resources load
+/// asynchronously, then becomes ready. Error only after the full wait elapses.
 const AVAILABILITY_WAIT: Duration = Duration::from_secs(3);
 const AVAILABILITY_POLL: Duration = Duration::from_millis(100);
 
-/// `SFSpeechRecognitionTask` 的裸指针包装，仅为把 task 句柄从 spawn_blocking 线程
-/// 存进 `AppleSpeechAsr::active_task`，供任意线程（含 tokio 上取消的线程）调用
-/// `-[SFSpeechRecognitionTask cancel]` 终止识别。
+/// Raw-pointer wrapper for `SFSpeechRecognitionTask`, used only to store the
+/// task handle from the spawn_blocking thread into
+/// `AppleSpeechAsr::active_task` so any thread (including one being cancelled
+/// on the tokio runtime) can call `-[SFSpeechRecognitionTask cancel]` to stop
+/// recognition.
 ///
-/// SAFETY: `SFSpeechRecognitionTask` 是标准的 objc/ARC 对象，其 `cancel` 属于
-/// Speech.framework 文档承诺可从任意线程安全调用的操作（内部转派到自身队列）；
-/// 我们对该指针只做两件事——存入 `active_task`、以及调用 `cancel`——不做解引用、
-/// 不改内部状态。指针仅在对应识别请求存活期间被持有：`recognize_file` 返回前会把
-/// `active_task` 置回 `None`，此时 recognizer / request 仍在同一栈帧强引用存活，
-/// task 不会被提前释放。因此跨线程传递该裸指针并调用 `cancel` 不违反内存/线程安全。
-/// 不实现 `Sync`——它只在 `Mutex` 保护下被取出后使用，无需并发共享引用。
+/// SAFETY: `SFSpeechRecognitionTask` is a standard objc/ARC object whose
+/// `cancel` is documented by Speech.framework as safe to call from any thread
+/// (it dispatches to its own queue internally). The pointer is only stored in
+/// `active_task` or passed to `cancel` — never dereferenced or mutated. It is
+/// held only while the recognition request is alive: `recognize_file` resets
+/// `active_task` to `None` before returning, while recognizer / request still
+/// strongly reference the task from the same stack frame, so it is not freed
+/// early. Passing the raw pointer across threads and calling `cancel` is
+/// therefore memory- and thread-safe. `Sync` is not implemented — the wrapper
+/// is only used after being taken out under a `Mutex`, with no concurrent
+/// shared references.
 struct SendableTask(*mut AnyObject);
 
-// SAFETY: 见 `SendableTask` 文档注释——底层 SFSpeechRecognitionTask 线程安全，
-// `cancel` 可跨线程调用，包装体只承载指针用于「存」与「取消」。
+// SAFETY: see the `SendableTask` doc comment — the underlying
+// SFSpeechRecognitionTask is thread-safe, `cancel` can be called
+// cross-thread, and the wrapper only carries the pointer for storing and
+// cancelling.
 unsafe impl Send for SendableTask {}
 
 pub struct AppleSpeechAsr {
-    /// 16-bit LE PCM 字节缓冲（recorder 推什么我们存什么）。与 LocalQwenAsr 同形。
+    /// Buffer of 16-bit LE PCM bytes (stores whatever the recorder pushes).
+    /// Mirrors LocalQwenAsr.
     buffer: Mutex<Vec<u8>>,
-    /// 识别 locale（Apple 标识符，如 "zh-CN"）。None = 用系统默认。由用户工作语言映射
-    /// 而来 —— SFSpeechRecognizer 一个实例只认一种语言，不显式指定就落到系统首选语言
-    /// （常是英文），中文语音会被英文引擎识别成英文且理解错误（用户报告的根因）。
+    /// Recognition locale (Apple identifier, e.g. "zh-CN"); None = system
+    /// default. Mapped from the user's working language — one
+    /// SFSpeechRecognizer instance handles a single language, and without an
+    /// explicit locale it falls back to the system preferred language (often
+    /// English), which mis-recognizes other languages (root cause of a
+    /// user-reported bug).
     locale: Option<String>,
-    /// 取消标志。`cancel()` 置位；`recognize_file` 的等待轮询每轮检查，置位即放弃
-    /// 等待并真正 `cancel` 底层识别任务 —— 让被上层动态超时抛弃 / 被 `cancel()` 的
-    /// spawn_blocking 阻塞线程在 ~100ms 内退出，而不是傻等满 `RECOGNITION_WAIT`。
+    /// Cancel flag. Set by `cancel()`; the wait loop in `recognize_file`
+    /// checks it each round and, when set, gives up waiting and cancels the
+    /// underlying recognition task — so spawn_blocking threads abandoned by
+    /// the outer dynamic timeout or by `cancel()` exit within ~100ms instead
+    /// of waiting out `RECOGNITION_WAIT`.
     cancel_flag: Arc<AtomicBool>,
-    /// 当前在飞的识别任务句柄。`recognize_file` 拿到 task 即存入，返回前清空；
-    /// `cancel()` 从这里取出并调用 `-[SFSpeechRecognitionTask cancel]` 终止识别。
+    /// Handle of the in-flight recognition task. `recognize_file` stores it as
+    /// soon as the task exists and clears it before returning; `cancel()`
+    /// takes it and calls `-[SFSpeechRecognitionTask cancel]` to stop
+    /// recognition.
     active_task: Arc<Mutex<Option<SendableTask>>>,
 }
 
@@ -104,19 +129,22 @@ impl AppleSpeechAsr {
         }
     }
 
-    /// 当前缓冲音频时长（毫秒）。与 LocalQwenAsr::buffer_duration_ms 对齐，
-    /// coordinator 用它给本地 provider 计算动态超时。不消费缓冲。
+    /// Duration (ms) of buffered audio. Matches
+    /// LocalQwenAsr::buffer_duration_ms; the coordinator uses it to compute
+    /// dynamic timeouts for local providers. Does not consume the buffer.
     pub fn buffer_duration_ms(&self) -> u64 {
         (self.buffer.lock().len() as u64 / 2) * 1000 / 16_000
     }
 
-    /// stop 时调用：把缓冲编码成临时 wav，喂给 `SFSpeechURLRecognitionRequest`，
-    /// 把异步结果同步化后返回。
+    /// Called on stop: encode the buffer into a temp wav, feed it to
+    /// `SFSpeechURLRecognitionRequest`, and return the synchronized result.
     ///
-    /// 失败时**保留** buffer（与 WhisperBatchASR / LocalQwenAsr 一致）：凭据无关，
-    /// 但权限被拒 / 识别失败时不该把用户录音直接丢掉。仅成功路径清缓冲。
+    /// On failure the buffer is kept (consistent with WhisperBatchASR /
+    /// LocalQwenAsr): denied permission or recognition failure must not
+    /// discard the user's recording. Only the success path clears the buffer.
     pub async fn transcribe(&self) -> Result<RawTranscript> {
-        // clone 而非 take：会话末调用一次，几 MB 可接受；失败时缓冲仍在。
+        // clone instead of take: called once per session, a few MB is
+        // acceptable, and the buffer survives failures.
         let pcm = self.buffer.lock().clone();
         if pcm.is_empty() {
             return Ok(RawTranscript {
@@ -127,14 +155,15 @@ impl AppleSpeechAsr {
         let duration_ms = (pcm.len() as u64 / 2) * 1000 / 16_000;
         let locale = self.locale.clone();
 
-        // 本次识别开始前复位取消标志：上一会话若以取消收尾，标志可能仍为 true。
+        // Reset the cancel flag before this recognition: a previous session
+        // that ended cancelled may have left it true.
         self.cancel_flag.store(false, Ordering::SeqCst);
         let cancel_flag = Arc::clone(&self.cancel_flag);
         let active_task = Arc::clone(&self.active_task);
 
-        // SFSpeechRecognizer 是阻塞且基于 objc runloop 的同步桥接；放到
-        // spawn_blocking 不占 tokio runtime。与 LocalQwenAsr 走同一个 Tauri
-        // 持有的 runtime handle。
+        // SFSpeechRecognizer bridges synchronously over the objc runloop and
+        // blocks; run it in spawn_blocking to keep the tokio runtime free,
+        // via the same Tauri-owned runtime handle as LocalQwenAsr.
         let result = tauri::async_runtime::spawn_blocking(move || {
             transcribe_pcm_blocking(
                 &pcm,
@@ -154,14 +183,18 @@ impl AppleSpeechAsr {
     }
 
     pub fn cancel(&self) {
-        // 先置位取消标志：等待轮询下一轮（~100ms 内）看到即放弃等待并退出阻塞线程。
+        // Set the cancel flag first: the wait loop sees it on its next round
+        // (~100ms) and gives up waiting, releasing the blocked thread.
         self.cancel_flag.store(true, Ordering::SeqCst);
-        // 再真正终止在飞的识别任务（若有）。取出句柄后立即调用 cancel。
+        // Then actually terminate the in-flight recognition task, if any,
+        // calling cancel immediately after taking the handle.
         if let Some(task) = self.active_task.lock().take() {
-            // SAFETY: `task.0` 是 `recognitionTaskWithRequest:` 返回的
-            // SFSpeechRecognitionTask 指针。`-[SFSpeechRecognitionTask cancel]` 无参、
-            // 无返回值，是 Speech.framework 承诺可从任意线程调用的操作。此处仅调用
-            // cancel、不解引用指针；调用后不再使用该句柄（已 take 出 Option）。
+            // SAFETY: `task.0` is the SFSpeechRecognitionTask pointer returned
+            // by `recognitionTaskWithRequest:`. `-[SFSpeechRecognitionTask
+            // cancel]` takes no arguments, returns nothing, and is documented
+            // by Speech.framework as callable from any thread. Only cancel is
+            // invoked, the pointer is not dereferenced, and the handle is not
+            // used again (already taken out of the Option).
             let _: () = unsafe { msg_send![task.0, cancel] };
             log::info!("[apple-speech] recognition task cancelled");
         }
@@ -181,8 +214,9 @@ impl crate::recorder::AudioConsumer for AppleSpeechAsr {
     }
 }
 
-/// 把 PCM 写成临时 wav，确保授权，跑批处理识别，删临时文件，返回结果。
-/// 在 spawn_blocking 线程内同步执行。
+/// Write the PCM to a temp wav, ensure authorization, run batch recognition,
+/// delete the temp file, and return the result. Runs synchronously on a
+/// spawn_blocking thread.
 fn transcribe_pcm_blocking(
     pcm: &[u8],
     duration_ms: u64,
@@ -198,7 +232,8 @@ fn transcribe_pcm_blocking(
         .collect();
     let wav = encode_wav_16k_mono(&samples);
 
-    // 临时 wav：唯一文件名避免并发会话碰撞；用完即删（RAII guard）。
+    // Temp wav: unique filename avoids concurrent-session collisions; deleted
+    // when done (RAII guard).
     let path = std::env::temp_dir().join(format!(
         "openless-apple-speech-{}-{}.wav",
         std::process::id(),
@@ -215,13 +250,15 @@ fn transcribe_pcm_blocking(
     Ok(RawTranscript { text, duration_ms })
 }
 
-/// 当前授权未确定时弹系统授权框并等待；最终非 authorized 一律返回清晰错误。
+/// If authorization is not yet determined, show the system prompt and wait;
+/// any final non-authorized status returns a clear error.
 fn ensure_authorized() -> Result<()> {
     let cls = speech_recognizer_class()?;
 
-    // SFSpeechRecognizer.authorizationStatus（类方法）。
-    // SAFETY: `cls` 是已查到的 `SFSpeechRecognizer` 类对象；`authorizationStatus`
-    // 是无参类方法，返回 NSInteger（i64）。
+    // SFSpeechRecognizer.authorizationStatus (class method).
+    // SAFETY: `cls` is the resolved `SFSpeechRecognizer` class object;
+    // `authorizationStatus` is a no-argument class method returning NSInteger
+    // (i64).
     let status: i64 = unsafe { msg_send![cls, authorizationStatus] };
     if status == SF_AUTH_AUTHORIZED {
         return Ok(());
@@ -236,16 +273,20 @@ fn ensure_authorized() -> Result<()> {
         bail!("语音识别授权状态未知: {status}");
     }
 
-    // NotDetermined：弹系统授权框并同步等待回调。block 范式照抄 permissions.rs。
+    // NotDetermined: show the system authorization prompt and wait
+    // synchronously for the callback, using the same block pattern as
+    // permissions.rs.
     let (tx, rx) = mpsc::channel();
     let block = RcBlock::new(move |granted_status: i64| {
         let _ = tx.send(granted_status);
     });
     log::info!("[apple-speech] requesting SFSpeechRecognizer authorization");
-    // SAFETY: `requestAuthorization:` 接收一个 `void(^)(SFSpeechRecognizerAuthorizationStatus)`
-    // block，回调参数是 NSInteger（i64）。`&*block` 是 block2 的稳定指针，block 本体
-    // 由 `block` 持有到本作用域结束 —— 回调在系统弹框被用户应答后触发，发生在
-    // `rx.recv_timeout` 返回之前，因此 block 生命周期足够覆盖回调。
+    // SAFETY: `requestAuthorization:` takes a
+    // `void(^)(SFSpeechRecognizerAuthorizationStatus)` block whose callback
+    // argument is NSInteger (i64). `&*block` is a stable block2 pointer and
+    // the block is owned by `block` until end of scope — the callback fires
+    // after the user answers the system prompt, before `rx.recv_timeout`
+    // returns, so the block outlives the callback.
     let _: () = unsafe { msg_send![cls, requestAuthorization: &*block] };
 
     let granted = match rx.recv_timeout(AUTHORIZATION_WAIT) {
@@ -262,18 +303,22 @@ fn ensure_authorized() -> Result<()> {
     }
 }
 
-/// 用 `SFSpeechURLRecognitionRequest` 对给定 wav 文件做一次批处理识别，
-/// 把 `recognitionTaskWithRequest:resultHandler:` 的异步回调同步化。
+/// Run one batch recognition of the given wav file via
+/// `SFSpeechURLRecognitionRequest`, synchronizing the async
+/// `recognitionTaskWithRequest:resultHandler:` callbacks.
 ///
-/// **多话段累积（修「停顿后前文丢失」）**：设备端识别会在语音停顿处把音频切成多个
-/// 话段（utterance），逐话段回调、逐话段重置文本（见 `SegmentAccumulator` 文档）。
-/// 因此不能「见到第一个 isFinal 就收工」——resultHandler 只负责把每次回调喂进
-/// `SegmentAccumulator`；等待循环以 `task.state == completed`（辅以 isFinal 后静默
-/// 的后备条件）判定识别真正结束，再把所有话段拼接返回。
+/// Multi-utterance accumulation: on-device recognition splits audio at pauses
+/// into utterances, each reported separately with its text reset (see the
+/// `SegmentAccumulator` docs). So the loop cannot stop at the first isFinal —
+/// the resultHandler only feeds each callback into `SegmentAccumulator`, and
+/// the wait loop decides real completion via `task.state == completed` (plus
+/// an isFinal-then-silence fallback) before joining all segments.
 ///
-/// 等待是每 `RECOGNITION_POLL` 一轮的轮询：每轮检查 `cancel_flag`，置位则 `cancel`
-/// 底层任务并返回「已取消」错误，让上层动态超时抛弃 / `cancel()` 触发时阻塞线程在
-/// ~100ms 内退出。返回前无论成败都清空 `active_task`（RAII guard 兜底 `?` 早退）。
+/// Waiting polls every `RECOGNITION_POLL`: each round checks `cancel_flag`,
+/// and on set cancels the underlying task and returns a "cancelled" error so
+/// threads abandoned by the outer dynamic timeout or by `cancel()` exit
+/// within ~100ms. `active_task` is cleared on every exit path (an RAII guard
+/// covers `?` early returns).
 fn recognize_file(
     wav_path: &str,
     locale: Option<&str>,
@@ -283,28 +328,34 @@ fn recognize_file(
 ) -> Result<String> {
     let recognizer = create_recognizer(locale)?;
 
-    // 识别引擎就绪等待（isAvailable 竞态）：SFSpeechRecognizer 刚 init 时引擎往往还没
-    // 就绪（异步加载语言资源），isAvailable 瞬时为 false、稍等即 true。之前一见 false
-    // 就 bail —— 这正是「有时用不了」的主因。改为轮询等待最多几秒再判定。
+    // Engine availability wait (isAvailable race): a just-initialized
+    // SFSpeechRecognizer often reports isAvailable == false briefly while
+    // language resources load asynchronously. Previously any false bailed out
+    // — the main cause of intermittent failures. Now poll for a few seconds
+    // before deciding.
     wait_until_available(recognizer)?;
 
     let url = file_url(wav_path)?;
     let request = create_url_request(url)?;
 
-    // on-device 优先：设备支持当前语言的设备端识别就强制 on-device —— 音频不出本机
-    // （隐私）、离线可用、不受网络波动/限流影响（消除「有时连不上服务器」）。不支持的
-    // 语言回退系统默认（可能走网络）以保底能用。
+    // Prefer on-device: force on-device recognition when the device supports
+    // it for the current language (audio stays local for privacy, works
+    // offline, immune to network issues). Unsupported languages fall back to
+    // the system default (possibly networked) so recognition still works.
     configure_on_device(recognizer, request);
 
-    // 显式开启 partial 回调：话段边界信号（speechRecognitionMetadata 非空的结果）
-    // 出现在非 final 回调里，关掉 partial 就拿不到边界、无从累积。
-    // SAFETY: `request` 是 SFSpeechURLRecognitionRequest（父类提供该 BOOL setter）。
+    // Enable partial results explicitly: utterance boundary signals (results
+    // with non-null speechRecognitionMetadata) arrive in non-final callbacks;
+    // without partials there are no boundaries to accumulate on.
+    // SAFETY: `request` is an SFSpeechURLRecognitionRequest (the BOOL setter
+    // comes from the parent class).
     let _: () = unsafe { msg_send![request, setShouldReportPartialResults: Bool::new(true)] };
 
     let shared = Arc::new(Mutex::new(RecognitionShared::default()));
     let shared_cb = Arc::clone(&shared);
-    // resultHandler: void(^)(SFSpeechRecognitionResult *result, NSError *error)。
-    // 回调只做「解包 + 喂累积器」，结束判定完全交给下面的等待循环。
+    // resultHandler: void(^)(SFSpeechRecognitionResult *result, NSError *error).
+    // The callback only unwraps and feeds the accumulator; completion is
+    // decided entirely by the wait loop below.
     let block = RcBlock::new(move |result: *mut AnyObject, error: *mut AnyObject| {
         let (recognized, callback_error) = extract_callback(result, error);
         let mut s = shared_cb.lock();
@@ -312,10 +363,13 @@ fn recognize_file(
     });
 
     log::info!("[apple-speech] starting recognitionTaskWithRequest");
-    // SAFETY: `recognizer` 有效；`request` 是有效的 `SFSpeechURLRecognitionRequest`；
-    // `&*block` 是稳定 block 指针，block 本体被 `block` 持有至本作用域结束。
-    // 返回的 `SFSpeechRecognitionTask` 自身被 recognizer 强引用直到完成；我们额外把
-    // 句柄存进 `active_task` 供 `cancel()` 从别的线程终止它（见 SendableTask 文档）。
+    // SAFETY: `recognizer` is valid; `request` is a valid
+    // `SFSpeechURLRecognitionRequest`; `&*block` is a stable block pointer and
+    // the block is owned by `block` until end of scope. The returned
+    // `SFSpeechRecognitionTask` is strongly referenced by the recognizer until
+    // completion; we additionally store the handle in `active_task` so
+    // `cancel()` can terminate it from another thread (see the SendableTask
+    // docs).
     let task: *mut AnyObject = unsafe {
         msg_send![
             recognizer,
@@ -324,12 +378,15 @@ fn recognize_file(
         ]
     };
 
-    // 存句柄供 cancel()；guard 保证本函数任意退出路径都把它清回 None，避免悬挂。
+    // Store the handle for cancel(); the guard clears it back to None on every
+    // exit path to avoid a dangling handle.
     *active_task.lock() = Some(SendableTask(task));
     let _task_guard = ActiveTaskGuard(active_task);
 
-    // 轮询等待：每轮先查 cancel_flag，再看错误 / 终止条件；超过按音频时长放大的
-    // 等待预算则超时（外层 coordinator 的动态超时通常先于它触发，这里只防回调失联）。
+    // Polling wait: each round checks cancel_flag first, then error /
+    // termination conditions; times out past the budget scaled to audio
+    // length (the outer coordinator's dynamic timeout usually fires first —
+    // this only guards against lost callbacks).
     let deadline = Instant::now() + recognition_wait_budget(duration_ms);
     loop {
         let now = Instant::now();
@@ -343,10 +400,14 @@ fn recognize_file(
         match decision {
             RecognitionDecision::Cancel => {
                 drop(s);
-                // 若 cancel() 尚未取走句柄（例如超时路径只置了 flag 没调 cancel），这里
-                // 补发一次 cancel，确保底层识别任务被真正终止，而不是留它在后台跑满。
+                // If cancel() has not taken the handle yet (e.g. a timeout
+                // path only set the flag), send cancel here so the underlying
+                // task is actually terminated instead of running to
+                // completion.
                 if let Some(t) = active_task.lock().take() {
-                    // SAFETY: 见 SendableTask 文档 —— `cancel` 无参、可跨线程调用，仅调用不解引用。
+                    // SAFETY: see the SendableTask docs — `cancel` takes no
+                    // arguments, is callable cross-thread, and is only invoked,
+                    // never dereferenced.
                     let _: () = unsafe { msg_send![t.0, cancel] };
                 }
                 bail!("语音识别已取消");
@@ -355,8 +416,9 @@ fn recognize_file(
                 let Some(err) = s.error.take() else {
                     bail!("语音识别失败：终止状态缺少错误详情");
                 };
-                // result 与 error 同次到达时，record_callback 已先折叠 result；这里抢救只
-                // 收账一次，不会因错误回放已提交的 final。
+                // When result and error arrive together, record_callback
+                // already folded the result; salvaging here settles it exactly
+                // once and never replays a committed final.
                 let salvaged = s.acc.salvage();
                 if salvaged.is_empty() {
                     bail!("语音识别失败: {err}");
@@ -381,9 +443,11 @@ fn recognize_file(
         }
 
         std::thread::sleep(RECOGNITION_POLL);
-        // SAFETY: `task` 在本栈帧内被 recognizer 强引用存活（见上）；`state` 是无参
-        // 只读属性，返回 NSInteger（i64）。跨线程读一个整型属性，最坏读到瞬时旧值，
-        // 下一轮（~100ms 后）即追上，不影响正确性。
+        // SAFETY: `task` stays alive, strongly referenced by the recognizer
+        // within this stack frame (see above); `state` is a no-argument
+        // read-only property returning NSInteger (i64). Reading an integer
+        // property across threads at worst yields a momentarily stale value,
+        // caught up on the next round (~100ms), without affecting correctness.
         let state: i64 = unsafe { msg_send![task, state] };
         if state == SF_TASK_STATE_COMPLETED {
             shared.lock().lifecycle.record_completed(Instant::now());
@@ -391,15 +455,17 @@ fn recognize_file(
     }
 }
 
-/// 识别等待预算：音频时长 + 30s，且不低于 `RECOGNITION_WAIT`。批处理识别通常远快于
-/// 实时，但长录音（多话段逐段吐结果）不该被固定 60s 硬顶截断——旧实现对超过 60s
-/// 才识别完的长录音会直接报「等待超时」。外层 coordinator 的动态超时仍然先兜底。
+/// Recognition wait budget: audio duration + 30s, at least `RECOGNITION_WAIT`.
+/// Batch recognition is usually far faster than real time, but long recordings
+/// (multiple segments, results per segment) must not be cut off by the fixed
+/// 60s cap. The outer coordinator's dynamic timeout still fires first.
 fn recognition_wait_budget(duration_ms: u64) -> Duration {
     RECOGNITION_WAIT.max(Duration::from_millis(duration_ms).saturating_add(Duration::from_secs(30)))
 }
 
-/// 保证 `recognize_file` 任意退出路径（含 `?` 早退、正常返回、取消/超时）都把
-/// `active_task` 清回 `None`，避免悬挂的 task 句柄被后续 `cancel()` 误用。
+/// Ensures `active_task` is reset to `None` on every exit path of
+/// `recognize_file` (including `?` early returns, normal return, cancel and
+/// timeout) so a dangling task handle cannot be misused by a later `cancel()`.
 struct ActiveTaskGuard<'a>(&'a Mutex<Option<SendableTask>>);
 
 impl Drop for ActiveTaskGuard<'_> {
@@ -408,12 +474,14 @@ impl Drop for ActiveTaskGuard<'_> {
     }
 }
 
-/// 轮询等待识别引擎就绪。init 后 isAvailable 可能瞬时 false（异步加载资源），稍等
-/// 即 true；等满 AVAILABILITY_WAIT 仍不可用才报错并引导。
+/// Poll until the recognition engine is available. isAvailable can be briefly
+/// false right after init (resources loading asynchronously); error with
+/// guidance only after AVAILABILITY_WAIT elapses with no availability.
 fn wait_until_available(recognizer: *mut AnyObject) -> Result<()> {
     let deadline = std::time::Instant::now() + AVAILABILITY_WAIT;
     loop {
-        // SAFETY: `recognizer` 有效；`isAvailable` 无参返回 BOOL。
+        // SAFETY: `recognizer` is valid; `isAvailable` is a no-argument call
+        // returning BOOL.
         let available: Bool = unsafe { msg_send![recognizer, isAvailable] };
         if available.as_bool() {
             return Ok(());
@@ -427,16 +495,19 @@ fn wait_until_available(recognizer: *mut AnyObject) -> Result<()> {
     }
 }
 
-/// 支持设备端识别的语言就把请求设成强制 on-device（音频不出本机、离线可用）；不支持
-/// 的语言不设，回退系统默认（可能走网络）以保底能用。
+/// Force on-device recognition for languages that support it (audio stays
+/// local, works offline); leave others unset so they fall back to the system
+/// default (possibly networked) and still work.
 fn configure_on_device(recognizer: *mut AnyObject, request: *mut AnyObject) {
-    // SFSpeechRecognizer.supportsOnDeviceRecognition（macOS 10.15+，BOOL 属性）。
-    // SAFETY: `recognizer` 有效；无参返回 BOOL。
+    // SFSpeechRecognizer.supportsOnDeviceRecognition (macOS 10.15+, BOOL
+    // property).
+    // SAFETY: `recognizer` is valid; no-argument call returning BOOL.
     let supports: Bool = unsafe { msg_send![recognizer, supportsOnDeviceRecognition] };
     if supports.as_bool() {
-        // SFSpeechRecognitionRequest.requiresOnDeviceRecognition = YES。
-        // SAFETY: `request` 是 SFSpeechURLRecognitionRequest（父类
-        // SFSpeechRecognitionRequest 提供该 setter）；参数 BOOL。
+        // SFSpeechRecognitionRequest.requiresOnDeviceRecognition = YES.
+        // SAFETY: `request` is an SFSpeechURLRecognitionRequest (the setter is
+        // provided by the parent class SFSpeechRecognitionRequest); BOOL
+        // argument.
         let _: () = unsafe { msg_send![request, setRequiresOnDeviceRecognition: Bool::new(true)] };
         log::info!("[apple-speech] on-device recognition enabled");
     } else {
@@ -446,19 +517,20 @@ fn configure_on_device(recognizer: *mut AnyObject, request: *mut AnyObject) {
     }
 }
 
-/// resultHandler 回调与等待循环之间的共享状态（block 侧写，轮询侧读）。
+/// State shared between the resultHandler callback and the wait loop (written
+/// by the block side, read by the polling side).
 #[derive(Default)]
 struct RecognitionShared {
     acc: SegmentAccumulator,
     lifecycle: RecognitionLifecycle,
-    /// 第一个识别错误（保留首个，后续忽略）。
+    /// First recognition error (the first is kept, later ones ignored).
     error: Option<String>,
 }
 
 struct RecognizedCallback {
     text: String,
-    /// 本次结果带 `speechRecognitionMetadata`（非空）——一个话段（utterance）
-    /// 到此结束，`text` 是该话段的完整文本。
+    /// This result carries non-null `speechRecognitionMetadata` — an
+    /// utterance ends here and `text` is that utterance's full text.
     utterance_ended: bool,
     is_final: bool,
 }
@@ -550,8 +622,9 @@ impl RecognitionLifecycle {
     }
 }
 
-/// 从 `(result, error)` 同时解包识别结果与错误。Apple 允许二者同次出现；调用方必须先
-/// 折叠结果、再记录错误，确保错误抢救包含这次最后文本且只收账一次。
+/// Unwrap both the recognition result and the error from `(result, error)`.
+/// Apple allows both in one callback; callers must fold the result before
+/// recording the error so error salvage includes this final text exactly once.
 fn extract_callback(
     result: *mut AnyObject,
     error: *mut AnyObject,
@@ -566,23 +639,27 @@ fn extract_callback(
     if result.is_null() {
         return (None, callback_error);
     }
-    // SAFETY: `result` 非空，是 `SFSpeechRecognitionResult`；`isFinal` 无参返回 BOOL。
+    // SAFETY: `result` is non-null and an `SFSpeechRecognitionResult`;
+    // `isFinal` is a no-argument call returning BOOL.
     let is_final: Bool = unsafe { msg_send![result, isFinal] };
-    // speechRecognitionMetadata 非空 = 一个话段结束（macOS 11.3+）。老系统没有该
-    // selector，先 respondsToSelector 探测，避免直接调用未知 selector 崩溃。
-    // SAFETY: `respondsToSelector:` 是 NSObject 协议方法，参数为 Sel，返回 BOOL。
+    // Non-null speechRecognitionMetadata = an utterance ends (macOS 11.3+).
+    // Older systems lack the selector; probe with respondsToSelector first to
+    // avoid crashing on an unknown selector.
+    // SAFETY: `respondsToSelector:` is an NSObject protocol method taking a Sel
+    // and returning BOOL.
     let has_metadata_sel: Bool =
         unsafe { msg_send![result, respondsToSelector: sel!(speechRecognitionMetadata)] };
     let utterance_ended = if has_metadata_sel.as_bool() {
-        // SAFETY: 上面已确认 selector 存在；无参返回对象指针（可能为 nil）。
+        // SAFETY: the selector's existence was confirmed above; no-argument
+        // call returning an object pointer (possibly nil).
         let metadata: *mut AnyObject = unsafe { msg_send![result, speechRecognitionMetadata] };
         !metadata.is_null()
     } else {
         false
     };
-    // result.bestTranscription.formattedString → NSString → Rust String。
-    // SAFETY: `result` 非空；`bestTranscription` 返回 SFTranscription（可能为 nil），
-    // `formattedString` 返回 NSString。
+    // result.bestTranscription.formattedString → NSString → Rust String.
+    // SAFETY: `result` is non-null; `bestTranscription` returns SFTranscription
+    // (possibly nil), `formattedString` returns NSString.
     let transcription: *mut AnyObject = unsafe { msg_send![result, bestTranscription] };
     let text = if transcription.is_null() {
         String::new()
@@ -598,38 +675,50 @@ fn extract_callback(
     (Some(recognized), callback_error)
 }
 
-/// 跨话段累积识别文本（修「停顿后前文丢失」，issue：Apple Speech 停顿截断）。
+/// Accumulates recognized text across utterances (fixes loss of pre-pause
+/// text; issue: Apple Speech truncation at pauses).
 ///
-/// Apple 设备端识别（`requiresOnDeviceRecognition`）会在语音停顿处把音频切成多个
-/// 「话段」(utterance)：每个话段结束时回调一次带 `speechRecognitionMetadata` 的结果
-/// （其文本**只覆盖该话段**），随后 partial 文本从空重新累计；`isFinal` 通常只在最后
-/// 一个话段出现（个别系统版本按话段多次 isFinal）。旧实现只取第一个 isFinal 的文本，
-/// 停顿之前的所有话段被整段丢弃——这正是「说话中间停顿思考，前面内容全没了」的根因。
-/// 这里把每个话段落袋，识别结束时按 CJK 规则拼接返回。
+/// Apple on-device recognition (`requiresOnDeviceRecognition`) splits audio at
+/// pauses into utterances: each utterance end reports one result carrying
+/// `speechRecognitionMetadata` whose text covers only that utterance, then
+/// partial text restarts from empty; `isFinal` usually appears only on the
+/// last utterance (some system versions emit isFinal per utterance). Keeping
+/// only the first isFinal's text discards every earlier utterance — the root
+/// cause of "pausing mid-speech loses everything said before". Each utterance
+/// is stored here and the segments are joined with CJK rules when recognition
+/// ends.
 ///
-/// 云端（服务器）识别没有话段重置：partial 全程累计、final 为全文。此时 `segments`
-/// 只会收到一条 final 全文（或经前缀替换归并），行为与旧实现一致。
+/// Server-side recognition has no utterance resets: partials accumulate
+/// throughout and the final is the full text, so `segments` receives a single
+/// final full-text entry (or one merged via prefix replacement) — the same
+/// behavior as before.
 #[derive(Default)]
 struct SegmentAccumulator {
-    /// 已结束话段的文本，按时间顺序。
+    /// Texts of finished utterances, in order.
     segments: Vec<String>,
-    /// 当前话段最新 partial 文本。
+    /// Latest partial text of the current utterance.
     current: String,
-    /// 自上次明确边界提交后，是否见过新一代 partial。它把「下一话段」与同一任务在
-    /// 结尾重放 final 全文区分开，避免用跨话段文本前缀猜测身份。
+    /// Whether a new-generation partial was seen since the last explicit
+    /// boundary commit. Distinguishes "next utterance" from the same task
+    /// replaying final full text at the end, without guessing identity from
+    /// cross-utterance text prefixes.
     current_generation_active: bool,
-    /// 最近一次 metadata 边界提交后，任务可能在完成时重放的累计全文。只有明确边界
-    /// 才能创建这个候选；纯 isFinal 序列即使文本相同也必须视为独立话段。
+    /// Cumulative full text the task may replay at completion; only an
+    /// explicit boundary may create this candidate. Identical-text isFinal-only
+    /// sequences must still count as distinct utterances.
     cumulative_replay_candidate: Option<String>,
 }
 
 impl SegmentAccumulator {
-    /// 喂入一次识别回调。`utterance_ended` / `is_final` 的文本视为所在话段的完整
-    /// 文本并落袋；普通 partial 只更新 `current`，除非检测到「静默重置」。
+    /// Feed one recognition callback. Text with `utterance_ended` / `is_final`
+    /// is treated as the utterance's complete text and committed; a plain
+    /// partial only updates `current` unless a silent reset is detected.
     fn fold(&mut self, text: &str, utterance_ended: bool, is_final: bool) {
         if utterance_ended {
-            // metadata 是 Apple 给出的独立 utterance 证据；即使相邻文本相同或互为
-            // 前缀也必须分别提交，不能把正常复述/自我修正当累计回放吞掉。
+            // metadata is Apple's explicit utterance evidence; adjacent texts
+            // that are equal or prefixes of each other must still be committed
+            // separately, so normal repetition/self-correction is not swallowed
+            // as a cumulative replay.
             let segment = if text.trim().is_empty() {
                 std::mem::take(&mut self.current)
             } else {
@@ -645,8 +734,10 @@ impl SegmentAccumulator {
             } else {
                 text.to_string()
             };
-            // 只有 metadata 边界创建的快照能证明这是同一 task 的累计全文重放；不能仅
-            // 因 final 文本等于 joined 就去重，否则连续两个相同的 final-only 话段会丢失。
+            // Only a snapshot created by a metadata boundary proves this is
+            // the same task replaying cumulative full text; deduplicating on
+            // "final text == joined" alone would drop consecutive identical
+            // final-only utterances.
             let normalized_segment = normalized(&segment);
             let is_cumulative_replay = !self.current_generation_active
                 && self.cumulative_replay_candidate.as_deref() == Some(normalized_segment.as_str());
@@ -657,8 +748,10 @@ impl SegmentAccumulator {
             self.current.clear();
             self.current_generation_active = false;
         } else if self.reset_detected(text) {
-            // 防守路径：没有 metadata 边界回调、partial 却骤缩——设备端识别已悄悄
-            // 重开话段。把上一话段已见的最长 partial 先落袋，再从新文本重新累计。
+            // Defensive path: no metadata boundary callback but the partial
+            // shrank sharply — on-device recognition silently started a new
+            // utterance. Commit the longest partial seen for the previous
+            // utterance, then accumulate from the new text.
             let previous = std::mem::take(&mut self.current);
             self.push_segment(&previous);
             self.current = text.to_string();
@@ -671,16 +764,19 @@ impl SegmentAccumulator {
         }
     }
 
-    /// partial 骤缩视为话段重置。阈值保守（原文本 ≥12 字符且新文本缩到 1/3 以下）：
-    /// 识别器正常的假设修正只会小幅增删，不会缩水到这个程度。
+    /// Treats a sharp partial shrink as an utterance reset. Conservative
+    /// threshold (previous text >= 12 chars and new text below 1/3 of it):
+    /// normal hypothesis revisions only make small edits.
     fn reset_detected(&self, text: &str) -> bool {
         let current_chars = self.current.chars().count();
         let new_chars = text.chars().count();
         current_chars >= 12 && new_chars.saturating_mul(3) < current_chars
     }
 
-    /// 明确话段落袋。调用方先依据 metadata / generation / final 状态判定提交身份；此处
-    /// 不做跨话段文本启发式去重，避免吞掉正常复述与前缀式自我修正。
+    /// Commits an explicit utterance. The caller first determines commit
+    /// identity from metadata / generation / final state; no cross-utterance
+    /// text heuristics here, so normal repetition and prefix-style
+    /// self-correction are not swallowed.
     fn push_segment(&mut self, text: &str) {
         let trimmed = text.trim();
         if trimmed.is_empty() {
@@ -689,7 +785,8 @@ impl SegmentAccumulator {
         self.segments.push(trimmed.to_string());
     }
 
-    /// 结束收账：把残余 partial 落袋后返回全部话段的拼接文本。
+    /// Final settlement: commit any residual partial, then return the joined
+    /// text of all utterances.
     fn salvage(&mut self) -> String {
         if self.current_generation_active {
             let current = std::mem::take(&mut self.current);
@@ -703,8 +800,9 @@ impl SegmentAccumulator {
         self.segments.len()
     }
 
-    /// 话段拼接：汉字、平假名、片假名及中日标点按无空格书写习惯连接；其它脚本
-    /// （包括韩文、俄文、阿文）默认补词间空格。润色模式下 LLM 仍会再整理。
+    /// Utterance joining: Han, hiragana, katakana and CJK punctuation connect
+    /// without spaces; other scripts (Korean, Cyrillic, Arabic, ...) get word
+    /// spaces. The LLM still normalizes in polish mode.
     fn joined(&self) -> String {
         let mut out = String::new();
         for segment in &self.segments {
@@ -808,8 +906,9 @@ fn is_closing_punctuation(c: char) -> bool {
     )
 }
 
-/// 空白不敏感比较用：剔除所有空白字符。话段拼接与引擎全文重放的分隔符可能不同
-/// （我们按 CJK 规则拼、引擎按自己的习惯拼），只比内容不比空白。
+/// Whitespace-insensitive comparison: strips all whitespace. Utterance joins
+/// and engine full-text replays may use different separators, so compare
+/// content only.
 fn normalized(s: &str) -> String {
     s.chars().filter(|c| !c.is_whitespace()).collect()
 }
@@ -820,7 +919,8 @@ fn speech_recognizer_class() -> Result<&'static AnyClass> {
     })
 }
 
-/// 指定工作语言时必须使用对应 locale；无法创建时返回错误，避免悄悄识别成系统默认语言。
+/// When a working language is given, its locale must be used; return an error
+/// on failure instead of silently recognizing with the system default language.
 fn create_recognizer(locale: Option<&str>) -> Result<*mut AnyObject> {
     let cls = speech_recognizer_class()?;
     let requested_locale = locale
@@ -834,15 +934,17 @@ fn create_recognizer(locale: Option<&str>) -> Result<*mut AnyObject> {
                 "[apple-speech] recognizer locale = {}",
                 locale.unwrap_or("")
             );
-            // SAFETY: `cls` 是 SFSpeechRecognizer 类；`alloc` 得未初始化实例，
-            // `initWithLocale:` 用有效 NSLocale 初始化，返回实例移交调用方（ARC 管理）。
+            // SAFETY: `cls` is the SFSpeechRecognizer class; `alloc` yields an
+            // uninitialized instance, `initWithLocale:` initializes it with a
+            // valid NSLocale, and the returned instance is handed to the
+            // caller (ARC-managed).
             unsafe {
                 let alloc: *mut AnyObject = msg_send![cls, alloc];
                 msg_send![alloc, initWithLocale: ns_loc]
             }
         }
         None => {
-            // SAFETY: 同上；`init` 用系统默认 locale。
+            // SAFETY: as above; `init` uses the system default locale.
             unsafe {
                 let alloc: *mut AnyObject = msg_send![cls, alloc];
                 msg_send![alloc, init]
@@ -855,12 +957,14 @@ fn create_recognizer(locale: Option<&str>) -> Result<*mut AnyObject> {
     Ok(recognizer)
 }
 
-/// `[NSLocale localeWithLocaleIdentifier:<id>]`。构造失败返回 None，由调用方报告所选语言不可用。
+/// `[NSLocale localeWithLocaleIdentifier:<id>]`. Returns None on failure so
+/// the caller reports the selected language as unavailable.
 fn ns_locale(identifier: &str) -> Option<*mut AnyObject> {
     let ns_id = ns_string_from_str(identifier).ok()?;
     let cls = AnyClass::get("NSLocale")?;
-    // SAFETY: `cls` 是 NSLocale；`localeWithLocaleIdentifier:` 接收 NSString（`ns_id` 有效），
-    // 返回 autoreleased NSLocale（在 spawn_blocking 线程的 autorelease 池存活）。
+    // SAFETY: `cls` is NSLocale; `localeWithLocaleIdentifier:` takes an
+    // NSString (`ns_id` is valid) and returns an autoreleased NSLocale (alive
+    // in the spawn_blocking thread's autorelease pool).
     let loc: *mut AnyObject = unsafe { msg_send![cls, localeWithLocaleIdentifier: ns_id] };
     if loc.is_null() {
         None
@@ -869,18 +973,21 @@ fn ns_locale(identifier: &str) -> Option<*mut AnyObject> {
     }
 }
 
-/// 将首选工作语言映射为 Apple locale；识别器仍须检查当前系统是否可用。
-/// 未收录的语言返回 None，由调用方报告不支持，而不是改用系统默认语言。
+/// Maps the preferred working language to an Apple locale; the caller must
+/// still check system availability. Unlisted languages return None so the
+/// caller reports them as unsupported instead of switching to the system
+/// default.
 pub fn native_name_to_apple_locale(native_name: &str) -> Option<String> {
     openless_core::language_catalog::apple_speech_locale(native_name)
 }
 
-/// `[NSURL fileURLWithPath:<path>]`。
+/// `[NSURL fileURLWithPath:<path>]`.
 fn file_url(path: &str) -> Result<*mut AnyObject> {
     let ns_path = ns_string_from_str(path)?;
     let cls = AnyClass::get("NSURL").ok_or_else(|| anyhow!("NSURL 类不可用"))?;
-    // SAFETY: `cls` 是 NSURL；`fileURLWithPath:` 接收 NSString（`ns_path` 有效），
-    // 返回 autoreleased NSURL（在 spawn_blocking 线程的隐式 autorelease 池存活）。
+    // SAFETY: `cls` is NSURL; `fileURLWithPath:` takes an NSString (`ns_path`
+    // is valid) and returns an autoreleased NSURL (alive in the spawn_blocking
+    // thread's implicit autorelease pool).
     let url: *mut AnyObject = unsafe { msg_send![cls, fileURLWithPath: ns_path] };
     if url.is_null() {
         bail!("构造文件 URL 失败: {path}");
@@ -888,11 +995,12 @@ fn file_url(path: &str) -> Result<*mut AnyObject> {
     Ok(url)
 }
 
-/// `[[SFSpeechURLRecognitionRequest alloc] initWithURL:<url>]`。
+/// `[[SFSpeechURLRecognitionRequest alloc] initWithURL:<url>]`.
 fn create_url_request(url: *mut AnyObject) -> Result<*mut AnyObject> {
     let cls = AnyClass::get("SFSpeechURLRecognitionRequest")
         .ok_or_else(|| anyhow!("SFSpeechURLRecognitionRequest 类不可用"))?;
-    // SAFETY: `cls` 是请求类；`alloc`+`initWithURL:` 用有效 `url` 初始化请求实例。
+    // SAFETY: `cls` is the request class; `alloc`+`initWithURL:` initializes
+    // the request instance with the valid `url`.
     let request: *mut AnyObject = unsafe {
         let alloc: *mut AnyObject = msg_send![cls, alloc];
         msg_send![alloc, initWithURL: url]
@@ -903,12 +1011,14 @@ fn create_url_request(url: *mut AnyObject) -> Result<*mut AnyObject> {
     Ok(request)
 }
 
-/// `[NSString stringWithUTF8String:<bytes>]`。`s` 不能含内部 NUL。
+/// `[NSString stringWithUTF8String:<bytes>]`. `s` must not contain an interior
+/// NUL.
 fn ns_string_from_str(s: &str) -> Result<*mut AnyObject> {
     let c = std::ffi::CString::new(s).context("字符串含 NUL，无法构造 NSString")?;
     let cls = AnyClass::get("NSString").ok_or_else(|| anyhow!("NSString 类不可用"))?;
-    // SAFETY: `cls` 是 NSString；`stringWithUTF8String:` 接收以 NUL 结尾的 C 字符串
-    // （`c.as_ptr()` 在 `c` 存活期间有效，本调用同步完成，NSString 会拷贝内容）。
+    // SAFETY: `cls` is NSString; `stringWithUTF8String:` takes a
+    // NUL-terminated C string (`c.as_ptr()` is valid while `c` lives, the call
+    // completes synchronously, and NSString copies the contents).
     let ns: *mut AnyObject = unsafe { msg_send![cls, stringWithUTF8String: c.as_ptr()] };
     if ns.is_null() {
         bail!("stringWithUTF8String 返回 nil");
@@ -916,29 +1026,32 @@ fn ns_string_from_str(s: &str) -> Result<*mut AnyObject> {
     Ok(ns)
 }
 
-/// NSString → Rust String（经 `UTF8String`）。nil 返回空串。
+/// NSString → Rust String (via `UTF8String`). Returns an empty string for nil.
 fn ns_string_to_rust(ns: *mut AnyObject) -> String {
     if ns.is_null() {
         return String::new();
     }
-    // SAFETY: `ns` 非空，是 NSString；`UTF8String` 返回指向 NSString 内部、以 NUL
-    // 结尾的 UTF-8 缓冲，在自动释放池存活期间有效。立即拷贝成 owned String。
+    // SAFETY: `ns` is non-null and an NSString; `UTF8String` returns a pointer
+    // into the NSString's internal NUL-terminated UTF-8 buffer, valid while
+    // the autorelease pool lives. Copied into an owned String immediately.
     let ptr: *const std::os::raw::c_char = unsafe { msg_send![ns, UTF8String] };
     if ptr.is_null() {
         return String::new();
     }
-    // SAFETY: `ptr` 是有效、以 NUL 结尾的 C 字符串（来自 NSString.UTF8String）。
+    // SAFETY: `ptr` is a valid NUL-terminated C string (from
+    // NSString.UTF8String).
     unsafe { std::ffi::CStr::from_ptr(ptr) }
         .to_string_lossy()
         .into_owned()
 }
 
-/// NSError → 可读字符串（`localizedDescription`）。
+/// NSError → human-readable string (`localizedDescription`).
 fn ns_error_description(error: *mut AnyObject) -> String {
     if error.is_null() {
         return "未知错误".to_string();
     }
-    // SAFETY: `error` 非空，是 NSError；`localizedDescription` 返回 NSString。
+    // SAFETY: `error` is non-null and an NSError; `localizedDescription`
+    // returns NSString.
     let desc: *mut AnyObject = unsafe { msg_send![error, localizedDescription] };
     let message = ns_string_to_rust(desc);
     if message.is_empty() {
@@ -948,14 +1061,16 @@ fn ns_error_description(error: *mut AnyObject) -> String {
     }
 }
 
-/// 进程内单调递增后缀，避免同进程内并发临时 wav 文件名碰撞。
+/// Process-local monotonic suffix, avoiding concurrent temp wav filename
+/// collisions within the process.
 fn unique_suffix() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-/// 临时文件 RAII 清理：transcribe 返回（成功或失败）时删除 wav。
+/// RAII temp-file cleanup: deletes the wav when transcribe returns (success
+/// or failure).
 struct TempFileGuard<'a>(&'a std::path::Path);
 
 impl Drop for TempFileGuard<'_> {
@@ -978,7 +1093,7 @@ mod tests {
     fn buffer_duration_tracks_consumed_pcm() {
         let asr = AppleSpeechAsr::new(None);
         assert_eq!(asr.buffer_duration_ms(), 0);
-        // 16k * 2 bytes/sample * 1s = 32000 bytes。
+        // 16k * 2 bytes/sample * 1s = 32000 bytes.
         asr.consume_pcm_chunk(&vec![0u8; 32_000]);
         assert_eq!(asr.buffer_duration_ms(), 1_000);
         asr.consume_pcm_chunk(&vec![0u8; 16_000]);
@@ -1047,8 +1162,10 @@ mod tests {
 
     #[test]
     fn active_task_guard_clears_handle_on_drop() {
-        // active_task 存了句柄后，ActiveTaskGuard 掉出作用域应把它清回 None。
-        // 用 dangling 指针仅做占位：guard 的 Drop 只 take + 置 None，不触碰指针内容。
+        // After active_task holds a handle, ActiveTaskGuard dropping out of
+        // scope must reset it to None. The dangling pointer is a placeholder
+        // only: the guard's Drop just takes and sets None, never touching the
+        // pointer's contents.
         let slot: Mutex<Option<SendableTask>> = Mutex::new(None);
         *slot.lock() = Some(SendableTask(std::ptr::null_mut()));
         assert!(slot.lock().is_some());
@@ -1063,18 +1180,21 @@ mod tests {
 
     #[test]
     fn cancel_on_empty_active_task_is_noop_and_sets_flag() {
-        // active_task 为 None 时 cancel() 不应发起任何 objc 调用，只置标志 + 清缓冲。
+        // With active_task None, cancel() must issue no objc calls, only set
+        // the flag and clear the buffer.
         let asr = AppleSpeechAsr::new(None);
         assert!(asr.active_task.lock().is_none());
-        asr.cancel(); // 不得 panic
+        asr.cancel(); // must not panic
         assert!(asr.cancel_flag.load(Ordering::SeqCst));
         assert!(asr.active_task.lock().is_none());
     }
 
     #[tokio::test]
     async fn transcribe_empty_buffer_short_circuits_before_flag_reset() {
-        // 空缓冲在复位取消标志之前就提前 return，因此不进入识别逻辑，flag 维持原值。
-        // 这条固定住短路顺序：只有真正要识别（缓冲非空）时才会复位并进入轮询。
+        // An empty buffer early-returns before the cancel flag is reset, so
+        // recognition logic is not entered and the flag keeps its value. Pins
+        // the short-circuit order: reset happens only when recognition
+        // actually runs (non-empty buffer).
         let asr = AppleSpeechAsr::new(None);
         asr.cancel_flag.store(true, Ordering::SeqCst);
         let out = asr.transcribe().await.unwrap();
@@ -1084,17 +1204,19 @@ mod tests {
 
     #[test]
     fn sendable_task_is_send() {
-        // 编译期断言：SendableTask 必须是 Send，才能被 spawn_blocking 捕获跨线程存取。
+        // Compile-time assertion: SendableTask must be Send so spawn_blocking
+        // can capture it across threads.
         fn assert_send<T: Send>() {}
         assert_send::<SendableTask>();
         assert_send::<Arc<Mutex<Option<SendableTask>>>>();
     }
 
-    // ---- SegmentAccumulator：停顿多话段累积（修「停顿后前文丢失」） ----
+    // ---- SegmentAccumulator: multi-utterance accumulation across pauses ----
 
     #[test]
     fn server_style_growing_partials_keep_full_final() {
-        // 云端识别：partial 全程累计、final 为全文 —— 行为必须与旧实现一致。
+        // Server-side recognition: partials accumulate throughout, final is
+        // full text — behavior must match the old implementation.
         let mut acc = SegmentAccumulator::default();
         acc.fold("hello", false, false);
         acc.fold("hello there", false, false);
@@ -1104,18 +1226,20 @@ mod tests {
 
     #[test]
     fn on_device_pause_segments_are_all_kept() {
-        // 用户 bug 复现：停顿产生话段边界（metadata），旧实现只留最后一段。
+        // User bug reproduction: a pause creates an utterance boundary
+        // (metadata); the old implementation kept only the last segment.
         let mut acc = SegmentAccumulator::default();
         acc.fold("今天天气", false, false);
-        acc.fold("今天天气很好", true, false); // 停顿 → 话段 1 结束
-        acc.fold("我们", false, false); // partial 从空重来
-        acc.fold("我们去公园", false, true); // 最后话段以 isFinal 收尾
+        acc.fold("今天天气很好", true, false); // pause -> utterance 1 ends
+        acc.fold("我们", false, false); // partials restart from empty
+        acc.fold("我们去公园", false, true); // last utterance ends with isFinal
         assert_eq!(acc.salvage(), "今天天气很好我们去公园");
     }
 
     #[test]
     fn per_segment_finals_are_all_kept() {
-        // 个别系统按话段多次 isFinal：每个 final 都要落袋，不能见到第一个就收工。
+        // Some systems emit isFinal per utterance: every final must be
+        // stored, not just the first.
         let mut acc = SegmentAccumulator::default();
         acc.fold("第一段内容", false, true);
         acc.fold("第二段内容", false, true);
@@ -1124,7 +1248,8 @@ mod tests {
 
     #[test]
     fn repeated_per_segment_finals_are_distinct_utterances() {
-        // 两个相邻话段内容可以完全相同；不能把第二个 final 当任务级全文重放吞掉。
+        // Two adjacent utterances can have identical content; the second
+        // final must not be swallowed as a task-level full-text replay.
         let mut acc = SegmentAccumulator::default();
         acc.fold("hello", false, true);
         acc.fold("hello", false, true);
@@ -1133,20 +1258,22 @@ mod tests {
 
     #[test]
     fn silent_reset_without_metadata_is_salvaged() {
-        // 防守路径：没有 metadata 边界、partial 骤缩 → 上一话段先落袋。
+        // Defensive path: no metadata boundary and a sharp partial shrink ->
+        // commit the previous utterance first.
         let mut acc = SegmentAccumulator::default();
-        acc.fold("这是停顿之前说的很长一段话啊", false, false); // 14 字符
-        acc.fold("后", false, false); // 骤缩 → 判定重置
+        acc.fold("这是停顿之前说的很长一段话啊", false, false); // 14 chars
+        acc.fold("后", false, false); // sharp shrink -> reset detected
         acc.fold("后半段", false, true);
         assert_eq!(acc.salvage(), "这是停顿之前说的很长一段话啊后半段");
     }
 
     #[test]
     fn small_revision_is_not_treated_as_reset() {
-        // 识别器正常的假设修正（小幅缩短）不能触发重置，否则会人为造出重复段。
+        // Normal hypothesis revision (small shrink) must not trigger a reset,
+        // otherwise duplicates are manufactured.
         let mut acc = SegmentAccumulator::default();
         acc.fold("hello there my friend", false, false);
-        acc.fold("hello there my frien", false, false); // 仅缩 1 字符
+        acc.fold("hello there my frien", false, false); // shrinks by only 1 char
         acc.fold("hello there my friends", false, true);
         assert_eq!(acc.salvage(), "hello there my friends");
     }
@@ -1177,8 +1304,10 @@ mod tests {
 
     #[test]
     fn full_text_replay_at_final_is_not_duplicated() {
-        // 防守：逐话段落袋之后，final 若重放「累计全文」（分隔符可能与我们不同），
-        // 空白不敏感去重必须把它忽略，不得把全文再拼一遍。
+        // Defensive: after committing utterances one by one, a final
+        // replaying the cumulative full text (possibly with different
+        // separators) must be ignored via whitespace-insensitive dedup, not
+        // appended a second time.
         let mut acc = SegmentAccumulator::default();
         acc.fold("今天天气很好", true, false);
         acc.fold("我们去公园", true, false);
@@ -1188,7 +1317,8 @@ mod tests {
 
     #[test]
     fn empty_boundary_text_falls_back_to_partial() {
-        // 边界结果偶见空文本：兜底用当前话段已见的最长 partial，不丢内容。
+        // Boundary results occasionally arrive empty: fall back to the longest
+        // partial seen for the current utterance so no content is lost.
         let mut acc = SegmentAccumulator::default();
         acc.fold("前半句", false, false);
         acc.fold("", true, false);
@@ -1198,7 +1328,8 @@ mod tests {
 
     #[test]
     fn salvage_includes_residual_partial() {
-        // 错误兜底路径：final 没等到，也要把已见 partial 抢救回来。
+        // Error fallback: even without a final, salvage the partials seen so
+        // far.
         let mut acc = SegmentAccumulator::default();
         acc.fold("说到一半", false, false);
         assert_eq!(acc.salvage(), "说到一半");
@@ -1246,12 +1377,14 @@ mod tests {
 
     #[test]
     fn recognition_wait_budget_scales_with_audio_length() {
-        // 短音频维持 60s 下限；长音频按时长 + 30s 放大，不再被固定硬顶截断。
+        // Short audio keeps the 60s floor; long audio scales to duration +
+        // 30s, no longer cut off by a fixed cap.
         assert_eq!(recognition_wait_budget(5_000), RECOGNITION_WAIT);
         assert_eq!(recognition_wait_budget(300_000), Duration::from_secs(330));
     }
 
-    // ---- RecognitionLifecycle：完成 / 迟到回调 / 静默与终止优先级 ----
+    // ---- RecognitionLifecycle: completion / late callbacks / quiescence and
+    // termination priority ----
 
     #[test]
     fn completed_task_waits_for_the_full_grace_period() {

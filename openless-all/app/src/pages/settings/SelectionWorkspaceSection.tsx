@@ -1,4 +1,4 @@
-// 通用 → 选区助手：合并选区润色与选区语音编辑，避免用户混淆两项职责。
+// General → Selection Assistant: merges selection polish and selection voice editing so users don't confuse the two jobs.
 
 import type {
   EditPlanFormat,

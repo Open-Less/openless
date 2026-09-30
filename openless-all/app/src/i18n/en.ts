@@ -293,6 +293,7 @@ export const en: typeof zhCN = {
     errorPrefix: 'Could not continue: ',
     question: 'Ask a question',
     edit: 'Edit selection',
+    compose: 'Help me write',
     cancel: 'Cancel',
   },
   qa: {
@@ -832,6 +833,13 @@ export const en: typeof zhCN = {
       clear: 'Clear results',
     },
   },
+  vocabLearning: {
+    open: 'Remember a word',
+    label: 'Enter the correct word to remember',
+    confirm: 'Confirm and add to dictionary',
+    saved: 'Saved. Manage this word in Dictionary.',
+    failed: 'Could not save: {{error}}',
+  },
   vocabCard: {
     title: 'Remember this word?',
     accept: 'Remember',
@@ -869,7 +877,7 @@ export const en: typeof zhCN = {
     editTitle: 'Edit Word',
     editSave: 'Save',
     editEmpty: 'Word cannot be empty.',
-    filter: { all: 'All', auto: 'Auto-Added', manual: 'Manually Added' },
+    filter: { all: 'All', auto: 'Confirmed', manual: 'Manually Added' },
     searchPlaceholder: 'Search',
     searchEmpty: 'No matching words.',
     newWord: 'New Word',
@@ -879,7 +887,7 @@ export const en: typeof zhCN = {
     newWordTemplates: 'Preset Templates',
     newWordTemplateCount: '{{count}} words',
     newWordAddSelected: 'Add Selected',
-    learnedSection: 'Auto-collected ({{count}})',
+    learnedSection: 'Confirmed ({{count}})',
     removeAllLearned: 'Remove all',
     corrections: {
       title: 'Correction rules',
@@ -1193,7 +1201,7 @@ export const en: typeof zhCN = {
   settings: {
     selectionWorkspace: {
       title: 'Selection Assistant',
-      hint: 'Select text, then use one shortcut: polish when voice edit is off; hold and speak when voice edit is on, then choose Ask or Edit.',
+      hint: 'With a selection, one shortcut polishes (voice edit off) or takes a spoken instruction to ask or edit. With no selection but focus in a text field, speak to Help me write a draft or ask a question.',
       polishHotkey: 'Selection assistant shortcut',
       polishHotkeyDesc:
         'Polishes directly when voice edit is off; hold to speak when voice edit is on (recording follows global settings).',
@@ -1242,12 +1250,33 @@ export const en: typeof zhCN = {
       useSystemProxyDesc:
         'When on, requests follow the system proxy. When off, all requests connect directly (usually lower latency for domestic services), but overseas services such as GitHub sign-in and updates may fail. Realtime voice streams and Less Computer are unaffected.',
     },
+    vocabularyLearning: {
+      title: 'Learn from corrections',
+      enabled: 'Enable learning from corrections',
+      observationSeconds: 'Observation duration',
+      observationSecondsHint:
+        'Maximum time to observe the current field after dictation: 10–60 seconds.',
+      suggestionSeconds: 'Suggestion duration',
+      suggestionSecondsHint:
+        'Unconfirmed suggestions expire after 5–60 seconds without being added to the vocabulary.',
+      maxPhraseChars: 'Maximum phrase length',
+      maxPhraseCharsHint:
+        'Limit both original and replacement phrases in automatic suggestions to 2–32 characters. Manual additions are unaffected.',
+      seconds: '{{count}} s',
+      characters: '{{count}} characters',
+      changeHint:
+        'Changing parameters stops the current observation and clears pending suggestions. New values apply to the next dictation. Resetting parameters does not change the enable switch.',
+      reset: 'Reset parameters',
+      saveError: 'Could not save. Please try again.',
+      description:
+        'After insertion, observe edits locally for up to 60 seconds and ask before saving a word. Observation text is not sent to a model. Password fields and known sensitive apps are excluded. Windows and Android support depends on the editor; Android requires accessibility. Turning this off stops observation.',
+    },
     dataStorage: {
       title: 'Data storage',
       desc: 'Conversation history and context kept on this device.',
       cursorContextLabel: 'Cursor context (experimental)',
       cursorContextDesc:
-        'While polishing, read the text around your cursor in the document you are writing, so the model can tell homophones, proper nouns and pronouns apart. When on, that text is sent to your configured LLM provider with the request; when off, nothing is read at all. Password fields, Secure Input, password managers and terminals are never read. macOS only.',
+        'Send nearby document text with polish requests (macOS only). This switch is separate from local vocabulary learning. Password fields and known sensitive apps are excluded.',
     },
     codingConsole: {
       title: 'Claude Console',
@@ -1443,7 +1472,8 @@ export const en: typeof zhCN = {
       comboClear: 'Clear',
       comboConflict: 'This shortcut combination is not available',
       shortcutSaveFailed: 'Failed to save shortcut',
-      mouseSideHint: 'Mouse4 / Mouse5 side buttons are supported as global dictation hotkeys on Windows',
+      mouseSideHint:
+        'Mouse4 / Mouse5 side buttons are supported as global dictation hotkeys on Windows',
       allowNonTsfFallbackLabel: 'Allow non-TSF fallback',
       allowNonTsfFallbackDesc:
         'Windows: when TSF insertion fails, use paced Unicode SendInput; if that still fails, copy the text to the clipboard.',
@@ -1529,6 +1559,8 @@ export const en: typeof zhCN = {
       validationTitle: 'Connection check',
       validationHint:
         'Manually send a real request to check this configuration. It may use service credits. Saving settings does not run a check.',
+      validationHintOmni:
+        'Manually send a text-only connectivity request (no recording). Passing does not mean audio dictation works—please confirm with a short recording. It may use service credits.',
       autoSaveHint:
         'Changes save automatically. Once configured, you can check the connection manually.',
       nameHint:
@@ -1603,6 +1635,7 @@ export const en: typeof zhCN = {
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter (free models)',
         requesty: 'Requesty',
+        apiRoute: 'API Route',
         orcarouter: 'OrcaRouter',
         alibabaCoding: 'Alibaba Cloud Coding Plan',
         codingPlanX: 'CodingPlanX',
@@ -1784,6 +1817,8 @@ export const en: typeof zhCN = {
       selectModel: 'Select a model to fill the field above',
       modelSaved: 'Saved model {{model}}.',
       validateSuccess: 'Connection check passed.',
+      validateSuccessOmni:
+        'Text connectivity passed. This does not mean audio dictation works—please confirm with a short recording.',
       validateFailed: 'Connection check failed.',
       providerHttpStatus:
         'Provider returned HTTP {{status}}. Check the API key permissions or endpoint.',
@@ -2042,6 +2077,13 @@ export const en: typeof zhCN = {
         notWindows: 'Only available on Windows.',
       },
     },
+    inputMethod: {
+      guidanceTitle: 'OpenLess input method',
+      enableSystemIme:
+        'In Android Settings → Keyboard / Input methods, enable OpenLess Voice and switch to it when needed.',
+      longPressLogo:
+        'In the OpenLess keyboard, long-press the logo in the upper-left corner to open native keyboard settings.',
+    },
     advanced: {
       multimodalPipelineTitle: 'Multimodal recognition pipeline',
       multimodalPipelineTitleHint:
@@ -2249,6 +2291,9 @@ export const en: typeof zhCN = {
       omni: 'Multimodal',
       models: 'Local models',
       connections: 'Connections',
+      inactive: 'Not used in this mode',
+      inactiveDetail:
+        'These settings are saved, but the current recognition pipeline does not use them.',
       statusConfigured:
         'Green dot: at least one service is on. Requests use the first enabled service.',
       statusMissing: 'Red dot: no service is turned on yet.',
@@ -2262,6 +2307,8 @@ export const en: typeof zhCN = {
     autoSaveHint: 'Changes save automatically',
     backToAdvanced: 'Back to Experiments & extensions',
     advancedPages: {
+      vocabularyLearning:
+        'Learn from manual corrections after dictation; configure observation, confirmation time and phrase length.',
       lessComputer: 'Choose an agent and configure its model, permissions, and working directory.',
       claudeConsole: 'Detect Claude Code and view output from test tasks.',
       multimodal: 'Manage the experimental multimodal recognition switch.',
@@ -2269,22 +2316,25 @@ export const en: typeof zhCN = {
     },
     descriptions: {
       general: 'Choose a microphone, adjust recording and text input, or connect your phone.',
+      inputMethod: 'Configure the Android overlay and input method for phone typing.',
       shortcuts: 'Set up shortcuts and choose what happens when you select text.',
       services:
         'Choose speech recognition and text processing services. Manage channels, local models and connections.',
       appearance: 'Adjust the theme, page layout and interface language for comfortable reading.',
       privacy:
         'Check system permissions and connections. Manage history, recordings and local data.',
-      advanced: 'Configure Less Computer, multimodal processing and debugging as needed.',
+      advanced: 'Configure Less Computer and debugging as needed.',
       about: 'View your version, update channel and automatic update settings.',
     },
     searchKeywords: {
       general: 'microphone recording input phone remote LAN PIN capsule mute startup autostart',
+      inputMethod: 'input method IME keyboard overlay Android',
       shortcuts: 'shortcut hotkey key combination selection polish voice editing',
-      services: 'ASR LLM API channel model cloud local offline network proxy marketplace',
+      services:
+        'ASR LLM API channel model cloud local offline network proxy marketplace multimodal pipeline Omni',
       appearance: 'theme dark light language font text size layout heatmap',
       privacy: 'permission microphone accessibility history recording storage privacy export',
-      advanced: 'Less Computer Claude Agent multimodal Omni debug logs experiment',
+      advanced: 'Less Computer Claude Agent debug logs experiment vocabulary learning',
       about: 'version Beta stable update upgrade',
     },
 
@@ -2292,6 +2342,7 @@ export const en: typeof zhCN = {
       appearance: 'Appearance & language',
       shortcuts: 'Shortcuts & selection',
       general: 'Recording & input',
+      inputMethod: 'Input method',
       services: 'AI services & models',
       privacy: 'Permissions & data',
       advanced: 'Experiments & extensions',

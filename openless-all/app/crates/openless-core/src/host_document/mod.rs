@@ -1,13 +1,17 @@
-//! 与平台无关的文档窗口和词汇学习规则。
+//! Platform-independent document-window and vocabulary-learning rules.
 //!
-//! AX/IME/clipboard 读取仍由宿主实现；Core 只提供可测试的纯函数。
+//! AX/IME/clipboard reads stay in the host; the Core only provides testable
+//! pure functions.
 
 mod diff;
+mod observation;
 mod window;
 
 pub use diff::{
-    edit_is_within_typed_text, is_vocab_worthy, learned_rule, minimal_edit, EditPair, LearnedRule,
+    edit_is_within_typed_text, is_vocab_worthy, learned_rule, learned_rule_with_max_chars,
+    minimal_edit, EditPair, LearnedRule,
 };
+pub use observation::ObservedInsertion;
 pub use window::{plan_window, utf16_offset_to_char_offset, window_around_cursor, WindowSpan};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

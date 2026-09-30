@@ -1,15 +1,18 @@
-//! 阿里云百炼（DashScope）多模态生成同步接口的批量 ASR 客户端。
+//! Batch ASR client for Alibaba Bailian (DashScope) multimodal-generation
+//! synchronous API.
 //!
-//! `fun-asr-flash` 与 `qwen-audio-3.0-asr-flash` 系列是**非实时录音文件识别**
-//! 模型，走 DashScope 私有的
-//! `multimodal-generation/generation` HTTP 接口，既不是实时 WebSocket 双工
-//! （见 `bailian.rs`），也不是 OpenAI 兼容的 `/audio/transcriptions`
-//! （见 `whisper.rs`）。因此单独成一路批量客户端：录音结束后把整段 PCM 编成
-//! WAV、base64 进 JSON body、POST 一次拿整段文本。
+//! `fun-asr-flash` and `qwen-audio-3.0-asr-flash` series are **non-realtime
+//! recorded-file recognition** models on DashScope's private
+//! `multimodal-generation/generation` HTTP API — neither the realtime
+//! WebSocket duplex (see `bailian.rs`) nor the OpenAI-compatible
+//! `/audio/transcriptions` (see `whisper.rs`). Hence a dedicated batch
+//! client: after recording ends, encode the whole PCM as WAV, base64 it into
+//! a JSON body, and POST once for the full text.
 //!
-//! 结构与 `mimo.rs`（同为「攒 PCM → POST 一段音频 → 解析私有 JSON」）一致，
-//! 复用其 `split_pcm_by_duration` / `join_transcript_chunks` 分片与拼接逻辑，
-//! 只有请求信封与响应解析不同。
+//! Mirrors `mimo.rs` (same "accumulate PCM -> POST one audio blob -> parse
+//! private JSON" shape) and reuses its `split_pcm_by_duration` /
+//! `join_transcript_chunks` chunking and joining; only the request envelope
+//! and response parsing differ.
 
 use anyhow::{Context, Result};
 use base64::Engine;
@@ -21,9 +24,11 @@ use crate::asr::mimo::{join_transcript_chunks, split_pcm_by_duration};
 use crate::asr::wav::encode_wav_16k_mono;
 use crate::asr::RawTranscript;
 
-// fun-asr-flash 单条音频上限 5 分钟；但真正的硬约束是 base64 进 JSON 的请求体
-// 体积。沿用 mimo 验证过的 180s 预算（16k/16-bit/mono WAV base64 后约 7.7MB），
-// 稳稳落在时长和常见网关体积上限之内。超长录音按此切分后逐段识别再拼接。
+// fun-asr-flash caps a single audio at 5 minutes, but the real hard
+// constraint is the request-body size from base64-in-JSON. Keep mimo's
+// proven 180s budget (~7.7MB after base64 for 16k/16-bit/mono WAV), safely
+// inside both the duration and common gateway size limits. Longer recordings
+// are split on this and transcribed segment by segment.
 const DASHSCOPE_MAX_CHUNK_DURATION_MS: u64 = 180_000;
 const ASYNC_TASK_POLL_TIMEOUT_SECS: u64 = 600;
 const ASYNC_WORKFLOW_OVERHEAD_SECS: u64 = 60;
@@ -152,7 +157,8 @@ impl DashScopeMultimodalASR {
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.api_key.trim()))
             .header("Content-Type", "application/json")
-            // multimodal-generation 默认可 SSE 流式；显式关掉走一次性 JSON 响应。
+            // multimodal-generation streams SSE by default; disable it
+            // explicitly for a one-shot JSON response.
             .header("X-DashScope-SSE", "disable")
             .json(&body)
             .timeout(request_timeout)
@@ -237,9 +243,11 @@ impl DashScopeMultimodalASR {
         .await
     }
 
-    /// 提交异步任务并轮询至完成。`poll_timeout` 是任务轮询阶段的硬截止时间：
-    /// 真实转写用长轮询（默认 600s），连通性验证用短轮询以便快速返回，避免
-    /// 「验证」按钮在最坏情况下阻塞近 11 分钟。
+    /// Submits the async task and polls until done. `poll_timeout` is the
+    /// hard deadline for the polling phase: real transcription uses long
+    /// polling (default 600s) while connectivity checks use short polling to
+    /// return quickly, so the "verify" button never blocks for nearly 11
+    /// minutes in the worst case.
     pub async fn transcribe_async_url_with_timeout(
         &self,
         file_url: &str,
@@ -267,8 +275,10 @@ impl DashScopeMultimodalASR {
         let task_url = api_url(&self.base_url, &format!("/api/v1/tasks/{task_id}"))?;
         let deadline = Instant::now() + poll_timeout;
         let completed = loop {
-            // 轮询窗口最长可达 600s、每秒一次：对瞬态网络失败做有界重试，
-            // 避免 10 分钟内单次连接抖动/5xx 直接废弃整段转写。
+            // The polling window can span up to 600s at one request per
+            // second: retry transient network failures with a bound so a
+            // single connection blip / 5xx mid-run doesn't discard the whole
+            // transcription.
             let task = get_json_with_retry(
                 crate::net::credential_http(),
                 task_url.clone(),
@@ -365,18 +375,20 @@ async fn download_async_result(raw_url: &str) -> Result<Value> {
     .await
 }
 
-/// GET JSON 请求的瞬态失败重试上限（指数退避 500ms / 1s / 2s / 4s）。
+/// Retry cap for transient GET JSON failures (exponential backoff 500ms / 1s / 2s / 4s).
 const ASYNC_HTTP_RETRY_ATTEMPTS: u32 = 3;
 
 fn retry_backoff(attempts: u32) -> Duration {
     Duration::from_millis((500u64 * 2u64.pow(attempts.min(3))).min(4000))
 }
 
-/// 带瞬态重试的 GET JSON。
+/// GET JSON with transient-failure retry.
 ///
-/// 连接失败 / 超时 / 请求阶段错误 / 5xx / 429 视为瞬态：指数退避重试，最多
-/// `ASYNC_HTTP_RETRY_ATTEMPTS` 次且不晚于 `deadline`（GET 幂等，重试安全）。
-/// 4xx 与确定性错误立即返回；`api_key` 为 Some 时附带 Bearer 头。
+/// Connect failures / timeouts / request-phase errors / 5xx / 429 count as
+/// transient: retry with exponential backoff up to `ASYNC_HTTP_RETRY_ATTEMPTS`
+/// times and never past `deadline` (GET is idempotent, retries are safe).
+/// 4xx and deterministic errors return immediately; with `api_key` = Some a
+/// Bearer header is attached.
 async fn get_json_with_retry(
     client: reqwest::Client,
     url: reqwest::Url,
@@ -449,11 +461,13 @@ impl super::AudioConsumer for DashScopeMultimodalASR {
     }
 }
 
-/// 归一化到 multimodal-generation 的完整 endpoint。
+/// Normalize to the full multimodal-generation endpoint.
 ///
-/// preset 默认下发的就是完整地址，命中首个分支直接用；用户若只填了业务空间
-/// 专属域名根（`https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com`）则补上标准
-/// 路径。其余情况保守地把标准后缀拼到用户给的路径后面。
+/// Presets already ship the full URL and hit the first branch unchanged; if
+/// the user entered only a workspace-specific domain root
+/// (`https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com`), append the
+/// standard path. Otherwise conservatively append the standard suffix to the
+/// user-provided path.
 pub fn generation_url(base_url: &str) -> Result<String> {
     const CANONICAL_PATH: &str = "/api/v1/services/aigc/multimodal-generation/generation";
     let trimmed = base_url.trim();
@@ -509,8 +523,9 @@ pub fn dashscope_multimodal_body_with_protocol(
             },
         });
     }
-    // qwen-audio-3.0-asr-flash 还支持 vocabulary 与 language_hints；当前批量客户端
-    // 尚未将这两项设置映射到请求体，暂时保持自动语言检测且不传热词。
+    // qwen-audio-3.0-asr-flash also supports vocabulary and language_hints;
+    // this batch client doesn't map those settings into the request body yet,
+    // so it stays on auto language detection with no hotwords for now.
     serde_json::json!({
         "model": model,
         "input": {
@@ -581,26 +596,28 @@ pub fn extract_async_transcript_text(json: &Value) -> Result<String> {
             }
         }
     }
-    // 段间用空格分隔：中文识别结果几乎不含空格，连成整句无感知；而拉丁语言
-    // （英文等）的词汇若直接拼接会粘在一起，空格分隔对两种场景都更安全。
+    // Join segments with a space: Chinese recognition results contain almost
+    // no spaces, so concatenating reads seamlessly, while Latin-script words
+    // would fuse together without one. A space is safe for both cases.
     Ok(texts.join(" "))
 }
 
-/// fun-asr-flash 的响应信封与标准多模态接口不同，且不同模型版本字段路径略有
-/// 差异（`output.text` / `output.output.sentence.text` / 标准 `choices`）。
-/// 这里按已知路径逐一兜底提取，取到第一个非空文本即返回，避免因单一路径假设
-/// 而在某个版本上静默丢字。
+/// fun-asr-flash's response envelope differs from the standard multimodal
+/// API, and field paths vary slightly across model versions
+/// (`output.text` / `output.output.sentence.text` / standard `choices`).
+/// Try each known path in order and return the first non-empty text, so a
+/// single-path assumption can't silently drop text on some version.
 pub fn extract_dashscope_text(json: &Value) -> String {
     let output = json.get("output");
 
-    // 1) output.text —— fun-asr-flash 文档主路径
+    // 1) output.text — fun-asr-flash documented primary path
     if let Some(text) = output.and_then(|o| o.get("text")).and_then(Value::as_str) {
         if !text.trim().is_empty() {
             return text.trim().to_string();
         }
     }
 
-    // 2) output.output.sentence.text —— 文档给出的另一种嵌套形态
+    // 2) output.output.sentence.text — another nested shape from the docs
     if let Some(text) = output
         .and_then(|o| o.get("output"))
         .and_then(|o| o.get("sentence"))
@@ -623,7 +640,7 @@ pub fn extract_dashscope_text(json: &Value) -> String {
         }
     }
 
-    // 4) 标准多模态 output.choices[0].message.content（字符串或 [{text}] 数组）
+    // 4) standard multimodal output.choices[0].message.content (string or [{text}] array)
     if let Some(content) = output
         .and_then(|o| o.get("choices"))
         .and_then(|c| c.as_array())
@@ -753,7 +770,7 @@ mod tests {
             protocol_for_model("qwen3-asr-flash-2026-02-10"),
             Some(DashScopeBatchProtocol::Multimodal)
         );
-        // beta 合并：#876 引入的 qwen-audio-3.0-asr-flash 走同步 multimodal。
+        // beta merge: the qwen-audio-3.0-asr-flash introduced by #876 goes through sync multimodal.
         assert_eq!(
             protocol_for_model("qwen-audio-3.0-asr-flash"),
             Some(DashScopeBatchProtocol::Multimodal)
@@ -765,8 +782,9 @@ mod tests {
                 "unexpected protocol for {model}"
             );
         }
-        // qwen3-asr-flash-filetrans 仅接受公网 URL，与本地录音的临时 OSS 链路
-        // 不兼容：显式拒绝，不得路由到异步协议。
+        // qwen3-asr-flash-filetrans only accepts public URLs, incompatible
+        // with the temporary OSS flow for local recordings: reject it
+        // explicitly; it must not route to the async protocol.
         assert_eq!(
             protocol_for_model("qwen3-asr-flash-filetrans-2025-11-17"),
             None

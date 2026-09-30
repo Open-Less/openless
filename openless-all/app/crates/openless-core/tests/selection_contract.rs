@@ -676,8 +676,10 @@ async fn transient_platform_failure_keeps_the_preview_retryable() {
         .await
         .expect_err("platform failure must be returned");
 
-    // 瞬时平台错误（焦点恢复/目标复核抖动）：错误返回、预览窗保持、
-    // session 回到 Preview 可直接重试——不能隐藏窗口把用户晾在「点了没反应」。
+    // Transient platform error (focus-restore / target recheck flakiness):
+    // the error is returned, the preview window stays, and the session
+    // returns to Preview for a direct retry — never hide the window and
+    // leave the user with a click that appears to do nothing.
     assert_eq!(error.code, BackendErrorCode::Platform);
     assert_eq!(runtime.cancel_count(), 0);
     assert_eq!(host.actions(), vec![HostAction::ShowSelectionPreview]);
@@ -692,7 +694,7 @@ async fn transient_platform_failure_keeps_the_preview_retryable() {
         SelectionPhase::Preview
     );
 
-    // 目标重新可用时重试应成功完成。
+    // The retry must complete once the target is available again.
     runtime.release_apply_error();
     backend
         .services()

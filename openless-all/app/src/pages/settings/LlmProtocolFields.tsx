@@ -23,7 +23,7 @@ const emptyValues: ProtocolValues = {
   'ark.thinking_budget': '',
 };
 
-/** 界面即时提示；Core 仍对实际存储和发出的请求做同样的校验。 */
+/** Immediate UI hint; Core still validates the same rules for what is stored and sent. */
 export function protocolValidationError(
   values: ProtocolValues,
   defaultFormat: LlmRequestFormat,
@@ -104,7 +104,7 @@ export function LlmProtocolFields({
       !loaded || saving || dirty || error !== null || validation !== null,
     );
   }, [loaded, saving, dirty, error, validation, onBlockedChange]);
-  // 关闭/切换前由宿主 Modal 收敛未落盘写入；flush 永远读取最新的 dirty 状态。
+  // The host Modal converges unwritten changes before close/switch; flush always reads the latest dirty state.
   useEffect(() => form?.register('protocol', () => flushRef.current()), [form?.register]);
 
   const save = (next: ProtocolValues): Promise<boolean> => {

@@ -1,11 +1,11 @@
-// LocalAsr.tsx — 本地 ASR 模型管理页。
+// LocalAsr.tsx — local ASR model management page.
 //
-// 功能：
-//  - 顶部：当前激活模型 + 镜像源切换
-//  - 模型列表：每行模型 = 真实尺寸 / 进度 / [下载|取消|删除|设为默认]
-//  - 真实尺寸通过 fetchLocalAsrRemoteInfo 实时从所选模型源拉，**不硬编码**
-//  - 监听 `local-asr-download-progress` 事件实时刷新进度
-//  - Win 端引擎不可用时禁用下载按钮，提示见 issue #256
+// Features:
+//  - Top: currently active model + mirror source switch
+//  - Model list: each row = real size / progress / [download|cancel|delete|set default]
+//  - Real size is fetched live from the selected model source via fetchLocalAsrRemoteInfo, never hardcoded
+//  - Listens to the `local-asr-download-progress` event to refresh progress in real time
+//  - Download button disabled when the engine is unavailable on Windows; see issue #256
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -104,12 +104,13 @@ import {
 } from './components';
 import type { RemoteSize } from './types';
 
-// Foundry Local Whisper 后端只在 Windows 编译实体（foundry_local_sdk 仅 Windows），
-// 非 Windows 平台 runtime 是 stub 永远 unavailable。前端这一页对应的卡片、状态拉取、
-// 事件订阅都必须按 OS 隔离，避免 macOS / Linux 用户看到 Windows 专属的 UI。
+// The Foundry Local Whisper backend is compiled only on Windows (foundry_local_sdk is Windows-only);
+// on other platforms the runtime is a stub that is always unavailable. The cards, status fetches, and
+// event subscriptions on this page must be OS-gated so macOS / Linux users never see Windows-only UI.
 //
-// Qwen3-ASR 的 MLX 实体只在 Apple Silicon 编译，C/CPU 实体覆盖 macOS / Linux；
-// Qwen3 模型管理 UI 仍按桌面端守严，具体后端由平台能力与渠道选择决定。
+// The MLX build of Qwen3-ASR compiles only on Apple Silicon; C/CPU builds cover macOS / Linux.
+// The Qwen3 model management UI stays desktop-gated; the actual backend follows platform
+// capabilities and the chosen channel.
 const OS = detectOS();
 const IS_WINDOWS = OS === 'win';
 const IS_QWEN_PLATFORM = OS === 'mac';
@@ -124,11 +125,10 @@ function effectiveSherpaMirror(mirror: string): string {
 }
 
 interface LocalAsrProps {
-  /// `embedded=true` 表示作为子组件嵌入「高级」设置页（Settings → Advanced）；
-  /// 此时跳过外层 page padding/height、PageHeader 与独立警告 Card —— 这些由
-  /// 宿主 AdvancedSection 决定（包括把警告统一到页面顶部的浮层 popup 上）。
-  /// `embedded=false`（默认）保留原全屏页样式，供 v 旧版本的独立「模型设置」
-  /// 页面入口使用——但当前代码里该入口已删，本分支会一并移除。
+  /// `embedded=true` renders this as a child of the Advanced settings page (Settings → Advanced);
+  /// it then skips the outer page padding/height, PageHeader, and standalone warning Card — the
+  /// host AdvancedSection owns those (including unifying the warning into the page-top overlay popup).
+  /// `embedded=false` (default) keeps the original full-page style.
   embedded?: boolean;
 }
 
@@ -137,9 +137,9 @@ interface LocalAsrContentWrapperProps {
   children: ReactNode;
 }
 
-// 必须保持为模块级组件：如果在 LocalAsr 渲染函数内定义，3 秒刷新引发的任意
-// setState 都会创建新的组件类型，React 会重挂整棵子树并清空 Collapsible /
-// SelectLite 等子组件的交互状态。
+// Must stay a module-level component: if defined inside the LocalAsr render function, any setState
+// from the 3s refresh creates a new component type and React remounts the whole subtree, wiping
+// interaction state of Collapsible / SelectLite children.
 function LocalAsrContentWrapper({ embedded, children }: LocalAsrContentWrapperProps) {
   if (embedded) return <>{children}</>;
   return (
@@ -186,17 +186,17 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   const stackLayout = useLayoutStack(1000);
   const { prefs, updatePrefs } = useHotkeySettings();
   const [settings, setSettings] = useState<LocalAsrSettings | null>(null);
-  // 等待 native capability 查询完成，避免 Intel Mac 先闪现 MLX 渠道。
+  // Wait for the native capability query so Intel Macs never flash the MLX channel first.
   const [supportsQwen3Mlx, setSupportsQwen3Mlx] = useState(false);
   const [models, setModels] = useState<LocalAsrModelStatus[]>([]);
-  // 两栏看板：右侧当前选中的模型（默认选第一个已下载的）。
+  // Two-pane board: the right side shows the selected model (defaults to the first downloaded one).
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
-  // 下载弹框开关：点侧栏「下载新模型」/ 看板「下载」打开。
+  // Download dialog toggle: opened from the sidebar "download new model" / board "download" actions.
   const [downloadDialogOpen, setDownloadDialogOpen] = useState(false);
   const [progress, setProgress] = useState<Record<string, LocalAsrDownloadProgress>>({});
   const [remoteSizes, setRemoteSizes] = useState<Record<string, RemoteSize>>({});
-  // HF 模型卡片（下载量/收藏/简介）——弹窗右侧展示；成功结果缓存，
-  // 失败记 { loading:false, error } 允许重试。
+  // HF model cards (downloads/stars/description) shown on the right of the dialog; successful
+  // results are cached, failures record { loading:false, error } to allow retry.
   const [hfCards, setHfCards] = useState<
     Record<string, HfModelCard | { loading: boolean; error: string | null }>
   >({});
@@ -253,8 +253,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   const sherpaRefreshTimer = useRef<number | null>(null);
   const sherpaDownloadRefreshTimer = useRef<number | null>(null);
   const foundrySelectionDirty = useRef(false);
-  // foundry 三个 SelectLite 共用的行容器：SelectLite 的 onChange 拿不到
-  // e.currentTarget，滚动保持改从这个容器元素向上找 .ol-thinscroll。
+  // Row container shared by the three Foundry SelectLites: SelectLite's onChange has no
+  // e.currentTarget, so scroll preservation walks up from this container to find .ol-thinscroll.
   const foundryControlsRef = useRef<HTMLDivElement>(null);
   const selectedFoundryAliasRef = useRef<FoundryLocalAsrModelAlias>('whisper-small');
   const sherpaSelectionDirty = useRef(false);
@@ -275,7 +275,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     setDownloadDialogOpen(open);
   };
 
-  // 清理 interval 只能阻止下一次 tick；generation 还要丢弃已经在途的异步结果。
+  // Clearing the interval only stops the next tick; the generation guard also discards in-flight async results.
   const makeRefreshGuard = (): RefreshGuard => {
     const generation = refreshGenerationRef.current;
     return () => generation === refreshGenerationRef.current && !downloadDialogOpenRef.current;
@@ -290,8 +290,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   };
 
   const scheduleScrollGuardRestore = () => {
-    // issue #470：立即帧由下面的 rAF + 嵌套 rAF 覆盖（≈0~32ms），故移除等价的 setTimeout(…,0)；
-    // 80ms / 200ms 两枪保留，用于兜住 rAF 之后才发生的异步重排（如图片晚加载）。
+    // issue #470: the immediate frames are covered by the rAF + nested rAF below (≈0-32ms), so the equivalent
+    // setTimeout(…,0) was removed; the 80ms / 200ms shots remain to catch async reflows after rAF (e.g. late images).
     window.setTimeout(restoreScrollGuard, 80);
     window.setTimeout(restoreScrollGuard, 200);
     window.requestAnimationFrame(() => {
@@ -543,7 +543,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     }
   };
 
-  // HF 模型卡片按需抓取（弹窗选中模型时），成功结果缓存不重复请求。
+  // HF model cards are fetched on demand (when a model is selected in the dialog); successful results are cached.
   const ensureHfCard = async (modelId: string, mirror: string) => {
     const isCurrent = makeMetadataGuard();
     setHfCards((prev) => ({
@@ -619,9 +619,9 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 下载弹窗打开期间暂停 3s 轮询：弹窗是静态目录选择，轮询 setState 会
-  // 重排遮罩后的看板内容，透过半透明遮罩看得到内容在跳。弹窗关闭后轮询
-  // 自动重启（依赖 downloadDialogOpen 的 effect 重建 interval）。
+  // Pause the 3s poll while the download dialog is open: the dialog is a static catalog picker and poll
+  // setStates reshuffle board content behind the translucent mask, which is visibly jumping. Polling
+  // restarts automatically when the dialog closes (the effect keyed on downloadDialogOpen rebuilds the interval).
   useEffect(() => {
     if (downloadDialogOpen) return;
     const pollTimer = window.setInterval(() => {
@@ -634,9 +634,9 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [downloadDialogOpen]);
 
-  // 引擎状态改由后端主动 emit（加载/释放/keepLoadedSecs 变更），前端零轮询。
-  // 挂载时仍拉一次初值，之后 listen `local-asr:engine-changed` 增量更新。
-  // 仅 Tauri 环境（浏览器 dev mock 无事件）。
+  // Engine status is now emitted by the backend (load/release/keepLoadedSecs changes), so the frontend never polls.
+  // Still fetch the initial value on mount, then listen to `local-asr:engine-changed` for updates.
+  // Tauri only (the browser dev mock has no events).
   useEffect(() => {
     if (!isTauri) return;
     void refreshEngineStatus();
@@ -684,7 +684,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [downloadDialogOpen, selectedModelId, settings?.mirror]);
 
-  // 订阅下载进度事件 — 仅 Tauri 环境（浏览器 dev mock 无事件）。
+  // Subscribe to download progress events — Tauri only (the browser dev mock has no events).
   useEffect(() => {
     if (!isTauri) return;
     let unlisten: undefined | (() => void);
@@ -694,7 +694,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
       const off = await listen<LocalAsrDownloadProgress>('local-asr-download-progress', (e) => {
         const payload = e.payload;
         if (payload.phase === 'cancelled') {
-          // 取消时清条目，bar 是否还显示交给 hasPartial 判断
+          // On cancel, drop the entry; whether the bar still shows is decided by hasPartial
           setProgress((prev) => {
             const next = { ...prev };
             delete next[payload.modelId];
@@ -1018,8 +1018,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     }
   };
 
-  // 侧栏「下载」动作：先启用（切供应商 + 写模型），再顺序准备/下载/加载。
-  // 原子激活已包含 prepare/preload；侧栏动作不得再串联第二套设置写入。
+  // Sidebar "download" action: enable first (switch provider + write model), then prepare/download/load in order.
+  // Atomic activation already covers prepare/preload; sidebar actions must not chain a second settings write.
   const handleEnableAndPrepareFoundry = async (alias: FoundryLocalAsrModelAlias) => {
     await handleEnableFoundry(alias);
   };
@@ -1309,8 +1309,9 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
 
   const handleDownload = async (modelId: string) => {
     setBusyModelId(modelId);
-    // 重下载时，第一个后端事件到达前先用本地已知值占位，避免进度条从 0% 跳到真实位置。
-    // 优先级：上一次 progress（取消后已删，通常没有）→ models 里的 downloadedBytes（cancel 时乐观写入）
+    // On re-download, seed with a locally known value before the first backend event arrives so the bar
+    // doesn't jump from 0% to the real position. Priority: last progress entry (usually gone after cancel)
+    // → downloadedBytes in models (optimistically written on cancel).
     const model = models.find((m) => m.id === modelId);
     const initialDownloaded = progress[modelId]?.bytesDownloaded ?? model?.downloadedBytes ?? 0;
     setProgress((prev) => ({
@@ -1353,7 +1354,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   };
 
   const handleCancel = async (modelId: string) => {
-    // Progress 事件里的 bytesDownloaded 是后端 in_flight + already_done，是真实字节
+    // bytesDownloaded in the Progress event is backend in_flight + already_done — the real byte count
     const lastBytes = progress[modelId]?.bytesDownloaded ?? 0;
     try {
       await cancelLocalAsrDownload(modelId);
@@ -1362,7 +1363,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         delete next[modelId];
         return next;
       });
-      // 乐观更新：让 hasPartial 立刻翻 true，不等 listener 200ms 后的 refresh
+      // Optimistic update: flip hasPartial immediately instead of waiting for the listener's 200ms refresh
       if (lastBytes > 0) {
         setModels((prev) =>
           prev.map((m) => (m.id === modelId ? { ...m, downloadedBytes: lastBytes } : m)),
@@ -1411,7 +1412,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     }
   };
 
-  // 清理中断下载的 staging 目录；已安装模型不受影响（后端保证）。
+  // Clean up the staging directory of an interrupted download; installed models are unaffected (guaranteed by the backend).
   const handleCleanupIncomplete = async (modelId: string) => {
     setBusyModelId(modelId);
     try {
@@ -1446,15 +1447,15 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
 
   const handlePreload = async () => {
     try {
-      // 加载完成后后端会 emit `local-asr:engine-changed`，前端零轮询更新状态。
+      // After loading, the backend emits `local-asr:engine-changed`; the frontend updates without polling.
       await preloadLocalAsr();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   };
 
-  // 先设为当前模型（含把 active provider 切到对应的本地引擎），再跑内置音频
-  // 测试。这样 Qwen3 与 Whisper 可以在同一页切换并比较加载/转写耗时。
+  // Set as the current model first (including switching the active provider to the local engine), then run
+  // the built-in audio test, so Qwen3 and Whisper can be compared for load/transcribe latency on one page.
   const handleTest = async (
     modelId: string,
     provider: 'local-qwen3-mlx' | 'local-qwen3-c' | 'local-whisper' = prefs?.activeAsrProvider ===
@@ -1501,10 +1502,10 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   };
 
   const engineAvailable = settings?.engineAvailable ?? false;
-  // 真实「下载中」判定：busyModelId 在下载启动后立即清空（Rust 命令同步返回，
-  // 下载跑在后端线程），下载中的可靠标志是 progress 条目的 phase。用于：
-  // 1) 下载弹窗 busy —— 遮罩点击不误关（用户点遮罩下的设置项时弹窗不能
-  //    「像按了叉一样消失」）；2) 「＋ 下载新模型」按钮下载中禁用。
+  // Reliable "downloading" test: busyModelId is cleared right after the download starts (the Rust command
+  // returns synchronously; the download runs on a backend thread), so the progress entry's phase is the
+  // trustworthy signal. Used for: 1) dialog busy — a mask click must not close the dialog; 2) disabling
+  // the "+ download new model" button while a download is in flight.
   const anyDownloadInFlight =
     Object.values(progress).some((p) => p.phase === 'started' || p.phase === 'progress') ||
     Object.values(sherpaDownloadProgress).some(
@@ -1662,14 +1663,14 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         ? t('localAsr.foundryRetryPrepare')
         : t('localAsr.sherpaPrepare');
 
-  // ─── 两栏看板的统一模型条目（Qwen3 / sherpa-onnx / foundry 归一化） ───
-  // allSidebarEntries = 全目录（下载弹窗用，未下载/下载中/已下载全列出，
-  // 让「下载新模型」弹窗能选到所有可获取的模型）；
-  // sidebarEntries = 只列已下载 / 下载中的模型（看板用，未下载的走
-  // 「＋ 下载新模型」弹窗获取）。
+  // Unified model entries for the two-pane board (Qwen3 / sherpa-onnx / foundry normalized).
+  // allSidebarEntries = full catalog (used by the download dialog; lists not-downloaded/downloading/downloaded
+  // so the dialog can pick every fetchable model).
+  // sidebarEntries = only downloaded / downloading models (board; not-downloaded ones come from the
+  // "download new model" dialog).
   const allSidebarEntries = useMemo<SidebarModelEntry[]>(() => {
     const entries: SidebarModelEntry[] = [];
-    // macOS：Qwen3 / Whisper 引擎
+    // macOS: Qwen3 / Whisper engines
     for (const m of models) {
       if (m.runtime !== 'generic' || !isLocalAsrModelSupportedOnOs(m, OS)) continue;
       const isWhisper = m.family === 'whisper';
@@ -1679,7 +1680,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
       entries.push({
         id: m.id,
         name: m.id.replace(/^qwen3-asr-/, 'Qwen3-ASR ').replace(/^whisper-/, 'Whisper '),
-        // 目录元数据来自 Core descriptor 快照，展示不再依赖实时 HuggingFace。
+        // Catalog metadata comes from the Core descriptor snapshot; display no longer depends on live HuggingFace.
         displayName: m.displayName || undefined,
         languages: m.languages?.length ? m.languages : undefined,
         sizeBytes: m.sizeBytes ?? undefined,
@@ -1750,8 +1751,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
       });
     }
     for (const c of IS_WINDOWS ? foundryCatalog : []) {
-      // foundry 下载发生在 prepare 内（runtime/model/load 阶段），cached
-      // 仍是 false，靠 prepare 进度判定「下载中」保住条目。
+      // Foundry downloads happen inside prepare (runtime/model/load phases) while cached is still false;
+      // the prepare progress is what marks "downloading" and keeps the entry alive.
       const isDownloading =
         foundryProgress?.modelAlias === c.alias &&
         (foundryProgress.phase === 'runtime' ||
@@ -1791,15 +1792,15 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     t,
   ]);
 
-  // 看板只展示已下载 / 下载中的模型（下载中必须有实时进度可见）。
+  // The board shows only downloaded / downloading models (downloading ones must show live progress).
   const sidebarEntries = useMemo<SidebarModelEntry[]>(
     () => allSidebarEntries.filter((e) => e.isDownloaded || e.isDownloading),
     [allSidebarEntries],
   );
 
-  // 弹窗打开时若看板选中项不在全目录里（零下载用户未选中任何模型），把
-  // 弹窗默认高亮写回 selectedModelId——弹窗高亮与看板 state 一致，后续
-  // 切换 / 开始下载都基于同一值，没有「弹窗内显示 A、逻辑上是 B」的分叉。
+  // When the dialog opens and the board selection is missing from the full catalog (fresh installs with
+  // nothing selected), write the dialog's default highlight back into selectedModelId — dialog highlight
+  // and board state stay one value, so switching / starting a download never diverges.
   useEffect(() => {
     if (!downloadDialogOpen) return;
     const valid = allSidebarEntries.some((e) => e.id === selectedModelId);
@@ -1812,13 +1813,13 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
 
   const selectedEntry = sidebarEntries.find((e) => e.id === selectedModelId) ?? null;
 
-  // 侧栏选中默认：首次渲染后若没有选中项，选中第一个已下载模型。
+  // Sidebar selection default: after first render with no selection, pick the first downloaded model.
   useLayoutEffect(() => {
-    // 下载弹窗打开时弹窗内高亮未下载模型是合法的（选中即准备下载），
-    // 不能让看板的回落逻辑把弹窗高亮抢走；弹窗关闭后再回落。
+    // While the download dialog is open, highlighting a not-downloaded model inside it is valid (selecting
+    // prepares a download); the board's fallback must not steal the dialog highlight. Fallback resumes after close.
     if (downloadDialogOpen) return;
-    // 选中项被删除（或从未选中）时回落到第一个已下载模型，避免侧栏无高亮、
-    // 详情面板停在空态。
+    // When the selection was deleted (or never made), fall back to the first downloaded model so the
+    // sidebar keeps a highlight and the detail panel doesn't sit in an empty state.
     const stillExists =
       selectedModelId !== null && sidebarEntries.some((e) => e.id === selectedModelId);
     if (stillExists) return;
@@ -1829,8 +1830,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     if (nextSelectedId !== selectedModelId) setSelectedModelId(nextSelectedId);
   }, [sidebarEntries, selectedModelId, downloadDialogOpen]);
 
-  // 从侧栏/看板分派引擎动作。不再有 setActive——激活 = 在 ASR 语音转写里
-  // 选本地模型供应商，「加载并测试」负责把模型设为当前使用。
+  // Dispatch engine actions from the sidebar/board. There is no separate setActive — activation means
+  // picking the local provider in ASR dictation; "load and test" sets the model as the one in use.
   const dispatchEntryAction = (
     entry: SidebarModelEntry,
     action: 'download' | 'delete' | 'reveal',
@@ -1847,8 +1848,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
       const alias = entry.id as SherpaOnnxModelAlias;
       if (action === 'download') {
         setSelectedSherpaAlias(alias);
-        // 显式传 alias：setTimeout 里的闭包拿不到新 state（handler 读的是
-        // 当前 render 的 selectedSherpaAlias），不传会操作到上一个模型。
+        // Pass the alias explicitly: the setTimeout closure can't see new state (the handler reads this
+        // render's selectedSherpaAlias); omitting it would operate on the previous model.
         window.setTimeout(() => void handleDownloadSherpa(alias), 0);
       } else if (action === 'delete') {
         setSelectedSherpaAlias(alias);
@@ -1866,9 +1867,10 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     }
   };
 
-  // 下载弹框「开始下载」：把弹框当前选中项分派到对应引擎的下载入口。
-  // 弹框列表是全目录（allSidebarEntries），选中项可能不在看板过滤列表里；
-  // 弹框默认选中第一项时 selectedModelId 可能还是 null，回退到第一个未下载条目。
+  // Download dialog "start download": dispatch the dialog's current selection to the matching engine's
+  // download entry. The dialog lists the full catalog (allSidebarEntries), so the selection may not be in
+  // the board's filtered list; when the dialog defaulted to its first item, selectedModelId may still be
+  // null — fall back to the first not-downloaded entry.
   const startDownloadFromDialog = () => {
     const dialogEntry =
       allSidebarEntries.find((e) => e.id === selectedModelId) ??
@@ -1925,12 +1927,12 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         />
       )}
 
-      {/* ─── 右上角下载进度浮层已全局化（App 根挂载，任何页面常驻），
-                 此处不再渲染；页面内进度仍由 progress / sherpaDownloadProgress
-                 驱动看板详情条。 ─── */}
+      {/* ─── The top-right download progress overlay is now global (mounted at the App root,
+                 present on every page) and no longer rendered here; in-page progress still drives
+                 the board's detail bar via progress / sherpaDownloadProgress. ─── */}
 
       {!embedded && (
-        /* 性能/质量预期警告 —— embedded 模式下由 AdvancedSection 自己渲染，避免重复。 */
+        /* Performance/quality expectation warning — in embedded mode AdvancedSection renders it itself to avoid duplication. */
         <Card
           style={{
             marginBottom: 16,
@@ -1949,8 +1951,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         </Card>
       )}
 
-      {/* Windows 已由下方 Foundry / sherpa 卡片完成模型管理；
-                 macOS / Linux 仍需要该看板管理 Qwen3 / Whisper 模型。 */}
+      {/* Windows manages models through the Foundry / sherpa cards below;
+                 macOS / Linux still need this board for Qwen3 / Whisper models. */}
       {visibleError && (
         <div className="ol-model-error" role="alert" style={{ marginBottom: 20 }}>
           {visibleError}
@@ -1979,8 +1981,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                   selectedId={selectedModelId}
                   onSelect={(id) => {
                     setSelectedModelId(id);
-                    // 选中瞬间校验磁盘状态（模型文件可能已被外部删除），
-                    // 立刻反映到列表与详情，不等 3s 轮询。
+                    // Verify disk state the moment a model is selected (files may have been deleted
+                    // externally) and reflect it in list and details immediately, without waiting for the 3s poll.
                     void refresh();
                   }}
                 />
@@ -2070,8 +2072,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         </section>
       )}
 
-      {/* ─── 收纳：下载与存储设置（镜像源 · 模型存储位置 · 内存引擎）——默认收起，
-                 需要手动点开。日常的下载 / 管理 / 测试不依赖这些低频配置。 ─── */}
+      {/* ─── Collapsed: download and storage settings (mirror · model storage location · in-memory engine) —
+                 collapsed by default, opened manually. Everyday download / manage / test flows don't need them. ─── */}
       <div className="ol-model-advanced">
         <Collapsible
           title={t('localAsr.downloadSettingsTitle')}
@@ -2132,7 +2134,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                   />
                 </div>
               </div>
-              {/* 运行时设置卡：内存中的引擎状态 + 多久释放 + 立即释放 */}
+              {/* Runtime settings card: in-memory engine state + release timer + release now */}
               {engineAvailable && (
                 <div className="ol-model-setting-group">
                   <div
@@ -2327,7 +2329,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
           </div>
         </Collapsible>
       </div>
-      {/* ─── 下载弹框：左侧模型选择 + 右侧详情，最下方开始下载。 ─── */}
+      {/* ─── Download dialog: model selection on the left, details on the right, start download at the bottom. ─── */}
       {downloadDialogOpen && (
         <DownloadDialog
           entries={allSidebarEntries}
@@ -2380,7 +2382,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         />
       )}
 
-      {/* ─── 分组：下载与管理（各引擎的模型获取/准备/下载） ─── */}
+      {/* ─── Group: download and manage (per-engine model fetch/prepare/download) ─── */}
       {IS_WINDOWS && <LocalAsrGroupTitle>{t('localAsr.groupDownload')}</LocalAsrGroupTitle>}
 
       {IS_WINDOWS && (
@@ -2464,8 +2466,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                   }}
                 >
                   {t('localAsr.foundrySelectedModel')}
-                  {/* 统一官方 SelectLite；滚动保持
-                                        改从行容器 ref 向上找滚动祖先。 */}
+                  {/* Use the official SelectLite; scroll preservation walks up
+                                        from the row container ref to the scroll ancestor. */}
                   <SelectLite
                     value={selectedFoundryAlias}
                     onChange={(v) => {
@@ -3077,10 +3079,10 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         </Card>
       )}
 
-      {/* Qwen3 模型管理区——只在 macOS 渲染（后端 #[cfg(target_os = "macos")] 独占）。
-          Windows / Linux 看见镜像源 / 下载 / 模型列表都是 dead UI。Foundry 块自身已经
-          被上方 IS_WINDOWS 守卫，错误 Card（共享 setError，被 Foundry handler 也写）
-          保持无条件露出。 */}
+      {/* Qwen3 model management area — rendered on macOS only (the backend is #[cfg(target_os = "macos")] exclusive).
+          On Windows / Linux the mirror / download / model list here would be dead UI. The Foundry block is already
+          guarded by IS_WINDOWS above; the error Card (shared setError, also written by Foundry handlers) stays
+          unconditionally visible. */}
       {IS_QWEN_PLATFORM && !engineAvailable && (
         <Card
           style={{

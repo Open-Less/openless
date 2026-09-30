@@ -20,9 +20,9 @@ static RUNTIME: OnceCell<Arc<GlobalHotkeyRuntime>> = OnceCell::new();
 pub struct GlobalHotkeyRuntime {
     manager: GlobalHotKeyManager,
     routes: Mutex<HashMap<u32, Sender<GlobalHotKeyEvent>>>,
-    /// 用于 dispatcher loop 的退出信号。process-singleton 在生产路径里不会被
-    /// drop，但 integration test / future RunEvent::Exit 钩子可以调用
-    /// `request_shutdown` 让 dispatcher 退出。审计 3.4.4。
+    /// Shutdown signal for the dispatcher loop. The process-singleton is never dropped in
+    /// production, but integration tests / a future RunEvent::Exit hook can call
+    /// `request_shutdown` to end the dispatcher. Audit 3.4.4.
     shutdown: AtomicBool,
 }
 

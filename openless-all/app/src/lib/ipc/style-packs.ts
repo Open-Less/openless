@@ -105,9 +105,10 @@ export function exportStylePackToZip(id: string, targetPath: string): Promise<st
   return invokeOrMock('export_style_pack_to_zip', { id, targetPath }, () => targetPath);
 }
 
-/** 用某个风格包重新润色一段已有原文。
- *  `stylePackId` 省略 = 用当前激活风格包（历史页「重试」：同样输入再跑一遍）；
- *  给了 id = 用指定风格包试算一次（历史页「换风格重润色」），不改变激活状态。 */
+/** Repolish an existing raw text with a style pack.
+ *  `stylePackId` omitted = use the currently active pack (History "retry": rerun the same input);
+ *  an id given = trial-run once with that pack (History "repolish in another style"), without
+ *  changing the active pack. */
 export function repolish(rawText: string, mode: PolishMode, stylePackId?: string): Promise<string> {
   return invokeOrMock(
     'repolish',

@@ -1,4 +1,4 @@
-//! macOS 本地 Whisper Large-v3 Turbo：录音结束后整段 batch 解码。
+//! macOS local Whisper Large-v3 Turbo: whole-segment batch decoding after recording ends.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -107,8 +107,9 @@ impl LocalWhisperCache {
             context: Mutex::new(context),
         });
         let mut slot = self.inner.lock();
-        // 普通听写可以用完成加载的 Arc 继续本轮，但不得覆盖后来的 cache；
-        // 激活操作必须失败，不能把已被替代的加载当作当前模型的成功回执。
+        // Ordinary dictation may finish its round with the already-loaded Arc, but must not
+        // overwrite a later cache; activation operations must fail, never reporting a superseded
+        // load as the current model.
         if self.load_generation.load(Ordering::Acquire) != load_generation {
             if activation_generation.is_some() {
                 anyhow::bail!("本地 Whisper 加载已被更新的操作替代");
@@ -134,7 +135,8 @@ impl LocalWhisperCache {
 
     pub(crate) fn release_lease(&self, model_id: &str, generation: u64) {
         let mut slot = self.inner.lock();
-        // model ID 相同不代表同一所有者，普通使用会撤销旧 activation 的释放权。
+        // The same model ID does not mean the same owner; ordinary use revokes the old
+        // activation's release rights.
         if slot.as_ref().is_some_and(|cached| {
             cached.model_id == model_id && cached.activation_generation == Some(generation)
         }) {
@@ -149,9 +151,10 @@ impl LocalWhisperCache {
         }
     }
 
-    /// Whisper 的同步解码不可强制中止；取消/超时只驱逐本会话借出的实例，
-    /// 旧 worker 用自己的 Arc 安全收尾。新激活即使复用同一 Arc 也保有 cache，
-    /// 直到下一次普通 get_or_load 撤销 activation owner。
+    /// Whisper's synchronous decode cannot be force-aborted; cancel/timeout only evicts the
+    /// instance this session borrowed, and the old worker finalizes safely with its own Arc. A
+    /// new activation that reuses the same Arc keeps the cache until the next ordinary
+    /// get_or_load revokes the activation owner.
     pub fn finish_use(&self, engine: &Arc<WhisperEngine>, discard: bool) {
         let mut slot = self.inner.lock();
         if slot.as_ref().is_some_and(|cached| {
@@ -322,9 +325,10 @@ impl LocalWhisperAsr {
         let audio = pcm_to_f32(&pcm);
         let engine = Arc::clone(&self.engine);
         let language = self.language.clone();
-        // `spawn_blocking` 无法被 tokio::time::timeout 中止；调用方取消或超时后只会
-        // 放弃等待结果，native Whisper 解码仍可能继续运行。Coordinator 会先驱逐
-        // cache，再让后续会话加载新的 WhisperContext，避免复用仍在解码的旧锁。
+        // `spawn_blocking` cannot be aborted by tokio::time::timeout; after a caller cancel or
+        // timeout only the wait is abandoned and the native Whisper decode may keep running. The
+        // coordinator evicts the cache first and has subsequent sessions load a new
+        // WhisperContext, avoiding reuse of the old lock still decoding.
         let text =
             tauri::async_runtime::spawn_blocking(move || engine.transcribe(&audio, &language))
                 .await

@@ -4,7 +4,7 @@ import { CloudIcon, XIcon } from 'lucide-react';
 import { isTauri } from '../lib/ipc/shared';
 import { cloudSyncE2eeClaimSetupPrompt } from '../lib/ipc/cloud-sync-e2ee';
 import { CloudSyncSection } from '../pages/settings/CloudSyncSection';
-import { Modal } from './ui/Modal';
+import { Modal, PresenceModal } from './ui/Modal';
 
 const PROMPT_EVENTS = new Set([
   'backend_started',
@@ -110,6 +110,7 @@ export function CloudSyncSetupPrompt({
     };
   }, [open, blocked]);
 
+  // The Core eligibility gate revokes this automatic prompt immediately.
   if (!open || blocked) return null;
   return (
     <Modal onClose={() => setOpen(false)} width="min(480px, 100%)" zIndex={75}>
@@ -194,21 +195,29 @@ export function CloudSyncWelcome() {
         <CloudIcon size={16} />
         {t('cloudSync.restore')}
       </button>
-      {open && (
-        <Modal onClose={() => setOpen(false)} width="min(680px, 100%)" zIndex={50}>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
-            <button
-              type="button"
-              className="ol-tool-button"
-              aria-label={t('common.close')}
-              onClick={() => setOpen(false)}
-            >
-              <XIcon size={18} />
-            </button>
-          </div>
-          <CloudSyncSection />
-        </Modal>
-      )}
+      <PresenceModal
+        open={Boolean(open)}
+        onClose={() => setOpen(false)}
+        width="min(680px, 100%)"
+        zIndex={50}
+        render={() =>
+          open && (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+                <button
+                  type="button"
+                  className="ol-tool-button"
+                  aria-label={t('common.close')}
+                  onClick={() => setOpen(false)}
+                >
+                  <XIcon size={18} />
+                </button>
+              </div>
+              <CloudSyncSection />
+            </>
+          )
+        }
+      />
     </>
   );
 }

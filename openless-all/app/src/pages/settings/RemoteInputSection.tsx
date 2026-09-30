@@ -1,7 +1,8 @@
-// 远程输入：在局域网用手机/平板浏览器打开一个录音页，语音实时流回电脑，复用
-// 电脑现有的「录音→ASR→润色→光标落字」管线。放在「通用」标签页里，做成可折叠组
-// （与「启动」一致，默认折叠）：启停开关、监听端口、访问网址（可一键复制，带配对码）、
-// 配对码（可重置）、默认录音方式，以及证书/安全提示。
+// Remote input: on the LAN, a phone/tablet browser opens a recording page and streams voice
+// back to the PC in real time, reusing the existing "record -> ASR -> polish -> insert at
+// cursor" pipeline. Lives in the "General" tab as a collapsible group (like "Launch", collapsed
+// by default): start/stop switch, listening port, access URLs (one-click copy, with pairing
+// code), pairing code (resettable), default recording mode, and certificate/security notes.
 
 import { useEffect, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -22,7 +23,7 @@ async function copyText(text: string): Promise<void> {
     await navigator.clipboard.writeText(text);
     return;
   } catch {
-    // 退路：隐藏 textarea + execCommand，兼容个别不支持 async clipboard 的环境。
+    // Fallback: hidden textarea + execCommand, for environments without async clipboard support.
     const ta = document.createElement('textarea');
     ta.value = text;
     ta.style.position = 'fixed';
@@ -44,7 +45,8 @@ export function RemoteInputSection() {
   const [status, setStatus] = useState<RemoteInputStatus | null>(null);
   const [startError, setStartError] = useState<{ reason: string; port: number } | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
-  // 端口编辑草稿：失焦/回车时才解析提交，避免逐键持久化导致后端服务在中间值端口反复重启。
+  // Port edit draft: parsed and committed on blur/Enter only, so per-keystroke persistence does
+  // not restart the backend service repeatedly on intermediate port values.
   const [portDraft, setPortDraft] = useState<string | null>(null);
 
   useEffect(() => {
@@ -56,7 +58,8 @@ export function RemoteInputSection() {
     const unsubs: Array<() => void> = [];
     const registerAndRefresh = async () => {
       try {
-        // 先注册事件，再查询快照，避免启动事件早于首次查询完成而被错过。
+        // Register events before querying the snapshot, so a startup event is not missed by
+        // arriving before the first query completes.
         if (isTauri) {
           const { listen } = await import('@tauri-apps/api/event');
           if (!alive) return;
@@ -65,7 +68,8 @@ export function RemoteInputSection() {
             setStartError(null);
             refresh();
           });
-          // 异步注册完成时组件可能已卸载，立即退订避免监听器泄漏。
+          // The component may have unmounted while async registration completed; unsubscribe
+          // immediately to avoid a listener leak.
           if (!alive) {
             runningUnsubscribe();
             return;
@@ -89,7 +93,8 @@ export function RemoteInputSection() {
       }
     };
     void registerAndRefresh().catch(() => {});
-    // 进设置页时把当前界面语言同步给远程服务，确保 H5 录音页语言与 PC 一致。
+    // Sync the current UI language to the remote service when entering settings, keeping the H5
+    // recording page language consistent with the PC.
     void setRemoteLocale(i18n.language).catch(() => {});
     return () => {
       alive = false;
@@ -101,14 +106,15 @@ export function RemoteInputSection() {
   const enabled = prefs.remoteInputEnabled;
   const mode = prefs.remoteInputDefaultMode ?? 'toggle';
   const viewState = getRemoteInputViewState(enabled, status, startError);
-  // 只有本地监听器返回的完整指纹才能作为手机核验的依据。
+  // Only a full fingerprint returned by the local listener qualifies for phone verification.
   const fingerprint = status?.caFingerprintSha256;
   const canVerifyCertificate = typeof fingerprint === 'string' && /^[a-f0-9]{64}$/i.test(fingerprint);
   const formattedFingerprint = canVerifyCertificate
     ? fingerprint.toUpperCase().match(/.{2}/g)!.join(' ')
     : '';
 
-  // 提交端口草稿：非法（非有限数/越界离谱）则丢弃还原显示，合法则取整并 clamp 到 [1024, 65535]。
+  // Commit the port draft: invalid (non-finite / wildly out of range) discards and restores the
+  // display; valid rounds and clamps into [1024, 65535].
   const commitPort = () => {
     if (portDraft == null) return;
     const n = Math.round(Number(portDraft));
@@ -287,8 +293,10 @@ export function RemoteInputSection() {
               <button
                 onClick={async () => {
                   try {
-                    // 直接用命令返回的新 PIN 更新本地状态；后端会异步重启服务，
-                    // 此时查询状态可能拿到 running:false 导致闪烁，刷新交给 remote-input:running 事件。
+                    // Update local state directly from the command's returned new PIN; the
+                    // backend restarts the service asynchronously, and querying status then may
+                    // return running:false causing a flicker — refresh is left to the
+                    // remote-input:running event.
                     const pin = await regenerateRemotePin();
                     setStatus((s) => (s ? { ...s, pin } : s));
                   } catch (e) {

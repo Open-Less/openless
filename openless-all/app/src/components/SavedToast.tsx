@@ -1,12 +1,17 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import type { CSSProperties } from 'react';
 import { useEffect, useState } from 'react';
+import { useReducedMotion } from '../lib/motion';
+import { Icon } from './Icon';
+
+const TOAST_TRANSITION = { type: 'spring' as const, damping: 26, stiffness: 320 };
 
 export type SaveToastState = 'idle' | 'saving' | 'saved' | 'failed';
 
-// 弹框入场 / 退场方向 —— 始终"从哪来，回哪去"（同一方向进出）。
-//   'right'：从屏幕右侧滑入、再滑回右侧 —— 页面级 toast（风格包 / 翻译 / 划词…）。
-//   'top'  ：从屏幕上方滑入、再滑回上方 —— 设置弹窗内的 toast。
+// Enter/exit direction — always "leave the way you came" (same direction both ways).
+//   'right': slides in from the right edge and back out right — page-level toasts
+//   (marketplace / translation / selection ask …).
+//   'top'  : slides in from the top and back out top — toasts inside the settings dialog.
 export type ToastSlideFrom = 'right' | 'top';
 
 interface SavedToastProps {
@@ -28,12 +33,15 @@ export function SavedToast({
   onAction,
   durationMs,
 }: SavedToastProps) {
-  // 维护内部状态，使通知可以自己倒计时关闭（即使用户父组件的 timer 长于 0.8s）
+  // Internal state lets the toast time itself out (even if the parent's timer runs
+  // longer than 0.8s).
   const [internalVisible, setInternalVisible] = useState(false);
+  const reduced = useReducedMotion();
 
   useEffect(() => {
     if (saveState !== 'idle') {
       setInternalVisible(true);
+      if (saveState === 'saving') return;
       const timer = window.setTimeout(
         () => setInternalVisible(false),
         durationMs ?? (onAction ? 6000 : 800),
@@ -45,9 +53,10 @@ export function SavedToast({
 
   const failed = saveState === 'failed';
 
-  // 统一停靠右上角 —— 跟「风格市场 / 刷新 / 导入 ZIP」这排页头按钮同区。
-  // position:fixed 锚视口：滑入 / 滑出都贴着屏幕边走，不会在页面里撑出滚动条。
-  // 设置弹窗自行传 offsetStyle 覆盖成 absolute（锚到弹窗内容区右上角）。
+  // Docked top-right — same zone as the "marketplace / refresh / import ZIP" header
+  // buttons. position:fixed anchors to the viewport: slide in/out hugs the screen
+  // edge and can't stretch the page into a scrollbar. The settings dialog passes its
+  // own offsetStyle to switch to absolute (anchored to the dialog content's corner).
   const style: CSSProperties = {
     position: 'fixed',
     top: 20,
@@ -74,23 +83,36 @@ export function SavedToast({
     gap: 6,
   };
 
-  // "从哪来，回哪去"：入场起点 == 退场终点，方向由 slideFrom 决定。
-  // 两个分支都写全 x / y —— motion variant 保持完整，避免另一轴落到隐式默认值。
-  const offscreen =
-    slideFrom === 'top' ? { opacity: 0, x: 0, y: '-220%' } : { opacity: 0, x: '120%', y: 0 };
+  // "Leave the way you came": enter start == exit end; direction comes from slideFrom.
+  // Both branches spell out x / y so the motion variant stays complete — no axis
+  // falling back to an implicit default.
+  const offscreen = reduced
+    ? { opacity: 0, x: 0, y: 0 }
+    : slideFrom === 'top'
+      ? { opacity: 0, x: 0, y: '-220%' }
+      : { opacity: 0, x: '120%', y: 0 };
 
   return (
     <AnimatePresence>
       {internalVisible && (
         <motion.div
           role={failed ? 'alert' : 'status'}
-          initial={{ ...offscreen, filter: 'blur(8px)' }}
-          animate={{ opacity: 1, x: 0, y: 0, filter: 'blur(0px)' }}
-          exit={{ ...offscreen, filter: 'blur(4px)' }}
-          transition={{ type: 'spring', damping: 20, stiffness: 260 }}
+          initial={offscreen}
+          animate={{ opacity: 1, x: 0, y: 0 }}
+          exit={offscreen}
+          transition={reduced ? { duration: 0 } : TOAST_TRANSITION}
           style={style}
         >
-          {failed ? '⚠️' : '✓'} {message}
+          {saveState === 'saving' ? (
+            <span className="ol-loading-spinner" aria-hidden="true">
+              <Icon name="refresh" size={12} />
+            </span>
+          ) : failed ? (
+            '⚠️'
+          ) : (
+            '✓'
+          )}{' '}
+          {message}
           {actionLabel && onAction && (
             <button
               type="button"

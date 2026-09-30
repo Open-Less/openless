@@ -1,5 +1,6 @@
-// Kbd.tsx — 键帽显示（shadcn Kbd 的纯 React 版，用户拍板的快捷键展示标准）。
-// 语义用真 <kbd> 元素；键帽视觉走主题 token（浅/深色自适应），底边阴影出立体感。
+// Kbd.tsx — keycap display (pure React take on shadcn Kbd, the standard shortcut
+// display). Semantics use a real <kbd> element; keycap visuals use theme tokens
+// (adaptive to light/dark), with a bottom shadow for depth.
 
 import type { CSSProperties, ReactNode } from 'react';
 
@@ -7,7 +8,7 @@ export function Kbd({ children, style }: { children: ReactNode; style?: CSSPrope
   return <kbd style={{ ...kbdStyle, ...style }}>{children}</kbd>;
 }
 
-/** 组合键：一组键帽并排（shadcn KbdGroup），如「左 ⌥」「Space」。 */
+/** Combo keys: a row of keycaps (shadcn KbdGroup), e.g. "Left ⌥", "Space". */
 export function KbdGroup({ keys, style }: { keys: string[]; style?: CSSProperties }) {
   return (
     <span style={{ ...groupStyle, ...style }}>
@@ -33,7 +34,7 @@ const kbdStyle: CSSProperties = {
   color: 'var(--ol-ink-2)',
   background: 'var(--ol-surface-2)',
   border: '0.5px solid var(--ol-line-strong)',
-  // 键帽立体感：底边多一线阴影。
+  // Keycap depth: an extra shadow line at the bottom edge.
   boxShadow: '0 1.5px 0 var(--ol-line), 0 0 0 0.5px rgba(0,0,0,0.02)',
   whiteSpace: 'nowrap',
 };

@@ -1,7 +1,7 @@
-// 关于 → 版本信息 / 检查更新 / 字体大小 / 文档链接。
-// 「个性化」原本是独立 tab，但只剩字体大小一项、整页太空，遂并入「关于」。
-// 「加入 Beta 渠道」已挪到「高级」页底部（见 BetaChannelSection），这里图标旁
-// 只保留查正式版的「检查更新」按钮。
+// About → version info / check updates / font size / doc links.
+// "Personalization" was once its own tab but was left with only font size, so it merged into "About".
+// "Join the Beta channel" moved to the bottom of the Advanced page (see BetaChannelSection); here the
+// icon area keeps only the stable-channel "check updates" button.
 
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -48,7 +48,7 @@ export function AboutSection() {
 
   return (
     <>
-      {/* ─── 版本信息 + 检查更新（正式版）─────────────────────────────── */}
+      {/* ─── Version info + check updates (stable) ─────────────────────── */}
       <Card>
         <div
           className="ol-inline-composite"
@@ -96,16 +96,16 @@ export function AboutSection() {
               {t('modal.about.tagline')} · {APP_VERSION_LABEL}
             </div>
           </div>
-          {/* 图标右上方：查正式版的检查更新按钮。Beta 渠道在「高级」页。 */}
+          {/* Top right of the icon: stable-channel check-updates button. Beta channel lives on the Advanced page. */}
           {platformCaps?.supportsAutoUpdate === true && (
             <CheckUpdateButton channel="stable" compact={compactLayout} />
           )}
         </div>
       </Card>
 
-      {/* 个性化（字体大小）已按需求移除（页面瘦身）。 */}
+      {/* Personalization (font size) removed as requested (page slimming). */}
 
-      {/* ─── 文档链接 ─────────────────────────────────────────────── */}
+      {/* ─── Documentation links ─────────────────────────────────────── */}
       <Card>
         <SectionTitle>{t('settings.about.linksTitle')}</SectionTitle>
         <Row label={t('modal.about.source')}>

@@ -518,6 +518,22 @@
     },
     {
       "authRequirement": "api_key_unless_custom_endpoint",
+      "defaultEndpoint": "https://global.api-route.com/v1",
+      "defaultModel": "deepseek-v4-flash",
+      "defaultRequestFormat": "chat_completions",
+      "kind": "llm",
+      "labelKey": "apiRoute",
+      "providerType": "api-route",
+      "staticModels": [],
+      "supportedRequestFormats": [
+        "chat_completions",
+        "responses",
+        "messages"
+      ],
+      "validationProbe": "llm_text"
+    },
+    {
+      "authRequirement": "api_key_unless_custom_endpoint",
       "defaultEndpoint": "https://api.orcarouter.ai/v1",
       "defaultModel": "orcarouter/fusion-flash",
       "defaultRequestFormat": "chat_completions",

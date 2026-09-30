@@ -21,12 +21,14 @@ pub use crate::android_types::{
 
 pub use crate::types::{HistorySource, PolishMode};
 
-/// 本地 ASR 保持加载设置的兼容值：不自动释放，仅由显式操作或进程退出卸载。
+/// Compatibility value for "keep local ASR loaded": never auto-unload; unload only on explicit action or process exit.
 pub const LOCAL_ASR_KEEP_LOADED_FOREVER_SECS: u32 = 86_400;
 
-/// 识别管线模式（issue #902）：`traditional` = 两段式 ASR + LLM 润色；
-/// `multimodal` = 单个多模态模型一步完成「音频 + 提示词 → 最终文本」。
-/// 两套配置在凭据库中完全隔离，运行时只读当前模式，切换不删除另一套配置。
+/// Recognition pipeline mode (issue #902): `traditional` = two-stage ASR +
+/// LLM polish; `multimodal` = one multimodal model turns audio + prompt
+/// into final text in a single step. The two configs live in fully isolated
+/// credential namespaces; the runtime reads only the active mode and
+/// switching never deletes the other config.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum PipelineMode {
@@ -76,12 +78,14 @@ pub enum OutputLanguagePreference {
     Ko,
 }
 
-/// 模拟粘贴时实际按下的快捷键。macOS 走 AX 直写 / Cmd+V，本枚举只在
-/// Windows / Linux 的 simulate_paste 路径生效。详见 issue #360：kitty 等
-/// Linux 终端只接受 Ctrl+Shift+V，硬编码 Ctrl+V 会被吞掉，听写文本只剩
-/// 在剪贴板里。默认 `CtrlV` 与历史行为一致；用户在 Settings 里改成
-/// `CtrlShiftV`（kitty/alacritty/wezterm/gnome-terminal/foot/...）或
-/// `ShiftInsert`（xterm/urxvt）后，simulate_paste 用对应组合。
+/// Shortcut actually pressed by simulated paste. macOS uses AX direct
+/// write / Cmd+V, so this enum only applies to the Windows / Linux
+/// simulate_paste path. See issue #360: kitty and similar Linux terminals
+/// only accept Ctrl+Shift+V — a hardcoded Ctrl+V is swallowed and the
+/// dictated text survives only in the clipboard. Default `CtrlV` keeps
+/// historical behavior; when the user picks `CtrlShiftV`
+/// (kitty/alacritty/wezterm/gnome-terminal/foot/...) or `ShiftInsert`
+/// (xterm/urxvt) in Settings, simulate_paste sends that combo.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum PasteShortcut {
@@ -91,7 +95,7 @@ pub enum PasteShortcut {
     ShiftInsert,
 }
 
-/// Windows 听写文本插入策略。默认 TSF 输入法；SendInput 逐字模拟；Paste 走剪贴板 + 模拟粘贴键。
+/// Windows dictation text insertion strategy. Default is the TSF IME; SendInput simulates keystrokes; Paste uses the clipboard plus a simulated paste key.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum WindowsInsertionMode {
@@ -101,7 +105,7 @@ pub enum WindowsInsertionMode {
     Paste,
 }
 
-/// Windows SendInput 路径的换行模拟方式。仅 `WindowsInsertionMode::SendInput` 生效。
+/// Newline simulation for the Windows SendInput path. Only applies to `WindowsInsertionMode::SendInput`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum WindowsSendInputNewlineMode {
@@ -111,30 +115,35 @@ pub enum WindowsSendInputNewlineMode {
     CrLf,
 }
 
-/// macOS 逐字上屏时换行符怎么发。仅流式插入路径生效。
+/// How newlines are sent during macOS character-by-character insertion.
+/// Only applies to the streaming insertion path.
 ///
-/// 默认 `Auto`：按会话开始时冻结的前台应用选择。Terminal/TUI 使用 U+000A，
-/// 其它和未知应用安全回退为 Shift+Return。
+/// Default `Auto`: chosen by the front app frozen at session start.
+/// Terminal/TUI apps get U+000A; everything else and unknown apps fall
+/// back to Shift+Return.
 ///
-/// 保留 `Return` 是因为风格市场里有靠换行发多条消息的风格包，那种效果需要真回车。
+/// `Return` stays available because style packs in the marketplace send
+/// multiple chat messages via newline, which requires a real Return.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum MacosNewlineMode {
-    /// 按会话开始时捕获的前台应用自动选择。
+    /// Auto-select from the front app captured at session start.
     #[default]
     Auto,
-    /// Shift+Return：聊天框软换行，不发送。
+    /// Shift+Return: soft newline in chat boxes, doesn't send.
     ShiftReturn,
-    /// U+000A：Terminal/TUI 中等价于 Ctrl+J 软换行。
+    /// U+000A: equivalent to Ctrl+J soft newline in Terminal/TUI.
     LineFeed,
-    /// Return：聊天框里等于发送 —— 想要「一段话拆成多条消息」的风格包用这个。
+    /// Return: sends in chat boxes — for style packs that split one passage
+    /// into multiple messages.
     Return,
 }
 
-/// Auto-update 渠道。决定后台 AutoUpdateGate 拉哪条 manifest。
-/// `Stable` = `latest-android-{arch}.json`（或桌面 plugin-updater 正式版 endpoints）。
-/// `Beta` = `latest-android-{arch}-beta.json`（或桌面 beta endpoints）。
-/// Settings 里手动「检查正式版 / 检查 Beta」按钮显式传 channel，不受此 pref 影响。
+/// Auto-update channel. Picks which manifest the background AutoUpdateGate
+/// fetches. `Stable` = `latest-android-{arch}.json` (or the desktop
+/// plugin-updater stable endpoints). `Beta` = `latest-android-{arch}-beta.json`
+/// (or the desktop beta endpoints). The Settings manual "check stable / check
+/// beta" buttons pass the channel explicitly and ignore this pref.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum UpdateChannel {
@@ -154,7 +163,7 @@ pub enum ThemeMode {
 
 pub use crate::types::HistoryInsertStatus as InsertStatus;
 
-/// 选区润色结果的交付方式：直接覆盖，或先在可编辑预览中确认。
+/// How selection polish results are delivered: direct replace, or confirm in an editable preview first.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum SelectionPolishOutputMode {
@@ -165,23 +174,28 @@ pub enum SelectionPolishOutputMode {
 
 pub use crate::types::{SelectionVoiceIntentMode, SelectionVoiceManualIntent};
 
-/// 前台应用标签拆分结果：人读的应用名 +（macOS 的）bundle id。
+/// Split result of a front-app label: human-readable app name plus the (macOS) bundle id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrontApp {
     pub name: Option<String>,
     pub bundle_id: Option<String>,
 }
 
-/// 把 `capture_frontmost_app()` 的显示串拆成 `FrontApp { name, bundle_id }`。
+/// Splits the `capture_frontmost_app()` display string into
+/// `FrontApp { name, bundle_id }`.
 ///
-/// macOS 那边拼的是 `"Claude (com.anthropic.claudefordesktop)"`；Windows 拿的是窗口
-/// 标题，没有 bundle id。历史条目有 `app_name` / `app_bundle_id` 两个字段，拆开存
-/// 才能让详情页只显示人读得懂的应用名，而不是把一长串 bundle id 也糊在正文里。
+/// macOS composes `"Claude (com.anthropic.claudefordesktop)"`; Windows has
+/// only window titles, no bundle id. History entries have separate
+/// `app_name` / `app_bundle_id` fields, so splitting lets the detail page
+/// show a readable app name instead of gluing the whole bundle id into the
+/// body text.
 ///
-/// 只有 macOS 的标签才是 `"名称 (bundle.id)"` 格式；Windows 拿的是窗口标题，括号属于
-/// 标题正文。调用方必须按平台传入 `is_macos`（生产路径统一走 `split_front_app_opt`），
-/// 非 macOS 一律整串当应用名。认不出括号结构也整串当应用名 —— 宁可显示得啰嗦，
-/// 也不要把窗口标题里的普通括号误当成 bundle id。
+/// Only macOS labels are `"name (bundle.id)"`; on Windows parentheses are
+/// part of the title. Callers must pass `is_macos` per platform (production
+/// goes through `split_front_app_opt`). Non-macOS labels and labels whose
+/// bracket structure doesn't parse stay whole as the app name — better a
+/// verbose display than misreading ordinary parentheses in a window title
+/// as a bundle id.
 pub fn split_front_app_label(label: &str, is_macos: bool) -> FrontApp {
     let trimmed = label.trim();
     if trimmed.is_empty() {
@@ -195,8 +209,9 @@ pub fn split_front_app_label(label: &str, is_macos: bool) -> FrontApp {
             if trimmed.ends_with(')') {
                 let name = trimmed[..open].trim();
                 let bundle = trimmed[open + 2..trimmed.len() - 1].trim();
-                // bundle id 必然是点分的反向域名。没有点的括号内容（"记事本 (未保存)"
-                // 这类窗口标题）不是 bundle id，不能拆。
+                // A bundle id is always a dotted reverse domain. Bracketed
+                // content without a dot (window titles like "Notepad
+                // (unsaved)") is not a bundle id and must not be split.
                 if !name.is_empty() && bundle.contains('.') && !bundle.contains(' ') {
                     return FrontApp {
                         name: Some(name.to_string()),
@@ -212,9 +227,10 @@ pub fn split_front_app_label(label: &str, is_macos: bool) -> FrontApp {
     }
 }
 
-/// `split_front_app_label` 的 `Option` 便捷版，平台开关收敛在这一处：
-/// 只有 macOS 的显示串才是 `"名称 (bundle.id)"`，其它平台（Windows 窗口标题、Linux）
-/// 整串当应用名，bundle id 留空。
+/// `Option` convenience wrapper for `split_front_app_label`; keeps the
+/// platform switch in one place: only macOS display strings are
+/// `"name (bundle.id)"`; other platforms (Windows window titles, Linux)
+/// keep the whole string as the name and leave the bundle id empty.
 pub fn split_front_app_opt(label: Option<&str>) -> FrontApp {
     label
         .map(|l| split_front_app_label(l, cfg!(target_os = "macos")))
@@ -224,11 +240,12 @@ pub fn split_front_app_opt(label: Option<&str>) -> FrontApp {
         })
 }
 
-/// 概览页活动统计的单日汇总（date = 本地日期 YYYY-MM-DD）。
+/// Per-day summary for the Overview activity stats (date = local date YYYY-MM-DD).
 ///
-/// 年度热力图只用 `count`；`chars` / `duration_ms` 供「近 7 天 / 近 30 天」的
-/// 字数与时长指标使用——这两个指标此前从 `list_history()` 现算，会被历史 200 条
-/// 上限截断（说得多的用户几天就把上周挤没了）。
+/// The yearly heatmap uses only `count`; `chars` / `duration_ms` feed the
+/// "last 7 / 30 days" character and duration metrics. Those used to be
+/// computed on the fly from `list_history()`, which the 200-entry history
+/// cap truncates (heavy users push last week out within days).
 pub use crate::activity::ActivityDay;
 
 pub use crate::types::DictationSession;
@@ -237,56 +254,99 @@ pub use crate::types::DictionaryEntry;
 
 pub use crate::types::{CorrectionRule, RuleSource};
 
-/// 一条等待用户确认的词条建议。
+/// A vocabulary suggestion waiting for user confirmation.
 ///
-/// 只存在内存里，不落盘：建议是易逝的 —— 卡片消失就当没发生，用户下次改同一个词会再
-/// 产生一条。这也是不做「拒绝名单」的原因：一份用户看不见的名单，只会让他将来纳闷
-/// 「为什么这个词它不学了」。
+/// Lives only in memory, never persisted: suggestions are ephemeral — when
+/// the card disappears it's as if nothing happened, and correcting the same
+/// word again raises a new suggestion. This is also why there is no reject
+/// list: an invisible list would only make users wonder later why the app
+/// stopped learning that word.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingCorrection {
     pub id: String,
-    /// 改之前那个（错的）写法。只用来在卡片上让用户看清改的是什么，不入库。
+    /// Absolute deadline shared by native and web confirmation surfaces.
+    pub expires_at_ms: i64,
+    /// The (wrong) pre-correction spelling. Only shown on the card so the
+    /// user sees what changed; never persisted.
     pub pattern: String,
-    /// 用户最后要的那个词 —— 点「好」之后进词汇表的就是它。
+    /// The word the user finally wants — the one accepted into the
+    /// vocabulary on "OK".
     pub replacement: String,
 }
 
-/// 一张卡片上最多列几条。同一次听写里改好几个词会合并到一张卡；再多就该丢最老的了，
-/// 卡片撑得比屏幕还高没有意义。
+/// Max entries listed on one card. Multiple corrections in one dictation
+/// merge onto a single card; beyond this the oldest is dropped — a card
+/// taller than the screen is pointless.
 pub const MAX_PENDING_CORRECTIONS: usize = 5;
 
 /// Marker used to distinguish vocabulary entries accepted from the manual-edit
 /// suggestion flow from entries explicitly created in Settings.
 pub const LEARNED_VOCAB_NOTE: &str = "从手改中自动收集";
 
-/// 落字失败兜底卡片的内容。
+/// Content of the insert-failure fallback card.
 ///
-/// 文本没能落到目标 app 时（焦点在上屏途中离开、Secure Input、插入失败），把**完整**
-/// 的那段话连同复制入口摆到用户面前。此前这些场景唯一的兜底是悄悄写剪贴板 —— 既依赖
-/// 一个默认可关的开关，用户也不知道文本在那儿。
+/// When text fails to land in the target app (focus lost mid-insert,
+/// Secure Input, insertion failure), surface the **full** passage with a
+/// copy entry point. Previously the only fallback was silently writing the
+/// clipboard, which depended on a default-off toggle and was invisible to
+/// the user.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct InsertFallbackCardPayload {
-    /// 完整文本。焦点中途离开时屏幕上只有半截，这里给的是整段。
+    /// Full text. Focus lost mid-insert leaves only part on screen; this
+    /// carries the whole passage.
     pub text: String,
-    /// 为什么没落进去。**只进日志，不上屏** —— 卡片没有标题行。见
-    /// `INSERT_FALLBACK_REASON_*`。
+    /// Why the insert failed. **Log-only, never rendered** — the card has no
+    /// title line. See `INSERT_FALLBACK_REASON_*`.
     pub reason: String,
-    /// 本次卡片展示的代次。尺寸测量 IPC 必须回传它，防止旧卡片迟到的报告缩放新卡片。
+    /// Generation of this card display. The size-measurement IPC must echo
+    /// it back so a stale card's late report can't rescale the new card.
     pub presentation_id: u64,
 }
 
-/// 逐字上屏打到一半断了（Secure Input 中途打开、合成按键被拒）。
+/// Character-by-character insertion broke mid-stream (Secure Input opened,
+/// synthetic keystrokes rejected).
 pub const INSERT_FALLBACK_REASON_PARTIAL_STREAM: &str = "partialStream";
-/// 插入没能完成（Secure Input、辅助功能掉权限、粘贴被拒等）。
+/// Insertion could not complete (Secure Input, accessibility permission
+/// revoked, paste rejected, etc.).
 pub const INSERT_FALLBACK_REASON_INSERT_FAILED: &str = "insertFailed";
 
-/// 卡片自动消失的时间。
+/// Card auto-dismissal time.
 ///
-/// 到点就当没发生 —— 不记任何东西。用户下次改同一个词还会再问，这正是不要拒绝名单
-/// 换来的好处。
+/// On expiry it's as if nothing happened — nothing is recorded. Asking
+/// again the next time the user corrects the same word is the trade-off for
+/// having no reject list.
 pub const VOCAB_SUGGESTION_TTL_MS: u64 = 10_000;
+
+/// Local-only tuning. Consent and sensitive-field protections remain separate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct VocabularyLearningSettings {
+    pub observation_seconds: u32,
+    pub suggestion_seconds: u32,
+    pub max_phrase_chars: u32,
+}
+
+impl Default for VocabularyLearningSettings {
+    fn default() -> Self {
+        Self {
+            observation_seconds: 60,
+            suggestion_seconds: 10,
+            max_phrase_chars: 12,
+        }
+    }
+}
+
+impl VocabularyLearningSettings {
+    pub fn normalized(self) -> Self {
+        Self {
+            observation_seconds: self.observation_seconds.clamp(10, 60),
+            suggestion_seconds: self.suggestion_seconds.clamp(5, 60),
+            max_phrase_chars: self.max_phrase_chars.clamp(2, 32),
+        }
+    }
+}
 
 pub use crate::types::{VocabPreset, VocabPresetStore};
 
@@ -335,131 +395,155 @@ pub struct UserPreferences {
     pub custom_style_prompts: CustomStylePrompts,
     pub launch_at_login: bool,
     pub show_capsule: bool,
-    /// 录音胶囊外观。偏好事件同步到各窗口，录音状态同时携带当前样式。
+    /// Recording capsule appearance. Preference events sync it to all windows; recording state carries the current style.
     #[serde(default)]
     pub capsule_style: CapsuleStyle,
     #[serde(default = "default_true")]
     pub capsule_transcript_enabled: bool,
     #[serde(default = "default_capsule_transcript_font_size")]
     pub capsule_transcript_font_size: u8,
-    /// 录音期间临时静音系统输出，停止/取消/出错后恢复原静音状态。
+    /// Temporarily mute system output during recording; restore the original mute state on stop/cancel/error.
     #[serde(default)]
     pub mute_during_recording: bool,
-    /// 录音结束后再连接当前 ASR 并提交整段 PCM。默认关闭。
+    /// Reconnect the current ASR after recording ends and submit the whole PCM. Default off.
     #[serde(default)]
     pub stable_transcription_enabled: bool,
-    /// 按下录音热键进入 recording 状态时，播放一段即时合成的提示音，提醒「已开始录音」。
-    /// 默认开启；可在「录音与输入」设置里关闭。提示音由 capsule 窗口用 Web Audio API 合成，
-    /// 不依赖 show_capsule —— 胶囊隐藏时仍会响。
+    /// Play an instantly synthesized cue when the recording hotkey enters the
+    /// recording state ("recording started"). Default on; can be disabled in
+    /// the "Recording & Input" settings. The cue is synthesized by the capsule
+    /// window via the Web Audio API and does not depend on show_capsule — it
+    /// still plays while the capsule is hidden.
     #[serde(default = "default_true")]
     pub audio_cue_on_record: bool,
-    /// Toggle 模式「说完自动停止」（issue #860）：检测到语音后，连续静音达到
-    /// `silence_auto_stop_seconds` 时自动停止并提交；一直没检测到语音则 10 秒后
-    /// 自动取消。默认关闭，保持既有「按两次」行为；Push-to-talk 不受影响。
+    /// Toggle-mode "auto-stop after speech" (issue #860): once speech is
+    /// detected, continuous silence for `silence_auto_stop_seconds` stops and
+    /// commits; if no speech is ever detected, auto-cancel after 10 seconds.
+    /// Default off to keep the existing "press twice" behavior; push-to-talk
+    /// is unaffected.
     #[serde(default)]
     pub silence_auto_stop_enabled: bool,
-    /// 语音后的连续静音阈值（秒）。可选 1 / 1.5 / 2 / 3 / 4 / 5，默认 3。
+    /// Continuous-silence threshold after speech, in seconds. Options 1 / 1.5 / 2 / 3 / 4 / 5, default 3.
     #[serde(default = "default_silence_auto_stop_seconds")]
     pub silence_auto_stop_seconds: f32,
-    /// 录音输入设备名称。空字符串 = 使用系统默认麦克风。
+    /// Recording input device name. Empty string = system default microphone.
     #[serde(default)]
     pub microphone_device_name: String,
     pub active_asr_provider: String, // "volcengine" | "apple-speech" | ...
     pub active_llm_provider: String, // "ark" | "openai" | ...
-    /// 识别管线模式（实验性，issue #902）。`multimodal` 时各语音管线改用
-    /// 单独隔离的多模态模型配置（`omni.*` 凭据命名空间），不再读 ASR/LLM 两套。
+    /// Recognition pipeline mode (experimental, issue #902). With
+    /// `multimodal`, voice pipelines switch to the separately isolated
+    /// multimodal model config (`omni.*` credential namespace) instead of
+    /// the ASR/LLM pair.
     #[serde(default = "default_pipeline_mode")]
     pub pipeline_mode: PipelineMode,
-    /// 「多模态识别管线」实验性功能总开关（高级设置）。关闭时一切行为与旧版一致。
+    /// Master switch for the experimental "multimodal pipeline" (Advanced settings). When off, behavior matches the old version.
     #[serde(default = "default_multimodal_pipeline_enabled")]
     pub multimodal_pipeline_enabled: bool,
-    /// 多模态（Omni）模型当前激活的 provider id（镜像凭据库 `omni.active`，
-    /// 供设置页初始化下拉；运行时权威仍在 CredentialsVault）。
+    /// Currently active provider id of the multimodal (Omni) model. Mirrors
+    /// the credential vault's `omni.active` to initialize the settings
+    /// dropdown; CredentialsVault stays authoritative at runtime.
     #[serde(default = "default_active_omni_provider")]
     pub active_omni_provider: String,
-    /// LLM 思考模式开关。默认 false 以保持既有「尽量关闭思考」行为；
-    /// Gemini 走原生 thinkingConfig，OpenAI-compatible 路径仅按 provider/channel
-    /// 下发官方渠道级字段；OpenAI 官方渠道会跳过普通 chat 模型不支持的字段。详见 issue #402。
+    /// LLM thinking-mode switch. Defaults to false to keep the existing
+    /// "thinking off" behavior; Gemini uses native thinkingConfig, the
+    /// OpenAI-compatible path sends provider/channel-level official fields
+    /// only, and the official OpenAI channel skips fields unsupported by
+    /// plain chat models. See issue #402.
     #[serde(default)]
     pub llm_thinking_enabled: bool,
-    /// 是否使用系统代理（issue #869）。默认 true 跟随系统代理，与历史行为一致；
-    /// 关闭后所有 reqwest 请求直连（国内服务通常延迟更低），GitHub 登录、更新等
-    /// 境外服务可能连不上。实时语音流（WebSocket）与 Less Computer 子进程不受此开关影响。
+    /// Whether to use the system proxy (issue #869). Default true follows the
+    /// system proxy, matching historical behavior; when off, all reqwest
+    /// requests connect directly (lower latency for China-hosted services),
+    /// while GitHub login, updates, and other overseas services may become
+    /// unreachable. Realtime voice streams (WebSocket) and Less Computer
+    /// subprocesses ignore this switch.
     #[serde(default = "default_true")]
     pub use_system_proxy: bool,
-    /// Windows/Linux 粘贴成功后是否恢复用户原剪贴板。默认 true 跟历史行为一致；
-    /// 关掉就把听写文本留在剪贴板，让 simulate_paste 实际没生效时用户能 Ctrl+V 找回。
-    /// macOS 走 AX 直写，不受这个开关影响。详见 issue #111。
+    /// Whether to restore the user's original clipboard after a successful
+    /// Windows/Linux paste. Default true matches historical behavior; when
+    /// off, the dictated text stays on the clipboard so users can recover it
+    /// with Ctrl+V when simulate_paste silently failed. macOS uses AX direct
+    /// write and ignores this switch. See issue #111.
     pub restore_clipboard_after_paste: bool,
-    /// Windows / Linux 的模拟粘贴键。macOS 走 AX 直写不受影响。详见 issue #360：
-    /// kitty 等 Linux 终端不接受 Ctrl+V，只能配 Ctrl+Shift+V。默认 CtrlV 与历史
-    /// 行为一致，不破坏既有用户。
+    /// Simulated paste key for Windows / Linux. macOS uses AX direct write
+    /// and is unaffected. See issue #360: kitty and similar Linux terminals
+    /// reject Ctrl+V and need Ctrl+Shift+V. Default CtrlV preserves history
+    /// for existing users.
     #[serde(default)]
     pub paste_shortcut: PasteShortcut,
-    /// Windows: 是否允许 TSF 失败后继续使用分批 Unicode SendInput / 剪贴板兜底。
-    /// Unicode SendInput 失败时才复制到剪贴板，避免文本丢失。
-    /// 默认开启以保持可用性；关闭后可验证文本是否真正由 TSF 上屏。
+    /// Windows: whether TSF failure may fall back to batched Unicode
+    /// SendInput / clipboard. The clipboard copy happens only after Unicode
+    /// SendInput fails, avoiding text loss. Default on for usability; turn
+    /// off to verify text is truly inserted by TSF.
     #[serde(default = "default_true")]
     pub allow_non_tsf_insertion_fallback: bool,
-    /// Windows 听写插入策略：TSF / SendInput / 剪贴板粘贴。
+    /// Windows dictation insertion strategy: TSF / SendInput / clipboard paste.
     #[serde(default)]
     pub windows_insertion_mode: WindowsInsertionMode,
-    /// Windows SendInput 路径的换行模拟方式。
+    /// Newline simulation for the Windows SendInput path.
     #[serde(default, rename = "windowsSendInputNewlineMode")]
     pub windows_sendinput_newline_mode: WindowsSendInputNewlineMode,
-    /// macOS 逐字上屏的换行模拟方式。
+    /// Newline simulation for macOS character-by-character insertion.
     #[serde(default)]
     pub macos_newline_mode: MacosNewlineMode,
-    /// 旧版 wire 兼容：`true` 等价于 `windows_insertion_mode = SendInput`。
+    /// Legacy wire compatibility: `true` is equivalent to `windows_insertion_mode = SendInput`.
     #[serde(
         default,
         rename = "windowsSendInputInsertionOnly",
         alias = "windowsSendinputInsertionOnly"
     )]
     pub windows_sendinput_insertion_only: bool,
-    /// Windows：非 TSF 插入方式（SendInput / 剪贴板粘贴）下是否在系统键盘列表（Win+Space）
-    /// 中显示 OpenLess TSF 输入法。默认 true 保持现有行为；关闭后用户级禁用语言配置文件，
-    /// 无需管理员权限。TSF 模式仍会强制启用 profile，但不会改写本偏好。
+    /// Windows: whether the OpenLess TSF IME shows in the system keyboard
+    /// list (Win+Space) under non-TSF insertion (SendInput / clipboard
+    /// paste). Default true keeps current behavior; when off, the language
+    /// profile is disabled per-user without admin rights. TSF mode still
+    /// force-enables the profile but never rewrites this pref.
     #[serde(default = "default_true", rename = "windowsShowOpenlessInKeyboardList")]
     pub windows_show_openless_in_keyboard_list: bool,
-    /// 用户的工作语言（多选，原生名）。会作为前提注入 LLM polish/translate 的 system prompt 头部，
-    /// 让模型知道该用户在哪些语言间工作。详见 issue #4。
+    /// User's working languages (multi-select, native names). Injected as
+    /// context at the head of the LLM polish/translate system prompt so the
+    /// model knows which languages the user works in. See issue #4.
     #[serde(default = "default_working_languages")]
     pub working_languages: Vec<String>,
-    /// 翻译输出的目标语言（单选，原生名）。空串 = 不启用翻译模式（Shift 组合键无效）。
-    /// 由前端从内置语言列表中选择，后端只接收最终的原生名字符串拼进 prompt。详见 issue #4。
+    /// Translation output target language (single-select, native name).
+    /// Empty = translation mode off (Shift combos are inert). The frontend
+    /// picks from the built-in language list; the backend just splices the
+    /// native name into the prompt. See issue #4.
     #[serde(default)]
     pub translation_target_language: String,
-    /// 中文输出字形偏好（不额外暴露为 UI 开关）：
-    /// - Simplified: 中文输出优先简体
-    /// - Traditional: 中文输出优先繁体
-    /// - Auto: 不额外约束
+    /// Chinese output script preference (not exposed as a UI switch):
+    /// - Simplified: prefer simplified for Chinese output
+    /// - Traditional: prefer traditional for Chinese output
+    /// - Auto: no extra constraint
     ///
-    /// 由前端「界面语言」选择同步驱动（简体/繁体），详见 issue #259。
+    /// Driven by the frontend "UI language" choice (simplified/traditional).
+    /// See issue #259.
     #[serde(default)]
     pub chinese_script_preference: ChineseScriptPreference,
-    /// 最终输出语言偏好（不额外暴露为 UI 开关）：
-    /// 由前端「界面语言」选择同步驱动：zh-CN/zh-TW/en/ja/ko，其他为 Auto。
+    /// Final output language preference (not exposed as a UI switch). Driven
+    /// by the frontend "UI language" choice: zh-CN/zh-TW/en/ja/ko, anything
+    /// else is Auto.
     #[serde(default)]
     pub output_language_preference: OutputLanguagePreference,
-    /// 划词语音问答（QA）的全局快捷键。`None` = 关闭功能；`Some(...)` 时
-    /// coordinator 用 global-hotkey crate 注册组合键（modifier + 主键）。
-    /// 默认 Cmd+Shift+; (macOS) / Ctrl+Shift+; (Windows)。详见 issue #118。
+    /// Global hotkey for selection voice QA. `None` = feature off; with
+    /// `Some(...)` the coordinator registers the combo (modifier + primary
+    /// key) via the global-hotkey crate. Defaults to Cmd+Shift+; (macOS) /
+    /// Ctrl+Shift+; (Windows). See issue #118.
     #[serde(default = "default_qa_hotkey")]
     pub qa_hotkey: Option<ShortcutBinding>,
-    /// 独立的速记快捷键。None = 未配置；启用后按一次开始、再按一次结束。
+    /// Standalone quick-note hotkey. None = not configured; when enabled, press once to start and again to stop.
     #[serde(default)]
     pub quick_note_hotkey: Option<ShortcutBinding>,
-    /// 选区润色全局快捷键。Windows 默认右 Alt；其它平台默认关闭。
+    /// Global hotkey for selection polish. Defaults to right Alt on Windows; off on other platforms.
     #[serde(default = "default_selection_polish_hotkey")]
     pub selection_polish_hotkey: Option<ShortcutBinding>,
-    /// 选区书面润色独立使用的风格包；未设置时迁移为默认内置轻度润色包。
+    /// Style pack used exclusively for written selection polish; migrates to the default built-in light-polish pack when unset.
     #[serde(default = "default_active_style_pack_id")]
     pub selection_polish_style_pack_id: String,
-    /// 选区润色直接覆盖，或先在可编辑预览中确认。
+    /// Selection polish replaces directly, or confirms in an editable preview first.
     #[serde(default)]
     pub selection_polish_output_mode: SelectionPolishOutputMode,
-    /// 选区语音编辑（issue #987 桌面 MVP）。默认关闭。
+    /// Selection voice editing (issue #987 desktop MVP). Default off.
     #[serde(default)]
     pub selection_voice_enabled: bool,
     #[serde(default)]
@@ -468,222 +552,268 @@ pub struct UserPreferences {
     pub selection_voice_manual_intent: SelectionVoiceManualIntent,
     #[serde(default = "default_selection_voice_edit_keywords")]
     pub selection_voice_edit_keywords: Vec<String>,
-    /// 选区语音 EditPlan 输出格式优先级（issue #1076）。默认 XML。
+    /// Preferred output format for selection voice EditPlan (issue #1076). Default XML.
     #[serde(default)]
     pub selection_voice_edit_plan_format: crate::edit_plan::EditPlanFormat,
-    /// 自定义选区语音 EditPlan system prompt；空串 = 风格包 / 内置默认。
+    /// Custom system prompt for selection voice EditPlan; empty = style pack / built-in default.
     #[serde(default)]
     pub selection_voice_edit_system_prompt: String,
-    /// 是否把每次 QA 会话写进 history.json。默认 false：QA 默认临时不留痕。
-    /// 详见 issue #118。
+    /// Whether to write each QA session into history.json. Default false:
+    /// QA stays ephemeral by default. See issue #118.
     #[serde(default)]
     pub qa_save_history: bool,
-    /// 自定义录音组合键。当 `hotkey.trigger == Custom` 时，coordinator 用
-    /// `global-hotkey` crate 注册此组合键（支持 Toggle + Hold 模式）。
-    /// `None` 且 trigger == Custom 表示用户选了自定义但还没录制。
+    /// Custom recording combo. When `hotkey.trigger == Custom`, the
+    /// coordinator registers this combo via the `global-hotkey` crate
+    /// (Toggle + Hold modes supported). `None` with trigger == Custom means
+    /// the user picked custom but hasn't recorded a key yet.
     #[serde(default)]
     pub custom_combo_hotkey: Option<ComboBinding>,
     #[serde(default = "default_translation_hotkey")]
     pub translation_hotkey: ShortcutBinding,
-    /// 「切换风格」全局快捷键。`None` = 停用（不注册全局键）；`Some(...)` = 注册。
-    /// 默认 `Some(默认键)`，对老用户零行为变化，仅新增可清空（issue #576）。
+    /// "Switch style" global hotkey. `None` = disabled (no global key
+    /// registered); `Some(...)` = registered. Defaults to `Some(default key)`
+    /// — zero behavior change for existing users, only newly clearable
+    /// (issue #576).
     #[serde(default = "default_switch_style_hotkey")]
     pub switch_style_hotkey: Option<ShortcutBinding>,
-    /// 「唤起 App」全局快捷键。`None` = 停用；`Some(...)` = 注册。默认 `Some(默认键)`。
+    /// "Open App" global hotkey. `None` = disabled; `Some(...)` = registered. Defaults to `Some(default key)`.
     #[serde(default = "default_open_app_hotkey")]
     pub open_app_hotkey: Option<ShortcutBinding>,
-    /// 风格包直达快捷键：每条把一个全局组合键绑定到具体风格包 id（issue #759）。
-    /// 按 id 而非「已启用列表第 N 个」绑定——启停其它风格包不会让已配的键位移。
-    /// 默认空列表（不预设 Alt+1~9：macOS 上 Option+数字用于输入特殊字符，全局
-    /// 注册会吞掉正常输入）。绑定指向已停用的包时，触发即自动启用并激活。
+    /// Direct style-pack hotkeys: each entry binds a global combo to a
+    /// specific style-pack id (issue #759). Binding by id rather than "Nth
+    /// in the enabled list" means enabling/disabling other packs never
+    /// shifts an existing binding. Defaults to an empty list (no Alt+1~9
+    /// preset: on macOS Option+digits type special characters and global
+    /// registration would swallow normal typing). Triggering a binding for
+    /// a disabled pack auto-enables and activates it.
     #[serde(default)]
     pub style_pack_hotkeys: Vec<StylePackHotkey>,
-    /// Less Computer：是否启用。默认关闭，需用户在高级设置开启。
+    /// Less Computer: whether enabled. Default off; users must enable it in Advanced settings.
     #[serde(default)]
     pub coding_agent_enabled: bool,
-    /// Agent 后端：`claude-code-cli`（默认）或 `opencode-cli`。
+    /// Agent backend: `claude-code-cli` (default) or `opencode-cli`.
     #[serde(default = "default_coding_agent_provider")]
     pub coding_agent_provider: String,
-    /// Agent 模型（`None` = 运行时取便宜默认 sonnet）。
+    /// Agent model (`None` = runtime picks the cheap default sonnet).
     #[serde(default)]
     pub coding_agent_model: Option<String>,
-    /// 权限模式：plan/default/acceptEdits/bypassPermissions。默认 acceptEdits（放行+护栏）。
+    /// Permission mode: plan/default/acceptEdits/bypassPermissions. Default acceptEdits (auto-approve with guardrails).
     #[serde(default = "default_coding_agent_permission_mode")]
     pub coding_agent_permission_mode: String,
-    /// Agent 工作目录（`None` = 临时目录）。
+    /// Agent working directory (`None` = temp directory).
     #[serde(default)]
     pub coding_agent_workdir: Option<String>,
-    /// Agent 可执行文件路径/命令（`None` 或空白 = 按后端取默认 `claude` / `opencode`）。
-    /// 供用户在「高级 → Less Computer」填自定义路径（例如未加入 PATH 的 opencode 二进制）。
+    /// Agent executable path/command (`None` or blank = backend default
+    /// `claude` / `opencode`). Lets users set a custom path under
+    /// "Advanced → Less Computer" (e.g. an opencode binary not on PATH).
     #[serde(default)]
     pub coding_agent_exe: Option<String>,
-    /// Less Computer 语音触发键。macOS 生效；支持单修饰键（左/右 Control、左/右 Option、Fn）
-    /// 和普通组合键。`None` = 停用。
+    /// Less Computer voice trigger key. macOS only; supports single
+    /// modifiers (left/right Control, left/right Option, Fn) and ordinary
+    /// combos. `None` = disabled.
     #[serde(default = "default_coding_agent_voice_hotkey")]
     pub coding_agent_voice_hotkey: Option<ShortcutBinding>,
-    /// 热键 1：语音 Agent 面板键。默认 Cmd/Ctrl+Shift+Enter。`None` = 停用。
+    /// Hotkey 1: voice Agent panel key. Default Cmd/Ctrl+Shift+Enter. `None` = disabled.
     #[serde(default = "default_coding_agent_panel_hotkey")]
     pub coding_agent_panel_hotkey: Option<ShortcutBinding>,
-    /// 热键 2：快取用键（选中→Claude→回插）。默认 `None`（用户自配）。
+    /// Hotkey 2: quick-use key (select -> Claude -> insert back). Default `None` (user-configured).
     #[serde(default)]
     pub coding_agent_quick_hotkey: Option<ShortcutBinding>,
-    /// 局域网远程输入服务开关。桌面端启动 HTTPS+WS 服务，手机浏览器推 PCM 到电脑。
+    /// LAN remote-input service switch. The desktop starts an HTTPS+WS server; a phone browser pushes PCM to the computer.
     #[serde(default)]
     pub remote_input_enabled: bool,
-    /// 局域网远程输入服务端口。
+    /// LAN remote-input service port.
     #[serde(default = "default_remote_input_port")]
     pub remote_input_port: u16,
-    /// 当前远程输入 PIN。真实运行时 PIN 另有进程内/磁盘路径维护，此字段保留 wire 兼容。
+    /// Current remote-input PIN. The real runtime PIN is maintained via separate in-process/disk paths; this field stays for wire compatibility.
     #[serde(default)]
     pub remote_input_pin: String,
-    /// 远程输入默认按钮模式。
+    /// Remote-input default button mode.
     #[serde(default = "default_remote_input_mode")]
     pub remote_input_default_mode: String,
-    /// 本地 Qwen3-ASR 当前激活的模型 id（"qwen3-asr-0.6b" / "qwen3-asr-1.7b"）。
-    /// 仅在 active_asr_provider 为 local-qwen3 / local-qwen3-mlx / local-qwen3-c 时有意义。
+    /// Currently active local Qwen3-ASR model id ("qwen3-asr-0.6b" /
+    /// "qwen3-asr-1.7b"). Only meaningful when active_asr_provider is
+    /// local-qwen3 / local-qwen3-mlx / local-qwen3-c.
     #[serde(default = "default_local_asr_model")]
     pub local_asr_active_model: String,
-    /// macOS 本地 Whisper 当前激活的模型 id。与 Qwen 偏好分开保存，避免在
-    /// 设置页测试 Whisper 时覆盖 Qwen 的模型选择。
+    /// Currently active macOS local Whisper model id. Stored separately from
+    /// the Qwen preference so testing Whisper in Settings doesn't clobber
+    /// the Qwen model choice.
     #[serde(default = "default_local_whisper_model")]
     pub local_whisper_active_model: String,
-    /// 本地模型下载源（"huggingface" / "hf-mirror" / "modelscope"）。
+    /// Local model download source ("huggingface" / "hf-mirror" / "modelscope").
     #[serde(default = "default_local_asr_mirror")]
     pub local_asr_mirror: String,
-    /// 本地 ASR 引擎在内存中的保留时长（秒）。0 = 说完话即释放；
-    /// 较大值 = 上次使用后驻留 N 秒再释放；86400 = 永不自动释放。
-    /// 默认 300（5 分钟）：兼顾连续听写不重加载、长时间不用释放 1.2GB+ RAM。
+    /// How long the local ASR engine stays in memory (seconds). 0 = release
+    /// right after the session; larger values = stay N seconds after last
+    /// use; 86400 = never auto-release. Default 300 (5 min): balances
+    /// no-reload across consecutive dictations against freeing 1.2GB+ RAM
+    /// when idle.
     #[serde(default = "default_local_asr_keep_loaded_secs")]
     pub local_asr_keep_loaded_secs: u32,
-    /// 本地模型自定义父目录。空字符串 = 使用系统默认 app data 下的 `models/`。
-    /// 非空时，实际模型根目录为 `<local_asr_models_base_dir>/OpenLess/models/`，
-    /// 让用户选择一个普通磁盘目录即可隔离 OpenLess 模型文件。
+    /// Custom parent directory for local models. Empty = the default
+    /// `models/` under app data. When set, the actual model root is
+    /// `<local_asr_models_base_dir>/OpenLess/models/`, letting users isolate
+    /// OpenLess model files in any ordinary disk directory.
     #[serde(default)]
     pub local_asr_models_base_dir: String,
-    /// Windows Foundry Local Whisper 当前激活的模型 alias。
+    /// Currently active Windows Foundry Local Whisper model alias.
     #[serde(default = "default_foundry_local_asr_model")]
     pub foundry_local_asr_model: String,
-    /// Windows Foundry Local native runtime 下载源："auto" / "nuget" / "ort-nightly"。
+    /// Windows Foundry Local native runtime download source: "auto" / "nuget" / "ort-nightly".
     #[serde(default = "default_foundry_local_runtime_source")]
     pub foundry_local_runtime_source: String,
-    /// Windows Foundry Local Whisper 语言 hint。空字符串 = 自动检测。
+    /// Windows Foundry Local Whisper language hint. Empty string = auto-detect.
     #[serde(default)]
     pub foundry_local_asr_language_hint: String,
-    /// Windows Foundry Local Whisper 模型在 runtime 中保持加载多久。
+    /// How long the Windows Foundry Local Whisper model stays loaded in the runtime.
     #[serde(default = "default_local_asr_keep_loaded_secs")]
     pub foundry_local_asr_keep_loaded_secs: u32,
-    /// Windows sherpa-onnx 本地 ASR 当前激活的模型 alias。
+    /// Currently active Windows sherpa-onnx local ASR model alias.
     #[serde(default = "default_sherpa_onnx_model")]
     pub sherpa_onnx_model: String,
-    /// Windows sherpa-onnx 语言 hint（BCP-47 / ISO 639-1 小写）。空 = 自动。
+    /// Windows sherpa-onnx language hint (lowercase BCP-47 / ISO 639-1). Empty = auto.
     #[serde(default)]
     pub sherpa_onnx_language_hint: String,
-    /// Windows sherpa-onnx 模型在 runtime 中保持加载多久（秒），语义与
-    /// foundry/qwen3 一致。
+    /// How long the Windows sherpa-onnx model stays loaded in the runtime
+    /// (seconds); same semantics as foundry/qwen3.
     #[serde(default = "default_local_asr_keep_loaded_secs")]
     pub sherpa_onnx_keep_loaded_secs: u32,
-    /// Auto-update 渠道。stable = 后台自动更新查正式版 manifest；beta = 查 Beta manifest。
-    /// 手动检查按钮显式指定 channel，与此 pref 解耦。
+    /// Auto-update channel. stable = background auto-update checks the
+    /// stable manifest; beta = the beta manifest. Manual check buttons pass
+    /// the channel explicitly, decoupled from this pref.
     #[serde(default)]
     pub update_channel: UpdateChannel,
-    /// 是否由用户明确选择过更新渠道。旧版默认会把 Stable 写入配置，单看
-    /// `update_channel` 无法区分默认值与主动切换；历史 Beta 则必然来自用户 opt-in。
+    /// Whether the user explicitly chose the update channel. Older versions
+    /// wrote Stable into the config by default, so `update_channel` alone
+    /// can't distinguish default from a deliberate switch; a historical Beta
+    /// always came from user opt-in.
     #[serde(default)]
     pub update_channel_explicit: bool,
-    /// 历史记录保留天数。0 = 不按时间清理（仅受 200 条上限）。默认 7 天。
-    /// 写入新条目时执行清理，避免后台轮询。
+    /// History retention in days. 0 = no time-based cleanup (only the
+    /// 200-entry cap). Default 7 days. Cleanup runs when a new entry is
+    /// written, avoiding background polling.
     #[serde(default = "default_history_retention_days")]
     pub history_retention_days: u32,
-    /// 对话感知 polish 的上下文窗口（分钟）：把最近 N 分钟的转写 + 已润色文本
-    /// 作为多轮上下文喂给 LLM，让代词 / 不完整句子能被正确解析。
-    /// 0 = 关闭（每次润色独立单轮，跟历史行为一致）。默认 5 分钟。
+    /// Context window (minutes) for conversation-aware polish: the last N
+    /// minutes of transcripts + polished text feed the LLM as multi-turn
+    /// context so pronouns / incomplete sentences resolve correctly.
+    /// 0 = off (each polish is a standalone single turn, as historically).
+    /// Default 5 minutes.
     #[serde(default = "default_polish_context_window_minutes")]
     pub polish_context_window_minutes: u32,
-    /// 启动时静默运行（不弹主窗口）。开机自启用户用得多——本来想看托盘
-    /// 而不是被主窗口打扰。开关一开后所有启动路径都不弹窗（包括手动点击），
-    /// 用户改用托盘菜单访问主窗口。默认 false 跟历史行为一致。
+    /// Start silently (no main window). Common for login-launch users who
+    /// want the tray rather than a popped-up window. When on, every launch
+    /// path skips the window (manual clicks included); users reach the main
+    /// window via the tray menu. Default false, matching history.
     #[serde(default)]
     pub start_minimized: bool,
     /// UI theme: follow OS, force light, or force dark. Frontend applies via data-ol-theme.
     #[serde(default)]
     pub theme_mode: ThemeMode,
-    /// 流式输入：润色 SSE 一边到达一边逐字模拟键盘事件输出到当前焦点。开启后用户感知到
-    /// 的处理时延显著降低（润色 LLM 第一个 token 即开始落字）。
+    /// Streaming insert: polish SSE output is typed character-by-character
+    /// into the current focus as it arrives, sharply lowering perceived
+    /// latency (typing starts at the polish LLM's first token).
     ///
-    /// 平台原语：
-    /// - macOS：CGEvent Unicode FFI；CJK / 日文 IME 会拦截，session 期间临时切到 ABC
-    /// - Windows：SendInput Unicode（绕过 TSF）；不需要切输入法
-    /// - Linux：通过 fcitx5 插件 commitString 直写或剪贴板回落。
+    /// Platform primitives:
+    /// - macOS: CGEvent Unicode FFI; CJK / Japanese IMEs intercept, so the
+    ///   session temporarily switches to ABC
+    /// - Windows: SendInput Unicode (bypasses TSF); no IME switch needed
+    /// - Linux: direct write via the fcitx5 plugin commitString, or
+    ///   clipboard fallback.
     ///
-    /// 限制：
-    /// - 不再走剪贴板路径，对 secure input 框（密码框 / 1Password）静默拒绝
-    /// - 仅 OpenAI-compatible provider 实装（v1）；Gemini / Codex provider 走原一次性
-    ///   插入路径
+    /// Limits:
+    /// - No clipboard path; silently refuses secure input fields
+    ///   (password boxes / 1Password)
+    /// - Only OpenAI-compatible providers implemented (v1); Gemini / Codex
+    ///   providers use the original one-shot insertion path
     ///
-    /// 默认 true（自 1.3.2-3 起）—— 流式落字感知延迟低，所有 fallback case 都已经接好，
-    /// 让开箱即用就能体验。CJK IME / Codex / Gemini provider 自动回落到一次性路径，
-    /// 用户无感。详见上面「限制」段。
+    /// Default true (since 1.3.2-3) — low perceived latency, all fallback
+    /// cases wired, so it works out of the box. CJK IME / Codex / Gemini
+    /// providers fall back to the one-shot path transparently. See the
+    /// "Limits" section above.
     #[serde(default = "default_true")]
     pub streaming_insert: bool,
-    /// issue #440 的一次性迁移标记。老版本会把默认 `streamingInsert:false`
-    /// 写进 preferences.json，升级后仅看 bool 无法区分「老默认」和「用户手动关」。
-    /// 缺少此标记的旧文件统一迁到 true；迁移后用户再关会带着标记保存，后续保留 false。
+    /// One-shot migration marker for issue #440. Old versions wrote the
+    /// default `streamingInsert:false` into preferences.json, so after
+    /// upgrade the bool alone can't distinguish "old default" from "user
+    /// turned it off". Old files without this marker migrate to true; after
+    /// migration a user's off choice is saved with the marker and stays false.
     #[serde(default)]
     pub streaming_insert_default_migrated: bool,
-    /// 流式输入成功后是否把最终润色文本写回剪贴板。一次性路径天然走剪贴板，所以
-    /// Cmd+V 可以重复粘贴；流式路径直接合成键盘事件、不动剪贴板，会让用户失去这层
-    /// 兜底。开启后流式成功收尾时把 final text 写到系统剪贴板，跟一次性行为对齐。
-    /// 默认 true（更接近用户习惯）。
+    /// Whether to write the final polished text back to the clipboard after a
+    /// successful streaming insert. The one-shot path naturally uses the
+    /// clipboard, so Cmd+V can re-paste; the streaming path synthesizes
+    /// keystrokes without touching the clipboard, removing that safety net.
+    /// When on, a successful streaming finish writes the final text to the
+    /// system clipboard, matching one-shot behavior. Default true (closer to
+    /// user habits).
     #[serde(default = "default_true")]
     pub streaming_insert_save_clipboard: bool,
-    /// 是否把「用户正在写的那篇文档」中光标附近的原文送进 LLM 润色当上下文。
+    /// Whether to send original text near the cursor from the document the
+    /// user is writing as LLM polish context.
     ///
-    /// **默认 false，且必须保持 false。** 开启后每次听写都会读取前台 app 的正文并把
-    /// 其中一段发给 LLM 服务商——这是用户没有主动交给我们的数据，只能由用户显式选择。
-    /// 关闭时 `host_document` 一次 AX 都不发，prompt 与本功能存在之前逐字节相同。
+    /// **Default false, and must stay false.** When on, every dictation
+    /// reads the front app's body and sends part of it to the LLM vendor —
+    /// data the user never handed over voluntarily, so only they may opt in.
+    /// When off, `host_document` issues zero AX calls and prompts are
+    /// byte-identical to before this feature existed.
     ///
-    /// 目前仅 macOS 有实现；Windows / Linux 开了也读不到，优雅降级为无上下文。
-    /// 密码框 / Secure Input / 密码管理器 / 终端一律硬拦，与本开关无关。
+    /// macOS-only today; Windows / Linux degrade gracefully to no context.
+    /// Password boxes / Secure Input / password managers / terminals are
+    /// hard-blocked regardless of this switch.
     #[serde(default)]
     pub cursor_context_enabled: bool,
-    /// 概览页是否显示「年度活动」热力图卡。默认 true；关闭只隐藏卡片，
-    /// 活动计数照常记录（persistence/activity.rs），再打开时全年数据仍在。
+    /// Observe corrections locally after insertion; independent of LLM context.
+    #[serde(default)]
+    pub vocabulary_learning_enabled: bool,
+    #[serde(default)]
+    pub vocabulary_learning_settings: VocabularyLearningSettings,
+    /// Whether the Overview shows the "yearly activity" heatmap card.
+    /// Default true; turning it off only hides the card — activity keeps
+    /// being recorded (persistence/activity.rs), so the full year's data is
+    /// still there when re-enabled.
     #[serde(default = "default_true")]
     pub show_overview_activity_heatmap: bool,
-    /// 易读布局：小屏或大字号时强制同行控件换行，避免横向溢出与文字被压扁。默认 false。
+    /// Readable layout: force same-row controls to wrap on small screens or large fonts, avoiding horizontal overflow and squashed text. Default false.
     #[serde(default)]
     pub stacked_row_layout: bool,
-    /// 保守排版：除首页、顶栏、底栏与胶囊窗外，内容区强制单列满宽。默认 false。
+    /// Conservative layout: force the content area to a single full-width column except for the home page, top/bottom bars, and capsule window. Default false.
     #[serde(default)]
     pub conservative_layout: bool,
-    /// 主窗口启动 + 后台每 60 分钟自动检查更新。默认 true。
-    /// Android 开启后自动检查并下载，校验后打开系统安装器；桌面仅自动检查 + 用户确认安装。
-    /// 关闭后仅 Settings 手动「检查更新」按钮可用。
+    /// Check for updates automatically on main-window launch plus every 60
+    /// minutes in the background. Default true. On Android this also
+    /// downloads and, after verification, opens the system installer; on
+    /// desktop it only checks + asks the user to confirm install. When off,
+    /// only the Settings manual "check for updates" button works.
     #[serde(default = "default_true")]
     pub auto_update_check: bool,
-    /// 历史记录上限（条数）。`None` = 使用代码内 200 条硬上限；
-    /// `Some(n)` 表示用户在 Settings 自定义了上限（5..=200 之间）。
+    /// History entry cap. `None` = the built-in 200-entry hard cap;
+    /// `Some(n)` = a user-defined cap from Settings (5..=200).
     #[serde(default)]
     pub history_max_entries: Option<u32>,
-    /// 是否为每次会话保留原始麦克风音频文件（wav）到 `recordings/` 目录，
-    /// 用于排查 ASR 误识别 / 麦克风灵敏度问题。默认 false。开启会占磁盘空间，
-    /// 受 `history_retention_days` 同样的清理策略约束。
+    /// Whether to keep each session's raw microphone audio (wav) under
+    /// `recordings/` for diagnosing ASR misrecognition / mic sensitivity.
+    /// Default false. When on it consumes disk and follows the same cleanup
+    /// policy as `history_retention_days`.
     #[serde(default)]
     pub record_audio_for_debug: bool,
-    /// `recordings/` 里保留的最近 wav 文件数（按 mtime 倒序保留最新的）。
-    /// `None` = 跟随 `HISTORY_CAP` (200)；`Some(n)` 时 clamp 到 1..=200。
-    /// 调用点：每次开新会话前裁旧。让用户在「文本历史保留 200 条但 wav 只留最近 5 条」
-    /// 这种「文本档案多 + 录音不占盘」组合下精确控制。
+    /// How many recent wav files `recordings/` keeps (newest first by mtime).
+    /// `None` = follow `HISTORY_CAP` (200); `Some(n)` clamps to 1..=200.
+    /// Trimmed before each new session. Lets users tune combinations like
+    /// "200 text entries but only the 5 newest wavs" — rich text history
+    /// without disk-hogging audio.
     #[serde(default)]
     pub audio_recording_max_entries: Option<u32>,
-    /// 速记导出的录音文件保存目录。空字符串表示每次导出时弹出保存对话框。
+    /// Directory for quick-note exported recordings. Empty string = show a save dialog on every export.
     #[serde(default)]
     pub quick_note_export_directory: String,
-    /// Style Pack Marketplace HTTP 基地址。空 = 本地开发默认 http://127.0.0.1:8090；
-    /// 用户在 Settings 里填生产 URL (如 https://api.openless-marketplace.com)。
+    /// Style Pack Marketplace HTTP base URL. Empty = the local-dev default
+    /// http://127.0.0.1:8090; users enter a production URL in Settings
+    /// (e.g. https://api.openless-marketplace.com).
     #[serde(default)]
     pub marketplace_base_url: String,
-    /// GitHub login 展示缓存。不用于认证；OAuth token 只存在 CredentialsVault。
+    /// Display cache of the GitHub login. Not for authentication; the OAuth token lives only in CredentialsVault.
     #[serde(default)]
     pub marketplace_dev_login: String,
     /// Android: text insertion strategy for cross-app dictation results.
@@ -707,10 +837,13 @@ pub struct UserPreferences {
     /// Android: floating overlay control diameter in dp.
     #[serde(default = "default_android_overlay_size_dp")]
     pub android_overlay_size_dp: u32,
-    /// 开屏 PV 的主版本世代标记（如 "2"）。空串 = 从未播过。启动时 Rust 比较
-    /// 此标记与当前应用主版本：不一致则写回并播一次开屏动画，之后同一世代内
-    /// （2.x 补丁/小版本升级、重启）不再播放。由 `take_splash_playback` 消费，
-    /// `update_settings` 保存时永远沿用当前值，防止客户端整档提交把它冲掉。
+    /// Major-version generation marker of the splash PV (e.g. "2"). Empty =
+    /// never played. At startup Rust compares this with the current app
+    /// major version: on mismatch it writes back and plays the splash once,
+    /// then stays silent within the same generation (2.x patch/minor
+    /// upgrades, restarts). Consumed by `take_splash_playback`;
+    /// `update_settings` always keeps the current value so whole-file client
+    /// saves can't wipe it.
     #[serde(default)]
     pub splash_seen_version: String,
 }
@@ -910,7 +1043,7 @@ struct UserPreferencesWire {
     remote_input_default_mode: String,
     #[serde(default = "default_local_asr_model")]
     local_asr_active_model: String,
-    /// `None` 保留“旧配置没有该字段”的信息，供本地 ASR 模型偏好迁移使用。
+    /// `None` preserves "the field was absent in the old config" for local ASR model preference migration.
     #[serde(default)]
     local_whisper_active_model: Option<String>,
     #[serde(default = "default_local_asr_mirror")]
@@ -953,6 +1086,9 @@ struct UserPreferencesWire {
     streaming_insert_save_clipboard: bool,
     #[serde(default)]
     cursor_context_enabled: bool,
+    #[serde(default)]
+    vocabulary_learning_enabled: bool,
+    vocabulary_learning_settings: VocabularyLearningSettings,
     #[serde(default = "default_true")]
     show_overview_activity_heatmap: bool,
     #[serde(default)]
@@ -1003,11 +1139,14 @@ where
     Option::<ShortcutBinding>::deserialize(deserializer).map(Some)
 }
 
-/// 将旧版共用的 `localAsrActiveModel` 迁移到彼此独立的 Qwen / Whisper 偏好。
+/// Migrates the legacy shared `localAsrActiveModel` into the separate Qwen /
+/// Whisper preferences.
 ///
-/// 旧字段长期被两套 provider 共用，因此不能只按字符串复制：旧值是 Qwen 时
-/// Whisper 应回到默认值；旧值误存为 Whisper 时则把它迁移到 Whisper，并让
-/// Qwen 回到默认值。新字段显式存在时优先使用它，但只接受 Whisper 模型 id。
+/// The old field was shared by both providers, so a straight string copy is
+/// wrong: a Qwen legacy value leaves Whisper at its default; a legacy value
+/// mistakenly stored as a Whisper id migrates to Whisper and Qwen resets to
+/// its default. When the new field exists explicitly it wins, but only
+/// Whisper model ids are accepted.
 fn migrate_local_asr_models(
     legacy_model: String,
     whisper_model: Option<String>,
@@ -1085,7 +1224,7 @@ impl Default for UserPreferencesWire {
             qa_save_history: prefs.qa_save_history,
             custom_combo_hotkey: prefs.custom_combo_hotkey,
             translation_hotkey: None,
-            // 默认携带默认键（Some），保证缺字段时仍是启用状态；None 专表「用户主动停用」。
+            // Carry the default key (Some) so a missing field still means enabled; None exclusively means "user disabled".
             switch_style_hotkey: prefs.switch_style_hotkey,
             open_app_hotkey: prefs.open_app_hotkey,
             style_pack_hotkeys: prefs.style_pack_hotkeys,
@@ -1103,7 +1242,7 @@ impl Default for UserPreferencesWire {
             remote_input_pin: prefs.remote_input_pin,
             remote_input_default_mode: prefs.remote_input_default_mode,
             local_asr_active_model: prefs.local_asr_active_model,
-            // 新字段必须保持 None：旧配置反序列化时需要区分“字段缺失”和显式值。
+            // New fields must stay None: deserializing old configs needs to distinguish "field missing" from an explicit value.
             local_whisper_active_model: None,
             local_asr_mirror: prefs.local_asr_mirror,
             local_asr_keep_loaded_secs: prefs.local_asr_keep_loaded_secs,
@@ -1116,7 +1255,7 @@ impl Default for UserPreferencesWire {
             sherpa_onnx_language_hint: prefs.sherpa_onnx_language_hint,
             sherpa_onnx_keep_loaded_secs: prefs.sherpa_onnx_keep_loaded_secs,
             update_channel: prefs.update_channel,
-            // None 保留旧配置缺少标记的信息；反序列化时只有历史 Beta 视为显式选择。
+            // None preserves the fact that the old config lacked the marker; deserialization treats only historical Beta as explicit.
             update_channel_explicit: None,
             history_retention_days: prefs.history_retention_days,
             polish_context_window_minutes: prefs.polish_context_window_minutes,
@@ -1126,6 +1265,8 @@ impl Default for UserPreferencesWire {
             streaming_insert_default_migrated: prefs.streaming_insert_default_migrated,
             streaming_insert_save_clipboard: prefs.streaming_insert_save_clipboard,
             cursor_context_enabled: prefs.cursor_context_enabled,
+            vocabulary_learning_enabled: prefs.vocabulary_learning_enabled,
+            vocabulary_learning_settings: prefs.vocabulary_learning_settings,
             show_overview_activity_heatmap: prefs.show_overview_activity_heatmap,
             stacked_row_layout: prefs.stacked_row_layout,
             conservative_layout: prefs.conservative_layout,
@@ -1164,12 +1305,16 @@ impl<'de> Deserialize<'de> for UserPreferences {
             .selection_polish_hotkey
             .unwrap_or_else(default_selection_polish_hotkey);
         if selection_polish_hotkey_was_missing {
-            // 1.3.15 新增的选区润色默认键（Windows = 右 Alt）不能抢占/顶掉用户已有按键：
-            // - 老用户从未自定义录音键（仍为历史默认 Right Control）：默认关闭新功能，
-            //   避免升级后右 Alt 被全局热键占用影响既有使用习惯；
-            // - 默认键与录音键重叠（字符串可能不等但物理同键，如 legacy rightAlt
-            //   派生出 RightOption 而默认是 RightAlt）：同样关闭，否则升级后任何
-            //   设置保存都会被热键冲突校验整体拒绝，改动全部丢失（#904）。
+            // The 1.3.15 selection-polish default key (Windows = right Alt)
+            // must not steal or collide with an existing user binding:
+            // - Users who never customized the recording key (still the
+            //   historical Right Control default): keep the new feature off
+            //   so the right Alt global key doesn't disturb existing habits;
+            // - Overlap with the recording key (strings may differ but the
+            //   physical key matches, e.g. legacy rightAlt derives
+            //   RightOption while the default is RightAlt): disable as well,
+            //   otherwise every settings save is rejected by hotkey-conflict
+            //   validation and all changes are lost (#904).
             let legacy_default_user = cfg!(target_os = "windows")
                 && is_right_control_modifier_shortcut(&dictation_hotkey);
             let default_taken_by_dictation =
@@ -1297,9 +1442,11 @@ impl<'de> Deserialize<'de> for UserPreferences {
             translation_hotkey: wire
                 .translation_hotkey
                 .unwrap_or_else(default_translation_hotkey),
-            // 直传 Option：None = 用户主动停用，不再用 unwrap_or_else 塌缩成默认键
-            // （那正是 #576「无法关闭」的根因）。缺字段时 wire 的 serde struct-default
-            // 会落到 Some(默认键)，保证老用户/新用户仍是启用。
+            // Pass the Option through: None = user disabled — no
+            // unwrap_or_else collapse back to the default key (the root
+            // cause of #576 "can't disable"). A missing field falls to the
+            // wire's serde struct-default Some(default key), so old and new
+            // users stay enabled.
             switch_style_hotkey: wire.switch_style_hotkey,
             open_app_hotkey: wire.open_app_hotkey,
             style_pack_hotkeys: wire.style_pack_hotkeys,
@@ -1328,6 +1475,8 @@ impl<'de> Deserialize<'de> for UserPreferences {
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: wire.streaming_insert_save_clipboard,
             cursor_context_enabled: wire.cursor_context_enabled,
+            vocabulary_learning_enabled: wire.vocabulary_learning_enabled,
+            vocabulary_learning_settings: wire.vocabulary_learning_settings.normalized(),
             show_overview_activity_heatmap: wire.show_overview_activity_heatmap,
             stacked_row_layout: wire.stacked_row_layout,
             conservative_layout: wire.conservative_layout,
@@ -1355,18 +1504,24 @@ impl<'de> Deserialize<'de> for UserPreferences {
 }
 
 impl UserPreferences {
-    /// 逐字段抢救一份无法严格反序列化的 preferences.json。
+    /// Field-by-field rescue of a preferences.json that fails strict
+    /// deserialization.
     ///
-    /// 背景：`UserPreferencesWire` 容器级 `#[serde(default)]` 已能容忍「缺字段」
-    /// （老文件读新版本）。真正会让整份解析失败、进而静默回落默认值（= 用户所有
-    /// 设置一次性丢光）的，是「字段存在但值非法」——例如某次重构改了枚举变体名 /
-    /// 字段类型，旧文件里的旧值在新版本里不再合法。这正是用户反馈「每次重装 app
-    /// 之后热键等设置就读不到」的根因路径。
+    /// `UserPreferencesWire`'s container-level `#[serde(default)]` already
+    /// tolerates missing fields (old files read by a newer version). What
+    /// actually fails the whole parse — and silently falls back to defaults,
+    /// wiping every user setting at once — is a field that exists with an
+    /// invalid value, e.g. after a refactor renames an enum variant or
+    /// changes a field type. This is the root cause of "settings unreadable
+    /// after reinstall" reports.
     ///
-    /// 抢救策略：把 JSON 当作对象，先归一化已知 alias，再逐 key 试解析。因为 Wire 对
-    /// 所有字段都有 default，单键对象 `{k: v}` 只有当 `v` 对字段 `k` 的类型非法时才会
-    /// 失败——据此精确剔除坏字段，保留其余全部有效设置（热键、模型选择、风格等都能
-    /// 活下来），最后再走一次正常反序列化。无法当作对象解析时才彻底回落默认。
+    /// Strategy: parse the JSON as an object, normalize known aliases, then
+    /// try each key in isolation. Since Wire defaults every field, a
+    /// single-key object `{k: v}` fails only when `v` is invalid for field
+    /// `k` — so bad fields can be dropped precisely while all valid settings
+    /// (hotkeys, model choices, styles, ...) survive, followed by one normal
+    /// deserialization. Only input that isn't a JSON object falls back to
+    /// defaults entirely.
     pub fn salvage_from_json_bytes(bytes: &[u8]) -> Self {
         let Ok(serde_json::Value::Object(mut map)) =
             serde_json::from_slice::<serde_json::Value>(bytes)
@@ -1477,7 +1632,7 @@ fn default_qa_hotkey() -> Option<ShortcutBinding> {
 fn default_selection_polish_hotkey() -> Option<ShortcutBinding> {
     #[cfg(target_os = "windows")]
     {
-        // Windows 用右 Alt；其它平台默认关闭，避免与历史听写默认键冲突。
+        // Right Alt on Windows; other platforms default to off to avoid clashing with the historical dictation default key.
         Some(ShortcutBinding {
             primary: "RightAlt".into(),
             modifiers: Vec::new(),
@@ -1491,7 +1646,7 @@ fn default_selection_polish_hotkey() -> Option<ShortcutBinding> {
 
 fn default_selection_voice_edit_keywords() -> Vec<String> {
     // Pre-#987 defaults were edit imperatives; interrogative routing treats these
-    // as extra question cues — empty default avoids misrouting e.g. 「改成」.
+    // as extra question cues — empty default avoids misrouting e.g. "change this".
     Vec::new()
 }
 
@@ -1678,6 +1833,8 @@ impl Default for UserPreferences {
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: true,
             cursor_context_enabled: false,
+            vocabulary_learning_enabled: false,
+            vocabulary_learning_settings: VocabularyLearningSettings::default(),
             show_overview_activity_heatmap: true,
             stacked_row_layout: false,
             conservative_layout: false,
@@ -1708,7 +1865,7 @@ pub struct ShortcutBinding {
     pub modifiers: Vec<String>,
 }
 
-/// 风格包直达快捷键：`binding` 按下即激活 `pack_id` 对应的风格包（issue #759）。
+/// Direct style-pack hotkey: pressing `binding` activates the style pack with id `pack_id` (issue #759).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct StylePackHotkey {
@@ -1747,12 +1904,13 @@ impl ShortcutBinding {
     }
 }
 
-/// 划词语音问答的全局快捷键绑定。原生名字符串：
-/// - `primary`：主键（如 `";"`、`"."`、`"A"`、`"F1"`）。
-/// - `modifiers`：修饰键集合，元素来自 `{"cmd","ctrl","alt","shift","super"}`。
-///   小写名简单序列化即可，前端 / 后端解析时统一 lowercase。
+/// Global hotkey binding for selection voice QA. Native-name strings:
+/// - `primary`: the primary key (e.g. `";"`, `"."`, `"A"`, `"F1"`).
+/// - `modifiers`: modifier set, elements from
+///   `{"cmd","ctrl","alt","shift","super"}`. Lowercase names serialize
+///   plainly; frontend / backend parsing lowercases uniformly.
 ///
-/// 默认 `Cmd+Shift+;` (macOS) / `Ctrl+Shift+;` (Windows)。
+/// Default `Cmd+Shift+;` (macOS) / `Ctrl+Shift+;` (Windows).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct QaHotkeyBinding {
@@ -1780,11 +1938,11 @@ impl Default for QaHotkeyBinding {
 }
 
 impl QaHotkeyBinding {
-    /// 渲染成给前端展示的可读标签。
-    /// 顺序与人类阅读习惯一致：`Cmd+Shift+;`、`Ctrl+Alt+Shift+.`。
+    /// Renders a readable label for the frontend.
+    /// Order matches human reading habits: `Cmd+Shift+;`, `Ctrl+Alt+Shift+.`.
     pub fn display_label(&self) -> String {
         let mut parts: Vec<String> = Vec::new();
-        // 固定输出顺序：Ctrl/Cmd → Alt/Option → Shift → Super
+        // Fixed output order: Ctrl/Cmd -> Alt/Option -> Shift -> Super
         let modifier_order = ["cmd", "ctrl", "alt", "shift", "super"];
         for tag in modifier_order {
             if self.modifiers.iter().any(|m| m.eq_ignore_ascii_case(tag)) {
@@ -1797,12 +1955,14 @@ impl QaHotkeyBinding {
     }
 }
 
-/// 录音快捷键的自定义组合键绑定。结构与 `QaHotkeyBinding` 相同：
-/// - `primary`：主键（如 `"D"`、`"Space"`、`"F1"`）。
-/// - `modifiers`：修饰键集合，元素来自 `{"cmd","ctrl","alt","shift","super"}`。
+/// Custom combo binding for the recording hotkey. Same shape as
+/// `QaHotkeyBinding`:
+/// - `primary`: the primary key (e.g. `"D"`, `"Space"`, `"F1"`).
+/// - `modifiers`: modifier set, elements from `{"cmd","ctrl","alt","shift","super"}`.
 ///
-/// 当 `HotkeyBinding.trigger == Custom` 时，coordinator 用 `global-hotkey` crate
-/// 注册此组合键，而非 modifier-only 的 CGEventTap / WH_KEYBOARD_LL。
+/// When `HotkeyBinding.trigger == Custom`, the coordinator registers this
+/// combo via the `global-hotkey` crate instead of the modifier-only
+/// CGEventTap / WH_KEYBOARD_LL.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ComboBinding {
@@ -1811,7 +1971,7 @@ pub struct ComboBinding {
 }
 
 impl ComboBinding {
-    /// 渲染成给前端展示的可读标签。复用 QaHotkeyBinding 的格式化逻辑。
+    /// Renders a readable label for the frontend; reuses QaHotkeyBinding's formatting.
     pub fn display_label(&self) -> String {
         let qa = QaHotkeyBinding {
             primary: self.primary.clone(),
@@ -1859,7 +2019,7 @@ fn display_primary(primary: &str) -> String {
     if trimmed.is_empty() {
         return "?".to_string();
     }
-    // 单个字母键归一为大写显示（"a" → "A"）；其余原样（如 ";"、"F1"）。
+    // Single letter keys display uppercased ("a" -> "A"); everything else as-is (e.g. ";", "F1").
     if trimmed.chars().count() == 1 {
         let ch = trimmed.chars().next().unwrap();
         if ch.is_ascii_alphabetic() {
@@ -1911,8 +2071,10 @@ pub enum HotkeyMode {
     Toggle,
     Hold,
     DoubleClick,
-    /// 自动识别：按下即开录；松手时按「按住时长」决定语义 —— 短按（< AUTO_HOLD_THRESHOLD）
-    /// 当作 Toggle（锁存，保持录音，下次按下再停），长按当作 Hold（松手即停）。
+    /// Auto-detect: recording starts on press; on release the hold duration
+    /// decides the semantics — a short press (< AUTO_HOLD_THRESHOLD) acts as
+    /// Toggle (latched, recording continues until the next press), a long
+    /// press as Hold (release stops).
     Auto,
 }
 
@@ -2134,9 +2296,10 @@ impl HotkeyCapability {
         {
             Self {
                 adapter: HotkeyAdapterKind::WindowsLowLevel,
-                // Windows 没有 Command 键：leftCommand/rightCommand 会被映射到 Win 键，
-                // 而单按 Win 会弹出开始菜单，实际无法作为录音热键使用。故不在 Windows
-                // 的常用单键预设里提供 Command 选项（issue #784）。
+                // Windows has no Command key: leftCommand/rightCommand map to
+                // the Win key, and a lone Win press opens the Start menu, so
+                // it can't serve as a recording hotkey. Hence no Command
+                // option among Windows' single-key presets (issue #784).
                 available_triggers: vec![
                     HotkeyTrigger::RightControl,
                     HotkeyTrigger::RightAlt,
@@ -2334,16 +2497,17 @@ impl Default for HotkeyStatus {
 
 impl Default for HotkeyBinding {
     fn default() -> Self {
-        // 注意：keys 必须是 None，不能预填具体 code。
+        // keys must stay None; never prefill a concrete code.
         //
-        // 原因：HotkeyBinding 用 `#[serde(default)]` **结构级 default**——反序列化时
-        // 整个 struct 先按 Default 填充再让 JSON 字段覆盖。如果这里 keys 预填了
-        // Some([...])，那么旧 prefs 里只写 `{"trigger":"rightControl","mode":"toggle"}`
-        // （不带 keys 字段）会被反序列化成 `{trigger=RightControl, keys=Some([默认值])}`
-        // 即 trigger 跟 keys 完全不一致——effective_codes() 直接信任 keys，导致
-        // 实际生效的快捷键跟用户当年选的 trigger 对不上。
-        // 现在 keys=None 时 effective_codes() 走 legacy_trigger_code(trigger) 路径，
-        // 跟 trigger 自动同步。
+        // HotkeyBinding's `#[serde(default)]` is a **struct-level default** —
+        // deserialization fills the whole struct from Default before JSON
+        // fields override. If keys were prefilled with Some([...]), old prefs
+        // like `{"trigger":"rightControl","mode":"toggle"}` (no keys field)
+        // would deserialize as `{trigger=RightControl, keys=Some([defaults])}`,
+        // i.e. trigger and keys disagree — and effective_codes() trusts keys
+        // directly, so the effective hotkey wouldn't match the trigger the
+        // user chose. With keys=None, effective_codes() takes the
+        // legacy_trigger_code(trigger) path and stays in sync with trigger.
         #[cfg(target_os = "windows")]
         {
             Self {
@@ -2376,16 +2540,18 @@ pub enum CapsuleState {
     Error,
 }
 
-/// 录音胶囊外观；序列化值用于偏好存储与各 Host 的窗口事件。
+/// Recording capsule appearance; serialized values feed preference storage and each Host's window events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum CapsuleStyle {
-    /// 流光 Siri 风格：SiriGL 光效舞台（默认）。
+    /// SiriGL light-effect stage style (default).
     #[default]
     Siri,
-    /// Openless 默认风格：经典毛玻璃药丸（音量条 + 取消/确认按钮）。
+    /// Openless default style: classic frosted-glass pill (volume bar +
+    /// cancel/confirm buttons).
     Classic,
-    /// 传统深色胶囊：蓝色波形，处理时收窄成状态提示。
+    /// Classic dark capsule: blue waveform that narrows into a status hint
+    /// while processing.
     Typeless,
 }
 
@@ -2397,25 +2563,35 @@ pub struct CapsulePayload {
     pub elapsed_ms: u64,
     pub message: Option<String>,
     pub inserted_chars: Option<u32>,
-    /// 当前 session 是否处于翻译模式（用户按过 Shift）。前端用它在胶囊顶部
-    /// 渲染"正在翻译"标签，让用户立刻知道这次输出会走翻译管线。详见 issue #4。
+    /// Whether the session is in translation mode (user pressed Shift). The
+    /// frontend renders a "translating" tag at the top of the capsule so the
+    /// user immediately knows this output goes through the translation
+    /// pipeline. See issue #4.
     pub translation: bool,
-    /// 当前是否是 Less Computer（语音 Agent 操控电脑）会话。前端据此把处理态文案
-    /// 从 "thinking" 换成 "using"——告诉用户 Agent 正在操作电脑而非单纯思考。
+    /// Whether this is a Less Computer (voice agent controlling the
+    /// computer) session. The frontend switches the processing label from
+    /// "thinking" to "using" — the agent is operating the computer, not
+    /// merely thinking.
     #[serde(default)]
     pub operating: bool,
-    /// 预备态：胶囊已经"乐观显示"出来（按下热键即弹出并播入场动画），但麦克风还没
-    /// 真正开始 capture 第一帧 PCM。为 true 时前端渲染"待命"光效（柔和呼吸、不接真实
-    /// 电平），并暗示用户先别急着开口；`level_handler` 首次触发（PCM 真的流入）后翻成
-    /// false，光条"点亮"进入正式录音态。只对 Recording 状态有意义。详见胶囊出现时序改造。
+    /// Warming state: the capsule is "optimistically" shown (it pops up and
+    /// plays its entrance animation on hotkey press) but the mic hasn't
+    /// captured its first PCM frame yet. While true the frontend renders a
+    /// standby glow (soft breathing, not wired to real levels) hinting the
+    /// user to hold off speaking; the first `level_handler` firing (real PCM
+    /// flowing) flips it false and the bar "lights up" into the recording
+    /// state. Only meaningful for the Recording state.
     #[serde(default)]
     pub warming: bool,
-    /// 用户选择的胶囊样式（siri / classic）。随每次状态事件下发，设置里切换后下一次
-    /// 录音即生效，胶囊 webview 无需额外请求。
+    /// User's chosen capsule style (siri / classic). Sent with every state
+    /// event, so a Settings switch takes effect on the next recording
+    /// without an extra request from the capsule webview.
     #[serde(default)]
     pub capsule_style: CapsuleStyle,
-    /// 选区润色专用的轻量反馈。它与原有语音/QA 会话共用同一扇不抢焦点的 capsule
-    /// 窗口，但前端据此切换为一行状态提示，避免改变既有语音光效与文案。
+    /// Lightweight feedback flag for selection polish. Shares the same
+    /// non-focus-stealing capsule window as voice/QA sessions, but the
+    /// frontend switches to a one-line status hint so existing voice glow
+    /// and copy stay untouched.
     #[serde(default)]
     pub selection_polish: bool,
 }
@@ -2427,14 +2603,15 @@ pub struct CapsulePayload {
 pub struct CredentialsStatus {
     pub active_asr_provider: String,
     pub active_llm_provider: String,
-    /// 当前识别管线模式（"traditional" | "multimodal"），前端据此决定
-    /// 配置页渲染哪套卡片、概览页按哪套判定「已配置」。
+    /// Current recognition pipeline mode ("traditional" | "multimodal"); the
+    /// frontend uses it to pick which config cards to render and which set
+    /// the Overview treats as "configured".
     pub pipeline_mode: PipelineMode,
     pub asr_configured: bool,
     pub llm_configured: bool,
-    /// 多模态（omni）模型是否已配置。仅 `pipeline_mode == multimodal` 时有意义。
+    /// Whether the multimodal (omni) model is configured. Only meaningful when `pipeline_mode == multimodal`.
     pub omni_configured: bool,
-    // 兼容旧前端字段（逐步迁移中）
+    // Legacy frontend fields (being migrated incrementally)
     pub volcengine_configured: bool,
     pub ark_configured: bool,
 }
@@ -2449,15 +2626,16 @@ pub struct TodayMetrics {
     pub total_duration_ms: u64,
 }
 
-/// 划词追问浮窗里一条对话消息。多轮提问会累积成 Vec<QaChatMessage>，
-/// 整段送给 LLM 维持上下文。详见 issue #118 v2。
+/// One chat message in the selection-QA popover. Follow-up questions
+/// accumulate into a Vec<QaChatMessage> sent whole to the LLM to keep
+/// context. See issue #118 v2.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct QaChatMessage {
-    /// "user" | "assistant" — 直接对应 OpenAI 消息 role 字段。
+    /// "user" | "assistant" — maps directly to the OpenAI message role field.
     pub role: String,
     pub content: String,
-    /// 仅用于前端安全展示选区原文；LLM 通道只读取 `role` / `content`。
+    /// For safe frontend display of the selection text only; the LLM channel reads only `role` / `content`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection_text: Option<String>,
 }
@@ -2483,9 +2661,11 @@ mod split_front_app_label_tests {
         assert_eq!(split.bundle_id.as_deref(), Some("com.microsoft.VSCode"));
     }
 
-    /// Windows 拿的是窗口标题，里面的括号是正文的一部分，不是 bundle id。
-    /// 平台开关关闭时整串保留——即使括号内容恰好形如反向域名、文件路径或版本号，
-    /// 也绝不拆。误拆会把标题截断，显示成半句话，还写入错误的 bundle id。
+    /// Windows titles are window titles; their parentheses are body text, not
+    /// bundle ids. With the platform switch off the whole string stays
+    /// intact — even when the bracketed part looks like a reverse domain,
+    /// file path, or version. Splitting would truncate the title and record
+    /// a wrong bundle id.
     #[test]
     fn window_titles_are_never_split_outside_macos() {
         for title in [
@@ -2572,21 +2752,21 @@ mod translation_effective_tests {
 
     #[test]
     fn unset_target_language_is_not_translation() {
-        // 用户没在翻译页选目标语言就按 Shift：此前胶囊照样显示「正在翻译」，
-        // 而后端走的是普通润色。
+        // Pressing Shift without a chosen target language: the capsule used
+        // to show "translating" while the backend ran plain polish.
         assert!(!translation_effective(true, "", &langs(&["简体中文"])));
         assert!(!translation_effective(true, "   ", &langs(&["简体中文"])));
     }
 
     #[test]
     fn target_equal_to_the_only_working_language_is_a_no_op() {
-        // 工作语言只有中文、目标也是中文 —— 源语言必定就是目标语言，翻译是空操作。
+        // Only working language is Chinese and the target is Chinese — the source is necessarily the target, so translation is a no-op.
         assert!(!translation_effective(
             true,
             "简体中文",
             &langs(&["简体中文"])
         ));
-        // 前后空白不该让它逃过判定。
+        // Surrounding whitespace must not slip past this check.
         assert!(!translation_effective(
             true,
             " 简体中文 ",
@@ -2596,7 +2776,7 @@ mod translation_effective_tests {
 
     #[test]
     fn simplified_to_traditional_still_translates() {
-        // 简体/繁体是语言列表里两个独立条目，简→繁是真实转换，不能按「同一种中文」拦掉。
+        // Simplified/traditional are separate entries in the language list; simplified -> traditional is a real conversion and must not be blocked as "the same Chinese".
         assert!(translation_effective(
             true,
             "繁体中文",
@@ -2606,8 +2786,9 @@ mod translation_effective_tests {
 
     #[test]
     fn multiple_working_languages_are_never_blocked() {
-        // 中/英双语用户把目标设成英文是正常用法（说中文出英文），源语言无法预先判定，
-        // 不能因为目标语言出现在工作语言里就拦。
+        // Bilingual users targeting English is normal usage (speak Chinese,
+        // output English); the source language can't be known up front, so
+        // the target appearing among working languages must not block it.
         assert!(translation_effective(
             true,
             "English",
@@ -2707,22 +2888,24 @@ mod tests {
 
     #[test]
     fn salvage_preserves_valid_fields_when_one_value_is_invalid() {
-        // 模拟「某次重构改了枚举变体名」后的旧文件：defaultMode 是新版本已不存在的值，
-        // 但 dictationHotkey / activeAsrProvider 仍然合法。抢救必须保住合法字段，
-        // 只把非法字段回落默认——而不是整份丢光。
+        // Simulates an old file after "a refactor renamed an enum variant":
+        // defaultMode holds a value that no longer exists, while
+        // dictationHotkey / activeAsrProvider stay valid. Salvage must keep
+        // the valid fields and reset only the invalid one — not discard
+        // everything.
         let json = br#"{
             "defaultMode": "totally-removed-mode",
             "dictationHotkey": { "primary": "LeftOption", "modifiers": [] },
             "activeAsrProvider": "bailian-qwen3-realtime"
         }"#;
 
-        // 严格解析必失败（否则这个测试没意义）。
+        // Strict parsing must fail (otherwise this test is meaningless).
         assert!(serde_json::from_slice::<UserPreferences>(json).is_err());
 
         let salvaged = UserPreferences::salvage_from_json_bytes(json);
         assert_eq!(salvaged.dictation_hotkey.primary, "LeftOption");
         assert_eq!(salvaged.active_asr_provider, "bailian-qwen3-realtime");
-        // 非法字段回落到默认，而不是让整份解析失败。
+        // The invalid field falls back to its default instead of failing the whole parse.
         assert_eq!(
             salvaged.default_mode,
             UserPreferences::default().default_mode
@@ -2789,8 +2972,10 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn legacy_right_alt_dictation_upgrade_disables_selection_polish_instead_of_colliding() {
-        // #904：录音键自定义为右 Alt 的旧配置升级时，默认注入的选区润色键（右 Alt）
-        // 与录音键相同会形成持久冲突，把后续所有设置保存挡死。迁移必须改为停用新功能。
+        // #904: when an old config with the recording key customized to right
+        // Alt upgrades, the injected selection-polish default (right Alt)
+        // collides persistently and blocks all later settings saves. The
+        // migration must disable the new feature instead.
         let prefs: UserPreferences = serde_json::from_str(
             r#"{
                 "hotkey": { "trigger": "rightAlt", "mode": "hold", "keys": null },
@@ -2805,9 +2990,11 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn legacy_right_alt_trigger_upgrade_disables_selection_polish_by_overlap() {
-        // #904 变体：旧文件没有 dictationHotkey，只带 legacy hotkey.trigger=rightAlt，
-        // 派生出的录音键 primary 是 "RightOption"，与默认注入的 "RightAlt" 字符串不相等
-        // 但物理同键（bindings_overlap=true）。迁移必须按重叠判定，不能按 == 字符串比较。
+        // #904 variant: the old file has no dictationHotkey, only legacy
+        // hotkey.trigger=rightAlt, whose derived recording key primary is
+        // "RightOption" — unequal as a string to the injected "RightAlt" but
+        // the same physical key (bindings_overlap=true). The migration must
+        // judge by overlap, not by == string comparison.
         let prefs: UserPreferences = serde_json::from_str(
             r#"{
                 "hotkey": { "trigger": "rightAlt", "mode": "hold", "keys": null }
@@ -2963,7 +3150,7 @@ mod tests {
 
     #[test]
     fn missing_audio_cue_on_record_pref_defaults_to_enabled() {
-        // 老用户的 preferences.json 没有这个字段 → 应默认开启（按下录音即提示）。
+        // Old preferences.json lacks this field -> should default to enabled (cue on record press).
         let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
 
         assert!(prefs.audio_cue_on_record);
@@ -2971,7 +3158,7 @@ mod tests {
 
     #[test]
     fn capsule_style_pref_defaults_to_siri_and_round_trips_wire_key() {
-        // 老用户的 preferences.json 没有 capsuleStyle 字段 → 回落默认 Siri。
+        // Old preferences.json has no capsuleStyle field -> falls back to the default Siri.
         let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
         assert_eq!(prefs.capsule_style, CapsuleStyle::Siri);
 
@@ -2993,8 +3180,10 @@ mod tests {
 
     #[test]
     fn audio_cue_on_record_pref_round_trips_explicit_false() {
-        // 用户在设置里关掉后，set_settings → 存盘 → get_settings 必须保住 false，
-        // 否则开关一刷新又跳回 true（字段在 Wire 往返时被丢掉的经典症状）。
+        // After the user turns it off in Settings, set_settings -> save ->
+        // get_settings must preserve false, or the toggle snaps back to true
+        // on refresh (classic symptom of the field being dropped in the Wire
+        // round trip).
         let disabled = UserPreferences {
             audio_cue_on_record: false,
             ..Default::default()
@@ -3026,7 +3215,7 @@ mod tests {
 
     #[test]
     fn action_hotkeys_default_to_enabled() {
-        // issue #576：默认仍开启（Some 默认键），对老用户零行为变化。
+        // issue #576: still enabled by default (Some default key), zero behavior change for existing users.
         let prefs = UserPreferences::default();
         assert!(prefs.switch_style_hotkey.is_some());
         assert!(prefs.open_app_hotkey.is_some());
@@ -3034,7 +3223,7 @@ mod tests {
 
     #[test]
     fn missing_action_hotkeys_default_to_enabled() {
-        // 老用户/缺字段：wire 的 struct-default 落到 Some(默认键)，不应被当成停用。
+        // Old users / missing field: the wire struct-default lands on Some(default key), which must not count as disabled.
         let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
         assert!(prefs.switch_style_hotkey.is_some());
         assert!(prefs.open_app_hotkey.is_some());
@@ -3042,8 +3231,9 @@ mod tests {
 
     #[test]
     fn disabled_action_hotkeys_round_trip_as_null() {
-        // issue #576：用户清空（None=停用）后存盘→读回必须仍是 None，
-        // 不能像旧逻辑那样被 unwrap_or_else 塌缩回默认键。
+        // issue #576: after the user clears it (None=disabled), save -> read
+        // back must stay None, not collapse to the default key via
+        // unwrap_or_else like the old logic.
         let disabled = UserPreferences {
             switch_style_hotkey: None,
             open_app_hotkey: None,
@@ -3061,11 +3251,11 @@ mod tests {
 
     #[test]
     fn style_pack_hotkeys_default_empty_and_round_trip() {
-        // issue #759：老 preferences.json 没有该字段 → 空列表，不报错。
+        // issue #759: old preferences.json lacks the field -> empty list, no error.
         let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
         assert!(prefs.style_pack_hotkeys.is_empty());
 
-        // 带绑定的存盘→读回保持原样（camelCase 字段名）。
+        // Configured bindings survive save -> read back unchanged (camelCase field names).
         let configured = UserPreferences {
             style_pack_hotkeys: vec![StylePackHotkey {
                 pack_id: "imported.demo".into(),
@@ -3087,7 +3277,7 @@ mod tests {
 
     #[test]
     fn explicit_action_hotkey_binding_round_trips() {
-        // 旧 preferences.json 里带实际绑定 → 读回应保留为 Some（启用）。
+        // Old preferences.json with a real binding -> read back keeps Some (enabled).
         let prefs: UserPreferences = serde_json::from_str(
             r#"{"switchStyleHotkey":{"primary":"S","modifiers":["cmd","shift"]}}"#,
         )
@@ -3201,9 +3391,9 @@ mod tests {
         assert_eq!(twice.light.matches("# 用户自定义附加要求").count(), 1);
     }
 
-    /// issue #360: 默认值必须是 CtrlV，跟历史行为一致；老配置文件没有
-    /// pasteShortcut 字段时反序列化也得回到 CtrlV，否则会把现有用户的粘贴
-    /// 行为静默改掉。
+    /// issue #360: the default must be CtrlV, matching historical behavior;
+    /// old config files without a pasteShortcut field must also deserialize
+    /// to CtrlV, otherwise existing users' paste behavior changes silently.
     #[test]
     fn paste_shortcut_defaults_to_ctrl_v() {
         let prefs = UserPreferences::default();
@@ -3213,9 +3403,10 @@ mod tests {
         assert_eq!(from_empty.paste_shortcut, PasteShortcut::CtrlV);
     }
 
-    /// issue #440: 老版本会把默认 `streamingInsert:false` 写进 preferences.json。
-    /// 缺少迁移标记的旧文件统一迁到 true；带有迁移标记后，用户再手动关掉的 false
-    /// 必须保留。
+    /// issue #440: old versions wrote the default `streamingInsert:false`
+    /// into preferences.json. Old files without the migration marker move to
+    /// true uniformly; once the marker is present, a user's manually chosen
+    /// false must be preserved.
     #[test]
     fn streaming_insert_defaults_to_enabled_for_missing_or_legacy_unmigrated_pref() {
         let prefs = UserPreferences::default();
@@ -3400,7 +3591,7 @@ mod tests {
         assert!(binding.effective_codes().is_empty());
     }
 
-    /// PR #826：新增的模型/耗时字段必须向后兼容——旧 history.json 完全没有这些 key。
+    /// PR #826: the new model/latency fields must be backward compatible — old history.json has none of these keys.
     #[test]
     fn dictation_session_deserializes_legacy_json_without_model_fields() {
         let legacy = r#"{
@@ -3426,7 +3617,7 @@ mod tests {
         assert_eq!(session.polish_ms, None);
     }
 
-    /// 新字段序列化必须是 camelCase（前端 types.ts 镜像按 camelCase 读）。
+    /// New fields must serialize as camelCase (the frontend types.ts mirror reads camelCase).
     #[test]
     fn dictation_session_serializes_model_fields_as_camel_case() {
         let session = DictationSession {

@@ -66,7 +66,12 @@ function persistAndroidOverlayPrefs(patch: Partial<UserPreferences>): Promise<An
   });
 }
 
-type AndroidPermissionsPanelMode = 'all' | 'accessibility' | 'overlayPermission' | 'overlayConfig';
+type AndroidPermissionsPanelMode =
+  | 'all'
+  | 'permissionsOnly'
+  | 'accessibility'
+  | 'overlayPermission'
+  | 'overlayConfig';
 
 interface AndroidPermissionsPanelProps {
   mode?: AndroidPermissionsPanelMode;
@@ -272,8 +277,10 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
     }
   };
 
-  const showOverlayPermission = mode === 'all' || mode === 'overlayPermission';
-  const showAccessibility = mode === 'all' || mode === 'accessibility';
+  const showOverlayPermission =
+    mode === 'all' || mode === 'permissionsOnly' || mode === 'overlayPermission';
+  const showAccessibility =
+    mode === 'all' || mode === 'permissionsOnly' || mode === 'accessibility';
   const showOverlayConfig = mode === 'all' || mode === 'overlayConfig';
 
   const rowJustify = layoutStack ? 'flex-start' : 'flex-end';

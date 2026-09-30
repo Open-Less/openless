@@ -1,19 +1,24 @@
-//! 阶跃星辰 StepAudio 实时 ASR 客户端（`wss://api.stepfun.com/v1/realtime/asr/stream`）。
+//! Step Audio realtime ASR client for StepFun
+//! (`wss://api.stepfun.com/v1/realtime/asr/stream`).
 //!
-//! 与 `qwen_realtime.rs` 同为 OpenAI Realtime 风格 WS，但四处关键差异
-//! （2026-07-16 真实接口逐项实测确认）：
+//! Like `qwen_realtime.rs`, an OpenAI Realtime-style WS, but with four key
+//! differences (each verified against the live API on 2026-07-16):
 //!
-//! - **模型在 `session.update` 里传**（`session.audio.input.transcription.model`），
-//!   不是 URL query；session 配置是 `audio.input.{format,transcription,turn_detection}`
-//!   的嵌套形状。
-//! - **`delta` 的 `text`/`stash` 是拼接关系**：`text` 是已确定前缀、`stash` 是
-//!   未定尾巴，当前句段全文 = `text + stash`（Qwen 是两者互斥取非空）。
-//! - **没有服务端结束事件**：`session.finish` 回 `transcript.response.error`（不支持）；
-//!   server_vad 模式下 `input_audio_buffer.commit` 被静默忽略。唯一可靠的收尾是
-//!   **补送 ≥silence_duration_ms 的静音帧逼 VAD 关段**——speech_stopped 后 ~0.4s
-//!   吐出该句段的 `completed`，随后客户端自行断开。
-//! - `prompt` 字段在 transcription 配置里被接受（批式 /audio/transcriptions 则
-//!   静默忽略 prompt、只认 hotwords——两条通道词汇偏置方式相反）。
+//! - **The model is passed in `session.update`**
+//!   (`session.audio.input.transcription.model`), not as a URL query; session config
+//!   uses the nested `audio.input.{format,transcription,turn_detection}` shape.
+//! - **`delta`'s `text`/`stash` concatenate**: `text` is the confirmed prefix and
+//!   `stash` the unsettled tail; the current segment's full text = `text + stash`
+//!   (Qwen treats the two as mutually exclusive, taking whichever is non-empty).
+//! - **No server-side finish event**: `session.finish` replies with
+//!   `transcript.response.error` (unsupported); in server_vad mode
+//!   `input_audio_buffer.commit` is silently ignored. The only reliable close is to
+//!   **send >= silence_duration_ms of silence to force VAD to close the segment** —
+//!   ~0.4s after speech_stopped the segment's `completed` arrives, then the client
+//!   disconnects itself.
+//! - The `prompt` field is accepted inside the transcription config (the batch
+//!   /audio/transcriptions endpoint silently ignores prompt and only honors
+//!   hotwords — the two channels bias vocabulary in opposite ways).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -36,44 +41,53 @@ use super::qwen_realtime::join_segments;
 use super::{AudioConsumer, RawTranscript};
 use crate::ports::{TextStreamChunk, TextStreamSink};
 
-/// 内部 effective id（`resolve_effective_asr_provider` 按模型名从 `stepfun`
-/// 路由到这里），不出现在设置页 preset 列表里。
+/// Internal effective id (`resolve_effective_asr_provider` routes here from `stepfun`
+/// by model name); not shown in the settings-page preset list.
 pub const PROVIDER_ID: &str = "stepfun-realtime";
 pub const DEFAULT_ENDPOINT: &str = "wss://api.stepfun.com/v1/realtime/asr/stream";
 pub const DEFAULT_MODEL: &str = "stepaudio-2.5-asr-stream";
-/// 实时 WS 在 base URL 下的固定路径（从批式共用的 https base 派生 wss URL 用）。
+/// Fixed path under the base URL for the realtime WS (derives the wss URL from the
+/// https base shared with the batch endpoint).
 const REALTIME_PATH: &str = "/realtime/asr/stream";
 
-/// 100 ms of 16 kHz / 16-bit / mono PCM，与 recorder 输出一致。
+/// 100 ms of 16 kHz / 16-bit / mono PCM, matching the recorder output.
 pub const TARGET_AUDIO_CHUNK_BYTES: usize = 3_200;
 const BYTES_PER_MS: u64 = 32;
 const FINAL_RESULT_TIMEOUT: Duration = Duration::from_secs(12);
 const SESSION_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
-/// WebSocket 建连（TCP + TLS + HTTP upgrade）本身的上限。
+/// Upper bound on the WebSocket handshake itself (TCP + TLS + HTTP upgrade).
 ///
-/// 没有它，`connect_async` 会无限等：握手打到一半断网、公司网关 / 酒店门户静默丢包、
-/// 服务端黑洞掉连接，这个 await 就永远不返回。而 `open_session` 是在 hotkey bridge
-/// 线程上 `block_on` 等的（那条 bridge 为修 #468/#475 的 latch 竞态改成了串行），
-/// 一旦卡住，按下 / 松开全都排在队里没人处理 —— 用户的表现是「热键突然完全失灵，
-/// 录音开不了也停不了，只能退出重开」，而且没有任何提示。
+/// Without it, `connect_async` waits forever: a mid-handshake disconnect, a corporate
+/// gateway / hotel portal silently dropping packets, or a server black-holing the
+/// connection means this await never returns. `open_session` is awaited with
+/// `block_on` on the hotkey bridge thread (made serial to fix the #468/#475 latch
+/// race), so once stuck, both press and release queue up unhandled — the user sees
+/// "hotkeys suddenly completely dead, recording can neither start nor stop, must
+/// restart the app", with no hint why.
 ///
-/// 与 SESSION_READY_TIMEOUT 的区别：那个管的是「连上之后等 session.updated 回应」，
-/// 这个管的是「连上」本身，之前完全没人管。取值与 volcengine 侧一致。
+/// Distinct from SESSION_READY_TIMEOUT, which covers "waiting for session.updated
+/// after connecting"; this one covers connecting itself, previously unguarded. Value
+/// matches the volcengine side.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-/// server_vad 断句静默阈值，与 qwen_realtime 取齐（500ms 降低换气误切概率）。
+/// server_vad segmentation silence threshold, aligned with qwen_realtime (500ms
+/// lowers the chance of cutting on a breath).
 const VAD_SILENCE_DURATION_MS: u32 = 500;
-/// 收尾补送的静音时长：必须 > VAD_SILENCE_DURATION_MS 并留网络余量，
-/// 否则 VAD 不关段、最后一句永远等不到 completed（协议无 finish 事件）。
+/// Length of the silence tail appended at close: must exceed VAD_SILENCE_DURATION_MS
+/// with network margin, otherwise VAD never closes the segment and the last
+/// sentence's completed never arrives (the protocol has no finish event).
 const SILENCE_TAIL_MS: u64 = 700;
-/// 静音送出后等待「无未关句段」的宽限期：纯静音会话（连接检查、误触）没有任何
-/// speech_started，宽限到点即以空文本成功返回。
+/// Grace period after the silence tail for "no open segments": a pure-silence session
+/// (connection check, accidental press) has no speech_started at all; when the grace
+/// expires it returns successfully with empty text.
 const FINISH_GRACE: Duration = Duration::from_millis(1_200);
-/// 宽限期内的复查间隔。收尾判据必须**反复**查——只查一次的话，那一次不通过就
-/// 再没有第二次机会（详见 `send_last_frame` 里的宽限任务）。
+/// Poll interval during the grace period. The finish criterion must be checked
+/// repeatedly — a single check that fails leaves no second chance (see the grace task
+/// in `send_last_frame`).
 const FINISH_POLL_INTERVAL: Duration = Duration::from_millis(100);
-/// 自尾帧写出起算的收尾硬上限。服务端始终不关最后一个句段时的兜底，把最坏等待
-/// 从 FINAL_RESULT_TIMEOUT（12s）压到这里。
+/// Hard deadline counted from the tail frame write. Backstop for a server that never
+/// closes the last segment, capping the worst-case wait at this instead of
+/// FINAL_RESULT_TIMEOUT (12s).
 const FINISH_HARD_DEADLINE: Duration = Duration::from_millis(3_000);
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -83,12 +97,14 @@ type SharedWriter = Arc<AsyncMutex<Option<WsSink>>>;
 #[derive(Clone, Debug)]
 pub struct StepfunRealtimeCredentials {
     pub api_key: String,
-    /// 允许三种形态：空（默认网关）、批式共用的 `https://api.stepfun.com/v1`
-    /// （自动派生 wss 路径）、完整 `wss://` URL（原样使用）。
+    /// Three accepted forms: empty (default gateway), the `https://api.stepfun.com/v1`
+    /// base shared with the batch endpoint (wss path derived automatically), or a full
+    /// `wss://` URL (used as-is).
     pub endpoint: String,
     pub model: String,
-    /// 用户词典拼成的 prompt（实时协议接受 transcription.prompt；批式则相反，
-    /// 只认 hotwords）。None = 不发。
+    /// User dictionary assembled into a prompt (the realtime protocol accepts
+    /// transcription.prompt; the batch endpoint is the opposite, only hotwords).
+    /// None = not sent.
     pub prompt: Option<String>,
 }
 
@@ -102,8 +118,10 @@ impl StepfunRealtimeCredentials {
         }
     }
 
-    /// 连接 URL：`wss://` 开头原样用；`http(s)://` base（与批式共用的凭据槽）
-    /// 换 scheme 并补 `/realtime/asr/stream` 路径；解析失败/空值回默认网关。
+    /// Connect URL: a `wss://` prefix is used as-is; an `http(s)://` base (the
+    /// credential slot shared with the batch endpoint) gets its scheme switched and
+    /// the `/realtime/asr/stream` path appended; unparseable or empty falls back to
+    /// the default gateway.
     pub fn connect_url(&self) -> String {
         let endpoint = self.endpoint.trim();
         if endpoint.is_empty() {
@@ -148,7 +166,8 @@ enum SendItem {
     Audio {
         chunk: Vec<u8>,
         contains_non_silent_audio: bool,
-        /// `send_last_frame` 用它确认尾帧已由写 worker 实际写入 WebSocket。
+        /// Lets `send_last_frame` confirm the tail frame was actually written to the
+        /// WebSocket by the write worker.
         written_tx: Option<oneshot::Sender<Result<(), String>>>,
     },
 }
@@ -158,9 +177,9 @@ struct SyncState {
     pending_audio: Vec<u8>,
     audio_scratch: Vec<u8>,
     bytes_received: u64,
-    /// 最近一次非静音 PCM 由写 worker 成功写入 WebSocket 的时刻。
+    /// Last time the write worker successfully wrote non-silent PCM to the WebSocket.
     last_non_silent_audio_written_at: Option<Instant>,
-    /// 最近一次服务端 completed 事件到达的时刻。
+    /// Last time a server-side completed event arrived.
     last_completed_at: Option<Instant>,
     session_started: bool,
     session_finished: bool,
@@ -168,19 +187,23 @@ struct SyncState {
     start: Option<Instant>,
     final_tx: Option<oneshot::Sender<Result<RawTranscript, StepfunASRError>>>,
     send_tx: Option<mpsc::UnboundedSender<SendItem>>,
-    /// VAD 断句后按到达顺序累积的已完成句段（completed.transcript）。
+    /// Completed segments (completed.transcript) accumulated in arrival order after
+    /// VAD segmentation.
     completed_segments: Vec<String>,
     // Per connection: ignore updates/repeats for completed item IDs.
     completed_item_ids: std::collections::HashSet<String>,
-    /// 当前开放句段的 interim 全文 = delta.text（已确定前缀）+ delta.stash
-    /// （未定尾巴）；completed 到达后清空。
+    /// Current open segment's interim full text = delta.text (confirmed prefix) +
+    /// delta.stash (unsettled tail); cleared when completed arrives.
     partial_text: String,
-    /// speech_started 开、completed 关的未收尾句段计数。收尾判据：finishing
-    /// 且归零（静音尾帧已逼 VAD 关掉所有段）。
+    /// Unsettled segment count: opened by speech_started, closed by completed. Finish
+    /// criterion: finishing and zero (the silence tail has forced VAD to close all
+    /// segments).
     open_segments: u32,
-    /// send_last_frame 已冲刷尾音频 + 静音帧，进入等待句段归零阶段。
+    /// send_last_frame has flushed the tail audio + silence frames and is waiting for
+    /// segment count to reach zero.
     finishing: bool,
-    /// 尾帧尚未由写 worker 确认写入 WebSocket，不能被旧句段的 completed 抢先收尾。
+    /// Tail frame not yet confirmed written to the WebSocket by the write worker; an
+    /// older segment's completed must not finish the session first.
     tail_write_pending: bool,
 }
 
@@ -357,11 +380,13 @@ impl StepfunRealtimeASR {
         Ok(())
     }
 
-    /// 冲刷尾音频 + 补送静音帧逼 VAD 关掉所有开放句段，等全部 completed 到齐。
+    /// Flushes the tail audio and appends silence frames to force VAD to close all
+    /// open segments, then waits for every completed to arrive.
     ///
-    /// 协议没有 finish 事件（见模块注释），完成判据由客户端状态机给出：
-    /// `finishing && open_segments == 0`。纯静音会话（无任何 speech_started）
-    /// 由 FINISH_GRACE 宽限兜底，以空文本成功返回。
+    /// The protocol has no finish event (see module docs), so the finish criterion
+    /// comes from the client state machine: `finishing && open_segments == 0`.
+    /// Pure-silence sessions (no speech_started at all) are covered by the
+    /// FINISH_GRACE backstop and return successfully with empty text.
     pub async fn send_last_frame(self: &Arc<Self>) -> Result<(), StepfunASRError> {
         let result = tokio::time::timeout(FINAL_RESULT_TIMEOUT, async {
             let finished = self.session_finished.notified();
@@ -375,11 +400,12 @@ impl StepfunRealtimeASR {
                     st.audio_scratch.extend_from_slice(&pending);
                 }
                 let mut tail = std::mem::take(&mut st.audio_scratch);
-                // 只有**真实录音**部分算「有声」。补的静音是收尾工具，若把它一起
-                // 算进去，`last_non_silent_audio_written_at` 会被推到最后一个
-                // completed 之后，`has_audio_after_last_completed` 从此恒为真。
+                // Only the real recording counts as "voiced". The appended silence is a
+                // close-out tool; counting it would push last_non_silent_audio_written_at
+                // past the last completed, making has_audio_after_last_completed
+                // permanently true.
                 let contains_non_silent_audio = contains_non_silent_pcm(&tail);
-                // 尾音频和静音帧合并成一次 append，减少一次写。
+                // Merge tail audio and silence frames into one append to save a write.
                 tail.resize(tail.len() + (SILENCE_TAIL_MS * BYTES_PER_MS) as usize, 0);
                 st.finishing = true;
                 st.tail_write_pending = send_tx.is_some();
@@ -408,20 +434,26 @@ impl StepfunRealtimeASR {
                 .map_err(StepfunASRError::SendFailed)?;
             self.state.lock().tail_write_pending = false;
 
-            // 宽限任务：尾帧已写出，客户端不再发任何音频，剩下的只是等服务端把尾帧
-            // 里的音频吐成 completed。等够 FINISH_GRACE 且没有未关句段即可收尾。
+            // Grace task: the tail frame is written and the client sends no more audio;
+            // all that remains is waiting for the server to turn the tail audio into
+            // completed events. Once FINISH_GRACE has elapsed with no open segments,
+            // finish.
             //
-            // 必须**轮询**：此处曾经只在 FINISH_GRACE 到点查一次，那一次不通过就再
-            // 没有第二次机会——而尾帧之后服务端可能一个事件都不再发（松手前已停顿
-            // ≥VAD 阈值时，最后一段的 completed 早在尾帧之前就到了），会话于是一路
-            // 干等到 FINAL_RESULT_TIMEOUT。实测约 13% 的听写因此白等 12 秒。
-            // （那 13% 的直接成因是 `contains_non_silent_pcm` 把底噪当语音，见该函数；
-            // 轮询 + 硬上限是第二道防线，保证任何收尾失败都不会再退化成 12 秒。）
+            // Must poll: this used to check once at FINISH_GRACE expiry, and a single
+            // failed check left no second chance — after the tail frame the server may
+            // send no further events at all (when the pause before release already
+            // exceeded the VAD threshold, the last segment's completed arrived before
+            // the tail), so the session idled until FINAL_RESULT_TIMEOUT. Measured at
+            // ~13% of dictations waiting the full 12 seconds this way. (The direct
+            // cause of that 13% was contains_non_silent_pcm treating room tone as
+            // speech, see that function; polling + the hard deadline are the second
+            // line of defense ensuring any finish failure never degrades to 12s again.)
             //
-            // 收尾前提仍是「无未关句段、且最后一个 completed 之后没有未确认的真实
-            // 音频」——那条保护是对的，不能为了修卡顿丢掉。真正的兜底是
-            // FINISH_HARD_DEADLINE：服务端始终不关最后一段时，把最坏等待压到 3s，
-            // 而不是一路耗到 FINAL_RESULT_TIMEOUT。
+            // The finish precondition is still "no open segments, and no unconfirmed
+            // real audio after the last completed" — that guard is correct and must not
+            // be dropped to fix the stall. The real backstop is FINISH_HARD_DEADLINE:
+            // when the server never closes the last segment, worst-case wait is 3s
+            // instead of idling until FINAL_RESULT_TIMEOUT.
             let weak = Arc::downgrade(self);
             let task_spawner = Arc::clone(&self.task_spawner);
             task_spawner.spawn(Box::pin(async move {
@@ -468,9 +500,11 @@ impl StepfunRealtimeASR {
         match result {
             Ok(inner) => inner,
             Err(_) => {
-                // 超时兜底：有部分结果就带出去，没有才报错——与断连路径一致。
-                // 走到这里说明上面的宽限任务没能收尾（它自己有 FINISH_HARD_DEADLINE
-                // 兜底，正常不该到这一步），而用户已经白等了整整 12 秒——必须留痕。
+                // Timeout backstop: return the partial result if one exists, error
+                // otherwise — same as the disconnect path. Reaching here means the
+                // grace task above failed to finish (it has its own FINISH_HARD_DEADLINE
+                // backstop and normally should not get here), and the user has already
+                // waited the full 12 seconds — this must be logged.
                 log::warn!(
                     "[stepfun-asr] finish stalled for {:?}, falling back to partial transcript",
                     FINAL_RESULT_TIMEOUT
@@ -548,8 +582,9 @@ impl StepfunRealtimeASR {
                 self.finish_error(StepfunASRError::TaskFailed(format!("{item_id}: {message}")));
                 false
             }
-            // `transcript.response.error` 是 StepFun 特有的请求级错误事件
-            // （实测发不支持的 session.finish 时返回），与通用 `error` 同处理。
+            // `transcript.response.error` is a StepFun-specific request-level error
+            // event (observed when sending the unsupported session.finish); handled
+            // like the generic `error`.
             "error" | "transcript.response.error" => {
                 let message = value
                     .get("error")
@@ -598,8 +633,10 @@ impl StepfunRealtimeASR {
     }
 
     fn record_partial(&self, value: &Value) {
-        // `text` 是已确定前缀、`stash` 是未定尾巴，二者拼接即当前句段全文
-        // （与 Qwen 的互斥语义不同，见模块注释）。两者皆空不覆盖已有 partial。
+        // `text` is the confirmed prefix and `stash` the unsettled tail; concatenated
+        // they form the current segment's full text (unlike Qwen's mutually exclusive
+        // semantics, see module docs). Empty deltas do not overwrite an existing
+        // partial.
         let confirmed = value.get("text").and_then(Value::as_str).unwrap_or("");
         let stash = value.get("stash").and_then(Value::as_str).unwrap_or("");
         let combined = format!("{confirmed}{stash}");
@@ -629,7 +666,7 @@ impl StepfunRealtimeASR {
         }
     }
 
-    /// 返回 false 表示会话已收尾、读循环可退出。
+    /// Returns false when the session has finished and the read loop may exit.
     fn record_completed(&self, value: &Value) -> bool {
         let transcript = value
             .get("transcript")
@@ -682,8 +719,8 @@ impl StepfunRealtimeASR {
             st.session_finished = true;
             st.send_tx.take();
             let mut segments = std::mem::take(&mut st.completed_segments);
-            // 收尾时若还有未 completed 的 interim 尾巴（静音帧理应冲出 completed，
-            // 防御性兜底），拼在最后。
+            // At close, if an interim tail is still un-completed (the silence frames
+            // should flush it out; defensive backstop), append it last.
             if !st.partial_text.is_empty() {
                 segments.push(std::mem::take(&mut st.partial_text));
             }
@@ -710,7 +747,8 @@ impl StepfunRealtimeASR {
             has_transcript(&st)
         };
         if has_result {
-            // 与 Bailian / Qwen / Volcengine 一致：异常但已有结果时兜底返回。
+            // Consistent with Bailian / Qwen / Volcengine: on error with an existing
+            // result, fall back to returning it.
             self.finish_success();
         } else {
             self.finish_error(error);
@@ -783,17 +821,18 @@ fn drain_audio_chunks(buffer: &mut Vec<u8>) -> Vec<Vec<u8>> {
     chunks
 }
 
-/// 采样振幅超过满量程 ~1% 才算「有声」。
+/// A sample counts as "voiced" only above ~1% of full-scale amplitude.
 const NON_SILENT_PEAK: i16 = 328;
-/// 至少这么多采样超阈值才判定这一帧含真实语音。单点尖峰（键盘、电流噪声）不足以
-/// 把收尾判据拉住。
+/// At least this many samples above threshold to call the frame real speech. A single
+/// spike (keyboard, electrical noise) must not hold the finish criterion.
 const NON_SILENT_MIN_SAMPLES: usize = 8;
 
-/// 这段 s16le PCM 里是否有真实语音。
+/// Whether this s16le PCM contains real speech.
 ///
-/// 曾经写成 `any(|byte| byte != 0)`——但麦克风底噪（实测 RMS≈0.0008）每个采样都
-/// 非零，于是**任何**一帧都被判成「非静音」，`last_non_silent_audio_written_at`
-/// 被无意义地一路刷新，收尾判据永远不成立。这里改成按振幅判。
+/// Used to be `any(|byte| byte != 0)` — but microphone room tone (measured
+/// RMS approx 0.0008) makes every sample non-zero, so every frame was judged
+/// "non-silent", last_non_silent_audio_written_at was refreshed pointlessly, and the
+/// finish criterion could never hold. Amplitude-based instead.
 fn contains_non_silent_pcm(pcm: &[u8]) -> bool {
     pcm.as_chunks::<2>()
         .0
@@ -810,11 +849,13 @@ fn has_transcript(state: &SyncState) -> bool {
     !state.completed_segments.is_empty() || !state.partial_text.trim().is_empty()
 }
 
-/// 硬截止只允许在已有当前句段可返回文本，或确认没有未结算音频时收尾。
+/// At the hard deadline, finish only if there is current-segment text to return, or
+/// no audio remains unsettled.
 ///
-/// 如果服务端已经确认开始了一段语音、却还没有发出任何 transcript，继续等到
-/// FINAL_RESULT_TIMEOUT，让迟到的 completed 有机会到达；超时后由
-/// `finish_with_partial_or_error` 返回显式错误，而不是静默成功返回空文本。
+/// If the server confirmed a speech segment started but emitted no transcript yet,
+/// keep waiting until FINAL_RESULT_TIMEOUT so a late completed can arrive; after the
+/// timeout `finish_with_partial_or_error` returns an explicit error rather than
+/// silently succeeding with empty text.
 fn should_force_finish_at_hard_deadline(state: &SyncState) -> bool {
     if state.open_segments > 0 {
         return !state.partial_text.trim().is_empty();
@@ -834,7 +875,7 @@ fn has_audio_after_last_completed(state: &SyncState) -> bool {
 }
 
 fn session_update_message(model: &str, prompt: Option<&str>) -> String {
-    // language 省略 => 服务端自动检测语种。
+    // language omitted => server auto-detects.
     let mut transcription = json!({ "model": model });
     if let Some(prompt) = prompt {
         let trimmed = prompt.trim();
@@ -946,7 +987,7 @@ mod tests {
         })
     }
 
-    /// 语音级 s16le PCM：振幅远超 NON_SILENT_PEAK。
+    /// Speech-level s16le PCM: amplitude far above NON_SILENT_PEAK.
     fn speech_pcm(bytes: usize) -> Vec<u8> {
         std::iter::repeat(6_000i16.to_le_bytes())
             .flatten()
@@ -954,8 +995,8 @@ mod tests {
             .collect()
     }
 
-    /// 底噪级 s16le PCM：每个字节都非零（旧的 `byte != 0` 判据会误判成语音），
-    /// 但振幅低于 NON_SILENT_PEAK，实际是静音。
+    /// Room-tone-level s16le PCM: every byte non-zero (the old `byte != 0` check would
+    /// misjudge it as speech), but amplitude below NON_SILENT_PEAK — actually silence.
     fn room_tone_pcm(bytes: usize) -> Vec<u8> {
         std::iter::repeat(0x0101i16.to_le_bytes())
             .flatten()
@@ -976,13 +1017,14 @@ mod tests {
         assert_eq!(creds.connect_url(), DEFAULT_ENDPOINT);
         assert_eq!(creds.normalized_model(), DEFAULT_MODEL);
 
-        // 批式共用的 https base（preset 默认值）→ 派生 wss 完整路径。
+        // https base shared with the batch endpoint (preset default) -> derive the
+        // full wss path.
         creds.endpoint = "https://api.stepfun.com/v1".to_string();
         assert_eq!(creds.connect_url(), DEFAULT_ENDPOINT);
         creds.endpoint = "https://api.stepfun.com/v1/".to_string();
         assert_eq!(creds.connect_url(), DEFAULT_ENDPOINT);
 
-        // 完整 wss URL 原样使用。
+        // Full wss URL used as-is.
         creds.endpoint = "wss://gateway.example.com/v1/realtime/asr/stream".to_string();
         assert_eq!(
             creds.connect_url(),
@@ -1041,13 +1083,14 @@ mod tests {
 
     #[test]
     fn delta_concatenates_confirmed_text_with_stash() {
-        // StepFun 语义：text 前缀 + stash 尾巴（实测 2026-07），非 Qwen 的互斥取一。
+        // StepFun semantics: text prefix + stash tail (measured 2026-07), not Qwen's
+        // pick-the-non-empty-one.
         let asr = create_test_asr();
         asr.handle_text_message(&delta_event("", "今天。"));
         assert_eq!(asr.state.lock().partial_text, "今天。");
         asr.handle_text_message(&delta_event("今天天气不错，", "我们来测试。"));
         assert_eq!(asr.state.lock().partial_text, "今天天气不错，我们来测试。");
-        // 两者皆空不覆盖已有 partial。
+        // Empty deltas do not overwrite an existing partial.
         asr.handle_text_message(&delta_event("", ""));
         assert_eq!(asr.state.lock().partial_text, "今天天气不错，我们来测试。");
     }
@@ -1153,7 +1196,8 @@ mod tests {
 
     #[test]
     fn empty_finishing_session_yields_empty_text() {
-        // 连接检查 / 误触场景：无任何句段，finish_success 返回空文本成功。
+        // Connection check / accidental press: no segments at all; finish_success
+        // returns empty text successfully.
         let asr = create_test_asr();
         let (tx, mut rx) = oneshot::channel();
         {
@@ -1194,10 +1238,10 @@ mod tests {
 
     #[test]
     fn silence_detection_ignores_room_tone_but_catches_speech() {
-        // 底噪：每个字节都非零，旧的 `byte != 0` 判据会误判成语音。
+        // Room tone: every byte non-zero, the old `byte != 0` check would call it speech.
         assert!(!contains_non_silent_pcm(&room_tone_pcm(3_200)));
         assert!(contains_non_silent_pcm(&speech_pcm(3_200)));
-        // 纯静音与单点尖峰都不算有声。
+        // Pure silence and a single-point spike both count as silence.
         assert!(!contains_non_silent_pcm(&[0u8; 3_200]));
         let mut spike = room_tone_pcm(3_200);
         spike[0..2].copy_from_slice(&20_000i16.to_le_bytes());
@@ -1266,8 +1310,9 @@ mod tests {
             ws.send(Message::Text(completed_event("delayed speech")))
                 .await
                 .unwrap();
-            // 保持连接直到客户端处理 completed 并主动关闭，避免测试服务端析构抢先
-            // 触发客户端的连接错误。
+            // Keep the connection open until the client processes the completed and
+            // closes itself, so the test server is not dropped first and turned into a
+            // client-side connection error.
             let _ = tokio::time::timeout(Duration::from_secs(2), async {
                 while let Some(message) = ws.next().await {
                     match message {
@@ -1309,8 +1354,9 @@ mod tests {
         server.await.unwrap();
     }
 
-    /// 假网关：握手后回 `session.updated`，收到第一个音频 append 时发出指定事件，
-    /// 之后**保持静默**直到客户端关闭连接——模拟 StepFun「没有 finish 事件」的现实。
+    /// Fake gateway: replies with `session.updated` after the handshake, emits the
+    /// given events on the first audio append, then stays silent until the client
+    /// closes — simulating StepFun's "no finish event" reality.
     async fn spawn_fake_gateway(events_on_first_audio: Vec<String>) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!(
@@ -1320,7 +1366,7 @@ mod tests {
         tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
-            // 首条必然是 session.update。
+            // The first message is necessarily session.update.
             assert!(matches!(
                 ws.next().await.unwrap().unwrap(),
                 Message::Text(_)
@@ -1347,13 +1393,14 @@ mod tests {
         endpoint
     }
 
-    /// 回归：松手前已停顿 ≥VAD 阈值 —— 最后一段的 completed 在尾帧**之前**就到了，
-    /// 服务端此后不会再发任何事件。
+    /// Regression: the pause before release already exceeded the VAD threshold — the
+    /// last segment's completed arrived before the tail frame, and the server sends
+    /// nothing after that.
     ///
-    /// 修复前：尾帧里残留的底噪被 `byte != 0` 判成语音，把
-    /// `last_non_silent_audio_written_at` 推到 completed 之后，一次性宽限检查因此
-    /// 不通过、又没有第二次机会 → 干等满 12 秒 FINAL_RESULT_TIMEOUT。实测约 13%
-    /// 的听写走到这条路径上。
+    /// Before the fix: room tone left in the tail was judged speech by `byte != 0`,
+    /// pushing last_non_silent_audio_written_at past the completed, so the one-shot
+    /// grace check failed with no second chance -> the full 12s FINAL_RESULT_TIMEOUT.
+    /// Measured on ~13% of dictations.
     #[tokio::test]
     async fn finishes_promptly_when_last_completed_arrived_before_the_tail() {
         let endpoint = spawn_fake_gateway(vec![
@@ -1369,10 +1416,10 @@ mod tests {
             prompt: None,
         }));
         asr.open_session().await.unwrap();
-        // 一整帧语音，触发服务端回 speech_started + completed。
+        // One full frame of speech, making the server reply speech_started + completed.
         asr.consume_pcm_chunk(&speech_pcm(TARGET_AUDIO_CHUNK_BYTES));
-        // 关键时序：必须等 completed **先于**尾帧到达，否则走的是
-        // `record_completed` 的健康快路径，复现不出这个 bug。
+        // Key timing: completed must arrive before the tail frame, otherwise the healthy
+        // fast path in `record_completed` runs and the bug does not reproduce.
         tokio::time::timeout(Duration::from_secs(5), async {
             while asr.state.lock().last_completed_at.is_none() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1380,8 +1427,9 @@ mod tests {
         })
         .await
         .expect("fake gateway should have completed the segment");
-        // 不足一帧的底噪残留：留在 audio_scratch 里，收尾时跟静音帧拼成尾帧一起
-        // 写出。旧判据把它当语音，于是尾帧把「最后一次语音」推到 completed 之后。
+        // Sub-frame room-tone residue: stays in audio_scratch and is concatenated with
+        // the silence frames into the tail at close. The old check treated it as
+        // speech, pushing "last speech" past the completed.
         asr.consume_pcm_chunk(&room_tone_pcm(1_600));
 
         let started = Instant::now();
@@ -1401,8 +1449,9 @@ mod tests {
         );
     }
 
-    /// 回归：服务端始终不关最后一个句段（只有 speech_started + delta，没有
-    /// completed）。硬上限必须兜住，而不是退化成 12 秒。
+    /// Regression: the server never closes the last segment (only speech_started +
+    /// delta, no completed). The hard deadline must bound the wait instead of
+    /// degrading to 12 seconds.
     #[tokio::test]
     async fn hard_deadline_bounds_the_wait_when_segment_never_closes() {
         let endpoint = spawn_fake_gateway(vec![
@@ -1431,22 +1480,25 @@ mod tests {
             elapsed >= FINISH_HARD_DEADLINE && elapsed < FINISH_HARD_DEADLINE * 2,
             "should settle at the hard deadline, took {elapsed:?}"
         );
-        // 未 completed 的 interim 尾巴仍然带出去，不能因为收尾超时就丢字。
+        // The un-completed interim tail is still returned; a finish timeout must not
+        // drop text.
         assert_eq!(
             asr.await_final_result().await.unwrap().text,
             "这句话没有收到 completed"
         );
     }
 
-    // 服务端收下 TCP 却永不完成 WebSocket 握手（断网、公司网关 / 酒店门户静默丢包、
-    // 服务端黑洞）时，open_session 必须超时返回错误，而不是把调用方永远挂住 ——
-    // 它是在串行的 hotkey bridge 线程上 block_on 等的，一旦挂住，按下 / 松开全都排在
-    // 队列里没人处理，用户表现为「热键彻底失灵，录音开不了也停不了，只能退出重开」。
+    // When the server accepts TCP but never completes the WebSocket handshake
+    // (disconnect, corporate gateway / hotel portal silently dropping packets, server
+    // black-holing), open_session must time out with an error instead of hanging the
+    // caller forever — it runs block_on on the serial hotkey bridge thread, and a hang
+    // queues press / release events unhandled: hotkeys appear totally dead, recording
+    // can neither start nor stop, and the app must be restarted.
     #[tokio::test]
     async fn open_session_times_out_when_handshake_never_completes() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        // 收下连接后什么都不回，连接一直挂着。
+        // Accepts the connection then never replies, leaving it hanging.
         let _server = tokio::spawn(async move {
             let _accepted = listener.accept().await;
             std::future::pending::<()>().await;
@@ -1468,7 +1520,8 @@ mod tests {
             matches!(&err, StepfunASRError::ConnectionFailed(msg) if msg.contains("连接超时")),
             "应报连接超时，实际: {err:?}"
         );
-        // 上限给足余量，只为证明它真的有界（没有 CONNECT_TIMEOUT 时这里会永远不返回）。
+        // Generous upper bound, only to prove the wait is truly bounded (without
+        // CONNECT_TIMEOUT this would never return).
         assert!(
             started.elapsed() < CONNECT_TIMEOUT * 3,
             "超时应在 CONNECT_TIMEOUT 量级返回，实际耗时 {:?}",

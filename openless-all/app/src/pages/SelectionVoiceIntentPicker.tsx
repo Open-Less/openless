@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { MessageCircleQuestion, PencilLine, Sparkles } from 'lucide-react';
+import { MessageCircleQuestion, PencilLine, PenLine, Sparkles } from 'lucide-react';
 import { ToolWindowHeader } from '../components/ui/ToolWindowHeader';
 import {
   cancelSelectionVoiceIntentPrompt,
@@ -48,7 +48,7 @@ export function SelectionVoiceIntentPicker() {
     };
   }, []);
 
-  const choose = async (intent: 'question' | 'edit') => {
+  const choose = async (intent: 'question' | 'edit' | 'compose') => {
     setBusy(true);
     setError(null);
     try {
@@ -101,13 +101,23 @@ export function SelectionVoiceIntentPicker() {
             <MessageCircleQuestion size={20} />
             {t('selectionVoiceIntent.question')}
           </button>
+          {sourceText.trim() ? (
+            <button
+              className="ol-tool-button"
+              disabled={busy}
+              onClick={() => void choose('edit')}
+            >
+              <PencilLine size={20} />
+              {t('selectionVoiceIntent.edit')}
+            </button>
+          ) : null}
           <button
             className="ol-tool-button is-primary"
             disabled={busy}
-            onClick={() => void choose('edit')}
+            onClick={() => void choose('compose')}
           >
-            <PencilLine size={20} />
-            {t('selectionVoiceIntent.edit')}
+            <PenLine size={20} />
+            {t('selectionVoiceIntent.compose')}
           </button>
         </div>
         <button

@@ -21,7 +21,7 @@ export function AudioCueListener() {
   const prevStateRef = useRef<CapsuleState>('idle' as CapsuleState);
   const audioCueRuntimeEnabled = !isAndroid();
 
-  // 读取设置（默认开启）
+  // Read settings (enabled by default)
   useEffect(() => {
     if (!isTauri || !audioCueRuntimeEnabled) return;
     let cancelled = false;
@@ -31,7 +31,7 @@ export function AudioCueListener() {
         const prefs = await getSettings();
         if (!cancelled) audioCueEnabledRef.current = prefs.audioCueOnRecord !== false;
       } catch {
-        // 读取失败保持默认 true
+        // Read failure: keep the default true
       }
     })();
     return () => {
@@ -39,7 +39,7 @@ export function AudioCueListener() {
     };
   }, [audioCueRuntimeEnabled]);
 
-  // 监听设置变更
+  // Listen for settings changes
   useEffect(() => {
     if (!isTauri || !audioCueRuntimeEnabled) return;
     let unlisten: (() => void) | undefined;
@@ -62,13 +62,13 @@ export function AudioCueListener() {
     };
   }, [audioCueRuntimeEnabled]);
 
-  // 预热 AudioContext
+  // Prime the AudioContext
   useEffect(() => {
     if (!isTauri || !audioCueRuntimeEnabled) return;
     primeAudioCue();
   }, [audioCueRuntimeEnabled]);
 
-  // 监听 capsule 状态边沿
+  // Listen for capsule state edges
   useEffect(() => {
     if (!isTauri || !audioCueRuntimeEnabled) return;
     let unlisten: (() => void) | undefined;

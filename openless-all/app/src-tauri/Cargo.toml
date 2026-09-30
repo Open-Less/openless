@@ -1,6 +1,6 @@
 [package]
 name = "openless"
-version = "2.0.0-Beta.3+build.20260926"
+version = "2.0.0-Beta.4+build.20260930"
 license = "AGPL-3.0-only"
 description = "OpenLess — local voice input that types where your cursor is"
 authors = ["OpenLess"]
@@ -12,7 +12,9 @@ name = "openless_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+# Keep on the same train as `tauri = "=2.11.2"`. Floating `version = "2"` resolves
+# to tauri-build 2.7 when CI regenerates the lockfile.
+tauri-build = { version = "=2.6.2", features = [] }
 # Compile vendored Open-Less/qwen-asr C sources for the local ASR engine on macOS.
 cc = "1.1"
 
@@ -21,11 +23,16 @@ zeroize = "1"
 # Framework-independent business core.  Tauri remains an adapter and owns the
 # window/plugin/IPC concerns; Linux must depend on the same crate directly.
 openless-core = { path = "../crates/openless-core" }
-# 锁 ~2.11 因为 npm @tauri-apps/api 与 plugin-dialog 都已升 2.11；
-# tauri build 跨 minor 一致性检查会拒绝 npm 2.11 + Rust 2.10 的组合。
+# Pin the whole 2.11.2 train. tauri 2.11.2 allows `tauri-runtime ^2.11`, so an
+# unlocked resolve picks 2.12.0 and fails to compile (Monitor / UnexpectedMenuKind).
+# Direct pins keep `cargo generate-lockfile` (ci-disable-macos-qwen3) compatible.
 # macos-private-api must live in [dependencies] so tauri_build can match tauri.conf.json
 # macOSPrivateApi; tray-icon stays desktop-only in the target table below.
-tauri = { version = "~2.11", features = ["macos-private-api"] }
+tauri = { version = "=2.11.2", features = ["macos-private-api"] }
+tauri-runtime = "=2.11.2"
+tauri-runtime-wry = "=2.11.2"
+tauri-macros = "=2.6.2"
+tauri-utils = "=2.9.2"
 # 锁 >=2.3.5 修复 GHSA-c9pr-q8gx-3mgp：tauri-plugin-shell `open` 端点作用域校验绕过（CRITICAL，issue #668）。
 tauri-plugin-shell = "2.3.5"
 tauri-plugin-dialog = "2.7.2"
@@ -77,7 +84,7 @@ tauri-plugin-fs = "2.5.1"
 # Desktop-only plugins, hotkey/insertion helpers, and tray-icon (not built for mobile).
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["native-tls"] }
-tauri = { version = "~2.11", features = ["macos-private-api", "tray-icon"] }
+tauri = { version = "=2.11.2", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-updater = "=2.10.1"
 tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
@@ -117,6 +124,7 @@ ndk-context = "0.1"
 tao = "0.35"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "=3.7.0"
 block2 = "0.5"
 core-foundation = "0.10"
 tokenizers = "0.21"
@@ -138,10 +146,14 @@ tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2"
 # scripts/ci-disable-macos-qwen3.mjs 删掉本行来规避。
 qwen3-asr-rs = { path = "vendor/qwen3-asr-rs", default-features = false, features = ["mlx"] }
 [target.'cfg(target_os = "windows")'.dependencies]
+windows-core = "0.58"
 foundry-local-sdk = { version = "=1.2.1", features = ["winml"] }
 raw-window-handle = "0.6"
 sherpa-onnx = { version = "1.13.2", default-features = false, features = ["static"] }
 windows = { version = "0.58", features = [
+  "implement",
+  "Win32_UI_Accessibility",
+  "Win32_System_Variant",
   "Win32_Foundation",
   "Win32_Globalization",
   "Win32_Graphics_Dwm",

@@ -1,5 +1,6 @@
-// 渠道凭据、模型列表和连接验证表单。供应商能力与默认值由 Core 提供，
-// 界面负责本地化、字段保存反馈，以及用户主动触发的模型拉取和验证。
+// Channel credentials, model lists, and connection validation forms. Provider capabilities and
+// defaults come from Core; the UI handles localization, field-save feedback, and user-triggered
+// model fetching and validation.
 
 import {
   useCallback,
@@ -31,11 +32,12 @@ import { LlmProtocolFields } from './LlmProtocolFields';
 import { ProviderFormContext } from './ProviderForm';
 import { LocalModelPicker } from './models/LocalModelPicker';
 import { emitSaved } from '../../lib/savedEvent';
+import { useContentMotion } from '../../lib/motion';
 import { useLayoutStack, useConservativeLayout } from '../../lib/useMobileLayout';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite, type SelectOption } from '../../components/ui/SelectLite';
 import { Card } from '../_atoms';
-import { SettingRow, SectionTitle, Toggle, inputStyle, segmentedTrackStyle } from './shared';
+import { SettingRow, SectionTitle, Toggle, inputStyle } from './shared';
 import {
   parseAdvancedAsrConfig,
   serializeAdvancedAsrConfig,
@@ -126,8 +128,9 @@ function LlmThinkingToggle({
   );
 }
 
-// React 只保留本地化标签。endpoint、model、auth 与能力必须来自 Core
-// ProviderDescriptor，避免每个平台各维护一份会漂移的业务真相。
+// React holds only localization labels. endpoint, model, auth, and capabilities must come from
+// the Core ProviderDescriptor, so each platform does not maintain its own drifting copy of
+// business truth.
 export const LLM_LABELS = [
   ['ark', 'ark'],
   ['deepseek', 'deepseek'],
@@ -140,6 +143,7 @@ export const LLM_LABELS = [
   ['cometapi', 'cometapi'],
   ['openrouterFree', 'openrouterFree'],
   ['requesty', 'requesty'],
+  ['api-route', 'apiRoute'],
   ['orcarouter', 'orcarouter'],
   ['alibabaCoding', 'alibabaCoding'],
   ['codingPlanX', 'codingPlanX'],
@@ -153,10 +157,10 @@ export const LLM_LABELS = [
   ['custom_messages', 'customMessages'],
 ].map(([id, nameKey]) => ({ id, nameKey })) as readonly { id: string; nameKey: string }[];
 
-// 火山语音转写在资源 ID 为空时显示的默认值。
+// Default shown for Volcano speech transcription when the resource ID is empty.
 const ASR_DEFAULT_RESOURCE_ID = 'volc.seedasr.sauc.duration';
 
-/** 模型预设下拉里的「自定义模型…」哨兵值：选中即切回输入框手输。 */
+/** Sentinel value for the "Custom model…" entry in the model preset dropdown; selecting it switches back to a manual input. */
 const CUSTOM_MODEL_OPTION_VALUE = '__custom_model__';
 
 function matchesEndpointPreset(value: string, endpoint: string): boolean {
@@ -182,11 +186,12 @@ function matchesEndpointPreset(value: string, endpoint: string): boolean {
 }
 
 /**
- * 一张渠道卡片的凭据字段区（编辑弹窗的主体）。
+ * Credential field area of one channel card (the body of the edit dialog).
  *
- * 渠道化之前这里是「下拉选厂商 + 一组字段」；现在厂商由卡片自身的 providerType
- * 决定，字段一律按 `channelId` 作用域读写（后端 read_credential/set_credential 的
- * `provider` 参数收的就是渠道 id），因此同一家厂商的多张卡片互不干扰。
+ * Before channelization this was "dropdown of vendors + a group of fields"; now the vendor is
+ * determined by the card's own providerType and fields are always read/written scoped by
+ * `channelId` (the `provider` parameter of the backend read_credential/set_credential takes the
+ * channel id), so multiple cards for the same vendor do not interfere.
  */
 export function ChannelCredentialFields({
   kind,
@@ -211,9 +216,9 @@ export function ChannelCredentialFields({
       | 'supportedRequestFormats'
     >
   >;
-  /** 测试连通出结果后通知外层刷新卡片上的延迟/标红。 */
+  /** Notify the parent to refresh the card's latency / error highlight after a connectivity test resolves. */
   onTested?: () => void;
-  /** 新建草稿发生用户交互时同步通知外层，避免关闭流程误删。 */
+  /** Notify the parent whenever a new draft sees user interaction, so the close flow does not discard it. */
   onUserMutation?: () => void;
 }) {
   const { t } = useTranslation();
@@ -295,8 +300,9 @@ export function ChannelCredentialFields({
       .finally(() => trackField('thinking', false));
   };
 
-  // Provider policy 必须 fail-closed：Core descriptor 尚未返回或加载失败时，
-  // 不短暂渲染一套猜测的凭据字段，避免用户把秘密写进错误槽位。
+  // Provider policy must fail closed: while the Core descriptor has not loaded or failed to
+  // load, do not briefly render a guessed set of credential fields — users could type secrets
+  // into the wrong slot.
   if (!descriptor) {
     return <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)' }}>{t('common.loading')}</div>;
   }
@@ -532,8 +538,9 @@ export function ChannelCredentialFields({
                   await setCredential('volcengine.auth_mode', mode, channelId);
                   onTested?.();
                 } catch (error) {
-                  // 写入失败必须回滚 UI 并提示：否则模式看着已切换、重启后却静默回退，
-                  // 配合独立 API Key 槽会造成「Key 存在但模式不对」的混乱。
+                  // A failed write must roll the UI back and show an error: otherwise the mode
+                  // looks switched but silently reverts after restart, which combined with the
+                  // separate API Key slot produces "key exists but mode is wrong" confusion.
                   console.error('[settings] failed to save volcengine auth mode', error);
                   setVolcengineAuthMode(prev);
                   emitSaved('failed', t('common.operationFailed'));
@@ -553,8 +560,9 @@ export function ChannelCredentialFields({
             />
           </ChannelFormRow>
         )}
-        {/* 两种模式使用各自独立的凭据槽位：旧版 Access Token（volcengine.access_key）
-            与 ASR API Key（volcengine.api_key，普通服务 API Key 鉴权或 Agent Plan 使用）互不预填。 */}
+        {/* The two modes use separate credential slots: the legacy Access Token
+            (volcengine.access_key) and the ASR API Key (volcengine.api_key, used for regular
+            service API key auth or Agent Plan) never prefill each other. */}
         {!agentPlan && volcengineAuthMode === 'app_id_token' ? (
           <>
             <CredentialField
@@ -662,7 +670,8 @@ export function ChannelCredentialFields({
     );
   }
 
-  // 腾讯云实时语音：三段式密钥 + 固定模型档（Preview 仅 16kHz 单声道、60 秒内）。
+  // Tencent Cloud realtime speech: three-part keys + fixed model tier (Preview is 16kHz mono
+  // only, under 60 seconds).
   if (descriptor?.authRequirement === 'tencent_cloud') {
     return (
       <>
@@ -721,11 +730,12 @@ export function ChannelCredentialFields({
     );
   }
 
-  // 本地引擎（qwen3 / sherpa / foundry / Apple 语音）没有 key 与地址；模型的下载与
-  // 切换仍由「高级 → 本地模型」里的 <LocalAsr embedded /> 负责，这里只说明一句。
+  // Local engines (qwen3 / sherpa / foundry / Apple speech) have no key or address; model
+  // download and switching stay with <LocalAsr embedded /> under "Advanced -> Local models",
+  // so only a one-line note here.
   if (descriptor?.authRequirement === 'none') {
-    // 本地引擎：模型即凭据。这里直接切换使用中的模型（全局生效），
-    // 下载 / 删除 / 镜像在「服务 → 本地模型」管理页。
+    // Local engine: the model is the credential. This switches the in-use model directly
+    // (global effect); download / delete / mirror live in the "Services -> Local models" page.
     return (
       <>
         <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
@@ -788,7 +798,7 @@ export function ChannelCredentialFields({
         mask
         onUserMutation={onUserMutation}
       />
-      {/* 统一百炼保留 endpoint 供用户选择区域或工作空间域名；后端按模型转换协议与路径。 */}
+      {/* Unified Bailian keeps the endpoint for users choosing a region or workspace domain; the backend converts protocol and path per model. */}
       <CredentialField
         key={`${channelId}:endpoint`}
         label={t('settings.providers.baseUrlLabel')}
@@ -820,8 +830,15 @@ export function ChannelCredentialFields({
             : undefined
         }
       />
-      {unifiedBailian && <BailianProtocolField key={channelId} channelId={channelId}
-        onChange={setBailianProtocol} onUserMutation={onAsrMutation} onBlockedChange={trackField} />}
+      {unifiedBailian && (
+        <BailianProtocolField
+          key={channelId}
+          channelId={channelId}
+          onChange={setBailianProtocol}
+          onUserMutation={onAsrMutation}
+          onBlockedChange={trackField}
+        />
+      )}
       {unifiedBailian && (
         <BailianProtocolHint
           key={`${channelId}:proto:${asrModelRevision}`}
@@ -829,22 +846,26 @@ export function ChannelCredentialFields({
           selectedProtocol={bailianProtocol}
         />
       )}
-      {unifiedBailian && (bailianProtocol === 'dashscope-realtime' || (bailianProtocol === 'auto' && bailianModelSupportsVocabulary(bailianModel))) && (
-        <>
-          <CredentialField
-            key={`${channelId}:vocabulary_id`}
-            label={t('settings.providers.bailianVocabularyIdLabel')}
-            account="asr.vocabulary_id"
-            provider={channelId}
-            mono
-            onUserMutation={onUserMutation}
-            placeholder="vocab-..."
-          />
-          <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
-            {t('settings.providers.bailianVocabularyIdNote')}
-          </div>
-        </>
-      )}
+      {unifiedBailian &&
+        (bailianProtocol === 'dashscope-realtime' ||
+          (bailianProtocol === 'auto' && bailianModelSupportsVocabulary(bailianModel))) && (
+          <>
+            <CredentialField
+              key={`${channelId}:vocabulary_id`}
+              label={t('settings.providers.bailianVocabularyIdLabel')}
+              account="asr.vocabulary_id"
+              provider={channelId}
+              mono
+              onUserMutation={onUserMutation}
+              placeholder="vocab-..."
+            />
+            <div
+              style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}
+            >
+              {t('settings.providers.bailianVocabularyIdNote')}
+            </div>
+          </>
+        )}
       {providerType === 'elevenlabs' && (
         <div
           role="note"
@@ -864,7 +885,7 @@ export function ChannelCredentialFields({
       {(providerType === 'openai-compatible' || providerType === 'zenmux') && (
         <AsrAdvancedOptions provider={channelId} onUserMutation={onUserMutation} />
       )}
-      {/* 统一百炼「拉取模型」只写 model，不覆盖用户选择的区域或工作空间 endpoint。 */}
+      {/* Unified Bailian "fetch models" writes only model, never overwriting the user-chosen region or workspace endpoint. */}
       <ProviderTools
         kind="asr"
         disabled={Object.values(blockedFields).some(Boolean)}
@@ -878,9 +899,10 @@ export function ChannelCredentialFields({
   );
 }
 
-// ASR 高级选项：openai-compatible 与 zenmux 两个预设显示。
-// openai-compatible 暴露 verbose_json / 分片时长（其余命名厂商保持硬编码行为）；
-// zenmux 暴露 enable_itn（数字归一化）开关，verbose_json / 分片对其无意义。
+// ASR advanced options: shown for the openai-compatible and zenmux presets.
+// openai-compatible exposes verbose_json / chunk duration (other named vendors keep hardcoded
+// behavior); zenmux exposes the enable_itn (number normalization) toggle — verbose_json /
+// chunking are meaningless for it.
 function AsrAdvancedOptions({
   provider,
   onUserMutation,
@@ -1011,28 +1033,29 @@ function AsrAdvancedOptions({
   );
 }
 
-// 统一「阿里云百炼」下,按模型名判断走哪种协议(与后端
-// coordinator::resolve_effective_asr_provider 保持一致):qwen3-asr-flash-realtime* 与
-// fun-asr-realtime* 与 fun-asr-flash-8k-realtime* 都是实时模型；fun-asr-flash-2026-06-15
-// 与 qwen-audio-3.0-asr-flash 是「录音文件·说完转写」（同步）。
+// Under unified "Alibaba Cloud Bailian", decide the protocol by model name (kept in sync with
+// the backend coordinator::resolve_effective_asr_provider): qwen3-asr-flash-realtime*,
+// fun-asr-realtime*, and fun-asr-flash-8k-realtime* are realtime models; fun-asr-flash-2026-06-15
+// and qwen-audio-3.0-asr-flash are "record then transcribe" (synchronous).
 function bailianModelProtocol(model: string): 'realtime' | 'sync' | 'async' {
   const m = model.trim();
-  if (!m || m.includes('realtime') || m === 'qwen-audio-3.0-asr-flash-streaming')
-    return 'realtime';
-  // qwen3-asr-flash-filetrans 仅接受公网 URL，暂不支持（后端 protocol_for_model
-  // 显式拒绝），前端不再归为 async 提示。
+  if (!m || m.includes('realtime') || m === 'qwen-audio-3.0-asr-flash-streaming') return 'realtime';
+  // qwen3-asr-flash-filetrans only accepts public URLs and is not supported yet (the backend
+  // protocol_for_model rejects it explicitly), so the frontend no longer classifies it as async.
   if (
     m === 'fun-asr' ||
     (m.startsWith('fun-asr-') && !m.startsWith('fun-asr-flash')) ||
     m.startsWith('paraformer')
   )
     return 'async';
-  // 其余（fun-asr-flash-*、qwen3-asr-flash、qwen-audio-3.0-asr-flash）为同步录音模型。
+  // The rest (fun-asr-flash-*, qwen3-asr-flash, qwen-audio-3.0-asr-flash) are synchronous
+  // record-file models.
   return 'sync';
 }
 
-// qwen-audio-3.0-asr-flash 官方支持热词，但批量协议尚未把该设置写入请求体；
-// 在后端接入前不展示一个实际不生效的热词输入框。
+// qwen-audio-3.0-asr-flash officially supports hotwords, but the batch protocol does not write
+// that setting into the request body yet; until the backend supports it, do not show a hotword
+// input that would have no effect.
 function bailianModelSupportsVocabulary(model: string): boolean {
   const m = model.trim();
   return (
@@ -1044,14 +1067,25 @@ function bailianModelSupportsVocabulary(model: string): boolean {
   );
 }
 
-// 模型框下的一行协议提示,解决「三种模型看不出区别」——告诉用户当前模型是实时还是
-// 录音文件、行为差异如何。随 asrModelRevision(拉取/选择模型时)与挂载时重读 asr.model。
-function BailianProtocolHint({ currentModel, selectedProtocol }: { currentModel: string; selectedProtocol: BailianProtocol }) {
+// One-line protocol hint under the model field, resolving "the three model types look
+// identical" — tells the user whether the current model is realtime or record-file and how the
+// behavior differs. Re-reads asr.model on asrModelRevision (model fetch/selection) and mount.
+function BailianProtocolHint({
+  currentModel,
+  selectedProtocol,
+}: {
+  currentModel: string;
+  selectedProtocol: BailianProtocol;
+}) {
   const { t } = useTranslation();
-  const protocol = selectedProtocol === 'auto'
-    ? bailianModelProtocol(currentModel)
-    : selectedProtocol === 'async-transcription' ? 'async'
-      : selectedProtocol.endsWith('realtime') ? 'realtime' : 'sync';
+  const protocol =
+    selectedProtocol === 'auto'
+      ? bailianModelProtocol(currentModel)
+      : selectedProtocol === 'async-transcription'
+        ? 'async'
+        : selectedProtocol.endsWith('realtime')
+          ? 'realtime'
+          : 'sync';
   const hint =
     protocol === 'realtime'
       ? t('settings.providers.bailianModelRealtimeHint')
@@ -1241,7 +1275,11 @@ function CatalogModelField({
             style={iconBtnStyle}
             disabled={status === 'loading'}
           >
-            <Icon name="refresh" size={13} />
+            <Icon
+              name="refresh"
+              size={13}
+              className={status === 'loading' ? 'ol-loading-spinner' : undefined}
+            />
           </button>
           {trailing}
         </div>
@@ -1281,6 +1319,7 @@ function ProviderTools({
   modelsUrl,
   showFetchModels = true,
   disabled = false,
+  compact = false,
 }: {
   kind: 'llm' | 'asr' | 'omni';
   modelAccount: string;
@@ -1291,6 +1330,7 @@ function ProviderTools({
   modelsUrl?: string;
   showFetchModels?: boolean;
   disabled?: boolean;
+  compact?: boolean;
 }) {
   const { t } = useTranslation();
   const mounted = useRef(true);
@@ -1312,10 +1352,11 @@ function ProviderTools({
     setMessage(nextMessage);
   };
 
-  // 把测试结果落到渠道上（卡片据此显示延迟或标红）。失败不打断主流程：
-  // 测试本身已经在按钮旁给出结论，记录不上只是卡片少一行历史。
+  // Persist the test result onto the channel (the card shows latency or an error highlight from
+  // it). Failure does not interrupt the flow: the test already shows its conclusion next to the
+  // button; a failed record only means one less history line on the card.
   const persistTest = async (ok: boolean, latencyMs: number | null, message: string | null) => {
-    // Omni 不走渠道化（独立命名空间），没有可落测试结果的渠道卡片。
+    // Omni is not channelized (its own namespace), so there is no channel card to record into.
     if (!mounted.current || !provider || kind === 'omni') return;
     try {
       await recordChannelTest(kind, provider, ok, latencyMs, message);
@@ -1336,7 +1377,13 @@ function ProviderTools({
       const latency = Math.round(performance.now() - started);
       setResult(
         result.ok ? 'success' : 'error',
-        t(result.ok ? 'settings.providers.validateSuccess' : 'settings.providers.validateFailed'),
+        t(
+          result.ok
+            ? kind === 'omni'
+              ? 'settings.providers.validateSuccessOmni'
+              : 'settings.providers.validateSuccess'
+            : 'settings.providers.validateFailed',
+        ),
       );
       await persistTest(result.ok, result.ok ? latency : null, result.ok ? null : 'validateFailed');
     } catch (error) {
@@ -1397,6 +1444,7 @@ function ProviderTools({
   const resultMessage = message && (
     <div
       className="ol-provider-result"
+      key={`${operation}:${status}`}
       data-status={status}
       role="status"
       style={{
@@ -1415,10 +1463,73 @@ function ProviderTools({
       <Icon
         name={status === 'success' ? 'check' : status === 'loading' ? 'refresh' : 'info'}
         size={15}
+        className={status === 'loading' ? 'ol-loading-spinner' : undefined}
       />
       <span>{message}</span>
     </div>
   );
+
+  if (compact) {
+    return (
+      <section className="ol-omni-tools" aria-label={t('settings.channels.validationTitle')}>
+        <div className="ol-omni-tools-actions">
+          {showFetchModels && (
+            <button
+              className="ol-channel-fetch-models"
+              type="button"
+              onClick={modelsUrl ? () => void openExternal(modelsUrl) : loadModels}
+              style={miniBtnStyle}
+              disabled={disabled || status === 'loading'}
+            >
+              <Icon
+                name={modelsUrl ? 'external' : 'refresh'}
+                size={14}
+                className={
+                  status === 'loading' && operation === 'models' ? 'ol-loading-spinner' : undefined
+                }
+              />
+              {modelsUrl
+                ? t('settings.providers.viewModels')
+                : status === 'loading' && operation === 'models'
+                  ? t('settings.providers.loadingModels')
+                  : t('settings.providers.fetchModels')}
+            </button>
+          )}
+          {!modelsUrl && models.length > 0 && (
+            <SelectLite
+              value={selectedModel}
+              onChange={applyModel}
+              disabled={disabled || status === 'loading'}
+              options={models.map((model) => ({ value: model, label: model }))}
+              placeholder={t('settings.providers.selectModel')}
+              ariaLabel={t('settings.providers.selectModel')}
+              style={{ flex: 1, minWidth: 140, maxWidth: '100%', height: 34 }}
+            />
+          )}
+          <button
+            className="ol-channel-verify"
+            type="button"
+            onClick={validate}
+            style={{ ...miniBtnStyle, color: 'var(--ol-blue)', borderColor: 'var(--ol-blue)' }}
+            disabled={disabled || status === 'loading'}
+          >
+            <Icon
+              name={status === 'loading' && operation === 'validate' ? 'refresh' : 'play'}
+              size={13}
+              className={
+                status === 'loading' && operation === 'validate' ? 'ol-loading-spinner' : undefined
+              }
+            />
+            {status === 'loading' && operation === 'validate'
+              ? t('settings.channels.verifying')
+              : t('settings.channels.verify')}
+          </button>
+        </div>
+        <p className="ol-omni-tools-hint">{t('settings.channels.validationHintOmni')}</p>
+        {resultMessage}
+      </section>
+    );
+  }
 
   return (
     <>
@@ -1442,7 +1553,13 @@ function ProviderTools({
               style={miniBtnStyle}
               disabled={disabled || status === 'loading'}
             >
-              <Icon name={modelsUrl ? 'external' : 'refresh'} size={14} />
+              <Icon
+                name={modelsUrl ? 'external' : 'refresh'}
+                size={14}
+                className={
+                  status === 'loading' && operation === 'models' ? 'ol-loading-spinner' : undefined
+                }
+              />
               {modelsUrl
                 ? t('settings.providers.viewModels')
                 : status === 'loading' && operation === 'models'
@@ -1469,7 +1586,11 @@ function ProviderTools({
           <ChannelSectionHeading
             icon="bolt"
             title={t('settings.channels.validationTitle')}
-            description={t('settings.channels.validationHint')}
+            description={t(
+              kind === 'omni'
+                ? 'settings.channels.validationHintOmni'
+                : 'settings.channels.validationHint',
+            )}
           />
           <button
             className="ol-channel-verify"
@@ -1483,7 +1604,13 @@ function ProviderTools({
             }}
             disabled={disabled || status === 'loading'}
           >
-            <Icon name="play" size={13} />
+            <Icon
+              name={status === 'loading' && operation === 'validate' ? 'refresh' : 'play'}
+              size={13}
+              className={
+                status === 'loading' && operation === 'validate' ? 'ol-loading-spinner' : undefined
+              }
+            />
             {status === 'loading' && operation === 'validate'
               ? t('settings.channels.verifying')
               : t('settings.channels.verify')}
@@ -1529,7 +1656,8 @@ function providerErrorMessage(error: unknown, t: ReturnType<typeof useTranslatio
   if (message === 'volcengineAccessTokenMissing')
     return t('settings.providers.volcengineAccessTokenMissing');
   if (message === 'volcengineApiKeyMissing') return t('settings.providers.apiKeyMissing');
-  // 火山握手被拒/被限流的报错自带状态码与场景说明，原样透传比笼统的「操作失败」有用。
+  // Volcano handshake rejection/rate-limit errors carry a status code and scenario text;
+  // passing them through is more useful than a generic "operation failed".
   if (message.includes('凭据被拒') || message.includes('被限流')) return message;
   if (message.includes('API Key')) return t('settings.providers.apiKeyMissing');
   if (message.includes('Endpoint')) return t('settings.providers.endpointMissing');
@@ -1559,11 +1687,11 @@ interface CredentialFieldProps {
   defaultValue?: string;
   trailing?: ReactNode;
   onValueChange?: (value: string) => void;
-  /** 只在用户直接改变该字段时触发；初始化读取、复制和显隐不触发。 */
+  /** Fires only when the user directly edits the field; initial read, copy, and show/hide do not trigger it. */
   onUserMutation?: () => void;
-  /** 提供则渲染为下拉（预设选择）代替输入框；当前值不在预设里时附加为自定义项。 */
+  /** When provided, renders a dropdown (preset selection) instead of an input; appends the current value as a custom item if not in the presets. */
   options?: SelectOption[];
-  /** 地址预设与手填共用同一个字段及保存队列。 */
+  /** Endpoint presets and manual input share one field and one save queue. */
   endpointPresets?: { label: string; options: SelectOption[] };
 }
 
@@ -1584,14 +1712,15 @@ function CredentialField({
 }: CredentialFieldProps) {
   const fieldId = useId();
   const { t } = useTranslation();
-  // 宿主 ChannelModal 关闭/切换前收敛本字段未落盘的防抖写入（#1044 语义）。
+  // Let the host ChannelModal settle this field's pending debounced writes before close/switch (#1044 semantics).
   const form = useContext(ProviderFormContext);
   const [value, setValue] = useState('');
   const [revealed, setRevealed] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [status, setStatus] = useState<CredentialFieldStatus>('idle');
-  // 预设下拉的「自定义模型…」逃生口：选中后切回输入框，保证后端支持的任意模型名都能手输。
+  // The "Custom model…" escape hatch in the preset dropdown: selecting it switches back to an
+  // input so any model name the backend supports can be typed manually.
   const [customModelMode, setCustomModelMode] = useState(false);
   useEffect(() => {
     onBlockedChange?.(
@@ -1602,7 +1731,7 @@ function CredentialField({
       account,
       !loaded || dirty || status === 'saving' || status === 'readError' || status === 'saveError',
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- form?.track 与 onBlockedChange 同为稳定引用
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- form?.track and onBlockedChange are both stable refs
   }, [account, loaded, dirty, status, onBlockedChange]);
 
   const debounceRef = useRef<number | null>(null);
@@ -1612,10 +1741,10 @@ function CredentialField({
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const lastWriteOk = useRef(true);
   const flushRef = useRef<() => Promise<boolean>>(() => Promise.resolve(true));
-  // 离开前 flush：冲掉防抖里未发的编辑并等待在途写完成；返回 false 阻止关闭。
+  // Flush before leaving: push debounced edits not yet sent and await in-flight writes; returning false blocks the close.
   useEffect(
     () => form?.register(account, () => flushRef.current()),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- register 为稳定引用，account 变更即重挂
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- register is stable; account change remounts
     [account],
   );
   const markMutation = () => {
@@ -1662,9 +1791,9 @@ function CredentialField({
     };
   }, []);
 
-  // 改造：除 readError（持续错误，留在输入旁标识字段不可用）外，所有 saving / saved /
-  //   saveError / copied / copyError 一律发到右上角 SavedToast。原内联文案太挤、跟其它
-  //   页面 toast 风格不统一。
+  // Design: except readError (a persistent error that stays next to the input to mark the field
+  // unavailable), all saving / saved / saveError / copied / copyError states go to the top-right
+  // SavedToast. Inline text was too cramped and inconsistent with other pages' toast style.
   const showTemporaryStatus = (next: CredentialFieldStatus) => {
     if (next === 'saving') {
       emitSaved('saving', t('common.saving'));
@@ -1689,7 +1818,7 @@ function CredentialField({
     setStatus('saving');
     emitSaved('saving', t('common.saving'));
     try {
-      // 按编辑顺序写入，旧请求完成不能把新值标记为已保存。
+      // Write in edit order; an older request finishing must not mark the newer value as saved.
       const write = saveQueue.current
         .catch(() => undefined)
         .then(() => setCredential(account, v, provider));
@@ -1812,7 +1941,7 @@ function CredentialField({
               <SelectLite
                 value={value}
                 onChange={(v) => {
-                  // 「自定义模型…」逃生口：切回输入框手输任意模型名。
+                  // "Custom model…" escape hatch: switch back to the input to type any model name.
                   if (v === CUSTOM_MODEL_OPTION_VALUE) {
                     setCustomModelMode(true);
                     return;
@@ -1903,9 +2032,10 @@ function CredentialField({
             >
               <Icon name="copy" size={14} />
             </button>
-            {/* readError 是字段无法读取的持续错误，留在原位提示用户该字段不可用；
-              其它瞬态状态（saving / saved / saveError / copied / copyError）都通过
-              emitSaved 发到右上角统一 toast，不再内联占位。 */}
+            {/* readError is a persistent "field unreadable" error and stays in place to tell the
+              user the field is unavailable; other transient states (saving / saved / saveError /
+              copied / copyError) go through emitSaved to the unified top-right toast instead of
+              inline placeholders. */}
             {status === 'readError' && (
               <span
                 style={{
@@ -1968,22 +2098,17 @@ const iconBtnStyle: CSSProperties = {
     'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), transform 0.12s var(--ol-motion-quick)',
 };
 
-/**
- * 在「实验与扩展」启用多模态管线后，展示独立的 Omni 配置。
- * Omni 使用自己的凭据命名空间，不参与 ASR/LLM 渠道排序；传统渠道配置仍保留，
- * 切回传统管线后继续使用。
- */
+/** Compact configuration for the active multimodal pipeline. */
 export function OmniChannelSection() {
   const { t } = useTranslation();
-  const baseLayoutStack = useLayoutStack();
-  const conservative = useConservativeLayout();
-  const layoutStack = conservative || baseLayoutStack;
   const { prefs, updatePrefs } = useHotkeySettings();
   const [descriptors, setDescriptors] = useState<ProviderDescriptor[]>([]);
   const [omniProvider, setOmniProvider] = useState('custom');
   const [committedOmniProvider, setCommittedOmniProvider] = useState('custom');
   const omniSwitchSeqRef = useRef(0);
   const [omniModelRevision, setOmniModelRevision] = useState(0);
+  const formRef = useRef<HTMLDivElement>(null);
+  useContentMotion(formRef, committedOmniProvider);
 
   useEffect(() => {
     void listProviderDescriptors('omni')
@@ -2012,8 +2137,9 @@ export function OmniChannelSection() {
     setCommittedOmniProvider(omniId);
   }, [prefs, omniPresets]);
 
-  // 与 LLM 卡同语义：受控下拉立即反馈 + committed 控制 CredentialField remount
-  // + seq 守卫防 stale 覆盖，只是凭据落到 omni.* 槽。
+  // Same semantics as the LLM card: controlled dropdown gives immediate feedback + committed
+  // controls CredentialField remount + a seq guard prevents stale overwrites; only credentials
+  // land in omni.* slots.
   const onOmniProviderChange = async (id: string) => {
     setOmniProvider(id);
     const seq = ++omniSwitchSeqRef.current;
@@ -2029,8 +2155,8 @@ export function OmniChannelSection() {
         if (seq !== omniSwitchSeqRef.current) return;
       }
       const preset = omniPresets.find((p) => p.id === id);
-      // 切到非 custom 预设强制覆盖 endpoint/model 默认值（与 LLM 卡同语义），
-      // 保证「切换」真切到位，不残留旧厂商的槽值。
+      // Switching to a non-custom preset force-overwrites endpoint/model defaults (same as the
+      // LLM card), so the switch truly takes effect and no old vendor slot values linger.
       if (preset && preset.id !== 'custom') {
         if (preset.baseUrl) {
           await setCredential('omni.endpoint', preset.baseUrl);
@@ -2054,74 +2180,16 @@ export function OmniChannelSection() {
     }
   };
 
-  // 识别管线模式：切换只改偏好，不删除另一套凭据，切回即恢复；运行时只读当前模式。
-  const onPipelineModeChange = (mode: 'traditional' | 'multimodal') => {
-    if (!prefs) return;
-    void updatePrefs((current) => ({ ...current, pipelineMode: mode })).catch((error) => {
-      console.error('[settings] failed to update pipeline mode', error);
-      emitSaved('failed', t('common.operationFailed'));
-    });
-  };
-
-  if (prefs?.multimodalPipelineEnabled !== true) return null;
-  const multimodalMode = prefs?.pipelineMode === 'multimodal';
   const omniPreset = omniPresets.find((p) => p.id === committedOmniProvider);
 
   return (
-    <>
-      <div style={{ marginBottom: 12 }}>
-        <SettingRow
-          label={t('settings.providers.pipelineModeLabel')}
-          desc={t('settings.providers.pipelineModeHint')}
-        >
-          <div
-            style={{
-              display: 'flex',
-              gap: 6,
-              alignItems: 'center',
-              flexWrap: layoutStack ? 'wrap' : 'nowrap',
-            }}
-          >
-            <div style={segmentedTrackStyle}>
-              {(['traditional', 'multimodal'] as const).map((mode) => (
-                <button
-                  key={mode}
-                  onClick={() => onPipelineModeChange(mode)}
-                  style={{
-                    padding: '5px 12px',
-                    fontSize: 12,
-                    fontWeight: 500,
-                    border: 0,
-                    borderRadius: 6,
-                    fontFamily: 'inherit',
-                    background:
-                      prefs?.pipelineMode === mode
-                        ? 'var(--ol-segmented-active-bg)'
-                        : 'transparent',
-                    color: prefs?.pipelineMode === mode ? 'var(--ol-ink)' : 'var(--ol-ink-3)',
-                    boxShadow:
-                      prefs?.pipelineMode === mode ? 'var(--ol-segmented-active-shadow)' : 'none',
-                    cursor: 'default',
-                  }}
-                >
-                  {mode === 'traditional'
-                    ? t('settings.providers.pipelineModeTraditional')
-                    : t('settings.providers.pipelineModeMultimodal')}
-                </button>
-              ))}
-            </div>
-          </div>
-        </SettingRow>
-        <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', lineHeight: 1.5, paddingLeft: 2 }}>
-          {t('settings.providers.pipelineIsolationNotice')}
+    <Card className="ol-omni-settings" padding={16}>
+      <div ref={formRef}>
+        <div style={{ marginBottom: 4 }}>
+          <SectionTitle>{t('settings.providers.omniTitle')}</SectionTitle>
         </div>
-      </div>
-      {multimodalMode && (
-        <Card>
-          <div style={{ marginBottom: 10 }}>
-            <SectionTitle>{t('settings.providers.omniTitle')}</SectionTitle>
-          </div>
-          <SettingRow label={t('settings.providers.providerLabel')}>
+        <div className="ol-omni-primary-fields">
+          <ChannelFormRow label={t('settings.providers.providerLabel')}>
             <SelectLite
               value={omniProvider}
               onChange={(next) => onOmniProviderChange(next)}
@@ -2130,41 +2198,9 @@ export function OmniChannelSection() {
                 label: t(`settings.providers.presets.${p.nameKey}`),
               }))}
               ariaLabel={t('settings.providers.providerLabel')}
-              style={{ ...inputStyle, width: '100%', maxWidth: layoutStack ? '100%' : 200 }}
+              style={{ ...inputStyle, width: '100%', maxWidth: '100%', height: 38 }}
             />
-          </SettingRow>
-          <CredentialField
-            key={`${committedOmniProvider}:api_key`}
-            label={t('settings.providers.apiKeyLabel')}
-            account="omni.api_key"
-            mono
-            mask
-          />
-          <CredentialField
-            key={`${committedOmniProvider}:endpoint`}
-            label={t('settings.providers.baseUrlLabel')}
-            account="omni.endpoint"
-            placeholder={omniPreset?.baseUrl || 'https://your-endpoint/v1'}
-          />
-          {committedOmniProvider === 'custom' && (
-            <>
-              <CredentialField
-                key="omni:temperature"
-                label={t('settings.providers.temperatureLabel')}
-                account="omni.temperature"
-                placeholder={t('settings.providers.temperaturePlaceholder')}
-                mono
-              />
-              <CredentialField
-                key="omni:extra_headers"
-                label={t('settings.providers.extraHeadersLabel')}
-                account="omni.extra_headers"
-                placeholder={t('settings.providers.extraHeadersPlaceholder')}
-                mono
-                mask
-              />
-            </>
-          )}
+          </ChannelFormRow>
           <CredentialField
             key={`${committedOmniProvider}:model:${omniModelRevision}`}
             label={t('settings.providers.modelLabel')}
@@ -2172,14 +2208,47 @@ export function OmniChannelSection() {
             placeholder={omniPreset?.modelPlaceholder || 'model-name'}
             mono
           />
-          <ProviderTools
-            key={`omni:${committedOmniProvider}`}
-            kind="omni"
-            modelAccount="omni.model"
-            onModelSelected={() => setOmniModelRevision((v) => v + 1)}
-          />
-        </Card>
-      )}
-    </>
+        </div>
+        <CredentialField
+          key={`${committedOmniProvider}:api_key`}
+          label={t('settings.providers.apiKeyLabel')}
+          account="omni.api_key"
+          mono
+          mask
+        />
+        <CredentialField
+          key={`${committedOmniProvider}:endpoint`}
+          label={t('settings.providers.baseUrlLabel')}
+          account="omni.endpoint"
+          placeholder={omniPreset?.baseUrl || 'https://your-endpoint/v1'}
+        />
+        {committedOmniProvider === 'custom' && (
+          <div className="ol-omni-advanced-fields">
+            <CredentialField
+              key="omni:temperature"
+              label={t('settings.providers.temperatureLabel')}
+              account="omni.temperature"
+              placeholder={t('settings.providers.temperaturePlaceholder')}
+              mono
+            />
+            <CredentialField
+              key="omni:extra_headers"
+              label={t('settings.providers.extraHeadersLabel')}
+              account="omni.extra_headers"
+              placeholder={t('settings.providers.extraHeadersPlaceholder')}
+              mono
+              mask
+            />
+          </div>
+        )}
+        <ProviderTools
+          key={`omni:${committedOmniProvider}`}
+          kind="omni"
+          modelAccount="omni.model"
+          onModelSelected={() => setOmniModelRevision((v) => v + 1)}
+          compact
+        />
+      </div>
+    </Card>
   );
 }

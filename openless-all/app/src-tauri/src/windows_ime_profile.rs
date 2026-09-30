@@ -75,11 +75,12 @@ pub enum ProfileRestoreDecision {
     KeepCurrentProfile,
 }
 
-/// 判断快照是否就是 OpenLess 自己的 TSF 配置文件。
+/// Whether the snapshot is OpenLess's own TSF profile.
 ///
-/// 用于粘滞态防护：若上次会话恢复失败，OpenLess 仍是当前输入法，下一次
-/// `prepare_session` 会把 OpenLess 本身捕获为"原输入法"；此时应跳过恢复，
-/// 避免把 OpenLess 当原输入法写死（issue #852 的失败状态自粘）。
+/// Sticky-state protection: if the last session's restore failed and OpenLess is still the
+/// current IME, the next `prepare_session` would capture OpenLess itself as the "original
+/// IME"; restore must then be skipped, otherwise OpenLess gets persisted as the original
+/// IME (the self-sticky failure state of issue #852).
 pub fn is_openless_profile_snapshot(snapshot: &ImeProfileSnapshot) -> bool {
     matches!(snapshot.kind(), ImeProfileKind::TextService)
         && snapshot.lang_id() == OPENLESS_TSF_LANG_ID
@@ -92,10 +93,11 @@ pub fn is_openless_profile_snapshot(snapshot: &ImeProfileSnapshot) -> bool {
             == Some(OPENLESS_PROFILE_GUID_BRACED)
 }
 
-/// 测试专用：构造 OpenLess 自己的 TSF 快照。
+/// Test-only: build a TSF snapshot of OpenLess itself.
 ///
-/// 标识由生产常量派生（转小写以覆盖 GUID 归一化路径），避免测试字面量与
-/// 生产常量漂移——若常量变更，测试仍会跟随验证新值。
+/// Identifiers derive from the production constants (lowercased to exercise the GUID
+/// normalization path), so test literals cannot drift from production constants — if a
+/// constant changes, the test follows and validates the new value.
 #[cfg(test)]
 pub(crate) fn openless_snapshot_for_test() -> ImeProfileSnapshot {
     ImeProfileSnapshot::text_service(
@@ -114,17 +116,19 @@ fn normalize_guid_string(value: &str) -> String {
     }
 }
 
-/// 根据会话状态决定是否恢复原输入法。
+/// Decide whether to restore the original IME based on session state.
 ///
-/// - 会话确实激活过 OpenLess（`openless_was_activated`）→ 恢复；
-/// - 激活失败但捕获到了原快照（`openless_activation_failed`）→ 仍恢复，
-///   覆盖"激活半途而废"的残留状态；
-/// - 既没激活、也没有失败快照（未捕获到原输入法 / 非 Windows）→ 保持现状。
+/// - The session really activated OpenLess (`openless_was_activated`) → restore;
+/// - Activation failed but the original snapshot was captured (`openless_activation_failed`)
+///   → still restore, cleaning up a half-finished activation's leftover state;
+/// - Neither activated nor a failure snapshot (original IME never captured / non-Windows)
+///   → keep the current profile.
 ///
-/// 注意：这里**不再**接收 `is_openless_profile_active()` 的探测结果。该探测运行在
-/// OpenLess 自己进程的后台线程上，而 OpenLess IME 激活发生在目标 App 进程，
-/// `GetActiveProfile` 可能返回线程本地的默认配置，误判为"用户已切走"而跳过恢复
-/// （issue #852）。恢复决定只应依赖我们已知的激活事实。
+/// Note: this **no longer** takes the result of `is_openless_profile_active()`. That probe
+/// runs on a background thread of OpenLess's own process, while OpenLess IME activation
+/// happens in the target app's process; `GetActiveProfile` may return a thread-local default
+/// profile, misjudged as "the user already switched away" and skipping the restore
+/// (issue #852). The restore decision must rely only on activation facts we already know.
 pub fn restore_decision(
     saved: Option<&ImeProfileSnapshot>,
     openless_was_activated: bool,
@@ -196,20 +200,22 @@ pub fn is_openless_language_profile_enabled() -> WindowsImeProfileResult<bool> {
     ))
 }
 
-/// TSF IME 未装（或注册损坏）时「键盘列表可见性」偏好的短路结果。
+/// Short-circuit result for the "keyboard list visibility" preference when the TSF IME is not
+/// installed (or its registration is broken).
 ///
-/// 返回 `Some(result)` 表示无需触碰注册表即可结束；`None` 表示已安装，需要走真正的
-/// `EnableLanguageProfile` 变更。抽成纯函数，使「未安装」这一分支能在任意平台上被测试
-/// 覆盖到（`apply_windows_openless_keyboard_list` 依赖 Windows 注册表，macOS/CI
-/// 无法命中其内部分支）。
+/// Returning `Some(result)` ends the operation without touching the registry; `None` means the
+/// IME is installed and the real `EnableLanguageProfile` change must run. Pure function so the
+/// "not installed" branch is testable on any platform (`apply_windows_openless_keyboard_list`
+/// depends on the Windows registry; macOS/CI can't reach its internal branches).
 ///
-/// 关键语义：TSF IME 未安装时，键盘列表里根本没有 OpenLess 条目——
-/// - `desired == false`（不显示）是天然已满足的空操作；
-/// - `desired == true`（显示）也只能是 no-op（没东西可启用）。
+/// Key semantics: with the TSF IME not installed, the keyboard list has no OpenLess entry at all —
+/// - `desired == false` (hide) is already satisfied, a natural no-op;
+/// - `desired == true` (show) can only be a no-op too (nothing to enable).
 ///
-/// 两支都必须是 `Ok(())`。此前「不显示 + 未安装」错误地返回 `Err`，经 settings.rs 的
-/// 设置事务传播，导致整个设置保存回滚（用户在非 TSF 插入方式下
-/// 勾「不在键盘列表显示」且未装 TSF IME 时，之后任何设置都存不进）。
+/// Both branches must be `Ok(())`. Previously "hide + not installed" wrongly returned `Err`,
+/// which propagated through the settings.rs transaction and rolled back the whole settings
+/// save (with a non-TSF insertion method and the TSF IME not installed, checking "don't show
+/// in the keyboard list" made any later setting impossible to save).
 fn keyboard_list_pref_short_circuit(
     install_state: WindowsImeInstallState,
     _desired: bool,
@@ -221,7 +227,7 @@ fn keyboard_list_pref_short_circuit(
     }
 }
 
-/// 将 Core 已决定的键盘列表目标状态同步到当前用户的 TSF 语言配置文件。
+/// Sync the keyboard list target state already decided by Core into the current user's TSF language profile.
 pub fn apply_windows_openless_keyboard_list(desired: bool) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -300,8 +306,8 @@ impl WindowsImeProfileManager {
     }
 }
 
-/// 汇总 legacy 与现代两条恢复路径的结果：任一成功即视为整体成功，
-/// 两者都失败才算失败，并分别记录失败原因。
+/// Combine the legacy and modern restore paths' results: either succeeding counts as overall
+/// success; only both failing fails, with each failure reason logged.
 pub(super) fn report_restore_step_results(
     legacy_result: WindowsImeProfileResult<()>,
     modern_result: WindowsImeProfileResult<()>,
@@ -463,23 +469,26 @@ mod windows_impl {
     }
 
     pub fn restore_profile(snapshot: &ImeProfileSnapshot) -> WindowsImeProfileResult<()> {
-        // 必须与 activate_openless_profile 路径对称：激活同时调了 legacy
-        // ITfInputProcessorProfiles 的 ChangeCurrentLanguage + ActivateLanguageProfile，
-        // 单独调现代 ITfInputProcessorProfileMgr::ActivateProfile 不会更新 legacy
-        // current language / active profile 状态，OS 仍认 OpenLess 是当前输入法 →
-        // 用户的输入法切不回去。issue #469。
+        // Must stay symmetric with the activate_openless_profile path: activation calls both the
+        // legacy ITfInputProcessorProfiles ChangeCurrentLanguage + ActivateLanguageProfile and
+        // the modern ITfInputProcessorProfileMgr::ActivateProfile; calling only the modern one
+        // doesn't update the legacy current language / active profile state, so the OS still
+        // treats OpenLess as the current IME and the user's IME can't be switched back. issue #469.
         //
-        // #852 加固：legacy 与现代各自独立执行并分别记录结果，legacy 失败不再短路
-        // 现代调用（此前 legacy `?` 传播会让现代 ActivateProfile 根本不执行，恢复
-        // 整体失败）。任一成功即视为整体成功：legacy 成功 → OS 视觉层（语言指示器、
-        // 键盘事件路由）已切回；现代成功 → 会话级激活已切回。两者都失败才算失败。
+        // #852 hardening: legacy and modern run independently with results recorded separately;
+        // a legacy failure no longer short-circuits the modern call (a legacy `?` previously
+        // meant the modern ActivateProfile never ran and the whole restore failed). Either
+        // succeeding counts as success: legacy success → the OS visual layer (language
+        // indicator, keyboard event routing) switched back; modern success → session-level
+        // activation switched back. Only both failing fails.
         let lang_id = snapshot.lang_id();
 
-        // legacy 与现代共用同一组解析后的参数（TextService 为 CLSID + profile GUID，
-        // KeyboardLayout 为 HKL）。GUID 解析失败直接整体失败，与旧行为一致。
+        // legacy and modern share the same resolved arguments (TextService: CLSID + profile GUID;
+        // KeyboardLayout: HKL). GUID parse failure fails the whole restore, as before.
         let args = resolve_restore_args(snapshot)?;
 
-        // legacy 步骤：先切语言，TextService 再激活具体 profile（KeyboardLayout 无 profile）。
+        // legacy steps: switch the language first, then activate the specific profile for a
+        // TextService (KeyboardLayout has no profile).
         let legacy_result = with_input_processor_profiles(|profiles| unsafe {
             profiles.ChangeCurrentLanguage(lang_id)?;
             if args.profile_type == TF_PROFILETYPE_INPUTPROCESSOR {
@@ -500,7 +509,7 @@ mod windows_impl {
         report_restore_step_results(legacy_result, modern_result)
     }
 
-    /// 单次 restore 所需的解析后参数（legacy 与现代路径共用）。
+    /// Resolved arguments for a single restore (shared by the legacy and modern paths).
     struct RestoreArgs {
         profile_type: u32,
         clsid: GUID,
@@ -508,7 +517,7 @@ mod windows_impl {
         hkl: HKL,
     }
 
-    /// 解析 restore 参数：TextService 用 CLSID + profile GUID，KeyboardLayout 用 HKL。
+    /// Resolve restore arguments: TextService uses CLSID + profile GUID, KeyboardLayout uses HKL.
     fn resolve_restore_args(snapshot: &ImeProfileSnapshot) -> WindowsImeProfileResult<RestoreArgs> {
         match snapshot.kind() {
             ImeProfileKind::TextService => {
@@ -843,7 +852,7 @@ mod tests {
 
     #[test]
     fn openless_snapshot_detection_matches_exact_profile_identifiers() {
-        // 大小写与花括号不同的 GUID 也应被归一化后识别为 OpenLess（粘滞态防护）。
+        // GUIDs differing in case/braces must also be recognized as OpenLess after normalization (sticky-state protection).
         let openless = openless_snapshot_for_test();
         assert!(is_openless_profile_snapshot(&openless));
 
@@ -854,13 +863,14 @@ mod tests {
         assert!(!is_openless_profile_snapshot(&keyboard));
     }
 
-    // ── Fix: TSF IME 未安装时「键盘列表可见性」偏好不应报错 ──
-    // 之前 `desired == false`（不显示）+ 未安装错误地返回 Err，经 settings.rs 的
-    // apply_keyboard_list(&prefs)? 传播导致整个设置保存事务回滚。这是回归护栏。
+    // ── Fix: the "keyboard list visibility" preference must not error when the TSF IME is not installed ──
+    // "hide" (`desired == false`) + not installed previously returned Err, which propagated
+    // through settings.rs's apply_keyboard_list(&prefs)? and rolled back the whole settings save
+    // transaction. Regression guard.
 
     #[test]
     fn uninstalled_hide_request_is_noop_ok() {
-        // 用户想让 OpenLess 不出现在键盘列表，但 TSF IME 没装 → 天然已满足 → Ok(())。
+        // The user wants OpenLess hidden from the keyboard list but the TSF IME isn't installed → already satisfied → Ok(()).
         assert_eq!(
             keyboard_list_pref_short_circuit(WindowsImeInstallState::NotInstalled, false),
             Some(Ok(()))
@@ -869,7 +879,7 @@ mod tests {
 
     #[test]
     fn uninstalled_show_request_is_noop_ok() {
-        // 用户想显示但没装 → 只能 no-op（没东西可启用）→ Ok(())。
+        // The user wants it shown but it isn't installed → only a no-op is possible (nothing to enable) → Ok(()).
         assert_eq!(
             keyboard_list_pref_short_circuit(WindowsImeInstallState::NotInstalled, true),
             Some(Ok(()))
@@ -878,7 +888,7 @@ mod tests {
 
     #[test]
     fn broken_registration_short_circuits_ok_for_both_desired_values() {
-        // 注册损坏同样视为「列表里没有可信条目」→ 两支都短路成 Ok(())，绝不 Err。
+        // Broken registration also means "no trusted entry in the list" → both branches short-circuit to Ok(()), never Err.
         assert_eq!(
             keyboard_list_pref_short_circuit(WindowsImeInstallState::RegistrationBroken, false),
             Some(Ok(()))
@@ -899,7 +909,7 @@ mod tests {
 
     #[test]
     fn installed_state_proceeds_to_real_profile_mutation() {
-        // 已安装 → 不短路，交给真正的 EnableLanguageProfile 变更。
+        // Installed → no short-circuit; hand off to the real EnableLanguageProfile change.
         assert_eq!(
             keyboard_list_pref_short_circuit(WindowsImeInstallState::Installed, false),
             None

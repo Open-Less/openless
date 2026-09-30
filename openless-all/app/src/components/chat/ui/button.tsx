@@ -45,8 +45,9 @@ function Button({
   inert,
   ...props
 }: ButtonPrimitive.Props & VariantProps<typeof buttonVariants> & { inert?: boolean }) {
-  // React 18 兼容：@shadcn/react 按 React 19 传布尔 inert，React 18 会把 false
-  // 渲染成 inert="false"（HTML 中属性存在即生效）。归一成「有/无属性」。
+  // React 18 compat: @shadcn/react passes a boolean inert as React 19 does; React 18
+  // renders false as inert="false" (attribute presence is what counts in HTML).
+  // Normalize to attribute present/absent.
   const inertAttr = inert ? ({ inert: '' } as Record<string, unknown>) : undefined;
   return (
     <ButtonPrimitive

@@ -1,13 +1,13 @@
-//! 划词语音问答（QA）专用的全局快捷键监听器。
+//! Global hotkey listener dedicated to the selection-based voice QA flow.
 //!
 //! 与 `hotkey.rs`（modifier-only 听写热键）平行——QA 用的是组合键
 //! `Cmd+Shift+;` / `Ctrl+Shift+;`，所以走 `global-hotkey` crate（macOS 内部
 //! 用 Carbon `RegisterEventHotKey`，Windows 用 `RegisterHotKey`）。
 //!
-//! 仅产出 `QaHotkeyEvent::Pressed` 边沿事件；toggle / 录音生命周期由
-//! coordinator 解释（第一次按 → 开始问答；第二次按 → 结束）。
+//! Produces only `QaHotkeyEvent::Pressed` edge events; the toggle / recording lifecycle is
+//! interpreted by the coordinator (first press -> start QA; second press -> end).
 //!
-//! 通过 `global_hotkey_runtime` 共享进程级 manager / event receiver。
+//! Shares the process-wide manager / event receiver via `global_hotkey_runtime`.
 
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
@@ -21,7 +21,7 @@ use crate::types::ShortcutBinding;
 
 #[derive(Debug, Clone, Copy)]
 pub enum QaHotkeyEvent {
-    /// 用户按下了配置的 QA 组合键（toggle 模式：第一次开始，第二次结束）。
+    /// The user pressed the configured QA chord (toggle mode: first press starts, second ends).
     Pressed,
 }
 
@@ -37,35 +37,39 @@ pub enum QaHotkeyError {
     ManagerInitFailed(String),
 }
 
-/// QA 全局快捷键监听器。`Drop` 时反注册。
+/// QA global hotkey listener. Unregisters on `Drop`.
 ///
-/// 内部用 `global-hotkey` crate；事件转发线程持有一个共享的 `Sender`。
+/// Uses the `global-hotkey` crate internally; the forwarding thread holds a shared `Sender`.
 pub struct QaHotkeyMonitor {
     inner: Arc<Inner>,
 }
 
 struct Inner {
-    /// 当前注册的 hotkey 句柄；用于 unregister。
+    /// Handle of the currently registered hotkey; used to unregister.
     registered: Mutex<Option<RegisteredHotkey>>,
     tx: Sender<QaHotkeyEvent>,
 }
 
-// global-hotkey 0.6 的 GlobalHotKeyManager 在 Windows 内部持有 HHOOK / window
-// handle 等 `*mut c_void`，crate 没标 Send/Sync。但这些句柄实际是 OS 进程级
-// 资源，跨线程读写是 OS 自己同步的；coordinator.rs 又需要把 `Arc<Inner>`（间接含
-// QaHotkeyMonitor）放进 async_runtime::spawn 里，强制要求 Send。手动标记。
-// macOS 上 GlobalHotKeyManager 内部用 Carbon EventHotKey，同理。
-// 与 hotkey.rs::CallbackContext 已有的 unsafe impl Send/Sync 同款做法。
+// global-hotkey 0.6's GlobalHotKeyManager internally holds HHOOK / window handles and other
+// `*mut c_void` on Windows, and the crate does not mark it Send/Sync. These handles are OS
+// process-level resources whose cross-thread access the OS itself synchronizes; coordinator.rs
+// needs to put `Arc<Inner>` (indirectly holding QaHotkeyMonitor) into async_runtime::spawn,
+// which requires Send. Mark manually. The same applies to GlobalHotKeyManager on macOS, which
+// uses Carbon EventHotKey internally.
+// Same approach as the existing unsafe impl Send/Sync for hotkey.rs::CallbackContext.
 unsafe impl Send for Inner {}
 unsafe impl Sync for Inner {}
 
 impl QaHotkeyMonitor {
-    /// 启动监听并注册一个 hotkey。`tx` 在每次按下边沿收到 `QaHotkeyEvent::Pressed`。
+    /// Start listening and register one hotkey. `tx` receives `QaHotkeyEvent::Pressed` on each
+    /// press edge.
     ///
-    /// **注意**：`global-hotkey` crate 在 macOS 要求 manager 在主线程构造。
-    /// 调用方需要确保从主线程触发（coordinator 的 supervisor 线程会通过
-    /// `AppHandle::run_on_main_thread` 跳到主线程后再 spawn 这个 monitor）。
-    /// 本函数不强制断言主线程——单元 / 集成测试也跑不到 manager 创建那一行。
+    /// **Note**: the `global-hotkey` crate requires the manager to be constructed on the main
+    /// thread on macOS. The caller must ensure the call is initiated from the main thread (the
+    /// coordinator's supervisor thread hops to the main thread via
+    /// `AppHandle::run_on_main_thread` before spawning this monitor).
+    /// This function does not assert the main thread — unit / integration tests never reach the
+    /// manager creation line either.
     pub fn start(
         binding: ShortcutBinding,
         tx: Sender<QaHotkeyEvent>,
@@ -78,8 +82,9 @@ impl QaHotkeyMonitor {
             .register(hotkey)
             .map_err(|e| QaHotkeyError::RegisterFailed(e.to_string()))?;
 
-        // 启动转发线程：runtime 已按 hotkey id 分发；这里保留 id 检查作为防线，
-        // 避免未来误接回进程级事件流后串到其他快捷键。
+        // Start the forwarding thread: the runtime already dispatches by hotkey id; the id
+        // check stays as a defensive line so a future accidental re-connection to the
+        // process-wide event stream cannot leak into other shortcuts.
         let hotkey_id = registered.hotkey().id();
         let tx_for_thread = tx.clone();
         std::thread::Builder::new()
@@ -95,7 +100,7 @@ impl QaHotkeyMonitor {
         })
     }
 
-    /// 替换当前注册的 hotkey（用户在设置里改了组合键时）。
+    /// Replace the currently registered hotkey (when the user changes the chord in settings).
     pub fn update_binding(&self, binding: ShortcutBinding) -> Result<(), QaHotkeyError> {
         let next = parse_binding(&binding)?;
         let mut current = self.inner.registered.lock();

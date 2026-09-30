@@ -1,9 +1,10 @@
-// 服务 → 扩展市场：通过 GitHub 登录获取上传 / 点赞身份。
-// 浏览与安装风格在「风格」页内完成，设置页只管登录身份。
+// Services → extension marketplace: GitHub sign-in provides the upload/like identity.
+// Browsing and installing styles happens on the "styles" page; the settings page only
+// manages the sign-in identity.
 //
-// 登录走共用的 <GithubLoginModal />（GitHub OAuth Device Flow），与风格市场
-// 完全一致 —— 点登录弹出统一登录窗口，授权成功后 token 由
-// Rust CredentialsVault 保管，prefs.marketplaceDevLogin 只作展示。
+// Sign-in uses the shared <GithubLoginModal /> (GitHub OAuth Device Flow), identical to the
+// style marketplace — clicking sign-in opens the unified login window, and once authorized
+// the token is kept by the Rust CredentialsVault; prefs.marketplaceDevLogin is display-only.
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -65,7 +66,7 @@ export function MarketplaceSection() {
       <SectionTitle>{t('settings.marketplace.title')}</SectionTitle>
 
       {signedIn ? (
-        /* ── 已登录 ──────────────────────────────────────────────── */
+        /* ── Signed in ──────────────────────────────────────────────── */
         <div
           style={{
             display: 'flex',
@@ -114,7 +115,7 @@ export function MarketplaceSection() {
           </Btn>
         </div>
       ) : (
-        /* ── 未登录 ──────────────────────────────────────────────── */
+        /* ── Not signed in ──────────────────────────────────────────── */
         <div>
           <Btn variant="primary" size="sm" icon="user" onClick={() => setShowLogin(true)}>
             {t('settings.marketplace.github.signIn')}

@@ -1,6 +1,7 @@
-// 高级 → Beta 渠道。Toggle 控制后台 AutoUpdateGate 跟随 stable/beta；
-// 「检查 Beta 更新」按钮始终可用，与 Toggle 状态无关。
-// 关于页的「检查正式版更新」固定查 stable，两者互不影响。
+// Advanced → Beta channel. The Toggle controls whether the background AutoUpdateGate
+// follows stable/beta; the "check for Beta updates" button always works regardless of the
+// Toggle state. The About page's "check for stable updates" always checks stable — the two
+// don't interfere with each other.
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';

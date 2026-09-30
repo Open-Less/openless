@@ -1,49 +1,50 @@
 import { invokeOrMock } from './shared';
 import type { LessComputerSyncResult, LessComputerVoiceMode } from '../types';
 
-/** 用户点 ✕ / 按 Esc 关闭 Less Computer 浮窗（隐藏窗口）。 */
+/** The user clicks ✕ / presses Esc to close the Less Computer overlay (hides the window). */
 export function lessComputerWindowDismiss(): Promise<void> {
   return invokeOrMock('less_computer_window_dismiss', undefined, () => undefined);
 }
 
-/** 从主设置页打开文字交互浮窗，无需先触发麦克风或全局快捷键。 */
+/** Opens the text-interaction overlay from the main settings page, without first triggering the mic or a global hotkey. */
 export function lessComputerWindowOpen(): Promise<void> {
   return invokeOrMock('less_computer_window_open', undefined, () => undefined);
 }
 
-/** 内联审批卡的 Approve / Deny 回执。token 关联到等待中的拦截动作。 */
+/** Approve / Deny receipt of the inline approval card. The token maps to a blocked action awaiting review. */
 export function lessComputerApprove(token: string, approved: boolean): Promise<void> {
   return invokeOrMock('less_computer_approve', { token, approved }, () => undefined);
 }
 
-/** 浮窗打字输入：文字指令直接进入 Less Computer 执行链（与语音同护栏/审批/连续会话）。 */
+/** Typed input in the overlay: text commands enter the Less Computer execution chain directly (same guardrails / approvals / continued sessions as voice). */
 export function lessComputerSubmitText(text: string): Promise<void> {
   return invokeOrMock('less_computer_submit_text', { text }, () => undefined);
 }
 
-/** 面板内开麦。dictate：转写只填进输入框；submit：说完直接交给 Agent（与快捷键一致）。
- *  启动失败（麦克风权限、其它语音会话占用）以 reject 返回，面板内联提示。 */
+/** Start the mic from the panel. dictate: the transcript only fills the input box; submit: handed straight
+ *  to the agent after speech (same as the hotkey). Startup failure (mic permission, another voice session
+ *  in progress) rejects, shown inline in the panel. */
 export function lessComputerVoiceStart(mode: LessComputerVoiceMode): Promise<void> {
   return invokeOrMock('less_computer_voice_start', { mode }, () => undefined);
 }
 
-/** 只结束指定录音并按其 mode 收尾；迟到请求不会停止后来开始的会话。 */
+/** Ends only the specified recording and finalizes per its mode; a late request never stops a session started later. */
 export function lessComputerVoiceStop(sessionId: string): Promise<void> {
   return invokeOrMock('less_computer_voice_stop', { sessionId }, () => undefined);
 }
 
-/** 只取消指定录音会话，不会波及其它会话或已在运行的任务。 */
+/** Cancels only the specified recording session; other sessions and running tasks are untouched. */
 export function lessComputerVoiceCancel(sessionId: string): Promise<void> {
   return invokeOrMock('less_computer_voice_cancel', { sessionId }, () => undefined);
 }
 
-/** 停止正在运行的 Agent 任务。 */
+/** Stops the running agent task. */
 export function lessComputerTaskCancel(): Promise<void> {
   return invokeOrMock('less_computer_task_cancel', undefined, () => undefined);
 }
 
-/** 浮窗 mount 时拉取当前会话的事件缓冲（seq 升序），重放 webview 冷加载期间
- *  丢掉的事件（尤其首条 user —— 用户说的话）。 */
+/** On overlay mount, fetches the current session's event buffer (seq ascending) to replay events lost
+ *  during webview cold load (especially the first user message — what the user said). */
 export function lessComputerSync(afterSequence: number): Promise<LessComputerSyncResult> {
   return invokeOrMock('less_computer_sync', { afterSequence }, () => ({
     events: [],

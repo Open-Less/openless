@@ -1,7 +1,9 @@
 //! Tauri IPC 命令入口，按设置、凭据、历史等领域拆分子模块。
 //!
-//! 子模块的命令及宏生成的伴生项通过 glob 重导出，供 `lib.rs` 的
-//! `generate_handler!` 以 `commands::<name>` 注册。平台条件须与注册清单保持一致。
+//! Submodule commands and their macro-generated companions are glob
+//! re-exported for registration by `lib.rs`'s `generate_handler!` as
+//! `commands::<name>`. Platform conditions must stay consistent with the
+//! registration list.
 
 use std::sync::Arc;
 
@@ -11,7 +13,7 @@ use parking_lot::Mutex;
 use tauri::Manager;
 use tauri::State;
 
-// 子模块通过 use super::* 使用共享的 Host 状态、DTO 和依赖类型。
+// Submodules access the shared Host state, DTOs, and dependency types via use super::*.
 pub(crate) use serde::Serialize;
 pub(crate) use serde_json::Value;
 pub(crate) use tauri::{AppHandle, Emitter, Window};
@@ -105,7 +107,8 @@ pub use selection_polish_preview::*;
 pub use selection_voice::*;
 pub use settings::*;
 #[cfg(not(mobile))]
-// Sherpa 命令只在 Windows 注册；其他桌面目标保留空重导出。
+// Sherpa commands are registered on Windows only; other desktop targets keep
+// an empty re-export.
 #[allow(unused_imports)]
 pub use sherpa_asr::*;
 pub use style_packs::*;
@@ -139,10 +142,12 @@ impl AudioConsumer for LevelProbeConsumer {
     fn consume_pcm_chunk(&self, _pcm: &[u8]) {}
 }
 
-// ─────────────────────────── 跨域共享校验 helper ───────────────────────────
+// ─────────────────────────── shared cross-domain validation helpers ───────────────────────────
 
-/// UUID-v4 字面校验：36 字符 + 5 段 `-` 分隔（8-4-4-4-12）+ 仅 ASCII 十六进制。
-/// 用于 install/detail/like —— pack_id 来自远端服务器，必须是它发的 UUID。
+/// UUID-v4 literal validation: 36 chars + 4 `-` separators (8-4-4-4-12) +
+/// ASCII hex only.
+/// Used by install/detail/like — pack_id comes from the remote server and must
+/// be a UUID it issued.
 pub(crate) fn is_valid_session_id(s: &str) -> bool {
     if s.len() != 36 {
         return false;
@@ -161,9 +166,11 @@ pub(crate) fn is_valid_session_id(s: &str) -> bool {
     true
 }
 
-/// 本地 style pack id 白名单：`[A-Za-z0-9._-]`、长度 1..=128。
-/// 上传走本地 id（`builtin.light` / 用户自取 slug / UUID 都可），不是远端 UUID。
-/// 仍阻断 `..` / `/` / `\` / 控制字符，避免 path traversal 进临时 zip 文件名。
+/// Local style pack id whitelist: `[A-Za-z0-9._-]`, length 1..=128.
+/// Uploads use local ids (`builtin.light` / a user-chosen slug / a UUID are
+/// all fine), not remote UUIDs.
+/// Still blocks `..` / `/` / `\` / control characters to keep path traversal
+/// out of temp zip file names.
 pub(crate) fn is_valid_local_pack_id(s: &str) -> bool {
     if s.is_empty() || s.len() > 128 {
         return false;
@@ -172,7 +179,7 @@ pub(crate) fn is_valid_local_pack_id(s: &str) -> bool {
         .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_')
 }
 
-// ─── 在系统文件管理器中打开路径（三个 ASR 模块共用，cfg 分平台）───
+// ─── Open a path in the system file manager (shared by the three ASR modules, cfg per platform) ───
 
 #[cfg(target_os = "windows")]
 pub(crate) fn open_path_in_file_manager(path: &std::path::Path) -> Result<(), String> {
@@ -252,12 +259,13 @@ mod tests {
             volcengine_app_key: Some("app".into()),
             volcengine_access_key: Some("access".into()),
             volcengine_resource_id: Some("resource".into()),
-            volcengine_auth_mode: None, // 默认 AppIdToken 模式
+            volcengine_auth_mode: None, // defaults to AppIdToken mode
             ..snapshot()
         };
         assert!(asr_configured_for_provider("volcengine", &volcengine));
 
-        // AppIdToken 模式缺 access_key → 未配置（即使 app_key / resource_id 已填）。
+        // AppIdToken mode without access_key -> unconfigured (even with
+        // app_key / resource_id filled).
         let volcengine_no_access = CredentialsSnapshot {
             volcengine_app_key: Some("app".into()),
             volcengine_resource_id: Some("resource".into()),
@@ -268,7 +276,8 @@ mod tests {
             &volcengine_no_access
         ));
 
-        // ApiKey 模式：只需独立 api_key 槽 + resource_id，无需 app_key。
+        // ApiKey mode: only the standalone api_key slot + resource_id are
+        // needed, no app_key.
         let volcengine_api_key = CredentialsSnapshot {
             volcengine_api_key: Some("key".into()),
             volcengine_resource_id: Some("resource".into()),
@@ -279,7 +288,8 @@ mod tests {
             "volcengine",
             &volcengine_api_key
         ));
-        // ApiKey 模式缺 api_key（旧 access_key 槽有值也不满足）→ 未配置。
+        // ApiKey mode missing api_key (even with the old access_key slot set) ->
+        // unconfigured.
         let volcengine_api_key_missing = CredentialsSnapshot {
             volcengine_access_key: Some("old-access-token".into()),
             volcengine_resource_id: Some("resource".into()),
@@ -295,8 +305,9 @@ mod tests {
             asr_api_key: Some("key".into()),
             ..snapshot()
         };
-        // endpoint/model 默认值现在来自 Core descriptor，因此公共 Whisper 渠道只要具备
-        // 必需的 key 就已经完成配置。
+        // endpoint/model defaults now come from the Core descriptor, so the
+        // public Whisper channel counts as configured with just the required
+        // key.
         assert!(asr_configured_for_provider("whisper", &whisper_key_only));
         assert!(asr_configured_for_provider(
             crate::asr::bailian::PROVIDER_ID,
@@ -308,8 +319,8 @@ mod tests {
             asr_model: Some("whisper-1".into()),
             ..snapshot()
         };
-        // 显式 endpoint/model 不能免除公共 Whisper provider 的 key；只有
-        // `openai-compatible` 允许可选鉴权。
+        // An explicit endpoint/model does not waive the public Whisper
+        // provider's key; only `openai-compatible` allows optional auth.
         assert!(!asr_configured_for_provider(
             "whisper",
             &whisper_keyless_ready
@@ -792,8 +803,9 @@ mod tests {
 
     #[test]
     fn parse_latest_beta_from_atom_picks_first_beta_tagged_entry() {
-        // Fixture trimmed from real `releases.atom`：包含一条 stable + 一条 Beta。
-        // 解析必须跳过 stable（tag 不以 -beta-tauri 结尾），返回 Beta。
+        // Fixture trimmed from a real `releases.atom`: one stable + one Beta
+        // entry. Parsing must skip the stable entry (tag not ending in
+        // -beta-tauri) and return the Beta.
         let body = r#"<?xml version="1.0"?>
 <feed>
   <entry>
@@ -882,7 +894,8 @@ mod tests {
 
     #[test]
     fn is_valid_session_id_accepts_canonical_uuid_v4() {
-        // canonical UUID-v4 字面：8-4-4-4-12，全小写、全大写、混合都接受。
+        // Canonical UUID-v4 literal: 8-4-4-4-12; lowercase, uppercase, and
+        // mixed all accepted.
         assert!(is_valid_session_id("550e8400-e29b-41d4-a716-446655440000"));
         assert!(is_valid_session_id("550E8400-E29B-41D4-A716-446655440000"));
         assert!(is_valid_session_id("Abc12345-6789-abcd-EF01-234567890abc"));
@@ -893,21 +906,22 @@ mod tests {
         assert!(!is_valid_session_id(""));
         assert!(!is_valid_session_id("../../etc/passwd"));
         assert!(!is_valid_session_id("..\\..\\windows\\system32"));
-        // 长度对但含 `/`：dash 位置错或非 hex 字符都不通过
+        // Right length but contains `/`: wrong dash positions or non-hex chars
+        // are both rejected
         assert!(!is_valid_session_id("550e8400-e29b-41d4-a716-44665544/000"));
-        assert!(!is_valid_session_id("550e8400_e29b_41d4_a716_446655440000")); // 用 _ 代 -
-                                                                               // 非 hex 字符
+        assert!(!is_valid_session_id("550e8400_e29b_41d4_a716_446655440000")); // uses _ for -
+                                                                               // non-hex char
         assert!(!is_valid_session_id("550e8400-e29b-41d4-a716-44665544000g"));
-        // 长度不对（35 / 37）
+        // Wrong length (35 / 37)
         assert!(!is_valid_session_id("550e8400-e29b-41d4-a716-44665544000"));
         assert!(!is_valid_session_id(
             "550e8400-e29b-41d4-a716-4466554400000"
         ));
-        // NUL 字节
+        // NUL byte
         assert!(!is_valid_session_id(
             "550e8400-e29b-41d4-a716-44665544\x00000"
         ));
-        // 百分号编码与绝对路径
+        // Percent-encoding and absolute paths
         assert!(!is_valid_session_id("%2e%2e/recordings/x"));
         assert!(!is_valid_session_id("/Users/attacker/secret.wav"));
     }

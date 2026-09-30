@@ -1,10 +1,10 @@
-// localAsr.ts — IPC + 事件类型 for 本地 ASR 引擎与模型管理。
+// localAsr.ts — IPC + event types for the local ASR engines and model management.
 //
-// 后端命令定义：openless-all/app/src-tauri/src/commands.rs `local_asr_*`
-// 事件：local-asr-download-progress / local-asr-token
+// Backend command definitions: openless-all/app/src-tauri/src/commands.rs `local_asr_*`
+// Events: local-asr-download-progress / local-asr-token
 //
-// 注意：模型文件清单与尺寸不在此处硬编码 —— 通过
-// `fetchLocalAsrRemoteInfo()` 实时从所选模型源拉取。
+// Note: the model file list and sizes are not hardcoded here — they are fetched live from
+// the selected model source via `fetchLocalAsrRemoteInfo()`.
 
 import { invokeOrMock } from './ipc';
 import type { OS } from '../components/WindowChrome';
@@ -303,7 +303,7 @@ export function fetchLocalAsrRemoteInfo(
   }));
 }
 
-/** HF 模型卡片：下载量 / 收藏 / 简介（下载弹窗右侧展示）。 */
+/** HF model card: downloads / likes / description (shown on the right of the download modal). */
 export interface HfModelCard {
   modelId: string;
   mirror: string;
@@ -334,7 +334,7 @@ export function deleteLocalAsrModel(modelId: string): Promise<void> {
   return invokeOrMock('local_asr_delete_model', { modelId }, () => undefined);
 }
 
-/** 清理中断下载遗留的 staging 目录，不触碰已安装模型。 */
+/** Cleans up staging directories left by interrupted downloads; installed models are untouched. */
 export function cleanupIncompleteLocalAsrModel(modelId: string): Promise<void> {
   return invokeOrMock('local_asr_cleanup_incomplete', { modelId }, () => undefined);
 }
@@ -373,7 +373,7 @@ export function testLocalAsrModel(modelId: string): Promise<LocalAsrTestResult> 
   }));
 }
 
-/** 验证设置页中的本地渠道，不改变全局当前渠道。 */
+/** Validates a local channel from the settings page without changing the globally active channel. */
 export function testLocalAsrChannel(channelId: string): Promise<LocalAsrTestResult> {
   return invokeOrMock('local_asr_test_channel', { channelId }, () => ({
     backend: 'mock',

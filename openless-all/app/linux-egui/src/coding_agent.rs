@@ -1,4 +1,4 @@
-//! Linux Coding Agent Adapter：只负责临时文件与子进程 I/O。
+//! Linux Coding Agent Adapter: owns only temp files and subprocess I/O.
 
 use std::path::PathBuf;
 use std::process::Stdio;

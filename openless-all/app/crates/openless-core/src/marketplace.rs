@@ -85,7 +85,10 @@ impl MarketplaceConfig {
     }
 
     /// Opt in after the host provides the controlled credential and UI bridges.
-    pub fn with_encrypted_sync(mut self, config: crate::cloud_sync_e2ee::EncryptedSyncConfig) -> Self {
+    pub fn with_encrypted_sync(
+        mut self,
+        config: crate::cloud_sync_e2ee::EncryptedSyncConfig,
+    ) -> Self {
         self.encrypted_sync_config = Some(config);
         self
     }
@@ -462,8 +465,8 @@ impl MarketplaceService {
     pub(crate) async fn sync_identity(
         &self,
     ) -> Result<(SecretValue, crate::cloud_sync_e2ee_protocol::types::Account), BackendError> {
-        use futures_util::StreamExt;
         use crate::cloud_sync_e2ee_protocol::types::{Account, GithubId};
+        use futures_util::StreamExt;
         let token = self.read_access_token().await?;
         let response = crate::net::credential_http_for_url(self.config.github_user_url.as_str())
             .get(self.config.github_user_url.clone())
@@ -471,7 +474,9 @@ impl MarketplaceService {
             .header("User-Agent", "OpenLess-encrypted-sync")
             .timeout(Duration::from_secs(15))
             .bearer_auth(token.expose_secret())
-            .send().await.map_err(|_| Self::authentication_required())?;
+            .send()
+            .await
+            .map_err(|_| Self::authentication_required())?;
         if !response.status().is_success() {
             return Err(Self::authentication_required());
         }
@@ -485,13 +490,27 @@ impl MarketplaceService {
             bytes.extend_from_slice(&chunk);
         }
         #[derive(serde::Deserialize)]
-        struct User { id: u64, login: String }
-        let user: User = serde_json::from_slice(&bytes).map_err(|_| Self::authentication_required())?;
-        if user.login.is_empty() || user.login.len() > 128 || self.read_access_token().await? != token {
+        struct User {
+            id: u64,
+            login: String,
+        }
+        let user: User =
+            serde_json::from_slice(&bytes).map_err(|_| Self::authentication_required())?;
+        if user.login.is_empty()
+            || user.login.len() > 128
+            || self.read_access_token().await? != token
+        {
             return Err(Self::authentication_required());
         }
-        let github_id = GithubId::parse(&user.id.to_string()).map_err(|_| Self::authentication_required())?;
-        Ok((token, Account { github_id, login: user.login }))
+        let github_id =
+            GithubId::parse(&user.id.to_string()).map_err(|_| Self::authentication_required())?;
+        Ok((
+            token,
+            Account {
+                github_id,
+                login: user.login,
+            },
+        ))
     }
 
     async fn clear_authentication(&self) -> Result<(), BackendError> {

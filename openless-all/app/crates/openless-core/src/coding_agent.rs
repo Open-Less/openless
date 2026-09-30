@@ -1,7 +1,10 @@
-//! Coding Agent 的跨宿主请求类型、参数归一化和纯业务规则。
+//! Cross-host Coding Agent request types, parameter normalization, and pure
+//! business rules.
 //!
-//! 进程创建、文件 I/O 和事件转发属于宿主 Adapter；本模块统一命令、护栏、临时文件计划、
-//! PATH 规则和协议解析，避免 Tauri 与 Linux 各维护一份业务语义。
+//! Process creation, file I/O, and event forwarding belong to the host
+//! Adapter; this module unifies commands, guardrails, temporary-file plans,
+//! PATH rules, and protocol parsing so Tauri and Linux don't each maintain
+//! their own business semantics.
 
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::{OsStr, OsString};
@@ -16,7 +19,7 @@ use crate::coding_agent_guard::{deny_rule_for_pattern, HIGH_RISK_PATTERNS};
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::events::{BackendEventKind, BackendEventPublisher, CodingAgentStreamEvent};
 
-/// Coding Agent provider，对应持久化偏好中的稳定字符串。
+/// Coding Agent provider; matches the stable string in persisted preferences.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CodingAgentProvider {
     #[serde(rename = "claude-code-cli")]
@@ -69,7 +72,7 @@ impl CodingAgentProvider {
     }
 }
 
-/// 按 provider 解析用户配置的模型。
+/// Resolves the user-configured model per provider.
 pub fn resolve_coding_agent_model(
     provider: CodingAgentProvider,
     configured: Option<String>,
@@ -85,7 +88,7 @@ pub fn resolve_coding_agent_model(
     }
 }
 
-/// Coding Agent 权限模式。
+/// Coding Agent permission mode.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CodingAgentPermissionMode {
@@ -162,12 +165,12 @@ pub fn normalize_coding_agent_workdir(
     Ok(Some(path))
 }
 
-/// 一次无头 Coding Agent 运行的归一化请求。
+/// Normalized request for one headless Coding Agent run.
 #[derive(Debug, Clone)]
 pub struct CodingAgentRequest {
     pub session_id: String,
     pub provider: CodingAgentProvider,
-    /// prompt 只能走 stdin/专用输入，不得放入 argv。
+    /// The prompt only travels via stdin/dedicated input; never argv.
     pub prompt: String,
     pub cwd: Option<PathBuf>,
     pub model: Option<String>,
@@ -257,14 +260,14 @@ pub struct AgentTemporaryFile {
     pub contents: Vec<u8>,
 }
 
-/// 一项已经过 Core 校验与 token 展开的临时文件写入 effect。
+/// One temporary-file write effect, already validated and token-expanded by the Core.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentMaterializedFile {
     pub path: PathBuf,
     pub contents: Vec<u8>,
 }
 
-/// Core 生成的临时文件写入与 argv 替换计划；宿主只执行这些文件 effect。
+/// Core-produced temporary-file write and argv replacement plan; hosts only execute these file effects.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentMaterializationPlan {
     pub argv: Vec<String>,
@@ -272,7 +275,7 @@ pub struct AgentMaterializationPlan {
 }
 
 impl AgentMaterializationPlan {
-    /// 在宿主选定的隔离目录内验证文件名并展开所有临时路径 token。
+    /// Validates file names and expands all temporary path tokens inside the host-chosen isolated directory.
     pub fn new(command: &AgentCommand, directory: &Path) -> Result<Self, BackendError> {
         let mut paths = BTreeMap::new();
         for file in &command.temporary_files {
@@ -328,10 +331,10 @@ impl AgentMaterializationPlan {
     }
 }
 
-/// 登录 shell 输出中标记可信 PATH 起点的固定哨兵。
+/// Fixed sentinel marking the start of the trusted PATH in login-shell output.
 pub const AGENT_PATH_SENTINEL: &str = "__OPENLESS_PATH__";
 
-/// GUI 宿主获取登录 shell PATH 时应依次执行的纯计划。
+/// Pure plan of the commands a GUI host should run, in order, to get the login-shell PATH.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentLoginShellPathPlan {
     pub shell: String,
@@ -366,7 +369,7 @@ pub fn parse_agent_login_shell_path(output: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// 按登录 shell、静态 fallback、现有环境的优先级保序合并 PATH。
+/// Order-preserving PATH merge by priority: login shell, static fallback, existing environment.
 pub fn merge_agent_path(
     current: &OsStr,
     home: Option<&Path>,
@@ -474,7 +477,7 @@ pub fn autonomous_prompt(task: &str) -> String {
 const CLAUDE_ALLOWED_TOOLS: [&str; 7] =
     ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "WebSearch"];
 
-/// 构造 Claude Code 无头流式参数；不含可执行文件和 prompt。
+/// Builds Claude Code headless streaming args; excludes the executable and prompt.
 pub fn build_claude_args(request: &CodingAgentRequest) -> Vec<String> {
     let mut args = vec![
         "-p".into(),
@@ -521,7 +524,7 @@ pub fn build_claude_args(request: &CodingAgentRequest) -> Vec<String> {
     args
 }
 
-/// Codex 的沙箱模式。权限只能收紧，遗留的宽权限值统一降级为只读。
+/// Codex sandbox mode. Permissions may only be tightened; legacy wide values degrade to read-only.
 pub fn codex_sandbox_mode(mode: CodingAgentPermissionMode) -> &'static str {
     match mode {
         CodingAgentPermissionMode::AcceptEdits => "workspace-write",
@@ -531,7 +534,7 @@ pub fn codex_sandbox_mode(mode: CodingAgentPermissionMode) -> &'static str {
     }
 }
 
-/// 构造 OpenCode 无头参数；prompt 由宿主写入 stdin。
+/// Builds OpenCode headless args; the host writes the prompt to stdin.
 pub fn build_opencode_args(request: &CodingAgentRequest) -> Vec<String> {
     let mut args = vec!["run".into(), "--format".into(), "json".into()];
     if let Some(model) = &request.model {
@@ -550,7 +553,7 @@ pub fn build_opencode_args(request: &CodingAgentRequest) -> Vec<String> {
     args
 }
 
-/// 构造 Codex 参数；prompt 由 stdin 提供，避免 argv 泄漏和注入。
+/// Builds Codex args; the prompt comes via stdin to avoid argv leakage and injection.
 pub fn build_codex_args(request: &CodingAgentRequest) -> Vec<String> {
     let mut args = vec![
         "exec".into(),
@@ -578,7 +581,7 @@ pub fn build_codex_args(request: &CodingAgentRequest) -> Vec<String> {
     args
 }
 
-/// dsh 只允许通过 profile 启动；prompt 由宿主写入 stdin/patch。
+/// dsh may only start via a profile; the host writes the prompt to stdin/patch.
 pub fn build_dsh_args(request: &CodingAgentRequest) -> Vec<String> {
     let _ = request;
     vec!["--profile".into(), "headless".into()]
@@ -612,7 +615,7 @@ pub fn build_dsh_patch_yaml(patch_path: &Path, prompt: &str) -> Result<String, B
     ))
 }
 
-/// 解析 Claude stream-json 的共享事件。
+/// Parses shared Claude stream-json events.
 pub fn parse_claude_stream_line(session_id: &str, line: &str) -> Option<CodingAgentStreamEvent> {
     let value: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
     match value.get("type")?.as_str()? {
@@ -930,8 +933,9 @@ pub fn build_agent_command(request: &CodingAgentRequest) -> Result<AgentCommand,
             );
             (
                 build_opencode_args(request),
-                // OpenCode v1.18.29 run.ts:400-402（v1.2.18:322同样支持）读取
-                // 非TTY stdin。避免Windows npm .cmd拒绝自动化prompt中的换行。
+                // OpenCode v1.18.29 run.ts:400-402 (also supported since
+                // v1.2.18:322) reads non-TTY stdin. Avoids Windows npm .cmd
+                // rejecting newlines in the automation prompt.
                 // https://github.com/anomalyco/opencode/blob/v1.18.29/packages/opencode/src/cli/cmd/run.ts#L400-L402
                 PromptPayload::Stdin(request.prompt.clone()),
             )

@@ -24,15 +24,16 @@ export interface CapsuleMessageLayout {
   lineClamp: number;
 }
 
-// 纯光效舞台按 siri-glsl demo 的原始比例呈现：光条横贯 ~420px（demo 画布宽），
-// 舞台 460×180 给发光扩散留余量。与 src-tauri/src/lib.rs 的 capsule_window_bounds /
-// capsule_visual_height 保持一致。
+// The pure light-effect stage renders at the siri-glsl demo's original proportions: the light
+// bar spans ~420px (demo canvas width), the stage is 460×180 leaving room for glow diffusion.
+// Kept in sync with capsule_window_bounds / capsule_visual_height in src-tauri/src/lib.rs.
 const VOICE_ORB_STAGE_WIDTH = 460;
 const VOICE_ORB_STAGE_HEIGHT = 180;
 const VOICE_ORB_TEXT_WIDTH = 400;
 
-// typeless 窗口面积是原尺寸（460×128）的 1/5；内容由 CapsuleStyles.css 的 zoom 缩放，
-// 与 src-tauri/src/lib.rs 的 capsule_window_bounds_for_style 保持一致。
+// The typeless window is 1/5 the area of the original size (460×128); content is scaled by the
+// zoom in CapsuleStyles.css, kept in sync with capsule_window_bounds_for_style in
+// src-tauri/src/lib.rs.
 const TYPELESS_STAGE_WIDTH = 206;
 const TYPELESS_STAGE_HEIGHT = 57;
 

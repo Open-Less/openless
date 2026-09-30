@@ -242,8 +242,8 @@ export function ModelRow({
   const downloadedBytes = progress?.bytesDownloaded ?? model.downloadedBytes;
   const totalBytes = progress?.bytesTotal ?? remoteSize?.totalBytes ?? 0;
   const ratio = totalBytes > 0 ? Math.min(1, downloadedBytes / totalBytes) : 0;
-  // 进度条要保留：有 partial 残留（downloadedBytes>0 但未完整）就一直显示，
-  // 让用户看到上次下到哪里了，再点下载会从那里续。
+  // Keep the progress bar: as long as partial bytes remain (downloadedBytes>0 but incomplete) it stays visible,
+  // so the user sees where the last download got to and resuming continues from there.
   const hasPartial = !model.isDownloaded && model.downloadedBytes > 0;
   const showProgress = isDownloading || progress?.phase === 'failed' || hasPartial;
 
@@ -465,36 +465,36 @@ export function TestResultBlock({ result }: { result: LocalAsrTestResult | { err
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// 本地 ASR 模型管理重构（两栏看板 + 下载弹框 + 右上角下载进度浮层）。
-// 纯展示组件；数据与动作由 LocalAsr/index.tsx 组装后传入。
+// Local ASR model management refactor (two-pane board + download dialog + top-right download progress overlay).
+// Presentational components only; data and actions are assembled by LocalAsr/index.tsx.
 // ─────────────────────────────────────────────────────────────────────
 
-/** 侧栏统一条目：本地引擎（Qwen3 / Whisper / sherpa-onnx / foundry）归一化。 */
+/** Unified sidebar entry: local engines (Qwen3 / Whisper / sherpa-onnx / foundry) normalized. */
 export interface SidebarModelEntry {
   id: string;
-  /** 展示名（如 qwen3-asr-0.6b / whisper-small）。 */
+  /** Display name (e.g. qwen3-asr-0.6b / whisper-small). */
   name: string;
-  /** 目录快照的正式展示名（Core descriptor）；无则回退 name。 */
+  /** Official display name from the catalog snapshot (Core descriptor); falls back to name. */
   displayName?: string;
-  /** 目录快照的支持语言短码（zh / en / ja…）。 */
+  /** Supported language short codes from the catalog snapshot (zh / en / ja…). */
   languages?: string[];
-  /** 目录快照的远端完整尺寸；无需实时访问 HuggingFace 即可展示。 */
+  /** Full remote size from the catalog snapshot; displayable without hitting HuggingFace live. */
   sizeBytes?: number;
-  /** 有已下载字节但未装好 = 中断残留，可一键清理 staging 目录。 */
+  /** Downloaded bytes but not installed = interrupted leftovers; the staging directory can be cleaned with one click. */
   partialBytes?: number;
-  /** HF 仓库标识（Qwen3 有；sherpa/foundry 可能为空）。 */
+  /** HF repo identifier (Qwen3 has one; sherpa/foundry may be empty). */
   repo?: string;
-  /** 已下载字节数（HF 拉取的真实尺寸）。 */
+  /** Downloaded byte count (real size fetched from HF). */
   remoteBytes?: number;
-  /** 已下载（有绿勾）。 */
+  /** Downloaded (green check). */
   isDownloaded: boolean;
-  /** 下载中（有进度条/取消入口）。 */
+  /** Downloading (progress bar / cancel entry). */
   isDownloading: boolean;
-  /** 下载中实时百分比（0-100；仅 isDownloading 时有值）。 */
+  /** Live download percent (0-100; set only while isDownloading). */
   percent?: number | null;
-  /** 当前激活（设为默认的本地模型）。 */
+  /** Currently active (the local model set as default). */
   isActive: boolean;
-  /** 引擎标识，决定右侧动作按钮分派。 */
+  /** Engine tag; decides which action buttons dispatch on the right. */
   engine: 'qwen3' | 'whisper' | 'sherpa' | 'foundry';
   runtimeLabel?: string;
   downloadError?: string | null;
@@ -684,7 +684,7 @@ export function ModelDetailPanel({
   onDelete: () => void;
   onReveal: () => void;
   onTest: () => void;
-  /** 清理中断下载的 staging 目录（仅存在残留且未在下载时出现）。 */
+  /** Clean up the staging directory of an interrupted download (shown only when leftovers exist and no download is running). */
   onCleanup?: () => void;
   showTest: boolean;
   testResult: LocalAsrTestResult | { error: string } | null;

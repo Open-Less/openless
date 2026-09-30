@@ -5,7 +5,8 @@ type CatalogState = {
   error?: unknown;
 };
 
-/** 目录响应只改变候选；配置版本与请求序号共同决定响应是否有效。 */
+/** Catalog responses only update the candidates; the config version and request sequence
+    together decide whether a response is valid. */
 export class ModelCatalog {
   private state: CatalogState | null = null;
   private request = 0;

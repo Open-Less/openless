@@ -7,7 +7,7 @@
 //!   对 Unicode 字符串事件的拦截。Windows 上是 no-op。
 //! - `restore_input_source(app, prev)` —— 配对调用，恢复 macOS 上的原输入源。
 //!
-//! ## 平台差异
+//! ## Platform differences
 //!
 //! - **macOS**：手写 CGEvent FFI（与 `insertion.rs::macos` 的 Cmd+V 同源）。
 //!   `CGEventKeyboardSetUnicodeString` 在 CJK / 日文 IME 激活时被拦截 ——
@@ -15,22 +15,24 @@
 //! - **Windows**：`SendInput(KEYEVENTF_UNICODE)` 直接发 UTF-16 scancode。TSF 不拦
 //!   Unicode 事件（与 keyboard layout / IME 解耦），所以不需要切输入法。
 //!
-//! ## 已知坑（macOS）
+//! ## Known pitfalls (macOS)
 //!
-//! - Secure Event Input（密码框、1Password 等）下 CGEventPost 静默失败；
-//!   `type_unicode_chunk` 开头先用 `IsSecureEventInputEnabled` 探测，命中即返
-//!   `TypeError::SecureInputActive`。
-//! - Modifier 状态继承 —— 用户按着 Shift 不清零会被映射成大写，每个事件显式
-//!   `CGEventSetFlags(_, 0)`。
-//! - Chromium / Electron / Tauri 自身在 keyDown/keyUp 之间无延迟时会丢字，每 codepoint
-//!   sleep 1ms。
+//! - Under Secure Event Input (password fields, 1Password, ...) CGEventPost
+//!   fails silently; `type_unicode_chunk` probes with
+//!   `IsSecureEventInputEnabled` up front and returns
+//!   `TypeError::SecureInputActive` when set.
+//! - Modifier state inheritance — a held Shift maps characters to uppercase;
+//!   every event sets `CGEventSetFlags(_, 0)` explicitly.
+//! - Chromium / Electron / Tauri themselves drop characters when
+//!   keyDown/keyUp have no delay; sleeps 1ms per codepoint.
 //!
-//! ## 线程安全（macOS）
+//! ## Thread safety (macOS)
 //!
-//! - `type_unicode_chunk`（CGEventPost）任意线程可调，对齐 `insertion.rs::macos::
-//!   simulate_paste` 现状。
-//! - TIS（`switch_to_ascii` / `restore_input_source`）调度到主线程，规避 macOS 14+
-//!   对 TSM/TIS 主线程的 `dispatch_assert_queue_fail` SIGTRAP。
+//! - `type_unicode_chunk` (CGEventPost) is callable from any thread, matching
+//!   the current state of `insertion.rs::macos::simulate_paste`.
+//! - TIS (`switch_to_ascii` / `restore_input_source`) dispatches to the main
+//!   thread to avoid the macOS 14+ `dispatch_assert_queue_fail` SIGTRAP on
+//!   TSM/TIS main-thread checks.
 
 #[allow(unused_imports)]
 use tauri::{AppHandle, Runtime};
@@ -78,7 +80,7 @@ pub enum TisError {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// macOS 实现
+// macOS implementation
 // ═══════════════════════════════════════════════════════════════════════════
 #[cfg(target_os = "macos")]
 mod macos_impl {
@@ -90,35 +92,41 @@ mod macos_impl {
 
     const INTER_KEYSTROKE_DELAY: Duration = Duration::from_millis(1);
 
-    /// 逐字上屏时单个 char 的发送方式。
+    /// How a single char is sent when typing text character by character.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(super) enum MacKeystroke {
-        /// 换行：发真实的 Shift+Return 按键（聊天框软换行）。
+        /// Newline: send a real Shift+Return keystroke (soft newline in chat boxes).
         ShiftReturn,
-        /// 换行：发送 Unicode U+000A（Terminal/TUI 中作为 Ctrl+J 软换行）。
+        /// Newline: send Unicode U+000A (soft newline as Ctrl+J in terminals/TUIs).
         LineFeed,
-        /// 换行：发真实的 Return 按键（聊天框里等于发送）。
+        /// Newline: send a real Return keystroke (equals "send" in chat boxes).
         Return,
-        /// CR：不发任何键。`\r\n` 里它只是 `\n` 的前缀，发了会变成两个换行；
-        /// 而 LLM 输出中不存在「单独的 `\r` 表示换行」的老 Mac 格式。吞掉最稳，
-        /// 也让跨 delta 边界被拆开的 `\r` / `\n` 各自都不会多打一个换行。
+        /// CR: send nothing. In `\r\n` it is only a prefix of `\n`; sending it
+        /// would produce two newlines, and LLM output never uses the old Mac
+        /// "bare `\r` means newline" format. Swallowing is the safest choice
+        /// and keeps `\r` / `\n` split across delta boundaries from each
+        /// adding an extra newline.
         Swallow,
-        /// 普通字符：`CGEventKeyboardSetUnicodeString`。
+        /// Regular character: `CGEventKeyboardSetUnicodeString`.
         Unicode,
     }
 
-    /// **换行必须走真实按键，不能当普通 Unicode 字符发。**
+    /// **Newlines must go through real keystrokes, not plain Unicode chars.**
     ///
-    /// macOS 的文本输入系统看到 U+000A 就当作 Return —— 在微信 / Slack / Telegram
-    /// 这类聊天框里等价于「发送」。曾经有一条带空行的两段话被逐字上屏，第一个 `\n`
-    /// 直接把上半句发了出去，下半句留在了输入框里。
+    /// macOS text input treats U+000A as Return — in chat boxes like
+    /// WeChat / Slack / Telegram that equals "send". A two-paragraph text with
+    /// a blank line once had its first half sent out by the first `\n`, leaving
+    /// the rest in the input box.
     ///
-    /// 默认发 Shift+Return：在聊天框是「软换行」（不发送），在编辑器 / 终端 / 网页
-    /// textarea 里就是普通换行 —— 两边都对。Windows 侧早有同款结论（见
-    /// `WindowsSendInputNewlineMode::ShiftEnter`，设置文案直接写着「聊天框选它」）。
+    /// Default is Shift+Return: a soft newline in chat boxes and a plain
+    /// newline in editors / terminals / web textareas — correct in both.
+    /// Windows reached the same conclusion earlier (see
+    /// `WindowsSendInputNewlineMode::ShiftEnter`; the settings copy says "pick
+    /// this for chat boxes").
     ///
-    /// 用户可以在设置里改成 `Return`：风格市场上有靠换行把一段话拆成多条消息的风格包，
-    /// 那种效果要的正是真回车。
+    /// Users can switch to `Return` in settings: style packs in the market
+    /// split a passage into multiple messages via newlines, which needs a real
+    /// Return.
     pub(super) fn classify_mac_keystroke(ch: char, mode: MacosNewlineMode) -> MacKeystroke {
         match ch {
             '\n' => match mode {
@@ -132,8 +140,9 @@ mod macos_impl {
         }
     }
 
-    /// 之前激活的 input source 引用 token。携带 raw ptr 的 usize 表示，所有解引用都
-    /// 通过 `restore_input_source` 调度到主线程执行；手动 `Send + Sync`。
+    /// Token for the previously active input source. Held as a raw pointer in a
+    /// usize; all dereferences happen on the main thread via
+    /// `restore_input_source`. `Send + Sync` implemented manually.
     pub struct PreviousInputSource {
         raw: usize,
     }
@@ -160,10 +169,12 @@ mod macos_impl {
                 MacKeystroke::ShiftReturn => send_shift_return(),
                 MacKeystroke::LineFeed => send_line_feed(),
                 MacKeystroke::Return => send_return(),
-                // 吞掉的 char 也要计数：调用方（`flush_streaming_insert_buffer_with`）
-                // 拿 `typed_chars` 和 `delta.chars().count()` 比对，少一个就判定
-                // 「部分失败」并丢弃后续所有 delta。计数的语义是「这个 char 已处理」，
-                // 不是「屏幕上多了一个字符」。
+                // Swallowed chars still count: the caller
+                // (`flush_streaming_insert_buffer_with`) compares `typed_chars`
+                // against `delta.chars().count()`, and any shortfall is judged
+                // a partial failure that drops all later deltas. The count
+                // means "this char was processed", not "one more character on
+                // screen".
                 MacKeystroke::Swallow => Ok(()),
                 MacKeystroke::Unicode => send_one_codepoint(ch),
             };
@@ -190,13 +201,15 @@ mod macos_impl {
     fn send_one_codepoint(ch: char) -> Result<(), TypeError> {
         let mut buf = [0u16; 2];
         let utf16 = ch.encode_utf16(&mut buf);
-        // 虚拟键码 0 + Unicode string 覆写：字符本身由 unicode string 决定，keycode 不参与。
-        // flags 显式清零 —— 用户按着 Shift 时不清会被映射成大写。
+        // Virtual keycode 0 + Unicode string override: the character is fully
+        // determined by the unicode string, the keycode is irrelevant.
+        // Flags are explicitly cleared — a held Shift would otherwise map the
+        // character to uppercase.
         post_key_event(0, 0, Some(utf16))
     }
 
-    /// 发一次 Shift+Return。用真实的 Return 虚拟键码（`kVK_Return`）而不是 U+000A，
-    /// 详见 [`classify_mac_keystroke`]。
+    /// Sends one Shift+Return. Uses the real Return virtual keycode
+    /// (`kVK_Return`) instead of U+000A; see [`classify_mac_keystroke`].
     fn send_shift_return() -> Result<(), TypeError> {
         post_key_event(KEY_RETURN, KCG_EVENT_FLAG_MASK_SHIFT, None)
     }
@@ -205,16 +218,19 @@ mod macos_impl {
         send_one_codepoint('\n')
     }
 
-    /// 发一次不带修饰键的 Return。聊天框里这等于「发送」——只有用户在设置里明确选了
-    /// [`MacosNewlineMode::Return`] 才会走到这里。
+    /// Sends one Return with no modifiers. This equals "send" in chat boxes —
+    /// only reached when the user explicitly picked
+    /// [`MacosNewlineMode::Return`] in settings.
     fn send_return() -> Result<(), TypeError> {
         post_key_event(KEY_RETURN, 0, None)
     }
 
-    /// 构造并 post 一对 down/up 键盘事件，负责全部 CF 资源的释放。
+    /// Constructs and posts a down/up keyboard event pair; owns all CF resource
+    /// release.
     ///
-    /// `unicode` 为 `Some` 时用 `CGEventKeyboardSetUnicodeString` 覆写字符内容
-    /// （此时 `virtual_key` 无意义）；为 `None` 时就是按下 `virtual_key` 这个物理键。
+    /// When `unicode` is `Some`, `CGEventKeyboardSetUnicodeString` overrides the
+    /// character content (`virtual_key` is then meaningless); when `None`, the
+    /// event presses the physical `virtual_key`.
     fn post_key_event(
         virtual_key: CGKeyCode,
         flags: CGEventFlags,
@@ -252,10 +268,13 @@ mod macos_impl {
         Ok(())
     }
 
-    /// Secure Event Input 是否开启（密码框、sudo 提示、1Password 等会打开它）。
+    /// Whether Secure Event Input is on (password fields, sudo prompts,
+    /// 1Password, ... enable it).
     ///
-    /// 写入路径用它判断「合成键盘事件会不会被静默丢弃」；`host_document` 用它做读取
-    /// 前的第一道硬拦 —— 这个信号一亮就说明屏幕上正在输入凭据，一个字都不该读。
+    /// The write path uses it to decide "would synthetic keystrokes be silently
+    /// dropped"; `host_document` uses it as the first hard gate before reading —
+    /// when this signal is on, credentials are being typed on screen and
+    /// nothing may be read.
     pub fn is_secure_input_enabled() -> bool {
         unsafe { IsSecureEventInputEnabled() != 0 }
     }
@@ -352,7 +371,7 @@ mod macos_impl {
     const KCG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: CGEventSourceStateID = 1;
     const K_CF_STRING_ENCODING_ASCII: CFStringEncoding = 0x0600;
     const KCG_EVENT_FLAG_MASK_SHIFT: CGEventFlags = 0x00020000;
-    /// US/ANSI 键盘上 Return 的虚拟键码（`kVK_Return`）。
+    /// Virtual keycode of Return on a US/ANSI keyboard (`kVK_Return`).
     const KEY_RETURN: CGKeyCode = 36;
 
     #[repr(C)]
@@ -399,7 +418,7 @@ mod macos_impl {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Windows 实现
+// Windows implementation
 // ═══════════════════════════════════════════════════════════════════════════
 #[cfg(target_os = "windows")]
 mod windows_impl {
@@ -454,9 +473,11 @@ mod windows_impl {
         let mut sent_in_chunk = 0usize;
         let mut chars = text.chars().peekable();
         while let Some(ch) = chars.next() {
-            // typed_chars 是已消费的源 Unicode scalar 前缀，不是系统按键数。
-            // CR 被安全吞掉也已消费，否则 Core 会把完整 CRLF 输入误判成部分失败；
-            // 系统发送失败则不消费当前字符，保留精确的已完成前缀供最终协调。
+            // typed_chars is the consumed prefix of source Unicode scalars, not
+            // a system keystroke count. A safely swallowed CR is also consumed,
+            // otherwise Core would misjudge complete CRLF input as a partial
+            // failure; on a send failure the current char is not consumed,
+            // preserving the exact completed prefix for final reconciliation.
             match super::classify_sendinput_char(ch) {
                 super::SendInputCharKind::Skip => {
                     typed_chars += 1;
@@ -623,8 +644,9 @@ mod windows_impl {
         }
     }
 
-    /// Windows SendInput Unicode 绕过 TSF 与 IME，无需切换输入法。返回 `Ok(None)`，
-    /// `restore_input_source` 也是 no-op。
+    /// Windows SendInput Unicode bypasses TSF and the IME, so no input-method
+    /// switch is needed. Returns `Ok(None)`; `restore_input_source` is also a
+    /// no-op.
     pub async fn switch_to_ascii<R: Runtime>(
         _app: &AppHandle<R>,
     ) -> Result<Option<PreviousInputSource>, TisError> {
@@ -639,18 +661,23 @@ mod windows_impl {
     }
 }
 
-/// SendInput 的单字符发送分类。消费计数与发送方式分离：即使 Skip 不发系统事件，
-/// 调用方传入的那个 Unicode scalar 也已被处理，必须计入已消费前缀。
+/// Per-character send classification for SendInput. Consumption counting and
+/// send method are separate: even a Skip sends no system event, the Unicode
+/// scalar passed in by the caller has been processed and must count toward the
+/// consumed prefix.
 #[cfg(target_os = "windows")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SendInputCharKind {
-    /// `\r`：不发送系统事件（CRLF 只产生一次换行），但计入已消费源前缀。
+    /// `\r`: no system event (CRLF produces one newline), but counts toward the
+    /// consumed source prefix.
     Skip,
-    /// `\n`：按换行发出（模式由 `WindowsSendInputOptions::newline_mode` 决定）。
+    /// `\n`: sent as a newline (mode chosen by
+    /// `WindowsSendInputOptions::newline_mode`).
     Newline,
-    /// `\t`：按 Tab 键发出。
+    /// `\t`: sent as a Tab keystroke.
     Tab,
-    /// 其余字符：按 UTF-16 Unicode 事件逐 code unit 发出。
+    /// All other characters: sent as UTF-16 Unicode events, code unit by code
+    /// unit.
     Unicode,
 }
 
@@ -671,12 +698,14 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn swallowed_carriage_returns_are_consumed_without_sending_input() {
-        // 这个输入不会产生任何系统按键，直接验证生产 API 的消费计数。
+        // This input produces no system keystrokes; verifies the consumption
+        // count of the production API directly.
         assert_eq!(super::type_unicode_chunk("\r\r").unwrap(), 2);
     }
 
-    /// 默认模式下换行走 Shift+Return —— macOS 把 U+000A 当 Return，聊天框里等于
-    /// 「发送」，一条带空行的两段话会被从中间劈开发出去。
+    /// With the default mode, newlines go through Shift+Return — macOS treats
+    /// U+000A as Return, which equals "send" in chat boxes, so a two-paragraph
+    /// text with a blank line would be split and sent apart.
     #[test]
     #[cfg(target_os = "macos")]
     fn newline_defaults_to_safe_auto_fallback() {
@@ -689,7 +718,8 @@ mod tests {
             classify_mac_keystroke('\n', mode),
             MacKeystroke::ShiftReturn
         );
-        // `\r` 吞掉：CRLF 里它只是 LF 的前缀，发出去会变成两个换行。
+        // `\r` is swallowed: in CRLF it is only a prefix of LF; sending it
+        // would produce two newlines.
         assert_eq!(classify_mac_keystroke('\r', mode), MacKeystroke::Swallow);
         for ch in ['a', '中', '，', ' ', '\t', '😀'] {
             assert_eq!(
@@ -700,8 +730,9 @@ mod tests {
         }
     }
 
-    /// 选了 Return 模式就得发真回车 —— 风格市场里有靠换行把一段话拆成多条消息的
-    /// 风格包，那种效果要的正是「回车 = 发送」。
+    /// Return mode must send a real Return — style packs in the market split a
+    /// passage into multiple messages via newlines, and that effect needs
+    /// "Return = send".
     #[test]
     #[cfg(target_os = "macos")]
     fn return_mode_sends_a_plain_return_for_style_packs_that_want_it() {
@@ -712,7 +743,7 @@ mod tests {
             classify_mac_keystroke('\n', MacosNewlineMode::Return),
             MacKeystroke::Return
         );
-        // 换行模式只影响换行，别的字符一律照旧。
+        // The newline mode only affects newlines; all other chars unchanged.
         assert_eq!(
             classify_mac_keystroke('中', MacosNewlineMode::Return),
             MacKeystroke::Unicode
@@ -731,9 +762,10 @@ mod tests {
         );
     }
 
-    /// 计数契约：`type_unicode_chunk` 返回的 typed_chars 必须等于输入的 char 数，
-    /// 连被吞掉的 `\r` 也要算 —— 调用方拿它跟 `delta.chars().count()` 比对，
-    /// 少一个就判定「部分失败」并丢弃后面所有 delta。
+    /// Counting contract: the typed_chars returned by `type_unicode_chunk`
+    /// must equal the input char count, including swallowed `\r`s — the caller
+    /// compares it against `delta.chars().count()`, and any shortfall is judged
+    /// a partial failure that drops all later deltas.
     #[test]
     #[cfg(target_os = "macos")]
     fn every_char_counts_toward_typed_chars_including_swallowed_ones() {
@@ -747,7 +779,8 @@ mod tests {
             MacosNewlineMode::Return,
         ] {
             let text = "上半句\r\n\r\n下半句";
-            // 每个 char 都会被分类成某一种处理方式，没有漏网的。
+            // Every char is classified into exactly one handling path; none can
+            // escape.
             let counted = text
                 .chars()
                 .map(|ch| classify_mac_keystroke(ch, mode))
@@ -823,15 +856,17 @@ mod tests {
     }
 }
 
-/// Windows SendInput 成功消费整段输入时的 Unicode scalar 数，包含不发按键的 CR。
-/// 与 Core 流式插入的 written_chars 契约一致，不能改成 UTF-16 单元数或按键事件数。
+/// Number of Unicode scalars consumed when Windows SendInput successfully
+/// consumes the whole input, including CRs that send no keystroke. Matches the
+/// Core streaming-insertion written_chars contract; must not become a UTF-16
+/// unit count or a keystroke event count.
 #[cfg(target_os = "windows")]
 pub fn expected_sendinput_typed_chars(text: &str) -> usize {
     text.chars().count()
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 公共导出（按 cfg 分发到对应实现）
+// Public re-exports (cfg-dispatched to the matching implementation)
 // ═══════════════════════════════════════════════════════════════════════════
 #[cfg(target_os = "macos")]
 #[allow(unused_imports)]

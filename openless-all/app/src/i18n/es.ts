@@ -293,6 +293,7 @@ export const es: typeof zhCN = {
     errorPrefix: 'No se pudo continuar: ',
     question: 'Hacer una pregunta',
     edit: 'Editar la selección',
+    compose: 'Ayúdame a escribir',
     cancel: 'Cancelar',
   },
   qa: {
@@ -841,6 +842,13 @@ export const es: typeof zhCN = {
       clear: 'Borrar resultados',
     },
   },
+  vocabLearning: {
+    open: 'Recordar una palabra',
+    label: 'Introduce la palabra correcta',
+    confirm: 'Confirmar y añadir al diccionario',
+    saved: 'Guardado. Puedes gestionarla en el diccionario.',
+    failed: 'No se pudo guardar: {{error}}',
+  },
   vocabCard: {
     title: '¿Recordar esta palabra?',
     accept: 'Recordar',
@@ -880,7 +888,7 @@ export const es: typeof zhCN = {
     editEmpty: 'La palabra no puede estar vacía.',
     filter: {
       all: 'Todas',
-      auto: 'Añadidas automáticamente',
+      auto: 'Confirmadas',
       manual: 'Añadidas manualmente',
     },
     searchPlaceholder: 'Buscar',
@@ -892,7 +900,7 @@ export const es: typeof zhCN = {
     newWordTemplates: 'Plantillas predefinidas',
     newWordTemplateCount: '{{count}} palabras',
     newWordAddSelected: 'Añadir seleccionadas',
-    learnedSection: 'Recogidas automáticamente ({{count}})',
+    learnedSection: 'Confirmadas ({{count}})',
     removeAllLearned: 'Eliminar todas',
     corrections: {
       title: 'Reglas de corrección',
@@ -1258,12 +1266,33 @@ export const es: typeof zhCN = {
       useSystemProxyDesc:
         'Al activarlo, las solicitudes usan el proxy del sistema. Al desactivarlo, se conectan directamente, lo que suele reducir la latencia con servicios locales, pero puede impedir el acceso a GitHub y las actualizaciones en algunas regiones. No afecta a los flujos de voz en tiempo real ni a Less Computer.',
     },
+    vocabularyLearning: {
+      title: 'Aprender de las correcciones',
+      enabled: 'Activar aprendizaje de correcciones',
+      observationSeconds: 'Tiempo de observación',
+      observationSecondsHint:
+        'Observar el campo actual durante un máximo de 10–60 segundos después del dictado.',
+      suggestionSeconds: 'Duración de las sugerencias',
+      suggestionSecondsHint:
+        'Las sugerencias sin confirmar caducan tras 5–60 segundos sin añadirse al diccionario.',
+      maxPhraseChars: 'Longitud máxima',
+      maxPhraseCharsHint:
+        'Limitar el original y el reemplazo de las sugerencias automáticas a 2–32 caracteres. No afecta a las adiciones manuales.',
+      seconds: '{{count}} s',
+      characters: '{{count}} caracteres',
+      changeHint:
+        'Cambiar parámetros detiene la observación y borra las sugerencias pendientes. Se aplican al siguiente dictado. Restablecer parámetros no cambia la activación.',
+      reset: 'Restablecer parámetros',
+      saveError: 'No se pudo guardar. Inténtalo de nuevo.',
+      description:
+        'Tras insertar texto, detecta cambios en el campo localmente durante un máximo de 60 segundos y pide confirmación antes de guardar palabras. El texto observado no se envía al modelo. Se excluyen contraseñas y aplicaciones sensibles conocidas. En Windows y Android depende del editor; Android requiere accesibilidad. Al desactivarlo se detiene la observación.',
+    },
     dataStorage: {
       title: 'Almacenamiento de datos',
       desc: 'Historial de conversaciones y contexto guardados en este dispositivo.',
       cursorContextLabel: 'Contexto del cursor (experimental)',
       cursorContextDesc:
-        'Al mejorar el texto, lee lo que rodea al cursor en el documento para distinguir homófonos, nombres propios y pronombres. Si se activa, ese texto se envía al proveedor LLM configurado junto con la solicitud. Si se desactiva, no se lee nada. Nunca se leen campos de contraseña, Entrada Segura, gestores de contraseñas ni terminales. Solo macOS.',
+        'Envía el texto cercano al cursor al modelo para pulirlo (solo macOS). Es independiente del aprendizaje local. Se excluyen contraseñas y aplicaciones sensibles conocidas.',
     },
     codingConsole: {
       title: 'Consola de Claude',
@@ -1464,7 +1493,8 @@ export const es: typeof zhCN = {
       comboClear: 'Borrar',
       comboConflict: 'Esta combinación de teclas no está disponible',
       shortcutSaveFailed: 'No se pudo guardar el atajo',
-      mouseSideHint: 'Los botones laterales Mouse4 / Mouse5 se admiten como atajos globales de dictado en Windows',
+      mouseSideHint:
+        'Los botones laterales Mouse4 / Mouse5 se admiten como atajos globales de dictado en Windows',
       allowNonTsfFallbackLabel: 'Permitir alternativa sin TSF',
       allowNonTsfFallbackDesc:
         'Windows: si falla la inserción TSF, usa SendInput Unicode con pausas. Si también falla, copia el texto al portapapeles.',
@@ -1554,6 +1584,8 @@ export const es: typeof zhCN = {
       validationTitle: 'Comprobación de conexión',
       validationHint:
         'Envía manualmente una solicitud real para comprobar la configuración. Puede consumir saldo del servicio. Guardar los ajustes no ejecuta esta comprobación.',
+      validationHintOmni:
+        'Envía manualmente una solicitud solo de texto (sin grabación). Pasar no significa que el dictado de audio funcione: confirma con una grabación corta. Puede consumir saldo del servicio.',
       autoSaveHint:
         'Los cambios se guardan automáticamente. Después de configurar el servicio, puedes comprobar la conexión.',
       nameHint:
@@ -1635,6 +1667,7 @@ export const es: typeof zhCN = {
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter (modelos gratuitos)',
         requesty: 'Requesty',
+        apiRoute: 'API Route',
         orcarouter: 'OrcaRouter',
         alibabaCoding: 'Alibaba Cloud Coding Plan',
         codingPlanX: 'CodingPlanX',
@@ -1812,6 +1845,8 @@ export const es: typeof zhCN = {
       selectModel: 'Elige un modelo para completar el campo de arriba',
       modelSaved: 'Modelo {{model}} guardado.',
       validateSuccess: 'Conexión comprobada correctamente.',
+      validateSuccessOmni:
+        'Conectividad de texto correcta. Esto no significa que el dictado de audio funcione: confirma con una grabación corta.',
       validateFailed: 'La comprobación de conexión falló.',
       providerHttpStatus:
         'El proveedor devolvió HTTP {{status}}. Comprueba los permisos de la clave API o la dirección.',
@@ -2081,6 +2116,13 @@ export const es: typeof zhCN = {
         notWindows: 'Solo disponible en Windows.',
       },
     },
+    inputMethod: {
+      guidanceTitle: 'Método de entrada de OpenLess',
+      enableSystemIme:
+        'En Ajustes de Android → Teclado / Métodos de entrada, activa OpenLess Voice y selecciónalo cuando lo necesites.',
+      longPressLogo:
+        'En el teclado de OpenLess, mantén pulsado el logo de la esquina superior izquierda para abrir los ajustes nativos del teclado.',
+    },
     advanced: {
       multimodalPipelineTitle: 'Reconocimiento multimodal (experimental)',
       multimodalPipelineTitleHint:
@@ -2293,6 +2335,9 @@ export const es: typeof zhCN = {
       omni: 'Multimodal',
       models: 'Modelos locales',
       connections: 'Conexiones',
+      inactive: 'No se usa en este modo',
+      inactiveDetail:
+        'Esta configuración se conserva, pero el modo de reconocimiento actual no la utiliza.',
       statusConfigured:
         'Punto verde: hay al menos un servicio activado. Las solicitudes usan el primero.',
       statusMissing: 'Punto rojo: todavía no hay ningún servicio activado.',
@@ -2306,6 +2351,8 @@ export const es: typeof zhCN = {
     autoSaveHint: 'Los cambios se guardan automáticamente',
     backToAdvanced: 'Volver a Experimentos y extensiones',
     advancedPages: {
+      vocabularyLearning:
+        'Aprender de correcciones manuales; configurar observación, confirmación y longitud.',
       lessComputer: 'Elige un agente y configura su modelo, permisos y directorio de trabajo.',
       claudeConsole: 'Detecta Claude Code y consulta la salida de las tareas de prueba.',
       multimodal: 'Administra la activación del reconocimiento multimodal experimental.',
@@ -2314,31 +2361,35 @@ export const es: typeof zhCN = {
     },
     descriptions: {
       general: 'Elige un micrófono, ajusta la grabación y la entrada de texto o conecta tu móvil.',
+      inputMethod: 'Configura la superposición y el método de entrada de Android.',
       shortcuts: 'Configura atajos y elige qué sucede al seleccionar texto.',
       services:
         'Elige servicios de reconocimiento de voz y procesamiento de texto. Administra canales, modelos locales y conexiones.',
       appearance: 'Ajusta el tema, el diseño y el idioma de la interfaz para leer con comodidad.',
       privacy:
         'Comprueba los permisos y las conexiones. Administra el historial, las grabaciones y los datos locales.',
-      advanced:
-        'Configura Less Computer, el procesamiento multimodal y la depuración según tus necesidades.',
+      advanced: 'Configura Less Computer y la depuración según tus necesidades.',
       about: 'Consulta tu versión, el canal y los ajustes de actualización automática.',
     },
     searchKeywords: {
       general:
         'micrófono grabación entrada teléfono remoto LAN PIN cápsula silenciar inicio automático',
+      inputMethod: 'método de entrada IME teclado superposición Android',
       shortcuts: 'atajo tecla combinación selección mejorar voz edición',
-      services: 'ASR LLM API canal modelo nube local sin conexión red proxy catálogo',
+      services:
+        'ASR LLM API canal modelo nube local sin conexión red proxy catálogo multimodal canalización Omni',
       appearance: 'tema oscuro claro idioma fuente texto tamaño diseño mapa actividad',
       privacy:
         'permiso micrófono accesibilidad historial grabación almacenamiento privacidad exportar',
-      advanced: 'Less Computer Claude agente multimodal Omni depuración registros experimento',
+      advanced:
+        'Less Computer Claude agente depuración registros experimento Aprender de las correcciones vocabulary learning',
       about: 'versión Beta estable actualización actualizar',
     },
     sections: {
       appearance: 'Apariencia e idioma',
       shortcuts: 'Atajos y selección',
       general: 'Grabación y entrada',
+      inputMethod: 'Método de entrada',
       services: 'Servicios y modelos de IA',
       privacy: 'Permisos y datos',
       advanced: 'Experimentos y extensiones',

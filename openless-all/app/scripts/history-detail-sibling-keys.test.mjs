@@ -1,19 +1,20 @@
-// 历史详情面板的同层 key 必须唯一。
+// Sibling keys inside the history detail panel must be unique.
 //
-// 背景：AudioRecordingPlayer 与 RepolishPanel 是详情 Card 里的兄弟节点，两者都靠 key
-// 在切换历史条目时强制重挂载以重置自身状态。曾经两个 key 都直接写 `item.id`，同一层出现
-// 重复 key —— React 只警告不报错（"Encountered two children with the same key"），
-// 但 reconcile 无法正确匹配旧 fiber，每切换一次条目就在 DOM 里残留一个「播放录音」按钮，
-// 长时间开着不关的窗口会叠出一整列。
+// Background: AudioRecordingPlayer and RepolishPanel are siblings inside the detail Card, and
+// both rely on their key to force a remount when the history entry switches, resetting their
+// state. Both keys once used plain `item.id`, producing duplicate keys on the same level —
+// React only warns ("Encountered two children with the same key") but reconcile can no longer
+// match the old fiber, leaving a stale play-recording button in the DOM on every switch; a
+// window left open piles up a whole column of them.
 //
-// 这条契约锁的是「同层 key 在运行时互不相同」，而不是某个具体命名，后续再往详情面板
-// 加带 key 的兄弟组件时同样会被拦下。
+// This contract pins "sibling keys are distinct at runtime", not any particular naming, so any
+// future keyed sibling added to the detail panel is caught too.
 
 import { readFile } from 'node:fs/promises';
 
 const historyTsx = await readFile(new URL('../src/pages/History.tsx', import.meta.url), 'utf-8');
 
-/** 从 `key={` 之后开始按花括号配对取出完整表达式（模板串里的 `${}` 不会截断）。 */
+/** Extract the full expression after each `key={` by brace matching (`${}` inside template strings doesn't truncate). */
 function readKeyExpressions(source) {
   const keys = [];
   const marker = 'key={';
@@ -36,7 +37,8 @@ function readKeyExpressions(source) {
   }
 }
 
-// 详情面板 = 右栏那张 Card。取「桌面端总是渲染 / 移动端展开才渲染」的条件到 Card 收尾之间。
+// Detail panel = the right-column Card. Take from the "always rendered on desktop / rendered
+// when expanded on mobile" condition to the Card's closing tag.
 const detailStart = historyTsx.indexOf('{(!mobile || mobileDetailOpen) && (');
 if (detailStart === -1) {
   throw new Error('未定位到历史详情面板（右栏 Card）的起始位置，契约测试需要同步更新');
@@ -47,7 +49,8 @@ if (detailEnd === -1) {
 }
 
 const detailSource = historyTsx.slice(detailStart, detailEnd);
-// 列表项的 key 在左栏，不在这段里；这里拿到的都是详情面板同层组件的 key。
+// List item keys live in the left column, outside this slice; everything here is a key of a
+// component at the detail panel's sibling level.
 const detailKeys = readKeyExpressions(detailSource);
 
 if (detailKeys.length < 2) {
@@ -56,7 +59,8 @@ if (detailKeys.length < 2) {
   );
 }
 
-// 每个 key 仍要跟着条目 id 变化，否则切换条目时组件不重挂载，上一条的播放/润色状态会串台。
+// Each key must still track the entry id, otherwise components don't remount on entry switch
+// and the previous entry's playback/polish state bleeds into the next.
 for (const { expression } of detailKeys) {
   if (!expression.includes('item.id')) {
     throw new Error(
@@ -66,8 +70,9 @@ for (const { expression } of detailKeys) {
 }
 
 /**
- * React 会把非 undefined 的 key 转成字符串后参与 sibling reconciliation。
- * 在样例条目上求值，避免 `item.id` / `String(item.id)` 这类不同源码表达式绕过唯一性检查。
+ * React converts non-undefined keys to strings before sibling reconciliation.
+ * Evaluate on a sample entry so different source expressions like `item.id` /
+ * `String(item.id)` can't bypass the uniqueness check.
  */
 function evaluateKey(expression, itemId) {
   const value = Function('item', `'use strict'; return (${expression});`)({ id: itemId });

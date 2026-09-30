@@ -398,7 +398,7 @@ const acknowledge = (page) =>
     }),
   });
 
-// 息屏结束两分钟录音，已发送的帧仍在 stop 之前；重复生命周期事件不会重复结束。
+// Screen lock ends a two-minute recording with already-sent frames still before the stop; repeated lifecycle events don't end twice.
 for (const defaultMode of ['toggle', 'hold']) {
   const page = await openRemotePage({ defaultMode });
   assert.equal(page.element('wake-lock-switch').checked, true);

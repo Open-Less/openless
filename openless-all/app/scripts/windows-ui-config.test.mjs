@@ -17,7 +17,8 @@ const config = JSON.parse(raw);
 const capsuleWindow = config.app.windows.find((window) => window.label === 'capsule');
 const mainWindow = config.app.windows.find((window) => window.label === 'main');
 const libRs = await readFile(new URL('../src-tauri/src/lib.rs', import.meta.url), 'utf-8');
-// 契约校验编译进二进制的胶囊子系统并集；原生窗口操作属于显式 Tauri Host。
+// Contract check over the union of the capsule subsystem compiled into the binary; native
+// window manipulation belongs to the explicit Tauri Host.
 const coordinatorRs =
   (await readFile(new URL('../src-tauri/src/coordinator.rs', import.meta.url), 'utf-8')) +
   '\n' +
@@ -107,7 +108,7 @@ if (!/os === 'win' \|\| os === 'android' \? 0 : 14/.test(windowChromeTsx)) {
 
 assertMatch(
   windowChromeTsx,
-  /\/\/ Windows: decorations:true 时外层不画圆角/,
+  /\/\/ Windows: with decorations:true the shell draws no radius/,
   'windows WindowChrome should defer chrome to native decorations',
 );
 
@@ -117,8 +118,9 @@ assertMatch(
   'macOS drag region should reserve the native traffic-light area',
 );
 assertEqual(mainWindow.trafficLightPosition.x, 16, 'traffic lights should have a 16px left inset');
-// tao 的 inset_traffic_lights 里 y 只缩放标题栏容器（斜率 1），视觉顶距 ≈ y-14；
-// 左 16 时实测左距 21.5px，y=26 才让顶距与之相等（x==y 反而不等）。
+// In tao's inset_traffic_lights, y only scales the title-bar container (slope 1), so the
+// visual top inset ≈ y-14; with left=16 the measured left inset is 21.5px, and y=26 makes
+// the top inset equal (x==y does not).
 assertEqual(mainWindow.trafficLightPosition.y, 26, 'traffic lights should have an equal visual top inset');
 assertEqual(mainWindow.width, 1300, 'main window should use the reviewed default width');
 assertEqual(mainWindow.height, 835, 'main window should use the reviewed default height');

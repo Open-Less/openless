@@ -24,16 +24,219 @@ class OpenLessAccessibilityService : AccessibilityService() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val keyboardRefreshRunnable = Runnable { updateKeyboardOverlayState() }
     private var lastEditableFocus: AccessibilityNodeInfo? = null
+    private var vocabularyGeneration = 0L
+    private var vocabularyNode: AccessibilityNodeInfo? = null
+    private var vocabularyDeadline = 0L
+    private var vocabularyStarted = 0L
+    private var vocabularyCard: android.view.View? = null
+    private val vocabularyRead = Runnable { readVocabularyText() }
+    private val vocabularyTimeout = Runnable { stopVocabularyObservation() }
+    private var vocabularyCardTimeout: Runnable? = null
+    @Volatile private var vocabularyEpoch = 0L
+
+    private fun postVocabulary(action: () -> Unit) {
+        val epoch = vocabularyEpoch
+        mainHandler.post {
+            if (instance === this && vocabularyEpoch == epoch) action()
+        }
+    }
+
+    private fun invalidateVocabularyLifecycle() {
+        vocabularyEpoch++
+        stopVocabularyObservation()
+        hideVocabularyCard()
+    }
+
+    private var vocabularyCardRequest = 0L
+
+    private fun requestVocabulary(operation: String, data: Bundle = Bundle(), observation: Boolean = false, callback: (Boolean, Bundle?) -> Unit) {
+        val epoch = vocabularyEpoch
+        val generation = vocabularyGeneration
+        OpenLessVocabularyIpc.request(this, operation, data) { ok, response ->
+            if (instance === this && vocabularyEpoch == epoch && (!observation || vocabularyGeneration == generation)) {
+                callback(ok, response)
+            }
+        }
+    }
+
+    private fun refreshVocabularyCard() {
+        val request = ++vocabularyCardRequest
+        requestVocabulary("pending") { ok, response ->
+            if (request == vocabularyCardRequest) showVocabularyCard(if (ok) response?.getString("json") ?: "[]" else "[]")
+        }
+    }
+
+    private fun startVocabularyObservation(generation: Long) {
+        if (generation == 0L || vocabularyGeneration == generation) return
+        stopVocabularyObservation()
+        vocabularyGeneration = generation
+        requestVocabulary("active", Bundle().apply { putLong("generation", generation) }, true) { active, response ->
+            val deadline = response?.getLong("deadline") ?: 0L
+            if (active && deadline > android.os.SystemClock.elapsedRealtime()) {
+                captureVocabularyNode(generation, deadline)
+            } else stopVocabularyObservation()
+        }
+    }
+
+    private fun captureVocabularyNode(generation: Long, deadline: Long) {
+        val root = rootInActiveWindow ?: run { stopVocabularyObservation(); return }
+        val node = try { root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) } finally { root.recycle() }
+        if (node == null) { stopVocabularyObservation(); return }
+        val packageName = node.packageName?.toString()?.lowercase().orEmpty()
+        if (!node.isEditable || node.isPassword || packageName.isEmpty() || packageName == this.packageName ||
+            listOf("keepass", "bitwarden", "1password", "lastpass", "dashlane", "termux", "password").any { packageName.contains(it) }) {
+            node.recycle()
+            stopVocabularyObservation()
+            return
+        }
+        vocabularyGeneration = generation
+        vocabularyNode = node
+        vocabularyStarted = android.os.SystemClock.elapsedRealtime()
+        vocabularyDeadline = deadline
+        val remaining = deadline - vocabularyStarted
+        if (remaining <= 0L) { stopVocabularyObservation(); return }
+        mainHandler.post(vocabularyRead)
+        mainHandler.postDelayed(vocabularyTimeout, remaining)
+    }
+
+    private fun stopVocabularyObservation() {
+        val generation = vocabularyGeneration
+        mainHandler.removeCallbacks(vocabularyRead)
+        mainHandler.removeCallbacks(vocabularyTimeout)
+        vocabularyNode?.recycle()
+        vocabularyNode = null
+        vocabularyGeneration = 0L
+        if (generation != 0L) {
+            OpenLessVocabularyIpc.request(this, "stop", Bundle().apply { putLong("generation", generation) }) { _, _ -> }
+        }
+    }
+
+    private fun readVocabularyText() {
+        if (vocabularyNode == null) return
+        requestVocabulary("active", Bundle().apply { putLong("generation", vocabularyGeneration) }, true) { active, _ ->
+            if (active) readConfirmedVocabularyText() else stopVocabularyObservation()
+        }
+    }
+
+    private fun readConfirmedVocabularyText() {
+        val node = vocabularyNode ?: return
+        if (android.os.SystemClock.elapsedRealtime() >= vocabularyDeadline || !node.refresh() || !node.isFocused || node.isPassword) {
+            stopVocabularyObservation()
+            return
+        }
+        val root = rootInActiveWindow
+        val sameWindow = root != null && root.windowId == node.windowId
+        root?.recycle()
+        if (!sameWindow) { stopVocabularyObservation(); return }
+        val text = node.text?.toString()
+        if (text == null || text.length > 20_000) { stopVocabularyObservation(); return }
+        requestVocabulary("observe", Bundle().apply {
+            putLong("generation", vocabularyGeneration)
+            putString("text", text)
+        }, true) { alive, _ ->
+            if (!alive) stopVocabularyObservation()
+            else if (android.os.SystemClock.elapsedRealtime() - vocabularyStarted < 1_000L) {
+                mainHandler.postDelayed(vocabularyRead, 100L)
+            }
+        }
+    }
+
+    private fun vocabularyEvent(event: AccessibilityEvent) {
+        val node = vocabularyNode ?: return
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_FOCUSED ||
+            event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
+            if (!node.refresh() || !node.isFocused || node.isPassword) stopVocabularyObservation()
+        }
+        if (event.eventType != AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) return
+        val source = event.source ?: return
+        try {
+            if (source != node) return
+            if (event.isPassword || source.isPassword) { stopVocabularyObservation(); return }
+            mainHandler.removeCallbacks(vocabularyRead)
+            mainHandler.postDelayed(vocabularyRead, 700L)
+        } finally { source.recycle() }
+    }
+
+    private fun hideVocabularyCard() {
+        vocabularyCardTimeout?.let { mainHandler.removeCallbacks(it) }
+        vocabularyCardTimeout = null
+        vocabularyCard?.let { view ->
+            try { (getSystemService(WINDOW_SERVICE) as android.view.WindowManager).removeView(view) } catch (_: Exception) { }
+        }
+        vocabularyCard = null
+    }
+
+    private fun showVocabularyCard(json: String) {
+        hideVocabularyCard()
+        val entries = try { org.json.JSONArray(json) } catch (_: Exception) { return }
+        val now = System.currentTimeMillis()
+        val pending = (0 until entries.length()).map { entries.getJSONObject(it) }.filter { it.optLong("expiresAtMs") > now }
+        if (pending.isEmpty()) return
+        val layout = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(16, 12, 16, 12)
+            setBackgroundColor(android.graphics.Color.rgb(38, 38, 42))
+            addView(android.widget.TextView(context).apply { text = "记住这个词？"; setTextColor(android.graphics.Color.WHITE) })
+        }
+        for (entry in pending) {
+            val row = android.widget.LinearLayout(this)
+            row.addView(android.widget.TextView(this).apply {
+                text = entry.optString("pattern") + " → " + entry.optString("replacement")
+                setTextColor(android.graphics.Color.WHITE)
+                maxLines = 2
+            }, android.widget.LinearLayout.LayoutParams(0, -2, 1f))
+            for (accept in listOf(true, false)) {
+                row.addView(android.widget.Button(this).apply {
+                    text = if (accept) "✓" else "×"
+                    contentDescription = if (accept) "加入词典" else "忽略"
+                    setOnClickListener {
+                        isEnabled = false
+                        requestVocabulary("resolve", Bundle().apply {
+                            putString("id", entry.getString("id"))
+                            putBoolean("accept", accept)
+                        }) { ok, _ ->
+                            isEnabled = true
+                            if (ok) refreshVocabularyCard()
+                            else android.widget.Toast.makeText(this@OpenLessAccessibilityService, "保存失败，请重试", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }, android.widget.LinearLayout.LayoutParams((56 * resources.displayMetrics.density).toInt(), -2))
+            }
+            layout.addView(row)
+        }
+        val params = android.view.WindowManager.LayoutParams(
+            (340 * resources.displayMetrics.density).toInt().coerceAtMost(resources.displayMetrics.widthPixels),
+            android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+            android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            android.graphics.PixelFormat.TRANSLUCENT
+        ).apply { gravity = android.view.Gravity.TOP or android.view.Gravity.END; y = (48 * resources.displayMetrics.density).toInt() }
+        try {
+            (getSystemService(WINDOW_SERVICE) as android.view.WindowManager).addView(layout, params)
+            vocabularyCard = layout
+            val timeout = Runnable { refreshVocabularyCard() }
+            vocabularyCardTimeout = timeout
+            mainHandler.postDelayed(timeout, (pending.minOf { it.getLong("expiresAtMs") } - now).coerceAtLeast(1L))
+        } catch (_: Exception) { hideVocabularyCard() }
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        vocabularyEpoch++
+        refreshVocabularyCard()
+        requestVocabulary("current") { ok, response ->
+            val generation = if (ok) response?.getLong("generation", 0L) ?: 0L else 0L
+            if (vocabularyGeneration == 0L) startVocabularyObservation(generation)
+        }
         updateKeyboardOverlayState()
         scheduleKeyboardOverlayRefresh()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
+        vocabularyEvent(event)
         when (event.eventType) {
             AccessibilityEvent.TYPE_VIEW_CLICKED -> rememberFocusedEditable(event)
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
@@ -51,9 +254,10 @@ class OpenLessAccessibilityService : AccessibilityService() {
         }
     }
 
-    override fun onInterrupt() = Unit
+    override fun onInterrupt() { invalidateVocabularyLifecycle() }
 
     override fun onDestroy() {
+        invalidateVocabularyLifecycle()
         mainHandler.removeCallbacks(keyboardRefreshRunnable)
         invalidateEditableCache()
         if (instance === this) {
@@ -427,6 +631,31 @@ class OpenLessAccessibilityService : AccessibilityService() {
     }
 
     companion object {
+        private fun sendVocabularyCommand(operation: String, generation: Long = 0L) {
+            val context = OpenLessAppContext.context ?: return
+            val intent = Intent(context, OpenLessAccessibilityCommandReceiver::class.java).apply {
+                action = OpenLessAccessibilityCommandReceiver.ACTION_VOCABULARY
+                putExtra("operation", operation)
+                putExtra("generation", generation)
+            }
+            try { context.sendBroadcast(intent) } catch (_: Throwable) { }
+        }
+
+        internal fun handleVocabularyCommand(intent: Intent) {
+            val service = instance ?: return
+            val generation = intent.getLongExtra("generation", 0L)
+            service.postVocabulary {
+                when (intent.getStringExtra("operation")) {
+                    "arm" -> service.startVocabularyObservation(generation)
+                    "disarm" -> if (service.vocabularyGeneration == generation) service.stopVocabularyObservation()
+                    "refresh" -> service.refreshVocabularyCard()
+                }
+            }
+        }
+
+        @Keep @JvmStatic fun armVocabularyObservation(generation: Long) = sendVocabularyCommand("arm", generation)
+        @Keep @JvmStatic fun disarmVocabularyObservation(generation: Long) = sendVocabularyCommand("disarm", generation)
+        @Keep @JvmStatic fun showVocabularySuggestions(json: String) = sendVocabularyCommand("refresh")
         /** Matches [isEnabled] / Settings.Secure component id format (full class name). */
         @JvmStatic
         fun serviceComponentId(): String =

@@ -36,12 +36,15 @@ pub const TARGET_AUDIO_CHUNK_BYTES: usize = 3_200;
 const TARGET_AUDIO_CHUNK_BYTES_8K: usize = 1_600;
 const BYTES_PER_MS: u64 = 32;
 const FINAL_RESULT_TIMEOUT: Duration = Duration::from_secs(12);
-/// WebSocket 建连（TCP + TLS + HTTP upgrade）本身的上限。没有它 `connect_async` 会无限
-/// 等，而 `open_session` 是在串行的 hotkey bridge 线程上 `block_on` 等的 —— 卡住就意味着
-/// 热键彻底失灵（开不了也停不了，只能退出重开）。详见 stepfun_realtime.rs 同名常量。
+/// Cap on the WebSocket handshake (TCP + TLS + HTTP upgrade) itself. Without it
+/// `connect_async` waits forever, and `open_session` is awaited with `block_on` on
+/// the serial hotkey bridge thread — a hang means hotkeys are completely dead
+/// (recording can neither start nor stop; the app must be restarted). See the same
+/// constant in stepfun_realtime.rs.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// 单个候选地址的 TCP 上限。IPv6 黑洞时不能把整段 5s 耗在第一个 AAAA 上。
+/// TCP cap per candidate address. On IPv6 black holes the whole 5s budget must not be
+/// spent on the first AAAA.
 const PER_ADDR_TCP_TIMEOUT: Duration = Duration::from_millis(1500);
 
 fn default_port_for_request(
@@ -161,11 +164,12 @@ impl BailianCredentials {
     }
 }
 
-/// Bailian 实时 ASR 走 DashScope WebSocket 网关，接口地址只接受 ws:// 或
-/// wss://。用户容易把百炼控制台的 `https://` 兼容模式 / 专属域名地址粘进来
-/// ——那是另一套 HTTP 协议，WebSocket 握手必然失败且底层报错
-/// （"URL scheme not supported"）对用户不可读。在验证入口先拦下，
-/// 前端据 `bailianEndpointSchemeInvalid` 错误码给出可操作的提示。
+/// Bailian realtime ASR uses the DashScope WebSocket gateway, which accepts only
+/// ws:// or wss:// endpoints. Users often paste the `https://` compatibility-mode /
+/// dedicated-domain URL from the Bailian console — a different HTTP protocol whose
+/// WebSocket handshake always fails, with an unreadable underlying error
+/// ("URL scheme not supported"). Intercept at validation entry points so the frontend
+/// can show an actionable hint via the `bailianEndpointSchemeInvalid` error code.
 pub fn endpoint_scheme_is_websocket(endpoint: &str) -> bool {
     let lower = endpoint.trim().to_ascii_lowercase();
     lower.starts_with("wss://") || lower.starts_with("ws://")
@@ -204,11 +208,13 @@ struct SyncState {
     start: Option<Instant>,
     final_tx: Option<oneshot::Sender<Result<RawTranscript, BailianASRError>>>,
     send_tx: Option<mpsc::UnboundedSender<SendItem>>,
-    /// sentence_id → text，按 sentence_id 排序拼接得到最终文本。
-    /// 同一 sentence_id 的后到结果覆盖前一个，消除累积文本导致的重复。
+    /// sentence_id -> text; joined in sentence_id order to form the final text. A
+    /// later result for the same sentence_id overwrites the previous one, eliminating
+    /// the duplication caused by cumulative text.
     final_segments: BTreeMap<i64, String>,
-    /// sentence_id → interim 文本，sentence_end == false 时更新，
-    /// 收到同 sentence_id 的 final 结果时将内容移入 final_segments。
+    /// sentence_id -> interim text, updated while sentence_end == false; when the
+    /// final result for that sentence_id arrives, the content moves into
+    /// final_segments.
     partial_segments: BTreeMap<i64, String>,
     last_result_text: String,
 }
@@ -495,7 +501,7 @@ impl BailianRealtimeASR {
             return;
         };
 
-        // 跳过 heartbeat 事件（不含识别文本）
+        // Skip heartbeat events (no recognized text).
         if sentence
             .get("heartbeat")
             .and_then(Value::as_bool)
@@ -512,10 +518,11 @@ impl BailianRealtimeASR {
             return;
         }
 
-        // 使用 API 文档标注的 sentence_end 作为 finality 判断。
-        // end_time > 0 仅在 sentence_end 字段完全不存在时作为兼容 fallback，
-        // 因为 DashScope 的 interim 结果也包含正数的 end_time（随音频推进增长），
-        // 直接 fallback 会导致 interim 结果被误判为 final，重现累积文本重复。
+        // Use the API-documented sentence_end as the finality signal. end_time > 0 is
+        // only a compatibility fallback when the sentence_end field is entirely
+        // absent, because DashScope interim results also carry a positive end_time
+        // (growing with the audio); falling back unconditionally would misjudge
+        // interim results as final and re-create the cumulative-text duplication.
         let sentence_end_val = sentence.get("sentence_end");
         let sentence_end = sentence_end_val.and_then(Value::as_bool).unwrap_or(false);
         let end_time = sentence
@@ -590,7 +597,9 @@ impl BailianRealtimeASR {
                 || !st.partial_segments.is_empty()
         };
         if has_partial {
-            // 与 Volcengine 保持一致：连接异常但已有 partial 时优先兜底返回，避免丢失用户已识别出的内容。
+            // Consistent with Volcengine: when the connection breaks but a partial
+            // already exists, return it rather than the error, so recognized text is
+            // not lost.
             self.finish_success();
         } else {
             self.finish_error(error);
@@ -683,9 +692,10 @@ fn model_is_8k(model: &str) -> bool {
 }
 
 fn downsample_pcm_16k_to_8k(pcm: &[u8]) -> Vec<u8> {
-    // 16 kHz → 8 kHz：相邻两个样本取平均（一阶低通）。相比纯抽取（每隔一个
-    // 直接丢弃），平均能压低 4–8 kHz 频段折叠进 0–4 kHz 的混叠，识别更稳。
-    // 用 i32 求和避免 i16 溢出；输出样本数减半。
+    // 16 kHz -> 8 kHz: average adjacent samples (first-order low-pass). Compared with
+    // plain decimation (dropping every other sample), averaging suppresses aliasing of
+    // the 4-8 kHz band into 0-4 kHz, making recognition more stable. i32 summation
+    // avoids i16 overflow; output sample count is halved.
     let mut out = Vec::with_capacity(pcm.len() / 2);
     for pair in pcm.as_chunks::<4>().0.iter() {
         let left = i16::from_le_bytes([pair[0], pair[1]]) as i32;
@@ -697,16 +707,18 @@ fn downsample_pcm_16k_to_8k(pcm: &[u8]) -> Vec<u8> {
 }
 
 fn clear_downsample_tail(remainder: &mut Vec<u8>) {
-    // 平均降采样需要成对样本：收尾时不足一对的残余（≤1 个 16k 样本 ≈ 0.0625ms）
-    // 无法配对取平均，直接丢弃，不破坏后续分块对齐。
+    // Averaging downsample needs sample pairs: a remainder smaller than one pair at
+    // close-out (<= 1 16k sample, approx 0.0625ms) cannot be paired and is discarded,
+    // keeping later chunk alignment intact.
     remainder.clear();
 }
 
-/// 带重叠检测的文本段拼接：如果后一段的开头与前一段的末尾存在重叠，
-/// 只追加不重叠的尾部，避免因 API 重放或重复事件导致的累积文本重复。
+/// Joins text segments with overlap detection: when the start of the next segment
+/// overlaps the end of the previous one, only the non-overlapping tail is appended,
+/// preventing cumulative-text duplication from API replays or duplicate events.
 ///
-/// 最小重叠长度为 2 个字符，避免单字巧合匹配（如"今天"+"天气"）。
-/// 例如 ["你好吗", "好吗我们"] → "你好吗我们"
+/// Minimum overlap length is 2 chars to avoid single-char coincidences.
+/// e.g. ["AB CD", "CD EF"] -> "AB CD EF"
 fn merge_segments(segments: &[String]) -> String {
     let mut result = String::new();
     for seg in segments {
@@ -842,8 +854,8 @@ mod tests {
                         "sentence_id": sentence_id,
                         "text": text,
                         "sentence_end": is_final,
-                        // end_time 始终为正数，匹配 DashScope 真实 API 行为：
-                        // interim 和 final 都携带正数的 end_time。
+                        // end_time is always positive, matching the real DashScope
+                        // API: interim and final both carry positive end_time.
                         "end_time": 1000 + sentence_id * 100
                     }
                 }
@@ -1052,8 +1064,8 @@ mod tests {
 
     #[test]
     fn interim_with_positive_end_time_not_mistaken_for_final() {
-        // DashScope 真实 API 中 interim 结果同时带有 sentence_end: false
-        // 和正数的 end_time，验证这不会被误判为 final。
+        // In the real DashScope API, interim results carry both sentence_end: false
+        // and a positive end_time; verify this is not misjudged as final.
         let asr = create_test_asr();
         asr.record_result(&make_result_event(1, "中间结果", false));
         let st = asr.state.lock();
@@ -1193,7 +1205,8 @@ mod tests {
         assert!(endpoint_scheme_is_websocket(
             "  WSS://dashscope.aliyuncs.com/api-ws/v1/inference/  "
         ));
-        // 百炼控制台的 https 兼容模式 / 专属域名地址不是 WebSocket 网关
+        // The Bailian console's https compatibility-mode / dedicated-domain URLs are
+        // not WebSocket gateways.
         assert!(!endpoint_scheme_is_websocket(
             "https://llm-xxx.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
         ));
@@ -1255,8 +1268,9 @@ mod tests {
 
     #[test]
     fn downsample_flush_drops_lone_tail_sample() {
-        // 3 个 16k 样本：完整一对 (1,2) 取平均；残余的第 3 个样本无法配对，
-        // 收尾时直接丢弃（最多损失 0.0625ms，无感知）。
+        // 3 16k samples: the complete pair (1,2) is averaged; the leftover 3rd sample
+        // cannot be paired and is discarded at close (at most 0.0625ms lost,
+        // imperceptible).
         let mut remainder = [
             1_i16.to_le_bytes(),
             2_i16.to_le_bytes(),

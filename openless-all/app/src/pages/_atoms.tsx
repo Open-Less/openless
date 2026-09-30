@@ -12,7 +12,7 @@ interface PageHeaderProps {
   desc?: string;
   right?: ReactNode;
   titleRight?: ReactNode;
-  /** 概览等单屏页用：收紧标题与下方内容的间距。 */
+  /** For single-screen pages like Overview: tightens the gap between the title and content below. */
   compact?: boolean;
 }
 
@@ -235,7 +235,7 @@ export function Btn({
     sm: { padding: '5px 10px', fontSize: 13 },
     md: { padding: '7px 14px', fontSize: 13.5 },
   };
-  // 主按钮禁用时改成浅灰，避免半透明深色仍像可以点击。
+  // When the primary button is disabled, switch to light gray — translucent dark would still look clickable.
   const muted = disabled && (variant === 'primary' || variant === 'blue');
   return (
     <button
@@ -270,26 +270,27 @@ export function Btn({
 }
 
 interface CollapsibleProps {
-  /// 标题行内容（短文案，居左）。
+  /// Title row content (short text, left-aligned).
   title: ReactNode;
-  /// 可选的副标题 / 描述（小字，居标题下方）。
+  /// Optional subtitle / description (small text below the title).
   desc?: ReactNode;
-  /// 默认是否展开。默认 false（折叠，符合"默认只显示标题 + 右箭头"语义）。
+  /// Whether expanded by default. Default false (collapsed, matching the "title + right arrow only" default).
   defaultOpen?: boolean;
-  /// 嵌在 Card padding=0 容器里时设为 true：移除上下 margin，仅靠 Card 的 borderBottom 分割。
+  /// Set true when nested in a Card padding=0 container: removes top/bottom margins, relying only on the Card's borderBottom to separate.
   embedded?: boolean;
   children: ReactNode;
 }
 
-/// 折叠栏：默认收起，标题行右侧显示一个 `›` 箭头，点击切换展开/收起。展开时箭头
-/// 旋转 90°。内容区域用 `grid-template-rows: 0fr ↔ 1fr` 过渡——浏览器把 `1fr`
-/// 解析为内容实际高度，过渡到真实高度，避免 max-height 固定大值时短内容也走完
-/// 整段动画 / 短内容关闭时延迟生效的"卡卡"感。要求 Chromium 117+（Tauri 自带），
-/// 现代版本完全支持。
+/// Collapsible section: collapsed by default, a `›` arrow on the right of the title row toggles
+/// expand/collapse. The arrow rotates 90° when expanded. The content area transitions via
+/// `grid-template-rows: 0fr ↔ 1fr` — the browser resolves `1fr` to the content's actual height and
+/// transitions to it, avoiding the janky feel of a max-height animation where short content still plays
+/// the full animation / closes with a delay. Requires Chromium 117+ (bundled with Tauri); modern
+/// versions are fully supported.
 ///
-/// `embedded=true`：嵌在 `<Card padding={0}>` 里、与其他 Collapsible 共享一张 Card 时使用，
-/// 底部加一道 0.5px 分隔。
-/// `embedded=false`：独立 block，自带 Card 同款外观（border / radius / shadow）。
+/// `embedded=true`: for nesting inside a `<Card padding={0}>` sharing one Card with other Collapsibles;
+/// adds a 0.5px bottom separator.
+/// `embedded=false`: standalone block with the Card look (border / radius / shadow).
 export function Collapsible({
   title,
   desc,
@@ -307,8 +308,8 @@ export function Collapsible({
         background: embedded ? 'transparent' : 'var(--ol-surface)',
         boxShadow: embedded ? 'none' : 'var(--ol-shadow-sm)',
         overflow: 'hidden',
-        // 父级 flex column 带 minHeight:0 + overflow:auto 时，所有 flex 子项默认
-        // shrink:1，会把 header 按钮也压成一条线。锁住不压缩，溢出走父容器滚动。
+        // In a parent flex column with minHeight:0 + overflow:auto, flex children default to shrink:1
+        // and the header button would be squeezed to a line. Lock it from shrinking; overflow scrolls in the parent.
         flexShrink: 0,
       }}
     >
@@ -316,8 +317,8 @@ export function Collapsible({
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        // 让屏幕阅读器朗读折叠状态；键盘 focus 保留浏览器默认 outline 而不是
-        // outline: 'none'，避免 Tab 切换时丢失视觉焦点指示（pr-agent #407 反馈）。
+        // Announce the collapsed state to screen readers; keyboard focus keeps the browser's default outline
+        // instead of outline: 'none' so Tab navigation keeps a visual focus indicator (pr-agent #407).
         style={{
           width: '100%',
           padding: '14px 18px',
@@ -362,19 +363,19 @@ export function Collapsible({
       <div
         style={{
           display: 'grid',
-          // grid-template-rows: 0fr → 1fr 让浏览器把 1fr 解析为内容实际高度。
+          // grid-template-rows: 0fr → 1fr makes the browser resolve 1fr to the content's actual height.
           gridTemplateRows: open ? '1fr' : '0fr',
           transition: 'grid-template-rows 0.22s var(--ol-motion-soft)',
         }}
-        // inert 把内部交互元素从 tab 顺序 + a11y 树移除，避免折叠后键盘用户
-        // 仍能 tab 到不可见的输入框 / 按钮 / Toggle（pr-agent #407 反馈）。
-        // 受支持范围：Chromium 102+（Tauri WebView 远高于此）/ Safari 15.4+。
-        // React 18 类型没收 `inert`，用 spread 传 string-boolean 绕过编译器。
+        // inert removes internal interactive elements from tab order + the a11y tree so keyboard users
+        // can't tab into invisible inputs / buttons / toggles after collapsing (pr-agent #407).
+        // Support: Chromium 102+ (the Tauri WebView is far newer) / Safari 15.4+.
+        // React 18 types don't accept `inert`; pass the string-boolean via spread to bypass the compiler.
         {...(!open ? { inert: '' } : {})}
         aria-hidden={!open}
       >
-        {/* minHeight: 0 必填：默认 grid item 不允许收缩到小于内容固有高度，
-            没这条 trick 不生效，行高动画也跟着失败。 */}
+        {/* minHeight: 0 is required: a grid item won't shrink below its content's intrinsic height by default;
+            without this trick nothing animates and the row-height animation fails too. */}
         <div style={{ overflow: 'hidden', minHeight: 0 }}>
           <div style={{ padding: '0 18px 18px' }}>{children}</div>
         </div>

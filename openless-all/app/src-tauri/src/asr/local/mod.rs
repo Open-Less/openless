@@ -1,4 +1,4 @@
-//! 本地 ASR 引擎入口。
+//! Local ASR engine entry point.
 //!
 //! 当前本地引擎：
 //! - **macOS**：Qwen3-ASR 可选 MLX/Metal 或 C/CPU；
@@ -175,8 +175,9 @@ impl LocalQwenEngine {
         }
     }
 
-    /// Dictation 转写保持各后端原有语义：MLX 整段 batch；C 追加 0.5 秒静音后
-    /// 走流式解码，并将稳定 token 交给调用方实时显示。
+    /// Dictation transcription keeps each backend's existing semantics: MLX batches the whole
+    /// segment; C appends 0.5s of silence and streams, handing stable tokens to the caller for
+    /// live display.
     pub fn transcribe_dictation_with_handler<F>(
         &self,
         operation_id: u64,
@@ -228,10 +229,10 @@ mod qwen_dictation_tests {
     }
 }
 
-/// Apple Speech（SFSpeechRecognizer）本地 ASR 的 provider id；与 Core
-/// ProviderDescriptor 的 type 对齐（issue #574）。该字符串在所有平台都可被识别，
-/// 但 provider 实现只在 macOS 编译；非 macOS 上由上层判为 not-configured /
-/// 不可用（见 commands / coordinator 的平台门控）。
+/// Provider id for the Apple Speech (SFSpeechRecognizer) local ASR; aligned with the Core
+/// ProviderDescriptor type (issue #574). The string is recognizable on all platforms,
+/// but the provider implementation compiles only on macOS; on non-macOS the upper layer treats
+/// it as not-configured / unavailable (see the platform gating in commands / coordinator).
 pub const APPLE_SPEECH_PROVIDER_ID: &str = "apple-speech";
 
 #[allow(dead_code)]

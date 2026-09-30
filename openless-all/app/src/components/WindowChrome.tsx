@@ -1,7 +1,4 @@
-import {
-  type CSSProperties,
-  type ReactNode,
-} from 'react';
+import { type CSSProperties, type ReactNode } from 'react';
 
 export type OS = 'mac' | 'win' | 'android';
 
@@ -29,7 +26,8 @@ interface WindowChromeProps {
 }
 
 export function WindowChrome({ os = 'mac', children, height = 800 }: WindowChromeProps) {
-  // Windows: decorations:true 时外层不画圆角/边框/阴影/标题栏，避免与原生窗口重叠。
+  // Windows: with decorations:true the shell draws no radius/border/shadow/titlebar,
+  // avoiding overlap with the native window.
   const shellRadius = os === 'mac' ? 0 : os === 'win' || os === 'android' ? 0 : 14;
   const consoleRadius = os === 'mac' ? 20 : os === 'win' ? WIN_CONSOLE_RADIUS : 0;
   const titlebarHeight = os === 'mac' ? MAC_TITLEBAR_HEIGHT : 0;
@@ -47,6 +45,7 @@ export function WindowChrome({ os = 'mac', children, height = 800 }: WindowChrom
           width: '100%',
           height,
           position: 'relative',
+          isolation: 'isolate',
           borderRadius: 'var(--ol-window-shell-radius)',
           boxShadow: os === 'win' ? 'none' : 'var(--ol-shadow-xl)',
           overflow: 'hidden',
@@ -59,10 +58,9 @@ export function WindowChrome({ os = 'mac', children, height = 800 }: WindowChrom
           backdropFilter: 'none',
           WebkitBackdropFilter: 'none',
           animation:
-            os === 'win' ? undefined : 'ol-window-enter 0.42s var(--ol-motion-spring) both',
+            os === 'win' ? undefined : 'ol-window-enter 0.24s var(--ol-motion-spring) backwards',
           transition:
             'box-shadow 0.28s var(--ol-motion-soft), border-color 0.28s var(--ol-motion-soft)',
-          willChange: 'opacity, transform',
         } as CSSProperties
       }
     >

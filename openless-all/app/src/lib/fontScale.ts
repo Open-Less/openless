@@ -1,5 +1,6 @@
-// 全局字体大小档位 — 通过 documentElement.style.zoom 整体缩放（WebKit/Tauri 支持）。
-// localStorage 是单一事实源；窗口启动时读一次应用，Settings 的"个性化"里改了就直接覆盖。
+// Global font-size tiers — scales the whole UI via documentElement.style.zoom (supported by
+// WebKit/Tauri). localStorage is the single source of truth; it's read once at window
+// startup, and changes made in Settings' "personalization" overwrite it directly.
 
 export type FontScaleId = 'small' | 'medium' | 'large';
 
@@ -16,9 +17,10 @@ export function readFontScale(): FontScaleId {
     const v = window.localStorage.getItem(FONT_SCALE_KEY);
     if (v === 'small' || v === 'medium' || v === 'large') return v;
   } catch {
-    /* localStorage 不可用：忽略，落回默认 */
+    /* localStorage unavailable: ignore, fall back to the default */
   }
-  // Windows 默认 'large'（用户反馈 medium 在 Windows 上字号偏小）；其他平台保持 medium。
+  // Windows defaults to 'large' (user feedback: medium reads too small on Windows); other
+  // platforms keep medium.
   if (typeof navigator !== 'undefined') {
     const hint = `${navigator.userAgent || ''} ${navigator.platform || ''}`;
     if (/Windows|Win32|Win64/.test(hint)) return 'large';
@@ -28,7 +30,8 @@ export function readFontScale(): FontScaleId {
 
 export function applyFontScale(id: FontScaleId): void {
   const scale = FONT_SCALE_VALUES[id];
-  // CSS zoom 不在 W3C 标准里但 WebKit/Blink 都支持；Tauri 桌面端走 Wry/WebKit，没问题。
+  // CSS zoom isn't in the W3C standard but WebKit/Blink both support it; Tauri desktop runs
+  // Wry/WebKit, so it's fine.
   (document.documentElement.style as CSSStyleDeclaration & { zoom?: string }).zoom = String(scale);
 }
 
@@ -38,6 +41,6 @@ export function setFontScale(id: FontScaleId, source: 'user' | 'sync-restore' = 
     window.localStorage.setItem(FONT_SCALE_KEY, id);
     window.dispatchEvent(new CustomEvent('openless:ui-preferences-changed', { detail: { source, key: 'fontScale' } }));
   } catch {
-    /* 忽略 */
+    /* ignore */
   }
 }

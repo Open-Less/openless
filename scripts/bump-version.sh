@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
-# 同步更新 OpenLess 四处版本号。
-# 用法：
+# Sync-update the OpenLess version in four places.
+# Usage:
 #     ./scripts/bump-version.sh 1.2.21
 #
-# 改的位置（CLAUDE.md 强调必须同时改，否则 release-tauri.yml 失败）：
+# Locations to edit (CLAUDE.md stresses they must change together, otherwise
+# release-tauri.yml fails):
 #   - openless-all/app/package.json                "version": "X.Y.Z"
-#   - openless-all/app/package-lock.json           根包 version + 嵌套引用
+#   - openless-all/app/package-lock.json           root package version + nested refs
 #   - openless-all/app/src-tauri/tauri.conf.json   "version": "X.Y.Z"
-#   - openless-all/app/src-tauri/Cargo.toml        version = "X.Y.Z" (顶层)
-#   - openless-all/app/src-tauri/Cargo.lock        通过 cargo update -p openless 同步
+#   - openless-all/app/src-tauri/Cargo.toml        version = "X.Y.Z" (top level)
+#   - openless-all/app/src-tauri/Cargo.lock        synced via cargo update -p openless
 #
-# CI 的 cross-platform 任务最后一步会校验四个文件版本号一致；漏改一处直接 fail。
+# CI's cross-platform job verifies the versions match across the files in its last step;
+# missing one fails outright.
 
 set -euo pipefail
 
@@ -43,22 +45,24 @@ for f in "$PKG_JSON" "$PKG_LOCK" "$TAURI_CONF" "$CARGO_TOML" "$CARGO_LOCK"; do
   fi
 done
 
-# package.json + package-lock.json：npm version 一行同步两个，且不打 git tag。
-# --allow-same-version 让脚本可重复运行（实际 release flow 不会，但 dry-run 友好）。
+# package.json + package-lock.json: npm version updates both in one line, without a git tag.
+# --allow-same-version makes the script re-runnable (the real release flow won't, but it's
+# dry-run friendly).
 echo "▶ 升 package.json + package-lock.json → $NEW"
 ( cd "$APP" && npm version "$NEW" --no-git-tag-version --allow-same-version > /dev/null )
 
-# tauri.conf.json：BSD sed 与 GNU sed 都支持 -E + -i.bak 后缀；不用行号范围地址。
+# tauri.conf.json: both BSD sed and GNU sed support -E + -i.bak suffix; no line-range address.
 echo "▶ 升 tauri.conf.json → $NEW"
 sed -E -i.bak \
   "s/\"version\":[[:space:]]*\"[0-9]+\.[0-9]+\.[0-9]+\"/\"version\": \"$NEW\"/" \
   "$TAURI_CONF"
 rm "$TAURI_CONF.bak"
 
-# Cargo.toml：用 awk 替换 [package] 段里的 version = "X.Y.Z" 行。
-# 必须锚定 [package] 段：文件里先出现的纯 X.Y.Z 版本行可能是依赖版本
-# （如 keyring 的 `version = "3.6.3"`），不带锚定会把依赖版本误改成新版本号。
-# 不用 GNU sed 的 `0,/.../` 行号范围地址（macOS BSD sed 不支持）。
+# Cargo.toml: use awk to replace the version = "X.Y.Z" line inside the [package] section.
+# Must anchor on the [package] section: an earlier bare X.Y.Z version line in the file may
+# be a dependency version (e.g. keyring's `version = "3.6.3"`); without the anchor a
+# dependency would get the new version by mistake.
+# No GNU sed `0,/.../` line-range address (macOS BSD sed doesn't support it).
 echo "▶ 升 Cargo.toml → $NEW"
 awk -v new="$NEW" '
   /^\[package\]$/ { in_package = 1 }
@@ -70,11 +74,12 @@ awk -v new="$NEW" '
 ' "$CARGO_TOML" > "$CARGO_TOML.tmp"
 mv "$CARGO_TOML.tmp" "$CARGO_TOML"
 
-# Cargo.lock：cargo update 显式同步 openless package；失败要立刻退出，不能吞错。
+# Cargo.lock: cargo update syncs the openless package explicitly; exit immediately on
+# failure, never swallow errors.
 echo "▶ 同步 Cargo.lock"
 ( cd "$APP/src-tauri" && cargo update -p openless 2>&1 | tail -5 )
 
-# 校验五处一致（package.json / package-lock.json / tauri.conf.json / Cargo.toml / Cargo.lock）
+# Verify consistency across the five (package.json / package-lock.json / tauri.conf.json / Cargo.toml / Cargo.lock)
 echo
 echo "===== 验证版本一致性 ====="
 PKG=$(node -p "require('$PKG_JSON').version")

@@ -1,0 +1,18 @@
+{
+  "format_version": 1,
+  "generated": "2026-09-25",
+  "chars": {
+    "file": "pinyin_chars.tsv",
+    "character_count": 8105,
+    "row_count": 8225,
+    "generator": "scripts/generate-pinyin-characters.mjs"
+  },
+  "phrases": {
+    "file": "pinyin_phrases.tsv",
+    "row_count": 2006,
+    "corpus_limit": 2000,
+    "whitelist_added": 6,
+    "blacklist_removed": 1,
+    "generator": "scripts/generate-pinyin-phrases.mjs"
+  }
+}

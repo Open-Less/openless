@@ -1,0 +1,51 @@
+pinyin_phrases.tsv — attribution, source pinning, and license
+=================================================================
+
+Sources:
+
+1. rime/rime-pinyin-simp — pinyin_simp.dict.yaml (base candidate pool and
+   usage-frequency weight; multi-character rows only — see
+   pinyin_chars.LICENSE.txt for this same file's single-character rows)
+   https://github.com/rime/rime-pinyin-simp
+   Commit: 0c6861ef7420ee780270ca6d993d18d4101049d0
+   Downloaded: 2026-09-25
+   SHA-256: e341598343a0f0f2035bb1aafc34a7f3bb7887deeecb3f60796262aaa2983e6b
+   License: Apache License 2.0. Full text:
+            https://github.com/rime/rime-pinyin-simp/blob/master/LICENSE
+
+2. mozillazg/pinyin-data — kMandarin_8105.txt, used only as a character-set
+   membership filter (rejects any candidate phrase containing a character
+   outside 《通用规范汉字表》, i.e. traditional-only/rare/PUA characters)
+   https://github.com/mozillazg/pinyin-data
+   Commit: 923b108dc5d45dee061324c011b478fb649f8b73
+   Downloaded: 2026-09-25
+   SHA-256: 1b1546f6e190c0f1cbf23e3bb436b41c3ace16f852be4daebc2c7295636628a4
+   License: MIT License, Copyright (c) 2016 mozillazg. Full text:
+            https://github.com/mozillazg/pinyin-data/blob/master/LICENSE
+
+3. mozillazg/phrase-pinyin-data — pinyin.txt, authoritative word-level
+   readings used to correct a phrase's pinyin when it disagrees with rime's
+   own per-character reading (resolves polyphones-in-context)
+   https://github.com/mozillazg/phrase-pinyin-data
+   Commit: cee0ed6e6e4898580cafd2bd5e3723e20b214aa0
+   Downloaded: 2026-09-25
+   SHA-256: dcc769607c220b312fea3e71cb63421298b4b891b1f7356a95ab58f2c96fff81
+   License: MIT License, Copyright (c) 2017 mozillazg. Full text:
+            https://github.com/mozillazg/phrase-pinyin-data/blob/master/LICENSE
+
+Generation: this repo's scripts/generate-pinyin-phrases.mjs — see that
+script's own header comment for the exact re-fetch/regenerate commands and
+selection/ranking rules (2-4 character simplified-only words, top ~2000 by
+usage weight, plus a small manually curated domain-term whitelist confirmed
+with the user on 2026-09-25 — see the WHITELIST constant in that script — and
+a small blacklist of corpus noise found by spot-checking the output, e.g.
+"回复日期", a forum/IME-corpus UI-template phrase rather than real vocabulary
+— see the BLACKLIST constant). LitePinyinRepository.kt additionally ranks
+the whitelisted words above an ordinary same-abbreviation phrase at query
+time (its own PRIORITY_PHRASES constant), not something this generator's
+own output encodes.
+Output rows are tab-separated "phrase<TAB>full_pinyin<TAB>abbreviation<TAB>
+weight", pinyin lowercase ASCII with ü normalized to v and tone marks
+stripped, abbreviation = first letter of each syllable. No runtime code in
+OpenLess downloads, modifies, or redistributes any of the three original
+sources — only this generated, filtered derivative ships in the app.

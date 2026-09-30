@@ -1,6 +1,6 @@
 type Status = 'idle' | 'saving' | 'saved' | 'readError' | 'saveError';
 
-/** 一个凭据槽的草稿和串行写入；调用方在更换作用域前等待 flush。 */
+/** Draft and serial writes for one credential slot; callers await flush before switching scopes. */
 export class CredentialDraft {
   private state = { value: '', loaded: false, dirty: false, status: 'idle' as Status };
   private listeners = new Set<() => void>();

@@ -599,11 +599,11 @@ fn pack_version_newer_compares_numeric_segments() {
     assert!(!super::version_newer("3.0.0", "3.0.0"));
     assert!(super::version_newer("3.1.0", "3.0.9"));
     assert!(super::version_newer("10.0.0", "9.9.9"));
-    // pre-release 视为与正式版同级，不判为更新
+    // pre-release compares equal to the release; not an update
     assert!(!super::version_newer("3.0.0-beta.1", "3.0.0"));
     assert!(!super::version_newer("3.0.0", "3.0.0-beta.1"));
     assert!(super::version_newer("3.0.1-beta", "3.0.0"));
-    // 全非数字 → 不判定更新
+    // All-non-numeric segments -> not an update
     assert!(!super::version_newer("abc", "def"));
 }
 
@@ -617,7 +617,7 @@ fn reconcile_builtin_packs_upgrades_prompt_only_and_preserves_user_fields() {
     local.version = "2.0.0".into();
     local.prompt = "用户自定义的旧 prompt".into();
     local.name = "我的清晰结构".into();
-    local.enabled = false; // 用户手动禁用
+    local.enabled = false; // disabled manually by the user
 
     assert!(super::reconcile_builtin_packs(&mut packs));
 
@@ -636,11 +636,11 @@ fn reconcile_builtin_packs_upgrades_prompt_only_and_preserves_user_fields() {
 
 #[test]
 fn reconcile_builtin_packs_skips_equal_version_and_adds_missing() {
-    // 等版本（builtin 3.0.0 vs local 3.0.0）→ 不推进、不落盘
+    // Equal versions (builtin 3.0.0 vs local 3.0.0) -> no upgrade, no write
     let mut packs = builtin_style_packs();
     assert!(!super::reconcile_builtin_packs(&mut packs));
 
-    // 本地缺失内置包 → 补入全部 4 个
+    // Built-in pack missing locally -> all 4 are added back
     let mut empty: Vec<StylePack> = Vec::new();
     assert!(super::reconcile_builtin_packs(&mut empty));
     assert_eq!(empty.len(), 4);

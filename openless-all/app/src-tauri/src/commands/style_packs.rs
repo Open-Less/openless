@@ -176,8 +176,9 @@ pub fn delete_style_pack(
     refresh_tray_menu_async(&app);
     if let Some(change) = &outcome.effects.hotkeys {
         if let Err(error) = coord.apply_hotkey_runtime_change(change) {
-            // Core 删除事务已经提交；保留新的显式 target，让常驻 supervisor 继续收敛，
-            // 不再从偏好文档反推本次删除意图。
+            // The Core delete transaction is already committed; keep the new explicit target so
+            // the resident supervisor keeps converging instead of inferring the delete intent
+            // from the preferences document.
             log::warn!("[style-pack] refresh hotkeys after delete failed: {error}");
         }
     }

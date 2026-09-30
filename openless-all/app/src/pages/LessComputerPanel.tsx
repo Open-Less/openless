@@ -105,7 +105,8 @@ interface TextSegment {
 interface ToolSegment {
   kind: 'tool';
   name: string;
-  /** 后端没有工具结束事件：下一个事件到达时仅停止活动指示，不推断工具成功。 */
+  /** No backend tool-end event exists: the next event merely stops the activity indicator and
+   *  must not infer tool success. */
   running: boolean;
 }
 
@@ -124,10 +125,12 @@ interface CompactionSegment {
   kind: 'compaction';
 }
 
-/** 助手输出流：文本 / 工具行 / 上下文压缩 / 审批卡按到达顺序排列（Codex 式交错）。 */
+/** Assistant output stream: text / tool lines / context compaction / approval cards in arrival
+ *  order (Codex-style interleave). */
 type Segment = TextSegment | ToolSegment | CompactionSegment | ApprovalSegment;
 
-/** 一轮对话：用户一句 + 助手输出流 + 本轮收尾态。连续对话累积成数组。 */
+/** One conversation turn: a user line + assistant output stream + the turn's final status.
+ *  Consecutive turns accumulate into an array. */
 interface Turn {
   user: string;
   segments: Segment[];
@@ -146,15 +149,16 @@ function emptyTurn(user: string): Turn {
 }
 
 /**
- * 自愈：浮窗首次创建时 webview 冷加载，后端的 `user` 事件常常先于 listener
- * 注册被丢掉；随后的 delta/tool/收尾若发现没有任何轮次，就地补一轮（用户文案
- * 缺失，只是不显示指令气泡），保证输出照常渲染而不是永久空白。
+ * Self-heal: when the floating window is first created the webview cold-loads, so backend `user`
+ * events are often dropped before the listener registers; if a following delta/tool/final event
+ * finds no turns, patch in a turn on the spot (the user text is missing, so only the instruction
+ * bubble is not shown), keeping the output rendering instead of a permanent blank.
  */
 function ensureTurn(turns: Turn[]): Turn[] {
   return turns.length > 0 ? turns : [emptyTurn('')];
 }
 
-/** 对 turns 数组「最后一轮」做不可变更新（空数组先自愈补轮）。 */
+/** Immutably update the "last turn" of the turns array (an empty array is self-healed first). */
 function updateLastTurn(turns: Turn[], fn: (t: Turn) => Turn): Turn[] {
   const list = ensureTurn(turns);
   return [...list.slice(0, -1), fn(list[list.length - 1])];
@@ -165,7 +169,7 @@ function hasFinishedLastTurn(turns: Turn[]): boolean {
   return last !== undefined && last.status !== 'working';
 }
 
-/** 把流里还在扫光的工具行停下来（下一个事件到达仅停止工具活动指示）。 */
+/** Stop the tool lines still sweeping in the stream (the next event only stops tool activity). */
 function settleRunningTools(segments: Segment[]): Segment[] {
   if (!segments.some((s) => s.kind === 'tool' && s.running)) return segments;
   return segments.map((s) => (s.kind === 'tool' && s.running ? { ...s, running: false } : s));
@@ -310,14 +314,17 @@ export function LessComputerPanel() {
     );
   }, [enterEpoch]);
 
-  // ── 后端事件订阅（mount 一次）────────────────────────────────────────
+  // ── Backend event subscription (mounted once) ────────────────────────
   //
-  // 冷加载竞态补偿：webview 首次创建需要数百毫秒，后端在此期间 emit 的事件
-  // （尤其首条 user —— 用户说的那句话）到不了 listener。协议：
-  //   1) 先注册 listener，实时事件暂存 pending（不直接应用）；
-  //   2) 调 less_computer_sync 拉后端缓冲，按 seq 升序全量重放；
-  //   3) 放行 pending 与后续实时流，seq ≤ 已应用最大值的重复事件丢弃。
-  // 无 seq 的事件（后端缓冲锁异常的降级路径）无条件应用。
+  // Cold-load race compensation: the webview takes hundreds of ms to create the first time, and
+  // events emitted by the backend during that window (especially the first user line — what the
+  // user said) never reach the listener. Protocol:
+  //   1) Register the listener first, buffering live events in pending (not applied directly);
+  //   2) Call less_computer_sync to pull the backend buffer and replay it in ascending seq order;
+  //   3) Then release pending and the live stream, dropping duplicates with seq ≤ the highest
+  //      applied value.
+  // Events without seq (the degraded path when the backend buffer lock misbehaves) apply
+  // unconditionally.
   useEffect(() => {
     if (!isTauri) return;
     let unlisten: (() => void) | undefined;
@@ -360,7 +367,8 @@ export function LessComputerPanel() {
           setTurns([]);
           setVoice(null);
         }
-        // 投影有自己的原始seq，不推进聊天流水位；读取投影期间到达的普通事件仍需应用。
+        // The projection carries its own original seq and does not advance the chat watermark;
+        // ordinary events arriving while reading the projection still need to be applied.
         if (replay.voiceState) {
           const snapshot = replay.voiceState;
           setVoice((previous) => reduceLessComputerVoice(previous, snapshot, true));
@@ -387,7 +395,8 @@ export function LessComputerPanel() {
       case 'user': {
         turnEpoch.current += 1;
         approvalRequests.current.clear();
-        // 一轮新对话。fresh=true（后端无可续会话→新会话）则清空历史重开；否则追加为后续轮次。
+        // A new turn. fresh=true (backend had no resumable session → new session) clears history
+        // and starts over; otherwise append as a follow-up turn.
         setTurns((prev) => (ev.fresh ? [emptyTurn(ev.text)] : [...prev, emptyTurn(ev.text)]));
         if (ev.fresh) setSessionSeq((seq) => seq + 1);
         break;
@@ -451,8 +460,9 @@ export function LessComputerPanel() {
         setTurns((prev) =>
           updateLastTurn(prev, (tn) => {
             let segments = settleRunningTools(tn.segments);
-            // 正常情况最终文本已通过 delta 流出；只有整轮没有任何文本时才用
-            // completed 的成品兜底（否则会把穿插的工具行冲掉）。
+            // Normally the final text already streamed in via deltas; only fall back to
+            // completed's finished text when the turn contained no text at all (otherwise the
+            // interleaved tool lines would be wiped).
             if (ev.text && !segments.some((s) => s.kind === 'text')) {
               segments = [...segments, { kind: 'text', content: ev.text }];
             }

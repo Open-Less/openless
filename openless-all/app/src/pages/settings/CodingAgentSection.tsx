@@ -1,13 +1,15 @@
-// 高级 → Less Computer 配置：启用开关、后端（Claude / OpenCode / Codex / dsh）、
-// 模型 / 权限模式 / 工作目录。
+// Advanced → Less Computer configuration: enable toggle, backend
+// (Claude / OpenCode / Codex / dsh), model / permission mode / working directory.
 //
-// 四个后端的能力不一样，这一页要如实反映差异，别让用户以为选项都通用：
-// - 模型：Claude 用别名下拉，OpenCode 拉账号可用列表，Codex 收裸模型名（自由文本），
-//   dsh 压根没有模型开关 —— 那一行直接不显示。
-// - 护栏：Claude / OpenCode 是逐命令 deny 清单（撞了能弹审批卡放行单条）；
-//   Codex / dsh 只有粗粒度沙箱档位，审批卡对它们不生效，这里挂一条说明。
-// 「按住说话键」在 通用 → 快捷键 里配置（见 ShortcutsSection），这里不再重复。
-// 配置经 UserPreferences 持久化；启用后 coordinator 才注册热键。
+// The four backends differ in capability, and this page must reflect that honestly so users
+// don't assume every option applies everywhere:
+// - Model: Claude uses an alias dropdown, OpenCode fetches the account's available list, Codex
+//   takes a bare model name (free text), and dsh has no model switch at all — hide that row.
+// - Guardrails: Claude / OpenCode have per-command deny lists (a hit can raise an approval card
+//   to allow that one command); Codex / dsh only have coarse sandbox levels where the approval
+//   card has no effect, so show an explanatory note here.
+// "Hold-to-talk key" is configured under General → Shortcuts (see ShortcutsSection); not repeated here.
+// Configuration persists via UserPreferences; the coordinator registers the hotkey only when enabled.
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -52,7 +54,7 @@ function normalizePermissionMode(
 
 type OpenCodeModelsStatus = 'idle' | 'loading' | 'loaded' | 'error';
 
-/** 后端下拉的选项。顺序 = 接入先后，Claude 保持第一（默认后端）。 */
+/** Backend dropdown options. Order = onboarding order; Claude stays first (default backend). */
 const PROVIDERS: { value: CodingAgentProviderId; label: string }[] = [
   { value: 'claude-code-cli', label: 'Claude Code' },
   { value: 'opencode-cli', label: 'OpenCode' },
@@ -60,7 +62,7 @@ const PROVIDERS: { value: CodingAgentProviderId; label: string }[] = [
   { value: 'dsh-cli', label: 'dsh' },
 ];
 
-/** 各后端默认的可执行文件名，用作「自定义路径」输入框的 placeholder。 */
+/** Default executable name per backend, used as the "custom path" input placeholder. */
 const DEFAULT_EXE: Record<CodingAgentProviderId, string> = {
   'claude-code-cli': 'claude',
   'opencode-cli': 'opencode',
@@ -72,7 +74,8 @@ export function CodingAgentSection() {
   const { t } = useTranslation();
   const { prefs, updatePrefs: savePrefs } = useHotkeySettings();
 
-  // OpenCode 安装检测：仅当启用 + 选了 OpenCode 后端时探测一次，用于提示是否需先安装。
+  // OpenCode install detection: probe once only when enabled + the OpenCode backend is selected,
+  // to hint whether it must be installed first.
   const [opencode, setOpencode] = useState<OpenCodeDetection | null>(null);
   const [opencodeModels, setOpencodeModels] = useState<string[]>([]);
   const [opencodeModelsStatus, setOpencodeModelsStatus] = useState<OpenCodeModelsStatus>('idle');
@@ -82,10 +85,10 @@ export function CodingAgentSection() {
   const useOpencode = prefs?.codingAgentEnabled && provider === 'opencode-cli';
   const useCodex = prefs?.codingAgentEnabled && provider === 'codex-cli';
   const useDsh = prefs?.codingAgentEnabled && provider === 'dsh-cli';
-  // 只有沙箱档位、没有逐命令 deny 清单的后端：审批卡对它们不生效。
+  // Backends with only sandbox levels and no per-command deny list: the approval card has no effect on them.
   const sandboxOnly = Boolean(useCodex || useDsh);
 
-  // Codex / dsh 的安装检测（两家共用同一个通用检测命令）。
+  // Codex / dsh install detection (both share the same generic detection command).
   const [cliDetection, setCliDetection] = useState<OpenCodeDetection | null>(null);
   useEffect(() => {
     if (!sandboxOnly) {
@@ -99,7 +102,7 @@ export function CodingAgentSection() {
         const detection = await codingAgentDetectCli(provider, prefs?.codingAgentExe ?? undefined);
         if (alive) setCliDetection(detection);
       } catch {
-        // 检测失败按「没装」处理：这里只是提示，不阻断用户保存配置。
+        // Treat detection failure as "not installed": this is only a hint, it never blocks saving the config.
         if (alive) setCliDetection({ installed: false, version: null, exe: DEFAULT_EXE[provider] });
       }
     })();
@@ -120,7 +123,7 @@ export function CodingAgentSection() {
     setOpencodeModels([]);
     setOpencodeModelsStatus('loading');
     setOpencodeModelsError('');
-    // 先探测用户配置的二进制，再自动刷新当前 OpenCode 账号可用的模型。
+    // Probe the user-configured binary first, then auto-refresh the models available to the current OpenCode account.
     void (async () => {
       try {
         const exe = prefs?.codingAgentExe ?? undefined;
@@ -197,7 +200,7 @@ export function CodingAgentSection() {
 
       {enabled && (
         <>
-          {/* 「按住说话键」配置已挪到 通用 → 快捷键，避免和这里重复。本区只留后端/模型等高级项。 */}
+          {/* "Hold-to-talk key" config moved to General → Shortcuts to avoid duplication. This section keeps only backend/model and other advanced items. */}
           <SettingRow label={t('settings.codingAgent.provider')}>
             <SelectLite
               value={prefs.codingAgentProvider}
@@ -220,7 +223,7 @@ export function CodingAgentSection() {
             />
           </SettingRow>
 
-          {/* OpenCode 后端：提示安装/登录状态。issue #579。 */}
+          {/* OpenCode backend: show install/login status. issue #579. */}
           {useOpencode && opencode && (
             <div
               style={{
@@ -236,7 +239,7 @@ export function CodingAgentSection() {
             </div>
           )}
 
-          {/* Codex / dsh：装没装 + 版本。没装时按警示色提示。 */}
+          {/* Codex / dsh: installed or not + version. Warn-colored hint when missing. */}
           {sandboxOnly && cliDetection && (
             <div
               style={{
@@ -255,7 +258,7 @@ export function CodingAgentSection() {
             </div>
           )}
 
-          {/* 护栏差异说明：这两家没有逐命令 deny 清单，审批卡不会弹。别让用户以为有。 */}
+          {/* Guardrail difference: these two have no per-command deny list, so the approval card never appears. Don't let users assume it does. */}
           {sandboxOnly && (
             <div
               style={{
@@ -304,7 +307,7 @@ export function CodingAgentSection() {
             />
           </SettingRow>
 
-          {/* dsh 的 headless profile 没有 --model：模型由 profile 决定，这里不给假开关。 */}
+          {/* dsh's headless profile has no --model: the model is decided by the profile, so don't offer a fake switch here. */}
           {useDsh && (
             <div
               style={{
@@ -331,8 +334,8 @@ export function CodingAgentSection() {
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 {useCodex ? (
-                  // Codex 的模型名是裸名（gpt-5 / o3 / 自建网关的任意名字），枚举不过来，
-                  // 给自由文本；留空 = 用 ~/.codex/config.toml 里的设置。
+                  // Codex model names are bare (gpt-5 / o3 / any name from a self-hosted gateway);
+                  // they can't be enumerated, so use free text. Empty = use the settings in ~/.codex/config.toml.
                   <input
                     type="text"
                     value={prefs.codingAgentModel ?? ''}
@@ -360,9 +363,9 @@ export function CodingAgentSection() {
                     options={
                       useOpencode
                         ? [
-                            // 空值 = 使用 OpenCode CLI 默认模型。
+                            // Empty = use the OpenCode CLI default model.
                             { value: '', label: t('settings.codingAgent.opencodeModelDefault') },
-                            // 已选但不在拉取结果里的模型仍保留，避免选中项凭空消失。
+                            // Keep a selected model that's missing from the fetched list, so the selection doesn't vanish.
                             ...(prefs.codingAgentModel?.includes('/') &&
                             !opencodeModels.includes(prefs.codingAgentModel)
                               ? [{ value: prefs.codingAgentModel, label: prefs.codingAgentModel }]
@@ -370,7 +373,7 @@ export function CodingAgentSection() {
                             ...opencodeModels.map((model) => ({ value: model, label: model })),
                           ]
                         : [
-                            // 空值 = 使用 CLI 默认模型；放回选项里，避免选了具体模型后回不去默认。
+                            // Empty = use the CLI default model; keep it as an option so a specific model choice can be undone.
                             { value: '', label: t('settings.codingAgent.modelDefault') },
                             { value: 'haiku', label: 'Haiku' },
                             { value: 'sonnet', label: 'Sonnet' },

@@ -19,6 +19,22 @@ if (!lock.includes('name = "qwen3-asr-rs"')) {
   throw new Error(`openless Cargo.lock package 未包含 qwen3-asr-rs：${lockPath}`);
 }
 
+function lockVersion(text, name) {
+  const match = text.match(new RegExp(`name = "${name}"\\r?\\nversion = "([^"]+)"`));
+  return match?.[1] ?? null;
+}
+
+const expected = {
+  tauri: lockVersion(lock, 'tauri'),
+  'tauri-runtime': lockVersion(lock, 'tauri-runtime'),
+  'tauri-build': lockVersion(lock, 'tauri-build'),
+};
+for (const [name, version] of Object.entries(expected)) {
+  if (!version) {
+    throw new Error(`Cargo.lock missing ${name} before qwen3 disable`);
+  }
+}
+
 // 仅调整移除 path 依赖后的工作区图，保留已验证的第三方依赖版本。
 // generate-lockfile 会重新解析整个依赖树，令非 macOS CI 偏离提交的锁文件。
 const cargoResult = spawnSync('cargo', ['update', '--workspace', '--manifest-path', cargoPath], {
@@ -36,4 +52,14 @@ const regeneratedLock = readFileSync(lockPath, 'utf8');
 if (regeneratedLock.includes('name = "qwen3-asr-rs"')) {
   throw new Error(`cargo update --workspace 后仍包含 qwen3-asr-rs：${lockPath}`);
 }
-console.log('[ci] disabled macOS-only qwen3-asr-rs dependency for this target');
+for (const [name, want] of Object.entries(expected)) {
+  const got = lockVersion(regeneratedLock, name);
+  if (got !== want) {
+    throw new Error(
+      `cargo update --workspace drifted ${name}: got ${got}, want ${want}. Check Cargo.toml pins.`,
+    );
+  }
+}
+console.log(
+  `[ci] disabled macOS-only qwen3-asr-rs (tauri ${expected.tauri}, tauri-runtime ${expected['tauri-runtime']})`,
+);

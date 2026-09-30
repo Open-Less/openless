@@ -67,7 +67,7 @@ const initialReady = i18n.use(initReactI18next).init({
   lng: initialLng,
   fallbackLng: 'zh-CN',
   supportedLngs: SUPPORTED_LOCALES as unknown as string[],
-  partialBundledLanguages: true, // 告诉 i18next 内联资源已完整，无需 backend 拉取
+  partialBundledLanguages: true, // tell i18next the inline resources are complete; no backend fetch needed
   interpolation: { escapeValue: false },
   react: { useSuspense: false },
 });
@@ -104,16 +104,17 @@ if (typeof window !== 'undefined') {
 export default i18n;
 
 /**
- * 当前持久化偏好。'system' 表示跟随系统；具体语言 tag 表示用户已显式选择。
- * 与 i18n.language 不同：i18n.language 永远是已 resolve 的具体语言。
+ * The current persisted preference. 'system' means follow the system; a concrete
+ * language tag means the user chose explicitly. Differs from i18n.language, which is
+ * always the resolved concrete language.
  */
 export function getLocalePreference(): SupportedLocale | typeof FOLLOW_SYSTEM_VALUE {
   return getStoredLocale() ?? FOLLOW_SYSTEM_VALUE;
 }
 
 /**
- * 写入用户偏好并立即切换 i18n 语言。
- * pref === 'system' 时清除存储项，重新走 navigator 检测。
+ * Writes the user preference and switches the i18n language immediately.
+ * pref === 'system' clears the stored item and re-detects via navigator.
  */
 export async function setLocalePreference(
   pref: SupportedLocale | typeof FOLLOW_SYSTEM_VALUE,
@@ -130,8 +131,9 @@ export async function setLocalePreference(
   return resolved;
 }
 
-// 远程输入 H5 录音页跟随 PC 界面语言：把已解析的 locale 推给后端（后端只存内存
-// 镜像，H5 请求首页时据此渲染）。非 Tauri（浏览器 dev）环境走 mock no-op，失败静默。
+// The remote-input H5 recording page follows the PC UI language: push the resolved
+// locale to the backend (it keeps only an in-memory mirror, used when the H5 page
+// requests its index). Non-Tauri (browser dev) hits a mock no-op; failures are silent.
 function syncRemoteLocale(resolved: SupportedLocale): void {
   void setRemoteLocale(resolved).catch(() => {});
 }

@@ -24,7 +24,7 @@ for (const [locale, translation] of Object.entries({ 'zh-CN': zhCN, 'zh-TW': zhT
     'modal.noResults',
     'startup.failed',
     'startup.retry',
-    ...['label', 'llm', 'asr', 'omni', 'models', 'connections'].map(
+    ...['label', 'llm', 'asr', 'omni', 'models', 'connections', 'inactive', 'inactiveDetail'].map(
       (view) => `modal.serviceViews.${view}`,
     ),
   ]) {

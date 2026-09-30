@@ -1,6 +1,7 @@
-// markdown.tsx — 助手 markdown 正文（原 QaPanel/LessComputerPanel 的
-// AssistantText 去重合并）：帧率节流 + 渲染失败降级纯文本 + DOMPurify 兜底
-// 消毒，流式时末尾带脉冲光标。样式 .olchat-answer（chat.css）。
+// markdown.tsx — assistant markdown body (deduped merge of QaPanel/LessComputerPanel's
+// AssistantText): frame-throttled, falls back to plain text on render failure, with
+// DOMPurify as a final sanitize pass; a pulsing caret trails while streaming.
+// Styled by .olchat-answer (chat.css).
 
 import { useMemo } from 'react';
 import DOMPurify from 'dompurify';
@@ -14,7 +15,8 @@ interface AssistantMarkdownProps {
 }
 
 export function AssistantMarkdown({ markdown, streaming = false }: AssistantMarkdownProps) {
-  // 按帧率节流：流式回复逐 token 全量 parse + DOMPurify 是 O(n²)，长回复越来越卡。
+  // Frame-throttled: full parse + DOMPurify per token while streaming is O(n²), and
+  // long replies get progressively jankier.
   const throttled = useRafThrottle(markdown);
   const html = useMemo(() => {
     let rendered: string;
@@ -24,7 +26,8 @@ export function AssistantMarkdown({ markdown, streaming = false }: AssistantMark
       console.error('[chat] markdown render failed', error);
       rendered = renderQaPlainText(String(throttled ?? ''));
     }
-    // 兜底再消毒：qaMarkdown 已转义 raw HTML token，DOMPurify 多一道防线。
+    // Extra sanitize pass: qaMarkdown already escapes raw HTML tokens; DOMPurify adds
+    // one more line of defense.
     return DOMPurify.sanitize(rendered, { ADD_ATTR: ['target', 'rel'] });
   }, [throttled]);
   return (

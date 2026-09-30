@@ -19,7 +19,7 @@ function splitQaUserContent(content: string): { selection: string; question: str
     return { selection: envelope[1].trim(), question: envelope[2].trim() };
   }
 
-  // 兼容修复前已保存在当前会话中的旧格式。
+  // Compatibility with the old format already saved in the current session before the fix.
   const legacy = content.match(/^# 选区原文\n([\s\S]*?)\n\n# 我的问题\n([\s\S]+)$/);
   if (legacy) {
     return { selection: legacy[1].trim(), question: legacy[2].trim() };
@@ -34,8 +34,9 @@ export function acceptQaSessionEvent(
   if (!payload.sessionId) {
     return { accepted: true, sessionId: currentSessionId };
   }
-  // idle 一律视为新会话 token：open_qa_panel 的 idle 总是携带新生成的 session_id，
-  // 且事件按发送顺序到达，complete/turn 收尾的 idle 一定先于下一次 open。
+  // idle is always treated as a new-session token: open_qa_panel's idle always carries a newly
+  // generated session_id, and events arrive in send order, so the idle that closes
+  // complete/turn always precedes the next open.
   const startsTurn =
     payload.kind === 'recording' ||
     payload.kind === 'loading' ||

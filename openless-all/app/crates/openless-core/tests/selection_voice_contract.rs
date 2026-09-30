@@ -894,3 +894,297 @@ fn selection_voice_instruction_auto_classification_wire_fixture_is_stable() {
         })
     );
 }
+
+#[tokio::test]
+async fn begin_session_allows_empty_selection_text() {
+    let (backend, data_dir) = backend();
+    let voice = &backend.services().selection_voice;
+    let session_id = voice
+        .begin(SelectionCapture {
+            text: String::new(),
+            source_app: Some("Notepad".to_string()),
+        })
+        .await
+        .expect("empty selection must be allowed for compose/qa");
+    let snapshot = voice.snapshot().await.unwrap();
+    assert_eq!(snapshot.session_id, Some(session_id));
+    assert_eq!(snapshot.source_text.as_deref(), Some(""));
+    voice.cancel(Some(session_id)).await.unwrap();
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn empty_selection_help_me_write_routes_to_compose() {
+    let (backend, data_dir) = backend();
+    let voice = &backend.services().selection_voice;
+    let session_id = voice
+        .begin(SelectionCapture {
+            text: String::new(),
+            source_app: None,
+        })
+        .await
+        .unwrap();
+    voice.mark_processing(session_id).await.unwrap();
+    let disposition = voice
+        .resolve_instruction(SelectionVoiceInstructionRequest {
+            session_id,
+            raw: "帮我写一封短邮件".to_string(),
+            polished: "帮我写一封短邮件".to_string(),
+            intent_mode: SelectionVoiceIntentMode::Heuristic,
+            manual_intent: SelectionVoiceManualIntent::Question,
+            question_keywords: Vec::new(),
+            auto_classification: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(disposition.intent(), Some(SelectionVoiceIntent::Compose));
+    voice.cancel(Some(session_id)).await.unwrap();
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn empty_selection_question_stays_question() {
+    let (backend, data_dir) = backend();
+    let voice = &backend.services().selection_voice;
+    let session_id = voice
+        .begin(SelectionCapture {
+            text: String::new(),
+            source_app: None,
+        })
+        .await
+        .unwrap();
+    voice.mark_processing(session_id).await.unwrap();
+    let disposition = voice
+        .resolve_instruction(SelectionVoiceInstructionRequest {
+            session_id,
+            raw: "今天是什么日子？".to_string(),
+            polished: "今天是什么日子？".to_string(),
+            intent_mode: SelectionVoiceIntentMode::Heuristic,
+            manual_intent: SelectionVoiceManualIntent::Edit,
+            question_keywords: Vec::new(),
+            auto_classification: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(disposition.intent(), Some(SelectionVoiceIntent::Question));
+    voice.cancel(Some(session_id)).await.unwrap();
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn confirm_intent_accepts_compose() {
+    let preferences = UserPreferences {
+        selection_voice_intent_mode: SelectionVoiceIntentMode::Prompt,
+        selection_polish_output_mode: SelectionPolishOutputMode::DirectReplace,
+        ..UserPreferences::default()
+    };
+    let polisher = Arc::new(ScriptedPolisher::successful([
+        "Write a short note.",
+        "Hello — this is the drafted note.",
+    ]));
+    let (backend, data_dir) = backend_with_model(preferences, Arc::clone(&polisher));
+    let voice = &backend.services().selection_voice;
+    let session_id = voice
+        .begin(SelectionCapture {
+            text: String::new(),
+            source_app: None,
+        })
+        .await
+        .unwrap();
+    voice.mark_processing(session_id).await.unwrap();
+    let awaiting = voice
+        .process_transcript(session_id, "写一条短消息".to_string())
+        .await
+        .unwrap();
+    assert!(awaiting.is_awaiting_intent());
+
+    let disposition = voice
+        .confirm_intent(session_id, "compose".to_string())
+        .await
+        .unwrap();
+    assert_eq!(disposition.intent(), Some(SelectionVoiceIntent::Compose));
+
+    let route = voice.route_disposition(disposition).await.unwrap();
+    let SelectionVoiceRoute::ReadyToApply { preview } = route else {
+        panic!("compose must return ReadyToApply with generated draft");
+    };
+    assert_eq!(preview.source_text, "");
+    assert_eq!(preview.text, "Hello — this is the drafted note.");
+    let calls = polisher.calls();
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.system_prompt.contains("帮我写")
+                || call.system_prompt.contains("Help me write")),
+        "compose must use the compose system prompt, got: {:?}",
+        calls.iter().map(|c| &c.system_prompt).collect::<Vec<_>>()
+    );
+
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn empty_selection_edit_intent_coerces_to_compose() {
+    let preferences = UserPreferences {
+        selection_voice_intent_mode: SelectionVoiceIntentMode::Manual,
+        selection_voice_manual_intent: SelectionVoiceManualIntent::Edit,
+        selection_polish_output_mode: SelectionPolishOutputMode::DirectReplace,
+        ..UserPreferences::default()
+    };
+    let polisher = Arc::new(ScriptedPolisher::successful([
+        "Drafted from coerced edit intent.",
+    ]));
+    let (backend, data_dir) = backend_with_model(preferences, Arc::clone(&polisher));
+    let voice = &backend.services().selection_voice;
+    let session_id = voice
+        .begin(SelectionCapture {
+            text: String::new(),
+            source_app: None,
+        })
+        .await
+        .unwrap();
+    voice.mark_processing(session_id).await.unwrap();
+
+    let disposition = voice
+        .resolve_instruction(SelectionVoiceInstructionRequest {
+            session_id,
+            raw: "改正式一点".to_string(),
+            polished: "改正式一点".to_string(),
+            intent_mode: SelectionVoiceIntentMode::Manual,
+            manual_intent: SelectionVoiceManualIntent::Edit,
+            question_keywords: Vec::new(),
+            auto_classification: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        disposition.intent(),
+        Some(SelectionVoiceIntent::Compose),
+        "empty selection + Edit must coerce to Compose"
+    );
+
+    let route = voice.route_disposition(disposition).await.unwrap();
+    let SelectionVoiceRoute::ReadyToApply { preview } = route else {
+        panic!("coerced compose must ReadyToApply, got {route:?}");
+    };
+    assert_eq!(preview.text, "Drafted from coerced edit intent.");
+
+    // Prompt-mode picker: choosing "edit" with empty source also coerces.
+    let preferences = UserPreferences {
+        selection_voice_intent_mode: SelectionVoiceIntentMode::Prompt,
+        selection_polish_output_mode: SelectionPolishOutputMode::DirectReplace,
+        ..UserPreferences::default()
+    };
+    let polisher = Arc::new(ScriptedPolisher::successful([
+        "写一条消息",
+        "Picker-coerced draft.",
+    ]));
+    let (backend, data_dir2) = backend_with_model(preferences, Arc::clone(&polisher));
+    let voice = &backend.services().selection_voice;
+    let session_id = voice
+        .begin(SelectionCapture {
+            text: String::new(),
+            source_app: None,
+        })
+        .await
+        .unwrap();
+    voice.mark_processing(session_id).await.unwrap();
+    let awaiting = voice
+        .process_transcript(session_id, "写一条消息".to_string())
+        .await
+        .unwrap();
+    assert!(awaiting.is_awaiting_intent());
+    let disposition = voice
+        .confirm_intent(session_id, "edit".to_string())
+        .await
+        .unwrap();
+    assert_eq!(disposition.intent(), Some(SelectionVoiceIntent::Compose));
+    let route = voice.route_disposition(disposition).await.unwrap();
+    assert!(matches!(route, SelectionVoiceRoute::ReadyToApply { .. }));
+
+    let _ = std::fs::remove_dir_all(data_dir);
+    let _ = std::fs::remove_dir_all(data_dir2);
+}
+
+#[tokio::test]
+async fn non_empty_selection_keeps_edit_and_question_routes() {
+    let (backend, data_dir) = backend();
+    let voice = &backend.services().selection_voice;
+
+    let edit_session = voice
+        .begin(SelectionCapture {
+            text: "hello world".to_string(),
+            source_app: None,
+        })
+        .await
+        .unwrap();
+    voice.mark_processing(edit_session).await.unwrap();
+    let edit = voice
+        .resolve_instruction(SelectionVoiceInstructionRequest {
+            session_id: edit_session,
+            raw: "翻译成英文".to_string(),
+            polished: "翻译成英文".to_string(),
+            intent_mode: SelectionVoiceIntentMode::Heuristic,
+            manual_intent: SelectionVoiceManualIntent::Question,
+            question_keywords: Vec::new(),
+            auto_classification: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(edit.intent(), Some(SelectionVoiceIntent::Edit));
+    voice.cancel(Some(edit_session)).await.unwrap();
+
+    let question_session = voice
+        .begin(SelectionCapture {
+            text: "hello world".to_string(),
+            source_app: None,
+        })
+        .await
+        .unwrap();
+    voice.mark_processing(question_session).await.unwrap();
+    let question = voice
+        .resolve_instruction(SelectionVoiceInstructionRequest {
+            session_id: question_session,
+            raw: "什么意思".to_string(),
+            polished: "什么意思".to_string(),
+            intent_mode: SelectionVoiceIntentMode::Heuristic,
+            manual_intent: SelectionVoiceManualIntent::Edit,
+            question_keywords: Vec::new(),
+            auto_classification: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(question.intent(), Some(SelectionVoiceIntent::Question));
+    voice.cancel(Some(question_session)).await.unwrap();
+
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn strong_compose_cue_wins_even_when_phrased_as_question() {
+    let (backend, data_dir) = backend();
+    let voice = &backend.services().selection_voice;
+    let session_id = voice
+        .begin(SelectionCapture {
+            text: String::new(),
+            source_app: None,
+        })
+        .await
+        .unwrap();
+    voice.mark_processing(session_id).await.unwrap();
+    let disposition = voice
+        .resolve_instruction(SelectionVoiceInstructionRequest {
+            session_id,
+            raw: "能帮我写一封邮件吗？".to_string(),
+            polished: "能帮我写一封邮件吗？".to_string(),
+            intent_mode: SelectionVoiceIntentMode::Heuristic,
+            manual_intent: SelectionVoiceManualIntent::Question,
+            question_keywords: Vec::new(),
+            auto_classification: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(disposition.intent(), Some(SelectionVoiceIntent::Compose));
+    voice.cancel(Some(session_id)).await.unwrap();
+    let _ = std::fs::remove_dir_all(data_dir);
+}

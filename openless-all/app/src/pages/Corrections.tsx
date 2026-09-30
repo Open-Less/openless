@@ -1,7 +1,8 @@
-// Corrections.tsx — 「纠正规则」独立页。
-// 修正常见 ASR 误识别：pattern → replacement，支持 {num} 一个数字通配。
-// 自动收集（source === 'learned'）的规则可单独筛出并一键清空 —— 与词典页的
-// 「自动添加」筛选同一套信任前提：用户随时能看清、能整块撤销。
+// Corrections.tsx — the standalone "Correction rules" page.
+// Fixes common ASR misrecognitions: pattern -> replacement, with {num} as a single-digit wildcard.
+// Auto-collected (source === 'learned') rules can be filtered separately and cleared in one click —
+// same trust premise as the dictionary page's "auto-added" filter: the user can always inspect and
+// revoke them in bulk.
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -98,8 +99,8 @@ export function Corrections() {
   const onRemoveAllLearnedRules = async () => {
     const learned = rules.filter((r) => r.source === 'learned');
     if (learned.length === 0) return;
-    // 逐条删而不是加一个新的批量后端命令：规则数量是几十条量级，为此多开一条 IPC
-    // 不值得，而且逐条删失败一条也不影响其余。
+    // Delete one by one instead of adding a new batch backend command: rule counts are in the
+    // tens, not worth another IPC, and a single delete failing does not affect the rest.
     const removed: string[] = [];
     for (const rule of learned) {
       try {

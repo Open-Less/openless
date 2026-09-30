@@ -149,7 +149,8 @@ mod android_impl {
             return Err(format!("download status {}", resp.status()));
         }
         let total = resp.content_length();
-        // 安全：防止无限流耗尽内存。200 MB 远超任何实际 APK 大小（当前约 50 MB）。
+        // Security: cap the stream so an unbounded one can't exhaust memory. 200 MB far
+        // exceeds any real APK size (~50 MB currently).
         const MAX_APK_BYTES: u64 = 200 * 1024 * 1024;
         if let Some(len) = total {
             if len > MAX_APK_BYTES {

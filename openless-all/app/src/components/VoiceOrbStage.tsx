@@ -9,20 +9,24 @@ export interface VoiceOrbStageProps {
   os: OS;
   state: CapsuleState;
   level: number;
-  /** 预备态：录音光条渲染成「待命」呼吸形态，不接真实电平。见 CapsulePayload.warming。 */
+  /** Warming: the wave renders as a standby breathing form, ignoring the real level. See CapsulePayload.warming. */
   warming?: boolean;
-  /** 预备→就绪的平均耗时（ms），驱动展开动画的预测节奏。见 SiriGL warmupMs。 */
+  /** Average warm→ready duration (ms), driving the predicted expand pace. See SiriGL warmupMs. */
   warmupMs?: number;
   message?: string;
 }
 
 /**
- * 纯光效舞台（siri-glsl 完整克隆，无壳无按钮无底）：
- *   - recording：彩虹光谱声波横贯舞台，振幅随真实麦克风电平起伏；
- *   - transcribing / polishing：波形从两端向中间收缩汇聚，流体圆点环淡入加速转动；
- *   - done / cancelled：转速回落标准，六点合并成中央一颗圆，由外层 capsule-out 淡出；
- *   - error：冻结光效 + 浮一行发光红字说明原因（唯一保留的文字信息）。
- * 刻意没有任何垫底/暗晕（用户拍板）：白底界面上宁可对比度弱，也不要黑色遮挡。
+ * Pure light stage (full siri-glsl clone, no chrome, no buttons, no backdrop):
+ *   - recording: a rainbow spectral voice wave spans the stage, amplitude following
+ *     the real mic level;
+ *   - transcribing / polishing: the wave collapses from both ends toward the center
+ *     while a fluid dot ring fades in and spins faster;
+ *   - done / cancelled: speed falls back to standard, the six dots merge into one
+ *     center circle, and the outer capsule-out fades it away;
+ *   - error: frozen light + a glowing red line explaining why (the only text kept).
+ * Deliberately no underlay/dark vignette: on a white UI, weaker contrast beats a
+ * black occlusion.
  */
 export function VoiceOrbStage({
   os,
@@ -35,7 +39,7 @@ export function VoiceOrbStage({
   const { t } = useTranslation();
   const metrics = useMemo(() => getCapsulePillMetrics(os), [os]);
 
-  // done / cancelled / error 冻结最后形态淡出，不再切换 phase。
+  // done / cancelled / error freeze the last phase and fade out; no further switching.
   const lastPhaseRef = useRef<'wave' | 'orb'>('wave');
   let phase = lastPhaseRef.current;
   if (state === 'recording') phase = 'wave';
@@ -43,9 +47,10 @@ export function VoiceOrbStage({
   lastPhaseRef.current = phase;
   const isOrb = phase === 'orb';
 
-  // 性能：波形淡出彻底结束（.55s delay + .6s duration）后卸载它的绘制循环 ——
-  // 思考期间不再为一块不可见的 canvas 每帧跑 fragment。回到录音态立即重挂
-  //（shader 编译已被驱动缓存，重建近零耗时）。
+  // Perf: unmount the wave's draw loop after its fade fully ends (.55s delay + .6s
+  // duration) so thinking doesn't run fragments every frame for an invisible canvas.
+  // Remounts immediately on returning to recording (the driver caches the compiled
+  // shader; rebuild is near-zero cost).
   const [waveAlive, setWaveAlive] = useState(true);
   useEffect(() => {
     if (!isOrb) {
@@ -79,7 +84,8 @@ export function VoiceOrbStage({
             inset: 0,
             width: '100%',
             height: '100%',
-            // 收缩汇聚进行时波形保持可见，收成中央光点后再淡出，与圆点环的淡入交叠。
+            // Keep the wave visible while it collapses; fade out once it becomes the
+            // center orb, overlapping the dot ring's fade-in.
             opacity: isOrb ? 0 : 1,
             transition: isOrb ? 'opacity .6s ease-out .55s' : 'opacity .25s ease-out',
           }}
@@ -88,8 +94,9 @@ export function VoiceOrbStage({
       {isOrb && (
         <SiriGL
           mode="orb"
-          // 思考中（LLM 接收）加速转动；插入/取消/出错时回落到标准速度，
-          // 同时六点合并成中央一颗圆，随外层淡出一起消失。
+          // Spin faster while thinking (LLM is receiving); on insert/cancel/error fall
+          // back to standard speed as the six dots merge into one center circle and
+          // vanish with the outer fade.
           speed={state === 'transcribing' || state === 'polishing' ? 1.5 : 1.0}
           merging={state !== 'transcribing' && state !== 'polishing'}
           style={{

@@ -278,6 +278,7 @@ export const ko: typeof zhCN = {
     errorPrefix: '계속할 수 없습니다: ',
     question: '질문하기',
     edit: '선택 영역 편집',
+    compose: '대신 작성',
     cancel: '취소',
   },
   qa: {
@@ -816,6 +817,13 @@ export const ko: typeof zhCN = {
       clear: '결과 지우기',
     },
   },
+  vocabLearning: {
+    open: '단어 기억하기',
+    label: '기억할 올바른 단어를 입력하세요',
+    confirm: '확인하고 사전에 추가',
+    saved: '저장했습니다. 사전에서 관리할 수 있습니다.',
+    failed: '저장 실패: {{error}}',
+  },
   vocabCard: {
     title: '이 단어를 기억할까요?',
     accept: '기억하기',
@@ -853,7 +861,7 @@ export const ko: typeof zhCN = {
     editTitle: '단어 편집',
     editSave: '저장',
     editEmpty: '단어를 입력하세요.',
-    filter: { all: '전체', auto: '자동 추가', manual: '수동 추가' },
+    filter: { all: '전체', auto: '확인 후 수집', manual: '수동 추가' },
     searchPlaceholder: '검색',
     searchEmpty: '일치하는 단어가 없습니다.',
     newWord: '새 단어',
@@ -863,7 +871,7 @@ export const ko: typeof zhCN = {
     newWordTemplates: '프리셋 템플릿',
     newWordTemplateCount: '{{count}}개 단어',
     newWordAddSelected: '선택 추가',
-    learnedSection: '자동 수집 ({{count}})',
+    learnedSection: '확인 후 수집 ({{count}})',
     removeAllLearned: '모두 삭제',
     corrections: {
       title: '교정 규칙',
@@ -1222,12 +1230,31 @@ export const ko: typeof zhCN = {
       useSystemProxyDesc:
         '켜면 요청이 시스템 프록시를 따릅니다. 끄면 모든 요청이 직결됩니다(국내 서비스는 보통 더 빠름). GitHub 로그인·업데이트 등 해외 서비스는 연결되지 않을 수 있습니다. 실시간 음성 스트림과 Less Computer는 영향을 받지 않습니다.',
     },
+    vocabularyLearning: {
+      title: '수정으로 단어 학습',
+      enabled: '수정 학습 사용',
+      observationSeconds: '관찰 시간',
+      observationSecondsHint: '음성 입력 후 현재 입력란을 관찰하는 최대 시간입니다(10~60초).',
+      suggestionSeconds: '제안 유지 시간',
+      suggestionSecondsHint: '확인하지 않은 제안은 5~60초 후 사전에 추가되지 않고 사라집니다.',
+      maxPhraseChars: '최대 글자 수',
+      maxPhraseCharsHint:
+        '자동 제안의 원문과 대체 문구를 2~32자로 제한합니다. 수동 추가에는 영향을 주지 않습니다.',
+      seconds: '{{count}}초',
+      characters: '{{count}}자',
+      changeHint:
+        '설정을 변경하면 현재 관찰을 중지하고 대기 중인 제안을 지웁니다. 다음 음성 입력부터 적용됩니다. 초기화해도 사용 스위치는 바뀌지 않습니다.',
+      reset: '매개변수 초기화',
+      saveError: '저장하지 못했습니다. 다시 시도하세요.',
+      description:
+        '입력 후 최대 60초 동안 기기에서 해당 입력란의 수정을 감지하고 확인 후 사전에 추가합니다. 관찰한 텍스트는 모델에 보내지 않습니다. 비밀번호 입력란과 알려진 민감한 앱은 제외됩니다. Windows 및 Android는 편집기에 따라 지원이 다르며 Android는 접근성 서비스가 필요합니다. 끄면 관찰을 중지합니다.',
+    },
     dataStorage: {
       title: '데이터 저장',
       desc: '이 기기에 보관되는 대화 기록과 컨텍스트.',
       cursorContextLabel: '커서 문맥 (실험적)',
       cursorContextDesc:
-        '다듬을 때 작성 중인 문서에서 커서 주변 원문을 읽어, 동음이의어·고유명사·대명사를 모델이 구분할 수 있게 합니다. 켜면 해당 텍스트가 요청과 함께 설정된 LLM 제공자로 전송됩니다. 끄면 한 글자도 읽지 않습니다. 비밀번호 입력란, Secure Input, 비밀번호 관리자, 터미널은 항상 읽지 않습니다. macOS 전용.',
+        '다듬기 요청 시 커서 주변 텍스트를 모델에 보냅니다(macOS 전용). 기기 내 단어 학습과 별도 설정입니다. 비밀번호 입력란과 알려진 민감한 앱은 제외됩니다.',
     },
     codingConsole: {
       title: 'Claude 콘솔',
@@ -1421,7 +1448,8 @@ export const ko: typeof zhCN = {
       comboClear: '지우기',
       comboConflict: '이 단축키 조합은 사용할 수 없습니다',
       shortcutSaveFailed: '단축키를 저장하지 못했습니다',
-      mouseSideHint: '마우스 측면 버튼 Mouse4 / Mouse5는 Windows에서 전역 받아쓰기 단축키로 지원됩니다',
+      mouseSideHint:
+        '마우스 측면 버튼 Mouse4 / Mouse5는 Windows에서 전역 받아쓰기 단축키로 지원됩니다',
       allowNonTsfFallbackLabel: '비 TSF 폴백 허용',
       allowNonTsfFallbackDesc:
         'Windows: TSF 입력이 실패하면 분할된 Unicode SendInput을 사용하고, 그래도 실패하면 텍스트를 클립보드에 복사합니다.',
@@ -1507,6 +1535,8 @@ export const ko: typeof zhCN = {
       validationTitle: '연결 확인',
       validationHint:
         '실제 요청을 보내 현재 설정을 확인합니다. 서비스 사용량이 차감될 수 있습니다. 설정을 저장해도 자동으로 확인하지 않습니다.',
+      validationHintOmni:
+        '텍스트 연결만 수동으로 확인합니다(녹음 없음). 통과해도 오디오 받아쓰기가 된다는 뜻은 아닙니다. 짧은 녹음으로 다시 확인하세요. 서비스 사용량이 차감될 수 있습니다.',
       autoSaveHint:
         '변경 사항은 자동으로 저장됩니다. 설정을 마친 후 연결을 직접 확인할 수 있습니다.',
       nameHint:
@@ -1581,6 +1611,7 @@ export const ko: typeof zhCN = {
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter(무료 모델)',
         requesty: 'Requesty',
+        apiRoute: 'API Route',
         orcarouter: 'OrcaRouter',
         alibabaCoding: 'Alibaba Cloud Coding Plan',
         codingPlanX: 'CodingPlanX',
@@ -1758,6 +1789,8 @@ export const ko: typeof zhCN = {
       selectModel: '모델을 선택해 위 필드에 입력',
       modelSaved: '모델 {{model}} 을(를) 저장했습니다.',
       validateSuccess: '연결 확인을 통과했습니다.',
+      validateSuccessOmni:
+        '텍스트 연결은 통과했습니다. 오디오 받아쓰기가 된다는 뜻은 아닙니다. 짧은 녹음으로 확인하세요.',
       validateFailed: '연결 확인에 실패했습니다.',
       providerHttpStatus:
         '공급자가 {{status}} 를 반환했습니다. API Key 권한 또는 Endpoint 를 확인해 주세요.',
@@ -1999,6 +2032,13 @@ export const ko: typeof zhCN = {
         notWindows: 'Windows 만 사용 가능.',
       },
     },
+    inputMethod: {
+      guidanceTitle: 'OpenLess 입력 방법',
+      enableSystemIme:
+        'Android 설정 → 키보드 / 입력 방법에서 OpenLess Voice를 활성화하고 필요할 때 선택하세요.',
+      longPressLogo:
+        'OpenLess 키보드의 왼쪽 위 로고를 길게 누르면 기본 키보드 설정을 열 수 있습니다.',
+    },
     advanced: {
       multimodalPipelineTitle: '멀티모달 인식 파이프라인 ',
       multimodalPipelineTitleHint:
@@ -2203,6 +2243,8 @@ export const ko: typeof zhCN = {
       omni: '멀티모달',
       models: '로컬 모델',
       connections: '연결 및 확장',
+      inactive: '현재 모드에서 사용 안 함',
+      inactiveDetail: '이 설정은 저장되지만 현재 인식 파이프라인에서는 사용되지 않습니다.',
       statusConfigured: '초록 점: 켜진 서비스가 있습니다. 요청은 켜진 목록의 첫 항목을 사용합니다.',
       statusMissing: '빨간 점: 아직 켜진 서비스가 없습니다.',
     },
@@ -2215,6 +2257,8 @@ export const ko: typeof zhCN = {
     autoSaveHint: '변경 사항이 자동 저장됩니다',
     backToAdvanced: '실험 및 확장으로 돌아가기',
     advancedPages: {
+      vocabularyLearning:
+        '음성 입력 후 수동 수정으로 학습하고 관찰 시간, 확인 시간, 글자 수를 설정합니다.',
       lessComputer: 'Agent를 선택하고 모델, 권한, 작업 디렉터리를 설정합니다.',
       claudeConsole: 'Claude Code를 감지하고 테스트 작업의 실행 출력을 확인합니다.',
       multimodal: '실험적 멀티모달 인식 기능의 사용 여부를 설정합니다.',
@@ -2222,20 +2266,24 @@ export const ko: typeof zhCN = {
     },
     descriptions: {
       general: '마이크, 녹음 방식, 텍스트 입력을 설정하고 휴대폰 입력을 연결합니다.',
+      inputMethod: 'Android 오버레이와 입력 방법을 설정합니다.',
       shortcuts: '기능별 단축키와 텍스트 선택 후 동작을 설정합니다.',
       services: '음성 인식과 텍스트 처리 서비스, 채널, 로컬 모델 및 연결을 관리합니다.',
       appearance: '테마, 페이지 배치, 인터페이스 언어를 편하게 읽도록 조정합니다.',
       privacy: '시스템 권한과 연결을 확인하고 기록, 녹음 및 로컬 데이터를 관리합니다.',
-      advanced: '필요에 따라 Less Computer, 멀티모달 처리 및 디버깅을 설정합니다.',
+      advanced: '필요에 따라 Less Computer와 디버깅을 설정합니다.',
       about: '현재 버전, 업데이트 채널 및 자동 업데이트 설정을 확인합니다.',
     },
     searchKeywords: {
       general: '마이크 녹음 입력 휴대폰 원격 LAN PIN 캡슐 음소거 시작 자동시작',
+      inputMethod: '입력 방법 IME 키보드 오버레이 Android',
       shortcuts: '단축키 핫키 키 조합 선택 다듬기 음성 편집',
-      services: 'ASR LLM API 채널 모델 클라우드 로컬 네트워크 프록시 마켓',
+      services:
+        'ASR LLM API 채널 모델 클라우드 로컬 네트워크 프록시 마켓 멀티모달 인식 파이프라인 Omni',
       appearance: '테마 다크 라이트 언어 글꼴 글자 크기 배치 레이아웃 히트맵',
       privacy: '권한 마이크 접근성 기록 녹음 저장 개인정보 내보내기',
-      advanced: 'Less Computer Claude Agent 멀티모달 Omni 디버그 로그 실험',
+      advanced:
+        'Less Computer Claude Agent 멀티모달 Omni 디버그 로그 실험 수정으로 단어 학습 vocabulary learning',
       about: '버전 Beta 안정 업데이트 업그레이드',
     },
 
@@ -2243,6 +2291,7 @@ export const ko: typeof zhCN = {
       appearance: '모양 및 언어',
       shortcuts: '단축키 및 선택',
       general: '녹음 및 입력',
+      inputMethod: '입력 방법',
       services: 'AI 서비스 및 모델',
       privacy: '권한 및 데이터',
       advanced: '실험 기능 및 확장',

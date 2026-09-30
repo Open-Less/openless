@@ -12,7 +12,8 @@ const finalInsert = adapters.match(
 )?.[0];
 assert.ok(finalInsert, 'the production final insertion path must exist');
 
-// 原生接线合同：不改系统剪贴板或抢焦点，真实窗口效果仍需设备验收。
+// Native wiring contract: do not touch the system clipboard or steal focus; real window effects
+// still require on-device acceptance.
 const unavailableTarget = finalInsert.match(
   /if let Err\(error\) = self\.restore_insertion_target\(\) \{([\s\S]*?)\n        \}/,
 )?.[1];

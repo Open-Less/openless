@@ -1,18 +1,21 @@
-// 翻译目标语言的可用性判定，与后端 `types.rs::translation_effective` 保持同一套规则。
-// 后端在按下翻译修饰键时用它决定是否进入翻译管线；这里只负责在翻译页提前把「设了但
-// 不会生效」的组合告诉用户，避免出现「按了 Shift 却什么也没翻」的沉默失败。
+// Availability rules for the translation target language, kept identical to the backend's `types.rs::translation_effective`.
+// The backend uses it when the translation modifier is pressed to decide whether to enter the translation
+// pipeline; this module only warns the translation page in advance about "set but won't take effect"
+// combinations, avoiding the silent failure of "pressed Shift and nothing translated".
 
-/** 未选择目标语言 = 翻译功能未启用（Shift 无效）。 */
+/** No target language selected = translation disabled (Shift does nothing). */
 export function isTranslationEnabled(translationTargetLanguage: string): boolean {
   return translationTargetLanguage.trim() !== '';
 }
 
 /**
- * 目标语言与用户「唯一的」工作语言相同 —— 源语言必定就是目标语言，翻译是可证的空操作。
+ * The target language equals the user's single working language — the source language is necessarily the
+ * target, so translation is a provable no-op.
  *
- * 工作语言有多个时返回 false：中/英双语用户把目标设成英文是正常用法（说中文出英文），
- * 源语言无法预先判定，不能拦。简体/繁体是语言列表里两个独立条目，按字面比较即可，
- * 简→繁不会被误判成空操作。
+ * Returns false when there are multiple working languages: a bilingual user setting English as the target
+ * while speaking Chinese is normal usage, and the source language can't be determined in advance, so it
+ * must not be blocked. Simplified/Traditional are separate entries in the language list and compare
+ * literally, so Simplified→Traditional is not misjudged as a no-op.
  */
 export function isTranslationTargetRedundant(
   translationTargetLanguage: string,

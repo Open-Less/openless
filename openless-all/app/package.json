@@ -1,7 +1,7 @@
 {
   "name": "openless-app",
   "private": true,
-  "version": "2.0.0-Beta.3+build.20260926",
+  "version": "2.0.0-Beta.4+build.20260930",
   "type": "module",
   "scripts": {
     "pretest": "npm run build",
@@ -33,7 +33,8 @@
     "check:android-updater-pubkey": "node scripts/check-android-updater-pubkey.mjs",
     "check:android-shizuku-scaffolding": "node scripts/merge-android-shizuku-manifest.test.mjs && node scripts/patch-android-shizuku-deps.test.mjs",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"android/frontend/**/*.{ts,tsx}\" \"scripts/**/*.{js,mjs,sh}\" \"*.{ts,json,html,sh}\" \"assets/remote-input/*.{js,css,html}\"",
-    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"android/frontend/**/*.{ts,tsx}\" \"scripts/**/*.{js,mjs,sh}\" \"*.{ts,json,html,sh}\" \"assets/remote-input/*.{js,css,html}\""
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"android/frontend/**/*.{ts,tsx}\" \"scripts/**/*.{js,mjs,sh}\" \"*.{ts,json,html,sh}\" \"assets/remote-input/*.{js,css,html}\"",
+    "test:ui-motion": "playwright test"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
@@ -57,11 +58,13 @@
     "tailwindcss": "^4.3.2"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@tauri-apps/cli": "^2.1.0",
     "@types/dompurify": "^3.0.5",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
+    "js-yaml": "4.3.0",
     "prettier": "3.9.6",
     "prettier-plugin-sh": "0.19.0",
     "shadcn": "^4.13.0",

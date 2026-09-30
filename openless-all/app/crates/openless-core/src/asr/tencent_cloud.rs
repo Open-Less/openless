@@ -1,13 +1,15 @@
-//! 腾讯云实时语音识别 WebSocket 客户端。
+//! Tencent Cloud realtime speech recognition WebSocket client.
 //!
-//! 官方文档：https://cloud.tencent.com/document/api/1093/48982
+//! Official docs: https://cloud.tencent.com/document/api/1093/48982
 //!
-//! 协议要点：
-//! - 端点：`wss://asr.cloud.tencent.com/asr/v2/<appid>`；
-//! - 鉴权：查询参数按字典序拼接后，以 SecretKey 做 HMAC-SHA1，再 Base64；
-//! - 音频：16 kHz / 16-bit / 单声道 PCM，每 200ms 发送 6400 bytes；
-//! - 收尾：发送文本消息 `{"type":"end"}`，等待 `final=1`；
-//! - 默认模型：`Hy-ASR-3.0-preview`（腾讯云当前最新混元 ASR Preview）。
+//! Protocol highlights:
+//! - Endpoint: `wss://asr.cloud.tencent.com/asr/v2/<appid>`;
+//! - Auth: query parameters sorted and concatenated, HMAC-SHA1 with the
+//!   SecretKey, then Base64;
+//! - Audio: 16 kHz / 16-bit / mono PCM, 6400 bytes every 200ms;
+//! - Finish: send the text message `{"type":"end"}` and wait for `final=1`;
+//! - Default model: `Hy-ASR-3.0-preview` (Tencent Cloud's latest Hunyuan ASR
+//!   Preview at the time of writing).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

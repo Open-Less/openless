@@ -17,13 +17,13 @@ import { KbdGroup } from './Kbd';
 import { setShortcutRecordingActive, validateShortcutBinding } from '../lib/ipc';
 import type { ShortcutBinding } from '../lib/types';
 
-/** 主行与「正在录入」面板切换时的水平滑动距离（px）。 */
+/** Horizontal slide distance (px) when switching between the main row and the recording panel. */
 const SLIDE_DISTANCE = 48;
-/** 下拉菜单展开后的固定高度（px）：菜单按钮行高恒定，用固定值动画避免每次测量。 */
+/** Fixed expanded height (px) of the dropdown menu: constant button row height, so a fixed value avoids per-frame measuring. */
 const MENU_HEIGHT = 34;
-/** 滑动切换用 spring（与 Style.tsx 编辑抽屉同款）。只动 transform/opacity，不驱动布局，避免抖动。 */
+/** Spring for the slide switch (same as Style.tsx's edit drawer). Animate transform/opacity only, never layout, to avoid jitter. */
 const slideSpring = { type: 'spring' as const, damping: 26, stiffness: 280 };
-/** 下拉菜单展开/收起缓动，与 --ol-motion-soft 一致。 */
+/** Dropdown expand/collapse easing, matching --ol-motion-soft. */
 const menuEase = [0.22, 0.8, 0.22, 1] as const;
 
 export function ShortcutRecorder({
@@ -44,18 +44,18 @@ export function ShortcutRecorder({
   value: ShortcutBinding | null;
   onSave: (binding: ShortcutBinding) => Promise<void>;
   disabled?: boolean;
-  /** 提供则下拉菜单里的「停用」可点（问答/切风格等可停用快捷键）。 */
+  /** When provided, the menu's Disable is clickable (shortcuts that may be disabled, e.g. QA / style switch). */
   onDisable?: () => void | Promise<void>;
   disableLabel?: string;
-  /** 置灰「停用」（核心快捷键不可停用），配合 disableHint 展示原因。 */
+  /** Grays out Disable (core shortcuts can't be disabled); pair with disableHint for the reason. */
   disableDisabled?: boolean;
   disableHint?: string;
-  /** 提供则下拉菜单里渲染「重置」——恢复该快捷键的默认绑定。 */
+  /** When provided, renders Reset in the menu — restores the shortcut's default binding. */
   onReset?: () => void | Promise<void>;
   resetLabel?: string;
-  /** 仅允许组合键（修饰键+主键 / 功能键）；拒绝单修饰键，因为全局热键无法注册它。 */
+  /** Combos only (modifier+key / function key); reject lone modifiers since global hotkeys can't register them. */
   comboOnly?: boolean;
-  /** 听写 start/stop 专用：录制 cmd-left / ctrl-right 等侧向修饰键。 */
+  /** Dictation start/stop only: record side-specific modifiers like cmd-left / ctrl-right. */
   sideSpecificModifiers?: boolean;
   /** macOS dictation only: choose the dedicated key as the single trigger. */
   allowMacDictationKey?: boolean;
@@ -77,7 +77,7 @@ export function ShortcutRecorder({
   const pressedCodes = useRef<Set<string>>(new Set());
   const rootRef = useRef<HTMLDivElement | null>(null);
 
-  // 菜单打开时：Esc 或点击菜单外部即收起，避免菜单"赖着不关"。
+  // While the menu is open: Esc or clicking outside collapses it, so it can't linger.
   useEffect(() => {
     if (!menuOpen) return;
     const onKeyDown = (e: globalThis.KeyboardEvent) => {
@@ -142,9 +142,10 @@ export function ShortcutRecorder({
     }
   };
 
-  // 浏览器不下发 Fn keydown：先监听 Rust CGEventTap 转发的事件，再激活后端录制态，
-  // 避免用户刚进入录制就按 Fn 时事件早于监听器注册。用 ref 拿最新 finish，避免 effect
-  // 因 finish 引用变化反复注册。
+  // The browser doesn't deliver Fn keydown: subscribe to the Rust CGEventTap-forwarded
+  // event before activating backend recording, so a Fn pressed right as recording
+  // starts can't arrive before the listener is registered. Read finish via ref so the
+  // effect doesn't re-register on finish identity changes.
   const finishRef = useRef(finish);
   finishRef.current = finish;
   useEffect(() => {
@@ -190,7 +191,7 @@ export function ShortcutRecorder({
     };
   }, [recording, allowMouseButtons]);
 
-  /** 开始录入：同时收起菜单——「录制快捷键」按下后，重置/停用两个按钮随之消失。 */
+  /** Start recording and collapse the menu — Reset/Disable go away once "record shortcut" is pressed. */
   const startRecording = () => {
     if (disabled || recording) return;
     setMenuOpen(false);
@@ -286,7 +287,8 @@ export function ShortcutRecorder({
     if (onDisable) void onDisable();
   };
 
-  // 「停用」可点：有 onDisable 且未被置灰（录音快捷键置灰，核心热键不可停用）。
+  // Disable is clickable: onDisable exists and it isn't grayed out (the dictation
+  // shortcut is grayed; core hotkeys can't be disabled).
   const canDisable = Boolean(onDisable) && !disableDisabled;
 
   const rootStyle: CSSProperties = {
@@ -294,8 +296,9 @@ export function ShortcutRecorder({
     flexDirection: 'column',
     gap: 6,
     width: '100%',
-    // 设置行里的快捷键录制控件不再拉满整行（此前「Right ⌃」值贴左、
-    // 下拉箭头甩到最右缘），与输入框同宽上限，紧凑地跟在标签列之后。
+    // The shortcut recorder in settings rows no longer spans the full row (previously
+    // the value hugged left and the chevron flew to the far edge); capped to the input
+    // width, sitting compactly after the label column.
     maxWidth: 360,
   };
   const recorderRowStyle: CSSProperties = {
@@ -357,8 +360,9 @@ export function ShortcutRecorder({
 
   return (
     <div style={rootStyle} ref={rootRef}>
-      {/* mode="wait"：主行与「正在录入」面板不重叠渲染；切换只做 transform/opacity 动画，
-          不驱动布局，面板运动过程不抖动。所有滑入/滑出统一向右。 */}
+      {/* mode="wait": the main row and recording panel never render overlapped; the
+          switch animates transform/opacity only, never layout, so the motion doesn't
+          jitter. All slides in/out go to the right. */}
       <AnimatePresence mode="wait" initial={false}>
         {recording ? (
           <motion.div
@@ -400,8 +404,10 @@ export function ShortcutRecorder({
             transition={slideSpring}
           >
             <div style={recorderRowStyle}>
-              {/* 键帽逐键展示（Kbd 组件，用户拍板的快捷键展示标准），替代整块灰底文本。
-                  录入入口在展开菜单里（录制快捷键）；主行只留箭头，统一靠最右。 */}
+              {/* Keycaps shown key by key (Kbd component, the standard shortcut
+                  display), replacing the gray text block. Recording lives in the
+                  expanded menu ("record shortcut"); the main row keeps only the
+                  chevron, aligned right. */}
               {value && <KbdGroup keys={formatComboParts(value)} />}
               <div style={controlsGroupStyle}>
                 <motion.button
@@ -421,8 +427,9 @@ export function ShortcutRecorder({
                 </motion.button>
               </div>
             </div>
-            {/* 下拉菜单：整个板块向下展开，出现 录制快捷键 / 重置 / 停用 三个按钮。
-                高度用固定值动画（菜单内容高度恒定），避免 'auto' 每次测量带来的卡顿。 */}
+            {/* Dropdown: the whole block expands downward with Record / Reset / Disable
+                buttons. Height animates to a fixed value (menu content height is
+                constant), avoiding 'auto' per-frame measuring jank. */}
             <AnimatePresence initial={false}>
               {menuOpen && (
                 <motion.div

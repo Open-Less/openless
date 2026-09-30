@@ -342,7 +342,14 @@ fn backend(
 
 #[tokio::test]
 async fn qa_and_selection_voice_never_request_disk_archives() {
-    for entry in ["qa", "qa-omni", "selection", "dictation", "less"] {
+    for entry in [
+        "qa",
+        "qa-omni",
+        "selection",
+        "selection-omni",
+        "dictation",
+        "less",
+    ] {
         let plans = Arc::new(Mutex::new(Vec::new()));
         let recorder = testing::FixtureAudioRecorder::new(vec![vec![0; 320]], Vec::new());
         let (backend, path) = backend(
@@ -357,10 +364,10 @@ async fn qa_and_selection_voice_never_request_disk_archives() {
             Arc::new(QaRuntime::default()),
         );
         // The main-path debug switch must not opt private QA/Selection audio
-        // into disk retention. Traditional and Omni QA share this boundary.
+        // into disk retention. Traditional and Omni QA/Selection share this boundary.
         let mut prefs = backend.get_preferences();
         prefs.record_audio_for_debug = true;
-        if entry == "qa-omni" {
+        if matches!(entry, "qa-omni" | "selection-omni") {
             prefs.multimodal_pipeline_enabled = true;
             prefs.pipeline_mode = shared_types::PipelineMode::Multimodal;
         }
@@ -419,6 +426,29 @@ async fn qa_and_selection_voice_never_request_disk_archives() {
                         .expect("private Selection audio must stay in memory"),
                     "instruction"
                 );
+                backend
+                    .services()
+                    .selection_voice
+                    .cancel(Some(id))
+                    .await
+                    .unwrap();
+            }
+            "selection-omni" => {
+                let id = backend
+                    .services()
+                    .selection_voice
+                    .begin(SelectionCapture {
+                        text: "selection".into(),
+                        source_app: None,
+                    })
+                    .await
+                    .unwrap();
+                let capture = backend
+                    .start_selection_voice_capture(id, Arc::new(Control))
+                    .await
+                    .unwrap();
+                // Finish would call Omni; cancel is enough to prove archive policy.
+                let _ = capture.cancel().await;
                 backend
                     .services()
                     .selection_voice

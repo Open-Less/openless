@@ -1,6 +1,8 @@
-// audioCue 纯函数单测，沿用仓库现有 .test.ts 的轻量自执行断言风格
-// （无独立 runner —— 在 tsc 类型检查下编译，必要时可用 tsx 直接跑）。
-// 播放/停止依赖 Web Audio 运行时，不在此单测覆盖；这里只钉住可被回归的音符规划。
+// Unit tests for audioCue's pure functions, following the repo's existing lightweight
+// self-executing .test.ts assertion style (no separate runner — compiles under tsc type
+// checking and can be run directly with tsx when needed).
+// Playback/stop depends on the Web Audio runtime and isn't covered here; these tests only
+// pin the note scheduling that can regress.
 
 import {
   audioContextActionForState,
@@ -28,14 +30,15 @@ function assertEqual<T>(actual: T, expected: T, name: string) {
     tones.every((t) => t.freq > 0 && t.durationMs > 0),
     'every tone has positive frequency and duration',
   );
-  // 指数包络 ramp 不能到 0，峰值必须严格为正，否则 exponentialRampToValueAtTime 抛错。
+  // An exponential-envelope ramp must not reach 0; peak gain must be strictly positive or
+  // exponentialRampToValueAtTime throws.
   assert(
     tones.every((t) => t.peakGain > 0 && t.peakGain <= 1),
     'every tone peak gain is within (0, 1]',
   );
-  // 第二个音上升（小三度），听感是「叮咚」而非平铺两声。
+  // The second tone rises (minor third), so it reads as a "ding-dong" instead of two flat beeps.
   assert(tones[1].freq > tones[0].freq, 'second tone rises in pitch');
-  // 两音交叠：第二个音在第一个音结束前起，连成一段。
+  // The two tones overlap: the second starts before the first ends, forming one chime.
   assert(
     tones[1].startMs < tones[0].startMs + tones[0].durationMs,
     'tones overlap into a single chime',
@@ -53,7 +56,7 @@ function assertEqual<T>(actual: T, expected: T, name: string) {
 }
 
 {
-  // 挂起期间被更新一轮播放接管 → 不播，避免叠音。
+  // Superseded by a newer playback while suspended → don't play, avoiding stacked cues.
   assertEqual(
     shouldPlayDeferredCue({
       superseded: true,
@@ -64,7 +67,7 @@ function assertEqual<T>(actual: T, expected: T, name: string) {
     false,
     'superseded cue does not play',
   );
-  // 没被打断 → 正常播放。
+  // Nothing interrupted → play normally.
   assertEqual(
     shouldPlayDeferredCue({
       superseded: false,
@@ -75,7 +78,8 @@ function assertEqual<T>(actual: T, expected: T, name: string) {
     true,
     'cue plays when nothing interrupted it',
   );
-  // 修复点：快速录音——resume 期间录音已停，但 resume 很快（未超阈值）→ 仍补响一声。
+  // The fixed case: a quick recording — recording already stopped during resume, but the
+  // resume was fast (under the threshold) → still play the deferred cue.
   assertEqual(
     shouldPlayDeferredCue({
       superseded: false,
@@ -86,7 +90,8 @@ function assertEqual<T>(actual: T, expected: T, name: string) {
     true,
     'quick recording still gets a slightly-late cue',
   );
-  // 录音已停且 resume 真迟到（超阈值）→ 丢弃，避免提示音姗姗来迟。
+  // Recording stopped and the resume is genuinely late (over the threshold) → drop, so the
+  // cue doesn't arrive out of nowhere.
   assertEqual(
     shouldPlayDeferredCue({
       superseded: false,
@@ -97,7 +102,7 @@ function assertEqual<T>(actual: T, expected: T, name: string) {
     false,
     'genuinely late cue is dropped',
   );
-  // 边界：恰好等于阈值不算迟到（> 才丢），仍补播。
+  // Boundary: exactly at the threshold is not late (only > drops), still plays.
   assertEqual(
     shouldPlayDeferredCue({
       superseded: false,
@@ -111,23 +116,26 @@ function assertEqual<T>(actual: T, expected: T, name: string) {
 }
 
 {
-  // 「用久了没声音」的回归钉子：closed 的 ctx 必须重建，否则提示音/试听永久静默。
+  // Regression pin for "no sound after long use": a closed ctx must be recreated, otherwise
+  // cues/audition go permanently silent.
   assertEqual(audioContextActionForState('closed'), 'recreate', 'closed context must be recreated');
-  // running 可直接排期。
+  // running can schedule directly.
   assertEqual(
     audioContextActionForState('running'),
     'ready',
     'running context is ready to schedule',
   );
-  // suspended 先 resume 再排期（WKWebView/WebView2 常态）。
+  // suspended resumes first, then schedules (the WKWebView/WebView2 norm).
   assertEqual(audioContextActionForState('suspended'), 'resume', 'suspended context needs resume');
-  // WebKit 非标准 interrupted（音频会话被抢占）同样需要 resume，不能当 running 直接排期。
+  // WebKit's non-standard interrupted (audio session preempted) also needs a resume; it
+  // must not be treated as running and scheduled directly.
   assertEqual(
     audioContextActionForState('interrupted'),
     'resume',
     'interrupted context needs resume',
   );
-  // 任何未知非运行态都保守地走 resume（宁可尝试唤醒也不静默漏音）。
+  // Any unknown non-running state conservatively resumes (better to attempt a wake-up than
+  // silently miss cues).
   assertEqual(
     audioContextActionForState('some-future-state'),
     'resume',
@@ -136,33 +144,38 @@ function assertEqual<T>(actual: T, expected: T, name: string) {
 }
 
 {
-  // 「用久了没声音」修复的回归钉子：resume() 之后的处置决策（cueActionAfterResume）。
-  // resume 成功、ctx 真在跑、且仍该播 → 排期发声。
+  // Regression pin for the "no sound after long use" fix: the post-resume disposition
+  // decision (cueActionAfterResume).
+  // Resume succeeded, ctx is really running, and the cue should still play → schedule.
   assertEqual(
     cueActionAfterResume({ runningAfterResume: true, shouldPlay: true, allowRecreate: true }),
     'schedule',
     'running-after-resume and should-play schedules the cue',
   );
-  // 被新一轮播放接管 / 真迟到（shouldPlay=false）→ 丢弃，且不重建（让最新那次处理）。
+  // Superseded by a newer playback / genuinely late (shouldPlay=false) → drop, and don't
+  // recreate (let the latest round handle it).
   assertEqual(
     cueActionAfterResume({ runningAfterResume: true, shouldPlay: false, allowRecreate: true }),
     'drop',
     'superseded or late cue is dropped even when the context is running',
   );
-  // 核心修复：resume 被拒、或名义 resolve 但 ctx 仍非 running（runningAfterResume=false）——
-  // 只要还该播且可重建，就丢弃坏死 ctx 重试，绝不静默放弃 / 不在冻结时钟上排期。
+  // Core fix: resume rejected, or nominally resolved but ctx still not running
+  // (runningAfterResume=false) — as long as the cue should still play and recreation is
+  // allowed, drop the dead ctx and retry; never silently give up or schedule on a frozen
+  // clock.
   assertEqual(
     cueActionAfterResume({ runningAfterResume: false, shouldPlay: true, allowRecreate: true }),
     'recreate-retry',
     'a context that will not wake recreates instead of going permanently silent',
   );
-  // 重试一次后仍唤不醒（allowRecreate=false）→ 放弃，避免坏死 ctx 上无限递归。
+  // Still unresponsive after one retry (allowRecreate=false) → give up, avoiding infinite
+  // recursion on a dead ctx.
   assertEqual(
     cueActionAfterResume({ runningAfterResume: false, shouldPlay: true, allowRecreate: false }),
     'drop',
     'second attempt gives up to avoid an infinite recreate loop',
   );
-  // 本就不该播时，即使唤不醒也不浪费一次重建。
+  // When the cue shouldn't play anyway, don't waste a recreate even if the ctx won't wake.
   assertEqual(
     cueActionAfterResume({ runningAfterResume: false, shouldPlay: false, allowRecreate: true }),
     'drop',
@@ -170,5 +183,6 @@ function assertEqual<T>(actual: T, expected: T, name: string) {
   );
 }
 
-// 静默成功难以与「没跑」区分；直接 tsx 跑时给个明确通过信号。
+// Silent success is indistinguishable from "never ran"; print an explicit pass signal when
+// run directly with tsx.
 console.log('[audioCue.test] all assertions passed');

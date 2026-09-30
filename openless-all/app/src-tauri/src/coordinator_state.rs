@@ -1,8 +1,8 @@
-//! Coordinator 的纯状态转移层。
+//! Pure state-transition layer of the Coordinator.
 //!
-//! 这里不依赖 Tauri / 音频 / 系统剪贴板，只描述 dictation session 的 Rust
-//! 状态机。这样 Windows CI 可以在不启动完整 Tauri test harness 的情况下实际运行
-//! 后端单测。
+//! This module has no dependency on Tauri / audio / the system clipboard; it only describes the
+//! Rust state machine of a dictation session. That way Windows CI can run real backend unit tests
+//! without booting the full Tauri test harness.
 
 use std::time::Instant;
 
@@ -24,32 +24,38 @@ pub(crate) enum SessionPhase {
     Starting,
     Listening,
     Processing,
-    /// 已经过了最后一次 cancel 检查、即将 / 正在调用 inserter.insert 的窗口。
-    /// cancel_session 在此阶段拒绝介入：Cmd+V 模拟点击已开始或已发出，
-    /// 无法撤销，硬把 cancelled=true 也救不回来，只会让 UI 出现 cancelled
-    /// 但实际还是插入了的诡异状态。详见 PR 修 Codex audit HIGH #2。
+    /// Window after the last cancel check, about to invoke / already invoking inserter.insert.
+    /// cancel_session refuses to intervene in this phase: the simulated Cmd+V has started or has
+    /// been sent and cannot be undone; forcing cancelled=true cannot rescue it and would only
+    /// leave the UI showing "cancelled" while the text was still inserted. See the PR fixing
+    /// Codex audit HIGH #2.
     Inserting,
 }
 
 pub(crate) struct SessionState {
     pub(crate) phase: SessionPhase,
     pub(crate) started_at: Instant,
-    /// Starting 阶段（ASR 握手中）按下 stop 边沿（toggle 第二次按 / hold 松开）→
-    /// 等握手完成 phase=Listening 后立刻 end_session，不丢边沿。issue #51。
+    /// A stop edge pressed during Starting (ASR handshake; second toggle press / hold release) →
+    /// end_session fires immediately once the handshake completes and phase=Listening, so the
+    /// edge is not lost. issue #51.
     pub(crate) pending_stop: bool,
-    /// 用户在 Processing 阶段按 Esc 取消：end_session 在 polish/insert 检查点跳过插入 +
-    /// 跳过 history.append。issue #52。
+    /// Esc pressed during Processing: end_session skips insert + history.append at the
+    /// polish/insert checkpoints. issue #52.
     pub(crate) cancelled: bool,
     pub(crate) focus_target: Option<usize>,
-    /// 每次 begin_session 生成新的 UUID session id。
-    /// recorder error monitor 持有 captured id，处理时若与当前不等说明
-    /// 是上一 session 的迟到错误，必须 drop，不要 abort 当前 active session。
+    /// Fresh UUID session id generated on each begin_session.
+    /// The recorder error monitor holds the captured id; if it differs from the current one at
+    /// handling time, the error is a late one from the previous session and must be dropped, not
+    /// abort the current active session.
     pub(crate) session_id: SessionId,
-    /// 用户开始 dictation 时所处的前台 app 标签（"Mail (com.apple.mail)" / Windows 窗口标题）。
-    /// 用作 LLM polish/translate 的上下文前提，让模型按 app 调风格。详见 issue #116。
+    /// Foreground app label when the user started dictation
+    /// ("Mail (com.apple.mail)" / Windows window title).
+    /// Used as context precondition for LLM polish/translate so the model adapts style per app.
+    /// See issue #116.
     pub(crate) front_app: Option<String>,
-    /// Less Computer 语音模式：专用 Agent 键按下后置 true。end_session 在拿到转写后
-    /// 据此分流——不走润色插入，转而把转写交给 Claude 跑任务、结果弹胶囊。默认 false。
+    /// Less Computer voice mode: set true when the dedicated Agent key is pressed. On getting the
+    /// transcript, end_session branches on it — no polish-and-insert; instead the transcript goes
+    /// to Claude to run a task and the result pops the capsule. Defaults to false.
     pub(crate) voice_agent: bool,
 }
 
@@ -68,7 +74,8 @@ impl Default for SessionState {
     }
 }
 
-/// begin_session 的锁内转移：只有 Idle 能进入 Starting，并生成新 session id。
+/// In-lock transition of begin_session: only Idle may enter Starting, and a new session id is
+/// generated.
 pub(crate) fn begin_session_state(
     state: &mut SessionState,
     focus_target: Option<usize>,
@@ -77,9 +84,10 @@ pub(crate) fn begin_session_state(
     begin_session_state_with_id(state, focus_target, front_app, new_session_id())
 }
 
-/// 与 [`begin_session_state`] 相同，但允许宿主在进入 Coordinator 状态机前生成
-/// session id。Less Computer 需要把这个 id 同时交给 Core capture lease 和宿主录音
-/// 资源，避免两套状态各自生成 UUID 后无法可靠取消同一轮会话。
+/// Same as [`begin_session_state`], but lets the host generate the session id before entering the
+/// Coordinator state machine. Less Computer needs to hand the same id to both the Core capture
+/// lease and the host recording resources, so two states do not generate separate UUIDs that
+/// cannot reliably cancel the same session.
 pub(crate) fn begin_session_state_with_id(
     state: &mut SessionState,
     focus_target: Option<usize>,
@@ -96,12 +104,14 @@ pub(crate) fn begin_session_state_with_id(
     state.focus_target = focus_target;
     state.session_id = session_id;
     state.front_app = front_app;
-    // 每个新会话默认是普通听写；Less Computer 专用入口会显式把它标为语音 Agent。
+    // Every new session defaults to plain dictation; the Less Computer entry point explicitly
+    // marks it as a voice Agent.
     state.voice_agent = false;
     Some(state.session_id)
 }
 
-/// stop_dictation / hold release 在 Starting 阶段只记录 pending_stop，等待启动完成后处理。
+/// stop_dictation / hold release during Starting only records pending_stop, processed after
+/// startup completes.
 pub(crate) fn request_stop_during_starting_state(state: &mut SessionState) -> bool {
     if state.phase != SessionPhase::Starting {
         return false;
@@ -110,17 +120,18 @@ pub(crate) fn request_stop_during_starting_state(state: &mut SessionState) -> bo
     true
 }
 
-/// begin_session 中各 await 之间的 cancel race 检查结果。
+/// Result of the cancel race check between awaits inside begin_session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BeginOutcome {
-    /// 启动 continuation 属于旧 session；不能改动当前 session 状态。
+    /// The startup continuation belongs to an old session; must not touch current session state.
     StaleContinuation,
-    /// 正常进入 Listening。
+    /// Entered Listening normally.
     Started,
-    /// Starting 阶段积累了 pending_stop 边沿，应立即 end_session（hold 快速松开 / toggle 快速双击）。
+    /// A pending_stop edge accumulated during Starting; end_session must run immediately (fast
+    /// hold release / rapid toggle double press).
     PendingStop,
-    /// 期间 cancel_session 触发（cancelled=true 或 phase 被外部改回 Idle）。
-    /// 必须回滚 recorder + ASR 资源，不进 Listening。
+    /// cancel_session fired meanwhile (cancelled=true or phase externally reset to Idle).
+    /// Must roll back recorder + ASR resources; do not enter Listening.
     CancelRaced,
 }
 
@@ -169,7 +180,8 @@ pub(crate) struct CancelDecision {
     pub(crate) session_id: SessionId,
 }
 
-/// cancel_session 的锁内前半段。Idle / Inserting 不可取消；其他阶段设置 cancelled。
+/// In-lock first half of cancel_session. Idle / Inserting cannot be cancelled; other phases set
+/// cancelled.
 pub(crate) fn begin_cancel_session_state(state: &mut SessionState) -> Option<CancelDecision> {
     let phase = state.phase;
     if matches!(phase, SessionPhase::Idle | SessionPhase::Inserting) {
@@ -182,10 +194,11 @@ pub(crate) fn begin_cancel_session_state(state: &mut SessionState) -> Option<Can
     })
 }
 
-/// cancel_session 外部资源清理后的锁内收尾。Processing 阶段把 phase 留给 end_session
-/// 自己收尾（防止与 polish/insert 路径竞争），但 focus_target 是当前 session 的窗口
-/// 资源句柄，cancel 之后无论处于哪个 phase 都应当释放，避免下一个 session 之前的
-/// 空档期被旧值污染。详见 audit 3.3.5。
+/// In-lock wrap-up of cancel_session after external resource cleanup. In Processing, the phase is
+/// left for end_session to finish itself (avoiding a race with the polish/insert path), but
+/// focus_target is the current session's window resource handle and must be released on cancel
+/// regardless of phase, so the gap before the next session is not polluted by a stale value. See
+/// audit 3.3.5.
 pub(crate) fn finish_cancel_session_state(state: &mut SessionState, decision: CancelDecision) {
     state.focus_target = None;
     if decision.phase != SessionPhase::Processing {
@@ -193,11 +206,11 @@ pub(crate) fn finish_cancel_session_state(state: &mut SessionState, decision: Ca
     }
 }
 
-/// 完成已进入 Processing 的取消收尾。
+/// Completes the cancel wrap-up for a session that already entered Processing.
 ///
-/// cancel_session 不能直接把 Processing 改成 Idle，否则会和 end_session 的润色/插入
-/// 收尾并发竞争；因此由 end_session 在取消早退点调用。session id 校验避免旧会话的迟到
-/// continuation 修改新会话状态。
+/// cancel_session must not move Processing straight to Idle, or it would race with end_session's
+/// polish/insert wrap-up; end_session therefore calls this at its cancel early-exit points. The
+/// session id check keeps a late continuation from an old session from mutating the new one.
 pub(crate) fn finish_cancelled_processing_state(
     state: &mut SessionState,
     session_id: SessionId,
@@ -289,8 +302,9 @@ mod tests {
 
     #[test]
     fn begin_session_resets_voice_agent_flag() {
-        // 安全护栏：上一会话残留的 voice_agent=true 绝不能让下一次普通听写被误判成
-        // Cloud Agent（否则听写内容会被发去跑 Claude 而不是插入光标）。
+        // Safety guard: a stale voice_agent=true from the previous session must never let the
+        // next plain dictation be misjudged as Cloud Agent (otherwise the dictation text would be
+        // sent to run Claude instead of being inserted at the cursor).
         let mut state = SessionState {
             voice_agent: true,
             ..Default::default()
@@ -434,8 +448,9 @@ mod tests {
 
             assert_eq!(state.phase, expected_phase, "initial={initial:?}");
             assert_eq!(state.cancelled, expected_cancelled, "initial={initial:?}");
-            // 任何被 begin_cancel_session_state 接受的 phase（即非 Idle/Inserting）
-            // 都应当清掉 focus_target，包括 Processing —— 这是 audit 3.3.5 的回归卡。
+            // Any phase accepted by begin_cancel_session_state (i.e. not Idle/Inserting) must
+            // clear focus_target, including Processing — this is the regression card for audit
+            // 3.3.5.
             if expected_cancelled {
                 assert!(
                     state.focus_target.is_none(),

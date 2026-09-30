@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 
 /**
- * 返回 `value`，但每个动画帧最多更新一次。
+ * Returns `value`, updated at most once per animation frame.
  *
- * 用于流式文本（LLM token）等到达速度远高于刷新率的场景：把「每个 token 触发一次
- * 重渲染」坍缩成「每帧最多一次」，让昂贵的派生计算（markdown 全量解析、DOM 测量）
- * 按帧率（~60fps）而非 token 率运行。否则一段长回复的解析是 O(n²)（每来一个 token
- * 就把已累积的整段重新 parse 一遍）。
+ * For streaming text (LLM tokens) and similar inputs arriving far faster than the refresh
+ * rate: collapses "one re-render per token" into "at most one per frame", so expensive
+ * derived computation (full markdown parsing, DOM measurement) runs at the frame rate
+ * (~60fps) instead of the token rate. Otherwise parsing a long reply is O(n²) (each token
+ * re-parses the entire accumulated text).
  *
- * 这是 throttle 而非 debounce：流式持续进行时每帧都会 flush 当前最新值；最新值最终
- * 一定会被投递（停止后的下一帧收尾），不会丢内容。
+ * This is throttle, not debounce: while streaming continues, each frame flushes the latest
+ * value; the final value is always delivered (a trailing frame after the stream stops), so
+ * no content is lost.
  */
 export function useRafThrottle<T>(value: T): T {
   const [throttled, setThrottled] = useState<T>(value);
@@ -18,7 +20,7 @@ export function useRafThrottle<T>(value: T): T {
   latest.current = value;
 
   useEffect(() => {
-    // 本帧已排程：不重排、不取消，最新值会在它触发时一并 flush。
+    // A frame is already scheduled: don't reorder or cancel; the latest value flushes when it fires.
     if (frame.current != null) return;
     frame.current = requestAnimationFrame(() => {
       frame.current = null;
@@ -26,7 +28,7 @@ export function useRafThrottle<T>(value: T): T {
     });
   }, [value]);
 
-  // 仅在卸载时取消挂起的帧，避免对已卸载组件 setState。
+  // Cancel a pending frame only on unmount, avoiding setState on an unmounted component.
   useEffect(
     () => () => {
       if (frame.current != null) cancelAnimationFrame(frame.current);

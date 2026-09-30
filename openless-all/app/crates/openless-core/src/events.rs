@@ -351,6 +351,15 @@ pub struct QaRecordingLevel {
     pub level: f32,
 }
 
+/// Live microphone meter for Selection Voice / Help me write (shared capsule).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectionVoiceRecordingLevel {
+    pub session_id: String,
+    pub level: f32,
+    pub elapsed_ms: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteInputRuntimeEvent {
@@ -425,6 +434,7 @@ pub enum BackendEventKind {
     MicrophoneDevicesChanged,
     QaLevel(QaRecordingLevel),
     QaState(QaStateEvent),
+    SelectionVoiceLevel(SelectionVoiceRecordingLevel),
     RemoteInputStatusChanged(RemoteInputRuntimeEvent),
     RemoteInputFailed(RemoteInputErrorEvent),
     VocabularySuggestionsChanged(Vec<PendingCorrection>),

@@ -63,6 +63,7 @@ const LLM_PROVIDER_TYPES: &[(&str, &str)] = &[
     ("cometapi", "cometapi"),
     ("openrouterFree", "openrouterFree"),
     ("requesty", "requesty"),
+    ("api-route", "apiRoute"),
     ("orcarouter", "orcarouter"),
     ("alibabaCoding", "alibabaCoding"),
     ("codingPlanX", "codingPlanX"),
@@ -418,8 +419,9 @@ pub struct CredentialConfiguration {
 pub fn volcengine_configured(configuration: &CredentialConfiguration) -> bool {
     use crate::asr::volcengine::VolcengineAuthMode;
 
-    // resource id 不是配置门槛：留空时运行时回落默认资源
-    //（见 VolcengineCredentials::resolve_resource_id），认证只取决于密钥本身。
+    // The resource id is not a configuration gate: when left empty the runtime falls
+    // back to the default resource (see VolcengineCredentials::resolve_resource_id);
+    // authentication depends only on the keys themselves.
     let Ok(service) = crate::asr::volcengine::VolcengineService::parse(
         configuration
             .volcengine_service
@@ -603,6 +605,7 @@ pub fn default_llm_endpoint(provider_type: &str) -> Option<&'static str> {
         "cometapi" => Some("https://api.cometapi.com/v1"),
         "openrouterFree" => Some("https://openrouter.ai/api/v1"),
         "requesty" => Some("https://router.requesty.ai/v1"),
+        "api-route" => Some("https://global.api-route.com/v1"),
         "orcarouter" => Some(crate::asr::mimo::ORCAROUTER_DEFAULT_ENDPOINT),
         "alibabaCoding" => Some("https://coding-intl.dashscope.aliyuncs.com/v1"),
         "codingPlanX" => Some("https://api.codingplanx.ai/v1"),
@@ -626,6 +629,7 @@ pub fn default_llm_model(provider_type: &str) -> Option<&'static str> {
         "mimo" => Some("xiaomi/mimo-v2-flash"),
         "openrouterFree" => Some("qwen/qwen3-coder:free"),
         "requesty" => Some("openai/gpt-4o-mini"),
+        "api-route" => Some("deepseek-v4-flash"),
         "orcarouter" => Some("orcarouter/fusion-flash"),
         "alibabaCoding" => Some("qwen3-coder-plus"),
         "codingPlanX" => Some("gpt-5-mini"),
@@ -1095,9 +1099,10 @@ pub fn volc_resource_history_label(resource_id: &str) -> Option<String> {
     allowed.then(|| id.to_string())
 }
 
-/// 1.x native ASR 的动态预算保留在 Core，Host 只负责执行 deadline 后的原生取消。
-/// MLX/C 和 Apple Speech 给短音频 30 秒余量；Whisper Metal 保留 15 秒地板；
-/// Windows batch 的 CPU/GPU 回退各自消费完整预算，不能再套一个更短的外层计时器。
+/// The dynamic budget for 1.x native ASR stays in Core; the Host only executes native
+/// cancellation after the deadline. MLX/C and Apple Speech get a 30-second margin for
+/// short audio; Whisper Metal keeps a 15-second floor; the Windows batch CPU/GPU
+/// fallbacks each consume the full budget — no shorter outer timer may wrap them.
 pub fn native_transcribe_timeout(provider_type: &str, duration_ms: u64) -> Duration {
     let (numerator, denominator, extra, minimum) = match provider_type {
         "local-whisper" | "apple-whisper" => (1_u64, 2_000_u64, 10, 15),
@@ -1294,7 +1299,8 @@ mod tests {
         configuration.volcengine_api_key = true;
         configuration.volcengine_resource_id = true;
         assert!(volcengine_configured(&configuration));
-        // resource id 留空（运行时回落默认资源）不构成「未配置」。
+        // An empty resource id (runtime falls back to the default) does not count as
+        // "unconfigured".
         configuration.volcengine_resource_id = false;
         assert!(volcengine_configured(&configuration));
         assert!(!asr_configured(
@@ -1385,6 +1391,42 @@ mod tests {
         assert!(!llm_configured("requesty", &configuration));
         configuration.llm_api_key = true;
         assert!(llm_configured("requesty", &configuration));
+    }
+
+    #[test]
+    fn api_route_descriptor_supplies_defaults_formats_and_credentials() {
+        use crate::llm_protocol::LlmRequestFormat;
+        assert!(crate::cloud_providers::SHARED_CLOUD_LLM_PROVIDER_TYPES.contains(&"api-route"));
+        let descriptor = provider_descriptor(ProviderKind::Llm, "api-route").unwrap();
+        assert_eq!(descriptor.label_key, "apiRoute");
+        assert_eq!(
+            descriptor.default_endpoint.as_deref(),
+            Some("https://global.api-route.com/v1")
+        );
+        assert_eq!(
+            descriptor.default_model.as_deref(),
+            Some("deepseek-v4-flash")
+        );
+        assert_eq!(
+            descriptor.default_request_format,
+            Some(LlmRequestFormat::ChatCompletions)
+        );
+        assert_eq!(descriptor.supported_request_formats, LlmRequestFormat::ALL);
+        assert_eq!(descriptor.validation_probe, ValidationProbe::LlmText);
+        assert!(api_key_required(
+            ProviderKind::Llm,
+            "api-route",
+            Some("https://global.api-route.com/v1/chat/completions")
+        ));
+        let mut configuration = CredentialConfiguration {
+            llm_endpoint: true,
+            llm_api_key_required: true,
+            llm_model: true,
+            ..CredentialConfiguration::default()
+        };
+        assert!(!llm_configured("api-route", &configuration));
+        configuration.llm_api_key = true;
+        assert!(llm_configured("api-route", &configuration));
     }
 
     #[test]

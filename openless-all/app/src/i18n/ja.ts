@@ -1,9 +1,9 @@
 import type { zhCN } from './zh-CN';
 import { en } from './en';
 
-// 日本語 (Beta) — AI 機械翻訳ベース。ネイティブ話者によるレビューを推奨。
-// 構造は zh-CN.ts に追従。新しい key を追加する場合は ja.ts / ko.ts も同時に
-// 更新してください（更新されない key は ...en で英語にフォールバックします）。
+// Japanese (Beta) — AI machine translation based; native-speaker review recommended.
+// Structure mirrors zh-CN.ts. When adding new keys, update ja.ts / ko.ts as well
+// (keys not updated fall back to English via ...en).
 export const ja: typeof zhCN = {
   ...en,
   cloudSyncE2ee: {
@@ -284,6 +284,7 @@ export const ja: typeof zhCN = {
     errorPrefix: '続行できません：',
     question: '質問する',
     edit: '選択範囲を編集',
+    compose: '書いて',
     cancel: 'キャンセル',
   },
   qa: {
@@ -822,6 +823,13 @@ export const ja: typeof zhCN = {
       clear: '結果を消去',
     },
   },
+  vocabLearning: {
+    open: '単語を覚える',
+    label: '覚えたい正しい単語を入力',
+    confirm: '確認して辞書に追加',
+    saved: '保存しました。辞書で管理できます。',
+    failed: '保存できませんでした：{{error}}',
+  },
   vocabCard: {
     title: 'この語を覚えますか？',
     accept: '覚える',
@@ -860,7 +868,7 @@ export const ja: typeof zhCN = {
     editTitle: '単語を編集',
     editSave: '保存',
     editEmpty: '単語を入力してください。',
-    filter: { all: 'すべて', auto: '自動追加', manual: '手動追加' },
+    filter: { all: 'すべて', auto: '確認して追加', manual: '手動追加' },
     searchPlaceholder: '検索',
     searchEmpty: '一致する単語がありません。',
     newWord: '新語',
@@ -870,7 +878,7 @@ export const ja: typeof zhCN = {
     newWordTemplates: 'プリセットテンプレート',
     newWordTemplateCount: '{{count}} 語',
     newWordAddSelected: '選択を追加',
-    learnedSection: '自動収集（{{count}}）',
+    learnedSection: '確認して追加（{{count}}）',
     removeAllLearned: 'すべて削除',
     corrections: {
       title: '補正ルール',
@@ -1230,12 +1238,31 @@ export const ja: typeof zhCN = {
       useSystemProxyDesc:
         'オンにするとリクエストはシステムプロキシを経由します。オフにするとすべて直接接続します（国内サービスの遅延が低くなる傾向）。GitHub ログインやアップデートなど海外サービスには接続できない場合があります。リアルタイム音声ストリームと Less Computer は影響を受けません。',
     },
+    vocabularyLearning: {
+      title: '修正から単語を学習',
+      enabled: '修正からの学習を有効にする',
+      observationSeconds: '監視時間',
+      observationSecondsHint: '音声入力後、現在の入力欄を監視する最大時間（10～60 秒）。',
+      suggestionSeconds: '候補の表示時間',
+      suggestionSecondsHint: '未確認の候補は 5～60 秒後に消え、辞書には追加されません。',
+      maxPhraseChars: '最大文字数',
+      maxPhraseCharsHint:
+        '自動候補の元の語と置換後の語を 2～32 文字に制限します。手動追加には影響しません。',
+      seconds: '{{count}} 秒',
+      characters: '{{count}} 文字',
+      changeHint:
+        '設定を変更すると現在の監視を終了し、未確認の候補を消去します。次の音声入力から適用されます。リセットしても有効化スイッチは変わりません。',
+      reset: '設定値をリセット',
+      saveError: '保存できませんでした。再試行してください。',
+      description:
+        '挿入後、入力欄の修正を端末内で最大60秒間検出し、確認後に辞書へ追加します。検出した文章はモデルに送信しません。パスワード欄と既知の機密アプリは除外します。Windows・Androidではエディターによって対応が異なり、Androidはユーザー補助が必要です。オフにすると検出を停止します。',
+    },
     dataStorage: {
       title: 'データ保存',
       desc: 'この端末に保存される会話履歴とコンテキスト。',
       cursorContextLabel: 'カーソル文脈（実験的）',
       cursorContextDesc:
-        '推敲時に、いま書いている文書のカーソル周辺の原文を読み取り、同音語・固有名詞・代名詞の書き分けをモデルが判断できるようにします。オンにすると、そのテキストがリクエストとともに設定中の LLM プロバイダへ送信されます。オフのときは一文字も読み取りません。パスワード入力欄、Secure Input、パスワード管理アプリ、ターミナルは常に読み取りません。macOS のみ。',
+        '推敲時にカーソル付近の文章をモデルへ送信します（macOSのみ）。端末内の単語学習とは独立した設定です。パスワード欄と既知の機密アプリは除外します。',
     },
     codingConsole: {
       title: 'Claude コンソール',
@@ -1433,7 +1460,8 @@ export const ja: typeof zhCN = {
       comboClear: 'クリア',
       comboConflict: 'このショートカットの組み合わせは使用できません',
       shortcutSaveFailed: 'ショートカットの保存に失敗しました',
-      mouseSideHint: 'マウスサイドボタン Mouse4 / Mouse5 は Windows でグローバルなディクテーションホットキーとして使えます',
+      mouseSideHint:
+        'マウスサイドボタン Mouse4 / Mouse5 は Windows でグローバルなディクテーションホットキーとして使えます',
       allowNonTsfFallbackLabel: '非 TSF フォールバックを許可',
       allowNonTsfFallbackDesc:
         'Windows：TSF 入力が失敗した時は分割した Unicode SendInput を使い、それも失敗した場合はクリップボードへコピーします。',
@@ -1519,6 +1547,8 @@ export const ja: typeof zhCN = {
       validationTitle: '接続の確認',
       validationHint:
         '実際にリクエストを送信して設定を確認します。サービスの利用枠を消費する場合があります。設定の保存だけでは確認を実行しません。',
+      validationHintOmni:
+        'テキストのみの疎通確認を手動送信します（録音なし）。成功しても音声ディクテーションが使えるとは限りません。短い録音で再確認してください。サービスの利用枠を消費する場合があります。',
       autoSaveHint: '変更は自動保存されます。設定が終わったら、手動で接続を確認できます。',
       nameHint:
         '同じプロバイダーのチャンネルを区別するための名前です。モデルや接続には影響しません。',
@@ -1593,6 +1623,7 @@ export const ja: typeof zhCN = {
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter（無料モデル）',
         requesty: 'Requesty',
+        apiRoute: 'API Route',
         orcarouter: 'OrcaRouter',
         alibabaCoding: 'Alibaba Cloud Coding Plan',
         codingPlanX: 'CodingPlanX',
@@ -1771,6 +1802,8 @@ export const ja: typeof zhCN = {
       selectModel: 'モデルを選んで上記欄に入力',
       modelSaved: 'モデル {{model}} を保存しました。',
       validateSuccess: '接続チェックに合格しました。',
+      validateSuccessOmni:
+        'テキスト疎通は成功しました。これは音声ディクテーションが使えることを意味しません。短い録音で確認してください。',
       validateFailed: '接続チェックに失敗しました。',
       providerHttpStatus:
         'サプライヤーが {{status}} を返しました。API Key 権限またはエンドポイントを確認してください。',
@@ -2015,6 +2048,13 @@ export const ja: typeof zhCN = {
         notWindows: 'Windows のみ利用可能。',
       },
     },
+    inputMethod: {
+      guidanceTitle: 'OpenLess 入力方法',
+      enableSystemIme:
+        'Android の設定 → キーボード / 入力方法で OpenLess Voice を有効にし、必要に応じて切り替えてください。',
+      longPressLogo:
+        'OpenLess キーボードの左上にあるロゴを長押しすると、端末のキーボード設定を開けます。',
+    },
     advanced: {
       multimodalPipelineTitle: 'マルチモーダル認識パイプライン',
       multimodalPipelineTitleHint:
@@ -2221,6 +2261,8 @@ export const ja: typeof zhCN = {
       omni: 'マルチモーダル',
       models: 'ローカルモデル',
       connections: '接続と拡張',
+      inactive: '現在のモードでは未使用',
+      inactiveDetail: 'この設定は保存されていますが、現在の認識パイプラインでは使用されません。',
       statusConfigured:
         '緑の点：有効なサービスがあります。リクエストは有効な一覧の先頭を使います。',
       statusMissing: '赤の点：まだ有効なサービスがありません。',
@@ -2234,6 +2276,8 @@ export const ja: typeof zhCN = {
     autoSaveHint: '変更は自動保存されます',
     backToAdvanced: '実験と拡張に戻る',
     advancedPages: {
+      vocabularyLearning:
+        '音声入力後の手動修正から学習し、監視時間・確認時間・文字数を設定します。',
       lessComputer: 'Agent を選び、モデル・権限・作業ディレクトリを設定します。',
       claudeConsole: 'Claude Code を検出し、テストタスクの実行出力を確認します。',
       multimodal: '実験的なマルチモーダル認識の有効・無効を設定します。',
@@ -2241,20 +2285,24 @@ export const ja: typeof zhCN = {
     },
     descriptions: {
       general: 'マイク、録音方法、文字入力を設定し、スマートフォンからの入力を接続します。',
+      inputMethod: 'Android のオーバーレイと入力方法を設定します。',
       shortcuts: '各機能のショートカットと、テキスト選択後の操作を設定します。',
       services: '音声認識と文章処理のサービス、チャンネル、ローカルモデル、接続を管理します。',
       appearance: 'テーマ、レイアウト、表示言語を読みやすく調整します。',
       privacy: 'システム権限と接続を確認し、履歴、録音、ローカルデータを管理します。',
-      advanced: '必要に応じて Less Computer、マルチモーダル処理、デバッグを設定します。',
+      advanced: '必要に応じて Less Computer とデバッグを設定します。',
       about: '現在のバージョン、更新チャンネル、自動更新を確認します。',
     },
     searchKeywords: {
       general: 'マイク 録音 入力 スマホ リモート LAN PIN カプセル ミュート 起動',
+      inputMethod: '入力方法 IME キーボード オーバーレイ Android',
       shortcuts: 'ショートカット ホットキー キー 選択 推敲 音声編集',
-      services: 'ASR LLM API チャンネル モデル クラウド ローカル ネットワーク プロキシ マーケット',
+      services:
+        'ASR LLM API チャンネル モデル クラウド ローカル ネットワーク プロキシ マーケット マルチモーダル 認識パイプライン Omni',
       appearance: 'テーマ ダーク ライト 言語 フォント 文字 サイズ レイアウト ヒートマップ',
       privacy: '権限 マイク アクセシビリティ 履歴 録音 保存 プライバシー エクスポート',
-      advanced: 'Less Computer Claude Agent マルチモーダル Omni デバッグ ログ 実験',
+      advanced:
+        'Less Computer Claude Agent マルチモーダル Omni デバッグ ログ 実験 修正から単語を学習 vocabulary learning',
       about: 'バージョン Beta 安定 更新 アップデート',
     },
 
@@ -2262,6 +2310,7 @@ export const ja: typeof zhCN = {
       appearance: '外観と言語',
       shortcuts: 'ショートカットと選択',
       general: '録音と入力',
+      inputMethod: '入力方法',
       services: 'AI サービスとモデル',
       privacy: '権限とデータ',
       advanced: '実験機能と拡張',

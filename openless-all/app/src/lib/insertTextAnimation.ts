@@ -1,12 +1,14 @@
 /**
- * 直播转写插入动画的纯函数模型。
+ * Pure-function model of the live transcription insert animation.
  *
- * 坐标直觉（与参考视频一致）：
- * - 新字出现在右侧插入点：淡入 + 上弹回落
- * - 既有文字被挤向左侧，延迟随离插入点的距离增加（声波传播）
- * - 胶囊先以右缘为锚向左拓宽，再整体右移回到居中
+ * Coordinate intuition (matching the reference video):
+ * - New characters appear at the right-side insertion point: fade in + pop up and settle
+ * - Existing text is pushed left, with delay growing with distance from the insertion point
+ *   (sound-wave propagation)
+ * - The capsule first widens leftward anchored at its right edge, then shifts right to recenter
  *
- * 这些量只描述「何时、往哪」；真正的弹簧由 LiveTranscriptPill 交给 framer-motion。
+ * These values only describe "when and where"; the actual springs are handed to framer-motion by
+ * LiveTranscriptPill.
  */
 
 export const INSERT_TEXT_MOTION = {
@@ -65,8 +67,9 @@ export function segmentInsertUnits(text: string): string[] {
 }
 
 /**
- * 以最长公共前缀 + 后缀对齐，给稳定字素分配稳定 key。
- * 中间新增的字素 marked born，下一轮会被压成 born: false。
+ * Align on the longest common prefix + suffix, giving stable graphemes stable keys.
+ * Newly inserted graphemes in the middle are marked born; the next round flattens them to
+ * born: false.
  */
 export function diffInsertUnits(prev: InsertUnit[], nextText: string): InsertUnit[] {
   const next = segmentInsertUnits(nextText);

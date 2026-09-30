@@ -1,7 +1,8 @@
 /**
- * 统一的悬浮提示，支持 hover、键盘 focus 和触摸触发。
+ * Unified tooltip supporting hover, keyboard focus, and touch triggers.
  *
- * Tooltip 使用 portal + fixed 定位，不受父级 overflow、transform 或 backdrop-filter 影响。
+ * Tooltip uses portal + fixed positioning, unaffected by parent overflow, transform,
+ * or backdrop-filter.
  */
 import {
   useEffect,
@@ -15,20 +16,20 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 
-/** 首次 hover 到出现的延迟。 */
+/** Delay from first hover to show. */
 const WARM_DELAY_MS = 600;
-/** tooltip 关闭后的预热窗口。 */
+/** Warm window after a tooltip closes. */
 const WARM_LINGER_MS = 300;
 
 let warmUntil = 0;
 
 interface TooltipProps {
   content: ReactNode;
-  /** 提示出现在锚点的哪一侧，默认 right。 */
+  /** Which side of the anchor the tooltip appears on; default right. */
   placement?: 'right' | 'top' | 'bottom';
-  /** 整句说明允许换行，默认 nowrap。 */
+  /** Full-sentence descriptions may wrap; default nowrap. */
   wrap?: boolean;
-  /** 让标签本身成为可聚焦的 Tooltip 触发器。 */
+  /** Makes the label itself a focusable tooltip trigger. */
   focusable?: boolean;
   children: ReactNode;
 }
@@ -197,7 +198,8 @@ export function Tooltip({
   );
 
   return (
-    // display:grid 保持锚点尺寸与子元素一致，同时避免引入额外布局差异。
+    // display:grid keeps the anchor size equal to its child while avoiding extra
+    // layout differences.
     <span
       ref={anchorRef}
       onMouseEnter={onEnter}

@@ -1,7 +1,9 @@
-//! MLX Qwen3-ASR 隔离进程与本地 IPC。
+//! MLX Qwen3-ASR isolated worker process and local IPC.
 //!
-//! mlx-c 的致命错误会直接结束当前进程，因此所有 MLX 初始化、加载和推理都放在
-//! 当前可执行文件的隐藏 worker 模式中。主进程只通过 Unix socket 发送小型 JSON 帧。
+//! Fatal errors in mlx-c end the current process directly, so all MLX
+//! initialization, loading, and inference run inside a hidden worker mode of
+//! the current executable. The main process talks to it only through small
+//! JSON frames over a Unix socket.
 
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
@@ -344,9 +346,10 @@ impl MlxWorkerClient {
             );
             user_error(MlxErrorCode::WorkerStart)
         };
-        // macOS 的 TMPDIR 通常位于很深的 /var/folders 路径；Unix socket 的
-        // sun_path 只有 104 字节。使用系统短临时根目录，私有性仍由唯一目录和
-        // 0700 权限保证。
+        // macOS's TMPDIR usually sits deep under /var/folders, and a Unix
+        // socket's sun_path is only 104 bytes. Use the system's short temp root;
+        // privacy is still guaranteed by the unique directory and 0700
+        // permissions.
         let session_dir = Path::new("/tmp").join(format!(
             "openless-mlx-{}-{}",
             std::process::id(),
@@ -526,8 +529,9 @@ impl MlxWorkerClient {
         let load_started = Instant::now();
         let request_id = self.next_request_id();
         let mut stream = self.io.lock().map_err(|_| user_error(MlxErrorCode::Io))?;
-        // 使用固定短轮询保持 120 秒总截止时间，同时避免 macOS 在 peer 已关闭后
-        // 再次 setsockopt(SO_RCVTIMEO) 返回 EINVAL，掩盖真正的 worker EOF。
+        // Fixed short polling keeps the 120s total deadline while avoiding
+        // macOS returning EINVAL from a second setsockopt(SO_RCVTIMEO) after
+        // the peer has closed, which would mask the real worker EOF.
         stream.set_read_timeout(Some(LOAD_POLL_INTERVAL))?;
         stream.set_write_timeout(Some(START_TIMEOUT))?;
         write_frame(
@@ -644,8 +648,10 @@ impl MlxWorkerClient {
         operation_id: u64,
         cancelled: &AtomicBool,
     ) -> Result<ActiveOperationGuard<'_>> {
-        // cancel() 先置 cancelled，再取同一把短锁检查 owner。这里在锁内同时检查
-        // 标志并登记 owner，封住“已取消但 blocking task 尚未开始”的竞态。
+        // cancel() sets cancelled first, then takes the same short lock to
+        // check the owner. Checking the flag and registering the owner inside
+        // the lock closes the "already cancelled but the blocking task has not
+        // started yet" race.
         let mut active = self
             .active_operation
             .lock()
@@ -1252,7 +1258,7 @@ mod tests {
     use std::sync::mpsc;
 
     fn test_dir() -> PathBuf {
-        // macOS 的测试 TMPDIR 同样可能超过 Unix socket 的 SUN_LEN。
+        // macOS's test TMPDIR can likewise exceed a Unix socket's SUN_LEN.
         let dir = Path::new("/tmp").join(format!(
             "ol-mlx-test-{}-{}",
             std::process::id(),

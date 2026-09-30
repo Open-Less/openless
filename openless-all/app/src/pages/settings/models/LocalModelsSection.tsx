@@ -1,10 +1,11 @@
-// 模型设置页（2.0）：本地 ASR 模型的下载与管理看板。
-// 含 Qwen3（macOS）/ Foundry Local + sherpa-onnx（Windows）三条本地引擎。
+// Model settings page (2.0): download and management dashboard for local ASR models.
+// Covers three local engines: Qwen3 (macOS) / Foundry Local + sherpa-onnx (Windows).
 //
-// 本地 ASR 不再有「启用开关」——是否激活由「服务 → AI 提供商」的 ASR
-// 语音转写供应商决定：选到本地模型供应商即使用本地引擎（与 Apple 语音同理）。
-// 这里是模型目录与管理（下载 / 删除 / 清理残留 / 测试 / 镜像源）；
-// 使用中的模型切换在渠道编辑器的 LocalModelPicker。
+// Local ASR no longer has an "enable toggle" — activation is decided by the ASR speech
+// transcription provider under Services → AI Providers: picking a local model provider uses the
+// local engine (same idea as Apple Speech). This page is the model catalog and management
+// (download / delete / clean leftovers / test / mirror source); switching the model in use
+// happens in the channel editor's LocalModelPicker.
 
 import { useEffect, useState } from 'react';
 import type { PlatformCapabilities } from '../../../lib/types';
@@ -29,8 +30,9 @@ export function LocalModelsSection() {
 
   return (
     <Card>
-      {/* 标题 + 右上角 inline 警告小字（实验性标记保留）。
-          Windows：标题区整体灰显 —— 本地 ASR 在 Win 上走 Foundry / sherpa 独立路径。 */}
+      {/* Title + inline warning text in the top-right corner (experimental badge kept).
+          Windows: the title area is grayed out — local ASR on Windows goes through the
+          separate Foundry / sherpa paths. */}
       <div
         style={{
           display: 'flex',
@@ -69,9 +71,9 @@ export function LocalModelsSection() {
           {t('settings.advanced.platformNotSupported')}
         </div>
       ) : (
-        /* 模型目录 / 管理看板（模型选择 · 下载 · 清理 · 删除 · 测试 · 镜像源）。
-           使用入口在「AI 提供商 → ASR 语音转写」选择本地供应商后，
-           由渠道编辑器内的 LocalModelPicker 切换使用中的模型。 */
+        /* Model catalog / management dashboard (model selection · download · cleanup · delete · test · mirror source).
+           Usage entry: pick a local provider under "AI Providers → ASR speech transcription",
+           then switch the model in use via the LocalModelPicker in the channel editor. */
         <div style={{ marginTop: 16, borderTop: '0.5px solid var(--ol-line)', paddingTop: 16 }}>
           <LocalAsr embedded />
         </div>

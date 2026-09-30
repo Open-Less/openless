@@ -1,7 +1,9 @@
-//! qwen3_asr_rs 的 MLX/Metal 包装。
+//! MLX/Metal wrapper around qwen3_asr_rs.
 //!
-//! 上游库目前以音频文件作为输入。OpenLess 的录音器产生的是 16 kHz、单声道、
-//! 16-bit PCM，因此这里只做一次临时 WAV 封装；模型本身保持驻留并跨会话复用。
+//! The upstream library currently takes an audio file as input. OpenLess's
+//! recorder produces 16 kHz mono 16-bit PCM, so this layer only wraps it in a
+//! temporary WAV once; the model itself stays resident and is reused across
+//! sessions.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -52,9 +54,11 @@ impl MlxQwenAsrEngine {
     }
 }
 
-/// Qwen 官方 ASR 权重通常只有 `vocab.json` + `merges.txt`，而 qwen3_asr_rs
-/// 使用 HuggingFace 的统一 `tokenizer.json`。这里在首次加载时本地生成一次，
-/// 避免要求用户安装 Python/Transformers；如果模型包已经带 tokenizer.json，则直接复用。
+/// Qwen's official ASR weights usually ship only `vocab.json` + `merges.txt`,
+/// while qwen3_asr_rs uses HuggingFace's unified `tokenizer.json`. Generate it
+/// locally once at first load instead of requiring users to install
+/// Python/Transformers; if the model package already carries tokenizer.json,
+/// reuse it directly.
 pub(super) fn ensure_tokenizer_json(model_dir: &Path) -> Result<()> {
     let tokenizer_path = model_dir.join("tokenizer.json");
     if tokenizer_path.is_file() {

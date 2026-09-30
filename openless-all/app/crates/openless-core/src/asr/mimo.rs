@@ -14,8 +14,9 @@ use crate::asr::RawTranscript;
 
 const PCM_SAMPLE_RATE_HZ: u64 = 16_000;
 const PCM_BYTES_PER_SAMPLE: usize = 2;
-// 官方限制：Base64 后的音频数据不能超过 10MB。180s 的 16k/16-bit/mono WAV
-// Base64 后约 7.7MB，给 JSON/data-url 前缀和厂商侧 MB 口径差异留余量。
+// Official limit: Base64-encoded audio data must not exceed 10MB. A 180s
+// 16k/16-bit/mono WAV is ~7.7MB after Base64, leaving margin for the JSON/data-url
+// prefix and vendor-side MB accounting differences.
 const MIMO_MAX_CHUNK_DURATION_MS: u64 = 180_000;
 pub const PROVIDER_ID: &str = "xiaomi-mimo-asr";
 pub const DEFAULT_ENDPOINT: &str = "https://api.xiaomimimo.com/v1";
@@ -229,8 +230,9 @@ fn pcm_duration_ms(pcm: &[u8]) -> u64 {
     super::pcm::pcm_duration_ms(pcm)
 }
 
-/// 按时长把 PCM 切成多段（base64 进 JSON 的批量 ASR 都受单请求体积/时长限制）。
-/// `dashscope_multimodal` 复用同一套切分逻辑，故 `pub(crate)`。
+/// Splits PCM into segments by duration (batch ASR over base64-in-JSON is limited by
+/// per-request size/duration). `dashscope_multimodal` reuses the same splitting, hence
+/// `pub(crate)`.
 pub(crate) fn split_pcm_by_duration(pcm: &[u8], max_chunk_duration_ms: u64) -> Vec<&[u8]> {
     if max_chunk_duration_ms == 0 {
         return vec![pcm];
@@ -245,8 +247,9 @@ pub(crate) fn split_pcm_by_duration(pcm: &[u8], max_chunk_duration_ms: u64) -> V
     pcm.chunks(bytes_per_chunk).collect()
 }
 
-/// 把分段识别文本按 CJK/标点规则拼回一句（段间按需补空格）。
-/// `dashscope_multimodal` 复用同一套拼接逻辑，故 `pub(crate)`。
+/// Joins the segmented transcript chunks back into one text using CJK/punctuation
+/// rules (space inserted between segments when needed).
+/// `dashscope_multimodal` reuses the same joining, hence `pub(crate)`.
 pub(crate) fn join_transcript_chunks(chunks: &[String]) -> String {
     let mut joined = String::new();
     for chunk in chunks.iter().map(|chunk| chunk.trim()) {

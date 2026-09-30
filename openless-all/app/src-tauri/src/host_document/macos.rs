@@ -1,20 +1,22 @@
-//! macOS Accessibility 读取实现。
+//! macOS Accessibility read implementation.
 //!
-//! 手写 FFI，与 `lib.rs::macos_capsule_ax` / `selection.rs::macos_ax` 同源（仓库没有
-//! 引入 accessibility crate 的先例，这里保持一致）。新增的只有：`AXValue` 全文、
-//! `kAXValueCFRangeType` 的 CFRange 解包、大文档走 `AXStringForRange` +
-//! `AXNumberOfCharacters`，以及那两份旧代码都缺的 **messaging timeout**。
+//! Hand-written FFI, same lineage as `lib.rs::macos_capsule_ax` /
+//! `selection.rs::macos_ax` (the repo has no precedent for an accessibility
+//! crate). Adds only: full `AXValue` text, `CFRange` unpacking for
+//! `kAXValueCFRangeType`, `AXStringForRange` + `AXNumberOfCharacters` for large
+//! documents, and the **messaging timeout** both older copies lack.
 //!
-//! ## 坐标系
+//! ## Coordinate systems
 //!
-//! AX 的所有文本下标都是 **UTF-16 code unit**，而窗口算法按 char 走。中文在 UTF-16
-//! 里 1 个单元、emoji 2 个，两套坐标必须显式换算 —— 见
-//! [`utf16_offset_to_char_offset`](super::utf16_offset_to_char_offset)。
+//! All AX text indices are **UTF-16 code units**, while the window algorithm
+//! works in chars. Chinese is 1 unit in UTF-16, emoji 2; the two coordinate
+//! systems must be converted explicitly — see
+//! [`utf16_offset_to_char_offset`](super::utf16_offset_to_char_offset).
 //!
-//! ## 本文件只在 `spawn_blocking` 里跑
+//! ## This file only runs inside `spawn_blocking`
 //!
-//! 每个 AX 调用都可能阻塞到 `AX_MESSAGING_TIMEOUT_SECS`，绝不能出现在 tokio worker 上。
-//! 调度由 [`super::probe_around_cursor`] 负责。
+//! Every AX call can block up to `AX_MESSAGING_TIMEOUT_SECS`; none of it may
+//! run on a tokio worker. Scheduling is handled by [`super::probe_around_cursor`].
 
 use std::ffi::{c_void, CStr};
 use std::os::raw::c_char;
@@ -29,13 +31,16 @@ use core_foundation::runloop::{
 
 use super::{
     evaluate_gate, minimal_edit, plan_window, utf16_offset_to_char_offset, window_around_cursor,
-    EditPair, GateInputs, ReadOutcome, AX_MESSAGING_TIMEOUT_SECS, EDIT_WATCH_MAX_LIFETIME,
+    EditPair, GateInputs, ReadOutcome, AX_MESSAGING_TIMEOUT_SECS,
 };
 
-/// 超过这个 UTF-16 长度就不整篇 `AXValue` 读回来，改走 `AXStringForRange` 只取光标附近。
+/// Above this UTF-16 length, skip a full `AXValue` read and use
+/// `AXStringForRange` to fetch only the span near the cursor.
 ///
-/// 在一篇十万字的文档上 `AXValue` 会把整篇跨进程拷过来，光是 marshalling 就够撞上
-/// 超时；而我们最终只要几百字。阈值取得比任何合理预算都大得多，正常文档仍走简单路径。
+/// On a 100k-character document `AXValue` copies the whole text across the
+/// process boundary; marshalling alone can hit the timeout, and only a few
+/// hundred characters are needed. The threshold sits far above any reasonable
+/// budget, so normal documents keep the simple path.
 const FULL_TEXT_MAX_UTF16: usize = 20_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -53,60 +58,39 @@ fn classify_document_length(total: Option<usize>, limit: usize) -> DocumentLengt
     }
 }
 
-/// 一条光标通知要跟最后一次文本变化隔多久，才算「用户真的把光标移开了」。
+/// How long a caret notification must trail the last text change to count as
+/// "the user actually moved the caret away".
 ///
-/// 两种通知是**成对**发出来的：打一个字，`AXValueChanged` 和 `AXSelectedTextChanged`
-/// 相隔几毫秒先后到达。不设这道门槛，第二条就会被当成「光标移开」——于是每敲一个键都
-/// 判定一次，而中间态全被拒，等用户真正打完时已经没有待判定的改动了。真机上就是这样
-/// 一次都没学到的。
+/// The two notifications arrive as a **pair**: one keystroke yields
+/// `AXValueChanged` then `AXSelectedTextChanged` a few milliseconds apart.
+/// Without this threshold the second one is misread as "caret moved away",
+/// so every keystroke triggers a verdict that rejects all intermediate
+/// states — on real hardware this meant nothing was ever learned.
 ///
-/// 300ms：远大于配对通知的间隔（毫秒级），远小于「停手再去点别处」的间隔。
+/// 300ms: far above the paired-notification gap (milliseconds), far below
+/// the gap to "stopped typing and clicked elsewhere".
 const CARET_MOVE_QUIET: Duration = Duration::from_millis(300);
 
-/// 「这一处改完了」的**兜底**判据：多久没动静就判一次。
+/// **Fallback** criterion for "this edit is finished": how long without
+/// activity before forcing a verdict. The primary criterion is semantic —
+/// the caret leaving this spot (see `value_changed_shim`).
 ///
-/// 主判据是语义的 —— 光标离开这一处（见 `value_changed_shim`）。时间只用来兜住那些
-/// 不发光标事件的 app。
-///
-/// 为什么必须有「改完了」这个概念：把「扣德克斯」改成 `Codex` 的击键序列是删掉四个字
-/// → C → o → d → e → x。每一步都是一次通知，而中间态「扣德克斯 → C」「→ Co」
-/// 「→ Cod」全都是形式合法的**跨文种**改动 —— 那是自动入库、不问用户的那一档。判早了，
-/// 一次改词就能往词库里塞四条垃圾。
-///
-/// 5 秒而不是 1 秒出头：它已经不是主判据了，放宽只会更不容易抓到中间态。用户改到一半
-/// 停下来想事情，也不该被切断。
-///
-/// ## 已知代价：「改完词接着往下写」学不到
-///
-/// `pending_since` 每次文本变化都会重置，所以只要用户不停手，判定就一直往后推。等他
-/// 终于停下来，比对是「原基线 vs 最终文本」——**改的那个词和之后写的所有内容被并成
-/// 同一处差异**：
-///
-/// ```text
-/// 基线    我们用扣德克斯写代码
-/// 最终    我们用 Codex 写代码，然后还要接着写很多别的
-/// 差异    扣德克斯写代码 → Codex 写代码，然后还要接着写很多别的
-/// ```
-///
-/// 结果要么超长/跨句被拒（这次纠正白做），要么变成一条被污染的建议。这跟「改完按回车
-/// 撑成整句」是同一个根：[`minimal_edit`](super::minimal_edit) 只能表达**一处
-/// 连续**差异，用户做两处改动时中间的字必然被卷进来。
-///
-/// **没有在这里收紧**，因为两个方向都会退化掉更重要的东西：
-///
-/// - 把 `pending_since` 改成只在为 `None` 时设置（等于给窗口加 5 秒硬顶），会重新
-///   开始抓到单个词改到一半的中间态 —— 那正是这个常量当初从 1 秒放宽到 5 秒要躲开的；
-/// - 真正的解法是换成能识别多处改动的差异算法（LCS 之类），那是独立一件事，而且必须
-///   有真机数据才能验证它没把已经调好的判定搞坏。
-///
-/// 在那之前：这条路径上的建议要么没有、要么偏长，而每条建议都要用户在卡片上点勾才
-/// 入库 —— 代价是漏学或多看一眼，不是静默写错。
+/// 5s, not ~1s: intermediate states of a multi-keystroke correction are all
+/// legal-looking cross-script edits; judging them early would feed several
+/// garbage entries per corrected word into the lexicon. A long window also
+/// avoids cutting off a user who pauses mid-edit. Known cost: an edit
+/// followed by more typing only settles once the user stops, and
+/// [`minimal_edit`](super::minimal_edit) can express a single contiguous
+/// diff, so the correction and the following text merge into one diff that
+/// may be rejected or polluted.
 const EDIT_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// 等「我们自己的落字生效」最多等多久，超过就以当前文档状态为基线。
+/// How long to wait for our own inserted text to land before anchoring the
+/// baseline to the current document state.
 ///
-/// 目标 app 对插入的文本做过加工时（智能引号、自动补全、字形转换），我们永远等不到
-/// 那段文字原样出现。等不到就一直不锚定，等于功能静默失效 —— 宁可基线略有偏差。
+/// When the target app transforms inserted text (smart quotes, autocomplete,
+/// glyph conversion), the exact text never appears; waiting forever would
+/// silently disable the feature — a slightly off baseline is preferable.
 const BASELINE_ANCHOR_TIMEOUT: Duration = Duration::from_millis(1500);
 
 #[repr(C)]
@@ -119,7 +103,7 @@ type CFTypeId = usize;
 type AxError = i32;
 type AxValueRef = *const c_void;
 
-/// CoreFoundation 的 `CFRange`（`CFIndex` = `isize`）。
+/// CoreFoundation's `CFRange` (`CFIndex` = `isize`).
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct CFRange {
@@ -130,10 +114,10 @@ struct CFRange {
 const AX_ERROR_SUCCESS: AxError = 0;
 const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 const K_AX_VALUE_CF_RANGE_TYPE: i32 = 4;
-/// `kCFNumberCFIndexType` —— 按 `CFIndex`（isize）取值，与 AX 的下标宽度一致。
+/// `kCFNumberCFIndexType` — read as `CFIndex` (isize), matching AX's index width.
 const K_CF_NUMBER_CF_INDEX_TYPE: i32 = 14;
 
-/// AXObserver 的不透明句柄。
+/// Opaque handle for AXObserver.
 #[repr(C)]
 struct OpaqueAxObserver(c_void);
 type AxObserverRef = *mut OpaqueAxObserver;
@@ -196,11 +180,10 @@ extern "C" {
         encoding: u32,
     ) -> CFStringRef;
     fn CFStringGetCStringPtr(s: CFStringRef, encoding: u32) -> *const c_char;
-    // 返回 `u8` 而不是 `bool`：CoreFoundation 的 `Boolean` 是 `unsigned char`，不是
-    // C 的 `_Bool`。Rust 的 `bool` 要求位模式**恰好**是 0 或 1，其余一律 UB —— 拿它
-    // 接一个 `unsigned char` 是在赌 CF 永远只返回 0/1。同文件的 `AXValueGetValue`
-    // 早就是 `u8` 了，这两个当初照抄 `selection.rs` 抄进来的（那边至今还是 `bool`，
-    // 属于本模块开头声明过「不得复制」的那类既有缺陷）。
+    // Returns `u8`, not `bool`: CoreFoundation's `Boolean` is `unsigned char`,
+    // not C's `_Bool`. Rust's `bool` requires the bit pattern to be exactly 0
+    // or 1 (anything else is UB), so it must not receive an `unsigned char`.
+    // `AXValueGetValue` in this file already uses `u8`.
     fn CFStringGetCString(
         s: CFStringRef,
         buffer: *mut c_char,
@@ -212,34 +195,37 @@ extern "C" {
     fn CFNumberGetValue(number: CFTypeRef, number_type: i32, value_ptr: *mut c_void) -> u8;
 }
 
-/// 拿到焦点元素的结果。`Ready` 里的 ref **调用方负责 `CFRelease`**。
+/// Result of acquiring the focused element. The caller must `CFRelease` the ref in `Ready`.
 enum GatedElement {
     Ready(AxUiElementRef),
     Blocked(super::BlockReason),
     Unavailable(&'static str),
 }
 
-/// **拿到焦点元素的唯一入口 —— 想读宿主 app 的任何东西都必须从这里拿。**
+/// **The only way to obtain the focused element — anything read from the host
+/// app must come through here.**
 ///
-/// 把「取元素」和「过闸门」焊死在一起，是因为它们分开过一次就出过事：闸门原本只装在
-/// 读取路径上，手改观察器自己另开了一条取元素的路，于是在终端里听写时上下文读取被正确
-/// 拦住、观察器却照样把终端全文读走。**闸门漏一条路径 = 没有闸门。**
+/// Taking the element and passing the gate are fused: when they were separate,
+/// the manual-edit observer opened its own path and read a terminal's full
+/// text even though the context read was correctly blocked. One ungated path
+/// means no gate.
 ///
-/// 顺序有讲究，两段判定不能合并：
+/// Two checks in order, not merged:
 ///
-/// 1. 先用**前台 app**粗判一道（Secure Input、bundle 黑名单）—— 命中就一条 AX 消息都
-///    不发，这是为了省事，不是最终判据；
-/// 2. 拿到焦点元素后，用**元素自己的 pid** 换真正的 bundle，连同 `role` / `subrole`
-///    再判一次 —— 这一道才算数。
+/// 1. A coarse check against the **front app** (Secure Input, bundle
+///    blacklist) — a hit sends no AX message at all;
+/// 2. After taking the element, re-check using the **element's own pid** to
+///    resolve the real bundle, together with `role` / `subrole` — this one
+///    counts.
 ///
-/// 第二道为什么必须重新取 bundle：前台 app 是在取元素**之前**采样的，而每个 AX 调用
-/// 都可能阻塞到 [`AX_MESSAGING_TIMEOUT_SECS`]。用户在这中间切了 app，第一道就会拿旧
-/// app 的身份，放行一个属于新 app 的元素 —— 终端、密码管理器正是靠 bundle 黑名单拦的。
-/// 拿元素自己的 pid 去问「你是谁」，这个时间窗就不存在了；顺带也修好了「焦点元素归属
-/// 与前台 app 本来就可能不一致」这件事。
+/// The second check re-resolves the bundle because the front app was sampled
+/// before the element was taken and every AX call can block up to
+/// [`AX_MESSAGING_TIMEOUT_SECS`]; if the user switched apps in between, the
+/// stale identity would admit an element owned by the new app.
 ///
-/// `AXUIElementSetMessagingTimeout` 也在这里统一设。不设就继承 AX 默认的 ~6 秒，对着
-/// 一个卡死的 app 就是 6 秒冻结 —— 这是本模块最重要的一行。
+/// `AXUIElementSetMessagingTimeout` is also set here; without it AX's ~6s
+/// default freezes the worker against a stuck app — the most important line
+/// in this module.
 unsafe fn focused_element_passing_the_gate(mut gate: GateInputs) -> GatedElement {
     if let Some(reason) = evaluate_gate(&gate) {
         return GatedElement::Blocked(reason);
@@ -249,7 +235,7 @@ unsafe fn focused_element_passing_the_gate(mut gate: GateInputs) -> GatedElement
     if system.is_null() {
         return GatedElement::Unavailable("system-wide AX element unavailable");
     }
-    // 系统级 element 上的设置会成为本进程的默认值。
+    // Settings on the system-wide element become this process's default.
     AXUIElementSetMessagingTimeout(system, AX_MESSAGING_TIMEOUT_SECS);
 
     let focused = copy_element_attr(system, b"AXFocusedUIElement\0");
@@ -258,18 +244,18 @@ unsafe fn focused_element_passing_the_gate(mut gate: GateInputs) -> GatedElement
     let Some(focused) = focused else {
         return GatedElement::Unavailable("no focused UI element (AX permission or no focus)");
     };
-    // 显式再设一次：进程默认值只对「之后创建」的 ref 生效，对已有 ref 补一刀更稳。
+    // Set again explicitly: the process default only applies to refs created afterwards.
     AXUIElementSetMessagingTimeout(focused, AX_MESSAGING_TIMEOUT_SECS);
 
-    // 拿元素自己的身份重判，别再信第一道用的那个前台 app。
+    // Re-check with the element's own identity; do not trust the front app sampled earlier.
     //
-    // **确认不了归属就不读 —— 这里必须失败关闭。** 取不到 pid 或查不到 bundle 时，
-    // 如果沿用第一道那个采样值，闸门就退回按「谁在最前面」判定，等于这个修复没做；
-    // 而把 `bundle_id` 清成 `None` 同样不行 —— `evaluate_gate` 对缺失的元数据是放行的
-    //（见 `missing_metadata_does_not_block_by_itself`），那是另一种 fail-open。
+    // **Fail closed: if ownership cannot be confirmed, do not read.** Keeping
+    // the front-app value sampled earlier falls back to a frontmost-app gate,
+    // and clearing `bundle_id` to `None` is another fail-open (`evaluate_gate`
+    // allows missing metadata, see `missing_metadata_does_not_block_by_itself`).
     //
-    // 代价是没有 bundle id 的进程读不到上下文。那类进程本来就很少，而「宁可不读」正是
-    // 这个功能对隐私的基本承诺。
+    // The cost is that processes without a bundle id get no context. Few such
+    // processes exist, and not reading is this feature's privacy baseline.
     let mut pid: i32 = 0;
     let owner = (AXUIElementGetPid(focused, &mut pid) == AX_ERROR_SUCCESS && pid > 0)
         .then(|| crate::selection::bundle_id_for_pid(pid))
@@ -279,7 +265,7 @@ unsafe fn focused_element_passing_the_gate(mut gate: GateInputs) -> GatedElement
         return GatedElement::Unavailable("could not confirm which app owns the focused element");
     };
     gate.bundle_id = Some(owner);
-    // Secure Input 是全局状态，顺手也刷新一次 —— 同样可能在这几次 AX 调用期间才打开。
+    // Secure Input is global state; refresh it too — it may have been enabled during these AX calls.
     gate.secure_input = crate::unicode_keystroke::is_secure_input_enabled();
     gate.role = copy_string_attr(focused, b"AXRole\0");
     gate.subrole = copy_string_attr(focused, b"AXSubrole\0");
@@ -291,10 +277,12 @@ unsafe fn focused_element_passing_the_gate(mut gate: GateInputs) -> GatedElement
     GatedElement::Ready(focused)
 }
 
-/// 同步读取光标周围的文档。**只允许在 `spawn_blocking` 上下文里调用。**
+/// Synchronously reads the document around the cursor. **Only callable in a
+/// `spawn_blocking` context.**
 ///
-/// `gate` 带着调用方已经填好的 `secure_input` / `bundle_id`；
-/// [`focused_element_passing_the_gate`] 会补上 `role` / `subrole` 并做最终判定。
+/// `gate` carries the caller-filled `secure_input` / `bundle_id`;
+/// [`focused_element_passing_the_gate`] fills in `role` / `subrole` and makes
+/// the final decision.
 pub(super) fn read_around_cursor_blocking(budget_chars: usize, gate: GateInputs) -> ReadOutcome {
     unsafe {
         let focused = match focused_element_passing_the_gate(gate) {
@@ -322,8 +310,9 @@ unsafe fn read_document(focused: AxUiElementRef, budget_chars: usize) -> ReadOut
             );
         }
         DocumentLength::WithinLimit(total) => {
-            // 小文档（绝大多数情况）：整篇读回来，按 char 精确截窗。AXValue 不可读时
-            // 仍可用已知总长度走下面的有界 AXStringForRange 回落。
+            // Small document (the common case): read the whole text and slice
+            // the window precisely in chars. If AXValue is unreadable, fall
+            // through to the bounded AXStringForRange path using the known length.
             if let Some(text) = copy_string_attr(focused, b"AXValue\0") {
                 let cursor = utf16_offset_to_char_offset(&text, cursor_utf16);
                 return ReadOutcome::Window(window_around_cursor(&text, cursor, budget_chars));
@@ -333,9 +322,10 @@ unsafe fn read_document(focused: AxUiElementRef, budget_chars: usize) -> ReadOut
         DocumentLength::OverLimit(total) => total,
     };
 
-    // 回落：文档太大，或者该控件压根不给 AXValue（Electron 类常见）。改成只跟它要
-    // 光标附近的一段。UTF-16 预算给两倍 —— 宁可多要一点回来自己裁，也不要因为
-    // char/UTF-16 换算差把上文截秃。
+    // Fallback: the document is too large, or the control exposes no AXValue
+    // (common in Electron apps). Request only a span around the cursor. The
+    // UTF-16 budget is doubled — better to over-fetch and trim here than to
+    // lose context to char/UTF-16 conversion drift.
     let span = plan_window(total_utf16, cursor_utf16, budget_chars.saturating_mul(2));
     if span.len == 0 {
         return ReadOutcome::Window(super::DocumentWindow {
@@ -350,21 +340,21 @@ unsafe fn read_document(focused: AxUiElementRef, budget_chars: usize) -> ReadOut
     ReadOutcome::Window(window_around_cursor(&text, cursor, budget_chars))
 }
 
-/// 读 `AXSelectedTextRange` 的起点 —— 没有选区时它就是光标位置（length == 0）。
+/// Reads the start of `AXSelectedTextRange` — with no selection it is the caret position (length == 0).
 unsafe fn copy_caret_offset(focused: AxUiElementRef) -> Option<usize> {
     let range = copy_selected_range(focused)?;
     caret_offset_from_location(range.location)
 }
 
-/// 把 `AXSelectedTextRange` 的 location 翻成光标偏移。**负数是「没有光标」，不是 0。**
+/// Converts an `AXSelectedTextRange` location into a caret offset.
+/// **Negative means "no caret", not 0.**
 ///
-/// 部分 app（尤其 Electron 那一类）在没有插入点或元素不是文本控件时返回
-/// `kCFNotFound`（-1）。原本这里 `.max(0)`，等于把「不知道光标在哪」当成「光标在开头」
-/// —— 于是我们读回文档**开头**那几百个字，再当作「光标附近」发给 LLM。错得静默：
-/// 日志里看到的是 `before=0 after=N`，像是「上文为空」，实际是读错了地方。
-///
-/// 返回 `None` 让 `read_document` 走 `Unavailable` 分支：这次不发上下文，探针里也能
-/// 看到原因。宁可没有上下文，不要错的上下文。
+/// Some apps (notably Electron ones) return `kCFNotFound` (-1) when there is
+/// no insertion point. The old `.max(0)` treated "caret unknown" as "caret at
+/// the start", silently sending the document's opening lines as cursor
+/// context (`before=0 after=N` in logs looked like empty context). Returning
+/// `None` routes `read_document` to `Unavailable`: no context beats wrong
+/// context.
 fn caret_offset_from_location(location: isize) -> Option<usize> {
     (location >= 0).then_some(location as usize)
 }
@@ -727,7 +717,7 @@ mod keyboard_delivery_tests {
     }
 }
 
-/// `AXStringForRange(range)` —— 只把光标附近那段跨进程拷回来。
+/// `AXStringForRange(range)` — copies only the span near the cursor across the process boundary.
 unsafe fn copy_string_for_range(
     focused: AxUiElementRef,
     start: usize,
@@ -764,10 +754,11 @@ unsafe fn copy_string_for_range(
     text
 }
 
-/// 读一个属性并保证它真的是 CFString。
+/// Reads an attribute and verifies it is really a CFString.
 ///
-/// 类型检查不是多余的：`AXValue` 在滑块上是数字、在复选框上是布尔。不检查就会把
-/// 一个 CFNumber 当字符串解，轻则乱码重则读越界。
+/// The type check is not redundant: `AXValue` is a number on sliders, a
+/// boolean on checkboxes; decoding a CFNumber as a string yields garbage or
+/// an out-of-bounds read.
 unsafe fn copy_string_attr(element: AxUiElementRef, attribute: &[u8]) -> Option<String> {
     let value = copy_attr(element, attribute)?;
     let text = if CFGetTypeID(value) == CFStringGetTypeID() {
@@ -779,7 +770,7 @@ unsafe fn copy_string_attr(element: AxUiElementRef, attribute: &[u8]) -> Option<
     text
 }
 
-/// 读一个 CFNumber 属性并按 `CFIndex` 取值。
+/// Reads a CFNumber attribute as a `CFIndex`.
 unsafe fn copy_index_attr(element: AxUiElementRef, attribute: &[u8]) -> Option<usize> {
     let value = copy_attr(element, attribute)?;
     if CFGetTypeID(value) != CFNumberGetTypeID() {
@@ -800,12 +791,12 @@ unsafe fn copy_index_attr(element: AxUiElementRef, attribute: &[u8]) -> Option<u
     }
 }
 
-/// 读一个属性，值本身就是另一个 AXUIElement（如 `AXFocusedUIElement`）。
+/// Reads an attribute whose value is itself an AXUIElement (e.g. `AXFocusedUIElement`).
 unsafe fn copy_element_attr(element: AxUiElementRef, attribute: &[u8]) -> Option<AxUiElementRef> {
     copy_attr(element, attribute).map(|value| value as AxUiElementRef)
 }
 
-/// 读任意属性的原始 CFTypeRef。**调用方负责 `CFRelease`。**
+/// Reads the raw CFTypeRef of any attribute. **Caller must `CFRelease`.**
 unsafe fn copy_attr(element: AxUiElementRef, attribute: &[u8]) -> Option<CFTypeRef> {
     let attr = cfstring_from_static(attribute)?;
     let mut value: CFTypeRef = std::ptr::null();
@@ -855,34 +846,38 @@ unsafe fn cfstring_to_rust(s: CFStringRef) -> Option<String> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 手改监听（AXObserver）
+// Manual edit watch (AXObserver)
 // ═══════════════════════════════════════════════════════════════════════════
 //
-// 形状照抄 `device_watch.rs`（CoreAudio 设备监听）：专用线程 → 注册回调（user_data
-// 双重间接封装闭包胖指针）→ `CFRunLoop::run_in_mode(1s)` 轮转 + 退出 flag → 退出前
-// 反注册 → 失败只 warn。那边注释解释了为什么不用 `CFRunLoopRun()` + 跨线程
-// `CFRunLoopStop`：跨线程停 runloop 有竞态且会漏线程。这里一模一样。
+// Same shape as `device_watch.rs` (CoreAudio device watch): dedicated thread →
+// register callback (user_data double indirection wrapping the closure fat
+// pointer) → `CFRunLoop::run_in_mode(1s)` rotation + stop flag → unregister
+// before exit → warn only on failure. Cross-thread `CFRunLoopStop` is avoided
+// for the same reason documented there: it races and can leak the thread.
 //
-// **必须保证解除**。观察器泄漏意味着我们一直持有别的 app 的 AX 引用、一直被它的每次
-// 击键唤醒 —— 既是资源泄漏也是隐私问题。所以有三重保险：调用方 disarm、60 秒硬超时、
-// 前台 app 一换就自杀。
+// **Disarm must be guaranteed.** A leaked observer keeps AX references to
+// another app and wakes on every keystroke — a resource leak and a privacy
+// issue. Three safeguards: caller disarm, 60s hard timeout, self-termination
+// when the front app changes.
 
-/// 跨线程传递 AX 引用的载体。
+/// Carrier for passing an AX reference across threads.
 ///
-/// `AXUIElementRef` 是 CFType，跨线程使用本身没问题（CF 引用计数是原子的），但裸指针
-/// 不是 `Send`。照 `unicode_keystroke::PreviousInputSource` 的既有做法：存成 `usize`
-/// + 手动 `Send`，交接前 `CFRetain`、用完 `CFRelease`。
+/// `AXUIElementRef` is a CFType, safe to use across threads (CF refcounting is
+/// atomic), but the raw pointer is not `Send`. Same approach as
+/// `unicode_keystroke::PreviousInputSource`: store as `usize` + manual `Send`,
+/// `CFRetain` before handoff, `CFRelease` when done.
 ///
-/// 在调用线程上抓元素、而不是让工作线程自己去读 `AXFocusedUIElement`，是因为武装发生
-/// 在落字刚结束那一刻，此时焦点一定还在目标控件上；让新线程晚几毫秒再读，用户可能
-/// 已经点到别处了。
+/// The element is captured on the calling thread instead of having the worker
+/// read `AXFocusedUIElement` itself: arming happens right after insertion
+/// lands, while focus is still on the target control; a new thread reading a
+/// few ms later may find focus already moved elsewhere.
 struct SendableElement(usize);
 unsafe impl Send for SendableElement {}
 
 impl SendableElement {
     /// # Safety
-    /// `element` 必须是有效的 `AXUIElementRef`。本函数自己 retain，调用方的那一份
-    /// 所有权不受影响（仍需自行 release）。
+    /// `element` must be a valid `AXUIElementRef`. This function retains it
+    /// itself; the caller's ownership is unaffected (still must be released).
     unsafe fn retained(element: AxUiElementRef) -> Self {
         CFRetain(element as CFTypeRef);
         Self(element as usize)
@@ -895,75 +890,80 @@ impl SendableElement {
 
 impl Drop for SendableElement {
     fn drop(&mut self) {
-        // SAFETY: retained 里 CFRetain 过一次，这里配对释放。
+        // SAFETY: `retained` did one CFRetain; release it in pairs here.
         unsafe { CFRelease(self.0 as CFTypeRef) };
     }
 }
 
-/// 观察线程持有的全部状态。回调通过 `refcon` 拿到它。
+/// All state held by the watch thread. The callback receives it via `refcon`.
 struct WatchContext {
     element: SendableElement,
-    /// 停止 flag，与 [`run_edit_watch_loop`] 那个是同一个。
+    /// Stop flag, the same one [`run_edit_watch_loop`] holds.
     ///
-    /// 回调也得看它，不能只有循环看。解除信号到达时，观察线程可能正卡在
-    /// `CFRunLoop::run_in_mode` 里（最长 1 秒），而这一秒内排队的 AX 通知**照样会派发
-    /// 到回调**——循环末尾那道 `if !stop.load(..)` 覆盖不到这条路径。
-    ///
-    /// 这不是唯一防线（协调方那边还有观察器代次和「听写进行中不弹卡片」两道），但它是
-    /// 最早、最便宜的一道：对不上就直接不做那次跨进程 AX 全文读取和比对。
+    /// The callback must check it too, not just the loop. When the disarm
+    /// signal arrives, the thread may be parked in `CFRunLoop::run_in_mode`
+    /// (up to 1s); AX notifications queued in that window still dispatch to
+    /// the callback, which the loop's trailing `if !stop.load(..)` cannot
+    /// cover. This is the earliest, cheapest defense: a mismatch skips the
+    /// cross-process AX full-text read and diff entirely.
     stop: Arc<AtomicBool>,
-    /// 比对基线：**我们插完字之后**该控件的全文。
+    /// Comparison baseline: the control's full text **after our insertion
+    /// lands**.
     ///
-    /// 不能在武装的那一刻就定死。`inserter.insert()` 返回只代表事件发出去了，目标 app
-    /// 把字放进文档要晚几十到几百毫秒；那一刻读到的是**插入之前**的文档。拿它当基线，
-    /// 第一次比对出来的差异就是我们自己插的那一整段，会被当成「纯插入」直接丢掉，
-    /// 用户真正改的那个词永远轮不到被看见。所以基线是「落字生效后才锚定」的。
+    /// It cannot be fixed at arm time: `inserter.insert()` returning only
+    /// means the events were sent; the target app applies them tens to
+    /// hundreds of ms later, so a baseline read then is pre-insertion. The
+    /// first diff would then be our own inserted text, discarded as a "pure
+    /// insertion", and the user's real edit would never be seen. Hence the
+    /// baseline anchors only after the typed text lands.
     baseline: std::cell::RefCell<String>,
-    /// 基线是否已经锚定到「落字生效后」的状态。
+    /// Whether the baseline has anchored to the post-insertion state.
     anchored: std::cell::Cell<bool>,
-    /// 武装时刻，用于给锚定兜底一个时限。
+    /// Arm time, backing the anchor with a deadline.
     armed_at: Instant,
-    /// 我们这次实际打出去的文本。只有落在这段文字里的改动才算「用户改了我们插的东西」。
+    /// The text actually typed this time. Only edits landing inside this span
+    /// count as "the user changed what we inserted".
     typed_text: String,
     on_edit: Box<dyn Fn(EditPair) -> bool + Send + Sync>,
-    /// 本次武装期间上报了几处改动。
+    /// Number of edits reported during this armed window.
     reports: std::cell::Cell<u64>,
-    /// 上一次通知时看到的文本。
+    /// Text seen at the previous notification.
     ///
-    /// 用来把两种通知分开 —— 这是「一次编辑结束了没有」的**主判据**：
+    /// Distinguishes the two notifications — the **primary** criterion for
+    /// "has this edit finished":
     ///
-    /// | 用户在干什么 | 文本变了 | 光标动了 |
-    /// |---|---|---|
-    /// | 打字 / 删字 | ✅ | ✅（跟着走） |
-    /// | 点到别处、按方向键、选中别的 | ❌ | ✅ |
+    /// - typing / deleting: text changed, caret moved along;
+    /// - clicking elsewhere, arrow keys, selecting: text unchanged, caret
+    ///   moved.
     ///
-    /// 「光标动了但文本没变」就是他离开了这一处 —— 那一刻这次改动才算定稿。这不是
-    /// 时间上的猜测，是语义信号，而且用的是本来就在收的 `AXSelectedTextChanged`。
+    /// "Caret moved but text unchanged" means the user left this spot — the
+    /// semantic moment the edit becomes final. This is a semantic signal, not
+    /// a timing guess, and it uses `AXSelectedTextChanged`, which is received
+    /// anyway.
     last_text: std::cell::RefCell<String>,
-    /// 最后一次**文本**变化的时刻。用来把「打字带出来的光标事件」和「用户真的移开光标」
-    /// 分开 —— 见 [`CARET_MOVE_QUIET`]。
+    /// Time of the last **text** change. Separates caret events caused by
+    /// typing from a real caret move — see [`CARET_MOVE_QUIET`].
     last_value_change: std::cell::Cell<Option<Instant>>,
-    /// 有未判定的改动时，记它开始的时刻；`None` 表示没有待判定的改动。
+    /// Start time of a pending unjudged edit; `None` means nothing pending.
     ///
-    /// 回调只登记，判定交给监听线程 —— 中间态怎么都可能变，全程只记录不分析。
-    /// 回调和那个循环在同一线程上（通知由 runloop 派发），`Cell` 就够，不需要锁。
+    /// The callback only records; the watch thread judges. Intermediate states
+    /// can still change, so nothing is analyzed until the boundary. Callback
+    /// and loop share the runloop thread (notifications are dispatched by it),
+    /// so `Cell` suffices, no lock needed.
     pending_since: std::cell::Cell<Option<Instant>>,
-    /// 本次武装期间收到了几次通知。
-    ///
-    /// 解除时和「学到了几条」一起打出来 —— 逐事件的诊断日志都降到了 debug（这个 app
-    /// 只记 info 以上），日常使用里一次听写只留 armed/disarmed 两行，而这两个数字足够
-    /// 判断「这个 app 到底发不发通知」，那正是要逐 app 收集的覆盖率数据。
-    ///
-    /// 解除时打出来。这一个数字就能把「观察器压根没工作」（0）和「通知收到了但被后面
-    /// 某一步过滤掉了」（>0）分开 —— 没有它，两种情况在日志里完全一样。
+    /// Number of notifications received during this armed window, logged at
+    /// disarm. This one number separates "the observer never worked" (0) from
+    /// "notifications arrived but were filtered later" (>0) — without it both
+    /// look identical in the logs.
     notifications: std::cell::Cell<u64>,
 }
 
-/// `AXValueChanged` 回调 shim：把 `refcon` 还原成 `WatchContext` 并比对文本。
+/// `AXValueChanged` callback shim: recovers `WatchContext` from `refcon` and diffs the text.
 ///
 /// # Safety
-/// `refcon` 必须是 `run_edit_watch_loop` 注册时传入、且在观察器存活期间一直有效的
-/// `*const WatchContext`（由观察线程的栈持有，反注册在其之前完成）。
+/// `refcon` must be the `*const WatchContext` passed when `run_edit_watch_loop`
+/// registered the observer, valid for the observer's lifetime (owned by the
+/// watch thread's stack; unregistration happens before it returns).
 unsafe extern "C" fn value_changed_shim(
     _observer: AxObserverRef,
     _element: AxUiElementRef,
@@ -975,25 +975,27 @@ unsafe extern "C" fn value_changed_shim(
     }
     let ctx = &*(refcon as *const WatchContext);
     ctx.notifications.set(ctx.notifications.get() + 1);
-    // 已经解除就什么都别做。**这一刀必须在读 AXValue 之前。**
+    // Do nothing once disarmed. **This check must precede the AXValue read.**
     //
-    // 解除信号到达时观察线程可能正卡在 `run_in_mode` 里（最长 1 秒），这一秒内排队的
-    // AX 通知照样派发到这里 —— 循环末尾那道 `if !stop.load(..)` 覆盖不到回调这条路。
-    // 不挡的话，一次已经作废的观察还会再去跨进程读一遍宿主 app 的全文。
+    // While the thread is parked in `run_in_mode` (up to 1s), AX notifications
+    // queued in that window still dispatch here; the loop's trailing
+    // `if !stop.load(..)` does not cover the callback path. Without this, a
+    // voided watch would re-read the host app's full text cross-process.
     if ctx.stop.load(Ordering::Relaxed) {
         return;
     }
-    // 每一条 early return 都要留痕。否则「回调没被调用」和「回调被调用但被过滤掉了」
-    // 在日志里长得一模一样 —— 第一次真机排查就卡在这个盲点上。
+    // Every early return must log. Otherwise "callback never ran" and
+    // "callback ran but was filtered" look identical in the logs.
     let Some(current) = copy_string_attr(ctx.element.as_ref(), b"AXValue\0") else {
         log::debug!("[cursor-context] notified but AXValue is unreadable");
         return;
     };
-    // 第一阶段：等我们自己的落字生效，把基线锚在那之后。
+    // Phase 1: wait for our own inserted text to land, then anchor the baseline.
     if !ctx.anchored.get() {
-        // 正常情况：文档里出现了我们刚打出去的那段文字 —— 插入生效了。
-        // 兜底：目标 app 可能对文本做了加工（智能引号、自动补全），contains 永远匹配
-        // 不上。等到这个时限就直接以当前状态为准 —— 落字早已生效，再等只会一直瞎等。
+        // Normal path: the typed text appears in the document — insertion
+        // landed. Fallback: the target app may transform the text (smart
+        // quotes, autocomplete) so `contains` never matches; at the deadline
+        // take the current state as-is.
         let inserted = current.contains(&ctx.typed_text);
         if inserted || ctx.armed_at.elapsed() >= BASELINE_ANCHOR_TIMEOUT {
             log::debug!(
@@ -1005,8 +1007,10 @@ unsafe extern "C" fn value_changed_shim(
                     "timeout"
                 }
             );
-            // 两者必须一起推进：`baseline` 是比对起点，`last_text` 是「上次看到的样子」。
-            // 只更新前者的话，锚定后第一条通知会把「插入生效」当成一次用户编辑。
+            // Both must advance together: `baseline` is the diff start,
+            // `last_text` is "last seen". Updating only the former would make
+            // the first post-anchor notification report the insertion itself
+            // as a user edit.
             *ctx.last_text.borrow_mut() = current.clone();
             *ctx.baseline.borrow_mut() = current;
             ctx.anchored.set(true);
@@ -1014,17 +1018,18 @@ unsafe extern "C" fn value_changed_shim(
         return;
     }
 
-    // 第二阶段：把「打字」和「光标移开」分开 —— 全程只记录，边界到了才分析。
+    // Phase 2: separate "typing" from "caret moved away" — record only, analyze at the boundary.
     if *ctx.last_text.borrow() != current {
-        // 还在改。登记一笔，不判定：中间态怎么都可能变。
+        // Still editing. Record, do not judge: intermediate states can still change.
         *ctx.last_text.borrow_mut() = current;
         ctx.last_value_change.set(Some(Instant::now()));
         ctx.pending_since.set(Some(Instant::now()));
         return;
     }
 
-    // 文本没变。可能是用户把光标移开了（边界），也可能只是刚才那次打字带出来的配对
-    // 通知 —— 后者必须挡掉，否则每敲一个键都判定一次。
+    // Text unchanged: either the user moved the caret away (boundary) or this
+    // is the paired notification from the last keystroke — the latter must be
+    // blocked or every keystroke triggers a verdict.
     if !is_caret_notification(notification) || ctx.pending_since.get().is_none() {
         return;
     }
@@ -1039,15 +1044,16 @@ unsafe extern "C" fn value_changed_shim(
     settle_pending_edit(ctx, true);
 }
 
-/// 这条通知是不是 `AXSelectedTextChanged`（光标/选区变化）。
+/// Whether this notification is `AXSelectedTextChanged` (caret/selection change).
 unsafe fn is_caret_notification(notification: CFStringRef) -> bool {
     cfstring_to_rust(notification).as_deref() == Some("AXSelectedTextChanged")
 }
 
-/// 一处改动定稿了，比对一次并上报。
+/// An edit has settled; diff once and report.
 ///
-/// `force` 为真表示到了明确的语义边界（光标移开、切走 app、观察结束）；为假时只有
-/// 距最后一次变动超过 [`EDIT_SETTLE_TIMEOUT`] 才处理，那是给不发光标事件的 app 兜底。
+/// `force` marks a definite semantic boundary (caret moved away, front app
+/// changed, watch ending); otherwise only after [`EDIT_SETTLE_TIMEOUT`] since
+/// the last change — the fallback for apps that emit no caret events.
 unsafe fn settle_pending_edit(ctx: &WatchContext, force: bool) {
     let Some(since) = ctx.pending_since.get() else {
         return;
@@ -1069,9 +1075,11 @@ unsafe fn settle_pending_edit(ctx: &WatchContext, force: bool) {
         );
         return;
     };
-    // Core 决定这次修改是否属于刚插入的文本、能否成为词条建议。拒绝时刻意保留旧
-    // 基线：先删除、后输入仍应合并为一次替换，不能拆成两个无法学习的半截修改。
-    // AX 层只拥有原生观察时序，不拥有词条业务规则。
+    // Core decides whether this edit belongs to the just-inserted text and can
+    // become a lexicon suggestion. On rejection the old baseline is kept on
+    // purpose: delete-then-type must still merge into one replacement, not
+    // split into two unlearnable half-edits. AX owns native watch timing, not
+    // lexicon business rules.
     if !(ctx.on_edit)(edit) {
         return;
     }
@@ -1079,30 +1087,33 @@ unsafe fn settle_pending_edit(ctx: &WatchContext, force: bool) {
     ctx.reports.set(ctx.reports.get() + 1);
 }
 
-/// 观察器愿意盯的文档上限（UTF-16 code unit）。
+/// Largest document the observer will watch (UTF-16 code units).
 ///
-/// 每收到一条通知就要整份读一次 `AXValue` 再做 O(n) 比对，而观察窗口最长 60 秒、
-/// 用户每敲一个键都可能来一条。文档大到一定程度，这个代价就变成「用户改一个词，
-/// 每次击键都跨进程拷贝一份文档」—— 卡顿、甚至把 AX 消息拖超时。
-///
-/// 与 [`FULL_TEXT_MAX_UTF16`] 同一量级：一次性读不下的文档，也不值得逐键盯着。
-/// 超过就干脆不武装 —— 学不到词可以接受，让用户打字变卡不行。
+/// Every notification triggers a full `AXValue` read plus an O(n) diff, up to
+/// once per keystroke for the 60s window; past a certain size that becomes
+/// "copy the whole document cross-process per keystroke" — lag, even AX
+/// timeouts. Same order as [`FULL_TEXT_MAX_UTF16`]: a document too large to
+/// read once is not worth watching per key. Beyond it, do not arm at all —
+/// missing a word is acceptable, making typing laggy is not.
 const EDIT_WATCH_MAX_UTF16: usize = 20_000;
 
-/// 武装手改监听。成功返回停止开关，失败返回 `None`（只 warn，绝不影响主链路）。
+/// Arms the manual edit watch. Returns the stop flag on success, `None` on
+/// failure (warn only; never disturbs the main path).
 ///
-/// `typed_text` 是用户实际看到落到屏幕上的那段文字 —— 流式路径下它是真正打出去的内容
-/// 而非完整 LLM 输出，两者可能不同。
+/// `typed_text` is what the user actually saw land on screen — under
+/// streaming it is the content really typed, not the full LLM output; the two
+/// can differ.
 ///
-/// **抓焦点元素和读基线都在新线程里做，不在调用线程上。** 调用方 `arm_edit_watch` 位于
-/// `end_session` 这条 async 路径上，也就是 tokio worker —— 而这几次 AX 调用每次都可能
-/// 耗到 [`AX_MESSAGING_TIMEOUT_SECS`]，对着一个 AX 无响应的 app（正是设这个超时要防的
-/// 那种）能把一个 worker 卡住几百毫秒。本模块开头第 2 条硬约束写的就是这件事。
-///
-/// 代价是「趁焦点还没跑」这个窗口从零变成一次线程启动（几十微秒）。这比放进
-/// `spawn_blocking` 好 —— 那个要排 tokio 阻塞池的队，负载高时反而更晚。
+/// **The focused element and baseline are read on the new thread, not the
+/// caller's.** The caller `arm_edit_watch` sits on the async `end_session`
+/// path, i.e. a tokio worker, and each of these AX calls can burn
+/// [`AX_MESSAGING_TIMEOUT_SECS`] against an AX-unresponsive app — the very
+/// case the timeout exists for. The cost is a thread spawn (tens of µs);
+/// better than `spawn_blocking`, which queues on the tokio blocking pool and
+/// can be later under load.
 pub(super) fn spawn_edit_watcher(
     typed_text: String,
+    lifetime: std::time::Duration,
     on_edit: Box<dyn Fn(EditPair) -> bool + Send + Sync>,
 ) -> Option<Arc<AtomicBool>> {
     let stop = Arc::new(AtomicBool::new(false));
@@ -1113,9 +1124,10 @@ pub(super) fn spawn_edit_watcher(
             let Some((element, baseline, pid)) = grab_focused_element() else {
                 return;
             };
-            // 兜底。主判定在 `grab_focused_element` 里靠 `AXNumberOfCharacters` 完成，
-            // 那一道能在整篇拷回来**之前**就拦住；这里防目标 app 报出与 AXValue 不一致
-            // 的长度，避免观察器在错误元数据下继续工作。
+            // Backstop. The primary check lives in `grab_focused_element` via
+            // `AXNumberOfCharacters`, which rejects before the full copy; this
+            // guards against the target app reporting a length inconsistent
+            // with AXValue, so the watcher never runs on wrong metadata.
             let baseline_utf16 = baseline.encode_utf16().count();
             if baseline_utf16 > EDIT_WATCH_MAX_UTF16 {
                 log::info!(
@@ -1129,7 +1141,8 @@ pub(super) fn spawn_edit_watcher(
                 WatchContext {
                     element,
                     stop: Arc::clone(&thread_stop),
-                    // 武装时若文档里已经有我们插的字，说明落字已经生效，基线直接可用。
+                    // If the inserted text is already in the document at arm
+                    // time, insertion landed and the baseline is usable as-is.
                     anchored: std::cell::Cell::new(baseline.contains(&typed_text)),
                     baseline: std::cell::RefCell::new(baseline),
                     armed_at: Instant::now(),
@@ -1144,6 +1157,7 @@ pub(super) fn spawn_edit_watcher(
                 pid,
                 bundle_id,
                 thread_stop,
+                lifetime,
             );
         });
 
@@ -1154,21 +1168,24 @@ pub(super) fn spawn_edit_watcher(
     Some(stop)
 }
 
-/// 抓当前焦点元素 + 读一次基线全文 + 取 pid。**只在观察线程上调用。**
+/// Grabs the focused element + reads the baseline full text once + gets the
+/// pid. **Only called on the watch thread.**
 ///
-/// ## 安全闸门必须在这里再过一遍
+/// ## The security gate must run here too
 ///
-/// 观察器读的是和 [`read_around_cursor_blocking`] 完全相同的东西 —— 焦点元素的
-/// `AXValue` 全文 —— 只是读得更频繁（整个观察窗口内每条通知一次），而且读到的差异会
-/// 进日志、还可能变成一张词条建议卡片。
+/// The observer reads exactly what [`read_around_cursor_blocking`] reads —
+/// the focused element's full `AXValue` — just more often (once per
+/// notification for the whole window), and the diff may reach logs or become
+/// a suggestion card.
 ///
-/// 两条路径是**分别**到达 AX 的：读取那条走 `probe_around_cursor`，观察这条走
-/// `arm_edit_watch`。闸门只装在前者身上时，后者就是一个绕过口 —— 在终端里听写，上下文
-/// 读取被正确拦住，落字之后观察器却照样武装、照样把终端全文读走。这个功能敢默认存在
-/// 的全部前提就是「密码框 / Secure Input / 密码管理器 / 终端一律不读」，两条路径必须
-/// 给出同一个答案。
-///
-/// 走的是和读取路径同一个 [`focused_element_passing_the_gate`]，不另开一条路。
+/// The two paths reach AX **separately**: the read path via
+/// `probe_around_cursor`, the watch path via `arm_edit_watch`. When only the
+/// former was gated, the latter was a bypass — dictating in a terminal had
+/// the context read correctly blocked, yet the watcher still armed and read
+/// the terminal's full text. The feature's entire premise is "never read
+/// password fields / Secure Input / password managers / terminals"; both
+/// paths must answer identically. Hence the same
+/// [`focused_element_passing_the_gate`], no separate route.
 fn grab_focused_element() -> Option<(SendableElement, String, i32)> {
     let (_, bundle_id) = crate::selection::current_front_app_parts();
     let gate = GateInputs {
@@ -1191,10 +1208,11 @@ fn grab_focused_element() -> Option<(SendableElement, String, i32)> {
             }
         };
 
-        // 先问长度再决定要不要整篇拷回来 —— 与 `read_document` 同一套做法。
-        // `AXValue` 会把整篇文档跨进程拷过来，在一个十万字的文件上光 marshalling 就够
-        // 撞上超时；而超限的文档我们本来就不观察（见 `EDIT_WATCH_MAX_UTF16`），白拷一次
-        // 纯属浪费。
+        // Ask the length before deciding on a full copy — same approach as
+        // `read_document`. `AXValue` copies the whole document cross-process;
+        // on a 100k-character file marshalling alone can hit the timeout, and
+        // over-limit documents are not watched anyway (see
+        // `EDIT_WATCH_MAX_UTF16`), so the copy would be pure waste.
         match classify_document_length(
             copy_index_attr(focused, b"AXNumberOfCharacters\0"),
             EDIT_WATCH_MAX_UTF16,
@@ -1239,6 +1257,7 @@ fn run_edit_watch_loop(
     pid: i32,
     bundle_id: Option<String>,
     stop: Arc<AtomicBool>,
+    lifetime: std::time::Duration,
 ) {
     unsafe {
         let mut observer: AxObserverRef = std::ptr::null_mut();
@@ -1247,19 +1266,22 @@ fn run_edit_watch_loop(
             log::warn!("[cursor-context] AXObserverCreate failed: AXError={err}");
             return;
         }
-        // 注册两种通知，不是一种。
+        // Register two notifications, not one.
         //
-        // `AXValueChanged` 是「文本内容变了」的标准信号，但不是每个文本控件都发它。
-        // `AXSelectedTextChanged` 是「选区/光标动了」—— 用户改一个词必然会移动光标，
-        // 所以它是同一件事的另一条证据路径。收到任意一个都去比对一次文本，代价只是
-        // 一次 AX 读；漏掉一种通知的代价是整个功能在那个 app 里静默失效。
+        // `AXValueChanged` is the standard "text content changed" signal, but
+        // not every text control emits it. `AXSelectedTextChanged`
+        // (caret/selection moved) is a second evidence path for the same
+        // event — editing a word necessarily moves the caret. Either one
+        // triggers a text diff costing one AX read; missing one means the
+        // whole feature silently dies in that app.
         let mut registered: Vec<(CFStringRef, &str)> = Vec::new();
         for name in [&b"AXValueChanged\0"[..], &b"AXSelectedTextChanged\0"[..]] {
             let Some(notification) = cfstring_from_static(name) else {
                 continue;
             };
-            // SAFETY: &ctx 在本函数返回前一直有效，而反注册发生在返回之前，C 侧拿不到
-            // 悬垂指针。
+            // SAFETY: &ctx lives until this function returns, and
+            // unregistration happens before the return, so C never sees a
+            // dangling pointer.
             let add_err = AXObserverAddNotification(
                 observer,
                 ctx.element.as_ref(),
@@ -1284,12 +1306,13 @@ fn run_edit_watch_loop(
             return;
         }
 
-        // runloop 这一段走 core_foundation 的封装而不是自己再声明一遍 extern：
-        // `hotkey.rs` 已经声明过 CFRunLoopGetCurrent / CFRunLoopAddSource，重复声明
-        // 会触发 clashing_extern_declarations（ABI 上兼容，但那是靠运气）。
+        // Use core_foundation's wrapper for the runloop part instead of
+        // re-declaring the externs: `hotkey.rs` already declares
+        // CFRunLoopGetCurrent / CFRunLoopAddSource, and duplicates trigger
+        // clashing_extern_declarations (ABI-compatible, but only by luck).
         let source = CFRunLoopSource::wrap_under_get_rule(AXObserverGetRunLoopSource(observer));
         let runloop = CFRunLoop::get_current();
-        // SAFETY: kCFRunLoopDefaultMode 是 CoreFoundation 的 'static 常量字符串。
+        // SAFETY: kCFRunLoopDefaultMode is a CoreFoundation 'static constant string.
         let mode = kCFRunLoopDefaultMode;
         runloop.add_source(&source, mode);
         log::info!(
@@ -1307,56 +1330,66 @@ fn run_edit_watch_loop(
             if stop.load(Ordering::Relaxed) {
                 break;
             }
-            // 60 秒硬上限：过了这么久还在改，多半是在写新东西而不是纠我们插的词。
-            if started.elapsed() >= EDIT_WATCH_MAX_LIFETIME {
+            // Stop when the configured observation window expires.
+            if started.elapsed() >= lifetime {
                 end_reason = "timeout";
                 break;
             }
-            // 前台 app 一换就收工 —— 继续盯着别人的窗口既没意义也不该做。
+            // Stop as soon as the front app changes — watching someone else's
+            // window is both pointless and improper.
             let (_, current_bundle) = crate::selection::current_front_app_parts();
             if current_bundle != bundle_id {
                 end_reason = "front app changed";
                 break;
             }
             let result = CFRunLoop::run_in_mode(mode, Duration::from_secs(1), false);
-            // 解除信号可能正好在这 1 秒里到达。先看一眼再判定 —— 否则会上报一条属于
-            // 上一轮的改动（见下面收尾处的长注释）。
+            // The disarm signal may arrive exactly within this 1s. Check
+            // before judging — otherwise an edit from the previous round gets
+            // reported (see the long comment at the loop's exit).
             if stop.load(Ordering::Relaxed) {
                 break;
             }
-            // 每转一圈问一次「停手够久了吗」。判定发生在这里而不是回调里。
+            // Ask once per rotation whether typing has been quiet long enough.
+            // Judging happens here, not in the callback.
             settle_pending_edit(&ctx, false);
-            // Finished 表示 runloop 里没有任何 input source —— 观察器的 source 已经装上，
-            // 正常走不到这里；真到了就说明焦点元素没了，收工。
+            // Finished means the runloop has no input source — the observer's
+            // source is installed, so this normally cannot happen; if it does,
+            // the focused element is gone. Stop.
             if matches!(result, CFRunLoopRunResult::Finished) {
                 end_reason = "focused element gone";
                 break;
             }
         }
 
-        // 收工前兜一次：用户改完就直接切走 app 的话，停手计时还没到就已经退出循环了，
-        // 那次改动不该白丢。
+        // Final settle before exit: if the user finished editing and
+        // immediately switched apps, the loop ended before the quiet timer
+        // fired; that edit should not be lost.
         //
-        // **但被主动解除时不补。** `stop` 被置位只有两个来源：新一轮听写开始
-        //（`begin_session_as`）或用户关掉了开关（`disarm_edit_watch`）。两种情况下协调方
-        // 都已经把建议卡片收掉了 —— 这时再上报一条属于上一轮的改动，卡片会在**新会话
-        // 进行中**弹出来。而卡片会把胶囊窗口缩到自己那么大，等于把正在进行的那次听写的
-        // 胶囊弄没了（这个坑真机上踩过一次，表现是「热键像是坏了」）。
+        // **But not when actively disarmed.** `stop` is set only by a new
+        // dictation session (`begin_session_as`) or the user turning the
+        // switch off (`disarm_edit_watch`); in both cases the coordinator has
+        // already dismissed the suggestion card, and a late report would pop
+        // a card **mid new session**, shrinking the capsule window to the
+        // card's size and erasing the capsule of the dictation in progress
+        // (seen once on hardware as "the hotkey seems broken").
         //
-        // 自然结束（超时 / 切走 app / 焦点元素没了）才补 —— 那几种情况下没有新会话在跑，
-        // 用户那次改动是真的还没被判定过。
+        // Only natural ends (timeout / app switch / focus element gone)
+        // settle — no new session is running then, and the user's edit truly
+        // was never judged.
         if !stop.load(Ordering::Relaxed) {
             settle_pending_edit(&ctx, true);
         }
 
-        // 无论怎么退出的，反注册这一段都必须跑到。
+        // Whatever the exit path, this unregistration must run.
         runloop.remove_source(&source, mode);
         for (notification, label) in registered {
             let remove_err =
                 AXObserverRemoveNotification(observer, ctx.element.as_ref(), notification);
             if remove_err != AX_ERROR_SUCCESS {
-                // -25202 = notification not registered，通常意味着元素已经被目标 app
-                // 销毁重建（Electron 每次输入都这样）——那也解释了为什么通知收不到。
+                // -25202 = notification not registered, usually because the
+                // target app destroyed and recreated the element (Electron
+                // does this on every input) — which also explains why the
+                // notifications stopped arriving.
                 log::warn!(
                     "[cursor-context] remove {label} failed: AXError={remove_err} (element gone?)"
                 );
@@ -1370,7 +1403,7 @@ fn run_edit_watch_loop(
             ctx.notifications.get(),
             ctx.reports.get()
         );
-        // ctx 在此 drop —— 此时观察器已移除，C 侧不再回调，安全。
+        // ctx drops here — the observer is removed and C no longer calls back; safe.
         drop(ctx);
     }
 }
@@ -1403,12 +1436,14 @@ mod tests {
         );
     }
 
-    /// 负数 location 是「没有光标」的哨兵，必须和「光标在开头」区分开。
+    /// A negative location is a "no caret" sentinel and must stay distinct
+    /// from "caret at the start".
     ///
-    /// 真机上 Electron 类 app 反复出现 `before=0 after=N`，一直被当成「这个 app 读不到
-    /// 上文」；实际上是 `AXSelectedTextRange` 返回了 kCFNotFound(-1)，被钳成 0 之后
-    /// 我们读了文档开头，还当成光标附近发给了 LLM。错的上下文比没有上下文更糟 ——
-    /// 它看起来是对的。
+    /// Electron apps repeatedly produced `before=0 after=N` on hardware,
+    /// long taken as "this app's context is unreadable"; actually
+    /// `AXSelectedTextRange` returned kCFNotFound(-1), clamped to 0, so the
+    /// document's opening was read and sent to the LLM as cursor context.
+    /// Wrong context is worse than none — it looks right.
     #[test]
     fn a_negative_caret_location_is_not_the_start_of_the_document() {
         assert_eq!(caret_offset_from_location(0), Some(0), "光标真在开头");

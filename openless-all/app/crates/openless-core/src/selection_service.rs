@@ -509,9 +509,10 @@ impl SelectionServiceInner {
 
     fn fail_if_active(&self, session_id: SessionId) -> bool {
         let mut state = self.state.write().expect("selection state lock poisoned");
-        // 只对「还在进行中」的 session 结算：Cancelled 是用户主动结束，
-        // Completed 是已粘贴成功（race：complete 与 fail 判断之间的窄窗口，
-        // 若误标 Failed 会把成功状态覆盖掉）。
+        // Settle only sessions still in progress: Cancelled means the user ended it;
+        // Completed means paste succeeded (race: the narrow window between the
+        // complete and fail checks — wrongly marking Failed would overwrite the
+        // success state).
         if state.snapshot.session_id == Some(session_id)
             && matches!(
                 state.snapshot.phase,
@@ -531,10 +532,11 @@ impl SelectionServiceInner {
         }
     }
 
-    /// confirm 失败结算：session 已失效（stale / 目标变更 / 并发占用）结算为
-    /// Failed 并隐藏预览；瞬时的平台错误（焦点恢复 / 目标复核抖动）回退到
-    /// Preview 保持可重试——直接失败掉会让预览窗被隐藏、编辑内容丢失，
-    /// 用户看到的只是「点确认没反应」。
+    /// confirm-failure settlement: a dead session (stale / target changed / occupied
+    /// concurrently) settles to Failed and hides the preview; transient platform
+    /// errors (focus restore / target recheck jitter) fall back to Preview and stay
+    /// retryable — failing outright would hide the preview window, lose the edited
+    /// content, and leave the user with an unresponsive-looking confirm button.
     fn settle_confirm_failure(&self, session_id: SessionId, error: &BackendError) -> bool {
         let settled = matches!(
             error.code,
@@ -666,11 +668,16 @@ impl SelectionApi for SelectionService {
                 inner.set_context(session_id, Arc::clone(&context))?;
                 let (output, polish_ms) = if uses_llm {
                     let polish_started = std::time::Instant::now();
-                    // C 案：圈選潤色此前漏接簡繁偏好（語音輸入路徑在 finish 時已套用
-                    // apply_chinese_script_preference）。這裡對齊——LLM 輸出依用戶
-                    // 設定做確定性簡繁轉換，與 prompt 無關，避免小模型簡體漂移直接
-                    // 進預覽/替換。非 LLM 分支只回顯原始選區，不轉換。
-                    // `context` 稍後被 move 進 polish()，先把 Copy 的偏好抓成局部。
+                    // Option C: selection polish previously missed the
+                    // simplified/traditional preference (the voice-input path already
+                    // applies apply_chinese_script_preference at finish). Align here —
+                    // LLM output gets a deterministic script conversion per user
+                    // setting, independent of the prompt, keeping small-model
+                    // simplified-script drift out of the preview/replacement. The
+                    // non-LLM branch only echoes the raw selection and does no
+                    // conversion.
+                    // `context` is moved into polish() later; grab the Copy preference
+                    // into a local first.
                     let script_pref = context.polish.chinese_script_preference;
                     let mut output = inner
                         .polisher
@@ -681,11 +688,15 @@ impl SelectionApi for SelectionService {
                             Arc::new(DiscardTextStreamSink),
                         )
                         .await?;
-                    // 脚手架剥离（2026-09-11 蜘蛛故事事故）：小模型间歇性把 user
-                    // message 的模板句与 <raw_transcript> 信封连同正文一起回显。
-                    // prompt 层禁令对 35B 小模型只有部分效果，这里做确定性后处理
-                    // （模型无关）：活标签必然来自回显——用户正文进 LLM 前标签已被
-                    // sanitize 中和，正规输出不可能含活标签，取标签内正文零误伤。
+                    // Scaffolding stripping (2026-09-11 spider-story incident): small
+                    // models intermittently echo the user-message template lines and
+                    // the <raw_transcript> envelope along with the body text. The
+                    // prompt-level ban only partially works on 35B-class models, so
+                    // this deterministic post-processing (model-independent) runs
+                    // here: a live tag can only come from an echo — tags were already
+                    // sanitized out of the user text before it entered the LLM, and a
+                    // well-formed output cannot contain live tags, so extracting the
+                    // text inside the tag has zero false positives.
                     let before_strip = output.text.clone();
                     let stripped = crate::streaming_insert::strip_echoed_scaffolding(&output.text);
                     if stripped != before_strip {
@@ -775,9 +786,11 @@ impl SelectionApi for SelectionService {
                     Ok(())
                 }
                 Err(error) => {
-                    // 分流：session 已失效（stale / 并发 confirm）必须结算；瞬时的
-                    // 平台错误（焦点恢复 / 目标复核抖动）保持 preview 可重试——
-                    // 否则窗口被隐藏、busy 卡死，表现为「点确认没反应」。
+                    // Triage: a dead session (stale / concurrent confirm) must
+                    // settle; transient platform errors (focus restore / target
+                    // recheck jitter) keep the preview retryable — otherwise the
+                    // window is hidden and busy sticks, looking like an unresponsive
+                    // confirm button.
                     if inner.settle_confirm_failure(session_id, &error) {
                         inner.cancel_runtime_best_effort(session_id).await;
                         inner.hide_preview();

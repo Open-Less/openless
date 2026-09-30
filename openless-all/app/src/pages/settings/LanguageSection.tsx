@@ -1,4 +1,4 @@
-// 界面语言单独持久化；不覆盖工作语言或翻译目标。
+// UI language is persisted separately; it never overwrites working languages or the translation target.
 
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';

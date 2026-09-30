@@ -339,7 +339,7 @@ async fn ca_fingerprint_tracks_the_running_listener_and_clears_on_stop_or_failur
         .get("caFingerprintSha256")
         .is_none());
 
-    // 启动失败时不能继续展示上一次监听器的指纹。
+    // A failed start must not keep showing the previous listener's fingerprint.
     *runtime.ca_fingerprint_sha256.lock().unwrap() = Some(replacement.clone());
     runtime.fail_start.store(true, Ordering::Release);
     assert!(remote

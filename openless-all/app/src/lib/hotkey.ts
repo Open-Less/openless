@@ -17,7 +17,7 @@ export function defaultQaShortcut(): ShortcutBinding {
   };
 }
 
-/** 选区润色的默认触发键，与后端默认值保持一致。 */
+/** Default trigger for selection polish, kept in sync with the backend default. */
 export function defaultSelectionPolishShortcut(): ShortcutBinding {
   return { primary: 'RightAlt', modifiers: [] };
 }
@@ -26,8 +26,8 @@ export function defaultAppShortcutModifiers(): string[] {
   return currentPlatform().isMac ? ['cmd', 'shift'] : ['ctrl', 'shift'];
 }
 
-// 「停用」后重新「启用」时恢复的默认键，与后端 default_switch_style_hotkey /
-// default_open_app_hotkey 保持一致（issue #576）。
+// Defaults restored when re-"enabling" after "disable", matching the backend
+// default_switch_style_hotkey / default_open_app_hotkey (issue #576).
 export function defaultSwitchStyleShortcut(): ShortcutBinding {
   return { primary: 'S', modifiers: defaultAppShortcutModifiers() };
 }
@@ -40,8 +40,8 @@ export function defaultLessComputerShortcut(): ShortcutBinding {
   return { primary: 'LeftControl', modifiers: [] };
 }
 
-// 默认录音快捷键：右侧 Control。与 mock-data 默认值 / Rust legacy trigger
-// （shortcut_binding.rs 的 rightControl 映射）保持一致。
+// Default recording hotkey: right Control. Matches the mock-data default and the Rust legacy
+// trigger (the rightControl mapping in shortcut_binding.rs).
 export function defaultDictationHotkey(): ShortcutBinding {
   return { primary: 'RightControl', modifiers: [] };
 }
@@ -52,7 +52,8 @@ export function getHotkeyTriggerLabel(trigger: HotkeyTrigger | null | undefined)
   return i18n.t(`hotkey.triggers.${trigger}`);
 }
 
-/** 根据录音方式返回追加在触发键标签后的语义后缀（如「（按住说话）」）。 */
+/** Returns the semantic suffix appended to the trigger label for a recording mode (e.g. the
+ *  "hold to talk" suffix). */
 export function hotkeyModeSuffix(mode: HotkeyMode | null | undefined): string {
   switch (mode) {
     case 'hold':
@@ -66,7 +67,7 @@ export function hotkeyModeSuffix(mode: HotkeyMode | null | undefined): string {
   }
 }
 
-/** 根据录音方式返回使用说明（含触发键占位符 trigger）。 */
+/** Returns usage instructions for a recording mode (with the trigger placeholder `trigger`). */
 function hotkeyModeUsage(mode: HotkeyMode | null | undefined, trigger: string): string {
   switch (mode) {
     case 'hold':
@@ -128,7 +129,7 @@ export function getHotkeyBindingLabel(binding: HotkeyBinding | null | undefined)
 export function getHotkeyCodeLabel(code: string): string {
   const zh = i18n.language.toLowerCase().startsWith('zh');
   const isMac = currentPlatform().isMac;
-  // macOS 使用 Option/Command 符号，并与组合键标签 formatPrimary 保持一致。
+  // macOS uses the Option/Command symbols, consistent with the combo label in formatPrimary.
   const labels: Record<string, string> = {
     ControlLeft: zh ? '左Ctrl' : 'Left Ctrl',
     ControlRight: zh ? '右Ctrl' : 'Right Ctrl',
@@ -239,15 +240,16 @@ export function shortcutFromLegacyTrigger(trigger: HotkeyTrigger): ShortcutBindi
   };
 }
 
-/** 把 ComboBinding 或 QaHotkeyBinding 格式化为可读标签，如 "⌘⇧D" / "Ctrl+Shift+D"。 */
-/** 组合键的逐键显示段（修饰键按固定顺序 + 主键），供键帽（Kbd）逐键渲染。 */
+/** Formats a ComboBinding or QaHotkeyBinding into a readable label, like "⌘⇧D" / "Ctrl+Shift+D". */
+/** Per-key display segments of a combo (modifiers in fixed order + primary key), for rendering
+ *  key caps (Kbd) one key at a time. */
 export function formatComboParts(
   binding: ComboBinding | QaHotkeyBinding | ShortcutBinding,
 ): string[] {
   const parts: string[] = [];
   const platform = currentPlatform();
 
-  // 固定输出顺序：Ctrl/Cmd → Alt/Option → Shift → Super
+  // Fixed output order: Ctrl/Cmd → Alt/Option → Shift → Super
   const modifierOrder = [
     'cmd-left',
     'cmd-right',
@@ -412,11 +414,11 @@ function sideModifierDisplayName(
 function formatPrimary(primary: string): string {
   const trimmed = primary.trim();
   if (!trimmed) return '?';
-  // 单字母归大写
+  // Uppercase single letters
   if (trimmed.length === 1 && /[a-zA-Z]/.test(trimmed)) {
     return trimmed.toUpperCase();
   }
-  // 常见命名键的 macOS 符号
+  // macOS symbols for common named keys
   const isMac = currentPlatform().isMac;
   if (isMac) {
     switch (trimmed.toLowerCase()) {

@@ -1,14 +1,16 @@
 //! 系统权限请求 / 检查（macOS / Windows）。
 //!
-//! 与 Swift `Sources/OpenLessHotkey/AccessibilityPermission.swift` +
-//! `Sources/OpenLessRecorder/MicrophonePermission.swift` 同源。
+//! Mirrors Swift `Sources/OpenLessHotkey/AccessibilityPermission.swift` +
+//! `Sources/OpenLessRecorder/MicrophonePermission.swift`.
 //!
-//! - macOS Accessibility：`AXIsProcessTrusted` 检查；
-//!   `AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: true})` 弹系统授权框。
-//! - macOS Microphone：`AVAudioApplication.shared.recordPermission` + requestRecordPermission。
-//! - Windows：cpal 不需要 Accessibility 等价权限；麦克风首次使用时 Win10+ 弹一次系统提示。
-//!   没有可用输入设备时返回 `NoDevice`（区别于权限被拒的 `Denied`），避免把
-//!   “没插麦克风”误报成“未授权麦克风”。详见 issue #779。
+//! - macOS Accessibility: `AXIsProcessTrusted` check;
+//!   `AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: true})` shows the system
+//!   authorization dialog.
+//! - macOS Microphone: `AVAudioApplication.shared.recordPermission` + requestRecordPermission.
+//! - Windows: cpal needs no Accessibility-equivalent permission; the mic shows the one-time
+//!   system prompt on Win10+ at first use. With no available input device, return `NoDevice`
+//!   (distinct from permission `Denied`) so "no microphone plugged in" is not misreported as
+//!   "microphone not authorized". See issue #779.
 
 use serde::Serialize;
 
@@ -19,14 +21,14 @@ pub enum PermissionStatus {
     Denied,
     NotDetermined,
     Restricted,
-    /// 当前平台不需要这个权限（如 Windows 上的 Accessibility）。
+    /// The current platform has no such permission (e.g. Accessibility on Windows).
     NotApplicable,
-    /// 当前没有可用的麦克风输入设备（不是权限问题）。
+    /// No usable microphone input device right now (not a permission problem).
     NoDevice,
 }
 
-/// 错误字符串是否暗示“当前没有可用输入设备”（区别于权限被拒）。
-/// cpal 在不同平台返回的文案不统一，靠关键字粗判。
+/// Whether an error string implies "no usable input device right now" (distinct from permission denied).
+/// cpal's messages vary by platform, so this is a coarse keyword match.
 pub(crate) fn is_no_device_error(lower: &str) -> bool {
     [
         "no default input device",
@@ -77,12 +79,14 @@ mod platform {
 
     #[link(name = "AVFoundation", kind = "framework")]
     extern "C" {
-        // 直接拿 AVFoundation 导出的 NSString 静态符号；不用从 Rust 串构造 NSString。
+        // Take the NSString static symbol exported by AVFoundation directly; don't build an
+        // NSString from a Rust string.
         static AVMediaTypeAudio: *const c_void;
     }
 
-    // AVAudioApplication 在 AVFAudio 框架（macOS 14+）。Swift 原版 MicrophonePermission.swift
-    // 走的就是这条；它是录音启动前判断权限的唯一真相源。
+    // AVAudioApplication lives in the AVFAudio framework (macOS 14+). The Swift original
+    // MicrophonePermission.swift takes this path; it is the single source of truth for
+    // pre-recording permission checks.
     #[link(name = "AVFAudio", kind = "framework")]
     extern "C" {}
 
@@ -96,7 +100,7 @@ mod platform {
         }
     }
 
-    /// 弹 Accessibility 系统授权框（只在未授权时弹）。返回当前授权状态。
+    /// Show the Accessibility system authorization dialog (only when not yet granted). Returns the current status.
     pub fn request_accessibility() -> PermissionStatus {
         unsafe {
             let key = kAXTrustedCheckOptionPrompt;
@@ -122,7 +126,7 @@ mod platform {
     }
 
     pub fn check_microphone() -> PermissionStatus {
-        // 与 Swift `MicrophonePermission.isGranted()` 保持同源。
+        // Mirrors Swift `MicrophonePermission.isGranted()`.
         if let Some(status) = check_microphone_via_avaudio_application() {
             return status;
         }
@@ -130,7 +134,7 @@ mod platform {
     }
 
     pub fn request_microphone() -> PermissionStatus {
-        // 与 Swift `MicrophonePermission.request()` 保持同源，8 秒兜底。
+        // Mirrors Swift `MicrophonePermission.request()`, with an 8s fallback.
         if let Some(status) = request_microphone_via_avaudio_application() {
             return status;
         }
@@ -141,14 +145,14 @@ mod platform {
         use objc2::msg_send;
         use objc2::runtime::{AnyClass, AnyObject};
 
-        // 类不存在 = 在老 macOS（< 14）上跑，回落到 capture device 路径
+        // Class missing = running on older macOS (< 14); fall back to the capture device path
         let cls = AnyClass::get("AVAudioApplication")?;
         let shared: *mut AnyObject = unsafe { msg_send![cls, sharedInstance] };
         if shared.is_null() {
             log::warn!("[mic] AVAudioApplication sharedInstance returned null");
             return None;
         }
-        // AVAudioApplicationRecordPermission 是 NS_ENUM(NSInteger, ...) FourCC：
+        // AVAudioApplicationRecordPermission is an NS_ENUM(NSInteger, ...) FourCC:
         //   'grnt' = 0x67726e74 = 1735552628
         //   'deny' = 0x64656e79 = 1684368761
         //   'undt' = 0x756e6474 = 1970168948
@@ -363,8 +367,8 @@ mod platform {
         check_microphone()
     }
 
-    /// 轻量检测是否存在输入设备：只枚举设备、不开输入流，
-    /// 供听写启动前快速区分「没插麦克风」与「有设备但权限被拒」。
+    /// Lightweight check for an input device: enumerate devices only, no input stream,
+    /// letting dictation startup quickly tell "no mic plugged in" from "device present but denied".
     pub fn has_microphone_input_device() -> bool {
         cpal::default_host().default_input_device().is_some()
     }
@@ -496,8 +500,8 @@ pub use platform::has_microphone_input_device;
 
 #[cfg(any(target_os = "macos", target_os = "android"))]
 pub fn has_microphone_input_device() -> bool {
-    // macOS / Android 的权限检查走系统授权回调，不依赖这里；
-    // 录音启动失败路径另有 NoInputDevice 兜底文案。
+    // macOS / Android permission checks go through system authorization callbacks and don't
+    // rely on this; the recording-start failure path has its own NoInputDevice fallback message.
     false
 }
 

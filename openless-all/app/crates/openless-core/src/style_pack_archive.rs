@@ -49,8 +49,8 @@ pub(super) struct StylePackArchiveManifest {
     pub(super) icon_file: Option<String>,
     pub(super) recommended_model: Option<String>,
     pub(super) compatible_app_version: Option<String>,
-    /// Marketplace 上游关系。旧 ZIP 没有此字段时自动为 None；
-    /// 兼容早期口误/拼写包里可能出现的 `orion*` 字段名。
+    /// Marketplace upstream relation. Automatically None when older ZIPs lack the
+    /// field; aliases accept `orion*` field names from early misspelled packs.
     #[serde(
         default,
         alias = "orionPackId",

@@ -1,22 +1,9 @@
-// 「这段话没能落进去」的兜底卡片，弹在屏幕右下角。
-//
-// 为什么需要它：文本没能插进目标 app 时（上屏途中你切走了窗口、密码框挡着、粘贴被拒），
-// 此前唯一的兜底是**悄悄**把文本写进剪贴板。那有两个问题——它依赖一个默认可关的开关，
-// 而且就算开着，屏幕上也没有任何东西告诉你「你刚说的那段话在剪贴板里」。你看到的只是
-// 胶囊一闪而过，然后是空的输入框，或者被守卫截断的半截话。
-//
-// 所以卡片必须把**完整**的那段话摆出来：切走窗口的人要的是整段，不是屏幕上残留的半截。
-//
-// 为什么复制走后端：卡片浮在别的 app 上面，按钮刻意 preventDefault 不抢焦点（抢了就把
-// 你正在写的地方的光标弄没了），而未聚焦的文档调 navigator.clipboard 会直接抛
-// `Document is not focused`。
-//
-// 为什么 TTL 比词条卡片长一倍：那张卡片只要瞄一眼「记不记这个词」，这张要把一段话读完
-// 再决定复不复制。悬停时还会停表——正在读的时候卡片消失是最气人的。
-//
-// 为什么没有标题：卡片突然出现、里面是你刚说的那段话、下面一个「复制」——这三件事凑在
-// 一起，意思已经到了。原先那行「你切走了窗口，这段话没能落进去」是在替用户解释他自己
-// 刚做过的动作，读起来像旁白。`payload.reason` 仍然保留，但只进日志，不上屏。
+// Fallback card for "this text didn't make it in", shown at the bottom-right of the
+// screen. Displays the FULL text (whatever landed on screen is only a partial), pauses
+// its TTL while hovered, and copies via the backend: the button deliberately
+// preventDefaults so it never steals focus, and navigator.clipboard throws
+// "Document is not focused" on an unfocused document. No title — the text plus a Copy
+// button is self-explanatory; payload.reason is logged only, never displayed.
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -31,12 +18,13 @@ import {
 } from '../lib/insertFallbackLayout';
 import type { InsertFallbackCardPayload } from '../lib/types';
 
-/// 卡片自己消失的时间。比词条卡片的 10 秒长——这张要读内容。
+/// Auto-dismiss delay. Double the vocab card's 10s — this one needs reading.
 const TTL_MS = 20_000;
-/// 复制成功后按钮停留在「已复制」的时间。
+/// How long the button stays on "Copied" after a successful copy.
 const COPIED_FEEDBACK_MS = 1_600;
-/// 正文最多显示几行，再多就在卡片内部滚动。
-/// 原生窗口使用 DOM 实测高度，不再重复维护这组布局参数。
+/// Max body lines before scrolling inside the card.
+/// Native windows measure real DOM height; these layout constants are no longer
+/// maintained in parallel.
 const MAX_LINES = 8;
 const LINE_HEIGHT = 18;
 
@@ -67,7 +55,7 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
       if (!report) return;
       lastHeightReportRef.current = report;
       void reportInsertFallbackCardHeight(report.presentationId, report.height).catch(() => {
-        // IPC 短暂失败后允许后续 ResizeObserver 通知重试。
+        // On transient IPC failure, clear the report so a later ResizeObserver tick retries.
         if (
           !cancelled &&
           lastHeightReportRef.current?.presentationId === report.presentationId &&
@@ -89,7 +77,7 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
     };
   }, [payload.presentationId]);
 
-  // TTL 倒计时。悬停时暂停：鼠标停在卡片上说明人正在读它。
+  // TTL countdown. Paused on hover: the cursor on the card means it's being read.
   useEffect(() => {
     if (paused) return;
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -108,8 +96,8 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
       setCopyFailed(false);
       window.setTimeout(() => setCopied(false), COPIED_FEEDBACK_MS);
     } catch {
-      // 复制失败要说出来——这张卡片本身就是「文本别丢了」的最后一道保障，
-      // 再静默失败一次，用户就真的没有任何途径拿到这段话了。
+      // Copy failure must be surfaced — this card is the last line of defense against
+      // losing the text; failing silently again would leave the user no way to get it.
       setCopyFailed(true);
     }
   };
@@ -124,7 +112,8 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
         flexDirection: 'column',
         justifyContent: 'flex-end',
         padding: 12,
-        // 卡片是唯一要接鼠标的东西——胶囊本体全程 pointerEvents:none。
+        // The card is the only thing taking mouse input — the capsule itself stays
+        // pointerEvents:none at all times.
         pointerEvents: 'auto',
         boxSizing: 'border-box',
       }}
@@ -152,7 +141,7 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
             lineHeight: `${LINE_HEIGHT}px`,
             maxHeight: LINE_HEIGHT * MAX_LINES,
             overflowY: 'auto',
-            // 让用户能手动选一段——有人只想要其中一句。
+            // Allow manual selection — some users only want one sentence.
             userSelect: 'text',
             cursor: 'text',
             whiteSpace: 'pre-wrap',
@@ -185,8 +174,8 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
   );
 }
 
-/// 按钮配色与胶囊上那对确认/取消同源；这里是带文字的宽按钮，因为「复制」需要说清楚
-/// 自己干了什么，一个图标撑不住。
+/// Buttons reuse the capsule's confirm/cancel palette; a labeled wide button because
+/// "Copy" needs words, not just an icon.
 function TextButton({
   label,
   primary,
@@ -199,8 +188,9 @@ function TextButton({
   return (
     <button
       onClick={onClick}
-      // 卡片浮在别的 app 上面，按下去不能把焦点从用户正在写的地方抢走。
-      // 这也正是复制必须走后端的原因（navigator.clipboard 要求文档聚焦）。
+      // The card floats over another app; pressing must not steal focus from where the
+      // user is typing. That's also why copy goes through the backend
+      // (navigator.clipboard requires a focused document).
       onMouseDown={(event) => {
         event.preventDefault();
         event.stopPropagation();

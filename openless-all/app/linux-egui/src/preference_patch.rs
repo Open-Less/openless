@@ -1,34 +1,9 @@
-//! Apply field edits to the latest Core revision through its strict transaction.
-use std::collections::BTreeMap;
-
-use openless_core::{BackendError, BackendErrorCode, SettingsUpdateOutcome, UserPreferences};
+//! Apply field edits through the shared Core patch implementation.
+pub use openless_core::preference_patch::patch_preferences;
+use openless_core::preference_patch::update_fields;
+use openless_core::{BackendError, SettingsUpdateOutcome};
 use serde_json::Value;
-
-pub fn patch_preferences(
-    current: &UserPreferences,
-    edits: &BTreeMap<String, Value>,
-) -> Result<UserPreferences, BackendError> {
-    let mut document = serde_json::to_value(current).map_err(invalid)?;
-    for (pointer, value) in edits {
-        let destination = document
-            .pointer_mut(pointer)
-            .ok_or_else(|| invalid(format!("unknown preference: {pointer}")))?;
-        *destination = value.clone();
-    }
-    serde_json::from_value(document).map_err(invalid)
-}
-
-fn invalid(error: impl std::fmt::Display) -> BackendError {
-    BackendError::new(BackendErrorCode::InvalidArgument, error.to_string())
-}
-
-fn revision_conflict(error: &BackendError) -> bool {
-    error.code == BackendErrorCode::Busy
-        && error.details.as_ref().is_some_and(|details| {
-            details["expectedPreferencesRevision"].is_u64()
-                && details["actualPreferencesRevision"].is_u64()
-        })
-}
+use std::collections::BTreeMap;
 
 impl crate::LinuxHost {
     pub fn update_preference_fields(
@@ -48,25 +23,11 @@ impl crate::LinuxHost {
     }
 }
 
-fn update_fields(
-    edits: &BTreeMap<String, Value>,
-    mut read: impl FnMut() -> (u64, UserPreferences),
-    mut save: impl FnMut(UserPreferences, u64) -> Result<SettingsUpdateOutcome, BackendError>,
-) -> Result<SettingsUpdateOutcome, BackendError> {
-    for attempt in 0..3 {
-        let (revision, current) = read();
-        let draft = patch_preferences(&current, edits)?;
-        match save(draft, revision) {
-            Err(error) if attempt < 2 && revision_conflict(&error) => continue,
-            outcome => return outcome,
-        }
-    }
-    unreachable!("the final attempt always returns")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openless_core::preference_patch::revision_conflict;
+    use openless_core::{BackendErrorCode, UserPreferences};
 
     #[test]
     fn patches_preserve_other_fields_and_reject_unknown_or_invalid_values() {

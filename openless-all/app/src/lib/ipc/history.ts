@@ -6,7 +6,8 @@ export function listHistory(): Promise<DictationSession[]> {
   return invokeOrMock('list_history', undefined, () => mockHistory);
 }
 
-/** 每日听写活动计数（日期升序），概览页年度热力图数据源。与历史保留策略解耦。 */
+/** Daily dictation activity counts (ascending by date), the overview page's yearly heatmap
+    data source. Decoupled from the history retention policy. */
 export function getActivityStats(): Promise<ActivityDay[]> {
   return invokeOrMock('get_activity_stats', undefined, () => mockActivityDays);
 }
@@ -19,9 +20,10 @@ export function clearHistory(): Promise<void> {
   return invokeOrMock('clear_history', undefined, () => undefined);
 }
 
-/** 读取某次会话的原始麦克风 WAV 的 data URL（base64）。
- *  仅当 session.hasAudioRecording === true 时调用，避免无效 IPC。
- *  返回 `data:audio/wav;base64,...` 格式，前端 `<audio>` 和导出按钮直接使用。 */
+/** Reads the data URL (base64) of a session's original microphone WAV.
+ *  Call only when session.hasAudioRecording === true, to avoid a useless IPC.
+ *  Returns `data:audio/wav;base64,...`, used directly by the frontend `<audio>` and the
+ *  export button. */
 export function readAudioRecording(sessionId: string): Promise<string> {
   return invokeOrMock('read_audio_recording', { sessionId }, () => 'data:audio/wav;base64,');
 }
@@ -31,10 +33,14 @@ export interface HistoryRetranscriptionResult {
   updatedEntry: DictationSession | null;
 }
 
-/** 用当前 ASR provider 对一条有归档录音的历史条目重新转录（issue #613 / #1046）。
- *  转录失败记录会被修复；已完成 / 润色失败记录只返回临时结果，不覆盖原历史。
- *  失败时抛出错误（如「重新转录仍未识别到语音」/「recording not found」），录音保留不丢。
- *  成功、润色失败和转录失败的条目都可调用，后端再次校验录音与能力边界。 */
+/** Re-transcribes a history entry with an archived recording using the current ASR provider
+ *  (issue #613 / #1046).
+ *  Transcription-failed entries get repaired; completed / polish-failed entries only get a
+ *  transient result, never overwriting the original history.
+ *  Throws on failure (e.g. "retranscription still found no speech" / "recording not
+ *  found"); the recording is kept, never lost.
+ *  Callable on successful, polish-failed, and transcription-failed entries; the backend
+ *  re-validates the recording and capability boundaries. */
 export function retranscribeRecording(sessionId: string): Promise<HistoryRetranscriptionResult> {
   return invokeOrMock('retranscribe_recording', { sessionId }, () => ({
     text: mockHistory[0].rawTranscript,

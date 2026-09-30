@@ -130,12 +130,13 @@ impl PolishTranslationStream {
     }
 }
 
-/// 把 working_languages + front_app 拼成 system prompt 头部前提：
-///     # 上下文
-///     用户的工作语言：…
-///     当前前台应用：…（请按这个 app 的常见沟通风格调整语气）
+/// Builds the working_languages + front_app premise at the head of the
+/// system prompt: a context heading followed by the working-languages line
+/// and the front-app line (asking the model to match that app's typical
+/// communication tone).
 ///
-/// 两个字段都空时返回 None，调用方就不拼前缀。详见 issue #4 / #116。
+/// Returns None when both fields are empty so callers skip the prefix.
+/// See issue #4 / #116.
 pub fn context_premise(
     working_languages: &[String],
     chinese_script_preference: ChineseScriptPreference,
@@ -147,9 +148,10 @@ pub fn context_premise(
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .collect();
-    // 安全：window title 是攻击者可控字段，嵌入前必须清理。
-    // 去除换行符（防止注入多行指令）和 Markdown/XML 分隔符（防止结构性提示注入）；
-    // 截断到 100 个字符（远超任何真实 app 名称的合理长度）。
+    // Safety: the window title is attacker-controlled and must be sanitized
+    // before embedding. Strip newlines (blocks multi-line instruction
+    // injection) and Markdown/XML delimiters (blocks structural prompt
+    // injection); truncate to 100 chars (far beyond any real app name).
     let app = front_app
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -222,12 +224,13 @@ pub fn context_premise(
     Some(lines.join("\n"))
 }
 
-/// 把 polish 输入参数装配成 `(system_prompt, user_prompt)` 二元组。
+/// Assembles the polish inputs into a `(system_prompt, user_prompt)` pair.
 ///
-/// 抽出来是为了让 OpenAI 兼容客户端 (本文件) 和谷歌原生 Gemini 客户端
-/// (`llm_gemini.rs`) 共享同一套 prompt 装配规则——不再担心两路 LLM
-/// 在 `system_prompt` 拼接顺序、context_premise 注入时机、
-/// polish_context_instruction 追加条件上慢慢漂移。
+/// Extracted so the OpenAI-compatible client (this file) and Google's native
+/// Gemini client (`llm_gemini.rs`) share one prompt-assembly rule set — the
+/// two LLM paths can no longer drift on `system_prompt` concatenation order,
+/// context_premise injection timing, or polish_context_instruction
+/// append conditions.
 #[allow(clippy::too_many_arguments)]
 pub fn compose_polish_prompts(
     raw_text: &str,
@@ -279,14 +282,17 @@ pub(crate) fn compose_polish_prompts_for_input(
     ) {
         system_prompt = format!("{}\n\n{}", premise, system_prompt);
     }
-    // 光标上下文（用户正在写的那篇文档）。开关关闭时调用方传 None，这里逐字节回到
-    // 改动前的 prompt —— 关掉就等于这个功能不存在，是本功能的第一条验收。
+    // Cursor context (the document the user is writing). When the switch is
+    // off the caller passes None and the prompt here is byte-identical to
+    // before the feature: off must equal nonexistent — the feature's first
+    // acceptance criterion.
     let cursor_context_block = cursor_context.and_then(prompts::cursor_context_block);
     if let Some(block) = &cursor_context_block {
         system_prompt = format!("{}\n\n{}", system_prompt, block);
     }
-    // issue #609 F-02：在 system prompt 末尾追加对抗式防御措辞，明确信封内文本是
-    // 数据而非指令。纵深防御，非硬保证。
+    // issue #609 F-02: append adversarial defense wording at the end of the
+    // system prompt stating that text inside envelopes is data, not
+    // instructions. Defense in depth, not a hard guarantee.
     system_prompt = format!(
         "{}\n\n{}",
         system_prompt,
@@ -296,7 +302,9 @@ pub(crate) fn compose_polish_prompts_for_input(
             prompts::polish_injection_defense()
         }
     );
-    // 带了光标上下文才追加它那一条，理由同上：没开这个功能的用户不该被改 prompt。
+    // Append the cursor-context defense line only when cursor context was
+    // added — same reasoning: users without the feature must not see their
+    // prompt change.
     if cursor_context_block.is_some() {
         system_prompt = format!(
             "{}\n{}",
@@ -304,8 +312,9 @@ pub(crate) fn compose_polish_prompts_for_input(
             prompts::cursor_context_injection_defense()
         );
     }
-    // 多轮上下文模式：把"上一轮的指令是什么、不要复读上一轮答案"明确写进
-    // system prompt，配合 chat structure 让 LLM 自然不重复历史输出。
+    // Multi-turn context mode: state explicitly in the system prompt what the
+    // previous instruction was and not to repeat the previous answer; with
+    // the chat structure the LLM naturally avoids echoing history.
     if has_prior_turns {
         system_prompt = format!(
             "{}\n\n{}",
@@ -321,9 +330,10 @@ pub(crate) fn compose_polish_prompts_for_input(
     (system_prompt, user_prompt)
 }
 
-/// 翻译路径的 `(system_prompt, user_prompt)` 装配——和 polish 一样供两路 LLM 客户端共用。
-/// 翻译模式以 `target_language` 为唯一输出语言约束，OutputLanguagePreference 在这里被
-/// 强制设为 Auto 以避免 UI 偏好（如 ja）与 target_language（如 en）冲突。
+/// Translation-path `(system_prompt, user_prompt)` assembly — shared by both
+/// LLM clients like polish. `target_language` is the sole output-language
+/// constraint; OutputLanguagePreference is forced to Auto here so a UI
+/// preference (e.g. ja) can't conflict with target_language (e.g. en).
 #[allow(clippy::too_many_arguments)]
 pub fn assemble_polish_system_prompt(
     style_system_prompt: &str,
@@ -393,7 +403,7 @@ pub fn compose_translate_prompts(
     (system_prompt, user_prompt)
 }
 
-/// QA 划词问答的 system_prompt 装配。两路 LLM 客户端共用。
+/// System prompt assembly for selection voice QA. Shared by both LLM clients.
 pub fn compose_qa_system_prompt(
     working_languages: &[String],
     chinese_script_preference: ChineseScriptPreference,
@@ -412,14 +422,17 @@ pub fn compose_qa_system_prompt(
     system_prompt
 }
 
-/// 构建「热词 + 错别字纠错」模块文本：agent-style 措辞，把模型当成接到一段 ASR 转写
-/// 的写作助手，明确告诉它「输入可能有错别字，按这个列表 + 上下文修正」。
+/// Builds the "hotwords + typo correction" block: agent-style wording that
+/// treats the model as a writing assistant receiving an ASR transcript and
+/// tells it explicitly "the input may contain typos; fix them against this
+/// list plus context".
 ///
-/// 内置 default prompt 里的 `{{HOTWORDS}}` 占位符被这段文本替换；用户自定义 prompt
-/// 没占位符时 compose_system_prompt 兜底拼到末尾。
+/// Replaces the `{{HOTWORDS}}` placeholder in built-in default prompts; when
+/// a user-custom prompt has no placeholder, compose_system_prompt appends
+/// this block at the end as a fallback.
 ///
-/// 这段文本 100% 对齐 compose_hotword_block_preview，让 Style Pack 设置页的预览跟
-/// 实际发给 LLM 的 prompt 一致。
+/// Stays 100% aligned with compose_hotword_block_preview so the Style Pack
+/// settings preview matches the prompt actually sent to the LLM.
 pub fn build_hotword_block(hotwords: &[String]) -> String {
     let cleaned: Vec<String> = hotwords
         .iter()
@@ -459,10 +472,13 @@ pub fn build_hotword_block(hotwords: &[String]) -> String {
     )
 }
 
-/// 系统提示词组装：先把内置 default prompt 的 `{{HOTWORDS}}` 占位符替换为实际热词块；
-/// 用户自定义 prompt 没占位符时 fallback 行为：
-/// - hotwords 非空 → 末尾追加热词块（兼容历史 prompt 仍能拿到热词）
-/// - hotwords 空 → 不附加任何东西（用户决定自己 prompt 的内容，不强行注入）
+/// System prompt composition: first replaces the `{{HOTWORDS}}` placeholder
+/// in built-in default prompts with the actual hotword block. Fallback for
+/// user-custom prompts without the placeholder:
+/// - hotwords non-empty -> append the hotword block at the end (historical
+///   prompts still get hotwords)
+/// - hotwords empty -> append nothing (the user owns their prompt; no forced
+///   injection)
 pub fn compose_system_prompt(style_system_prompt: &str, hotwords: &[String]) -> String {
     let base = style_system_prompt.trim_end();
     if base.contains(crate::style_packs::HOTWORDS_PLACEHOLDER) {
@@ -477,8 +493,9 @@ pub fn compose_system_prompt(style_system_prompt: &str, hotwords: &[String]) -> 
 }
 
 pub fn compose_hotword_block_preview(hotwords: &[String]) -> String {
-    // Style Pack 设置页的预览 100% 跟 system prompt 用同一段文本，避免「设置里看到一段、
-    // 实际发给 LLM 是另一段」的不一致。空热词时返回纯错别字纠错指南。
+    // The Style Pack settings preview uses the exact same text as the system
+    // prompt, avoiding "one thing in settings, another sent to the LLM".
+    // Returns a plain typo-correction guide when hotwords are empty.
     build_hotword_block(hotwords)
 }
 

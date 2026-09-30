@@ -1,8 +1,8 @@
-// 通用 OpenAI 兼容 ASR（openai-compatible）与 ZenMux（zenmux）的高级配置。
-// JSON 形状与后端 coordinator.rs::AdvancedAsrConfig 保持一致：
-// {"verboseJson": bool, "chunkDurationMs": number|null, "enableItn": bool}。
-// 解析策略与后端一致：缺失 / 非法一律回落保守默认（不发 response_format、不分片、
-// enable_itn 默认开启）。
+// Advanced configuration for the generic OpenAI-compatible ASR (openai-compatible) and ZenMux (zenmux).
+// JSON shape matches the backend's coordinator.rs::AdvancedAsrConfig:
+// {"verboseJson": bool, "chunkDurationMs": number|null, "enableItn": bool}.
+// Parsing matches the backend: missing/invalid values always fall back to conservative defaults
+// (no response_format, no chunking, enable_itn on by default).
 
 export interface AdvancedAsrConfig {
   verboseJson: boolean;
@@ -30,7 +30,7 @@ export function parseAdvancedAsrConfig(raw: string | null): AdvancedAsrConfig {
   return {
     verboseJson: record.verboseJson === true,
     chunkDurationMs,
-    // 缺失 / 非布尔回落默认开启（与后端 parse_advanced_asr_config 一致）。
+    // Missing / non-bool falls back to enabled by default (matches the backend's parse_advanced_asr_config).
     enableItn: record.enableItn !== false,
   };
 }

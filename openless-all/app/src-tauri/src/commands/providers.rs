@@ -18,8 +18,8 @@ pub fn list_provider_descriptors(
     ))
 }
 
-/// `channel_id = None` 保留旧 React 语义：验证当前 active provider。
-/// 指定 channel 时由 Core 按渠道 metadata 解析凭据和 provider 协议。
+/// `channel_id = None` keeps the legacy React semantics: validate the current active provider.
+/// With a channel given, Core resolves credentials and the provider protocol from the channel metadata.
 #[tauri::command]
 pub async fn validate_provider_credentials(
     core: CoreState<'_>,

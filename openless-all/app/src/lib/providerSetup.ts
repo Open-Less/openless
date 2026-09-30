@@ -3,7 +3,8 @@ import type { CredentialsStatus } from './types';
 export const PROVIDER_SETUP_PROMPT_DEFERRED_KEY = 'ol.providerSetupPromptDeferredThisSession';
 
 export function areProvidersConfigured(credentials: CredentialsStatus): boolean {
-  // 多模态（Omni）模式：只要求多模态模型已配置；传统 ASR/LLM 两套在该模式下不参与。
+  // Multimodal (Omni) mode: only requires the multimodal model to be configured; the legacy
+  // ASR/LLM pair takes no part in this mode.
   if (credentials.pipelineMode === 'multimodal') {
     return credentials.omniConfigured === true;
   }

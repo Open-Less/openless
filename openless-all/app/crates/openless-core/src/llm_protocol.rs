@@ -1,4 +1,5 @@
-//! 渠道级文本协议：请求格式、鉴权和正文事件由 Core 统一解释。
+//! Channel-level text protocol: request format, auth, and body events are
+//! interpreted uniformly by the Core.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -63,8 +64,8 @@ impl LlmRequestFormat {
         let endpoint = endpoint_url(endpoint, suffix)?;
         let mut url = url::Url::parse(&endpoint)
             .map_err(|_| LLMError::ParseError("invalid LLM endpoint".into()))?;
-        // 火山套餐的 Messages 使用 /api/{plan}，OpenAI 兼容格式使用 /v3。
-        // 只适配官方套餐路径，自定义网关及普通方舟保持原样。
+        // Volcengine plan Messages uses /api/{plan}; OpenAI-compatible formats use /v3.
+        // Only official plan paths are adapted; custom gateways and plain ark stay as-is.
         if url.scheme() == "https" && url.host_str() == Some("ark.cn-beijing.volces.com") {
             let prefix = url.path().strip_suffix(suffix).unwrap_or_default();
             let plan = prefix.strip_suffix("/v3").unwrap_or(prefix);
@@ -93,7 +94,7 @@ impl LlmRequestFormat {
     }
 }
 
-/// 更换格式只替换已知的末端路径，不破坏网关前缀及查询参数。
+/// Switching format only replaces the known trailing path; gateway prefixes and query parameters survive.
 pub fn endpoint_url(endpoint: &str, suffix: &str) -> Result<String, LLMError> {
     let mut url = url::Url::parse(endpoint.trim())
         .map_err(|_| LLMError::ParseError("invalid LLM endpoint".into()))?;
@@ -240,7 +241,7 @@ pub(crate) fn request_body(
                 .strip_prefix("openai/")
                 .unwrap_or(config.model.trim())
                 .to_ascii_lowercase();
-            // 已知普通模型不接受 reasoning；未知网关模型按所选兼容协议声明参数。
+            // Known plain models don't accept reasoning; unknown gateway models declare it per the selected compatible protocol.
             if !(model.starts_with("gpt-4")
                 || model.starts_with("gpt-3.5")
                 || model.starts_with("chatgpt-4"))
@@ -364,7 +365,7 @@ pub(crate) enum StreamEvent {
     Ignore,
 }
 
-/// 共用 SSE 分帧；保留未完整的 UTF-8 字节，不能逐个 HTTP chunk 有损解码。
+/// Shared SSE framing; incomplete UTF-8 bytes are preserved — decoding per HTTP chunk would be lossy.
 pub(crate) struct TextEventStream {
     format: LlmRequestFormat,
     buffer: String,
@@ -608,7 +609,7 @@ mod tests {
                     "https://example.com/gateway/v1/models?tenant=1#local"
                 );
             }
-            // 套餐的 Messages 与 OpenAI 兼容地址使用不同的版本前缀。
+            // Plan Messages and OpenAI-compatible URLs use different version prefixes.
             for plan in ["plan", "coding"] {
                 for base in [format!("/api/{plan}"), format!("/api/{plan}/v3")] {
                     let prefix = if format == LlmRequestFormat::Messages {

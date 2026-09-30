@@ -1,5 +1,6 @@
-// LLM 与 ASR 共用的渠道列表和编辑器。
-// Core 按排序选择第一个启用渠道；每个渠道独立保存凭据，支持同一供应商的多个账号。
+// Channel list and editor shared by LLM and ASR.
+// Core picks the first enabled channel by sort order; each channel stores credentials
+// independently, supporting multiple accounts of the same provider.
 
 import {
   useCallback,
@@ -15,6 +16,7 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { Modal } from '../../components/ui/Modal';
+import { useOverlayMotion } from '../../lib/motion';
 import { SelectLite } from '../../components/ui/SelectLite';
 import { detectOS, type OS } from '../../components/WindowChrome';
 import { testLocalAsrChannel } from '../../lib/localAsr';
@@ -70,8 +72,8 @@ interface PresetOption {
   supportedRequestFormats?: ProviderDescriptor['supportedRequestFormats'];
 }
 
-/** 「添加渠道」下拉里的供应商清单。本地引擎与 Codex OAuth 也在其中 —— 它们不是预置的
- *  固定卡片，而是和云端厂商一样由用户添加，只是编辑时没有 key / 地址字段。 */
+/** Provider list in the "add channel" dropdown. Local engines and Codex OAuth are here too —
+ *  they are not fixed preset cards but user-added like cloud vendors, only without key / endpoint fields when editing. */
 export function presetsFor(
   kind: ChannelKind,
   os: OS,
@@ -101,12 +103,13 @@ export function presetsFor(
     if (p.id === 'foundry-local-whisper' || p.id === 'sherpa-onnx-local') {
       return os === 'win';
     }
-    // 百炼的两个旧 id 是历史别名，统一入口是 `bailian`，不再让新卡片选到。
+    // The two old Bailian ids are historical aliases; the unified entry is `bailian`, so new cards must not pick them.
     if (p.id === 'bailian-qwen3-realtime' || p.id === 'bailian-fun-asr-flash') return false;
     return true;
   });
-  // 新建渠道继续隐藏历史别名；编辑已有渠道时把当前值补回，避免 Select value
-  // 找不到对应 option 而显示为空。只接受注册表里已知的 preset，不放行任意字符串。
+  // New channels keep hiding the historical aliases; when editing an existing channel, put the current
+  // value back so the Select's value doesn't render empty for a missing option. Only known presets from
+  // the registry are accepted; arbitrary strings are not allowed through.
   if (currentProviderId && !visible.some((preset) => preset.id === currentProviderId)) {
     const current = available.find((preset) => preset.id === currentProviderId);
     if (current) visible.push(current);
@@ -114,12 +117,12 @@ export function presetsFor(
   return visible;
 }
 
-/** 只有从未发生用户交互的新建草稿才允许走空白回收。 */
+/** Only a fresh draft that never saw user interaction may be recycled as blank. */
 export function shouldRecycleDraft(draftId: string | null, touched: boolean): boolean {
   return draftId != null && !touched;
 }
 
-/** OrcaRouter 渠道使用统一的无空格品牌名；只填空名称，不覆盖用户自定义命名。 */
+/** OrcaRouter channels use the unified brand name without spaces; only fill an empty name, never override user naming. */
 export function defaultChannelNameForProvider(providerType: string, currentName: string): string {
   if (currentName.trim() || providerType !== 'orcarouter') return currentName;
   return 'OrcaRouter';
@@ -138,7 +141,7 @@ function presetLabel(
   return preset ? t(`settings.providers.presets.${preset.nameKey}`) : providerType;
 }
 
-/** 卡片上模型那一行读的凭据账户 —— 与 ChannelCredentialFields 里保持一致。 */
+/** Credential account read for the model line on the card — kept in sync with ChannelCredentialFields. */
 function modelAccountFor(kind: ChannelKind): string {
   return kind === 'llm' ? 'ark.model_id' : 'asr.model';
 }
@@ -150,15 +153,16 @@ function failedOpMessage(error: unknown, fallback: string): string {
 }
 
 /**
- * 把后端的错误串压成按钮上放得下的短标签，且要**能指导行动**：
- * 401 是 key 不对、429 是被限流等会儿再说、超时是网络——用户看到才知道该改什么。
+ * Compress backend error strings into short labels that fit the button and are actionable:
+ * 401 means a wrong key, 429 means rate-limited and retry later, timeout means network —
+ * the user must see what to fix.
  */
 function shortErrorLabel(raw: string | null, t: ReturnType<typeof useTranslation>['t']): string {
   const message = (raw ?? '').trim();
   if (message.startsWith('providerHttpStatus:')) {
     return message.split(':')[1] || t('settings.channels.errGeneric');
   }
-  // 裸状态码也认（历史记录里可能只存了 "401"）——状态码本身就是最好的短标签。
+  // A bare status code is accepted too (history may have stored only "401") — the code itself is the best short label.
   if (/^[1-5]\d{2}$/.test(message)) return message;
   if (message === 'providerRequestTimeout' || message.includes('timeout')) {
     return t('settings.channels.errTimeout');
@@ -173,7 +177,7 @@ function shortErrorLabel(raw: string | null, t: ReturnType<typeof useTranslation
   return t('settings.channels.errGeneric');
 }
 
-/** 一天以前的验证结果只能算"旧消息"，褪色表示不保证现在还有效。 */
+/** A test result older than a day is stale news; the faded look signals it may no longer hold. */
 const STALE_TEST_SECONDS = 24 * 60 * 60;
 
 type ChannelTestMode = 'provider' | 'local-model' | 'unavailable';
@@ -216,7 +220,7 @@ export function ChannelList({
   autoCreateWhenEmpty = false,
 }: {
   kind: ChannelKind;
-  /** 新手引导用：列表为空时直接摊开添加表单，别让新用户对着空列表和一个加号发呆。 */
+  /** For onboarding: when the list is empty, open the add form directly instead of leaving new users staring at an empty list and a plus. */
   autoCreateWhenEmpty?: boolean;
 }) {
   const { t } = useTranslation();
@@ -225,9 +229,9 @@ export function ChannelList({
   const conservative = useConservativeLayout();
   const preferenceStack = readable || conservative;
   const os = detectOS();
-  // 初值 false：getPlatformCapabilities() 的权威值是架构感知的（Apple Silicon /
-  // Intel），以 os === 'mac' 起步会让 Intel Mac 打开下拉时闪现一次 MLX 预设，
-  // 再由异步纠正消失。Apple Silicon 上 MLX 选项晚一帧出现，可接受。
+  // Initial false: the authoritative getPlatformCapabilities() value is architecture-aware (Apple Silicon /
+  // Intel); starting from os === 'mac' would flash the MLX preset once on Intel Macs when the dropdown
+  // opens, then remove it asynchronously. On Apple Silicon the MLX option appears one frame late — acceptable.
   const [supportsQwen3Mlx, setSupportsQwen3Mlx] = useState(false);
   const [descriptors, setDescriptors] = useState<ProviderDescriptor[]>([]);
   const presets = presetsFor(kind, os, supportsQwen3Mlx, undefined, descriptors);
@@ -235,12 +239,12 @@ export function ChannelList({
   const [models, setModels] = useState<Record<string, string>>({});
   const [loaded, setLoaded] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  /** 新建时先落一张草稿卡片（凭据必须按渠道 id 写入），弹窗直接编辑它。 */
+  /** A draft card is created up front when creating (credentials must be written per channel id); the dialog edits it directly. */
   const [draftId, setDraftId] = useState<string | null>(null);
-  /** 同步 ref 避免 blur 保存与关闭弹窗之间的 state 调度竞态。 */
+  /** Synced ref to avoid a state-scheduling race between blur-save and closing the dialog. */
   const draftTouchedRef = useRef(false);
   const [creatingBusy, setCreatingBusy] = useState(false);
-  // 只自动弹一次：用户取消掉之后不该再被弹窗追着跑。
+  // Auto-open only once: after the user cancels, the dialog must not keep chasing them.
   const autoOpenedRef = useRef(false);
 
   useEffect(() => {
@@ -258,11 +262,11 @@ export function ChannelList({
       const list = await listChannels(kind);
       setChannels(list);
       setLoaded(true);
-      // 广播给服务分类 tab：语言模型/语音识别是必配项，tab 上的红/黄状态点
-      // 需要在任何增删改/启停后即时刷新。
+      // Broadcast to the service tabs: language models / speech recognition are required config, and the
+      // red/yellow status dots on the tabs must refresh after every add/remove/edit/enable toggle.
       window.dispatchEvent(new CustomEvent('ol-channels-changed', { detail: { kind } }));
-      // 卡片上要显示每张卡当前的模型名 —— 凭据按渠道隔离，只能逐个读。
-      // 渠道数量是个位数，并发读一轮的开销可以忽略。
+      // Each card shows its current model name — credentials are isolated per channel, so they are read one by one.
+      // Channel counts are single digits; the cost of one concurrent read round is negligible.
       const account = modelAccountFor(kind);
       const entries = await Promise.all(
         list.map(async (channel) => {
@@ -284,10 +288,11 @@ export function ChannelList({
     void refresh();
   }, [refresh]);
 
-  // ── 添加：一步到位 ──
-  // 点「添加渠道」直接开编辑弹窗（供应商、名字、密钥、测试都在里面）。草稿卡片在
-  // 后台先建出来只是因为凭据要按渠道 id 落盘；用户完全没有交互就关掉时才会被回收。
-  // 一旦改过任何字段就保留，避免 blur/debounce 保存与关闭流程竞争删除卡片。
+  // ── Add: one step ──
+  // Clicking "add channel" opens the edit dialog directly (provider, name, key, test all inside). The draft
+  // card is created in the background only because credentials must be persisted per channel id; it is recycled
+  // only if the user closed without any interaction. Once any field changed, keep it — an async blur/debounce
+  // save must not race the close flow into deleting the card.
   const startCreate = useCallback(async () => {
     if (creatingBusy) return;
     setCreatingBusy(true);
@@ -313,13 +318,13 @@ export function ChannelList({
     }
   }, [autoCreateWhenEmpty, loaded, channels.length, startCreate]);
 
-  // 生效中的那张 = 第一个启用的（列表已按 order 排好）。
+  // The active one = the first enabled channel (the list is already sorted by order).
   const activeId = channels.find((c) => c.enabled)?.id ?? null;
 
-  // ── 卡片上的验证 ──
-  // 只在用户点的时候跑：验证是**真实的调用**（LLM 走一次真的润色请求、云端 ASR
-  // 传一段静音音频、本地 ASR 加载并转写内置音频）。做成打开设置就全部自动验一遍的话，
-  // 等于每次开设置都按卡片数烧一遍额度，还容易把自己撞进限流。
+  // ── Card verification ──
+  // Runs only when the user clicks: verification is a real call (LLM sends one real polish request, cloud ASR
+  // sends a silent audio clip, local ASR loads and transcribes built-in audio). Auto-verifying all cards on
+  // settings open would burn quota per card count each time and easily trip rate limits.
   const [testingIds, setTestingIds] = useState<Record<string, boolean>>({});
 
   const runTest = async (channel: Channel) => {
@@ -370,11 +375,11 @@ export function ChannelList({
     }
   };
 
-  // ── 拖拽排序 ──
-  // 用 pointer 事件手写，**不用 HTML5 draggable**：Tauri 的 webview 默认开着
-  // dragDropEnabled，会把 dragstart/drop 当成文件拖放吞掉，`draggable` 在打包后的
-  // app 里根本不触发（浏览器里却是好的，最容易漏测）。pointer 方案还顺带让
-  // Windows 与 Android 的行为保持一致。
+  // ── Drag to reorder ──
+  // Hand-written with pointer events, not HTML5 draggable: Tauri's webview ships with dragDropEnabled
+  // on by default, which swallows dragstart/drop as file drag-and-drop, so `draggable` never fires in the
+  // packaged app (it works in the browser — the easiest bug to miss). The pointer approach also keeps
+  // Windows and Android behavior consistent.
   const rowsRef = useRef(new Map<string, HTMLDivElement>());
   const channelsRef = useRef<Channel[]>([]);
   const dragIdRef = useRef<string | null>(null);
@@ -385,12 +390,12 @@ export function ChannelList({
     channelsRef.current = channels;
   }, [channels]);
 
-  // FLIP 动画比较更新前后的布局位置，平滑呈现增删与排序变化。
-  // 正在拖动的行保留自己的 transform，避免滑位动画覆盖拖动态。
+  // FLIP animation compares layout positions before/after updates, smoothly presenting add/remove and reorder.
+  // The dragging row keeps its own transform so slide animations don't overwrite the dragged state.
   const prevRowTops = useRef(new Map<string, number>());
   useLayoutEffect(() => {
-    // 同样只量布局位置（offsetTop）：rect.top 会被上一帧仍在飞行的 FLIP
-    // transform 污染，量出来的位移差是错的，动画本身也会跟着抖。
+    // Also measure layout position only (offsetTop): rect.top is polluted by a FLIP transform still
+    // flying from the previous frame, making the measured delta wrong and the animation jittery.
     const nextTops = new Map<string, number>();
     rowsRef.current.forEach((element, id) => nextTops.set(id, element.offsetTop));
     rowsRef.current.forEach((element, id) => {
@@ -422,8 +427,8 @@ export function ChannelList({
 
   const dragCleanupRef = useRef<(() => void) | null>(null);
 
-  /** 按指针命中的行实时排序。使用 offsetTop 读取布局坐标，避免 FLIP 的
-   * transform 改变命中结果，导致同一指针位置反复触发互换。 */
+  /** Reorder in real time by the row under the pointer. Reads layout coordinates via offsetTop so FLIP
+   * transforms can't change the hit result and retrigger swaps at the same pointer position. */
   const moveDragTo = (pointerY: number) => {
     const dragId = dragIdRef.current;
     if (!dragId) return;
@@ -460,9 +465,9 @@ export function ChannelList({
     });
   };
 
-  /// 拖拽刚结束时浏览器还会补一个 click。设置弹窗的遮罩层上挂着 onClick={onClose}，
-  /// 这个补发的 click 会把整个设置面板关掉（拖一次卡片、设置就没了）。在捕获阶段
-  /// 吞掉紧随其后的那一个 click，200ms 内没等到就撤掉监听。
+  /// The browser fires a trailing click right after a drag ends. The settings dialog's overlay has
+  /// onClick={onClose}, and that trailing click closes the whole settings panel (drag a card once, settings
+  /// are gone). Swallow that one click at capture phase; remove the listener if it doesn't arrive within 200ms.
   const swallowNextClick = () => {
     const handler = (event: MouseEvent) => {
       event.preventDefault();
@@ -486,7 +491,7 @@ export function ChannelList({
     const ids = channelsRef.current.map((c) => c.id);
     const before = orderAtDragStartRef.current;
     if (ids.length === before.length && ids.every((id, index) => id === before[index])) {
-      return; // 顺序没变，不打扰后端
+      return; // order unchanged, don't bother the backend
     }
     try {
       await reorderChannels(kind, ids);
@@ -499,15 +504,16 @@ export function ChannelList({
     }
   };
 
-  // 刻意**不用** setPointerCapture：它会把后续事件重定向到手柄，浏览器补发的 click
-  // 于是落到设置弹窗的遮罩上，一拖就把设置关了。改用 window 级监听，事件目标不变。
+  // Deliberately NOT setPointerCapture: it redirects later events to the handle, so the browser's trailing
+  // click lands on the settings dialog overlay and one drag closes settings. Window-level listeners keep
+  // the event target unchanged.
   const onDragHandleDown = (event: React.PointerEvent<HTMLElement>, id: string) => {
     event.preventDefault();
     event.stopPropagation();
     dragIdRef.current = id;
     orderAtDragStartRef.current = channelsRef.current.map((c) => c.id);
     setDraggingId(id);
-    // 拖动期间整页光标保持 grabbing：指针滑出手柄后也能看出「正在拖」。
+    // Keep the grabbing cursor page-wide during the drag: still visible when the pointer leaves the handle.
     document.body.style.cursor = 'grabbing';
 
     const onMove = (moveEvent: PointerEvent) => moveDragTo(moveEvent.clientY);
@@ -522,7 +528,7 @@ export function ChannelList({
     };
   };
 
-  // 组件卸载（比如关掉设置面板）时别把 window 监听 / grabbing 光标留在外面。
+  // On unmount (e.g. closing the settings panel) don't leak window listeners / the grabbing cursor.
   useEffect(
     () => () => {
       dragCleanupRef.current?.();
@@ -534,8 +540,8 @@ export function ChannelList({
   const editingChannel = channels.find((c) => c.id === (draftId ?? editingId)) ?? null;
   const isDraft = draftId != null;
 
-  // 弹窗退场门控：closing 动画期间保留最后一次
-  // 打开的 channel/isDraft，避免动画播一半内容先消失、标题从「添加」闪回「编辑」。
+  // Dialog exit gating: keep the last opened channel/isDraft during the closing animation so content
+  // doesn't vanish mid-animation and the title doesn't flash from "add" back to "edit".
   const dialogMount = useExitMount(editingChannel !== null);
   const lastDialogRef = useRef<{ channel: Channel; isDraft: boolean } | null>(null);
   if (editingChannel) lastDialogRef.current = { channel: editingChannel, isDraft };
@@ -553,8 +559,8 @@ export function ChannelList({
     setEditingId(null);
     draftTouchedRef.current = false;
     if (shouldRecycleDraft(id, touched)) {
-      // 只回收从未发生用户交互的草稿；一旦用户改过任何内容，异步保存无论成功与否
-      // 都不得与关闭流程竞争删除这张卡片。
+      // Recycle only drafts that never saw user interaction; once the user changed anything, the async
+      // save — success or failure — must not race the close flow into deleting this card.
       try {
         await deleteChannelIfBlank(kind, id!);
       } catch (error) {
@@ -615,8 +621,8 @@ export function ChannelList({
         </div>
       )}
 
-      {/* 生效渠道不再用蓝底 + 左侧竖条（「当前使用」徽章已经说明问题，
-          整行染色太花哨）；行改为圆角卡片，选中态只用中性灰底 + 细描边。 */}
+      {/* Active channels no longer use blue background + left bar (the "current" badge already says it;
+          a fully tinted row is too loud); rows are rounded cards, selected state is neutral gray fill + thin outline. */}
       <div
         style={{
           display: 'flex',
@@ -647,8 +653,8 @@ export function ChannelList({
                 gap: '14px 20px',
                 padding: '14px 12px',
                 borderRadius: 12,
-                // 拖动态：轻微抬升（scale + 大阴影 + 强描边 + 提高层级），
-                // 让「哪张在被拖、拖到哪了」一目了然。
+                // Drag state: slight lift (scale + big shadow + strong outline + raised z-index)
+                // makes "which card is being dragged, where is it" obvious at a glance.
                 border: '0.5px solid',
                 borderColor:
                   draggingId === channel.id
@@ -913,9 +919,7 @@ function ChannelTestResult({
   );
 }
 
-/**
- * 为设置与新手引导提供 LLM/ASR 渠道列表；多模态管线启用时展示 Omni 配置。
- */
+/** Provides the LLM/ASR channel lists for settings and onboarding. */
 export function ProvidersSection({
   kind = 'all',
   autoCreateWhenEmpty = false,
@@ -925,13 +929,12 @@ export function ProvidersSection({
 } = {}) {
   const { t } = useTranslation();
   const { prefs } = useHotkeySettings();
-  // 多模态管线接管（issue #902）：多模态模式下隐藏传统 llm/asr 渠道列表，
-  // 凭据两套并存但停用，切回即恢复（与合并前 beta 语义一致）。
+  // Onboarding uses the active pipeline; settings can inspect either configuration at any time.
   const multimodalMode =
     prefs?.multimodalPipelineEnabled === true && prefs?.pipelineMode === 'multimodal';
   return (
     <>
-      {kind === 'all' && <OmniChannelSection />}
+      {kind === 'all' && multimodalMode && <OmniChannelSection />}
       {kind === 'all' && !multimodalMode && (
         <div
           style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6, marginBottom: 10 }}
@@ -939,10 +942,10 @@ export function ProvidersSection({
           {t('settings.providers.credentialStorageNotice')}
         </div>
       )}
-      {!multimodalMode && (kind === 'all' || kind === 'llm') && (
+      {(kind === 'llm' || (kind === 'all' && !multimodalMode)) && (
         <ChannelList kind="llm" autoCreateWhenEmpty={autoCreateWhenEmpty} />
       )}
-      {!multimodalMode && (kind === 'all' || kind === 'asr') && (
+      {(kind === 'asr' || (kind === 'all' && !multimodalMode)) && (
         <ChannelList kind="asr" autoCreateWhenEmpty={autoCreateWhenEmpty} />
       )}
     </>
@@ -950,8 +953,8 @@ export function ProvidersSection({
 }
 
 /**
- * 添加与编辑复用同一表单。设置中挂载为右侧子页，新手引导中使用独立弹窗。
- * 新建渠道先取得凭据所属的 ID，关闭时仅回收从未发生用户操作的空白草稿。
+ * Add and edit share the same form. Mounted as a right-side subpage in settings, or a standalone dialog in onboarding.
+ * Creating a channel first obtains the ID the credentials belong to; on close only blank drafts that never saw user action are recycled.
  */
 function ChannelModal({
   kind,
@@ -967,18 +970,18 @@ function ChannelModal({
   kind: ChannelKind;
   channel: Channel;
   presets: PresetOption[];
-  /** 新建流程中的草稿卡片：标题用「添加渠道」，未触碰时允许回收。 */
+  /** Draft card in the create flow: title says "add channel"; recyclable while untouched. */
   isDraft: boolean;
   mobile: boolean;
-  /** 退场中：透传给 Modal 反向播放入场动画（useExitMount 门控卸载）。 */
+  /** Keeps the editor mounted until its exit finishes. */
   closing?: boolean;
   onClose: () => void;
   onChanged: () => void | Promise<void>;
-  /** 用户对草稿做了有意义的操作；必须在异步写入前同步触发。 */
+  /** The user made a meaningful change to the draft; must fire synchronously before async writes. */
   onUserMutation: () => void;
 }) {
   const { t } = useTranslation();
-  // 关闭 / 换供应商前收敛渠道表单未落盘的异步写入（#1044 语义）。
+  // Drain the channel form's unwritten async writes before closing / switching provider (#1044 semantics).
   const form = useProviderForm();
   const [name, setName] = useState(channel.name);
   const [providerType, setProviderType] = useState(channel.providerType);
@@ -988,6 +991,7 @@ function ChannelModal({
   const nameId = useId();
   const editorHost = useContext(ChannelEditorHostContext);
   const embedded = Boolean(editorHost?.container && editorHost.background);
+  useOverlayMotion(dialogRef, closing, 'drawer', embedded);
   const closeRequestedRef = useRef(false);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -1013,7 +1017,7 @@ function ChannelModal({
     const wasInert = background?.inert ?? false;
     (
       dialog?.querySelector<HTMLElement>('[role="combobox"], input:not([disabled])') ?? dialog
-    )?.focus();
+    )?.focus({ preventScroll: true });
     // Keep body-portaled provider menus accessible while disabling the covered
     // settings surface. aria-modal would hide those existing sibling portals.
     if (background) background.inert = true;
@@ -1071,9 +1075,9 @@ function ChannelModal({
     }
   };
 
-  // 换供应商后把 preset 默认 endpoint / model 写进**空槽**（不覆盖用户已填的自定义值）。
-  // 渠道化后每张卡凭据独立，这里按卡片 id 读写；Codex OAuth / 本地引擎 / 自定义
-  // OpenAI 兼容（baseUrl/model 为空）自然跳过。失败只记日志，不影响换厂商本身。
+  // After switching providers, write the preset's default endpoint / model into EMPTY slots (never overwrite
+  // user-entered custom values). Channels are isolated per card, so this reads/writes by card id; Codex OAuth /
+  // local engines / custom OpenAI-compatible (empty baseUrl/model) naturally skip. Failures are logged only.
   const fillProviderDefaults = async (next: string) => {
     try {
       const preset = presets.find((item) => item.id === next);
@@ -1214,7 +1218,7 @@ function ChannelModal({
               <p className="ol-channel-name-hint">{t('settings.channels.nameHint')}</p>
             </ChannelFormRow>
 
-            {/* 模型列表、供应商特有字段与验证结果都留在同一个滚动区。 */}
+            {/* Model list, provider-specific fields, and test results all stay in the same scroll area. */}
             {!changingProvider && (
               <ChannelCredentialFields
                 key={`${channel.id}:${providerType}`}

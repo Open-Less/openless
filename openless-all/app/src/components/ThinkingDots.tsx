@@ -1,19 +1,20 @@
-// ThinkingDots.tsx — 六圆点「思考中」指示，全应用统一的思考视觉语言。
+// ThinkingDots.tsx — six-dot "thinking" indicator, the app-wide thinking visual language.
 //
-// 与胶囊的 WebGL 流体圆点（SiriGL orb）同一意象：六个彩点绕圆心转动 + 轻微
-// 聚散呼吸。面板/列表里的指示尺寸小（16~28px），WebGL orb 在这个尺寸下细节
-// 不可辨且每个实例占一个 GL context，所以这里用纯 CSS 实现 —— 只动
-// transform/opacity（合成器友好），任意尺寸清晰，浅色底上依然可见（实色点）。
+// Same imagery as the capsule's WebGL fluid dots (SiriGL orb): six colored dots
+// orbiting the center with a slight gather/scatter breathing. Panel/list indicators
+// are small (16~28px) where the WebGL orb's detail is unreadable and each instance
+// costs a GL context, so this is pure CSS — animating transform/opacity only
+// (compositor-friendly), sharp at any size, visible on light backgrounds (solid dots).
 
 import type { CSSProperties } from 'react';
 
 interface ThinkingDotsProps {
-  /** 外接圆直径（px），默认 20。 */
+  /** Circumscribed-circle diameter (px), default 20. */
   size?: number;
   style?: CSSProperties;
 }
 
-/** 六点色板：取 Siri 光谱的低饱和段，深浅主题下都可读。 */
+/** Six-dot palette: the low-saturation end of the Siri spectrum, readable in light and dark themes. */
 const DOT_COLORS = ['#5b8def', '#8b6ff2', '#c96fd6', '#e08787', '#d9a75f', '#5fb8a8'];
 
 export function ThinkingDots({ size = 20, style }: ThinkingDotsProps) {

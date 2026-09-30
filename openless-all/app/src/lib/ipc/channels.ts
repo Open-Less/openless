@@ -1,5 +1,6 @@
-// 渠道配置的 typed IPC：排序、启停、名称和手动验证结果。
-// Core 选择排序后的第一个启用渠道；凭据通过 readCredential/setCredential 按渠道 ID 读写。
+// Typed IPC for channel configuration: ordering, enable/disable, naming and manual test results.
+// Core picks the first enabled channel after sorting; credentials are read/written per channel id
+// via readCredential/setCredential.
 
 import { invokeOrMock } from './shared';
 import { mockCredentialValues } from './mock-data';
@@ -9,24 +10,24 @@ export type ChannelKind = 'llm' | 'asr';
 export interface ChannelTestResult {
   ok: boolean;
   latencyMs: number | null;
-  /** Unix 秒（后端时钟，前端不要自己生成）。 */
+  /** Unix seconds (backend clock; the frontend must not generate it itself). */
   at: number;
   error: string | null;
 }
 
 export interface Channel {
   id: string;
-  /** 用户取的名字；空串表示未命名，由 UI 回落到 preset 显示名。 */
+  /** User-chosen name; empty string means unnamed, with the UI falling back to the preset display name. */
   name: string;
-  /** 厂商 id —— 决定协议与表单形状，与 id 相互独立。 */
+  /** Vendor id — decides the protocol and form shape, independent of id. */
   providerType: string;
   enabled: boolean;
   order: number;
   lastTest: ChannelTestResult | null;
 }
 
-// 浏览器（非 Tauri）下的样例数据，让 `npm run dev` 能预览列表的四种状态：
-// 生效中 / 备用 / 测试失败标红 / 已关闭沉底。
+// Sample data for the browser (non-Tauri) case, letting `npm run dev` preview the list's four
+// states: active / backup / failed test in red / disabled sunk to the bottom.
 const mockChannels: Record<ChannelKind, Channel[]> = {
   llm: [
     {
@@ -100,7 +101,7 @@ export function invalidateMockChannelTests(kind: ChannelKind): void {
   for (const channel of mockChannels[kind]) channel.lastTest = null;
 }
 
-/** 返回后端分配的渠道 id。 */
+/** Returns the backend-assigned channel id. */
 export function createChannel(
   kind: ChannelKind,
   providerType: string,
@@ -120,7 +121,7 @@ export function createChannel(
   });
 }
 
-/** 在已建好的草稿卡片上换供应商（单弹窗添加流程的常规操作）。 */
+/** Switch provider on an existing draft card (the normal operation in the single-dialog add flow). */
 export function setChannelProviderType(
   kind: ChannelKind,
   id: string,
@@ -136,7 +137,7 @@ export function setChannelProviderType(
   });
 }
 
-/** 关闭添加弹窗时回收没填任何东西的草稿；返回是否真的删了。 */
+/** Reclaim a draft with nothing filled in when the add dialog closes; returns whether it was actually deleted. */
 export function deleteChannelIfBlank(kind: ChannelKind, id: string): Promise<boolean> {
   return invokeOrMock('delete_channel_if_blank', { kind, id }, () => {
     const channel = mockChannels[kind].find((channel) => channel.id === id);
@@ -177,11 +178,11 @@ export function setChannelEnabled(kind: ChannelKind, id: string, enabled: boolea
   });
 }
 
-/** ids 是拖拽后的完整顺序；后端会把未提及的渠道排到末尾。 */
+/** ids is the full post-drag order; the backend sinks unmentioned channels to the end. */
 export function reorderChannels(kind: ChannelKind, ids: string[]): Promise<void> {
   return invokeOrMock('reorder_channels', { kind, ids }, () => {
-    // mock 也要真的重排：否则浏览器预览里松手后顺序被 listChannels 拉回原样，
-    // 看着就像"拖拽坏了"，而真机是好的。
+    // The mock must really reorder too: otherwise the browser preview snaps back to the old
+    // order via listChannels after release, looking like "drag is broken" while the real app works.
     const list = mockChannels[kind];
     const ordered = ids
       .map((id) => list.find((c) => c.id === id))

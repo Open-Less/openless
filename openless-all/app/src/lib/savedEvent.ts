@@ -1,11 +1,12 @@
-// savedEvent.ts — 跨组件的"已保存 / 失败"统一事件通道。
+// savedEvent.ts — cross-component unified "saved / failed" event channel.
 //
-// 触发：任意组件保存成功 / 失败时调用 emitSaved(...)。
-// 监听：根容器（Settings / Translation / SelectionAsk）通过 useSavedToastListener 订阅，
-//   状态喂给 <SavedToast>，pill 浮在右上角。
+// Emit: any component calls emitSaved(...) when a save succeeds / fails.
+// Listen: root containers (Settings / Translation / SelectionAsk) subscribe via
+// useSavedToastListener, feeding state to <SavedToast>, a pill floating top-right.
 //
-// 用 DOM CustomEvent（而不是 React Context）是为了让 CredentialField / ProviderTools
-// 这类深层叶子组件不必沿 props 链传 dispatcher，跟 NAVIGATE_LOCAL_ASR_EVENT 同惯例。
+// A DOM CustomEvent (instead of React Context) lets deep leaf components like CredentialField /
+// ProviderTools avoid threading a dispatcher down the props chain, same convention as
+// NAVIGATE_LOCAL_ASR_EVENT.
 
 import { useEffect, useState } from 'react';
 
@@ -32,8 +33,9 @@ interface ToastSnapshot {
 const IDLE_SNAPSHOT: ToastSnapshot = { state: 'idle', message: '' };
 
 /**
- * 订阅 saved-toast 事件，自动管理"非 saving 状态 1.6s 后回 idle"逻辑。
- * saving 状态保持显示直到下一条事件覆盖（避免长任务里 saving 中途消失）。
+ * Subscribe to saved-toast events, auto-managing the "return to idle 1.6s after a non-saving
+ * state" logic. A saving state stays visible until the next event overwrites it (so saving
+ * does not disappear mid-way through a long task).
  */
 export function useSavedToastListener(): ToastSnapshot {
   const [snapshot, setSnapshot] = useState<ToastSnapshot>(IDLE_SNAPSHOT);

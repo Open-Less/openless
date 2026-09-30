@@ -1,0 +1,17 @@
+english-frequency.tsv — attribution and license
+================================================
+
+Source: hermitdave/FrequencyWords
+        https://github.com/hermitdave/FrequencyWords
+        content/2018/en/en_50k.txt (English, OpenSubtitles-2018 corpus)
+
+License: MIT License, Copyright (c) 2016 Hermit Dave. Full text:
+        https://github.com/hermitdave/FrequencyWords/blob/master/LICENSE
+
+Generation: this repo's scripts/generate-english-dictionary.mjs filters the
+source list to plain lowercase English words (rejecting subtitle-tokenizer
+contraction fragments such as "'s"/"n't", numbers, and non-letter tokens),
+keeps the top 20,000 by frequency, and writes them as tab-separated
+"word<TAB>count" rows sorted by descending frequency. No runtime code in
+OpenLess downloads, modifies, or redistributes the original source files —
+only this generated, filtered derivative ships in the app.

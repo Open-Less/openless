@@ -192,7 +192,8 @@ fn persist_settings_preserving_update_channel(
     mut prefs: UserPreferences,
 ) -> Result<(), String> {
     let _host_guard = coord.lock_settings_host();
-    // 在同一把写锁内读取并回填，避免并发渠道切换被旧设置快照覆盖。
+    // Read and backfill under the same write lock, so a concurrent channel switch can't be
+    // overwritten by a stale settings snapshot.
     preserve_update_channel_preferences(&mut prefs, &coord.backend().get_preferences());
     persist_settings_with_host_lock_held(coord, prefs)
 }
@@ -235,9 +236,15 @@ pub async fn set_settings(
     coord: CoordinatorState<'_>,
     app: AppHandle,
     mut prefs: UserPreferences,
+    edits: Option<std::collections::BTreeMap<String, serde_json::Value>>,
 ) -> Result<UserPreferences, String> {
-    // 捕获旧值用于远程输入服务的 diff（persist 后端口/开关变化时启停/重启）。
+    // Capture old values for the remote-input service diff (start/stop/restart when the
+    // port/switch changes after persist).
     let remote_prev = coord.backend().get_preferences();
+    if let Some(edits) = &edits {
+        prefs = openless_core::preference_patch::patch_preferences(&prefs, edits)
+            .map_err(|e| e.to_string())?;
+    }
     let packs = coord
         .backend()
         .list_style_packs(&prefs.active_style_pack_id)
@@ -245,25 +252,31 @@ pub async fn set_settings(
     sync_style_pack_preferences(&mut prefs, &packs);
     prefs.android_overlay_trigger = prefs.android_overlay_trigger.normalized();
     invalidate_llm_tests_if_thinking_changed(&coord, &remote_prev, &prefs).await?;
-    // 广播给所有 webview。issue #205：QaPanel 跑在独立 webview，
-    // 没有 HotkeySettingsContext，必须靠事件感知录音键变化，否则面板可见时
-    // 用户改键会让浮窗里的 "{recordHotkey}" 文案一直停留在旧值。
-    persist_settings_preserving_update_channel(&*coord, prefs)?;
+    // Persist changed fields and notify every WebView through the shared settings path.
+    if let Some(edits) = edits {
+        persist_setting_fields(&coord, &edits)?;
+    } else {
+        persist_settings_preserving_update_channel(&coord, prefs)?;
+    }
     let prefs = coord.backend().get_preferences();
-    // 保存即同步胶囊样式原子：下一次录音的入场帧就携带新样式，不依赖 emit_capsule
-    // 主线程闭包的 ~30Hz 同步（Windows 主线程拥塞时闭包延迟 → 整场显示旧样式）。
-    // 前端也会通过 prefs:changed 广播收到新样式，录音中切换即时换肤。
+    // Sync the capsule-style atom on save: the next recording's entrance frame carries the
+    // new style instead of depending on emit_capsule's ~30Hz main-thread closure sync (a
+    // congested Windows main thread delays the closure → the whole session shows the old
+    // style). The frontend also receives the new style via the prefs:changed broadcast,
+    // giving instant reskin mid-recording.
     coord.sync_capsule_style_from_preferences();
-    // 系统代理开关变化时立即重建客户端连接池（issue #869）。
+    // Rebuild the client connection pool immediately when the system-proxy switch changes (issue #869).
     if remote_prev.use_system_proxy != prefs.use_system_proxy {
         crate::net::set_use_system_proxy(prefs.use_system_proxy);
     }
     #[cfg(target_os = "android")]
     coord.apply_android_overlay_settings_change(&remote_prev, &prefs);
-    // refresh_tray_microphone_menu 内部会调用 NSStatusItem.set_menu，必须在主线程上跑。
-    // set_settings 是异步 Tauri command，执行期间不在 macOS UI 主线程；从这里直接调
-    // 会触发 macOS 主线程断言或在 dispatch 队列上死锁，导致整个 UI 无响应（用户改
-    // 偏好后所有按键都没反应即此根因）。dispatch 到主线程后继续处理，异步任务不阻塞。
+    // refresh_tray_microphone_menu calls NSStatusItem.set_menu internally and must run on
+    // the main thread. set_settings is an async Tauri command and is not on the macOS UI
+    // main thread while executing; calling it directly from here trips the macOS main-thread
+    // assertion or deadlocks the dispatch queue, freezing the whole UI (the root cause of
+    // every keypress dead after a user preference change). Dispatch to the main thread and
+    // continue; the async task does not block.
     let app_for_main = app.clone();
     let prefs_for_main = prefs.clone();
     let _ = app.run_on_main_thread(move || {
@@ -276,7 +289,8 @@ pub async fn set_settings(
             );
         }
     });
-    // 远程输入：开关 / 端口变化时启停或重启服务（PIN 变化走 regenerate_remote_pin 命令）。
+    // Remote input: start/stop or restart the service when the switch/port changes
+    // (PIN changes go through the regenerate_remote_pin command).
     if remote_prev.remote_input_enabled != prefs.remote_input_enabled
         || remote_prev.remote_input_port != prefs.remote_input_port
     {
@@ -299,8 +313,13 @@ pub async fn set_settings(
 pub async fn set_settings(
     coord: CoordinatorState<'_>,
     mut prefs: UserPreferences,
+    edits: Option<std::collections::BTreeMap<String, serde_json::Value>>,
 ) -> Result<UserPreferences, String> {
     let previous = coord.backend().get_preferences();
+    if let Some(edits) = &edits {
+        prefs = openless_core::preference_patch::patch_preferences(&prefs, edits)
+            .map_err(|e| e.to_string())?;
+    }
     let packs = coord
         .backend()
         .list_style_packs(&prefs.active_style_pack_id)
@@ -308,11 +327,16 @@ pub async fn set_settings(
     sync_style_pack_preferences(&mut prefs, &packs);
     prefs.android_overlay_trigger = prefs.android_overlay_trigger.normalized();
     invalidate_llm_tests_if_thinking_changed(&coord, &previous, &prefs).await?;
-    persist_settings_preserving_update_channel(&*coord, prefs)?;
+    if let Some(edits) = edits {
+        persist_setting_fields(&coord, &edits)?;
+    } else {
+        persist_settings_preserving_update_channel(&coord, prefs)?;
+    }
     let prefs = coord.backend().get_preferences();
-    // 保存即同步胶囊样式原子（Android 通知胶囊 payload 同源，见 emit_capsule）。
+    // Sync the capsule-style atom on save (same source as the Android notification capsule
+    // payload; see emit_capsule).
     coord.sync_capsule_style_from_preferences();
-    // 系统代理开关变化时立即重建客户端连接池（issue #869）。
+    // Rebuild the client connection pool immediately when the system-proxy switch changes (issue #869).
     if previous.use_system_proxy != prefs.use_system_proxy {
         crate::net::set_use_system_proxy(prefs.use_system_proxy);
     }
@@ -429,16 +453,18 @@ mod tests {
 
 // ─────────────────────────── release channel (Beta opt-in) ───────────────────────────
 //
-// 渠道偏好的写入路径跟 set_settings 复用 persist_settings：保持热键兜底归一化
-// 跟其他 prefs 写入一致，且写完后 emit "prefs:changed"，让前端跨 webview 同步。
+// Channel preference writes reuse persist_settings (as set_settings does) so hotkey
+// fallback normalization stays consistent with other prefs writes, and "prefs:changed" is
+// emitted afterwards to sync the frontend across webviews.
 //
-// 更新：plugin-updater 2.10.1 的 Builder 现在暴露 .endpoints() runtime API（CLAUDE.md
-// 当年记的"不支持"已不成立）。本节配合 `app_check_update_with_channel` 命令实现
-// Beta auto-update：Stable 渠道 → 走 tauri.conf 的默认 endpoints；Beta 渠道 →
-// fetch_latest_beta_release 拿最新 prerelease tag → 拼成 -beta manifest URL →
-// builder.endpoints(vec![url]).build().check()。Stable 用户绝对不会撞到 Beta 包
-// （Beta tag 的 manifest 文件名带 `-beta` 后缀，跟 Stable manifest 在 GitHub
-// Release assets 里物理分离）。
+// Update: plugin-updater 2.10.1's Builder now exposes the .endpoints() runtime API (the
+// "unsupported" note recorded in CLAUDE.md no longer holds). This section, together with
+// the `app_check_update_with_channel` command, implements Beta auto-update: Stable channel →
+// tauri.conf's default endpoints; Beta channel → fetch_latest_beta_release gets the latest
+// prerelease tag → build the -beta manifest URL →
+// builder.endpoints(vec![url]).build().check(). Stable users can never hit a Beta package
+// (Beta-tag manifests carry a `-beta` filename suffix, physically separated from Stable
+// manifests in the GitHub Release assets).
 
 fn effective_update_channel(
     requested: Option<UpdateChannel>,
@@ -479,7 +505,8 @@ pub fn set_update_channel(
     coord: CoordinatorState<'_>,
     channel: UpdateChannel,
 ) -> Result<(), String> {
-    // 渠道读取和持久化必须同属一个写临界区，避免反向覆盖并发常规设置。
+    // Channel read and persistence must share one write critical section, so they can't be
+    // overwritten in reverse by concurrent regular settings writes.
     let _host_guard = coord.lock_settings_host();
     let mut prefs = coord.backend().get_preferences();
     if !select_update_channel(&mut prefs, channel) {
@@ -497,15 +524,16 @@ pub struct LatestBetaRelease {
     pub published_at: String,
 }
 
-/// 拉 GitHub Releases atom feed 找最新 Beta release。
+/// Fetches the GitHub Releases atom feed to find the latest Beta release.
 ///
-/// 历史：之前用 `api.github.com/repos/.../releases` REST 端点，**未认证 60 req/h/IP**，
-/// 多人多次切 Beta toggle 很容易撞 403 rate limit（用户报"获取 Beta 版本信息失败"
-/// 即是这个）。换成 `releases.atom` 后是公开页面 + CDN cache，没有同等 rate 限制。
-/// Atom feed 不显式标 prerelease，所以按当前 `-Beta.N-tauri` 约定过滤，同时兼容
-/// 历史 `-beta-tauri` 后缀。
+/// History: this used the `api.github.com/repos/.../releases` REST endpoint, which allows
+/// only **60 unauthenticated req/h/IP**; many users toggling Beta repeatedly easily hit the
+/// 403 rate limit (the reported "failed to get Beta version info"). `releases.atom` is a
+/// public page with CDN cache and no equivalent rate limit.
+/// The Atom feed doesn't explicitly mark prereleases, so filter by the current
+/// `-Beta.N-tauri` convention while also accepting the historical `-beta-tauri` suffix.
 ///
-/// 返回 `Ok(None)` = 当前没发过 Beta 版；`Err(String)` = 网络/解析故障。
+/// `Ok(None)` = no Beta release published yet; `Err(String)` = network/parse failure.
 #[tauri::command]
 pub async fn fetch_latest_beta_release() -> Result<Option<LatestBetaRelease>, String> {
     let resp = net::send_with_retry(|| {
@@ -525,9 +553,10 @@ pub async fn fetch_latest_beta_release() -> Result<Option<LatestBetaRelease>, St
     Ok(parse_latest_beta_from_atom(&body))
 }
 
-/// 简单字符串解析 atom feed，避免引 XML 库。每个 `<entry>...</entry>` 内含一行
-/// `<link rel="alternate" type="text/html" href=".../releases/tag/<tag>"/>`，
-/// 用 `/releases/tag/` 这个唯一锚点抓 tag。
+/// Minimal string parsing of the atom feed to avoid an XML dependency. Each
+/// `<entry>...</entry>` contains one
+/// `<link rel="alternate" type="text/html" href=".../releases/tag/<tag>"/>` line; grab the
+/// tag via the unique `/releases/tag/` anchor.
 pub(crate) fn parse_latest_beta_from_atom(body: &str) -> Option<LatestBetaRelease> {
     for entry in body.split("<entry>").skip(1) {
         let entry_body = entry
@@ -592,19 +621,21 @@ fn extract_between(haystack: &str, open: &str, close: &str) -> Option<String> {
 
 // ─────────────────────── Channel-aware updater check ────────────────────────
 //
-// 替换前端原来直接 import('@tauri-apps/plugin-updater').check() 的路径：
-// - Stable 渠道：builder 不动 endpoints，沿用 tauri.conf 配的 stable manifest URL。
-// - Beta 渠道：先 fetch_latest_beta_release 拿最新 prerelease tag，拼成 -beta manifest
-//   URL（同时给一对 mirror + direct），再 builder.endpoints(vec![url])?.build()?.check()。
+// Replaces the frontend's previous direct import('@tauri-apps/plugin-updater').check() path:
+// - Stable channel: the builder keeps tauri.conf's stable manifest URL endpoints untouched.
+// - Beta channel: fetch_latest_beta_release gets the latest prerelease tag, builds the -beta
+//   manifest URL (as a mirror + direct pair), then
+//   builder.endpoints(vec![url])?.build()?.check().
 //
-// 返回的 Metadata 形状与 plugin-updater 的 JS UpdateMetadata 完全一致（rid +
-// currentVersion 等驼峰字段），前端可以直接 `new Update(metadata)` 复用 plugin
-// 的 download / install / close 实现，无需我们自己写下载和签名校验。
+// The returned Metadata shape exactly matches plugin-updater's JS UpdateMetadata (rid +
+// currentVersion and other camelCase fields), so the frontend can call
+// `new Update(metadata)` directly and reuse the plugin's download / install / close
+// implementations instead of writing our own download and signature verification.
 //
-// 物理隔离：Beta tag 推出来的 manifest 文件名带 `-beta` 后缀（参见 release-tauri.yml
-// 第 382 行注释），跟 Stable 的 `latest-{tgt}-{arch}.json` 在 GitHub Release assets
-// 里是分开的两份文件 —— 即使代码逻辑写错把 Beta URL 传给 Stable 用户，HTTP 也是
-// 直接 404，绝不会拿到错档。
+// Physical isolation: manifests published from Beta tags carry a `-beta` filename suffix
+// (see the comment at line 382 of release-tauri.yml), separate from Stable's
+// `latest-{tgt}-{arch}.json` in the GitHub Release assets — even if buggy code passed a
+// Beta URL to a Stable user, HTTP returns 404 outright; the wrong artifact is unreachable.
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -617,14 +648,15 @@ pub struct AppUpdateMetadata {
     pub version: String,
     pub date: Option<String>,
     pub body: Option<String>,
-    /// 原始 manifest JSON——桌面 `new Update(metadata)` / Android 自定义安装路径共用。
+    /// Raw manifest JSON — shared by desktop `new Update(metadata)` and the Android custom install path.
     pub raw_json: serde_json::Value,
 }
 
-/// 决定 manifest 来源后走 plugin-updater 的标准 check 流程。
-/// 渠道：显式传入 `channel` 时用它（关于页固定查 Stable、高级页 Beta 区查 Beta）；
-/// 不传则使用用户明确选择的渠道；尚未选择时跟随当前构建类型。
-/// 返回 None = 当前是最新；Some(metadata) = 有新版可装。
+/// Resolves the manifest source, then runs plugin-updater's standard check flow.
+/// Channel: uses an explicitly passed `channel` (the About page always checks Stable, the
+/// advanced page's Beta section checks Beta); when absent, uses the user's explicit
+/// channel choice; when none chosen yet, follows the current build type.
+/// Returns None = already up to date; Some(metadata) = an update is available.
 #[tauri::command]
 #[cfg(not(mobile))]
 pub async fn app_check_update_with_channel<R: tauri::Runtime>(
@@ -656,8 +688,9 @@ pub async fn app_check_update_with_channel<R: tauri::Runtime>(
     let Some(update) = update else {
         return Ok(None);
     };
-    // date 字段透传需要引 time crate；前端 AutoUpdate.tsx 实际并不用 date，所以这里
-    // 直接置 None，避免拉一个新 dep 进 src-tauri/Cargo.toml。
+    // Passing through the date field would require the time crate; the frontend
+    // AutoUpdate.tsx never uses date, so set it to None here and avoid pulling a new dep
+    // into src-tauri/Cargo.toml.
     let metadata = AppUpdateMetadata {
         current_version: update.current_version.clone(),
         version: update.version.clone(),
@@ -669,17 +702,19 @@ pub async fn app_check_update_with_channel<R: tauri::Runtime>(
     Ok(Some(metadata))
 }
 
-/// 把 fetch_latest_beta_release 找到的最新 prerelease tag 拼成 -beta manifest URL 对。
-/// 顺序：先镜像（fastgit.cc 代理 GitHub），后直连 —— 跟 tauri.conf 现有 Stable
-/// endpoints 一致，让国内访问优先打到 CDN。
+/// Builds the -beta manifest URL pair from the latest prerelease tag found by
+/// fetch_latest_beta_release.
+/// Order: mirror first (fastgit.cc proxies GitHub), then direct — matching tauri.conf's
+/// existing Stable endpoints so mainland-China access hits the CDN first.
 #[cfg(not(mobile))]
 async fn resolve_beta_manifest_endpoints() -> Result<Vec<url::Url>, String> {
     let Some(latest) = fetch_latest_beta_release().await? else {
         return Err("尚未发布过 Beta 版本".to_string());
     };
     let tag = latest.tag_name;
-    // {{target}} / {{arch}} 占位符由 plugin 在 check 时替换。Rust raw string 用 r#""#
-    // 不需要转义双花括号，比 format! 干净。
+    // {{target}} / {{arch}} placeholders are substituted by the plugin at check time. A
+    // Rust raw string (r#""#) needs no escaped double braces and is cleaner than format!-ing
+    // the literal.
     let mirror = format!(
         "https://fastgit.cc/https://github.com/Open-Less/openless/releases/download/{tag}/latest-{{{{target}}}}-{{{{arch}}}}-beta-mirror.json"
     );
@@ -719,8 +754,9 @@ pub async fn app_download_and_install_android_update(
     signature: String,
     version: String,
 ) -> Result<(), String> {
-    // 安全：下载前校验 URL，防止 SSRF（如内网元数据接口、localhost 服务）。
-    // 只允许已知的 GitHub 直链和 fastgit 镜像前缀。
+    // Security: validate the URL before downloading to prevent SSRF (e.g. intranet metadata
+    // endpoints, localhost services). Only the known GitHub direct links and the fastgit
+    // mirror prefix are allowed.
     const DIRECT_BASE: &str = "https://github.com/Open-Less/openless";
     const MIRROR_BASE: &str = "https://fastgit.cc/https://github.com/Open-Less/openless";
     if !url.starts_with(DIRECT_BASE) && !url.starts_with(MIRROR_BASE) {
@@ -771,4 +807,79 @@ pub(crate) fn replace_dictation_hotkey(
         )
         .map(|_| ())
         .map_err(settings_save_error)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsSnapshot {
+    pub preferences: UserPreferences,
+    pub revision: u64,
+}
+
+#[tauri::command]
+pub fn get_settings_snapshot(core: CoreState<'_>) -> Result<SettingsSnapshot, String> {
+    settings_snapshot(&core)
+}
+
+fn settings_snapshot(backend: &openless_core::OpenLessBackend) -> Result<SettingsSnapshot, String> {
+    for _ in 0..3 {
+        let revision = backend.snapshot().preferences_revision;
+        let preferences = backend.get_preferences();
+        if backend.snapshot().preferences_revision == revision {
+            return Ok(SettingsSnapshot {
+                preferences,
+                revision,
+            });
+        }
+    }
+    Err("settings are changing; retry the read".into())
+}
+
+fn persist_setting_fields(
+    coord: &Coordinator,
+    edits: &std::collections::BTreeMap<String, serde_json::Value>,
+) -> Result<(), String> {
+    let _host_guard = coord.lock_settings_host();
+    openless_core::preference_patch::update_fields(
+        edits,
+        || {
+            (
+                coord.backend().snapshot().preferences_revision,
+                coord.backend().get_preferences(),
+            )
+        },
+        |mut prefs, revision| {
+            preserve_update_channel_preferences(&mut prefs, &coord.backend().get_preferences());
+            coord.backend().update_settings(
+                prefs,
+                openless_core::SettingsUpdateOptions::SETTINGS_DOCUMENT.at_revision(revision),
+                &TauriSettingsRuntime::new(coord),
+            )
+        },
+    )
+    .map(|_| ())
+    .map_err(settings_save_error)
+}
+
+#[cfg(not(mobile))]
+#[tauri::command]
+pub async fn update_setting_fields(
+    coord: CoordinatorState<'_>,
+    app: AppHandle,
+    edits: std::collections::BTreeMap<String, serde_json::Value>,
+) -> Result<SettingsSnapshot, String> {
+    let prefs = coord.backend().get_preferences();
+    set_settings(coord.clone(), app, prefs, Some(edits)).await?;
+    settings_snapshot(&coord.backend())
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+pub async fn update_setting_fields(
+    coord: CoordinatorState<'_>,
+    edits: std::collections::BTreeMap<String, serde_json::Value>,
+) -> Result<SettingsSnapshot, String> {
+    let prefs = coord.backend().get_preferences();
+    set_settings(coord.clone(), prefs, Some(edits)).await?;
+    settings_snapshot(&coord.backend())
 }

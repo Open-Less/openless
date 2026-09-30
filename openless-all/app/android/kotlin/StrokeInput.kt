@@ -20,7 +20,8 @@ internal class StrokeInputRepository(context: Context) {
         "看" to "h", "天" to "h", "我" to "psh", "们" to "p", "你" to "psh", "他" to "p",
         "她" to "p", "它" to "p", "这" to "z", "那" to "z", "什" to "p", "么" to "p",
         "请" to "n", "问" to "z", "谢" to "n", "再" to "h", "见" to "h", "中" to "s",
-        // 就: 点、横、竖、折、横、竖、撇、点、横、撇、折、点。
+        // Each stroke of the entry below, in order: dot, horizontal, vertical, fold, horizontal,
+        // vertical, slant, dot, horizontal, slant, fold, dot.
         "就" to "nhszhspnhpzn",
         "文" to "n", "一" to "h", "二" to "h", "三" to "h", "四" to "p", "五" to "h",
         "六" to "n", "七" to "h", "八" to "p", "九" to "p", "零" to "n",
@@ -45,7 +46,8 @@ internal class StrokeInputRepository(context: Context) {
     private fun loadEntries(context: Context): List<Pair<String, String>> {
         // A character may have more than one valid stroke sequence in Rime.
         // Keep every code here; deduplicate only the rendered character list
-        // after filtering, otherwise valid aliases such as 过/hsnnzn vanish.
+        // after filtering, otherwise valid alias codes (a character with two
+        // sequences) vanish.
         return runCatching {
             context.assets.open("stroke.dict.tsv").bufferedReader().useLines { lines ->
                 lines.mapNotNull { line ->

@@ -62,27 +62,32 @@ use dictation::{handle_pressed, handle_released};
 use dictation::{handle_pressed_edge, handle_released_edge, handle_trigger_combined};
 use qa::handle_qa_hotkey_pressed;
 
-/// 词条建议卡片的窗口尺寸（逻辑点）。
+/// Window size of the vocabulary suggestion card (logical points).
 ///
-/// 显示卡片时必须把胶囊窗口缩到这个大小 —— 见 [`show_vocab_suggestion_card`] 里关于
-/// 鼠标穿透的说明。
+/// Showing the card must shrink the capsule window to this size — see the
+/// cursor-passthrough notes in [`show_vocab_suggestion_card`].
 const VOCAB_CARD_WIDTH: f64 = 320.0;
-/// 一行建议的高度：勾叉按钮 28pt + 行间距 8pt，与 `VocabSuggestionCard.tsx` 对齐。
+/// Height of one suggestion row: check/cross buttons 28pt + 8pt row spacing,
+/// aligned with `VocabSuggestionCard.tsx`.
 const VOCAB_CARD_ROW_HEIGHT: f64 = 36.0;
-/// 标题行 + 卡片内边距 + 留给投影的外边距。
+/// Title row + card padding + margin left for the drop shadow.
 const VOCAB_CARD_CHROME_HEIGHT: f64 = 72.0;
-/// 卡片离屏幕右边缘留多少。
+/// Margin between the card and the right screen edge.
 const VOCAB_CARD_EDGE_MARGIN: f64 = 24.0;
 
-/// 把「要不要记住这个词」的卡片弹到胶囊那个位置。
+/// Pops the "remember this word?" card at the capsule's position.
 ///
-/// 复用胶囊窗口而不是新开一个：多显示器定位、Space 贴附（macOS 26 上那个把窗口钉死在
-/// 单个桌面的坑）、nonactivating panel 都是踩过坑才对的，重开一个窗口等于重踩一遍。
+/// Reuses the capsule window instead of creating a new one: multi-monitor
+/// positioning, Space attachment, and the nonactivating panel were all tuned
+/// the hard way; a new window would repeat those pitfalls.
 ///
-/// 但有一处必须动：**胶囊平时是鼠标完全穿透的**（`set_ignore_cursor_events(true)`），
-/// 因为它浮在别的 app 上面，不能挡住用户点下面的东西。卡片要能点，就得临时关掉穿透；
-/// 而透明窗口一旦不穿透，**连透明的部分也会拦鼠标**。所以显示卡片时把窗口缩到卡片实际
-/// 大小，挡住的范围就只有卡片本身；收起时再恢复。
+/// One thing must change: the capsule is normally fully cursor-transparent
+/// (`set_ignore_cursor_events(true)`) because it floats over other apps and
+/// must not block clicks on what is underneath. The card must be clickable,
+/// so passthrough is temporarily disabled — but once a transparent window
+/// stops ignoring the cursor, even its transparent parts intercept the mouse.
+/// So the window shrinks to the card's actual size while shown, and is
+/// restored when hidden.
 fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
     let pending = inner.backend.pending_corrections();
     if pending.is_empty() {
@@ -95,16 +100,14 @@ fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
     let inner_for_main = Arc::clone(inner);
     let _ = capsule.run_on_main_thread(move |capsule| {
         let inner = inner_for_main;
-        // **最后一道闸：听写不在 Idle 就绝不弹卡片。**
+        // Last gate: never show the card while dictation is not Idle.
         //
-        // 上游那些判据（观察器代次、`pending_corrections` 是否为空）全都是「读一次再去
-        // 干活」，读完到这里还隔着一次跨线程调度 —— 排队期间 Core 会话可能已开始。
-        // 完全可能已经跑完：解除观察器、收起卡片、开启新一轮听写。那种 check-then-act
-        // 无论怎么加都堵不住这一段。
-        //
-        // 判据放在这里才有意义：这是碰窗口之前的最后一个时点，而且问的是**真正的不变量**
-        // —— 卡片和录音胶囊共用一个窗口，显示卡片要把窗口缩到卡片大小，在听写进行中弹
-        // 出来就是把那次听写的胶囊弄没了（真机踩过，表现是「热键像是坏了」）。
+        // Upstream checks (observer generation, non-empty `pending_corrections`)
+        // are check-then-act reads made before a cross-thread hop; a Core
+        // session can start — even finish — while queued. Only this final
+        // check, the last point before touching the window, tests the real
+        // invariant: the card and the recording capsule share one window, so
+        // showing the card mid-dictation would wipe out that session's capsule.
         //
         if inner.backend.snapshot().dictation.phase != openless_core::DictationPhase::Idle
             || inner.backend.less_computer_active_session().is_some()
@@ -114,9 +117,9 @@ fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
             return;
         }
         inner.vocab_card_visible.store(true, Ordering::SeqCst);
-        // 卡片是要点的，穿透必须关掉。
-        // Android 没有胶囊窗口，tauri 的 set_ignore_cursor_events 在其上不存在
-        //（与 capsule_focus.rs 里同一处理）。
+        // The card must be clickable, so cursor passthrough must be disabled.
+        // Android has no capsule window and tauri's set_ignore_cursor_events
+        // does not exist there (same handling as capsule_focus.rs).
         #[cfg(not(mobile))]
         if let Err(e) = capsule.set_cursor_passthrough(false) {
             log::warn!("[vocab-card] set_ignore_cursor_events(false) failed: {e}");
@@ -129,9 +132,12 @@ fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
         {
             log::warn!("[vocab-card] position failed: {e}");
         }
-        // 位置同理：`maybe_position_capsule_bottom_center` 的去重缓存只记「显示器 +
-        // 翻译态」，卡片这一挪它一无所知。不清掉的话，下一次录音时它会拿相同的
-        // 显示器快照判定「没变化」→ 跳过重新定位 → 胶囊留在卡片挪过去的右下角。
+        // Positioning ditto: the dedup cache in `maybe_position_capsule_bottom_center`
+        // only tracks "monitor + translation state" and knows nothing about
+        // this move. Without invalidation, the next recording would judge
+        // "nothing changed" from the same monitor snapshot, skip repositioning,
+        // and leave the capsule in the bottom-right corner the card moved it
+        // to.
         capsule.invalidate_layout();
         capsule.show_for_recording(true);
         #[cfg(target_os = "macos")]
@@ -139,13 +145,15 @@ fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
     });
 }
 
-/// 收起卡片：把窗口完整还给胶囊。
+/// Dismisses the card and returns the window fully to the capsule.
 ///
-/// 四条路径都会走到这里 —— 用户点了「好」/「都不用」、10 秒到时、新一轮听写开始。
+/// Reached from every dismissal path — user accepts/rejects, the 10s timeout,
+/// a new dictation session starting.
 ///
-/// **没有卡片时必须原样返回。** 新听写会话会调它，如果无条件去
-/// `hide()` 那个窗口，就会和 `emit_capsule` 的 show 抢同一个窗口 —— 胶囊时隐时不显，
-/// 用户会以为热键坏了。
+/// Must be a no-op when no card is showing: new dictation sessions call it,
+/// and unconditionally hiding the window would race `emit_capsule`'s show for
+/// the same window — the capsule flickers and the user thinks the hotkey is
+/// broken.
 fn hide_vocab_suggestion_card(inner: &Arc<Inner>) {
     inner.backend.dismiss_pending_corrections();
     if !inner.vocab_card_visible.swap(false, Ordering::SeqCst) {
@@ -155,26 +163,32 @@ fn hide_vocab_suggestion_card(inner: &Arc<Inner>) {
         return;
     };
     let _ = capsule.run_on_main_thread(move |capsule| {
-        // 先隐藏再改几何：复原要同时动尺寸和位置，窗口还亮着时改就有概率被合成出
-        // 一帧「卡片被拉宽、还横着飞过半个屏幕」。
+        // Hide before changing geometry: restoring size and position while the
+        // window is visible can composite a frame with the card stretched wide
+        // and flying across half the screen.
         let _ = capsule.hide();
-        // 穿透必须还回去，否则胶囊会一直挡着屏幕底部那一块。
+        // Passthrough must be restored, or the capsule keeps blocking that
+        // area at the bottom of the screen.
         #[cfg(not(mobile))]
         if let Err(e) = capsule.set_cursor_passthrough(true) {
             log::warn!("[vocab-card] restoring cursor passthrough failed: {e}");
         }
-        // 尺寸也必须还回去 —— 卡片把窗口缩到过自己的大小，不复原的话下一次胶囊
-        // 就挤在一个 320×108 的窗口里，等于看不见。
+        // Size must be restored too — the card shrank the window to its own
+        // size, and without this the next capsule would be squeezed into a
+        // 320×108 window, effectively invisible.
         let bounds = crate::capsule_window_bounds(false);
         if let Err(e) = capsule.set_size(bounds.width, bounds.height) {
             log::warn!("[vocab-card] restoring capsule size failed: {e}");
         }
-        // 位置一样要还 —— 卡片把窗口挪到了右下角，胶囊的位置是底部居中。
-        // 只还尺寸不还位置，下一次录音胶囊就出现在右下角（真机上就是这个 bug）。
+        // Position must be restored too — the card moved the window to the
+        // bottom-right while the capsule sits bottom-center. Restoring size
+        // alone would put the next recording capsule in the bottom-right
+        // corner.
         //
-        // 清缓存和这次重定位是两件事，都要做：清缓存保证「就算这次重定位失败，
-        // 下一次 emit_capsule 也一定会重算」，重定位保证「就算有哪条路径绕过了
-        // emit_capsule 直接 show，窗口也已经在对的地方」。
+        // Both cache invalidation and this repositioning are needed:
+        // invalidation guarantees the next emit_capsule recomputes even if this
+        // repositioning fails; repositioning guarantees the window is already
+        // in the right place even if some path shows it without emit_capsule.
         capsule.invalidate_layout();
         if let Err(e) = capsule.position_capsule_bottom_center(false) {
             log::warn!("[vocab-card] restoring capsule position failed: {e}");
@@ -182,11 +196,13 @@ fn hide_vocab_suggestion_card(inner: &Arc<Inner>) {
     });
 }
 
-/// 兜底卡片的窗口宽度（逻辑点）。比词条卡片宽一点 —— 这张要放一整段话。
+/// Window width of the insert-fallback card (logical points). Slightly wider
+/// than the vocab card — this one holds a full passage.
 const FALLBACK_CARD_WIDTH: f64 = 360.0;
-/// Webview 首次渲染前的安全高度。真实高度由卡片 DOM 测量后通过 IPC 回报。
+/// Safe height before the webview's first render. The real height is measured
+/// from the card DOM and reported back over IPC.
 const FALLBACK_CARD_INITIAL_HEIGHT: f64 = 260.0;
-/// 尺寸 IPC 的原生安全边界，不表达任何 CSS 布局规则。
+/// Native safety bounds for the size IPC; not a CSS layout rule.
 const FALLBACK_CARD_MIN_HEIGHT: f64 = 96.0;
 const FALLBACK_CARD_MAX_HEIGHT: f64 = 320.0;
 
@@ -208,16 +224,19 @@ fn validated_fallback_card_height(
     ))
 }
 
-/// 文本没能落到目标 app 时，把它连同一个复制按钮弹出来。
+/// Shows the text with a copy button when it could not be inserted into the
+/// target app.
 ///
-/// 为什么需要这张卡片：这些场景下唯一的兜底是「把文本写进剪贴板」，而它既依赖一个
-/// 默认可关的开关，用户也**根本不知道文本在剪贴板里** —— 没有任何提示。屏幕上要么
-/// 什么都没有，要么只有半截。
+/// Needed because in these scenarios the only fallback is copying the text to
+/// the clipboard, which depends on a default-off setting and gives the user no
+/// hint that the text is there — the screen would show nothing or a partial
+/// result.
 ///
-/// 窗口机制整套照搬 [`show_vocab_suggestion_card`]（复用胶囊窗口、关穿透、缩尺寸、
-/// 右下角定位），理由见那里。多的一件事是 `insert_fallback_card_visible`：这张卡片
-/// 在会话收尾那一刻弹出，而收尾自己安排了一次 `schedule_capsule_idle` → `hide()`，
-/// 必须让那次 hide 认得出卡片并让路。
+/// The window mechanism mirrors [`show_vocab_suggestion_card`] (reuse the
+/// capsule window, disable passthrough, shrink size, bottom-right position);
+/// see there for rationale. One extra piece: this card appears exactly when
+/// the session wraps up, and the wrap-up schedules `schedule_capsule_idle` →
+/// `hide()`, so that hide must recognize the card and yield.
 fn show_insert_fallback_card(inner: &Arc<Inner>, text: String, reason: &'static str) {
     if text.trim().is_empty() {
         return;
@@ -228,8 +247,10 @@ fn show_insert_fallback_card(inner: &Arc<Inner>, text: String, reason: &'static 
     let inner_for_main = Arc::clone(inner);
     let _ = capsule.run_on_main_thread(move |capsule| {
         let inner = inner_for_main;
-        // 与词条卡片同一道闸、同一理由：听写不在 Idle 就绝不碰这个窗口，否则等于把
-        // 正在进行的那次听写的胶囊弄没了。收尾路径是先把 phase 置回 Idle 再走到这里的。
+        // Same gate and rationale as the vocab card: never touch this window
+        // while dictation is not Idle, or the in-flight session's capsule is
+        // destroyed. The wrap-up path sets the phase back to Idle before
+        // reaching here.
         if inner.backend.snapshot().dictation.phase != openless_core::DictationPhase::Idle
             || inner.backend.less_computer_active_session().is_some()
         {
@@ -254,9 +275,11 @@ fn show_insert_fallback_card(inner: &Arc<Inner>, text: String, reason: &'static 
         {
             log::warn!("[fallback-card] position failed: {e}");
         }
-        // 位置同理：`maybe_position_capsule_bottom_center` 的去重缓存只记「显示器 +
-        // 翻译态」，卡片这一挪它一无所知。不清掉的话下一次录音会判定「没变化」→
-        // 跳过重新定位 → 胶囊留在卡片挪过去的右下角。
+        // Positioning ditto: the dedup cache in `maybe_position_capsule_bottom_center`
+        // only tracks "monitor + translation state" and knows nothing about
+        // this move. Without invalidation the next recording would judge
+        // "nothing changed", skip repositioning, and leave the capsule in the
+        // bottom-right corner.
         capsule.invalidate_layout();
         inner.host.emit_insert_fallback(&payload);
         capsule.show_for_recording(true);
@@ -300,10 +323,11 @@ fn report_insert_fallback_card_height(
     })
 }
 
-/// 收起兜底卡片：把窗口完整还给胶囊。
+/// Dismisses the fallback card and returns the window fully to the capsule.
 ///
-/// 与 [`hide_vocab_suggestion_card`] 同款：**没有卡片时必须原样返回**，否则每次听写
-/// 开始都会去 hide 那个窗口，和 `emit_capsule` 的 show 抢。
+/// Same as [`hide_vocab_suggestion_card`]: must be a no-op when no card is
+/// showing, or every dictation start would hide the window and race
+/// `emit_capsule`'s show.
 fn hide_insert_fallback_card(inner: &Arc<Inner>) {
     let _event_guard = inner.capsule_event_lock.lock();
     let (was_visible, deferred_capsule) = inner.host.dismiss_insert_fallback_card();
@@ -317,30 +341,37 @@ fn hide_insert_fallback_card(inner: &Arc<Inner>) {
     let backend = Arc::clone(&inner.backend);
     let _ = capsule.run_on_main_thread(move |capsule| {
         host.clear_insert_fallback();
-        // 先隐藏再改几何：复原要同时动尺寸和位置，窗口还亮着时改就有概率被合成出
-        // 一帧「卡片被拉宽、还横着飞过半个屏幕」。
+        // Hide before changing geometry: restoring size and position while the
+        // window is visible can composite a frame with the card stretched wide
+        // and flying across half the screen.
         let _ = capsule.hide();
-        // 穿透必须还回去，否则胶囊会一直挡着屏幕那一块。
+        // Passthrough must be restored, or the capsule keeps blocking that
+        // screen area.
         #[cfg(not(mobile))]
         if let Err(e) = capsule.set_cursor_passthrough(true) {
             log::warn!("[fallback-card] restoring cursor passthrough failed: {e}");
         }
-        // 尺寸也必须还回去 —— 卡片把窗口缩到过自己的大小，不复原的话下一次胶囊
-        // 就挤在一个卡片大小的窗口里，等于看不见。
+        // Size must be restored too — the card shrank the window to its own
+        // size, and without this the next capsule would be squeezed into a
+        // card-sized window, effectively invisible.
         let bounds = crate::capsule_window_bounds(false);
         if let Err(e) = capsule.set_size(bounds.width, bounds.height) {
             log::warn!("[fallback-card] restoring capsule size failed: {e}");
         }
-        // 位置一样要还 —— 卡片把窗口挪到了右下角，胶囊的位置是底部居中。只还尺寸
-        // 不还位置，下一次录音胶囊就出现在右下角（词条卡片在真机上踩过这个 bug）。
-        // 清缓存和这次重定位两件都要做，理由见 `hide_vocab_suggestion_card`。
+        // Position must be restored too — the card moved the window to the
+        // bottom-right while the capsule sits bottom-center. Restoring size
+        // alone would put the next recording capsule in the bottom-right
+        // corner. Both cache invalidation and this repositioning are needed;
+        // see `hide_vocab_suggestion_card` for rationale.
         capsule.invalidate_layout();
         if let Err(e) = capsule.position_capsule_bottom_center(false) {
             log::warn!("[fallback-card] restoring capsule position failed: {e}");
         }
         if let Some(payload) = deferred_capsule {
-            // 卡片期间 QA / Selection Polish 仍会推进胶囊状态，只是不能碰共享窗口。
-            // 卡片释放后把最新状态一次性应用回来；若最新是 Idle，该 helper 会正常隐藏。
+            // During the card, QA / Selection Polish still advance capsule
+            // state but cannot touch the shared window. Re-apply the latest
+            // state once the card is released; if it is Idle, the helper hides
+            // normally.
             let preferences = backend.get_preferences();
             let show_capsule = payload.selection_polish || preferences.show_capsule;
             capsule.apply_capsule_payload(&payload, show_capsule, preferences.capsule_style, true);
@@ -493,30 +524,37 @@ struct Inner {
     host: crate::tauri_coordinator_host::TauriCoordinatorHost,
     backend: Arc<openless_core::OpenLessBackend>,
     less_computer_voice: Mutex<Option<LessComputerHostCapture>>,
-    /// 实际安装在宿主上的快捷键目标。设置事务只通过显式 target 更新这里，
-    /// 监听器安装/恢复不得回读尚未提交或已回滚的 preferences。
+    /// The shortcut target actually installed on the host. Settings
+    /// transactions update it only via an explicit target; listener
+    /// install/restore must not read back uncommitted or rolled-back
+    /// preferences.
     hotkey_runtime_target: Mutex<openless_core::HotkeyRuntimeTarget>,
-    /// 串行化 Tauri 侧“Core 设置事务 + 宿主 effect”以及风格包删除 effect，
-    /// 防止两个命令把显式 runtime target 乱序安装。
+    /// Serializes "Core settings transaction + host effect" and style-pack
+    /// removal effects on the Tauri side so two commands cannot install the
+    /// explicit runtime target out of order.
     settings_host_gate: Mutex<()>,
     hotkey_resume_started: AtomicBool,
     overlay_qa_handoff: tokio::sync::Mutex<()>,
     inserter: TextInserter,
-    /// 建议卡片是不是正占着胶囊窗口。
+    /// Whether the suggestion card is currently occupying the capsule window.
     ///
-    /// 门控 `hide_vocab_suggestion_card`：没有卡片时它必须什么都不做，否则每次听写
-    /// 开始都会去 hide 胶囊窗口，和 `emit_capsule` 的 show 抢同一个窗口。
+    /// Gates `hide_vocab_suggestion_card`: with no card it must do nothing, or
+    /// every dictation start would hide the capsule window and race
+    /// `emit_capsule`'s show for the same window.
     vocab_card_visible: AtomicBool,
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Arc<Mutex<HotkeyStatus>>,
     /// Webview fallback only: pairs one raw keydown/up edge with the same Core press id.
     window_hotkey_press_id: AtomicU64,
     shortcut_recording_active: AtomicBool,
-    /// Less Computer modifier 热键的按下代次与待处理组合键事件。
+    /// Press generation and pending combo event for the Less Computer modifier
+    /// hotkey.
     less_computer_press_generation: AtomicU64,
     less_computer_combo_pending_press: Mutex<Option<crate::hotkey::HotkeyCombinedEdge>>,
-    /// 自定义组合键监听器（global-hotkey crate）。当 `prefs.hotkey.trigger == Custom` 时
-    /// 代替 modifier-only 的 hotkey monitor。`None` 表示不使用自定义组合键或还没成功安装。
+    /// Custom combo-key listener (global-hotkey crate). Replaces the
+    /// modifier-only hotkey monitor when `prefs.hotkey.trigger == Custom`;
+    /// `None` means no custom combo key is used or installation has not
+    /// succeeded yet.
     combo_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     side_aware_combo: Mutex<Option<crate::side_aware_combo::SideAwareComboMonitor>>,
     /// Mouse4/Mouse5 听写监听（WH_MOUSE_LL）；与 combo / side-aware 互斥。
@@ -525,47 +563,57 @@ struct Inner {
     switch_style_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     open_app_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     quick_note_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
-    /// 风格包直达快捷键监听器（issue #759）：pack_id → 实际绑定 + monitor。
-    /// 绑定元数据让 supervisor 能区分「同一 pack_id 但按键已变化」，并在任何
-    /// 非事务设置路径注册失败后继续重试到实际状态与 prefs 一致。
+    /// Style-pack direct shortcut listeners (issue #759): pack_id → actual
+    /// binding + monitor. The binding metadata lets the supervisor distinguish
+    /// "same pack_id but changed keys" and keep retrying after any
+    /// non-transactional registration failure until actual state matches prefs.
     style_pack_hotkeys: Mutex<std::collections::HashMap<String, StylePackHotkeyRegistration>>,
-    /// 选区润色快捷键：modifier-only 复用 `HotkeyMonitor`，其它组合键复用
-    /// `ComboHotkeyMonitor`。桌面（非 mobile）专属。
+    /// Selection-polish shortcut: modifier-only reuses `HotkeyMonitor`, other
+    /// combos reuse `ComboHotkeyMonitor`. Desktop (non-mobile) only.
     #[cfg(not(mobile))]
     selection_polish_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
-    /// 选区语音宿主资源。业务 session/prompt/preview 由 openless-core 独占。
+    /// Selection-voice host resources. Business session/prompt/preview state
+    /// is owned exclusively by openless-core.
     #[cfg(all(not(mobile), target_os = "windows"))]
     selection_voice_host: Arc<Mutex<selection_voice_session::SelectionVoiceHostState>>,
     #[cfg(all(not(mobile), target_os = "windows"))]
     selection_voice_capture: Mutex<Option<Arc<openless_core::VoiceTranscriptionSession>>>,
-    /// 划词语音问答（issue #118）：与 dictation hotkey 平行的全局快捷键
-    /// 监听器（global-hotkey crate）。`None` 表示功能关闭或还没成功安装。
+    /// Selection voice QA (issue #118): global shortcut listener parallel to
+    /// the dictation hotkey (global-hotkey crate). `None` means the feature is
+    /// off or installation has not succeeded yet.
     qa_hotkey: Mutex<Option<QaHotkeyMonitor>>,
     coding_agent_modifier_hotkey: Mutex<Option<HotkeyMonitor>>,
     coding_agent_combo_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
-    /// 最近一次 emit_capsule 下发的 state，纯内省/测试用途（在 app 句柄校验之前写入，
-    /// 因此无 GUI 的测试环境也能断言「按下热键 → 弹了哪种胶囊」）。写入是单次廉价
-    /// 加锁，对 ~30Hz 录音回调可忽略。
+    /// State from the most recent emit_capsule, for introspection/tests only
+    /// (written before app-handle validation so GUI-less tests can assert
+    /// which capsule a hotkey press produced). A single cheap lock per write,
+    /// negligible at the ~30Hz recording cadence.
     last_capsule_state: Mutex<Option<CapsuleState>>,
-    /// 每次 capsule payload 递增。选区润色的终态自动隐藏会带上该代数，防止旧 timer
-    /// 覆盖新的选区润色/语音/QA 可见状态。
+    /// Increments with each capsule payload. Selection-polish final-state
+    /// auto-hide carries this epoch so a stale timer cannot overwrite newer
+    /// selection-polish/voice/QA visibility.
     capsule_event_epoch: AtomicU64,
-    /// 将 capsule 事件与自动隐藏线性化。这样一个旧 timer 要么在新的 payload 之前收起
-    /// 旧提示，要么发现代数已改变直接放弃，绝不会在新会话之后补发 Idle。
+    /// Linearizes capsule events against auto-hide: a stale timer either hides
+    /// the old hint before the new payload or bails on a changed epoch, never
+    /// emitting Idle after a new session.
     capsule_event_lock: Mutex<()>,
-    /// 选区润色的轻量提示仍在显示或处理中。已有语音/QA 的旧 auto-hide timer 必须在
-    /// 此期间让路，避免把选区润色浮窗提前收掉。
+    /// Selection-polish lightweight hint is still showing or being processed.
+    /// Older voice/QA auto-hide timers must yield during this window so they do
+    /// not dismiss the selection-polish capsule early.
     selection_polish_capsule_active: AtomicBool,
     /// Tauri QA window visibility. All QA business state belongs to openless-core.
     qa_context: Arc<TauriQaHostContext>,
-    /// 预备态标志：按下热键即"乐观显示"胶囊（带入场动画），此时麦克风还在 cpal
-    /// init 窗口内、没有第一帧 PCM。为 true 时 emit_capsule 把 Recording payload 的
-    /// `warming` 打成 true（前端渲染"待命"光效）；`level_handler` 首次触发（PCM 真的
-    /// 流入）后置 false，光条"点亮"进入正式录音。begin_session 每次入场重置为 true。
-    /// Coordinator 退出信号。各 hotkey supervisor loop 在每轮重试 sleep 之前会检查
-    /// 此 flag；为 true 时 loop 立刻 return。生产场景里 process exit 一并 reap 所有
-    /// supervisor 线程，但 integration test 和未来 RunEvent::Exit 钩子需要这条
-    /// 显式退出路径。审计 3.1.2。
+    /// Warming-up flag: a hotkey press "optimistically" shows the capsule (with
+    /// entrance animation) while the microphone is still inside the cpal init
+    /// window with no first PCM frame. When true, emit_capsule marks the
+    /// Recording payload's `warming` true (the frontend renders a standby
+    /// glow); the first `level_handler` fire (real PCM flow) clears it and the
+    /// meter lights up into actual recording. begin_session resets it to true
+    /// on each start.
+    /// Coordinator shutdown signal. Each hotkey supervisor loop checks it
+    /// before its retry sleep and returns immediately when set. In production,
+    /// process exit reaps all supervisor threads, but integration tests and a
+    /// future RunEvent::Exit hook need this explicit exit path. Audit 3.1.2.
     shutdown: AtomicBool,
 }
 
@@ -708,9 +756,10 @@ impl Coordinator {
         }
     }
 
-    /// 保留旧构造函数：现有调用点（含单元测试）只传 Foundry runtime。
-    /// sherpa-onnx runtime 这里创建默认 offline batch 实例；入产后（lib.rs）请走
-    /// `new_with_local_runtimes`，确保 Tauri State 共享同一个 Arc。
+    /// Legacy constructor kept for existing call sites (including unit tests)
+    /// that only pass a Foundry runtime. The sherpa-onnx runtime is created
+    /// here as a default offline batch instance; once inside the app (lib.rs),
+    /// use `new_with_local_runtimes` so Tauri State shares the same Arc.
     #[cfg(target_os = "windows")]
     pub fn new_with_foundry_runtime(foundry_local_runtime: Arc<FoundryLocalRuntime>) -> Self {
         Self::new_with_local_runtimes(foundry_local_runtime, Arc::new(SherpaOnnxRuntime::new()))
@@ -853,14 +902,40 @@ impl Coordinator {
         let _ = self.present_core_capsule_if_current(payload, None);
     }
 
+    /// Selection-voice claims the shared capsule from hotkey Start through
+    /// session teardown so late dictation Done cannot overwrite Recording.
+    pub(crate) fn selection_voice_owns_capsule(&self) -> bool {
+        #[cfg(all(not(mobile), target_os = "windows"))]
+        {
+            selection_voice_session::selection_voice_owns_capsule(&self.inner)
+        }
+        #[cfg(not(all(not(mobile), target_os = "windows")))]
+        {
+            false
+        }
+    }
+
+    pub(crate) fn selection_voice_accepts_level(&self, session_id: &str) -> bool {
+        #[cfg(all(not(mobile), target_os = "windows"))]
+        {
+            selection_voice_session::selection_voice_accepts_level(&self.inner, session_id)
+        }
+        #[cfg(not(all(not(mobile), target_os = "windows")))]
+        {
+            let _ = session_id;
+            false
+        }
+    }
+
     pub(crate) fn present_core_capsule_if_current(
         &self,
         payload: CapsulePayload,
         expected_epoch: Option<u64>,
     ) -> Option<u64> {
         let state = payload.state;
-        // Core 已拥有本帧的翻译、准备态和会话归属；不可在窗口层按迟到的
-        // 当前状态重新拼装，否则冷启动或快速切换会丢失真实反馈。
+        // Core already owns this frame's translation, readiness, and session
+        // ownership; the window layer must not rebuild it from stale late
+        // state, or cold starts and fast switches lose real feedback.
         let epoch = emit_core_capsule(&self.inner, payload, expected_epoch)?;
         if let Some(delay_ms) = core_capsule_hide_delay(state) {
             let inner = Arc::clone(&self.inner);
@@ -975,11 +1050,11 @@ impl Coordinator {
         }
     }
 
-    /// 让所有 hotkey supervisor loop（dictation / qa / combo / translation /
-    /// switch_style / open_app / style_pack / selection_polish）在下一轮 sleep / poll
-    /// 后退出。生产场景下进程退出
-    /// 一并 reap 所有线程，但 integration test 和未来 RunEvent::Exit 钩子需要
-    /// 显式退出路径。审计 3.1.2。
+    /// Makes all hotkey supervisor loops (dictation / qa / combo / translation
+    /// / switch_style / open_app / style_pack / selection_polish) exit after
+    /// their next sleep / poll. In production, process exit reaps all threads,
+    /// but integration tests and a future RunEvent::Exit hook need this
+    /// explicit exit path. Audit 3.1.2.
     #[allow(dead_code)]
     pub fn request_shutdown(&self) {
         self.inner.shutdown.store(true, Ordering::SeqCst);
@@ -1040,8 +1115,9 @@ impl Coordinator {
             log::info!("[coord] hotkey startup waits for local recovery");
             return;
         }
-        // 起一个守护线程，反复尝试安装 hotkey hook。Accessibility 一被授予就立即生效，
-        // 用户不需要手动重启 OpenLess。
+        // Spawn a daemon thread that retries installing the hotkey hook, so it
+        // takes effect as soon as Accessibility is granted without requiring
+        // the user to restart OpenLess.
         let inner = Arc::clone(&self.inner);
         std::thread::Builder::new()
             .name("openless-hotkey-supervisor".into())
@@ -1053,8 +1129,9 @@ impl Coordinator {
         self.inner.hotkey.lock().take();
     }
 
-    /// 启动 QA hotkey supervisor（issue #118）。和 `start_hotkey_listener` 平行：
-    /// 守护线程反复尝试注册（用户可能改了组合键），失败则 3s 后重试。
+    /// Starts the QA hotkey supervisor (issue #118), parallel to
+    /// `start_hotkey_listener`: a daemon thread retries registration every 3s
+    /// on failure (the user may have changed the combo).
     pub fn start_qa_hotkey_listener(&self) {
         let inner = Arc::clone(&self.inner);
         std::thread::Builder::new()
@@ -1063,8 +1140,9 @@ impl Coordinator {
             .ok();
     }
 
-    /// 启动「快速 Agent」双热键 supervisor。与 QA hotkey 平行；功能默认关闭，
-    /// 仅在 `coding_agent_enabled` 时注册。
+    /// Starts the "quick Agent" dual-hotkey supervisor, parallel to the QA
+    /// hotkey; the feature is off by default and registered only when
+    /// `coding_agent_enabled`.
     pub fn start_coding_agent_hotkey_listener(&self) {
         let inner = Arc::clone(&self.inner);
         std::thread::Builder::new()
@@ -1082,11 +1160,13 @@ impl Coordinator {
     }
 
     pub fn stop_qa_hotkey_listener(&self) {
-        // QaHotkeyMonitor::drop 在 macOS 底层是 Carbon RemoveEventHotKey，要求主线程。
-        // RunEvent::Exit 回调不保证在 AppKit 主线程跑，drop 漏到 tokio worker 上会
-        // 触发 macOS dispatch_assert_queue_fail SIGTRAP。包到 run_on_main_thread 让
-        // drop 在主线程发生；AppHandle 已 None 时直接 drop（最坏 crash 也是退出时刻）。
-        // 详见 issue #169。
+        // QaHotkeyMonitor::drop bottoms out in Carbon RemoveEventHotKey on
+        // macOS, which requires the main thread. The RunEvent::Exit callback is
+        // not guaranteed to run on the AppKit main thread; a drop that lands on
+        // a tokio worker triggers macOS dispatch_assert_queue_fail SIGTRAP.
+        // Wrap it in run_on_main_thread so the drop happens on the main
+        // thread; when the AppHandle is already None, drop directly (worst case
+        // is a crash at exit time anyway). See issue #169.
         let inner = Arc::clone(&self.inner);
         if self
             .inner
@@ -1126,8 +1206,8 @@ impl Coordinator {
         }
     }
 
-    /// 启动自定义组合键监听器。当 `prefs.hotkey.trigger == Custom` 时，
-    /// 代替 modifier-only 的 hotkey monitor。
+    /// Starts the custom combo-key listener. Replaces the modifier-only hotkey
+    /// monitor when `prefs.hotkey.trigger == Custom`.
     pub fn start_combo_hotkey_listener(&self) {
         let inner = Arc::clone(&self.inner);
         std::thread::Builder::new()
@@ -1188,8 +1268,9 @@ impl Coordinator {
         take_action_hotkey_on_main_thread(&self.inner, ActionHotkeyKind::QuickNote);
     }
 
-    /// 启动风格包直达快捷键监听（issue #759）。supervisor 线程等 AppHandle 就绪后
-    /// 按 prefs 全量注册，个别注册失败按 action hotkey 的节奏重试。
+    /// Starts style-pack direct shortcut listening (issue #759). The
+    /// supervisor thread waits for the AppHandle, registers everything from
+    /// prefs, and retries individual failures on the action-hotkey cadence.
     pub fn start_style_pack_hotkey_listeners(&self) {
         let inner = Arc::clone(&self.inner);
         std::thread::Builder::new()
@@ -1202,12 +1283,14 @@ impl Coordinator {
         clear_style_pack_hotkeys_on_main_thread(&self.inner);
     }
 
-    /// 用户在设置里改了风格快捷键列表时调用：按最新 prefs 全量对齐注册状态。
+    /// Called when the user edits the style shortcut list in settings:
+    /// realigns registration state fully against the latest prefs.
     pub(crate) fn update_style_pack_hotkey_bindings(&self) {
         sync_style_pack_hotkeys_on_main_thread(&self.inner);
     }
 
-    /// 事务式设置路径使用：等待主线程完成整表注册并返回精确失败原因。
+    /// Used by the transactional settings path: waits for the main thread to
+    /// finish full registration and returns the precise failure reason.
     pub(crate) fn try_update_style_pack_hotkey_bindings(&self) -> Result<(), String> {
         try_sync_style_pack_hotkeys_on_main_thread(&self.inner)
     }
@@ -1218,8 +1301,9 @@ impl Coordinator {
     pub(crate) fn update_qa_hotkey_binding(&self) {
         let target = hotkey_runtime_target(&self.inner);
         let Some(binding) = target.qa else {
-            // 用户把功能关了 → 直接 drop monitor。drop 也得在主线程，否则 Carbon
-            // unregister 会失败/UB。
+            // The user disabled the feature -> drop the monitor directly. The
+            // drop must happen on the main thread, or Carbon unregister fails
+            // / is UB.
             let inner_clone = Arc::clone(&self.inner);
             if self
                 .inner
@@ -1252,23 +1336,26 @@ impl Coordinator {
             return;
         }
         self.update_modifier_shortcut_bindings();
-        // global-hotkey crate 的 manager.register/unregister 必须主线程跑。
-        // 没在主线程会让 Carbon 句柄注册看似成功但事件不派发。
+        // The global-hotkey crate's manager.register/unregister must run on
+        // the main thread; off-thread, Carbon registration appears to succeed
+        // but events are never dispatched.
         let inner_clone = Arc::clone(&self.inner);
         let binding_for_main = binding.clone();
         if self
             .inner
             .host
             .run_on_main_thread(move || {
-                // 路径 1：当前已有 monitor → 在主线程换绑定。
+                // Path 1: a monitor already exists -> swap the binding on the
+                // main thread.
                 if let Some(monitor) = inner_clone.qa_hotkey.lock().as_ref() {
                     if let Err(e) = monitor.update_binding(binding_for_main.clone()) {
                         log::warn!("[coord] update QA hotkey binding 失败: {e}");
                     }
                     return;
                 }
-                // 路径 2：之前还没装上 → 主线程上重装一次（supervisor 也会重试，
-                // 但用户体感更快：set_qa_hotkey 命令一返回，hotkey 立即生效）。
+                // Path 2: not installed yet -> reinstall on the main thread
+                // (the supervisor also retries, but this way the hotkey takes
+                // effect as soon as the set_qa_hotkey command returns).
                 let (tx, rx) = mpsc::channel::<QaHotkeyEvent>();
                 match QaHotkeyMonitor::start(binding_for_main, tx) {
                     Ok(monitor) => {
@@ -1336,7 +1423,7 @@ impl Coordinator {
     }
 
     fn update_action_hotkey_binding(&self, kind: ActionHotkeyKind) {
-        // None = 用户主动停用：反注册全局键，立即生效。
+        // None = the user disabled it: unregister the global key immediately.
         let Some(binding) = action_hotkey_binding(&self.inner, kind) else {
             take_action_hotkey_on_main_thread(&self.inner, kind);
             log::info!("[coord] action hotkey {kind:?} 已停用（用户清空）");
@@ -1378,8 +1465,9 @@ impl Coordinator {
         }
     }
 
-    /// 给前端 Settings 渲染当前 QA 快捷键 label（如 "Cmd+Shift+;"）。
-    /// `qa_hotkey == None` 时返回空串，UI 据此显示「未启用」。
+    /// Label of the current QA shortcut for the frontend Settings (e.g.
+    /// "Cmd+Shift+;"). Returns an empty string when `qa_hotkey == None`; the UI
+    /// shows "not enabled" for it.
     pub fn qa_hotkey_label(&self) -> String {
         self.inner
             .backend
@@ -1390,7 +1478,8 @@ impl Coordinator {
             .unwrap_or_default()
     }
 
-    /// 保存后同步样式、窗口尺寸和点击区域，不等待下一次录音状态事件。
+    /// After saving, syncs style, window size, and click region without
+    /// waiting for the next recording state event.
     pub fn sync_capsule_style_from_preferences(&self) {
         self.inner
             .host
@@ -1408,7 +1497,8 @@ impl Coordinator {
         }
     }
 
-    /// 落字失败兜底卡片自己关掉了（用户点关闭 / TTL 到时）。
+    /// The insert-fallback card dismissed itself (user closed it or TTL
+    /// expired).
     pub fn dismiss_insert_fallback_card(&self) {
         hide_insert_fallback_card(&self.inner);
     }
@@ -1475,10 +1565,12 @@ impl Coordinator {
         }
     }
 
-    /// 将 Core 已校验并完成冲突协调的显式目标应用到宿主监听器。
+    /// Applies a Core-validated, conflict-resolved explicit target to the host
+    /// listeners.
     ///
-    /// 本方法不会读取 preferences；失败时 target 保持为 `next`，由 Core 根据
-    /// receipt 调用反向 change 恢复，从而让部分安装也能收敛回旧状态。
+    /// This method never reads preferences; on failure the target stays `next`
+    /// and Core restores it via the inverse change based on the receipt, so
+    /// partial installation still converges back to the old state.
     pub(crate) fn apply_hotkey_runtime_change(
         &self,
         change: &openless_core::SettingsValueChange<openless_core::HotkeyRuntimeTarget>,
@@ -1516,8 +1608,9 @@ impl Coordinator {
         if previous.coding_agent_enabled != next.coding_agent_enabled
             || previous.coding_agent_voice != next.coding_agent_voice
         {
-            // 旧键被注销后不会再有 Released；只取消其尚在采集的 Less 会话。
-            // Agent 已处理的任务已取走 capture，不在这个 slot 中。
+            // After the old key is unregistered no Released edge will arrive;
+            // cancel only its still-capturing Less session. Tasks the Agent
+            // already handled took the capture and are not in this slot.
             cancel_less_computer_capture(&self.inner, None);
             self.update_coding_agent_hotkey_binding()?;
         }
@@ -1529,9 +1622,12 @@ impl Coordinator {
     }
 
     pub(crate) async fn dismiss_less_computer(&self) -> Result<(), String> {
-        // 先结束当前对话身份，随后精确释放Host capture/Core run；隐藏窗口不等于停麦。
+        // End the current conversation identity first, then release the Host
+        // capture / Core run precisely; hiding the window does not stop the
+        // mic.
         self.inner.backend.services().less_computer.dismiss();
-        // 立即隐藏。若清理期间用户重新开启窗口，其show epoch会撤销这次退出动画。
+        // Hide immediately. If the user reopens the window during cleanup, its
+        // show epoch supersedes this exit animation.
         self.inner.host.hide_less_computer();
         let result = cancel_active_less_computer(&self.inner).await;
         result.map(|_| ()).map_err(|error| error.to_string())
@@ -1548,7 +1644,8 @@ impl Coordinator {
             }
         };
         if let Some((id, control)) = starting {
-            // 胶囊停止与静音停止共用交接队列，冷启动期间点击不能被吞掉。
+            // Capsule stop and mute stop share the handoff queue, so clicks
+            // during cold start cannot be swallowed.
             return control
                 .request(id, openless_core::RecordingControlAction::Stop)
                 .map(|_| true)
@@ -1611,8 +1708,10 @@ impl Coordinator {
     pub(crate) async fn cancel_dictation_from_cli(
         &self,
     ) -> Result<openless_core::CliDispatchOutcome, openless_core::BackendError> {
-        // CLI取消与1.x主session范围一致：先释放Less Host slot，之后只委托主听写取消。
-        // 不复用全局Esc的QA/Selection分支，以免扩大既有CLI命令的作用域。
+        // CLI cancel matches the 1.x main-session scope: release the Less Host
+        // slot first, then delegate only to main dictation cancellation. The
+        // global Esc QA/Selection branches are not reused, keeping the
+        // existing CLI command scope unchanged.
         if cancel_active_less_computer(&self.inner).await? {
             return Ok(openless_core::CliDispatchOutcome::DictationCancelled);
         }
@@ -1706,9 +1805,10 @@ impl Coordinator {
         }
     }
 
-    /// CLI 入口的 QA toggle：直接复用 modifier-only QA 热键边沿的处理函数。
-    /// 与 `handle_qa_hotkey_pressed` 同语义 — Idle → 开浮窗 / Recording → 收尾 /
-    /// Processing → 忽略。桌面快捷键 → CLI 转发的备用进入点。
+    /// QA toggle for the CLI entry point: reuses the modifier-only QA hotkey
+    /// edge handler. Same semantics as `handle_qa_hotkey_pressed` — Idle →
+    /// open the panel / Recording → finalize / Processing → ignore. A fallback
+    /// entry point when the desktop shortcut forwards to CLI.
     pub async fn cli_toggle_qa_panel(&self) {
         handle_qa_hotkey_pressed(&self.inner).await;
     }
@@ -1717,8 +1817,10 @@ impl Coordinator {
         self.inner
             .shortcut_recording_active
             .store(active, Ordering::SeqCst);
-        // 同步给热键监听器：录制态激活时 CGEventTap 上报 Fn 按下边沿，
-        // 供前端 ShortcutRecorder 提交 Fn 绑定（浏览器不向网页层下发 Fn keydown）。
+        // Sync to the hotkey listeners: while recording mode is active, the
+        // CGEventTap reports Fn press edges so the frontend ShortcutRecorder
+        // can commit Fn bindings (browsers never deliver Fn keydown to web
+        // pages).
         #[cfg(not(mobile))]
         let sync_ok = self.inner.hotkey.lock().as_ref().map(|m| {
             m.set_recording_active(active);
@@ -1765,8 +1867,10 @@ impl Coordinator {
 
 const CAPSULE_AUTO_HIDE_DELAY_MS: u64 = 2000;
 
-/// Core 终态事件只描述语义，原生胶囊保持多久由 Tauri Host 负责。把映射集中成纯函数，
-/// 可以明确锁定成功、失败、取消三条时序，并让测试不依赖真实窗口与计时器。
+/// Core terminal events describe semantics only; how long the native capsule
+/// stays is the Tauri Host's job. Centralizing the mapping in a pure function
+/// pins the done/error/cancel timings and lets tests run without real windows
+/// and timers.
 fn core_capsule_hide_delay(state: CapsuleState) -> Option<u64> {
     match state {
         CapsuleState::Done | CapsuleState::Error => Some(CAPSULE_AUTO_HIDE_DELAY_MS),

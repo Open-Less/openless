@@ -1,20 +1,21 @@
 name: Release Tauri (cross-platform)
 # meta: ensure Actions indexes this workflow on forks (no behavior change).
-# 触发条件：
-#   - 推 v*.*.*-tauri 形式的 tag（与老 Swift 版的 vX.Y.Z 区分开,不冲突）
-#   - 手动 dispatch（用于测试构建,不发版）
+# Triggers:
+#   - push a v*.*.*-tauri tag (kept distinct from the legacy Swift vX.Y.Z tags, no conflict)
+#   - manual dispatch (for test builds, no release)
 #
-# 输出：
-#   macOS arm64/x64 .dmg + Windows x64 .msi/.exe，自动作为 GitHub Release 资产上传。
-#   Linux egui 由 release-linux-egui.yml 独立构建；本工作流不编译 Linux/Tauri。
+# Outputs:
+#   macOS arm64/x64 .dmg + Windows x64 .msi/.exe, uploaded automatically as GitHub Release assets.
+#   Linux egui is built separately by release-linux-egui.yml; this workflow does not build Linux/Tauri.
 #
-# macOS 分发：
-#   - 配好 APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / APPLE_ID /
-#     APPLE_PASSWORD / APPLE_TEAM_ID 后，Tauri 会做 Developer ID 签名和公证。
-#     用户从浏览器下载后不需要手工 xattr。
-#   - 未配置 Apple secrets 时自动回退 ad-hoc 签名，GitHub Actions 会打印 warning。
-#   - Windows 没签名（无证书）,Win 11 SmartScreen 会警告 "未识别的发布者",用户点"仍要运行"。
-#   - 任意一个 platform 失败不影响另一个继续构建（fail-fast: false）。
+# macOS distribution:
+#   - With APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / APPLE_ID /
+#     APPLE_PASSWORD / APPLE_TEAM_ID configured, Tauri performs Developer ID signing and
+#     notarization; users downloading from a browser do not need manual xattr.
+#   - Without Apple secrets, falls back to ad-hoc signing; GitHub Actions prints a warning.
+#   - Windows is unsigned (no certificate); Win 11 SmartScreen warns "Unknown publisher" and the
+#     user clicks "Run anyway".
+#   - One platform failing does not stop the other from building (fail-fast: false).
 
 on:
   push:
@@ -28,7 +29,8 @@ on:
         options: [all, macos]
         default: all
 
-# 同一 tag 重复推送只跑最新一次；workflow_dispatch 用 run_id 隔离避免互相取消。
+# Repeated pushes of the same tag run only the latest run; workflow_dispatch isolates by run_id
+# to avoid mutual cancellation.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'push' }}
@@ -48,18 +50,19 @@ jobs:
     env:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      # 渠道由 tag 后缀决定：
+      # Channel is decided by the tag suffix:
       #   v<v>-beta-tauri / v<v>-Beta.N-tauri
-      #                    → beta 渠道（GitHub Release 标 prerelease，manifest 文件名带 -beta 后缀，
-      #                      正式版用户的 endpoint 拿不到）
-      #   v<v>-tauri       → stable 渠道（正式版，文件名沿用旧约定，向后兼容）
-      # workflow_dispatch / 非 tag 触发时 github.ref_name 不是 tag 字符串，
-      # endsWith 返回 false，回退为 stable，不改变现有 dispatch 行为。
+      #                    -> beta channel (GitHub Release marked prerelease, manifest filename
+      #                       carries a -beta suffix so stable users' endpoint never sees it)
+      #   v<v>-tauri       -> stable channel (regular release; filenames follow the old
+      #                       convention for backward compatibility)
+      # On workflow_dispatch / non-tag triggers github.ref_name is not a tag string, endsWith
+      # returns false, and it falls back to stable — dispatch behavior unchanged.
       OPENLESS_RELEASE_CHANNEL: ${{ (endsWith(github.ref_name, '-beta-tauri') || contains(github.ref_name, '-Beta.')) && 'beta' || 'stable' }}
     steps:
       - uses: actions/checkout@v4
         with:
-          # MLX 子模块只在 macOS 发布构建需要。
+          # The MLX submodule is only needed for macOS release builds.
           submodules: ${{ startsWith(matrix.platform, 'macos') && 'recursive' || 'false' }}
 
       - name: Disable macOS-only Qwen3 MLX dependency
@@ -76,7 +79,8 @@ jobs:
         with:
           targets: ${{ matrix.rust-target }}
 
-      # 在恢复缓存前设置实际编译环境，让 cache key 包含 macOS profile。
+      # Set up the actual build environment before restoring caches so the cache key includes
+      # the macOS profile.
       - name: Configure macOS build environment
         if: startsWith(matrix.platform, 'macos')
         working-directory: openless-all/app
@@ -199,12 +203,12 @@ jobs:
             fi
           done
 
-      # ── macOS：用我们自己的 build-mac.sh，统一处理签名、公证和 artifact 清理 ──
+      # ── macOS: use our own build-mac.sh, handling signing, notarization, and artifact cleanup ──
       - name: Build (macOS)
         if: startsWith(matrix.platform, 'macos')
         working-directory: 'openless-all/app'
         env:
-          INSTALL: '0'        # CI 不要装到 /Applications,也不要 reset TCC
+          INSTALL: '0'        # CI must not install to /Applications or reset TCC
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bash scripts/build-mac.sh
@@ -217,9 +221,9 @@ jobs:
           path: openless-all/app/src-tauri/target/cargo-timings/*.html
           if-no-files-found: ignore
 
-      # ── Windows：先 build OpenLessIme.dll(x64+x86)，再跑 tauri bundle。
-      #    openless-ime.wxs 用 $(env.OPENLESS_IME_DLL_X64) / _X86 拿绝对路径，
-      #    跨 candle/light cwd 都能 resolve（Tauri wix bundler cwd 不固定）。
+      # ── Windows: build OpenLessIme.dll (x64+x86) first, then run tauri bundle.
+      #    openless-ime.wxs reads absolute paths from $(env.OPENLESS_IME_DLL_X64) / _X86,
+      #    resolvable across candle/light cwd changes (Tauri's wix bundler cwd is not fixed).
       - name: Build Windows IME native DLLs
         if: matrix.platform == 'windows-latest'
         shell: pwsh
@@ -243,20 +247,22 @@ jobs:
             "$($t.EnvName)=$dll" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
             Write-Host "[ok] built $dll (exported $($t.EnvName))"
 
-            # bundle.resources 引用的是 src-tauri/openless-ime-payload/{x64,x86}/OpenLessIme.dll
-            # （仓库里 commit 的是 0 字节占位让 mac 本地 build 也能 resolve）。
-            # 这里用真 dll 覆盖占位，让 NSIS / MSI 都装上真文件；NSIS hook 的 regsvr32
-            # 同时会把 64 / 32 位 COM 注册到 HKLM\Software\Classes\CLSID 的
-            # KEY_WOW64_64KEY / KEY_WOW64_32KEY 两侧（windows_ime_profile.rs 都会查）。
+            # bundle.resources references src-tauri/openless-ime-payload/{x64,x86}/OpenLessIme.dll
+            # (the repo commits 0-byte placeholders so mac local builds can also resolve).
+            # Overwrite the placeholders with the real dlls so NSIS / MSI install real files;
+            # the NSIS hook's regsvr32 also registers the 64/32-bit COM classes under
+            # HKLM\Software\Classes\CLSID on both the KEY_WOW64_64KEY / KEY_WOW64_32KEY
+            # views (both are checked by windows_ime_profile.rs).
             $payloadDir = Join-Path $appRoot "src-tauri\openless-ime-payload\$($t.Folder)"
             New-Item -ItemType Directory -Force -Path $payloadDir | Out-Null
             Copy-Item -Force -Path $dll -Destination (Join-Path $payloadDir 'OpenLessIme.dll')
             Write-Host "[ok] copied real $($t.Folder) dll into bundle.resources payload path"
           }
 
-      # ── Windows tauri build：保持 bash shell，因为 PowerShell 调外部命令
-      #    会把 '{"bundle":...}' 的内部双引号吃掉、让 tauri 收到无效 JSON。
-      #    用 set +e + GITHUB_ENV 把 exit code 传到下一步给 Repair 判断。
+      # ── Windows tauri build: keep the bash shell, because PowerShell invoking external
+      #    commands strips the inner double quotes of '{"bundle":...}' and tauri receives
+      #    invalid JSON.
+      #    Use set +e + GITHUB_ENV to pass the exit code to the next step for Repair.
       - name: Build (Windows)
         if: matrix.platform == 'windows-latest'
         shell: bash
@@ -276,13 +282,13 @@ jobs:
             msi_supported=0
             echo "[info] Skipping MSI bundle for non-numeric prerelease version $app_version."
           fi
-          # 拆两轮跑：Tauri 的签名 / updater artifact 阶段是 post-bundle 钩子，
-          # 任意 bundler 失败会让 *所有* bundle 的 .sig 跳过。MSI 必踩 ICE80，
-          # 所以单一 `tauri build` 永远拿不到 NSIS 的 .exe.sig。
-          # Pass 1：NSIS 独立跑——必须成功，产出 *_x64-setup.exe(.sig) 给 updater。
-          # Pass 2：MSI 独立跑——允许失败，Repair 步骤兜底 light.exe 重链。
-          # Beta 版跳过 MSI：Windows Installer / WiX 无法表示 `1.2.3-Beta.1`
-          # 这类非纯数字 prerelease 标识，稳定版仍然照常产出 MSI。
+          # Run in two passes: Tauri's signing / updater artifact stage is a post-bundle hook,
+          # and any bundler failure makes *all* bundles skip their .sig. MSI always hits ICE80,
+          # so a single `tauri build` can never produce the NSIS .exe.sig.
+          # Pass 1: NSIS alone — must succeed, producing *_x64-setup.exe(.sig) for the updater.
+          # Pass 2: MSI alone — allowed to fail; the Repair step re-links with light.exe.
+          # Beta skips MSI: Windows Installer / WiX cannot represent non-numeric prerelease
+          # identifiers like `1.2.3-Beta.1`; stable still produces MSI as usual.
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
             npm run tauri -- build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":true}}'
             nsis_exit=$?
@@ -309,17 +315,18 @@ jobs:
             fi
           fi
           echo "TAURI_BUILD_EXIT=$msi_exit" >> "$GITHUB_ENV"
-          # NSIS 是 updater 的硬依赖，挂了就直接 fail step。
+          # NSIS is a hard dependency of the updater; fail the step outright if it fails.
           if [ "$nsis_exit" -ne 0 ]; then
             echo "::error::NSIS bundle failed (exit $nsis_exit) — updater artifact unavailable."
             exit 1
           fi
-          # MSI 失败不挡——下一步 Repair 用 light.exe 重链（带 -sice:ICE80）。
+          # MSI failure does not block — the next Repair step re-links with light.exe (with -sice:ICE80).
           exit 0
 
-      # ── 如果 tauri 在 wix link 阶段失败（candle 出了 wixobj，但 light 因 cwd
-      #    解析 wxs Source 找不到 IME DLL），从 appRoot 手动跑 light 兜底重链。
-      #    这是本地 windows-package-msvc.ps1::Repair-TauriMsiBundle 的同款手术。
+      # ── If tauri fails at the wix link stage (candle produced wixobj, but light cannot find
+      #    the IME DLL because of cwd-relative wxs Source resolution), manually run light from
+      #    appRoot to re-link. Same surgery as the local windows-package-msvc.ps1
+      #    ::Repair-TauriMsiBundle.
       - name: Repair Windows MSI if Tauri failed at WiX link
         if: matrix.platform == 'windows-latest'
         shell: pwsh
@@ -359,10 +366,10 @@ jobs:
           $msiPath = Join-Path $bundleDir "OpenLess_${version}_x64_en-US.msi"
           Push-Location $appRoot
           try {
-            # -sice:ICE80：x86 IME DLL 与 x64 一同打进 INSTALLDIR\windows-ime\，
-            # 这是 32 位组件落在 64 位 Directory 下的合法场景（DLL 路径绝对指向，
-            # 不依赖 SysWOW64 重定向）。Tauri 自身没有暴露 light 透传参数，所以
-            # 必须在这里抑制，否则 LGHT0204 必失败。
+            # -sice:ICE80: the x86 IME DLL is bundled alongside x64 under INSTALLDIR\windows-ime\;
+            # a 32-bit component under a 64-bit Directory is legitimate here (the DLL path is
+            # absolute and does not rely on SysWOW64 redirection). Tauri exposes no pass-through
+            # for light arguments, so ICE80 must be suppressed here or LGHT0204 always fails.
             & $light -nologo -sice:ICE80 -ext WixUIExtension -ext WixUtilExtension -loc $locale -out $msiPath $mainObj $imeObj
             if ($LASTEXITCODE -ne 0) { throw "light.exe relink failed with exit $LASTEXITCODE" }
           } finally {
@@ -414,26 +421,28 @@ jobs:
           OPENLESS_UPDATE_ARCH: ${{ matrix.updater-arch }}
           OPENLESS_UPDATE_REPO: Open-Less/openless
           OPENLESS_UPDATE_MIRROR_BASE_URL: https://fastgit.cc/https://github.com
-          # beta 渠道时输出 latest-{tgt}-{arch}-beta.json，stable 沿用旧文件名。
+          # On the beta channel output latest-{tgt}-{arch}-beta.json; stable keeps the old filename.
           OPENLESS_RELEASE_CHANNEL: ${{ env.OPENLESS_RELEASE_CHANNEL }}
-          # Beta 渠道里脚本要把 manifest.url 写成 releases/download/<tag>/...
-          # 而不是 releases/latest（后者永远 = Stable，Beta 用户按 url 下载会拉到错文件）。
-          # workflow_dispatch 时 github.ref_name 不是 tag——但那种情况下 channel=stable，
-          # 脚本不会读这个字段，安全。
+          # On the beta channel the script must write manifest.url as releases/download/<tag>/...
+          # rather than releases/latest (the latter is always = Stable, so beta users downloading
+          # via url would fetch the wrong file).
+          # On workflow_dispatch github.ref_name is not a tag — but then channel=stable and the
+          # script does not read this field, so it is safe.
           OPENLESS_RELEASE_TAG: ${{ github.ref_name }}
         run: node scripts/write-updater-manifest.mjs
 
-      # ── 收集产物 ──
+      # ── Collect artifacts ──
       - name: List artifacts (debug)
         shell: bash
         working-directory: 'openless-all/app/src-tauri/target/release/bundle'
         run: ls -la macos/ dmg/ nsis/ msi/ 2>/dev/null || true
 
-      # 防御性步骤：剥掉 macOS 产物上任何残留扩展属性 / quarantine。
-      # 理论上 GitHub Actions 输出的 .app/.dmg 不会带 com.apple.quarantine
-      # （xattr 也不会通过 actions/upload-artifact 跨机器持久化），但保留这一步
-      # 让"云端 artifact 一定干净"成为可验证的承诺。用户下载后再被本地浏览器
-      # 加 quarantine 时，按 release notes 的 `xattr -cr` 一行即可消除。
+      # Defensive step: strip any residual extended attributes / quarantine from macOS bundles.
+      # In theory GitHub Actions output .app/.dmg never carries com.apple.quarantine (and xattr
+      # does not persist across machines via actions/upload-artifact), but keeping this step
+      # makes "cloud artifacts are always clean" a verifiable promise. If the user's local
+      # browser adds quarantine after download, the `xattr -cr` line in the release notes
+      # removes it.
       - name: Strip xattr / quarantine on macOS bundles
         if: startsWith(matrix.platform, 'macos')
         shell: bash
@@ -490,11 +499,11 @@ jobs:
             openless-all/app/src-tauri/target/release/bundle/latest-windows-x86_64*.json
           if-no-files-found: error
 
-      # ── tag 推送时,同步上传到 GitHub Release ──
-      # 只有 leader job (darwin/aarch64) 把 release body 写到文件,其余 matrix job
-      # 的 body_path 留空,softprops/action-gh-release@v2 在 body 为空时会保留
-      # existing release body 不动,避免每个 matrix job 都 append 一遍同样的 prelude
-      # 导致 release notes 重复 N 次。
+      # ── On tag push, also upload to the GitHub Release ──
+      # Only the leader job (darwin/aarch64) writes the release body to a file; the other matrix
+      # jobs leave body_path empty. softprops/action-gh-release@v2 keeps the existing release
+      # body when body is empty, so each matrix job does not append the same prelude again and
+      # duplicate the release notes N times.
       - name: Prepare release body prelude
         if: matrix.updater-target == 'darwin' && matrix.updater-arch == 'aarch64' && startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
         shell: bash
@@ -512,13 +521,12 @@ jobs:
 
           ### 渠道说明
 
-          - 以 `-tauri` 结尾的 tag 是**正式版**（自动推送给所有 in-app 检查更新的用户）。
-          - 以 `-beta-tauri` 结尾或包含 `-Beta.N-tauri` 的 tag 是 **Beta 版**（GitHub 标 pre-release，**不**通过 in-app updater 推送给正式版用户；只对在「设置 → 关于 → 加入 Beta 渠道」开关切到 Beta 的用户可见，且需要手动从此页面下载安装）。
+          - `vX.Y.Z-tauri` 是**正式版**，使用 Stable 更新源。
+          - `vX.Y.Z-Beta.N-tauri` 是 **Beta 版**（GitHub pre-release）。在「设置 → 关于与更新 → 加入 Beta 频道」选择 Beta 更新源，也可从本页下载安装包。历史 `-beta-tauri` 标签继续兼容，Beta 不推送给 Stable 用户。
 
           ### 行为变更提示
 
-          - 流式输入默认开启；不兼容场景会自动回落到一次性插入。可在「设置 → 高级」关闭。
-          - 流式输入成功后默认把最终文本同步到剪贴板，方便再次粘贴；可在「设置 → 高级」关闭。
+          - 输入方式、流式输入与剪贴板选项位于「设置 → 录音与输入」，按平台能力显示。
           EOF
           echo "OPENLESS_RELEASE_BODY_PATH=$RUNNER_TEMP/release-body.md" >> "$GITHUB_ENV"
 
@@ -531,17 +539,17 @@ jobs:
           # Keep Beta assets private until all platforms have built and the
           # administrator has verified the downloadable packages.
           draft: ${{ env.OPENLESS_RELEASE_CHANNEL == 'beta' }}
-          # beta 渠道的 release 必须标 prerelease=true：GitHub UI 会折叠它，
-          # 普通用户看不到；同时只上传 latest-*-beta.json，正式版用户的
-          # endpoint（latest-*.json）永远不会被覆盖，保证 Beta 不溢出正式版。
+          # Beta releases must be marked prerelease=true: GitHub UI collapses them and regular
+          # users do not see them; only latest-*-beta.json is uploaded, so stable users'
+          # endpoint (latest-*.json) is never overwritten and beta never leaks into stable.
           prerelease: ${{ env.OPENLESS_RELEASE_CHANNEL == 'beta' }}
-          # 非 leader job 的 OPENLESS_RELEASE_BODY_PATH 是空字符串,softprops 在
-          # body 为空时走 `body || existing.body` 分支保留既有内容,不会覆盖。
-          # leader job 用默认 append_body=false,每次完整覆盖 release body 为
-          # "prelude + generated notes",re-run 同一 tag 时也保持 idempotent
-          # (append_body=true 会让 re-run 把上轮 body 拼到前面、再次复制)。
+          # Non-leader jobs have OPENLESS_RELEASE_BODY_PATH as an empty string; softprops keeps
+          # the existing content via the `body || existing.body` branch when body is empty.
+          # The leader job uses the default append_body=false and fully overwrites the release
+          # body with "prelude + generated notes" each time, staying idempotent on re-runs of
+          # the same tag (append_body=true would prepend the previous body again and duplicate).
           body_path: ${{ env.OPENLESS_RELEASE_BODY_PATH }}
-          # generate_release_notes 也只在 leader 跑，避免 matrix jobs 重复生成。
+          # generate_release_notes also runs only on the leader, avoiding duplicates from matrix jobs.
           generate_release_notes: ${{ matrix.updater-target == 'darwin' && matrix.updater-arch == 'aarch64' }}
           files: |
             openless-all/app/src-tauri/target/release/bundle/dmg/*.dmg
@@ -553,14 +561,16 @@ jobs:
             openless-all/app/src-tauri/target/release/bundle/msi/*.msi.sig
             openless-all/app/src-tauri/target/release/bundle/latest-*.json
 
-  # ── 正式版发布后，自动更新 Homebrew cask ──
-  # 为什么放进这条流水线，而不是单独的 `release: published` 工作流：softprops 用默认
-  # GITHUB_TOKEN 创建的 Release 不会触发 `release` 事件的其它工作流（GitHub 防递归），
-  # 所以独立的 update-cask 工作流永远不会被自动触发（历史上只在一次手动场景跑过且失败）。
-  # 用 needs: build 串在构建之后、同一条流水线里，才能保证每次正式发版都自动更新 cask。
+  # ── After a stable release, update the Homebrew cask automatically ──
+  # Why in this pipeline instead of a separate `release: published` workflow: a Release created
+  # by softprops with the default GITHUB_TOKEN does not trigger other workflows on the `release`
+  # event (GitHub's anti-recursion rule), so a standalone update-cask workflow would never fire
+  # automatically. Chaining it with needs: build in the same pipeline is the only way to update
+  # the cask on every stable release.
   #
-  # 仅正式版：v*-tauri 且非 -beta-tauri。beta 不碰 Homebrew，避免把预发布版推给
-  # `brew install --cask openless` 的用户。cask 文件在默认分支（beta）上，提交回该分支。
+  # Stable only: v*-tauri and not -beta-tauri. Beta does not touch Homebrew, avoiding pushing a
+  # prerelease to `brew install --cask openless` users. The cask lives on the default branch
+  # (beta); commits go back to that branch.
   update-homebrew-cask:
     name: Update Homebrew cask (stable only)
     needs: build
@@ -590,7 +600,8 @@ jobs:
           version="${TAG#v}"
           version="${version%-tauri}"
 
-          # 直接下载 DMG 自己算 sha256，不依赖 GitHub 资产 digest 字段的时序/可用性。
+          # Download the DMGs directly and compute sha256 ourselves; do not depend on the
+          # timing/availability of GitHub's asset digest fields.
           mkdir -p "$RUNNER_TEMP/dmg"
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
             --dir "$RUNNER_TEMP/dmg" \
@@ -614,14 +625,16 @@ jobs:
         run: |
           set -euo pipefail
           cask="Casks/openless.rb"
-          # ⚠️ cask 第 2 行 `arch arm: "aarch64", intel: "x64"` 也含 `intel: "..."`，
-          # 裸 `s/intel: "..."/` 会把 arch 指令一起改成哈希 → Intel 用户 brew 装包 404。
-          # 所以 intel 的 sed 用 `^[[:space:]]*intel:` 锚定 sha256 块那一行；arm 的 sed
-          # 靠 `sha256 arm:   ` 前缀天然只命中 sha256 行。捕获组 \1 保留原缩进。
+          # Warning: line 2 of the cask, `arch arm: "aarch64", intel: "x64"`, also contains
+          # `intel: "..."`. A bare `s/intel: "..."/` would rewrite the arch instruction with a
+          # hash too -> brew installs 404 for Intel users. So the intel sed anchors the sha256
+          # line with `^[[:space:]]*intel:`, while the arm sed naturally matches only the sha256
+          # line via the `sha256 arm:   ` prefix. Capture group \1 preserves the original indent.
           sed -i "s/version \"[^\"]*\"/version \"$VERSION\"/" "$cask"
           sed -i "s/sha256 arm:   \"[^\"]*\"/sha256 arm:   \"$ARM_SHA\"/" "$cask"
           sed -i "s/^\([[:space:]]*\)intel: \"[^\"]*\"/\1intel: \"$INTEL_SHA\"/" "$cask"
-          # 防呆：arch 指令必须原样保留，且本次 sha256 必须确实写进去了，否则让 job 失败。
+          # Guard: the arch instruction must remain untouched and both new sha256 values must
+          # actually be written, otherwise fail the job.
           grep -q 'arch arm: "aarch64", intel: "x64"' "$cask" \
             || { echo "::error::arch 指令被 sed 误伤"; exit 1; }
           grep -q "\"$ARM_SHA\"" "$cask" && grep -q "\"$INTEL_SHA\"" "$cask" \
@@ -641,6 +654,6 @@ jobs:
             echo "cask 已是 $VERSION，无需提交"
             exit 0
           fi
-          # [skip ci]：cask 文本改动不需要再跑一遍跨平台 ci.yml。
+          # [skip ci]: cask text changes do not need another cross-platform ci.yml run.
           git commit -m "[cask] openless $VERSION (auto from release) [skip ci]"
           git push

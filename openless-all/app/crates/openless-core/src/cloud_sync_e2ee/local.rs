@@ -97,12 +97,12 @@ impl LocalStorage {
     }
 
     pub(crate) async fn read_ui(&self) -> SyncResult<Option<UiEnvelope>> {
-        let value: Option<UiEnvelope> =
-            self.read("device", "sync-ui-preferences")
-                .await
-                .inspect_err(|error| {
-                    log_local_failure("ui_mirror_read", error);
-                })?;
+        let value: Option<UiEnvelope> = self
+            .read("device", "sync-ui-preferences")
+            .await
+            .inspect_err(|error| {
+                log_local_failure("ui_mirror_read", error);
+            })?;
         if let Some(value) = &value {
             if value.schema_version != 1
                 || crate::cloud_sync_e2ee_protocol::types::UuidV4::parse(&value.revision).is_err()
@@ -398,10 +398,20 @@ fn decode_key(value: &str) -> SyncResult<Zeroizing<[u8; 32]>> {
 }
 
 pub(crate) fn durable_replace(path: &Path, bytes: &[u8]) -> SyncResult<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| error("local_storage_unavailable"))?;
-    fs::create_dir_all(parent).map_err(|_| error("local_storage_unavailable"))?;
+    let parent = path.parent().ok_or_else(|| {
+        log::error!(
+            "[e2ee-local] durable_replace missing parent path={}",
+            path.display()
+        );
+        error("local_storage_unavailable")
+    })?;
+    fs::create_dir_all(parent).map_err(|err| {
+        log::error!(
+            "[e2ee-local] durable_replace create_dir_all path={} err={err}",
+            parent.display()
+        );
+        error("local_storage_unavailable")
+    })?;
     let temporary = parent.join(format!(".{}.tmp", uuid::Uuid::new_v4()));
     let result = (|| {
         let mut options = fs::OpenOptions::new();
@@ -411,18 +421,39 @@ pub(crate) fn durable_replace(path: &Path, bytes: &[u8]) -> SyncResult<()> {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
-        let mut file = options
-            .open(&temporary)
-            .map_err(|_| error("local_storage_unavailable"))?;
-        file.write_all(bytes)
-            .map_err(|_| error("local_storage_unavailable"))?;
-        file.sync_all()
-            .map_err(|_| error("local_storage_unavailable"))?;
-        fs::rename(&temporary, path).map_err(|_| error("local_storage_unavailable"))?;
+        let mut file = options.open(&temporary).map_err(|err| {
+            log::error!(
+                "[e2ee-local] durable_replace open tmp={} err={err}",
+                temporary.display()
+            );
+            error("local_storage_unavailable")
+        })?;
+        file.write_all(bytes).map_err(|err| {
+            log::error!(
+                "[e2ee-local] durable_replace write tmp={} err={err}",
+                temporary.display()
+            );
+            error("local_storage_unavailable")
+        })?;
+        file.sync_all().map_err(|err| {
+            log::error!(
+                "[e2ee-local] durable_replace sync tmp={} err={err}",
+                temporary.display()
+            );
+            error("local_storage_unavailable")
+        })?;
+        fs::rename(&temporary, path).map_err(|err| {
+            log::error!(
+                "[e2ee-local] durable_replace rename tmp={} dest={} err={err}",
+                temporary.display(),
+                path.display()
+            );
+            error("local_storage_unavailable")
+        })?;
         sync_directory(parent)
     })();
     if result.is_err() {
-        let _ = fs::remove_file(temporary);
+        let _ = fs::remove_file(&temporary);
     }
     result
 }
@@ -432,7 +463,13 @@ fn sync_directory(path: &Path) -> SyncResult<()> {
     {
         fs::File::open(path)
             .and_then(|f| f.sync_all())
-            .map_err(|_| error("local_storage_unavailable"))?;
+            .map_err(|err| {
+                log::error!(
+                    "[e2ee-local] sync_directory path={} err={err}",
+                    path.display()
+                );
+                error("local_storage_unavailable")
+            })?;
     }
     #[cfg(not(unix))]
     {
@@ -443,10 +480,20 @@ fn sync_directory(path: &Path) -> SyncResult<()> {
 
 /// Publish a fully written identity without replacing an existing install's ID.
 pub(crate) fn durable_create(path: &Path, bytes: &[u8]) -> SyncResult<bool> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| error("local_storage_unavailable"))?;
-    fs::create_dir_all(parent).map_err(|_| error("local_storage_unavailable"))?;
+    let parent = path.parent().ok_or_else(|| {
+        log::error!(
+            "[e2ee-local] durable_create missing parent path={}",
+            path.display()
+        );
+        error("local_storage_unavailable")
+    })?;
+    fs::create_dir_all(parent).map_err(|err| {
+        log::error!(
+            "[e2ee-local] durable_create create_dir_all path={} err={err}",
+            parent.display()
+        );
+        error("local_storage_unavailable")
+    })?;
     let temporary = parent.join(format!(".identity-{}.tmp", uuid::Uuid::new_v4()));
     let result = (|| {
         let mut options = fs::OpenOptions::new();
@@ -456,23 +503,99 @@ pub(crate) fn durable_create(path: &Path, bytes: &[u8]) -> SyncResult<bool> {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
-        let mut file = options
-            .open(&temporary)
-            .map_err(|_| error("local_storage_unavailable"))?;
+        let mut file = options.open(&temporary).map_err(|err| {
+            log::error!(
+                "[e2ee-local] durable_create open tmp={} err={err}",
+                temporary.display()
+            );
+            error("local_storage_unavailable")
+        })?;
         file.write_all(bytes)
             .and_then(|()| file.sync_all())
-            .map_err(|_| error("local_storage_unavailable"))?;
+            .map_err(|err| {
+                log::error!(
+                    "[e2ee-local] durable_create write/sync tmp={} err={err}",
+                    temporary.display()
+                );
+                error("local_storage_unavailable")
+            })?;
         match fs::hard_link(&temporary, path) {
             Ok(()) => {
                 sync_directory(parent)?;
                 Ok(true)
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
-            Err(_) => Err(error("local_storage_unavailable")),
+            Err(err) if hard_link_unsupported(&err) => {
+                // Android app-private storage often denies link(2) (EPERM). Fall back to
+                // O_EXCL create of the final path so we still never replace an existing ID.
+                log::warn!(
+                    "[e2ee-local] durable_create hard_link unsupported tmp={} dest={} kind={:?} err={err}; falling back to exclusive create",
+                    temporary.display(),
+                    path.display(),
+                    err.kind()
+                );
+                if exclusive_create(path, bytes)? {
+                    sync_directory(parent)?;
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
+            Err(err) => {
+                log::error!(
+                    "[e2ee-local] durable_create hard_link tmp={} dest={} kind={:?} err={err}",
+                    temporary.display(),
+                    path.display(),
+                    err.kind()
+                );
+                Err(error("local_storage_unavailable"))
+            }
         }
     })();
     let _ = fs::remove_file(&temporary);
     result
+}
+
+fn hard_link_unsupported(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::Unsupported | std::io::ErrorKind::PermissionDenied
+    ) || matches!(
+        err.raw_os_error(),
+        Some(1 /* EPERM */) | Some(95 /* EOPNOTSUPP/ENOTSUP */)
+    )
+}
+
+fn exclusive_create(path: &Path, bytes: &[u8]) -> SyncResult<bool> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    match options.open(path) {
+        Ok(mut file) => file
+            .write_all(bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|err| {
+                log::error!(
+                    "[e2ee-local] exclusive_create write path={} err={err}",
+                    path.display()
+                );
+                let _ = fs::remove_file(path);
+                error("local_storage_unavailable")
+            })
+            .map(|()| true),
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(err) => {
+            log::error!(
+                "[e2ee-local] exclusive_create open path={} err={err}",
+                path.display()
+            );
+            Err(error("local_storage_unavailable"))
+        }
+    }
 }
 
 fn log_local_failure(stage: &'static str, failure: &crate::BackendError) {

@@ -39,8 +39,8 @@ pub fn set_translation_hotkey(
     super::settings::persist_strict_settings(&coord, prefs)
 }
 
-/// 设置「切换风格」全局快捷键。`binding == None`（前端传 null）= 停用：清空绑定并
-/// 反注册全局键。镜像 `set_qa_hotkey` 的 `Option=None` 停用模式（issue #576）。
+/// Sets the "switch style" global hotkey. `binding == None` (frontend passes null) = disable:
+/// clears the binding and unregisters the global key. Mirrors `set_qa_hotkey`'s `Option=None` disable mode (issue #576).
 #[tauri::command]
 pub fn set_switch_style_hotkey(
     coord: CoordinatorState<'_>,
@@ -57,7 +57,7 @@ pub fn set_switch_style_hotkey(
     super::settings::persist_strict_settings(&coord, prefs)
 }
 
-/// 设置「唤起 App」全局快捷键。`binding == None`（前端传 null）= 停用（同上）。
+/// Sets the "open app" global hotkey. `binding == None` (frontend passes null) = disable (same as above).
 #[tauri::command]
 pub fn set_open_app_hotkey(
     coord: CoordinatorState<'_>,
@@ -74,7 +74,7 @@ pub fn set_open_app_hotkey(
     super::settings::persist_strict_settings(&coord, prefs)
 }
 
-/// 设置独立速记快捷键。None = 停用。
+/// Sets the standalone quick-note hotkey. None = disable.
 #[tauri::command]
 pub fn set_quick_note_hotkey(
     coord: CoordinatorState<'_>,
@@ -91,9 +91,9 @@ pub fn set_quick_note_hotkey(
     super::settings::persist_strict_settings(&coord, prefs)
 }
 
-/// 设置 Selection Polish 全局快捷键。Core 先产生显式 effect target；Tauri
-/// 注册成功后才持久化，失败则按 receipt 恢复旧监听器且不写偏好。
-/// 选区润色为桌面（Windows-first）工作流，mobile 不注册。
+/// Sets the Selection Polish global hotkey. Core produces an explicit effect target first; persistence happens
+/// only after Tauri registration succeeds, and on failure the old listener is restored per the receipt without
+/// writing prefs. Selection polish is a desktop (Windows-first) workflow; mobile does not register.
 #[cfg(not(mobile))]
 #[tauri::command]
 pub fn set_selection_polish_hotkey(
@@ -111,8 +111,9 @@ pub fn set_selection_polish_hotkey(
     super::settings::persist_strict_settings(&coord, next)
 }
 
-/// 整表替换风格包直达快捷键（issue #759）。前端任何增删改都发全量列表，
-/// 校验通过才落库并热更新全局键注册；失败时旧绑定原样保留。
+/// Replaces the whole style-pack direct-hotkey table (issue #759). The frontend sends the full list on any
+/// add/remove/edit; only after validation passes does it persist and hot-reload the global key registrations;
+/// on failure the old bindings are kept as-is.
 #[tauri::command]
 pub fn set_style_pack_hotkeys(
     coord: CoordinatorState<'_>,
@@ -134,7 +135,7 @@ pub fn validate_combo_hotkey(binding: ComboBinding) -> Result<(), String> {
     crate::combo_hotkey::validate_binding(&shortcut).map_err(|e| e.to_string())
 }
 
-/// 设置自定义录音组合键并热更新 monitor。
+/// Sets the custom recording combo key and hot-swaps the monitor.
 #[tauri::command]
 pub async fn set_combo_hotkey(
     coord: CoordinatorState<'_>,
@@ -176,7 +177,7 @@ mod tests {
             coding_agent_voice_hotkey: Some(lc.clone()),
             ..Default::default()
         };
-        // 基线全不同 → 通过。
+        // Baseline: all distinct → passes.
         assert!(reject_hotkey_collisions(&prefs).is_ok());
 
         prefs.dictation_hotkey = lc.clone();
@@ -199,7 +200,7 @@ mod tests {
         assert!(reject_hotkey_collisions(&prefs).is_err());
         prefs.open_app_hotkey = Some(key("E"));
 
-        // 复位后再次全不同 → 通过。
+        // After resetting, all distinct again → passes.
         assert!(reject_hotkey_collisions(&prefs).is_ok());
     }
 
@@ -219,7 +220,7 @@ mod tests {
             dictation_hotkey: key("A"),
             ..Default::default()
         };
-        // 基线：两条不同包、不同键 → 通过。
+        // Baseline: two different packs, different keys → passes.
         assert!(reject_style_pack_hotkey_conflicts(
             &[
                 style_hotkey("builtin.raw", "1"),
@@ -228,7 +229,7 @@ mod tests {
             &prefs,
         )
         .is_ok());
-        // 同一个包绑两条 → 拒绝。
+        // Same pack bound twice → rejected.
         assert!(reject_style_pack_hotkey_conflicts(
             &[
                 style_hotkey("builtin.raw", "1"),
@@ -237,7 +238,7 @@ mod tests {
             &prefs,
         )
         .is_err());
-        // 两条绑同一个键 → 拒绝。
+        // Two entries bound to the same key → rejected.
         assert!(reject_style_pack_hotkey_conflicts(
             &[
                 style_hotkey("builtin.raw", "1"),
@@ -246,9 +247,9 @@ mod tests {
             &prefs,
         )
         .is_err());
-        // 空 pack_id → 拒绝。
+        // Empty pack_id → rejected.
         assert!(reject_style_pack_hotkey_conflicts(&[style_hotkey("", "1")], &prefs).is_err());
-        // 与听写键重叠 → 拒绝。
+        // Overlaps the dictation key → rejected.
         let clash = StylePackHotkey {
             pack_id: "builtin.raw".into(),
             binding: key("A"),

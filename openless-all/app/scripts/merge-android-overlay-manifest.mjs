@@ -13,6 +13,7 @@ const PERMISSIONS = [
   'android.permission.FOREGROUND_SERVICE_MICROPHONE',
   'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
   'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
+  'android.permission.POST_NOTIFICATIONS',
 ];
 
 const APPLICATION_SNIPPET = `
@@ -57,6 +58,9 @@ const SERVICE_SNIPPETS = [
                 android:resource="@xml/openless_accessibility_config" />
         </service>`,
   `<receiver
+            android:name=".OpenLessVocabularyReceiver"
+            android:exported="false" />`,
+  `<receiver
             android:name=".OpenLessAccessibilityCommandReceiver"
             android:process=":accessibility"
             android:exported="false" />`,
@@ -73,6 +77,14 @@ const SERVICE_SNIPPETS = [
             android:exported="false"
             android:excludeFromRecents="true"
             android:noHistory="false"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.openless" />`, // launcher intent-filter attached by moveLauncherIntentFilterToWarmupActivity()
+  // IME long-press Logo → native keyboard settings. Must be declared or
+  // startActivity(OpenLessKeyboardSettingsActivity) fails with ActivityNotFound.
+  `<activity
+            android:name=".OpenLessKeyboardSettingsActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.openless" />`,
 ];
 
@@ -161,6 +173,39 @@ function mergeApplicationChildren(manifestXml) {
   return { content, changed };
 }
 
+/** Move only the launcher filter, including repair of previously generated manifests. */
+function moveLauncherIntentFilterToWarmupActivity(manifestXml) {
+  const activities = /<activity\b([^>]*?)(?:\/>|>([\s\S]*?)<\/activity>)/g;
+  const filters = /<intent-filter\b[^>]*>[\s\S]*?<\/intent-filter>/g;
+  const isLauncher = (filter) =>
+    filter.includes('"android.intent.action.MAIN"') &&
+    filter.includes('"android.intent.category.LAUNCHER"');
+  const hosts = new Set([
+    '.MainActivity',
+    '.OpenLessBackendWarmupActivity',
+    '.MicrophonePermissionActivity',
+  ]);
+  const nameOf = (attrs) => attrs.match(/android:name="([^"]+)"/)?.[1];
+  let launcher;
+  for (const [, attrs, body = ''] of manifestXml.matchAll(activities)) {
+    if (hosts.has(nameOf(attrs)))
+      launcher ??= [...body.matchAll(filters)].map(([filter]) => filter).find(isLauncher);
+  }
+  if (!launcher) return { content: manifestXml, changed: false };
+  const content = manifestXml.replace(activities, (original, attrs, body = '') => {
+    const name = nameOf(attrs);
+    if (!hosts.has(name)) return original;
+    const remaining = body.replace(filters, (filter) => (isLauncher(filter) ? '' : filter)).trim();
+    if (name === '.OpenLessBackendWarmupActivity') {
+      attrs = attrs.replace(/android:exported="[^"]*"/, 'android:exported="true"').trimEnd();
+      return `<activity${attrs}>${remaining}${launcher}</activity>`;
+    }
+    if (remaining === body.trim()) return original;
+    return `<activity${attrs.trimEnd()}>${remaining}</activity>`;
+  });
+  return { content, changed: content !== manifestXml };
+}
+
 function main() {
   const { dryRun } = parseArgs(process.argv.slice(2));
 
@@ -173,7 +218,12 @@ function main() {
   let content = readFileSync(targetPath, 'utf8');
   let changed = false;
 
-  for (const step of [mergePermissions, ensureApplicationName, mergeApplicationChildren]) {
+  for (const step of [
+    mergePermissions,
+    ensureApplicationName,
+    mergeApplicationChildren,
+    moveLauncherIntentFilterToWarmupActivity,
+  ]) {
     const result = step(content);
     content = result.content;
     changed = changed || result.changed;

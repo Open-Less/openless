@@ -1,19 +1,22 @@
 #![allow(clippy::too_many_arguments)]
 
-//! 谷歌 Gemini 原生 generateContent / streamGenerateContent 客户端。
+//! Native Google Gemini generateContent / streamGenerateContent client.
 //!
-//! 为什么不复用 `polish.rs::OpenAICompatibleLLMProvider`：
-//! 1. **思考模式控制**——Gemini 原生 `thinkingConfig` 比 OpenAI 兼容 shim
-//!    的 provider 私有字段更直接；OpenLess 只做渠道级开关，不维护单模型适配表。
-//! 2. **认证机制**——原生用 `x-goog-api-key` header（Bearer 不被识别），
-//!    OpenAICompatibleLLMProvider 写死了 Bearer Authorization。
-//! 3. **请求/响应 shape**——原生 `contents` 走 `role: user|model`，没有
-//!    chat completions 的 system role；要走 `systemInstruction` 字段。
+//! Constraints that rule out reusing `polish.rs::OpenAICompatibleLLMProvider`:
+//! 1. **Thinking-mode control** — Gemini's native `thinkingConfig` is more
+//!    direct than the OpenAI-compatible shim's provider-private fields;
+//!    OpenLess only exposes a channel-level switch, not a per-model table.
+//! 2. **Auth** — native uses the `x-goog-api-key` header (Bearer is not
+//!    recognized); OpenAICompatibleLLMProvider hardcodes Bearer Authorization.
+//! 3. **Request/response shape** — native `contents` uses `role: user|model`
+//!    with no chat-completions system role; the system prompt goes through
+//!    `systemInstruction`.
 //!
-//! prompt 装配 (system_prompt / user_prompt / qa system_prompt) 复用
-//! `polish.rs::compose_*` pub(crate) 装配函数，避免两路 LLM 客户端漂移。
-//! `clean_polish_output` 也复用——polish 提示词禁的"以下是整理后的内容"
-//! 前缀只有走它才能在原生路径上同样剥离。
+//! Prompt assembly (system_prompt / user_prompt / qa system_prompt) reuses
+//! `polish.rs::compose_*` pub(crate) builders so the two LLM clients can't
+//! drift. `clean_polish_output` is reused too — the leading self-narration
+//! prefix banned by polish prompts is only stripped on the native path
+//! through it.
 
 use std::time::Duration;
 
@@ -35,13 +38,14 @@ const BODY_PREVIEW_LIMIT: usize = 200;
 pub struct GeminiConfig {
     pub api_key: String,
     pub model: String,
-    /// e.g. `https://generativelanguage.googleapis.com/v1beta`。允许末尾带 `/`。
-    /// 后端拼成 `{base_url}/models/{model}:generateContent`。
+    /// e.g. `https://generativelanguage.googleapis.com/v1beta`. A trailing
+    /// `/` is allowed; the backend appends `{base_url}/models/{model}:generateContent`.
     pub base_url: String,
     pub temperature: f32,
     pub request_timeout_secs: u64,
-    /// true = 不下发关闭思考的 thinkingConfig，让模型按自身默认思考；
-    /// false = 下发 Gemini 原生渠道级最低思考配置。
+    /// true = omit the thinking-disabling thinkingConfig and let the model
+    /// think by its own default; false = send Gemini's native channel-level
+    /// minimal thinking config.
     pub thinking_enabled: bool,
 }
 
@@ -75,8 +79,9 @@ pub struct GeminiProvider {
 impl GeminiProvider {
     pub fn new(config: GeminiConfig) -> Self {
         // Reuse a cached client keyed by timeout so the connection pool survives
-        // across utterances instead of re-handshaking every polish. 代理开关
-        // 切换时 net::set_use_system_proxy 会清空缓存，这里按新策略重建。
+        // across utterances instead of re-handshaking every polish. The proxy
+        // switch clears the cache in net::set_use_system_proxy, so rebuild
+        // here under the new policy.
         let timeout = config.request_timeout_secs;
         let no_proxy =
             crate::net::should_bypass_proxy(&config.base_url, crate::net::use_system_proxy());
@@ -236,11 +241,9 @@ impl GeminiProvider {
             .await
     }
 
-    /// 多模态（Omni）识别管线（issue #902）的 Gemini 通道：音频 + 提示词一次调用。
-    /// `wav_bytes` 为 `Some` 时以 `inlineData(audio/wav)` 追加到 user parts（已是
-    /// 编码好的 WAV 文件字节，PCM→WAV 的转换由 omni 层统一完成）；
-    /// `None` 时退化为纯文本调用（选区润色 / 历史重润色等文本管线复用同一通道，
-    /// 读取的是 omni 命名空间的凭据，与传统 LLM 配置隔离）。
+    /// Gemini Omni call with optional WAV audio in an `inlineData` part.
+    /// The Omni layer encodes PCM to WAV; absent audio uses a text-only request.
+    /// Both paths use the independent Omni credential namespace.
     pub(crate) async fn complete_omni(
         &self,
         system_prompt: &str,
@@ -263,9 +266,10 @@ impl GeminiProvider {
         Ok(clean_polish_output(&raw))
     }
 
-    /// 划词语音问答的流式回答。Gemini 原生 SSE: `:streamGenerateContent?alt=sse`，
-    /// 每个 `data: {...}` 帧里 `candidates[0].content.parts[0].text` 是 delta；
-    /// 流结束没有 `[DONE]` sentinel，stream 自然终止。
+    /// Streaming answers for selection voice QA. Native Gemini SSE:
+    /// `:streamGenerateContent?alt=sse`; each `data: {...}` frame carries the
+    /// delta in `candidates[0].content.parts[0].text`. There is no `[DONE]`
+    /// sentinel at stream end; the stream just terminates.
     pub async fn answer_chat_streaming<F, C>(
         &self,
         messages: &[QaChatMessage],
@@ -302,7 +306,7 @@ impl GeminiProvider {
             .await
     }
 
-    /// `generationConfig` 注入：温度 + 渠道级 thinkingConfig。
+    /// `generationConfig` injection: temperature + channel-level thinkingConfig.
     fn build_generate_body(&self, system_prompt: &str, contents: Vec<Value>) -> Value {
         let mut generation_config = json!({ "temperature": self.config.temperature });
         if !self.config.thinking_enabled {
@@ -386,16 +390,19 @@ impl GeminiProvider {
         }
 
         let mut response = response;
-        // 字节级缓冲——`reqwest::chunk()` 可能在多字节 UTF-8 字符（CJK / emoji）
-        // 中间切开，对每个 chunk 独立 from_utf8 会把合法的 SSE 流当成
-        // "non-utf8 SSE chunk" 直接 fail（PR #398 pr_agent 实测漏洞）。
-        // SSE 帧分隔符 `\n\n` 两字节都是 ASCII (0x0A)，永远不会落在多字节字符中部，
-        // 所以按字节定位完整 event、再对完整 event 做 from_utf8 永远安全。
+        // Byte-level buffering — `reqwest::chunk()` may split in the middle
+        // of a multi-byte UTF-8 character (CJK / emoji); calling from_utf8 on
+        // each chunk independently would treat a valid SSE stream as
+        // "non-utf8 SSE chunk" and fail (verified gap found by PR #398
+        // pr_agent). SSE frame delimiters `\n\n` are pure ASCII (0x0A) and
+        // never fall inside a multi-byte character, so locating complete
+        // events by bytes and decoding whole events is always safe.
         let mut byte_buffer: Vec<u8> = Vec::new();
         let mut full_text = String::new();
         loop {
-            // 与 polish.rs streaming 同款取消旗标——用户取消 / 关浮窗时立即 break，
-            // 不再 drain HTTP body 烧 quota。
+            // Same cancel flag as polish.rs streaming — break immediately on
+            // user cancel / popover close instead of draining the HTTP body
+            // and burning quota.
             if should_cancel() {
                 log::info!("[llm] gemini stream cancelled by caller; breaking SSE loop");
                 break;
@@ -456,7 +463,7 @@ impl GeminiProvider {
     }
 }
 
-// ─────────────────────── 内部辅助 ───────────────────────
+// ─────────────────────── internal helpers ───────────────────────
 
 fn user_content(text: &str) -> Value {
     json!({ "role": "user", "parts": [{ "text": text }] })
@@ -470,22 +477,25 @@ fn system_instruction(system_prompt: &str) -> Value {
     json!({ "parts": [{ "text": system_prompt }] })
 }
 
-/// 从字节缓冲里取出所有以 SSE 帧分隔符（`\n\n` 或 `\r\n\r\n`）分隔的完整
-/// event；剩余不完整字节留在 buffer 里等下一次 chunk 拼接。
+/// Drains all complete events from the byte buffer, delimited by SSE frame
+/// separators (`\n\n` or `\r\n\r\n`); incomplete trailing bytes stay in the
+/// buffer for the next chunk.
 ///
-/// 不变量：两种分隔符的所有字节都是 ASCII（0x0A / 0x0D），永远不会出现在
-/// UTF-8 多字节字符的中部位置，所以
-/// 1. 按字节查找分隔符 100% 安全；
-/// 2. 对完整 event 字节区间 (event_start..delim_start) 做 from_utf8 永远不会因
-///    chunk 边界把多字节字符切开而失败；
-/// 3. CRLF 与 LF 不会在同一位置都匹配（\r\n\r\n 内部不含 \n\n），按"最早出现"
-///    选取分隔符不会歧义。
+/// Invariant: every byte of both delimiters is ASCII (0x0A / 0x0D) and can
+/// never appear inside a UTF-8 multi-byte character, so
+/// 1. byte-level delimiter search is 100% safe;
+/// 2. from_utf8 over the complete event range (event_start..delim_start)
+///    can never fail from a chunk boundary splitting a multi-byte character;
+/// 3. CRLF and LF never both match at the same offset (\r\n\r\n contains no
+///    \n\n), so picking the earliest delimiter is unambiguous.
 ///
-/// 这是 PR #398 pr_agent 指出的两个 SSE 漏洞的合修：
-/// (a) 原代码对每个网络 chunk 独立 from_utf8，遇到 CJK / emoji 跨 chunk 切分时
-///     直接报错让流挂掉；
-/// (b) 原代码只识别 `\n\n`，碰到走 CRLF 风格的服务器流（个别 HTTP/2 中间层、
-///     CDN 会做行尾标准化）会以为流是空的——文档没强制 LF only，必须兼容。
+/// Fixes both SSE gaps reported by PR #398 pr_agent:
+/// (a) the old code ran from_utf8 per network chunk and killed the stream
+///     whenever CJK / emoji spanned a chunk boundary;
+/// (b) the old code only recognized `\n\n`, so servers using CRLF-style
+///     framing (some HTTP/2 intermediaries and CDNs normalize line endings)
+///     looked like an empty stream — the docs don't mandate LF-only, so both
+///     must be accepted.
 fn drain_complete_sse_events(buffer: &mut Vec<u8>) -> Vec<String> {
     let mut events = Vec::new();
     loop {
@@ -506,7 +516,9 @@ fn drain_complete_sse_events(buffer: &mut Vec<u8>) -> Vec<String> {
         let event_str = match std::str::from_utf8(&buffer[..end]) {
             Ok(s) => s.to_string(),
             Err(e) => {
-                // 完整 event 自身 UTF-8 不合法（极少见，可能是上游异常）：丢弃此 event 不让流挂掉。
+                // The complete event itself is invalid UTF-8 (rare; likely
+                // dirty upstream data): drop this event instead of killing
+                // the stream.
                 log::warn!("[llm] gemini SSE event has invalid UTF-8 (skipping): {e}");
                 buffer.drain(..end + delim_len);
                 continue;
@@ -518,9 +530,9 @@ fn drain_complete_sse_events(buffer: &mut Vec<u8>) -> Vec<String> {
     events
 }
 
-/// 多轮 polish 的 contents 序列。
-/// 输入约定：`prior_turns` 与 polish.rs 一致（最新在前 newest-first），
-/// chat 时间序为 oldest-first，所以这里 `iter().rev()` 反转。
+/// Contents sequence for multi-turn polish.
+/// Input contract: `prior_turns` matches polish.rs (newest-first); chat
+/// chronological order is oldest-first, hence `iter().rev()` here.
 fn build_polish_history_contents(
     prior_turns: &[(String, String)],
     user_prompt: &str,
@@ -534,8 +546,9 @@ fn build_polish_history_contents(
     contents
 }
 
-/// Gemini 多模态调用的一轮 user contents：文本 part 恒在首位，音频 part 可选。
-/// `wav_bytes` 是编码好的 WAV 文件字节，base64 后经 `inlineData(audio/wav)` 下发。
+/// One user turn for a Gemini multimodal call: the text part is always
+/// first, the audio part optional. `wav_bytes` holds encoded WAV file bytes,
+/// sent base64 via `inlineData(audio/wav)`.
 fn omni_gemini_contents(user_text: &str, wav_bytes: Option<&[u8]>) -> Vec<Value> {
     let mut parts = vec![json!({ "text": user_text })];
     if let Some(wav) = wav_bytes {
@@ -550,9 +563,10 @@ fn omni_gemini_contents(user_text: &str, wav_bytes: Option<&[u8]>) -> Vec<Value>
     vec![json!({ "role": "user", "parts": parts })]
 }
 
-/// QA chat messages → Gemini contents：assistant role 重命名为 model。
-/// QaChatMessage.role 在 polish.rs OpenAI 路径里是 `"user" | "assistant"`；
-/// 这里把 `assistant` 翻成 Gemini 的 `model`，其它原样保留。
+/// QA chat messages → Gemini contents: the assistant role is renamed to
+/// model. QaChatMessage.role is `"user" | "assistant"` on the polish.rs
+/// OpenAI path; `assistant` maps to Gemini's `model`, everything else passes
+/// through unchanged.
 fn qa_messages_to_contents(messages: &[QaChatMessage]) -> Vec<Value> {
     messages
         .iter()
@@ -567,11 +581,13 @@ fn qa_messages_to_contents(messages: &[QaChatMessage]) -> Vec<Value> {
         .collect()
 }
 
-/// Gemini 原生通道的关闭/最低思考请求。
+/// Thinking-off / minimal-thinking request for the native Gemini channel.
 ///
-/// OpenLess 不维护 Gemini 单模型适配表；开启时不下发 thinkingConfig，关闭时
-/// 使用官方 thinkingConfig 中可表达“关闭思考”的 `thinkingBudget = 0`。若某个
-/// 具体模型不支持该字段或不能完全关闭思考，交由 Gemini API 自身处理。
+/// OpenLess keeps no per-model adaptation table: when thinking is enabled,
+/// no thinkingConfig is sent; when disabled, it sends the official
+/// `thinkingBudget = 0` that expresses "no thinking". If a specific model
+/// doesn't support the field or can't fully disable thinking, the Gemini API
+/// itself handles that.
 fn disabled_thinking_config() -> Value {
     json!({ "thinkingBudget": 0 })
 }
@@ -626,8 +642,9 @@ fn extract_assistant_content(body: &str) -> Result<String, LLMError> {
         .and_then(|c| c.get("parts"))
         .and_then(|p| p.as_array())
         .ok_or_else(|| LLMError::ParseError("missing content.parts".into()))?;
-    // 把所有 part.text 拼起来。开启思考时模型可能产出多段；逐段拼接避免
-    // future-proof 单 part vs 多 part 的差异坑到。
+    // Concatenate all part.text. With thinking on, the model may emit several
+    // segments; joining per segment avoids future single-part vs multi-part
+    // differences breaking this.
     let mut buf = String::new();
     for part in parts {
         if let Some(t) = part.get("text").and_then(|v| v.as_str()) {
@@ -711,16 +728,17 @@ mod tests {
 
     #[test]
     fn build_polish_history_contents_orders_oldest_to_newest_and_uses_model_role() {
-        // prior_turns 入参约定 newest-first（与 polish.rs::build_polish_history_messages
-        // 同源约定）；这里反转为 chat 时间序 oldest-first 喂给 Gemini。
-        // assistant role 的 polished 历史必须挂在 Gemini 的 `model` role 上。
+        // prior_turns arrives newest-first (same contract as
+        // polish.rs::build_polish_history_messages); reverse into chat
+        // chronological oldest-first order for Gemini.
+        // Polished history on the assistant role must map to Gemini's `model` role.
         let prior = vec![
             ("raw-newest".into(), "polished-newest".into()),
             ("raw-mid".into(), "polished-mid".into()),
             ("raw-oldest".into(), "polished-oldest".into()),
         ];
         let contents = build_polish_history_contents(&prior, "USER_NOW");
-        // 3×(user/model) + 1 当前 user = 7
+        // 3x(user/model) + 1 current user = 7
         assert_eq!(contents.len(), 7);
         assert_eq!(contents[0]["role"], "user");
         assert!(contents[0]["parts"][0]["text"]
@@ -790,19 +808,21 @@ mod tests {
         let mut buf = b"data: {\"a\":1}\n\ndata: {\"b\":2}\n\ndata: incompl".to_vec();
         let events = drain_complete_sse_events(&mut buf);
         assert_eq!(events, vec!["data: {\"a\":1}", "data: {\"b\":2}"]);
-        // 不完整的最后一段保留在 buffer 里等下次 chunk 拼接
+        // The incomplete tail stays in the buffer for the next chunk.
         assert_eq!(buf, b"data: incompl");
     }
 
     #[test]
     fn drain_complete_sse_events_handles_multibyte_split_across_chunks() {
-        // 回归 PR #398 pr_agent UTF-8 SSE 漏洞：
-        // "你好" 的 UTF-8 字节是 e4 bd a0 e5 a5 bd（共 6 字节）。
-        // 模拟 reqwest::chunk() 把这段切在 e4 bd 后（即第一个汉字的 1/3 处），
-        // 旧代码立刻 from_utf8(&chunk) 报错让整条流挂掉；新代码累积字节直到拿到
-        // 完整 event (\n\n) 才解码，应当无损。
+        // Regression for the PR #398 pr_agent UTF-8 SSE gap:
+        // The sample text is e4 bd a0 e5 a5 bd in UTF-8 (6 bytes). Simulate
+        // reqwest::chunk() cutting after e4 bd (a third of the way into the
+        // first character). The old code immediately ran from_utf8(&chunk),
+        // errored, and killed the whole stream; the new code accumulates
+        // bytes until a complete event (\n\n) arrives, then decodes — must
+        // be lossless.
         let event_bytes = b"data: {\"text\":\"\xe4\xbd\xa0\xe5\xa5\xbd\"}\n\n";
-        let cut = 17; // 切在 e4 bd 之后、a0 之前——多字节字符内部
+        let cut = 17; // cuts after e4 bd, before a0 — inside a multi-byte character
         assert!(cut < event_bytes.len() && event_bytes[cut] == 0xa0);
 
         let mut buf = Vec::new();
@@ -825,9 +845,12 @@ mod tests {
 
     #[test]
     fn drain_complete_sse_events_handles_crlf_delimiter() {
-        // 回归 PR #398 pr_agent advisory：部分服务器/CDN 用 \r\n\r\n 分隔 SSE 帧，
-        // 旧实现只认 \n\n 会把整条流当空流。新实现按字节同时查 \r\n\r\n 与 \n\n，
-        // 取最早位置。Rust str::lines() 在 event 内自动剥 \r，所以 line 处理无需改。
+        // Regression for the PR #398 pr_agent advisory: some servers/CDNs
+        // delimit SSE frames with \r\n\r\n, and the old implementation only
+        // recognized \n\n, treating the whole stream as empty. The new one
+        // searches \r\n\r\n and \n\n byte-wise and takes the earliest offset.
+        // Rust str::lines() strips \r inside an event, so line handling needs
+        // no change.
         let mut buf = b"data: {\"a\":1}\r\n\r\ndata: {\"b\":2}\r\n\r\n".to_vec();
         let events = drain_complete_sse_events(&mut buf);
         assert_eq!(events, vec!["data: {\"a\":1}", "data: {\"b\":2}"]);
@@ -836,7 +859,8 @@ mod tests {
 
     #[test]
     fn drain_complete_sse_events_picks_earliest_delimiter_when_mixed() {
-        // 同一 buffer 里既有 LF 风格也有 CRLF 风格——按出现顺序处理，不漏 event。
+        // The same buffer holds both LF- and CRLF-style frames — process in
+        // order of appearance so no event is lost.
         let mut buf = b"data: lf-event\n\ndata: crlf-event\r\n\r\nrest".to_vec();
         let events = drain_complete_sse_events(&mut buf);
         assert_eq!(events, vec!["data: lf-event", "data: crlf-event"]);
@@ -845,10 +869,11 @@ mod tests {
 
     #[test]
     fn drain_complete_sse_events_skips_invalid_utf8_event_without_failing_stream() {
-        // 极端情况：完整 event 自身字节序列就 UTF-8 不合法（上游脏数据）。
-        // 旧实现会 ? 直接 fail 让流挂掉；新实现降级为 warn + skip。
+        // Edge case: the complete event's own byte sequence is invalid UTF-8
+        // (dirty upstream data). The old implementation's `?` would fail and
+        // kill the stream; the new one degrades to warn + skip.
         let mut buf: Vec<u8> = b"data: ok\n\n".to_vec();
-        buf.extend_from_slice(&[0xff, 0xfe, b'\n', b'\n']); // 不合法 event
+        buf.extend_from_slice(&[0xff, 0xfe, b'\n', b'\n']); // invalid event
         buf.extend_from_slice(b"data: ok2\n\n");
         let events = drain_complete_sse_events(&mut buf);
         assert_eq!(events, vec!["data: ok", "data: ok2"]);

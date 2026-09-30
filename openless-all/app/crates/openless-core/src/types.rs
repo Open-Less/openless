@@ -187,6 +187,7 @@ pub enum SelectionVoiceManualIntent {
     #[default]
     Question,
     Edit,
+    Compose,
 }
 
 impl std::fmt::Display for SessionId {

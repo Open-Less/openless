@@ -18,7 +18,9 @@ export function getSelectionVoiceIntentPrompt(): Promise<SelectionVoiceIntentPro
   }));
 }
 
-export function confirmSelectionVoiceIntentPrompt(intent: 'question' | 'edit'): Promise<void> {
+export function confirmSelectionVoiceIntentPrompt(
+  intent: 'question' | 'edit' | 'compose',
+): Promise<void> {
   return invokeOrMock('confirm_selection_voice_intent_prompt', { intent }, () => undefined);
 }
 

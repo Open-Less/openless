@@ -1,9 +1,10 @@
 import { createContext, useContext } from 'react';
 
 /**
- * 跳转到「服务 → 本地模型」视图的回调。由拥有视图状态的 ServicesTab 提供，
- * 渠道编辑器等深层界面通过它把用户带到模型管理页；取不到时（如独立测试渲染）
- * 调用方应退化为隐藏跳转入口。
+ * Callback that navigates to the "Services → Local models" view. Provided by the ServicesTab that
+ * owns the view state; deep surfaces such as the channel editor use it to bring the user to the
+ * model management page. When unavailable (e.g. standalone test rendering), callers should degrade
+ * to hiding the navigation entry.
  */
 export const LocalModelsNavContext = createContext<(() => void) | null>(null);
 

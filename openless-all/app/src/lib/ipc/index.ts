@@ -23,6 +23,8 @@ export {
   BACKEND_CONTRACT_VERSION,
   getStartupSnapshot,
   getSettings,
+  getSettingsSnapshot,
+  updateSettingFields,
   getDefaultStyleSystemPrompts,
   setSettings,
 } from './settings';
@@ -43,7 +45,7 @@ export {
 export type { AuthRequirement, ProviderDescriptor, ProviderKind } from './providers';
 export { listProviderDescriptors } from './providers';
 
-// channels（渠道卡片）
+// channels (channel cards)
 export type { Channel, ChannelKind, ChannelTestResult } from './channels';
 export {
   listChannels,
@@ -196,7 +198,7 @@ export {
   lessComputerTaskCancel,
 } from './less-computer';
 
-// chat-panel（QA / Less Computer 共用）
+// chat-panel (shared by QA / Less Computer)
 export { chatPanelFocusKeyboard } from './chat-panel';
 
 // updater
@@ -276,7 +278,7 @@ export {
   writeMarketplaceDetailCache,
 } from './marketplace-cache';
 
-// splash（2.0 开屏 PV 首启标记）
+// splash (2.0 intro-video first-launch marker)
 export { takeSplashPlayback, SPLASH_MAJOR } from './splash';
 
 // utils

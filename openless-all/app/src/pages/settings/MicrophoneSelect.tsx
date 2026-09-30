@@ -1,5 +1,6 @@
-// 麦克风选择 —— 复用 SelectLite「官方框」下拉：点开后弹出麦克风列表，
-// 选中项最右侧打勾、勾左侧显示实时音量条。下拉打开时监听选中设备电平。
+// Microphone select — reuses the SelectLite "official box" dropdown: opening pops a microphone list where
+// the selected item gets a check on the far right with a live level meter to its left. While the dropdown is
+// open, the level of the selected device is monitored.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -10,10 +11,10 @@ import { useMobileLayout } from '../../lib/useMobileLayout';
 
 interface MicrophoneSelectProps {
   devices: MicrophoneDevice[];
-  /** 当前生效的设备名；'' = 系统默认。 */
+  /** Currently effective device name; '' = system default. */
   selectedName: string;
   onSelect: (name: string) => void;
-  /** 下拉打开时回调 —— 用于刷新设备列表。 */
+  /** Callback when the dropdown opens — used to refresh the device list. */
   onOpen?: () => void;
 }
 
@@ -27,7 +28,7 @@ export function MicrophoneSelect({
   const mobile = useMobileLayout();
   const [open, setOpen] = useState(false);
   const [level, setLevel] = useState(0);
-  // 串行化 start/stop —— 避免快速开合下监听器与 Rust 端状态错位。
+  // Serialize start/stop — prevents listener / Rust-side state mismatch on rapid open-close.
   const monitorQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const enqueueMonitorTask = useCallback((task: () => Promise<void>) => {
@@ -36,7 +37,7 @@ export function MicrophoneSelect({
     return next;
   }, []);
 
-  // 下拉打开时监听选中设备电平；关闭即停止并清零。
+  // Monitor the selected device's level while the dropdown is open; stop and reset on close.
   useEffect(() => {
     if (!open) {
       setLevel(0);
@@ -96,7 +97,7 @@ export function MicrophoneSelect({
     };
   }, [enqueueMonitorTask, open, selectedName]);
 
-  // 选中项（默认麦克风或某条设备）右侧挂音量条，由 SelectLite 在其后再补打勾。
+  // The selected entry (default mic or a device row) carries the level meter on its right; SelectLite appends the check after it.
   const options = useMemo<SelectOption[]>(() => {
     const meter = <LevelMeter level={level} />;
     return [

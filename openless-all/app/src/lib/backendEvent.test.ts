@@ -64,6 +64,28 @@ state = applyTranscriptEvent(state, {
 });
 assertState(state, '新会话', 7);
 
+state = applyTranscriptEvent(state, {
+  sequence: 8,
+  sessionId: 'sv',
+  kind: {
+    type: 'selection_voice_state_changed',
+    payload: { phase: 'recording', sessionId: 'sv' },
+  },
+});
+assertState(state, '', 8);
+state = applyTranscriptEvent(state, {
+  sequence: 9,
+  sessionId: 'b',
+  kind: { type: 'transcript_delta', payload: { text: '旧听写', offset: 0, isFinal: true } },
+});
+assertState(state, '', 8);
+state = applyTranscriptEvent(state, {
+  sequence: 10,
+  sessionId: 'sv',
+  kind: { type: 'transcript_delta', payload: { text: '帮我写', offset: 0, isFinal: false } },
+});
+assertState(state, '帮我写', 10);
+
 // Cloud ASR snapshots must retain all preceding words and apply corrections.
 let cloudState: TranscriptViewState = { sessionId: null, sequence: 0, text: '' };
 for (const [index, text] of ['你', '你好', '您好', '您好。', '您好。世界'].entries()) {

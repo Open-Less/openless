@@ -21,15 +21,16 @@ pub struct SelectionCaptureOutcome {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SelectionInsertionTarget;
 
-/// 普通听写在所有 Host 都先创建一个 insertion session。移动端没有可恢复的桌面焦点，
-/// 因此只返回不携带状态的 opaque token；真正落字仍由 Android accessibility/Shizuku
-/// Adapter 决定，不能把这个 token 当作 Selection Polish 的可校验目标。
+/// Normal dictation creates an insertion session first on every Host. Mobile has no restorable desktop
+/// focus, so it only returns a stateless opaque token; actual text insertion remains up to the Android
+/// accessibility/Shizuku Adapter, and this token must not be treated as a verifiable Selection Polish target.
 pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
     SelectionInsertionTarget
 }
 
-/// 移动端普通落字无需切回另一个桌面应用，恢复动作是成功的 no-op。Selection Polish
-/// 仍通过 `selection_insertion_target_is_captured == false` 保持不可用，二者语义不可混用。
+/// Mobile plain insertion never needs to switch back to another desktop app, so restore is a successful
+/// no-op. Selection Polish stays unavailable via `selection_insertion_target_is_captured == false`;
+/// the two semantics must not be conflated.
 pub(crate) fn reactivate_selection_insertion_target(_target: &SelectionInsertionTarget) -> bool {
     true
 }
@@ -80,9 +81,9 @@ pub fn capture_selection() -> Option<SelectionContext> {
     None
 }
 
-/// 与桌面端 `selection::current_front_app_parts` 同形。移动端没有「前台 app」这个
-/// 概念（我们自己就是前台），恒返回空 —— 存在的意义只是让 `capsule_focus` 那边能有
-/// 一份跨平台统一的实现，不必再写第二份平台分流。
+/// Same shape as the desktop `selection::current_front_app_parts`. Mobile has no "foreground app"
+/// concept (we are the foreground), so it always returns empty — this exists only so `capsule_focus`
+/// can keep one cross-platform implementation instead of a second platform branch.
 pub(crate) fn current_front_app_parts() -> (Option<String>, Option<String>) {
     (None, None)
 }

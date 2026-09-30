@@ -260,7 +260,7 @@ pub use events::{
     LessComputerVoiceMode, LessComputerVoiceOutcome, LessComputerVoicePhase, LocalAsrDownloadPhase,
     LocalAsrDownloadProgress, LocalAsrPreparePhase, LocalAsrPrepareProgress, LocalAsrRuntimeKind,
     QaRecordingLevel, QaStateEvent, QaStateKind, RecordingControlAction, RecordingControlRequest,
-    RemoteInputErrorEvent, RemoteInputRuntimeEvent,
+    RemoteInputErrorEvent, RemoteInputRuntimeEvent, SelectionVoiceRecordingLevel,
 };
 pub use external_audio::{AudioRecorderRouter, ExternalAudioRecorder};
 pub use history::{HistoryStore, HISTORY_CAP};
@@ -369,3 +369,5 @@ pub use vocabulary::{
     builtin_vocab_presets, list_vocab_presets, resolve_vocab_presets, save_vocab_presets,
     DictionaryStore,
 };
+
+pub mod preference_patch;

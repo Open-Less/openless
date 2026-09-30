@@ -36,9 +36,10 @@ impl WindowsImeSessionError {
 pub fn map_ime_status_to_insert_status(status: ImeSubmitStatus) -> InsertStatus {
     match status {
         ImeSubmitStatus::Committed => InsertStatus::Inserted,
-        // DLL 的拒绝/失败只能证明“没有提交”，它从未写入剪贴板。
-        // 返回 Failed 让调用方按用户设置执行真实回退；只有剪贴板写入成功的
-        // 路径才有资格报告 CopiedFallback。OutcomeUnknown 仍通过 Err 单独传递。
+        // The DLL's rejection/failure only proves "not committed"; it never wrote the clipboard.
+        // Return Failed so the caller performs the real fallback per user settings; only paths
+        // with a successful clipboard write qualify to report CopiedFallback. OutcomeUnknown is
+        // still passed separately via Err.
         ImeSubmitStatus::Rejected | ImeSubmitStatus::Failed => InsertStatus::Failed,
     }
 }
@@ -120,9 +121,10 @@ impl WindowsImeSessionController {
                 }
             };
 
-            // 诊断：会话开始时 OpenLess 已是当前输入法 → 上次会话疑似恢复失败。
-            // 此时仍照常激活（幂等），restore_session 的粘滞态防护会跳过"恢复"，
-            // 避免把 OpenLess 当原输入法写死（issue #852 的失败状态自粘）。
+            // Diagnostic: OpenLess was already the current IME at session start -> the previous
+            // session's restore likely failed. Still activate as usual (idempotent);
+            // restore_session's sticky-state guard will skip "restore", avoiding hardcoding
+            // OpenLess as the original IME (the failure self-sticking from issue #852).
             if is_openless_profile_snapshot(&saved_profile) {
                 log::warn!(
                     "[windows-ime] session began while OpenLess IME was already the active profile — previous session likely failed to restore"
@@ -174,18 +176,20 @@ impl WindowsImeSessionController {
         Ok(map_ime_status_to_insert_status(status))
     }
 
-    /// 恢复会话前的输入法。
+    /// Restore the IME from before the session.
     ///
-    /// 已知限制：恢复是无条件的——会话中途用户手动切走的输入法也会在结束时被
-    /// 覆盖为会话前快照（`GetActiveProfile` 探测在 OpenLess 进程后台线程下不可靠，
-    /// 不能作为控制流依据，issue #852）。
+    /// Known limitation: restore is unconditional — an IME the user manually switched to
+    /// mid-session is also overwritten with the pre-session snapshot at the end
+    /// (`GetActiveProfile` probing is unreliable from a background thread in the OpenLess
+    /// process and cannot drive control flow, issue #852).
     pub fn restore_session(&self, prepared: PreparedWindowsImeSession) {
         let saved_profile = prepared.saved_profile.as_ref();
         let openless_was_activated = prepared.openless_was_activated();
         let activation_failed = prepared.activation_failed_with_saved_profile();
 
-        // 诊断：记录决策依据 + 恢复前探测到的当前 profile（不影响决策）。
-        // issue #852 的恢复决策只依赖会话已知的激活事实，不依赖该探测结果。
+        // Diagnostic: log the decision basis + the profile probed as current before restore
+        // (does not affect the decision). The issue #852 restore decision relies only on the
+        // session's known activation facts, not on this probe.
         let active_profile_desc = match self.profile_manager.capture_active_profile() {
             Ok(snapshot) => describe_snapshot(&snapshot),
             Err(error) => format!("unavailable: {error}"),
@@ -207,8 +211,10 @@ impl WindowsImeSessionController {
             return;
         };
 
-        // 恢复流程（粘滞防护/重试/诊断）实现在 windows_ime_restore，可跨平台单测。
-        // outcome 仅补一条 debug 诊断；成功/失败/跳过的详情已由流程内部日志输出。
+        // Restore flow (sticky guard / retry / diagnostics) lives in windows_ime_restore so it
+        // can be unit-tested cross-platform.
+        // The outcome only adds a debug diagnostic; success/failure/skip details are already
+        // logged inside the flow.
         let outcome = run_restore_flow(
             saved_profile,
             |snapshot| self.profile_manager.restore_profile(snapshot),
@@ -284,7 +290,8 @@ mod tests {
 
     #[test]
     fn restore_decision_uses_confirmed_activation_state_only() {
-        // 激活成功且有原快照 → 恢复（决策不再依赖 profile-current 探测，issue #852）。
+        // Activated and a pre-session snapshot exists -> restore (the decision no longer relies
+        // on profile-current probing, issue #852).
         let activated = PreparedWindowsImeSession {
             saved_profile: Some(ImeProfileSnapshot::keyboard_layout(0x0409, 0x0409_0409)),
             openless_activated: true,
@@ -298,7 +305,7 @@ mod tests {
             ProfileRestoreDecision::RestoreSavedProfile
         );
 
-        // 从未激活（unavailable）→ 保持现状。
+        // Never activated (unavailable) -> keep as is.
         let unavailable = PreparedWindowsImeSession::unavailable();
         assert_eq!(
             restore_decision(

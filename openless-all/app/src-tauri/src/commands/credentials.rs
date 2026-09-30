@@ -625,8 +625,9 @@ fn configured(field: &Option<String>) -> bool {
         .unwrap_or(false)
 }
 
-/// 多模态（Omni）模型是否已配置：OpenAI 兼容通道要求 API Key + Base URL + Model；
-/// Gemini 通道要求 API Key + Model（Base URL 为空时后端走官方默认）。
+/// Whether the multimodal (Omni) model is configured: the OpenAI-compatible channel requires
+/// API Key + Base URL + Model; the Gemini channel requires API Key + Model (empty Base URL falls
+/// back to the backend's official default).
 pub(crate) fn omni_configured_for_active_provider(snap: &CredentialsSnapshot) -> bool {
     openless_core::provider_rules::omni_configured(
         &snap.active_omni_provider,
@@ -850,8 +851,9 @@ pub async fn set_active_omni_provider(core: CoreState<'_>, provider: String) -> 
         .map_err(|error| error.to_string())
 }
 
-/// 读出某个账号的实际值（用于设置页预填表单）。
-/// 凭据来自系统凭据库；只允许主设置窗口读取 raw secret，避免胶囊 / QA 等辅助窗口默认暴露。
+/// Read an account's actual value (used to pre-fill settings forms).
+/// Credentials come from the system keychain; only the main settings window may read raw secrets,
+/// keeping auxiliary windows (capsule / QA etc.) from exposing them by default.
 #[tauri::command]
 pub async fn read_credential(
     core: CoreState<'_>,
@@ -905,7 +907,8 @@ enum CredentialProviderKind {
     Omni,
 }
 
-/// 一个凭据账户所属的 provider map —— 决定显式 provider id 应路由到哪个命名空间。
+/// Which provider map a credential account belongs to — decides which namespace an explicit
+/// provider id routes to.
 fn account_provider_kind(account: CredentialAccount) -> CredentialProviderKind {
     match account {
         CredentialAccount::ArkApiKey

@@ -1,10 +1,12 @@
 //! Credentials vault.
 //!
-//! 正常读写走系统凭据库；旧 plaintext JSON 只作为迁移来源。为保持多 provider
-//! schema 与 active provider 状态，凭据库里保存一个 JSON payload。macOS 使用一个稳定
-//! 条目，避免每个分片分别要求授权；Windows 按单条凭据 2560 bytes 的限制拆分。
+//! Normal reads/writes go through the system credential store; the legacy
+//! plaintext JSON is only a migration source. To keep the multi-provider
+//! schema and the active provider state, the vault stores one JSON payload.
+//! macOS uses a single stable entry to avoid per-chunk authorization prompts;
+//! Windows splits it because of the 2560-byte per-credential limit.
 //!
-//! v1 schema：
+//! v1 schema:
 //!   {
 //!     "version": 1,
 //!     "active": { "asr": "<id>", "llm": "<id>" },
@@ -19,7 +21,8 @@
 //! non-exportable from Android Keystore. Marketplace OAuth remains
 //! process-memory-only and is deliberately stripped from `credentials.enc.json`.
 //!
-//! "ark.api_key"/"volcengine.app_key" 等账户名按 Swift 语义路由到 active provider。
+//! Account names like "ark.api_key"/"volcengine.app_key" route to the active
+//! provider following Swift semantics.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -30,6 +33,20 @@ use anyhow::{Context, Result};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+#[cfg(any(target_os = "macos", test))]
+mod macos_vault;
+
+#[cfg(target_os = "macos")]
+mod macos_keychain;
+
+#[cfg(target_os = "macos")]
+static MACOS_SINGLE_ITEM_VAULT: OnceLock<Mutex<macos_vault::SingleItemVault>> = OnceLock::new();
+
+#[cfg(target_os = "macos")]
+fn macos_single_item_vault() -> &'static Mutex<macos_vault::SingleItemVault> {
+    MACOS_SINGLE_ITEM_VAULT.get_or_init(|| Mutex::new(Default::default()))
+}
+
 pub use openless_core::{ChannelKind, ChannelSummary, ChannelTestSummary};
 
 // `anyhow!` is only invoked from the keyring (non-Android) code paths; gating the
@@ -37,7 +54,8 @@ pub use openless_core::{ChannelKind, ChannelSummary, ChannelTestSummary};
 #[cfg(not(target_os = "android"))]
 use anyhow::anyhow;
 
-/// 旧版 plaintext JSON 凭据路径。仅作为迁移来源；成功写入系统凭据库后会删除。
+/// Legacy plaintext JSON credentials path. Migration source only; deleted
+/// once the system credential store write succeeds.
 const LEGACY_CREDS_DIR: &str = ".openless";
 const LEGACY_CREDS_FILE: &str = "credentials.json";
 
@@ -63,7 +81,8 @@ static SYNC_WRITE_GATE: OnceLock<
     Mutex<Option<std::sync::Arc<openless_core::credentials::SyncWriteGate>>>,
 > = OnceLock::new();
 
-// Keychain 访问节流：每进程只补写/扫描一次，避免重复授权弹窗。
+// Keychain access throttle: backfill/scan once per process to avoid repeated
+// authorization prompts.
 #[cfg(not(target_os = "android"))]
 static SINGLE_ITEM_MIGRATION_ATTEMPTED: AtomicBool = AtomicBool::new(false);
 #[cfg(not(target_os = "android"))]
@@ -230,7 +249,7 @@ fn validate_sync_key(value: &openless_core::SecretValue) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "macos")))]
 fn read_sync_secret_raw(
     account: &openless_core::credentials::SyncSecretAccount,
 ) -> Result<Option<openless_core::SecretValue>> {
@@ -243,7 +262,7 @@ fn read_sync_secret_raw(
         .transpose()
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "macos")))]
 fn write_sync_secret_raw(
     account: &openless_core::credentials::SyncSecretAccount,
     value: &openless_core::SecretValue,
@@ -251,12 +270,80 @@ fn write_sync_secret_raw(
     set_keyring_password(account.as_str(), value.expose_secret())
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "macos")))]
 fn remove_sync_secret_raw(account: &openless_core::credentials::SyncSecretAccount) -> Result<()> {
+    remove_sync_secret_native(account)
+}
+
+#[cfg(not(target_os = "android"))]
+fn remove_sync_secret_native(
+    account: &openless_core::credentials::SyncSecretAccount,
+) -> Result<()> {
     match keyring_entry_for(account.as_str())?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(_) => anyhow::bail!("could not remove encrypted sync key from system credential store"),
     }
+}
+
+#[cfg(target_os = "macos")]
+fn read_sync_secret_raw(
+    account: &openless_core::credentials::SyncSecretAccount,
+) -> Result<Option<openless_core::SecretValue>> {
+    macos_single_item_vault().lock().read_sync_secret(
+        account,
+        &mut get_keyring_password_native,
+        &mut set_keyring_password_native,
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn write_sync_secret_raw(
+    account: &openless_core::credentials::SyncSecretAccount,
+    value: &openless_core::SecretValue,
+) -> Result<()> {
+    macos_single_item_vault().lock().write_sync_secret(
+        account,
+        value,
+        bootstrap_macos_credentials,
+        &mut get_keyring_password_native,
+        &mut set_keyring_password_native,
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn remove_sync_secret_raw(account: &openless_core::credentials::SyncSecretAccount) -> Result<()> {
+    macos_single_item_vault().lock().remove_sync_secret(
+        account,
+        &mut get_keyring_password_native,
+        &mut set_keyring_password_native,
+        |_| remove_sync_secret_native(account),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn bootstrap_macos_credentials() -> Result<String> {
+    // A first local-key write must preserve complete legacy credentials and never
+    // publish an empty v2 item over an unreadable older source. No channel backfill.
+    let root = load_desktop_credentials_readonly_with(
+        get_keyring_password_native,
+        || {
+            let path = credentials_path()?;
+            match std::fs::read(path) {
+                Ok(bytes) => {
+                    let bytes = zeroize::Zeroizing::new(bytes);
+                    decode_single_credentials(
+                        std::str::from_utf8(&bytes)
+                            .context("invalid legacy credential encoding")?,
+                    )
+                    .map(Some)
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(_) => anyhow::bail!("could not read legacy credential source"),
+            }
+        },
+        false,
+    )?;
+    serde_json::to_string(&root).context("encode macOS credential envelope")
 }
 
 #[cfg(any(target_os = "android", test))]
@@ -538,8 +625,9 @@ struct CredsRoot {
     active: CredsActive,
     #[serde(default)]
     providers: CredsProviders,
-    /// 多模态识别管线（issue #902）专用凭据命名空间，与 asr/llm 完全隔离：
-    /// 运行时只在 `pipeline_mode == multimodal` 时读取，切换模式不删除。
+    /// Credential namespace dedicated to the multimodal pipeline (issue #902),
+    /// fully isolated from asr/llm: read at runtime only when
+    /// `pipeline_mode == multimodal`; switching modes does not delete it.
     #[serde(default)]
     omni: CredsOmni,
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -591,9 +679,10 @@ struct CredsProviders {
     llm: HashMap<String, CredsLlmEntry>,
 }
 
-/// 多模态（Omni）模型配置：一个 active provider + 按 provider 隔离的 entry。
-/// entry 字段形状与 LLM 对齐（API Key / Base URL / Model / 温度 / 额外请求头），
-/// 但存放在独立命名空间，绝不与 `providers.llm` 共享槽位。
+/// Multimodal (Omni) model configuration: one active provider + per-provider
+/// entries. Entry fields mirror the LLM shape (API key / base URL / model /
+/// temperature / extra headers) but live in their own namespace, never sharing
+/// slots with `providers.llm`.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct CredsOmni {
     #[serde(default = "creds_default_omni")]
@@ -674,13 +763,16 @@ impl std::fmt::Debug for MarketplaceGithubToken {
     }
 }
 
-/// 渠道卡片的公共元信息 —— ASR / LLM 两侧共用同一套语义：
-///   - `providerType` 是**协议路由 key**（deepseek / volcengine / bailian ...），
-///     必须独立于 map key：一个供应商可以有多张卡片（多把 key），此时 map key 是
-///     uuid，而 providerType 仍指向同一个厂商实现。
-///     `None` = v1 老数据，此时 map key 本身就是 providerType（见 `channel_provider_type`）。
-///   - `order` 越小越优先，启用列表的第一个即"当前使用"。
-///   - 关闭的渠道会被自动排到末尾（见 `commands::channels::toggle`）。
+/// Common metadata for a channel card — ASR / LLM share the same semantics:
+///   - `providerType` is the **protocol routing key** (deepseek / volcengine /
+///     bailian ...) and must stay independent of the map key: one vendor can
+///     have several cards (several keys), where the map key is a uuid while
+///     providerType still points to the same vendor implementation.
+///     `None` = legacy v1 data, where the map key itself is the providerType
+///     (see `channel_provider_type`).
+///   - Lower `order` wins; the first enabled entry is "in use".
+///   - Disabled channels are automatically sorted to the end (see
+///     `commands::channels::toggle`).
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[allow(non_snake_case)]
 struct ChannelMeta {
@@ -688,16 +780,18 @@ struct ChannelMeta {
     providerType: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     order: Option<u32>,
-    /// 缺省 `true`：v1 老数据迁移后一律视为启用。
+    /// Defaults to `true`: migrated v1 data is always treated as enabled.
     #[serde(default = "channel_default_enabled", skip_serializing_if = "is_true")]
     enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     lastTest: Option<ChannelTest>,
 }
 
-/// 手写 `Default` 而不是 derive：`bool::default()` 是 `false`，而 `write_account`
-/// 用 `map.entry(id).or_default()` 创建 entry —— derive 会让新写入的渠道一出生就是
-/// 禁用状态，Core directory 会忽略它，表现为"填了 key 却不生效"。
+/// Hand-written `Default` instead of derive: `bool::default()` is `false`,
+/// while `write_account` creates entries via `map.entry(id).or_default()` —
+/// deriving would make every newly written channel start disabled, the Core
+/// directory would ignore it, and the symptom is "key filled in but not
+/// effective".
 impl Default for ChannelMeta {
     fn default() -> Self {
         Self {
@@ -721,15 +815,16 @@ fn is_zero(value: &u64) -> bool {
     *value == 0
 }
 
-/// 「测试连通」的结果，持久化以便重启后仍能看到上次测试的延迟。
-/// `error` 同时承担 P0 的失败标红（测试失败）与 P2 的运行时失败标红。
+/// Result of a "test connection", persisted so the last test's latency
+/// survives restarts. `error` serves both the P0 test-failure and P2
+/// runtime-failure red flags.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[allow(non_snake_case)]
 struct ChannelTest {
     ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     latencyMs: Option<u32>,
-    /// Unix 秒。
+    /// Unix seconds.
     at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error: Option<String>,
@@ -740,7 +835,8 @@ struct ChannelTest {
 struct CredsAsrEntry {
     #[serde(flatten)]
     channel: ChannelMeta,
-    /// 用户给这张卡片取的名字；空则前端回落到 preset 显示名。
+    /// Name the user gave this card; empty falls back to the preset display
+    /// name on the frontend.
     #[serde(skip_serializing_if = "Option::is_none")]
     displayName: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -759,47 +855,52 @@ struct CredsAsrEntry {
     authMode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     volcengineService: Option<String>,
-    /// ASR API Key —— 普通服务 API Key 鉴权或 Agent Plan 使用，与旧版 Access Token 槽位
-    /// (`accessKey`) 隔离，避免不同鉴权方式的凭据互相污染。
+    /// ASR API key — used by plain service API key auth or Agent Plan,
+    /// isolated from the legacy Access Token slot (`accessKey`) so credentials
+    /// of different auth modes never contaminate each other.
     #[serde(skip_serializing_if = "Option::is_none")]
     volcengineApiKey: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     vocabularyId: Option<String>,
-    /// 通用 OpenAI 兼容 ASR(openai-compatible)的高级配置 JSON:
-    /// `{"verboseJson": bool, "chunkDurationMs": number|null}`。
-    /// 仅该预设读取;命名厂商的怪癖开关保持硬编码,不受此字段影响。
+    /// Advanced config JSON for the generic OpenAI-compatible ASR
+    /// (openai-compatible): `{"verboseJson": bool, "chunkDurationMs": number|null}`.
+    /// Read only by that preset; named vendors' quirk switches stay hardcoded
+    /// and ignore this field.
     #[serde(skip_serializing_if = "Option::is_none")]
     advancedConfig: Option<String>,
-    /// 讯飞开放平台应用 ID（RTASR/IFASR 鉴权用）。
+    /// Xfyun (iFlytek) Open Platform app ID (for RTASR/IFASR auth).
     #[serde(skip_serializing_if = "Option::is_none")]
     xfyunAppId: Option<String>,
-    /// 讯飞实时语音转写 APIKey（接口密钥）。
+    /// Xfyun real-time speech transcription API key.
     #[serde(skip_serializing_if = "Option::is_none")]
     xfyunApiKey: Option<String>,
-    /// 腾讯云账号 AppID（实时语音识别 WebSocket 路径参数）。
+    /// Tencent Cloud account AppID (real-time ASR WebSocket path parameter).
     #[serde(skip_serializing_if = "Option::is_none")]
     tencentCloudAppId: Option<String>,
-    /// 腾讯云 API 密钥 SecretID。
+    /// Tencent Cloud API key SecretID.
     #[serde(skip_serializing_if = "Option::is_none")]
     tencentCloudSecretId: Option<String>,
-    /// 腾讯云 API 密钥 SecretKey。
+    /// Tencent Cloud API key SecretKey.
     #[serde(skip_serializing_if = "Option::is_none")]
     tencentCloudSecretKey: Option<String>,
 }
 
 impl CredsAsrEntry {
     fn is_empty(&self) -> bool {
-        // 渠道卡片（providerType 已写入）永远不算空：用户可能刚点「添加渠道」、
-        // 名字都取好了还没填 key，此时被 clean_credentials 的 retain 静默删掉
-        // 就是"卡片自己消失了"。渠道只能由用户显式删除（或由
-        // `delete_channel_if_blank` 回收一张什么都没填的草稿）。
+        // A channel card (providerType written) never counts as empty: the
+        // user may have just clicked "add channel", named it, and not yet
+        // filled the key — clean_credentials' retain silently deleting it
+        // would look like "the card vanished on its own". Channels can only
+        // be deleted explicitly by the user (or a fully blank draft reclaimed
+        // by `delete_channel_if_blank`).
         if self.channel.providerType.is_some() {
             return false;
         }
         self.has_no_content()
     }
 
-    /// 除渠道元信息外，用户是否一个字都没填。草稿回收用。
+    /// Whether the user left everything blank besides channel metadata. Used
+    /// for draft reclamation.
     fn has_no_content(&self) -> bool {
         self.displayName.as_deref().unwrap_or("").is_empty()
             && self.apiKey.as_deref().unwrap_or("").is_empty()
@@ -869,14 +970,16 @@ impl CredsLlmEntry {
     }
 
     fn is_empty(&self) -> bool {
-        // 同 CredsAsrEntry::is_empty —— 渠道卡片只能由用户显式删除。
+        // Same as CredsAsrEntry::is_empty — a channel card can only be
+        // deleted explicitly by the user.
         if self.channel.providerType.is_some() {
             return false;
         }
         self.has_no_content()
     }
 
-    /// 除渠道元信息外，用户是否一个字都没填。草稿回收用。
+    /// Whether the user left everything blank besides channel metadata. Used
+    /// for draft reclamation.
     fn has_no_content(&self) -> bool {
         self.displayName.as_deref().unwrap_or("").is_empty()
             && self.apiKey.as_deref().unwrap_or("").is_empty()
@@ -895,11 +998,13 @@ impl CredsLlmEntry {
     }
 }
 
-/// ASR / LLM 两种 entry 共享渠道元信息的读写口子，让迁移与排序逻辑只写一遍。
+/// Shared read/write access to channel metadata for both ASR / LLM entries, so
+/// migration and ordering logic is written once.
 trait HasChannelMeta {
     fn meta(&self) -> &ChannelMeta;
     fn meta_mut(&mut self) -> &mut ChannelMeta;
-    /// 用户是否往这张卡里填过东西 —— 迁移排序时用来避免把空卡片排到第一。
+    /// Whether the user ever filled anything into this card — used by
+    /// migration ordering to avoid ranking an empty card first.
     fn is_blank(&self) -> bool;
 }
 
@@ -927,16 +1032,19 @@ impl HasChannelMeta for CredsLlmEntry {
     }
 }
 
-/// 渠道的协议路由 key。v1 老数据没有 `providerType`，此时 map key 本身就是厂商 id。
+/// The channel's protocol routing key. Legacy v1 data has no `providerType`;
+/// then the map key itself is the vendor id.
 ///
-/// **这是渠道化最容易漏的一处**：`coordinator::resolve_effective_asr_provider` 和
-/// `commands/providers.rs` 里几十处 `== PROVIDER_ID` 的比较全都依赖它，
-/// 拿成 channel id（uuid）会让整个 ASR 路由失效。
+/// **The easiest thing to get wrong in the channel model**: dozens of
+/// `== PROVIDER_ID` comparisons in `coordinator::resolve_effective_asr_provider`
+/// and `commands/providers.rs` all depend on this; using the channel id (uuid)
+/// instead would break the entire ASR routing.
 fn channel_provider_type<'a, V: HasChannelMeta>(key: &'a str, entry: &'a V) -> &'a str {
     entry.meta().providerType.as_deref().unwrap_or(key)
 }
 
-/// 仅供 v1 -> v2 migration 修复遗失的 active；运行期 active policy 在 Core。
+/// Only for the v1 -> v2 migration to repair a lost active; runtime active
+/// policy lives in Core.
 fn current_channel_id<V: HasChannelMeta>(map: &HashMap<String, V>) -> Option<String> {
     map.iter()
         .filter(|(_, entry)| entry.meta().enabled)
@@ -950,15 +1058,19 @@ fn current_channel_id<V: HasChannelMeta>(map: &HashMap<String, V>) -> Option<Str
         .map(|(key, _)| key.clone())
 }
 
-/// v1（一个 preset 一个槽）→ v2（渠道卡片）。
+/// v1 (one slot per preset) → v2 (channel cards).
 ///
-/// 幂等的两个支点：
-///   1. 迁移出来的渠道 **id 直接沿用原 preset id**，不生成 uuid —— 老用户的 map key
-///      一个字节都不变，重复执行结果完全一致；新 id 由 Core directory 统一分配。
-///   2. 已带 `providerType` 的 entry 一律跳过。
+/// Two pillars of idempotency:
+///   1. Migrated channels **reuse the original preset id as their id**, no
+///      uuid is generated — legacy users' map keys stay byte-identical and
+///      repeated runs produce identical results; new ids are assigned only by
+///      the Core directory.
+///   2. Entries that already carry `providerType` are always skipped.
 ///
-/// order 按「原 active 排第一，其余按 id 字母序」分配。迁移 reader 不读取当前 Core
-/// descriptor 的展示顺序；字母序对同一份 v1 数据始终确定，能保证重复迁移幂等。
+/// `order` is assigned as "original active first, the rest by id
+/// alphabetical order". The migration reader never consults the current Core
+/// descriptor's display order; alphabetical order is deterministic for the
+/// same v1 data, keeping repeated migrations idempotent.
 fn migrate_channel_map<V: HasChannelMeta>(map: &mut HashMap<String, V>, active: &str) -> bool {
     if map.is_empty()
         || map
@@ -969,13 +1081,15 @@ fn migrate_channel_map<V: HasChannelMeta>(map: &mut HashMap<String, V>, active: 
     }
 
     let mut keys: Vec<String> = map.keys().cloned().collect();
-    // 排序优先级（false < true，所以"是"排前面）：
-    //   1. 原来的 active —— 升级前用哪个，升级后还用哪个；
-    //   2. **填过凭据的** —— `active` 指向一个已不存在的 entry 是真实会发生的
-    //      （前端 prefs 与凭据库里的 active 是两份数据，历史上可能不同步）。这时若纯按
-    //      字母序挑，很容易把一张空卡排到第一，用户升级后就看到"未配置"，而他配好的
-    //      那张其实还在列表下面躺着；
-    //   3. 字母序 —— 兜底，保证结果确定、迁移幂等。
+    // Sort priority (false < true, so "yes" sorts first):
+    //   1. The original active — what was used before the upgrade stays in use;
+    //   2. **Configured entries** — `active` pointing at a nonexistent entry
+    //      really happens (the frontend prefs and the vault's active are two
+    //      copies of data that can drift). Picking purely alphabetically could
+    //      rank an empty card first, showing "unconfigured" after upgrade while
+    //      the user's configured card sits further down the list;
+    //   3. Alphabetical — the tiebreaker, keeping results deterministic and
+    //      migrations idempotent.
     let is_blank: std::collections::HashMap<&String, bool> = map
         .iter()
         .map(|(key, entry)| (key, entry.is_blank()))
@@ -1010,7 +1124,7 @@ fn migrate_channel_map<V: HasChannelMeta>(map: &mut HashMap<String, V>, active: 
     changed
 }
 
-/// 渠道 schema 版本：1 = 一个 preset 一个槽；2 = 渠道卡片。
+/// Channel schema version: 1 = one slot per preset; 2 = channel cards.
 const CHANNELS_SCHEMA_VERSION: u32 = 2;
 
 /// Early Omni vaults used derive(Default), bypassing the serde "custom" default.
@@ -1056,7 +1170,8 @@ fn migrate_legacy_omni_slot(omni: &mut CredsOmni) -> bool {
     true
 }
 
-/// 就地把 v1 数据补成渠道卡片。返回是否有实际改动（调用方据此决定要不要落盘）。
+/// Upgrades v1 data into channel cards in place. Returns whether anything
+/// actually changed (the caller decides whether to persist).
 fn migrate_channels(root: &mut CredsRoot) -> bool {
     let active_asr = root.active.asr.clone();
     let active_llm = root.active.llm.clone();
@@ -1094,16 +1209,18 @@ fn migrate_channels(root: &mut CredsRoot) -> bool {
     migrate_legacy_omni_slot(&mut root.omni) || changed
 }
 
-/// 全新安装的平台预置。
+/// Platform presets for fresh installs.
 ///
 /// 只有 Windows 需要：那里的默认 ASR 是本地 Foundry，无需任何 key、装上就能用
 /// （见 `creds_default_asr`）。渠道化后列表完全由用户添加，不预置的话 Windows 新用户
 /// 开箱会一个 ASR 都没有。macOS 的默认是要填 key 的云端厂商，预置一张空卡片
 /// 没有意义，交给新手引导。
 ///
-/// 靠 `version < 2` 把"全新安装"和"用户把渠道全删了"区分开：后者 version 已经是 2，
-/// 不会被重新种回来。version 的落盘发生在下一次真实写入时（见 `load_credentials`
-/// 关于不主动落盘的说明），在此之前每次冷启动都会在内存里重新预置，正是期望行为。
+/// `version < 2` distinguishes "fresh install" from "user deleted all
+/// channels": the latter already has version 2 and is never re-seeded. The
+/// version is persisted on the next real write (see the note in
+/// `load_credentials` about not writing proactively); until then every cold
+/// start re-seeds in memory, which is the desired behavior.
 fn seed_default_channels(root: &mut CredsRoot) -> bool {
     #[cfg(target_os = "windows")]
     {
@@ -1845,9 +1962,10 @@ fn read_chunk_manifest(json: &str) -> Option<CredsChunkManifest> {
 /// login / under contention when we read the manifest entry plus every chunk
 /// entry in quick succession. A single failed read makes the whole credential
 /// set look empty → `load_keyring_credentials` returns `Err` → `load_credentials`
-/// falls back to an empty default → Overview shows「火山引擎未配置」even though the
+/// falls back to an empty default → Overview shows "volcengine not
+/// configured" even though the
 /// secrets are present (the next dictation re-reads and succeeds, which is why the
-/// bug is *probabilistic* and the app "实际可以正常使用"). The more chunks a
+/// bug is *probabilistic* and the app "works fine in practice"). The more chunks a
 /// credential set spans, the more reads per load, the higher the odds at least
 /// one trips. Retry transient errors a few times with short backoff.
 ///
@@ -1862,6 +1980,34 @@ const KEYRING_READ_RETRY_BACKOFF_MS: u64 = 60;
 
 #[cfg(not(target_os = "android"))]
 fn get_keyring_password(account: &str) -> Result<Option<String>> {
+    #[cfg(target_os = "macos")]
+    if account == KEYRING_SINGLE_CREDENTIALS_ACCOUNT {
+        return macos_single_item_vault()
+            .lock()
+            .read_credentials(&mut get_keyring_password_native);
+    }
+    get_keyring_password_native(account)
+}
+
+#[cfg(not(target_os = "android"))]
+fn get_keyring_password_native(account: &str) -> Result<Option<String>> {
+    #[cfg(target_os = "macos")]
+    log::info!(
+        "[vault-access] macOS native read kind={}",
+        if account == KEYRING_SINGLE_CREDENTIALS_ACCOUNT {
+            "credentials"
+        } else if account.starts_with("cloud-sync.e2ee.local.") {
+            "legacy-local-sync-key"
+        } else if account.starts_with("cloud-sync.e2ee.key.") {
+            "legacy-remembered-sync-key"
+        } else {
+            "legacy-credentials"
+        }
+    );
+    #[cfg(target_os = "macos")]
+    if account == KEYRING_SINGLE_CREDENTIALS_ACCOUNT {
+        return macos_keychain::read_primary();
+    }
     #[cfg(target_os = "windows")]
     {
         let mut attempt = 0usize;
@@ -1921,7 +2067,7 @@ fn load_keyring_credentials() -> Result<Option<CredsRoot>> {
     )
 }
 
-/// credentials.v2 补写每进程只尝试一次。
+/// credentials.v2 backfill is attempted at most once per process.
 #[cfg(not(target_os = "android"))]
 fn set_keyring_password_for_migration(account: &str, value: &str) -> Result<()> {
     if SINGLE_ITEM_MIGRATION_ATTEMPTED.swap(true, Ordering::SeqCst) {
@@ -1930,7 +2076,8 @@ fn set_keyring_password_for_migration(account: &str, value: &str) -> Result<()> 
     set_keyring_password(account, value)
 }
 
-/// 首次成功定位凭据来源时记一条日志，用于诊断「未配置」误报。
+/// Log once on first successful vault-source identification, to diagnose
+/// spurious "unconfigured" reports.
 #[cfg(any(not(target_os = "android"), test))]
 fn log_vault_source_once(source: &str) {
     if !VAULT_SOURCE_LOGGED.swap(true, Ordering::SeqCst) {
@@ -1940,6 +2087,23 @@ fn log_vault_source_once(source: &str) {
 
 #[cfg(not(target_os = "android"))]
 fn set_keyring_password(account: &str, value: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    if account == KEYRING_SINGLE_CREDENTIALS_ACCOUNT {
+        return macos_single_item_vault().lock().write_credentials(
+            value,
+            &mut get_keyring_password_native,
+            &mut set_keyring_password_native,
+        );
+    }
+    set_keyring_password_native(account, value)
+}
+
+#[cfg(not(target_os = "android"))]
+fn set_keyring_password_native(account: &str, value: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    if account == KEYRING_SINGLE_CREDENTIALS_ACCOUNT {
+        return macos_keychain::write_primary(value);
+    }
     keyring_entry_for(account)?
         .set_password(value)
         .with_context(|| format!("write system credential vault {account}"))
@@ -2052,7 +2216,8 @@ fn migrate_legacy_sources_for_update() -> Result<CredsRoot> {
 
     #[cfg(not(target_os = "android"))]
     {
-        // 旧版逐账户条目扫描每进程只跑一次并缓存；失败时重放同一错误，不重扫。
+        // The legacy per-account scan runs once per process and is cached; on
+        // failure the same error is replayed, no rescan.
         let probe = LEGACY_KEYRING_PROBE.get_or_init(|| {
             migrate_legacy_keyring_accounts().map_err(|error| format!("{error:#}"))
         });
@@ -2067,7 +2232,8 @@ fn migrate_legacy_sources_for_update() -> Result<CredsRoot> {
     Ok(CredsRoot::default())
 }
 
-/// 扫描旧版逐账户 Keychain 条目并迁移到当前存储。Some = 找到旧凭据。
+/// Scan legacy per-account Keychain entries and migrate them to the current
+/// store. `Some` = legacy credentials found.
 #[cfg(not(target_os = "android"))]
 fn migrate_legacy_keyring_accounts() -> Result<Option<CredsRoot>> {
     let legacy_vault = load_legacy_keyring_credentials_for_update()?;
@@ -2104,8 +2270,10 @@ fn load_credentials_into_cache_with(
     }
 }
 
-/// 补齐渠道元数据只改内存；下次保存时一并持久化，不在每次启动重写凭据。
-/// macOS 的旧存储分片由底层读取器在成功授权后单独合并一次。
+/// Channel metadata backfill only touches memory; it is persisted together
+/// with the next save instead of rewriting the vault on every startup.
+/// macOS's legacy chunked store is consolidated once by the underlying
+/// reader after a successful authorization.
 fn load_credentials() -> CredsRoot {
     let mut root = load_credentials_raw();
     migrate_channels(&mut root);
@@ -2295,23 +2463,23 @@ fn load_credentials_for_update_unbound() -> Result<CredsRoot> {
     #[cfg(not(target_os = "android"))]
     match load_keyring_credentials() {
         Ok(Some(root)) => {
-            // 同 load_credentials：不再每次 update 都尝试 delete legacy keyring
-            // entries，避免反复触发 macOS Keychain ACL 弹窗。
+            // Same as load_credentials: don't try to delete legacy keyring entries on every
+            // update, to avoid repeatedly triggering the macOS Keychain ACL prompt.
             remove_legacy_credentials_file_best_effort();
             clear_vault_read_error();
             store_credentials_cache(&root);
             Ok(root)
         }
         Ok(None) => {
-            // migrate_legacy_sources_for_update 内部如果实际 migrate 会调
-            // save_credentials，cache 会被刷新；如果只返回 default root（没 legacy），
-            // 我们这里再显式 cache 一次防御性补一下。
+            // If migrate_legacy_sources_for_update actually migrates it calls save_credentials
+            // and the cache is refreshed; if it only returns the default root (no legacy data),
+            // defensively cache it here too.
             let root = migrate_legacy_sources_for_update()?;
             clear_vault_read_error();
             store_credentials_cache(&root);
             Ok(root)
         }
-        // 错误路径不缓存 —— 同 load_credentials 注释；让下次读重试 keyring。
+        // Error path is not cached — see the load_credentials comment; let the next read retry the keyring.
         Err(e) => {
             record_vault_read_failure(&e);
             Err(e)
@@ -2564,7 +2732,7 @@ pub enum CredentialAccount {
     VolcengineResourceId,
     VolcengineService,
     VolcengineAuthMode,
-    /// ASR API Key（普通服务 API Key 鉴权或 Agent Plan 使用，独立于旧版 Access Token 槽位）。
+    /// ASR API key (plain service API key auth or Agent Plan; separate from the legacy Access Token slot).
     VolcengineApiKey,
     ArkApiKey,
     ArkModelId,
@@ -2577,23 +2745,23 @@ pub enum CredentialAccount {
     AsrModel,
     /// Active ASR provider's optional hotword vocabulary ID.
     AsrVocabularyId,
-    /// 通用 OpenAI 兼容 ASR 的高级配置 JSON（verboseJson / chunkDurationMs）。
+    /// Advanced config JSON for the generic OpenAI-compatible ASR (verboseJson / chunkDurationMs).
     AsrAdvancedConfig,
-    /// 讯飞开放平台应用 ID。
+    /// Xfyun Open Platform app ID.
     XfyunAppId,
-    /// 讯飞实时语音转写 APIKey。
+    /// Xfyun real-time speech transcription API key.
     XfyunApiKey,
-    /// 腾讯云账号 AppID。
+    /// Tencent Cloud account AppID.
     TencentCloudAppId,
-    /// 腾讯云 API 密钥 SecretID。
+    /// Tencent Cloud API key SecretID.
     TencentCloudSecretId,
-    /// 腾讯云 API 密钥 SecretKey。
+    /// Tencent Cloud API key SecretKey.
     TencentCloudSecretKey,
-    /// 多模态（Omni）模型的 API Key。仅多模态管线读取。
+    /// Multimodal (Omni) model API key. Read only by the multimodal pipeline.
     OmniApiKey,
-    /// 多模态（Omni）模型的 Base URL。
+    /// Multimodal (Omni) model base URL.
     OmniEndpoint,
-    /// 多模态（Omni）模型的 model id。
+    /// Multimodal (Omni) model id.
     OmniModel,
 }
 
@@ -2787,7 +2955,7 @@ fn channel_summaries<V: HasChannelMeta>(
             }
         })
         .collect();
-    // 与 current_channel_id 同序：order 升序，同 order 按 id 字母序。
+    // Same ordering as current_channel_id: ascending order, ties broken by id alphabetical order.
     list.sort_by(|left, right| {
         left.order
             .cmp(&right.order)
@@ -3290,11 +3458,11 @@ fn apply_sync_credentials_root(
     Ok(next)
 }
 
-/// 凭据存储——系统凭据库；旧 JSON 文件只作为迁移来源。
+/// Credential vault — the system credential store; the legacy JSON file is a migration source only.
 pub struct CredentialsVault;
 
 impl CredentialsVault {
-    /// 系统凭据库 service name；macOS 下对应 Keychain service。
+    /// System credential store service name; maps to the Keychain service on macOS.
     pub const SERVICE_NAME: &'static str = "com.openless.app";
 
     pub(crate) fn bind_sync_gate(
@@ -3543,13 +3711,13 @@ impl CredentialsVault {
         MARKETPLACE_TOKEN_REJECTED.store(false, Ordering::SeqCst);
     }
 
-    /// 当前 ASR 渠道的**厂商 id（providerType）**，不是渠道 id。
+    /// The current ASR channel's **vendor id (providerType)**, not the channel id.
     ///
-    /// 渠道化后 `active.asr` 存的是渠道 id（多把 key 时是 uuid），但全代码库几十处
-    /// `get_active_asr() == crate::asr::bailian::PROVIDER_ID` 式的比较、以及
-    /// `coordinator::resolve_effective_asr_provider` 的协议路由，要的都是厂商 id。
-    /// 因此这里做一次转换，让那些调用点保持零改动。
-    /// 需要渠道 id 本身时用 `get_active_asr_channel_id`。
+    /// After channelization `active.asr` stores a channel id (a uuid with multiple keys), but the
+    /// dozens of comparisons like `get_active_asr() == crate::asr::bailian::PROVIDER_ID` across
+    /// the codebase and the protocol routing in `coordinator::resolve_effective_asr_provider` all
+    /// need the vendor id. Convert here so those call sites stay unchanged.
+    /// Use `get_active_asr_channel_id` when the channel id itself is needed.
     pub fn get_active_asr() -> String {
         let _guard = credentials_lock().lock();
         let root = load_credentials();
@@ -3569,7 +3737,7 @@ impl CredentialsVault {
         Self::select_active_provider(openless_core::ProviderSlot::Llm, id)
     }
 
-    /// 当前 LLM 渠道的**厂商 id（providerType）**。理由同 `get_active_asr`。
+    /// The current LLM channel's **vendor id (providerType)**. Same rationale as `get_active_asr`.
     pub fn get_active_llm() -> String {
         let _guard = credentials_lock().lock();
         let root = load_credentials();
@@ -3581,7 +3749,7 @@ impl CredentialsVault {
             .unwrap_or(id)
     }
 
-    /// 指定 LLM 渠道的自定义请求头（测试连通用；不传渠道时用 `get_active_llm_extra_headers`）。
+    /// Custom request headers for a specific LLM channel (used by connection tests; use `get_active_llm_extra_headers` when no channel is passed).
     pub fn get_llm_extra_headers_for_channel(id: &str) -> HashMap<String, String> {
         let _guard = credentials_lock().lock();
         let mut root = load_credentials();
@@ -3589,7 +3757,7 @@ impl CredentialsVault {
         active_llm_extra_headers(&root)
     }
 
-    /// 指定 LLM 渠道的采样温度。
+    /// Sampling temperature for a specific LLM channel.
     pub fn get_llm_temperature_for_channel(id: &str) -> Option<f32> {
         let _guard = credentials_lock().lock();
         let mut root = load_credentials();
@@ -3597,10 +3765,10 @@ impl CredentialsVault {
         active_llm_temperature(&root)
     }
 
-    /// 按渠道 id 读 LLM 凭据（编辑非当前卡片时用）。
+    /// Read LLM credentials by channel id (used when editing a non-active card).
     ///
-    /// ASR 早就有 `get_for_asr_provider`；LLM 侧原本只能读"当前 active"，
-    /// 渠道化后必须能读任意一张卡片。
+    /// ASR has long had `get_for_asr_provider`; the LLM side could originally only read the
+    /// "current active" entry, and after channelization must read any card.
     pub fn get_for_llm_provider(id: &str, account: CredentialAccount) -> Result<Option<String>> {
         let _guard = credentials_lock().lock();
         let mut root = load_credentials_for_update()?;
@@ -3796,7 +3964,7 @@ impl CredentialsVault {
         })
     }
 
-    /// 写入指定 LLM 渠道的采样温度，不改变 active 渠道。
+    /// Write the sampling temperature for a specific LLM channel without changing the active channel.
     pub fn set_llm_temperature_for_provider(id: &str, value: &str) -> Result<()> {
         let temperature = parse_llm_temperature(value)?;
         mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
@@ -3817,7 +3985,7 @@ impl CredentialsVault {
         })
     }
 
-    /// 写入指定 LLM 渠道的额外请求头，不改变 active 渠道。
+    /// Write extra request headers for a specific LLM channel without changing the active channel.
     pub fn set_llm_extra_headers_json_for_provider(id: &str, value: &str) -> Result<()> {
         let headers = parse_extra_headers_json(value)?;
         mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
@@ -4144,9 +4312,9 @@ mod tests {
 
     #[test]
     fn omni_accounts_route_to_omni_namespace_only() {
-        // 多模态（Omni）凭据必须与 LLM/ASR 命名空间完全隔离（issue #902）：
-        // 写 omni 槽位不影响 ark 槽位；切换 omni active provider 后读到的是
-        // 该 provider 自己的 entry，而不是别的 provider 的残留值。
+        // Multimodal (Omni) credentials must be fully isolated from the LLM/ASR namespaces (issue #902):
+        // writing an omni slot doesn't touch the ark slot; after switching the omni active provider
+        // reads return that provider's own entry, never another provider's leftover values.
         let mut root = CredsRoot::default();
         root.active.llm = "ark".into();
         root.active.asr = "volcengine".into();
@@ -4172,11 +4340,11 @@ mod tests {
             lookup_account(&root, CredentialAccount::OmniApiKey).as_deref(),
             Some("omni-key")
         );
-        // 传统 LLM / ASR 槽位必须保持为空。
+        // Legacy LLM / ASR slots must stay empty.
         assert_eq!(lookup_account(&root, CredentialAccount::ArkApiKey), None);
         assert_eq!(lookup_account(&root, CredentialAccount::AsrApiKey), None);
 
-        // 切到另一个 omni provider：读不到 openai 的 entry（per-provider 隔离）。
+        // Switch to another omni provider: openai's entry is unreadable (per-provider isolation).
         root.omni.active = "custom".into();
         assert_eq!(lookup_account(&root, CredentialAccount::OmniApiKey), None);
         root.omni.active = "openai".into();
@@ -4185,7 +4353,7 @@ mod tests {
             Some("gpt-4o-audio-preview")
         );
 
-        // 显式 provider id 的运行时读取不得依赖或改写 active provider。
+        // Runtime reads with an explicit provider id must neither depend on nor rewrite the active provider.
         write_omni_account(
             &mut root,
             "custom",
@@ -4311,7 +4479,7 @@ mod tests {
             Some(r#"{"verboseJson":true,"chunkDurationMs":30000}"#)
         );
 
-        // 清空即移除该字段，且只影响对应 provider 的 entry。
+        // Clearing removes the field, and only from the matching provider's entry.
         write_account(&mut root, CredentialAccount::AsrAdvancedConfig, None);
         assert_eq!(
             lookup_account(&root, CredentialAccount::AsrAdvancedConfig),
@@ -4321,7 +4489,7 @@ mod tests {
             .advancedConfig
             .is_none());
 
-        // 旧条目（无 advancedConfig 字段）反序列化为 None，不破坏既有数据。
+        // Old entries without the advancedConfig field deserialize as None, preserving existing data.
         let legacy: CredsAsrEntry = serde_json::from_str(r#"{"apiKey":"k"}"#).unwrap();
         assert!(legacy.advancedConfig.is_none());
         assert!(!legacy.is_empty());
@@ -4704,7 +4872,7 @@ mod tests {
         );
     }
 
-    // ---- 渠道卡片（v1 → v2）----
+    // ---- Channel cards (v1 → v2) ----
 
     fn v1_root_with_two_asr_providers() -> CredsRoot {
         let mut root = CredsRoot::default();
@@ -4731,7 +4899,7 @@ mod tests {
         let mut root = v1_root_with_two_asr_providers();
         assert!(super::migrate_channels(&mut root));
 
-        // id 沿用原 preset id —— 老用户的 map key 一个字节都不变。
+        // ids reuse the original preset ids — legacy users' map keys stay byte-identical.
         let volcengine = root
             .providers
             .asr
@@ -4744,10 +4912,10 @@ mod tests {
             Some("volcengine")
         );
         assert_eq!(groq.channel.providerType.as_deref(), Some("groq"));
-        // 原 active 排第一。
+        // The original active channel ranks first.
         assert_eq!(volcengine.channel.order, Some(0));
         assert_eq!(groq.channel.order, Some(1));
-        // v1 老数据一律视为启用。
+        // v1 data is always treated as enabled.
         assert!(volcengine.channel.enabled);
         assert!(groq.channel.enabled);
     }
@@ -4758,7 +4926,7 @@ mod tests {
         assert!(super::migrate_channels(&mut root));
         let after_first = serde_json::to_string(&root).expect("encode");
 
-        // 第二次必须无改动（返回 false）且结果逐字节一致。
+        // The second run must be a no-op (returns false) with byte-identical results.
         assert!(!super::migrate_channels(&mut root));
         assert_eq!(serde_json::to_string(&root).expect("encode"), after_first);
     }
@@ -4768,21 +4936,21 @@ mod tests {
         let mut root = v1_root_with_two_asr_providers();
         super::migrate_channels(&mut root);
 
-        // 迁移后凭据读取行为不变 —— 这是老用户升级不炸的底线。
+        // Credential reads behave the same after migration — the baseline for a non-breaking legacy upgrade.
         assert_eq!(
             lookup_account(&root, CredentialAccount::VolcengineAppKey).as_deref(),
             Some("vk")
         );
     }
 
-    /// `active` 指向一个**不存在的 entry** 是真实会发生的：前端 prefs 里的
-    /// `activeAsrProvider` 与凭据库里的 `active.asr` 是两份数据，历史上可能不同步。
-    /// 此时迁移只能退而求其次选一张，但**绝不允许动任何凭据** —— 用户的 key 必须原样
-    /// 留在各自的 entry 里，用户把想用的那张拖回第一位就能恢复。
+    /// `active` pointing at a **missing entry** really happens: the frontend prefs'
+    /// `activeAsrProvider` and the vault's `active.asr` are two copies of data that can drift.
+    /// Migration must then pick a fallback but **never touch any credentials** — the user's keys
+    /// stay in their entries as-is, and reordering the desired card back to first restores it.
     #[test]
     fn migration_never_touches_credentials_even_when_active_points_at_a_missing_entry() {
         let mut root = CredsRoot::default();
-        root.active.asr = "stepfun".into(); // 凭据库里并没有这个 entry
+        root.active.asr = "stepfun".into(); // no such entry in the vault
         root.providers.asr.insert(
             "volcengine".into(),
             CredsAsrEntry {
@@ -4801,7 +4969,7 @@ mod tests {
 
         super::migrate_channels(&mut root);
 
-        // 迁移只写 providerType / order，凭据一个字节都不动。
+        // Migration writes only providerType / order; credentials are untouched byte for byte.
         assert_eq!(
             root.providers
                 .asr
@@ -4824,16 +4992,17 @@ mod tests {
             root.providers.asr.get("groq").unwrap().apiKey.as_deref(),
             Some("gk")
         );
-        // 两张卡片都还在，用户可以自己拖回想要的那张。
+        // Both cards survive; the user can drag the desired one back to first.
         assert_eq!(root.providers.asr.len(), 2);
-        // active 退到一个真实存在的渠道上，而不是继续指向空气。
+        // active falls back to a real existing channel instead of pointing at nothing.
         assert!(root.providers.asr.contains_key(&root.active.asr));
     }
 
     #[test]
     fn migration_prefers_a_configured_channel_over_alphabetical_order() {
-        // active 指向一个不存在的 entry；`aaa-empty` 字母序更靠前但一个字都没填，
-        // `volcengine` 才是用户真正配好的那张。纯字母序会让用户升级后看到"未配置"。
+        // active points at a missing entry; `aaa-empty` sorts earlier alphabetically but is
+        // completely blank, while `volcengine` is the one the user actually configured. Pure
+        // alphabetical order would show "unconfigured" after the upgrade.
         let mut root = CredsRoot::default();
         root.active.asr = "stepfun".into();
         root.providers.asr.insert(
@@ -4855,7 +5024,7 @@ mod tests {
         super::migrate_channels(&mut root);
 
         assert_eq!(root.active.asr, "volcengine");
-        // 凭据确实能通过正常读取路径拿到 —— 也就是 UI 上会显示"已配置"。
+        // Credentials resolve through the normal read path — i.e. the UI shows "configured".
         assert_eq!(
             lookup_account(&root, CredentialAccount::VolcengineAppKey).as_deref(),
             Some("vk")
@@ -4865,7 +5034,7 @@ mod tests {
     #[test]
     fn freshly_added_channel_survives_clean_credentials() {
         let mut root = CredsRoot::default();
-        // 刚点「添加渠道」、名字取好了但还没填 key。
+        // Just clicked "add channel": named but no key filled in yet.
         root.providers.asr.insert(
             "chan-uuid".into(),
             CredsAsrEntry {
@@ -4889,7 +5058,7 @@ mod tests {
 
     #[test]
     fn v1_payload_without_channel_fields_still_deserializes() {
-        // flatten 的 ChannelMeta 不能破坏老 payload 的反序列化。
+        // flatten'd ChannelMeta must not break deserialization of old payloads.
         let v1 = r#"{
             "version": 1,
             "active": { "asr": "volcengine", "llm": "ark" },
@@ -4908,11 +5077,11 @@ mod tests {
                 .as_deref(),
             Some("vk")
         );
-        // 缺省即启用，且尚未渠道化。
+        // Default is enabled, and not yet channelized.
         let entry = root.providers.asr.get("volcengine").unwrap();
         assert!(entry.channel.enabled);
         assert_eq!(entry.channel.providerType, None);
-        // 未迁移时 providerType 回落到 map key。
+        // Before migration, providerType falls back to the map key.
         assert_eq!(
             super::channel_provider_type("volcengine", entry),
             "volcengine"
@@ -4985,7 +5154,7 @@ mod tests {
 
     #[test]
     fn provider_type_is_independent_of_channel_id_for_multi_key_setups() {
-        // 同一家两把 key：map key 是 uuid，providerType 都指向 deepseek。
+        // Two keys from the same vendor: map keys are uuids, providerType points at deepseek for both.
         let mut root = CredsRoot::default();
         for (id, order) in [("uuid-a", 0u32), ("uuid-b", 1)] {
             root.providers.llm.insert(
@@ -5006,7 +5175,7 @@ mod tests {
         assert_eq!(root.active.llm, "uuid-a");
 
         let entry = root.providers.llm.get(&root.active.llm).unwrap();
-        // 协议路由拿到的必须是厂商 id，不是 uuid。
+        // Protocol routing must get the vendor id, not the uuid.
         assert_eq!(
             super::channel_provider_type(&root.active.llm, entry),
             "deepseek"
@@ -6060,3 +6229,5 @@ mod sync_capture_diagnostic_tests {
         }
     }
 }
+
+mod android_transfer;

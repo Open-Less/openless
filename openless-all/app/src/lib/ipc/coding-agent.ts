@@ -18,14 +18,14 @@ export interface ClaudeDetection {
   hasComputerUse: boolean;
 }
 
-/** OpenCode CLI 检测结果（issue #579）。 */
+/** OpenCode CLI detection result (issue #579). */
 export interface OpenCodeDetection {
   installed: boolean;
   version: string | null;
   exe: string;
 }
 
-/** 检测 `opencode` 是否安装（语音 Agent 选 OpenCode 后端时设置页据此提示）。 */
+/** Detects whether `opencode` is installed (the settings page uses this to hint when the voice agent selects the OpenCode backend). */
 export function codingAgentDetectOpencode(exe?: string): Promise<OpenCodeDetection> {
   return invokeOrMock('coding_agent_detect_opencode', { exe }, () => ({
     installed: false,
@@ -35,8 +35,8 @@ export function codingAgentDetectOpencode(exe?: string): Promise<OpenCodeDetecti
 }
 
 /**
- * 检测 Codex / dsh 是否安装。与 OpenCode 共用同一个检测结果形状。
- * `provider` 传 prefs 里的后端 id（只认 `codex-cli` / `dsh-cli`）。
+ * Detects whether Codex / dsh is installed. Shares the OpenCode detection result shape.
+ * `provider` takes the backend id from prefs (only `codex-cli` / `dsh-cli` are accepted).
  */
 export function codingAgentDetectCli(provider: string, exe?: string): Promise<OpenCodeDetection> {
   return invokeOrMock('coding_agent_detect_cli', { provider, exe }, () => ({
@@ -46,12 +46,12 @@ export function codingAgentDetectCli(provider: string, exe?: string): Promise<Op
   }));
 }
 
-/** 拉取当前 OpenCode 配置可用的 `provider/model` 列表。 */
+/** Fetches the `provider/model` list available in the current OpenCode config. */
 export function codingAgentListOpencodeModels(exe?: string, refresh = true): Promise<string[]> {
   return invokeOrMock('coding_agent_list_opencode_models', { exe, refresh }, () => []);
 }
 
-/** 无头 Claude 运行事件，由后端 `coding-agent:test` 流式推送（tag 为 `kind`）。 */
+/** Headless Claude run events, streamed by the backend's `coding-agent:test` (tagged by `kind`). */
 export type CodingAgentEvent =
   | { kind: 'started'; sessionId: string }
   | { kind: 'delta'; sessionId: string; text: string }

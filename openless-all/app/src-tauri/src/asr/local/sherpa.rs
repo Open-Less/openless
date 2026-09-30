@@ -1,7 +1,7 @@
-//! Windows sherpa-onnx 本地 ASR 的原生运行模式与事件载荷。
+//! Native runtime modes and event payloads for Windows sherpa-onnx local ASR.
 //!
-//! 当前 catalog 覆盖 Windows offline batch 模型和实验 online streaming 模型；
-//! `sherpa_runtime.rs` 分别持有 `OfflineRecognizer` / `OnlineRecognizer`。
+//! The current catalog covers Windows offline batch models and experimental online streaming
+//! models; `sherpa_runtime.rs` holds the `OfflineRecognizer` / `OnlineRecognizer` respectively.
 
 use serde::Serialize;
 
@@ -72,21 +72,21 @@ impl SherpaPrepareProgressPayload {
 #[allow(dead_code)]
 pub struct SherpaRuntimeStatus {
     pub provider_id: String,
-    /// 当前平台是否具备 sherpa-onnx 推理能力。Windows 为 true；其他平台保留
-    /// provider 元数据但不提供本地 sherpa 推理。
+    /// Whether the current platform has sherpa-onnx inference capability. True on Windows;
+    /// other platforms keep the provider metadata but provide no local sherpa inference.
     pub available: bool,
-    /// 当前模型是否已加载到内存。
+    /// Whether the current model is loaded in memory.
     pub runtime_ready: bool,
     pub active_model: String,
     pub loaded_model_id: Option<String>,
     pub error: Option<String>,
-    /// 最近一次 prepare/load 耗时。缓存命中也会记录一次很小的耗时。
+    /// Duration of the most recent prepare/load. A cache hit also records a very small value.
     pub last_prepare_ms: Option<u64>,
-    /// 最近一次 batch decode 耗时，不含录音时间。
+    /// Duration of the most recent batch decode, excluding recording time.
     pub last_transcribe_ms: Option<u64>,
-    /// 最近一次送入 recognizer 的音频时长。
+    /// Duration of the audio most recently fed to the recognizer.
     pub last_audio_ms: Option<u64>,
-    /// 最近一次 prepare/transcribe 错误，方便 UI 和日志定位可恢复失败。
+    /// Most recent prepare/transcribe error, helping UI and logs locate recoverable failures.
     pub last_error: Option<String>,
 }
 

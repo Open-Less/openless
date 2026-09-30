@@ -18,8 +18,9 @@ import type { PlatformCapabilities } from './lib/types';
 import { isWindowHotkeyKeyboardCandidate, windowMouseHotkeyCode } from './lib/windowHotkeyFallback';
 import { HotkeySettingsProvider } from './state/HotkeySettingsContext';
 
-// 各 WebView 按窗口用途懒加载页面，减少常驻内存。
-// 胶囊承担录音的即时反馈，体积较小且对首帧延迟敏感，因此保持直接导入。
+// Lazy-load pages per WebView by window purpose to cut resident memory. The capsule
+// gives instant recording feedback — small and first-frame-latency sensitive — so it
+// stays a direct import.
 const AutoUpdateGate = lazy(() =>
   import('./components/AutoUpdateGate').then((m) => ({ default: m.AutoUpdateGate })),
 );
@@ -35,10 +36,10 @@ const SelectionVoiceIntentPicker = lazy(() =>
     default: m.SelectionVoiceIntentPicker,
   })),
 );
-// Tauri 的 Less Computer 面板同时面向 macOS 和 Windows；Linux 由原生 egui 提供。
-// TAURI_ENV_PLATFORM 是编译期字面量，不支持该 WebView 的平台可裁掉对应 import，
-// 避免把不能显示的面板 chunk 带入移动端构建。
-// 纯浏览器 vite 环境（预览/调样式）没有该变量 → 保持可加载。
+// Tauri's Less Computer panel targets macOS and Windows; Linux gets the native egui
+// UI instead. TAURI_ENV_PLATFORM is a compile-time literal, so platforms that don't
+// run this WebView can drop the import, keeping the panel chunk out of mobile builds.
+// Plain-browser vite (preview/styling) lacks the variable → stays loadable.
 const TAURI_BUILD_PLATFORM: string | undefined = import.meta.env.TAURI_ENV_PLATFORM;
 const LESS_COMPUTER_BUNDLED =
   !TAURI_BUILD_PLATFORM || TAURI_BUILD_PLATFORM === 'darwin' || TAURI_BUILD_PLATFORM === 'windows';
@@ -62,9 +63,10 @@ type Gate = 'checking' | 'incompatible' | 'onboarding' | 'ready';
 const ANDROID_SETUP_WIZARD_COMPLETE_KEY = 'openless.androidSetupWizardComplete';
 
 /**
- * 所有 Tauri webview 共用同一个 fail-closed 启动边界。胶囊、QA、预览和 Less Computer
- * 也会调用业务 IPC，不能因为它们不是主窗口就绕过 2.0 握手。requireBackendReady 内部
- * 复用同一个 Promise，所以主窗口后续读取不会产生第二次启动请求。
+ * All Tauri webviews share the same fail-closed startup boundary. Capsule, QA, preview,
+ * and Less Computer also call business IPC, so they can't skip the 2.0 handshake just
+ * for not being the main window. requireBackendReady reuses one Promise internally, so
+ * later main-window reads never trigger a second startup request.
  */
 export function App(props: AppProps) {
   const [ready, setReady] = useState(!isTauri);
@@ -133,7 +135,7 @@ function ReadyApp({
   }
 
   const os = forcedOs ?? detectOS();
-  // Windows 启动不应被权限探测阻塞首屏。
+  // Windows startup must not block the first screen on permission probes.
   const [gate, setGate] = useState<Gate>(isTauri ? 'checking' : 'ready');
   const [startupError, setStartupError] = useState<string | null>(null);
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
@@ -212,24 +214,25 @@ function ReadyApp({
     requestAnimationFrame(() => {
       if (cancelled) return;
       (async () => {
-        // 尊重 prefs.startMinimized：开了静默启动就别在前端强 show 主窗口。否则
-        // Rust 端 setup() 抑制掉的窗口，会被这条 useEffect 在 webview 加载完成后
-        // 再通过 IPC 拉出来 —— issue #468 在 Rust 修复后用户仍能在 Win11 上复现
-        // 的最后一条路径（Rust log 里看不到，因为走的是 plugin-window 的 IPC）。
+        // Respect prefs.startMinimized: with silent start, don't force-show the main
+        // window from the frontend. Otherwise this useEffect pulls the window that
+        // Rust setup() suppressed back out via IPC after webview load — the last
+        // remaining #468 repro path on Win11 after the Rust fix (invisible in Rust
+        // logs because it goes through plugin-window IPC).
         try {
           const prefs = await getSettings();
           if (prefs.startMinimized) return;
         } catch (err) {
-          // 安全侧默认 = 不弹窗。Rust 端 get_settings 签名是
-          // `pub fn get_settings(...) -> UserPreferences`（非 Result），所以
-          // 该 catch 唯一会被触发的场景是 Tauri IPC 基础设施抖动（autostart 早期
-          // __TAURI_INTERNALS__ 还没就绪）。旧逻辑 fall-through to show 会在用户
-          // 开了静默启动时仍把主窗口弹出来 —— #468 复现路径。
+          // Safe default = stay hidden. Rust's get_settings returns UserPreferences
+          // (not a Result), so this catch only fires on Tauri IPC infra flakiness
+          // (__TAURI_INTERNALS__ not ready early in autostart). The old fall-through
+          // to show would still pop the main window with silent start on — the #468
+          // repro path.
           //
-          // 此时 tray 已由 Rust 端 setup() 在 webview 加载前注册完成，是稳定的
-          // 兜底入口；宁可让用户从 tray 手动唤起，也不要在抖动时强 show 一个白色
-          // / 透明主窗口。首次安装的"prefs 不存在"场景不走这里 —— Rust 端会返回
-          // 默认 UserPreferences。
+          // By now the tray is registered by Rust setup() before webview load and is a
+          // stable fallback; better to have the user raise the window from the tray
+          // than force-show a white/transparent main window mid-flake. First-install
+          // "no prefs" doesn't reach here — Rust returns default UserPreferences.
           const detail = err instanceof Error ? err.message : String(err);
           console.warn(
             '[startup] read startMinimized failed; staying hidden to avoid #468:',
@@ -273,9 +276,10 @@ function ReadyApp({
       }
 
       if (os === 'win') {
-        // 超时保护：50 次 × 200ms = 10s。hotkey hook 永远 starting（被反作弊 / EDR
-        // / UAC 拦）时不让 UI 死锁灰屏，过 10s 强 setGate('ready') 让用户进
-        // Permissions 页看 hotkey_status.lastError 处理。详见 issue #163。
+        // Timeout guard: 50 × 200ms = 10s. If the hotkey hook stays "starting" forever
+        // (blocked by anti-cheat / EDR / UAC), don't deadlock the UI on a gray screen;
+        // after 10s force setGate('ready') so the user can reach the Permissions page
+        // and check hotkey_status.lastError. See issue #163.
         const POLL_INTERVAL_MS = 200;
         const POLL_MAX_ATTEMPTS = 50;
         let attempts = 0;
@@ -304,8 +308,9 @@ function ReadyApp({
       ]);
       if (cancelled) return;
       const aOk = a === 'granted' || a === 'notApplicable';
-      // noDevice（当前没有麦克风）不是权限问题：不卡 onboarding，
-      // 让用户进应用后在权限页看到“未检测到麦克风”的明确提示。见 issue #779。
+      // noDevice (no mic present) isn't a permission issue: don't trap the user on
+      // onboarding; let them in and show the clear "no microphone detected" notice on
+      // the permissions page. See issue #779.
       const mOk = m === 'granted' || m === 'notApplicable' || m === 'noDevice';
       setGate(aOk && mOk ? 'ready' : 'onboarding');
     })().catch((error) => {
@@ -363,7 +368,8 @@ function ReadyApp({
   return (
     <Suspense fallback={null}>
       <HotkeySettingsProvider>
-        {/* 全局下载进度浮层：主窗口所有页面常驻（自身监听事件，与页面解耦）。 */}
+        {/* Global download progress overlay: always mounted across main-window pages
+            (listens to events itself, decoupled from pages). */}
         <GlobalDownloadProgress />
         {platformCaps?.platform === 'android' && (
           <div style={{ display: mobileQaOpen ? 'block' : 'none', height: '100%' }}>

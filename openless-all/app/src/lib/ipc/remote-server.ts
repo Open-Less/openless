@@ -1,6 +1,6 @@
 import { invokeOrMock } from './shared';
 
-// ── Remote input (局域网手机录音) ──────────────────────────────────────
+// ── Remote input (LAN phone recording) ──────────────────────────────
 export interface RemoteInputStatus {
   running: boolean;
   starting: boolean;
@@ -8,7 +8,7 @@ export interface RemoteInputStatus {
   pin: string;
   urls: string[];
   urlsStale: boolean;
-  /** 通过本地 IPC 获取正在运行的服务所用根证书的完整 SHA-256。 */
+  /** Full SHA-256 of the root CA used by the running service, fetched via local IPC. */
   caFingerprintSha256?: string;
 }
 
@@ -31,7 +31,7 @@ export function regenerateRemotePin(): Promise<string> {
   return invokeOrMock('regenerate_remote_pin', undefined, () => '123456');
 }
 
-/** 把 PC 端界面语言同步给远程输入服务，H5 录音页据此显示对应语言。 */
+/** Syncs the PC UI language to the remote input service so the H5 recording page displays that language. */
 export function setRemoteLocale(locale: string): Promise<void> {
   return invokeOrMock('set_remote_locale', { locale }, () => undefined);
 }

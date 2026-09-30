@@ -1,5 +1,6 @@
-// Windows 插入相关设置行的显示谓词。
-// 旧布尔 windowsSendInputInsertionOnly 只在新字段 windowsInsertionMode 缺失时兜底。
+// Display predicates for the Windows insertion-related settings rows.
+// The legacy boolean windowsSendInputInsertionOnly is only a fallback when the new
+// windowsInsertionMode field is missing.
 
 import type { WindowsInsertionMode } from './types';
 
@@ -10,7 +11,7 @@ export function effectiveWindowsInsertionMode(
   return mode ?? (sendInputOnly ? 'sendInput' : 'tsf');
 }
 
-/** 非 TSF（SendInput / Paste）时显示「在键盘列表中显示 OpenLess」。 */
+/** Shows "show OpenLess in the keyboard list" for non-TSF modes (SendInput / Paste). */
 export function showWindowsOpenlessKeyboardListToggle(
   mode: WindowsInsertionMode | undefined,
   sendInputOnly?: boolean,
@@ -18,7 +19,7 @@ export function showWindowsOpenlessKeyboardListToggle(
   return effectiveWindowsInsertionMode(mode, sendInputOnly) !== 'tsf';
 }
 
-/** 仅 SendInput 时显示换行方式选项；Paste 下隐藏。 */
+/** Shows the newline-mode option for SendInput only; hidden under Paste. */
 export function showWindowsSendInputNewlineMode(
   mode: WindowsInsertionMode | undefined,
   sendInputOnly?: boolean,

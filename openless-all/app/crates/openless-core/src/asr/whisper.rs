@@ -11,53 +11,56 @@ use crate::asr::RawTranscript;
 const PCM_SAMPLE_RATE_HZ: u64 = 16_000;
 const PCM_BYTES_PER_SAMPLE: usize = 2;
 
-/// Whisper の `prompt` パラメータの安全側上限（文字数）。
+/// Safe char-count upper bound for Whisper's `prompt` parameter.
 ///
-/// OpenAI / Groq の Audio Transcriptions API は `prompt` を 244 トークンまで
-/// 受け付ける。トークナイザは BPE で言語によって 1 token あたりの文字数が
-/// 異なる：英語は ~4 chars/token、日本語・中国語は最悪 ~1 char/token。
-/// CJK ユーザーが安全に収まるよう、文字数で 240 を上限にする。
+/// The OpenAI / Groq Audio Transcriptions APIs accept `prompt` up to 244
+/// tokens. The BPE tokenizer's chars-per-token varies by language: English
+/// ~4 chars/token, Japanese and Chinese ~1 char/token at worst. Cap at 240
+/// chars so CJK users fit safely.
 pub const PROMPT_CHAR_BUDGET: usize = 240;
 
-/// 区切り文字（ASCII）。Whisper のトークナイザはどの言語でも安定して扱える。
+/// Separator (ASCII). Stable in Whisper's tokenizer for every language.
 const PROMPT_SEPARATOR: &str = ", ";
 
-/// ZenMux 聚合平台的默认端点与模型（issue #837）。与前端 `ASR_PRESETS` 的
-/// `zenmux` 条目保持一致；`read_whisper_credentials` 在 active 为 zenmux 且
-/// 用户未填时回退到这里。
+/// Default endpoint and model for the ZenMux aggregator (issue #837). Matches
+/// the frontend `ASR_PRESETS` `zenmux` entry; `read_whisper_credentials`
+/// falls back here when active is zenmux and the user left it empty.
 pub const ZENMUX_DEFAULT_ENDPOINT: &str = "https://zenmux.ai/api/v1";
 pub const ZENMUX_DEFAULT_MODEL: &str = "qwen/qwen3-asr-flash";
 
-/// `/audio/transcriptions` 请求体编码方式由共享 Core 统一决定；Tauri 只实现传输。
+/// `/audio/transcriptions` request-body encoding is decided by the shared Core; Tauri only implements transport.
 pub use crate::provider_rules::AsrRequestFormat;
 
 pub struct WhisperBatchASR {
     api_key: String,
     base_url: String,
     model: String,
-    /// 任意のプロンプト（語彙ヒント等）。空文字や空白のみは送信しない。
-    /// `None` ＝ プロンプト無し（既存挙動）。
+    /// Optional prompt (vocabulary hints etc.). Never send empty or
+    /// whitespace-only prompts. `None` = no prompt (existing behavior).
     prompt: Option<String>,
-    /// OpenAI 互換でもファイル長に上限がある provider 用。None は従来通り一括送信。
+    /// For providers that cap file length despite OpenAI compatibility. None sends in one shot as before.
     max_chunk_duration_ms: Option<u64>,
-    /// `response_format=verbose_json` を要求してセグメント単位のメタデータ
-    /// （no_speech_prob / avg_logprob / compression_ratio）で幻聴を捨てるか。
-    /// OpenAI / Groq の Whisper は full に対応。SenseVoice / TeleSpeech 等
-    /// （SiliconFlow）は response_format 自体が無いので false にして従来の
-    /// `json` のまま送る（壊さない）。
+    /// Request `response_format=verbose_json` so per-segment metadata
+    /// (no_speech_prob / avg_logprob / compression_ratio) can filter
+    /// hallucinations. OpenAI / Groq Whisper support it. SenseVoice /
+    /// TeleSpeech etc. (SiliconFlow) have no response_format parameter, so
+    /// keep false and send plain `json` to avoid breaking them.
     verbose_json: bool,
-    /// 请求体编码方式。默认 `Multipart`，OpenRouter 走 `OpenRouterJson`。
+    /// Request-body encoding. Defaults to `Multipart`; OpenRouter uses `OpenRouterJson`.
     request_format: AsrRequestFormat,
-    /// ZenMux 的 `language` 字段（ISO 639-1，如 `zh`）。None = 不发送，服务端
-    /// 自动检测。仅 `ZenMuxJson` 编码下生效。
+    /// ZenMux `language` field (ISO 639-1, e.g. `zh`). None = omit so the
+    /// server auto-detects. Only applies to `ZenMuxJson` encoding.
     language: Option<String>,
-    /// ZenMux 的 `enable_itn` 字段（数字/单位归一化）。默认 true，与 ZenMux
-    /// 文档示例及中文 ASR 预期一致；仅 `ZenMuxJson` 编码下生效。
+    /// ZenMux `enable_itn` field (number/unit normalization). Defaults to
+    /// true, matching ZenMux docs and Chinese ASR expectations; only applies
+    /// to `ZenMuxJson` encoding.
     enable_itn: bool,
-    /// 一等 `hotwords` 参数（JSON 数组字符串）。StepFun 等厂商不认 `prompt`
-    /// （静默忽略），但提供专门的热词字段——用它词典才真正生效。空 = 不发。
+    /// First-class `hotwords` parameter (JSON-array string). StepFun and
+    /// similar providers ignore `prompt` silently but expose a dedicated
+    /// hotwords field — the dictionary only takes effect through it.
+    /// Empty = omit.
     hotwords: Vec<String>,
-    /// 自定义端点路径（默认 `/audio/transcriptions`；MiniMax 等厂商为 `/speech_to_text`）。
+    /// Custom endpoint path (default `/audio/transcriptions`; MiniMax etc. use `/speech_to_text`).
     endpoint_path: Option<String>,
     buffer: Mutex<Vec<u8>>,
 }
@@ -87,35 +90,36 @@ impl WhisperBatchASR {
         }
     }
 
-    /// 设置自定义端点路径（例如 `"/speech_to_text"`）。
+    /// Sets a custom endpoint path (e.g. `"/speech_to_text"`).
     pub fn with_endpoint_path(mut self, path: impl Into<String>) -> Self {
         self.endpoint_path = Some(path.into());
         self
     }
 
-    /// 设置请求体编码方式（默认 `Multipart`）。OpenRouter 需 `OpenRouterJson`。
-    /// 用 builder 而非给 `new()` 加参数，避免改动既有 4 处构造点的签名。
+    /// Sets the request-body encoding (default `Multipart`). OpenRouter needs
+    /// `OpenRouterJson`. A builder avoids changing the existing `new()` call-site signatures.
     pub fn with_request_format(mut self, request_format: AsrRequestFormat) -> Self {
         self.request_format = request_format;
         self
     }
 
-    /// 设置一等热词列表（默认空 = 不发）。仅 Multipart 编码下生效；与 `prompt`
-    /// 二选一由 wiring 决定（见 coordinator 的 `whisper_uses_hotwords`）。
+    /// Sets the first-class hotwords list (default empty = omit). Only applies
+    /// to Multipart encoding; the `prompt` vs hotwords choice is made by wiring
+    /// (see coordinator's `whisper_uses_hotwords`).
     pub fn with_hotwords(mut self, hotwords: Vec<String>) -> Self {
         self.hotwords = hotwords;
         self
     }
 
-    /// 设置 ZenMux 的 `language` 字段（ISO 639-1 码）。None = 不发送（自动检测）。
-    /// 仅 `ZenMuxJson` 编码下生效。
+    /// Sets the ZenMux `language` field (ISO 639-1 code). None = omit
+    /// (auto-detect). Only applies to `ZenMuxJson` encoding.
     pub fn with_language(mut self, language: Option<String>) -> Self {
         self.language = language;
         self
     }
 
-    /// 设置 ZenMux 的 `enable_itn`（数字归一化）开关，默认 true。仅 `ZenMuxJson`
-    /// 编码下生效。
+    /// Sets the ZenMux `enable_itn` (number normalization) switch, default
+    /// true. Only applies to `ZenMuxJson` encoding.
     pub fn with_enable_itn(mut self, enable_itn: bool) -> Self {
         self.enable_itn = enable_itn;
         self
@@ -124,17 +128,19 @@ impl WhisperBatchASR {
     /// Stop collecting audio, encode the buffer as WAV, and POST to the
     /// Whisper transcriptions endpoint.
     ///
-    /// 失败时**保留** PCM buffer，让上层有机会重试或在历史中至少留一个失败记录；
-    /// 当前缓冲音频时长（毫秒）。Coordinator 在 transcribe() 调用前读取，
-    /// 用于计算 Whisper / OpenRouter 的动态超时。不消费缓冲。
+    /// On failure **keep** the PCM buffer so the caller can retry or at least
+    /// record a failure in history; current buffered audio duration in ms.
+    /// The coordinator reads this before transcribe() to compute the
+    /// Whisper / OpenRouter dynamic timeout. Does not consume the buffer.
     pub fn buffer_duration_ms(&self) -> u64 {
         pcm_duration_ms(&self.buffer.lock())
     }
 
-    /// 之前的实现一进函数就 `mem::take` 把 buffer 清空，凭证错或网络中断都会
-    /// 让用户的录音直接消失。
+    /// The buffer must survive a failed transcribe: draining it up front
+    /// would lose the recording on credential or network errors.
     pub async fn transcribe(&self) -> Result<RawTranscript> {
-        // clone 而不是 take：~30s 16 kHz 16-bit 音频 ≈ 960 KB，会话末调用一次，可接受。
+        // Clone instead of take: ~30s of 16 kHz 16-bit audio is ~960 KB,
+        // called once per session — acceptable.
         let pcm = self.buffer.lock().clone();
         if pcm.is_empty() {
             return Ok(RawTranscript {
@@ -144,8 +150,8 @@ impl WhisperBatchASR {
         }
 
         let result = self.transcribe_inner(&pcm).await;
-        // 仅在成功路径上才清 buffer。失败时 PCM 还在，coordinator 拿到 Err 但
-        // 用户重新触发 stop 时仍能再发一次，或日后增加重试入口时复用。
+        // Clear the buffer only on success. On failure the PCM stays: the
+        // coordinator gets Err, but a re-triggered stop can send again.
         if result.is_ok() {
             self.buffer.lock().clear();
         }
@@ -188,19 +194,19 @@ impl WhisperBatchASR {
                     .part("file", wav_part)
                     .text("model", self.model.clone());
 
-                // verbose_json 対応プロバイダ（OpenAI / Groq）のときだけ、セグメント
-                // メタデータ付きの応答を要求し、temperature も 0 に固定する。非対応
-                // プロバイダ（SiliconFlow の SenseVoice / TeleSpeech 等）には送らず
-                // 従来どおりの応答にして、未知パラメータでの 4xx を避ける。
+                // Only verbose_json-capable providers (OpenAI / Groq) get a
+                // request for segment metadata, with temperature pinned to 0.
+                // Don't send it to providers without support (SiliconFlow
+                // SenseVoice / TeleSpeech etc.) to avoid 4xx on unknown params.
                 if self.verbose_json {
                     form = form
                         .text("response_format", "verbose_json")
                         .text("temperature", "0");
                 }
 
-                // `prompt` は空文字を送らない：OpenAI 互換実装によっては空文字でエラーに
-                // なるリスクがある（Groq は許容するが防御的にスキップ）。`trim()` で
-                // 空白のみのケースも除外。
+                // Never send an empty `prompt`: some OpenAI-compatible
+                // implementations error on it (Groq tolerates it, skip
+                // defensively). `trim()` also excludes whitespace-only values.
                 if let Some(prompt) = self.prompt.as_ref() {
                     let trimmed = prompt.trim();
                     if !trimmed.is_empty() {
@@ -208,8 +214,9 @@ impl WhisperBatchASR {
                     }
                 }
 
-                // 一等热词（StepFun 形状：可解析的 JSON 数组字符串，如
-                // `["热词1","热词2"]`）。空白词条过滤后再编码，全空则不发该字段。
+                // First-class hotwords (StepFun shape: a parseable JSON array
+                // string like `["hotword1","hotword2"]`). Filter out blank
+                // entries before encoding; if all are blank, omit the field.
                 let hotwords: Vec<&str> = self
                     .hotwords
                     .iter()
@@ -222,8 +229,9 @@ impl WhisperBatchASR {
                     }
                 }
 
-                // `openai-compatible` 允许 API Key 留空（LAN 无鉴权端点）：此时
-                // 不带 Authorization 头，避免空 Bearer 被服务端 401 拒绝。
+                // `openai-compatible` allows an empty API key (LAN endpoints
+                // without auth): omit the Authorization header so an empty
+                // Bearer doesn't get rejected with 401.
                 let mut request = client.post(&url);
                 if !self.api_key.trim().is_empty() {
                     request = request.header("Authorization", format!("Bearer {}", self.api_key));
@@ -231,9 +239,10 @@ impl WhisperBatchASR {
                 request.multipart(form)
             }
             AsrRequestFormat::OpenRouterJson => {
-                // OpenRouter /audio/transcriptions：application/json，音频走标准
-                // base64（带 padding）。不带 multipart 专属的 prompt/response_format
-                // 字段，避免未知字段导致 4xx；verbose_json 对该协议保持关闭。
+                // OpenRouter /audio/transcriptions: application/json with
+                // standard base64 (padded) audio. Omit the multipart-only
+                // prompt/response_format fields to avoid 4xx on unknown
+                // fields; verbose_json stays off for this protocol.
                 let body = serde_json::json!({
                     "model": self.model,
                     "input_audio": {
@@ -248,9 +257,10 @@ impl WhisperBatchASR {
                 request.json(&body)
             }
             AsrRequestFormat::ZenMuxJson => {
-                // ZenMux /audio/transcriptions（issue #837）：application/json，
-                // 音频走标准 base64。语言跟随 OpenLess 工作语言映射；enable_itn
-                // 由设置页开关决定，恒显式发送。不带 multipart 专属字段。
+                // ZenMux /audio/transcriptions (issue #837): application/json
+                // with standard base64 audio. Language follows the OpenLess
+                // working-language mapping; enable_itn comes from the settings
+                // toggle and is always sent explicitly. No multipart-only fields.
                 let mut body = serde_json::json!({
                     "model": self.model,
                     "input_audio": {
@@ -298,13 +308,14 @@ impl WhisperBatchASR {
             }
         }
         if self.verbose_json {
-            // verbose_json：セグメントのメタデータで幻聴を除いた本文を組む。
-            // segments が無い応答では内部で従来どおり text にフォールバック。
+            // verbose_json: assemble the body from segment metadata, dropping
+            // hallucinations. Falls back to plain text when segments are absent.
             Ok(extract_confident_text(&json))
         } else {
-            // GLM-ASR 等厂商在静音/弱音片段偶发返回仅含 `#`（或 `##`…）的占位
-            // 文本（issue #787）。归一化为空转写，走既有空转写护栏，避免把占位符
-            // 当有效内容插入用户输入。
+            // GLM-ASR etc. occasionally return placeholder text consisting
+            // only of `#` (or `##`...) for silent/weak audio (issue #787).
+            // Normalize to an empty transcript so the existing empty-transcript
+            // guard keeps placeholders out of user input.
             let text = json["text"].as_str().unwrap_or("").trim();
             if is_placeholder_heading(text) {
                 Ok(String::new())
@@ -325,21 +336,26 @@ impl super::AudioConsumer for WhisperBatchASR {
     }
 }
 
-/// verbose_json 应答里去掉「幻听」段落后拼出正文。
+/// Assemble verbose_json output, dropping hallucinated segments.
 ///
-/// Whisper 在静音 / 弱音 / 噪声段会生成「听起来合理但用户没说」的文本（已知
-/// hallucination 缺陷）：录音前后的沉默或麦克风底噪会变成无关词。verbose_json
-/// 的每个 segment 带 `no_speech_prob` / `avg_logprob` / `compression_ratio`，
-/// 用它们丢掉明显不是真实语音的段落。
+/// Whisper generates plausible-but-unsaid text on silent / quiet / noisy
+/// audio (known hallucination defect): lead-in silence or mic noise becomes
+/// stray words. Each verbose_json segment carries `no_speech_prob` /
+/// `avg_logprob` / `compression_ratio`; use them to drop segments that are
+/// clearly not real speech.
 ///
-/// 判定（命中任一即丢弃）：
-/// - `no_speech_prob > 0.6` 且 `avg_logprob < -0.5`：高静音概率且低置信，沉默被作话。
-/// - `compression_ratio > 2.4`：同一短语反复幻听（Whisper 标准阈值）。
-/// - `avg_logprob < -1.0`：置信极低，噪声被词化。
+/// Drop when any of:
+/// - `no_speech_prob > 0.6` and `avg_logprob < -0.5`: high silence
+///   probability with low confidence, silence turned into words.
+/// - `compression_ratio > 2.4`: the same phrase repeated (Whisper's standard
+///   threshold).
+/// - `avg_logprob < -1.0`: very low confidence, noise turned into words.
 ///
-/// 误删真实语音最糟，所以阈值保守。没有 `segments` 字段（例如 provider 忽略了
-/// verbose_json）时退回直接用 `text`，与旧行为一致。元数据字段缺失时按
-/// 「不丢弃」处理（unwrap_or 默认值），所以对不返回这些指标的 provider 是无害空转。
+/// Thresholds are conservative because dropping real speech is the worst
+/// outcome. Without a `segments` field (e.g. the provider ignored
+/// verbose_json) fall back to `text` as before. Missing metadata fields
+/// count as "keep" (unwrap_or defaults), so providers without these metrics
+/// pass through unchanged.
 fn extract_confident_text(json: &serde_json::Value) -> String {
     let Some(segments) = json.get("segments").and_then(|s| s.as_array()) else {
         let text = json["text"].as_str().unwrap_or("").trim();
@@ -385,19 +401,22 @@ fn extract_confident_text(json: &serde_json::Value) -> String {
 
     let kept = kept.trim().to_string();
     if kept.is_empty() {
-        // 全部段落被判为幻听（≈整段几乎是静音）。回退到原始 text 会把幻听又捡
-        // 回来，所以返回空串；上层把空转写当「什么都没说」无害处理。
+        // Every segment was judged a hallucination (the clip is almost all
+        // silence). Falling back to the raw text would reintroduce it, so
+        // return an empty string; callers treat that as "nothing said".
         return String::new();
     }
     kept
 }
 
-/// 判定转写结果是否为「纯井号占位文本」。
+/// Detect transcripts that are pure `#` placeholder text.
 ///
-/// GLM-ASR（zhipu）在静音 / 弱音片段偶发把整段识别为单个 `#`（或 `##`、`###`…），
-/// 属于模型退化的占位输出，不是任何真实语音转写（issue #787）。判定只命中「整段
-/// 仅由 1 个或多个 `#` 组成」的情况：`C#`、`# 你好` 等含其它字符的真实内容不受
-/// 影响。输入先 `trim()`，空白与两侧空格不影响判定。
+/// GLM-ASR (zhipu) occasionally transcribes an entire silent / quiet clip as
+/// a single `#` (or `##`, `###`...) — degenerate placeholder output, not a
+/// real transcript (issue #787). Only match text made up entirely of one or
+/// more `#`: real content containing other characters (`C#`, `# hello`) is
+/// unaffected. Input is `trim()`ed first; surrounding whitespace doesn't
+/// affect the check.
 fn is_placeholder_heading(text: &str) -> bool {
     let trimmed = text.trim();
     !trimmed.is_empty() && trimmed.chars().all(|c| c == '#')
@@ -576,34 +595,33 @@ fn is_cjk(ch: char) -> bool {
     )
 }
 
-/// 用户辞書の有効フレーズから Whisper の `prompt` パラメータを組み立てる。
+/// Build the Whisper `prompt` parameter from the enabled user-dictionary phrases.
 ///
-/// Whisper は `prompt` で語彙ヒント / スタイル文脈を渡せる：固有名詞・専門
-/// 用語の表記揺れを抑え、ASR 段階で正しい綴り（漢字選択を含む）に偏らせる。
-/// 既存の dictionary 機能はこれまで Volcengine ASR と Polish LLM のみに渡って
-/// いて、Whisper 互換プロバイダ（whisper / siliconflow / zhipu / groq）には
-/// 流れていなかった。本関数で同じエントリを Whisper にも届ける。
+/// Whisper accepts vocabulary hints / style context via `prompt`: it curbs
+/// spelling drift for proper nouns and jargon and biases the ASR stage
+/// toward correct spellings (including kanji choice). The dictionary
+/// previously only reached Volcengine ASR and the polish LLM, not
+/// Whisper-compatible providers (whisper / siliconflow / zhipu / groq); this
+/// function delivers the same entries to Whisper.
 ///
-/// # 仕様
+/// # Contract
 ///
-/// - 空白のみのフレーズは除外
-/// - 区切りは `, `
-/// - 末尾に `.` を付与して「文の終わり」を Whisper に明示（モデルがプロンプト
-///   を続きと誤解して書き起こし冒頭に混入するのを抑える）
-/// - 文字数が `PROMPT_CHAR_BUDGET` を超えるエントリは**スキップ**して次に
-///   進む（途中で打ち切らない）。これにより「先頭に長文 1 件があると残りが
-///   全部捨てられる」現象を回避でき、登録順を保ちつつ収まるエントリを最大化
-///   できる。
-/// - 入力が空、または有効フレーズが 0 件の場合は `None` を返す。Optional に
-///   することで「プロンプト無し」と「空文字プロンプト」を呼び出し側で区別
-///   する必要をなくす。
+/// - Whitespace-only phrases are skipped
+/// - Entries are joined with `, `
+/// - A trailing `.` marks "end of sentence" so the model doesn't treat the
+///   prompt as a continuation and mix it into the transcript head
+/// - Entries exceeding `PROMPT_CHAR_BUDGET` are **skipped** and iteration
+///   continues (no mid-way break), so one long leading entry cannot discard
+///   every later one; entry order is preserved and fit is maximized
+/// - Returns `None` for empty input or zero valid phrases, so callers need
+///   not distinguish "no prompt" from an empty prompt
 ///
-/// 预算装不下的词条是**静默**丢弃的：用户在词汇表里看得见它、以为它在生效，实际
-/// 上从来没送到 ASR。真机上排查这个花了很久，因为没留下任何痕迹——所以留一行。
+/// Entries that don't fit the budget are dropped **silently**: the user sees
+/// them in the vocabulary and assumes they work, but they never reach the
+/// ASR. Log one line when that happens so it's diagnosable.
 ///
-/// 但这个函数每次听写都会被调用，无条件打 info 会把日志刷满。丢弃集合只随词典
-/// 变化而变化，所以只在它**变了**的时候打；`app` 固定 Info 级别（`lib.rs`），
-/// 用 debug 等于没打。
+/// This runs on every dictation, so log only when the dropped set **changed**;
+/// `app` is pinned to Info level (`lib.rs`), so debug would be invisible.
 fn log_dropped_phrases_when_changed(included: &[&str], dropped: &[&str]) {
     static LAST_DROPPED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
@@ -643,7 +661,7 @@ pub fn build_prompt_from_phrases(phrases: &[String]) -> Option<String> {
         } else {
             PROMPT_SEPARATOR.chars().count() + phrase_chars
         };
-        // 末尾の "." 1 文字も予約。
+        // Reserve one char for the trailing ".".
         if total_chars + added + 1 > PROMPT_CHAR_BUDGET {
             dropped.push(trimmed);
             continue;
@@ -729,8 +747,8 @@ mod tests {
 
     #[test]
     fn build_prompt_truncates_overflow_but_keeps_short_entries_after_long_one() {
-        // 先頭に 250 文字の長文 → 単独で予算超過 → スキップ。続く短いエントリは
-        // 採用される。「途中で break しない」契約の検証。
+        // A 250-char leading phrase exceeds the budget alone and is skipped;
+        // the following short entries are kept. Verifies the no-mid-break contract.
         let long = "あ".repeat(250);
         let phrases = vec![long.clone(), "梁山泊".to_string(), "TRC".to_string()];
         let prompt = build_prompt_from_phrases(&phrases).expect("non-empty");
@@ -742,7 +760,7 @@ mod tests {
 
     #[test]
     fn build_prompt_respects_char_budget() {
-        // 6 文字 × 50 件 = 300 文字（区切り込みでさらに増える）→ 予算超過分は捨てる。
+        // 6 chars x 50 entries = 300 chars (more with separators) -> overflow entries are dropped.
         let phrases: Vec<String> = (0..50).map(|i| format!("word{:02}", i)).collect();
         let prompt = build_prompt_from_phrases(&phrases).expect("non-empty");
         assert!(
@@ -756,12 +774,12 @@ mod tests {
 
     #[test]
     fn build_prompt_includes_first_entries_when_truncating_in_order() {
-        // 順序保証：登録順の早いものから入る。後続が落ちる。
+        // Order guarantee: earliest entries fill first; later ones drop.
         let phrases: Vec<String> = (0..100).map(|i| format!("entry{:03}", i)).collect();
         let prompt = build_prompt_from_phrases(&phrases).expect("non-empty");
         assert!(prompt.contains("entry000"));
         assert!(prompt.contains("entry001"));
-        // 100 件 × 8 文字以上は確実に予算超過 → 末尾は入らない
+        // 100 entries x 8+ chars surely exceeds the budget -> the tail is dropped
         assert!(!prompt.contains("entry099"));
     }
 
@@ -949,7 +967,7 @@ mod tests {
 
     #[test]
     fn extract_confident_text_missing_metrics_keeps_segment() {
-        // provider が指標を返さない場合は「不丢弃」＝そのまま残す（無害空転）。
+        // When the provider returns no metrics, "keep" = leave the segment as-is (harmless no-op).
         let json = serde_json::json!({
             "text": "x",
             "segments": [ {"text": "保留される"} ]
@@ -959,23 +977,23 @@ mod tests {
 
     #[test]
     fn placeholder_heading_detects_pure_hash_runs_only() {
-        // issue #787：GLM-ASR 偶发返回仅含 `#` 的占位文本。
+        // issue #787: GLM-ASR occasionally returns placeholder text of only `#`.
         assert!(is_placeholder_heading("#"));
         assert!(is_placeholder_heading("##"));
         assert!(is_placeholder_heading("###"));
         assert!(is_placeholder_heading("  ##  "));
-        // 含其它字符的真实内容不受影响。
+        // Real content with other characters is unaffected.
         assert!(!is_placeholder_heading("C#"));
         assert!(!is_placeholder_heading("# 你好"));
         assert!(!is_placeholder_heading("#hash"));
-        // 空 / 空白输入不命中。
+        // Empty / whitespace input doesn't match.
         assert!(!is_placeholder_heading(""));
         assert!(!is_placeholder_heading("   "));
     }
 
     #[tokio::test]
     async fn single_placeholder_chunk_transcribes_to_empty() {
-        // 单分片响应为 `#` → 归一化为空转写。
+        // A single-chunk response of `#` normalizes to an empty transcript.
         for text in ["#", "##", "###"] {
             let (base_url, server) = start_whisper_test_server(vec![text]);
             let asr = WhisperBatchASR::new(
@@ -997,7 +1015,7 @@ mod tests {
 
     #[tokio::test]
     async fn placeholder_chunk_is_dropped_when_joining() {
-        // 分片 ["你好", "#", "世界"] → 占位分片被丢弃，正常分片保留。
+        // A placeholder chunk among real chunks is dropped; real chunks are kept.
         let (base_url, server) = start_whisper_test_server(vec!["你好", "#", "世界"]);
         let asr = WhisperBatchASR::new(
             "key".to_string(),
@@ -1017,7 +1035,8 @@ mod tests {
 
     #[tokio::test]
     async fn all_placeholder_chunks_transcribe_to_empty() {
-        // 全部分片均为 `#` → 整体转写为空（走 coordinator 空转写护栏）。
+        // All chunks are `#` -> the whole transcript is empty (exercises the
+        // coordinator's empty-transcript guard).
         let (base_url, server) = start_whisper_test_server(vec!["#", "##", "###"]);
         let asr = WhisperBatchASR::new(
             "key".to_string(),
@@ -1079,8 +1098,9 @@ mod tests {
 
     #[tokio::test]
     async fn openrouter_format_posts_json_with_base64_audio() {
-        // issue #582：OpenRouterJson 走 application/json + input_audio.data(base64)，
-        // 而非 multipart；响应仍按 {text} 解析。
+        // issue #582: OpenRouterJson posts application/json with
+        // input_audio.data (base64) instead of multipart; the response is
+        // still parsed as {text}.
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let addr = listener.local_addr().unwrap();
@@ -1109,7 +1129,7 @@ mod tests {
             assert!(request_text.starts_with("POST /audio/transcriptions HTTP/1.1"));
             assert!(lower.contains("content-type: application/json"));
             assert!(lower.contains("authorization: bearer key"));
-            // body 是 JSON：含 input_audio.data + format:"wav"，且不是 multipart。
+            // Body is JSON: contains input_audio.data + format:"wav", not multipart.
             assert!(request_text.contains("input_audio"));
             assert!(request_text.contains(r#""format":"wav""#));
             assert!(!lower.contains("multipart/form-data"));
@@ -1136,8 +1156,9 @@ mod tests {
 
     #[tokio::test]
     async fn zenmux_format_posts_json_with_language_and_itn() {
-        // issue #837：ZenMuxJson 走 application/json + input_audio.data(base64)，
-        // 语言有映射时发送、enable_itn 恒显式发送；响应仍按 {text} 解析。
+        // issue #837: ZenMuxJson posts application/json with
+        // input_audio.data (base64); language is sent when mapped and
+        // enable_itn is always sent explicitly; the response is parsed as {text}.
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let addr = listener.local_addr().unwrap();
@@ -1196,7 +1217,7 @@ mod tests {
 
     #[tokio::test]
     async fn zenmux_format_omits_language_when_unset_and_sends_false_itn() {
-        // language 无映射（None）时不发送该字段；enable_itn=false 显式发送 false。
+        // With no language mapping (None), the field is omitted; enable_itn=false is sent explicitly.
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let addr = listener.local_addr().unwrap();
@@ -1248,8 +1269,8 @@ mod tests {
 
     #[tokio::test]
     async fn empty_api_key_omits_authorization_header() {
-        // openai-compatible 允许 API Key 留空（LAN 无鉴权端点）：请求不得携带
-        // 空 Bearer 头，避免被服务端 401 拒绝。
+        // openai-compatible allows an empty API key (LAN no-auth endpoints):
+        // the request must not carry an empty Bearer header, which servers 401.
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let addr = listener.local_addr().unwrap();
@@ -1298,8 +1319,9 @@ mod tests {
 
     #[tokio::test]
     async fn hotwords_sent_as_json_array_field_without_prompt() {
-        // StepFun 形状：词典走一等 `hotwords`（JSON 数组字符串）而非 `prompt`；
-        // 空白词条过滤后编码。
+        // StepFun shape: the dictionary goes through the first-class `hotwords`
+        // (JSON array string) instead of `prompt`; blank entries are filtered
+        // before encoding.
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let addr = listener.local_addr().unwrap();

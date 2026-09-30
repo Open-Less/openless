@@ -67,8 +67,10 @@ pub async fn inject_hotkey_click_for_dev(coord: CoordinatorState<'_>) -> Result<
     coord.inject_hotkey_click_for_dev().await
 }
 
-/// `style_pack_id` 省略 = 用当前激活风格包（历史页「重试」）；给了 id = 用指定风格包
-/// 试算一次（历史页「换风格重润色」），不改变激活状态。
+/// Omitting `style_pack_id` = use the currently active style pack (history
+/// page "retry"); passing an id = trial-polish once with that style pack
+/// (history page "re-polish with another style") without changing the active
+/// one.
 #[tauri::command]
 pub async fn repolish(
     core: CoreState<'_>,

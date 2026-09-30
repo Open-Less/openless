@@ -1,9 +1,10 @@
 #![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
-//! 火山引擎大模型流式 ASR 二进制帧编解码。
+//! Binary frame codec for Volcengine large-model streaming ASR.
 //!
-//! 帧结构通常为：4 字节 header + 可选 sequence + 4 字节大端 payload size + payload。
-//! 为了避免运行时依赖 gzip 实现，这里显式使用 no compression；官方协议允许客户端选择
-//! no compression，服务端会沿用客户端声明的压缩方式。
+//! Frame layout: 4-byte header + optional sequence + 4-byte big-endian
+//! payload size + payload. Explicitly uses no compression to avoid a runtime
+//! gzip dependency; the official protocol lets the client choose no
+//! compression, and the server follows whatever the client declares.
 
 const HEADER_BYTE_0: u8 = 0x11; // header_size = 1 * 4 = 4 bytes, version = 1
 const COMPRESSION_NONE: u8 = 0b0000;

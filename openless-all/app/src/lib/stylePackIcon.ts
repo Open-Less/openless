@@ -4,7 +4,7 @@ const MAX_SVG_BYTES = 256 * 1024;
 const MAX_PNG_BYTES = 64 * 1024;
 const ICON_SIZE = 128;
 
-/** 清理 SVG 的可执行内容和外部引用，保留图形、渐变与内部遮罩。 */
+/** Strip executable content and external references from an SVG, keeping shapes, gradients, and internal masks. */
 export function sanitizeStyleSvg(source: string): string {
   if (/<!DOCTYPE|<!ENTITY/i.test(source)) throw new Error('invalidSvg');
   const document = new DOMParser().parseFromString(source, 'image/svg+xml');
@@ -29,7 +29,8 @@ export function sanitizeStyleSvg(source: string): string {
   });
   const svg = new DOMParser().parseFromString(clean, 'image/svg+xml').documentElement;
   if (svg.localName !== 'svg') throw new Error('invalidSvg');
-  // 只允许引用同一 SVG 中的元素，避免解码图标时请求网络或本地文件。
+  // Only references to elements within the same SVG are allowed, so decoding the icon never
+  // requests the network or local files.
   for (const element of [svg, ...Array.from(svg.querySelectorAll('*'))]) {
     for (const attribute of Array.from(element.attributes)) {
       if (attribute.localName === 'href' && !attribute.value.trim().startsWith('#')) {
@@ -64,7 +65,7 @@ function hasExternalCssReference(value: string): boolean {
   );
 }
 
-/** 转成风格包已有的 PNG 资源格式；128px 输出仍须满足 Core 的 64 KiB 上限。 */
+/** Convert to the PNG resource format the style pack already uses; the 128px output must still fit Core's 64 KiB cap. */
 export async function rasterizeStyleSvg(file: File): Promise<number[]> {
   if (
     !file.name.toLowerCase().endsWith('.svg') ||
@@ -93,7 +94,7 @@ export async function rasterizeStyleSvg(file: File): Promise<number[]> {
   }
 }
 
-/** 图片仅通过 img 展示；拒绝可执行类型和超过资源上限的返回值。 */
+/** Images render only via img; reject executable types and returns above the resource cap. */
 export function isStyleIconDataUrl(value: string | null): value is string {
   return (
     value !== null &&

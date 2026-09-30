@@ -1,8 +1,8 @@
-// Translation.tsx — 独立的"翻译"页，从 Settings → 录音 中拆出来。
-// 用户在这里：
-//   - 勾选自己的工作语言（多选，用作 LLM polish/translate prompt 的前提）
-//   - 选一个翻译目标语言（单选；选"不启用"则 Shift 不触发翻译）
-//   - 看完整使用说明（怎么触发、按钮位置、胶囊显示）
+// Translation.tsx — a standalone "translation" page, split out of Settings → Recording.
+// Here the user:
+//   - checks their working languages (multi-select, a precondition for the LLM polish/translate prompt)
+//   - picks one translation target language (single-select; "disabled" means Shift never triggers translation)
+//   - reads the full usage guide (how to trigger, button position, capsule display)
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -202,8 +202,10 @@ export function Translation() {
 
   const triggerLabel = formatComboLabel(prefs.dictationHotkey);
   const translationHotkeyLabel = formatComboLabel(prefs.translationHotkey);
-  // 「已启用」= 选了目标语言 **且** 该目标真的会触发翻译。目标等于唯一工作语言时后端
-  // 走普通润色，状态灯不能还亮着说已启用（否则用户按 Shift 什么都没发生，无从排查）。
+  // "Enabled" = a target language is chosen **and** that target really triggers translation.
+  // When the target equals the only working language the backend does plain polishing, so the
+  // status light must not claim enabled (otherwise pressing Shift does nothing and gives the
+  // user no way to debug it).
   const redundantTarget = isTranslationTargetRedundant(
     prefs.translationTargetLanguage,
     prefs.workingLanguages,
@@ -277,10 +279,10 @@ export function Translation() {
           </span>
         </div>
 
-        {/* 宽屏下「工作语言 / 目标语言」并排两栏（窄屏自动叠成一栏），
-            语言 chips 用对齐的均匀网格代替自由换行，避免参差的标签云。 */}
+        {/* On wide screens "working language / target language" sit side by side (narrow screens stack);
+            language chips use an aligned uniform grid instead of free wrapping, avoiding a ragged tag cloud. */}
         <div className="ol-translation-grid">
-          {/* 1. 工作语言 */}
+          {/* 1. Working languages */}
           <Card style={{ display: 'flex', flexDirection: 'column' }}>
             <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 6 }}>
               {t('translation.working.title')}
@@ -330,7 +332,7 @@ export function Translation() {
             <p className="ol-translation-language-hint">{t('translation.languageSupportHint')}</p>
           </Card>
 
-          {/* 2. 翻译目标语言 */}
+          {/* 2. Translation target language */}
           <Card style={{ display: 'flex', flexDirection: 'column' }}>
             <div
               style={{
@@ -427,7 +429,7 @@ export function Translation() {
           </Card>
         </div>
 
-        {/* 3. 使用方法：编号步骤条，宽屏一行铺开、窄屏自动折行 */}
+        {/* 3. How to use: numbered step strip, one row on wide screens, wraps on narrow ones */}
         <Card>
           <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 12 }}>
             {t('translation.howto.title')}

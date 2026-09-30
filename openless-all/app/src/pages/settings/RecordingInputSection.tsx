@@ -1,4 +1,5 @@
-// 录音与输入设置：录音方式、提示音、输入行为及平台专属选项。
+// Recording & input settings: recording mode, audio cues, input behavior, and
+// platform-specific options.
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -32,7 +33,7 @@ import { SectionTitle, SettingRow, Toggle, inputStyle, segmentedTrackStyle } fro
 import { MicrophoneSelect } from './MicrophoneSelect';
 import { detectOS } from '../../components/WindowChrome';
 
-/** 「静音后自动停止」的可选静音时长（秒），见 issue #860。 */
+/** Selectable silence durations (seconds) for "auto-stop after silence"; see issue #860. */
 const silenceAutoStopOptions = [1, 1.5, 2, 3, 4, 5];
 
 async function autostartIsEnabled(): Promise<boolean> {
@@ -188,14 +189,18 @@ export function RecordingInputSection() {
   const onAutoUpdateCheckChange = (autoUpdateCheck: boolean) =>
     savePrefs({ ...prefs, autoUpdateCheck });
 
-  // 录音方式（按住说话 / 自动等）横向选框的滑动指示块：跟随选中项移动，
-  // left/width 过渡就是切换动画。按钮的 offsetParent 就是 track（position:relative），
-  // offsetLeft 与绝对定位 thumb 的 containing block 同原点（track padding 边），
-  // 直接赋值即可；useLayoutEffect 在 paint 前定位，首帧无闪动。
-  // 依赖必须含 showDesktopHotkey：prefs 与 platformCaps 异步加载，首次进入时可能
-  // 出现「activeMode 已定但按钮未挂载」的时序（先 prefs 后 caps），effect 提前
-  // return 后按钮才挂载——不加这个依赖 thumb 就永远不定位（用户反馈：首次进入
-  // 设置不显示当前选择的录音方式）。
+  // Sliding thumb of the horizontal segmented control for the recording mode
+  // (hold-to-talk / auto, etc.): follows the selected item, and the left/width transition
+  // is the switch animation. The button's offsetParent is the track (position:relative),
+  // and offsetLeft shares the containing block origin of the absolutely positioned thumb
+  // (the track's padding edge), so assign directly; useLayoutEffect positions before
+  // paint, so no first-frame flash.
+  // The dependency list must include showDesktopHotkey: prefs and platformCaps load
+  // asynchronously, so on first entry there can be a timing where activeMode is set but
+  // the buttons aren't mounted yet (prefs before caps) and the effect returns early; only
+  // after the buttons mount does this effect run again — without this dependency the thumb
+  // would never be positioned (user report: the selected recording mode wasn't shown on
+  // first visit to settings).
   const modeTrackRef = useRef<HTMLDivElement | null>(null);
   const modeButtonsRef = useRef(new Map<HotkeyMode, HTMLButtonElement>());
   const [modeThumb, setModeThumb] = useState<{ left: number; width: number } | null>(null);
@@ -209,8 +214,9 @@ export function RecordingInputSection() {
       setModeThumb({ left: active.offsetLeft, width: active.offsetWidth });
     };
     measure();
-    // 语言切换（按钮文案重排）/ 窗口缩放都会改变按钮宽高，ResizeObserver 兜底
-    // 重测，避免 thumb 停在旧位置（pr_agent #912 反馈）。
+    // Language switches (button text reflow) and window resizes both change button sizes;
+    // the ResizeObserver re-measures as a safety net so the thumb never stays at a stale
+    // position (pr_agent #912 feedback).
     const observer = new ResizeObserver(measure);
     observer.observe(track);
     return () => observer.disconnect();
@@ -272,8 +278,10 @@ export function RecordingInputSection() {
               disableHint={t('settings.recording.comboDisableHint')}
               onSave={async (binding) => {
                 await setDictationHotkey(binding);
-                // setDictationHotkey 后端已持久化并广播偏好变更；这里 refresh 拉新，
-                // 避免用本地快照整包覆盖期间的其他偏好改动。
+                // setDictationHotkey has already persisted and broadcast the preference
+                // change on the backend; refresh here to pull the latest, avoiding a full
+                // overwrite from the local snapshot that would clobber other preference
+                // changes made in the meantime.
                 await refresh();
               }}
               onReset={async () => {
@@ -290,9 +298,10 @@ export function RecordingInputSection() {
             desc={t('settings.recording.modeDesc')}
           >
             <div ref={modeTrackRef} style={{ ...segmentedTrackStyle, position: 'relative' }}>
-              {/* 滑动指示块：选中态背景/投影移到这上面，切换时 left/width 平滑过渡；
-                按钮本身只变文字颜色。measure 前（首帧 layout effect 前）不渲染，
-                paint 前已定位，无闪动。 */}
+              {/* Sliding thumb: carries the selected-state background/shadow and transitions
+                left/width smoothly on switch; the buttons only change text color. Not
+                rendered before measuring (before the first-frame layout effect); positioned
+                before paint, so no flash. */}
               {modeThumb && (
                 <div
                   style={{
@@ -339,11 +348,13 @@ export function RecordingInputSection() {
           </SettingRow>
         )}
         {showDesktopHotkey && (
-          // 「静音后自动停止」只在切换式（toggle）模式下可用。外层容器恒渲染，
-          // 录音方式从按住/自动切到切换式时整组从下方拉出、切走时收回——与开关
-          // 控制秒数行的动画同款（grid 0fr→1fr），不再「突然跳出」。收起时内容
-          // 仍在 DOM 里（overflow hidden），动画结束高度归 0、不占布局；inert
-          // 把折叠态控件移出 tab 顺序与 a11y 树（与 Collapsible 同款，pr_agent 反馈）。
+          // "Auto-stop after silence" is only available in toggle mode. The outer container
+          // always renders: switching the mode from hold/auto to toggle pulls the whole
+          // group out from below, and switching away collapses it — the same grid 0fr→1fr
+          // animation as the toggle-controlled seconds row, no more "sudden pop-in". While
+          // collapsed the content stays in the DOM (overflow hidden), height animates to 0
+          // and takes no layout space; inert removes the collapsed controls from tab order
+          // and the a11y tree (same as Collapsible; pr_agent feedback).
           <div
             style={{
               display: 'grid',
@@ -360,15 +371,17 @@ export function RecordingInputSection() {
                 label={t('settings.recording.silenceAutoStopLabel')}
                 desc={t('settings.recording.silenceAutoStopDesc')}
               >
-                {/* 开关行只放 Toggle：秒数下拉移出本行，避免开关时行内内容变宽导致抖动。 */}
+                {/* The toggle row holds only the Toggle: move the seconds dropdown out of
+                    this row to avoid jitter from the row widening when toggled. */}
                 <Toggle
                   on={prefs.silenceAutoStopEnabled}
                   onToggle={(next) => savePrefs({ ...prefs, silenceAutoStopEnabled: next })}
                 />
               </SettingRow>
-              {/* 开启后在本行下方展开「静音时长」选择行。展开/收起走 grid 0fr→1fr
-                过渡（嵌套在外层容器内，随外层一起拉出/收回）。终点高度固定
-                （SettingRow 自身高度），反复开关不会跳动。 */}
+              {/* When enabled, expand the "silence duration" selector row below. Expand/collapse
+                uses a grid 0fr→1fr transition (nested in the outer container, pulled
+                out/collapsed together with it). The final height is fixed (SettingRow's own
+                height), so repeated toggling never jumps. */}
               <div
                 style={{
                   display: 'grid',
@@ -382,8 +395,9 @@ export function RecordingInputSection() {
               >
                 <div style={{ overflow: 'hidden', minHeight: 0 }}>
                   <SettingRow label={t('settings.recording.silenceAutoStopSecondsLabel')}>
-                    {/* 与麦克风下拉同款视觉：SelectLite 默认触发器底色 + 固定 200 宽 →
-                      右边缘与「MacBook Air 麦克风」对齐（control 区域同起点同宽）。 */}
+                    {/* Same visuals as the microphone dropdown: SelectLite default trigger
+                      background + fixed 200px width → right edge aligns with "MacBook Air
+                      Microphone" (control areas share the same start and width). */}
                     <SelectLite
                       value={String(
                         silenceAutoStopOptions.includes(prefs.silenceAutoStopSeconds)
@@ -523,7 +537,7 @@ export function RecordingInputSection() {
         </SettingRow>
       </Card>
 
-      {/* ─── 插入与剪贴板（折叠，仅 macOS / Windows） ──────────────── */}
+      {/* ─── Insertion & clipboard (collapsed; macOS / Windows only) ──────────────── */}
       {showDesktopInsert && (
         <Collapsible title={t('settings.recording.insertGroupTitle')}>
           <SettingRow
@@ -654,8 +668,10 @@ export function RecordingInputSection() {
               />
             </SettingRow>
           )}
-          {/* 流式输入：润色 SSE 一边到达一边模拟键盘逐字落到光标，降低感知延迟。
-            不满足条件时自动回落一次性插入。属于「插入行为」，故归到本组。 */}
+          {/* Streaming input: as the polish SSE stream arrives, keystrokes are simulated
+            character by character at the cursor to cut perceived latency. Falls back
+            automatically to one-shot insertion when conditions aren't met. It's an
+            "insertion behavior", hence grouped here. */}
           <SettingRow label={t('settings.advanced.streamingInsertLabel')}>
             <Toggle
               on={!!prefs.streamingInsert}
@@ -670,7 +686,7 @@ export function RecordingInputSection() {
           </SettingRow>
         </Collapsible>
       )}
-      {/* ─── 启动（折叠） ──────────────────────────────────────────── */}
+      {/* ─── Startup (collapsed) ──────────────────────────────────────────── */}
       {showDesktopStartup && (
         <Collapsible title={t('settings.recording.startupGroupTitle')} defaultOpen>
           <AutostartRow />
@@ -692,7 +708,8 @@ function AutostartRow() {
   const { t } = useTranslation();
   const [enabled, setEnabled] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  // 切 plist / 注册表失败时给用户看的错误。null = 没有失败/上次操作已成功。
+  // Error shown to the user when switching the plist / registry fails. null = no failure /
+  // the last operation succeeded.
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {

@@ -1,6 +1,8 @@
-// 高级 → 调试工具：保留原始录音、导出错误日志等排障入口。
-// recordAudioForDebug 行自 Settings.tsx 的 RecordingSection 拆出；
-// 导出错误日志自 SettingsModal 的 AboutMini 迁入 —— 调试相关集中到此处。
+// Advanced → Debug tools: troubleshooting entries such as keeping raw recordings and exporting
+// the error log.
+// The recordAudioForDebug row was split out of RecordingSection in Settings.tsx;
+// export-error-log migrated from AboutMini in SettingsModal — debug-related entries are
+// centralized here.
 
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -20,7 +22,8 @@ export function DebugToolsSection() {
   const [exportStatus, setExportStatus] = useState<'idle' | 'busy' | 'ok' | 'err'>('idle');
   const [exportMessage, setExportMessage] = useState<string>('');
   const exportTimerRef = useRef<number | null>(null);
-  // 光标上下文探针。倒计时让用户有时间切到目标 app —— 见 onProbeCursorContext。
+  // Cursor context probe. The countdown gives the user time to switch to the target app — see
+  // onProbeCursorContext.
   const [probeCountdown, setProbeCountdown] = useState(0);
   const [probeResult, setProbeResult] = useState<HostDocumentReadResult | null>(null);
   const [probeError, setProbeError] = useState<string | null>(null);
@@ -34,10 +37,12 @@ export function DebugToolsSection() {
     [],
   );
 
-  /// 点一下 → 倒数几秒 → 读一次前台 app 的光标上下文。
+  /// Click → count down a few seconds → read the foreground app's cursor context once.
   ///
-  /// 必须有倒计时：点按钮的那一刻前台 app 是 OpenLess 自己，直接读只会读到我们自己的
-  /// 设置窗口。倒计时期间切到备忘录 / VS Code / 微信里点进输入框，探针才读得到真东西。
+  /// A countdown is required: at the moment the button is clicked the foreground app is OpenLess
+  /// itself, so reading directly would only read our own settings window. During the countdown the
+  /// user switches to Notes / VS Code / WeChat and clicks into an input field, and only then does
+  /// the probe read something real.
   const PROBE_DELAY_SECONDS = 5;
   const onProbeCursorContext = async () => {
     setProbeResult(null);
@@ -90,7 +95,7 @@ export function DebugToolsSection() {
 
   const onRecordAudioForDebugChange = (recordAudioForDebug: boolean) =>
     savePrefs({ ...prefs, recordAudioForDebug });
-  // 留空视为不限制，落回 null → 后端走 200 默认。
+  // Empty means unlimited, falling back to null → the backend applies its 200 default.
   const onAudioRecordingMaxEntriesChange = (raw: string) => {
     const trimmed = raw.trim();
     if (trimmed === '') {
@@ -134,8 +139,8 @@ export function DebugToolsSection() {
           )}
         </div>
       </SettingRow>
-      {/* 光标上下文探针。里程碑 1 的产物「能肉眼看它在各 app 里读到了什么」——
-          没有这个入口，那条命令就等于不存在。 */}
+      {/* Cursor context probe. Milestone 1's deliverable "see with your own eyes what it reads in
+          each app" — without this entry point, that command might as well not exist. */}
       <SettingRow
         label={t('settings.debug.cursorProbeLabel')}
         desc={t('settings.debug.cursorProbeDesc')}
@@ -210,7 +215,7 @@ export function DebugToolsSection() {
               title={exportMessage}
             >
               {t('modal.about.exportSuccess')}
-              {mobile && exportMessage ? `：${exportMessage}` : ''}
+              {exportMessage ? `：${exportMessage}` : ''}
             </span>
           )}
           {exportStatus === 'err' && (

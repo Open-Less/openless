@@ -244,7 +244,7 @@ pub(crate) fn backend_dependencies(
         ));
     dependencies.qa_runtime = Some(Arc::new(crate::qa_adapter::TauriQaRuntimeAdapter::new(
         Arc::clone(&app),
-        backend,
+        Arc::clone(&backend),
         Arc::clone(&credential_store),
         Arc::clone(&qa_host_context),
     )));
@@ -267,7 +267,7 @@ pub(crate) fn backend_dependencies(
             Some(Arc::new(TauriSelectionRuntime::new(Arc::clone(&app))));
         dependencies.selection_polisher = Some(polisher);
     }
-    dependencies.text_inserter = Arc::new(TauriTextInserter::new(Arc::clone(&app)));
+    dependencies.text_inserter = Arc::new(TauriTextInserter::new(Arc::clone(&app), backend));
     dependencies.host_actions = Arc::new(TauriHostActions::new(app, qa_host_context));
     dependencies.dictation_engine = dictation;
     dependencies.credential_store = credential_store;
@@ -629,9 +629,10 @@ impl openless_core::ModelRuntimeAdapter for TauriLocalAsrRuntimeAdapter {
                             )
                         })
                 }
-                // Generic 模型文件已由 Core ModelStore 校验完整性。与 Foundry/Sherpa
-                // 不同，它没有额外的 native runtime 安装阶段；真正加载留给 preload，
-                // 此时才能拿到本次激活的 MLX/C provider，不能偷读尚未提交的旧偏好。
+                // Generic model files are already integrity-verified by the Core ModelStore.
+                // Unlike Foundry/Sherpa it has no extra native runtime install phase; real
+                // loading is left to preload, where the MLX/C provider activated for this run
+                // becomes available — never read the not-yet-committed old preferences.
                 openless_core::LocalAsrRuntime::Generic => {
                     let model = native_local_asr_model(&target)?;
                     if cfg!(target_os = "macos") {
@@ -855,9 +856,10 @@ impl TauriLocalAsrRuntimeAdapter {
         let whisper_cache = Arc::clone(&self.native.whisper_cache);
         Box::pin(async move {
             if target.runtime != openless_core::LocalAsrRuntime::Generic {
-                // Windows 的 prepare 已完成加载；统一 preload 阶段只验证回执。
-                // preload 也可被单独调用，所以必须核对真实已加载 alias，不能虚报
-                // 成功，也不能像旧实现那样用 Unsupported 推翻成功的 prepare。
+                // On Windows prepare already finished loading; the unified preload phase only
+                // verifies the receipt. preload can also be called standalone, so the really
+                // loaded alias must be checked — never fake success, and never overturn a
+                // successful prepare with Unsupported like the old implementation did.
                 #[cfg(target_os = "windows")]
                 {
                     let ready = match target.runtime {
@@ -946,7 +948,6 @@ impl TauriLocalAsrRuntimeAdapter {
             ))
         })
     }
-
 }
 
 #[derive(Clone)]
@@ -1069,9 +1070,10 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
             };
             return Err(BackendError::new(error_code, code));
         }
-        // 贴上前一刻的最终防线：validate 的 simulate_copy 兜底期间前台焦点
-        // 可能跳走（对方恰好暴露相同文本时文本比对会放行），这里再核一次
-        // 捕获时的前台应用是否仍是前台，不是就拒绝。
+        // Final line of defense right before pasting: during validate's simulate_copy fallback
+        // the foreground focus may have jumped away (if the other app happens to expose the same
+        // text, the text comparison lets it through). Re-check that the app captured at capture
+        // time is still foreground; if not, refuse.
         #[cfg(target_os = "macos")]
         if !crate::selection::selection_target_still_front(target) {
             return Err(BackendError::new(
@@ -1622,8 +1624,9 @@ impl TranscriptionEngine for TauriNativeTranscriptionEngine {
         context: Arc<DictationContext>,
         partials: Arc<dyn TextStreamSink>,
     ) -> BoxFuture<'static, Result<Arc<dyn TranscriptionSession>, BackendError>> {
-        // 两个 Windows runtime 独立计代；切到 Sherpa 不能让 Foundry 的释放永久失效。
-        // 设置页 prepare/release 也共享这些代次，旧会话不能卸载新启用的模型。
+        // The two Windows runtimes count generations independently; switching to Sherpa must not
+        // permanently invalidate Foundry's release. Settings-page prepare/release also shares
+        // these generations: an old session must not unload a newly enabled model.
         #[cfg(target_os = "windows")]
         let current_generation = Arc::clone(
             if context.asr.provider_type == openless_core::LocalAsrRuntime::Foundry.provider_id() {
@@ -1973,8 +1976,9 @@ impl TranscriptionSession for TauriNativeTranscriptionSession {
         Box::pin(async move {
             #[cfg(target_os = "windows")]
             let mut recovery = None;
-            // 不在各分支的 ? 前安排释放：所有结果统一从这里经过。cancel 与 finish
-            // 可能并发，released 保证资源收尾只安排一次；旧 generation 不清掉新会话。
+            // Don't arrange the release before each branch's `?`: all results flow through this
+            // one point. cancel and finish may run concurrently; `released` guarantees resource
+            // teardown is arranged only once, and an old generation can't clear a new session.
             let result = async {
             let output = match kind {
                 #[cfg(target_os = "windows")]
@@ -2141,8 +2145,9 @@ fn foundry_transcription_notices(
     released: Arc<AtomicBool>,
 ) -> crate::asr::local::foundry_runtime::FoundryFallbackNoticeCallback {
     Arc::new(move |notice| {
-        // 直接进入同一Core事件流：CPU首次下载可能很久，不能等finish返回后
-        // 才发提示。回调只持Weak Backend，finish/失败/cancel共用released收尾。
+        // Feed directly into the same Core event stream: a first CPU download can take very
+        // long, so the notice can't wait for finish to return. The callback holds only a Weak
+        // Backend; finish/failure/cancel share the `released` teardown.
         if released.load(Ordering::Acquire) {
             return;
         }
@@ -2253,8 +2258,8 @@ async fn await_native_transcription<T>(
     timeout: std::time::Duration,
     operation: impl std::future::Future<Output = Result<T, BackendError>>,
 ) -> Result<T, BackendError> {
-    // timeout 只停止等待。调用者必须 cancel_native 并驱逐自己的 cache；
-    // spawn_blocking / Whisper C API 不会因 future 被 drop 而自动停止执行。
+    // The timeout only stops waiting. The caller must cancel_native and evict its own cache;
+    // spawn_blocking / the Whisper C API do not stop automatically when the future is dropped.
     tokio::time::timeout(timeout, operation)
         .await
         .map_err(|_| {
@@ -2509,17 +2514,21 @@ impl RecordingArchive for TauriRecordingArchive {
                 ));
             };
             let target = crate::persistence::quick_note_recordings_root()
-                .map_err(|error| BackendError::new(BackendErrorCode::Persistence, error.to_string()))?
+                .map_err(|error| {
+                    BackendError::new(BackendErrorCode::Persistence, error.to_string())
+                })?
                 .join(file_name);
             if current == target {
                 return Ok(());
             }
-            tokio::fs::rename(&current, &target).await.map_err(|error| {
-                BackendError::new(
-                    BackendErrorCode::Persistence,
-                    format!("promote quick-note recording archive: {error}"),
-                )
-            })?;
+            tokio::fs::rename(&current, &target)
+                .await
+                .map_err(|error| {
+                    BackendError::new(
+                        BackendErrorCode::Persistence,
+                        format!("promote quick-note recording archive: {error}"),
+                    )
+                })?;
             *path.lock() = target;
             Ok(())
         })
@@ -2536,17 +2545,21 @@ impl RecordingArchive for TauriRecordingArchive {
                 ));
             };
             let target = crate::persistence::recordings_root()
-                .map_err(|error| BackendError::new(BackendErrorCode::Persistence, error.to_string()))?
+                .map_err(|error| {
+                    BackendError::new(BackendErrorCode::Persistence, error.to_string())
+                })?
                 .join(file_name);
             if current == target {
                 return Ok(());
             }
-            tokio::fs::rename(&current, &target).await.map_err(|error| {
-                BackendError::new(
-                    BackendErrorCode::Persistence,
-                    format!("move recording archive to ordinary storage: {error}"),
-                )
-            })?;
+            tokio::fs::rename(&current, &target)
+                .await
+                .map_err(|error| {
+                    BackendError::new(
+                        BackendErrorCode::Persistence,
+                        format!("move recording archive to ordinary storage: {error}"),
+                    )
+                })?;
             *path.lock() = target;
             Ok(())
         })
@@ -2583,9 +2596,11 @@ impl ActiveRecording for TauriActiveRecording {
     }
 }
 
-/// 归档和系统输出静音沿用1.x的best-effort语义：目录不可写、没有默认扬声器或
-/// macOS音量脚本失败，都不意味着输入麦克风不可用。分别告警并关闭失败的辅助项，
-/// 让后面的Recorder::start独立报告真实采集错误；成功的静音guard仍由录音资源持有。
+/// Archiving and system output muting keep 1.x best-effort semantics: an unwritable directory,
+/// no default speaker, or a failed macOS volume script does not mean the input microphone is
+/// unusable. Warn on each failure and disable only the failed auxiliary item, letting the later
+/// `Recorder::start` report the real capture error; a successful mute guard stays owned by the
+/// recording resources.
 fn prepare_recording_options<M>(
     archive_path: Result<Option<PathBuf>, impl std::fmt::Display>,
     mute_enabled: bool,
@@ -2624,9 +2639,10 @@ impl AudioRecorder for TauriAudioRecorder {
                     preview.stop();
                 }
             }
-            let permanent_archive = !matches!(
+            let permanent_archive = matches!(
                 context.output_target,
-                openless_core::DictationOutputTarget::ForegroundApp
+                openless_core::DictationOutputTarget::QuickNote
+                    | openless_core::DictationOutputTarget::Undecided
             );
             // Undecided Android captures use the permanent quick-note spool
             // until the terminal tap/gesture classifies the session.
@@ -2746,6 +2762,7 @@ fn map_recorder_error(error: RecorderError) -> BackendError {
 #[derive(Clone)]
 pub(crate) struct TauriTextInserter {
     app: AppHandleSlot,
+    backend: BackendSlot,
     insertion_target: Option<crate::selection::SelectionInsertionTarget>,
     #[cfg(target_os = "windows")]
     windows_ime: Arc<crate::windows_ime_session::WindowsImeSessionController>,
@@ -2762,8 +2779,11 @@ impl EditObservationAdapter for TauriEditObservationAdapter {
         typed_text: String,
         sink: Arc<dyn EditObservationSink>,
     ) -> Result<(), BackendError> {
-        *self.watcher.lock() =
-            crate::host_document::watch_for_edits(typed_text, move |edit| sink.publish(edit));
+        *self.watcher.lock() = crate::host_document::watch_for_edits(
+            typed_text,
+            sink.observation_duration(),
+            move |edit| sink.publish(edit),
+        );
         Ok(())
     }
 
@@ -2773,9 +2793,10 @@ impl EditObservationAdapter for TauriEditObservationAdapter {
 }
 
 impl TauriTextInserter {
-    fn new(app: AppHandleSlot) -> Self {
+    fn new(app: AppHandleSlot, backend: BackendSlot) -> Self {
         Self {
             app,
+            backend,
             insertion_target: None,
             #[cfg(target_os = "windows")]
             windows_ime: Arc::new(crate::windows_ime_session::WindowsImeSessionController::new()),
@@ -2783,8 +2804,9 @@ impl TauriTextInserter {
     }
 }
 
-/// 只有实际流式输入才切 ABC。TIS 失败是平台能力降级，不能阻断无需 TIS 的
-/// 一次性粘贴；Core 读取 supports_streaming 回执，仍独占 reconciliation 策略。
+/// Switch ABC only for actual streaming input. A TIS failure is a platform capability
+/// downgrade and must not block a one-shot paste that doesn't need TIS; Core reads the
+/// supports_streaming receipt and keeps exclusive control of the reconciliation policy.
 #[cfg(any(target_os = "macos", test))]
 async fn prepare_streaming_input_source<T: Default, E: std::fmt::Display, F>(
     streaming: bool,
@@ -2945,6 +2967,7 @@ impl CoreTextInserter for TauriTextInserter {
         context: Arc<DictationContext>,
     ) -> BoxFuture<'static, Result<Arc<dyn TextInsertionSession>, BackendError>> {
         let app = Arc::clone(&self.app);
+        let backend = Arc::clone(&self.backend);
         let insertion_target = self.insertion_target.clone();
         #[cfg(target_os = "windows")]
         let windows_ime = Arc::clone(&self.windows_ime);
@@ -3029,6 +3052,7 @@ impl CoreTextInserter for TauriTextInserter {
             let _ = app;
             Ok(Arc::new(TauriTextInsertionSession {
                 session_id,
+                backend,
                 context,
                 insertion_target,
                 finished: Arc::new(AtomicBool::new(false)),
@@ -3056,6 +3080,7 @@ impl CoreTextInserter for TauriTextInserter {
 #[derive(Clone)]
 struct TauriTextInsertionSession {
     session_id: SessionId,
+    backend: BackendSlot,
     context: Arc<DictationContext>,
     insertion_target: crate::selection::SelectionInsertionTarget,
     finished: Arc<AtomicBool>,
@@ -3154,7 +3179,7 @@ impl TauriTextInsertionSession {
 
     async fn insert_final(&self, text: String) -> Result<InsertOutcome, BackendError> {
         if let Err(error) = self.restore_insertion_target() {
-            // 原目标不可用时只复制，不能向当前焦点粘贴或发送按键。
+            // When the original target is unavailable, copy only — never paste or send keystrokes to the current focus.
             #[cfg(target_os = "windows")]
             if self.context.insertion.allow_non_tsf_fallback {
                 return self.copy_fallback(text).await;
@@ -3205,11 +3230,33 @@ impl TauriTextInsertionSession {
                     windows_unicode_fallback(&self.context, &text)
                 }
                 openless_core::shared_types::WindowsInsertionMode::Paste => {
-                    crate::insertion::TextInserter::new().insert(
-                        &text,
-                        self.context.insertion.restore_clipboard_after_paste,
-                        self.context.insertion.paste_shortcut,
-                    )
+                    let backend = Arc::clone(&self.backend);
+                    let observe = self.context.insertion.observe_edits;
+                    let restore = self.context.insertion.restore_clipboard_after_paste;
+                    let shortcut = self.context.insertion.paste_shortcut;
+                    tauri::async_runtime::spawn_blocking(move || {
+                        crate::host_document::insert_with_delivery_check(
+                            &text,
+                            || {
+                                observe
+                                    && backend
+                                        .lock()
+                                        .as_ref()
+                                        .and_then(|b| b.upgrade())
+                                        .is_some_and(|b| {
+                                            b.get_preferences().vocabulary_learning_enabled
+                                        })
+                            },
+                            || {
+                                crate::insertion::TextInserter::new()
+                                    .insert(&text, restore, shortcut)
+                            },
+                        )
+                    })
+                    .await
+                    .map_err(|error| {
+                        BackendError::new(BackendErrorCode::Internal, error.to_string())
+                    })?
                 }
             };
             return map_insert_status(status);
@@ -3382,8 +3429,9 @@ impl TextInsertionSession for TauriTextInsertionSession {
                     session.insert_final(final_text).await
                 };
                 if let Err(error) = session.restore_platform_state().await {
-                    // 恢复输入源失败并不能撤销已经落下的文字。保留真实交付结果，
-                    // 避免历史误报失败后诱导用户重试造成重复；无论插入成败都记录恢复错误。
+                    // A failed input-source restore cannot undo text already inserted. Keep the
+                    // real delivery outcome — historically a false failure prompted retries that
+                    // duplicated text; log the restore error regardless of insertion success.
                     log::warn!(
                         "[core-adapter] restore input state after insertion failed: {error}"
                     );
@@ -3777,8 +3825,9 @@ mod tests {
 
     #[test]
     fn optional_recording_preparation_failure_keeps_microphone_options_usable() {
-        // 这里只替代文件系统/输出静音边界，不启动真实麦克风或修改系统音量。
-        // 1.x 的这两项准备都允许失败；准备结果仍必须能交给 Recorder::start。
+        // Replace only the filesystem/output-mute boundaries here; don't start a real microphone
+        // or change system volume. Both 1.x preparations are allowed to fail, and their results
+        // must still be handed to Recorder::start.
         let mut options = Vec::new();
         for (archive_fails, mute_fails) in [(true, false), (false, true), (true, true)] {
             let archive_result = if archive_fails {
@@ -3818,7 +3867,7 @@ mod tests {
             });
         assert_eq!(archive, Some(path.clone()));
         assert_eq!(restored.load(Ordering::SeqCst), 0);
-        // 成功的guard必须交给录音资源，而不是在准备结束时提前恢复音量。
+        // A successful guard must be handed to the recording resources, not restore the volume early at the end of preparation.
         drop(mute);
         assert_eq!(restored.load(Ordering::SeqCst), 1);
         let (archive, mute) =
@@ -3947,8 +3996,9 @@ mod tests {
             ),
             Arc::new(openless_core::PreferencesStore::in_memory()),
         );
-        // 这是生产 Adapter 的真实未准备状态；preload 独立调用不能虚报成功，
-        // 也不能声称整个 Windows runtime Unsupported。测试不下载/加载设备模型。
+        // This is the production adapter's real unprepared state; a standalone preload call must
+        // not fake success nor claim the whole Windows runtime Unsupported. The test does not
+        // download/load device models.
         for runtime in [LocalAsrRuntime::Foundry, LocalAsrRuntime::SherpaOnnx] {
             let target = LocalAsrTarget::parse(runtime, runtime.default_model()).unwrap();
             let error = adapter
@@ -4032,8 +4082,9 @@ mod tests {
                 .unwrap(),
             target.model_id()
         );
-        // Preferences 仍是旧的云端渠道。若错误读取它会返回虚假的 Ok；本次指定
-        // Qwen provider + Whisper target 必须在进入任何 native loader 前明确拒绝。
+        // Preferences still hold the old cloud channel; wrongly reading them would return a fake
+        // Ok. A request specifying a Qwen provider + Whisper target must be rejected explicitly
+        // before entering any native loader.
         let wrong_target =
             LocalAsrTarget::parse(LocalAsrRuntime::Generic, "whisper-large-v3-turbo").unwrap();
         let error = adapter

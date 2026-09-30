@@ -239,7 +239,8 @@ function AndroidMicrophoneStep() {
 
   useEffect(() => {
     void refresh();
-    // issue #470：纯事件驱动，去掉高频轮询。窗口重新聚焦或重新可见时刷新（授权必经系统设置再切回）。
+    // issue #470: purely event-driven, no high-frequency polling. Refresh on window
+    // refocus / re-visible (granting always goes through System Settings and back).
     const onFocus = () => {
       void refresh();
     };
@@ -309,7 +310,7 @@ function DesktopOnboarding({
   const [accessibility, setAccessibility] = useState<PermissionStatus>('notDetermined');
   const [microphone, setMicrophone] = useState<PermissionStatus>('notDetermined');
   const [busy, setBusy] = useState(false);
-  // 区分「尚未尝试弹 TCC 对话框」和「TCC 已拒绝」两种 denied 状态。
+  // Distinguish "TCC dialog never shown yet" from "TCC already denied".
   const [tccPromptShown, setTccPromptShown] = useState(false);
   const refreshTimeoutRef = useRef<number | null>(null);
   const { capability } = useHotkeySettings();
@@ -326,7 +327,8 @@ function DesktopOnboarding({
     // onboarding finish before we knew macOS needs Accessibility, dropping users
     // into the app with a dead hotkey. Mirrors the gate in App.tsx.
     const aOk = a === 'granted' || a === 'notApplicable';
-    // noDevice = 当前没有麦克风设备，不是权限问题，不阻塞进入应用。
+    // noDevice = no microphone device present; not a permission issue, don't block
+    // entering the app.
     const mOk = m === 'granted' || m === 'notApplicable' || m === 'noDevice';
     if (aOk && mOk) {
       onComplete();
@@ -335,7 +337,9 @@ function DesktopOnboarding({
 
   useEffect(() => {
     void refresh();
-    // issue #470：纯事件驱动，去掉每秒轮询。授权必经系统设置 App，切回 OpenLess 必触发 focus/visibilitychange。
+    // issue #470: purely event-driven, no per-second polling. Granting always goes
+    // through the System Settings app, so returning to OpenLess always fires
+    // focus/visibilitychange.
     const onFocus = () => {
       void refresh();
     };
@@ -356,8 +360,9 @@ function DesktopOnboarding({
     try {
       const result = await requestAccessibilityPermission();
       setTccPromptShown(true);
-      // 如果 TCC 弹窗用户点了「允许」，权限已授予，不需要再打开系统设置。
-      // 仅在 TCC 拒绝或之前已拒绝（不会再弹窗）时才打开系统设置引导用户手动开启。
+      // If the user allowed in the TCC dialog, the permission is already granted and
+      // System Settings isn't needed. Open System Settings only when TCC was denied
+      // or previously denied (it won't re-prompt), to guide manual enabling.
       if (result !== 'granted') {
         await openSystemSettings('accessibility');
       }

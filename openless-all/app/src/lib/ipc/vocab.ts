@@ -6,6 +6,21 @@ export function listVocab(): Promise<DictionaryEntry[]> {
   return invokeOrMock('list_vocab', undefined, () => mockVocab.map((entry) => ({ ...entry })));
 }
 
+export function addLearnedVocab(phrase: string): Promise<void> {
+  return invokeOrMock('add_learned_vocab', { phrase }, () => {
+    if (!mockVocab.some((entry) => entry.phrase === phrase.trim())) {
+      mockVocab.unshift({
+        id: crypto.randomUUID(),
+        phrase: phrase.trim(),
+        note: '从手改中自动收集',
+        enabled: true,
+        hits: 0,
+        createdAt: new Date().toISOString(),
+      });
+    }
+  });
+}
+
 export function addVocab(phrase: string, note?: string): Promise<DictionaryEntry> {
   return invokeOrMock('add_vocab', { phrase, note }, () => {
     const entry = {
@@ -35,7 +50,7 @@ export function setVocabEnabled(id: string, enabled: boolean): Promise<void> {
   });
 }
 
-/** 编辑词条文本：id / hits / enabled 保持不变（后端 update_vocab）。 */
+/** Edit an entry's text: id / hits / enabled stay unchanged (backend update_vocab). */
 export function updateVocab(id: string, phrase: string): Promise<void> {
   return invokeOrMock('update_vocab', { id, phrase }, () => {
     const entry = mockVocab.find((entry) => entry.id === id);
@@ -58,37 +73,39 @@ export function addCorrectionRule(pattern: string, replacement: string): Promise
   }));
 }
 
-/** 卡片上点了勾：把这个词收进词汇表，并打「自动收集」标记。 */
+/** Check mark clicked on the card: add this word to the vocab list with the "auto-collected"
+ *  flag. */
 export function acceptPendingCorrection(id: string): Promise<void> {
   return invokeOrMock('accept_pending_correction', { id }, () => undefined);
 }
 
-/** 卡片上点了叉：丢掉这一条，什么都不记 —— 没有拒绝名单。 */
+/** Cross clicked on the card: drop this item, recording nothing — there is no denylist. */
 export function rejectPendingCorrection(id: string): Promise<void> {
   return invokeOrMock('reject_pending_correction', { id }, () => undefined);
 }
 
-/** 卡片 10 秒到期，或新一轮听写开始。 */
+/** Dismiss on the configured deadline or the next dictation round. */
 export function dismissVocabSuggestions(): Promise<void> {
   return invokeOrMock('dismiss_vocab_suggestions', undefined, () => undefined);
 }
 
 /**
- * 把文字放进剪贴板。
+ * Put text into the clipboard.
  *
- * 走后端而不是 `navigator.clipboard`：兜底卡片浮在别的 app 上面、按钮刻意不抢焦点，
- * 而未聚焦的文档调那个 API 会抛 `Document is not focused`。
+ * Goes through the backend rather than `navigator.clipboard`: the fallback card floats over
+ * another app and the buttons deliberately do not steal focus, while an unfocused document calling
+ * that API throws `Document is not focused`.
  */
 export function copyTextToClipboard(text: string): Promise<void> {
   return invokeOrMock('copy_text_to_clipboard', { text }, () => undefined);
 }
 
-/** 落字失败兜底卡片关掉了（用户点关闭 / TTL 到时）。 */
+/** The insert-fallback card closed (user clicked close / TTL expired). */
 export function dismissInsertFallbackCard(): Promise<void> {
   return invokeOrMock('dismiss_insert_fallback_card', undefined, () => undefined);
 }
 
-/** 把浏览器真实折行后的卡片高度同步给原生共享窗口。 */
+/** Sync the card's real browser-wrapped height to the native shared window. */
 export function reportInsertFallbackCardHeight(
   presentationId: number,
   height: number,

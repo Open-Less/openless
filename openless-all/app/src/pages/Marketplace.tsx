@@ -1,15 +1,15 @@
-// Marketplace.tsx — Style Pack Marketplace 浏览面板。
+// Marketplace.tsx — Style Pack Marketplace browse panel.
 //
-// Phase A 目标（goal 1.a-e）：
-//   (a) 后端验证 — 通过 marketplace_* IPC 跟后端通信
-//   (b) 上传与拉取功能 — Install / Upload 按钮
-//   (c) 单独弹窗界面 — modal-style detail 卡片
-//   (d) 搜索框 — 顶部 input + server-side ?q=
-//   (e) 按排名自动推荐 — 默认 sort=popular
+// Phase A goals (goal 1.a-e):
+//   (a) backend validation — talk to the backend via marketplace_* IPC
+//   (b) upload and fetch features — Install / Upload buttons
+//   (c) standalone dialog UI — modal-style detail card
+//   (d) search box — top input + server-side ?q=
+//   (e) rank-based auto-recommendation — default sort=popular
 //
-// 后端 URL 走 prefs.marketplaceBaseUrl，dev 模式默认 http://127.0.0.1:8090；
-// 用户在 Settings 填生产 URL 后客户端自动切换。
-// GitHub login 只用作展示；是否可写由 Rust 端凭据库中的 OAuth token 决定。
+// The backend URL comes from prefs.marketplaceBaseUrl; dev defaults to http://127.0.0.1:8090;
+// once the user fills the production URL in Settings the client switches automatically.
+// The GitHub login is display only; write access is decided by the OAuth token in the Rust credentials vault.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -18,7 +18,7 @@ import { Icon } from '../components/Icon';
 import { SavedToast } from '../components/SavedToast';
 import { ThinkingDots } from '../components/ThinkingDots';
 import { GithubLoginModal } from '../components/GithubLoginModal';
-import { Modal } from '../components/ui/Modal';
+import { PresenceModal } from '../components/ui/Modal';
 import {
   downloadMarketplacePack,
   fetchMarketplaceDetail,
@@ -66,7 +66,7 @@ export function Marketplace() {
   const stackLayout = conservative || baseLayoutStack;
   const { prefs, updatePrefs } = useHotkeySettings();
 
-  // 启动时尝试读缓存：上次默认视图（popular + 空 query）的列表，秒呈现。后台 refresh 校准。
+  // Read the cache at startup: the last default view (popular + empty query) list renders instantly; a background refresh corrects it.
   const [items, setItems] = useState<MarketplaceListItem[]>(() => readMarketplaceListCache() ?? []);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -85,22 +85,22 @@ export function Marketplace() {
   const [uploadOriginPackId, setUploadOriginPackId] = useState<string | null>(null);
   const [uploadTargetName, setUploadTargetName] = useState<string | null>(null);
   const [localPacks, setLocalPacks] = useState<StylePack[]>([]);
-  // 上传选包器选中态：点 pack 卡片选中（不立刻上传），底部「确定上传」才真正提交。
+  // Upload picker selection: clicking a pack card selects it (no immediate upload); the bottom "confirm upload" submits.
   const [selectedUploadPackId, setSelectedUploadPackId] = useState<string | null>(null);
   const [myPacks, setMyPacks] = useState<MarketplaceMyPackItem[]>([]);
-  // 「我的发布」改为弹框形态：showMyPacks 控制开关，myPacksQuery 是弹框内独立搜索词
-  // （不与外层 marketplace 搜索 query 互相干扰）。
+  // "My packs" is dialog-shaped: showMyPacks toggles it, myPacksQuery is a dialog-local search term
+  // (kept separate from the outer marketplace search query).
   const [showMyPacks, setShowMyPacks] = useState(false);
   const [myPacksQuery, setMyPacksQuery] = useState('');
-  // 加载/错误三态：loading（首次拉取或重试时）、error（HTTP 失败 / 解析失败）、success（默认）。
-  // 旧版只有 success 状态 + toast，导致：拉取中显示「你还没有发布过风格包」误导用户；
-  // 失败后只弹 toast，没有 inline 重试入口。
+  // Loading/error/success tri-state: loading (first fetch or retry), error (HTTP failure / parse failure), success (default).
+  // The old version only had success + toast, which caused: while fetching it showed "you haven't published any
+  // style packs", misleading users; failures only toasted with no inline retry entry.
   const [myPacksLoading, setMyPacksLoading] = useState(false);
   const [myPacksError, setMyPacksError] = useState<string | null>(null);
-  // GitHub 登录弹窗开关 —— 登录流程交给共用的 <GithubLoginModal />。
+  // GitHub login dialog toggle — the login flow is handled by the shared <GithubLoginModal />.
   const [showLogin, setShowLogin] = useState(false);
-  // 当前用户赞过的 pack id 集合 —— 用于红心渲染 + 「我赞过的」过滤。
-  // 进入 marketplace 时拉一次；点星后本地 mutate。
+  // Set of pack ids the user has liked — drives heart rendering + the "liked" filter.
+  // Fetched once on entering the marketplace; mutated locally after starring.
   const [likedIds, setLikedIds] = useState<Set<string>>(new Set());
   const currentLogin = (prefs?.marketplaceDevLogin ?? '').trim();
   const [marketplaceSignedIn, setMarketplaceSignedIn] = useState(false);
@@ -123,18 +123,18 @@ export function Marketplace() {
       return false;
     }
   }, [currentLogin, updatePrefs]);
-  // 「衍生自」只在 origin 作者 != 当前登录身份时显示 —— 自己的 pack 不要给自己挂衍生标签。
+  // "Derived from" shows only when the origin author != the current login — don't tag a user's own pack as derivative of themselves.
   const isDerivative = (originLogin: string | null | undefined): boolean =>
     !!originLogin && originLogin !== currentLogin;
 
-  // search 防抖 300ms
+  // 300ms search debounce
   useEffect(() => {
     const id = window.setTimeout(() => setDebouncedQuery(query), 300);
     return () => window.clearTimeout(id);
   }, [query]);
 
-  // 单调递增 seq 防 stale 响应覆盖：用户快速改 query / 切换 pack 时旧请求 response
-  // 可能晚于新请求到达，比较 seq 丢弃过期结果。
+  // Monotonic seq guards against stale responses overwriting fresh state: when the user quickly edits the
+  // query / switches packs, an old request's response may arrive after the new one; compare seq and drop stale results.
   const reqSeqRef = useRef(0);
   const detailSeqRef = useRef(0);
   const refresh = useCallback(async () => {
@@ -142,12 +142,12 @@ export function Marketplace() {
     setLoading(true);
     setLoadError(null);
     try {
-      // backend 只认 popular/new —— 'liked' 走 popular 拉一批回来，前端再过滤。
+      // The backend only understands popular/new — 'liked' fetches via popular and filters on the frontend.
       const serverSort: 'popular' | 'new' = sort === 'liked' ? 'popular' : sort;
       const list = await listMarketplace({ query: debouncedQuery, sort: serverSort, limit: 50 });
       if (seq !== reqSeqRef.current) return; // stale response
       setItems(list);
-      // 只缓存「默认视图」（popular + 空 query），重开时秒出。
+      // Cache only the "default view" (popular + empty query) so reopening is instant.
       if (serverSort === 'popular' && debouncedQuery.trim() === '') {
         writeMarketplaceListCache(list);
       }
@@ -166,11 +166,11 @@ export function Marketplace() {
   }, [items, sort, likedIds]);
 
   const visibleMyPacks = useMemo(() => {
-    // 立刻隐藏 withdrawn / superseded：
-    // - withdrawn：用户已主动下架，留 5 分钟窗口反而让计数对不上（用户原报告：发布 1 个、显示 2 个）。
-    //   下架的反馈通过 actionMsg toast 给即可。
-    // - superseded：新版上架后旧版的服务端 state，对用户来说该旧版本已经"被替换"，
-    //   不应再算进「我的发布」当前在线列表。
+    // Hide withdrawn / superseded immediately:
+    // - withdrawn: the user already took it down; a 5-minute grace window would make counts disagree
+    //   (user report: published 1, showed 2). Withdraw feedback goes through the actionMsg toast.
+    // - superseded: server state of an old version after a new one is published; from the user's view
+    //   the old version has been replaced and no longer counts as currently online in "my packs".
     const q = myPacksQuery.trim().toLowerCase();
     return myPacks.filter((pack) => {
       if (pack.state === 'withdrawn' || pack.state === 'superseded') return false;
@@ -191,7 +191,7 @@ export function Marketplace() {
     void refreshAuthStatus();
   }, [currentLogin, refreshAuthStatus]);
 
-  // 拉一次「我赞过的」缓存，渲染红心 + 「我赞过的」过滤。登录身份变更时重拉。
+  // Fetch the "my likes" cache once to render hearts + the "liked" filter. Refetch when the login identity changes.
   useEffect(() => {
     let cancelled = false;
     if (!marketplaceSignedIn) {
@@ -231,7 +231,7 @@ export function Marketplace() {
       console.warn('[marketplace] fetch my-packs failed', error);
       const msg = errorMessage(error);
       setMyPacksError(msg);
-      // 仍然弹 toast，行为兼容；inline error 让用户在弹框里能直接重试。
+      // Still toast for behavior compatibility; the inline error lets users retry directly in the dialog.
       setActionMsg({ kind: 'err', text: t('marketplace.myPacks.loadFailed', { err: msg }) });
     } finally {
       setMyPacksLoading(false);
@@ -242,7 +242,7 @@ export function Marketplace() {
     void refreshMyPacks();
   }, [refreshMyPacks]);
 
-  // 弹框打开时刷新一次「我的发布」，避免显示陈旧数据。
+  // Refresh "my packs" once when the dialog opens so it doesn't show stale data.
   useEffect(() => {
     if (showMyPacks && marketplaceSignedIn) {
       void refreshMyPacks();
@@ -255,8 +255,8 @@ export function Marketplace() {
     setDetail(null);
     setDetailLoading(true);
     setInstallError((previous) => (previous?.packId === id ? previous : null));
-    // 差量缓存命中：list 已经带 version+updatedAt，按三元组匹配本机 detail。
-    // 命中 = 直接渲染、跳过网络；未命中 = 走 fetchMarketplaceDetail。
+    // Differential cache hit: the list already carries version+updatedAt; match the local detail by the triple.
+    // Hit = render directly, skip the network; miss = go through fetchMarketplaceDetail.
     const listItem = items.find((it) => it.id === id);
     if (listItem) {
       const cached = readMarketplaceDetailCache(
@@ -274,8 +274,8 @@ export function Marketplace() {
     }
     try {
       const d = await fetchMarketplaceDetail(id);
-      if (seq !== detailSeqRef.current) return; // stale: 用户已切到另一个 pack
-      // 校验后回写：writeMarketplaceDetailCache 会做 ID / 大小校验。
+      if (seq !== detailSeqRef.current) return; // stale: user already switched to another pack
+      // Validate then write back: writeMarketplaceDetailCache checks ID / size.
       writeMarketplaceDetailCache(d);
       setDetail(d);
     } catch (error) {
@@ -344,7 +344,7 @@ export function Marketplace() {
     const prevLikedIds = likedIds;
     const prevLikeCount = detail.likeCount;
     const wasLiked = prevLikedIds.has(packId);
-    // optimistic mutate：立即切红心 + 调计数，让用户感觉点击即生效。
+    // Optimistic mutate: flip the heart and adjust the count immediately so the click feels instant.
     const optimisticCount = Math.max(0, prevLikeCount + (wasLiked ? -1 : 1));
     setLikedIds((prev) => {
       const next = new Set(prev);
@@ -360,7 +360,7 @@ export function Marketplace() {
     );
     try {
       const r = await likeMarketplacePack(packId);
-      // 服务端回来后以服务端 likeCount / alreadyLiked 为准校准（防止并发或本地 drift）。
+      // After the server responds, recalibrate to the server's likeCount / alreadyLiked (guards against concurrency or local drift).
       setDetail((prev) =>
         prev && prev.id === packId ? { ...prev, likeCount: r.likeCount } : prev,
       );
@@ -373,7 +373,7 @@ export function Marketplace() {
       });
     } catch (error) {
       void refreshAuthStatus();
-      // rollback 到点击前的状态
+      // Roll back to the pre-click state
       setLikedIds(prevLikedIds);
       setDetail((prev) =>
         prev && prev.id === packId ? { ...prev, likeCount: prevLikeCount } : prev,
@@ -396,7 +396,7 @@ export function Marketplace() {
       setUploadOriginPackId(originPackId);
       setUploadTargetName(targetName);
       const packs = await listStylePacks();
-      // 内置 pack 是只读模板，不能上传；更新时把同名本地版本排到最前面。
+      // Builtin packs are read-only templates and cannot be uploaded; when updating, sort the same-named local version to the front.
       const target = (targetName ?? '').trim().toLowerCase();
       const editable = packs
         .filter((p) => p.kind !== 'builtin')
@@ -407,7 +407,7 @@ export function Marketplace() {
           return a.name.localeCompare(b.name);
         });
       setLocalPacks(editable);
-      // 更新流程下预选「建议更新」的本地包（同名），用户多数情况下一键确认。
+      // In the update flow, preselect the "suggested update" local pack (same name) so the user usually just confirms.
       const recommended =
         target.length > 0
           ? editable.find((p) => p.name.trim().toLowerCase() === target)
@@ -424,14 +424,14 @@ export function Marketplace() {
 
   const onDelete = async () => {
     if (!detail) return;
-    if (detail.authorLogin !== currentLogin) return; // 只有作者能删
+    if (detail.authorLogin !== currentLogin) return; // only the author can delete
     // eslint-disable-next-line no-alert
     if (!window.confirm(t('marketplace.detail.withdrawConfirm', { name: detail.name }))) return;
     try {
       await marketplaceDelete(detail.id);
       setActionMsg({ kind: 'ok', text: t('marketplace.detail.withdrawSuccess') });
       setSelectedId(null);
-      // 撤回后立即从列表里去掉，再请求一次确认
+      // Remove it from the list immediately after withdrawing, then request again to confirm
       setItems((prev) => prev.filter((p) => p.id !== detail.id));
       void refresh();
     } catch (error) {
@@ -466,8 +466,8 @@ export function Marketplace() {
     const localPack = localPacks.find((p) => p.id === packId);
     try {
       const result = await uploadMarketplacePack(packId, uploadOriginPackId);
-      // optimistic：拿到 200 立即把这条包推到「我的发布」最前面，状态置为后端返回值（通常 'pending'）。
-      // 避免等 1.5s / 5s 的 polling 才看到——后续 polling 会用服务端真实数据覆盖。
+      // Optimistic: on 200, push this pack to the top of "my packs" with the backend's returned state (usually 'pending').
+      // Avoids waiting 1.5s / 5s polling to see it — later polling overwrites with real server data.
       if (localPack && currentLogin) {
         const nowIso = new Date().toISOString();
         const optimistic: MarketplaceMyPackItem = {
@@ -490,7 +490,8 @@ export function Marketplace() {
         setMyPacks((prev) => {
           const idx = prev.findIndex((p) => p.id === result.id);
           if (idx >= 0) {
-            // 原作者更新同 id：保留 likes/downloads 等服务端计数，覆盖元信息 + 重置 state 为 pending。
+            // Same-id update by the original author: keep server counters like likes/downloads, overwrite meta
+            // and reset state to pending.
             const next = [...prev];
             next[idx] = {
               ...next[idx],
@@ -512,9 +513,10 @@ export function Marketplace() {
       setUploadOriginPackId(null);
       setUploadTargetName(null);
       setSelectedUploadPackId(null);
-      // issue #470：上传后给后端一点时间落库 + 跑审核，再用服务端真实数据校准一次
-      // （审核状态可能 pending→approved/rejected）。乐观更新已即时反映「我的发布」，
-      // 这里只需单次兜底刷新；取较长延时（5s）确保后端最终一致后能查到，去掉冗余的 1.5s 那次。
+      // issue #470: after upload, give the backend time to persist and run review, then recalibrate once with
+      // real server data (review state may go pending→approved/rejected). The optimistic update already reflects
+      // "my packs" instantly, so a single catch-up refresh suffices; use the longer delay (5s) to ensure
+      // eventual consistency, dropping the redundant 1.5s pass.
       window.setTimeout(() => {
         void refresh();
         void refreshMyPacks();
@@ -528,12 +530,12 @@ export function Marketplace() {
     }
   };
 
-  // GitHub 登录成功后 Rust 已保存 token；prefs 只缓存 login 供界面展示。
+  // After a successful GitHub login Rust has already saved the token; prefs caches only the login for display.
   const onLoginSuccess = useCallback(
     (nextLogin: string) => {
       setMarketplaceSignedIn(true);
-      // prefs 写入失败只 console 记一笔（与重构前的 OAuth 轮询一致）—— 不能裸 void，
-      // 否则 reject 会冒成未处理的 promise rejection。
+      // A failed prefs write is only logged (same as the pre-refactor OAuth polling) — never bare void,
+      // or the rejection surfaces as an unhandled promise rejection.
       void updatePrefs((current) => ({ ...current, marketplaceDevLogin: nextLogin })).catch((e) =>
         console.warn('[marketplace] save login to prefs failed', e),
       );
@@ -622,7 +624,7 @@ export function Marketplace() {
         }
       />
 
-      {/* 顶部搜索 + 排序 */}
+      {/* Top: search + sort */}
       <div
         className="ol-flex-row"
         style={{
@@ -712,10 +714,10 @@ export function Marketplace() {
         </Card>
       )}
 
-      {/* 卡片列表 / 我的发布 */}
+      {/* Card list / my packs */}
       <div style={{ flex: 1, overflow: 'auto' }} className="ol-thinscroll ol-scroll-fade">
         {loading && items.length === 0 ? (
-          // 只在没有缓存数据时才显示 loading；有缓存就直接渲染缓存数据，后台 refresh 校准
+          // Show loading only when there's no cached data; with a cache, render it directly and let the background refresh correct it
           <div
             style={{
               padding: 32,
@@ -906,645 +908,675 @@ export function Marketplace() {
         )}
       </div>
 
-      {/* 详情弹窗 */}
-      {selectedId && (
-        <Modal
-          zIndex={mobile || stackLayout ? 70 : 50}
-          onClose={() => {
-            setSelectedId(null);
-            setInstallError(null);
-          }}
-        >
-          {detailLoading || !detail ? (
-            <div
-              style={{
-                padding: 32,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 10,
-                color: 'var(--ol-ink-4)',
-                fontSize: 13,
-              }}
-            >
-              <ThinkingDots size={18} />
-              {t('common.loading')}
-            </div>
-          ) : (
+      {/* Detail dialog */}
+      <PresenceModal
+        open={Boolean(selectedId)}
+        zIndex={mobile || stackLayout ? 70 : 50}
+        onClose={() => {
+          setSelectedId(null);
+          setInstallError(null);
+        }}
+        render={() =>
+          selectedId && (
             <>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'baseline',
-                  gap: 10,
-                  marginBottom: 6,
-                  flexWrap: 'wrap',
-                }}
-              >
-                <h2 style={{ margin: 0, fontSize: 18, fontWeight: 650 }}>{detail.name}</h2>
-                <Pill size="sm" tone="outline">
-                  {detail.baseMode}
-                </Pill>
-                {isDerivative(detail.originAuthorLogin) && (
-                  <span
-                    title={t('marketplace.derivativeBadge', { login: detail.originAuthorLogin })}
-                  >
-                    <Pill size="sm" tone="ok">
-                      {t('marketplace.derivativeBadge', { login: detail.originAuthorLogin })}
-                    </Pill>
-                  </span>
-                )}
-                <span
+              {detailLoading || !detail ? (
+                <div
                   style={{
-                    fontSize: 11,
+                    padding: 32,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 10,
                     color: 'var(--ol-ink-4)',
-                    fontFamily: 'var(--ol-font-mono)',
-                  }}
-                >
-                  v{detail.version}
-                </span>
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginBottom: 12 }}>
-                <span style={{ fontWeight: 500, color: 'var(--ol-ink-3)' }}>
-                  @{detail.authorLogin}
-                </span>
-                {' · '}
-                <span style={{ color: likedIds.has(detail.id) ? '#ef4444' : 'var(--ol-ink-4)' }}>
-                  {likedIds.has(detail.id) ? '★' : '☆'}
-                </span>{' '}
-                {detail.likeCount}
-                {' · ↓ '}
-                {detail.downloadCount}
-              </div>
-              {detail.description && (
-                <div
-                  style={{
                     fontSize: 13,
-                    color: 'var(--ol-ink-2)',
-                    lineHeight: 1.6,
-                    marginBottom: 14,
                   }}
                 >
-                  {detail.description}
+                  <ThinkingDots size={18} />
+                  {t('common.loading')}
                 </div>
-              )}
-              <div
-                style={{
-                  padding: 12,
-                  border: '0.5px solid var(--ol-line)',
-                  borderRadius: 10,
-                  background: 'var(--ol-surface-2)',
-                  marginBottom: 14,
-                  maxHeight: 280,
-                  overflow: 'auto',
-                  fontSize: 12,
-                  fontFamily: 'var(--ol-font-mono)',
-                  whiteSpace: 'pre-wrap',
-                  color: 'var(--ol-ink-2)',
-                }}
-              >
-                {detail.prompt}
-              </div>
-              {isMarketplaceInstallErrorForPack(installError, detail.id) && (
-                <div
-                  role="alert"
-                  style={{
-                    color: '#ef4444',
-                    fontSize: 12,
-                    whiteSpace: 'normal',
-                    overflowWrap: 'anywhere',
-                    marginBottom: 10,
-                  }}
-                >
-                  {installError.message}
-                </div>
-              )}
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  gap: 8,
-                  alignItems: 'center',
-                }}
-              >
-                <div>
-                  {marketplaceSignedIn &&
-                    detail.authorLogin === currentLogin &&
-                    currentLogin.length > 0 && (
-                      <Btn variant="ghost" size="sm" onClick={() => void onDelete()}>
-                        <span style={{ color: '#ef4444', marginRight: 4 }}>🗑</span>
-                        {t('marketplace.detail.withdrawBtn')}
-                      </Btn>
-                    )}
-                </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <motion.button
-                    onClick={() => void onLike()}
-                    aria-label={marketplaceSignedIn ? undefined : t('marketplace.oauth.loginBtn')}
+              ) : (
+                <>
+                  <div
                     style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      background: 'transparent',
-                      border: 'none',
-                      cursor: 'pointer',
-                      padding: '4px 8px',
-                      borderRadius: 8,
+                      display: 'flex',
+                      alignItems: 'baseline',
+                      gap: 10,
+                      marginBottom: 6,
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <h2 style={{ margin: 0, fontSize: 18, fontWeight: 650 }}>{detail.name}</h2>
+                    <Pill size="sm" tone="outline">
+                      {detail.baseMode}
+                    </Pill>
+                    {isDerivative(detail.originAuthorLogin) && (
+                      <span
+                        title={t('marketplace.derivativeBadge', {
+                          login: detail.originAuthorLogin,
+                        })}
+                      >
+                        <Pill size="sm" tone="ok">
+                          {t('marketplace.derivativeBadge', { login: detail.originAuthorLogin })}
+                        </Pill>
+                      </span>
+                    )}
+                    <span
+                      style={{
+                        fontSize: 11,
+                        color: 'var(--ol-ink-4)',
+                        fontFamily: 'var(--ol-font-mono)',
+                      }}
+                    >
+                      v{detail.version}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginBottom: 12 }}>
+                    <span style={{ fontWeight: 500, color: 'var(--ol-ink-3)' }}>
+                      @{detail.authorLogin}
+                    </span>
+                    {' · '}
+                    <span
+                      style={{ color: likedIds.has(detail.id) ? '#ef4444' : 'var(--ol-ink-4)' }}
+                    >
+                      {likedIds.has(detail.id) ? '★' : '☆'}
+                    </span>{' '}
+                    {detail.likeCount}
+                    {' · ↓ '}
+                    {detail.downloadCount}
+                  </div>
+                  {detail.description && (
+                    <div
+                      style={{
+                        fontSize: 13,
+                        color: 'var(--ol-ink-2)',
+                        lineHeight: 1.6,
+                        marginBottom: 14,
+                      }}
+                    >
+                      {detail.description}
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      padding: 12,
+                      border: '0.5px solid var(--ol-line)',
+                      borderRadius: 10,
+                      background: 'var(--ol-surface-2)',
+                      marginBottom: 14,
+                      maxHeight: 280,
+                      overflow: 'auto',
                       fontSize: 12,
-                      fontWeight: 500,
+                      fontFamily: 'var(--ol-font-mono)',
+                      whiteSpace: 'pre-wrap',
                       color: 'var(--ol-ink-2)',
                     }}
                   >
-                    <span
+                    {detail.prompt}
+                  </div>
+                  {isMarketplaceInstallErrorForPack(installError, detail.id) && (
+                    <div
+                      role="alert"
                       style={{
-                        color: likedIds.has(detail.id) ? '#ef4444' : 'inherit',
-                        marginRight: 4,
-                        display: 'inline-block',
+                        color: '#ef4444',
+                        fontSize: 12,
+                        whiteSpace: 'normal',
+                        overflowWrap: 'anywhere',
+                        marginBottom: 10,
                       }}
                     >
-                      {likedIds.has(detail.id) ? '★' : '☆'}
-                    </span>
-                    {detail.likeCount}
-                  </motion.button>
-                  <Btn
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      setSelectedId(null);
-                      setInstallError(null);
-                    }}
-                  >
-                    {installingPackId !== null ? t('common.close') : t('common.cancel')}
-                  </Btn>
-                  <Btn
-                    variant="blue"
-                    size="sm"
-                    disabled={!canStartMarketplaceInstall(installingPackId)}
-                    onClick={() => void onInstall()}
-                  >
-                    {isMarketplaceInstallActive(installingPackId, detail.id)
-                      ? t('marketplace.installingBtn')
-                      : t('marketplace.installBtn')}
-                  </Btn>
-                </div>
-              </div>
-            </>
-          )}
-        </Modal>
-      )}
-
-      {/* 上传选包器 —— zIndex 60 让它叠在「我的发布」(zIndex 50) 之上 */}
-      {showUpload && (
-        <Modal
-          zIndex={mobile || stackLayout ? 70 : 60}
-          onClose={() => {
-            setShowUpload(false);
-            setUploadOriginPackId(null);
-            setUploadTargetName(null);
-            setSelectedUploadPackId(null);
-          }}
-        >
-          <h2 style={{ margin: '0 0 12px', fontSize: 16, fontWeight: 650 }}>
-            {uploadOriginPackId
-              ? t('marketplace.upload.updateTitle', {
-                  name: uploadTargetName ?? t('style.pack.title'),
-                })
-              : t('marketplace.uploadTitle')}
-          </h2>
-          <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', marginBottom: 12 }}>
-            {uploadOriginPackId
-              ? t('marketplace.upload.updateHint')
-              : t('marketplace.uploadHint', { login: prefs?.marketplaceDevLogin ?? '' })}
-          </div>
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 8,
-              maxHeight: 360,
-              overflow: 'auto',
-            }}
-          >
-            {localPacks.length === 0 ? (
-              <div
-                style={{ fontSize: 12, color: 'var(--ol-ink-4)', textAlign: 'center', padding: 20 }}
-              >
-                {t('marketplace.uploadNoLocal')}
-              </div>
-            ) : (
-              localPacks.map((p) => {
-                const recommended =
-                  !!uploadTargetName &&
-                  p.name.trim().toLowerCase() === uploadTargetName.trim().toLowerCase();
-                const selected = selectedUploadPackId === p.id;
-                return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => setSelectedUploadPackId((prev) => (prev === p.id ? null : p.id))}
+                      {installError.message}
+                    </div>
+                  )}
+                  <div
                     style={{
-                      textAlign: 'left',
-                      padding: 10,
-                      border: selected
-                        ? '1px solid var(--ol-blue)'
-                        : '0.5px solid var(--ol-line-strong)',
-                      borderRadius: 8,
-                      background: selected ? 'var(--ol-blue-soft)' : 'var(--ol-surface)',
-                      cursor: 'pointer',
                       display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: 8,
                       alignItems: 'center',
-                      gap: 10,
                     }}
                   >
-                    {/* 选中圈：未选空圆，选中蓝实心 + 白勾 */}
-                    <span
-                      style={{
-                        flexShrink: 0,
-                        width: 18,
-                        height: 18,
-                        borderRadius: 999,
-                        border: selected
-                          ? '1px solid var(--ol-blue)'
-                          : '1px solid var(--ol-line-strong)',
-                        background: selected ? 'var(--ol-blue)' : 'transparent',
-                        display: 'inline-grid',
-                        placeItems: 'center',
-                        color: '#fff',
-                        fontSize: 11,
-                        fontWeight: 700,
-                        transition: 'background 0.12s, border-color 0.12s',
-                      }}
-                    >
-                      {selected && '✓'}
-                    </span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 8,
-                          justifyContent: 'space-between',
-                        }}
-                      >
-                        <div style={{ fontSize: 13, fontWeight: 600 }}>{p.name}</div>
-                        {recommended && (
-                          <Pill size="sm" tone="blue">
-                            {t('marketplace.upload.recommendedBadge')}
-                          </Pill>
+                    <div>
+                      {marketplaceSignedIn &&
+                        detail.authorLogin === currentLogin &&
+                        currentLogin.length > 0 && (
+                          <Btn variant="ghost" size="sm" onClick={() => void onDelete()}>
+                            <span style={{ color: '#ef4444', marginRight: 4 }}>🗑</span>
+                            {t('marketplace.detail.withdrawBtn')}
+                          </Btn>
                         )}
-                      </div>
-                      <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 2 }}>
-                        {p.description || t('marketplace.noDescription')}
-                      </div>
                     </div>
-                  </button>
-                );
-              })
-            )}
-          </div>
-          {/* 底部：取消 / 确定上传（未选中时 disabled）*/}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
-            <Btn
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setShowUpload(false);
-                setUploadOriginPackId(null);
-                setUploadTargetName(null);
-                setSelectedUploadPackId(null);
-              }}
-            >
-              {t('common.cancel')}
-            </Btn>
-            <Btn
-              variant="blue"
-              size="sm"
-              disabled={!selectedUploadPackId}
-              onClick={() => {
-                if (selectedUploadPackId) void onUpload(selectedUploadPackId);
-              }}
-            >
-              {t('marketplace.upload.confirmBtn')}
-            </Btn>
-          </div>
-        </Modal>
-      )}
-
-      {/* 我的发布 · 弹框形态（叠在风格市场页面之上）*/}
-      {showMyPacks && (
-        <Modal zIndex={mobile || stackLayout ? 70 : 50} onClose={() => setShowMyPacks(false)}>
-          {/* 顶部一行：搜索 (左) + 用户名/登录 (中) + 关闭 × (右) */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-            {/* 搜索框 (最左) */}
-            <div
-              style={{
-                flex: 1,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '6px 10px',
-                border: '0.5px solid var(--ol-line-strong)',
-                borderRadius: 10,
-                background: 'var(--ol-surface)',
-              }}
-            >
-              <Icon name="search" size={14} stroke="var(--ol-ink-3)" />
-              <input
-                type="search"
-                placeholder={t('marketplace.myPacks.searchPlaceholder')}
-                value={myPacksQuery}
-                onChange={(e) => setMyPacksQuery(e.target.value)}
-                autoFocus
-                style={{
-                  flex: 1,
-                  outline: 'none',
-                  border: 0,
-                  background: 'transparent',
-                  fontSize: 13,
-                  color: 'var(--ol-ink-1)',
-                }}
-              />
-            </div>
-            {/* 用户名 + 登录 chip。点击 → 触发 GitHub OAuth Device Flow。
-                已登录时再点会重新走一次（切账号）。 */}
-            <button
-              type="button"
-              title={
-                authorizedLogin
-                  ? t('marketplace.oauth.reloginTooltip', { login: authorizedLogin })
-                  : t('marketplace.oauth.loginTooltip')
-              }
-              onClick={() => setShowLogin(true)}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '5px 10px',
-                borderRadius: 9,
-                border: '0.5px solid var(--ol-line-strong)',
-                background: authorizedLogin ? 'var(--ol-blue-soft)' : 'var(--ol-surface)',
-                color: authorizedLogin ? 'var(--ol-blue)' : 'var(--ol-ink-3)',
-                fontSize: 12,
-                fontWeight: 650,
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              <span
-                style={{
-                  width: 18,
-                  height: 18,
-                  borderRadius: 999,
-                  display: 'inline-grid',
-                  placeItems: 'center',
-                  background: authorizedLogin ? 'rgba(37,99,235,0.14)' : 'var(--ol-surface-2)',
-                  fontSize: 10,
-                  fontWeight: 750,
-                }}
-              >
-                {(authorizedLogin || '?').slice(0, 1).toUpperCase()}
-              </span>
-              <span>
-                {authorizedLogin ? `@${authorizedLogin}` : t('marketplace.oauth.loginBtn')}
-              </span>
-            </button>
-            {/* 关闭 × */}
-            <button
-              type="button"
-              aria-label={t('common.close')}
-              title={t('common.close')}
-              onClick={() => setShowMyPacks(false)}
-              style={{
-                width: 30,
-                height: 30,
-                borderRadius: 9,
-                display: 'inline-grid',
-                placeItems: 'center',
-                border: '0.5px solid var(--ol-line-strong)',
-                background: 'var(--ol-surface)',
-                color: 'var(--ol-ink-2)',
-                cursor: 'pointer',
-                fontSize: 18,
-                lineHeight: 1,
-                fontWeight: 500,
-              }}
-            >
-              ×
-            </button>
-          </div>
-
-          {/* 第二行：计数信息（左）+ 刷新 + 上传（右）。计数走 visibleMyPacks（已剔除
-              withdrawn / superseded），跟列表里看到的卡片数对得上。 */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 8,
-              marginBottom: 12,
-            }}
-          >
-            <div style={{ fontSize: 11.5, color: 'var(--ol-ink-3)' }}>
-              {(() => {
-                if (!marketplaceSignedIn) return t('marketplace.myPacks.notLoggedIn');
-                const activeCount = visibleMyPacks.length;
-                const pendingCount = visibleMyPacks.filter((p) => p.state === 'pending').length;
-                return pendingCount > 0
-                  ? t('marketplace.myPacks.summaryPending', {
-                      count: activeCount,
-                      pending: pendingCount,
-                    })
-                  : t('marketplace.myPacks.summary', { count: activeCount });
-              })()}
-            </div>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <Btn
-                icon="refresh"
-                variant="ghost"
-                size="sm"
-                onClick={() => void refreshMyPacks()}
-                disabled={!marketplaceSignedIn || myPacksLoading}
-              >
-                {t('common.refresh')}
-              </Btn>
-              <span title={canUpload ? '' : t('marketplace.uploadDisabledHint')}>
-                <Btn
-                  icon="cloud"
-                  variant="blue"
-                  size="sm"
-                  onClick={() => void openUploadPicker()}
-                  disabled={!canUpload}
-                >
-                  {t('marketplace.uploadBtn')}
-                </Btn>
-              </span>
-            </div>
-          </div>
-
-          {/* 包列表。四态：loading（首次拉取/重试中）→ error（HTTP 失败 + inline 重试）
-              → empty（无包/无匹配）→ list。loading 优先级最高，让用户清楚知道在拉数据；
-              error 单独成块带「重试」按钮，比 toast 更稳定可达。 */}
-          {(() => {
-            const hasLoadedAny = visibleMyPacks.length > 0 || myPacks.length > 0;
-            if (myPacksLoading && !hasLoadedAny) {
-              return (
-                <div style={{ padding: '32px 12px', textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, color: 'var(--ol-ink-3)', marginBottom: 6 }}>
-                    {t('marketplace.myPacks.loadingTitle')}
-                  </div>
-                  <div style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>
-                    {t('marketplace.myPacks.loadingHint')}
-                  </div>
-                </div>
-              );
-            }
-            if (myPacksError && !hasLoadedAny) {
-              return (
-                <div style={{ padding: '24px 12px', textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, color: 'var(--ol-red, #ef4444)', marginBottom: 8 }}>
-                    {t('marketplace.myPacks.loadErrorTitle')}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 11.5,
-                      color: 'var(--ol-ink-4)',
-                      marginBottom: 12,
-                      wordBreak: 'break-word',
-                    }}
-                  >
-                    {myPacksError}
-                  </div>
-                  <Btn variant="blue" size="sm" onClick={() => void refreshMyPacks()}>
-                    {t('marketplace.myPacks.loadErrorRetry')}
-                  </Btn>
-                </div>
-              );
-            }
-            if (visibleMyPacks.length === 0) {
-              return (
-                <div style={{ padding: '32px 12px', textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, color: 'var(--ol-ink-3)', marginBottom: 6 }}>
-                    {marketplaceSignedIn
-                      ? myPacks.length === 0
-                        ? t('marketplace.myPacks.emptyTitle')
-                        : t('marketplace.myPacks.noMatch')
-                      : t('marketplace.myPacks.notLoggedIn')}
-                  </div>
-                  {marketplaceSignedIn && myPacks.length === 0 && (
-                    <div style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>
-                      {t('marketplace.myPacks.emptyHint')}
-                    </div>
-                  )}
-                </div>
-              );
-            }
-            return null;
-          })()}
-          {visibleMyPacks.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {visibleMyPacks.map((pack) => (
-                <div
-                  key={pack.id}
-                  style={{
-                    padding: 14,
-                    borderRadius: 12,
-                    border: '0.5px solid var(--ol-line-strong)',
-                    background: 'var(--ol-surface)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 8,
-                  }}
-                >
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'flex-start',
-                      gap: 8,
-                    }}
-                  >
-                    <div style={{ minWidth: 0 }}>
-                      <div
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <motion.button
+                        onClick={() => void onLike()}
+                        aria-label={
+                          marketplaceSignedIn ? undefined : t('marketplace.oauth.loginBtn')
+                        }
                         style={{
-                          fontSize: 14,
-                          fontWeight: 650,
-                          color: 'var(--ol-ink)',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          background: 'transparent',
+                          border: 'none',
+                          cursor: 'pointer',
+                          padding: '4px 8px',
+                          borderRadius: 8,
+                          fontSize: 12,
+                          fontWeight: 500,
+                          color: 'var(--ol-ink-2)',
                         }}
                       >
-                        {pack.name}
-                      </div>
-                      <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 3 }}>
-                        v{pack.version} · {new Date(pack.updatedAt).toLocaleDateString()}
-                      </div>
-                    </div>
-                    <Pill
-                      size="sm"
-                      tone={pack.state === 'approved' ? 'ok' : 'outline'}
-                      style={
-                        pack.state === 'rejected' || pack.state === 'withdrawn'
-                          ? { color: '#ef4444', borderColor: 'rgba(239,68,68,0.28)' }
-                          : undefined
-                      }
-                    >
-                      {statusLabel(pack.state, t)}
-                    </Pill>
-                  </div>
-                  {pack.description && (
-                    <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.5 }}>
-                      {pack.description}
-                    </div>
-                  )}
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    <Pill size="sm" tone="outline">
-                      {pack.baseMode}
-                    </Pill>
-                    {pack.tags.slice(0, 3).map((tag) => (
-                      <Pill key={tag} size="sm" tone="default">
-                        {tag}
-                      </Pill>
-                    ))}
-                  </div>
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      gap: 8,
-                      marginTop: 2,
-                    }}
-                  >
-                    <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>
-                      ★ {pack.likeCount} · ↓ {pack.downloadCount}
-                    </span>
-                    <div style={{ display: 'flex', gap: 6 }}>
+                        <span
+                          style={{
+                            color: likedIds.has(detail.id) ? '#ef4444' : 'inherit',
+                            marginRight: 4,
+                            display: 'inline-block',
+                          }}
+                        >
+                          {likedIds.has(detail.id) ? '★' : '☆'}
+                        </span>
+                        {detail.likeCount}
+                      </motion.button>
                       <Btn
                         variant="ghost"
                         size="sm"
-                        onClick={() => void openUploadPicker(pack.id, pack.name)}
-                        disabled={!canUpload}
+                        onClick={() => {
+                          setSelectedId(null);
+                          setInstallError(null);
+                        }}
                       >
-                        {t('marketplace.myPacks.actions.update')}
+                        {installingPackId !== null ? t('common.close') : t('common.cancel')}
                       </Btn>
-                      {pack.state !== 'withdrawn' && (
-                        <Btn variant="ghost" size="sm" onClick={() => void onDeleteMine(pack)}>
-                          <span style={{ color: '#ef4444' }}>
-                            {t('marketplace.myPacks.actions.withdraw')}
-                          </span>
-                        </Btn>
-                      )}
+                      <Btn
+                        variant="blue"
+                        size="sm"
+                        disabled={!canStartMarketplaceInstall(installingPackId)}
+                        onClick={() => void onInstall()}
+                      >
+                        {isMarketplaceInstallActive(installingPackId, detail.id)
+                          ? t('marketplace.installingBtn')
+                          : t('marketplace.installBtn')}
+                      </Btn>
                     </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </Modal>
-      )}
+                </>
+              )}
+            </>
+          )
+        }
+      />
 
-      {/* GitHub 登录弹窗 */}
+      {/* Upload picker — zIndex 60 stacks it above "my packs" (zIndex 50) */}
+      <PresenceModal
+        open={Boolean(showUpload)}
+        zIndex={mobile || stackLayout ? 70 : 60}
+        onClose={() => {
+          setShowUpload(false);
+          setUploadOriginPackId(null);
+          setUploadTargetName(null);
+          setSelectedUploadPackId(null);
+        }}
+        render={() =>
+          showUpload && (
+            <>
+              <h2 style={{ margin: '0 0 12px', fontSize: 16, fontWeight: 650 }}>
+                {uploadOriginPackId
+                  ? t('marketplace.upload.updateTitle', {
+                      name: uploadTargetName ?? t('style.pack.title'),
+                    })
+                  : t('marketplace.uploadTitle')}
+              </h2>
+              <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', marginBottom: 12 }}>
+                {uploadOriginPackId
+                  ? t('marketplace.upload.updateHint')
+                  : t('marketplace.uploadHint', { login: prefs?.marketplaceDevLogin ?? '' })}
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                  maxHeight: 360,
+                  overflow: 'auto',
+                }}
+              >
+                {localPacks.length === 0 ? (
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: 'var(--ol-ink-4)',
+                      textAlign: 'center',
+                      padding: 20,
+                    }}
+                  >
+                    {t('marketplace.uploadNoLocal')}
+                  </div>
+                ) : (
+                  localPacks.map((p) => {
+                    const recommended =
+                      !!uploadTargetName &&
+                      p.name.trim().toLowerCase() === uploadTargetName.trim().toLowerCase();
+                    const selected = selectedUploadPackId === p.id;
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() =>
+                          setSelectedUploadPackId((prev) => (prev === p.id ? null : p.id))
+                        }
+                        style={{
+                          textAlign: 'left',
+                          padding: 10,
+                          border: selected
+                            ? '1px solid var(--ol-blue)'
+                            : '0.5px solid var(--ol-line-strong)',
+                          borderRadius: 8,
+                          background: selected ? 'var(--ol-blue-soft)' : 'var(--ol-surface)',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 10,
+                        }}
+                      >
+                        {/* Selection circle: empty when unselected; solid blue + white check when selected */}
+                        <span
+                          style={{
+                            flexShrink: 0,
+                            width: 18,
+                            height: 18,
+                            borderRadius: 999,
+                            border: selected
+                              ? '1px solid var(--ol-blue)'
+                              : '1px solid var(--ol-line-strong)',
+                            background: selected ? 'var(--ol-blue)' : 'transparent',
+                            display: 'inline-grid',
+                            placeItems: 'center',
+                            color: '#fff',
+                            fontSize: 11,
+                            fontWeight: 700,
+                            transition: 'background 0.12s, border-color 0.12s',
+                          }}
+                        >
+                          {selected && '✓'}
+                        </span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 8,
+                              justifyContent: 'space-between',
+                            }}
+                          >
+                            <div style={{ fontSize: 13, fontWeight: 600 }}>{p.name}</div>
+                            {recommended && (
+                              <Pill size="sm" tone="blue">
+                                {t('marketplace.upload.recommendedBadge')}
+                              </Pill>
+                            )}
+                          </div>
+                          <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 2 }}>
+                            {p.description || t('marketplace.noDescription')}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+              {/* Bottom: cancel / confirm upload (disabled when nothing selected) */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+                <Btn
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setShowUpload(false);
+                    setUploadOriginPackId(null);
+                    setUploadTargetName(null);
+                    setSelectedUploadPackId(null);
+                  }}
+                >
+                  {t('common.cancel')}
+                </Btn>
+                <Btn
+                  variant="blue"
+                  size="sm"
+                  disabled={!selectedUploadPackId}
+                  onClick={() => {
+                    if (selectedUploadPackId) void onUpload(selectedUploadPackId);
+                  }}
+                >
+                  {t('marketplace.upload.confirmBtn')}
+                </Btn>
+              </div>
+            </>
+          )
+        }
+      />
+
+      {/* My packs · dialog form (stacked above the marketplace page) */}
+      <PresenceModal
+        open={Boolean(showMyPacks)}
+        zIndex={mobile || stackLayout ? 70 : 50}
+        onClose={() => setShowMyPacks(false)}
+        render={() =>
+          showMyPacks && (
+            <>
+              {/* Top row: search (left) + username/login (center) + close × (right) */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                {/* Search box (leftmost) */}
+                <div
+                  style={{
+                    flex: 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '6px 10px',
+                    border: '0.5px solid var(--ol-line-strong)',
+                    borderRadius: 10,
+                    background: 'var(--ol-surface)',
+                  }}
+                >
+                  <Icon name="search" size={14} stroke="var(--ol-ink-3)" />
+                  <input
+                    type="search"
+                    placeholder={t('marketplace.myPacks.searchPlaceholder')}
+                    value={myPacksQuery}
+                    onChange={(e) => setMyPacksQuery(e.target.value)}
+                    autoFocus
+                    style={{
+                      flex: 1,
+                      outline: 'none',
+                      border: 0,
+                      background: 'transparent',
+                      fontSize: 13,
+                      color: 'var(--ol-ink-1)',
+                    }}
+                  />
+                </div>
+                {/* Username + login chip. Click → GitHub OAuth Device Flow.
+                Clicking again while signed in restarts the flow (account switch). */}
+                <button
+                  type="button"
+                  title={
+                    authorizedLogin
+                      ? t('marketplace.oauth.reloginTooltip', { login: authorizedLogin })
+                      : t('marketplace.oauth.loginTooltip')
+                  }
+                  onClick={() => setShowLogin(true)}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '5px 10px',
+                    borderRadius: 9,
+                    border: '0.5px solid var(--ol-line-strong)',
+                    background: authorizedLogin ? 'var(--ol-blue-soft)' : 'var(--ol-surface)',
+                    color: authorizedLogin ? 'var(--ol-blue)' : 'var(--ol-ink-3)',
+                    fontSize: 12,
+                    fontWeight: 650,
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 18,
+                      height: 18,
+                      borderRadius: 999,
+                      display: 'inline-grid',
+                      placeItems: 'center',
+                      background: authorizedLogin ? 'rgba(37,99,235,0.14)' : 'var(--ol-surface-2)',
+                      fontSize: 10,
+                      fontWeight: 750,
+                    }}
+                  >
+                    {(authorizedLogin || '?').slice(0, 1).toUpperCase()}
+                  </span>
+                  <span>
+                    {authorizedLogin ? `@${authorizedLogin}` : t('marketplace.oauth.loginBtn')}
+                  </span>
+                </button>
+                {/* Close × */}
+                <button
+                  type="button"
+                  aria-label={t('common.close')}
+                  title={t('common.close')}
+                  onClick={() => setShowMyPacks(false)}
+                  style={{
+                    width: 30,
+                    height: 30,
+                    borderRadius: 9,
+                    display: 'inline-grid',
+                    placeItems: 'center',
+                    border: '0.5px solid var(--ol-line-strong)',
+                    background: 'var(--ol-surface)',
+                    color: 'var(--ol-ink-2)',
+                    cursor: 'pointer',
+                    fontSize: 18,
+                    lineHeight: 1,
+                    fontWeight: 500,
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+
+              {/* Second row: count info (left) + refresh + upload (right). Counts use visibleMyPacks (withdrawn /
+              superseded already removed) so they match the cards visible in the list. */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  marginBottom: 12,
+                }}
+              >
+                <div style={{ fontSize: 11.5, color: 'var(--ol-ink-3)' }}>
+                  {(() => {
+                    if (!marketplaceSignedIn) return t('marketplace.myPacks.notLoggedIn');
+                    const activeCount = visibleMyPacks.length;
+                    const pendingCount = visibleMyPacks.filter((p) => p.state === 'pending').length;
+                    return pendingCount > 0
+                      ? t('marketplace.myPacks.summaryPending', {
+                          count: activeCount,
+                          pending: pendingCount,
+                        })
+                      : t('marketplace.myPacks.summary', { count: activeCount });
+                  })()}
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <Btn
+                    icon="refresh"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void refreshMyPacks()}
+                    disabled={!marketplaceSignedIn || myPacksLoading}
+                  >
+                    {t('common.refresh')}
+                  </Btn>
+                  <span title={canUpload ? '' : t('marketplace.uploadDisabledHint')}>
+                    <Btn
+                      icon="cloud"
+                      variant="blue"
+                      size="sm"
+                      onClick={() => void openUploadPicker()}
+                      disabled={!canUpload}
+                    >
+                      {t('marketplace.uploadBtn')}
+                    </Btn>
+                  </span>
+                </div>
+              </div>
+
+              {/* Pack list. Four states: loading (first fetch/retry) → error (HTTP failure + inline retry)
+              → empty (no packs / no match) → list. Loading has top priority so the user knows data is being fetched;
+              error gets its own block with a retry button — more reliably reachable than a toast. */}
+              {(() => {
+                const hasLoadedAny = visibleMyPacks.length > 0 || myPacks.length > 0;
+                if (myPacksLoading && !hasLoadedAny) {
+                  return (
+                    <div style={{ padding: '32px 12px', textAlign: 'center' }}>
+                      <div style={{ fontSize: 13, color: 'var(--ol-ink-3)', marginBottom: 6 }}>
+                        {t('marketplace.myPacks.loadingTitle')}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>
+                        {t('marketplace.myPacks.loadingHint')}
+                      </div>
+                    </div>
+                  );
+                }
+                if (myPacksError && !hasLoadedAny) {
+                  return (
+                    <div style={{ padding: '24px 12px', textAlign: 'center' }}>
+                      <div
+                        style={{ fontSize: 13, color: 'var(--ol-red, #ef4444)', marginBottom: 8 }}
+                      >
+                        {t('marketplace.myPacks.loadErrorTitle')}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 11.5,
+                          color: 'var(--ol-ink-4)',
+                          marginBottom: 12,
+                          wordBreak: 'break-word',
+                        }}
+                      >
+                        {myPacksError}
+                      </div>
+                      <Btn variant="blue" size="sm" onClick={() => void refreshMyPacks()}>
+                        {t('marketplace.myPacks.loadErrorRetry')}
+                      </Btn>
+                    </div>
+                  );
+                }
+                if (visibleMyPacks.length === 0) {
+                  return (
+                    <div style={{ padding: '32px 12px', textAlign: 'center' }}>
+                      <div style={{ fontSize: 13, color: 'var(--ol-ink-3)', marginBottom: 6 }}>
+                        {marketplaceSignedIn
+                          ? myPacks.length === 0
+                            ? t('marketplace.myPacks.emptyTitle')
+                            : t('marketplace.myPacks.noMatch')
+                          : t('marketplace.myPacks.notLoggedIn')}
+                      </div>
+                      {marketplaceSignedIn && myPacks.length === 0 && (
+                        <div style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>
+                          {t('marketplace.myPacks.emptyHint')}
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+              {visibleMyPacks.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {visibleMyPacks.map((pack) => (
+                    <div
+                      key={pack.id}
+                      style={{
+                        padding: 14,
+                        borderRadius: 12,
+                        border: '0.5px solid var(--ol-line-strong)',
+                        background: 'var(--ol-surface)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 8,
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'flex-start',
+                          gap: 8,
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }}>
+                          <div
+                            style={{
+                              fontSize: 14,
+                              fontWeight: 650,
+                              color: 'var(--ol-ink)',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {pack.name}
+                          </div>
+                          <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 3 }}>
+                            v{pack.version} · {new Date(pack.updatedAt).toLocaleDateString()}
+                          </div>
+                        </div>
+                        <Pill
+                          size="sm"
+                          tone={pack.state === 'approved' ? 'ok' : 'outline'}
+                          style={
+                            pack.state === 'rejected' || pack.state === 'withdrawn'
+                              ? { color: '#ef4444', borderColor: 'rgba(239,68,68,0.28)' }
+                              : undefined
+                          }
+                        >
+                          {statusLabel(pack.state, t)}
+                        </Pill>
+                      </div>
+                      {pack.description && (
+                        <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.5 }}>
+                          {pack.description}
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        <Pill size="sm" tone="outline">
+                          {pack.baseMode}
+                        </Pill>
+                        {pack.tags.slice(0, 3).map((tag) => (
+                          <Pill key={tag} size="sm" tone="default">
+                            {tag}
+                          </Pill>
+                        ))}
+                      </div>
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          gap: 8,
+                          marginTop: 2,
+                        }}
+                      >
+                        <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>
+                          ★ {pack.likeCount} · ↓ {pack.downloadCount}
+                        </span>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <Btn
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => void openUploadPicker(pack.id, pack.name)}
+                            disabled={!canUpload}
+                          >
+                            {t('marketplace.myPacks.actions.update')}
+                          </Btn>
+                          {pack.state !== 'withdrawn' && (
+                            <Btn variant="ghost" size="sm" onClick={() => void onDeleteMine(pack)}>
+                              <span style={{ color: '#ef4444' }}>
+                                {t('marketplace.myPacks.actions.withdraw')}
+                              </span>
+                            </Btn>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )
+        }
+      />
+
+      {/* GitHub login dialog */}
       {showLogin && (
         <GithubLoginModal onClose={() => setShowLogin(false)} onSuccess={onLoginSuccess} />
       )}

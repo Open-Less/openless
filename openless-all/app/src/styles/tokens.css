@@ -57,6 +57,7 @@
   --ol-motion-spring: cubic-bezier(0.16, 1, 0.3, 1);
   --ol-motion-soft: cubic-bezier(0.22, 0.8, 0.22, 1);
   --ol-motion-quick: cubic-bezier(0.2, 0, 0, 1);
+  --ol-motion-exit: cubic-bezier(0.4, 0, 1, 1);
 
   /* Shadows（shadcn 弱阴影：模糊与 alpha 约砍半） */
   --ol-shadow-sm: 0 1px 1px rgba(15, 17, 22, 0.02), 0 0 0 0.5px rgba(0, 0, 0, 0.02);

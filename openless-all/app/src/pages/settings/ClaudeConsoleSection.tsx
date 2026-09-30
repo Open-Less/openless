@@ -1,6 +1,6 @@
-// 高级 → Claude 控制台：检测 claude 安装 / MCP（computer use）状态，
-// 并护栏化地无头跑一次 claude、流式查看输出与用量。这是「快速 Agent」引擎的
-// 最小可用垂直切片，不依赖录音 / coordinator。
+// Advanced → Claude console: detects the claude install / MCP (computer use) status, and
+// runs a guarded headless claude pass with streamed output and usage. This is the minimal
+// viable vertical slice of the "quick Agent" engine, independent of recording / coordinator.
 
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -65,7 +65,7 @@ export function ClaudeConsoleSection() {
     }
   }
 
-  // 订阅后端流式事件。
+  // Subscribe to backend streaming events.
   useEffect(() => {
     if (!isTauri) return;
     let unlisten: (() => void) | undefined;
@@ -115,13 +115,13 @@ export function ClaudeConsoleSection() {
     };
   }, [t]);
 
-  // 首次自动检测。
+  // Auto-detect on first mount.
   useEffect(() => {
     void runDetect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 输出自动滚到底。
+  // Auto-scroll output to the bottom.
   useEffect(() => {
     if (outRef.current) outRef.current.scrollTop = outRef.current.scrollHeight;
   }, [output]);

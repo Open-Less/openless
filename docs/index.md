@@ -1,6 +1,6 @@
 # OpenLess 文档入口
 
-状态：canonical；更新：2026-09-08。实现说明与当前源码保持一致；范围、接口合同和验收要求由各自文档维护。各专项文档的更新时间与状态单独标注。
+状态：canonical；更新：2026-09-29。实现说明与当前源码保持一致；范围、接口合同和验收要求由各自文档维护。各专项文档的更新时间与状态单独标注。
 
 ## 范围与架构
 
@@ -27,8 +27,8 @@
 
 - [macOS CI 与打包耗时](macos-build-performance.md)：基线日志、Rust 编译优化、缓存边界与仅 macOS 验证入口。
 - [CI 触发范围与缓存配额](ci-trigger-and-cache-policy.md)：改动范围门控、10 GB 缓存分配与维护、发版预热点。
-- [Android APK 编译耗时调研与实现](android-build-time-research-1103.md)：ABI 并行、缓存回写和发布验证。
 - [Android APK / 悬浮窗计划](android-mobile-apk-overlay-plan.md)（实施中）
+- [Android 输入法](android-ime.md)：语音、笔画、英文、轻量拼音、后台服务与真机验收入口。
 - [火山引擎 ASR 配置](volcengine-setup.md)
 - [讯飞（iflytek）ASR 配置](xfyun-asr.md)
 - [百炼（DashScope）ASR 模型](bailian-asr-models.md)
@@ -38,6 +38,7 @@
 ## 验证入口（在 `openless-all/app` 执行）
 
 - `npm test`：构建 React + 全部前端/合同测试（含 Core 快捷键回归）。
+- `npm run build && npm run test:ui-motion`：生产前端的 Chromium/WebKit 动效交互回归；运行前使用 `npx playwright install --with-deps chromium webkit` 安装测试浏览器。
 - `cargo fmt --all --check`：根 workspace 的 openless-core、linux-egui；Tauri 单独执行 `cargo fmt --manifest-path src-tauri/Cargo.toml --check`。
 - `cargo test -p openless-core --locked`、`cargo test -p openless-linux-egui --locked`。
 - `src-tauri` 及 `backend-tests` 被 workspace exclude，按平台独立构建。源码构建 Tauri 前初始化子模块：`git submodule update --init --recursive`；Core/Linux 独立检查不依赖 Tauri 子模块。

@@ -1,11 +1,12 @@
 //! 本地 Qwen3-ASR 引擎缓存。
 //!
-//! 用途：避免每次 dictation 都重加载 1.2GB+ 模型。引擎一次 load 后驻留在内存，
-//! 跨多次会话复用；用户在设置里决定"说完话即释放" / "保持 N 秒后释放" /
-//! "不释放"。
+//! Purpose: avoid reloading the 1.2GB+ model on every dictation. Once loaded the engine stays
+//! in memory and is reused across sessions; the user chooses in settings between
+//! "release after speech" / "release after N seconds" / "never release".
 //!
-//! 调度规则：每次会话结束后 spawn 一个 sleep+check 任务；任务在到点时检查
-//! `last_used`——如果中间又被使用过则不释放，否则 drop 引擎让 OS 回收 RAM。
+//! Scheduling rule: after each session a sleep+check task is spawned; when it fires it checks
+//! `last_used` — if the engine was used meanwhile it is not released, otherwise it is dropped
+//! so the OS reclaims the RAM.
 
 use std::path::Path;
 #[cfg(target_os = "macos")]
@@ -109,8 +110,9 @@ impl LocalAsrCache {
         );
         let engine = Arc::new(LocalQwenEngine::load(backend, model_dir)?);
         let mut slot = self.inner.lock();
-        // 迟到 loader 不得覆盖新 cache。普通听写仍按冻结上下文使用自己的 Arc；
-        // 激活操作则必须报失败，否则调用方会把已被替代的模型提交为当前模型。
+        // A late loader must not overwrite the new cache. Ordinary dictation keeps using its
+        // own Arc from the frozen context; activation operations must fail here instead, or the
+        // caller would commit a superseded model as the current model.
         if self.load_generation.load(Ordering::Acquire) != load_generation {
             if activation_generation.is_some() {
                 anyhow::bail!("本地 Qwen3-ASR 加载已被更新的操作替代");
@@ -152,15 +154,16 @@ impl LocalAsrCache {
                 None
             }
         };
-        // 驱逐不取消仍持 Arc 的转写，与 finish_use 的实例级收尾保持一致。
+        // Eviction does not cancel transcriptions still holding an Arc, matching finish_use's
+        // instance-level finalization.
         if taken.is_some() {
             drop(taken);
             pressure_relief();
         }
     }
 
-    /// 标记最近使用时间——end_session 在调过 transcribe 之后调一下，
-    /// 让 release 计时器从这一刻重新算。
+    /// Mark last-used time — end_session calls this after transcribe so the release timer
+    /// restarts from this moment.
     pub fn touch(&self) {
         #[cfg(target_os = "macos")]
         {
@@ -204,7 +207,7 @@ impl LocalAsrCache {
         }
     }
 
-    /// 如果空闲时长 ≥ threshold，释放引擎。返回是否真释放了。
+    /// Release the engine if idle for >= threshold. Returns whether it was actually released.
     pub fn release_if_idle(&self, idle_threshold: Duration) -> bool {
         #[cfg(target_os = "macos")]
         {
@@ -235,13 +238,16 @@ impl LocalAsrCache {
         false
     }
 
-    /// 从 cache 立刻驱逐，但不终止仍持有引擎的并发会话。会话结束、取消或超时后的
-    /// 自动清理走这里，避免一个会话误杀另一个共享 MLX worker 的在途转写。
+    /// Evict from the cache immediately, but do not terminate concurrent sessions still holding
+    /// the engine. Automatic cleanup after a session ends, cancels, or times out goes through
+    /// here, avoiding one session accidentally killing another's in-flight transcription on a
+    /// shared MLX worker.
     pub fn evict_now(&self) {
         self.release_now_inner(false);
     }
 
-    /// 立刻释放（用户点"立即释放"、切走 provider、删模型时调）。
+    /// Release immediately (called when the user clicks "Release now", switches provider, or
+    /// deletes a model).
     pub fn release_now(&self) {
         self.release_now_inner(true);
     }
@@ -286,12 +292,15 @@ impl LocalAsrCache {
 #[cfg(not(target_os = "macos"))]
 fn pressure_relief() {}
 
-/// drop MLX Qwen 引擎后调一次：让 macOS libmalloc 把 freelist 上的物理页归还内核。
-/// 不调的话，encoder f32 weights 那 ~几百 MB 的 free 不会立刻反映到 RSS，活动监视器
-/// 看起来"释放按钮没生效"。decoder bf16 走 mmap，munmap 时已立即生效，不依赖这个调用。
+/// Call once after dropping the MLX Qwen engine: makes macOS libmalloc return the physical pages
+/// on its freelist to the kernel. Without it, the ~hundreds of MB freed by the encoder f32
+/// weights does not immediately show up in RSS, so Activity Monitor looks like the "release"
+/// button did nothing. The decoder bf16 uses mmap and takes effect immediately at munmap; it
+/// does not rely on this call.
 #[cfg(target_os = "macos")]
 fn pressure_relief() {
-    // SAFETY: 系统 API；NULL zone + goal=0 = 对所有 zone 尽量多地归还，无内存安全风险。
+    // SAFETY: system API; NULL zone + goal=0 = return as much as possible from all zones, no
+    // memory-safety risk.
     let freed = unsafe { malloc_zone_pressure_relief(std::ptr::null_mut(), 0) };
     log::info!(
         "[local-asr cache] malloc_zone_pressure_relief freed ~{} bytes",

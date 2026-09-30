@@ -1,13 +1,13 @@
-//! 录音快捷键的自定义组合键监听器。
+//! Custom combo-key listener for the recording hotkey.
 //!
-//! 与 `hotkey.rs`（modifier-only 听写热键）平行——当用户选择自定义组合键
-//! （如 `Cmd+Shift+D`）时，用 `global-hotkey` crate 注册。
+//! Parallel to `hotkey.rs` (modifier-only dictation hotkey) — when the user picks a custom
+//! combo key (e.g. `Cmd+Shift+D`), it registers via the `global-hotkey` crate.
 //!
-//! 与 `qa_hotkey.rs` 的关键区别：**同时产出 Pressed 和 Released 边沿事件**，
-//! 以支持 Hold（按住说话）模式。`global-hotkey` crate 的 `HotKeyState::Released`
-//! 在 macOS (Carbon) 和 Windows 上均可用于检测松开。
+//! Key difference from `qa_hotkey.rs`: it emits BOTH Pressed and Released edge events
+//! to support Hold (push-to-talk) mode. The `global-hotkey` crate's `HotKeyState::Released`
+//! works for detecting release on both macOS (Carbon) and Windows.
 //!
-//! 通过 `global_hotkey_runtime` 与 QA 快捷键共享进程级 manager / event receiver。
+//! Shares the process-level manager / event receiver with the QA hotkey via `global_hotkey_runtime`.
 
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
@@ -22,9 +22,9 @@ use crate::types::ShortcutBinding;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComboHotkeyEvent {
-    /// 用户按下了配置的组合键。
+    /// The user pressed the configured combo key.
     Pressed { at: Instant },
-    /// 用户松开了配置的组合键（用于 Hold 模式结束录音）。
+    /// The user released the configured combo key (ends recording in Hold mode).
     Released { at: Instant },
 }
 
@@ -40,10 +40,10 @@ pub enum ComboHotkeyError {
     ManagerInitFailed(String),
 }
 
-/// 自定义组合键全局快捷键监听器。`Drop` 时反注册。
+/// Global hotkey listener for the custom combo key. Unregisters on `Drop`.
 ///
-/// 内部用 `global-hotkey` crate；事件转发线程持有一个共享的 `Sender`。
-/// 与 `QaHotkeyMonitor` 的区别：转发 Pressed **和** Released 事件。
+/// Uses the `global-hotkey` crate internally; the event forwarding thread holds a shared `Sender`.
+/// Unlike `QaHotkeyMonitor`, it forwards BOTH Pressed and Released events.
 pub struct ComboHotkeyMonitor {
     inner: Arc<Inner>,
 }
@@ -55,16 +55,16 @@ struct Inner {
     tx: Sender<ComboHotkeyEvent>,
 }
 
-// global-hotkey 0.6 的 GlobalHotKeyManager 在 Windows 内部持有 HHOOK / window
-// handle 等 `*mut c_void`，crate 没标 Send/Sync。与 qa_hotkey.rs 同理。
+// global-hotkey 0.6's GlobalHotKeyManager internally holds HHOOK / window handles and other
+// `*mut c_void` on Windows; the crate doesn't mark Send/Sync. Same reasoning as qa_hotkey.rs.
 unsafe impl Send for Inner {}
 unsafe impl Sync for Inner {}
 
 impl ComboHotkeyMonitor {
-    /// 启动监听并注册一个组合键。`tx` 在每次按下/松开边沿收到事件。
+    /// Start listening and register one combo key. `tx` receives an event on every press/release edge.
     ///
-    /// **注意**：`global-hotkey` crate 在 macOS 要求 manager 在主线程构造。
-    /// 调用方需要确保从主线程触发。
+    /// Note: the `global-hotkey` crate requires the manager to be constructed on the main thread
+    /// on macOS. Callers must trigger this from the main thread.
     pub fn start(
         binding: ShortcutBinding,
         tx: Sender<ComboHotkeyEvent>,
@@ -89,8 +89,8 @@ impl ComboHotkeyMonitor {
             .register(hotkey)
             .map_err(|e| ComboHotkeyError::RegisterFailed(e.to_string()))?;
 
-        // runtime 已按 hotkey id 分发；这里保留 id 检查作为防线，
-        // 避免未来误接回进程级事件流后串到其他快捷键。
+        // The runtime already dispatches by hotkey id; the id check stays as a defense line in case a
+        // future change wires this back to the process-level event stream and bleeds into other hotkeys.
         let hotkey_id = registered.hotkey().id();
         let tx_for_thread = tx.clone();
         std::thread::Builder::new()
@@ -108,7 +108,7 @@ impl ComboHotkeyMonitor {
         })
     }
 
-    /// 替换当前注册的组合键（用户在设置里改了组合键时）。
+    /// Replace the currently registered combo key (user changed it in settings).
     pub fn update_binding(&self, binding: ShortcutBinding) -> Result<(), ComboHotkeyError> {
         #[cfg(target_os = "macos")]
         if is_native_dictation(&binding) {
@@ -188,7 +188,7 @@ fn forward_loop(hotkey_id: u32, rx: Receiver<GlobalHotKeyEvent>, tx: Sender<Comb
     log::info!("[combo-hotkey] 转发线程退出");
 }
 
-/// 测试一个组合键是否可以注册（不实际注册，仅验证格式）。
+/// Test whether a combo key can be registered (validates format only, no actual registration).
 pub fn validate_binding(binding: &ShortcutBinding) -> Result<(), ComboHotkeyError> {
     #[cfg(target_os = "macos")]
     if is_native_dictation(binding) {

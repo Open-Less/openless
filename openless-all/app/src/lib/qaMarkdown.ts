@@ -55,7 +55,7 @@ export function renderQaPlainText(raw: string): string {
 }
 
 export function renderQaMarkdown(markdown: string): string {
-  // 保留 markdown 语义（尤其代码块），但把 raw HTML token 转义为纯文本，避免注入。
+  // Keep markdown semantics (code blocks especially) but escape raw HTML tokens to plain text to avoid injection.
   return marked.parse(markdown, {
     async: false,
     gfm: true,

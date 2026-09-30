@@ -1,7 +1,7 @@
-// 模型使用页：渠道编辑器「本地引擎」分支的内嵌模型选择器。
-// 全局 active model 与引擎状态来自本地 ASR IPC——本地模型不按渠道隔离，
-// 这里切的是全局使用中的模型；下载 / 删除 / 镜像等管理动作仍在
-// 「服务 → 本地模型」（useLocalModelsNav 跳转）。
+// Model usage page: embedded model picker for the channel editor's "local engine" branch.
+// The global active model and engine status come from the local ASR IPC — local models are not isolated
+// per channel, so this switches the globally active model; management actions like download / delete /
+// mirror stay in "Services → Local models" (jump via useLocalModelsNav).
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -27,7 +27,7 @@ import {
 import { emitSaved } from '../../../lib/savedEvent';
 import { useLocalModelsNav } from './modelsNav';
 
-/** 本地引擎 providerType → 选择器数据源家族。 */
+/** Local engine providerType → picker data-source family. */
 function familyOfProviderType(providerType: string): 'generic' | 'sherpa' | 'foundry' | 'apple' {
   if (providerType === 'sherpa-onnx-local') return 'sherpa';
   if (providerType === 'foundry-local-whisper') return 'foundry';
@@ -39,7 +39,7 @@ interface ModelOption {
   value: string;
   label: string;
   downloaded: boolean;
-  /** 有已下载字节但未装好 = 中断残留，可一键清理。 */
+  /** Downloaded bytes but not installed = interrupted leftovers, cleanable with one click. */
   partialBytes?: number;
 }
 

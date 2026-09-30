@@ -1,16 +1,16 @@
 /* ============================================================
- * OpenLess 远程输入 — 手机端录音页
- * 纯静态,无外部依赖。通过 WSS 把 16kHz/单声道/16bit LE PCM
- * 实时推送给 PC 端 Rust 服务。
+ * OpenLess Remote Input — phone-side recording page
+ * Pure static, no external dependencies. Streams 16kHz/mono/16-bit LE PCM
+ * to the PC-side Rust service over WSS in real time.
  *
- * 显示语言跟随 PC 端界面语言：Rust 在返回首页时把 window.__OL_LANG__
- * 注入成 PC 当前 locale（前端切换语言时经 set_remote_locale 命令同步）。
+ * Display language follows the PC UI language: Rust injects window.__OL_LANG__
+ * with the PC locale when serving the page (synced via the set_remote_locale command).
  * ========================================================== */
 (function () {
   'use strict';
 
   // ============================================================
-  // i18n —— 文案字典（与 PC 端 src/i18n 对齐的 8 种语言）
+  // i18n — string dictionary (8 languages, aligned with PC-side src/i18n)
   // ============================================================
   var I18N = {
     'zh-CN': {
@@ -618,7 +618,7 @@
     },
   };
 
-  // 解析显示语言：优先 PC 注入的 window.__OL_LANG__，回退手机系统语言。
+  // Resolve display language: prefer PC-injected window.__OL_LANG__, fall back to the phone system language.
   var LANG = (function () {
     var injected = (window.__OL_LANG__ || '').trim();
     if (Object.prototype.hasOwnProperty.call(I18N, injected)) return injected;
@@ -639,14 +639,14 @@
   })();
   var L = I18N[LANG] || I18N['zh-CN'];
 
-  // 极简插值：把 "{n}" / "{reason}" / "{name}" 替换成对应值。
+  // Minimal interpolation: replace "{n}" / "{reason}" / "{name}" with the matching values.
   function fmt(tpl, vars) {
     return String(tpl).replace(/\{(\w+)\}/g, function (_, k) {
       return vars && vars[k] != null ? vars[k] : '';
     });
   }
 
-  // 把 index.html 里带 data-i18n 的静态文案按当前语言渲染。
+  // Render static strings in index.html marked with data-i18n in the current language.
   function applyStaticI18n() {
     try {
       document.title = L.title;
@@ -658,14 +658,14 @@
     }
   }
 
-  // ---------- 常量 ----------
-  var TARGET_SR = 16000; // 目标采样率,必须与 PC 端一致
-  var MODE_KEY = 'ol_remote_mode'; // localStorage 键:录音方式
-  var PIN_KEY = 'ol_remote_pin'; // localStorage 键:上次成功的配对码
-  var INSERT_KEY = 'ol_remote_insert'; // localStorage 键:电脑落字开关(默认开)
+  // ---------- Constants ----------
+  var TARGET_SR = 16000; // target sample rate; must match the PC side
+  var MODE_KEY = 'ol_remote_mode'; // localStorage key: recording mode
+  var PIN_KEY = 'ol_remote_pin'; // localStorage key: last successful pairing code
+  var INSERT_KEY = 'ol_remote_insert'; // localStorage key: insert-on-PC toggle (default on)
   var WAKE_LOCK_KEY = 'ol_remote_wake_lock';
   var RECOVERY_KEY = 'ol_remote_recovery_session';
-  var MIC_PREP_TIMEOUT_MS = 10000; // 麦克风准备超时:超过则判失败让用户重试,避免无限卡"准备中"
+  var MIC_PREP_TIMEOUT_MS = 10000; // mic preparation timeout: past it, fail and let the user retry instead of sticking on "preparing"
   var PCM_QUEUE_MAX_BYTES = 128 * 1024;
 
   // ---------- DOM ----------
@@ -700,17 +700,17 @@
   var offlineReason = $('offline-reason');
   var copyCertBtn = $('copy-cert-link');
 
-  // ---------- 状态 ----------
+  // ---------- State ----------
   var ws = null;
   var authed = false;
-  var recording = false; // 是否正在录音(决定是否 send 音频)
-  var startSent = false; // 本次录音的 {type:'start'} 是否已真正发出(等 ensureAudio 异步就绪后才发)
-  var busy = false; // PC 端忙,本次禁用
+  var recording = false; // whether a recording is active (decides whether to send audio)
+  var startSent = false; // whether {type:'start'} for this recording has actually been sent (only after ensureAudio resolves)
+  var busy = false; // PC is busy; disable this session
   var mode = readMode(); // 'toggle' | 'hold'
   var lastPin = '';
   var remoteSessionId = '';
   var remoteSequence = 0;
-  var finishAfterStarted = ''; // ACK 前松手/取消：'stop' | 'cancel' | ''
+  var finishAfterStarted = ''; // released/cancelled before ACK: 'stop' | 'cancel' | ''
   var pendingPcm = [];
   var pendingPcmBytes = 0;
   var awaitingResult = false;
@@ -722,7 +722,7 @@
   var wakeLockGeneration = 0;
   var wakeLockPending = null;
 
-  // 音频相关
+  // Audio state
   var audioCtx = null;
   var mediaStream = null;
   var sourceNode = null;
@@ -730,15 +730,15 @@
   var scriptNode = null;
   var workletUrl = null;
   var usingWorklet = false;
-  // 音频代际计数:每次重置/释放音频时自增。getUserMedia 可能在 withTimeout 超时后
-  // 迟到 resolve,若不校验代际,迟到的 stream 会泄漏活跃麦克风轨道,甚至覆盖丢失
-  // 用户重试成功后的新流。
+  // Audio generation counter: incremented on every reset/release. getUserMedia may resolve
+  // late, after the withTimeout timeout; without a generation check the late stream would leak
+  // live mic tracks or clobber the new stream from a successful retry.
   var audioGen = 0;
-  // ScriptProcessor 兜底用的重采样状态(跨块保留)
+  // Resample state for the ScriptProcessor fallback (kept across chunks)
   var resampleState = { phase: 0, last: 0, hasLast: false };
 
   // ============================================================
-  // 配对码持久化(localStorage)
+  // Pairing code persistence (localStorage)
   // ============================================================
   function readPin() {
     try {
@@ -760,7 +760,7 @@
     saveRecoverySession('');
   }
 
-  // 恢复凭据仅用于本次随机会话；不请求电脑历史记录列表。
+  // Recovery credentials apply to this random session only; they never request the computer's history list.
   function readRecoverySession() {
     try {
       var saved = JSON.parse(localStorage.getItem(RECOVERY_KEY) || 'null');
@@ -796,7 +796,7 @@
     clearRecoveryTimer();
     if (!authed || document.hidden || recording || startSent || !recoverySessionId) return;
     wsSendJSON({ type: 'recover', sessionId: recoverySessionId, recoveryKey: recoveryKey });
-    // 唤醒后的旧连接可能仍显示 OPEN，却再也收不到数据；超时重新认证。
+    // A stale connection after wake-up may still show OPEN but never receives data; re-authenticate on timeout.
     recoveryTimer = setTimeout(function () {
       recoveryTimer = null;
       if (!recording && authed && !document.hidden) {
@@ -886,7 +886,7 @@
   }
 
   // ============================================================
-  // 屏幕切换
+  // Screen switching
   // ============================================================
   function showScreen(which) {
     screenPin.classList.toggle('active', which === 'pin');
@@ -895,10 +895,10 @@
   }
 
   // ============================================================
-  // 模式(toggle / hold)
+  // Mode (toggle / hold)
   // ============================================================
   // ============================================================
-  // 电脑落字开关(关闭=只把文字回传手机、不落到电脑光标)
+  // Insert-on-PC toggle (off = only return text to the phone, don't type at the PC cursor)
   // ============================================================
   function readInsert() {
     try {
@@ -912,7 +912,7 @@
       localStorage.setItem(INSERT_KEY, v ? '1' : '0');
     } catch (e) {}
   }
-  // 把当前开关值发给电脑(仅已连接时生效):进录音屏时同步一次,之后每次切换即时下发。
+  // Send the current toggle value to the PC (only while connected): once when entering the recording screen, then immediately on every change.
   function sendInsertConfig() {
     wsSendJSON({ type: 'set_insert', value: insertSwitch ? insertSwitch.checked : true });
   }
@@ -930,8 +930,9 @@
     try {
       m = localStorage.getItem(MODE_KEY);
     } catch (e) {}
-    // 手机明确保存的两种模式优先；首次访问、旧值损坏或存储被禁用时，
-    // 跟随 PC 当前默认值。不要把继承值写回存储，否则之后 PC 改设置就失效了。
+    // An explicitly saved phone-side mode wins; on first visit, corrupted value or disabled
+    // storage, follow the PC's current default. Never write the inherited value back, or later
+    // PC-side changes would stop taking effect.
     if (m === 'hold' || m === 'toggle') return m;
     return window.__OL_DEFAULT_MODE__ === 'hold' ? 'hold' : 'toggle';
   }
@@ -950,7 +951,7 @@
     if (mode === 'hold') {
       recTip.textContent = L.tipHold;
       recordLabel.textContent = recording ? L.labelHoldRec : L.labelHoldIdle;
-      recordBtn.style.touchAction = 'none'; // hold 防滚动
+      recordBtn.style.touchAction = 'none'; // prevent scrolling in hold mode
     } else {
       recTip.textContent = L.tipToggle;
       recordLabel.textContent = recording ? L.labelToggleRec : L.labelToggleIdle;
@@ -958,23 +959,23 @@
     }
   }
 
-  // 手机手动切换后保存为本机偏好，后续访问继续优先于 PC 默认值。
+  // A manual switch on the phone is saved as a local preference and keeps taking precedence over the PC default.
   modeSwitch.addEventListener('click', function (e) {
     var t = e.target.closest('.mode-btn');
     if (!t) return;
     var m = t.getAttribute('data-mode');
     if (m === mode) return;
-    // 录音中切换模式先安全停止(取消本次,避免状态错乱)
+    // When switching mode while recording, stop safely first (cancel this take to avoid inconsistent state)
     if (recording) cancelRecording();
     writeMode(m);
   });
 
   // ============================================================
-  // 状态文字 / 音量
+  // Status text / level
   // ============================================================
   function setStatus(text, kind) {
     statusText.textContent = text;
-    // 每次切状态先清掉图标/三点动效,由调用方(applyStatusKind)按需重新点亮。
+    // Clear the icon/three-dot animation on every status change; the caller (applyStatusKind) re-enables them as needed.
     if (statusIcon) statusIcon.hidden = true;
     if (statusDots) statusDots.hidden = true;
     statusBar.classList.remove('is-error', 'is-ok', 'is-work');
@@ -988,12 +989,12 @@
     levelBar.style.width = (v * 100).toFixed(1) + '%';
   }
 
-  // 去掉状态文案开头的 emoji 图标(如 '🎤 录音中' → '录音中'),改用 DOM 图标/动效呈现。
+  // Strip the leading emoji icon from status strings (e.g. '🎤 Recording' → 'Recording'); the DOM icon/animation renders it instead.
   function stripLeadingIcon(s) {
     return String(s).replace(/^\S+\s+/, '');
   }
 
-  // PC 端落字完成后回传的最终文字,显示在状态区下方;开始新一次录音时清空。
+  // Final text returned by the PC after insertion, shown below the status area; cleared when a new recording starts.
   function showResult(text) {
     if (!resultWrap) return;
     if (!text) {
@@ -1013,7 +1014,7 @@
     }
   }
 
-  // done 后过几秒自动回到"准备就绪",方便直接开始下一次,而不是一直停在结果上。
+  // A few seconds after done, return to "ready" automatically so the next recording can start right away.
   var readyTimer = null;
   function scheduleReady() {
     if (readyTimer) clearTimeout(readyTimer);
@@ -1022,8 +1023,8 @@
       if (!recording && authed) setStatus(L.ready, null);
     }, 2500);
   }
-  // 录音/停止/取消入口都要清掉 readyTimer,否则上一次 done 的回 ready 定时器会迟到
-  // 触发,把"识别中…"等新状态错盖成"准备就绪"。
+  // Every record/stop/cancel entry point must clear readyTimer, otherwise the late
+  // return-to-ready timer from the previous done would overwrite newer states like "transcribing…".
   function clearReadyTimer() {
     if (readyTimer) {
       clearTimeout(readyTimer);
@@ -1031,12 +1032,12 @@
     }
   }
 
-  // busy 提示的解除定时器:跟踪起来,新状态到来时清除,避免多个 busy 消息叠加定时器
-  // 或迟到的定时器覆盖新状态。
+  // Timer that clears the busy state: tracked so a new status clears it, preventing stacked
+  // busy timers or a late timer from overwriting the new state.
   var busyTimer = null;
 
-  // 识别/润色阶段的客户端兜底超时:服务端任何原因不回 done/error(如孤立会话、进程异常)
-  // 时,30 秒后显示通用错误并回 ready,防止 UI 永久卡在"识别中…"。
+  // Client-side fallback timeout for transcribe/polish: if the server never replies done/error
+  // (orphaned session, crashed process), show a generic error after 30s and return to ready.
   var workTimer = null;
   function armWorkTimeout() {
     clearWorkTimeout();
@@ -1073,9 +1074,10 @@
     }
   }
 
-  // 连接看门狗:wss 握手或认证在 12s 内没完成,几乎都是手机没信任电脑证书
-  // (iOS Safari 对自签名 wss 不复用页面级证书例外)。与其无限"连接中",不如回到
-  // 配对屏给出明确提示,引导用户去信任证书。
+  // Connect watchdog: if the wss handshake or auth doesn't finish within 12s, it is almost
+  // always the phone not trusting the computer certificate (iOS Safari doesn't reuse the
+  // page-level certificate exception for wss). Return to the pairing screen with a clear
+  // message instead of spinning on "connecting" forever.
   var connectTimer = null;
   function armConnectTimeout() {
     clearConnectTimeout();
@@ -1098,7 +1100,7 @@
 
   function connect(pin) {
     lastPin = pin;
-    closeWS(); // 清理旧连接
+    closeWS(); // tear down the old connection
     authed = false;
     busy = false;
     awaitingResult = false;
@@ -1112,15 +1114,15 @@
       return;
     }
     ws.binaryType = 'arraybuffer';
-    armConnectTimeout(); // 看门狗:握手/认证迟迟不完成 → 多半是证书没被信任
+    armConnectTimeout(); // watchdog: a stalled handshake/auth usually means the certificate isn't trusted
 
     ws.onopen = function () {
-      // 连上立即握手
+      // Handshake immediately after connecting
       wsSendJSON({ type: 'hello', pin: pin, prefer: mode });
     };
 
     ws.onmessage = function (ev) {
-      if (typeof ev.data !== 'string') return; // 下行只处理文本
+      if (typeof ev.data !== 'string') return; // downstream messages are text only
       var msg;
       try {
         msg = JSON.parse(ev.data);
@@ -1131,7 +1133,7 @@
     };
 
     ws.onerror = function () {
-      // onerror 后通常紧跟 onclose,统一在 close 里处理 UI
+      // onclose usually follows onerror; handle the UI in one place in the close handler
     };
 
     ws.onclose = function () {
@@ -1151,13 +1153,14 @@
       resetRemoteStreamState();
       teardownAudio();
       if (wasAuthed) {
-        // 已进入录音屏后断开 → 断线屏
+        // Disconnected after entering the recording screen → offline screen
         offlineReason.textContent = recoverySessionId ? L.offlineRecording : L.offlineSub;
         showScreen('offline');
       } else {
-        // 未认证就关闭(握手被拒/证书不受信任/网络中断)。无论当前是否在配对屏都给出
-        // 明确提示 —— 否则(尤其安卓 Chrome 对不受信任的自签名 wss 会立刻 onclose)
-        // 用户只看到按钮闪一下变回"连接",完全不知道发生了什么。
+        // Closed before auth (handshake rejected / untrusted certificate / network drop).
+        // Always show a clear message — otherwise (especially Android Chrome, which fires
+        // onclose immediately for untrusted self-signed wss) the user just sees the button
+        // flash back to "Connect" with no idea what happened.
         showScreen('pin');
         showPinError(L.errConnFail);
       }
@@ -1197,12 +1200,12 @@
           authed = true;
           busy = false;
           clearConnectTimeout();
-          writePin(lastPin); // 配对成功 → 记住配对码,刷新后免重输
+          writePin(lastPin); // pairing succeeded → remember the code so refreshes skip retyping
           enterRecScreen();
           requestRecovery();
         } else {
           authed = false;
-          clearPin(); // 配对码失效(错误/锁定)→ 清除,避免下次自动重连又失败
+          clearPin(); // pairing code invalid (wrong/locked) → clear it so auto-reconnect doesn't fail again
           var reason = msg.reason === 'locked' ? L.errPinLocked : L.errPinWrong;
           closeWS();
           showScreen('pin');
@@ -1233,10 +1236,10 @@
         recording = false;
         awaitingResult = false;
         resetRemoteStreamState();
-        teardownAudioCapture(); // 停止采集但保留 ctx
+        teardownAudioCapture(); // stop capture but keep the ctx
         updateRecordBtnUI();
         setStatus(fmt(L.busy, { reason: msg.reason || L.busyDefault }), 'error');
-        // 短暂后解除忙态,允许重试。定时器存入 busyTimer 跟踪,重入时先清,避免叠加。
+        // Clear the busy state shortly so retries are possible. Track the timer in busyTimer and clear on re-entry to avoid stacking.
         if (busyTimer) clearTimeout(busyTimer);
         busyTimer = setTimeout(function () {
           busyTimer = null;
@@ -1247,7 +1250,7 @@
         break;
 
       case 'result':
-        // 电脑落字完成后回传的最终文字,显示给手机用户看本次识别结果。
+        // Final text returned by the PC after insertion; shows this run's result to the phone user.
         showResult(msg.text);
         awaitingResult = false;
         clearRecoveryTimer();
@@ -1257,7 +1260,7 @@
   }
 
   function applyStatusKind(msg) {
-    // 真实状态到来即解除 busy 兜底定时,避免它迟到触发把新状态错盖成"准备就绪"。
+    // A real status clears the busy fallback timer so a late fire can't overwrite it with "ready".
     if (busyTimer) {
       clearTimeout(busyTimer);
       busyTimer = null;
@@ -1278,30 +1281,30 @@
         awaitingResult = true;
         updateRecordBtnUI();
         setStatus(stripLeadingIcon(L.statusTranscribing), 'work');
-        if (statusDots) statusDots.hidden = false; // 识别中:三点加载动效
-        armWorkTimeout(); // 工作状态续上兜底超时,防止服务端中途无响应卡死
+        if (statusDots) statusDots.hidden = false; // transcribing: three-dot loader
+        armWorkTimeout(); // re-arm the fallback timeout while working, in case the server goes silent
         break;
       case 'polishing':
-        setStatus(L.statusPolishing, 'work'); // 润色保留 ✨
-        armWorkTimeout(); // 同上
+        setStatus(L.statusPolishing, 'work'); // keep ✨ while polishing
+        armWorkTimeout(); // same as above
         break;
       case 'done':
         awaitingResult = false;
         updateRecordBtnUI();
-        clearWorkTimeout(); // 正常收尾,解除兜底超时
+        clearWorkTimeout(); // normal completion, clear the fallback timeout
         var n = typeof msg.insertedChars === 'number' ? msg.insertedChars : 0;
         setStatus(stripLeadingIcon(fmt(L.statusDone, { n: n })), 'ok');
         if (statusIcon) {
           statusIcon.src = '/done.png';
           statusIcon.hidden = false;
-        } // 完成:对勾图
+        } // done: checkmark image
         setLevel(0);
         scheduleReady();
         break;
       case 'error':
         awaitingResult = false;
         updateRecordBtnUI();
-        clearWorkTimeout(); // 服务端已明确报错,解除兜底超时
+        clearWorkTimeout(); // server reported an error explicitly, clear the fallback timeout
         if (recording || startSent) failRecording('❌ ' + (msg.message || L.errGeneric), true);
         else {
           resetRemoteStreamState();
@@ -1315,7 +1318,7 @@
   }
 
   // ============================================================
-  // 屏幕状态判断辅助
+  // Screen state helpers
   // ============================================================
   function isPinScreen() {
     return screenPin.classList.contains('active');
@@ -1328,14 +1331,14 @@
     updateRecordBtnUI();
     setStatus(L.ready, null);
     setLevel(0);
-    sendInsertConfig(); // 进录音屏时把「电脑落字」开关同步给电脑
+    sendInsertConfig(); // sync the insert-on-PC toggle to the computer when entering the recording screen
   }
 
   // ============================================================
-  // PIN 屏交互
+  // PIN screen interactions
   // ============================================================
   pinInput.addEventListener('input', function () {
-    // 仅保留数字
+    // Keep digits only
     var v = pinInput.value.replace(/\D+/g, '').slice(0, 6);
     if (v !== pinInput.value) pinInput.value = v;
     showPinError('');
@@ -1371,7 +1374,7 @@
     btnConnect.textContent = L.btnConnect;
   }
 
-  // 重新连接
+  // Reconnect
   btnReconnect.addEventListener('click', function () {
     showScreen('pin');
     showPinError('');
@@ -1379,11 +1382,11 @@
     var p = lastPin || readPin();
     if (p) {
       pinInput.value = p;
-      doConnect(); // 有配对码直接重连,省去再点一次
+      doConnect(); // reconnect directly with the saved code, no extra tap
     }
   });
 
-  // 复制证书下载链接 —— 方便换个浏览器打开,或发给自己。
+  // Copy the certificate download link — handy for opening in another browser or sending to yourself.
   function fallbackCopyText(text, cb) {
     try {
       var ta = document.createElement('textarea');
@@ -1416,8 +1419,8 @@
     });
   }
 
-  // 结果文字「一键复制」：优先 navigator.clipboard(需安全上下文,本页是 HTTPS),
-  // 失败或旧浏览器回退 execCommand(兼容性高,见 fallbackCopyText)。
+  // One-tap copy of the result text: prefer navigator.clipboard (needs a secure context;
+  // this page is HTTPS), fall back to execCommand for old browsers (see fallbackCopyText).
   if (resultCopy) {
     resultCopy.addEventListener('click', function () {
       var text = resultText.textContent || '';
@@ -1441,7 +1444,7 @@
   }
 
   // ============================================================
-  // 录音按钮交互(toggle / hold)
+  // Record button interactions (toggle / hold)
   // ============================================================
   function updateRecordBtnUI() {
     recordBtn.classList.toggle('recording', recording);
@@ -1454,7 +1457,7 @@
     }
   }
 
-  // toggle 模式:click 切换
+  // Toggle mode: click to switch
   recordBtn.addEventListener('click', function () {
     if (mode !== 'toggle') return;
     if (!authed || busy || awaitingResult) return;
@@ -1462,17 +1465,18 @@
     else startRecording();
   });
 
-  // hold 模式:按下开始;松开/取消结束。
-  // 关键:用 document 级监听兜底"松开"事件。移动端 setPointerCapture 在动画/重排/
-  // 系统权限弹窗时可能丢失,导致 recordBtn 自身的 pointerup 收不到 —— 表现为"手已
-  // 松开却还在录音,得再点一下才停"。改为按下时在 document 上挂一次性的 pointerup/
-  // pointercancel,无论指针最终在哪释放都能结束录音。
+  // Hold mode: press to start; release/cancel to stop.
+  // Key point: a document-level listener backs up the "release" event. On mobile,
+  // setPointerCapture can be lost during animations/reflows/system permission dialogs, so
+  // recordBtn's own pointerup never fires — the recording keeps running after the finger
+  // lifts. Instead, attach one-shot document-level pointerup/pointercancel on press so the
+  // recording ends wherever the pointer is released.
   var holdEndHandler = null;
   function attachHoldEnd() {
     if (holdEndHandler) return;
     holdEndHandler = function () {
       if (recording)
-        stopRecording(); // stopRecording 内部会 detachHoldEnd
+        stopRecording(); // stopRecording detaches it internally
       else detachHoldEnd();
     };
     document.addEventListener('pointerup', holdEndHandler, true);
@@ -1494,12 +1498,13 @@
   });
 
   // ============================================================
-  // 录音流程
+  // Recording flow
   // ============================================================
-  // 给可能"永久 pending"的 Promise 兜底超时。移动端 audioCtx.resume() / getUserMedia()
-  // 在息屏/切后台/被占用时可能既不 resolve 也不 reject,整条 ensureAudio 链就永久卡住 ——
-  // start 指令发不出去、电脑端不弹胶囊,H5 一直停在"正在准备麦克风…"。超时即判失败,复位
-  // 状态并提示重试,而不是无限等待。
+  // Fallback timeout for Promises that may stay "pending forever". On mobile, audioCtx.resume()
+  // / getUserMedia() may neither resolve nor reject when the screen locks, the app backgrounds,
+  // or the mic is busy, leaving the whole ensureAudio chain stuck — no start command, no capsule
+  // on the PC, and the page stuck on "preparing microphone…". On timeout, fail, reset state and
+  // prompt a retry instead of waiting forever.
   function withTimeout(promise, ms, tag) {
     return new Promise(function (resolve, reject) {
       var timer = setTimeout(function () {
@@ -1526,36 +1531,37 @@
       setStatus(L.connLost, 'error');
       return;
     }
-    // 先乐观置态,保证 iOS 在手势同步栈内 resume()
+    // Set state optimistically so iOS calls resume() within the gesture's synchronous stack
     recording = true;
     clearRecoveryTimer();
     acquireWakeLock();
     resetRemoteStreamState();
-    clearReadyTimer(); // 防止上一次 done 的回 ready 定时器迟到覆盖本次状态
-    clearWorkTimeout(); // 新一次录音开始,作废上一轮的识别兜底超时
+    clearReadyTimer(); // keep the previous done's late return-to-ready timer from overwriting this run
+    clearWorkTimeout(); // new recording started; invalidate the previous run's fallback timeout
     updateRecordBtnUI();
     setStatus(L.preparingMic, 'work');
-    clearResult(); // 清掉上一次的识别结果,避免新录音时还显示旧文字
+    clearResult(); // clear the previous result so the new recording doesn't show old text
 
     var gen = audioGen;
     withTimeout(ensureAudio(), MIC_PREP_TIMEOUT_MS, 'TIMEOUT')
       .then(function () {
         if (gen !== audioGen) return;
         if (!recording) {
-          // 期间已被取消/松手
+          // Cancelled/released while preparing
           teardownAudioCapture();
           return;
         }
         wsSendJSON({ type: 'start' });
-        startSent = true; // start 已发出,stopRecording 才需要配对发 stop
+        startSent = true; // start is out; only now does stopRecording need to send a matching stop
         setStatus(L.preparingBackend, 'work');
       })
       .catch(function (err) {
         if (gen !== audioGen) return;
         recording = false;
         resetRemoteStreamState();
-        // 超时多半是 audioCtx 卡死(resume 永不 settle),彻底重建,否则下次重试会继续卡在
-        // 同一个坏 ctx 上;非超时错误只需停采集链。
+        // A timeout usually means the audioCtx is wedged (resume never settles); rebuild it
+        // from scratch or the next retry sticks on the same broken ctx. Other errors only
+        // need the capture chain stopped.
         if (err && err.name === 'TIMEOUT') resetAudioContext();
         else teardownAudioCapture();
         updateRecordBtnUI();
@@ -1566,12 +1572,13 @@
   function stopRecording() {
     detachHoldEnd();
     if (!recording) return;
-    clearReadyTimer(); // 防止迟到的回 ready 定时器覆盖"识别中…"
+    clearReadyTimer(); // keep a late return-to-ready timer from overwriting "transcribing…"
     recording = false;
     updateRecordBtnUI();
     teardownAudioCapture();
-    // start 还没发出(hold 按下后立即松手,ensureAudio 尚未完成)→ 按本地取消处理:
-    // 不发孤立 stop,否则 PC 无对应会话、不回 done/error,UI 会永久卡在"识别中…"。
+    // start not yet sent (hold released before ensureAudio finished) → treat as a local cancel:
+    // don't send an orphan stop, or the PC has no session, never replies done/error, and the UI
+    // sticks on "transcribing…" forever.
     if (!startSent) {
       resetRemoteStreamState();
       setStatus(L.ready, null);
@@ -1585,7 +1592,7 @@
       resetRemoteStreamState();
       enterTranscribing();
     } else {
-      // ACK 未到：先保留首段 PCM，ACK 后按序 flush，再把 stop 排在音频帧之后。
+      // ACK not yet arrived: keep the first PCM chunks, flush them in order after ACK, then queue stop after the audio frames.
       finishAfterStarted = 'stop';
       setStatus(L.preparingBackend, 'work');
       setLevel(0);
@@ -1637,18 +1644,18 @@
   }
 
   // ============================================================
-  // 音频:获取设备 + 建立采集链
+  // Audio: acquire devices + build the capture chain
   // ============================================================
-  // 确保 AudioContext / getUserMedia / 采集节点就绪并开始推流。
-  // 必须在用户手势调用栈内(startRecording 由手势触发)。
+  // Ensure AudioContext / getUserMedia / capture nodes are ready and start streaming.
+  // Must be called from within a user-gesture stack (startRecording is gesture-triggered).
   function ensureAudio() {
     var gen = audioGen;
-    // 不支持 getUserMedia
+    // getUserMedia unsupported
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       return Promise.reject(new Error('UNSUPPORTED:浏览器不支持录音,请升级或换浏览器'));
     }
 
-    // 1) AudioContext(iOS 需手势内 resume)
+    // 1) AudioContext (iOS needs resume within a gesture)
     if (!audioCtx) {
       var AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) {
@@ -1662,17 +1669,18 @@
       };
     }
 
-    // 注意:iOS Safari 来电/Siri 后 ctx 处于私有的 'interrupted' 状态,只判 'suspended'
-    // 不命中,会导致录音静默无声 —— 凡是非 running 都尝试 resume。
+    // Note: after a call/Siri, iOS Safari puts the ctx in a private 'interrupted' state that a
+    // 'suspended'-only check misses, leaving recordings silently silent — try resume for any
+    // non-running state.
     var resumeP =
       audioCtx.state !== 'running' ? audioCtx.resume().catch(function () {}) : Promise.resolve();
 
     return resumeP
       .then(function () {
         if (gen !== audioGen) return null;
-        // 2) 麦克风流(已存在则复用)
+        // 2) Mic stream (reuse if present)
         if (mediaStream) return mediaStream;
-        // 使用准备开始时的代际；停止/取消后迟到的流必须释放，不能覆盖下一次录音。
+        // Use the generation captured when preparation began; a late stream after stop/cancel must be released, never overwrite the next recording.
         return navigator.mediaDevices
           .getUserMedia({
             audio: {
@@ -1690,7 +1698,7 @@
                   t.stop();
                 });
               } catch (e) {}
-              return null; // 交给下一步判空直接放弃
+              return null; // the next step's null check drops it
             }
             mediaStream = stream;
             stream.getTracks().forEach(function (track) {
@@ -1702,20 +1710,21 @@
           });
       })
       .then(function (stream) {
-        // 3) 建立采集图(若已建好则跳过)。audioCtx 可能在准备超时后被 resetAudioContext
-        // 置空(本次 getUserMedia 迟到 resolve),此时直接放弃,避免对 null ctx 建图报错。
+        // 3) Build the capture graph (skip if already built). audioCtx may have been nulled by
+        // resetAudioContext after a prep timeout (this getUserMedia resolved late); bail out to
+        // avoid building on a null ctx.
         if (gen !== audioGen || sourceNode || !audioCtx || !stream) return;
         sourceNode = audioCtx.createMediaStreamSource(stream);
         return buildCaptureGraph();
       });
   }
 
-  // 建立 AudioWorklet(优先)或 ScriptProcessor(兜底)
+  // Build AudioWorklet (preferred) or ScriptProcessor (fallback)
   function buildCaptureGraph() {
     var gen = audioGen;
     var inSr = audioCtx.sampleRate || 48000;
 
-    // 优先 AudioWorklet
+    // Prefer AudioWorklet
     if (audioCtx.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
       return loadWorklet()
         .then(function () {
@@ -1727,7 +1736,7 @@
             processorOptions: { inSr: inSr, targetSr: TARGET_SR },
           });
           workletNode.port.onmessage = function (e) {
-            // e.data 是已转换好的 Int16 LE ArrayBuffer
+            // e.data is the converted Int16 LE ArrayBuffer
             if (gen === audioGen) sendAudio(e.data);
           };
           sourceNode.connect(workletNode);
@@ -1735,19 +1744,19 @@
         })
         .catch(function () {
           if (gen !== audioGen) return;
-          // worklet 加载失败 → 回退 ScriptProcessor
+          // worklet load failed → fall back to ScriptProcessor
           usingWorklet = false;
           buildScriptProcessor(inSr);
         });
     }
 
-    // 无 audioWorklet:直接兜底
+    // No audioWorklet: use the fallback directly
     usingWorklet = false;
     buildScriptProcessor(inSr);
     return Promise.resolve();
   }
 
-  // ---- AudioWorklet processor(字符串 → Blob URL 加载) ----
+  // ---- AudioWorklet processor (loaded from a string via Blob URL) ----
   function loadWorklet() {
     if (workletUrl) return audioCtx.audioWorklet.addModule(workletUrl);
 
@@ -1759,8 +1768,8 @@
       '    this.inSr=p.inSr||sampleRate;' +
       '    this.targetSr=p.targetSr||16000;' +
       '    this.ratio=this.inSr/this.targetSr;' +
-      '    this.phase=0;' + // 当前小数相位
-      '    this.last=0;' + // 上一块最后一个样本(用于跨块拼接)
+      '    this.phase=0;' + // current fractional phase
+      '    this.last=0;' + // last sample of the previous chunk (for cross-chunk stitching)
       '    this.hasLast=false;' +
       '  }' +
       '  process(inputs){' +
@@ -1771,19 +1780,19 @@
       '    var prev=this.last;' +
       '    var hasPrev=this.hasLast;' +
       '    var n=ch.length;' +
-      // 估算输出样本数上界
+      // Upper bound on the output sample count
       '    var outCap=Math.ceil((n+1)/ratio)+2;' +
       '    var pcm=new ArrayBuffer(outCap*2);' +
       '    var dv=new DataView(pcm);' +
       '    var oi=0;' +
-      // 线性插值:phase 以"输入样本"为单位推进,step=inSr/16000
-      // i=floor(phase),frac=phase-i;a=样本[i],b=样本[i+1]
-      // 跨块时 i 可能为 -1,用 prev 作为 a。
+      // Linear interpolation: phase advances in "input sample" units, step=inSr/16000
+      // i=floor(phase), frac=phase-i; a=sample[i], b=sample[i+1]
+      // Across chunks i may be -1; use prev as a.
       '    while(true){' +
       '      var i=Math.floor(phase);' +
       '      var frac=phase-i;' +
       '      var a,b;' +
-      '      if(i+1>=n){break;}' + // 需要 i 和 i+1 都在块内(或 a 用 prev)
+      '      if(i+1>=n){break;}' + // need both i and i+1 inside the chunk (or a uses prev)
       '      if(i<0){' +
       '        if(!hasPrev){phase+=ratio;continue;}' +
       '        a=prev;b=ch[0];' +
@@ -1796,7 +1805,7 @@
       '      oi++;' +
       '      phase+=ratio;' +
       '    }' +
-      // 保留余数:把 phase 拉回到相对下一块起点
+      // Keep the remainder: pull phase back relative to the next chunk's start
       '    this.phase=phase-n;' +
       '    this.last=ch[n-1];' +
       '    this.hasLast=true;' +
@@ -1813,7 +1822,7 @@
     return audioCtx.audioWorklet.addModule(workletUrl);
   }
 
-  // ---- ScriptProcessor 兜底 ----
+  // ---- ScriptProcessor fallback ----
   function buildScriptProcessor(inSr) {
     scriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
     resampleState.phase = 0;
@@ -1826,7 +1835,7 @@
       var buf = resampleToInt16LE(input, inSr);
       if (buf && buf.byteLength) sendAudio(buf);
     };
-    // ScriptProcessor 需连到 destination 才会触发(用静音增益避免回放)
+    // ScriptProcessor only fires when connected to the destination (silent gain avoids playback)
     sourceNode.connect(scriptNode);
     var silent = audioCtx.createGain();
     silent.gain.value = 0;
@@ -1835,7 +1844,7 @@
     scriptNode._silentGain = silent;
   }
 
-  // 主线程线性插值重采样(给 ScriptProcessor 用),逻辑与 worklet 一致
+  // Main-thread linear-interpolation resampling (for ScriptProcessor), same logic as the worklet
   function resampleToInt16LE(ch, inSr) {
     var ratio = inSr / TARGET_SR;
     var phase = resampleState.phase;
@@ -1978,7 +1987,7 @@
     }
   }
 
-  // 发送二进制音频帧；start ACK 前最多缓存 128 KiB，避免冷启动吞掉首词。
+  // Send binary audio frames; buffer at most 128 KiB before the start ACK so a cold start doesn't swallow the first word.
   function sendAudio(buf) {
     if (!recording || !buf || !buf.byteLength) return;
     if (!ws || ws.readyState !== 1) {
@@ -2017,12 +2026,13 @@
     return frame;
   }
 
-  // 本地音量可视化:直接用即将上传的 Int16 PCM 算 RMS。远程模式下 PC 端没有麦克风
-  // 电平源(不开本地 cpal),所以电平条由手机端自己的音频驱动 —— 实时,且不依赖后端事件。
+  // Local level visualization: compute RMS from the Int16 PCM about to be uploaded. In remote
+  // mode the PC has no mic level source (no local cpal), so the phone's own audio drives the
+  // level bar — real time, independent of backend events.
   var lastLevelAt = 0;
   function updateLocalLevel(buf) {
     var now = window.performance && performance.now ? performance.now() : 0;
-    if (now && now - lastLevelAt < 50) return; // 限到 ~20Hz,避免过度刷新 DOM
+    if (now && now - lastLevelAt < 50) return; // cap at ~20Hz to avoid excessive DOM updates
     lastLevelAt = now;
     var n = buf.byteLength >> 1;
     if (n === 0) return;
@@ -2033,15 +2043,15 @@
       sum += s * s;
     }
     var rms = Math.sqrt(sum / n);
-    setLevel(Math.min(1, rms * 3.5)); // 适度放大,让正常说话有明显跳动
+    setLevel(Math.min(1, rms * 3.5)); // modest gain so normal speech visibly moves the bar
   }
 
   // ============================================================
-  // 音频清理
+  // Audio teardown
   // ============================================================
-  // 仅停止"采集/推流"(断开节点),保留 audioCtx & mediaStream 以便快速重启。
+  // Stop only capture/streaming (disconnect nodes); keep audioCtx & mediaStream for a quick restart.
   function teardownAudioCapture() {
-    audioGen++; // 停止/取消也作废在途的 resume、麦克风、worklet 和准备超时回调。
+    audioGen++; // stop/cancel also invalidates in-flight resume, mic, worklet and prep-timeout callbacks.
     releaseWakeLock();
     if (wakeLockHint) wakeLockHint.textContent = L.wakeLockHint;
     try {
@@ -2068,16 +2078,16 @@
     try {
       if (sourceNode) sourceNode.disconnect();
     } catch (e) {}
-    // sourceNode 置空,下次 ensureAudio 重新从 stream 创建
+    // Null out sourceNode; the next ensureAudio recreates it from the stream
     sourceNode = null;
 
-    // 复位兜底重采样状态
+    // Reset the fallback resample state
     resampleState.phase = 0;
     resampleState.last = 0;
     resampleState.hasLast = false;
   }
 
-  // 彻底释放(断线时):停止麦克风轨道并关闭 ctx。
+  // Full release (on disconnect): stop the mic tracks and close the ctx.
   function teardownAudio() {
     teardownAudioCapture();
     if (mediaStream) {
@@ -2087,7 +2097,7 @@
       } catch (e) {}
       mediaStream = null;
     }
-    // 不强行 close ctx(部分浏览器再次 new 较慢);仅在确实需要时挂起
+    // Don't force-close the ctx (some browsers are slow to create a new one); just suspend when needed
     if (audioCtx && audioCtx.state === 'running') {
       try {
         audioCtx.suspend();
@@ -2095,9 +2105,10 @@
     }
   }
 
-  // 准备超时后的硬复位:停麦克风轨道并彻底关闭 audioCtx,使下次 ensureAudio 从零重建。
-  // 与 teardownAudio 的区别:这里 close 并置空 audioCtx —— 超时根因往往是 ctx 自身坏掉
-  // (resume 永不 settle),保留它只会让下次继续卡。
+  // Hard reset after a prep timeout: stop the mic tracks and fully close audioCtx so the next
+  // ensureAudio rebuilds from zero. Unlike teardownAudio, this closes and nulls audioCtx — the
+  // timeout root cause is usually a broken ctx (resume never settles), and keeping it only
+  // wedges the next attempt.
   function resetAudioContext() {
     teardownAudioCapture();
     if (mediaStream) {
@@ -2116,7 +2127,7 @@
   }
 
   // ============================================================
-  // 息屏和切后台结束本段录音，保留电脑已收到的部分。
+  // Screen lock / backgrounding ends this recording, keeping what the PC already received.
   // ============================================================
   function interruptRecording() {
     var hadStarted = startSent;
@@ -2128,7 +2139,7 @@
       teardownAudioCapture();
       updateRecordBtnUI();
     }
-    // 系统中断后释放旧轨道，下一次由用户开始录音时重新获取麦克风。
+    // Release the old tracks after a system interruption; the next user-initiated recording re-acquires the mic.
     teardownAudio();
     if (hadStarted) setStatus(L.interrupted, 'work');
   }
@@ -2153,21 +2164,23 @@
   });
 
   // ============================================================
-  // 初始化
+  // Init
   // ============================================================
   function init() {
-    // iOS Safari 怪癖兜底：页面"首次加载"后,页面内 wss 的证书信任不生效 —— 首次连接
-    // 会卡在 TLS 握手→超时,手动刷新一次就好(已用日志证实:首次 TCP 到了却不升级,刷新
-    // 后立刻 WS 升级成功)。这里把那一下"刷新"自动化:每个浏览器会话首次加载时静默
-    // reload 一次,之后再初始化+自动连接,wss 握手就能成功。sessionStorage 标记保证只刷
-    // 一次、不会死循环;手动刷新(同标签)不会重复触发,新标签/重开才会再刷。
+    // iOS Safari quirk workaround: certificate trust for in-page wss doesn't apply on the
+    // page's first load — the first connect stalls at the TLS handshake and times out, and one
+    // manual refresh fixes it (confirmed via logs: the first TCP arrives without upgrade; after
+    // refresh the WS upgrade succeeds immediately). Automate that refresh: silently reload once
+    // per browser session on first load, then init + auto-connect so the wss handshake succeeds.
+    // The sessionStorage marker guarantees a single reload with no loop; a manual refresh (same
+    // tab) won't retrigger it, only a new tab/reopen will.
     var reloadedOnce = false;
     try {
       reloadedOnce = sessionStorage.getItem('ol_reloaded_once') === '1';
     } catch (e) {}
     if (!reloadedOnce) {
-      // 写后立即读回校验:sessionStorage 被禁用(写入抛异常/写不进去)时标记永远落不下,
-      // 若仍 reload 会无限循环刷新 —— 校验失败就放弃刷新,直接继续初始化。
+      // Read back right after writing: if sessionStorage is disabled (write throws / doesn't
+      // stick) the marker never lands and reloading would loop forever — skip the reload and continue init.
       var marked = false;
       try {
         sessionStorage.setItem('ol_reloaded_once', '1');
@@ -2185,13 +2198,13 @@
     initWakeLockSwitch();
     showScreen('pin');
     showPinError('');
-    // 上次成功的配对码 → 自动填充并重连,刷新/重开页面免再输一次
+    // Last successful pairing code → autofill and reconnect, so a refresh/reopen skips retyping
     var saved = readPin();
     if (saved) {
       pinInput.value = saved;
       doConnect();
     } else {
-      // 自动聚焦 PIN(部分移动端会被策略拦截,忽略失败)
+      // Autofocus the PIN field (some mobile browsers block it; ignore failures)
       setTimeout(function () {
         try {
           pinInput.focus();

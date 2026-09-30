@@ -1,9 +1,10 @@
-//! 远程输入（局域网手机录音）的 HTTPS + WebSocket 服务。
+//! HTTPS + WebSocket server for remote input (LAN phone recording).
 //!
-//! 手机在同一局域网用浏览器打开 `https://<PC-IP>:<port>`，得到一个录音页
-//! （assets/ 下的 index.html / app.js / style.css，编译期 include_str! 内嵌）。
-//! 手机录音以 16k/单声道/16-bit LE PCM 经 WebSocket 实时推回 PC，并通过共享
-//! [`openless_core::OpenLessBackend`] 的 external-audio seam 进入同一听写管线。
+//! A phone on the same LAN opens `https://<PC-IP>:<port>` in a browser and gets a recording
+//! page (index.html / app.js / style.css under assets/, embedded via compile-time include_str!).
+//! The phone streams 16k/mono/16-bit LE PCM back to the PC in real time over WebSocket and
+//! enters the same dictation pipeline through the external-audio seam of the shared
+//! [`openless_core::OpenLessBackend`].
 //!
 //! Browser microphone access requires a secure context, so this server uses HTTPS.
 //! A persistent per-installation CA signs a separate LAN server certificate.
@@ -40,15 +41,16 @@ const HEADER_HTML: &str = "text/html; charset=utf-8";
 const HEADER_JS: &str = "application/javascript; charset=utf-8";
 const HEADER_CSS: &str = "text/css; charset=utf-8";
 
-/// 服务端 keepalive：每 KEEPALIVE_PING_SECS 发一次 WS Ping（浏览器自动回 Pong）；
-/// 连续 IDLE_TIMEOUT_SECS 收不到任何上行帧（含 Pong）则视为半开死链断开。
-/// 手机息屏/Wi-Fi 漂移常常不发 TCP FIN，没有探活时 recv() 永久挂起：连接任务、
-/// 事件订阅、进行中的远程会话全部悬挂。
+/// Server keepalive: send a WS Ping every KEEPALIVE_PING_SECS (browsers answer Pong
+/// automatically); if no upstream frame (including Pong) arrives for IDLE_TIMEOUT_SECS, treat
+/// the link as a half-open dead connection and disconnect. Phones with the screen off or after
+/// Wi-Fi drift often never send a TCP FIN, and without liveness probes recv() hangs forever:
+/// the connection task, event subscription, and any in-flight remote session all hang.
 const KEEPALIVE_PING_SECS: u64 = 30;
 const IDLE_TIMEOUT_SECS: u64 = 90;
 const AUDIO_IDLE_TIMEOUT_SECS: u64 = 15;
 
-// ───────────────────────── 对外类型 ─────────────────────────
+// ───────────────────────── Public types ─────────────────────────
 
 pub struct RemoteServerConfig {
     pub port: u16,
@@ -56,12 +58,14 @@ pub struct RemoteServerConfig {
     pub app: AppHandle,
 }
 
-/// 运行中的服务句柄。drop / shutdown 触发优雅关停。
+/// Handle for the running server. drop / shutdown triggers graceful shutdown.
 pub struct RemoteServerHandle {
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
-    /// 广播给所有已建立 WS 连接的关停信号。只停 accept loop 是不够的：连接任务
-    /// 是独立 spawn 的，不通知它们的话，用户关掉远程输入（或重置 PIN 触发重启）
-    /// 后已配对的手机会话原样存活，仍能录音、向 PC 光标落字——撤销语义失效。
+    /// Shutdown signal broadcast to all established WS connections. Stopping the accept loop
+    /// alone is not enough: connection tasks are spawned independently, and without notifying
+    /// them a paired phone session survives intact after the user turns off remote input (or
+    /// resets the PIN, triggering a restart) — still able to record and type at the PC cursor,
+    /// which breaks the revoke semantics.
     conn_shutdown_tx: tokio::sync::watch::Sender<bool>,
     join: tauri::async_runtime::JoinHandle<()>,
     pub bound_port: u16,
@@ -69,7 +73,7 @@ pub struct RemoteServerHandle {
 }
 
 impl RemoteServerHandle {
-    /// 通知 accept loop 与所有存量 WS 连接退出，并等待 accept loop 结束。
+    /// Tell the accept loop and all existing WS connections to exit, and wait for the accept loop to finish.
     pub async fn shutdown(mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
@@ -92,13 +96,14 @@ pub struct RemoteInputStatus {
     pub ca_fingerprint_sha256: Option<String>,
 }
 
-// ───────────────────────── 工具函数 ─────────────────────────
+// ───────────────────────── Utility functions ─────────────────────────
 
-/// 生成 6 位数字配对码。使用 rejection sampling 消除取模偏差（u32::MAX 不是
-/// 1_000_000 的倍数，直接取模会给低编号 PIN 带来约 0.03% 的额外概率）。
+/// Generate a 6-digit numeric pairing code. Uses rejection sampling to remove modulo bias
+/// (u32::MAX is not a multiple of 1_000_000; plain modulo gives low-numbered PINs about 0.03%
+/// extra probability).
 pub fn generate_pin() -> String {
-    // u32::MAX + 1 = 2^32；舍弃使结果偏置的高端余数区间。
-    // 偏置截止点：u32::MAX - (u32::MAX % 1_000_000) + 1（向下取整到 1_000_000 的倍数）
+    // u32::MAX + 1 = 2^32; discard the high remainder range that would bias the result.
+    // Bias cutoff: u32::MAX - (u32::MAX % 1_000_000) + 1 (rounded down to a multiple of 1_000_000)
     const LIMIT: u32 = u32::MAX - (u32::MAX % 1_000_000);
     loop {
         let b = uuid::Uuid::new_v4().into_bytes();
@@ -106,7 +111,7 @@ pub fn generate_pin() -> String {
         if n < LIMIT {
             return format!("{:06}", n % 1_000_000);
         }
-        // 极罕见（约 2^32 mod 10^6 / 2^32 ≈ 0.007% 概率），重新采样即可。
+        // Extremely rare (about 2^32 mod 10^6 / 2^32 ≈ 0.007% chance); just resample.
     }
 }
 
@@ -119,7 +124,7 @@ fn pin_path(app: &AppHandle) -> Option<std::path::PathBuf> {
 
 mod pin_persistence;
 
-/// 读持久化的配对码；没有 / 无效则新生成并写盘。让配对码跨重启稳定。
+/// Read the persisted pairing code; generate and persist a new one if missing/invalid. Keeps the pairing code stable across restarts.
 pub fn load_or_create_pin(app: &AppHandle) -> std::io::Result<String> {
     let path = pin_path(app).ok_or_else(|| {
         std::io::Error::new(
@@ -130,7 +135,7 @@ pub fn load_or_create_pin(app: &AppHandle) -> std::io::Result<String> {
     pin_persistence::load_or_create_pin_at_path(&path, generate_pin)
 }
 
-/// 原子写配对码到磁盘；只有成功后调用方才能提交内存状态。
+/// Write the pairing code to disk atomically; callers commit in-memory state only after success.
 pub fn save_pin(app: &AppHandle, pin: &str) -> std::io::Result<()> {
     let path = pin_path(app).ok_or_else(|| {
         std::io::Error::new(
@@ -150,7 +155,7 @@ fn is_private_lan(ip: &Ipv4Addr) -> bool {
             || (o[0] == 172 && (16..=31).contains(&o[1])))
 }
 
-/// 本机所有局域网 IPv4（过滤回环 / link-local / 虚拟网卡的非私网段）。
+/// All LAN IPv4 addresses of this machine (filtering loopback / link-local / non-private ranges from virtual adapters).
 pub fn local_lan_ipv4s() -> Vec<Ipv4Addr> {
     let mut out: Vec<Ipv4Addr> = Vec::new();
     if let Ok(ifaces) = local_ip_address::list_afinet_netifas() {
@@ -167,7 +172,7 @@ pub fn local_lan_ipv4s() -> Vec<Ipv4Addr> {
     out
 }
 
-/// 给前端展示的访问网址列表。
+/// Access URLs shown to the frontend.
 pub fn access_urls(port: u16) -> Vec<String> {
     local_lan_ipv4s()
         .iter()
@@ -179,18 +184,20 @@ pub fn access_urls(port: u16) -> Vec<String> {
 
 mod tls_identity;
 
-// ───────────────────────── 启动 ─────────────────────────
+// ───────────────────────── Startup ─────────────────────────
 
 struct WsState {
     backend: Arc<openless_core::OpenLessBackend>,
     /// Public CA certificate offered for phone installation; never the server leaf or key.
     cert_der: Vec<u8>,
-    /// 服务关停广播的接收端，每条 WS 连接 clone 一份并在主循环 select 监听。
+    /// Receiver of the server-shutdown broadcast; each WS connection clones one and watches it
+    /// in its main loop's select.
     conn_shutdown_rx: tokio::sync::watch::Receiver<bool>,
 }
 
-/// 经 accept loop 注入的对端 IP（axum Extension）。hyper 直连 TLS 流时拿不到
-/// ConnectInfo，这里在每条连接的 service 上挂一层 Extension 把 peer 传进 handler。
+/// Peer IP injected by the accept loop (axum Extension). hyper talking to the TLS stream
+/// directly cannot get ConnectInfo, so an Extension carrying the peer is attached to each
+/// connection's service and read by the handler.
 #[derive(Clone, Copy)]
 struct PeerIp(IpAddr);
 
@@ -242,8 +249,9 @@ fn build_router(state: Arc<WsState>) -> Router {
                 )
             }),
         )
-        // 证书下载：手机在浏览器打开它即可下载并安装信任（iOS Safari 的 wss 不复用
-        // 页面级证书例外，需在系统里完全信任后 wss 才稳定）。
+        // Certificate download: the phone opens it in a browser to download and install trust
+        // (iOS Safari's wss does not reuse page-level certificate exceptions; wss is only
+        // stable after full trust in the system settings).
         .route(
             "/cert.cer",
             get(|State(state): State<Arc<WsState>>| async move {
@@ -264,8 +272,9 @@ fn build_router(state: Arc<WsState>) -> Router {
         .with_state(state)
 }
 
-/// 首页按 PC 当前偏好注入语言和录音默认模式，每次刷新即读取最新值。
-/// H5 保留手机本地明确保存的模式，仅首次访问或无效本地值使用 PC 默认值。
+/// The index page injects language and the recording default mode from current PC preferences,
+/// reading fresh values on every refresh. The H5 page keeps the mode explicitly saved on the
+/// phone; PC defaults apply only on first visit or for invalid local values.
 async fn index_handler(State(state): State<Arc<WsState>>) -> impl IntoResponse {
     let lang = state
         .backend
@@ -274,7 +283,8 @@ async fn index_handler(State(state): State<Arc<WsState>>) -> impl IntoResponse {
         .status()
         .map(|status| status.locale)
         .unwrap_or_else(|_| "zh-CN".to_string());
-    // 偏好来自持久化数据，禁止将任意字符串拼进内联 script；只注入固定字面量。
+    // Preferences come from persisted data; never concatenate arbitrary strings into inline
+    // script — only fixed literals are injected.
     let default_mode = if state.backend.get_preferences().remote_input_default_mode == "hold" {
         "hold"
     } else {
@@ -302,7 +312,7 @@ async fn mobileconfig_handler(State(state): State<Arc<WsState>>) -> impl IntoRes
 }
 
 pub async fn start(cfg: RemoteServerConfig) -> Result<RemoteServerHandle, String> {
-    let _ = HEADER_HTML; // index 用 axum Html() 自带 content-type
+    let _ = HEADER_HTML; // index uses axum Html(), which sets its own content-type
     let mut sans = vec!["localhost".to_string(), "127.0.0.1".to_string()];
     for ip in local_lan_ipv4s() {
         sans.push(ip.to_string());
@@ -352,11 +362,14 @@ pub async fn start(cfg: RemoteServerConfig) -> Result<RemoteServerHandle, String
                             continue;
                         }
                     };
-                    // 最底层诊断：每个到达本机 8443 的 TCP 连接都记下来源 IP。手机一连就能
-                    // 看到它到底有没有真的到这台电脑、来自哪个网段（排查"是不是连到别的设备"）。
+                    // Lowest-level diagnostics: log the source IP of every TCP connection
+                    // reaching port 8443. As soon as a phone connects, this shows whether it
+                    // actually reached this machine and from which subnet (debugging "did it
+                    // connect to some other device").
                     log::info!("[remote-input] 收到 TCP 连接，来自 {peer}");
                     let acceptor = acceptor.clone();
-                    // 每条连接把对端 IP 以 Extension 挂进 router，供 PIN 按 IP 锁定。
+                    // Attach the peer IP to the router as an Extension per connection, for PIN
+                    // locking by IP.
                     let router = router.clone().layer(axum::Extension(PeerIp(peer.ip())));
                     tokio::spawn(async move {
                         let tls = match acceptor.accept(tcp).await {
@@ -393,8 +406,10 @@ async fn ws_upgrade(
     axum::Extension(PeerIp(peer_ip)): axum::Extension<PeerIp>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    // 能走到这里说明 wss 的 TLS 握手已成功（证书被手机接受）。排查"连不上"时看有没有
-    // 这行：没有 = 卡在 TLS/证书（握手就失败）；有 = 握手 OK，问题在认证/后续逻辑。
+    // Getting here means the wss TLS handshake succeeded (the certificate was accepted by the
+    // phone). When debugging "cannot connect", look for this line: absent = stuck at
+    // TLS/certificate (handshake failed); present = handshake OK, the problem is in
+    // authentication or later logic.
     log::info!("[remote-input] WS 已升级：手机已通过 wss 接入（TLS/证书 OK）");
     ws.on_upgrade(move |socket| handle_ws(socket, state, peer_ip))
 }
@@ -403,8 +418,9 @@ fn send_json<T: Serialize>(value: &T) -> Message {
     Message::Text(serde_json::to_string(value).unwrap_or_else(|_| "{}".into()))
 }
 
-/// 手机只接收本连接开出的 Core 会话。全局 capsule/纯文本广播没有 owner，
-/// 会把电脑本地听写或另一台手机的内容发给所有已配对连接，不能作为网络出口。
+/// Phones only receive the Core session opened by their own connection. Global capsule /
+/// plain-text broadcasts have no owner and would send local PC dictation or another phone's
+/// content to all paired connections; they must not be a network egress.
 fn backend_event_to_phone(
     event: &openless_core::BackendEvent,
     remote_session_id: &mut Option<openless_core::SessionId>,
@@ -415,8 +431,9 @@ fn backend_event_to_phone(
     }
     match &event.kind {
         BackendEventKind::DictationCompleted(result) => {
-            // Completed 状态先于结果发布，所以只能在收到结果后释放下行 owner。
-            // stop future 完成也不清 owner，避免 select 顺序让最后一条结果丢失。
+            // Completed state is published before the result, so the downstream owner can only
+            // be released after the result arrives. The stop future's completion does not clear
+            // the owner either, so select ordering cannot lose the final result.
             *remote_session_id = None;
             vec![
                 serde_json::json!({"type":"status", "kind":"done",
@@ -455,13 +472,14 @@ fn backend_event_to_phone(
     }
 }
 
-// stop 包含 ASR/润色/插入，可能持续数十秒。让 socket select 持有并轮询 future，
-// 期间仍能收 cancel/Close/关停信号；意外断线继续收尾，撤销权限时才取消。
+// stop spans ASR/polish/insertion and can run for tens of seconds. The socket select holds and
+// polls the future, still receiving cancel/Close/shutdown meanwhile; an unexpected disconnect
+// continues finalization, and only permission revocation cancels it.
 type PendingRemoteStop =
     futures_util::future::BoxFuture<'static, Result<(), openless_core::BackendError>>;
 
 async fn handle_ws(mut socket: WebSocket, state: Arc<WsState>, peer_ip: IpAddr) {
-    // 1) 握手：等第一帧 hello + PIN。
+    // 1) Handshake: wait for the first hello + PIN frame.
     let connection_id = openless_core::SessionId::new();
     let authed = match tokio::time::timeout(Duration::from_secs(15), socket.recv()).await {
         Ok(Some(Ok(Message::Text(txt)))) => {
@@ -480,7 +498,7 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<WsState>, peer_ip: IpAddr) 
                 }
             }
         }
-        _ => return, // 超时 / 非文本首帧 / 断开
+        _ => return, // timeout / non-text first frame / disconnected
     };
     match authed {
         openless_core::RemoteAuthResult::Ok => {
@@ -509,11 +527,13 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<WsState>, peer_ip: IpAddr) 
         }
     }
 
-    // 在 start 控制帧之前订阅，确保快速会话的起始事件也能在 owner 建立后转发。
+    // Subscribe before the start control frame so even a fast session's initial events are
+    // forwarded once the owner is established.
     let mut events = state.backend.subscribe();
     let mut last_event_sequence = 0;
 
-    // 3) 主循环：手机上行（控制 / PCM） + 后端状态下行 + keepalive 探活 + 关停广播。
+    // 3) Main loop: phone upstream (control / PCM) + backend status downstream + keepalive
+    // probes + shutdown broadcast.
     let mut conn_shutdown_rx = state.conn_shutdown_rx.clone();
     let mut keepalive = tokio::time::interval(Duration::from_secs(KEEPALIVE_PING_SECS));
     keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -603,9 +623,10 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<WsState>, peer_ip: IpAddr) 
                 }
             }
             _ = keepalive.tick() => {
-                // 半开探活：浏览器收到 Ping 自动回 Pong（上面 recv 收到即刷新 last_rx）。
-                // 超时无任何上行 → 死链，break 走下方统一收尾（撤销 Core lease），
-                // 避免录音中掉线时远程会话与标志悬挂。
+                // Half-open liveness: browsers answer Ping with Pong automatically (recv above
+                // refreshes last_rx when it arrives). No upstream at all past the timeout ->
+                // dead link; break to the unified finalization below (revoking the Core lease),
+                // avoiding a dangling remote session and flags when a phone drops mid-recording.
                 if last_rx.elapsed() > Duration::from_secs(IDLE_TIMEOUT_SECS) {
                     log::info!("[remote-input] 连接 {}s 无上行（含 Pong），按半开死链断开", IDLE_TIMEOUT_SECS);
                     break;
@@ -615,7 +636,8 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<WsState>, peer_ip: IpAddr) 
                 }
             }
             _ = audio_watchdog.tick(), if receiving_audio && pending_stop.is_none() && remote_session_id.is_some() => {
-                // 浏览器可能只暂停麦克风而仍自动回复 Pong，不能仅靠 TCP 探活。
+                // A browser may pause only the microphone while still answering Pongs, so TCP
+                // liveness alone is not enough.
                 if last_audio.elapsed() >= Duration::from_secs(AUDIO_IDLE_TIMEOUT_SECS) {
                     receiving_audio = false;
                     pending_stop = Some(state.backend.services().remote_input
@@ -623,8 +645,9 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<WsState>, peer_ip: IpAddr) 
                 }
             }
             changed = conn_shutdown_rx.changed() => {
-                // 服务关停（用户关闭远程输入 / 重置 PIN / 改端口触发重启）：
-                // 主动断开存量连接，撤销已配对手机的会话与落字能力。
+                // Server shutting down (user turned off remote input / reset the PIN / changed
+                // the port, triggering a restart): actively disconnect existing connections and
+                // revoke paired phones' sessions and typing ability.
                 if changed.is_err() || *conn_shutdown_rx.borrow() {
                     preserve_audio = false;
                     log::info!("[remote-input] 服务关停，断开存量手机连接");
@@ -634,7 +657,8 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<WsState>, peer_ip: IpAddr) 
         }
     }
 
-    // 4) 断线只结束采集；识别和历史持久化继续，不依赖手机保持连接。
+    // 4) Disconnect ends only capture; recognition and history persistence continue and do not
+    // depend on the phone staying connected.
     log::info!("[remote-input] WS 连接已关闭");
     drop(socket);
     if preserve_audio && !*conn_shutdown_rx.borrow() {
@@ -664,7 +688,7 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<WsState>, peer_ip: IpAddr) 
     drop(pending_stop);
 }
 
-/// 返回 false 表示应断开连接。
+/// Returns false when the connection should be dropped.
 async fn handle_control(
     txt: &str,
     state: &Arc<WsState>,
@@ -735,9 +759,10 @@ async fn apply_remote_control(
                 let _ = remote_input.cancel_stream(connection_id, session_id).await;
                 *pending_stop = None;
             }
-            // 结果事件可能先于 Core stop 的最后几步清理到达。此时 owner 已释放，
-            // 不能因为迟到的 cancel 把尚未返回的 stop future 丢掉，否则会遗留
-            // Core finishing lease；让 select 正常把它轮询至完成即可。
+            // A result event may arrive before Core stop's final cleanup steps. The owner is
+            // already released then; a late cancel must not drop the still-running stop future,
+            // or a Core finishing lease would be left behind. Let select poll it to completion
+            // normally.
         }
         "recover" => {
             let session_id = v
@@ -765,7 +790,7 @@ async fn apply_remote_control(
             );
         }
         "set_insert" => {
-            // 手机端「电脑落字」开关：value=true 表示要落字。no_insert = !value。
+            // Phone-side "type on PC" switch: value=true means insert. no_insert = !value.
             let insert = v.get("value").and_then(|b| b.as_bool()).unwrap_or(true);
             log::info!("[remote-input] 电脑落字开关 = {insert}");
             if let Err(error) = remote_input.set_insert(connection_id, insert).await {
@@ -985,8 +1010,9 @@ mod tests {
         assert!(pending_stop.is_none());
         assert_eq!(runtime.audio_cancel_count(), 1);
 
-        // 下行结果已经清 owner，但 stop 仍在做最后清理时，迟到 cancel 不得
-        // 销毁这个 cleanup future。否则 Core 的 finishing lease 会永久悬挂。
+        // The downstream result already cleared the owner, but while stop is still doing final
+        // cleanup, a late cancel must not destroy this cleanup future; otherwise Core's
+        // finishing lease would hang forever.
         pending_stop = Some(Box::pin(async { Ok(()) }));
         apply_remote_control(
             r#"{"type":"cancel"}"#,

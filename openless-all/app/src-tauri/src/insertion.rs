@@ -19,10 +19,11 @@ use crate::types::{InsertStatus, PasteShortcut};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(750);
 
-/// 把一段文字放进剪贴板。供落字失败兜底卡片的「复制」按钮使用。
+/// Put a text into the clipboard; used by the "Copy" button on the insertion-failure fallback card.
 ///
-/// 单独开这个入口而不是让前端调 `navigator.clipboard`：卡片浮在别的 app 上、按钮
-/// 不抢焦点，未聚焦文档里那个 API 会抛 `Document is not focused`。
+/// A separate entry instead of letting the frontend call `navigator.clipboard`: the card floats
+/// above another app and its button does not take focus, and in an unfocused document that API
+/// throws `Document is not focused`.
 pub fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
     if copy_to_clipboard(text) {
         Ok(())
@@ -82,8 +83,10 @@ impl TextInserter {
         )
     }
 
-    /// macOS 路径：保存原剪贴板 → 写转写文字 → post Cmd+V → 按需恢复原剪贴板。
-    /// `_paste_shortcut` 在 macOS 不使用（固定 Cmd+V），仅为对齐跨平台签名。
+    /// macOS path: save the original clipboard -> write the transcribed text -> post Cmd+V ->
+    /// restore the original clipboard on demand.
+    /// `_paste_shortcut` is unused on macOS (fixed Cmd+V); it exists only to match the
+    /// cross-platform signature.
     #[cfg(target_os = "macos")]
     pub fn insert(
         &self,
@@ -94,9 +97,11 @@ impl TextInserter {
         if text.is_empty() {
             return InsertStatus::CopiedFallback;
         }
-        // issue #525：先记下用户原剪贴板，粘贴成功且「恢复剪贴板」开关开启时再恢复，避免覆盖
-        // 用户手动复制的内容。此前 macOS 完全不实现恢复（恢复机制曾被 cfg 排除），导致设置里
-        // 的开关在 macOS 上无效——无论开关如何，剪贴板都被留成转写文字。
+        // issue #525: record the user's original clipboard first and restore it only after the
+        // paste succeeds and the "restore clipboard" switch is on, so user-copied content is not
+        // overwritten. macOS previously implemented no restore at all (the mechanism was
+        // excluded by cfg), which made the settings switch a no-op on macOS — the clipboard was
+        // left as the transcribed text regardless of the switch.
         let restore_plan = match copy_to_clipboard_with_restore_plan(text) {
             Ok(plan) => plan,
             Err(err) => {
@@ -106,7 +111,7 @@ impl TextInserter {
         };
         if let Err(err) = simulate_paste() {
             log::warn!("[insertion] simulated paste failed: {}", err);
-            // 粘贴失败：把转写文字留在剪贴板供用户手动粘贴，不恢复。
+            // Paste failed: leave the transcribed text in the clipboard for manual pasting; no restore.
             return InsertStatus::CopiedFallback;
         }
         if restore_clipboard_after_paste {
@@ -115,7 +120,8 @@ impl TextInserter {
         insertion_success_status()
     }
 
-    /// Android：跨应用输入由 dictation 流程按用户策略处理；通用插入只写剪贴板兜底。
+    /// Android: cross-app input is handled by the dictation flow per user policy; generic
+    /// insertion only writes the clipboard as a fallback.
     #[cfg(target_os = "android")]
     pub fn insert(
         &self,
@@ -398,8 +404,8 @@ where
     if secure_input_active {
         return Err("secure input is active".into());
     }
-    // CoreGraphics 只能确认合成事件已经构造并投递，无法确认前台应用接受了 Cmd+V
-    // 或真的插入了文本。
+    // CoreGraphics can only confirm the synthetic event was constructed and delivered; it
+    // cannot confirm the foreground app accepted Cmd+V or actually inserted text.
     post_cmd_v()
 }
 
@@ -415,7 +421,7 @@ fn simulate_paste() -> Result<(), String> {
     )
 }
 
-/// 把 `PasteShortcut` 拆成 `(modifiers, primary)`，顺序决定按下/释放顺序。
+/// Split `PasteShortcut` into `(modifiers, primary)`; the order defines press/release order.
 #[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 fn paste_keys(shortcut: PasteShortcut) -> (Vec<enigo::Key>, enigo::Key) {
     use enigo::Key;
@@ -432,8 +438,8 @@ fn simulate_paste(shortcut: PasteShortcut) -> Result<(), String> {
     let (modifiers, primary) = paste_keys(shortcut);
     let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
 
-    // 顺序：按 modifier → 点击主键 → 反向释放 modifier。
-    // 任一步失败也把已按下的 modifier 反向释放回来，避免卡键。
+    // Order: press modifiers -> tap the primary key -> release modifiers in reverse.
+    // If any step fails, release the already-pressed modifiers in reverse to avoid stuck keys.
     let mut pressed = 0usize;
     let mut first_err: Option<String> = None;
 
@@ -476,7 +482,8 @@ fn insertion_success_status() -> InsertStatus {
 }
 
 // ── macOS CGEvent paste ──
-// 直接调 CoreGraphics FFI 发送 Cmd+V，避开 enigo 在主线程外触发的 TSM 断言。
+// Call the CoreGraphics FFI directly to send Cmd+V, avoiding TSM assertions enigo triggers
+// off the main thread.
 
 #[cfg(target_os = "macos")]
 mod macos {
@@ -498,7 +505,7 @@ mod macos {
     const KCG_HID_EVENT_TAP: CGEventTapLocation = 0;
     const KCG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: CGEventSourceStateID = 1;
     const KCG_EVENT_FLAG_MASK_COMMAND: CGEventFlags = 0x00100000;
-    /// US/ANSI 键盘上 "V" 的虚拟键码（kVK_ANSI_V）。
+    /// Virtual key code of "V" on a US/ANSI keyboard (kVK_ANSI_V).
     const KEY_V: CGKeyCode = 9;
 
     #[link(name = "CoreGraphics", kind = "framework")]
@@ -518,11 +525,11 @@ mod macos {
         fn CFRelease(cf: *const c_void);
     }
 
-    /// 模拟 Cmd+V：构造 V 的 down/up 事件，加 Cmd flag 后依次 post 到 HID 事件流。
+    /// Simulate Cmd+V: build V down/up events, add the Cmd flag, and post both to the HID event stream.
     pub fn post_cmd_v() -> Result<(), String> {
         unsafe {
             let source = CGEventSourceCreate(KCG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE);
-            // source 为 NULL 时 post 仍合法（Apple 文档允许），不视为致命错误。
+            // Posting is still legal when source is NULL (allowed by Apple's docs); not fatal.
             let down = CGEventCreateKeyboardEvent(source, KEY_V, true);
             let up = CGEventCreateKeyboardEvent(source, KEY_V, false);
             if down.is_null() || up.is_null() {
@@ -576,7 +583,8 @@ mod tests {
         assert!(!should_restore_clipboard(None, "dictated text"));
     }
 
-    /// 配置的快捷键必须真实映射到对应按键。只比较 modifier 数 + 主键，规避 enigo 内部 PartialEq。
+    /// The configured shortcut must really map to the corresponding keys. Compares only the
+    /// modifier count + primary key, bypassing enigo's internal PartialEq.
     #[test]
     #[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
     fn paste_keys_match_configured_shortcut() {
@@ -602,7 +610,8 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     fn crlf_sendinput_success_uses_expected_typed_count() {
-        // 包含已安全吞掉的 CR：回执报告的是消费源前缀，不是发出的按键数。
+        // Includes the safely swallowed CR: the receipt reports the consumed source prefix,
+        // not the number of keystrokes sent.
         let text = "a\r\nb";
         let expected = crate::unicode_keystroke::expected_sendinput_typed_chars(text);
         let status = map_sendinput_type_result(text, Ok(expected));
@@ -613,7 +622,8 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     fn crlf_sendinput_partial_mismatch_falls_back_to_clipboard() {
-        // 只处理了 a + CR + LF，末尾 b 未消费，必须保留部分失败语义。
+        // Only a + CR + LF were consumed; the trailing b was not, so the partial-failure
+        // semantics must hold.
         let text = "a\r\nb";
         let expected = crate::unicode_keystroke::expected_sendinput_typed_chars(text);
         let mismatched = 3;
@@ -679,8 +689,9 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn macos_paste_success_reports_inserted_and_guards_restore() {
-        // 粘贴成功 → Inserted；恢复仅在剪贴板仍是刚插入的转写文字时进行（issue #525），
-        // 即「恢复剪贴板」开关在 macOS 上真正生效。
+        // Paste success -> Inserted; restore runs only while the clipboard still holds the
+        // just-inserted text (issue #525), i.e. the "restore clipboard" switch really works on
+        // macOS.
         assert_eq!(insertion_success_status(), InsertStatus::Inserted);
         assert!(should_restore_clipboard(
             Some("dictated text"),

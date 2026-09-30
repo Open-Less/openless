@@ -341,9 +341,13 @@
     "microphone_devices_changed",
     "qa_level",
     "qa_state",
+    "selection_voice_level",
     "remote_input_status_changed",
     "remote_input_failed",
-    "vocabulary_suggestions_changed"
+    "vocabulary_suggestions_changed",
+    "cloud_sync_state_changed",
+    "cloud_sync_conflict_detected",
+    "cloud_sync_restore_completed"
   ],
   "domainInterfaces": [
     "ProviderApi",
@@ -399,9 +403,9 @@
     "additiveChange": "new optional fields require a default"
   },
   "counts": {
-    "tauriCommandsObserved": 199,
+    "tauriCommandsObserved": 200,
     "legacyEventsObserved": 30,
-    "coreEventKindsDefined": 30
+    "coreEventKindsDefined": 34
   },
   "implementationStatus": {
     "sharedRepositories": "preferences, history, activity, vocabulary, correction, style packs",
@@ -410,5 +414,5 @@
     "linuxAdapters": "credentials/provider UI, resources, packaged Qwen runtime, fcitx5 insertion/hotkeys/selection preview, capabilities, cpal recording, QA, TLS Remote Input, host actions, single-instance intent broker and native runtime lifecycle",
     "releaseGate": "Linux release requires successful artifacts and real Ubuntu audio, focus/input, install, upgrade, and rollback evidence"
   },
-  "status": "all 30 legacy events and 30 Core events are classified under contract 2.0.0; real-platform release evidence remains gated"
+  "status": "all 30 legacy events and 34 Core events are classified under contract 2.0.0; real-platform release evidence remains gated"
 }

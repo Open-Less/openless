@@ -1,4 +1,5 @@
-// Android 设置：自动检查并下载更新开关（桌面同类开关在 RecordingInputSection 启动组）。
+// Android settings: auto-check-and-download-updates toggle (the desktop equivalent lives in
+// RecordingInputSection's startup group).
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';

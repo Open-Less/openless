@@ -2494,7 +2494,8 @@ mod linux_app {
                         return;
                     }
                     match event.kind {
-                        // Linux已有独立录音显示；新typed反馈供接手Host/UI团队继续接入。
+                        // Linux already has its own recording display; new typed feedback is
+                        // for the Host/UI team taking over to wire up.
                         LessComputerEventKind::VoiceState { .. } => {}
                         LessComputerEventKind::User { .. } => {}
                         LessComputerEventKind::Started => {

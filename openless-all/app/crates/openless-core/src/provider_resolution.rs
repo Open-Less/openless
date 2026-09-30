@@ -79,3 +79,61 @@ pub(crate) async fn resolve_session_provider(
         keep_loaded_secs: None,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::credentials::{ChannelMutation, CredentialDirectory, InMemoryCredentialStore};
+
+    #[tokio::test]
+    async fn reordered_asr_channel_wins_over_stale_preference() {
+        let store = Arc::new(InMemoryCredentialStore::default());
+        let directory = CredentialDirectory::new(store.clone());
+        for provider_type in ["foundry-local-whisper", "volcengine", "volcengine"] {
+            directory
+                .mutate_channel(ChannelMutation::Create {
+                    kind: ChannelKind::Asr,
+                    provider_type: provider_type.into(),
+                    name: provider_type.into(),
+                })
+                .await
+                .unwrap();
+        }
+        directory
+            .mutate_channel(ChannelMutation::Reorder {
+                kind: ChannelKind::Asr,
+                ids: vec![
+                    "volcengine-2".into(),
+                    "volcengine".into(),
+                    "foundry-local-whisper".into(),
+                ],
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            directory.active_provider(ProviderSlot::Asr).await.unwrap(),
+            "volcengine-2"
+        );
+
+        let credential_store: Arc<dyn CredentialStore> = store;
+        for stale_preference in ["foundry-local-whisper", "volcengine"] {
+            let resolved =
+                resolve_session_provider(&credential_store, ProviderSlot::Asr, stale_preference)
+                    .await
+                    .unwrap();
+            assert_eq!(resolved.provider_id, "volcengine-2");
+            assert_eq!(resolved.provider_type, "volcengine");
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_asr_selection_uses_legacy_preference_fallback() {
+        let credential_store: Arc<dyn CredentialStore> =
+            Arc::new(InMemoryCredentialStore::default());
+        let resolved = resolve_session_provider(&credential_store, ProviderSlot::Asr, "volcengine")
+            .await
+            .unwrap();
+        assert_eq!(resolved.provider_id, "volcengine");
+        assert_eq!(resolved.provider_type, "volcengine");
+    }
+}

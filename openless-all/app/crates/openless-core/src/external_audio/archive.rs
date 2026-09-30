@@ -20,7 +20,8 @@ impl ExternalRecordingArchive {
         plan: &RecordingPlan,
     ) -> std::io::Result<Self> {
         std::fs::create_dir_all(directory)?;
-        // 只清理本应用生成的 UUID.wav，且为本次录音预留一个名额。
+        // Only clean up UUID.wav files this app generated, and reserve one slot for
+        // the recording about to start.
         let mut entries = Vec::new();
         for entry in std::fs::read_dir(directory)?.flatten() {
             let path = entry.path();
@@ -88,7 +89,8 @@ impl ExternalRecordingArchive {
                 .ok_or_else(|| std::io::Error::other("remote recording exceeds WAV size limit"))?;
             let file = writer.0.as_mut().unwrap();
             file.write_all(pcm)?;
-            // 每帧修正标准头；无需等手机发送 stop，即可读取磁盘上已收到的音频。
+            // Fix the standard header every frame; the audio received so far is
+            // readable on disk without waiting for the phone's stop.
             file.seek(SeekFrom::Start(4))?;
             file.write_all(&(36 + size).to_le_bytes())?;
             file.seek(SeekFrom::Start(40))?;

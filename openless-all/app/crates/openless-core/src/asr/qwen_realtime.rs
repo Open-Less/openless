@@ -2,18 +2,22 @@
 //!
 //! Speaks the OpenAI Realtime-style WebSocket protocol
 //! (`/api-ws/v1/realtime?model=...`) — the protocol line `bailian.rs` left as
-//! a follow-up. 与经典 `/api-ws/v1/inference` 不同：音频以 base64 JSON 事件
-//! （`input_audio_buffer.append`）发送，服务端以 `server_vad` 自动断句，每句
-//! 产生一个 `conversation.item.input_audio_transcription.completed`。
+//! a follow-up. Unlike the classic `/api-ws/v1/inference`: audio is sent as base64
+//! JSON events (`input_audio_buffer.append`), the server auto-segments with
+//! `server_vad`, and each segment produces one
+//! `conversation.item.input_audio_transcription.completed`.
 //!
-//! 2026-07 线上实测确认的关键行为：
-//! - `session.finish` 会先冲刷 VAD 尚未关闭的尾段（补发 completed）再回
-//!   `session.finished`，说到一半松手不会丢尾巴；
-//! - 纯静音 + finish 正常返回 `session.finished`（连接检查可用，无经典协议
-//!   的 EmptyAudio 问题）；
-//! - `session.update` 省略 `input_audio_transcription.language` 时自动检测语种；
-//! - 业务空间专属域名（`wss://{WorkspaceId}.cn-beijing.maas.aliyuncs.com`）
-//!   同样承载此路径，经典 inference 路径则只在公共网关。
+//! Key behaviors verified against the live service in 2026-07:
+//! - `session.finish` first flushes the tail segment VAD has not closed (sending its
+//!   completed) before replying `session.finished`; releasing mid-sentence does not
+//!   lose the tail.
+//! - Pure silence + finish returns `session.finished` normally (connection checks
+//!   work; no classic-protocol EmptyAudio problem).
+//! - `session.update` auto-detects the language when
+//!   `input_audio_transcription.language` is omitted.
+//! - Workspace-dedicated domains
+//!   (`wss://{WorkspaceId}.cn-beijing.maas.aliyuncs.com`) also serve this path; the
+//!   classic inference path exists only on the public gateway.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -39,17 +43,21 @@ pub const PROVIDER_ID: &str = "bailian-qwen3-realtime";
 pub const DEFAULT_ENDPOINT: &str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime";
 pub const DEFAULT_MODEL: &str = "qwen3-asr-flash-realtime";
 
-/// 100 ms of 16 kHz / 16-bit / mono PCM，与 recorder 输出及官方示例一致。
+/// 100 ms of 16 kHz / 16-bit / mono PCM, matching the recorder output and the
+/// official examples.
 pub const TARGET_AUDIO_CHUNK_BYTES: usize = 3_200;
 const BYTES_PER_MS: u64 = 32;
 const FINAL_RESULT_TIMEOUT: Duration = Duration::from_secs(12);
 const SESSION_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
-/// WebSocket 建连（TCP + TLS + HTTP upgrade）本身的上限。没有它 `connect_async` 会无限
-/// 等，而 `open_session` 是在串行的 hotkey bridge 线程上 `block_on` 等的 —— 卡住就意味着
-/// 热键彻底失灵（开不了也停不了，只能退出重开）。详见 stepfun_realtime.rs 同名常量。
+/// Cap on the WebSocket handshake (TCP + TLS + HTTP upgrade) itself. Without it
+/// `connect_async` waits forever, and `open_session` is awaited with `block_on` on
+/// the serial hotkey bridge thread — a hang means hotkeys are completely dead
+/// (recording can neither start nor stop; the app must be restarted). See the same
+/// constant in stepfun_realtime.rs.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-/// server_vad 断句静默阈值。官方默认 400ms；取 500ms 降低说话中途换气被切断的概率。
+/// server_vad segmentation silence threshold. Official default is 400ms; 500ms
+/// lowers the chance of cutting a sentence on a mid-speech breath.
 const VAD_SILENCE_DURATION_MS: u32 = 500;
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -80,8 +88,8 @@ impl Qwen3RealtimeCredentials {
         }
     }
 
-    /// 连接 URL：`{endpoint}?model={model}`。用户若已在 endpoint 里带了
-    /// `model=` 查询参数则原样使用，不重复拼接。
+    /// Connect URL: `{endpoint}?model={model}`. If the user's endpoint already carries
+    /// a `model=` query param, use it as-is without appending again.
     pub fn connect_url(&self) -> String {
         let endpoint = self.normalized_endpoint();
         if endpoint.contains("model=") {
@@ -129,12 +137,14 @@ struct SyncState {
     start: Option<Instant>,
     final_tx: Option<oneshot::Sender<Result<RawTranscript, Qwen3ASRError>>>,
     send_tx: Option<mpsc::UnboundedSender<SendItem>>,
-    /// VAD 断句后按到达顺序累积的已完成句段（completed.transcript）。
+    /// Completed segments (completed.transcript) accumulated in arrival order after
+    /// VAD segmentation.
     completed_segments: Vec<String>,
     // Per connection: ignore updates/repeats for completed item IDs.
     completed_item_ids: std::collections::HashSet<String>,
-    /// 当前未完成句段的最新 interim 文本；completed 到达后清空。
-    /// 服务端在句段开放期把累积文本放 `stash`、精修期放 `text`，取非空者。
+    /// Latest interim text of the current open segment; cleared when completed
+    /// arrives. During the open phase the server puts cumulative text in `stash`, and
+    /// the refined pass in `text`; take whichever is non-empty.
     partial_text: String,
 }
 
@@ -461,8 +471,9 @@ impl Qwen3RealtimeASR {
     }
 
     fn record_partial(&self, value: &Value) {
-        // 句段开放期服务端把累积文本放 `stash`，随后的精修 pass 放 `text`；
-        // 两者互斥出现，取非空者作为当前句段的 interim 文本。
+        // During the open phase the server puts cumulative text in `stash`, and the
+        // refined pass in `text`; they are mutually exclusive — take whichever is
+        // non-empty as the current segment's interim text.
         let text = value
             .get("text")
             .and_then(Value::as_str)
@@ -536,8 +547,8 @@ impl Qwen3RealtimeASR {
             st.session_finished = true;
             st.send_tx.take();
             let mut segments = std::mem::take(&mut st.completed_segments);
-            // session.finished 前若还有未 completed 的 interim 尾巴（理论上
-            // finish 会冲刷出 completed，防御性兜底），拼在最后。
+            // If an interim tail is still un-completed before session.finished (finish
+            // should flush it out; defensive backstop), append it last.
             if !st.partial_text.is_empty() {
                 segments.push(std::mem::take(&mut st.partial_text));
             }
@@ -564,7 +575,8 @@ impl Qwen3RealtimeASR {
             !st.completed_segments.is_empty() || !st.partial_text.trim().is_empty()
         };
         if has_partial {
-            // 与 Bailian / Volcengine 保持一致：连接异常但已有结果时兜底返回。
+            // Consistent with Bailian / Volcengine: on error with an existing result,
+            // fall back to returning it.
             self.finish_success();
         } else {
             self.finish_error(error);
@@ -629,8 +641,10 @@ fn drain_audio_chunks(buffer: &mut Vec<u8>) -> Vec<Vec<u8>> {
     chunks
 }
 
-/// VAD 句段拼接：CJK 之间直接相连；拉丁词之间补空格，避免英文句段黏连。
-/// `stepfun_realtime` 的多句段收尾复用同一套拼接逻辑，故 `pub(crate)`。
+/// Joins VAD segments: CJK characters concatenate directly; a space is inserted
+/// between Latin words so English segments do not stick together.
+/// `stepfun_realtime` reuses this joining for multi-segment close-out, hence
+/// `pub(crate)`.
 pub(crate) fn join_segments(segments: &[String]) -> String {
     let mut joined = String::new();
     for seg in segments.iter().map(|s| s.trim()) {
@@ -651,7 +665,7 @@ pub(crate) fn join_segments(segments: &[String]) -> String {
 }
 
 fn session_update_message() -> String {
-    // language 省略 => 服务端自动检测语种（2026-07 实测可用）。
+    // language omitted => server auto-detects (verified live 2026-07).
     json!({
         "type": "session.update",
         "event_id": event_id(),
@@ -806,7 +820,7 @@ mod tests {
         assert_eq!(value["session"]["input_audio_format"], "pcm");
         assert_eq!(value["session"]["sample_rate"], 16000);
         assert_eq!(value["session"]["turn_detection"]["type"], "server_vad");
-        // language 省略走服务端自动检测
+        // language omitted -> server auto-detects
         assert!(value["session"]["input_audio_transcription"].is_null());
         assert!(value["event_id"]
             .as_str()
@@ -861,13 +875,13 @@ mod tests {
     #[test]
     fn partial_prefers_text_falls_back_to_stash() {
         let asr = create_test_asr();
-        // 句段开放期：text 为空、stash 有累积文本
+        // Open phase: text empty, stash holds cumulative text.
         asr.record_partial(&text_event("", "今天"));
         assert_eq!(asr.state.lock().partial_text, "今天");
-        // 精修期：text 有值优先
+        // Refined pass: non-empty text wins.
         asr.record_partial(&text_event("今天天气", "旧stash"));
         assert_eq!(asr.state.lock().partial_text, "今天天气");
-        // 两者皆空不覆盖已有 partial
+        // Both empty: do not overwrite the existing partial.
         asr.record_partial(&text_event("", ""));
         assert_eq!(asr.state.lock().partial_text, "今天天气");
     }
@@ -985,7 +999,8 @@ mod tests {
 
     #[test]
     fn empty_session_finishes_with_empty_text() {
-        // 连接检查场景：纯静音无任何 completed，finish 后应返回空文本成功。
+        // Connection-check scenario: pure silence with no completed at all; finish
+        // must return empty text successfully.
         let asr = create_test_asr();
         let (tx, mut rx) = oneshot::channel();
         asr.state.lock().final_tx = Some(tx);

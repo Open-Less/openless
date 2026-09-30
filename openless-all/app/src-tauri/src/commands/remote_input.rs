@@ -1,9 +1,10 @@
-//! 远程输入（局域网手机录音）命令面。
+//! Command surface for remote input (LAN phone recording).
 //!
-//! 手机在同一局域网用浏览器打开 `https://<PC-IP>:<port>` 的 H5 录音页，经
-//! WSS 把 16kHz PCM 推回 PC，由共享 Core 当作"手机麦克风"喂进现有听写
-//! 管线。本模块只暴露设置页需要的状态查询 / PIN 重置 / 语言同步命令；
-//! 服务启停由 set_settings 里的 prefs diff 触发（见 settings.rs）。
+//! A phone on the same LAN opens the H5 recording page at `https://<PC-IP>:<port>` in a
+//! browser and pushes 16kHz PCM back to the PC over WSS; the shared Core feeds it into the
+//! existing dictation pipeline as a "phone microphone". This module exposes only the status
+//! query / PIN reset / locale sync commands the settings page needs;
+//! service start/stop is triggered by the prefs diff in set_settings (see settings.rs).
 
 use super::*;
 
@@ -64,7 +65,7 @@ pub async fn regenerate_remote_pin(core: CoreState<'_>) -> Result<String, String
         .map_err(|error| error.message)
 }
 
-/// 同步 PC 端界面语言到远程输入服务，H5 录音页据此显示对应语言。
+/// Sync the PC UI language to the remote input service; the H5 recording page displays that language.
 #[tauri::command]
 pub async fn set_remote_locale(
     app: AppHandle,

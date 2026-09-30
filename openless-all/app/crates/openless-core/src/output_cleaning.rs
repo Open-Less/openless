@@ -25,7 +25,8 @@ pub fn clean_polish_output(content: &str) -> String {
     output.trim().to_string()
 }
 
-/// XML 结构化输出清洗：剥离 thinking 块，保留 edit_plan 信封。
+/// XML structured-output cleaning: strips thinking blocks, keeps the edit_plan
+/// envelope.
 pub fn clean_xml_llm_output(content: &str) -> String {
     let without_thinking = strip_thinking_blocks(content);
     let trimmed = without_thinking.trim();
@@ -64,7 +65,8 @@ fn find_ci_substr(haystack: &str, needle: &str) -> Option<usize> {
     None
 }
 
-/// JSON 结构化输出清洗：只剥离 thinking 块与 markdown 围栏，不删 boilerplate 前缀。
+/// JSON structured-output cleaning: strips only thinking blocks and markdown fences,
+/// leaving boilerplate prefixes alone.
 pub fn clean_json_llm_output(content: &str) -> String {
     let without_thinking = strip_thinking_blocks(content);
     let trimmed = without_thinking.trim();

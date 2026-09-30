@@ -8,7 +8,8 @@ pub struct FoundryNativeModelState {
     pub display_name: Option<String>,
 }
 
-/// CPU 回退期间向调用方报告的最小状态。调用方只决定如何展示，不参与模型选择。
+/// Minimal state reported to callers during CPU fallback. Callers only decide
+/// how to present it; they do not take part in model selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FoundryFallbackNotice {
     SwitchingToCpu,
@@ -27,14 +28,17 @@ impl FoundryFallbackNotice {
 pub(crate) type FoundryFallbackNoticeCallback =
     Arc<dyn Fn(FoundryFallbackNotice) + Send + Sync + 'static>;
 
-/// 一条 Foundry ASR route 的进程内代数。
+/// In-process generation for one Foundry ASR route.
 ///
-/// route 在录音/重转录会话创建时分配；后续设置变更或新会话只能使旧 route 失效，
-/// 不能在真正开始转写时把旧会话重新绑定到最新代数。
+/// A route is assigned when a recording / re-transcription session is created;
+/// later settings changes or new sessions can only invalidate the old route —
+/// they cannot rebind the old session to the newest generation when
+/// transcription actually starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FoundryRouteEpoch(u64);
 
-/// 一段录音的 Foundry 转写结果。仅供本地 ASR provider 消费，不扩展 IPC 协议。
+/// Foundry transcription result for one recording. Consumed only by the local
+/// ASR provider; not part of the IPC protocol.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct FoundryTranscriptionOutcome {
     pub texts: Vec<String>,
@@ -44,9 +48,11 @@ pub(crate) struct FoundryTranscriptionOutcome {
     pub primary_recovery: Option<FoundryPrimaryRecoveryToken>,
 }
 
-/// 一次成功 CPU 回退后恢复原始 primary variant 所需的进程内令牌。
+/// In-process token for restoring the original primary variant after a
+/// successful CPU fallback.
 ///
-/// 令牌绑定 route epoch；旧会话的异步恢复不能覆盖后续录音或显式模型操作。
+/// The token is bound to the route epoch; an old session's async recovery must
+/// not override later recordings or explicit model operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FoundryPrimaryRecoveryToken {
     alias: String,
@@ -72,15 +78,18 @@ impl FoundryPrimaryRecoveryToken {
     }
 }
 
-/// 单次录音回退临时 CPU 模型的运行时 lease。
+/// Runtime lease for the temporary CPU model of a single recording fallback.
 ///
-/// 取消清理必须带上该 lease，避免旧录音的异步清理误卸载下一段录音重新加载的同一 CPU variant。
+/// Cancellation cleanup must carry this lease so an old recording's async
+/// cleanup cannot unload the same CPU variant reloaded by the next recording.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct FoundryTemporaryCpuFallbackLease(u64);
 
-/// CPU 回退已经尝试但不能完成时的终态标记。
+/// Terminal marker for a CPU fallback that was attempted but could not
+/// complete.
 ///
-/// Coordinator 据此跳过面对瞬态网络错误设计的静默重试，避免重新命中同一 CUDA 路径。
+/// The coordinator uses it to skip the silent retry designed for transient
+/// network errors, avoiding a second hit on the same CUDA path.
 #[derive(Debug, thiserror::Error)]
 #[error("Foundry CUDA CPU fallback failed; gpu_error={gpu_error}; cpu_error={cpu_error}")]
 pub(crate) struct FoundryCpuFallbackTerminalError {
@@ -96,17 +105,21 @@ pub(crate) fn is_terminal_foundry_fallback_error(error: &anyhow::Error) -> bool 
     })
 }
 
-/// Foundry GPU→CPU 回退终态错误面向用户的精简文案（PR #945 review P2-2）。
+/// Concise user-facing text for the Foundry GPU→CPU fallback terminal error
+/// (PR #945 review P2-2).
 ///
-/// 重转录/听写/QA 三处消费点共用，避免文案分叉；原始 GPU/CPU SDK 错误
-/// 只出现在日志与 err 字段，不直接展示给用户。仅 Windows 存在 Foundry
-/// provider，非 Windows 目标无需编译（避免 dead_code 警告）。
+/// Shared by the three consumers — re-transcription, dictation, QA — to keep
+/// the copy in one place; the raw GPU/CPU SDK errors appear only in logs and
+/// the err field, never shown directly to users. The Foundry provider exists
+/// only on Windows, so non-Windows targets need not compile it (avoids
+/// dead_code warnings).
 #[cfg(target_os = "windows")]
 pub(crate) const FOUNDRY_FALLBACK_TERMINAL_USER_MESSAGE: &str =
     "本地识别失败: GPU 识别异常，且 CPU 回退未能完成（详情见日志）";
 
 #[cfg(target_os = "windows")]
-// Windows 原生运行时模块同时暴露预加载与转写接口，调用入口按目标配置选择。
+// The Windows native runtime module exposes both preload and transcription
+// interfaces; the call site picks one based on the target configuration.
 #[allow(dead_code)]
 mod imp {
     use super::{FoundryPrimaryRecoveryToken, FoundryRouteEpoch};
@@ -322,8 +335,9 @@ mod imp {
         cache_hit: bool,
     }
 
-    /// 将「按分片转写、识别 CUDA 错误、一次 CPU 回退、清理临时模型」收敛到一个
-    /// 可替换的执行接口中。生产路径使用 SDK adapter；测试路径使用脚本化 fake，完全不需 GPU。
+    /// Collapses "transcribe per chunk, detect CUDA errors, one CPU fallback,
+    /// clean up the temporary model" into one swappable execution interface.
+    /// Production uses the SDK adapter; tests use a scripted fake with no GPU.
     #[allow(async_fn_in_trait)]
     trait FoundryExecutionAdapter {
         fn alias(&self) -> &str;
@@ -417,8 +431,10 @@ mod imp {
                         outcome.cpu_model_id = Some(cpu.model_id);
                         fallback_gpu_error = Some(gpu_error);
                         fallback_started_at = Some(fallback_started);
-                        // CPU 是一次恢复路径：首次下载/加载不耗尽原 GPU 的推理预算，
-                        // 因此给尚未完成的分片一段新的同规格推理窗口。
+                        // CPU is a recovery path: the first download/load does
+                        // not consume the original GPU inference budget, so the
+                        // remaining chunks get a fresh inference window of the
+                        // same size.
                         deadline = Instant::now()
                             .checked_add(audio_timeout)
                             .context("Foundry CPU fallback timeout is too large")?;
@@ -479,8 +495,10 @@ mod imp {
         }
         .await;
 
-        // 临时 CPU 模型无论结果如何都应释放；清理失败不能覆盖已拿到的转写文本，
-        // 但会保留 runtime state，令下一次默认准备路径继续负责回收它。
+        // The temporary CPU model must be released regardless of the outcome.
+        // A cleanup failure must not overwrite the transcription text already
+        // obtained, but it leaves runtime state behind so the next default
+        // prepare path keeps responsibility for reclaiming it.
         if let Err(error) = adapter.finish().await {
             log::warn!("[foundry-asr] release temporary CPU fallback model failed: {error:#}");
         }
@@ -579,8 +597,10 @@ mod imp {
             &mut self,
             notices: &FoundryFallbackNoticeCallback,
         ) -> Result<FoundryCpuSwitch> {
-            // 在任何 await 之前分配 lease：取消方可以用当时的 lease 上界安全清理尚未
-            // 完成加载的临时模型，同时不会触及随后新录音分配的更高 lease。
+            // Allocate the lease before any await: the canceller can then safely
+            // clean up a not-yet-loaded temporary model using the lease upper
+            // bound at that moment, without touching the higher lease a later
+            // recording allocates.
             let lease = self.runtime.next_temporary_cpu_fallback_lease();
             self.runtime.check_prepare_cancelled()?;
             let cpu_model = self
@@ -630,8 +650,10 @@ mod imp {
             }
             self.runtime.clear_loaded_if_model_id(&previous.model_id);
 
-            // 先把带 lease 的临时模型记入 runtime state，再等待 load。若外层因取消 drop
-            // 当前 future，取消清理任务将在 lifecycle 锁释放后看到这份 state 并卸载它。
+            // Record the leased temporary model into runtime state before
+            // waiting for load. If the outer future is dropped due to
+            // cancellation, the cancellation cleanup task will see this state
+            // once the lifecycle lock is released and unload it.
             let loaded = LoadedModel::new(self.alias, Arc::clone(&cpu_model), Some(lease));
             {
                 let mut state = self.runtime.state.lock();
@@ -700,16 +722,22 @@ mod imp {
     }
 
     pub struct FoundryLocalRuntime {
-        /// 串行化 runtime 内所有「物理状态」操作（下载/加载/卸载/推理），防止
-        /// release/delete/prepare 与在途转写交错破坏 SDK 状态。
+        /// Serializes all "physical state" operations in the runtime
+        /// (download/load/unload/inference) so release/delete/prepare cannot
+        /// interleave with an in-flight transcription and corrupt SDK state.
         ///
-        /// 锁粒度 trade-off（PR #945 review P1-3）：`transcribe_audio_files` 整段录音
-        /// 单次持锁，期间 `release_now`/`delete_model`/`prepare` 都会等待；首次 CPU
-        /// 回退下载可能数百 MB、持续数十秒。该等待有界于转写 timeout 预算，且取消
-        /// 仍可中断（`cancel_prepare` + `check_prepare_cancelled`）。若未来要缩小粒度，
-        /// 可让下载阶段不持锁、下载完成后重新校验 route epoch 再持锁加载/推理。
+        /// Lock granularity trade-off (PR #945 review P1-3): `transcribe_audio_files`
+        /// holds this lock for a whole recording, during which
+        /// `release_now`/`delete_model`/`prepare` wait; a first CPU fallback
+        /// download can be hundreds of MB over tens of seconds. That wait is
+        /// bounded by the transcription timeout budget and cancellation still
+        /// interrupts it (`cancel_prepare` + `check_prepare_cancelled`). To
+        /// narrow the granularity later, the download phase could run without
+        /// the lock, re-validate the route epoch after download, and take the
+        /// lock again for load/inference.
         lifecycle: AsyncMutex<()>,
-        /// EP 注册会使 SDK 的模型目录缓存失效；成功后本进程不再重复注册。
+        /// EP registration invalidates the SDK's model catalog cache; once it
+        /// succeeds this process never registers again.
         execution_providers_ready: OnceCell<()>,
         cancel_prepare: Arc<AtomicBool>,
         temporary_cpu_fallback_sequence: AtomicU64,
@@ -759,8 +787,10 @@ mod imp {
             }
         }
 
-        /// 激活事务的 prepare 回执：LoadedModel 只在 SDK load 成功后发布。
-        /// SDK model_id 可包含具体设备后缀，必须以保存的 alias 匹配用户请求。
+        /// Prepare receipt of the activation transaction: LoadedModel is
+        /// published only after a successful SDK load. The SDK model_id can
+        /// carry a device-specific suffix, so the user request must be matched
+        /// by the saved alias.
         pub(crate) fn is_loaded_for(&self, alias: &str) -> bool {
             self.state
                 .lock()
@@ -787,10 +817,12 @@ mod imp {
             let _lifecycle = self.lifecycle.lock().await;
             self.cancel_prepare.store(false, Ordering::SeqCst);
             let progress: FoundryPrepareProgressCallback = Arc::new(progress);
-            // 节流：SDK 的 percent 回调频率不可控（可能远高于前端可感知的
-            // 刷新率），percent 类事件 ≥150ms 才转发，避免进度浮层抽搐；
-            // phase 事件（percent=None，如 runtime/model/load 的阶段切换与
-            // finished/failed）不受限，保证阶段提示不丢。
+            // Throttle: the SDK's percent callback frequency is uncontrolled
+            // (potentially far above the frontend's perceivable refresh rate),
+            // so percent-carrying events are forwarded at most every 150ms to
+            // keep the progress overlay from jittering. Phase events
+            // (percent=None, such as runtime/model/load stage changes and
+            // finished/failed) are not throttled so stage hints are never lost.
             let raw = Arc::clone(&progress);
             let last_emit = Arc::new(AtomicU64::new(0));
             let progress: FoundryPrepareProgressCallback = Arc::new(move |payload| {
@@ -815,11 +847,14 @@ mod imp {
             self.cancel_prepare.store(true, Ordering::SeqCst);
         }
 
-        /// 仅取消仍属于指定 route 的 ASR 操作，并返回该操作当前持有的临时 CPU lease。
+        /// Cancels only the ASR operation still belonging to the given route
+        /// and returns the temporary CPU lease that operation currently holds.
         ///
-        /// route 校验与代数推进使用 CAS，避免旧 provider 在新录音刚开始时把共享
-        /// `cancel_prepare` 标志写给新录音。清理 lease 从 state 读取精确值，不使用
-        /// runtime 全局序列上界，避免旧取消误卸载新录音的 CPU 模型。
+        /// Route validation and generation advance use CAS so a stale provider
+        /// cannot write the shared `cancel_prepare` flag onto a new recording
+        /// that has just started. The cleanup lease is read from state exactly,
+        /// not a runtime-global sequence upper bound, so an old cancellation
+        /// cannot unload the new recording's CPU model.
         pub(crate) fn request_cancel_transcription(
             &self,
             expected_epoch: FoundryRouteEpoch,
@@ -851,10 +886,13 @@ mod imp {
             self.cancel_prepare.load(Ordering::SeqCst)
         }
 
-        /// 整段录音（所有分片 + CPU 回退的首次下载/加载）在单次 lifecycle 锁持有内
-        /// 完成。锁期间 `release_now`/`delete_model`/`prepare` 会等待，首次 CPU 回退
-        /// 下载可达数百 MB；该等待有界于 `audio_timeout`，取消仍可中断（见
-        /// `FoundryLocalRuntime::lifecycle` 字段注释的 trade-off，PR #945 review P1-3）。
+        /// The whole recording (all chunks plus the first CPU fallback
+        /// download/load) completes within a single lifecycle lock hold. While
+        /// locked, `release_now`/`delete_model`/`prepare` wait, and a first CPU
+        /// fallback download can reach hundreds of MB; the wait is bounded by
+        /// `audio_timeout`, and cancellation still interrupts it (see the
+        /// `FoundryLocalRuntime::lifecycle` field comment for the trade-off,
+        /// PR #945 review P1-3).
         pub(crate) async fn transcribe_audio_files(
             &self,
             route_epoch: FoundryRouteEpoch,
@@ -905,8 +943,10 @@ mod imp {
             let _lifecycle = self.lifecycle.lock().await;
             let waited_ms = wait_started.elapsed().as_millis();
             if waited_ms >= 100 {
-                // 长时间等待说明有在途转写/下载持锁（PR #945 review P1-3），
-                // 记日志便于真机定位「点释放模型无响应」的阻塞点。
+                // A long wait means an in-flight transcription/download holds
+                // the lock (PR #945 review P1-3); log it to help locate the
+                // "release model button unresponsive" blocking point on real
+                // machines.
                 log::info!(
                     "[foundry-asr] release_now waited {waited_ms} ms for lifecycle lock (in-flight transcribe/download)"
                 );
@@ -914,7 +954,8 @@ mod imp {
             self.release_now_locked().await
         }
 
-        /// 为新录音或重转录会话分配 route，并立即使旧恢复/释放任务失效。
+        /// Assigns a route for a new recording or re-transcription session and
+        /// immediately invalidates older recovery/release tasks.
         pub(crate) fn begin_route(&self) -> FoundryRouteEpoch {
             self.advance_route_epoch()
         }
@@ -923,7 +964,8 @@ mod imp {
             FoundryRouteEpoch(self.route_epoch.load(Ordering::SeqCst))
         }
 
-        /// 使已调度的恢复/释放任务失效；用于 alias 或 runtime source 切换。
+        /// Invalidates scheduled recovery/release tasks; used when the alias or
+        /// runtime source changes.
         pub fn invalidate_route(&self) {
             self.advance_route_epoch();
         }
@@ -941,8 +983,11 @@ mod imp {
             Ok(true)
         }
 
-        /// 等到 native lifecycle 锁之后再次校验 Host 的使用代次。仅在排队前检查会
-        /// 留下 TOCTOU：等待旧推理释放锁期间，新会话/设置页已经开始加载新模型。
+        /// Re-validates the Host usage generation after acquiring the native
+        /// lifecycle lock. Checking only before queueing leaves a TOCTOU:
+        /// while waiting for an old inference to release the lock, a new
+        /// session or the settings page may already have started loading a new
+        /// model.
         pub(crate) async fn release_if_generation(
             &self,
             generation: &AtomicU64,
@@ -957,8 +1002,10 @@ mod imp {
             Ok(true)
         }
 
-        /// 取消当前录音时仅清理精确匹配的临时 CPU 模型；正常 alias 模型仍遵循用户已有的
-        /// 保活设置。该方法会等待在途下载/加载/推理释放 lifecycle 锁。
+        /// When cancelling the current recording, cleans up only the exactly
+        /// matching temporary CPU model; regular alias models still follow the
+        /// user's keep-alive settings. Waits for in-flight
+        /// downloads/loads/inference to release the lifecycle lock.
         pub async fn release_temporary_cpu_fallback(
             &self,
             cancelled_lease: FoundryTemporaryCpuFallbackLease,
@@ -1320,9 +1367,12 @@ mod imp {
             Ok(())
         }
 
-        /// 成功 CPU 回退后按原 route 恢复精确 primary variant。
+        /// After a successful CPU fallback, restores the exact primary variant
+        /// for the original route.
         ///
-        /// 新准备/转写会在等待 lifecycle 锁之前推进 epoch，因此旧恢复任务不会覆盖新会话。
+        /// New prepare/transcribe calls advance the epoch before waiting on the
+        /// lifecycle lock, so an old recovery task cannot override a new
+        /// session.
         pub async fn restore_primary_for_keep_alive(
             &self,
             token: &FoundryPrimaryRecoveryToken,
@@ -1395,7 +1445,8 @@ mod imp {
             Ok(true)
         }
 
-        /// 仅当恢复令牌仍代表当前 route 时释放 primary；用于保活截止任务。
+        /// Releases the primary only while the recovery token still represents
+        /// the current route; used by the keep-alive deadline task.
         pub async fn release_primary_if_current(
             &self,
             token: &FoundryPrimaryRecoveryToken,

@@ -4197,7 +4197,7 @@ dependencies = [
 
 [[package]]
 name = "openless"
-version = "2.0.0-Beta.3+build.20260926"
+version = "2.0.0-Beta.4+build.20260930"
 dependencies = [
  "anyhow",
  "arboard",
@@ -4241,6 +4241,7 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "rustls",
+ "security-framework 3.7.0",
  "semver",
  "serde",
  "serde_json",
@@ -4253,6 +4254,7 @@ dependencies = [
  "tar",
  "tauri",
  "tauri-build",
+ "tauri-macros",
  "tauri-nspanel",
  "tauri-plugin-autostart",
  "tauri-plugin-dialog",
@@ -4260,6 +4262,9 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "tauri-runtime",
+ "tauri-runtime-wry",
+ "tauri-utils",
  "tempfile",
  "thiserror 1.0.69",
  "time",
@@ -4273,6 +4278,7 @@ dependencies = [
  "whisper-rs",
  "window-vibrancy 0.7.1",
  "windows 0.58.0",
+ "windows-core 0.58.0",
  "winreg 0.52.0",
  "x509-parser",
  "zeroize",

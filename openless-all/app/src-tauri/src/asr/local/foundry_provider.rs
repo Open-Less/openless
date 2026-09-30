@@ -1,6 +1,6 @@
 #![allow(dead_code, unused_variables)]
-//! Foundry Local Whisper 的录音缓冲与分片转写适配。
-//! Windows 路径执行原生推理；其他目标保留类型兼容分支。
+//! Recording buffer and chunked transcription adapter for Foundry Local Whisper.
+//! The Windows path performs native inference; other targets keep type-compatible stubs.
 
 #[cfg(target_os = "windows")]
 use std::fs::{self, OpenOptions};
@@ -27,8 +27,9 @@ use super::foundry_runtime::FoundryLocalRuntime;
 use super::foundry_runtime::FoundryRouteEpoch;
 use super::foundry_runtime::{FoundryFallbackNoticeCallback, FoundryPrimaryRecoveryToken};
 
-/// Foundry Local Whisper 属于 Whisper 系模型，原生解码窗口约 30s。每次 SDK
-/// 请求保持在窗口内，再由 OpenLess 合并分片文本，避免长听写只返回第一段。
+/// Foundry Local Whisper is a Whisper-family model with a ~30s native decode window. Each SDK
+/// request stays within that window and OpenLess merges the chunk texts afterwards, preventing
+/// long dictations from returning only the first chunk.
 const FOUNDRY_WHISPER_CHUNK_LIMIT_MS: u64 = 30_000;
 
 #[must_use = "primary_recovery must be passed to Foundry release scheduling"]
@@ -89,16 +90,19 @@ impl FoundryLocalWhisperAsr {
         self.language_hint.as_deref()
     }
 
-    /// 当前缓冲音频时长（毫秒）。Coordinator 在发起转写前读取，
-    /// 用来给 Foundry Local Whisper 计算动态超时。不消费缓冲。
+    /// Duration of the currently buffered audio (ms). The Coordinator reads it before starting
+    /// transcription to compute a dynamic timeout for Foundry Local Whisper. Does not consume
+    /// the buffer.
     pub fn buffer_duration_ms(&self) -> u64 {
         pcm_duration_ms(&self.buffer.lock())
     }
 
-    /// 转写当前录音，并在 Foundry 的一次性 GPU→CPU 回退期间同步最小 UI 提示。
+    /// Transcribe the current recording, syncing a minimal UI notice during Foundry's one-time
+    /// GPU→CPU fallback.
     ///
-    /// 返回值包含 primary recovery token；所有调用方都必须把它交给 Coordinator 的释放调度，
-    /// 避免成功重转录只保留文本、却丢失模型生命周期信息。
+    /// The return value carries the primary recovery token; every caller must pass it to the
+    /// Coordinator's release scheduling, so a successful retranscription does not keep only the
+    /// text and lose the model lifecycle information.
     pub(crate) async fn transcribe_with_fallback_notice(
         &self,
         audio_timeout: std::time::Duration,
@@ -160,8 +164,9 @@ impl FoundryLocalWhisperAsr {
                 );
             }
 
-            // 所有临时 WAV 必须在单次 runtime 调用结束后才释放：GPU 失败时，runtime 才能让
-            // CPU 重试失败分片并继续后续分片，保持整段录音的一致执行路线。
+            // All temporary WAVs must outlive the single runtime call: on GPU failure the runtime
+            // can then let the CPU retry the failed chunks and continue with the rest, keeping a
+            // consistent execution path for the whole recording.
             let wav_files = chunks
                 .iter()
                 .map(|chunk| TempWavFile::create(chunk))
@@ -210,8 +215,9 @@ impl FoundryLocalWhisperAsr {
         self.cancel_generation.fetch_add(1, Ordering::SeqCst);
         #[cfg(target_os = "windows")]
         {
-            // 旧 provider 不能取消新 route；runtime 同时返回当前 route 的精确 CPU lease，
-            // 避免跨会话取消共享的 prepare 标志或误卸载新录音的临时模型。
+            // An old provider must not cancel a new route; the runtime also returns the exact CPU
+            // lease for the current route, avoiding cross-session cancellation of the shared
+            // prepare flag or wrongly unloading a new recording's temporary model.
             if let Some(cancelled_lease) =
                 self.runtime.request_cancel_transcription(self.route_epoch)
             {

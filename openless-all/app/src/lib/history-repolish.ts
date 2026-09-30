@@ -1,14 +1,17 @@
 import type { DictationSession, StylePack } from './types';
 
 /**
- * 「用原风格重试」要用的风格包 id。
+ * Style pack id used by "retry with the original style".
  *
- * 优先取产生这条记录的风格包（session.stylePackId）——重试的目的是跟上次结果做
- * A/B 对照，必须用同一套风格，否则判断不了是模型抖动还是风格差异。包已被删除、
- * 旧历史没有 stylePackId、或顶层包列表尚未加载（allPacks 为 null）时返回 undefined，
- * 由调用方回落当前激活风格包（repolish 省略 stylePackId 的行为）。
+ * Prefers the pack that produced the record (session.stylePackId) — the retry is an A/B
+ * comparison against the previous result, so it must use the same style, otherwise model
+ * jitter can't be told apart from a style difference. Returns undefined when the pack was
+ * deleted, the old history has no stylePackId, or the top-level pack list hasn't loaded
+ * (allPacks is null); the caller then falls back to the active pack (repolish's behavior
+ * when stylePackId is omitted).
  *
- * 注意查的是 allPacks（含已禁用包）：历史可能出自后来被禁用的包，只要包还在就能重试。
+ * Note the lookup checks allPacks (including disabled packs): history may come from a pack
+ * disabled later on; retry works as long as the pack still exists.
  */
 export function resolveRepolishRetryPackId(
   session: Pick<DictationSession, 'stylePackId'>,
@@ -21,15 +24,18 @@ export function resolveRepolishRetryPackId(
 // History shares the card label policy, including user-renamed builtins.
 export { stylePackDisplayName as packDisplayName } from './stylePackPresentation';
 
-/** 「换风格」下拉的默认选中项：当前激活包优先，其次第一个可用包，空列表返回 ''。 */
+/** Default selection for the "change style" dropdown: the active pack first, else the first
+    available pack; '' for an empty list. */
 export function defaultPackId(packs: StylePack[]): string {
   return packs.find((pack) => pack.active)?.id || packs[0]?.id || '';
 }
 
 /**
- * 「用原风格重试」实际要用的风格包 id：优先产生这条记录的原包；原包已删除、旧历史
- * 没有 stylePackId、或包列表尚未加载时，显式落到当前激活包（其次第一个可用包）——
- * 显式传 id 让前端标注与实际执行一致，而不是让后端走 None 的兜底链。
+ * The style pack id "retry with the original style" actually uses: prefers the original
+ * pack that produced the record; when it was deleted, the old history has no stylePackId,
+ * or the pack list hasn't loaded, fall back explicitly to the active pack (else the first
+ * available) — passing the id explicitly keeps the frontend's labeling consistent with
+ * actual execution instead of relying on the backend's None fallback chain.
  */
 export function resolveRepolishRetryPackIdWithFallback(
   session: Pick<DictationSession, 'stylePackId'>,

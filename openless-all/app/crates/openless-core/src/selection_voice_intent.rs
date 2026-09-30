@@ -8,6 +8,7 @@ use crate::types::{SelectionVoiceIntentMode, SelectionVoiceManualIntent};
 pub enum SelectionVoiceIntent {
     Question,
     Edit,
+    Compose,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +59,23 @@ pub const BUILTIN_QUESTION_CUES: &[&str] = &[
     "could you",
 ];
 
+pub const BUILTIN_COMPOSE_CUES: &[&str] = &[
+    "帮我写",
+    "写一封",
+    "写一条",
+    "写一个",
+    "起草",
+    "拟一封",
+    "help me write",
+    "write an email",
+    "write a message",
+    "draft a",
+    "write a group",
+    "write a post",
+    "i want to post",
+    "i need a",
+];
+
 pub fn looks_like_question_instruction(instruction: &str) -> bool {
     let trimmed = instruction.trim();
     if trimmed.is_empty() {
@@ -75,12 +93,23 @@ pub fn looks_like_question_instruction(instruction: &str) -> bool {
         .any(|cue| normalized.contains(&cue.to_lowercase()))
 }
 
+pub fn looks_like_compose_instruction(instruction: &str) -> bool {
+    let trimmed = instruction.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let normalized = trimmed.to_lowercase();
+    BUILTIN_COMPOSE_CUES
+        .iter()
+        .any(|cue| normalized.contains(&cue.to_lowercase()))
+}
+
 pub fn intent_heuristic_is_ambiguous(instruction: &str) -> bool {
     let trimmed = instruction.trim();
     if trimmed.is_empty() {
         return true;
     }
-    if looks_like_question_instruction(trimmed) {
+    if looks_like_compose_instruction(trimmed) || looks_like_question_instruction(trimmed) {
         return false;
     }
     trimmed.chars().count() < 4
@@ -110,7 +139,13 @@ pub fn effective_question_keywords(keywords: &[String]) -> Vec<&str> {
 pub fn resolve_selection_voice_intent_heuristic(
     instruction_polished: &str,
     question_keywords: &[String],
+    selection_empty: bool,
 ) -> SelectionVoiceIntent {
+    // Strong compose cues win even when the instruction also looks like a question
+    // (e.g. 「能帮我写一封邮件吗？」) and even with a non-empty selection.
+    if looks_like_compose_instruction(instruction_polished) {
+        return SelectionVoiceIntent::Compose;
+    }
     let normalized = instruction_polished.to_lowercase();
     for keyword in effective_question_keywords(question_keywords) {
         if normalized.contains(&keyword.to_lowercase()) {
@@ -118,14 +153,19 @@ pub fn resolve_selection_voice_intent_heuristic(
         }
     }
     if looks_like_question_instruction(instruction_polished) {
-        SelectionVoiceIntent::Question
+        return SelectionVoiceIntent::Question;
+    }
+    if selection_empty {
+        SelectionVoiceIntent::Compose
     } else {
         SelectionVoiceIntent::Edit
     }
 }
 
 pub fn looks_like_edit_instruction(instruction: &str) -> bool {
-    !looks_like_question_instruction(instruction) && !instruction.trim().is_empty()
+    !instruction.trim().is_empty()
+        && !looks_like_question_instruction(instruction)
+        && !looks_like_compose_instruction(instruction)
 }
 
 /// Resolve the selection-voice intent without accepting a host-specific
@@ -135,12 +175,14 @@ pub fn classify_selection_voice_intent(
     manual_intent: SelectionVoiceManualIntent,
     question_keywords: &[String],
     instruction_polished: &str,
+    selection_empty: bool,
 ) -> SelectionVoiceIntentClassification {
     classify_selection_voice_intent_with_provider_result(
         mode,
         manual_intent,
         question_keywords,
         instruction_polished,
+        selection_empty,
         None,
     )
 }
@@ -150,6 +192,7 @@ pub fn classify_selection_voice_intent_with_provider_result(
     manual_intent: SelectionVoiceManualIntent,
     question_keywords: &[String],
     instruction_polished: &str,
+    selection_empty: bool,
     auto_classification: Option<&str>,
 ) -> SelectionVoiceIntentClassification {
     match mode {
@@ -161,6 +204,7 @@ pub fn classify_selection_voice_intent_with_provider_result(
             intent: match manual_intent {
                 SelectionVoiceManualIntent::Question => SelectionVoiceIntent::Question,
                 SelectionVoiceManualIntent::Edit => SelectionVoiceIntent::Edit,
+                SelectionVoiceManualIntent::Compose => SelectionVoiceIntent::Compose,
             },
             source: "manual",
         },
@@ -168,6 +212,7 @@ pub fn classify_selection_voice_intent_with_provider_result(
             intent: resolve_selection_voice_intent_heuristic(
                 instruction_polished,
                 question_keywords,
+                selection_empty,
             ),
             source: "heuristic",
         },
@@ -178,16 +223,21 @@ pub fn classify_selection_voice_intent_with_provider_result(
                     source: "auto_llm",
                 };
             }
-            let intent =
-                resolve_selection_voice_intent_heuristic(instruction_polished, question_keywords);
+            let intent = resolve_selection_voice_intent_heuristic(
+                instruction_polished,
+                question_keywords,
+                selection_empty,
+            );
             SelectionVoiceIntentClassification {
                 intent,
                 source: if auto_classification.is_some() {
                     "auto_heuristic_fallback"
-                } else if intent == SelectionVoiceIntent::Question {
-                    "auto_question"
                 } else {
-                    "auto_edit"
+                    match intent {
+                        SelectionVoiceIntent::Question => "auto_question",
+                        SelectionVoiceIntent::Edit => "auto_edit",
+                        SelectionVoiceIntent::Compose => "auto_compose",
+                    }
                 },
             }
         }
@@ -334,6 +384,11 @@ pub fn clean_selection_voice_translation_output(raw: &str) -> String {
     text.trim().to_string()
 }
 
+/// Strip common LLM preamble / fencing from compose drafts.
+pub fn clean_selection_voice_compose_output(raw: &str) -> String {
+    clean_selection_voice_translation_output(raw)
+}
+
 fn parse_intent_from_xml(raw: &str) -> Option<SelectionVoiceIntent> {
     let lower = raw.to_lowercase();
     let start = lower.find("<intent>")? + "<intent>".len();
@@ -348,6 +403,9 @@ fn parse_intent_word(raw: &str) -> Option<SelectionVoiceIntent> {
         }
         "question" | "ask" | "qa" | "query" | "interrogative" => {
             Some(SelectionVoiceIntent::Question)
+        }
+        "compose" | "draft" | "write" | "help_me_write" | "help-me-write" => {
+            Some(SelectionVoiceIntent::Compose)
         }
         _ => None,
     }
@@ -364,6 +422,9 @@ fn parse_intent_from_prose(raw: &str) -> Option<SelectionVoiceIntent> {
         }
         "question" | "ask" | "qa" | "query" | "interrogative" | "提问" | "询问" | "问句" => {
             Some(SelectionVoiceIntent::Question)
+        }
+        "compose" | "draft" | "write" | "帮我写" | "写作" | "成稿" => {
+            Some(SelectionVoiceIntent::Compose)
         }
         _ => None,
     }
@@ -382,6 +443,20 @@ mod tests {
             SelectionVoiceManualIntent::Question,
             &[],
             instruction,
+            false,
+        )
+    }
+
+    fn classify_empty(
+        mode: SelectionVoiceIntentMode,
+        instruction: &str,
+    ) -> SelectionVoiceIntentClassification {
+        classify_selection_voice_intent(
+            mode,
+            SelectionVoiceManualIntent::Question,
+            &[],
+            instruction,
+            true,
         )
     }
 
@@ -409,6 +484,7 @@ mod tests {
                 SelectionVoiceManualIntent::Question,
                 &keywords,
                 "请解读这段文字",
+                false,
             )
             .intent,
             SelectionVoiceIntent::Question
@@ -427,9 +503,54 @@ mod tests {
                 SelectionVoiceManualIntent::Question,
                 &keywords,
                 "把牵引改成迁移",
+                false,
             )
             .intent,
             SelectionVoiceIntent::Edit
+        );
+    }
+
+    #[test]
+    fn empty_selection_affirmative_defaults_to_compose() {
+        assert_eq!(
+            classify_empty(SelectionVoiceIntentMode::Heuristic, "帮我写一封短邮件").intent,
+            SelectionVoiceIntent::Compose
+        );
+        assert_eq!(
+            classify_empty(SelectionVoiceIntentMode::Heuristic, "写一段会议纪要").intent,
+            SelectionVoiceIntent::Compose
+        );
+    }
+
+    #[test]
+    fn empty_selection_questions_stay_questions() {
+        assert_eq!(
+            classify_empty(SelectionVoiceIntentMode::Heuristic, "今天是什么日子？").intent,
+            SelectionVoiceIntent::Question
+        );
+    }
+
+    #[test]
+    fn non_empty_edit_and_question_keep_existing_routes() {
+        assert_eq!(
+            classify(SelectionVoiceIntentMode::Heuristic, "翻译成英文").intent,
+            SelectionVoiceIntent::Edit
+        );
+        assert_eq!(
+            classify(SelectionVoiceIntentMode::Heuristic, "什么意思").intent,
+            SelectionVoiceIntent::Question
+        );
+    }
+
+    #[test]
+    fn strong_compose_cue_wins_over_question_shape() {
+        assert_eq!(
+            classify_empty(SelectionVoiceIntentMode::Heuristic, "能帮我写一封邮件吗？").intent,
+            SelectionVoiceIntent::Compose
+        );
+        assert_eq!(
+            classify(SelectionVoiceIntentMode::Heuristic, "能帮我写一封邮件吗？").intent,
+            SelectionVoiceIntent::Compose
         );
     }
 
@@ -444,8 +565,16 @@ mod tests {
             Some(SelectionVoiceIntent::Question)
         );
         assert_eq!(
+            parse_intent_classification_json("<intent>compose</intent>"),
+            Some(SelectionVoiceIntent::Compose)
+        );
+        assert_eq!(
             parse_intent_classification_json("编辑"),
             Some(SelectionVoiceIntent::Edit)
+        );
+        assert_eq!(
+            parse_intent_classification_json("帮我写"),
+            Some(SelectionVoiceIntent::Compose)
         );
     }
 

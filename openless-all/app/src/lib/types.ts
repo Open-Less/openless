@@ -28,22 +28,22 @@ export type {
 
 export type PolishMode = 'raw' | 'light' | 'structured' | 'formal';
 
-/** 识别管线模式（issue #902）：traditional = ASR + LLM 两段式；
- *  multimodal = 单个多模态模型一步完成「音频 + 提示词 → 最终文本」。
- *  两套配置在凭据库中完全隔离，运行时只读当前模式。 */
+/** Recognition pipeline mode (issue #902): traditional = two-stage ASR + LLM;
+ *  multimodal = one multimodal model turns audio + prompt into final text in a single step.
+ *  The two configurations are fully isolated in the credentials vault; runtime reads only the current mode. */
 export type PipelineMode = 'traditional' | 'multimodal';
 
 export type InsertStatus = 'inserted' | 'pasteSent' | 'copiedFallback' | 'failed' | 'notRequested';
 
 export type HistorySource = 'voice' | 'quick_note' | 'selection_polish' | 'selection_voice_edit';
 
-/** 概览页年度活动热力图的单日计数（date = 本地日期 YYYY-MM-DD）。 */
+/** Per-day count for the Overview yearly activity heatmap (date = local date YYYY-MM-DD). */
 export interface ActivityDay {
   date: string;
   count: number;
-  /** 当日最终插入文本的总字符数。升级前写入的日期没有这个字段（读作 0）。 */
+  /** Total characters of final inserted text that day. Missing for dates written before the upgrade (reads as 0). */
   chars?: number;
-  /** 当日录音总时长（毫秒）。升级前写入的日期没有这个字段（读作 0）。 */
+  /** Total recording duration that day (ms). Missing for dates written before the upgrade (reads as 0). */
   durationMs?: number;
 }
 
@@ -52,9 +52,9 @@ export interface DictationSession {
   createdAt: string; // ISO-8601
   source?: HistorySource;
   rawTranscript: string;
-  /** 纠正规则**之前**的 ASR 原文。`rawTranscript` 存的是规则跑完之后的版本，
-   *  两者相同时后端不写这个字段（null）。用于归因：一次误识别到底是 ASR 听错还是
-   *  LLM 改坏。旧历史没有此字段。 */
+  /** ASR raw text before correction rules. `rawTranscript` holds the post-rule version;
+   *  when the two match, the backend omits this field (null). Used to attribute a misrecognition
+   *  to ASR mishearing vs. an LLM rewrite. Absent in older history. */
   asrTranscript: string | null;
   finalText: string;
   mode: PolishMode;
@@ -67,22 +67,22 @@ export interface DictationSession {
   errorCode: string | null;
   durationMs: number | null;
   dictionaryEntryCount: number | null;
-  /** 该会话是否在录音时归档了原始 wav（取决于当时 prefs.recordAudioForDebug）。
-   *  true 时前端在 History 渲染播放按钮，凭 id 通过 read_audio_recording IPC 拿字节流。 */
+  /** Whether the session archived the raw wav while recording (per prefs.recordAudioForDebug at the time).
+   *  When true, History renders a play button and fetches the byte stream via the read_audio_recording IPC by id. */
   hasAudioRecording: boolean | null;
-  /** 本次转写用的 ASR provider id（如 "volcengine" / "local-qwen3"）。旧历史为 null。 */
+  /** ASR provider id used for this transcription (e.g. "volcengine" / "local-qwen3"). Null in older history. */
   asrProvider: string | null;
-  /** 本次转写用的 ASR 模型 id。provider 无模型概念时为 null。 */
+  /** ASR model id used for this transcription. Null when the provider has no model concept. */
   asrModel: string | null;
-  /** 本次润色用的 LLM provider id。Raw 直通（未调用 LLM）时为 null。 */
+  /** LLM provider id used for polishing. Null for Raw passthrough (no LLM call). */
   llmProvider: string | null;
-  /** 本次润色用的 LLM 模型 id。Raw 直通时为 null。 */
+  /** LLM model id used for polishing. Null for Raw passthrough. */
   llmModel: string | null;
-  /** 本次会话走的识别管线模式（"multimodal" / 缺失 = 传统两段式）。 */
+  /** Pipeline mode used by this session ("multimodal" / missing = traditional two-stage). */
   pipelineMode?: string | null;
-  /** 松键后等待转写结果的实测耗时（毫秒）。流式 ASR 是收尾延迟，批式是完整转写耗时。 */
+  /** Measured wait for the transcription result after key release (ms). Tail latency for streaming ASR; full transcription time for batch. */
   asrMs: number | null;
-  /** LLM 润色/翻译调用的实测耗时（毫秒）。未调用 LLM 时为 null。 */
+  /** Measured duration of the LLM polish/translate call (ms). Null when no LLM call. */
   polishMs: number | null;
 }
 
@@ -95,8 +95,8 @@ export interface DictionaryEntry {
   createdAt: string;
 }
 
-/** 一条纠正规则是怎么来的。老的 correction-rules.json 没有这个字段，后端反序列化时
- *  落到 'manual'——那些确实都是手动加的。 */
+/** Where a correction rule came from. Old correction-rules.json lacks this field; the backend
+ *  deserializes it as 'manual' — those rules were indeed all added manually. */
 export type RuleSource = 'manual' | 'learned';
 
 export interface CorrectionRule {
@@ -108,9 +108,9 @@ export interface CorrectionRule {
   source: RuleSource;
 }
 
-/** `debug_read_cursor_context` 的返回：一次光标上下文探测的完整结果。
- *  status 之外的每一种都要能说清「为什么没读到」——装机验证时全靠它判断某个 app
- *  是被安全闸门拦住了，还是 AX 根本不支持。 */
+/** Return of `debug_read_cursor_context`: full result of one cursor-context probe.
+ *  Every non-ok status must state why nothing was read — during install verification this tells
+ *  whether an app was blocked by the safety gate or AX simply doesn't support it. */
 export interface HostDocumentReadResult {
   status: 'ok' | 'blocked' | 'unsupported' | 'unavailable' | 'timeout';
   reason: string | null;
@@ -120,22 +120,23 @@ export interface HostDocumentReadResult {
   elapsedMs: number;
 }
 
-/** 一条等待用户确认的纠正建议（Tier2）。后端只存在内存里，重启即空——建议本身是
- *  易逝的，用户下次犯同样的错会再产生一条。 */
+/** A correction suggestion awaiting user confirmation (Tier2). The backend keeps it only in memory
+ *  and it is lost on restart — suggestions are ephemeral; repeating the same mistake regenerates one. */
 export interface PendingCorrection {
+  expiresAtMs: number;
   id: string;
   pattern: string;
   replacement: string;
 }
 
-/** 为什么这段话没落进目标 app。只用于后端日志，卡片本身不渲染它。 */
+/** Why this text failed to land in the target app. Backend logs only; the card does not render it. */
 export type InsertFallbackReason = 'partialStream' | 'insertFailed';
 
-/** 落字失败兜底卡片的内容。`text` 始终是完整的那段话，即便屏幕上只落了半截。 */
+/** Content of the insert-failure fallback card. `text` is always the full text, even if only part landed on screen. */
 export interface InsertFallbackCardPayload {
   text: string;
   reason: InsertFallbackReason;
-  /** 本次展示代次；尺寸回报必须原样携带，后端据此忽略旧卡片的迟到 IPC。 */
+  /** Presentation generation; size reports must carry it verbatim so the backend can drop stale IPC from older cards. */
   presentationId: number;
 }
 
@@ -204,42 +205,42 @@ export interface HotkeyStatus {
 }
 
 export interface ShortcutBinding {
-  /** 主键，例如 "D" / "Space" / "F1" / "RightOption" / "LeftShift" */
+  /** Primary key, e.g. "D" / "Space" / "F1" / "RightOption" / "LeftShift" */
   primary: string;
-  /** 修饰符：泛化 tag（cmd/ctrl/…）或侧别 tag（cmd-left/ctrl-right/…）。 */
+  /** Modifiers: generic tags (cmd/ctrl/…) or side-specific tags (cmd-left/ctrl-right/…). */
   modifiers: string[];
 }
 
-/** 风格包直达快捷键：binding 按下即激活 packId 对应的风格包（issue #759）。 */
+/** Style pack direct hotkey: pressing the binding activates the style pack for packId (issue #759). */
 export interface StylePackHotkey {
   packId: string;
   binding: ShortcutBinding;
 }
 
-/** 划词语音问答快捷键绑定。null 表示未启用。详见 issue #118。 */
+/** Selection voice Q&A hotkey binding. null = not enabled. See issue #118. */
 export type QaHotkeyBinding = ShortcutBinding;
 
-/** 自定义录音组合键绑定。当 hotkey.trigger == 'custom' 时使用。 */
+/** Custom recording combo key binding. Used when hotkey.trigger == 'custom'. */
 export type ComboBinding = ShortcutBinding;
 
 export type CodingAgentProviderId = 'claude-code-cli' | 'opencode-cli' | 'codex-cli' | 'dsh-cli';
 export type CodingAgentPermissionMode = 'plan' | 'default' | 'acceptEdits' | 'bypassPermissions';
 
-/** 模拟粘贴时按下的快捷键。仅 Windows/Linux 生效；macOS 走 AX 直写。
- *  - ctrlV       : 标准粘贴（默认；大多数编辑器、浏览器、IDE）
- *  - ctrlShiftV  : kitty / alacritty / wezterm / gnome-terminal / foot 等终端
- *  - shiftInsert : xterm / urxvt 等老派 X11 终端
- *  详见 issue #360。 */
+/** Shortcut pressed for simulated paste. Windows/Linux only; macOS uses direct AX writes.
+ *  - ctrlV       : standard paste (default; most editors, browsers, IDEs)
+ *  - ctrlShiftV  : terminals like kitty / alacritty / wezterm / gnome-terminal / foot
+ *  - shiftInsert : legacy X11 terminals like xterm / urxvt
+ *  See issue #360. */
 export type PasteShortcut = 'ctrlV' | 'ctrlShiftV' | 'shiftInsert';
 
-/** Windows 听写文本插入策略。 */
+/** Windows dictation text insertion strategy. */
 export type WindowsInsertionMode = 'tsf' | 'sendInput' | 'paste';
 
-/** Windows SendInput 路径的换行模拟方式。 */
+/** Newline simulation for the Windows SendInput path. */
 export type WindowsSendInputNewlineMode = 'enter' | 'shiftEnter' | 'crlf';
 
-/** macOS 逐字上屏时换行符怎么发。`auto` 按前台应用选择；`lineFeed` 供终端使用；
- *  `return` 在聊天框里等于发送 —— 靠换行拆多条消息的风格包要的就是这个。 */
+/** How newlines are sent during macOS per-character insertion. `auto` picks per foreground app; `lineFeed` for terminals;
+ *  `return` acts as send in chat boxes — style packs that split one message per newline need this. */
 export type MacosNewlineMode = 'auto' | 'shiftReturn' | 'lineFeed' | 'return';
 
 export type WindowsImeInstallState =
@@ -252,16 +253,16 @@ export interface WindowsImeStatus {
   dllPath: string | null;
 }
 
-/** 后台自动更新渠道。未明确选择时跟随构建类型；手动检查按钮不受此字段影响。 */
+/** Background auto-update channel. Follows the build type when not explicitly chosen; manual check buttons are unaffected. */
 export type UpdateChannel = 'stable' | 'beta';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 
-/** 选区润色结果直接替换，或先在可编辑预览中确认。 */
+/** Selection polish result replaces directly, or is confirmed in an editable preview first. */
 export type SelectionPolishOutputMode = 'directReplace' | 'previewConfirm';
 
 export type SelectionVoiceIntentMode = 'prompt' | 'auto' | 'manual' | 'heuristic';
-export type SelectionVoiceManualIntent = 'question' | 'edit';
+export type SelectionVoiceManualIntent = 'question' | 'edit' | 'compose';
 /** Preferred EditPlan serialization when parsing selection-voice model output. */
 export type EditPlanFormat = 'xml' | 'json';
 
@@ -309,7 +310,7 @@ export interface StylePack {
   active: boolean;
   recommendedModel?: string | null;
   compatibleAppVersion?: string | null;
-  /** 衍生关系：null = 本地原创（或还没首发到云端）；非空 = 这份 pack 安装自云端 originPackId。 */
+  /** Derivation: null = locally authored (or never first-published to the cloud); non-null = this pack was installed from cloud originPackId. */
   originPackId?: string | null;
   originAuthorLogin?: string | null;
 }
@@ -348,200 +349,206 @@ export interface UserPreferences {
   customStylePrompts: CustomStylePrompts;
   launchAtLogin: boolean;
   showCapsule: boolean;
-  /** 录音胶囊外观；保存后同步到胶囊窗口。 */
+  /** Recording capsule appearance; synced to the capsule window on save. */
   capsuleStyle: CapsuleStyle;
   capsuleTranscriptEnabled: boolean;
   capsuleTranscriptFontSize: number;
-  /** 录音期间临时静音系统输出，停止/取消/出错后恢复原静音状态。 */
+  /** Temporarily mutes system output during recording; restores the original mute state on stop/cancel/error. */
   muteDuringRecording: boolean;
-  /** 先完整录音，停止后再连接当前 ASR 并提交整段音频。默认关闭。 */
+  /** Record fully first, then connect to the current ASR and submit the whole audio on stop. Off by default. */
   stableTranscriptionEnabled: boolean;
-  /** 按下录音热键进入 recording 状态时，播放一段合成提示音提醒「已开始录音」。
-   *  默认开启；在 capsule 窗口用 Web Audio API 合成，不依赖 showCapsule。 */
+  /** When the recording hotkey enters the recording state, plays a synthesized cue that recording has started.
+   *  On by default; synthesized with the Web Audio API in the capsule window, independent of showCapsule. */
   audioCueOnRecord: boolean;
-  /** Toggle 模式「说完自动停止」（issue #860）。默认关闭；开启后检测到语音、
-   *  连续静音达到 silenceAutoStopSeconds 时自动停止并提交，一直没说话则 10 秒后取消。 */
+  /** Toggle mode "auto-stop after speech" (issue #860). Off by default; when on, speech followed by
+   *  silenceAutoStopSeconds of continuous silence auto-stops and submits; 10 seconds of no speech cancels. */
   silenceAutoStopEnabled: boolean;
-  /** 语音后的连续静音阈值（秒）。可选 1 / 1.5 / 2 / 3 / 4 / 5，默认 3。 */
+  /** Continuous silence threshold after speech (seconds). Options: 1 / 1.5 / 2 / 3 / 4 / 5; default 3. */
   silenceAutoStopSeconds: number;
-  /** 录音输入设备名称。空字符串 = 使用系统默认麦克风。 */
+  /** Recording input device name. Empty string = system default microphone. */
   microphoneDeviceName: string;
   activeAsrProvider: string;
   activeLlmProvider: string;
-  /** 识别管线模式（实验性，issue #902）。multimodal 时各语音管线改用 omni 配置。 */
+  /** Recognition pipeline mode (experimental, issue #902). In multimodal mode, voice pipelines use the omni config. */
   pipelineMode: PipelineMode;
-  /** 「多模态识别管线」实验性功能总开关（高级设置）。默认 false。 */
+  /** Legacy capability gate; the Services pipeline selector enables it when selecting multimodal. */
   multimodalPipelineEnabled: boolean;
-  /** 多模态（Omni）模型当前激活的 provider id，镜像凭据库 omni.active。 */
+  /** Currently active provider id for the multimodal (Omni) model; mirrors credentials vault omni.active. */
   activeOmniProvider: string;
-  /** LLM 思考模式开关。默认关闭；OpenAI 普通 chat 模型会跳过不支持的字段。详见 issue #402。 */
+  /** LLM thinking mode toggle. Off by default; plain OpenAI chat models skip unsupported fields. See issue #402. */
   llmThinkingEnabled: boolean;
-  /** 是否使用系统代理（issue #869）。默认开启；关闭后所有请求直连，境外服务（GitHub 登录/更新等）可能连不上。 */
+  /** Whether to use the system proxy (issue #869). On by default; when off, all requests connect directly and foreign services (GitHub login/updates, etc.) may be unreachable. */
   useSystemProxy: boolean;
-  /** 仅 Windows/Linux：粘贴成功后是否恢复用户原剪贴板。默认 true。详见 issue #111。 */
+  /** Windows/Linux only: whether to restore the user's original clipboard after a successful paste. Default true. See issue #111. */
   restoreClipboardAfterPaste: boolean;
-  /** 仅 Windows/Linux：模拟粘贴时按下的快捷键。详见 issue #360：kitty/alacritty
-   *  等终端只接受 Ctrl+Shift+V，硬编码 Ctrl+V 会被吞掉，听写文本只剩在剪贴板里。
-   *  macOS 走 AX 直写不受影响。默认 'ctrlV' 与历史行为一致。 */
+  /** Windows/Linux only: shortcut pressed for simulated paste. See issue #360: terminals like kitty/alacritty
+   *  only accept Ctrl+Shift+V — a hardcoded Ctrl+V is swallowed and the dictation text is left in the clipboard.
+   *  macOS uses direct AX writes and is unaffected. Default 'ctrlV' matches historical behavior. */
   pasteShortcut: PasteShortcut;
-  /** Windows：TSF 失败后是否允许快捷键粘贴 / 剪贴板兜底。仅在剪贴板写失败时才再试 SendInput。关闭后可验证是否真实 TSF 上屏。 */
+  /** Windows: whether paste-shortcut / clipboard fallback is allowed after TSF fails. SendInput is retried only when the clipboard write fails. Disable to verify genuine TSF insertion. */
   allowNonTsfInsertionFallback: boolean;
-  /** Windows：听写插入策略（TSF / SendInput / 剪贴板粘贴）。 */
+  /** Windows: dictation insertion strategy (TSF / SendInput / clipboard paste). */
   windowsInsertionMode: WindowsInsertionMode;
-  /** Windows SendInput 路径的换行模拟方式。 */
+  /** Newline simulation for the Windows SendInput path. */
   windowsSendInputNewlineMode: WindowsSendInputNewlineMode;
   macosNewlineMode: MacosNewlineMode;
-  /** 旧版兼容：`true` 等价于 `windowsInsertionMode === 'sendInput'`。 */
+  /** Legacy compat: `true` is equivalent to `windowsInsertionMode === 'sendInput'`. */
   windowsSendInputInsertionOnly: boolean;
-  /** Windows：非 TSF 插入方式下是否在系统键盘列表（Win+Space）中显示 OpenLess。 */
+  /** Windows: whether to show OpenLess in the system keyboard list (Win+Space) for non-TSF insertion. */
   windowsShowOpenlessInKeyboardList: boolean;
-  /** 用户的工作语言（多选，原生名）；作为前提注入 LLM polish/translate prompt 头部。 */
+  /** User's working languages (multi-select, native names); injected as a premise at the head of LLM polish/translate prompts. */
   workingLanguages: string[];
-  /** 翻译模式目标语言（单选，原生名）；空串 = 不启用 Shift 翻译。详见 issue #4。 */
+  /** Translation mode target language (single-select, native name); empty string = Shift translation disabled. See issue #4. */
   translationTargetLanguage: string;
-  /** 中文输出字形偏好：由界面语言（简/繁）自动同步，不单独暴露设置项。 */
+  /** Chinese output script preference: auto-synced from the UI language (simplified/traditional); not exposed as a separate setting. */
   chineseScriptPreference: 'auto' | 'simplified' | 'traditional';
-  /** 最终输出语言偏好：由界面语言自动同步，不单独暴露设置项。 */
+  /** Final output language preference: auto-synced from the UI language; not exposed as a separate setting. */
   outputLanguagePreference: 'auto' | 'zhCn' | 'zhTw' | 'en' | 'ja' | 'ko';
-  /** 划词语音问答快捷键。null = 未启用。详见 issue #118。 */
+  /** Selection voice Q&A hotkey. null = not enabled. See issue #118. */
   qaHotkey: QaHotkeyBinding | null;
-  /** 独立速记快捷键。null = 未配置。 */
+  /** Standalone quick-note hotkey. null = not configured. */
   quickNoteHotkey: ShortcutBinding | null;
-  /** 选区润色快捷键。null = 已停用。 */
+  /** Selection polish hotkey. null = disabled. */
   selectionPolishHotkey: ShortcutBinding | null;
   /** The style pack used only by selected written-text polishing. */
   selectionPolishStylePackId: string;
-  /** 选区润色结果的交付方式。 */
+  /** How the selection polish result is delivered. */
   selectionPolishOutputMode: SelectionPolishOutputMode;
-  /** 选区语音编辑（issue #987 Windows MVP）。默认关闭。 */
+  /** Selection voice edit (issue #987 Windows MVP). Off by default. */
   selectionVoiceEnabled: boolean;
-  /** 选区语音意图分流：自动 / 手动 / 关键词启发。 */
+  /** Selection voice intent routing: auto / manual / keyword heuristic. */
   selectionVoiceIntentMode: SelectionVoiceIntentMode;
-  /** manual 模式下固定的意图。 */
+  /** Fixed intent in manual mode. */
   selectionVoiceManualIntent: SelectionVoiceManualIntent;
-  /** heuristic 模式下命中即走编辑分支的关键词。 */
+  /** Keywords that route to the edit branch on a hit in heuristic mode. */
   selectionVoiceEditKeywords: string[];
-  /** 选区语音 EditPlan 输出格式优先级（默认 xml）。 */
+  /** Preferred EditPlan output format for selection voice (default xml). */
   selectionVoiceEditPlanFormat: EditPlanFormat;
-  /** 自定义选区语音 EditPlan system prompt；空串 = 风格包 / 内置默认。 */
+  /** Custom selection-voice EditPlan system prompt; empty string = style pack / built-in default. */
   selectionVoiceEditSystemPrompt: string;
-  /** 是否把 Q&A 历史写到本地存档。详见 issue #118。 */
+  /** Whether to write Q&A history to the local archive. See issue #118. */
   qaSaveHistory: boolean;
-  /** 自定义录音组合键。当 hotkey.trigger == 'custom' 时使用。null = 未设置。 */
+  /** Custom recording combo key. Used when hotkey.trigger == 'custom'. null = not set. */
   customComboHotkey: ComboBinding | null;
-  /** 录音中触发翻译的全局快捷键。默认 Shift。 */
+  /** Global hotkey to trigger translation while recording. Default Shift. */
   translationHotkey: ShortcutBinding;
-  /** 切换到上一个润色风格的全局快捷键。null = 用户已停用（issue #576）。 */
+  /** Global hotkey to switch to the previous polish style. null = disabled by user (issue #576). */
   switchStyleHotkey: ShortcutBinding | null;
-  /** 打开 OpenLess 主窗口的全局快捷键。null = 用户已停用（issue #576）。 */
+  /** Global hotkey to open the OpenLess main window. null = disabled by user (issue #576). */
   openAppHotkey: ShortcutBinding | null;
-  /** 风格包直达快捷键：按下即激活对应风格包。默认空列表（issue #759）。 */
+  /** Style pack direct hotkeys: pressing one activates the corresponding style pack. Default empty list (issue #759). */
   stylePackHotkeys: StylePackHotkey[];
-  /** Less Computer：是否启用。默认关闭。 */
+  /** Less Computer: whether enabled. Off by default. */
   codingAgentEnabled: boolean;
-  /** Agent 后端：claude-code-cli（默认）/ opencode-cli / codex-cli / dsh-cli。 */
+  /** Agent backend: claude-code-cli (default) / opencode-cli / codex-cli / dsh-cli. */
   codingAgentProvider: CodingAgentProviderId;
   /**
-   * Agent 模型，null = 交给后端自己的默认。
-   * Claude 走别名（sonnet 等），OpenCode 要 `provider/model`，Codex 收裸模型名；
-   * dsh 的 headless profile 没有模型开关，这一项对它无效。
+   * Agent model, null = let the backend use its own default.
+   * Claude takes aliases (sonnet etc.), OpenCode needs `provider/model`, Codex takes a bare model name;
+   * dsh's headless profile has no model switch, so this has no effect for it.
    */
   codingAgentModel: string | null;
-  /** 权限模式：plan/default/acceptEdits/bypassPermissions。 */
+  /** Permission mode: plan/default/acceptEdits/bypassPermissions. */
   codingAgentPermissionMode: CodingAgentPermissionMode;
-  /** Agent 工作目录，null = 临时目录。 */
+  /** Agent working directory, null = temp directory. */
   codingAgentWorkdir: string | null;
-  /** Agent 可执行文件路径/命令，null 或空 = 按后端取默认（claude / opencode）。 */
+  /** Agent executable path/command, null or empty = backend default (claude / opencode). */
   codingAgentExe: string | null;
-  /** Windows/macOS Less Computer 按住说话快捷键。null = 停用。 */
+  /** Windows/macOS Less Computer push-to-talk hotkey. null = disabled. */
   codingAgentVoiceHotkey: ShortcutBinding | null;
-  /** 热键 1：语音 Agent 面板键。null = 停用。 */
+  /** Hotkey 1: voice agent panel key. null = disabled. */
   codingAgentPanelHotkey: ShortcutBinding | null;
-  /** 热键 2：快取用键（选中→Claude→回插）。null = 未配置。 */
+  /** Hotkey 2: quick-capture key (select → Claude → insert back). null = not configured. */
   codingAgentQuickHotkey: ShortcutBinding | null;
-  /** 本地 Qwen3-ASR 当前激活的模型 id。仅在 local-qwen3 系列 provider 时有意义。 */
+  /** Currently active model id for local Qwen3-ASR. Only meaningful for local-qwen3 providers. */
   localAsrActiveModel: string;
-  /** macOS 本地 Whisper 当前激活的模型 id。 */
+  /** Currently active model id for macOS local Whisper. */
   localWhisperActiveModel: string;
-  /** 本地模型下载源（'huggingface' / 'hf-mirror' / 'modelscope'）。 */
+  /** Local model download source ('huggingface' / 'hf-mirror' / 'modelscope'). */
   localAsrMirror: string;
-  /** 本地 ASR 引擎在内存中的保留时长（秒）。0 = 说完话即释放；
-   *  300 = 默认 5 分钟；86400 = 不自动释放（保持加载）。 */
+  /** How long the local ASR engine stays in memory (seconds). 0 = release right after speech;
+   *  300 = default 5 minutes; 86400 = never auto-release (stay loaded). */
   localAsrKeepLoadedSecs: number;
-  /** Windows Foundry Local Whisper 当前激活的模型 alias。 */
+  /** Currently active model alias for Windows Foundry Local Whisper. */
   foundryLocalAsrModel: string;
-  /** Windows Foundry Local native runtime 下载源。 */
+  /** Download source for the Windows Foundry Local native runtime. */
   foundryLocalRuntimeSource: string;
-  /** Windows Foundry Local Whisper 语言 hint。空字符串表示自动检测。 */
+  /** Windows Foundry Local Whisper language hint. Empty string = auto-detect. */
   foundryLocalAsrLanguageHint: string;
-  /** Windows Foundry Local Whisper 模型在 runtime 中保持加载的秒数。 */
+  /** Seconds the Windows Foundry Local Whisper model stays loaded in the runtime. */
   foundryLocalAsrKeepLoadedSecs: number;
-  /** Windows sherpa-onnx 本地 ASR 当前激活的模型 alias。 */
+  /** Currently active model alias for Windows sherpa-onnx local ASR. */
   sherpaOnnxModel: string;
-  /** Windows sherpa-onnx 语言 hint。空字符串表示自动检测。 */
+  /** Windows sherpa-onnx language hint. Empty string = auto-detect. */
   sherpaOnnxLanguageHint: string;
-  /** Windows sherpa-onnx 模型在 runtime 中保持加载的秒数。 */
+  /** Seconds the Windows sherpa-onnx model stays loaded in the runtime. */
   sherpaOnnxKeepLoadedSecs: number;
-  /** 历史记录保留天数。0 = 不按时间清理（仍受 200 条上限）。默认 7。 */
+  /** History retention days. 0 = no time-based cleanup (the 200-entry cap still applies). Default 7. */
   historyRetentionDays: number;
-  /** 对话感知 polish 上下文窗口（分钟）。0 = 关闭。默认 5。详见 PR-A。 */
+  /** Conversation-aware polish context window (minutes). 0 = off. Default 5. See PR-A. */
   polishContextWindowMinutes: number;
-  /** 启动时静默运行（不弹主窗口）。Windows 开机自启场景常用——只想要后台 + 托盘，
-   *  不想被主窗口打扰。开后所有启动路径都不弹窗，从菜单栏 / 托盘进入主窗口。默认 false。 */
+  /** Run silently at startup (no main window). Common for Windows auto-start — background + tray only,
+   *  without the main window popping up. When on, no startup path shows the window; open it from the menu bar / tray. Default false. */
   startMinimized: boolean;
   /** UI theme preference: follow OS, light, or dark. */
   themeMode: ThemeMode;
-  /** 后台自动更新渠道。用户未明确选择时跟随当前构建类型；
-   * About / Advanced 的手动检查按钮各自固定 stable/beta。 */
+  /** Background auto-update channel. Follows the current build type until the user chooses one;
+   * the manual check buttons in About / Advanced each pin stable/beta. */
   updateChannel: UpdateChannel;
-  /** 是否由用户明确选择过更新渠道；缺失时由当前构建类型决定默认渠道。 */
+  /** Whether the user explicitly chose the update channel; when missing, the current build type decides the default. */
   updateChannelExplicit?: boolean;
-  /** 流式输入：润色 SSE 一边到达一边逐字模拟键盘事件输出到当前焦点。开启后用户感知到
-   *  的处理时延显著降低。v1 限定 macOS + OpenAI-compatible provider，其他配置自动回落
-   *  到原一次性插入。默认 true。 */
+  /** Streaming insert: polished SSE output is typed into the current focus as keyboard events as it arrives,
+   *  greatly reducing perceived latency. v1 is limited to macOS + OpenAI-compatible providers; other configs
+   *  automatically fall back to the original one-shot insertion. Default true. */
   streamingInsert: boolean;
-  /** issue #440 一次性迁移标记：旧配置缺少该字段时后端会把老默认 false 迁到 true；
-   *  迁移后用户再手动关掉 streamingInsert 时保留 false。 */
+  /** One-time migration marker for issue #440: when old configs lack this field, the backend migrates the old default false to true;
+   *  if the user later turns streamingInsert off manually, false is preserved. */
   streamingInsertDefaultMigrated: boolean;
-  /** 流式输入成功后是否把最终润色文本写回剪贴板。开启后 Cmd+V 还能重复粘贴该次输出，
-   *  与一次性路径行为对齐。默认 true。 */
+  /** Whether to write the final polished text back to the clipboard after a successful streaming insert.
+   *  When on, Cmd+V can re-paste that output, matching the one-shot path. Default true. */
   streamingInsertSaveClipboard: boolean;
-  /** 是否把「用户正在写的那篇文档」中光标附近的原文送进 LLM 润色当上下文。
-   *  默认 false —— 开启后每次听写都会读取前台 app 的正文并把其中一段发给 LLM 服务商。
-   *  仅 macOS 有实现；密码框 / Secure Input / 密码管理器 / 终端一律硬拦。 */
+  /** Whether to send the text near the cursor in the document the user is writing to LLM polish as context.
+   *  Default false — when on, every dictation reads the foreground app's body text and sends part of it to the LLM provider.
+   *  macOS only; password fields / Secure Input / password managers / terminals are always hard-blocked. */
   cursorContextEnabled: boolean;
-  /** 概览页是否显示「年度活动」热力图卡。默认 true；关闭只隐藏卡片，活动计数照常记录。 */
+  vocabularyLearningEnabled: boolean;
+  vocabularyLearningSettings: {
+    observationSeconds: number;
+    suggestionSeconds: number;
+    maxPhraseChars: number;
+  };
+  /** Whether Overview shows the yearly activity heatmap card. Default true; turning it off only hides the card, activity counting continues. */
   showOverviewActivityHeatmap: boolean;
-  /** 易读布局：小屏或大字号时强制同行控件换行，避免横向溢出。默认 false。 */
+  /** Readable layout: wraps same-row controls on small screens or large fonts to avoid horizontal overflow. Default false. */
   stackedRowLayout: boolean;
-  /** 保守排版：除首页、顶栏、底栏与胶囊窗外，内容区强制单列满宽。默认 false。 */
+  /** Conservative layout: forces single-column full-width content everywhere except home, top bar, bottom bar, and capsule. Default false. */
   conservativeLayout: boolean;
-  /** 主窗口启动 + 后台每 60 分钟自动检查更新。默认 true。
-   *  Android：开启后自动检查并下载，校验后打开系统安装器。
-   *  桌面：开启后自动检查，发现更新弹窗由用户确认安装。
-   *  关闭后仅 Settings 手动「检查更新」按钮可用。 */
+  /** Auto-check updates at main-window startup and in the background every 60 minutes. Default true.
+   *  Android: when on, checks and downloads automatically, then opens the system installer after verification.
+   *  Desktop: when on, checks automatically; an update dialog asks the user to confirm installation.
+   *  When off, only the manual "Check for updates" button in Settings works. */
   autoUpdateCheck: boolean;
-  /** 历史记录上限（条数）。null = 走默认 200；5..=200 之间为用户自定义。 */
+  /** History entry cap. null = default 200; 5..=200 for user-defined values. */
   historyMaxEntries: number | null;
-  /** 是否为每次会话保留原始麦克风音频文件（wav），用于排查 ASR 误识别 / 麦克风灵敏度。
-   *  默认 false。开启后会占磁盘空间，受 historyRetentionDays 同样的清理策略约束。 */
+  /** Whether to keep the raw microphone audio file (wav) per session, for debugging ASR misrecognition / mic sensitivity.
+   *  Default false. When on, it uses disk space and follows the same cleanup policy as historyRetentionDays. */
   recordAudioForDebug: boolean;
-  /** recordings/ 里保留的最近 wav 文件数。null = 跟随 200 硬上限；1..=200 之间为用户自定义。
-   *  跟 historyMaxEntries 解耦——「文本档案多但 wav 只留最近 5 条」是合法组合。 */
+  /** Number of recent wav files kept in recordings/. null = follows the 200 hard cap; 1..=200 for user-defined values.
+   *  Decoupled from historyMaxEntries — many text entries with only the 5 most recent wavs is a valid combination. */
   audioRecordingMaxEntries: number | null;
-  /** 速记导出的录音文件保存目录。空字符串 = 每次导出时弹出保存对话框。 */
+  /** Save directory for quick-note exported recordings. Empty string = show a save dialog on each export. */
   quickNoteExportDirectory: string;
-  /** Marketplace HTTP 基地址。空 = 本地开发默认 http://127.0.0.1:8090；生产填 https://api.<domain>。 */
+  /** Marketplace HTTP base URL. Empty = local dev default http://127.0.0.1:8090; production uses https://api.<domain>. */
   marketplaceBaseUrl: string;
-  /** GitHub login 展示缓存。不用于认证；OAuth token 只存在 Rust CredentialsVault。 */
+  /** Cached GitHub login for display. Not used for auth; the OAuth token lives only in the Rust CredentialsVault. */
   marketplaceDevLogin: string;
-  /** 是否启用远程输入（局域网手机录音）HTTPS+WS 服务。默认 false。 */
+  /** Whether to enable the remote input (LAN phone recording) HTTPS+WS service. Default false. */
   remoteInputEnabled: boolean;
-  /** 远程输入服务监听端口（HTTPS）。默认 8443。 */
+  /** Remote input service listening port (HTTPS). Default 8443. */
   remoteInputPort: number;
-  /** 远程输入配对码（6 位数字）。空 = server 首次启动时随机生成。 */
+  /** Remote input pairing code (6 digits). Empty = generated randomly on first server start. */
   remoteInputPin: string;
-  /** 手机录音页默认交互方式：'toggle'（点击切换）/ 'hold'（按住说话）。 */
+  /** Default interaction mode of the phone recording page: 'toggle' (tap to switch) / 'hold' (push to talk). */
   remoteInputDefaultMode: 'toggle' | 'hold';
   /** Android: cross-app dictation insert strategy. */
   androidInsertStrategy: AndroidInsertStrategy;
@@ -557,8 +564,8 @@ export interface UserPreferences {
   androidOverlayGestureActions: AndroidOverlayGestureActions;
   /** Android: floating overlay control diameter in dp. */
   androidOverlaySizeDp: number;
-  /** 开屏 PV 的主版本世代标记（如 '2'）。空 = 从未播过；由 Rust 侧
-   *  take_splash_playback 独家推进，设置保存链路会原样保留，前端只读不写。 */
+  /** Major-version generation marker of the splash PV (e.g. '2'). Empty = never played; advanced exclusively by
+   *  the Rust-side take_splash_playback, preserved verbatim by the settings save path; the frontend is read-only. */
   splashSeenVersion?: string;
 }
 
@@ -575,7 +582,7 @@ export interface MarketplaceListItem {
   downloadCount: number;
   publishedAt: string;
   updatedAt: string;
-  /** 衍生关系：null = 原创；非空 = 衍生自 originPackId，UI 显「衍生自 @originAuthorLogin」。 */
+  /** Derivation: null = original; non-null = derived from originPackId, UI shows "derived from @originAuthorLogin". */
   originPackId?: string | null;
   originAuthorLogin?: string | null;
 }
@@ -594,9 +601,9 @@ export interface MicrophoneDevice {
   isDefault: boolean;
 }
 
-/** Rust 通过 `qa:state` 事件下发的 payload。
- *  v2 (issue #118 v2)：支持多轮对话，messages 数组每次由后端整段下发（单一可信源）。
- *  v2.1：开 `stream:true`，LLM 答案逐 chunk 通过 `answer_delta` 事件推前端边渲染。 */
+/** Payload delivered by Rust via the `qa:state` event.
+ *  v2 (issue #118 v2): multi-turn support; the backend sends the whole messages array each time (single source of truth).
+ *  v2.1: enables `stream:true`, pushing LLM answer chunks to the frontend via `answer_delta` events for streaming render. */
 export type QaStateKind =
   | 'idle'
   | 'recording'
@@ -611,38 +618,38 @@ export type QaStateKind =
 export interface QaChatMessage {
   role: 'user' | 'assistant';
   content: string;
-  /** 未经模型安全信封转义的选区原文，仅用于 UI 文本展示。 */
+  /** Raw selection text not escaped by the model safety envelope; for UI text display only. */
   selectionText?: string;
 }
 
 export interface QaStatePayload {
   kind: QaStateKind;
-  /** 后端会话 token；前端用它丢弃关闭/重开后迟到的旧轮事件。 */
+  /** Backend session token; the frontend uses it to drop stale late-turn events after close/reopen. */
   sessionId?: string;
-  /** 后端权威：当前已有的多轮对话历史（user → assistant 交替）。answer 事件带完整版。 */
+  /** Backend-authoritative multi-turn history so far (alternating user → assistant). answer events carry the full version. */
   messages?: QaChatMessage[];
-  /** recording 状态时附带的选区预览（前 60 字）。 */
+  /** Selection preview attached in recording state (first 60 chars). */
   selectionPreview?: string | null;
-  /** error 状态时附带的提示。 */
+  /** Message attached in error state. */
   error?: string;
-  /** answer_delta 事件时附带的本帧增量字符串。 */
+  /** Increment string of the current frame attached to answer_delta events. */
   chunk?: string;
-  /** 选区语音编辑结果可「替换选区」。 */
+  /** The selection voice edit result can replace the selection. */
   editApplyAvailable?: boolean;
-  /** 可回退到上一轮编辑预览。 */
+  /** Can revert to the previous edit preview. */
   editRevertAvailable?: boolean;
-  /** 划词提问面板「编辑指令」复选框。 */
+  /** "Edit instruction" checkbox in the selection Q&A panel. */
   editInstructionMode?: boolean;
-  /** 当前轮等待工具审批时的 session-scoped token。 */
+  /** Session-scoped token while the current turn waits for tool approval. */
   approvalToken?: string;
 }
 
 /**
- * Less Computer 语音 Agent 浮窗事件（窗口 label = "less-computer"，事件名
- * `less-computer:event`）。后端按 `kind` 标记，前端据此把交互渲染成聊天结构。
+ * Less Computer voice agent overlay window events (window label = "less-computer", event name
+ * `less-computer:event`). The backend tags each by `kind`; the frontend renders the interaction as a chat structure.
  */
 export type LessComputerEvent =
-  /** Core语音生命周期快照；seq去重、sessionId防止旧会话的终态/电平覆盖新录音。 */
+  /** Core voice lifecycle snapshot; seq for dedup, sessionId keeps old sessions' terminal states/levels from overwriting a new recording. */
   (
     | {
         kind: 'voice_state';
@@ -650,52 +657,52 @@ export type LessComputerEvent =
         phase: 'starting' | 'recording' | 'transcribing' | 'idle';
         level: number;
         elapsedMs: number;
-        /** 缺省按 submit 处理（旧事件与快捷键路径）。 */
+        /** Defaults to submit (legacy events and hotkey path). */
         mode?: LessComputerVoiceMode;
-        /** 本会话迄今的完整转写，录音中随实时识别更新。 */
+        /** Full transcript for this session so far, updated by live recognition while recording. */
         transcript?: string;
-        /** 仅 idle 时出现，描述本次录音如何收尾。 */
+        /** Present only in idle, describing how the recording ended. */
         outcome?: LessComputerVoiceOutcome;
       }
-    /** 一轮用户气泡（语音指令转写）。fresh=true 表示新会话（清空历史）；否则追加为后续轮次。 */
+    /** One user bubble (voice command transcript). fresh=true means a new session (history cleared); otherwise appended as a follow-up turn. */
     | { kind: 'user'; text: string; fresh?: boolean }
-    /** Agent 启动，进入运行态。 */
+    /** Agent started, entering the running state. */
     | { kind: 'started' }
-    /** 流式回复增量（来自 CodingAgentEvent::Delta）。 */
+    /** Streaming reply delta (from CodingAgentEvent::Delta). */
     | { kind: 'delta'; text: string }
-    /** 工具调用提示（来自 CodingAgentEvent::ToolUse，如 "Bash"）。 */
+    /** Tool call hint (from CodingAgentEvent::ToolUse, e.g. "Bash"). */
     | { kind: 'tool'; name: string }
-    /** 会话上下文被压缩（来自 CodingAgentEvent::Compaction），输出流对应位置内嵌提示。 */
+    /** Session context compacted (from CodingAgentEvent::Compaction); an inline hint is embedded at the matching point in the output stream. */
     | { kind: 'compaction' }
-    /** 内联审批卡：高风险动作被护栏拦下，等用户 Approve / Deny。 */
+    /** Inline approval card: a high-risk action was blocked by the guardrail, waiting for Approve / Deny. */
     | { kind: 'approval'; token: string; command: string; reason: string }
-    /** 运行完成：最终结果 + 成本（美元）。 */
+    /** Run completed: final result + cost (USD). */
     | { kind: 'completed'; text: string; costUsd?: number | null }
-    /** 用户从胶囊取消正在运行的 Agent。 */
+    /** User cancelled the running agent from the capsule. */
     | { kind: 'cancelled' }
-    /** 运行出错。 */
+    /** Run failed with an error. */
     | { kind: 'error'; message: string }
   ) & {
-    /** 单调事件序号（后端 emit 时编）。用于 less_computer_sync 重放与实时流去重；
-     *  缓冲锁异常时后端可能省略，无 seq 的事件前端无条件应用。 */
+    /** Monotonic event sequence number (assigned by the backend on emit). Used for less_computer_sync replay and
+     *  live-stream dedup; the backend may omit it when the buffer lock is abnormal, and events without seq are applied unconditionally. */
     seq?: number;
   };
 
 export type LessComputerVoiceEvent = Extract<LessComputerEvent, { kind: 'voice_state' }>;
 
-/** submit：说完直接交给 Agent；dictate：转写填进输入框，由用户编辑后发送。 */
+/** submit: hand the transcript straight to the agent after speech; dictate: fill the transcript into the input box for the user to edit before sending. */
 export type LessComputerVoiceMode = 'submit' | 'dictate';
 
 export type LessComputerVoiceOutcome = 'submitted' | 'committed' | 'empty' | 'failed' | 'cancelled';
 
-/** `less_computer_sync` 的有界 replay 结果。`truncated=true` 表示调用方的水位
- * 已早于后端仍保留的最老事件，前端必须清空派生视图后再应用 `events`。 */
+/** Bounded replay result of `less_computer_sync`. `truncated=true` means the caller's watermark
+ * is older than the oldest event the backend still holds; the frontend must clear derived views before applying `events`. */
 export interface LessComputerSyncResult {
   events: LessComputerEvent[];
   oldestSequence?: number;
   latestSequence: number;
   truncated: boolean;
-  /** 最新Core语音显示投影，即使长转写的阶段事件已被有界replay驱逐也可恢复。 */
+  /** Latest Core voice display projection, recoverable even when phase events of long transcripts were evicted by the bounded replay. */
   voiceState?: LessComputerVoiceEvent;
 }
 
@@ -704,7 +711,7 @@ export { SUPPORTED_LANGUAGES } from './languageCatalog';
 export type CapsuleState =
   'idle' | 'recording' | 'transcribing' | 'polishing' | 'done' | 'cancelled' | 'error';
 
-/** 录音胶囊样式：'siri' = 流光 Siri 光效版（默认）；'classic' = Openless 经典药丸版。 */
+/** Recording capsule style: 'siri' = flowing Siri light-effect version (default); 'classic' = Openless classic pill version. */
 export type CapsuleStyle = 'siri' | 'classic' | 'typeless';
 
 export interface CapsulePayload {
@@ -713,24 +720,25 @@ export interface CapsulePayload {
   elapsedMs: number;
   message: string | null;
   insertedChars: number | null;
-  /** 当前 session 是否处于翻译模式（用户已按过 Shift）。详见 issue #4。 */
+  /** Whether the current session is in translation mode (the user pressed Shift). See issue #4. */
   translation: boolean;
-  /** 当前是否是 Less Computer 会话：处理态文案显示 "using" 而非 "thinking"。 */
+  /** Whether this is a Less Computer session: the processing label shows "using" instead of "thinking". */
   operating?: boolean;
   /**
-   * 预备态：胶囊已「乐观显示」（按下热键即弹出并播入场动画），但麦克风还没吐第一帧
-   * PCM。为 true 时录音光条渲染成「待命」形态（柔和呼吸、不接真实电平），暗示用户稍候
-   * 再开口；麦克风就绪后翻 false，光条点亮进入正式录音。只对 recording 有意义。
+   * Warming state: the capsule is shown optimistically (pops up with the entrance animation on hotkey press)
+   * but the microphone has not produced its first PCM frame yet. When true, the recording level bar renders in
+   * a standby form (soft breathing, no real level), signaling the user to wait a moment before speaking; it flips
+   * to false once the mic is ready. Only meaningful for recording.
    */
   warming?: boolean;
   /**
-   * 用户选择的胶囊样式（siri / classic）。随每次状态事件下发；缺失时回落默认
-   * 'siri'，兼容旧后端 payload。
+   * User-selected capsule style (siri / classic). Sent with every state event; falls back to the default
+   * 'siri' when missing, for compatibility with older backend payloads.
    */
   capsuleStyle?: CapsuleStyle;
   /**
-   * 选区润色复用 capsule 的无焦点原生窗口，但渲染为轻量状态提示；缺失时保持原有
-   * 语音/QA 胶囊行为，兼容旧后端 payload。
+   * Selection polish reuses the capsule's focus-free native window but renders a lightweight status hint; when missing,
+   * the original voice/QA capsule behavior is kept, for compatibility with older backend payloads.
    */
   selectionPolish?: boolean;
 }
@@ -738,13 +746,13 @@ export interface CapsulePayload {
 export interface CredentialsStatus {
   activeAsrProvider: string;
   activeLlmProvider: string;
-  /** 当前识别管线模式，前端据此渲染配置页与概览「已配置」判定。 */
+  /** Current recognition pipeline mode; the frontend uses it to render the config page and the Overview "configured" check. */
   pipelineMode: PipelineMode;
   asrConfigured: boolean;
   llmConfigured: boolean;
-  /** 多模态（omni）模型是否已配置。仅 multimodal 模式有意义。 */
+  /** Whether the multimodal (omni) model is configured. Only meaningful in multimodal mode. */
   omniConfigured: boolean;
-  /** 兼容旧字段（过渡期保留）。 */
+  /** Legacy compatibility field (kept during the transition). */
   volcengineConfigured: boolean;
   arkConfigured: boolean;
 }

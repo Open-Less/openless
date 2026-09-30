@@ -1,5 +1,5 @@
-// 简体中文资源 — 与产品当前文案保持一致。
-// 八个语言文件共享同一结构；新增或删除 key 时同步更新全部语言。
+// Simplified Chinese resources — kept in sync with the product's current copy.
+// The eight locale files share one structure; add/remove keys in all of them together.
 
 export const zhCN = {
   cloudSyncE2ee: {
@@ -269,6 +269,7 @@ export const zhCN = {
     errorPrefix: '未能继续：',
     question: '提问',
     edit: '编辑选区',
+    compose: '帮我写',
     cancel: '取消',
   },
   qa: {
@@ -794,6 +795,13 @@ export const zhCN = {
       clear: '清除结果',
     },
   },
+  vocabLearning: {
+    open: '记住词汇',
+    label: '输入要记住的正确词汇',
+    confirm: '确认加入词典',
+    saved: '已记住，可在词典中管理',
+    failed: '保存失败：{{error}}',
+  },
   vocabCard: {
     title: '要记住这个词吗？',
     accept: '记住',
@@ -830,7 +838,7 @@ export const zhCN = {
     editTitle: '编辑词汇',
     editSave: '保存',
     editEmpty: '词条不能为空。',
-    filter: { all: '所有', auto: '自动添加', manual: '手动添加' },
+    filter: { all: '所有', auto: '确认收集', manual: '手动添加' },
     searchPlaceholder: '搜索',
     searchEmpty: '没有匹配的词条。',
     newWord: '新词',
@@ -840,7 +848,7 @@ export const zhCN = {
     newWordTemplates: '预设模板',
     newWordTemplateCount: '{{count}} 词',
     newWordAddSelected: '添加所选',
-    learnedSection: '自动收集（{{count}}）',
+    learnedSection: '确认收集（{{count}}）',
     removeAllLearned: '全部删除',
     corrections: {
       title: '纠正规则',
@@ -1146,7 +1154,7 @@ export const zhCN = {
   settings: {
     selectionWorkspace: {
       title: '选区助手',
-      hint: '选中文字后按同一快捷键：关闭语音编辑时直接润色；开启后口述指令，说完再选择「提问」或「编辑选区」。',
+      hint: '有选区时按同一快捷键：关闭语音编辑则润色；开启后口述指令，可提问或编辑选区。无选区但光标在文本框时：可「帮我写」成稿或提问。',
       polishHotkey: '选区助手快捷键',
       polishHotkeyDesc:
         '关闭语音编辑时直接润色；开启语音编辑时按住口述指令（录音方式跟随全局设置）。',
@@ -1190,12 +1198,30 @@ export const zhCN = {
       useSystemProxyDesc:
         '开启时请求跟随系统代理；关闭后所有网络请求直连（国内服务延迟通常更低），GitHub 登录、更新等境外服务可能连不上。实时语音流与 Less Computer 不受此开关影响。',
     },
+    vocabularyLearning: {
+      title: '手改学词',
+      enabled: '启用手改学词',
+      observationSeconds: '观察时长',
+      observationSecondsHint: '听写落字后观察当前输入框的最长时间，10–60 秒。',
+      suggestionSeconds: '建议保留时长',
+      suggestionSecondsHint: '未确认的建议会在 5–60 秒后消失，不加入词典。',
+      maxPhraseChars: '最大词长',
+      maxPhraseCharsHint: '自动建议中原词和替换词的长度上限，2–32 个字符；不影响手动加词。',
+      seconds: '{{count}} 秒',
+      characters: '{{count}} 个字符',
+      changeHint:
+        '更改参数会结束当前观察并清除待确认建议，下次听写生效。恢复参数不会改变启用开关。',
+      reset: '恢复默认参数',
+      saveError: '保存失败，请重试。',
+      description:
+        '插入后在本机观察当前输入框内的修改，最长 60 秒，确认后才加入词典。观察文本不会发给模型；排除密码框和已知敏感应用。Windows、Android 的支持取决于编辑器；Android 需开启无障碍服务。关闭后停止观察。',
+    },
     dataStorage: {
       title: '数据存储',
       desc: '本机保留的历史会话与对话上下文。',
       cursorContextLabel: '光标上下文（实验）',
       cursorContextDesc:
-        '润色时读取你正在写的那篇文档中光标附近的原文，帮模型判断同音词、专名和代词该怎么写。开启后这段文字会随请求发送给你配置的 LLM 服务商；关闭时一个字都不读。密码输入框、Secure Input、密码管理器与终端始终不读。仅 macOS。',
+        '润色时将光标附近文本发给模型（仅 macOS）。此开关与本地手改学词独立；排除密码框和已知敏感应用。',
     },
     codingConsole: {
       title: 'Claude 控制台',
@@ -1457,6 +1483,8 @@ export const zhCN = {
       validationTitle: '连接验证',
       validationHint:
         '手动发起一次真实请求，检查当前配置；可能消耗服务额度。保存设置不会自动验证。',
+      validationHintOmni:
+        '手动发起一次文本连通性请求（不含录音）。通过不代表音频听写可用，请再做一次短录音确认。可能消耗服务额度。',
       autoSaveHint: '字段修改后自动保存；完成配置后，可手动验证连接。',
       nameHint: '名称仅用于区分同一供应商的多个渠道，不影响模型或连接。',
       errModel: '模型',
@@ -1524,6 +1552,7 @@ export const zhCN = {
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter（免费模型）',
         requesty: 'Requesty',
+        apiRoute: 'API Route',
         orcarouter: 'OrcaRouter',
         alibabaCoding: '阿里云 Coding Plan',
         codingPlanX: 'CodingPlanX',
@@ -1692,6 +1721,7 @@ export const zhCN = {
       selectModel: '选择一个模型写入上方字段',
       modelSaved: '已保存模型 {{model}}。',
       validateSuccess: '连接检查通过。',
+      validateSuccessOmni: '文本连通性通过。这不代表音频听写可用，请再做一次短录音确认。',
       validateFailed: '连接检查未通过。',
       providerHttpStatus: '供应商接口返回 {{status}}，请检查 API Key 权限或 Endpoint。',
       endpointMustUseHttps:
@@ -1931,6 +1961,11 @@ export const zhCN = {
         notWindows: '仅 Windows 可用。',
       },
     },
+    inputMethod: {
+      guidanceTitle: 'OpenLess 输入法',
+      enableSystemIme: '请在系统设置 → 键盘 / 输入法中启用 OpenLess Voice，并在需要时切换到它。',
+      longPressLogo: '在 OpenLess 输入法键盘中长按左上角的 logo，可打开原生键盘设置。',
+    },
     advanced: {
       multimodalPipelineTitle: '多模态识别管线',
       multimodalPipelineTitleHint:
@@ -2127,6 +2162,8 @@ export const zhCN = {
       omni: '多模态模型',
       models: '本地模型',
       connections: '连接与扩展',
+      inactive: '当前模式未使用',
+      inactiveDetail: '此页配置已保留，但当前识别管线不会使用。',
       statusConfigured: '绿点：已有启用的渠道。请求使用列表中第一个启用的渠道。',
       statusMissing: '红点：还没有启用的渠道。',
     },
@@ -2139,6 +2176,7 @@ export const zhCN = {
     autoSaveHint: '修改后自动保存',
     backToAdvanced: '返回实验与扩展',
     advancedPages: {
+      vocabularyLearning: '从听写后的手动改词中学习，配置观察时长、确认时间和词长。',
       lessComputer: '选择 Agent，配置模型、权限与工作目录。',
       claudeConsole: '检测 Claude Code，并查看测试任务的运行输出。',
       multimodal: '管理多模态识别的实验性开关。',
@@ -2146,20 +2184,22 @@ export const zhCN = {
     },
     descriptions: {
       general: '选择麦克风、设置录音方式与文字输入，也可连接手机输入。',
+      inputMethod: '配置 Android 悬浮窗和输入法，快速开始手机端输入。',
       shortcuts: '设置各功能的触发方式，以及选中文字后的操作。',
       services: '选择语音识别与文字处理服务，管理渠道、本地模型和网络连接。',
       appearance: '调整主题、页面排版和界面语言，让阅读更舒服。',
       privacy: '检查系统权限与连接状态，管理历史、录音和本地数据。',
-      advanced: '按需配置 Less Computer、多模态与调试功能。',
+      advanced: '按需配置 Less Computer 与调试功能。',
       about: '查看当前版本、更新渠道与自动更新设置。',
     },
     searchKeywords: {
       general: '麦克风 录音 输入 手机 远程 局域网 PIN 胶囊 静音 自启 开机',
+      inputMethod: '输入法 IME 键盘 悬浮窗 Android 安卓',
       shortcuts: '快捷键 热键 组合键 选区 润色 语音编辑',
-      services: 'ASR LLM API 渠道 模型 云 本地 网络 代理 市场',
+      services: 'ASR LLM API 渠道 模型 云 本地 网络 代理 市场 多模态 识别管线 Omni',
       appearance: '主题 深色 浅色 暗色 语言 字号 排版 布局 热力图',
       privacy: '权限 麦克风 辅助功能 历史 录音 存储 隐私 导出',
-      advanced: 'Less Computer Claude Agent 多模态 Omni 调试 日志 实验',
+      advanced: 'Less Computer Claude Agent 调试 日志 实验 手改学词 vocabulary learning',
       about: '版本 Beta 稳定 更新 升级',
     },
 
@@ -2167,6 +2207,7 @@ export const zhCN = {
       appearance: '外观与语言',
       shortcuts: '快捷键与选区',
       general: '录音与输入',
+      inputMethod: '输入方式',
       services: 'AI 服务与模型',
       privacy: '权限与数据',
       advanced: '实验与扩展',

@@ -1,18 +1,23 @@
-//! 共享 HTTP 客户端 + 带重试的请求发送。
+//! Shared HTTP clients + retrying request sender.
 //!
-//! 背景：原先每个网络命令各自 `reqwest::Client::new()`，连接池互不复用 —— 一次
-//! 成功的 TLS 连接用完即弃，下一个命令又得重新握手。在握手不稳定的网络下（代理
-//! 分流等）首次握手经常被重置，用户得反复重试才能用。
+//! Background: each network command used to create its own `reqwest::Client::new()`,
+//! with no connection-pool reuse — a successful TLS connection was discarded after
+//! one use and the next command paid a fresh handshake. On networks with unstable
+//! handshakes (proxy routing etc.) the first handshake was often reset, forcing
+//! repeated user retries.
 //!
-//! 这里提供两件东西：
-//! - `http()`：进程级共享客户端。一次握手成功后的连接进连接池，后续命令直接复用，
-//!   不再付握手成本。
-//! - `send_with_retry`：只对**连接层失败**（`is_connect()` —— 握手重置 / 连接被拒
-//!   等）做指数退避重试。这类失败发生在请求送达服务端之前、且通常是瞬时的（代理
-//!   分流抖动等），重试既幂等安全又有意义。**不重试超时与其他请求层错误**：超时
-//!   可能发生在服务端已收到之后（重试 POST / DELETE 会重复执行）；`is_request()`
-//!   类错误多为确定性失败（如 endpoint 配置错误），重试只是徒增数秒延迟。HTTP
-//!   4xx/5xx 同样不重试 —— 服务端已应答，状态码交给调用方判断。
+//! Two things live here:
+//! - `http()`: process-wide shared client. Connections from a successful handshake
+//!   enter the pool and later commands reuse them without paying the handshake again.
+//! - `send_with_retry`: exponential-backoff retry for **connection-layer failures**
+//!   only (`is_connect()` — handshake reset / connection refused etc.). These happen
+//!   before the request reaches the server and are usually transient, so retrying is
+//!   both idempotent-safe and useful. **Timeouts and other request-layer errors are
+//!   not retried**: a timeout may occur after the server already received the request
+//!   (retrying POST / DELETE would repeat it); `is_request()` errors are mostly
+//!   deterministic (e.g. a misconfigured endpoint) and retrying only adds seconds of
+//!   delay. HTTP 4xx/5xx are likewise not retried — the server answered; the status
+//!   code is the caller's to judge.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -22,30 +27,34 @@ use std::time::Duration;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 
-/// 用户是否允许 app 使用系统代理（issue #869）。默认 true = 跟随系统代理，
-/// 与历史行为一致；关闭后所有 reqwest 客户端 `.no_proxy()` 直连。
-/// 启动时由 coordinator 用持久化设置初始化，`set_settings` 变更时同步。
+/// Whether the user allows the app to use the system proxy (issue #869). Default
+/// true = follow the system proxy, matching historical behavior; when off, all
+/// reqwest clients are built with `.no_proxy()` for direct connections.
+/// Initialized from persisted settings at startup by the coordinator and kept in
+/// sync on `set_settings` changes.
 static USE_SYSTEM_PROXY: AtomicBool = AtomicBool::new(true);
 
-/// 共享 / provider 客户端的构建缓存。key = `(discriminator, no_proxy 决策)`。
-/// 代理开关变化时整表清空重建，保证「存盘即生效」。
+/// Build cache for the shared / provider clients. key = `(discriminator, no_proxy
+/// decision)`. Cleared entirely when the proxy toggle changes so "saved = effective".
 static CACHE: Lazy<Mutex<HashMap<(u64, bool), reqwest::Client>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-/// 当前是否使用系统代理（false = 所有请求直连）。
+/// Whether the system proxy is in use (false = all requests go direct).
 pub fn use_system_proxy() -> bool {
     USE_SYSTEM_PROXY.load(Ordering::Relaxed)
 }
 
-/// 更新系统代理开关并清空客户端缓存，让后续请求立即按新策略重建连接池。
-/// 在启动初始化与 `set_settings` 中设置值变化时调用。
+/// Updates the system-proxy toggle and clears the client cache so later requests
+/// rebuild their connection pools under the new policy immediately. Called at startup
+/// initialization and from `set_settings` on value changes.
 pub fn set_use_system_proxy(enabled: bool) {
     USE_SYSTEM_PROXY.store(enabled, Ordering::Relaxed);
     CACHE.lock().clear();
 }
 
-/// 判定某 base_url 是否应绕过系统代理：回环地址恒绕过（localhost 走代理没有
-/// 意义且可能自环）；全局关闭系统代理时所有地址绕过（issue #869）。
+/// Whether a base_url should bypass the system proxy: loopback always bypasses
+/// (proxying localhost is pointless and can self-loop); with the global system-proxy
+/// toggle off, everything bypasses (issue #869).
 pub fn should_bypass_proxy(base_url: &str, use_system_proxy: bool) -> bool {
     !use_system_proxy || is_loopback_url(base_url)
 }
@@ -57,7 +66,7 @@ fn is_loopback_url(base_url: &str) -> bool {
     let Some(host) = url.host_str() else {
         return false;
     };
-    // url crate 对 IPv6 host 返回带方括号的形式（"[::1]"），解析前剥掉。
+    // The url crate returns IPv6 hosts bracketed ("[::1]"); strip before parsing.
     let host = host.trim_start_matches('[').trim_end_matches(']');
     if host.eq_ignore_ascii_case("localhost") {
         return true;
@@ -65,12 +74,15 @@ fn is_loopback_url(base_url: &str) -> bool {
     host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
-/// 共享客户端的基础 builder：握手限时 + 连接池 + UA；按需禁用系统代理。
+/// Base builder for shared clients: bounded handshake + connection pool + UA;
+/// disables the system proxy on demand.
 fn base_client_builder(no_proxy: bool) -> reqwest::ClientBuilder {
     let mut builder = reqwest::Client::builder()
-        // 握手单独限时：卡在握手上要尽快失败，好让 send_with_retry 立即重试。
+        // Separate handshake timeout: stuck handshakes should fail fast so
+        // send_with_retry can retry immediately.
         .connect_timeout(Duration::from_secs(8))
-        // 连接池：一条握手成功的连接保留 90s 供后续命令复用。
+        // Connection pool: a successfully handshaked connection stays 90s for later
+        // commands to reuse.
         .pool_idle_timeout(Duration::from_secs(90))
         .pool_max_idle_per_host(8)
         .tcp_keepalive(Duration::from_secs(30))
@@ -81,8 +93,9 @@ fn base_client_builder(no_proxy: bool) -> reqwest::ClientBuilder {
     builder
 }
 
-/// 进程级共享 HTTP 客户端。带连接池 —— 一次握手成功后的连接被后续请求复用；
-/// 代理开关切换后经 CACHE 清空自动按新策略重建。
+/// Process-wide shared HTTP client. Connection-pooled — connections from a successful
+/// handshake are reused by later requests; a proxy-toggle change clears CACHE and the
+/// client rebuilds under the new policy automatically.
 pub fn http() -> reqwest::Client {
     let no_proxy = !use_system_proxy();
     cached_client((0, no_proxy), || {
@@ -137,14 +150,16 @@ pub fn model_http() -> reqwest::Client {
     })
 }
 
-/// 按 `(timeout_secs, no_proxy)` 缓存并复用 `reqwest::Client`。
+/// Caches and reuses `reqwest::Client` by `(timeout_secs, no_proxy)`.
 ///
-/// LLM / ASR provider 过去每次请求都新建一个 `reqwest::Client`，新客户端连接池是
-/// 空的 —— 于是每句话都要重新 TLS 握手（~100–300ms）。这里把建好的客户端按其配置
-/// 缓存：相同配置的后续 provider 直接 `clone()` 复用同一连接池（`reqwest::Client`
-/// 内部是 `Arc`，clone 共享连接池与配置），握手成本只在首次付一次。
+/// LLM / ASR providers used to build a fresh `reqwest::Client` per request; a new
+/// client's pool is empty, so every utterance paid a fresh TLS handshake
+/// (~100-300ms). Built clients are now cached by their config: later providers with
+/// the same config `clone()` the same pool (`reqwest::Client` is an `Arc` inside —
+/// clone shares pool and config), so the handshake is paid once.
 ///
-/// `build` 只在首次 miss 时调用，必须产出与该 `key` 语义一致的客户端。
+/// `build` runs only on the first miss and must produce a client consistent with the
+/// `key` semantics.
 pub fn cached_client<F>(key: (u64, bool), build: F) -> reqwest::Client
 where
     F: FnOnce() -> reqwest::Client,
@@ -181,16 +196,20 @@ pub fn request_error_kind(error: &reqwest::Error) -> &'static str {
     }
 }
 
-/// 单次请求最多尝试的次数。失败本身很快（握手重置 ~0.5s），10 次总耗时仍可控。
+/// Max attempts per request. Individual failures are fast (handshake reset ~0.5s), so
+/// even 10 attempts stay within a controllable total.
 const MAX_ATTEMPTS: u32 = 10;
 
-/// 发送请求，只对连接层失败（`is_connect()`：握手重置 / 连接被拒等）做指数退避重试。
+/// Sends a request with exponential-backoff retries for connection-layer failures
+/// only (`is_connect()`: handshake reset / connection refused etc.).
 ///
-/// `make` 每次尝试都重新构造 `RequestBuilder`（`send()` 会消耗它）。只重试
-/// `is_connect()` —— 连接尚未建立、请求未送达服务端，且这类失败通常是瞬时的，
-/// 重试幂等安全且有价值。超时（可能服务端已在处理）与其他 `is_request()` 类错误
-/// （多为 endpoint 配置错误等确定性失败）都不重试。拿到任意 HTTP 响应（含
-/// 4xx/5xx）即返回，状态码由调用方自行判断。
+/// `make` rebuilds the `RequestBuilder` on each attempt (`send()` consumes it). Only
+/// `is_connect()` is retried — the connection was never established, the request
+/// never reached the server, and such failures are usually transient, so retrying is
+/// idempotent-safe and worthwhile. Timeouts (the server may already be processing)
+/// and other `is_request()` errors (mostly deterministic, e.g. a misconfigured
+/// endpoint) are not retried. Any HTTP response (including 4xx/5xx) is returned
+/// as-is; the caller judges the status code.
 pub async fn send_with_retry<F>(make: F) -> reqwest::Result<reqwest::Response>
 where
     F: Fn() -> reqwest::RequestBuilder,
@@ -205,7 +224,7 @@ where
                 if !retryable || attempt >= MAX_ATTEMPTS {
                     return Err(err);
                 }
-                // 150 / 300 / 600 / 900 / 900 … ms 退避。
+                // Backoff: 150 / 300 / 600 / 900 / 900 … ms.
                 let backoff = (150u64 * 2u64.pow((attempt - 1).min(3))).min(900);
                 let failure = request_error_kind(&err);
                 log::warn!(
@@ -227,7 +246,7 @@ mod tests {
     #[test]
     fn proxy_bypass_decision_is_pure() {
         use super::should_bypass_proxy;
-        // 回环地址无论系统代理开关如何都绕过。
+        // Loopback addresses bypass regardless of the system-proxy toggle.
         for url in [
             "http://localhost:9000/v1",
             "http://127.0.0.1:8080",
@@ -242,10 +261,11 @@ mod tests {
                 "{url} should bypass when system proxy is off"
             );
         }
-        // 公开 host：开启系统代理时跟随代理，关闭时直连。
+        // Public hosts: follow the proxy when the system proxy is on, direct when off.
         assert!(!should_bypass_proxy("https://api.example.com/v1", true));
         assert!(should_bypass_proxy("https://api.example.com/v1", false));
-        // 非法 URL 判为不可解析：开关开时不绕过，全局关闭时一律绕过。
+        // Unparseable URLs: no bypass when the toggle is on, always bypass when the
+        // global toggle is off.
         assert!(!should_bypass_proxy("not a url", true));
         assert!(should_bypass_proxy("not a url", false));
     }
@@ -260,7 +280,8 @@ mod tests {
         assert!(!CACHE.lock().is_empty());
         set_use_system_proxy(false);
         assert!(!use_system_proxy());
-        // 下一次 http() 按「直连」决策重建（key 的 bool 位 = no_proxy）。
+        // The next http() rebuilds under the "direct" decision (the key's bool is
+        // no_proxy).
         let _ = http();
         let _ = model_http();
         assert!(CACHE.lock().contains_key(&(0, true)));

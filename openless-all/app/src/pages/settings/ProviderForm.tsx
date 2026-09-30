@@ -13,7 +13,8 @@ export const ProviderLeaveContext = createContext<
   ((id: string, flush: () => Promise<boolean>) => () => void) | null
 >(null);
 
-/** 同一表单的写入在关闭/切换前收敛；版本只含计数，不携带凭据内容。 */
+/** Writes for the same form are flushed before close/switch; the version is a counter only and
+ *  never carries credential content. */
 export function useProviderForm() {
   const parent = useContext(ProviderLeaveContext);
   const id = useId();

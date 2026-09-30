@@ -1,7 +1,8 @@
-//! 跨平台模型清单、下载和缓存状态。
+//! Cross-platform model manifest, downloads, and cache state.
 //!
-//! 该模块拥有文件系统、Range/校验和进度状态；仅网络请求通过窄 Transport
-//! 注入，因此 Tauri/Linux 不需要再维护第二套模型存储实现。
+//! This module owns the filesystem, Range/checksum, and progress state; only network
+//! requests are injected through the narrow Transport, so Tauri/Linux need no second
+//! model-storage implementation.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Read, Seek, Write};

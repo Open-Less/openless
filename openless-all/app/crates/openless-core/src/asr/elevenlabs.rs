@@ -89,7 +89,7 @@ impl ElevenLabsBatchASR {
             .mime_str("audio/wav")
             .context("set MIME type")?;
         // `tag_audio_events=false`: by default Scribe emits bracketed non-speech
-        // events like "(laughter)" / "(高音)" into `text`; for dictation those
+        // events like "(laughter)" / "(high pitch)" into `text`; for dictation those
         // pollute the inserted text, so disable them.
         let form = reqwest::multipart::Form::new()
             .part("file", wav_part)

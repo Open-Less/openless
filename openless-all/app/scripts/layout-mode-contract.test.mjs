@@ -26,8 +26,8 @@ assert.match(css, /\.ol-conservative-stack/);
 
 assert.match(stackedLayout, /stackedRowLayout\?: boolean/);
 assert.doesNotMatch(stackedLayout, /mobile\s*\|\|/);
-// Toggle 尺寸契约：宽 36 由 width/minWidth/maxWidth 锁定，flex 只声明不伸缩。
-// flex-basis 必须为 auto，避免在列方向容器中把开关高度扩成 36px。
+// Toggle size contract: width 36 is locked by width/minWidth/maxWidth; flex only declares no grow/shrink.
+// flex-basis must be auto to avoid stretching the toggle's height to 36px in a column-direction container.
 assert.match(shared, /flex:\s*['"]0 0 auto['"]/);
 assert.match(shared, /width:\s*36/);
 assert.match(shared, /minWidth:\s*36/);

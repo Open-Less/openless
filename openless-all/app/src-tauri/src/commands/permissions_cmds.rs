@@ -141,7 +141,7 @@ fn map_core_permission(state: openless_core::PermissionState) -> PermissionStatu
     }
 }
 
-/// 跳到 macOS 系统设置的指定隐私面板。pane: "accessibility" | "microphone".
+/// Jumps to the given privacy pane in macOS System Settings. pane: "accessibility" | "microphone".
 #[tauri::command]
 pub fn open_system_settings(pane: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
@@ -204,9 +204,9 @@ pub fn open_system_settings(pane: String) -> Result<(), String> {
     }
 }
 
-/// 触发 macOS 系统弹"是否允许 OpenLess 访问麦克风"对话框。
-/// 与 Swift `MicrophonePermission.request()` 同语义：只信系统权限回调，
-/// 不用 cpal stream 成功与否伪造授权状态。
+/// Triggers macOS's "allow OpenLess to access the microphone" system dialog.
+/// Same semantics as Swift `MicrophonePermission.request()`: trust only the system
+/// permission callback, never fake the grant state from cpal stream success.
 #[tauri::command]
 pub async fn trigger_microphone_prompt(core: CoreState<'_>) -> Result<(), String> {
     let status = request_microphone_permission(core).await?;

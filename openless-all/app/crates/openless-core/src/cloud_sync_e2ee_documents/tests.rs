@@ -122,7 +122,7 @@ fn all_current_preference_fields_have_an_explicit_registration() {
 fn controlled_export_keeps_real_service_keys_but_excludes_local_secrets_and_grants() {
     let mut data = channel_snapshot();
     data.preferences = SecretJson::new(
-        json!({"themeMode":"dark","remoteInputPin":"fixture-pin-never-export","codingAgentEnabled":true,"cursorContextEnabled":true,"marketplaceDevLogin":"fixture-login","splashSeenVersion":"2","activeLlmProvider":"llm-one","codingAgentExe":"/fixture/never-run","futureAppearance":{"accent":"violet"}}),
+        json!({"themeMode":"dark","remoteInputPin":"fixture-pin-never-export","codingAgentEnabled":true,"cursorContextEnabled":true,"vocabularyLearningEnabled":true,"marketplaceDevLogin":"fixture-login","splashSeenVersion":"2","activeLlmProvider":"llm-one","codingAgentExe":"/fixture/never-run","futureAppearance":{"accent":"violet"}}),
     );
     let exported = export_snapshot(data).unwrap();
     let raw = serde_json::to_string(exported.documents.documents()).unwrap();
@@ -133,6 +133,7 @@ fn controlled_export_keeps_real_service_keys_but_excludes_local_secrets_and_gran
     assert!(!raw.contains("fixture-pin-never-export"));
     assert!(!raw.contains("codingAgentEnabled"));
     assert!(!raw.contains("cursorContextEnabled"));
+    assert!(!raw.contains("vocabularyLearningEnabled"));
     assert!(!raw.contains("fixture-login"));
     assert!(!raw.contains("activeLlmProvider"));
     assert!(raw.contains("futureAppearance"));

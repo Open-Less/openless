@@ -124,6 +124,8 @@ export let mockSettings: UserPreferences = {
   streamingInsertDefaultMigrated: true,
   streamingInsertSaveClipboard: true,
   cursorContextEnabled: false,
+  vocabularyLearningEnabled: false,
+  vocabularyLearningSettings: { observationSeconds: 60, suggestionSeconds: 10, maxPhraseChars: 12 },
   showOverviewActivityHeatmap: true,
   stackedRowLayout: false,
   conservativeLayout: false,
@@ -607,8 +609,9 @@ export const mockHistory: DictationSession[] = OL_DATA.history.map((h, i) => ({
   durationMs: 600,
   dictionaryEntryCount: 28,
   hasAudioRecording: null,
-  // 轮换三种画像，覆盖 UI 验收要看的形态：亚秒流式收尾（毫秒精度）、volc resource id、
-  // 超长 provider/model 文本换行；i%4==3 模拟 Raw 直通（无 LLM 行）与旧条目缺耗时。
+  // Rotate three profiles covering the shapes UI acceptance looks at: sub-second streaming
+  // finish (millisecond precision), volc resource id, very long provider/model text wrapping;
+  // i%4==3 simulates Raw passthrough (no LLM row) and older entries missing duration.
   asrProvider: ['bailian-qwen3-realtime', 'volcengine', 'openrouter', 'apple-speech'][i % 4],
   asrModel: [
     'qwen3-asr-flash-realtime',
@@ -813,9 +816,9 @@ export function mockImportStylePackFromZip(zipPath: string): StylePack {
   return cloneStylePack(pack);
 }
 
-// ── 活动热力图（浏览器 dev 演示数据）────────────────────────────────────
-// 过去一年稀疏分布的日计数，铺出有疏密对比的热力图。种子取日期序号的伪随机，
-// 刷新之间保持稳定。
+// ── Activity heatmap (browser dev demo data) ────────────────────────────
+// Sparse daily counts over the past year, laid out to give the heatmap visual contrast.
+// The seed is pseudo-random from the day index, staying stable across reloads.
 export const mockActivityDays: ActivityDay[] = (() => {
   const days: ActivityDay[] = [];
   const today = new Date();
@@ -826,9 +829,10 @@ export const mockActivityDays: ActivityDay[] = (() => {
     if (seed < 0.55) continue;
     const count = Math.max(1, Math.round(seed * 22) - 8);
     const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    // 字数 / 时长按每条 ~120 字、~9 秒的量级派生，让周期指标卡在浏览器 dev 下
-    // 也有可看的数据。最早的 30 天故意只给 count（不给 chars/durationMs），
-    // 模拟升级前写入的老数据，验证「老日期在字数/时长指标里显示 0」不会崩。
+    // Chars/duration derive at ~120 chars and ~9s per entry so the periodic metric cards have
+    // visible data under browser dev too. The oldest 30 days intentionally carry only count
+    // (no chars/durationMs), simulating pre-upgrade data and verifying that "old dates show 0
+    // in the chars/duration metrics" doesn't crash.
     const legacy = i > 334;
     days.push(
       legacy

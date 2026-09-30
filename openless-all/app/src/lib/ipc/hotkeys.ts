@@ -64,7 +64,7 @@ export function setDictationHotkey(binding: ShortcutBinding): Promise<void> {
   return invokeOrMock('set_dictation_hotkey', { binding }, () => undefined);
 }
 
-// binding = null 表示停用。Tauri 端持久化后，设置页会立即重新读取 prefs。
+// binding = null disables the hotkey. Once the Tauri side persists, the settings page re-reads prefs immediately.
 export function setSelectionPolishHotkey(binding: ShortcutBinding | null): Promise<void> {
   return invokeOrMock('set_selection_polish_hotkey', { binding }, () => {
     mockSetSettings({ ...mockSettings, selectionPolishHotkey: binding });
@@ -76,7 +76,7 @@ export function setTranslationHotkey(binding: ShortcutBinding): Promise<void> {
   return invokeOrMock('set_translation_hotkey', { binding }, () => undefined);
 }
 
-// binding = null 表示停用（清空全局键），与 set_qa_hotkey 一致（issue #576）。
+// binding = null disables (clears the global key), matching set_qa_hotkey (issue #576).
 export function setSwitchStyleHotkey(binding: ShortcutBinding | null): Promise<void> {
   return invokeOrMock('set_switch_style_hotkey', { binding }, () => undefined);
 }
@@ -92,7 +92,7 @@ export function setQuickNoteHotkey(binding: ShortcutBinding | null): Promise<voi
   });
 }
 
-// 风格包直达快捷键：整表替换（前端任何增删改都发全量列表，issue #759）。
+// Style pack direct hotkeys: whole-table replacement (any frontend add/remove/change sends the full list, issue #759).
 export function setStylePackHotkeys(hotkeys: StylePackHotkey[]): Promise<void> {
   return invokeOrMock('set_style_pack_hotkeys', { hotkeys }, () => {
     mockSetSettings({ ...mockSettings, stylePackHotkeys: hotkeys });

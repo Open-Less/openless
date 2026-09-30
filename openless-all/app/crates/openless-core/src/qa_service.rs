@@ -24,7 +24,10 @@ struct QaState {
 
 enum QaSubmission {
     Text(String),
-    ScopedText { text: String, expected_session: Option<SessionId> },
+    ScopedText {
+        text: String,
+        expected_session: Option<SessionId>,
+    },
     Captured(QaInput),
     SelectionEdit {
         selection_voice_session_id: SessionId,
@@ -283,7 +286,9 @@ impl QaService {
     async fn submit_inner(&self, submission: QaSubmission) -> Result<(), BackendError> {
         let _runtime = self.begin_runtime_work()?;
         let expected_session = match &submission {
-            QaSubmission::ScopedText { expected_session, .. } => Some(*expected_session),
+            QaSubmission::ScopedText {
+                expected_session, ..
+            } => Some(*expected_session),
             _ => None,
         };
         let text = match &submission {
@@ -307,7 +312,10 @@ impl QaService {
                 let mut state = self.state.lock().expect("QA state lock poisoned");
                 ensure_qa_idle(&state.snapshot)?;
                 if expected_session.is_some_and(|expected| expected != state.snapshot.session_id) {
-                    return Err(BackendError::new(BackendErrorCode::InvalidState, "qa_context_changed"));
+                    return Err(BackendError::new(
+                        BackendErrorCode::InvalidState,
+                        "qa_context_changed",
+                    ));
                 }
                 let previous = state.snapshot.clone();
                 let conversation_id = state.snapshot.conversation_id.unwrap_or(session_id);
@@ -334,7 +342,9 @@ impl QaService {
         }
 
         let prepared = match submission {
-            QaSubmission::Text(_) | QaSubmission::ScopedText { .. } => self.runtime.prepare_text(session_id, text).await,
+            QaSubmission::Text(_) | QaSubmission::ScopedText { .. } => {
+                self.runtime.prepare_text(session_id, text).await
+            }
             QaSubmission::Captured(mut input) => {
                 input.text = text;
                 self.runtime.prepare_captured_text(session_id, input).await
@@ -809,9 +819,20 @@ impl QaApi for QaService {
         Box::pin(async move { service.submit_text_inner(text).await })
     }
 
-    fn submit_text_in_context(&self, text: String, expected_session: Option<SessionId>) -> BoxFuture<'static, Result<(), BackendError>> {
+    fn submit_text_in_context(
+        &self,
+        text: String,
+        expected_session: Option<SessionId>,
+    ) -> BoxFuture<'static, Result<(), BackendError>> {
         let service = self.clone();
-        Box::pin(async move { service.submit_inner(QaSubmission::ScopedText { text, expected_session }).await })
+        Box::pin(async move {
+            service
+                .submit_inner(QaSubmission::ScopedText {
+                    text,
+                    expected_session,
+                })
+                .await
+        })
     }
 
     fn submit_captured_text(&self, input: QaInput) -> BoxFuture<'static, Result<(), BackendError>> {

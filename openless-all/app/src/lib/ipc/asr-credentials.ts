@@ -76,7 +76,8 @@ export function readCredential(account: string, provider?: string): Promise<stri
   );
 }
 
-/** `channelId` 省略时测当前生效的渠道；卡片上的「测试连通」会带上那张卡片的 id。 */
+/** When `channelId` is omitted, tests the currently active channel; the card's "test
+    connection" button passes that card's id. */
 export function validateProviderCredentials(
   kind: 'llm' | 'asr' | 'omni',
   channelId?: string,

@@ -1,7 +1,7 @@
-// GitHub 登录弹窗 —— 风格市场与扩展市场共用同一套登录界面。
-// GitHub OAuth Device Flow：打开即 start → 展示 user code 等浏览器授权 →
-// 轮询直到 authorized。各阶段内容套同一 minHeight 容器，窗口尺寸恒定，
-// 不再出现「先弹小窗、过会儿变大窗」的跳动。
+// GitHub login modal — the style marketplace and extension marketplace share one
+// login UI. GitHub OAuth Device Flow: start on open → show the user code and wait
+// for browser authorization → poll until authorized. All phases share one minHeight
+// container so the window size stays constant — no more small-then-larger jump.
 
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -33,9 +33,9 @@ type Phase =
 
 interface GithubLoginModalProps {
   onClose: () => void;
-  /** 授权成功回调（拿到 GitHub login）。 */
+  /** Called on successful authorization (receives the GitHub login). */
   onSuccess: (login: string) => void;
-  /** 由调用方的 useExitMount 驱动退场动画。 */
+  /** Exit animation driven by the caller's useExitMount. */
   closing?: boolean;
   overlayClassName?: string;
 }
@@ -53,7 +53,8 @@ export function GithubLoginModal({
   const cancelledRef = useRef(false);
   const beginGenerationRef = useRef(0);
   const activeFlowIdRef = useRef<string | undefined>(undefined);
-  // 用 ref 持有回调，poll 副作用只依赖 phase，不因父组件重渲染而重启。
+  // Hold callbacks in refs so the poll effect depends only on phase and doesn't
+  // restart on parent re-renders.
   const onSuccessRef = useRef(onSuccess);
   const onCloseRef = useRef(onClose);
   useEffect(() => {
@@ -92,7 +93,7 @@ export function GithubLoginModal({
         intervalMs: githubPollIntervalMs(start.interval),
         expiresAt: githubFlowExpiresAt(Date.now(), start.expiresIn),
       });
-      // 自动拉起浏览器；失败不致命，用户可手动复制。
+      // Open the browser automatically; failure is non-fatal, the user can copy manually.
       try {
         await openExternal(start.verificationUri);
       } catch {
@@ -104,7 +105,7 @@ export function GithubLoginModal({
     }
   }, [cancelActiveFlow]);
 
-  // 打开即发起登录。
+  // Start the login immediately on open.
   useEffect(() => {
     void begin();
     return () => {
@@ -114,7 +115,7 @@ export function GithubLoginModal({
     };
   }, [begin, cancelActiveFlow]);
 
-  // pending 阶段轮询 backend。
+  // Poll the backend during the pending phase.
   useEffect(() => {
     if (phase.kind !== 'pending') return;
     let cancelled = false;
@@ -226,7 +227,7 @@ export function GithubLoginModal({
         </button>
       </div>
 
-      {/* 固定最小高度 —— 各阶段共用，窗口尺寸恒定。 */}
+      {/* Fixed min height — shared by all phases, keeping the window size constant. */}
       <div style={{ minHeight: 220, display: 'flex', flexDirection: 'column' }}>
         {phase.kind === 'starting' && (
           <div

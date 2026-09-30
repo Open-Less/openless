@@ -1,6 +1,6 @@
 import type { zhCN } from './zh-CN';
 
-// 繁體中文資源，與其餘七種語言共用同一組文案 key。
+// Traditional Chinese resources, sharing the same copy keys as the other seven locales.
 export const zhTW: typeof zhCN = {
   cloudSyncE2ee: {
     protocolTitle: '雲端同步協議與隱私提醒',
@@ -269,6 +269,7 @@ export const zhTW: typeof zhCN = {
     errorPrefix: '未能繼續：',
     question: '提問',
     edit: '編輯選區',
+    compose: '幫我寫',
     cancel: '取消',
   },
   qa: {
@@ -794,6 +795,13 @@ export const zhTW: typeof zhCN = {
       clear: '清除結果',
     },
   },
+  vocabLearning: {
+    open: '記住詞彙',
+    label: '輸入要記住的正確詞彙',
+    confirm: '確認加入詞典',
+    saved: '已記住，可在詞典中管理',
+    failed: '儲存失敗：{{error}}',
+  },
   vocabCard: {
     title: '要記住這個詞嗎？',
     accept: '記住',
@@ -831,7 +839,7 @@ export const zhTW: typeof zhCN = {
     editEmpty: '詞條不能為空。',
     filter: {
       all: '所有',
-      auto: '自動新增',
+      auto: '確認收集',
       manual: '手動新增',
     },
     searchPlaceholder: '搜尋',
@@ -843,7 +851,7 @@ export const zhTW: typeof zhCN = {
     newWordTemplates: '預設範本',
     newWordTemplateCount: '{{count}} 詞',
     newWordAddSelected: '新增所選',
-    learnedSection: '自動收集（{{count}}）',
+    learnedSection: '確認收集（{{count}}）',
     removeAllLearned: '全部刪除',
     corrections: {
       title: '糾正規則',
@@ -1190,12 +1198,30 @@ export const zhTW: typeof zhCN = {
       useSystemProxyDesc:
         '開啟時請求跟隨系統代理；關閉後所有網路請求直連（國內服務延遲通常更低），GitHub 登入、更新等境外服務可能連不上。即時語音串流與 Less Computer 不受此開關影響。',
     },
+    vocabularyLearning: {
+      title: '手改學詞',
+      enabled: '啟用手改學詞',
+      observationSeconds: '觀察時長',
+      observationSecondsHint: '聽寫輸入後觀察目前輸入框的最長時間，10–60 秒。',
+      suggestionSeconds: '建議保留時長',
+      suggestionSecondsHint: '未確認的建議會在 5–60 秒後消失，不加入詞典。',
+      maxPhraseChars: '最大詞長',
+      maxPhraseCharsHint: '自動建議中原詞和替換詞的長度上限，2–32 個字元；不影響手動加詞。',
+      seconds: '{{count}} 秒',
+      characters: '{{count}} 個字元',
+      changeHint:
+        '變更參數會結束目前觀察並清除待確認建議，下次聽寫生效。恢復參數不會改變啟用開關。',
+      reset: '恢復預設參數',
+      saveError: '儲存失敗，請重試。',
+      description:
+        '插入後在本機觀察目前輸入框內的修改，最長 60 秒，確認後才加入詞典。觀察文字不會傳給模型；排除密碼欄位和已知敏感應用程式。Windows、Android 支援取決於編輯器；Android 需開啟無障礙服務。關閉後停止觀察。',
+    },
     dataStorage: {
       title: '資料儲存',
       desc: '本機保留的歷史會話與對話上下文。',
       cursorContextLabel: '遊標上下文（實驗）',
       cursorContextDesc:
-        '潤稿時讀取你正在寫的那篇檔案中游標附近的原文，幫模型判斷同音詞、專有名詞與代詞該怎麼寫。開啟後這段文字會隨請求送給你設定的 LLM 服務商；關閉時一個字都不讀。密碼輸入框、Secure Input、密碼管理器與終端機始終不讀。僅 macOS。',
+        '潤色時將游標附近文字傳給模型（僅 macOS）。此開關與本機手改學詞獨立；排除密碼欄位和已知敏感應用程式。',
     },
     codingConsole: {
       title: 'Claude 主控臺',
@@ -1458,6 +1484,8 @@ export const zhTW: typeof zhCN = {
       validationTitle: '連線驗證',
       validationHint:
         '手動發出一次實際請求，檢查目前設定；可能消耗服務額度。儲存設定不會自動驗證。',
+      validationHintOmni:
+        '手動發出一次文字連通性請求（不含錄音）。通過不代表音訊聽寫可用，請再做一次短錄音確認。可能消耗服務額度。',
       autoSaveHint: '修改欄位後會自動儲存；完成設定後，可手動驗證連線。',
       nameHint: '名稱僅用於區分同一供應商的多個渠道，不影響模型或連線。',
       errModel: '模型',
@@ -1525,6 +1553,7 @@ export const zhTW: typeof zhCN = {
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter（免費模型）',
         requesty: 'Requesty',
+        apiRoute: 'API Route',
         orcarouter: 'OrcaRouter',
         alibabaCoding: '阿里雲 Coding Plan',
         codingPlanX: 'CodingPlanX',
@@ -1693,6 +1722,7 @@ export const zhTW: typeof zhCN = {
       selectModel: '選擇一個模型寫入上方欄位',
       modelSaved: '已儲存模型 {{model}}。',
       validateSuccess: '連線檢查透過。',
+      validateSuccessOmni: '文字連通性通過。這不代表音訊聽寫可用，請再做一次短錄音確認。',
       validateFailed: '連線檢查未透過。',
       providerHttpStatus: '供應商介面返回 {{status}}，請檢查 API Key 權限或 Endpoint。',
       endpointMustUseHttps:
@@ -1932,6 +1962,11 @@ export const zhTW: typeof zhCN = {
         notWindows: '僅 Windows 可用。',
       },
     },
+    inputMethod: {
+      guidanceTitle: 'OpenLess 輸入法',
+      enableSystemIme: '請在系統設定 → 鍵盤 / 輸入法中啟用 OpenLess Voice，需要時切換到它。',
+      longPressLogo: '在 OpenLess 輸入法鍵盤中長按左上角的 logo，可開啟原生鍵盤設定。',
+    },
     advanced: {
       multimodalPipelineTitle: '多模態辨識管線',
       multimodalPipelineTitleHint:
@@ -2127,6 +2162,8 @@ export const zhTW: typeof zhCN = {
       omni: '多模態模型',
       models: '本機模型',
       connections: '連線與擴充',
+      inactive: '目前模式未使用',
+      inactiveDetail: '此頁設定已保留，但目前的辨識管線不會使用。',
       statusConfigured: '綠點：已有啟用的渠道。請求使用列表中第一個啟用的渠道。',
       statusMissing: '紅點：還沒有啟用的渠道。',
     },
@@ -2139,6 +2176,7 @@ export const zhTW: typeof zhCN = {
     autoSaveHint: '修改後自動儲存',
     backToAdvanced: '返回實驗與擴充',
     advancedPages: {
+      vocabularyLearning: '從聽寫後的手動改詞中學習，設定觀察時長、確認時間和詞長。',
       lessComputer: '選擇 Agent，設定模型、權限與工作目錄。',
       claudeConsole: '偵測 Claude Code，並查看測試工作的執行輸出。',
       multimodal: '管理多模態辨識的實驗性開關。',
@@ -2146,26 +2184,29 @@ export const zhTW: typeof zhCN = {
     },
     descriptions: {
       general: '選擇麥克風、設定錄音方式與文字輸入，也可連接手機輸入。',
+      inputMethod: '設定 Android 懸浮窗與輸入法，快速開始手機端輸入。',
       shortcuts: '設定各功能的觸發方式，以及選取文字後的操作。',
       services: '選擇語音辨識與文字處理服務，管理管道、本機模型和網路連線。',
       appearance: '調整主題、頁面排版和介面語言，讓閱讀更舒服。',
       privacy: '檢查系統權限與連線狀態，管理歷史、錄音和本機資料。',
-      advanced: '按需設定 Less Computer、多模態與除錯功能。',
+      advanced: '按需設定 Less Computer 與除錯功能。',
       about: '查看目前版本、更新管道與自動更新設定。',
     },
     searchKeywords: {
       general: '麥克風 錄音 輸入 手機 遠端 區域網路 PIN 膠囊 靜音 開機',
+      inputMethod: '輸入法 IME 鍵盤 懸浮窗 Android 安卓',
       shortcuts: '快捷鍵 熱鍵 組合鍵 選取 潤飾 語音編輯',
-      services: 'ASR LLM API 管道 模型 雲端 本機 網路 代理 市場',
+      services: 'ASR LLM API 管道 模型 雲端 本機 網路 代理 市場 多模態 辨識管線 Omni',
       appearance: '主題 深色 淺色 暗色 語言 字體 排版 版面 熱圖',
       privacy: '權限 麥克風 輔助功能 歷史 錄音 儲存 隱私 匯出',
-      advanced: 'Less Computer Claude Agent 多模態 Omni 除錯 日誌 實驗',
+      advanced: 'Less Computer Claude Agent 除錯 日誌 實驗 手改學詞 vocabulary learning',
       about: '版本 Beta 穩定 更新 升級',
     },
     sections: {
       appearance: '外觀與語言',
       shortcuts: '快捷鍵與選取文字',
       general: '通用',
+      inputMethod: '輸入方式',
       services: '服務',
       privacy: '隱私',
       advanced: '高階',

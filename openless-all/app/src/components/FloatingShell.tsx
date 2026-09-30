@@ -1,5 +1,5 @@
-// 主窗口外壳：组织侧栏导航、页面切换、移动端面板和设置弹窗。
-// 各页面共享偏好状态；业务读写通过 typed IPC 交给 Core。
+// Main window shell: sidebar navigation, page switching, mobile panels, and the
+// settings modal. Pages share preference state; business reads/writes go to Core via typed IPC.
 
 import { useEffect, useRef, useState, type ComponentType, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -26,6 +26,7 @@ import {
 } from '../lib/hotkeyMigration';
 import { applyFontScale, readFontScale } from '../lib/fontScale';
 import { useExitMount } from '../lib/useExitMount';
+import { useOverlayMotion, usePageTransition } from '../lib/motion';
 import { getCredentials } from '../lib/ipc';
 import {
   PROVIDER_SETUP_PROMPT_DEFERRED_KEY,
@@ -48,7 +49,7 @@ const STYLE_TAB_IDS: AppTab[] = ['style', 'marketplace'];
 const MAC_TRAFFIC_LIGHT_CLEARANCE = 44;
 const SIDEBAR_WIDTH = 226;
 
-/** tab → 页面组件映射（渲染主内容用；与侧栏树解耦，含未直接列在树上的页）。 */
+/** tab → page component map (renders main content; decoupled from the sidebar tree, includes pages not listed there directly). */
 const PAGE_CMP: Record<Exclude<AppTab, 'localAsr'>, ComponentType> = {
   overview: Overview,
   history: History,
@@ -61,7 +62,7 @@ const PAGE_CMP: Record<Exclude<AppTab, 'localAsr'>, ComponentType> = {
   corrections: Corrections,
 };
 
-/** 主导航分为直接入口与可展开分组；页面组件由 PAGE_CMP 统一解析。 */
+/** Main nav: direct entries and expandable groups; page components resolve through PAGE_CMP. */
 type NavNode =
   | { kind: 'item'; id: AppTab; icon: string }
   | { kind: 'group'; key: string; icon: string; children: Array<{ id: AppTab }> };
@@ -130,8 +131,7 @@ function FloatingShellBody({
   >();
   const [providerPromptOpen, setProviderPromptOpen] = useState(false);
   const [hotkeyModePromptOpen, setHotkeyModePromptOpen] = useState(false);
-  // 退出动画门：关闭时先反向播放入场动画再卸载。
-  const settingsMount = useExitMount(settingsOpen, 220);
+  const settingsMount = useExitMount(settingsOpen);
   const providerPromptMount = useExitMount(providerPromptOpen);
   const hotkeyPromptMount = useExitMount(hotkeyModePromptOpen);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -140,24 +140,14 @@ function FloatingShellBody({
 
   // The dialog records and moves focus before its background becomes inert.
   useEffect(() => {
-    if (shellRef.current) shellRef.current.inert = settingsOpen;
-  }, [settingsOpen]);
+    if (shellRef.current) shellRef.current.inert = settingsMount.mounted;
+  }, [settingsMount.mounted]);
 
-  // tab 切换的 cross-fade：旧页 blur+fade out（180ms），结束后挂载新页（走 ol-page-slide enter）。
-  // displayTab 是实际渲染的 tab，currentTab 是用户点中的目标 tab。
-  const [displayTab, setDisplayTab] = useState<AppTab>(initialTab);
-  const [tabPhase, setTabPhase] = useState<'idle' | 'exiting'>('idle');
-  useEffect(() => {
-    if (currentTab === displayTab) return;
-    setTabPhase('exiting');
-    const id = window.setTimeout(() => {
-      setDisplayTab(currentTab);
-      setTabPhase('idle');
-    }, 180);
-    return () => window.clearTimeout(id);
-  }, [currentTab, displayTab]);
+  const pageRef = useRef<HTMLDivElement>(null);
+  const displayTab = usePageTransition(currentTab, pageRef, mobile);
 
-  // 字体档位 — 启动时按 localStorage 应用一次；之后改动来自 Settings 的"个性化"section。
+  // Font scale — applied once from localStorage at startup; later changes come from
+  // the Settings "personalization" section.
   useEffect(() => {
     applyFontScale(readFontScale());
   }, []);
@@ -169,7 +159,8 @@ function FloatingShellBody({
 
   const Page = PAGE_CMP[displayTab as Exclude<AppTab, 'localAsr'>] ?? Overview;
 
-  // 分组展开态：默认展开「当前所在页所属的分组」。用户点分组标题手动切换。
+  // Group expansion: default-expand the group containing the current page; the user
+  // toggles via group titles.
   const groupOfTab = (tab: AppTab): string | null => {
     for (const node of NAV_TREE) {
       if (node.kind === 'group' && node.children.some((c) => c.id === tab)) return node.key;
@@ -180,7 +171,8 @@ function FloatingShellBody({
     const active = groupOfTab(currentTab);
     return active ? { [active]: true } : {};
   });
-  // 切到某分组内的页时自动展开该组（例如从胶囊直接跳到 marketplace）。
+  // Auto-expand the group when landing on one of its pages (e.g. jumping straight to
+  // marketplace from the capsule).
   useEffect(() => {
     const active = groupOfTab(currentTab);
     if (active) setOpenGroups((prev) => (prev[active] ? prev : { ...prev, [active]: true }));
@@ -216,9 +208,9 @@ function FloatingShellBody({
     }
   }, []);
 
-  // 之前监听的 NAVIGATE_LOCAL_ASR_EVENT 已无意义——「模型设置」独立 tab 已下线，
-  // 模型管理 UI 现在通过 Settings → Services 的 <LocalAsr embedded /> 渲染，
-  // 用户在 Settings 内即可一站式管理，无需跨页跳转。
+  // The old NAVIGATE_LOCAL_ASR_EVENT listener is obsolete: the standalone "model
+  // settings" tab is gone — model management now renders via <LocalAsr embedded /> in
+  // Settings → Services, all in one place.
 
   const rememberProviderPrompt = () => {
     window.sessionStorage.setItem(PROVIDER_SETUP_PROMPT_DEFERRED_KEY, '1');
@@ -237,7 +229,7 @@ function FloatingShellBody({
     setStyleOpen(false);
   };
 
-  // 跟随平台的设置快捷键。
+  // Platform-appropriate settings shortcut.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((os === 'mac' ? e.metaKey : e.ctrlKey) && e.key === ',') {
@@ -265,7 +257,8 @@ function FloatingShellBody({
   const styleTabActive = STYLE_TAB_IDS.includes(currentTab);
 
   return (
-    // 窗口内容从顶端铺开；macOS 仅在侧栏内部预留红绿灯区域。
+    // Window content flush to the top; macOS reserves the traffic-light strip inside
+    // the sidebar only.
     <div
       style={{
         flex: 1,
@@ -306,7 +299,7 @@ function FloatingShellBody({
           zIndex: 1,
         }}
       >
-        {/* Sidebar — desktop / wide only。 */}
+        {/* Sidebar — desktop / wide only. */}
         {!mobile && (
           <aside
             className="ol-sidebar-surface"
@@ -318,13 +311,13 @@ function FloatingShellBody({
               flexDirection: 'column',
               background: 'var(--ol-sidebar-bg)',
               borderRight: '0.5px solid var(--ol-line)',
-              // mac：顶部空出红绿灯高度，让 brand/nav 落在红绿灯下方。
+              // mac: clear the traffic-light height at the top so brand/nav sit below it.
               padding:
                 os === 'mac' ? `${MAC_TRAFFIC_LIGHT_CLEARANCE}px 10px 12px` : '10px 10px 12px',
             }}
           >
-            {/* 版本信息行：原「OpenLess」品牌位置直接改为显示版本信息，
-              填掉导航上方的空档；BETA 徽章与版本号同基线。 */}
+            {/* Version row: replaces the old "OpenLess" brand spot, filling the gap
+              above the nav; the BETA badge shares the version number's baseline. */}
             <div
               style={{
                 display: 'flex',
@@ -359,9 +352,10 @@ function FloatingShellBody({
               )}
             </div>
 
-            {/* nav — 扁平项 + 可展开分组（用户拍板结构）。扁平项：概览/历史/词汇。
-              分组：风格(润色模式+风格市场) / 工具(划词追问+翻译)。active 项由
-              .ol-nav-btn-active class 给 surface-2 静态圆角底；分组标题点击展开/收起。 */}
+            {/* nav — flat items + expandable groups. Flat: overview/history/vocab.
+              Groups: Style (polish modes + marketplace) / Tools (selection ask + translation).
+              Active items get a static surface-2 rounded bg via the .ol-nav-btn-active
+              class; group titles expand/collapse on click. */}
             <nav style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
               {NAV_TREE.map((node) => {
                 if (node.kind === 'item') {
@@ -387,7 +381,7 @@ function FloatingShellBody({
                 const groupActive = !settingsOpen && node.children.some((c) => c.id === currentTab);
                 return (
                   <div key={node.key}>
-                    {/* 分组标题：点击只展开/收起，不导航（用户：点风格弹出下拉选项）。 */}
+                    {/* Group title: click only expands/collapses, never navigates. */}
                     <button
                       onClick={() => toggleGroup(node.key)}
                       className={
@@ -409,7 +403,8 @@ function FloatingShellBody({
                         }}
                       />
                     </button>
-                    {/* 子项：grid-rows 0fr↔1fr 过渡实现无高度硬编码的展开动画。 */}
+                    {/* Children: the grid-rows 0fr↔1fr transition gives an expand
+                        animation without hardcoded heights. */}
                     <div
                       style={{
                         display: 'grid',
@@ -454,7 +449,7 @@ function FloatingShellBody({
 
             <div style={{ flex: 1 }} />
 
-            {/* 底部只剩设置按钮。 */}
+            {/* Footer holds only the settings button. */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 10 }}>
               <Tooltip content={t('shell.navHint.settings')} placement="right">
                 <button
@@ -483,9 +478,11 @@ function FloatingShellBody({
           </aside>
         )}
 
-        {/* Main content — 平铺实底块（用户反馈：右侧要一整块、不要圆角、别浮成卡）。
-            surface 实底，无外边距无圆角无阴影，直接顶到窗口边缘，与侧栏之间仅靠
-            侧栏的 border-right 分隔（即「侧栏那套逻辑」）。mac 圆角由原生窗口裁切。 */}
+        {/* Main content — one flat solid block (feedback: the right side is a single
+            slab, no rounding, not a floating card). Solid surface, no margin, no
+            rounding, no shadow, flush to the window edge, separated from the sidebar
+            only by the sidebar's border-right. mac rounding comes from the native
+            window clip. */}
         <div style={{ flex: 1, minWidth: 0, padding: 0, display: 'flex' }}>
           <main
             className="ol-console-main"
@@ -501,47 +498,42 @@ function FloatingShellBody({
               flexDirection: 'column',
             }}
           >
-            {/* key={displayTab} 让每次切换重挂这棵子树 → ol-page-slide keyframe 重新触发。
-                旧 tab 退出时不立刻 unmount，而是先播 ol-page-fadeout（blur+淡出），
-                180ms 后再切到新 tab 并播入场动画。详见 displayTab/tabPhase 的 effect。
-                padding + overflow:auto 直接挂在这棵 wrapper 上：
-                  - 自然高度的页（Overview / Vocab / Style）—— 整页内容超出时 wrapper 出现滚动条
-                  - 用 height:100% 撑满的页（History 左右双列）—— 100% 能解析到 wrapper 的固定高度，
-                    两列内部各自的 overflow:auto 才能独立滚动 */}
+            {/* Padding and overflow live on the transitioning page wrapper:
+                  - naturally-sized pages (Overview / Vocab / Style): the wrapper scrolls
+                    when the page content overflows
+                  - height:100% pages (History's two columns): 100% resolves against the
+                    wrapper's fixed height so each column's own overflow:auto can scroll */}
             <div
+              ref={pageRef}
               key={displayTab}
-              // issue #243：所有 tab 都允许 overflow:auto，让窗口被压缩 / 文案
-              //   变长时仍可触达底部内容（Codex P1：之前 overview 用 hidden
-              //   会让缩窗后 Recent 卡彻底不可见）。
-              //   - Overview 借 Overview.tsx 内部 flex 把底部行 grow 到撑满，
-              //     正常尺寸下内容刚好占满 → 浏览器自动不显示 scrollbar；
-              //     真挤不下了才 fallback 出细滚动条。
-              //   - 其他 tab 同样走细滚动条。
+              data-ol-page={displayTab}
+              // issue #243: all tabs allow overflow:auto so bottom content stays
+              //   reachable when the window shrinks or copy grows (Codex P1: overview
+              //   used hidden, leaving the Recent card fully invisible after shrinking).
+              //   - Overview uses its internal flex to grow the bottom row to fill;
+              //     at normal size the content fits exactly → no scrollbar; a thin
+              //     scrollbar appears only when it truly overflows.
+              //   - Other tabs use the thin scrollbar too.
               className="ol-thinscroll ol-scroll-fade"
-              // 概览单屏固定页（overflow hidden，永不出滚动条）不预留滚动条槽位。
+              // Overview is a fixed single-screen page (overflow hidden, never scrolls):
+              // no scrollbar gutter reserved.
               data-ol-page-fixed={displayTab === 'overview' && !mobile ? 'true' : undefined}
               style={{
                 flex: 1,
                 minHeight: 0,
-                // 概览页是单屏固定页：不滚动，所有仪表盘铺在一屏内，
-                // 由 Overview.tsx 内部 flex 自行分配高度；其余页保持细滚动条。
+                // Overview is a fixed single-screen page: no scrolling; all dashboards
+                // fit one screen with heights distributed by Overview.tsx's internal
+                // flex; other pages keep the thin scrollbar.
                 overflow: displayTab === 'overview' && !mobile ? 'hidden' : 'auto',
                 padding: mobile
                   ? '16px 16px calc(16px + env(safe-area-inset-bottom, 0px) + 56px)'
                   : displayTab === 'overview'
                     ? `${os === 'mac' ? 80 : 56}px 28px 24px`
                     : `${os === 'mac' ? 80 : 56}px 28px 32px`,
-                // position:relative 让页面里的"已保存"toast 用 absolute top:16 right:16
-                // 锚到这块控制台卡的右上角，而不是横在页头变成长横幅。
+                // position:relative lets the page's "saved" toast anchor at absolute
+                // top:16 right:16 to this console card's corner instead of stretching
+                // across the page header as a full-width banner.
                 position: 'relative',
-                animation: mobile
-                  ? tabPhase === 'exiting'
-                    ? 'ol-page-fadeout-mobile 0.18s var(--ol-motion-soft) forwards'
-                    : 'ol-page-fade-mobile 0.22s var(--ol-motion-soft) both'
-                  : tabPhase === 'exiting'
-                    ? 'ol-page-fadeout 0.18s var(--ol-motion-soft) forwards'
-                    : 'ol-page-slide 0.34s var(--ol-motion-spring) both',
-                willChange: mobile ? 'opacity' : 'opacity, transform',
                 display: 'flex',
                 flexDirection: 'column',
               }}
@@ -557,7 +549,8 @@ function FloatingShellBody({
                   style={{
                     display: 'flex',
                     flexDirection: 'column',
-                    // 保留使用指南的内容高度，让外层滚动区的底部导航留白生效。
+                    // Keep the usage-guide content height so the outer scroll area's
+                    // bottom-nav spacing applies.
                     flex: displayTab === 'selectionAsk' ? '1 0 auto' : 1,
                     minHeight: 0,
                   }}
@@ -618,7 +611,7 @@ function FloatingShellBody({
         </>
       )}
 
-      {/* Settings modal — rendered inside this window；settingsMount 门控退场动画 */}
+      {/* Settings modal — rendered inside this window; settingsMount gates the exit animation */}
       {settingsMount.mounted && (
         <SettingsModal
           key={settingsInitialSection ?? 'default'}
@@ -652,15 +645,15 @@ function FloatingShellBody({
       />
       <AudioCueListener />
 
-      {/* tab 切换 + provider prompt + footer popover 公用的入场关键帧 */}
+      {/* Enter keyframes shared by tab switching, the provider prompt, and the footer popover */}
       <style>{`
-        /* nav 三段视觉层次（扁平静态，无 pill 滑块）：
-             基础态  → ink-3（中灰文字 + 透明底）
-             hover  → ink（深色文字 + surface-2 浅灰底）  ← 让"翻译"等字词在悬停时高亮
-             选中  → ink（深色文字加粗 + surface-2 静态圆角底）
-           全走 class：sidebar 按钮不写 inline background，:hover / active 底色才能生效
-           （CSS 不能盖 inline style）；其他 .ol-nav-btn 使用方仍带 inline background，
-           这里的 active 底色对它们不生效，维持各自原样。 */
+        /* Nav three-tier visual hierarchy (flat, no pill slider):
+             base   → ink-3 (mid-gray text + transparent bg)
+             hover  → ink (dark text + surface-2 light bg)  ← highlights labels on hover
+             active → ink (bold dark text + static surface-2 rounded bg)
+           All via class: sidebar buttons carry no inline background so :hover / active
+           backgrounds can apply (CSS can't override inline style); other .ol-nav-btn
+           consumers keep their inline background, so the active bg doesn't affect them. */
         .ol-nav-btn {
           color: var(--ol-ink-3);
           font-weight: 500;
@@ -673,40 +666,6 @@ function FloatingShellBody({
         .ol-nav-btn:not(.ol-nav-btn-active):hover {
           background: var(--ol-surface-2);
           color: var(--ol-ink);
-        }
-        /* 只动 opacity/transform（合成器友好）：filter:blur 每帧全页重算，
-           是 tab 切换「卡」的元凶，已移除。 */
-        @keyframes ol-page-slide {
-          from { opacity: 0; transform: translate3d(10px, 0, 0) scale(.996); }
-          to   { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
-        }
-        @keyframes ol-page-fadeout {
-          from { opacity: 1; transform: translate3d(0, 0, 0); }
-          to   { opacity: 0; transform: translate3d(-6px, 0, 0); }
-        }
-        @keyframes ol-page-fade-mobile {
-          from { opacity: 0; }
-          to   { opacity: 1; }
-        }
-        @keyframes ol-page-fadeout-mobile {
-          from { opacity: 1; }
-          to   { opacity: 0; }
-        }
-        @keyframes ol-mobile-sheet-backdrop {
-          from { opacity: 0; }
-          to   { opacity: 1; }
-        }
-        @keyframes ol-mobile-sheet-up {
-          from { opacity: 0; transform: translate3d(0, 12px, 0); }
-          to   { opacity: 1; transform: translate3d(0, 0, 0); }
-        }
-        @keyframes ol-prompt-fade {
-          from { opacity: 0; backdrop-filter: blur(0); -webkit-backdrop-filter: blur(0); }
-          to   { opacity: 1; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
-        }
-        @keyframes ol-prompt-pop {
-          from { opacity: 0; transform: translateY(6px) scale(.97); filter: blur(6px); }
-          to   { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
         }
       `}</style>
     </div>
@@ -885,7 +844,7 @@ const mobileNavBtnStyle: CSSProperties = {
   cursor: 'default',
 };
 
-/** 侧栏导航按钮基础样式（扁平项 / 分组标题 / 子项共用；子项额外覆盖 paddingLeft）。 */
+/** Base style for sidebar nav buttons (shared by flat items / group titles / children; children override paddingLeft). */
 const navBtnStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -894,7 +853,7 @@ const navBtnStyle: CSSProperties = {
   padding: '8px 10px',
   borderRadius: 8,
   border: 0,
-  // （参考 Codex 侧栏）：导航文字 15px、图标 16px，观感更接近参考稿。
+  // (After the Codex sidebar): 15px nav text, 16px icons — closer to the reference design.
   fontFamily: 'inherit',
   fontSize: 15,
   cursor: 'default',
@@ -914,8 +873,13 @@ function ProviderSetupPrompt({
   onRestore: () => void;
 }) {
   const { t } = useTranslation();
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  useOverlayMotion(overlayRef, closing, 'backdrop');
+  useOverlayMotion(cardRef, closing);
   return (
     <div
+      ref={overlayRef}
       style={{
         position: 'absolute',
         inset: 0,
@@ -927,12 +891,11 @@ function ProviderSetupPrompt({
         background: 'var(--ol-dialog-backdrop)',
         backdropFilter: 'blur(6px) saturate(140%)',
         WebkitBackdropFilter: 'blur(6px) saturate(140%)',
-        animation: closing
-          ? 'ol-prompt-fade 0.18s var(--ol-motion-soft) reverse both'
-          : 'ol-prompt-fade 0.2s var(--ol-motion-soft)',
+        pointerEvents: closing ? 'none' : undefined,
       }}
     >
       <div
+        ref={cardRef}
         style={{
           width: 360,
           borderRadius: 'var(--ol-dialog-radius)',
@@ -940,9 +903,6 @@ function ProviderSetupPrompt({
           border: '1px solid var(--ol-dialog-border)',
           boxShadow: 'var(--ol-dialog-shadow)',
           padding: 20,
-          animation: closing
-            ? 'ol-prompt-pop 0.18s var(--ol-motion-soft) reverse both'
-            : 'ol-prompt-pop 0.26s var(--ol-motion-spring)',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
@@ -1031,8 +991,13 @@ function HotkeyModeMigrationPrompt({
   onOpenSettings: () => void;
 }) {
   const { t } = useTranslation();
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  useOverlayMotion(overlayRef, closing, 'backdrop');
+  useOverlayMotion(cardRef, closing);
   return (
     <div
+      ref={overlayRef}
       style={{
         position: 'absolute',
         inset: 0,
@@ -1044,12 +1009,11 @@ function HotkeyModeMigrationPrompt({
         background: 'var(--ol-dialog-backdrop)',
         backdropFilter: 'blur(6px) saturate(140%)',
         WebkitBackdropFilter: 'blur(6px) saturate(140%)',
-        animation: closing
-          ? 'ol-prompt-fade 0.18s var(--ol-motion-soft) reverse both'
-          : 'ol-prompt-fade 0.2s var(--ol-motion-soft)',
+        pointerEvents: closing ? 'none' : undefined,
       }}
     >
       <div
+        ref={cardRef}
         style={{
           width: 380,
           borderRadius: 'var(--ol-dialog-radius)',
@@ -1057,9 +1021,6 @@ function HotkeyModeMigrationPrompt({
           border: '1px solid var(--ol-dialog-border)',
           boxShadow: 'var(--ol-dialog-shadow)',
           padding: 20,
-          animation: closing
-            ? 'ol-prompt-pop 0.18s var(--ol-motion-soft) reverse both'
-            : 'ol-prompt-pop 0.26s var(--ol-motion-spring)',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>

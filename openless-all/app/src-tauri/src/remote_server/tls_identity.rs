@@ -261,8 +261,9 @@ fn load_at(directory: &Path, sans: &[String], now: OffsetDateTime) -> Result<Tls
     })
 }
 
-/// 对实际 DER 证书计算指纹，而非散列名称或描述文件元数据。
-/// 电脑通过本地 IPC 显示完整值，供用户从独立渠道核对。
+/// Fingerprint the actual DER certificate, not hashed names or profile metadata.
+/// The computer displays the full value via local IPC so the user can verify it through an
+/// independent channel.
 pub(super) fn fingerprint_sha256(cert: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     format!("{:x}", Sha256::digest(cert))
@@ -330,7 +331,7 @@ mod tests {
         let original = load_or_create(original_dir.path(), &names()).unwrap();
         let replacement = load_or_create(replacement_dir.path(), &names()).unwrap();
 
-        // 两张证书的名称完全相同，描述文件的名称和标识也可以照抄。
+        // The two certificates share identical names, so the profile's name and identifier can be copied verbatim.
         assert_eq!(
             parse_cert(&original.trust_cert).unwrap().distinguished_name,
             parse_cert(&replacement.trust_cert)
@@ -354,7 +355,8 @@ mod tests {
             .decode(certificate_data)
             .unwrap();
 
-        // 独立查看实际证书会发现指纹不同，且原 CA 的 TLS 验证拒绝替换证书。
+        // Inspecting the actual certificate independently reveals a different fingerprint, and the
+        // original CA's TLS verification rejects the substituted certificate.
         assert_ne!(
             fingerprint_sha256(&actual_certificate),
             original.ca_fingerprint_sha256

@@ -566,7 +566,8 @@ async fn websocket_session(mut socket: WebSocket, state: Arc<WebState>, peer: Ip
                         phase: openless_core::DictationPhase::Cancelled | openless_core::DictationPhase::Failed, ..
                     }));
                 for reply in remote_event(event.kind) {
-                    // 下行失败也保留已收到的录音，由外层继续完成识别和持久化。
+                    // Keep the recording already received even if a downstream send fails; the
+                    // outer loop continues transcription and persistence.
                     if socket.send(json_message(reply)).await.is_err() {
                         break 'connection;
                     }

@@ -1,26 +1,26 @@
-// Modal — 居中弹窗：backdrop + 卡片。风格市场详情 / 上传 / 我的发布 / GitHub 登录
-// 等共用同一套弹出逻辑，避免每处各写一个。
+// Modal — centered dialog: backdrop + card. Marketplace details / upload / my
+// listings / GitHub login all share this popup logic instead of each writing its own.
 //
-// 动画在 overlays.css 的 .ol-dialog-overlay / .ol-dialog-card 上（纯 opacity +
-// transform，不碰 blur）。退场使用独立的 *-out 关键帧：仅反转同名动画的方向不会
-// 重新播放，已结束的入场动画会直接跳到起始帧，表现为「啪」地消失。
+// Shared opacity/transform motion preserves the current pose when interrupted.
 
-import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useOverlayMotion } from '../../lib/motion';
+import { useExitMount } from '../../lib/useExitMount';
 
 interface ModalProps {
   children: ReactNode;
   onClose: () => void;
-  /** 默认 50；多层叠加时（如登录弹窗叠在「我的发布」之上）传更大的值。 */
+  /** Default 50; pass a larger value when stacking (e.g. login above "my listings"). */
   zIndex?: number;
-  /** 卡片宽度，默认 'min(560px, 100%)'。 */
+  /** Card width, default 'min(560px, 100%)'. */
   width?: string;
-  /** 需要固定标题和底栏的弹窗可由内部内容区负责滚动。 */
+  /** Dialogs with a fixed title/footer can let the inner content area scroll. */
   style?: CSSProperties;
-  /** true 时播放退场动画；调用方用
-   *  useExitMount 门控卸载时机，动画播完再 unmount。 */
+  /** true plays the exit animation; the caller gates unmount timing with
+   *  useExitMount, unmounting after the animation finishes. */
   closing?: boolean;
-  /** 宿主窗口定制遮罩与卡片外观（例如圆角浮窗需要圆角遮罩）。 */
+  /** Lets the host window customize overlay/card look (e.g. a rounded floating window needs a rounded overlay). */
   overlayClassName?: string;
   labelledBy?: string;
 }
@@ -48,6 +48,12 @@ export function Modal({
   labelledBy,
 }: ModalProps) {
   const cardRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  useOverlayMotion(overlayRef, closing, 'backdrop');
+  useOverlayMotion(cardRef, closing);
+  useLayoutEffect(() => {
+    if (cardRef.current) cardRef.current.inert = closing;
+  }, [closing]);
 
   useEffect(() => {
     const id = Symbol('modal');
@@ -57,6 +63,10 @@ export function Modal({
     if (card && !card.contains(document.activeElement)) card.focus({ preventScroll: true });
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Tab' || !card || openModals[openModals.length - 1] !== id) return;
+      if (card.inert) {
+        event.preventDefault();
+        return;
+      }
       const items = focusableWithin(card);
       const active = document.activeElement;
       if (items.length === 0) {
@@ -85,15 +95,18 @@ export function Modal({
     };
   }, []);
 
-  // Portal 到 document.body：弹窗常从设置 / 市场等面板内部触发，而窗口 chrome
-  // （WindowChrome）和页面容器带常驻 `will-change: transform`，会创建 containing
-  // block —— 直接渲染的话 backdrop 的 `position: fixed` 会相对那个祖先而非视口定位，
-  // 遮罩盖不住整窗（只压暗触发它的那块面板，比如 GitHub 登录浮在亮着的设置页上）。
-  // Portal 出去后 fixed 相对视口，遮罩铺满全局。与 Tooltip / SelectLite 同款做法。
+  // Portal to document.body: dialogs often trigger from inside panels (settings /
+  // marketplace), and the window chrome (WindowChrome) and page containers carry a
+  // temporary transforms while animating, creating a containing block — rendered in
+  // place, the backdrop's `position: fixed` would anchor to that ancestor instead of
+  // the viewport, covering only the triggering panel (e.g. GitHub login floating over
+  // a still-bright settings page). Portaled out, fixed anchors to the viewport and
+  // the overlay covers the whole window. Same approach as Tooltip / SelectLite.
   return createPortal(
     <div
+      ref={overlayRef}
       className={`ol-dialog-overlay${closing ? ' is-closing' : ''}${overlayClassName ? ` ${overlayClassName}` : ''}`}
-      onClick={onClose}
+      onClick={closing ? undefined : onClose}
       style={{
         position: 'fixed',
         inset: 0,
@@ -102,7 +115,6 @@ export function Modal({
         placeItems: 'center',
         zIndex,
         padding: 20,
-        pointerEvents: closing ? 'none' : undefined,
       }}
     >
       <div
@@ -130,5 +142,26 @@ export function Modal({
       </div>
     </div>,
     document.body,
+  );
+}
+
+/** Preserve the last visible content while its non-interactive exit finishes. */
+export function PresenceModal({
+  open,
+  render,
+  ...props
+}: Omit<ModalProps, 'children' | 'closing'> & { open: boolean; render: () => ReactNode }) {
+  const presence = useExitMount(open);
+  const previous = useRef<{ render: () => ReactNode; props: typeof props } | null>(null);
+  const content = open ? { render, props } : previous.current;
+  useLayoutEffect(() => {
+    if (open) previous.current = { render, props };
+    else if (!presence.mounted) previous.current = null;
+  });
+  if (!presence.mounted || !content) return null;
+  return (
+    <Modal {...content.props} closing={presence.closing}>
+      {content.render()}
+    </Modal>
   );
 }

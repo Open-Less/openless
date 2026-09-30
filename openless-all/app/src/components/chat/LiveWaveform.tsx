@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useReducedMotion } from '../../lib/motion';
 
 const BAR_WIDTH = 3;
 const BAR_GAP = 3;
@@ -24,6 +25,7 @@ export function LiveWaveform({
   label: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const reducedMotion = useReducedMotion();
   const levelRef = useRef(0);
   const processingRef = useRef(processing);
   levelRef.current = clampLevel(level);
@@ -33,9 +35,6 @@ export function LiveWaveform({
     const canvas = canvasRef.current;
     const context = canvas?.getContext('2d');
     if (!canvas || !context) return;
-    const reducedMotion =
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     let history: number[] = [];
     let smoothed = 0;
     let lastSample = performance.now();
@@ -110,7 +109,7 @@ export function LiveWaveform({
       window.cancelAnimationFrame(frame);
       observer?.disconnect();
     };
-  }, []);
+  }, [reducedMotion]);
 
   return (
     <div

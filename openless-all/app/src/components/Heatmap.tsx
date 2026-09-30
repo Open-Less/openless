@@ -1,9 +1,10 @@
-// Heatmap.tsx — 年度活动热力图（8starlabs Heatmap 规格的纯 React 版，用户拍板）。
+// Heatmap.tsx — yearly activity heatmap (pure React take on the 8starlabs Heatmap spec).
 //
-// GitHub 贡献图式布局：列 = 周（周日起），行 = 星期；顶部月份标签，左侧 Mon/Wed/Fri。
-// 颜色走 interpolate 模式（minColor→maxColor 按值插值，支持 linear/sqrt/log），
-// 零值格子用主题的 surface-2。提示走原生 title（date + value 的显示函数可定制）。
-// 取代 PR #716 的自绘实现：数据源与历史保留策略解耦（persistence/activity.rs）。
+// GitHub-contribution-graph layout: columns = weeks (starting Sunday), rows = weekdays;
+// month labels on top, Mon/Wed/Fri on the left. Colors interpolate minColor→maxColor
+// by value (linear/sqrt/log); zero cells use the theme's surface-2. Tooltips are native
+// title with customizable date/value display. Replaces the PR #716 hand-drawn version:
+// the data source is decoupled from history retention (persistence/activity.rs).
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 
@@ -19,15 +20,15 @@ interface HeatmapProps {
   endDate: Date;
   cellSize?: number;
   gap?: number;
-  /** 格子边长上限：概览单屏固定页需要控制热力图总高度，宽容器下不再无限放大。 */
+  /** Cell size cap: the overview fixed page must bound total heatmap height; no unlimited growth in wide containers. */
   maxCellSize?: number;
-  /** 值→颜色的插值曲线：log 适合量级差异大的数据。 */
+  /** Value→color interpolation curve: log suits data with large magnitude ranges. */
   interpolation?: 'linear' | 'sqrt' | 'log';
-  /** 最小非零值的颜色（hex）。 */
+  /** Color (hex) for the smallest non-zero value. */
   minColor?: string;
-  /** 最大值的颜色（hex）。 */
+  /** Color (hex) for the max value. */
   maxColor?: string;
-  /** 星期标签：MWF = 只标 Mon/Wed/Fri。 */
+  /** Weekday labels: MWF = only Mon/Wed/Fri. */
   daysOfTheWeek?: 'all' | 'MWF' | 'none';
   dateDisplay?: (date: Date) => string;
   valueDisplay?: (value: number) => string;
@@ -96,7 +97,7 @@ export function Heatmap({
 }: HeatmapProps) {
   const { weeks, max } = useMemo(() => {
     const counts = new Map(data.map((d) => [d.date, d.value]));
-    // 列从 startDate 所在周的周日开始，铺满到 endDate。
+    // Columns start on the Sunday of startDate's week and fill through endDate.
     const cursor = new Date(startDate);
     cursor.setDate(cursor.getDate() - cursor.getDay());
     const startIso = isoOf(startDate);
@@ -107,8 +108,8 @@ export function Heatmap({
     }[] = [];
     let maxValue = 0;
     let lastMonth = -1;
-    // 防御上限：正常 365 天调用约 53 列，远低于此值；超大跨度时钳到 ~5 年，
-    // 避免生成数千 DOM 列拖垮渲染。
+    // Defensive cap: a normal 365-day range is ~53 columns, well below this; clamp
+    // huge spans to ~5 years so thousands of DOM columns can't grind rendering down.
     const MAX_WEEKS = 260;
     while (cursor <= endDate) {
       if (columns.length >= MAX_WEEKS) break;
@@ -120,7 +121,7 @@ export function Heatmap({
         const inRange = iso >= startIso && iso <= endIso;
         const value = inRange ? (counts.get(iso) ?? 0) : null;
         if (value != null && value > maxValue) maxValue = value;
-        // 月份标签挂在「该月 1 日所在列」上。
+        // Month labels attach to the column containing the 1st of the month.
         if (inRange && date.getDate() === 1 && date.getMonth() !== lastMonth) {
           monthStart = date.getMonth();
           lastMonth = date.getMonth();
@@ -151,9 +152,11 @@ export function Heatmap({
     return index === 1 || index === 3 || index === 5; // Mon / Wed / Fri
   };
 
-  // 容器自适应（用户拍板「按比例自适应缩放」+「左右要贴边撑满」）：格子按容器宽度
-  // 均分周列，让 53 列正好铺满整块卡片、右缘不留空隙。cellSize 只当窄容器下的期望值，
-  // 不再作硬上限——上限会在宽容器上留出右侧空白（用户反馈的「左右没有贴边」）。
+  // Container-adaptive sizing (proportional scaling, must fill edge to edge): cells
+  // divide the container width evenly across week columns so 53 columns exactly fill
+  // the card with no gap at the right edge. cellSize is only the preferred size in
+  // narrow containers, no longer a hard cap — a cap leaves right-side blank space in
+  // wide containers (the "not filling edge to edge" feedback).
   const gridRef = useRef<HTMLDivElement>(null);
   const [fitCell, setFitCell] = useState<number | null>(null);
   const weekCount = weeks.length;
@@ -161,15 +164,17 @@ export function Heatmap({
     const el = gridRef.current;
     if (!el || weekCount === 0) return undefined;
     const measure = () => {
-      // 直接测格子区自身宽度（星期标签列在 flex 里各占各的，无需估算），
-      // cell 取精确小数 —— floor 会在 53 列上累积出几十像素的右侧空隙。
+      // Measure the grid area's own width (day-label columns are separate flex items,
+      // no estimation needed); keep cell as an exact fraction — floor accumulates tens
+      // of pixels of right-side gap across 53 columns.
       const usable = el.clientWidth;
       if (usable <= 0) return;
       const per = usable / weekCount;
       const g = per >= 13 ? 3 : 2;
-      // step = cell + gap = per ⇒ weekCount × step = usable，格子精确铺满右缘。
-      // 只留 5px 下限防窄容器过挤；maxCellSize 给概览单屏页封顶（不传则宽容器
-      // 时格子随之放大仍贴边）。
+      // step = cell + gap = per ⇒ weekCount × step = usable, so cells exactly fill to
+      // the right edge. 5px floor prevents crushing in narrow containers; maxCellSize
+      // caps the overview fixed page (unset: cells grow with wide containers and stay
+      // flush).
       const fitted = Math.max(5, per - g);
       setFitCell(maxCellSize != null ? Math.min(fitted, maxCellSize) : fitted);
     };
@@ -203,7 +208,7 @@ export function Heatmap({
         </div>
       )}
       <div ref={gridRef} style={{ overflow: 'hidden', flex: 1, minWidth: 0, paddingBottom: 2 }}>
-        {/* 月份标签行：绝对定位在每月起始列上方。 */}
+        {/* Month label row: absolutely positioned above each month's starting column. */}
         <div style={{ position: 'relative', height: 14, marginBottom: 2 }}>
           {weeks.map((week, i) =>
             week.monthStart != null ? (

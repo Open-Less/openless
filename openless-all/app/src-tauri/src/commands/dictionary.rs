@@ -1,6 +1,13 @@
 use super::*;
 
 #[tauri::command]
+pub fn add_learned_vocab(core: CoreState<'_>, phrase: String) -> Result<(), String> {
+    core.add_learned_vocabulary(phrase)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn list_vocab(core: CoreState<'_>) -> Result<Vec<DictionaryEntry>, String> {
     core.list_vocabulary().map_err(|e| e.to_string())
 }
@@ -46,24 +53,25 @@ pub fn add_correction_rule(
         .map_err(|e| e.to_string())
 }
 
-/// 卡片上点了勾：把这个词收进词汇表，打「自动收集」标记，随时能在词汇表页删掉。
+/// Checkmark clicked on the card: add the word to the vocabulary with the "auto-collected"
+/// marker; it can be deleted from the vocabulary page at any time.
 #[tauri::command]
-pub fn accept_pending_correction(core: CoreState<'_>, coord: CoordinatorState<'_>, id: String) {
+pub fn accept_pending_correction(
+    core: CoreState<'_>,
+    coord: CoordinatorState<'_>,
+    id: String,
+) -> Result<(), String> {
     match core.accept_pending_correction(&id) {
-        Ok(Some(suggestion)) => {
-            log::info!(
-                "[cursor-context] learned vocabulary entry: {:?} (was {:?})",
-                suggestion.replacement,
-                suggestion.pattern
-            );
+        Ok(Some(_)) => {
             coord.refresh_vocab_suggestion_presentation(!core.pending_corrections().is_empty());
         }
         Ok(None) => {}
-        Err(error) => log::warn!("[cursor-context] accept learned vocabulary failed: {error}"),
+        Err(error) => return Err(error.to_string()),
     }
+    Ok(())
 }
 
-/// 卡片上点了叉：丢掉这一条，什么都不记（没有拒绝名单）。
+/// X clicked on the card: drop this entry and record nothing (there is no reject list).
 #[tauri::command]
 pub fn reject_pending_correction(core: CoreState<'_>, coord: CoordinatorState<'_>, id: String) {
     if core.reject_pending_correction(&id) {
@@ -71,18 +79,20 @@ pub fn reject_pending_correction(core: CoreState<'_>, coord: CoordinatorState<'_
     }
 }
 
-/// 卡片 10 秒到期，或新一轮听写开始。
+/// The card expired after 10 seconds, or a new dictation round started.
 #[tauri::command]
 pub fn dismiss_vocab_suggestions(core: CoreState<'_>, coord: CoordinatorState<'_>) {
     core.dismiss_pending_corrections();
     coord.refresh_vocab_suggestion_presentation(false);
 }
 
-/// 落字失败兜底卡片上点了「复制」。
+/// "Copy" clicked on the insertion-failure fallback card.
 ///
-/// **走后端而不是前端的 `navigator.clipboard`**：卡片浮在别的 app 上面，按钮刻意
-/// `preventDefault` 不抢焦点（抢了就把用户正在写的地方的光标弄没了），而未聚焦的
-/// 文档调 `navigator.clipboard.writeText` 会直接抛 `Document is not focused`。
+/// **Goes through the backend, not the frontend's `navigator.clipboard`**: the card floats
+/// above another app and the button deliberately `preventDefault`s so it never takes focus
+/// (taking focus would destroy the cursor where the user is writing), and calling
+/// `navigator.clipboard.writeText` from an unfocused document throws
+/// `Document is not focused`.
 #[tauri::command]
 pub fn copy_text_to_clipboard(text: String) -> Result<(), String> {
     if text.is_empty() {
@@ -91,13 +101,14 @@ pub fn copy_text_to_clipboard(text: String) -> Result<(), String> {
     crate::insertion::copy_text_to_clipboard(&text)
 }
 
-/// 兜底卡片自己关掉了（用户点关闭 / TTL 到时）。
+/// The fallback card closed itself (user clicked close / TTL expired).
 #[tauri::command]
 pub fn dismiss_insert_fallback_card(coord: CoordinatorState<'_>) {
     coord.dismiss_insert_fallback_card();
 }
 
-/// 前端按真实折行结果回报卡片高度；presentation_id 用来忽略旧组件迟到的 ResizeObserver。
+/// The frontend reports the card height from real line-wrapping; presentation_id ignores late
+/// ResizeObserver callbacks from stale components.
 #[tauri::command]
 pub fn report_insert_fallback_card_height(
     coord: CoordinatorState<'_>,

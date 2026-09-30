@@ -8,7 +8,8 @@ import android.os.Bundle
 import android.provider.Settings
 
 /**
- * 引导用户授权 SYSTEM_ALERT_WINDOW。 Rust 命令 request_android_overlay_permission 通过 Intent 启动本 Activity。
+ * Walks the user through granting SYSTEM_ALERT_WINDOW. The Rust command
+ * request_android_overlay_permission launches this Activity via an Intent.
  */
 class OverlayPermissionActivity : Activity() {
 

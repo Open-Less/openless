@@ -9,8 +9,9 @@ function day(date: string, count: number, chars: number, durationMs: number): Ac
   return { date, count, chars, durationMs };
 }
 
-// 本地日期键必须按本地年月日拼。东八区凌晨用 toISOString() 会切到前一天，
-// 与后端 chrono::Local 写入的键对不上，整段数据会读成 0。
+// Local date keys must be built from local year/month/day. In UTC+8, toISOString() at early
+// morning switches to the previous day and mismatches the keys the backend writes with
+// chrono::Local, making the whole series read as 0.
 const localMidnight = new Date(2026, 7, 4, 0, 30, 0);
 assert(
   localDateKey(localMidnight) === '2026-08-04',
@@ -25,7 +26,7 @@ const activity: ActivityDay[] = [
   day('2026-08-04', 32, 3200, 320_000),
 ];
 
-// 7 天窗口：长度恒为 7、按日期升序、最后一个是今天、缺失日期补 0。
+// 7-day window: length always 7, ascending by date, last is today, missing dates filled with 0.
 const week = buildPeriodSeries(activity, 7, 'count', today);
 assert(week.buckets.length === 7, `7-day window should have 7 buckets, got ${week.buckets.length}`);
 assert(
@@ -42,7 +43,7 @@ assert(
   `daily average should divide by the whole period, got ${week.dailyAverage}`,
 );
 
-// 指标切换读的是不同字段，窗口逻辑不变。
+// Metric switching reads different fields; window logic unchanged.
 const weekChars = buildPeriodSeries(activity, 7, 'chars', today);
 assert(
   weekChars.total === 4000 + 11_800 + 4400 + 3200,
@@ -54,7 +55,7 @@ assert(
   `7-day duration total wrong: ${weekDuration.total}`,
 );
 
-// 30 天窗口把更早的日期也纳进来（这里 07-29 起的都在窗口内），长度恒为 30。
+// The 30-day window includes earlier dates (everything from 07-29 here falls inside it); length always 30.
 const month = buildPeriodSeries(activity, 30, 'count', today);
 assert(
   month.buckets.length === 30,
@@ -66,8 +67,8 @@ assert(
 );
 assert(month.total === 234, `30-day count total wrong: ${month.total}`);
 
-// 升级前写入的老数据只有 count，没有 chars / durationMs。字数/时长按 0 读，
-// 不能 NaN —— NaN 会把整个柱状图的 max 算坏。
+// Pre-upgrade data has only count, no chars / durationMs. Chars/duration read as 0 and must not
+// be NaN — NaN would break the whole bar chart's max computation.
 const legacy: ActivityDay[] = [{ date: '2026-08-03', count: 156 } as ActivityDay];
 const legacyChars = buildPeriodSeries(legacy, 7, 'chars', today);
 assert(legacyChars.total === 0, `legacy entries should read as 0 chars, got ${legacyChars.total}`);
@@ -75,14 +76,14 @@ assert(Number.isFinite(legacyChars.dailyAverage), 'legacy entries must not produ
 const legacyCount = buildPeriodSeries(legacy, 7, 'count', today);
 assert(legacyCount.total === 156, 'legacy entries should still report their count');
 
-// 空数据集不炸，全 0。
+// An empty dataset must not blow up; all zeros.
 const empty = buildPeriodSeries([], 7, 'count', today);
 assert(
   empty.buckets.length === 7 && empty.total === 0 && empty.dailyAverage === 0,
   'empty activity should yield a zeroed series',
 );
 
-// 跨月边界：窗口要正确回退到上个月，不能在 1 号截断。
+// Cross-month boundary: the window must correctly reach back into the previous month, not truncate at the 1st.
 const firstOfMonth = new Date(2026, 7, 1, 9, 0, 0); // 2026-08-01
 const crossMonth = buildPeriodSeries(activity, 7, 'count', firstOfMonth);
 assert(

@@ -1,8 +1,10 @@
-// 概览页「近 7 天 / 近 30 天」周期指标的聚合。
+// Aggregation for the overview page's "last 7 days / last 30 days" period metrics.
 //
-// 数据源是 activity 存储（date → {count, chars, durationMs}），**不是** listHistory()：
-// 历史受 200 条上限约束，日均上百次的用户几天就把上周挤没了，按历史现算会把没数据的
-// 那几天画成 0（明明年度热力图上是亮的）。activity 保留两年且只存聚合数字。
+// The data source is the activity store (date → {count, chars, durationMs}), **not**
+// listHistory(): history is capped at 200 entries, so a user with hundreds of sessions a
+// day pushes last week out within days; computing from history would draw the days without
+// data as 0 (even though the yearly heatmap lights up). Activity is kept for two years and
+// stores only aggregate numbers.
 
 import type { ActivityDay } from './types';
 
@@ -13,21 +15,23 @@ export const ACTIVITY_METRICS = ['count', 'chars', 'duration'] as const;
 export type ActivityMetric = (typeof ACTIVITY_METRICS)[number];
 
 export interface ActivityBucket {
-  /** 本地日期 YYYY-MM-DD，与后端 chrono::Local 写入的键同格式。 */
+  /** Local date YYYY-MM-DD, same format as the keys written by the backend's chrono::Local. */
   date: string;
   value: number;
 }
 
 export interface PeriodSeries {
-  /** 长度恒等于 days，按日期升序，最后一个是今天。缺数据的日期补 0。 */
+  /** Length always equals days, ascending by date, last one is today. Days without data are filled with 0. */
   buckets: ActivityBucket[];
   total: number;
-  /** 周期内日均值。分母是整个周期（含没说话的日子），不是「有记录的天数」。 */
+  /** Daily average over the period. The denominator is the whole period (including silent
+      days), not "days with records". */
   dailyAverage: number;
 }
 
-/** 本地日期键。必须用本地年月日拼，不能用 toISOString()——后者按 UTC 切日，
- *  东八区凌晨的会话会被算到前一天，与后端 chrono::Local 的键对不上。 */
+/** Local date key. Must be built from local year/month/day, not toISOString() — the latter
+ *  slices days by UTC, so a session just after midnight in UTC+8 would land on the previous
+ *  day and mismatch the backend's chrono::Local keys. */
 export function localDateKey(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -45,11 +49,12 @@ function readMetric(day: ActivityDay, metric: ActivityMetric): number {
 }
 
 /**
- * 把活动快照裁成「今天往前数 days 天」的连续序列。
+ * Trims the activity snapshot into a continuous series of the last `days` days ending today.
  *
- * 老数据（升级前写入的裸数字）没有 chars / durationMs，读回是 0：这些天在字数/时长
- * 指标里显示为 0 是诚实的——当时确实没记，不该凭历史现算去伪造一个受 200 条上限
- * 影响的数字。条数指标不受影响，全程可用。
+ * Old data (bare numbers written before the upgrade) lacks chars / durationMs and reads
+ * back as 0: showing 0 for those days in the chars/duration metrics is honest — nothing was
+ * recorded then, and it must not be fabricated from history, which is capped at 200
+ * entries. The count metric is unaffected and works for the full range.
  */
 export function buildPeriodSeries(
   activity: readonly ActivityDay[],

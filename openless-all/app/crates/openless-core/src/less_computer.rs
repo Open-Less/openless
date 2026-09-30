@@ -581,12 +581,18 @@ impl LessComputerApi for LessComputerService {
                 .lock()
                 .expect("Less Computer approval lock poisoned")
                 .remove(&token);
-            let sender = sender.ok_or_else(|| BackendError::new(
-                BackendErrorCode::InvalidState, "approval request is no longer pending",
-            ))?;
-            sender.send(approved).map_err(|_| BackendError::new(
-                BackendErrorCode::InvalidState, "approval receiver is no longer waiting",
-            ))
+            let sender = sender.ok_or_else(|| {
+                BackendError::new(
+                    BackendErrorCode::InvalidState,
+                    "approval request is no longer pending",
+                )
+            })?;
+            sender.send(approved).map_err(|_| {
+                BackendError::new(
+                    BackendErrorCode::InvalidState,
+                    "approval receiver is no longer waiting",
+                )
+            })
         })
     }
 

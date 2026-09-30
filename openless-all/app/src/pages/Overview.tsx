@@ -1,4 +1,4 @@
-// Overview.tsx — 真实指标，从 listHistory + getCredentials 派生。
+// Overview.tsx — real metrics, derived from listHistory + getCredentials.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -42,8 +42,8 @@ interface OverviewProps {
   onOpenSettings?: (section: 'general' | 'services' | 'privacy' | 'shortcuts') => void;
 }
 
-// id → i18n nameKey；这里只保留展示文案，provider 行为来自 Core descriptor。
-// （之前漏了 bailian-qwen3-realtime / apple-speech，会退化成显示裸 id）。
+// id → i18n nameKey; this keeps display labels only, provider behavior comes from the Core descriptor.
+// (bailian-qwen3-realtime / apple-speech were once missing and fell back to showing the bare id).
 const ASR_NAME_KEY_BY_ID: Record<string, string> = Object.fromEntries(
   ASR_LABELS.map((p) => [p.id, p.nameKey]),
 );
@@ -60,6 +60,7 @@ const LLM_NAME_KEY_BY_ID: Record<string, string> = {
   cometapi: 'cometapi',
   openrouterFree: 'openrouterFree',
   requesty: 'requesty',
+  'api-route': 'apiRoute',
   orcarouter: 'orcarouter',
   alibabaCoding: 'alibabaCoding',
   codingPlanX: 'codingPlanX',
@@ -103,11 +104,12 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
       });
   }, []);
 
-  // 活动数据（独立于历史内容存储，清空历史不影响）：年度热力图 + 近 7/30 天指标共用。
-  // 加载失败仅隐藏对应卡片。
+  // Activity data (stored independently of history content; clearing history doesn't affect it): shared by the
+  // yearly heatmap and the 7/30-day metrics. Load failure only hides the corresponding cards.
   //
-  // 热力图在移动端不渲染（issue #861：横向宽度固定，窄屏易溢出并拖慢 WebView），但
-  // 周期指标卡是要渲染的，所以 IPC 不能再按 mobile 跳过 —— 否则移动端周期卡永远空。
+  // The heatmap doesn't render on mobile (issue #861: fixed horizontal width overflows narrow screens and slows
+  // the WebView), but the period metric cards do render, so the IPC can no longer skip on mobile — otherwise
+  // mobile period cards would stay empty forever.
   const [activity, setActivity] = useState<ActivityDay[] | null>(null);
   const [activityError, setActivityError] = useState(false);
   const refreshActivity = useCallback(() => {
@@ -165,9 +167,9 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
     prefs?.activeOmniProvider,
   ]);
 
-  // ⌘R / Ctrl+R 重新拉取本页的三份数据（历史、活动、凭据），与历史页同键同语义。
-  // preventDefault 拦掉 webview 默认的整页 reload，避免整个前端重挂载。
-  // 此前概览页没有刷新入口，用户只能切到别的页再切回来才能看到新数据。
+  // ⌘R / Ctrl+R refetches this page's three data sets (history, activity, credentials), same key and semantics as the history page.
+  // preventDefault blocks the webview's default full-page reload, which would remount the whole frontend.
+  // The overview previously had no refresh entry; users had to switch pages away and back to see fresh data.
   const refreshAll = useCallback(() => {
     refreshHistory();
     refreshActivity();
@@ -185,9 +187,9 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [refreshAll]);
 
-  // 凭据被保存后重新拉取状态（issue #532 / #573：在 Settings 中填写/更新凭据
-  // 但不切换提供商时，上面的 useEffect 不会重跑，导致概览页的状态仍停留在「未配置」）。
-  // 复用 refreshCredentials() 以带上 credentialsRequestSeq 防竞态。
+  // Refetch status after credentials are saved (issue #532 / #573: filling/updating credentials in Settings
+  // without switching providers doesn't re-run the useEffect above, leaving the overview stuck on "not configured").
+  // Reuses refreshCredentials() to keep the credentialsRequestSeq race guard.
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
@@ -204,7 +206,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
           unlisten = handle;
         }
       } catch {
-        // browser dev mock — 没有 Tauri event bridge
+        // browser dev mock — no Tauri event bridge
       }
     })();
     return () => {
@@ -224,11 +226,11 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
     return { charsToday, segmentsToday, totalDurationMs, avgLatencyMs };
   }, [history]);
 
-  // 周期指标：近 7 天 / 近 30 天 × 条数 / 字数 / 时长。
+  // Period metrics: last 7 / 30 days × count / chars / duration.
   //
-  // 数据源必须是 activity 而不是 history —— history 有 200 条硬上限，日均上百次的用户
-  // 两三天就把上周挤没了，按历史现算会把没数据的那几天画成 0（而同一页的年度热力图
-  // 上那几天明明是亮的，两块数据自相矛盾）。
+  // The data source must be activity, not history — history has a 200-entry hard cap, so a user with hundreds of
+  // daily sessions pushes last week out within days; computing from history would draw data-less days as 0 while
+  // the yearly heatmap on the same page shows them lit, contradicting itself.
   const [period, setPeriod] = useState<ActivityPeriod>(7);
   const [metric, setMetric] = useState<ActivityMetric>('count');
   const series = useMemo(
@@ -246,15 +248,16 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
     hasShortcut: Boolean(prefs?.dictationHotkey.primary.trim()),
   });
   const openSettings = (section: OverviewSettingsSection) => onOpenSettings?.(section);
-  // 已配置完成的服务商卡不再常驻（没有信息价值），只展示仍待配置的
-  // 卡作为提醒；全部配置完成后整组「当前语音服务」隐藏。凭据加载中/拉取失败
-  // （providers 为空）时保留占位卡，避免页面闪空。
+  // Configured provider cards no longer stay resident (no informational value); only still-pending cards
+  // show as reminders. Once everything is configured the whole "current voice services" group hides. While
+  // credentials are loading / the fetch failed (providers empty), keep placeholder cards to avoid a blank flash.
   const pendingProviders = setup.providers.filter((p) => !p.configured);
   const showProvidersSection = setup.providers.length === 0 || pendingProviders.length > 0;
 
   return (
-    // 单屏固定页：不滚动，撑满外壳给定的高度，所有仪表盘在一屏内
-    // 弹性分配；窗口压到很矮时由底部行内部收缩（最近识别列表内滚），页面本身不出滚动条。
+    // Single-screen fixed page: no scrolling, fills the height given by the shell, dashboards share
+    // one screen elastically; when the window is squeezed very short, the bottom row shrinks internally
+    // (the recent list scrolls internally) and the page itself shows no scrollbar.
     <div
       style={{
         display: 'flex',
@@ -337,7 +340,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
         </div>
       )}
 
-      {/* 使用记录：标题 + 四张指标卡为一组。 */}
+      {/* Usage records: title + four metric cards as one group. */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
         <h2 style={{ fontSize: 13, fontWeight: 600, color: 'var(--ol-ink-2)', margin: 0 }}>
           {t('overview.statsTitle')}
@@ -386,7 +389,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
         </div>
       </div>
 
-      {/* 底部行吃掉剩余高度：周期卡图表区自适应拉高，最近识别列表内部滚动。 */}
+      {/* Bottom row takes the remaining height: the period chart area stretches, the recent list scrolls internally. */}
       <div
         style={{
           display: 'grid',
@@ -565,12 +568,12 @@ function ProviderCard({ kind, name, status, onConfigure }: ProviderCardProps) {
   );
 }
 
-/** 年度活动热力图卡：过去 365 天每日听写次数。月份/星期/日期标签用 Intl 按当前语言生成。 */
+/** Yearly activity heatmap card: dictation count per day over the past 365 days. Month/weekday/date labels are generated via Intl in the current language. */
 function ActivityHeatmapCard({ activity }: { activity: ActivityDay[] }) {
   const { t, i18n } = useTranslation();
   const { endDate, startDate, data, labels } = useMemo(() => {
-    // 年历按日历年铺满——1 月 1 日起、12 月 31 日止，从最左排到最右；
-    // 此前的滚动 365 天窗口会让月份标号从年中开始、右侧留空，观感像「缺数据」。
+    // The year calendar spans the calendar year — from Jan 1 to Dec 31, filled left to right;
+    // the previous rolling 365-day window started month labels mid-year and left the right side empty, looking like missing data.
     const now = new Date();
     const year = now.getFullYear();
     const start = new Date(year, 0, 1);
@@ -579,7 +582,7 @@ function ActivityHeatmapCard({ activity }: { activity: ActivityDay[] }) {
     const monthFormat = new Intl.DateTimeFormat(lang, { month: 'short' });
     const dayFormat = new Intl.DateTimeFormat(lang, { weekday: 'short' });
     const dateFormat = new Intl.DateTimeFormat(lang, { dateStyle: 'medium' });
-    const anchor = new Date(year, 0, 4); // 周日
+    const anchor = new Date(year, 0, 4); // Sunday
     return {
       endDate: end,
       startDate: start,
@@ -600,10 +603,10 @@ function ActivityHeatmapCard({ activity }: { activity: ActivityDay[] }) {
       <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--ol-ink-2)', flexShrink: 0 }}>
         {t('overview.activityTitle')}
       </span>
-      {/* 格子不再封顶：53 列随卡片宽度铺满到右缘。
-          卡片高度收紧为内容高度（flex 默认 0 1 auto：不拉伸、窗口压矮时才收缩），
-          四边 padding 一致；腾出的高度全部让给上方周期/最近识别行，热力图整体沉底
-          。 */}
+      {/* Cells no longer cap: 53 columns fill the card width to the right edge.
+          The card height tightens to content height (flex default 0 1 auto: no stretch, shrinks only when
+          the window is squeezed short); padding is equal on all four sides; the freed height goes entirely
+          to the period/recent rows above, and the heatmap sinks to the bottom. */}
       <Heatmap
         data={data}
         startDate={startDate}
@@ -656,7 +659,7 @@ function Metric({ icon, label, value, trend }: MetricProps) {
   );
 }
 
-/** 分段切换器（周期 / 指标共用）。窄，一行放得下两组。 */
+/** Segmented toggle (shared by period / metric). Narrow enough to fit both groups on one line. */
 function SegmentedToggle<T extends string | number>({
   value,
   options,
@@ -713,10 +716,10 @@ function SegmentedToggle<T extends string | number>({
 }
 
 /**
- * 周期指标卡：近 7 天 / 近 30 天 × 条数 / 字数 / 时长。
+ * Period metrics card: last 7 / 30 days × count / chars / duration.
  *
- * 卡片顶部显示周期总计（大字）+ 日均，柱状图在下 —— 用户关心的「这个月总共说了多少字」
- * 是一个数，不是要在 30 根柱子里目测求和。
+ * The card top shows the period total (large) + daily average, chart below — the user's question
+ * "how many characters did I dictate this month" is one number, not summing 30 bars by eye.
  */
 function PeriodMetricsCard({
   series,
@@ -751,7 +754,7 @@ function PeriodMetricsCard({
       padding={18}
       style={{ display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}
     >
-      {/* flexWrap：卡片在 1fr 列里较窄，两组切换器放不下时换行而不是压扁按钮。 */}
+      {/* flexWrap: the card is narrow inside a 1fr column; wrap instead of squashing buttons when the two toggles don't fit. */}
       <div
         style={{
           display: 'flex',
@@ -823,8 +826,8 @@ function PeriodMetricsCard({
   );
 }
 
-/** 柱状图。7 天时每根柱子上标数值；30 天时柱子只有几像素宽，标了会糊成一片，
- *  改用 title 悬浮显示，并只在两端和中间标日期。 */
+/** Bar chart. With 7 days each bar is labeled; at 30 days bars are a few pixels wide and labels would blur,
+ *  so values move to hover titles and dates are labeled only at the ends and middle. */
 function PeriodChart({
   series,
   metric,
@@ -840,7 +843,8 @@ function PeriodChart({
   const lastIndex = buckets.length - 1;
   const midIndex = Math.floor(lastIndex / 2);
 
-  // 图表区随卡片剩余高度拉伸（单屏固定页）：柱高按容器百分比缩放，不再固定 100px。
+  // The chart area stretches with the card's remaining height (single-screen fixed page): bar heights scale
+  // as a percentage of the container instead of a fixed 100px.
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 60 }}>
       <div
@@ -929,7 +933,7 @@ function weekDayLabel(dateKey: string, names: string[]): string {
   return names[new Date(year, month - 1, day).getDay()];
 }
 
-/** 条数/字数按整数千分位显示；时长转成人类可读的时/分/秒。 */
+/** Counts/chars display with thousands separators; duration converts to human-readable h/m/s. */
 function formatMetricValue(
   value: number,
   metric: ActivityMetric,
@@ -940,7 +944,7 @@ function formatMetricValue(
   return formatLocaleNumber(Math.round(value), locale);
 }
 
-/** 周期总时长可能是几十小时，不能沿用只处理秒/分的 formatDuration。 */
+/** A period total can be tens of hours; formatDuration (seconds/minutes only) doesn't apply. */
 function formatLongDuration(
   ms: number,
   t: ReturnType<typeof useTranslation>['t'],
@@ -975,8 +979,8 @@ function RecentRow({
   const onCopy = async () => {
     try {
       if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
-      // 与 History 一致：润色失败/未产出时 finalText 为空，回退到识别原文，
-      // 避免复制到空字符串。
+      // Same as History: when polish failed / produced nothing, finalText is empty and the copy falls back to
+      // the raw transcript, avoiding copying an empty string.
       await navigator.clipboard.writeText(
         session.finalText.trim() ? session.finalText : session.rawTranscript,
       );

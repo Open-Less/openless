@@ -56,18 +56,26 @@ pub struct LearnedRule {
 }
 
 pub fn is_vocab_worthy(edit: &EditPair) -> bool {
+    is_vocab_worthy_with_max_chars(edit, MAX_PHRASE_CHARS)
+}
+
+fn is_vocab_worthy_with_max_chars(edit: &EditPair, max_chars: usize) -> bool {
     let source = edit.source.trim();
     let target = edit.target.trim();
     !source.is_empty()
         && !target.is_empty()
         && !crosses_boundary(source)
         && !crosses_boundary(target)
-        && source.chars().count() <= MAX_PHRASE_CHARS
-        && target.chars().count() <= MAX_PHRASE_CHARS
+        && source.chars().count() <= max_chars
+        && target.chars().count() <= max_chars
 }
 
 pub fn learned_rule(edit: &EditPair) -> Option<LearnedRule> {
-    if !is_vocab_worthy(edit) {
+    learned_rule_with_max_chars(edit, MAX_PHRASE_CHARS)
+}
+
+pub fn learned_rule_with_max_chars(edit: &EditPair, max_chars: usize) -> Option<LearnedRule> {
+    if !is_vocab_worthy_with_max_chars(edit, max_chars) {
         return None;
     }
     let before: Vec<char> = edit.before.chars().collect();
@@ -91,10 +99,14 @@ pub fn learned_rule(edit: &EditPair) -> Option<LearnedRule> {
     let replacement = format!("{prefix}{}{suffix}", edit.target)
         .trim()
         .to_string();
-    (!pattern.is_empty() && !replacement.is_empty()).then_some(LearnedRule {
-        pattern,
-        replacement,
-    })
+    (!pattern.is_empty()
+        && !replacement.is_empty()
+        && pattern.chars().count() <= max_chars
+        && replacement.chars().count() <= max_chars)
+        .then_some(LearnedRule {
+            pattern,
+            replacement,
+        })
 }
 
 fn crosses_boundary(value: &str) -> bool {
@@ -113,6 +125,28 @@ pub fn edit_is_within_typed_text(edit: &EditPair, typed_text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configurable_phrase_limit_counts_characters_and_expanded_context() {
+        let mut edit = EditPair {
+            source: "甲".repeat(13),
+            target: "乙".repeat(13),
+            before: String::new(),
+            after: String::new(),
+        };
+        assert!(learned_rule(&edit).is_none());
+        assert!(learned_rule_with_max_chars(&edit, 13).is_some());
+        edit.source = "甲".into();
+        edit.target = "乙丙".into();
+        edit.before = "丁".into();
+        assert!(learned_rule_with_max_chars(&edit, 2).is_none());
+        assert_eq!(
+            learned_rule_with_max_chars(&edit, 3).unwrap().replacement,
+            "丁乙丙"
+        );
+        edit.target = "乙。丙".into();
+        assert!(learned_rule_with_max_chars(&edit, 32).is_none());
+    }
 
     #[test]
     fn diff_and_rule_are_char_safe() {

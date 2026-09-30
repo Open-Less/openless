@@ -26,6 +26,8 @@ promo-openless/
 promo-openless-v2/
 docs/old-promo/
 .worktrees/
+openless-all/app/test-results/
+openless-all/app/playwright-report/
 # 宣传录屏 / 素材根目录（GB 级二进制，绝不入版本库）
 video-materials/
 
@@ -84,6 +86,10 @@ docs/plans/
 /CLAUDE.md
 /AGENTS.md
 /issue-*-plan.md
+
+# 本地会话记录（Claude Code 对话存档），仅供本人下次取用，不入库
+/SESSION_NOTES.md
+/SESSION_TRANSCRIPT.jsonl
 
 # .github 内部协作 + 审计报告（ISSUE_TEMPLATE / workflows / pr template 仍保留发布）
 .github/COOPER_*.md

@@ -1,6 +1,6 @@
 # OpenLess 2.0 架构
 
-状态：canonical，当前实现说明；更新：2026-09-23。平台范围见 [2.0 需求](2.0-requirements.md)，文件定位见 [目录结构](structure.md)。
+状态：canonical，当前实现说明；更新：2026-09-30。平台范围见 [2.0 需求](2.0-requirements.md)，文件定位见 [目录结构](structure.md)。
 
 ## 1. 分层与工作区
 
@@ -45,6 +45,12 @@ flowchart TB
 
 Android 悬浮窗在录音中转入追问时，Host 先捕获原选区，Core 的 `stop_dictation_for_qa` 按原会话 ID 完成转写并释放听写资源，跳过听写润色与文字插入，再由 `QaApi::submit_captured_text` 接收已录问题和选区。重复手势由 Host 的异步锁合并；QA 不重新抓取已经变化的前台选区。
 
+Android IME 通过 `InputConnection` 插入文字；笔画、英文候选与轻量拼音由原生 Kotlin 控制器处理。`OpenLessApplication`、`OpenLessRuntimeService` 和 Warmup Activity 管理后台运行与恢复。用户操作与验收入口见 [Android 输入法](android-ime.md)。
+
+设置保存使用 `get_settings_snapshot` / `update_setting_fields`：前端只提交字段差异，Core 按偏好修订号提交事务并在版本冲突时重试；`prefs:changed` 使前端重新读取快照。`preferencesWriteGate.ts` 将尚未完成的本地编辑叠加到已确认快照，失败时只撤回对应请求。
+
+手改学词由 Core 的 `host_document/observation.rs` 和 `api.rs` 管理插入范围、观察代数、建议有效期与词典写入。独立本机授权默认关闭，配置位于「实验与扩展 → 手改学词」；观察时长 10–60 秒、建议有效期 5–60 秒、最大自动词长 2–32 个字符。设置改变会结束旧观察并清除旧建议，授权与参数不进入云同步。macOS AX、Windows UIA 与 Android 无障碍仅在当前编辑器内进行短时观察，密码框和已知敏感应用被排除；观察文本仅用于本地差分，确认前不写入词典。`PendingCorrection.expiresAtMs` 是 Web 和 Android 确认卡共用的截止时间；历史详情与 Android IME 保留显式确认加词入口，Linux 原生观察仍在独立验收范围。
+
 ## 3. Core 模块地图（按域，见 `src/lib.rs` pub mod 清单）
 
 - 听写链路：`dictation_engine` / `dictation_context` / `audio` / `external_audio` / `silence_auto_stop` / `streaming_insert` / `hotkey_interpreter` / `voice_session`
@@ -77,6 +83,12 @@ Less Computer 面板将听写与直接语音提交分开：麦克风把转写填
 
 选区直接润色在捕获文字和原输入目标后显示处理中提示，重复快捷键的 Busy 返回不覆盖该提示。已有语音选区入口在松开快捷键后继续显示思考动画，直到处理/替换完成，或交给确认和预览面板。录音提示音的 Web Audio context 在恢复超时或音频时钟冻结时丢弃并最多重试一次，重试沿用原请求的取消和迟到边界。
 
+Selection Voice 在有效输入目标中允许空选区：Core 将无草稿编辑转换为 Compose，生成正文后沿用预览/直接插入路径；已有选区仍按编辑或问答处理。Host 的胶囊所有权与会话 ID 绑定，结束录音后停止接收音量帧，终态通过 Done/Idle 收尾。Selection Voice 和 Less Computer 的辅助录音遵循当前多模态偏好；Omni 将音频转换为指令文字，后续意图、编辑与 Agent 调用仍由各自模型完成。
+
+AI 服务设置在顶部选择传统或多模态模式，各配置入口等宽排布并完整显示，不依赖横向滑动。传统模式禁用多模态模型入口；多模态模式禁用语言模型、语音识别和本地模型入口。禁用入口名称置灰，名称下方附醒目的黄/琥珀色“当前模式未使用”提示，鼠标和键盘均不可进入；连接与扩展保持可用。多模态表单将供应商/模型及自定义高级字段并排，拉取模型与验证集中在页尾；桌面常用窗口内单页显示完整表单，窄屏或放大字体时保留内容的可访问性。切换模式时若当前页面已禁用，则转到当前模式可用的配置页；本地模型的内部跳转入口受相同限制。切换模式保留两组渠道和凭据。Omni 连接测试只验证文本请求，实际音频可用性需录音验证；DashScope 音频使用 `data:;base64,` 和独立 `format` 字段。API Route 作为可手动添加的 OpenAI 兼容润色渠道，不改变默认提供方。
+
+界面动效由 `src/lib/motion.ts` 统一管理：设置面板以 360ms 淡入、上移并缩放到位，背景以 220ms 淡入；先绘制入场起点，再启动动画时钟。其他弹窗入场和配置内容切换 240ms、弹窗退出 180ms，主页面进入 160ms、退出 90ms；缓动读取 `tokens.css` 中的入场/退出曲线，设置入场使用 soft 曲线。动画使用透明度、位移及缩放，不动画布局尺寸。快速关闭、重开或切回原页从当前绘制状态续播，旧切页任务不能覆盖新选择。`useExitMount` 共用退出时长；系统开启减少动态效果时跳过动画等待。服务设置的模式高亮和分类指示条在选中项间移动，供应商配置切换淡入；加载图标与保存中状态保持真实反馈，临时合成层在完成或取消后释放。
+
 界面启动等待所选语言资源就绪；语言选择持久化到 `ol.locale`，其他 WebView 通过存储事件同步，日期、数字和默认风格展示随语言变化。用户修改的风格名称、说明和内容保持原文。旧版两种强制排版字段只保留数据兼容，界面清除其布局效果，窄屏改由响应式布局处理。
 
 ## 6. 存储与外部服务
@@ -97,7 +109,9 @@ Less Computer 面板将听写与直接语音提交分开：麦克风把转写填
 
 模型远程元数据只在下载详情选择模型时读取，界面按模型与镜像合并请求并缓存五分钟。Sherpa 离线解码通过 `src-tauri/src/asr/local/blocking_decode.rs` 串行运行；超时或取消不会提前释放原生任务持有的模型和许可，任务结束后才允许下一次解码。长期参考数据、训练准备和历史快照不是 Core 的在线训练服务。
 
-macOS 凭据在 `persistence/credentials.rs` 使用单个 `credentials.v2` 钥匙串项目；首次迁移读取旧分块一次并保留旧项目供旧版本使用。读取失败返回错误，不能降级成“未配置”；ASR 配置状态从同一次成功读取的快照生成。其他平台保留各自存储限制与适配。
+macOS 凭据通过 `persistence/credentials/macos_vault.rs` 共用 `credentials.v2` 钥匙串项目与进程内缓存：服务凭据、云同步本地包装密钥和记住的同步密钥在同一次受保护读取中加载。同步密钥位于 `_macosLocalSyncKeys` 本机扩展，Core 的提供方快照、UI IPC 与云端导出均不包含该字段。提供方保存/恢复保留扩展；新增密钥经原生存储读回验证，遗忘以持久化空值阻止旧项复活并删除旧独立项。
+
+第一次迁移仍须分别获得旧独立钥匙串项目的系统授权，不能取消或扩大它们的 ACL；成功读取后把本机密钥合入同一项目，后续启动只读取该项目。旧分块和迁移来源保留供旧版本使用，读失败不缓存为空、不扫描其他旧项目；可重试授权或读取。Keychain 外部修改在下一次进程启动生效。ASR 配置状态从同一次成功读取的快照生成。其他平台保留各自存储限制与适配。系统对独立项目的授权边界见 [Apple ACL 文档](https://developer.apple.com/documentation/security/access-control-lists)。
 
 ## 7. 验证入口
 

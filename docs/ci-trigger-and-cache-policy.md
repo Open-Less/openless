@@ -1,6 +1,6 @@
 # CI 触发范围与缓存配额
 
-状态：canonical；更新：2026-09-26。本文说明 CI 为什么在什么情况下跑哪些 job、缓存在 10 GB 预算内怎么分配，以及发版前怎么把耗时压下来。
+状态：canonical；更新：2026-09-29。本文说明 CI 为什么在什么情况下跑哪些 job、缓存在 10 GB 预算内怎么分配，以及发版前怎么把耗时压下来。
 
 ## 1. 触发与门控
 
@@ -8,7 +8,7 @@
 |---|---|
 | `pull_request` → `main` / `beta` | 按改动范围门控：改动够不到的平台直接跳过（见下） |
 | `push` → `main` / `beta` | 全量验证（合并后的基线必须有完整证据），不跳过任何 job |
-| tag `v*-tauri` | 发版：调用同一个可复用 Linux 打包工作流，并发布 deb/rpm |
+| tag `v*-tauri` | 发布 Tauri 桌面与 Android；Linux 包不随标签自动发布 |
 | `workflow_dispatch` | 全量；`platform=macos` 只跑 macOS（仅 macOS 验证入口） |
 
 同一 PR 连续推送会取消旧运行（`concurrency.cancel-in-progress`）。
@@ -19,7 +19,7 @@
 
 | 区域 | 跳过条件（全部改动都命中才算跳过） | 覆盖的 job |
 |---|---|---|
-| `tauri` | 仅 `linux-egui/**`（但**不含**它的 `Cargo.toml`，那会动全工作区 lock）、`scripts/linux-fcitx5-plugin/**`、`docs/**`、`*.md`、`LICENSE` | macOS / Windows 桌面检查、Android 检查 |
+| `tauri` | 仅 `linux-egui/**`（但**不含**它的 `Cargo.toml`，那会动全工作区 lock）、`scripts/linux-fcitx5-plugin/**`、`docs/**`、`*.md`、`LICENSE` | macOS / Windows 桌面检查、Android 检查、Chromium/WebKit UI 动效回归 |
 | `msrv` | 全部改动里没有任何 `.rs`、`Cargo.toml`、`Cargo.lock`、`rust-toolchain*`、`.github/**` | macOS Rust 1.88 MSRV |
 | `linux` | 全部改动都是散文（`docs/**`、`*.md`、`LICENSE`、`NOTICE`） | Linux Core/egui 测试与 deb/rpm 打包链 |
 
@@ -31,7 +31,9 @@
 
 跳过只允许是“改动可达性可证明”的结果，不允许是“读不到差异”或“接线漏了”的兜底。
 
-`linux-egui-package` 通过可复用工作流的 `scope` 输入接收结果（`full` / `none`，**默认 `full`**）：纯散文改动跳过整个 Linux 构建与打包链，而 push / tag / 发版调用不传该输入，因此永远全量构建。
+`linux-egui-package` 通过可复用工作流的 `scope` 输入接收结果（`full` / `none`，**默认 `full`**）：纯散文改动跳过整个 Linux 构建与打包链。独立 Linux 手动构建沿用完整检查，只上传 Actions 产物；管理员在产品验收后，针对已接受的现有 tag 构建并单独附加包，见 [发布规范](../RELEASING.md)。
+
+`ui-motion` 使用生产前端构建运行 `npm run test:ui-motion`，在 Chromium 与 WebKit 上验证快速往返切页、弹窗中断、手机抽屉退出以及减少动态效果下的模型入口规则。失败时保留浏览器 trace 和截图；浏览器 mock 验证不替代原生权限与设备交互。
 
 ## 2. MSRV 为什么是独立 job
 

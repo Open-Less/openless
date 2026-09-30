@@ -1,3 +1,4 @@
+mod cloud_note;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -11,7 +12,7 @@ use crate::config::{BackendConfig, BackendDependencies, Clock, SystemClock, Task
 use crate::correction::apply_correction_rules;
 use crate::credentials::{
     ChannelKind, ChannelMutation, ChannelMutationResult, ChannelSummary, CredentialKey,
-    ProviderSlot, SecretValue,
+    CredentialStore, ProviderSlot, SecretValue,
 };
 use crate::dictation_context::{
     DictationAudioSource, DictationContext, DictationOutputTarget, DictationProviderInvocations,
@@ -108,7 +109,10 @@ pub struct DictationHotkeyDispatchOptions {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DictationContextPurpose {
     Dictation,
-    AsrOnly,
+    /// Selection Voice + Less Computer: respect `effective_pipeline_mode`, but
+    /// skip resolving an unused LLM at capture time (intent/EditPlan/Agent run
+    /// later). Replaces the old `AsrOnly` force-Traditional gate (#1119 B).
+    AuxiliaryVoice,
     QaText,
     QaVoice,
 }
@@ -166,11 +170,24 @@ pub enum LessComputerVoiceFinish {
 
 pub struct VoiceTranscriptionSession {
     session_id: SessionId,
-    transcription: Arc<dyn TranscriptionSession>,
+    /// Traditional ASR session. Absent when multimodal Omni will produce text.
+    transcription: Option<Arc<dyn TranscriptionSession>>,
+    /// Multimodal PCM buffer filled by `start_audio_capture` (or host feed).
+    pcm: Option<Arc<CapturedPcm>>,
+    /// Credentials + context + prompt for Omni finish. Present with `pcm`.
+    omni: Option<AuxiliaryOmniFinish>,
     recording: Mutex<Option<Box<dyn crate::ports::ActiveRecording>>>,
     partials: Arc<VoiceTranscriptSink>,
     lifecycle: Arc<VoiceCaptureLifecycle>,
     task_spawner: Arc<dyn TaskSpawner>,
+}
+
+/// Shared Omni finish inputs for Selection Voice / Less Computer multimodal.
+#[derive(Clone)]
+struct AuxiliaryOmniFinish {
+    credentials: Arc<dyn CredentialStore>,
+    context: Arc<DictationContext>,
+    system_prompt: String,
 }
 
 pub struct QaVoiceCaptureSession {
@@ -305,6 +322,7 @@ struct SelectionVoiceRecordingProgress {
     session_id: SessionId,
     selection_voice: Arc<dyn crate::domains::SelectionVoiceApi>,
     control: Arc<dyn crate::ports::RecordingControlSink>,
+    events: BackendEventPublisher,
     task_spawner: Arc<dyn TaskSpawner>,
     started_at: std::time::Instant,
     silence: Mutex<Option<crate::silence_auto_stop::SilenceAutoStop>>,
@@ -559,6 +577,21 @@ impl crate::ports::RecordingProgressSink for QaRecordingProgress {
 
 impl crate::ports::RecordingProgressSink for SelectionVoiceRecordingProgress {
     fn publish_level(&self, elapsed_ms: u64, level: f32) -> Result<(), BackendError> {
+        let level = if level.is_finite() {
+            level.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        // Shared capsule (Siri / bars) needs live meter updates; silence policy
+        // alone previously swallowed every level and left the waveform flat.
+        self.events.publish(
+            Some(self.session_id),
+            BackendEventKind::SelectionVoiceLevel(crate::events::SelectionVoiceRecordingLevel {
+                session_id: self.session_id.to_string(),
+                level,
+                elapsed_ms,
+            }),
+        );
         let decision = self
             .silence
             .lock()
@@ -647,7 +680,9 @@ struct VoiceTranscriptSink {
 }
 
 struct VoiceCaptureControl {
-    transcription: Arc<dyn TranscriptionSession>,
+    transcription: Option<Arc<dyn TranscriptionSession>>,
+    pcm: Option<Arc<CapturedPcm>>,
+    omni: Option<AuxiliaryOmniFinish>,
     recording: Mutex<Option<Box<dyn crate::ports::ActiveRecording>>>,
     closed: std::sync::atomic::AtomicBool,
     resources: Mutex<Option<Arc<crate::voice_session::VoiceResourceHold>>>,
@@ -943,7 +978,10 @@ impl VoiceCaptureControl {
                     Some(recording) => recording.stop().await,
                     None => Ok(()),
                 };
-                let transcription = control.transcription.cancel().await;
+                let transcription = match control.transcription.as_ref() {
+                    Some(transcription) => transcription.cancel().await,
+                    None => Ok(()),
+                };
                 control
                     .feedback
                     .lock()
@@ -1063,7 +1101,12 @@ impl LessComputerVoiceSession {
                 "Less Computer PCM must be non-empty and contain complete 16-bit samples",
             ));
         }
-        self.control.transcription.consume_pcm_chunk(pcm);
+        if let Some(transcription) = self.control.transcription.as_ref() {
+            transcription.consume_pcm_chunk(pcm);
+        }
+        if let Some(buffer) = self.control.pcm.as_ref() {
+            buffer.consume_pcm_chunk(pcm);
+        }
         Ok(())
     }
 
@@ -1122,7 +1165,9 @@ impl LessComputerVoiceSession {
         }
         let control = Arc::clone(&self.control);
         let controls = Arc::clone(&self.controls);
-        let transcription = Arc::clone(&control.transcription);
+        let transcription = control.transcription.clone();
+        let pcm = control.pcm.clone();
+        let omni = control.omni.clone();
         let recording = control.take_recording();
         let archive = recording.as_ref().and_then(|recording| recording.archive());
         let archive_successful_recording = self.archive_successful_recording;
@@ -1162,7 +1207,9 @@ impl LessComputerVoiceSession {
                     if let Some(recording) = recording {
                         let _ = recording.stop().await;
                     }
-                    let _ = transcription.cancel().await;
+                    if let Some(transcription) = transcription.as_ref() {
+                        let _ = transcription.cancel().await;
+                    }
                     let _ = less_computer.abort_capture(session_id);
                     return Err(BackendError::new(
                         BackendErrorCode::Cancelled,
@@ -1171,7 +1218,9 @@ impl LessComputerVoiceSession {
                 }
                 if let Some(recording) = recording {
                     if let Err(error) = recording.stop().await {
-                        let _ = transcription.cancel().await;
+                        if let Some(transcription) = transcription.as_ref() {
+                            let _ = transcription.cancel().await;
+                        }
                         return Err(fail_less_voice_finish(
                             &less_computer,
                             session_id,
@@ -1182,23 +1231,75 @@ impl LessComputerVoiceSession {
                         .await);
                     }
                 }
-                let transcript = match transcription.finish().await {
-                    Ok(output) => output.text,
-                    Err(error) => {
-                        let _ = transcription.cancel().await;
+                let transcript = match (&transcription, &pcm, &omni) {
+                    (Some(transcription), _, _) => match transcription.finish().await {
+                        Ok(output) => output.text,
+                        Err(error) => {
+                            let _ = transcription.cancel().await;
+                            return Err(fail_less_voice_finish(
+                                &less_computer,
+                                session_id,
+                                &feedback,
+                                mode,
+                                error,
+                            )
+                            .await);
+                        }
+                    },
+                    (None, Some(pcm), Some(omni)) => {
+                        let wav = match crate::audio::encode_dictation_wav(&pcm.snapshot()) {
+                            Ok(wav) => wav,
+                            Err(error) => {
+                                return Err(fail_less_voice_finish(
+                                    &less_computer,
+                                    session_id,
+                                    &feedback,
+                                    mode,
+                                    error,
+                                )
+                                .await);
+                            }
+                        };
+                        match crate::cloud_providers::complete_omni_instruction_from_wav(
+                            omni.credentials.as_ref(),
+                            omni.context.as_ref(),
+                            &wav,
+                            &omni.system_prompt,
+                        )
+                        .await
+                        {
+                            Ok(text) => text,
+                            Err(error) => {
+                                return Err(fail_less_voice_finish(
+                                    &less_computer,
+                                    session_id,
+                                    &feedback,
+                                    mode,
+                                    error,
+                                )
+                                .await);
+                            }
+                        }
+                    }
+                    _ => {
                         return Err(fail_less_voice_finish(
                             &less_computer,
                             session_id,
                             &feedback,
                             mode,
-                            error,
+                            BackendError::new(
+                                BackendErrorCode::Internal,
+                                "Less Computer voice capture has an invalid pipeline shape",
+                            ),
                         )
                         .await);
                     }
                 };
                 if less_computer.capture_cancelled(session_id) {
                     feedback.settle(LessComputerVoiceOutcome::Cancelled, None);
-                    let _ = transcription.cancel().await;
+                    if let Some(transcription) = transcription.as_ref() {
+                        let _ = transcription.cancel().await;
+                    }
                     let _ = less_computer.abort_capture(session_id);
                     return Err(BackendError::new(
                         BackendErrorCode::Cancelled,
@@ -1343,7 +1444,9 @@ impl VoiceTranscriptionSession {
             .lock()
             .expect("voice transcription recording lock poisoned")
             .take();
-        let transcription = Arc::clone(&self.transcription);
+        let transcription = self.transcription.clone();
+        let pcm = self.pcm.clone();
+        let omni = self.omni.clone();
         let partials = Arc::clone(&self.partials);
         let lifecycle = Arc::clone(&self.lifecycle);
         let resources = lifecycle.resources();
@@ -1358,7 +1461,29 @@ impl VoiceTranscriptionSession {
                     if lifecycle.is_cancelled() {
                         return Err(VoiceCaptureLifecycle::cancelled_error());
                     }
-                    let transcript = transcription.finish().await?.text.trim().to_string();
+                    let transcript = match (&transcription, &pcm, &omni) {
+                        (Some(transcription), _, _) => {
+                            transcription.finish().await?.text.trim().to_string()
+                        }
+                        (None, Some(pcm), Some(omni)) => {
+                            // #1119 B: multimodal first stage — Omni audio→instruction text.
+                            // Host keeps finish() -> String so selection_voice_session stays thin.
+                            let wav = crate::audio::encode_dictation_wav(&pcm.snapshot())?;
+                            crate::cloud_providers::complete_omni_instruction_from_wav(
+                                omni.credentials.as_ref(),
+                                omni.context.as_ref(),
+                                &wav,
+                                &omni.system_prompt,
+                            )
+                            .await?
+                        }
+                        _ => {
+                            return Err(BackendError::new(
+                                BackendErrorCode::Internal,
+                                "voice transcription capture has an invalid pipeline shape",
+                            ));
+                        }
+                    };
                     if transcript.is_empty() {
                         return Err(BackendError::new(
                             BackendErrorCode::Provider,
@@ -1370,7 +1495,9 @@ impl VoiceTranscriptionSession {
                 .await;
                 let (result, cancel_provider) = lifecycle.settle(result);
                 if cancel_provider {
-                    let _ = transcription.cancel().await;
+                    if let Some(transcription) = transcription.as_ref() {
+                        let _ = transcription.cancel().await;
+                    }
                 }
                 lifecycle.release_resources();
                 let transcript = result?;
@@ -1389,7 +1516,7 @@ impl VoiceTranscriptionSession {
             .lock()
             .expect("voice transcription recording lock poisoned")
             .take();
-        let transcription = Arc::clone(&self.transcription);
+        let transcription = self.transcription.clone();
         let lifecycle = Arc::clone(&self.lifecycle);
         let resources = lifecycle.resources();
         own_voice_effect(
@@ -1403,7 +1530,12 @@ impl VoiceTranscriptionSession {
                             None => Ok(()),
                         }
                     },
-                    transcription.cancel(),
+                    async move {
+                        match transcription {
+                            Some(transcription) => transcription.cancel().await,
+                            None => Ok(()),
+                        }
+                    },
                 )
                 .await;
                 lifecycle.release_resources();
@@ -1609,6 +1741,7 @@ struct MutableState {
     /// are still being captured. The accepted request is applied before finish
     /// by every stop entry; no Host latch survives into the next session.
     dictation_translation_requested: Option<bool>,
+    dictation_destination_changed: bool,
     credentials: CredentialsStatus,
     transcripts: HashMap<SessionId, crate::types::TranscriptAccumulator>,
     silence_monitor: Option<SilenceMonitor>,
@@ -2122,6 +2255,7 @@ struct HistoryProviderAttribution {
 }
 
 struct CoreEditObservationSink {
+    settings: crate::shared_types::VocabularyLearningSettings,
     expected_generation: u64,
     generation: Arc<AtomicU64>,
     typed_text: String,
@@ -2130,6 +2264,10 @@ struct CoreEditObservationSink {
 }
 
 impl EditObservationSink for CoreEditObservationSink {
+    fn observation_duration(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.settings.observation_seconds as u64)
+    }
+
     fn publish(&self, edit: crate::host_document::EditPair) -> bool {
         // Dropping the native watcher is asynchronous on macOS: a queued AX
         // callback may still arrive after the next session starts. The Core
@@ -2140,7 +2278,10 @@ impl EditObservationSink for CoreEditObservationSink {
         if !crate::host_document::edit_is_within_typed_text(&edit, &self.typed_text) {
             return false;
         }
-        let Some(rule) = crate::host_document::learned_rule(&edit) else {
+        let Some(rule) = crate::host_document::learned_rule_with_max_chars(
+            &edit,
+            self.settings.max_phrase_chars as usize,
+        ) else {
             return false;
         };
         if let Err(error) = queue_pending_correction_state(
@@ -2148,6 +2289,8 @@ impl EditObservationSink for CoreEditObservationSink {
             &self.events,
             rule.pattern,
             rule.replacement,
+            Some((&self.generation, self.expected_generation)),
+            self.settings.suggestion_seconds,
         ) {
             log::warn!("failed to queue observed correction: {error}");
         }
@@ -2160,6 +2303,8 @@ fn queue_pending_correction_state(
     events: &Arc<EventBus>,
     pattern: String,
     replacement: String,
+    generation: Option<(&AtomicU64, u64)>,
+    suggestion_seconds: u32,
 ) -> Result<Option<PendingCorrection>, BackendError> {
     if pattern.trim().is_empty() || replacement.trim().is_empty() {
         return Err(BackendError::new(
@@ -2169,6 +2314,12 @@ fn queue_pending_correction_state(
     }
     let (suggestion, snapshot) = {
         let mut pending = pending.lock().expect("pending correction lock poisoned");
+        if generation.is_some_and(|(current, expected)| current.load(Ordering::Acquire) != expected)
+        {
+            return Ok(None);
+        }
+        let now = chrono::Utc::now().timestamp_millis();
+        pending.retain(|item| item.expires_at_ms > now);
         if pending
             .iter()
             .any(|item| item.pattern == pattern && item.replacement == replacement)
@@ -2180,6 +2331,7 @@ fn queue_pending_correction_state(
         }
         let suggestion = PendingCorrection {
             id: uuid::Uuid::new_v4().to_string(),
+            expires_at_ms: now + i64::from(suggestion_seconds.clamp(5, 60)) * 1000,
             pattern,
             replacement,
         };
@@ -2661,6 +2813,7 @@ impl OpenLessBackend {
                 dictation_context: None,
                 dictation_start_output_target: None,
                 dictation_translation_requested: None,
+                dictation_destination_changed: false,
                 credentials: CredentialsStatus::default(),
                 transcripts: HashMap::new(),
                 silence_monitor: None,
@@ -2916,7 +3069,7 @@ impl OpenLessBackend {
             let context = match self
                 .capture_dictation_context(
                     &DictationStartOptions::default(),
-                    DictationContextPurpose::AsrOnly,
+                    DictationContextPurpose::AuxiliaryVoice,
                 )
                 .await
             {
@@ -2948,48 +3101,102 @@ impl OpenLessBackend {
                 })),
                 feedback: Arc::clone(&feedback),
             });
-            let voice_capture = own_voice_start(
-                &self.deps.task_spawner,
-                Arc::clone(&resources),
-                self.deps.dictation_engine.start_voice_capture(
-                    session_id,
-                    Arc::clone(&context),
-                    Arc::clone(&partials) as Arc<dyn TextStreamSink>,
-                    Arc::clone(&recording_progress) as Arc<dyn crate::ports::RecordingProgressSink>,
-                    resources.cancel.clone(),
-                ),
-                discard_voice_capture,
-            )
-            .await;
-            let (transcription, recording) = match voice_capture {
-                Ok(capture) => (capture.transcription, Some(capture.recording)),
-                Err(error) if error.code == BackendErrorCode::Unsupported => {
-                    ensure_capture()?;
-                    match own_voice_start(
-                        &self.deps.task_spawner,
-                        Arc::clone(&resources),
-                        Arc::clone(&self.deps.dictation_engine).start_transcription_with_progress(
-                            Arc::clone(&self.deps.task_spawner),
-                            session_id,
-                            Arc::clone(&context),
-                            Arc::clone(&partials) as Arc<dyn TextStreamSink>,
-                            Arc::clone(&recording_progress)
-                                as Arc<dyn crate::ports::RecordingProgressSink>,
-                        ),
-                        |transcription| transcription.cancel(),
-                    )
-                    .await
-                    {
-                        Ok(session) => (session, None),
-                        Err(error) => {
-                            let _ = self.deps.services.less_computer.abort_capture(session_id);
-                            return Err(error);
-                        }
+            let omni_finish = AuxiliaryOmniFinish {
+                credentials: Arc::clone(&self.deps.credential_store),
+                context: Arc::clone(&context),
+                system_prompt: crate::prompts::auxiliary_voice_omni_instruction_prompt(),
+            };
+            let (transcription, recording, pcm, omni) = if context.pipeline_mode
+                == crate::shared_types::PipelineMode::Multimodal
+            {
+                let audio_capture = own_voice_start(
+                    &self.deps.task_spawner,
+                    Arc::clone(&resources),
+                    self.deps.dictation_engine.start_audio_capture(
+                        session_id,
+                        Arc::clone(&context),
+                        Arc::clone(&recording_progress)
+                            as Arc<dyn crate::ports::RecordingProgressSink>,
+                        resources.cancel.clone(),
+                    ),
+                    |capture| {
+                        Box::pin(async move { stop_and_discard_recording(capture.recording).await })
+                    },
+                )
+                .await;
+                match audio_capture {
+                    Ok(capture) => (
+                        None,
+                        Some(capture.recording),
+                        Some(capture.pcm),
+                        Some(omni_finish),
+                    ),
+                    Err(error) if error.code == BackendErrorCode::Unsupported => {
+                        // Host/external PCM feed path (same seam as ASR Unsupported).
+                        ensure_capture()?;
+                        (
+                            None,
+                            None,
+                            Some(Arc::new(CapturedPcm::default())),
+                            Some(omni_finish),
+                        )
+                    }
+                    Err(error) => {
+                        let _ = self.deps.services.less_computer.abort_capture(session_id);
+                        return Err(error);
                     }
                 }
-                Err(error) => {
-                    let _ = self.deps.services.less_computer.abort_capture(session_id);
-                    return Err(error);
+            } else {
+                let voice_capture = own_voice_start(
+                    &self.deps.task_spawner,
+                    Arc::clone(&resources),
+                    self.deps.dictation_engine.start_voice_capture(
+                        session_id,
+                        Arc::clone(&context),
+                        Arc::clone(&partials) as Arc<dyn TextStreamSink>,
+                        Arc::clone(&recording_progress)
+                            as Arc<dyn crate::ports::RecordingProgressSink>,
+                        resources.cancel.clone(),
+                    ),
+                    discard_voice_capture,
+                )
+                .await;
+                match voice_capture {
+                    Ok(capture) => (
+                        Some(capture.transcription),
+                        Some(capture.recording),
+                        None,
+                        None,
+                    ),
+                    Err(error) if error.code == BackendErrorCode::Unsupported => {
+                        ensure_capture()?;
+                        match own_voice_start(
+                            &self.deps.task_spawner,
+                            Arc::clone(&resources),
+                            Arc::clone(&self.deps.dictation_engine)
+                                .start_transcription_with_progress(
+                                    Arc::clone(&self.deps.task_spawner),
+                                    session_id,
+                                    Arc::clone(&context),
+                                    Arc::clone(&partials) as Arc<dyn TextStreamSink>,
+                                    Arc::clone(&recording_progress)
+                                        as Arc<dyn crate::ports::RecordingProgressSink>,
+                                ),
+                            |transcription| transcription.cancel(),
+                        )
+                        .await
+                        {
+                            Ok(session) => (Some(session), None, None, None),
+                            Err(error) => {
+                                let _ = self.deps.services.less_computer.abort_capture(session_id);
+                                return Err(error);
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        let _ = self.deps.services.less_computer.abort_capture(session_id);
+                        return Err(error);
+                    }
                 }
             };
             let request = if self.less_computer_capture_cancelled(session_id) {
@@ -3004,6 +3211,7 @@ impl OpenLessBackend {
                 Ok(request) => request,
                 Err(error) => {
                     let less_computer = Arc::clone(&self.deps.services.less_computer);
+                    let transcription = transcription.clone();
                     let _ = own_voice_effect(
                         &self.deps.task_spawner,
                         Box::pin(async move {
@@ -3011,7 +3219,9 @@ impl OpenLessBackend {
                             if let Some(recording) = recording {
                                 let _ = recording.stop().await;
                             }
-                            let _ = transcription.cancel().await;
+                            if let Some(transcription) = transcription {
+                                let _ = transcription.cancel().await;
+                            }
                             less_computer.abort_capture(session_id)
                         }),
                     )
@@ -3021,6 +3231,8 @@ impl OpenLessBackend {
             };
             let control = Arc::new(VoiceCaptureControl {
                 transcription,
+                pcm,
+                omni,
                 recording: Mutex::new(recording),
                 closed: std::sync::atomic::AtomicBool::new(false),
                 resources: Mutex::new(Some(resources)),
@@ -3099,7 +3311,7 @@ impl OpenLessBackend {
         let mut context = self
             .capture_dictation_context(
                 &DictationStartOptions::default(),
-                DictationContextPurpose::AsrOnly,
+                DictationContextPurpose::AuxiliaryVoice,
             )
             .await?;
         context.recording.archive_enabled = false;
@@ -3117,34 +3329,69 @@ impl OpenLessBackend {
             transcript: Mutex::new(crate::types::TranscriptAccumulator::default()),
             feedback: None,
         });
-        let capture = own_voice_start(
-            &self.deps.task_spawner,
-            Arc::clone(&resources),
-            self.deps.dictation_engine.start_voice_capture(
-                session_id,
-                context,
-                Arc::clone(&partials) as Arc<dyn TextStreamSink>,
-                Arc::new(SelectionVoiceRecordingProgress {
-                    session_id,
-                    selection_voice: Arc::clone(&self.deps.services.selection_voice),
-                    control,
-                    task_spawner: Arc::clone(&self.deps.task_spawner),
-                    started_at,
-                    silence: Mutex::new(silence),
-                }),
-                resources.cancel.clone(),
-            ),
-            discard_voice_capture,
-        )
-        .await?;
-        Ok(VoiceTranscriptionSession {
+        let recording_progress = Arc::new(SelectionVoiceRecordingProgress {
+            events: self.event_publisher(),
             session_id,
-            transcription: capture.transcription,
-            recording: Mutex::new(Some(capture.recording)),
-            partials,
-            lifecycle: Arc::new(VoiceCaptureLifecycle::with_resources(resources)),
+            selection_voice: Arc::clone(&self.deps.services.selection_voice),
+            control,
             task_spawner: Arc::clone(&self.deps.task_spawner),
-        })
+            started_at,
+            silence: Mutex::new(silence),
+        });
+        if context.pipeline_mode == crate::shared_types::PipelineMode::Multimodal {
+            let capture = own_voice_start(
+                &self.deps.task_spawner,
+                Arc::clone(&resources),
+                self.deps.dictation_engine.start_audio_capture(
+                    session_id,
+                    Arc::clone(&context),
+                    Arc::clone(&recording_progress) as Arc<dyn crate::ports::RecordingProgressSink>,
+                    resources.cancel.clone(),
+                ),
+                |capture| {
+                    Box::pin(async move { stop_and_discard_recording(capture.recording).await })
+                },
+            )
+            .await?;
+            Ok(VoiceTranscriptionSession {
+                session_id,
+                transcription: None,
+                pcm: Some(capture.pcm),
+                omni: Some(AuxiliaryOmniFinish {
+                    credentials: Arc::clone(&self.deps.credential_store),
+                    context,
+                    system_prompt: crate::prompts::auxiliary_voice_omni_instruction_prompt(),
+                }),
+                recording: Mutex::new(Some(capture.recording)),
+                partials,
+                lifecycle: Arc::new(VoiceCaptureLifecycle::with_resources(resources)),
+                task_spawner: Arc::clone(&self.deps.task_spawner),
+            })
+        } else {
+            let capture = own_voice_start(
+                &self.deps.task_spawner,
+                Arc::clone(&resources),
+                self.deps.dictation_engine.start_voice_capture(
+                    session_id,
+                    Arc::clone(&context),
+                    Arc::clone(&partials) as Arc<dyn TextStreamSink>,
+                    Arc::clone(&recording_progress) as Arc<dyn crate::ports::RecordingProgressSink>,
+                    resources.cancel.clone(),
+                ),
+                discard_voice_capture,
+            )
+            .await?;
+            Ok(VoiceTranscriptionSession {
+                session_id,
+                transcription: Some(capture.transcription),
+                pcm: None,
+                omni: None,
+                recording: Mutex::new(Some(capture.recording)),
+                partials,
+                lifecycle: Arc::new(VoiceCaptureLifecycle::with_resources(resources)),
+                task_spawner: Arc::clone(&self.deps.task_spawner),
+            })
+        }
     }
 
     #[doc(hidden)]
@@ -3518,6 +3765,9 @@ impl OpenLessBackend {
         // Native status warms only through the already-bound sync gate. A
         // pending journal therefore uses the Host's read-only loader before
         // startup recovery/auto-sync tries to capture credentials.
+        if !self.snapshot().running {
+            self.recover_cloud_notes()?;
+        }
         let before = self.get_preferences();
         let warmed = self.deps.credential_store.status(before).await;
         if let Some(sync) = &self.encrypted_sync {
@@ -4296,7 +4546,7 @@ impl OpenLessBackend {
         Ok(result)
     }
 
-    async fn refresh_and_publish_credentials(&self) -> Result<CredentialsStatus, BackendError> {
+    pub async fn refresh_and_publish_credentials(&self) -> Result<CredentialsStatus, BackendError> {
         let status = self
             .deps
             .credential_store
@@ -4315,12 +4565,17 @@ impl OpenLessBackend {
         self.preferences.get()
     }
 
-    /// 消费「本大版本首启」开屏 PV 标记：配置里的 `splash_seen_version` 与传入的
-    /// 当前主版本一致时返回 false（不再播放）；不一致时写回主版本并返回 true，
-    /// 前端据此播放随包发行的开屏动画（同世代 2.x 升级与重启都不重播）。
-    /// 磁盘写入失败时仍返回 true——宁可多播一次，也不静默吞掉首启体验；标记留待
-    /// 下次启动重试。成功写回后走 publish_preferences_changed 递增 revision，
-    /// 让并发中的设置页乐观提交重新对账，不会拿着旧档把标记冲掉。
+    /// Consumes the "first launch of this major version" splash PV marker:
+    /// returns false when the config's `splash_seen_version` matches the
+    /// given current major (no replay); on mismatch it writes back the major
+    /// and returns true, and the frontend plays the bundled splash animation
+    /// (2.x upgrades and restarts within the same generation never replay).
+    /// Returns true even when the disk write fails — better to replay once
+    /// than silently swallow the first-launch experience; the marker retries
+    /// on next launch. A successful write goes through
+    /// publish_preferences_changed to bump the revision so in-flight settings
+    /// pages with optimistic submits re-reconcile instead of wiping the
+    /// marker with a stale document.
     pub fn take_splash_playback(&self, current_major: &str) -> bool {
         match self.preferences.update(|preferences| {
             if preferences.splash_seen_version == current_major {
@@ -4424,12 +4679,16 @@ impl OpenLessBackend {
                 });
             }
         }
+        preferences.vocabulary_learning_settings =
+            preferences.vocabulary_learning_settings.normalized();
         let mut previous = self.preferences.get();
         crate::sync_dictation_hotkey_legacy_fields(&mut previous);
         crate::sync_dictation_hotkey_legacy_fields(&mut preferences);
-        // 开屏标记只能由 take_splash_playback 推进：整档提交的客户端（旧前端或
-        // 尚未回读标记的请求）不带此字段时，serde 默认会把空串写回，导致下次
-        // 启动重播开屏 PV。这里永远沿用盘上的当前值。
+        // The splash marker may only advance via take_splash_playback: when a
+        // whole-document submit (old frontend, or a request that hasn't read
+        // the marker back) omits the field, serde's default would write the
+        // empty string and replay the splash PV on next launch. Always keep
+        // the on-disk current value here.
         preferences.splash_seen_version = previous.splash_seen_version.clone();
         if options.preserve_current_style {
             preferences.preserve_style_preferences_from(&previous);
@@ -4504,8 +4763,11 @@ impl OpenLessBackend {
                 .reset();
         }
 
-        if previous.cursor_context_enabled && !preferences.cursor_context_enabled {
+        if (previous.vocabulary_learning_enabled && !preferences.vocabulary_learning_enabled)
+            || previous.vocabulary_learning_settings != preferences.vocabulary_learning_settings
+        {
             self.disarm_edit_observation();
+            self.dismiss_pending_corrections();
         }
         self.publish_preferences_changed();
         Ok(crate::SettingsUpdateOutcome {
@@ -4946,10 +5208,12 @@ impl OpenLessBackend {
     /// Return the instance-local correction suggestions awaiting a user
     /// decision. The returned value is owned and safe to render on any host.
     pub fn pending_corrections(&self) -> Vec<PendingCorrection> {
-        self.pending_corrections
+        let mut pending = self
+            .pending_corrections
             .lock()
-            .expect("pending correction lock poisoned")
-            .clone()
+            .expect("pending correction lock poisoned");
+        pending.retain(|item| item.expires_at_ms > chrono::Utc::now().timestamp_millis());
+        pending.clone()
     }
 
     /// Queue one observed manual correction. Duplicate pairs are ignored and
@@ -4964,6 +5228,10 @@ impl OpenLessBackend {
             &self.events,
             pattern,
             replacement,
+            None,
+            self.get_preferences()
+                .vocabulary_learning_settings
+                .suggestion_seconds,
         )
     }
 
@@ -5000,7 +5268,7 @@ impl OpenLessBackend {
         }
         self.disarm_edit_observation();
         if !enabled
-            || !self.get_preferences().cursor_context_enabled
+            || !self.get_preferences().vocabulary_learning_enabled
             || !matches!(insert_outcome, Some(InsertOutcome::Inserted))
             || typed_text.trim().is_empty()
         {
@@ -5008,6 +5276,10 @@ impl OpenLessBackend {
         }
         let expected_generation = self.edit_observation_generation.load(Ordering::Acquire);
         let sink = Arc::new(CoreEditObservationSink {
+            settings: self
+                .get_preferences()
+                .vocabulary_learning_settings
+                .normalized(),
             expected_generation,
             generation: Arc::clone(&self.edit_observation_generation),
             typed_text: typed_text.to_string(),
@@ -5045,6 +5317,14 @@ impl OpenLessBackend {
                 return Ok(None);
             };
             let suggestion = pending[index].clone();
+            if suggestion.expires_at_ms <= chrono::Utc::now().timestamp_millis() {
+                pending.remove(index);
+                self.events.publish(
+                    None,
+                    BackendEventKind::VocabularySuggestionsChanged(pending.clone()),
+                );
+                return Ok(None);
+            }
             let added = self.vocabulary.add_if_absent(
                 suggestion.replacement.clone(),
                 Some(LEARNED_VOCAB_NOTE.to_string()),
@@ -5103,6 +5383,23 @@ impl OpenLessBackend {
                 BackendEventKind::VocabularySuggestionsChanged(Vec::new()),
             );
         }
+    }
+
+    /// Explicit user-confirmed vocabulary collection from an in-app editor.
+    /// This path intentionally does not require permission to read other apps.
+    pub fn add_learned_vocabulary(
+        &self,
+        phrase: String,
+    ) -> Result<Option<DictionaryEntry>, BackendError> {
+        let phrase = phrase.trim();
+        if phrase.is_empty() || phrase.chars().count() > 64 || phrase.chars().any(char::is_control)
+        {
+            return Err(BackendError::new(
+                BackendErrorCode::InvalidArgument,
+                "enter a word or phrase of 1–64 characters",
+            ));
+        }
+        self.add_vocabulary_if_absent(phrase.to_owned(), Some(LEARNED_VOCAB_NOTE.to_owned()))
     }
 
     pub fn add_vocabulary(
@@ -5292,6 +5589,7 @@ impl OpenLessBackend {
             };
             state.dictation_start_output_target = Some(output_target);
             state.dictation_translation_requested = None;
+            state.dictation_destination_changed = false;
             self.events.publish(
                 Some(session_id),
                 BackendEventKind::DictationStateChanged(state.dictation.clone()),
@@ -5324,6 +5622,12 @@ impl OpenLessBackend {
             resources: starting_resources,
             inserter,
         } = reservation;
+        if options.output_target == DictationOutputTarget::CloudNote {
+            if let Err(error) = self.set_dictation_cloud_note(session_id, true) {
+                self.reset_dictation_session(session_id);
+                return Err(error);
+            }
+        }
         let context = match self
             .capture_dictation_context(&options, DictationContextPurpose::Dictation)
             .await
@@ -5365,6 +5669,10 @@ impl OpenLessBackend {
                     ),
                 }
             });
+            let context = match state.dictation_start_output_target {
+                Some(target) => Arc::new(context.with_output_target(target)),
+                None => context,
+            };
             state.dictation.translation_active = context.polish.translation_active;
             state.dictation_context = Some(Arc::clone(&context));
             state.dictation_start_output_target = None;
@@ -5530,6 +5838,7 @@ impl OpenLessBackend {
         if !started {
             let _ = self.cancel_session_adapters(session_id).await;
             self.reconcile_aborted_recording_draft(session_id, &context);
+            self.cleanup_cloud_note(session_id, true)?;
             return Err(BackendError::new(
                 BackendErrorCode::Cancelled,
                 "dictation session was cancelled while the engine was starting",
@@ -5576,7 +5885,7 @@ impl OpenLessBackend {
         .await
     }
 
-    async fn stop_dictation_session_with_options(
+    pub async fn stop_dictation_session_with_options(
         &self,
         mut expected_session_id: Option<SessionId>,
         options: DictationStopOptions,
@@ -5616,11 +5925,15 @@ impl OpenLessBackend {
                         })?;
                         let target = output_target.unwrap_or_else(|| match options.quick_note {
                             Some(true) => DictationOutputTarget::QuickNote,
-                            Some(false) => DictationOutputTarget::ForegroundApp,
+                            Some(false)
+                                if captured.output_target != DictationOutputTarget::CloudNote =>
+                            {
+                                DictationOutputTarget::ForegroundApp
+                            }
                             None if captured.output_target == DictationOutputTarget::Undecided => {
                                 DictationOutputTarget::ForegroundApp
                             }
-                            None => captured.output_target,
+                            None | Some(false) => captured.output_target,
                         });
                         let targeted = captured.with_output_target(target);
                         let context = match options.translation_requested {
@@ -5629,11 +5942,19 @@ impl OpenLessBackend {
                             }
                             None => Arc::new(targeted),
                         };
+                        let context = match options.raw_requested {
+                            Some(true) => Arc::new(context.with_raw_requested(true)),
+                            _ => context,
+                        };
                         let context_changed =
-                            state.dictation_translation_requested.take().is_some()
+                            std::mem::take(&mut state.dictation_destination_changed)
+                                || state.dictation_translation_requested.take().is_some()
                                 || state.dictation_context.as_ref().is_some_and(|previous| {
                                     previous.polish.translation_active
                                         != context.polish.translation_active
+                                        || previous.polish.mode != context.polish.mode
+                                        || previous.polish.style_system_prompt
+                                            != context.polish.style_system_prompt
                                         || previous.output_target != context.output_target
                                 });
                         state.dictation_context = Some(Arc::clone(&context));
@@ -5764,6 +6085,17 @@ impl OpenLessBackend {
                 return Err(error);
             }
         };
+
+        if context.output_target == DictationOutputTarget::CloudNote && engine_result.polish_failed
+        {
+            let error =
+                BackendError::new(BackendErrorCode::Provider, "cloud note polishing failed");
+            self.mark_dictation_failed(session_id, &error);
+            let _ = self.hide_dictation_feedback(session_id);
+            self.reset_dictation_session(session_id);
+            self.cleanup_cloud_note(session_id, true)?;
+            return Err(error);
+        }
 
         if engine_result.raw_text.trim().is_empty() {
             let error = BackendError::new(
@@ -5945,6 +6277,7 @@ impl OpenLessBackend {
         // transcript, silence detector or physical-hotkey generation.
         self.reset_dictation_session(session_id);
         self.persist_completed_dictation(&context, &result, insert_outcome, &engine_result);
+        self.cleanup_cloud_note(session_id, true)?;
         host_result?;
         Ok(result)
     }
@@ -5958,6 +6291,11 @@ impl OpenLessBackend {
     }
 
     fn persist_recording_started(&self, context: &DictationContext, session_id: SessionId) {
+        if context.output_target == DictationOutputTarget::CloudNote
+            || self.is_cloud_note(session_id)
+        {
+            return;
+        }
         let preferences = self.get_preferences();
         let front_app =
             crate::shared_types::split_front_app_opt(context.polish.front_app.as_deref());
@@ -6070,7 +6408,10 @@ impl OpenLessBackend {
         insert_outcome: Option<InsertOutcome>,
         engine_result: &crate::ports::EngineResult,
     ) {
-        if context.output_target == DictationOutputTarget::Qa {
+        if context.output_target == DictationOutputTarget::Qa
+            || context.output_target == DictationOutputTarget::CloudNote
+            || self.is_cloud_note(result.session_id)
+        {
             self.remove_recording_draft(result.session_id);
             return;
         }
@@ -6164,6 +6505,11 @@ impl OpenLessBackend {
         asr_call_label: Option<crate::auxiliary::AsrCallLabel>,
         llm_call_label: Option<crate::polish::LlmCallLabel>,
     ) {
+        if context.output_target == DictationOutputTarget::CloudNote
+            || self.is_cloud_note(session_id)
+        {
+            return;
+        }
         let preferences = self.get_preferences();
         let front_app =
             crate::shared_types::split_front_app_opt(context.polish.front_app.as_deref());
@@ -6257,6 +6603,9 @@ impl OpenLessBackend {
         hotkey.terminal(std::time::Instant::now());
         self.phase_changed.notify_waiters();
         drop(state);
+        if let Err(error) = self.cleanup_cloud_note(session_id, false) {
+            log::warn!("{error}");
+        }
         self.voice_sessions.release(session_id);
     }
 
@@ -6453,7 +6802,8 @@ impl OpenLessBackend {
         let first_error = cancel_result
             .err()
             .or_else(|| host_result.err())
-            .or_else(|| history_result.err());
+            .or_else(|| history_result.err())
+            .or_else(|| self.cleanup_cloud_note(active, false).err());
         match first_error {
             Some(error) => Err(error),
             None => Ok(()),
@@ -6507,17 +6857,14 @@ impl OpenLessBackend {
             .filter(|entry| entry.enabled)
             .map(|entry| entry.phrase)
             .collect();
-        // Less/Selection audio always uses ASR. QA text needs no microphone
-        // provider; Omni needs neither traditional channel. An unused channel
-        // must not turn a valid route into a startup failure.
-        let pipeline_mode = if purpose == DictationContextPurpose::AsrOnly {
-            crate::shared_types::PipelineMode::Traditional
-        } else {
-            crate::shared_types::effective_pipeline_mode(
-                preferences.multimodal_pipeline_enabled,
-                preferences.pipeline_mode,
-            )
-        };
+        // Auxiliary Voice (Selection / Less) and QA Voice respect multimodal
+        // preferences. Skip unused traditional channels so a valid Omni route
+        // is not blocked by missing ASR/LLM. QA text needs no microphone
+        // provider.
+        let pipeline_mode = crate::shared_types::effective_pipeline_mode(
+            preferences.multimodal_pipeline_enabled,
+            preferences.pipeline_mode,
+        );
         let traditional = pipeline_mode == crate::shared_types::PipelineMode::Traditional;
         let active_asr_provider = if traditional && purpose != DictationContextPurpose::QaText {
             self.resolve_session_provider(ProviderSlot::Asr, &preferences.active_asr_provider)
@@ -6528,7 +6875,8 @@ impl OpenLessBackend {
             )
         };
         let mut deferred_llm_error = None;
-        let active_llm_provider = if traditional && purpose != DictationContextPurpose::AsrOnly {
+        let skip_llm_at_capture = purpose == DictationContextPurpose::AuxiliaryVoice;
+        let active_llm_provider = if traditional && !skip_llm_at_capture {
             match self
                 .resolve_session_provider(ProviderSlot::Llm, &preferences.active_llm_provider)
                 .await
@@ -6674,6 +7022,143 @@ mod tests {
     };
 
     fn assert_send_sync<T: Send + Sync>() {}
+
+    #[test]
+    fn vocabulary_learning_settings_migrate_normalize_and_roundtrip() {
+        let old: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert!(!old.vocabulary_learning_enabled);
+        assert_eq!(old.vocabulary_learning_settings, Default::default());
+        let prefs: UserPreferences = serde_json::from_value(serde_json::json!({
+            "vocabularyLearningSettings": {
+                "observationSeconds": 0, "suggestionSeconds": 999, "maxPhraseChars": 99
+            }
+        }))
+        .unwrap();
+        assert_eq!(prefs.vocabulary_learning_settings.observation_seconds, 10);
+        assert_eq!(prefs.vocabulary_learning_settings.suggestion_seconds, 60);
+        assert_eq!(prefs.vocabulary_learning_settings.max_phrase_chars, 32);
+        let restored: UserPreferences =
+            serde_json::from_value(serde_json::to_value(&prefs).unwrap()).unwrap();
+        assert_eq!(
+            restored.vocabulary_learning_settings,
+            prefs.vocabulary_learning_settings
+        );
+    }
+
+    #[test]
+    fn vocabulary_learning_config_change_invalidates_pending_and_stale_sink() {
+        let (backend, _) = backend();
+        let mut prefs = backend.get_preferences();
+        prefs.vocabulary_learning_enabled = true;
+        prefs.vocabulary_learning_settings.observation_seconds = 20;
+        prefs.vocabulary_learning_settings.suggestion_seconds = 30;
+        prefs.vocabulary_learning_settings.max_phrase_chars = 16;
+        backend
+            .update_settings(
+                prefs,
+                crate::SettingsUpdateOptions::STRICT,
+                &crate::NoopSettingsRuntime,
+            )
+            .unwrap();
+        let sink = CoreEditObservationSink {
+            settings: backend.get_preferences().vocabulary_learning_settings,
+            expected_generation: backend.edit_observation_generation.load(Ordering::Acquire),
+            generation: Arc::clone(&backend.edit_observation_generation),
+            typed_text: "甲".repeat(13),
+            pending: Arc::clone(&backend.pending_corrections),
+            events: Arc::clone(&backend.events),
+        };
+        assert_eq!(
+            sink.observation_duration(),
+            std::time::Duration::from_secs(20)
+        );
+        let edit = crate::host_document::EditPair {
+            source: "甲".repeat(13),
+            target: "乙".repeat(13),
+            before: String::new(),
+            after: String::new(),
+        };
+        let before = chrono::Utc::now().timestamp_millis();
+        assert!(sink.publish(edit.clone()));
+        let after = chrono::Utc::now().timestamp_millis();
+        let suggestion = backend.pending_corrections().pop().unwrap();
+        assert!((before + 30_000..=after + 30_000).contains(&suggestion.expires_at_ms));
+        let mut prefs = backend.get_preferences();
+        prefs.vocabulary_learning_settings.observation_seconds = 999;
+        backend
+            .update_settings(
+                prefs,
+                crate::SettingsUpdateOptions::STRICT,
+                &crate::NoopSettingsRuntime,
+            )
+            .unwrap();
+        assert_eq!(
+            backend
+                .get_preferences()
+                .vocabulary_learning_settings
+                .observation_seconds,
+            60
+        );
+        assert!(backend.pending_corrections().is_empty());
+        assert!(!sink.publish(edit));
+        assert!(backend.pending_corrections().is_empty());
+        assert!(backend.get_preferences().vocabulary_learning_enabled);
+    }
+
+    #[test]
+    fn vocabulary_learning_expired_suggestions_cannot_be_accepted() {
+        let (backend, _) = backend();
+        let suggestion = backend
+            .queue_pending_correction("错词".into(), "Codex".into())
+            .unwrap()
+            .unwrap();
+        backend.pending_corrections.lock().unwrap()[0].expires_at_ms = 0;
+        assert!(backend
+            .accept_pending_correction(&suggestion.id)
+            .unwrap()
+            .is_none());
+        assert!(backend.list_vocabulary().unwrap().is_empty());
+        assert!(backend.pending_corrections().is_empty());
+    }
+
+    #[test]
+    fn vocabulary_learning_explicit_collection_is_confirmed_and_idempotent() {
+        let (backend, _) = backend();
+        assert!(!backend.get_preferences().vocabulary_learning_enabled);
+        let word = backend
+            .add_learned_vocabulary(" Codex ".into())
+            .unwrap()
+            .unwrap();
+        assert_eq!(word.phrase, "Codex");
+        assert_eq!(word.note.as_deref(), Some(LEARNED_VOCAB_NOTE));
+        assert!(backend
+            .add_learned_vocabulary("Codex".into())
+            .unwrap()
+            .is_none());
+        assert!(backend.add_learned_vocabulary("\n".into()).is_err());
+        assert!(backend
+            .add_learned_vocabulary("first\nsecond".into())
+            .is_err());
+        assert!(backend.add_learned_vocabulary("a".repeat(65)).is_err());
+        assert_eq!(backend.list_vocabulary().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn vocabulary_learning_old_generation_cannot_queue_after_opt_out() {
+        let (backend, _) = backend();
+        let generation = AtomicU64::new(2);
+        assert!(queue_pending_correction_state(
+            &backend.pending_corrections,
+            &backend.events,
+            "错词".into(),
+            "Codex".into(),
+            Some((&generation, 1)),
+            10
+        )
+        .unwrap()
+        .is_none());
+        assert!(backend.pending_corrections().is_empty());
+    }
 
     struct TestDataDir {
         path: std::path::PathBuf,
@@ -8113,6 +8598,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn selection_voice_capture_respects_pipeline_mode() {
+        let data_dir = TestDataDir::new("selection-voice-pipeline-mode");
+        let recorder = Arc::new(crate::testing::FixtureAudioRecorder::new(
+            vec![vec![1, 0, 2, 0]],
+            vec![],
+        ));
+        let transcription = Arc::new(crate::testing::FixtureTranscriptionEngine::successful(
+            "edit this",
+            120,
+        ));
+        let engine = crate::PipelineDictationEngine::new(
+            recorder.clone(),
+            transcription.clone(),
+            Arc::new(crate::testing::FixtureTextPolisher::successful("unused")),
+        );
+        let backend = OpenLessBackend::new(
+            BackendConfig {
+                data_dir: data_dir.path().to_path_buf(),
+                ..BackendConfig::default()
+            },
+            BackendDependencies {
+                dictation_engine: Arc::new(engine),
+                ..BackendDependencies::unsupported()
+            },
+        )
+        .unwrap();
+        let mut preferences = backend.get_preferences();
+        preferences.selection_voice_enabled = true;
+        backend.set_preferences(preferences).unwrap();
+
+        let traditional_id = backend
+            .services()
+            .selection_voice
+            .begin(crate::domains::SelectionCapture {
+                text: "draft".into(),
+                source_app: None,
+            })
+            .await
+            .unwrap();
+        let traditional = backend
+            .start_selection_voice_capture(
+                traditional_id,
+                Arc::new(FakeRecordingControl::default()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(traditional.finish().await.unwrap(), "edit this");
+        assert_eq!(transcription.pcm(), vec![1, 0, 2, 0]);
+        backend
+            .services()
+            .selection_voice
+            .cancel(Some(traditional_id))
+            .await
+            .unwrap();
+
+        let mut preferences = backend.get_preferences();
+        preferences.multimodal_pipeline_enabled = true;
+        preferences.pipeline_mode = crate::shared_types::PipelineMode::Multimodal;
+        backend.set_preferences(preferences).unwrap();
+        let asr_pcm_before = transcription.pcm().len();
+        let multimodal_id = backend
+            .services()
+            .selection_voice
+            .begin(crate::domains::SelectionCapture {
+                text: "draft".into(),
+                source_app: None,
+            })
+            .await
+            .unwrap();
+        let multimodal = backend
+            .start_selection_voice_capture(multimodal_id, Arc::new(FakeRecordingControl::default()))
+            .await
+            .unwrap();
+        // Multimodal finish needs Omni credentials; capture must not feed ASR.
+        assert!(multimodal.finish().await.is_err());
+        assert_eq!(transcription.pcm().len(), asr_pcm_before);
+        assert_eq!(recorder.stop_count(), 2);
+        backend
+            .services()
+            .selection_voice
+            .cancel(Some(multimodal_id))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
     async fn qa_and_selection_voice_capture_can_cancel_during_transcription_finish() {
         struct PendingTranscription {
             entered: Arc<tokio::sync::Semaphore>,
@@ -8197,7 +8768,9 @@ mod tests {
         });
         let capture = VoiceTranscriptionSession {
             session_id: SessionId::new(),
-            transcription: transcription.clone(),
+            transcription: Some(transcription.clone()),
+            pcm: None,
+            omni: None,
             recording: Mutex::new(None),
             partials: Arc::new(VoiceTranscriptSink {
                 publisher: backend.event_publisher(),
@@ -8537,6 +9110,7 @@ mod tests {
             })
             .await
             .unwrap();
+        let mut events = backend.subscribe();
         let control = Arc::new(FakeRecordingControl::default());
         let capture = backend
             .start_selection_voice_capture(
@@ -8546,6 +9120,23 @@ mod tests {
             .await
             .unwrap();
         tokio::task::yield_now().await;
+
+        let levels: Vec<f32> = std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event.kind {
+                BackendEventKind::SelectionVoiceLevel(level) => Some(level.level),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            levels
+                .iter()
+                .any(|level| (*level - 0.1).abs() < f32::EPSILON),
+            "selection voice must publish voiced levels for the shared capsule meter: {levels:?}"
+        );
+        assert!(
+            levels.contains(&0.0),
+            "selection voice must publish quiet levels for the shared capsule meter: {levels:?}"
+        );
 
         assert_eq!(
             *control.requests.lock().unwrap(),
@@ -10047,7 +10638,11 @@ mod tests {
         )
         .unwrap();
         let mut preferences = backend.get_preferences();
-        preferences.cursor_context_enabled = true;
+        preferences.vocabulary_learning_enabled = true;
+        assert!(
+            !preferences.cursor_context_enabled,
+            "learning must not require uploading cursor context"
+        );
         backend.set_preferences(preferences).unwrap();
         backend.start().await.unwrap();
         backend.start_dictation().await.unwrap();
@@ -10068,7 +10663,7 @@ mod tests {
 
         backend.dismiss_pending_corrections();
         let mut preferences = backend.get_preferences();
-        preferences.cursor_context_enabled = false;
+        preferences.vocabulary_learning_enabled = false;
         backend
             .update_settings(
                 preferences,
@@ -10081,7 +10676,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn disabled_cursor_context_is_not_rearmed_by_an_older_dictation() {
+    async fn disabled_vocabulary_learning_is_not_rearmed_by_an_older_dictation() {
         for streaming in [false, true] {
             let data_dir = TestDataDir::new("privacy-disabled-during-dictation");
             let observation = Arc::new(FakeEditObservation::default());
@@ -10106,13 +10701,13 @@ mod tests {
             )
             .unwrap();
             let mut preferences = backend.get_preferences();
-            preferences.cursor_context_enabled = true;
+            preferences.vocabulary_learning_enabled = true;
             preferences.streaming_insert = streaming;
             backend.set_preferences(preferences).unwrap();
             backend.start().await.unwrap();
             backend.start_dictation().await.unwrap();
             let mut preferences = backend.get_preferences();
-            preferences.cursor_context_enabled = false;
+            preferences.vocabulary_learning_enabled = false;
             backend
                 .update_settings(
                     preferences,
@@ -10238,7 +10833,7 @@ mod tests {
             .unwrap(),
         );
         let mut preferences = backend.get_preferences();
-        preferences.cursor_context_enabled = true;
+        preferences.vocabulary_learning_enabled = true;
         backend.set_preferences(preferences).unwrap();
         backend.start().await.unwrap();
         let first = backend.start_dictation().await.unwrap();
@@ -10843,6 +11438,135 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cloud_note_destination_can_be_revoked_and_cleanup_failure_is_visible() {
+        let data_dir = std::env::temp_dir().join(format!(
+            "openless-cloud-destination-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let engine = Arc::new(crate::testing::FixtureDictationEngine::successful(
+            "raw", "polished",
+        ));
+        let backend = backend_with_dictation_engine(data_dir.clone(), engine.clone());
+        backend.start().await.unwrap();
+        let id = backend.start_dictation().await.unwrap();
+        backend.set_dictation_cloud_note(id, true).unwrap();
+        backend.set_dictation_cloud_note(id, false).unwrap();
+        backend.stop_dictation_session(id).await.unwrap();
+        assert_eq!(backend.list_history().unwrap().len(), 1);
+        assert_eq!(
+            engine.contexts().last().unwrap().output_target,
+            DictationOutputTarget::ForegroundApp
+        );
+        let cloud = backend
+            .start_dictation_with_options(DictationStartOptions {
+                output_target: DictationOutputTarget::CloudNote,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let blocked_path = data_dir.join("recordings").join(format!("{cloud}.wav"));
+        std::fs::create_dir_all(&blocked_path).unwrap();
+        assert_eq!(
+            backend
+                .stop_dictation_session(cloud)
+                .await
+                .unwrap_err()
+                .code,
+            BackendErrorCode::Persistence
+        );
+        assert_eq!(backend.list_history().unwrap().len(), 1);
+        assert!(data_dir
+            .join("cloud-note-cleanup")
+            .join(cloud.to_string())
+            .exists());
+        std::fs::remove_dir(&blocked_path).unwrap();
+        backend.shutdown().await.unwrap();
+        backend.start().await.unwrap();
+        assert!(!data_dir
+            .join("cloud-note-cleanup")
+            .join(cloud.to_string())
+            .exists());
+        backend.shutdown().await.unwrap();
+        std::fs::remove_dir_all(data_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cloud_notes_never_retain_history_or_audio_on_success_failure_or_cancel() {
+        for outcome in ["success", "failure", "polish_failure", "empty", "cancel"] {
+            let data_dir =
+                std::env::temp_dir().join(format!("openless-cloud-note-{}", uuid::Uuid::new_v4()));
+            let transcription = if outcome == "failure" {
+                crate::testing::FixtureTranscriptionEngine::failing(BackendError::new(
+                    BackendErrorCode::Provider,
+                    "fixture",
+                ))
+            } else {
+                crate::testing::FixtureTranscriptionEngine::successful(
+                    if outcome == "empty" {
+                        ""
+                    } else {
+                        "private text"
+                    },
+                    1000,
+                )
+            };
+            let engine = crate::PipelineDictationEngine::new(
+                Arc::new(crate::ExternalAudioRecorder::with_recordings_directory(
+                    data_dir.join("recordings"),
+                )),
+                Arc::new(transcription),
+                Arc::new(if outcome == "polish_failure" {
+                    crate::testing::FixtureTextPolisher::failing(BackendError::new(
+                        BackendErrorCode::Provider,
+                        "fixture polish",
+                    ))
+                } else {
+                    crate::testing::FixtureTextPolisher::successful("polished private text")
+                }),
+            );
+            let backend = backend_with_dictation_engine(data_dir.clone(), Arc::new(engine));
+            backend.start().await.unwrap();
+            let mut prefs = backend.get_preferences();
+            prefs.record_audio_for_debug = true;
+            backend.set_preferences(prefs).unwrap();
+            let id = backend.start_external_dictation().await.unwrap();
+            backend.feed_external_pcm(id, &vec![1; 32000]).unwrap();
+            backend.set_dictation_cloud_note(id, true).unwrap();
+            if outcome == "cancel" {
+                backend.cancel_dictation(Some(id)).await.unwrap();
+            } else {
+                let result = backend.stop_dictation_session(id).await;
+                assert_eq!(result.is_ok(), outcome == "success");
+                if let Ok(result) = result {
+                    assert_eq!(result.polished_text, "polished private text");
+                }
+            }
+            assert!(backend.list_history().unwrap().is_empty(), "{outcome}");
+            assert!(
+                !data_dir
+                    .join("recordings")
+                    .join(format!("{id}.wav"))
+                    .exists(),
+                "{outcome}"
+            );
+            assert!(backend.set_dictation_cloud_note(id, true).is_err());
+            backend.shutdown().await.unwrap();
+            // Crash recovery may only remove recordings with an explicit cleanup marker.
+            std::fs::create_dir_all(data_dir.join("cloud-note-cleanup")).unwrap();
+            std::fs::write(data_dir.join("cloud-note-cleanup").join(id.to_string()), "").unwrap();
+            let private_wav = data_dir.join("recordings").join(format!("{id}.wav"));
+            std::fs::write(&private_wav, "private").unwrap();
+            let retained = data_dir.join("recordings/ordinary.wav");
+            std::fs::write(&retained, "ordinary").unwrap();
+            backend.start().await.unwrap();
+            assert!(!private_wav.exists());
+            assert!(retained.exists());
+            backend.shutdown().await.unwrap();
+            std::fs::remove_dir_all(data_dir).unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn external_audio_saves_failed_recordings_for_history_retry_and_prunes_successful_audio()
     {
         for fail in [false, true] {
@@ -11034,12 +11758,14 @@ mod tests {
             Some("polished source".to_string()),
             1250,
         );
-        let fixed_clock = Arc::new(crate::testing::FixedClock::new(
-            chrono::DateTime::parse_from_rfc3339("2026-08-28T12:34:56Z")
-                .unwrap()
-                .with_timezone(&chrono::Utc),
-            chrono::NaiveDate::from_ymd_opt(2026, 8, 28).unwrap(),
-        ));
+        // FixedClock stamps history/activity; retain_with_policy still uses wall-clock
+        // Utc::now(). Keep the stamp within the last day so a 30-day retention window
+        // never prunes the just-written entry as the calendar advances.
+        use chrono::Timelike;
+        let stamp = (chrono::Utc::now() - chrono::Duration::days(1))
+            .with_nanosecond(0)
+            .expect("truncate sub-second");
+        let fixed_clock = Arc::new(crate::testing::FixedClock::new(stamp, stamp.date_naive()));
         let backend = OpenLessBackend::new_with_clock(
             BackendConfig {
                 data_dir: data_dir.clone(),
@@ -11090,7 +11816,7 @@ mod tests {
         assert_eq!(history.len(), 1);
         let entry = &history[0];
         assert_eq!(entry.id, session_id.to_string());
-        assert_eq!(entry.created_at, "2026-08-28T12:34:56+00:00");
+        assert_eq!(entry.created_at, stamp.to_rfc3339());
         assert_eq!(entry.raw_transcript, "raw voice");
         assert_eq!(entry.final_text, "translated output");
         assert_eq!(entry.polish_source.as_deref(), Some("polished source"));
@@ -11102,7 +11828,7 @@ mod tests {
         );
         let activity = backend.list_activity().unwrap();
         assert_eq!(activity.len(), 1);
-        assert_eq!(activity[0].date, "2026-08-28");
+        assert_eq!(activity[0].date, stamp.date_naive().to_string());
         assert_eq!(
             activity[0].chars,
             "translated output".chars().count() as u64
@@ -12539,16 +13265,16 @@ mod tests {
         };
 
         let backend = make();
-        // 首启：标记缺失 → 播放一次并写回主版本。
+        // First launch: marker missing -> play once and write back the major.
         assert!(backend.take_splash_playback("2"));
         assert_eq!(backend.get_preferences().splash_seen_version, "2");
-        // 同一世代内再次启动不再播放。
+        // A restart within the same generation doesn't replay.
         assert!(!backend.take_splash_playback("2"));
 
-        // 模拟进程重启：标记已从 preferences.json 读回。
+        // Simulated process restart: the marker was read back from preferences.json.
         let reopened = make();
         assert!(!reopened.take_splash_playback("2"));
-        // 新一代大版本：播一次新 PV 后同样收口。
+        // A new major generation: plays the new PV once, then settles the same way.
         assert!(reopened.take_splash_playback("3"));
         assert!(!reopened.take_splash_playback("3"));
         assert_eq!(reopened.get_preferences().splash_seen_version, "3");

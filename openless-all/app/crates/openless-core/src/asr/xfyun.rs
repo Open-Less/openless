@@ -1,18 +1,21 @@
-//! iFlytek（讯飞开放平台）实时语音转写（RTASR）流式客户端。
+//! iFlytek (Xfyun Open Platform) realtime speech transcription (RTASR) streaming
+//! client.
 //!
-//! 官方文档：https://www.xfyun.cn/doc/asr/rtasr/API.html
+//! Official docs: https://www.xfyun.cn/doc/asr/rtasr/API.html
 //!
-//! 协议要点（标准版）：
-//! - 端点：`wss://rtasr.xfyun.cn/v1/ws`，鉴权走查询参数
-//!   `appid` + `ts` + `signa`，其中 `signa = Base64(HmacSHA1(MD5(appid + ts), apiKey))`；
-//! - 音频：16 kHz / 16-bit / 单声道 PCM，与 OpenLess recorder 输出完全一致；
-//! - 建议每 40ms 发送 1280 字节，发送过快可能触发引擎报错；
-//! - 上传结束：发送二进制消息 `{"end": true}`；
-//! - 结果：服务端以 text message 返回 `{"action":"result","data":"<json 字符串>"}`，
-//!   `data.cn.st.type` 为 `0`（最终结果）/ `1`（中间结果），全部结果发完后服务端断开连接。
+//! Protocol notes (standard edition):
+//! - Endpoint: `wss://rtasr.xfyun.cn/v1/ws`; auth via query params
+//!   `appid` + `ts` + `signa`, where `signa = Base64(HmacSHA1(MD5(appid + ts), apiKey))`.
+//! - Audio: 16 kHz / 16-bit / mono PCM, exactly matching the OpenLess recorder output.
+//! - Recommended: send 1280 bytes every 40ms; sending faster may trigger engine errors.
+//! - End of upload: send the binary message `{"end": true}`.
+//! - Results: the server returns `{"action":"result","data":"<json string>"}` as text
+//!   messages; `data.cn.st.type` is `0` (final) / `1` (interim); after all results the
+//!   server disconnects.
 //!
-//! 已知限制：标准版 RTASR 没有请求参数级热词（个性化热词只能在讯飞控制台上传）；
-//! 方言/小语种需在控制台开通后通过 `lang` 参数指定，首期固定中文普通话（`cn`）。
+//! Known limits: standard RTASR has no request-level hotwords (personalized hotwords
+//! can only be uploaded in the Xfyun console); dialects/minor languages need console
+//! enablement plus a `lang` param; initially fixed to Mandarin Chinese (`cn`).
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -39,17 +42,20 @@ use crate::ports::{TextStreamChunk, TextStreamSink};
 
 pub const PROVIDER_ID: &str = "iflytek";
 pub const DEFAULT_ENDPOINT: &str = "wss://rtasr.xfyun.cn/v1/ws";
-/// RTASR 文档建议：每 40ms 发送 1280 字节（16k/16-bit/mono = 32000 B/s）。
+/// RTASR docs recommendation: 1280 bytes every 40ms (16k/16-bit/mono = 32000 B/s).
 pub const TARGET_AUDIO_CHUNK_BYTES: usize = 1_280;
-/// 16 kHz · 16-bit · mono = 32 000 bytes/sec → 32 bytes/ms。
+/// 16 kHz / 16-bit / mono = 32000 bytes/sec -> 32 bytes/ms.
 const BYTES_PER_MS: u64 = 32;
 const FINAL_RESULT_TIMEOUT: Duration = Duration::from_secs(12);
-/// WebSocket 建连（TCP + TLS + HTTP upgrade）上限，避免弱网下握手挂死热键线程。
+/// Cap on the WebSocket handshake (TCP + TLS + HTTP upgrade) so a poor network cannot
+/// hang the hotkey thread.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-/// 握手阶段等待 `action=started` 的上限。鉴权失败（10105/10110）应在此窗口内快速失败，
-/// 而不是把错误拖到收尾阶段才暴露。
+/// Cap on waiting for `action=started` during the handshake. Auth failures
+/// (10105/10110) should fail fast within this window instead of surfacing only at
+/// finish time.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
-/// 默认语种：中文普通话。方言/小语种需在讯飞控制台开通后传对应 `lang` 参数。
+/// Default language: Mandarin Chinese. Dialects/minor languages require console
+/// enablement and a corresponding `lang` param.
 const DEFAULT_LANG: &str = "cn";
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -58,9 +64,9 @@ type SharedWriter = Arc<AsyncMutex<Option<WsSink>>>;
 
 #[derive(Clone, Debug)]
 pub struct XfyunCredentials {
-    /// 讯飞开放平台应用 ID。
+    /// Xfyun Open Platform app ID.
     pub app_id: String,
-    /// 实时语音转写服务对应的 APIKey（接口密钥）。
+    /// API key for the realtime speech transcription service.
     pub api_key: String,
 }
 
@@ -76,11 +82,11 @@ pub enum XfyunASRError {
     CredentialsMissing,
     #[error("连接失败: {0}")]
     ConnectionFailed(String),
-    /// 握手阶段服务端返回 10105 / 10110：AppID / APIKey 错误、IP 白名单未配置、
-    /// 或账号未开通实时语音转写服务。
+    /// Handshake returned 10105 / 10110: wrong AppID / APIKey, IP allowlist not
+    /// configured, or the realtime transcription service not enabled.
     #[error("凭据被拒或未开通服务（{0}）")]
     AuthRejected(String),
-    /// 10800：超过授权连接数 / 并发受限。
+    /// 10800: over the licensed connection count / concurrency limited.
     #[error("并发受限（{0}）")]
     RateLimited(String),
     #[error("识别失败: {0}")]
@@ -99,9 +105,11 @@ struct SyncState {
     finished: bool,
     start: Option<Instant>,
     final_tx: Option<oneshot::Sender<Result<RawTranscript, XfyunASRError>>>,
-    /// seg_id → 最终（type=0）分段文本。同一 seg_id 的后到结果覆盖前一个。
+    /// seg_id -> final (type=0) segment text. A later result for the same seg_id
+    /// overwrites the previous one.
     final_segments: BTreeMap<i64, String>,
-    /// seg_id → 最近一次中间（type=1）分段文本，服务端在 final 前断连时兜底用。
+    /// seg_id -> latest interim (type=1) segment text, used as a fallback when the
+    /// server disconnects before sending final.
     partial_segments: BTreeMap<i64, String>,
     last_result_text: String,
 }
@@ -112,13 +120,15 @@ pub struct XfyunStreamingASR {
     state: ParkingMutex<SyncState>,
     writer: SharedWriter,
     final_rx: ParkingMutex<Option<oneshot::Receiver<Result<RawTranscript, XfyunASRError>>>>,
-    /// 握手结果通道：receive loop 收到 `action=started` 后发 Ok，收到 error 发 Err。
-    /// `open_session` 等待它以在鉴权失败时快速失败。
+    /// Handshake result channel: the receive loop sends Ok on `action=started` and Err
+    /// on error. `open_session` awaits it to fail fast on auth rejection.
     handshake_tx: ParkingMutex<Option<oneshot::Sender<Result<(), XfyunASRError>>>>,
-    /// 音频发送队列：consume_pcm_chunk 入队，唯一 worker 串行 send，保证时序。
+    /// Audio send queue: consume_pcm_chunk enqueues, a single worker sends serially to
+    /// preserve ordering.
     audio_tx: ParkingMutex<Option<mpsc::UnboundedSender<Vec<u8>>>>,
-    /// 队列里 + worker 在飞的 audio 帧总数。send_last_frame 必须等它归零再发
-    /// `{"end": true}`，否则末帧先到、尾部音频被服务端当「end 之后的数据」丢弃。
+    /// Total audio frames queued plus in flight in the worker. send_last_frame must
+    /// wait for this to reach zero before sending `{"end": true}`, otherwise the end
+    /// frame arrives first and the server drops the tail audio as data after "end".
     pending_sends: Arc<AtomicUsize>,
     send_done: Arc<Notify>,
     partial_sink: ParkingMutex<Option<Arc<dyn TextStreamSink>>>,
@@ -151,8 +161,8 @@ impl XfyunStreamingASR {
         *self.partial_sink.lock() = Some(sink);
     }
 
-    /// 构建带鉴权参数的 WebSocket 地址：
-    /// `wss://rtasr.xfyun.cn/v1/ws?appid=..&ts=..&signa=..&lang=cn`。
+    /// Builds the WebSocket URL with auth params:
+    /// `wss://rtasr.xfyun.cn/v1/ws?appid=..&ts=..&signa=..&lang=cn`.
     pub fn connect_url(&self) -> String {
         connect_url(&self.credentials)
     }
@@ -192,7 +202,7 @@ impl XfyunStreamingASR {
         *self.handshake_tx.lock() = Some(handshake_tx);
         self.pending_sends.store(0, Ordering::SeqCst);
 
-        // 音频 worker：FIFO recv + 串行 send_binary，保证 chunk 顺序。
+        // Audio worker: FIFO recv + serial send_binary, preserving chunk order.
         let writer_for_worker = Arc::clone(&self.writer);
         let pending_for_worker = Arc::clone(&self.pending_sends);
         let notify_for_worker = Arc::clone(&self.send_done);
@@ -208,7 +218,7 @@ impl XfyunStreamingASR {
             }
         }));
 
-        // receive loop：处理 started / result / error，以及服务端断开。
+        // Receive loop: handles started / result / error, plus server disconnect.
         let weak_self = Arc::downgrade(self);
         let task_spawner = Arc::clone(&self.task_spawner);
         task_spawner.spawn(Box::pin(async move {
@@ -224,8 +234,9 @@ impl XfyunStreamingASR {
                         }
                     }
                     Ok(Message::Close(_)) => {
-                        // 服务端在全部结果发完后主动断开；也覆盖 37005（15s 无音频）
-                        // 等中断场景 —— finish_on_close 会按已有内容兜底。
+                        // The server disconnects on its own after all results; also
+                        // covers interruptions like 37005 (15s without audio) —
+                        // finish_on_close falls back to whatever arrived.
                         this.finish_on_close();
                         break;
                     }
@@ -241,7 +252,8 @@ impl XfyunStreamingASR {
             }
         }));
 
-        // 等待握手结果：鉴权错误 / 连接被拒在这里快速失败，不等用户说完话。
+        // Wait for the handshake result: auth errors / rejected connections fail fast
+        // here, without waiting for the user to finish speaking.
         match tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake_rx).await {
             Ok(Ok(Ok(()))) => Ok(()),
             Ok(Ok(Err(e))) => {
@@ -265,7 +277,8 @@ impl XfyunStreamingASR {
     }
 
     pub async fn send_last_frame(&self) -> Result<(), XfyunASRError> {
-        // 等所有在途音频帧发完，再发 `{"end": true}`（上限 800ms 防极端网络下永远等）。
+        // Wait for all in-flight audio frames, then send `{"end": true}` (800ms cap
+        // avoids waiting forever on an extreme network).
         let drain_deadline = Instant::now() + Duration::from_millis(800);
         while self.pending_sends.load(Ordering::SeqCst) > 0 {
             let remaining = drain_deadline.saturating_duration_since(Instant::now());
@@ -279,7 +292,7 @@ impl XfyunStreamingASR {
             let _ = tokio::time::timeout(remaining, self.send_done.notified()).await;
         }
 
-        // 冲刷尾部不足一块的残余音频。
+        // Flush the tail audio shorter than one chunk.
         let leftover = {
             let mut st = self.state.lock();
             if st.pending_audio.is_empty() {
@@ -300,7 +313,8 @@ impl XfyunStreamingASR {
             }
         }
 
-        // 等尾部音频也发完，再发结束标识（内容与文档一致，必须走 binary message）。
+        // Wait for the tail audio to be sent too, then send the end marker (contents
+        // per the docs; must be a binary message).
         let drain_deadline = Instant::now() + Duration::from_millis(800);
         while self.pending_sends.load(Ordering::SeqCst) > 0 {
             let remaining = drain_deadline.saturating_duration_since(Instant::now());
@@ -346,9 +360,11 @@ impl XfyunStreamingASR {
 
     pub fn cancel(&self) {
         self.state.lock().pending_audio.clear();
-        // 释放握手通道：open_session 若仍在等 started，会立刻收到 Err 返回。
+        // Release the handshake channel: if open_session is still waiting for started,
+        // it immediately receives Err and returns.
         *self.handshake_tx.lock() = None;
-        // 关闭音频队列 → worker 的 recv() 返回 None → 退出，不再 hold writer。
+        // Closing the audio queue -> worker.recv() returns None -> exits, no longer
+        // holding the writer.
         *self.audio_tx.lock() = None;
         let writer = Arc::clone(&self.writer);
         self.task_spawner.spawn(Box::pin(async move {
@@ -396,7 +412,8 @@ impl XfyunStreamingASR {
                     .to_string();
                 log::error!("[xfyun-asr] server error code={code} desc={desc}");
                 let error = classify_server_error(&code, &desc);
-                // 握手阶段就报错：把错误直接交给 open_session 的 handshake 等待方。
+                // Error during the handshake: hand it directly to open_session's
+                // handshake waiter.
                 let handed = self.handshake_tx.lock().take();
                 if let Some(tx) = handed {
                     let _ = tx.send(Err(error.clone()));
@@ -430,9 +447,11 @@ impl XfyunStreamingASR {
         let Some(st) = data.get("cn").and_then(|c| c.get("st")) else {
             return;
         };
-        // `type` 字段文档为字符串（"0" 最终 / "1" 中间）。防御性兼容数字形态
-        // （0/1）：若服务端以数字返回而只认字符串，多句最终结果会被整体降级成
-        // 中间结果，收尾 fallback 只剩最后一句 —— 前句丢失。
+        // The docs type the `type` field as a string ("0" final / "1" interim).
+        // Defensively accept the numeric form (0/1) too: if the server returned a
+        // number and only strings were accepted, all final results would degrade to
+        // interim and the close-out fallback would keep only the last sentence —
+        // losing the earlier ones.
         let is_final = st
             .get("type")
             .and_then(|v| {
@@ -468,8 +487,9 @@ impl XfyunStreamingASR {
         }
     }
 
-    /// 服务端断开连接：正常路径（全部结果已发完）或异常中断。
-    /// 握手尚未完成就被关闭时，优先把错误交给 open_session 的等待方。
+    /// Server disconnected: normal path (all results already sent) or abnormal
+    /// interruption. When closed before the handshake completes, hand the error to
+    /// open_session's waiter first.
     fn finish_on_close(&self) {
         let handshake = self.handshake_tx.lock().take();
         if let Some(tx) = handshake {
@@ -481,8 +501,9 @@ impl XfyunStreamingASR {
         self.finish_with_partial_or_error(XfyunASRError::NoFinalResult);
     }
 
-    /// 有已识别内容（最终或中间结果）就兜底返回，否则报错 —— 与 Volcengine / Bailian
-    /// 的「服务端在 final 前断连不丢已识别文字」策略保持一致。
+    /// If any recognized content (final or interim) exists, return it as a fallback;
+    /// otherwise error — consistent with the Volcengine / Bailian policy of "not
+    /// losing recognized text when the server disconnects before final".
     fn finish_with_partial_or_error(&self, error: XfyunASRError) {
         let has_partial = {
             let st = self.state.lock();
@@ -541,9 +562,10 @@ impl XfyunStreamingASR {
     }
 
     fn finish_error(&self, error: XfyunASRError) {
-        // 握手尚未完成就出错（如 receive loop 网络中断、服务端 error 消息）时，
-        // 必须把错误交给 open_session 的 handshake 等待方 —— 否则它只能空等
-        // HANDSHAKE_TIMEOUT（5s）才返回。已过握手的会话这里 take 到 None，幂等跳过。
+        // If an error occurs before the handshake completes (receive-loop network
+        // interruption, server error message), it must reach open_session's handshake
+        // waiter — otherwise that side idles until HANDSHAKE_TIMEOUT (5s). Sessions
+        // past the handshake take None here and skip idempotently.
         let handshake = self.handshake_tx.lock().take();
         if let Some(tx) = handshake {
             let _ = tx.send(Err(error.clone()));
@@ -586,8 +608,8 @@ impl AudioConsumer for XfyunStreamingASR {
             return;
         };
         for chunk in chunks {
-            // pending_sends 必须先 +1 再入队：否则 worker 可能先 recv + 发送 + 减 1，
-            // 把 usize 计数器 underflow。
+            // pending_sends must be incremented before enqueueing: otherwise the worker
+            // could recv + send + decrement first, underflowing the usize counter.
             self.pending_sends.fetch_add(1, Ordering::SeqCst);
             if tx.send(chunk).is_err() {
                 if self.pending_sends.fetch_sub(1, Ordering::SeqCst) == 1 {
@@ -624,7 +646,8 @@ fn connect_url(credentials: &XfyunCredentials) -> String {
     url.to_string()
 }
 
-/// `signa = Base64(HmacSHA1(MD5(appid + ts), apiKey))`，与讯飞开放平台文档公式一致。
+/// `signa = Base64(HmacSHA1(MD5(appid + ts), apiKey))`, matching the Xfyun Open
+/// Platform docs formula.
 pub fn compute_signa(app_id: &str, api_key: &str, ts: &str) -> String {
     let base = format!("{app_id}{ts}");
     let md5_hex = md5_hex(base.as_bytes());
@@ -642,7 +665,8 @@ fn md5_hex(input: &[u8]) -> String {
         .collect::<String>()
 }
 
-/// 从 `cn.st` 节点提取全部词：`rt[].ws[].cw[]` 取第一个候选的 `w` 依次拼接。
+/// Extracts all words from the `cn.st` node: joins the first candidate's `w` across
+/// `rt[].ws[].cw[]` in order.
 fn extract_words(st: &Value) -> String {
     let mut out = String::new();
     let Some(rt) = st.get("rt").and_then(Value::as_array) else {
@@ -667,8 +691,9 @@ fn extract_words(st: &Value) -> String {
     out
 }
 
-/// 把讯飞错误码归类为对用户可读的类别：鉴权/授权问题与并发限制单独分类，
-/// 其余归通用识别失败（避免 capsule 文案笼统指向「网络失败」）。
+/// Classifies iFlytek error codes into user-readable categories: auth/licensing and
+/// concurrency limits get their own variants; everything else is a generic task
+/// failure (keeps the capsule message from vaguely blaming the network).
 fn classify_server_error(code: &str, desc: &str) -> XfyunASRError {
     match code {
         "10105" | "10110" => XfyunASRError::AuthRejected(format!("{code} {desc}")),
@@ -714,7 +739,7 @@ mod tests {
 
     #[test]
     fn signa_matches_official_documentation_example() {
-        // 官方文档示例：appid=595f23df，ts=1512041814，apiKey=d9f4aa7ea6d94faca62cd88a28fd5234
+        // Official docs example: appid=595f23df, ts=1512041814, apiKey=d9f4aa7ea6d94faca62cd88a28fd5234
         // → signa = IrrzsJeOFk1NGfJHW6SkHUoN9CU=
         let signa = compute_signa("595f23df", "d9f4aa7ea6d94faca62cd88a28fd5234", "1512041814");
         assert_eq!(signa, "IrrzsJeOFk1NGfJHW6SkHUoN9CU=");
@@ -722,7 +747,7 @@ mod tests {
 
     #[test]
     fn md5_hex_matches_known_vector() {
-        // MD5("595f23df1512041814") = 0829d4012497c14a30e7e72aeebe565e（文档示例）
+        // MD5("595f23df1512041814") = 0829d4012497c14a30e7e72aeebe565e (documentation example)
         assert_eq!(
             md5_hex(b"595f23df1512041814"),
             "0829d4012497c14a30e7e72aeebe565e"
@@ -798,8 +823,9 @@ mod tests {
 
     #[test]
     fn record_result_accepts_numeric_type_for_final() {
-        // 防御性：服务端若以数字 0/1 返回 type（而非文档字符串 "0"/"1"），
-        // 最终结果仍要落 final_segments，不能整体降级成中间结果丢句。
+        // Defensively: if the server returns type as numbers 0/1 instead of the doc'd
+        // strings "0"/"1", final results must still land in final_segments instead of
+        // degrading to interim and losing sentences.
         let asr = XfyunStreamingASR::new(XfyunCredentials {
             app_id: "app".into(),
             api_key: "key".into(),
@@ -889,8 +915,9 @@ mod tests {
 
     #[test]
     fn finish_error_notifies_pending_handshake_waiter() {
-        // 握手前出错（如网络中断）必须唤醒 open_session 的 handshake 等待方，
-        // 否则其空等 HANDSHAKE_TIMEOUT。已过握手的会话 take 到 None，幂等。
+        // An error before the handshake (e.g. network interruption) must wake
+        // open_session's handshake waiter, otherwise it idles out HANDSHAKE_TIMEOUT.
+        // Sessions past the handshake take None — idempotent.
         let asr = XfyunStreamingASR::new(XfyunCredentials {
             app_id: "app".into(),
             api_key: "key".into(),
@@ -904,7 +931,7 @@ mod tests {
             Ok(Err(XfyunASRError::ConnectionFailed(_))) => {}
             other => panic!("handshake 等待方应收到错误，实际: {other:?}"),
         }
-        // 已 take：重复调用不 panic、不重复通知。
+        // Already taken: repeated calls neither panic nor notify again.
         asr.finish_error(XfyunASRError::ConnectionFailed("again".into()));
         assert!(asr.handshake_tx.lock().is_none());
     }

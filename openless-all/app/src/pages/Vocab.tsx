@@ -1,11 +1,14 @@
-// Vocab.tsx — 「词典」页。
-// 结构：
-//   - 顶部：标题 + 右上「新词」入口（弹窗：直接输入 或 从预设模板批量导入）
-//   - 工具行：所有 / 自动添加 / 手动添加 分段筛选 + 右侧圆形搜索（点击向左展开）
-//   - 词条网格：卡片默认只显文字，hover 变灰并浮现「编辑 / 删除」操作
-//   - 编辑走弹窗（update_vocab 保 id/hits）；场景预设保持卡片区块
-//   - 纠正规则已迁往「工具 → 纠正规则」页（Corrections.tsx）
-// 数据落地到 ~/Library/Application Support/OpenLess/dictionary.json（与 Swift 同名）。
+// Vocab.tsx — the "dictionary" page.
+// Structure:
+//   - Top: title + "new word" entry at the top-right (modal: direct input or bulk import
+//     from preset templates)
+//   - Toolbar: all / auto-added / manually-added segment filter + circular search on the
+//     right (expands leftward on click)
+//   - Word grid: cards show text only by default; hover dims them and reveals
+//     "edit / delete" actions
+//   - Editing uses a modal (update_vocab keeps id/hits); scene presets stay a card section
+//   - Correction rules moved to the "tools → correction rules" page (Corrections.tsx)
+// Data is stored in ~/Library/Application Support/OpenLess/dictionary.json (same name as Swift).
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -23,12 +26,13 @@ import {
 import type { DictionaryEntry, VocabPreset } from '../lib/types';
 import { DEFAULT_VOCAB_PRESETS, loadVocabPresets, persistVocabPresets } from '../lib/vocabPresets';
 import { useExitMount } from '../lib/useExitMount';
+import { useOverlayMotion } from '../lib/motion';
 import { useMobileLayout } from '../lib/useMobileLayout';
 import { Btn, Card, Collapsible, PageHeader } from './_atoms';
 
 const NEW_PRESET_DRAFT_ID = '__new__';
 
-/** 自动收集词条靠 note 认（后端 accept_pending_correction 打的就是这个标记）。 */
+/** Auto-collected entries are recognized by note (the marker backend accept_pending_correction sets). */
 const LEARNED_NOTE = '从手改中自动收集';
 
 type SourceFilter = 'all' | 'auto' | 'manual';
@@ -47,7 +51,7 @@ export function Vocab() {
   const [presetNameDraft, setPresetNameDraft] = useState('');
   const [presetPhrasesDraft, setPresetPhrasesDraft] = useState('');
 
-  // 词典改版新增状态
+  // State added by the dictionary redesign
   const [filter, setFilter] = useState<SourceFilter>('all');
   const [query, setQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
@@ -61,8 +65,9 @@ export function Vocab() {
   const editMount = useExitMount(editingEntry !== null);
   const newWordMount = useExitMount(newWordOpen);
 
-  // 词条网格 FLIP：增删/筛选让行位移时，从旧位置滑到新位置；
-  // 新卡片入场走 .ol-word-card 的 CSS 动画，删除走 onRemove 里的退场动画。
+  // Word-grid FLIP: when add/remove/filter shifts rows, slide cards from their old
+  // position to the new one; new cards enter via the .ol-word-card CSS animation and
+  // deletes use the exit animation in onRemove.
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
   const prevCardTops = useRef(new Map<string, number>());
   const [removingIds, setRemovingIds] = useState<Set<string>>(new Set());
@@ -78,7 +83,7 @@ export function Vocab() {
       const ids = new Set(data.map((entry) => entry.id));
       setSelectedIds((current) => new Set([...current].filter((id) => ids.has(id))));
     } catch (e) {
-      // 之前没 try/catch,后端 decode 失败时 spinner 永久卡死。
+      // Without try/catch, a backend decode failure used to leave the spinner stuck forever.
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
@@ -90,8 +95,9 @@ export function Vocab() {
     void loadVocabPresets()
       .then(setPresets)
       .catch((err) => setError(err instanceof Error ? err.message : String(err)));
-    // 订阅后端 vocab:updated：每段口述结束、record_hits 触发后由 coordinator 推送。
-    // Vocab 页面打开期间能即时看到命中数累加，无需切到其他 tab 再切回。
+    // Subscribe to backend vocab:updated: pushed by the coordinator after each dictation
+    // segment and its record_hits. Hit counts tick up live while the Vocab page is open,
+    // no tab switch away and back needed.
     if (!isTauri) return;
     let unlisten: (() => void) | undefined;
     let cancelled = false;
@@ -119,7 +125,8 @@ export function Vocab() {
     if (!phrase) return;
     try {
       const entry = await addVocab(phrase);
-      // 乐观插入头部（addVocab 返回新 entry，浏览器 mock 下也能立刻看到）。
+      // Optimistic insertion at the head (addVocab returns the new entry, also visible
+      // immediately under the browser mock).
       setEntries((prev) => [entry, ...prev]);
       flashSaved();
     } catch (e) {
@@ -173,8 +180,9 @@ export function Vocab() {
 
   const onToggle = async (entry: DictionaryEntry) => {
     const next = !entry.enabled;
-    // 乐观更新 UI；后端失败时回滚 + 让用户看到错误，避免 UI 显示「已禁用」但 ASR/polish
-    // 仍在注入此词条造成的诡异状态。issue #60。
+    // Optimistically update the UI; on backend failure, roll back + surface the error.
+    // Otherwise the UI could show "disabled" while ASR/polish still injects the entry —
+    // a confusing state. issue #60.
     setEntries((prev) => prev.map((e) => (e.id === entry.id ? { ...e, enabled: next } : e)));
     try {
       await setVocabEnabled(entry.id, next);
@@ -205,7 +213,8 @@ export function Vocab() {
     }
     try {
       await updateVocab(editingEntry.id, phrase);
-      // 乐观改名：id / hits / enabled 保持不变（后端 update_vocab 原地改 phrase）。
+      // Optimistic rename: id / hits / enabled stay unchanged (backend update_vocab edits
+      // the phrase in place).
       setEntries((prev) => prev.map((e) => (e.id === editingEntry.id ? { ...e, phrase } : e)));
       setEditingEntry(null);
       flashSaved();
@@ -270,7 +279,8 @@ export function Vocab() {
     setPresetPhrasesDraft('');
   };
 
-  /** 把一组模板的词条并入词典（已存在的按需启用）。返回失败条数。 */
+  /** Merges the selected templates' entries into the dictionary (enabling existing ones as
+      needed). Returns the number of failures. */
   const applyPresets = async (selected: VocabPreset[]) => {
     const byPhrase = new Map<string, DictionaryEntry[]>();
     const addedPhrases = new Set<string>();
@@ -334,14 +344,17 @@ export function Vocab() {
     }
   };
 
-  // 自动收集的单独一区。不给每个词条挂 badge —— 混在一堆里要逐个看；
-  // 分段筛选一眼就看得完，「全部删除」也自然地只管自动这一块。
-  // 用户随时能看清、能整块撤销，是自动收集能被信任的前提。
+  // A separate section for auto-collected entries. No badge per entry — mixed in a crowd,
+  // each would have to be inspected one by one; the segment filter makes them scannable at
+  // a glance, and "delete all" naturally targets only the auto section.
+  // Users can always see clearly and undo in bulk — the prerequisite for trusting
+  // auto-collection.
   const sourceOf = (entry: DictionaryEntry): Exclude<SourceFilter, 'all'> =>
     entry.note === LEARNED_NOTE ? 'auto' : 'manual';
   const learnedEntries = entries.filter((e) => sourceOf(e) === 'auto');
 
-  /** 删除退场动画（从哪来回到哪去）：先淡出收缩，动画结束再真正删。 */
+  /** Delete exit animation (reverse of entry): fade out and shrink first, delete for real
+      once the animation finishes. */
   const fadeOutCard = async (id: string) => {
     const element = cardRefs.current.get(id);
     if (!element) return;
@@ -355,7 +368,7 @@ export function Vocab() {
         { duration: 140, easing: 'ease-out', fill: 'forwards' },
       ).finished;
     } catch {
-      /* 动画被打断（筛选切换/卸载）不阻塞删除 */
+      /* Animation interrupted (filter switch/unmount) must not block deletion */
     }
   };
 
@@ -368,7 +381,8 @@ export function Vocab() {
       (!needle || e.phrase.toLowerCase().includes(needle)),
   );
 
-  // FLIP：只量布局位置（offsetTop），rect 会被飞行中的动画 transform 污染。
+  // FLIP: measure layout position only (offsetTop); rect is polluted by in-flight
+  // animation transforms.
   useLayoutEffect(() => {
     const nextTops = new Map<string, number>();
     cardRefs.current.forEach((element, id) => nextTops.set(id, element.offsetTop));
@@ -422,7 +436,7 @@ export function Vocab() {
 
       <SavedToast saveState={saveState} message={t('common.saved')} />
 
-      {/* 工具行：来源分段筛选 + 圆形搜索（点击向左展开）。 */}
+      {/* Toolbar: source segment filter + circular search (expands leftward on click). */}
       <div
         style={{
           display: 'flex',
@@ -495,8 +509,9 @@ export function Vocab() {
             : t('vocab.selectAllVisible')}
         </label>
         <div style={{ flex: 1 }} />
-        {/* 圆形控件原地展开成搜索框 —— 放大镜固定在右缘不动，
-            占位文字「搜索」在框内；收起走同一条 width 过渡（从哪来回到哪去）。 */}
+        {/* The circular control expands in place into the search box — the magnifier stays
+            fixed at the right edge, the "search" placeholder sits inside the box; collapse
+            uses the same width transition (reverse of expansion). */}
         <div className={searchOpen ? 'ol-search ol-search-open' : 'ol-search'}>
           <input
             className="ol-search-field"
@@ -521,8 +536,9 @@ export function Vocab() {
             className="ol-search-icon"
             aria-label={t('vocab.searchPlaceholder')}
             aria-expanded={searchOpen}
-            // 点图标不让输入框失焦：否则 blur 收起与 click 切换竞态，第二次点击
-            // 会先收起再被 toggle 重新展开，永远收不起来。
+            // Don't let the icon click blur the input: otherwise the blur-collapse and the
+            // click toggle race — a second click would collapse first and then be re-opened
+            // by the toggle, never collapsing.
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => {
               if (searchOpen && query) {
@@ -533,7 +549,7 @@ export function Vocab() {
               if (!searchOpen) {
                 window.setTimeout(() => inputRefSearchFocus(), 60);
               } else {
-                // 收起后输入框不可见，别让焦点留在里面。
+                // After collapsing, the input is invisible; don't leave focus in it.
                 const active = document.activeElement;
                 if (active instanceof HTMLElement && active.closest('.ol-search')) active.blur();
               }
@@ -566,7 +582,8 @@ export function Vocab() {
         </div>
       )}
 
-      {/* 自动添加筛选下给「全部删除」留一个稳定的出口（信任前提，见上注释）。 */}
+      {/* Under the auto-added filter, give "delete all" a stable outlet (the trust
+          prerequisite; see the comment above). */}
       {filter === 'auto' && learnedEntries.length > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
           <span style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>
@@ -578,14 +595,16 @@ export function Vocab() {
         </div>
       )}
 
-      {/* 独立滚动区：词条多时只有这一格在滚，底部面板固定在视口
-          底缘、白底天然遮挡滚过去的内容；之前网格作为页根 flex item 被压扁、内容
-          溢出到下方区块背后的穿帮也从根上消除。 */}
+      {/* Independent scroll region: with many entries only this cell scrolls, while the
+          bottom panel stays pinned to the viewport bottom edge with an opaque background
+          that naturally covers content scrolling beneath; this also eliminates at the root
+          the previous glitch where the grid, as a page-root flex item, got squashed and its
+          content overflowed behind the section below. */}
       <div
         className="ol-thinscroll"
         style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 2, paddingBottom: 12 }}
       >
-        {/* 词条网格：hover 变灰 + 右侧浮现编辑/删除。 */}
+        {/* Word grid: hover dims cards and reveals edit/delete on the right. */}
         <div
           style={{
             display: 'grid',
@@ -625,8 +644,9 @@ export function Vocab() {
         </div>
       </div>
 
-      {/* 底部面板：快速添加行 + 提示 + 场景预设固定成一块。场景预设展开时面板
-          整体变高、向上生长，输入行与面板顶缘的距离恒定。 */}
+      {/* Bottom panel: quick-add row + hints + scene presets as one fixed block. When the
+          scene presets expand, the panel grows taller upward while the gap between the input
+          row and the panel's top edge stays constant. */}
       <div
         style={{
           flexShrink: 0,
@@ -635,7 +655,7 @@ export function Vocab() {
           boxShadow: '0 -18px 22px -18px rgba(15,17,22,0.14)',
         }}
       >
-        {/* 快速添加行（保留原输入即添加的顺手路径）。 */}
+        {/* Quick-add row (keeps the original type-and-add flow). */}
         <div style={{ display: 'flex', gap: 8 }}>
           <input
             ref={inputRef}
@@ -661,8 +681,8 @@ export function Vocab() {
         </div>
         <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ol-ink-4)' }}>{t('vocab.tip')}</div>
 
-        {/* 场景预设：卡片区块（与「新词」弹窗共享同一份模板数据）。
-          可展开，顶部给一条分隔线与输入区分开。 */}
+        {/* Scene presets: card section (shares the same template data as the "new word"
+            modal). Expandable; a divider on top separates it from the input area. */}
         <div
           style={{
             marginTop: 12,
@@ -740,7 +760,7 @@ export function Vocab() {
         </div>
       </div>
 
-      {/* 编辑词条弹窗 */}
+      {/* Edit-entry modal */}
       {editMount.mounted && (
         <ModalShell
           title={t('vocab.editTitle')}
@@ -790,7 +810,7 @@ export function Vocab() {
         </ModalShell>
       )}
 
-      {/* 新词弹窗：直接输入 + 预设模板多选 */}
+      {/* New-word modal: direct input + preset template multi-select */}
       {newWordMount.mounted && (
         <ModalShell
           title={t('vocab.newWordTitle')}
@@ -911,8 +931,8 @@ export function Vocab() {
 
       <style>{`
         @keyframes ol-chip-in {
-          from { opacity: 0; transform: scale(.92); filter: blur(5px); }
-          to   { opacity: 1; transform: scale(1); filter: blur(0); }
+          from { opacity: 0; transform: scale(.97); }
+          to   { opacity: 1; transform: scale(1); }
         }
       `}</style>
     </div>
@@ -927,7 +947,7 @@ function inputRefSearchFocus() {
 interface WordCardProps {
   entry: DictionaryEntry;
   auto: boolean;
-  /** 删除退场动画进行中：屏蔽交互，避免重复点击。 */
+  /** Delete exit animation in progress: block interaction to prevent repeated clicks. */
   removing: boolean;
   cardRef: (element: HTMLDivElement | null) => void;
   onToggle: () => void;
@@ -937,7 +957,8 @@ interface WordCardProps {
   onSelect: () => void;
 }
 
-/** 词条卡片：默认只显图标+文字+命中数；hover/focus-within 变灰并浮现编辑/删除。 */
+/** Word card: shows icon + text + hit count by default; hover/focus-within dims it and
+    reveals edit/delete. */
 function WordCard({
   entry,
   auto,
@@ -995,15 +1016,19 @@ function WordCard({
 interface ModalShellProps {
   title: string;
   desc?: string;
-  /** true 时反向播放入场动画（退出），配合 useExitMount 实现「从哪来回到哪去」。 */
+  /** Keeps the closing card mounted until its exit finishes. */
   closing?: boolean;
   onClose: () => void;
   children: React.ReactNode;
 }
 
-/** 页面级小弹窗：backdrop 淡入 + 卡片 spring 弹出，Esc/点遮罩关闭。 */
+/** Page-level mini modal: backdrop fade-in + card spring pop-out; closes on Esc or backdrop click. */
 function ModalShell({ title, desc, closing = false, onClose, children }: ModalShellProps) {
   const { t } = useTranslation();
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  useOverlayMotion(overlayRef, closing, 'backdrop');
+  useOverlayMotion(cardRef, closing);
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -1013,7 +1038,8 @@ function ModalShell({ title, desc, closing = false, onClose, children }: ModalSh
   }, [onClose]);
   return (
     <div
-      onClick={onClose}
+      ref={overlayRef}
+      onClick={closing ? undefined : onClose}
       style={{
         position: 'fixed',
         inset: 0,
@@ -1025,12 +1051,11 @@ function ModalShell({ title, desc, closing = false, onClose, children }: ModalSh
         background: 'var(--ol-dialog-backdrop)',
         backdropFilter: 'blur(6px) saturate(140%)',
         WebkitBackdropFilter: 'blur(6px) saturate(140%)',
-        animation: closing
-          ? 'ol-prompt-fade 0.2s var(--ol-motion-soft) reverse both'
-          : 'ol-prompt-fade 0.2s var(--ol-motion-soft)',
+        pointerEvents: closing ? 'none' : undefined,
       }}
     >
       <div
+        ref={cardRef}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -1043,9 +1068,6 @@ function ModalShell({ title, desc, closing = false, onClose, children }: ModalSh
           border: '1px solid var(--ol-dialog-border)',
           boxShadow: 'var(--ol-dialog-shadow)',
           padding: 20,
-          animation: closing
-            ? 'ol-prompt-pop 0.2s var(--ol-motion-soft) reverse both'
-            : 'ol-prompt-pop 0.26s var(--ol-motion-spring)',
         }}
       >
         <div

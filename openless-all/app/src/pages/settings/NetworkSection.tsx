@@ -1,6 +1,6 @@
-// 服务 → 网络：全局系统代理开关（issue #869）。
-// 关闭后所有 reqwest 请求直连，适合国内模型直连延迟更低的场景；
-// 实时语音流（WebSocket）与 Less Computer 子进程不受此开关影响。
+// Services → Network: global system proxy toggle (issue #869).
+// When off, all reqwest requests connect directly — suited to lower-latency direct access for domestic models;
+// realtime voice streams (WebSocket) and Less Computer subprocesses are unaffected by this toggle.
 import { useTranslation } from 'react-i18next';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { Card } from '../_atoms';

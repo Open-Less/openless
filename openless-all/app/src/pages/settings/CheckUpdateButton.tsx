@@ -1,11 +1,12 @@
-// 检查更新按钮 —— 关于页查正式版（channel='stable'）、高级页 Beta 区查测试版
-// （channel='beta'），共用此组件。channel 显式传入，不受 prefs.updateChannel 影响。
+// Check-update button — the About page checks the stable channel (channel='stable') and the
+// Advanced page's Beta section checks the test channel (channel='beta'); both share this
+// component. channel is passed explicitly and is not affected by prefs.updateChannel.
 
 import { useEffect } from 'react';
 import { btnGhostStyle } from './shared';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
-import { isDialogStatus, UpdateDialog, useAutoUpdate } from '../../components/AutoUpdate';
+import { UpdateDialog, useAutoUpdate } from '../../components/AutoUpdate';
 import type { UpdateChannel } from '../../lib/ipc';
 
 export function CheckUpdateButton({
@@ -63,7 +64,7 @@ export function CheckUpdateButton({
                 ? label
                 : undefined
         }
-        // 桌面保留稳定文字宽度；紧凑布局使用带可访问名称的图标按钮。
+        // Desktop keeps a stable text width; compact layout uses an icon button with an accessible name.
         style={{
           ...btnGhostStyle,
           color,
@@ -95,8 +96,9 @@ export function CheckUpdateButton({
             name={iconName}
             size={12}
             style={{
-              // 状态图标（check ↔ refresh ↔ 错误）切换时颜色过渡；
-              // 检查中旋转（ol-spin），旋转轴在图标容器中心（宽度锁死 14）。
+              // Color transition when the status icon (check ↔ refresh ↔ error) switches;
+              // spin while checking (ol-spin) with the pivot at the icon container's center
+              // (width locked to 14).
               transition: 'color 0.18s var(--ol-motion-quick)',
               animation: checking ? 'ol-spin 0.8s linear infinite' : undefined,
             }}
@@ -107,27 +109,25 @@ export function CheckUpdateButton({
           style={{
             display: compact ? 'none' : undefined,
             whiteSpace: 'nowrap',
-            // 状态文案（"检查更新" ↔ "检查中…" ↔ 结果提示）切换时淡入微滑移，
-            // 与 SelectLite 选中值切换动画同款（ol-select-value-in，global.css）。
+            // Fade-in with a slight slide when the status text ("check" ↔ "checking…" ↔ result)
+            // switches; same animation as SelectLite's value switch (ol-select-value-in, global.css).
             animation: 'ol-select-value-in .16s var(--ol-motion-quick)',
           }}
         >
           {label}
         </span>
       </button>
-      {isDialogStatus(status) && (
-        <UpdateDialog
-          status={status}
-          currentVersion={updater.currentVersion}
-          version={updater.version}
-          progress={updater.progress}
-          downloaded={updater.downloaded}
-          contentLength={updater.contentLength}
-          errorMessage={updater.errorMessage}
-          onInstall={() => void updater.installUpdate()}
-          onClose={() => void updater.dismissDialog()}
-        />
-      )}
+      <UpdateDialog
+        status={status}
+        currentVersion={updater.currentVersion}
+        version={updater.version}
+        progress={updater.progress}
+        downloaded={updater.downloaded}
+        contentLength={updater.contentLength}
+        errorMessage={updater.errorMessage}
+        onInstall={() => void updater.installUpdate()}
+        onClose={() => void updater.dismissDialog()}
+      />
     </>
   );
 }

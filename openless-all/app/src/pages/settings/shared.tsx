@@ -1,4 +1,4 @@
-// 共享在设置各 section 间的原子（SettingRow / Toggle / inputStyle）和纯 i18n 标签。
+// Display atoms (SettingRow / Toggle / inputStyle) and pure i18n label tables shared across settings sections.
 
 import type { CSSProperties, ReactNode } from 'react';
 import { Icon } from '../../components/Icon';
@@ -9,7 +9,7 @@ import {
   useConservativeLayout,
 } from '../../lib/useMobileLayout';
 
-// 带说明的文字统一加虚线下划线 + help 光标，暗示「悬停可看解释」。
+// Hintable text gets a dotted underline + help cursor, signaling "hover for an explanation".
 const hintableTextStyle: CSSProperties = {
   cursor: 'help',
   textDecoration: 'underline dotted',
@@ -23,7 +23,7 @@ export function SectionTitle({
   style,
 }: {
   children: ReactNode;
-  /** 悬停在标题文字上时的功能说明，给 Less Computer 这类光看名字猜不出用途的板块。 */
+  /** Functional explanation shown on hovering the title text, for sections whose purpose isn't obvious from the name (e.g. Less Computer). */
   hint?: string;
   style?: CSSProperties;
 }) {
@@ -39,7 +39,7 @@ export function SectionTitle({
     return <div style={titleStyle}>{children}</div>;
   }
   return (
-    // display:flex 让 Tooltip 的锚点收缩到标题文字本身，提示贴着文字弹出。
+    // display:flex shrinks the Tooltip anchor to the title text itself so the tooltip pops up next to the words.
     <div style={{ ...titleStyle, display: 'flex' }}>
       <Tooltip content={hint} wrap placement="bottom" focusable>
         <span style={hintableTextStyle}>{children}</span>
@@ -82,7 +82,7 @@ export function ExperimentalSectionTitle({
   );
 }
 
-// 页面瘦身：设置页描述文案全部隐藏（保留组件签名 + 调用点，便于需要时恢复）。
+// Page slimming: settings page description copy is hidden entirely (component signature + call sites kept for easy restoration).
 export function SectionDesc(_props: { children: ReactNode; style?: CSSProperties }) {
   return null;
 }
@@ -92,10 +92,11 @@ interface SettingRowProps {
   desc?: string;
   children: ReactNode;
   controlWidth?: number | string;
+  className?: string;
 }
 
-// 设置的用途和后果直接可读，触屏和键盘用户无需依赖悬停。
-export function SettingRow({ label, desc, children, controlWidth }: SettingRowProps) {
+// A setting's purpose and consequences read directly; touch and keyboard users don't depend on hover.
+export function SettingRow({ label, desc, children, controlWidth, className }: SettingRowProps) {
   const mobile = useMobileLayout();
   const readable = useReadableLayout();
   const conservative = useConservativeLayout();
@@ -108,6 +109,7 @@ export function SettingRow({ label, desc, children, controlWidth }: SettingRowPr
   };
   return (
     <div
+      className={className}
       style={{
         display: 'grid',
         gridTemplateColumns: stackLayout ? 'minmax(0, 1fr)' : 'minmax(0, 200px) minmax(0, 1fr)',
@@ -118,8 +120,8 @@ export function SettingRow({ label, desc, children, controlWidth }: SettingRowPr
       }}
     >
       <div style={{ minWidth: 0, alignSelf: 'center' }}>
-        {/* 行内长说明不再常驻占位，统一收进标题旁的「?」，
-                    悬停 / 点击弹出（与「录音与输入」标题的提示同一交互语言）。 */}
+        {/* Inline long descriptions no longer occupy space; they collapse into the "?" next to the title,
+                    popping up on hover / click (same interaction language as the "Recording & Input" title hint). */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
           <span style={{ ...labelStyle, minWidth: 0 }}>{label}</span>
           {desc && (
@@ -187,9 +189,9 @@ export function Toggle({
       }}
       style={{
         position: 'relative',
-        // 此前写死 flex: 0 0 36px，在列方向的设置行包装里
-        // flex-basis 作用在高度上，开关被拉成 36×36 的圆球（开机自启行）。
-        // 宽高由 width/height 显式锁定，flex 只负责不伸不缩。
+        // Previously hardcoded flex: 0 0 36px; in the column-direction settings row wrapper flex-basis
+        // applied to height, stretching the toggle into a 36×36 ball (the launch-at-login row).
+        // Width/height are locked explicitly; flex only prevents growing/shrinking.
         flex: '0 0 auto',
         width: 36,
         minWidth: 36,
@@ -260,17 +262,17 @@ export const inputStyle: CSSProperties = {
   fontSize: 13.5,
   fontFamily: 'inherit',
   outline: 'none',
-  // 与 SelectLite 触发器同底色：此前用 --ol-surface-2（浅灰）会让所有输入框/
-  // 下拉与其它设置控件（麦克风/胶囊样式等 select-trigger-bg）颜色不一致。
+  // Same background as the SelectLite trigger: previously --ol-surface-2 (light gray) made every input /
+  // dropdown inconsistent with other settings controls (mic / capsule style, etc., which use select-trigger-bg).
   background: 'var(--ol-select-trigger-bg)',
   width: '100%',
   maxWidth: 360,
   transition: 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
 };
 
-// React 只保留展示标签。endpoint、model、auth、probe 与能力全部来自
-// Core ProviderDescriptor，避免任一 Host 再拥有一份会漂移的 provider 策略。
-// 这里的顺序和键仅用于本地化回退；协议说明也应写在 Core provider_rules 附近。
+// React keeps only display labels here. endpoint, model, auth, probe, and capabilities all come from
+// the Core ProviderDescriptor so no Host owns a drifting copy of provider policy. Order and keys here
+// are only for localization fallback; protocol notes belong near Core provider_rules.
 export const ASR_LABELS = [
   { id: 'volcengine', nameKey: 'asrVolcengine' },
   { id: 'elevenlabs', nameKey: 'asrElevenLabs' },

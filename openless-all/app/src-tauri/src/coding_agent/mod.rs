@@ -1,4 +1,4 @@
-//! Tauri Coding Agent Adapter：只负责临时文件与子进程 I/O。
+//! Tauri Coding Agent Adapter: handles only temp files and subprocess I/O.
 
 pub mod commands;
 

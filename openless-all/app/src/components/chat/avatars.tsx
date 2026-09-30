@@ -1,13 +1,15 @@
-// avatars.tsx — 思考动画与头像。
+// avatars.tsx — thinking animation and avatars.
 //
-// · ThinkingOrb：与转译胶囊思考态**同一实现**（SiriGL mode="orb"，6 个白色
-//   metaball 圆点相互交错转动，thinking speed=1.5 与 Capsule.tsx 一致）。
-//   白色光点需要深色底才可见 —— 深色小舞台（olchat-orb-stage）承托，与面板的
-//   米白背景形成区分（用户拍板）。WebGL 不可用时退回静态白点环。
-// · StaticOrbDots：settled 消息头像用的静态白点环（不占 GL context——长对话里
-//   每条消息一个实时 orb 会撞浏览器 WebGL context 上限）。
-// · UserAvatar：GitHub 已登录（prefs.marketplaceDevLogin）显示 github.com/
-//   {login}.png 头像，未登录 / 加载失败退回 GitHub 图标。仅划词追问（QA）使用。
+// · ThinkingOrb: the exact same implementation as the capsule's thinking state
+//   (SiriGL mode="orb", 6 white metaball dots weaving and rotating, thinking
+//   speed=1.5 matching Capsule.tsx). White dots need a dark backdrop — carried by the
+//   small dark stage (olchat-orb-stage) to contrast with the panel's off-white
+//   background. Falls back to a static white-dot ring when WebGL is unavailable.
+// · StaticOrbDots: static white-dot ring for settled message avatars (no GL context —
+//   a live orb per message in long chats would hit the browser's WebGL context limit).
+// · UserAvatar: when logged into GitHub (prefs.marketplaceDevLogin), shows the
+//   github.com/{login}.png avatar; falls back to the GitHub icon when logged out or
+//   on load failure. Used only by selection ask (QA).
 
 import { useEffect, useRef, useState } from 'react';
 import { ThinkingDots } from '../ThinkingDots';
@@ -18,7 +20,7 @@ import { isTauri } from '../../lib/ipc/shared';
 import { cn } from './lib/utils';
 import './chat.css';
 
-/** 胶囊同款思考动画（深色舞台承托的 SiriGL orb）。 */
+/** Capsule-identical thinking animation (SiriGL orb on a dark stage). */
 export function ThinkingOrb({ size = 56, className }: { size?: number; className?: string }) {
   return (
     <span
@@ -44,10 +46,10 @@ export function ThinkingOrb({ size = 56, className }: { size?: number; className
 }
 
 /**
- * 头像形态的胶囊思考动画：**旋转中的** orb，与胶囊一模一样（用户拍板：
- * 每条助手消息的头像都要转）。不各挂 GL context —— 从共享渲染源
- * （orbFeed，全面板唯一 GL context）逐帧 drawImage 镜像到自己的 2D 小画布。
- * WebGL 不可用时退回 ThinkingDots 圆环。
+ * Capsule thinking animation as an avatar: the rotating orb, identical to the capsule
+ * (every assistant message avatar spins). No per-avatar GL context — each frame is
+ * mirrored from the shared render source (orbFeed, the panel's single GL context) to
+ * a small 2D canvas via drawImage. Falls back to a ThinkingDots ring without WebGL.
  */
 export function OrbAvatar({ size = 32 }: { size?: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -65,8 +67,9 @@ export function OrbAvatar({ size = 32 }: { size?: number }) {
       return undefined;
     }
     const unsubscribe = subscribeOrbFrames((source) => {
-      // 中心裁切放大（源按胶囊构图，光环只占画面 ~1/3；头像里裁掉外圈留白
-      // 让转环撑满，动画本体不变）。
+      // Center-crop and scale (the source is composed for the capsule; the halo takes
+      // only ~1/3 of the frame — crop the outer padding so the ring fills the avatar,
+      // animation unchanged).
       const crop = 0.62;
       const sw = source.width * crop;
       const sh = source.height * crop;
@@ -95,9 +98,10 @@ export function OrbAvatar({ size = 32 }: { size?: number }) {
 }
 
 /**
- * 当前 GitHub 登录名（Marketplace 上传身份，设置里登录后写入 prefs）。
- * refreshKey 变化时重取 —— 面板窗口是常驻 webview（hide/show 复用），
- * 用新会话信号驱动刷新即可跟上登录状态变化。
+ * Current GitHub login (Marketplace upload identity, written to prefs on sign-in in
+ * Settings). Re-fetches when refreshKey changes — the panel window is a persistent
+ * webview (reused across hide/show), so a new-session signal drives the refresh to
+ * track login changes.
  */
 export function useGithubLogin(refreshKey?: string | number): string {
   const [login, setLogin] = useState('');
@@ -109,7 +113,7 @@ export function useGithubLogin(refreshKey?: string | number): string {
         if (!cancelled) setLogin((prefs.marketplaceDevLogin ?? '').trim());
       })
       .catch(() => {
-        /* 未登录 / 读取失败：保持图标兜底。 */
+        /* Not logged in / read failed: keep the icon fallback. */
       });
     return () => {
       cancelled = true;
@@ -118,7 +122,7 @@ export function useGithubLogin(refreshKey?: string | number): string {
   return login;
 }
 
-/** 用户头像（QA 专用）：GitHub 头像图 / 未登录 GitHub 图标。 */
+/** User avatar (QA only): GitHub avatar image, or the GitHub icon when logged out. */
 export function UserAvatar({ login }: { login: string }) {
   const [broken, setBroken] = useState(false);
   useEffect(() => setBroken(false), [login]);

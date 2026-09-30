@@ -2,9 +2,11 @@
 mod build_target;
 
 fn main() {
-    // build.rs 的 `#[cfg(target_os)]` 判断的是构建脚本主机，不是 Cargo 的目标平台。
-    // 优先使用 Cargo 的目标 OS；旧工具链缺失该变量时回退解析 TARGET，避免 Linux
-    // 主机交叉编译 armv7 Android 时把 qwen-asr C 后端误编进 APK。
+    // In build.rs, `#[cfg(target_os)]` tests the build-script host, not
+    // Cargo's target platform. Prefer Cargo's target OS; fall back to parsing
+    // TARGET for old toolchains missing the variable, so cross-compiling
+    // armv7 Android from a Linux host does not wrongly build the qwen-asr C
+    // backend into the APK.
     let target = std::env::var("TARGET").unwrap_or_default();
     let target_os = build_target::classify_target_os(
         &target,
@@ -67,8 +69,9 @@ fn link_macos_compiler_runtime() {
     println!("cargo:rustc-link-lib=static=clang_rt.osx");
 }
 
-/// Apple Silicon 发布包把 mlx.metallib 放在 Contents/Resources。
-/// mlx-c 默认只在可执行文件旁边找，这里补一个 C 入口去调用 set_metallib_path。
+/// Apple Silicon release bundles put mlx.metallib in Contents/Resources.
+/// mlx-c by default only looks next to the executable; this adds a C entry
+/// point that calls set_metallib_path.
 fn compile_mlx_metallib_path_shim() {
     const SOURCE: &str = "src/asr/local/mlx_set_metallib_path.cpp";
     println!("cargo:rerun-if-changed={SOURCE}");
@@ -79,9 +82,11 @@ fn compile_mlx_metallib_path_shim() {
         .compile("openless_mlx_set_metallib_path");
 }
 
-/// cpal → oboe → oboe-sys 会编译 C++；最终 cdylib 需显式链接 NDK libc++。
+/// cpal → oboe → oboe-sys compile C++; the final cdylib must link the NDK
+/// libc++ explicitly.
 fn link_android_cpp_runtime() {
-    // oboe-ext 已部分静态链入 libc++；补链 c++abi 提供 __cxa_pure_virtual 等 ABI 符号。
+    // oboe-ext is partially statically linked into libc++; link c++abi as well
+    // to provide __cxa_pure_virtual and other ABI symbols.
     println!("cargo:rustc-link-lib=c++_static");
     println!("cargo:rustc-link-lib=c++abi");
 }
@@ -106,12 +111,14 @@ int openless_common_controls_v6_manifest_dependency_anchor = 0;
     );
 }
 
-/// 编译 vendored Open-Less/qwen-asr 的 C 源（macOS/Linux）。
+/// Compiles the vendored Open-Less/qwen-asr C sources (macOS/Linux).
 ///
-/// 上游 Makefile `make blas` 等价配置：BLAS 加速通过 Accelerate framework，
-/// `USE_BLAS` + `ACCELERATE_NEW_LAPACK` 是必要宏。
-/// `-march=native` 这里**不**用——分发二进制要可移植，cc crate 在 release 下
-/// 默认带 `-O2`，加上 `-O3` 提一档；NEON/AVX 在源码里有 `#ifdef` 自动分派。
+/// Equivalent to the upstream Makefile's `make blas`: BLAS acceleration via the
+/// Accelerate framework; `USE_BLAS` + `ACCELERATE_NEW_LAPACK` are required
+/// macros.
+/// `-march=native` is deliberately NOT used — distributed binaries must stay
+/// portable. The cc crate defaults to `-O2` in release; `-O3` bumps it one
+/// level. NEON/AVX dispatch happens through `#ifdef`s in the sources.
 fn build_qwen_asr(target_os: &str) {
     const VENDOR: &str = "vendor/qwen-asr";
     const SOURCES: &[&str] = &[
@@ -132,8 +139,9 @@ fn build_qwen_asr(target_os: &str) {
         .include(VENDOR)
         .flag("-O3")
         .flag("-ffast-math")
-        // 上游开 `-Wall -Wextra`；我们把 qwen-asr 的代码当三方依赖，把无关警告压成静默
-        // 避免 build log 噪音淹没我们自己的告警。
+        // Upstream builds with `-Wall -Wextra`; qwen-asr is treated as a
+        // third-party dependency, so silence its irrelevant warnings to keep
+        // build log noise from drowning out our own warnings.
         .flag("-Wno-unused-parameter")
         .flag("-Wno-unused-variable")
         .flag("-Wno-unused-function")
@@ -160,14 +168,16 @@ fn build_qwen_asr(target_os: &str) {
         println!("cargo:rustc-link-lib=framework=Accelerate");
     }
 
-    // Linux 不依赖发行版的 OpenBLAS 开发包，先走 C 引擎自带的通用 CPU kernels。
+    // Linux does not depend on the distribution's OpenBLAS dev package; use the
+    // C engine's generic CPU kernels first.
     if target_os == "linux" {
         println!("cargo:rustc-link-lib=m");
         println!("cargo:rustc-link-lib=pthread");
     }
 
-    // Apple Speech 本地 ASR（issue #574）：apple_speech_provider 用
-    // SFSpeechRecognizer / SFSpeechURLRecognitionRequest，符号在 Speech.framework。
+    // Apple Speech local ASR (issue #574): apple_speech_provider uses
+    // SFSpeechRecognizer / SFSpeechURLRecognitionRequest; symbols live in
+    // Speech.framework.
     if target_os == "macos" {
         println!("cargo:rustc-link-lib=framework=Speech");
     }

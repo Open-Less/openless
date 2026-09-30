@@ -1,57 +1,67 @@
-// SiriGL.tsx — Apple 新版 Siri 动画的 WebGL 复刻，胶囊「纯光效」形态的渲染核心。
+// SiriGL.tsx — WebGL recreation of Apple's new Siri animation; render core of the
+// capsule's pure-light form.
 //
-// Shader 移植自 github.com/aaaa-zhen/siri-glsl（MIT，siri-wave.html）：
-//   - wave：siriWaveCore 光谱声波 —— 4 次光谱采样色散 + Lorentzian 发光线。
-//     原版 RESOLVED / 假音频信号改为 uniform：uLevel 接真实麦克风电平（capsule:state
-//     的 60Hz RMS），uResolved 1→0 时波形向圆心汇聚成呼吸光点（录音 → 思考的过渡）。
-//     原版末尾 `col *= res` 会让 res=0 全黑，这里改成保底亮度让汇聚后的光点常亮。
-//   - orb：siriFluidDotsCore 流体圆点 —— 6 个 metaball smooth-min 融合 + 周期
-//     聚拢/爆发，即官方「思考中」的圆形图标，原样移植。
+// Shaders ported from github.com/aaaa-zhen/siri-glsl (MIT, siri-wave.html):
+//   - wave: siriWaveCore spectral voice wave — 4-tap spectral dispersion + Lorentzian
+//     glow lines. The original's RESOLVED / fake audio signal become uniforms: uLevel
+//     carries the real mic level (60Hz RMS from capsule:state); as uResolved goes 1→0
+//     the wave converges into a breathing orb (recording → thinking transition). The
+//     original's final `col *= res` would go fully black at res=0; a floor brightness
+//     here keeps the converged orb lit.
+//   - orb: siriFluidDotsCore fluid dots — 6 metaballs fused with smooth-min plus
+//     periodic gather/burst, i.e. the official "thinking" round icon, ported as-is.
 //
-// 渲染框架与 demo 一致：单个大三角形铺满 + fragment shader，uniform 仅 4 个。
-// 输出加了 alpha（取 RGB 最大分量），光效直接浮在透明窗口上，无需底色。
-// 生命周期：挂载启动 rAF，卸载 cancel + 释放 GL 资源（不可见即零 GPU，#470 同款原则）。
+// Render setup matches the demo: one full-screen large triangle + fragment shader,
+// only 4 uniforms. Output adds alpha (max RGB component) so the light floats directly
+// on a transparent window with no background color.
+// Lifecycle: rAF starts on mount; unmount cancels it and releases GL resources
+// (invisible means zero GPU, same principle as #470).
 
-import { useEffect, useRef, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useRef, type CSSProperties } from 'react';
+import { useReducedMotion } from '../lib/motion';
 
 export type SiriGLMode = 'wave' | 'orb';
 
 interface SiriGLProps {
   mode: SiriGLMode;
-  /** wave 专用：原始 RMS 电平 0..1，内部做门限 + 攻快释慢平滑。 */
+  /** wave only: raw RMS level 0..1; gated and smoothed (fast attack, slow release) internally. */
   level?: number;
-  /** wave 专用：true=波形展开（录音），false=向圆心汇聚成呼吸光点（思考）。 */
+  /** wave only: true = wave expanded (recording), false = converged into a breathing orb (thinking). */
   resolved?: boolean;
   /**
-   * wave 专用：预备态。true = 麦克风尚未就绪，光条走柔和「待命」呼吸（忽略真实电平），
-   * 暗示用户稍候；麦克风就绪后置 false，改接真实电平，光条「点亮」进入正式录音。
+   * wave only: warming state. true = mic not ready yet; the wave runs a soft standby
+   * breathing (ignoring the real level) to tell the user to wait. Set false once the
+   * mic is ready: the real level takes over and the wave "lights up" into recording.
    */
   warming?: boolean;
-  /** wave 专用：预备态预期时长（ms），驱动展开动画的预测节奏。见 Capsule warmupMs。 */
+  /** wave only: expected warming duration (ms), driving the predicted expand pace. See Capsule warmupMs. */
   warmupMs?: number;
   /**
-   * 动画时间倍率（默认 1）。shader 时间由内部按 dt×speed 累积而非取墙钟，
-   * 因此变速是连续的：思考中 >1 加速转动，收尾回落到标准速度。
+   * Animation time multiplier (default 1). Shader time accumulates internally as
+   * dt×speed rather than wall clock, so speed changes are continuous: >1 spins faster
+   * while thinking, settling back to standard speed at the end.
    */
   speed?: number;
-  /** orb 专用：true = 六点向圆心合并成一颗圆（插入完成的收尾动画）。 */
+  /** orb only: true = the six dots merge into one circle at the center (insert-complete outro). */
   merging?: boolean;
   className?: string;
   style?: CSSProperties;
 }
 
-/** 内部渲染分辨率倍率（乘在 devicePixelRatio 上），demo 同款取值，越低越省 GPU。 */
+/** Internal render resolution scale (multiplied by devicePixelRatio); demo value — lower saves GPU. */
 const RENDER_SCALE = 0.75;
 
 /**
- * 预备态光条的「收拢度」：wave 的 uResolved 停在这个低值 —— 光条向中心聚拢、明显未展开
- * （视觉上就是「加载中，还没好」）。麦克风就绪后 uResolved 升到 1，光条展开点亮成完整
- * 声波，作为「准备完成、可以开口」的唯一信号。取值偏低才够「未成形」，但不取 0（0 是思
- * 考态的中心光点，避免撞脸）。
+ * Wave "collapse" level during warming: uResolved parks at this low value — the wave
+ * gathers toward the center, clearly not expanded (reads as "loading, not ready").
+ * Once the mic is ready, uResolved rises to 1 and the wave expands into the full
+ * voice wave as the sole "ready to speak" signal. Low enough to look unformed, but
+ * not 0 (0 is the thinking state's center orb; avoid that collision).
  */
 const WARMING_RESOLVED = 0.2;
 
-// 导出给 chat/orbFeed（共享 orb 渲染源：一个 GL context 镜像到多个小头像）。
+// Exported for chat/orbFeed (shared orb render source: one GL context mirrored to
+// several small avatars).
 export const VERTEX_SRC = 'attribute vec2 aPos; void main(){ gl_Position=vec4(aPos,0.0,1.0); }';
 
 const WAVE_FRAGMENT_SRC = `
@@ -78,9 +88,10 @@ void main(){
   float high=clamp(0.30+0.30*sin(t*2.9+4.0)*sin(t*0.71+2.0),0.0,1.0)*dv;
   float res=clamp(uResolved,0.0,1.0);
   float drift=mod(t,20.0*PI)*SPEED;
-  /* 汇聚 = 「四周向中间收缩」（用户拍板）：波形坐标随 res 下降横向放大，
-     可见波纹被从两端挤向圆心，而不是原地塌扁 + 相位继续往两边跑（脉冲感）。
-     光点距离场仍用未收缩的 p，保持正圆。 */
+  /* Converge = "edges shrink toward the center": wave x-coords stretch as res drops,
+     pushing the visible ripples from both ends toward the center, instead of
+     flattening in place while the phase keeps running sideways (pulse feel).
+     The orb distance field still uses the unscaled p to stay a perfect circle. */
   vec2 pw=p; pw.x*=mix(5.0,1.0,res);
   float xN=pw.x/max(aspect,1.0);
   float env=cos(PI*0.5*min(abs(0.9*xN),1.0)); env*=env;
@@ -110,27 +121,29 @@ void main(){
   vec3 col=num/den;
   float dM=mix(dUnres,abs(p.y-yMain),res);
   float lorM=mix(1.0/(1.0+(0.02*dM)*(0.02*dM)),1.0,res);
-  /* 原版 boost=(1-res)*(14*low+4)：汇聚光点的大光晕会铺满透明窗口、在窗口
-     边界被硬裁出直边。压到含蓄水平 —— 转场一切向内收，不向外扩。 */
+  /* Original boost=(1-res)*(14*low+4): the converged orb's big halo would fill the
+     transparent window and get hard-clipped into a straight edge at the border.
+     Toned down — the transition collapses inward, never outward. */
   float boost=(1.0-res)*(3.0*low+1.2);
   col+=0.5*inten*(lorM+boost)/(sqrt(dM*dM+soft*soft)+th);
   col=pow(max(col,0.0),vec3(1.5));
   float emT=clamp((abs(yScreen)-1.0+EDGE_INSET)/(-max(EDGE_MASK,1e-4)),0.0,1.0);
   float em=emT*emT*(3.0-2.0*emT);
   float gauss=exp(-pow(xN*FALLOFF,2.0));
-  /* 遮罩全程生效（原版 res→0 时遮罩失效会让收拢中段的残波漏到两侧）。 */
+  /* Edge mask active throughout (in the original it stops working as res→0, letting leftover wave leak out the sides mid-collapse). */
   col*=em*gauss;
   col*=mix(0.55,1.0,res);
   float a=clamp(max(col.r,max(col.g,col.b)),0.0,1.0);
   gl_FragColor=vec4(col,a);
 }`;
 
-// 相对原版 siriFluidDotsCore 的两处刻意修改（用户拍板）：
-//   1. 删除 12s 周期的 gather→burst 爆发 —— 冲击波会顶到方形画布边缘被硬裁；
-//      思考态只保留纯粹的转动 + metaball 融合。
-//   2. 聚拢改为 uniform uGather 驱动的「出场」：1=六点全聚在圆心（视觉上就是
-//      wave 汇聚后的那颗光点），0=散开成环 —— 光条收拢的光点由此平滑「化开」
-//      成思考圆点，中间没有任何跳变或弹入冲击。
+// Two deliberate changes vs the original siriFluidDotsCore:
+//   1. Removed the 12s gather→burst explosion — the shockwave hits the square canvas
+//      edge and gets hard-clipped; thinking keeps pure rotation + metaball fusion.
+//   2. Gathering is now an entrance driven by the uGather uniform: 1 = all six dots
+//      merged at the center (visually the orb the wave converges into), 0 = spread
+//      into a ring — the wave's converged orb smoothly "melts" into the thinking dots
+//      with no jump or pop-in impact.
 export const ORB_FRAGMENT_SRC = `
 precision highp float;
 uniform vec2 iResolution; uniform float iTime;
@@ -223,7 +236,7 @@ void main(){
 
 let webglProbe: boolean | null = null;
 
-/** 一次性探测 WebGL 可用性；失败时调用方退回旧胶囊 UI。 */
+/** One-shot WebGL availability probe; on failure the caller falls back to the old capsule UI. */
 export function isWebGLAvailable(): boolean {
   if (webglProbe != null) return webglProbe;
   try {
@@ -238,9 +251,10 @@ export function isWebGLAvailable(): boolean {
 let shadersWarmed = false;
 
 /**
- * 空闲预热：在 1×1 的离屏 context 里把两个 shader 各编译一次然后立即释放。
- * GPU 驱动（Metal / ANGLE）按源码缓存编译产物，正式挂载时命中缓存，编译从
- * 几十毫秒降到近零 —— 消除「按下热键后光条慢一拍」的首次延迟。
+ * Idle warm-up: compile both shaders once in a 1×1 offscreen context, then release
+ * immediately. GPU drivers (Metal / ANGLE) cache compiled shaders by source, so the
+ * real mount hits the cache and compilation drops from tens of ms to near zero —
+ * removing the "wave lags a beat after hotkey press" first-use delay.
  */
 export function warmUpSiriShaders(): void {
   if (shadersWarmed || !isWebGLAvailable()) return;
@@ -269,11 +283,11 @@ export function warmUpSiriShaders(): void {
     }
     gl.getExtension('WEBGL_lose_context')?.loseContext();
   } catch {
-    // 预热失败无碍：正式挂载时照常编译。
+    // Warm-up failure is harmless: the real mount compiles as usual.
   }
 }
 
-/** AudioBars 同款心理声学映射：门限静音底噪 + smoothstep + pow 提升小音量表现。 */
+/** Same psychoacoustic mapping as AudioBars: noise gate + smoothstep + pow to boost low-level response. */
 function visualVoice(raw: number): number {
   const gate = 0.012;
   const ceiling = 0.34;
@@ -294,8 +308,10 @@ export function SiriGL({
   style,
 }: SiriGLProps) {
   const hostRef = useRef<HTMLDivElement>(null);
-  // 60Hz 的 level 更新走 ref 桥接：render 只同步数值，绘制循环在 rAF 里读，
-  // 不因 props 变化重建 GL 管线。
+  const reducedMotion = useReducedMotion();
+  const redrawRef = useRef<(() => void) | null>(null);
+  // 60Hz level updates go through a ref bridge: render only syncs the value and the
+  // draw loop reads it in rAF, so the GL pipeline is never rebuilt for prop changes.
   const levelRef = useRef(0);
   const resolvedRef = useRef(1);
   const speedRef = useRef(1);
@@ -309,13 +325,18 @@ export function SiriGL({
   warmingRef.current = warming === true ? 1 : 0;
   warmupMsRef.current = warmupMs ?? 150;
 
+  useLayoutEffect(() => {
+    if (reducedMotion) redrawRef.current?.();
+  }, [level, resolved, warming, warmupMs, speed, merging, reducedMotion]);
+
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return undefined;
-    // 每次 effect 都新建 canvas：卸载时我们主动 loseContext 释放 GPU，而浏览器对
-    // 同一个 canvas 永远返回同一个（已死的）context —— React 复用 DOM 节点时
-    // （StrictMode 双挂载 / mode 切换重跑 effect）在旧 canvas 上重建管线必然全军
-    // 覆没（compile failed: null）。新 canvas = 新 context，彻底绕开。
+    // Create a new canvas per effect: unmount deliberately loseContext-es to release
+    // GPU, and the browser always returns the same (now dead) context for the same
+    // canvas — rebuilding the pipeline on the old canvas fails entirely when React
+    // reuses the DOM node (StrictMode double-mount / mode-switch effect rerun;
+    // "compile failed: null"). New canvas = new context, bypassing it completely.
     const canvas = document.createElement('canvas');
     canvas.style.cssText = 'display:block;width:100%;height:100%;pointer-events:none;';
     host.appendChild(canvas);
@@ -376,17 +397,20 @@ export function SiriGL({
     const uLevelLoc = gl.getUniformLocation(program, 'uLevel');
     const uGatherLoc = gl.getUniformLocation(program, 'uGather');
 
-    // 绘制侧的缓动状态：电平攻快释慢（VU 表手感），resolved 指数趋近（「慢慢汇聚」）。
-    // shader 时间按 dt×speed 累积（非墙钟），变速连续无跳变。
-    // orb 的 uGather 完整生命周期（用户拍板）：出场 gather=1 全聚圆心（接住 wave
-    // 收缩成的光点）→ 稳住一拍后缓缓「从中心散开」成环转动 → merging=true 时
-    // 干脆地（k=4）合并回中央一颗圆，随淡出消失。
+    // Draw-side easing state: level attacks fast / releases slow (VU-meter feel),
+    // resolved approaches exponentially ("slowly converging"). Shader time accumulates
+    // as dt×speed (not wall clock), so speed changes are jump-free.
+    // uGather lifecycle for orb: on entrance gather=1, all dots merged at the center
+    // (catching the orb the wave collapsed into) → after a beat, slowly spread from
+    // the center into a rotating ring → when merging=true, decisively merge back into
+    // one center circle (k=4) and vanish with the fade.
     const GATHER_HOLD_S = 0.3;
     let smoothLevel = 0;
-    // 预备态一挂载就从收拢态起步（未成形=加载中），避免「先展开一下又收拢」的突兀；
-    // 麦克风就绪后再展开到 resolvedRef。
+    // While warming, start from the collapsed state on mount (unformed = loading) to
+    // avoid the jarring "expand briefly then collapse"; expand to resolvedRef once the
+    // mic is ready.
     let smoothResolved = warmingRef.current > 0.5 ? WARMING_RESOLVED : resolvedRef.current;
-    // 预测式展开进度（0=收拢, 1=展开）：warming 入场从 0 起爬，非 warming 直接 1。
+    // Predicted expand progress (0=collapsed, 1=expanded): warming entrances climb from 0; non-warming starts at 1.
     let warmProgress = warmingRef.current > 0.5 ? 0 : 1;
     let smoothSpeed = speedRef.current;
     let gather = 1;
@@ -396,7 +420,13 @@ export function SiriGL({
     let last = performance.now();
 
     const frame = (now: number) => {
-      const dt = Math.min(0.05, (now - last) / 1000);
+      const dt = reducedMotion ? 0 : Math.min(0.05, (now - last) / 1000);
+      if (reducedMotion) {
+        smoothLevel = visualVoice(levelRef.current);
+        smoothResolved = warmingRef.current > 0.5 ? WARMING_RESOLVED : resolvedRef.current;
+        warmProgress = warmingRef.current > 0.5 ? 0 : 1;
+        gather = mergingRef.current > 0.5 ? 1 : 0;
+      }
       last = now;
       elapsed += dt;
       smoothSpeed += (speedRef.current - smoothSpeed) * (1 - Math.exp(-dt * 2.5));
@@ -412,10 +442,12 @@ export function SiriGL({
         gl.viewport(0, 0, w, h);
       }
 
-      // 汇聚态（resolved→0）时电平失去含义，切换成含蓄的慢呼吸信号驱动光点搏动。
+      // In the converged state (resolved→0) level loses meaning; switch to a subdued
+      // slow-breathing signal to pulse the orb.
       const thinking = resolvedRef.current < 0.5;
       const warmingNow = warmingRef.current > 0.5;
-      // 电平：预备态走低幅「加载脉动」（暗、慢，明显未就绪），思考态呼吸，录音态接真实电平。
+      // Level: warming runs a low-amplitude "loading pulse" (dim, slow, clearly not
+      // ready), thinking breathes, recording follows the real level.
       const target = warmingNow
         ? 0.12 + 0.06 * Math.sin(t * 3.0)
         : thinking
@@ -423,25 +455,30 @@ export function SiriGL({
           : visualVoice(levelRef.current);
       const attack = target > smoothLevel ? 14 : 5;
       smoothLevel += (target - smoothLevel) * (1 - Math.exp(-dt * attack));
-      // 预测式展开（用户方案）：入场展开不再死等就绪信号（那会「亮起→卡一下→突然展开」），
-      // 而是按历史平均加载时长 warmupMs 从按下就平滑推进：
-      //   · 未就绪（warming）：warmProgress 按 warmupMs 匀速慢爬，cap 0.9（留一截给就绪收尾）；
-      //   · 就绪（warming→false）：快速补到 1 —— 就绪早=剩得多，视觉上「迅速展开完成」；
-      //   · 加载超长：停在 0.9 等着（用户说的「没办法」的情况），光条明显未满=还没好。
+      // Predicted expand: the entrance no longer dead-waits for the ready signal (that
+      // read as "light up → stutter → suddenly expand") but progresses smoothly from
+      // the keypress using the historical average load time warmupMs:
+      //   · not ready (warming): warmProgress crawls at warmupMs pace, capped at 0.9
+      //     (keeping the last stretch for the ready finish);
+      //   · ready (warming→false): quickly complete to 1 — earlier ready = more left,
+      //     visually "expands to full quickly";
+      //   · very long load: hold at 0.9; a clearly unfilled wave = still not ready.
       const warmupSec = Math.max(0.06, warmupMsRef.current / 1000);
       if (warmingNow) {
         warmProgress = Math.min(0.9, warmProgress + dt / warmupSec);
       } else {
         warmProgress += (1 - warmProgress) * (1 - Math.exp(-dt * 9));
       }
-      // resolved：思考态（resolvedRef→0）走原「从容汇聚」；入场/录音由 warmProgress 从收拢
-      // （WARMING_RESOLVED）展开到满，smoothResolved 紧跟（展开节奏已由 warmProgress 控速）。
+      // resolved: thinking (resolvedRef→0) keeps the original unhurried convergence;
+      // entrance/recording expands from collapsed (WARMING_RESOLVED) to full via
+      // warmProgress, with smoothResolved following (warmProgress already sets the
+      // expand pace).
       const targetResolved = thinking
         ? resolvedRef.current
         : WARMING_RESOLVED + (1 - WARMING_RESOLVED) * warmProgress;
       const resolvedK = thinking ? 2.2 : 9.0;
       smoothResolved += (targetResolved - smoothResolved) * (1 - Math.exp(-dt * resolvedK));
-      // 出场 hold 之后才开始散开；合并（目标 1）快、散开（目标 0）缓。
+      // Spreading starts only after the entrance hold; merging (target 1) is fast, spreading (target 0) slow.
       if (mergingRef.current === 1) {
         gather += (1 - gather) * (1 - Math.exp(-dt * 4.0));
       } else if (elapsed > GATHER_HOLD_S) {
@@ -454,12 +491,20 @@ export function SiriGL({
       if (uLevelLoc) gl.uniform1f(uLevelLoc, smoothLevel);
       if (uGatherLoc) gl.uniform1f(uGatherLoc, gather);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
-      raf = requestAnimationFrame(frame);
+      if (!reducedMotion) raf = requestAnimationFrame(frame);
     };
-    // 首帧同步绘制（不等下一个 vsync）：挂载即有画面，热键按下的响应少一帧延迟。
+    // Draw the first frame synchronously (don't wait for the next vsync): visuals
+    // exist at mount, one frame less hotkey latency.
     frame(performance.now());
+    const redraw = () => frame(performance.now());
+    // Only static effects expose redraw; normal effects own a single RAF chain.
+    redrawRef.current = reducedMotion ? redraw : null;
+    const resize = reducedMotion ? new ResizeObserver(redraw) : null;
+    resize?.observe(host);
 
     return () => {
+      if (redrawRef.current === redraw) redrawRef.current = null;
+      resize?.disconnect();
       cancelAnimationFrame(raf);
       gl.deleteBuffer(buffer);
       gl.deleteProgram(program);
@@ -468,7 +513,7 @@ export function SiriGL({
       gl.getExtension('WEBGL_lose_context')?.loseContext();
       canvas.remove();
     };
-  }, [mode]);
+  }, [mode, reducedMotion]);
 
   return (
     <div

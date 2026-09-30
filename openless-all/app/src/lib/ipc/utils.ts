@@ -25,25 +25,30 @@ export async function openExternal(url: string): Promise<void> {
 }
 
 /**
- * 让用户选 save 路径并把当前会话日志（openless.log）复制过去。
- * 浏览器开发模式下走 mock 不实际写盘。返回最终 save 的绝对路径，取消选择则返回 null。
+ * Ask the user for a save path and copy the current session log (openless.log) there.
+ * Browser dev mode goes through a mock and does not write to disk. Returns the final save
+ * absolute path, or null if the user cancelled.
  *
- * Android：省略 filters——部分 ROM 上 CREATE_DOCUMENT + EXTRA_MIME_TYPES 不稳定；
- * 文件名已带 .log，足够标识类型。
+ * Android writes the log to public Downloads through MediaStore.
  */
 export async function exportErrorLog(suggestedFileName: string): Promise<string | null> {
   if (!isTauri) {
     return `~/Downloads/${suggestedFileName}`;
   }
-  const { save } = await import('@tauri-apps/plugin-dialog');
   const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent || '');
+  if (isAndroid) {
+    return invokeOrMock<string>(
+      'export_error_log_to_downloads',
+      { fileName: suggestedFileName },
+      () => `~/Downloads/${suggestedFileName}`,
+    );
+  }
+  const { save } = await import('@tauri-apps/plugin-dialog');
   const target = await save(
-    isAndroid
-      ? { defaultPath: suggestedFileName }
-      : {
-          defaultPath: suggestedFileName,
-          filters: [{ name: 'Log', extensions: ['log', 'txt'] }],
-        },
+    {
+      defaultPath: suggestedFileName,
+      filters: [{ name: 'Log', extensions: ['log', 'txt'] }],
+    },
   );
   if (!target) return null;
   await invokeOrMock<void>('export_error_log', { targetPath: target }, () => undefined);
@@ -51,9 +56,10 @@ export async function exportErrorLog(suggestedFileName: string): Promise<string 
 }
 
 /**
- * 把前端关键错误（如自动更新 install 失败）转发到 Rust 文件日志（openless.log）。
- * webview 的 console.error 不会落进 openless.log，单独走 IPC，便于用户「导出日志」
- * 后我们拿到失败的真实原因。永不抛错——日志失败不应再影响调用方的错误处理。
+ * Forward key frontend errors (e.g. auto-update install failures) to the Rust file log
+ * (openless.log). The webview's console.error does not land in openless.log, so this goes over
+ * IPC separately, letting us learn the real cause after the user "exports the log". Never
+ * throws — a logging failure must not disturb the caller's error handling.
  */
 export async function logClientError(message: string): Promise<void> {
   try {
@@ -63,11 +69,12 @@ export async function logClientError(message: string): Promise<void> {
   }
 }
 
-/** 探一次「宿主 app 光标周围的正文」。**调试用，不接产品链路。**
+/** Probe "the body text around the host app's cursor" once. **Debug only, no product path.**
  *
- *  `delayMs` 是这个入口能用起来的关键：从设置页点按钮时前台 app 是 OpenLess 自己，
- *  读到的永远是我们自己的窗口。给几秒延迟，用户才有时间切到备忘录 / VS Code / 微信
- *  里点进输入框，探针在那时才真正开始读。 */
+ *  `delayMs` is what makes this entry point usable: when clicking the button from the settings
+ *  page the foreground app is OpenLess itself, so it would always read our own window. A few
+ *  seconds of delay gives the user time to switch to Notes / VS Code / WeChat and click into an
+ *  input field before the probe actually reads. */
 export async function debugReadCursorContext(
   delayMs: number,
 ): Promise<import('../types').HostDocumentReadResult> {
