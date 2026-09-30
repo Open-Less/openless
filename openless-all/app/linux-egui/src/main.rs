@@ -583,6 +583,11 @@ mod linux_app {
         capsule_session: Option<String>,
         /// 已经为哪个会话排过收起计时，避免重复计时。
         capsule_dismissal_scheduled: Option<String>,
+        /// 「要记住这个词吗？」卡片当前内容（Core `pending_corrections`）。非空时
+        /// 胶囊窗只画这张卡；见 `refresh_vocab_suggestions`。
+        vocab_suggestions: Vec<openless_linux_egui::CapsuleSuggestion>,
+        /// 卡片上一轮的重算时刻，用来让过期的候选自己消失（Core 只按需清理）。
+        vocab_suggestions_checked: std::time::Instant,
         tray: Option<openless_linux_egui::LinuxTray>,
         exit_requested: bool,
         /// 上次打「泵心跳」日志的时间。
@@ -755,6 +760,8 @@ mod linux_app {
                         popup_action_guard: PopupActionGuard::default(),
                         capsule_session: None,
                         capsule_dismissal_scheduled: None,
+                        vocab_suggestions: Vec::new(),
+                        vocab_suggestions_checked: std::time::Instant::now(),
                         tray,
                         exit_requested: false,
                         last_pump_heartbeat: std::time::Instant::now(),
@@ -856,6 +863,8 @@ mod linux_app {
                     popup_action_guard: PopupActionGuard::default(),
                     capsule_session: None,
                     capsule_dismissal_scheduled: None,
+                    vocab_suggestions: Vec::new(),
+                    vocab_suggestions_checked: std::time::Instant::now(),
                     tray,
                     exit_requested: false,
                     last_pump_heartbeat: std::time::Instant::now(),
@@ -1303,6 +1312,108 @@ mod linux_app {
             .to_string()
         }
 
+        /// Core 的待确认纠正变了：没有会话时把卡片顶到胶囊窗上，有会话就丢掉候选。
+        ///
+        /// Tauri `show_vocab_suggestion_card` / `hide_vocab_suggestion_card`：卡片与
+        /// 录音胶囊**共用同一个窗口**，所以「会话在飞」时必须让路，否则卡片的尺寸/位置
+        /// 会把这次会话的胶囊顶掉。
+        fn refresh_vocab_suggestions(&mut self) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            self.vocab_suggestions_checked = std::time::Instant::now();
+            let pending = backend.pending_corrections();
+            let phase = self
+                .snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.dictation.phase);
+            if !openless_linux_egui::vocab_card_allowed(phase) {
+                if !pending.is_empty() {
+                    backend.dismiss_pending_corrections();
+                }
+                self.vocab_suggestions.clear();
+                self.hide_vocab_card();
+                return;
+            }
+            self.vocab_suggestions = pending
+                .iter()
+                .map(|item| openless_linux_egui::CapsuleSuggestion {
+                    id: item.id.clone(),
+                    pattern: item.pattern.clone(),
+                    replacement: item.replacement.clone(),
+                })
+                .collect();
+            if self.vocab_suggestions.is_empty() {
+                self.hide_vocab_card();
+            } else {
+                self.show_vocab_card();
+            }
+        }
+
+        /// 丢弃当前候选（新会话开始 / 胶囊开关关掉时）。
+        fn dismiss_vocab_suggestions(&mut self) {
+            if self.vocab_suggestions.is_empty() {
+                return;
+            }
+            if let Some(backend) = self.backend() {
+                backend.dismiss_pending_corrections();
+            }
+            self.vocab_suggestions.clear();
+        }
+
+        /// 把卡片画进胶囊窗。会话 id 留空：卡片与听写会话无关，因此**不能**走
+        /// `capsule_session`/兜底收起那条路（那会把卡片当成「会话消失了」收掉）。
+        fn show_vocab_card(&mut self) {
+            if !self.capsule_enabled() {
+                self.dismiss_vocab_suggestions();
+                return;
+            }
+            self.ensure_popup(PopupKind::Capsule);
+            self.send_popup(
+                PopupKind::Capsule,
+                HostToPopup::Capsule {
+                    version: POPUP_PROTOCOL_VERSION,
+                    session_id: String::new(),
+                    sequence: self.last_event_sequence.saturating_mul(2),
+                    phase: String::new(),
+                    text: String::new(),
+                    audio_level: None,
+                    translation_active: false,
+                    style: self.capsule_style_tag(),
+                    suggestions: self.vocab_suggestions.clone(),
+                },
+            );
+            // `send_popup` 会把胶囊会话记成空串，兜底收起会误判成「会话消失」。
+            self.capsule_session = None;
+        }
+
+        fn hide_vocab_card(&mut self) {
+            if self.vocab_suggestions.is_empty() && self.capsule_session.is_none() {
+                return;
+            }
+            self.send_popup(
+                PopupKind::Capsule,
+                HostToPopup::Hide {
+                    version: POPUP_PROTOCOL_VERSION,
+                    session_id: String::new(),
+                    sequence: 0,
+                },
+            );
+            self.capsule_session = None;
+        }
+
+        /// 卡片上有 Core 给的死线（`PendingCorrection::expires_at_ms`），Core 只按需
+        /// 清理过期项、不发事件；这里按秒重算，过期的行自己消失。
+        fn tick_vocab_suggestions(&mut self) {
+            if self.vocab_suggestions.is_empty() {
+                return;
+            }
+            if self.vocab_suggestions_checked.elapsed() < std::time::Duration::from_millis(500) {
+                return;
+            }
+            self.refresh_vocab_suggestions();
+        }
+
         fn show_capsule_popup(&mut self) {
             if !self.capsule_enabled() {
                 return;
@@ -1341,6 +1452,7 @@ mod linux_app {
                     audio_level: Some(snapshot.level),
                     translation_active: snapshot.translation_active,
                     style,
+                    suggestions: self.vocab_suggestions.clone(),
                 },
             );
             self.schedule_capsule_dismissal(&session_id.to_string(), snapshot.phase);
@@ -1368,6 +1480,7 @@ mod linux_app {
                     audio_level: None,
                     translation_active: false,
                     style: self.capsule_style_tag(),
+                    suggestions: self.vocab_suggestions.clone(),
                 },
             );
             self.schedule_capsule_dismissal(session_id, DictationPhase::Failed);
@@ -1629,6 +1742,28 @@ mod linux_app {
                         log::info!("[hotkey] local edge from the {kind:?} panel: {edge:?}");
                         self.pending_local_hotkeys
                             .push((std::time::Instant::now(), edge));
+                    }
+                    PopupSupervisorEvent::Message(PopupToHost::VocabSuggestion {
+                        id,
+                        accept,
+                        ..
+                    }) => {
+                        // 点一下就是一次词库写入（同步 IO），放到后台线程，别卡这一帧。
+                        if let Some(backend) = self.backend() {
+                            let result = if accept {
+                                backend
+                                    .accept_pending_correction(&id)
+                                    .map(|_| String::new())
+                                    .map_err(|error| error.to_string())
+                            } else {
+                                backend.reject_pending_correction(&id);
+                                Ok(String::new())
+                            };
+                            if let Err(error) = result {
+                                log::warn!("[vocab-card] resolve failed: {error}");
+                            }
+                            self.refresh_vocab_suggestions();
+                        }
                     }
                     PopupSupervisorEvent::Message(PopupToHost::DismissCapsule { .. }) => {
                         if let Some(snapshot) = self.snapshot.as_mut() {
@@ -2374,6 +2509,8 @@ mod linux_app {
                     let was_recording = self.recording_phase_active;
                     self.recording_phase_active = state.phase == DictationPhase::Recording;
                     if state.phase == DictationPhase::Recording && !was_recording {
+                        // 卡片与录音胶囊共用一个窗口：会话一起来就得让路。
+                        self.dismiss_vocab_suggestions();
                         self.play_record_cue(true);
                     } else if !self.recording_phase_active && was_recording {
                         self.play_record_cue(false);
@@ -2423,6 +2560,7 @@ mod linux_app {
                                 audio_level: Some(state.level),
                                 translation_active: state.translation_active,
                                 style,
+                                suggestions: self.vocab_suggestions.clone(),
                             },
                         );
                         // 终态：按 Tauri 时序安排自动收起，否则药丸会一直贴在屏幕上。
@@ -2582,6 +2720,11 @@ mod linux_app {
                         }
                     }
                 }
+                BackendEventKind::VocabularySuggestionsChanged(_) => {
+                    // Core 只负责攒候选；「要不要记住」的确认入口是胶囊窗上的卡片
+                    // （Tauri `VocabSuggestionCard`）。没有这张卡，自动学词永远落不了库。
+                    self.refresh_vocab_suggestions();
+                }
                 BackendEventKind::HistoryChanged(change) => {
                     self.history.observe(change.revision);
                     self.load_overview();
@@ -2729,6 +2872,7 @@ mod linux_app {
         /// 停了就说明热键消费与弹窗拉起也没在跑（这正是当初「关窗后热键失效」
         /// 的判据），用户/支持可以直接看日志确认。
         fn log_pump_heartbeat(&mut self, ctx: &egui::Context) {
+            self.tick_vocab_suggestions();
             if self.last_pump_heartbeat.elapsed() < std::time::Duration::from_secs(10) {
                 return;
             }
@@ -7193,6 +7337,29 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             });
             match action {
                 frontend::popups::CapsuleAction::None => {}
+                frontend::popups::CapsuleAction::AcceptSuggestion(id) => {
+                    // 卡片与听写会话无关：id 才是要处理的候选。
+                    let sequence = self.next_sequence();
+                    let session_id = self.session_id().unwrap_or_default();
+                    self.send(PopupToHost::VocabSuggestion {
+                        version: POPUP_PROTOCOL_VERSION,
+                        session_id,
+                        sequence,
+                        id,
+                        accept: true,
+                    });
+                }
+                frontend::popups::CapsuleAction::RejectSuggestion(id) => {
+                    let sequence = self.next_sequence();
+                    let session_id = self.session_id().unwrap_or_default();
+                    self.send(PopupToHost::VocabSuggestion {
+                        version: POPUP_PROTOCOL_VERSION,
+                        session_id,
+                        sequence,
+                        id,
+                        accept: false,
+                    });
+                }
                 frontend::popups::CapsuleAction::Cancel
                 | frontend::popups::CapsuleAction::Confirm => {
                     if let Some(session_id) = self.session_id() {
@@ -7441,6 +7608,24 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                                 version: POPUP_PROTOCOL_VERSION,
                                 session_id: String::new(),
                                 sequence: 0,
+                            })
+                        }
+                        frontend::popups::CapsuleAction::AcceptSuggestion(id) => {
+                            Some(PopupToHost::VocabSuggestion {
+                                version: POPUP_PROTOCOL_VERSION,
+                                session_id: String::new(),
+                                sequence: 0,
+                                id,
+                                accept: true,
+                            })
+                        }
+                        frontend::popups::CapsuleAction::RejectSuggestion(id) => {
+                            Some(PopupToHost::VocabSuggestion {
+                                version: POPUP_PROTOCOL_VERSION,
+                                session_id: String::new(),
+                                sequence: 0,
+                                id,
+                                accept: false,
                             })
                         }
                         frontend::popups::CapsuleAction::Confirm => {
@@ -8524,6 +8709,7 @@ Internal flags (set by OpenLess itself, not for regular use):
                 audio_level: Some(0.2),
                 translation_active: false,
                 style: "siri".into(),
+                suggestions: Vec::new(),
             })
             .expect("channel is open");
             assert!(!app.pump(None), "a progress frame must not exit");

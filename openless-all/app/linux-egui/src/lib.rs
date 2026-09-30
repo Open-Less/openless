@@ -56,7 +56,7 @@ pub use desktop::{
 pub use dictation_feedback::{
     capsule_hide_delay, capsule_hide_is_still_current, capsule_needs_fallback_dismissal,
     capsule_outcome, is_backend_error_code, is_expected_stop_error, normalize_stop_result,
-    phase_shows_capsule, CapsuleOutcome, CAPSULE_AUTO_HIDE_DELAY_MS,
+    phase_shows_capsule, vocab_card_allowed, CapsuleOutcome, CAPSULE_AUTO_HIDE_DELAY_MS,
 };
 #[cfg(target_os = "linux")]
 pub use fcitx5::prepare_fcitx5;
@@ -91,10 +91,10 @@ pub use local_hotkeys::{
 pub use logging::{export_error_log, init_file_logger, log_path};
 pub use popup::{
     force_x11_for, popup_command, read_jsonl, run_popup, write_jsonl,
-    ApplyOutcome as PopupApplyOutcome, CapsulePopupState, HostToPopup, LessComputerApproval,
-    LessComputerEntry, LessComputerPopupState, PopupActionGuard, PopupChatMessage, PopupKind,
-    PopupSendError, PopupState, PopupSupervisor, PopupSupervisorEvent, PopupToHost,
-    ProtocolError as PopupProtocolError, ProtocolErrorKind as PopupProtocolErrorKind,
+    ApplyOutcome as PopupApplyOutcome, CapsulePopupState, CapsuleSuggestion, HostToPopup,
+    LessComputerApproval, LessComputerEntry, LessComputerPopupState, PopupActionGuard,
+    PopupChatMessage, PopupKind, PopupSendError, PopupState, PopupSupervisor, PopupSupervisorEvent,
+    PopupToHost, ProtocolError as PopupProtocolError, ProtocolErrorKind as PopupProtocolErrorKind,
     QaPolishState, QaPopupState, MAX_JSONL_LINE_BYTES, POPUP_PROTOCOL_VERSION,
 };
 pub use popup_layer::{

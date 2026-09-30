@@ -1636,6 +1636,24 @@ pub const CATALOG: &[Msg] = &[
         text: row("词典", "VOCABULARY", "DICTIONARY", "辞書", "사전"),
     },
         Msg {
+        key: "vocabCard.title",
+        text: row(
+            "要记住这个词吗？",
+            "要記住這個詞嗎？",
+            "Remember this word?",
+            "この語を覚えますか？",
+            "이 단어를 기억할까요?",
+        ),
+    },
+        Msg {
+        key: "vocabCard.accept",
+        text: row("记住", "記住", "Remember", "覚える", "기억하기"),
+    },
+        Msg {
+        key: "vocabCard.reject",
+        text: row("不用", "不用", "Skip", "不要", "건너뛰기"),
+    },
+        Msg {
         key: "vocab.learned_section",
         text: row(
             "确认收集（{}）",

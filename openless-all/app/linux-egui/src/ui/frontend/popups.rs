@@ -62,6 +62,90 @@ pub enum CapsuleAction {
     Cancel,
     /// ✓ → the host stops the dictation and inserts.
     Confirm,
+    /// 「要记住这个词吗？」卡片上点了「记住」（Tauri `acceptPendingCorrection`）。
+    AcceptSuggestion(String),
+    /// 卡片上点了「不用」（Tauri `rejectPendingCorrection`）。
+    RejectSuggestion(String),
+}
+
+/// 「要记住这个词吗？」卡片的尺寸，与 Tauri `VocabSuggestionCard` 一致：
+/// 宽 320、标题区 72、每行 36（`VOCAB_CARD_*`）。
+const CARD_WIDTH: f32 = 320.0;
+const CARD_CHROME: f32 = 72.0;
+const CARD_ROW: f32 = 36.0;
+/// 卡片到窗口边缘的留白（Tauri `VOCAB_CARD_EDGE_MARGIN`）。
+const CARD_EDGE: f32 = 12.0;
+/// 行数多到装不下时标题区至少留这么高，剩下的分给行 —— Tauri 会改窗口大小，我们这个
+/// 舞台是固定的 460×180，所以宁可压行高，也不让最后一行露在窗外。
+const CARD_CHROME_MIN: f32 = 44.0;
+const CARD_BUTTON: f32 = 28.0;
+/// 标题占的高度（画的时候用固定值，几何才能是纯函数、测试才点得中按钮）。
+const CARD_TITLE_BLOCK: f32 = 24.0;
+
+/// 卡片几何：一列行 + 每行右侧「不用 / 记住」两颗圆钮。
+pub(crate) struct VocabCardLayout {
+    pub card: egui::Rect,
+    pub rows: Vec<VocabCardRow>,
+}
+
+pub(crate) struct VocabCardRow {
+    pub text: egui::Rect,
+    pub accept: egui::Rect,
+    pub reject: egui::Rect,
+}
+
+/// 按 Tauri `VocabSuggestionCard` 的尺寸算卡片几何。
+///
+/// 与 Tauri 的唯一差别：Tauri 会把窗口改成卡片大小（320 × 72+36n）并挪到屏幕右下角，
+/// 我们的胶囊舞台是固定的 460×180，所以行数多时压缩行高，并把卡片靠右放。
+pub(crate) fn vocab_card_layout(stage: egui::Rect, rows: usize) -> VocabCardLayout {
+    let count = rows.max(1) as f32;
+    let max_height = (stage.height() - 2.0 * CARD_EDGE).max(CARD_CHROME_MIN);
+    let mut row_height = CARD_ROW;
+    let mut height = CARD_CHROME + CARD_ROW * count;
+    if height > max_height {
+        row_height = ((max_height - CARD_CHROME_MIN) / count).max(18.0);
+        height = (CARD_CHROME_MIN + row_height * count).min(max_height);
+    }
+    let width = CARD_WIDTH.min(stage.width() - 2.0 * CARD_EDGE).max(1.0);
+    let card = egui::Rect::from_min_size(
+        egui::pos2(
+            stage.right() - CARD_EDGE - width,
+            stage.bottom() - CARD_EDGE - height,
+        ),
+        egui::vec2(width, height),
+    );
+    let inner = card.shrink(12.0);
+    let top = inner.top() + CARD_TITLE_BLOCK;
+    let row_height = row_height.min(((inner.bottom() - top) / count).max(1.0));
+    // 行被压缩时按钮必须跟着缩：Core 允许一张卡 5 条，硬塞 28px 圆钮会让相邻两行叠在一起。
+    let button = CARD_BUTTON.min((row_height - 2.0).max(14.0));
+    let rows = (0..rows)
+        .map(|index| {
+            let row = egui::Rect::from_min_size(
+                egui::pos2(inner.left(), top + row_height * index as f32),
+                egui::vec2(inner.width(), row_height),
+            );
+            // 两颗 28 宽圆钮 + 8 间距（Tauri 的 `CardButton` 就是胶囊确认/取消那一对）。
+            let accept = egui::Rect::from_center_size(
+                egui::pos2(row.right() - button / 2.0, row.center().y),
+                egui::vec2(button, button),
+            );
+            let reject = egui::Rect::from_center_size(
+                egui::pos2(accept.left() - 8.0 - button / 2.0, row.center().y),
+                egui::vec2(button, button),
+            );
+            VocabCardRow {
+                text: egui::Rect::from_min_max(
+                    row.min,
+                    egui::pos2(reject.left() - 8.0, row.bottom()),
+                ),
+                accept,
+                reject,
+            }
+        })
+        .collect();
+    VocabCardLayout { card, rows }
 }
 
 /// Tauri `selection-polish-preview` 面板的边距（`padding: 18`）。
@@ -1050,6 +1134,15 @@ pub fn dictation_capsule(
 ) -> CapsuleAction {
     let mut action = CapsuleAction::None;
     let phase = state.phase.to_ascii_lowercase();
+    // 「要记住这个词吗？」卡片与录音胶囊共用一个窗口：有候选时整窗只画这张卡。
+    if !state.suggestions.is_empty() {
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE)
+            .show(root_ui, |ui| {
+                action = capsule_suggestion_card(ui, state, lang);
+            });
+        return action;
+    }
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
         .show(root_ui, |ui| {
@@ -1491,6 +1584,124 @@ fn paint_thinking_label(
 }
 
 /// 圆形按钮（classic 为 28×28；Typeless 按 Tauri 的 zoom 比例缩放）。
+/// 确认式词库学习的确认入口（Tauri `VocabSuggestionCard`）。
+///
+/// 用户手改一个词之后 Core 把它攒成候选（`pending_corrections`）：「自动收集」在真机
+/// 上大约五条错四条，所以每一条都要人过一眼 —— 接受写进词库（词库页的「确认收集」
+/// 分段），拒绝只是丢掉，不留黑名单。
+fn capsule_suggestion_card(
+    ui: &mut egui::Ui,
+    state: &CapsulePopupState,
+    lang: Lang,
+) -> CapsuleAction {
+    let mut action = CapsuleAction::None;
+    let stage = ui.max_rect();
+    let layout = vocab_card_layout(stage, state.suggestions.len());
+    let card = layout.card;
+    let painter = ui.painter().with_clip_rect(card.intersect(stage));
+    painter.rect_filled(card, egui::CornerRadius::same(16), theme::SURFACE);
+    painter.rect_stroke(
+        card,
+        egui::CornerRadius::same(16),
+        egui::Stroke::new(1.0, theme::LINE),
+        egui::StrokeKind::Inside,
+    );
+    let inner = card.shrink(12.0);
+    let title = layout::text_galley(
+        ui,
+        tr_l10n(lang, "vocabCard.title"),
+        theme::INK_3,
+        11.0,
+        inner.width(),
+        1,
+    );
+    painter.galley(inner.min, title, theme::INK_3);
+    for (index, suggestion) in state.suggestions.iter().enumerate() {
+        let Some(row) = layout.rows.get(index) else {
+            break;
+        };
+        let text_rect = row.text;
+        let (reject_rect, accept_rect) = (row.reject, row.accept);
+        let mut job = egui::text::LayoutJob::default();
+        job.wrap.max_width = text_rect.width();
+        job.wrap.max_rows = 1;
+        let mono = egui::FontId::new(12.5, egui::FontFamily::Monospace);
+        // 改前（暗）→ 改后（亮）：一眼能看出这次手改把什么改成了什么。
+        job.append(
+            &suggestion.pattern,
+            0.0,
+            egui::text::TextFormat {
+                font_id: mono.clone(),
+                color: theme::INK_4,
+                ..Default::default()
+            },
+        );
+        job.append(
+            " \u{2192} ",
+            0.0,
+            egui::text::TextFormat {
+                font_id: mono.clone(),
+                color: theme::INK_4,
+                ..Default::default()
+            },
+        );
+        job.append(
+            &suggestion.replacement,
+            0.0,
+            egui::text::TextFormat {
+                font_id: mono,
+                color: theme::INK,
+                ..Default::default()
+            },
+        );
+        let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+        painter.with_clip_rect(text_rect).galley(
+            egui::pos2(
+                text_rect.left(),
+                text_rect.center().y - galley.rect.height() / 2.0,
+            ),
+            galley,
+            theme::INK,
+        );
+        let reject = ui.interact(
+            reject_rect,
+            ui.id().with(("openless-vocab-reject", index)),
+            egui::Sense::click(),
+        );
+        let icon = (reject_rect.width() * 0.46).clamp(9.0, 13.0);
+        round_button(
+            ui,
+            reject_rect,
+            icons::IconName::Close,
+            reject.hovered(),
+            theme::SURFACE_2,
+            theme::INK_2,
+            (0.8, icon),
+        );
+        if reject.clicked() {
+            action = CapsuleAction::RejectSuggestion(suggestion.id.clone());
+        }
+        let accept = ui.interact(
+            accept_rect,
+            ui.id().with(("openless-vocab-accept", index)),
+            egui::Sense::click(),
+        );
+        round_button(
+            ui,
+            accept_rect,
+            icons::IconName::Check,
+            accept.hovered(),
+            theme::BLUE_SOFT,
+            theme::BLUE,
+            (0.8, icon),
+        );
+        if accept.clicked() {
+            action = CapsuleAction::AcceptSuggestion(suggestion.id.clone());
+        }
+    }
+    action
+}
+
 fn round_button(
     ui: &egui::Ui,
     rect: egui::Rect,
@@ -2161,6 +2372,145 @@ mod tests {
         painted
     }
 
+    /// 渲染胶囊并把结果动作交出来；`click` 给一个坐标时会合成一次点击（按下+抬起
+    /// 同一帧，和真实点击等价）。
+    fn run_capsule(
+        state: &CapsulePopupState,
+        size: egui::Vec2,
+        click: Option<egui::Pos2>,
+    ) -> (CapsuleAction, String) {
+        let ctx = egui::Context::default();
+        let mut action = CapsuleAction::None;
+        let mut painted = String::new();
+        for frame in 0..2 {
+            let mut events = Vec::new();
+            if frame == 1 {
+                if let Some(pos) = click {
+                    for pressed in [true, false] {
+                        events.push(egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        });
+                    }
+                }
+            }
+            let output = crate::ui::frontend::run_pass(
+                &ctx,
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    action = dictation_capsule(ui, state, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
+                },
+            );
+            painted = painted_text(&output);
+        }
+        (action, painted)
+    }
+
+    /// 「要记住这个词吗？」卡片：有候选时整窗只画卡片（没有药丸），点「记住」把候选 id
+    /// 发回宿主，点「不用」发拒绝 —— 这就是确认式词库学习的确认入口（Tauri
+    /// `VocabSuggestionCard` + `PendingCorrection`）。
+    #[test]
+    fn the_vocab_card_asks_before_remembering() {
+        let state = CapsulePopupState {
+            phase: String::new(),
+            suggestions: vec![
+                openless_linux_egui::CapsuleSuggestion {
+                    id: "first".to_string(),
+                    pattern: "banana".to_string(),
+                    replacement: "bananas".to_string(),
+                },
+                openless_linux_egui::CapsuleSuggestion {
+                    id: "second".to_string(),
+                    pattern: "teh".to_string(),
+                    replacement: "the".to_string(),
+                },
+            ],
+            ..Default::default()
+        };
+        let size = egui::vec2(460.0, 180.0);
+        let (action, painted) = run_capsule(&state, size, None);
+        assert!(
+            matches!(action, CapsuleAction::None),
+            "rendering alone must not resolve anything"
+        );
+        assert!(
+            painted.contains(tr_l10n(Lang::ZhCn, "vocabCard.title")),
+            "the card must ask the question: {painted}"
+        );
+        for text in ["banana", "bananas", "teh", "the"] {
+            assert!(painted.contains(text), "row text {text} missing: {painted}");
+        }
+        // 每行两颗圆钮都在（图标画的是 Check / Close）。
+        assert_eq!(
+            painted
+                .matches(tr_l10n(Lang::ZhCn, "vocabCard.title"))
+                .count(),
+            1,
+            "the title is painted once"
+        );
+        let layout = vocab_card_layout(
+            egui::Rect::from_min_size(egui::Pos2::ZERO, size),
+            state.suggestions.len(),
+        );
+        assert_eq!(layout.rows.len(), 2, "one row per suggestion");
+        // 两行不重叠：第二行在第一行下面。
+        assert!(
+            layout.rows[0].accept.bottom() <= layout.rows[1].accept.top(),
+            "rows must not overlap"
+        );
+        let (action, _) = run_capsule(&state, size, Some(layout.rows[0].accept.center()));
+        assert!(
+            matches!(&action, CapsuleAction::AcceptSuggestion(id) if id == "first"),
+            "accepting the first row must carry its id, got {action:?}"
+        );
+        let (action, _) = run_capsule(&state, size, Some(layout.rows[1].reject.center()));
+        assert!(
+            matches!(&action, CapsuleAction::RejectSuggestion(id) if id == "second"),
+            "rejecting the second row must carry its id, got {action:?}"
+        );
+    }
+
+    /// 行数拉满（Core 上限 5 条）时卡片仍然整张落在舞台里，不露在窗外。
+    #[test]
+    fn a_full_vocab_card_still_fits_the_capsule_stage() {
+        let stage = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(460.0, 180.0));
+        let layout = vocab_card_layout(stage, 5);
+        assert_eq!(layout.rows.len(), 5, "every candidate gets a row");
+        assert!(
+            stage.contains_rect(layout.card),
+            "the card must stay inside the stage: {:?}",
+            layout.card
+        );
+        for (index, row) in layout.rows.iter().enumerate() {
+            assert!(
+                layout.card.contains_rect(row.accept) && layout.card.contains_rect(row.reject),
+                "row {index} buttons must stay inside the card"
+            );
+            assert!(
+                row.text.right() <= row.reject.left(),
+                "row {index} text must not overlap the buttons"
+            );
+        }
+        assert!(
+            layout
+                .rows
+                .windows(2)
+                .all(|pair| pair[0].accept.bottom() <= pair[1].accept.top()),
+            "rows must not overlap at the cap"
+        );
+        // 压缩后按钮也不能叠上去。
+        assert!(
+            layout.rows.iter().all(|row| row.accept.height() >= 14.0),
+            "buttons must stay tappable when the rows are compressed"
+        );
+    }
+
     /// 与 `run` 同款流程，但把最后一帧的 `FullOutput` 交出来（要按形状断言时用）。
     fn run_output(
         size: egui::Vec2,
@@ -2478,6 +2828,7 @@ mod tests {
                 CapsulePopupState {
                     phase: "polishing".into(),
                     style: "classic".into(),
+                    suggestions: Vec::new(),
                     ..Default::default()
                 },
                 false,
@@ -2683,6 +3034,7 @@ mod tests {
             let state = CapsulePopupState {
                 phase: "Polishing".into(),
                 style: style.into(),
+                suggestions: Vec::new(),
                 ..Default::default()
             };
             let mut colors = Vec::new();
@@ -2736,6 +3088,7 @@ mod tests {
             phase: "Failed".to_string(),
             text: message.to_string(),
             style: "siri".to_string(),
+            suggestions: Vec::new(),
             ..Default::default()
         };
         let painted = run(egui::vec2(460.0, 180.0), |ctx| {
@@ -2773,6 +3126,7 @@ mod tests {
                 phase: phase.into(),
                 audio_level: Some(0.4),
                 style: "siri".into(),
+                suggestions: Vec::new(),
                 ..Default::default()
             };
             let output = crate::ui::frontend::run_pass(
@@ -2877,6 +3231,7 @@ mod tests {
                 audio_level: Some(0.6),
                 translation_active: false,
                 style: "classic".to_string(),
+                suggestions: Vec::new(),
             };
             let (colors, _, _) = capsule_frame(&state);
             let reddish: Vec<_> = colors
@@ -2901,6 +3256,7 @@ mod tests {
             audio_level: Some(0.6),
             translation_active: false,
             style: "siri".to_string(),
+            suggestions: Vec::new(),
         };
         let (colors, callbacks, effect) = capsule_frame(&state);
         // 音量竖条是 3px 宽的小圆角矩形：数一下细长条形的填充个数。
@@ -2933,6 +3289,7 @@ mod tests {
                 phase: "Recording".to_string(),
                 audio_level: Some(0.4),
                 style: "classic".to_string(),
+                suggestions: Vec::new(),
                 ..Default::default()
             };
             let mut action = CapsuleAction::None;
@@ -2981,6 +3338,7 @@ mod tests {
                 let classic = CapsulePopupState {
                     phase: phase.into(),
                     style: "classic".into(),
+                    suggestions: Vec::new(),
                     ..Default::default()
                 };
                 let painted = run(egui::vec2(200.0, 60.0), |ui| {
@@ -2993,6 +3351,7 @@ mod tests {
                 );
                 let siri = CapsulePopupState {
                     style: "siri".into(),
+                    suggestions: Vec::new(),
                     ..classic.clone()
                 };
                 let painted = run(egui::vec2(460.0, 180.0), |ui| {
@@ -3015,6 +3374,7 @@ mod tests {
             let state = CapsulePopupState {
                 phase: phase.into(),
                 style: "siri".into(),
+                suggestions: Vec::new(),
                 ..Default::default()
             };
             let mut output = ctx.run_ui(
@@ -3044,6 +3404,7 @@ mod tests {
             audio_level: Some(0.4),
             translation_active: false,
             style: "siri".to_string(),
+            suggestions: Vec::new(),
         };
         let painted = run(egui::vec2(200.0, 60.0), |ctx| {
             dictation_capsule(ctx, &recording, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
@@ -3058,6 +3419,7 @@ mod tests {
         let transcribing = CapsulePopupState {
             phase: "Transcribing".to_string(),
             style: "classic".to_string(),
+            suggestions: Vec::new(),
             ..Default::default()
         };
         let painted = run(egui::vec2(200.0, 60.0), |ctx| {
@@ -3073,6 +3435,7 @@ mod tests {
         let transcribing_siri = CapsulePopupState {
             phase: "Transcribing".to_string(),
             style: "siri".to_string(),
+            suggestions: Vec::new(),
             ..Default::default()
         };
         let painted = run(egui::vec2(200.0, 60.0), |ctx| {
@@ -3096,6 +3459,7 @@ mod tests {
             audio_level: None,
             translation_active: false,
             style: "siri".to_string(),
+            suggestions: Vec::new(),
         };
         let painted = run(egui::vec2(200.0, 60.0), |ctx| {
             dictation_capsule(ctx, &done, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
@@ -3107,6 +3471,7 @@ mod tests {
         );
         let done_classic = CapsulePopupState {
             style: "classic".to_string(),
+            suggestions: Vec::new(),
             ..done.clone()
         };
         let painted = run(egui::vec2(200.0, 60.0), |ctx| {
@@ -3121,6 +3486,7 @@ mod tests {
             audio_level: None,
             translation_active: false,
             style: "siri".to_string(),
+            suggestions: Vec::new(),
         };
         let painted = run(egui::vec2(200.0, 60.0), |ctx| {
             dictation_capsule(ctx, &failed, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
