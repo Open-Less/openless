@@ -132,7 +132,10 @@ export function useOverlayMotion(
       motion.animation.pause();
       motion.animation.currentTime = 0;
       entryFrame = window.requestAnimationFrame(() => {
-        if (!cancelled) motion.animation.play();
+        if (cancelled) return;
+        entryFrame = window.requestAnimationFrame(() => {
+          if (!cancelled) motion.animation.play();
+        });
       });
     }
     void motion.animation.finished

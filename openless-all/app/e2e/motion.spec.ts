@@ -96,9 +96,11 @@ test('closing during entry preserves the painted opacity and releases the dialog
         panel.dataset.testEntryPending = 'true';
         // Pin after the dialog's first-frame startup callback has resumed the entrance.
         requestAnimationFrame(() => {
-          animation.pause();
-          animation.currentTime = 72;
-          panel.dataset.testEntryOpacity = getComputedStyle(panel).opacity;
+          requestAnimationFrame(() => {
+            animation.pause();
+            animation.currentTime = 72;
+            panel.dataset.testEntryOpacity = getComputedStyle(panel).opacity;
+          });
         });
       }
       const exit = panel?.getAnimations().find((entry) => entry.id === 'ol-surface-exit');
