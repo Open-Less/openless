@@ -845,6 +845,13 @@ export const de: typeof zhCN = {
       clear: 'Ergebnisse leeren',
     },
   },
+  vocabLearning: {
+    open: 'Wort merken',
+    label: 'Das richtige Wort eingeben',
+    confirm: 'Bestätigen und zum Wörterbuch hinzufügen',
+    saved: 'Gespeichert. Im Wörterbuch verwalten.',
+    failed: 'Speichern fehlgeschlagen: {{error}}',
+  },
   vocabCard: {
     title: 'Dieses Wort merken?',
     accept: 'Merken',
@@ -884,7 +891,7 @@ export const de: typeof zhCN = {
     editEmpty: 'Das Wort darf nicht leer sein.',
     filter: {
       all: 'Alle',
-      auto: 'Automatisch hinzugefügt',
+      auto: 'Bestätigt',
       manual: 'Manuell hinzugefügt',
     },
     searchPlaceholder: 'Suchen',
@@ -896,7 +903,7 @@ export const de: typeof zhCN = {
     newWordTemplates: 'Vorlagen',
     newWordTemplateCount: 'Wörter: {{count}}',
     newWordAddSelected: 'Auswahl hinzufügen',
-    learnedSection: 'Automatisch gesammelt ({{count}})',
+    learnedSection: 'Bestätigt ({{count}})',
     removeAllLearned: 'Alle entfernen',
     corrections: {
       title: 'Korrekturregeln',
@@ -1265,12 +1272,33 @@ export const de: typeof zhCN = {
       useSystemProxyDesc:
         'Anfragen verwenden den Systemproxy, wenn diese Option aktiv ist. Andernfalls werden alle Anfragen direkt gesendet, was bei inländischen Diensten meist schneller ist. Ausländische Dienste wie GitHub-Anmeldung und Updates können dann fehlschlagen. Echtzeit-Sprachstreams und Less Computer sind davon unabhängig.',
     },
+    vocabularyLearning: {
+      title: 'Aus Korrekturen lernen',
+      enabled: 'Lernen aus Korrekturen aktivieren',
+      observationSeconds: 'Beobachtungsdauer',
+      observationSecondsHint:
+        'Das aktuelle Eingabefeld nach dem Diktat höchstens 10–60 Sekunden beobachten.',
+      suggestionSeconds: 'Anzeigedauer der Vorschläge',
+      suggestionSecondsHint:
+        'Unbestätigte Vorschläge verfallen nach 5–60 Sekunden ohne Wörterbucheintrag.',
+      maxPhraseChars: 'Maximale Wortlänge',
+      maxPhraseCharsHint:
+        'Original und Ersatz in automatischen Vorschlägen auf 2–32 Zeichen begrenzen. Manuelle Einträge bleiben unverändert.',
+      seconds: '{{count}} s',
+      characters: '{{count}} Zeichen',
+      changeHint:
+        'Änderungen beenden die aktuelle Beobachtung und löschen offene Vorschläge. Sie gelten ab dem nächsten Diktat. Zurücksetzen ändert den Aktivierungsschalter nicht.',
+      reset: 'Parameter zurücksetzen',
+      saveError: 'Speichern fehlgeschlagen. Bitte erneut versuchen.',
+      description:
+        'Nach dem Einfügen werden Änderungen im Eingabefeld bis zu 60 Sekunden lokal erkannt. Wörter werden erst nach Bestätigung gespeichert. Der beobachtete Text wird nicht an ein Modell gesendet. Passwortfelder und bekannte sensible Apps sind ausgeschlossen. Die Unterstützung unter Windows und Android hängt vom Editor ab; Android benötigt Bedienungshilfen. Ausschalten beendet die Beobachtung.',
+    },
     dataStorage: {
       title: 'Datenspeicherung',
       desc: 'Gesprächsverlauf und Kontext, die auf diesem Gerät gespeichert werden.',
       cursorContextLabel: 'Cursorkontext (experimentell)',
       cursorContextDesc:
-        'Liest beim Überarbeiten den Text rund um den Cursor im aktuellen Dokument, damit das Modell gleich klingende Wörter, Eigennamen und Pronomen unterscheiden kann. Bei Aktivierung wird dieser Text mit der Anfrage an deinen LLM-Dienst gesendet; andernfalls wird nichts gelesen. Passwortfelder, Secure Input, Passwortmanager und Terminals werden nie gelesen. Nur unter macOS.',
+        'Text rund um den Cursor zur Überarbeitung an das Modell senden (nur macOS). Diese Einstellung ist vom lokalen Lernen getrennt. Passwortfelder und bekannte sensible Apps sind ausgeschlossen.',
     },
     codingConsole: {
       title: 'Claude-Konsole',
@@ -1473,7 +1501,8 @@ export const de: typeof zhCN = {
       comboClear: 'Leeren',
       comboConflict: 'Diese Tastenkombination ist nicht verfügbar',
       shortcutSaveFailed: 'Tastenkombination konnte nicht gespeichert werden',
-      mouseSideHint: 'Mausseitentasten Mouse4 / Mouse5 werden als globale Diktier-Hotkeys unter Windows unterstützt',
+      mouseSideHint:
+        'Mausseitentasten Mouse4 / Mouse5 werden als globale Diktier-Hotkeys unter Windows unterstützt',
       allowNonTsfFallbackLabel: 'Alternative ohne TSF erlauben',
       allowNonTsfFallbackDesc:
         'Windows: Falls das Einfügen über TSF fehlschlägt, wird Unicode-Text dosiert über SendInput eingegeben. Schlägt auch das fehl, wird der Text in die Zwischenablage kopiert.',
@@ -2340,6 +2369,8 @@ export const de: typeof zhCN = {
     autoSaveHint: 'Änderungen werden automatisch gespeichert',
     backToAdvanced: 'Zurück zu Experimente und Erweiterungen',
     advancedPages: {
+      vocabularyLearning:
+        'Aus manuellen Korrekturen lernen; Beobachtung, Bestätigungszeit und Wortlänge einstellen.',
       lessComputer:
         'Wähle einen Agenten und konfiguriere Modell, Berechtigungen und Arbeitsverzeichnis.',
       claudeConsole: 'Erkenne Claude Code und prüfe die Ausgabe von Testaufträgen.',
@@ -2369,7 +2400,8 @@ export const de: typeof zhCN = {
       appearance: 'Design Dunkel Hell Sprache Schrift Textgröße Layout Aktivitätsübersicht',
       privacy:
         'Berechtigung Mikrofon Bedienungshilfen Verlauf Aufnahme Speicher Datenschutz Export',
-      advanced: 'Less Computer Claude Agent Diagnose Protokolle Experiment',
+      advanced:
+        'Less Computer Claude Agent Multimodal Omni Diagnose Protokolle Experiment Aus Korrekturen lernen vocabulary learning',
       about: 'Version Beta Stabil Update Aktualisierung',
     },
     sections: {

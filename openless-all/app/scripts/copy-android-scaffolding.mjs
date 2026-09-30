@@ -53,6 +53,7 @@ const KOTLIN_FILES = [
   'OpenLessShizukuUserServiceClient.kt',
   'ShizukuPermissionActivity.kt',
   'OpenLessAccessibilityCommandReceiver.kt',
+  'OpenLessVocabularyReceiver.kt',
   'OverlayPermissionActivity.kt',
   'OpenLessUpdateInstaller.kt',
   'OpenLessContentReader.kt',

@@ -795,6 +795,13 @@ export const zhCN = {
       clear: '清除结果',
     },
   },
+  vocabLearning: {
+    open: '记住词汇',
+    label: '输入要记住的正确词汇',
+    confirm: '确认加入词典',
+    saved: '已记住，可在词典中管理',
+    failed: '保存失败：{{error}}',
+  },
   vocabCard: {
     title: '要记住这个词吗？',
     accept: '记住',
@@ -831,7 +838,7 @@ export const zhCN = {
     editTitle: '编辑词汇',
     editSave: '保存',
     editEmpty: '词条不能为空。',
-    filter: { all: '所有', auto: '自动添加', manual: '手动添加' },
+    filter: { all: '所有', auto: '确认收集', manual: '手动添加' },
     searchPlaceholder: '搜索',
     searchEmpty: '没有匹配的词条。',
     newWord: '新词',
@@ -841,7 +848,7 @@ export const zhCN = {
     newWordTemplates: '预设模板',
     newWordTemplateCount: '{{count}} 词',
     newWordAddSelected: '添加所选',
-    learnedSection: '自动收集（{{count}}）',
+    learnedSection: '确认收集（{{count}}）',
     removeAllLearned: '全部删除',
     corrections: {
       title: '纠正规则',
@@ -1191,12 +1198,30 @@ export const zhCN = {
       useSystemProxyDesc:
         '开启时请求跟随系统代理；关闭后所有网络请求直连（国内服务延迟通常更低），GitHub 登录、更新等境外服务可能连不上。实时语音流与 Less Computer 不受此开关影响。',
     },
+    vocabularyLearning: {
+      title: '手改学词',
+      enabled: '启用手改学词',
+      observationSeconds: '观察时长',
+      observationSecondsHint: '听写落字后观察当前输入框的最长时间，10–60 秒。',
+      suggestionSeconds: '建议保留时长',
+      suggestionSecondsHint: '未确认的建议会在 5–60 秒后消失，不加入词典。',
+      maxPhraseChars: '最大词长',
+      maxPhraseCharsHint: '自动建议中原词和替换词的长度上限，2–32 个字符；不影响手动加词。',
+      seconds: '{{count}} 秒',
+      characters: '{{count}} 个字符',
+      changeHint:
+        '更改参数会结束当前观察并清除待确认建议，下次听写生效。恢复参数不会改变启用开关。',
+      reset: '恢复默认参数',
+      saveError: '保存失败，请重试。',
+      description:
+        '插入后在本机观察当前输入框内的修改，最长 60 秒，确认后才加入词典。观察文本不会发给模型；排除密码框和已知敏感应用。Windows、Android 的支持取决于编辑器；Android 需开启无障碍服务。关闭后停止观察。',
+    },
     dataStorage: {
       title: '数据存储',
       desc: '本机保留的历史会话与对话上下文。',
       cursorContextLabel: '光标上下文（实验）',
       cursorContextDesc:
-        '润色时读取你正在写的那篇文档中光标附近的原文，帮模型判断同音词、专名和代词该怎么写。开启后这段文字会随请求发送给你配置的 LLM 服务商；关闭时一个字都不读。密码输入框、Secure Input、密码管理器与终端始终不读。仅 macOS。',
+        '润色时将光标附近文本发给模型（仅 macOS）。此开关与本地手改学词独立；排除密码框和已知敏感应用。',
     },
     codingConsole: {
       title: 'Claude 控制台',
@@ -2151,6 +2176,7 @@ export const zhCN = {
     autoSaveHint: '修改后自动保存',
     backToAdvanced: '返回实验与扩展',
     advancedPages: {
+      vocabularyLearning: '从听写后的手动改词中学习，配置观察时长、确认时间和词长。',
       lessComputer: '选择 Agent，配置模型、权限与工作目录。',
       claudeConsole: '检测 Claude Code，并查看测试任务的运行输出。',
       multimodal: '管理多模态识别的实验性开关。',
@@ -2173,7 +2199,7 @@ export const zhCN = {
       services: 'ASR LLM API 渠道 模型 云 本地 网络 代理 市场 多模态 识别管线 Omni',
       appearance: '主题 深色 浅色 暗色 语言 字号 排版 布局 热力图',
       privacy: '权限 麦克风 辅助功能 历史 录音 存储 隐私 导出',
-      advanced: 'Less Computer Claude Agent 调试 日志 实验',
+      advanced: 'Less Computer Claude Agent 调试 日志 实验 手改学词 vocabulary learning',
       about: '版本 Beta 稳定 更新 升级',
     },
 

@@ -418,7 +418,12 @@ async fn forward_legacy_event(
         BackendEventKind::RemoteInputFailed(error) => {
             let _ = app.emit("remote-input:error", error);
         }
-        BackendEventKind::VocabularySuggestionsChanged(suggestions) => {
+        BackendEventKind::VocabularySuggestionsChanged(_) => {
+            // Concurrent producers can enqueue an older snapshot after a
+            // dismissal. Present current Core state, never resurrect that card.
+            let suggestions = backend.pending_corrections();
+            #[cfg(target_os = "android")]
+            crate::android::edit_observation::show_suggestions(&suggestions);
             if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
                 coordinator.refresh_vocab_suggestion_presentation(!suggestions.is_empty());
             }

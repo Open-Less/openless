@@ -4278,6 +4278,7 @@ dependencies = [
  "whisper-rs",
  "window-vibrancy 0.7.1",
  "windows 0.58.0",
+ "windows-core 0.58.0",
  "winreg 0.52.0",
  "x509-parser",
  "zeroize",

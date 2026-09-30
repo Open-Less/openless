@@ -2255,6 +2255,7 @@ struct HistoryProviderAttribution {
 }
 
 struct CoreEditObservationSink {
+    settings: crate::shared_types::VocabularyLearningSettings,
     expected_generation: u64,
     generation: Arc<AtomicU64>,
     typed_text: String,
@@ -2263,6 +2264,10 @@ struct CoreEditObservationSink {
 }
 
 impl EditObservationSink for CoreEditObservationSink {
+    fn observation_duration(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.settings.observation_seconds as u64)
+    }
+
     fn publish(&self, edit: crate::host_document::EditPair) -> bool {
         // Dropping the native watcher is asynchronous on macOS: a queued AX
         // callback may still arrive after the next session starts. The Core
@@ -2273,7 +2278,10 @@ impl EditObservationSink for CoreEditObservationSink {
         if !crate::host_document::edit_is_within_typed_text(&edit, &self.typed_text) {
             return false;
         }
-        let Some(rule) = crate::host_document::learned_rule(&edit) else {
+        let Some(rule) = crate::host_document::learned_rule_with_max_chars(
+            &edit,
+            self.settings.max_phrase_chars as usize,
+        ) else {
             return false;
         };
         if let Err(error) = queue_pending_correction_state(
@@ -2281,6 +2289,8 @@ impl EditObservationSink for CoreEditObservationSink {
             &self.events,
             rule.pattern,
             rule.replacement,
+            Some((&self.generation, self.expected_generation)),
+            self.settings.suggestion_seconds,
         ) {
             log::warn!("failed to queue observed correction: {error}");
         }
@@ -2293,6 +2303,8 @@ fn queue_pending_correction_state(
     events: &Arc<EventBus>,
     pattern: String,
     replacement: String,
+    generation: Option<(&AtomicU64, u64)>,
+    suggestion_seconds: u32,
 ) -> Result<Option<PendingCorrection>, BackendError> {
     if pattern.trim().is_empty() || replacement.trim().is_empty() {
         return Err(BackendError::new(
@@ -2302,6 +2314,12 @@ fn queue_pending_correction_state(
     }
     let (suggestion, snapshot) = {
         let mut pending = pending.lock().expect("pending correction lock poisoned");
+        if generation.is_some_and(|(current, expected)| current.load(Ordering::Acquire) != expected)
+        {
+            return Ok(None);
+        }
+        let now = chrono::Utc::now().timestamp_millis();
+        pending.retain(|item| item.expires_at_ms > now);
         if pending
             .iter()
             .any(|item| item.pattern == pattern && item.replacement == replacement)
@@ -2313,6 +2331,7 @@ fn queue_pending_correction_state(
         }
         let suggestion = PendingCorrection {
             id: uuid::Uuid::new_v4().to_string(),
+            expires_at_ms: now + i64::from(suggestion_seconds.clamp(5, 60)) * 1000,
             pattern,
             replacement,
         };
@@ -4656,6 +4675,8 @@ impl OpenLessBackend {
                 });
             }
         }
+        preferences.vocabulary_learning_settings =
+            preferences.vocabulary_learning_settings.normalized();
         let mut previous = self.preferences.get();
         crate::sync_dictation_hotkey_legacy_fields(&mut previous);
         crate::sync_dictation_hotkey_legacy_fields(&mut preferences);
@@ -4738,8 +4759,11 @@ impl OpenLessBackend {
                 .reset();
         }
 
-        if previous.cursor_context_enabled && !preferences.cursor_context_enabled {
+        if (previous.vocabulary_learning_enabled && !preferences.vocabulary_learning_enabled)
+            || previous.vocabulary_learning_settings != preferences.vocabulary_learning_settings
+        {
             self.disarm_edit_observation();
+            self.dismiss_pending_corrections();
         }
         self.publish_preferences_changed();
         Ok(crate::SettingsUpdateOutcome {
@@ -5180,10 +5204,12 @@ impl OpenLessBackend {
     /// Return the instance-local correction suggestions awaiting a user
     /// decision. The returned value is owned and safe to render on any host.
     pub fn pending_corrections(&self) -> Vec<PendingCorrection> {
-        self.pending_corrections
+        let mut pending = self
+            .pending_corrections
             .lock()
-            .expect("pending correction lock poisoned")
-            .clone()
+            .expect("pending correction lock poisoned");
+        pending.retain(|item| item.expires_at_ms > chrono::Utc::now().timestamp_millis());
+        pending.clone()
     }
 
     /// Queue one observed manual correction. Duplicate pairs are ignored and
@@ -5198,6 +5224,10 @@ impl OpenLessBackend {
             &self.events,
             pattern,
             replacement,
+            None,
+            self.get_preferences()
+                .vocabulary_learning_settings
+                .suggestion_seconds,
         )
     }
 
@@ -5234,7 +5264,7 @@ impl OpenLessBackend {
         }
         self.disarm_edit_observation();
         if !enabled
-            || !self.get_preferences().cursor_context_enabled
+            || !self.get_preferences().vocabulary_learning_enabled
             || !matches!(insert_outcome, Some(InsertOutcome::Inserted))
             || typed_text.trim().is_empty()
         {
@@ -5242,6 +5272,10 @@ impl OpenLessBackend {
         }
         let expected_generation = self.edit_observation_generation.load(Ordering::Acquire);
         let sink = Arc::new(CoreEditObservationSink {
+            settings: self
+                .get_preferences()
+                .vocabulary_learning_settings
+                .normalized(),
             expected_generation,
             generation: Arc::clone(&self.edit_observation_generation),
             typed_text: typed_text.to_string(),
@@ -5279,6 +5313,14 @@ impl OpenLessBackend {
                 return Ok(None);
             };
             let suggestion = pending[index].clone();
+            if suggestion.expires_at_ms <= chrono::Utc::now().timestamp_millis() {
+                pending.remove(index);
+                self.events.publish(
+                    None,
+                    BackendEventKind::VocabularySuggestionsChanged(pending.clone()),
+                );
+                return Ok(None);
+            }
             let added = self.vocabulary.add_if_absent(
                 suggestion.replacement.clone(),
                 Some(LEARNED_VOCAB_NOTE.to_string()),
@@ -5337,6 +5379,23 @@ impl OpenLessBackend {
                 BackendEventKind::VocabularySuggestionsChanged(Vec::new()),
             );
         }
+    }
+
+    /// Explicit user-confirmed vocabulary collection from an in-app editor.
+    /// This path intentionally does not require permission to read other apps.
+    pub fn add_learned_vocabulary(
+        &self,
+        phrase: String,
+    ) -> Result<Option<DictionaryEntry>, BackendError> {
+        let phrase = phrase.trim();
+        if phrase.is_empty() || phrase.chars().count() > 64 || phrase.chars().any(char::is_control)
+        {
+            return Err(BackendError::new(
+                BackendErrorCode::InvalidArgument,
+                "enter a word or phrase of 1–64 characters",
+            ));
+        }
+        self.add_vocabulary_if_absent(phrase.to_owned(), Some(LEARNED_VOCAB_NOTE.to_owned()))
     }
 
     pub fn add_vocabulary(
@@ -6959,6 +7018,143 @@ mod tests {
     };
 
     fn assert_send_sync<T: Send + Sync>() {}
+
+    #[test]
+    fn vocabulary_learning_settings_migrate_normalize_and_roundtrip() {
+        let old: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert!(!old.vocabulary_learning_enabled);
+        assert_eq!(old.vocabulary_learning_settings, Default::default());
+        let prefs: UserPreferences = serde_json::from_value(serde_json::json!({
+            "vocabularyLearningSettings": {
+                "observationSeconds": 0, "suggestionSeconds": 999, "maxPhraseChars": 99
+            }
+        }))
+        .unwrap();
+        assert_eq!(prefs.vocabulary_learning_settings.observation_seconds, 10);
+        assert_eq!(prefs.vocabulary_learning_settings.suggestion_seconds, 60);
+        assert_eq!(prefs.vocabulary_learning_settings.max_phrase_chars, 32);
+        let restored: UserPreferences =
+            serde_json::from_value(serde_json::to_value(&prefs).unwrap()).unwrap();
+        assert_eq!(
+            restored.vocabulary_learning_settings,
+            prefs.vocabulary_learning_settings
+        );
+    }
+
+    #[test]
+    fn vocabulary_learning_config_change_invalidates_pending_and_stale_sink() {
+        let (backend, _) = backend();
+        let mut prefs = backend.get_preferences();
+        prefs.vocabulary_learning_enabled = true;
+        prefs.vocabulary_learning_settings.observation_seconds = 20;
+        prefs.vocabulary_learning_settings.suggestion_seconds = 30;
+        prefs.vocabulary_learning_settings.max_phrase_chars = 16;
+        backend
+            .update_settings(
+                prefs,
+                crate::SettingsUpdateOptions::STRICT,
+                &crate::NoopSettingsRuntime,
+            )
+            .unwrap();
+        let sink = CoreEditObservationSink {
+            settings: backend.get_preferences().vocabulary_learning_settings,
+            expected_generation: backend.edit_observation_generation.load(Ordering::Acquire),
+            generation: Arc::clone(&backend.edit_observation_generation),
+            typed_text: "甲".repeat(13),
+            pending: Arc::clone(&backend.pending_corrections),
+            events: Arc::clone(&backend.events),
+        };
+        assert_eq!(
+            sink.observation_duration(),
+            std::time::Duration::from_secs(20)
+        );
+        let edit = crate::host_document::EditPair {
+            source: "甲".repeat(13),
+            target: "乙".repeat(13),
+            before: String::new(),
+            after: String::new(),
+        };
+        let before = chrono::Utc::now().timestamp_millis();
+        assert!(sink.publish(edit.clone()));
+        let after = chrono::Utc::now().timestamp_millis();
+        let suggestion = backend.pending_corrections().pop().unwrap();
+        assert!((before + 30_000..=after + 30_000).contains(&suggestion.expires_at_ms));
+        let mut prefs = backend.get_preferences();
+        prefs.vocabulary_learning_settings.observation_seconds = 999;
+        backend
+            .update_settings(
+                prefs,
+                crate::SettingsUpdateOptions::STRICT,
+                &crate::NoopSettingsRuntime,
+            )
+            .unwrap();
+        assert_eq!(
+            backend
+                .get_preferences()
+                .vocabulary_learning_settings
+                .observation_seconds,
+            60
+        );
+        assert!(backend.pending_corrections().is_empty());
+        assert!(!sink.publish(edit));
+        assert!(backend.pending_corrections().is_empty());
+        assert!(backend.get_preferences().vocabulary_learning_enabled);
+    }
+
+    #[test]
+    fn vocabulary_learning_expired_suggestions_cannot_be_accepted() {
+        let (backend, _) = backend();
+        let suggestion = backend
+            .queue_pending_correction("错词".into(), "Codex".into())
+            .unwrap()
+            .unwrap();
+        backend.pending_corrections.lock().unwrap()[0].expires_at_ms = 0;
+        assert!(backend
+            .accept_pending_correction(&suggestion.id)
+            .unwrap()
+            .is_none());
+        assert!(backend.list_vocabulary().unwrap().is_empty());
+        assert!(backend.pending_corrections().is_empty());
+    }
+
+    #[test]
+    fn vocabulary_learning_explicit_collection_is_confirmed_and_idempotent() {
+        let (backend, _) = backend();
+        assert!(!backend.get_preferences().vocabulary_learning_enabled);
+        let word = backend
+            .add_learned_vocabulary(" Codex ".into())
+            .unwrap()
+            .unwrap();
+        assert_eq!(word.phrase, "Codex");
+        assert_eq!(word.note.as_deref(), Some(LEARNED_VOCAB_NOTE));
+        assert!(backend
+            .add_learned_vocabulary("Codex".into())
+            .unwrap()
+            .is_none());
+        assert!(backend.add_learned_vocabulary("\n".into()).is_err());
+        assert!(backend
+            .add_learned_vocabulary("first\nsecond".into())
+            .is_err());
+        assert!(backend.add_learned_vocabulary("a".repeat(65)).is_err());
+        assert_eq!(backend.list_vocabulary().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn vocabulary_learning_old_generation_cannot_queue_after_opt_out() {
+        let (backend, _) = backend();
+        let generation = AtomicU64::new(2);
+        assert!(queue_pending_correction_state(
+            &backend.pending_corrections,
+            &backend.events,
+            "错词".into(),
+            "Codex".into(),
+            Some((&generation, 1)),
+            10
+        )
+        .unwrap()
+        .is_none());
+        assert!(backend.pending_corrections().is_empty());
+    }
 
     struct TestDataDir {
         path: std::path::PathBuf,
@@ -10438,7 +10634,11 @@ mod tests {
         )
         .unwrap();
         let mut preferences = backend.get_preferences();
-        preferences.cursor_context_enabled = true;
+        preferences.vocabulary_learning_enabled = true;
+        assert!(
+            !preferences.cursor_context_enabled,
+            "learning must not require uploading cursor context"
+        );
         backend.set_preferences(preferences).unwrap();
         backend.start().await.unwrap();
         backend.start_dictation().await.unwrap();
@@ -10459,7 +10659,7 @@ mod tests {
 
         backend.dismiss_pending_corrections();
         let mut preferences = backend.get_preferences();
-        preferences.cursor_context_enabled = false;
+        preferences.vocabulary_learning_enabled = false;
         backend
             .update_settings(
                 preferences,
@@ -10472,7 +10672,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn disabled_cursor_context_is_not_rearmed_by_an_older_dictation() {
+    async fn disabled_vocabulary_learning_is_not_rearmed_by_an_older_dictation() {
         for streaming in [false, true] {
             let data_dir = TestDataDir::new("privacy-disabled-during-dictation");
             let observation = Arc::new(FakeEditObservation::default());
@@ -10497,13 +10697,13 @@ mod tests {
             )
             .unwrap();
             let mut preferences = backend.get_preferences();
-            preferences.cursor_context_enabled = true;
+            preferences.vocabulary_learning_enabled = true;
             preferences.streaming_insert = streaming;
             backend.set_preferences(preferences).unwrap();
             backend.start().await.unwrap();
             backend.start_dictation().await.unwrap();
             let mut preferences = backend.get_preferences();
-            preferences.cursor_context_enabled = false;
+            preferences.vocabulary_learning_enabled = false;
             backend
                 .update_settings(
                     preferences,
@@ -10629,7 +10829,7 @@ mod tests {
             .unwrap(),
         );
         let mut preferences = backend.get_preferences();
-        preferences.cursor_context_enabled = true;
+        preferences.vocabulary_learning_enabled = true;
         backend.set_preferences(preferences).unwrap();
         backend.start().await.unwrap();
         let first = backend.start_dictation().await.unwrap();

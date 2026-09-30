@@ -31,7 +31,7 @@ use core_foundation::runloop::{
 
 use super::{
     evaluate_gate, minimal_edit, plan_window, utf16_offset_to_char_offset, window_around_cursor,
-    EditPair, GateInputs, ReadOutcome, AX_MESSAGING_TIMEOUT_SECS, EDIT_WATCH_MAX_LIFETIME,
+    EditPair, GateInputs, ReadOutcome, AX_MESSAGING_TIMEOUT_SECS,
 };
 
 /// Above this UTF-16 length, skip a full `AXValue` read and use
@@ -1113,6 +1113,7 @@ const EDIT_WATCH_MAX_UTF16: usize = 20_000;
 /// can be later under load.
 pub(super) fn spawn_edit_watcher(
     typed_text: String,
+    lifetime: std::time::Duration,
     on_edit: Box<dyn Fn(EditPair) -> bool + Send + Sync>,
 ) -> Option<Arc<AtomicBool>> {
     let stop = Arc::new(AtomicBool::new(false));
@@ -1156,6 +1157,7 @@ pub(super) fn spawn_edit_watcher(
                 pid,
                 bundle_id,
                 thread_stop,
+                lifetime,
             );
         });
 
@@ -1255,6 +1257,7 @@ fn run_edit_watch_loop(
     pid: i32,
     bundle_id: Option<String>,
     stop: Arc<AtomicBool>,
+    lifetime: std::time::Duration,
 ) {
     unsafe {
         let mut observer: AxObserverRef = std::ptr::null_mut();
@@ -1327,9 +1330,8 @@ fn run_edit_watch_loop(
             if stop.load(Ordering::Relaxed) {
                 break;
             }
-            // 60s hard cap: still editing this long usually means writing new
-            // text, not correcting our inserted word.
-            if started.elapsed() >= EDIT_WATCH_MAX_LIFETIME {
+            // Stop when the configured observation window expires.
+            if started.elapsed() >= lifetime {
                 end_reason = "timeout";
                 break;
             }

@@ -21,6 +21,7 @@ import { CloudSyncSection } from './CloudSyncSection';
 import { LocalModelsSection } from './models/LocalModelsSection';
 import { LocalModelsNavContext } from './models/modelsNav';
 import { DebugToolsSection } from './DebugToolsSection';
+import { VocabularyLearningSection } from './VocabularyLearningSection';
 import { CodingAgentSection } from './CodingAgentSection';
 import { ClaudeConsoleSection } from './ClaudeConsoleSection';
 import { BetaChannelSection } from './BetaChannelSection';
@@ -392,6 +393,7 @@ export function AdvancedTab({
         >
           {item.id === 'lessComputer' && <CodingAgentSection />}
           {item.id === 'claudeConsole' && <ClaudeConsoleSection />}
+          {item.id === 'vocabularyLearning' && <VocabularyLearningSection />}
           {item.id === 'debug' && <DebugToolsSection />}
         </section>
       ))}

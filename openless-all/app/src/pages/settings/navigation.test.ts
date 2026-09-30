@@ -91,10 +91,21 @@ assert.equal(
 );
 assert.deepEqual(
   visibleAdvancedPages('android', 'android').map((item) => item.id),
-  ['debug'],
+  ['vocabularyLearning', 'debug'],
   'the pipeline switch lives in Services on every platform',
 );
 console.log('settings navigation tests passed');
+
+assert.equal(
+  visibleAdvancedPages('mobile', 'mac').some((item) => item.id === 'vocabularyLearning'),
+  false,
+  'generic mobile hosts without a native observer do not expose learning configuration',
+);
+assert.equal(
+  visibleAdvancedPages('desktop', 'mac').some((item) => item.id === 'vocabularyLearning'),
+  true,
+  'macOS retains its native correction observer settings',
+);
 
 const serviceViews = availableServiceViews(true);
 assert.deepEqual(

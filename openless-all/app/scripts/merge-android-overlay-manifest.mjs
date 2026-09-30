@@ -58,6 +58,9 @@ const SERVICE_SNIPPETS = [
                 android:resource="@xml/openless_accessibility_config" />
         </service>`,
   `<receiver
+            android:name=".OpenLessVocabularyReceiver"
+            android:exported="false" />`,
+  `<receiver
             android:name=".OpenLessAccessibilityCommandReceiver"
             android:process=":accessibility"
             android:exported="false" />`,

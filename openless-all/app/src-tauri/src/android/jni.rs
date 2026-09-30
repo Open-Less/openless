@@ -103,7 +103,7 @@ pub mod android {
         Ok(())
     }
 
-    fn load_context_class<'local>(
+    pub(crate) fn load_context_class<'local>(
         env: &mut JNIEnv<'local>,
         context: &JObject<'local>,
         class_name: &str,

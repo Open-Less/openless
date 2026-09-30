@@ -2,6 +2,8 @@
 
 pub mod accessibility;
 #[cfg(target_os = "android")]
+pub mod edit_observation;
+#[cfg(target_os = "android")]
 pub mod insert;
 pub mod insert_tiers;
 pub mod jni;

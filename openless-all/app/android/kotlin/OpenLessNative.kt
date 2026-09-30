@@ -27,6 +27,14 @@ object OpenLessNative {
     @JvmStatic external fun nativeStopDictationAsQuickNote()
 
     @JvmStatic external fun nativeCancelDictation()
+    @JvmStatic external fun nativeObserveVocabularyText(generation: Long, text: String): Boolean
+    @JvmStatic external fun nativeVocabularyObservationActive(generation: Long): Boolean
+    @JvmStatic external fun nativeVocabularyObservationRemainingMs(generation: Long): Long
+    @JvmStatic external fun nativeCurrentVocabularyObservation(): Long
+    @JvmStatic external fun nativeStopVocabularyObservation(generation: Long)
+    @JvmStatic external fun nativePendingVocabularySuggestions(): String
+    @JvmStatic external fun nativeResolveVocabularySuggestion(id: String, accept: Boolean): Boolean
+    @JvmStatic external fun nativeAddLearnedVocabulary(phrase: String): Boolean
 
     // Adds a word/phrase straight to the global Dictionary (same store
     // add_vocab exposes to the desktop UI) instead of a CorrectionRule —

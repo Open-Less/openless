@@ -1,6 +1,13 @@
 use super::*;
 
 #[tauri::command]
+pub fn add_learned_vocab(core: CoreState<'_>, phrase: String) -> Result<(), String> {
+    core.add_learned_vocabulary(phrase)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn list_vocab(core: CoreState<'_>) -> Result<Vec<DictionaryEntry>, String> {
     core.list_vocabulary().map_err(|e| e.to_string())
 }
@@ -49,19 +56,19 @@ pub fn add_correction_rule(
 /// Checkmark clicked on the card: add the word to the vocabulary with the "auto-collected"
 /// marker; it can be deleted from the vocabulary page at any time.
 #[tauri::command]
-pub fn accept_pending_correction(core: CoreState<'_>, coord: CoordinatorState<'_>, id: String) {
+pub fn accept_pending_correction(
+    core: CoreState<'_>,
+    coord: CoordinatorState<'_>,
+    id: String,
+) -> Result<(), String> {
     match core.accept_pending_correction(&id) {
-        Ok(Some(suggestion)) => {
-            log::info!(
-                "[cursor-context] learned vocabulary entry: {:?} (was {:?})",
-                suggestion.replacement,
-                suggestion.pattern
-            );
+        Ok(Some(_)) => {
             coord.refresh_vocab_suggestion_presentation(!core.pending_corrections().is_empty());
         }
         Ok(None) => {}
-        Err(error) => log::warn!("[cursor-context] accept learned vocabulary failed: {error}"),
+        Err(error) => return Err(error.to_string()),
     }
+    Ok(())
 }
 
 /// X clicked on the card: drop this entry and record nothing (there is no reject list).

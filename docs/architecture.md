@@ -49,6 +49,8 @@ Android IME 通过 `InputConnection` 插入文字；笔画、英文候选与轻�
 
 设置保存使用 `get_settings_snapshot` / `update_setting_fields`：前端只提交字段差异，Core 按偏好修订号提交事务并在版本冲突时重试；`prefs:changed` 使前端重新读取快照。`preferencesWriteGate.ts` 将尚未完成的本地编辑叠加到已确认快照，失败时只撤回对应请求。
 
+手改学词由 Core 的 `host_document/observation.rs` 和 `api.rs` 管理插入范围、观察代数、建议有效期与词典写入。独立本机授权默认关闭，配置位于「实验与扩展 → 手改学词」；观察时长 10–60 秒、建议有效期 5–60 秒、最大自动词长 2–32 个字符。设置改变会结束旧观察并清除旧建议，授权与参数不进入云同步。macOS AX、Windows UIA 与 Android 无障碍仅在当前编辑器内进行短时观察，密码框和已知敏感应用被排除；观察文本仅用于本地差分，确认前不写入词典。`PendingCorrection.expiresAtMs` 是 Web 和 Android 确认卡共用的截止时间；历史详情与 Android IME 保留显式确认加词入口，Linux 原生观察仍在独立验收范围。
+
 ## 3. Core 模块地图（按域，见 `src/lib.rs` pub mod 清单）
 
 - 听写链路：`dictation_engine` / `dictation_context` / `audio` / `external_audio` / `silence_auto_stop` / `streaming_insert` / `hotkey_interpreter` / `voice_session`

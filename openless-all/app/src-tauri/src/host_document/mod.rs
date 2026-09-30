@@ -6,11 +6,9 @@
 //!
 //! ## Boundary
 //!
-//! All platform differences stay inside this module. Non-macOS always returns
-//! [`HostDocumentStatus::Unsupported`]: Windows has no UIAutomation code and TSF only
-//! activates at commit time; most Linux fcitx5 clients don't support SurroundingText.
-//! Keeping the interface shape identical means future implementations won't require
-//! caller changes.
+//! Cursor context is available on macOS. Edit learning has separate local consent:
+//! macOS AX, Windows UIA and Android accessibility provide bounded observation.
+//! Linux retains explicit vocabulary entry.
 //!
 //! ## Three hard constraints (new code must not violate these, even though the old AX
 //! code in this repo does)
@@ -22,9 +20,9 @@
 //!    `tokio::time::timeout` as double protection (shaped after the native call boundary
 //!    in `windows_ime_ipc.rs`). The inner timeout protects the thread itself; the outer
 //!    one guarantees the async caller returns on time regardless.
-//! 3. **Pass the safety gate before reading**. We read arbitrary text from other apps
-//!    that ends up in LLM request bodies. Never read password fields, Secure Input,
-//!    password managers or terminals — not a single AX call.
+//! 3. **Pass the safety gate before reading text**. Reject password fields, Secure Input,
+//!    known password managers and terminals. Cursor context may enter authorized LLM
+//!    requests; edit observation remains local.
 //!
 //! ## Scope of this milestone
 //!
@@ -35,6 +33,10 @@
 
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+pub(crate) use windows::insert_with_delivery_check;
 
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{KeyboardDelivery, KeyboardDeliveryOutcome};
@@ -65,14 +67,6 @@ const AX_MESSAGING_TIMEOUT_SECS: f32 = 0.2;
 /// winds down on its own AX timeout.
 #[cfg(target_os = "macos")]
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1200);
-
-/// Maximum lifetime of an edit watch.
-///
-/// If the user is still editing this text after a minute, they are most likely writing new
-/// content rather than fixing our inserted word; learning beyond that only collects noise.
-/// Also the last safeguard for "the observer never leaks".
-#[cfg(target_os = "macos")]
-const EDIT_WATCH_MAX_LIFETIME: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Outcome of one read. Every variant beyond `Ok` must explain why nothing was read —
 /// during installation verification this distinguishes "blocked" from "AX unsupported".
@@ -333,15 +327,19 @@ fn blocked_result(reason: BlockReason) -> HostDocumentReadResult {
 /// observer thread itself has two more safeguards: a 60s hard timeout and self-termination
 /// when the foreground app changes.
 pub struct EditWatcher {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(target_os = "android")]
+    generation: u64,
 }
 
 impl EditWatcher {
     /// Disarm explicitly. Idempotent; also called automatically on drop.
     pub fn disarm(&self) {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        #[cfg(target_os = "android")]
+        crate::android::edit_observation::disarm(self.generation);
     }
 }
 
@@ -360,7 +358,11 @@ impl Drop for EditWatcher {
 ///
 /// `on_edit` is called on the observer thread, possibly multiple times. Returns `None` on any
 /// failure — failing to learn is acceptable; breaking typing is not.
-pub fn watch_for_edits<F>(typed_text: String, on_edit: F) -> Option<EditWatcher>
+pub fn watch_for_edits<F>(
+    typed_text: String,
+    lifetime: std::time::Duration,
+    on_edit: F,
+) -> Option<EditWatcher>
 where
     F: Fn(EditPair) -> bool + Send + Sync + 'static,
 {
@@ -369,12 +371,22 @@ where
         if typed_text.trim().is_empty() {
             return None;
         }
-        let stop = macos::spawn_edit_watcher(typed_text, Box::new(on_edit))?;
+        let stop = macos::spawn_edit_watcher(typed_text, lifetime, Box::new(on_edit))?;
         Some(EditWatcher { stop })
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     {
-        let _ = (typed_text, on_edit);
+        windows::spawn_edit_watcher(typed_text, lifetime, Box::new(on_edit))
+            .map(|stop| EditWatcher { stop })
+    }
+    #[cfg(target_os = "android")]
+    {
+        crate::android::edit_observation::arm(typed_text, lifetime, Box::new(on_edit))
+            .map(|generation| EditWatcher { generation })
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "android")))]
+    {
+        let _ = (typed_text, lifetime, on_edit);
         None
     }
 }

@@ -6,6 +6,21 @@ export function listVocab(): Promise<DictionaryEntry[]> {
   return invokeOrMock('list_vocab', undefined, () => mockVocab.map((entry) => ({ ...entry })));
 }
 
+export function addLearnedVocab(phrase: string): Promise<void> {
+  return invokeOrMock('add_learned_vocab', { phrase }, () => {
+    if (!mockVocab.some((entry) => entry.phrase === phrase.trim())) {
+      mockVocab.unshift({
+        id: crypto.randomUUID(),
+        phrase: phrase.trim(),
+        note: '从手改中自动收集',
+        enabled: true,
+        hits: 0,
+        createdAt: new Date().toISOString(),
+      });
+    }
+  });
+}
+
 export function addVocab(phrase: string, note?: string): Promise<DictionaryEntry> {
   return invokeOrMock('add_vocab', { phrase, note }, () => {
     const entry = {
@@ -69,7 +84,7 @@ export function rejectPendingCorrection(id: string): Promise<void> {
   return invokeOrMock('reject_pending_correction', { id }, () => undefined);
 }
 
-/** Card expired after 10 seconds, or a new dictation round started. */
+/** Dismiss on the configured deadline or the next dictation round. */
 export function dismissVocabSuggestions(): Promise<void> {
   return invokeOrMock('dismiss_vocab_suggestions', undefined, () => undefined);
 }

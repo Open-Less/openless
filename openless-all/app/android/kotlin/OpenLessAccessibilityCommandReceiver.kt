@@ -10,6 +10,10 @@ import android.util.Log
 class OpenLessAccessibilityCommandReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         val action = intent?.action ?: return
+        if (action == ACTION_VOCABULARY) {
+            OpenLessAccessibilityService.handleVocabularyCommand(intent)
+            return
+        }
         val receiver = resultReceiver(intent) ?: return
         when (action) {
             ACTION_PASTE -> {
@@ -58,6 +62,7 @@ class OpenLessAccessibilityCommandReceiver : BroadcastReceiver() {
     }
 
     companion object {
+        const val ACTION_VOCABULARY = "com.openless.app.accessibility.VOCABULARY"
         const val ACTION_PASTE = "com.openless.app.accessibility.PASTE"
         const val ACTION_PING = "com.openless.app.accessibility.PING"
         const val ACTION_CAPTURE_SELECTED_TEXT =

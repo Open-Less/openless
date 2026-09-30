@@ -337,7 +337,7 @@ impl DictationContext {
                         options.output_target,
                         DictationOutputTarget::QuickNote | DictationOutputTarget::Qa
                     ),
-                observe_edits: preferences.cursor_context_enabled,
+                observe_edits: preferences.vocabulary_learning_enabled,
                 // An undecided Android capture must not stream text into the
                 // foreground app before the terminal gesture classifies it.
                 streaming: !matches!(

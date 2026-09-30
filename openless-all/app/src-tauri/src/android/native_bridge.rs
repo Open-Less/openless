@@ -951,6 +951,62 @@ mod jni_exports {
     use jni::sys::{jboolean, jstring, JNIEnv};
     use jni::JNIEnv as JniEnv;
 
+    #[no_mangle]
+    pub extern "system" fn Java_com_openless_app_OpenLessNative_nativePendingVocabularySuggestions(
+        env: JniEnv,
+        _: JClass,
+    ) -> jstring {
+        let pending = CORE_BACKEND
+            .get()
+            .map(|b| b.pending_corrections())
+            .unwrap_or_default();
+        let json = serde_json::to_string(&pending).unwrap_or_else(|_| "[]".to_string());
+        env.new_string(json)
+            .map(|s| s.into_raw())
+            .unwrap_or(std::ptr::null_mut())
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_com_openless_app_OpenLessNative_nativeResolveVocabularySuggestion(
+        mut env: JniEnv,
+        _: JClass,
+        id: JString,
+        accept: jboolean,
+    ) -> jboolean {
+        let Some(backend) = CORE_BACKEND.get() else {
+            return 0;
+        };
+        let Ok(id) = env.get_string(&id) else {
+            return 0;
+        };
+        let id: String = id.into();
+        if accept != 0 {
+            backend.accept_pending_correction(&id).is_ok() as jboolean
+        } else {
+            backend.reject_pending_correction(&id);
+            1
+        }
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_com_openless_app_OpenLessNative_nativeAddLearnedVocabulary(
+        mut env: JniEnv,
+        _: JClass,
+        phrase: JString,
+    ) -> jboolean {
+        let Some(backend) = CORE_BACKEND.get() else {
+            return 0;
+        };
+        let Ok(phrase) = env.get_string(&phrase) else {
+            return 0;
+        };
+        let phrase: String = phrase.into();
+        if phrase.trim().is_empty() {
+            return 0;
+        }
+        backend.add_learned_vocabulary(phrase).is_ok() as jboolean
+    }
+
     unsafe fn with_jni_context<R>(
         env_ptr: *mut JNIEnv,
         context: JObject,

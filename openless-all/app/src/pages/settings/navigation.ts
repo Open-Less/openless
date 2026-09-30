@@ -14,6 +14,7 @@ export type SettingsSectionId =
 export const ADVANCED_PAGES = [
   { id: 'lessComputer', icon: 'mac', titleKey: 'settings.codingAgent.title' },
   { id: 'claudeConsole', icon: 'chevLR', titleKey: 'settings.codingConsole.title' },
+  { id: 'vocabularyLearning', icon: 'sparkle', titleKey: 'settings.vocabularyLearning.title' },
   { id: 'debug', icon: 'bolt', titleKey: 'settings.debug.title' },
 ] as const;
 
@@ -24,6 +25,8 @@ export function visibleAdvancedPages(platform: PlatformKind | undefined, os: OS)
   return ADVANCED_PAGES.filter((page) => {
     if (page.id === 'lessComputer') return platform === 'desktop' && (os === 'mac' || os === 'win');
     if (page.id === 'claudeConsole') return platform === 'desktop' && os === 'mac';
+    if (page.id === 'vocabularyLearning')
+      return platform === 'android' || (platform === 'desktop' && (os === 'win' || os === 'mac'));
     if (page.id === 'debug') return platform === 'desktop' || platform === 'android';
     return true;
   });

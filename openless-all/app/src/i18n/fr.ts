@@ -857,6 +857,13 @@ export const fr: typeof zhCN = {
       clear: 'Effacer les résultats',
     },
   },
+  vocabLearning: {
+    open: 'Mémoriser un mot',
+    label: 'Saisissez le mot correct à mémoriser',
+    confirm: 'Confirmer et ajouter au dictionnaire',
+    saved: 'Enregistré. Gérez ce mot dans le dictionnaire.',
+    failed: 'Échec de l’enregistrement : {{error}}',
+  },
   vocabCard: {
     title: 'Mémoriser ce mot ?',
     accept: 'Mémoriser',
@@ -896,7 +903,7 @@ export const fr: typeof zhCN = {
     editEmpty: 'Le mot ne peut pas être vide.',
     filter: {
       all: 'Tous',
-      auto: 'Ajoutés automatiquement',
+      auto: 'Confirmés',
       manual: 'Ajoutés manuellement',
     },
     searchPlaceholder: 'Rechercher',
@@ -908,7 +915,7 @@ export const fr: typeof zhCN = {
     newWordTemplates: 'Modèles prédéfinis',
     newWordTemplateCount: '{{count}} mots',
     newWordAddSelected: 'Ajouter la sélection',
-    learnedSection: 'Collectés automatiquement ({{count}})',
+    learnedSection: 'Confirmés ({{count}})',
     removeAllLearned: 'Tout supprimer',
     corrections: {
       title: 'Règles de correction',
@@ -1280,12 +1287,33 @@ export const fr: typeof zhCN = {
       useSystemProxyDesc:
         'Les requêtes suivent le proxy système si cette option est activée. Sinon, elles se connectent directement, ce qui réduit souvent la latence des services locaux, mais peut empêcher l’accès à GitHub ou aux mises à jour dans certaines régions. Les flux vocaux en temps réel et Less Computer ne sont pas concernés.',
     },
+    vocabularyLearning: {
+      title: 'Apprendre des corrections',
+      enabled: 'Activer l’apprentissage des corrections',
+      observationSeconds: 'Durée d’observation',
+      observationSecondsHint:
+        'Observer le champ actuel pendant 10 à 60 secondes au maximum après la dictée.',
+      suggestionSeconds: 'Durée des suggestions',
+      suggestionSecondsHint:
+        'Les suggestions non confirmées expirent après 5 à 60 secondes sans ajout au dictionnaire.',
+      maxPhraseChars: 'Longueur maximale',
+      maxPhraseCharsHint:
+        'Limiter le texte original et son remplacement à 2–32 caractères dans les suggestions automatiques. Les ajouts manuels ne sont pas concernés.',
+      seconds: '{{count}} s',
+      characters: '{{count}} caractères',
+      changeHint:
+        'Modifier les paramètres arrête l’observation et efface les suggestions en attente. Ils s’appliquent à la prochaine dictée. La réinitialisation ne change pas l’activation.',
+      reset: 'Réinitialiser les paramètres',
+      saveError: 'Échec de l’enregistrement. Réessayez.',
+      description:
+        'Après insertion, les modifications du champ sont détectées localement pendant 60 secondes maximum. Chaque mot nécessite une confirmation. Le texte observé n’est pas envoyé au modèle. Les champs de mot de passe et les applications sensibles connues sont exclus. Sous Windows et Android, la prise en charge dépend de l’éditeur ; Android nécessite le service d’accessibilité. Désactiver arrête l’observation.',
+    },
     dataStorage: {
       title: 'Stockage des données',
       desc: 'Historique des conversations et contexte conservés sur cet appareil.',
       cursorContextLabel: 'Contexte du curseur (expérimental)',
       cursorContextDesc:
-        'Lors de l’amélioration du texte, lit le contenu autour du curseur dans votre document pour distinguer les homophones, noms propres et pronoms. S’il est activé, ce texte accompagne la requête au fournisseur LLM configuré. Sinon, rien n’est lu. Les champs de mot de passe, la saisie sécurisée, les gestionnaires de mots de passe et les terminaux sont toujours exclus. macOS uniquement.',
+        'Envoyer le texte autour du curseur au modèle pour la reformulation (macOS uniquement). Ce réglage est indépendant de l’apprentissage local. Les champs de mot de passe et les applications sensibles connues sont exclus.',
     },
     codingConsole: {
       title: 'Console Claude',
@@ -1487,7 +1515,8 @@ export const fr: typeof zhCN = {
       comboClear: 'Effacer',
       comboConflict: 'Cette combinaison n’est pas disponible',
       shortcutSaveFailed: 'Impossible d’enregistrer le raccourci',
-      mouseSideHint: 'Les boutons latéraux Mouse4 / Mouse5 sont pris en charge comme raccourcis de dictée globaux sous Windows',
+      mouseSideHint:
+        'Les boutons latéraux Mouse4 / Mouse5 sont pris en charge comme raccourcis de dictée globaux sous Windows',
       allowNonTsfFallbackLabel: 'Autoriser une solution de repli sans TSF',
       allowNonTsfFallbackDesc:
         'Windows : si l’insertion TSF échoue, utilise SendInput Unicode avec des pauses. En cas de nouvel échec, copie le texte dans le presse-papiers.',
@@ -2355,6 +2384,8 @@ export const fr: typeof zhCN = {
     autoSaveHint: 'Les modifications sont enregistrées automatiquement',
     backToAdvanced: 'Retour à Expériences et extensions',
     advancedPages: {
+      vocabularyLearning:
+        'Apprendre des corrections manuelles ; régler l’observation, la confirmation et la longueur.',
       lessComputer:
         'Choisissez un agent et configurez son modèle, ses autorisations et son répertoire de travail.',
       claudeConsole: 'Détectez Claude Code et consultez la sortie des tâches de test.',
@@ -2386,7 +2417,8 @@ export const fr: typeof zhCN = {
       appearance: 'thème sombre clair langue police texte taille disposition carte activité',
       privacy:
         'autorisation microphone accessibilité historique enregistrement stockage confidentialité exporter',
-      advanced: 'Less Computer Claude agent débogage journaux expérience',
+      advanced:
+        'Less Computer Claude agent débogage journaux expérience Apprendre des corrections vocabulary learning',
       about: 'version Beta stable mise à jour actualisation',
     },
     sections: {

@@ -7,15 +7,8 @@
 import { Icon } from './Icon';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import {
-  acceptPendingCorrection,
-  dismissVocabSuggestions,
-  rejectPendingCorrection,
-} from '../lib/ipc';
+import { acceptPendingCorrection, rejectPendingCorrection } from '../lib/ipc';
 import type { PendingCorrection } from '../lib/types';
-
-/// Auto-dismiss delay, aligned with the backend's `VOCAB_SUGGESTION_TTL_MS`.
-const TTL_MS = 10_000;
 
 interface VocabSuggestionCardProps {
   suggestions: PendingCorrection[];
@@ -28,19 +21,28 @@ export function VocabSuggestionCard({ suggestions }: VocabSuggestionCardProps) {
   const [resolved, setResolved] = useState<Set<string>>(new Set());
   const timerRef = useRef<number | null>(null);
 
-  // 10s countdown, restarting on every list change: several corrections from one
-  // dictation arrive in sequence, and without the reset a later item could vanish
-  // right as it appears.
+  // Each suggestion has a Core deadline; new suggestions do not extend old ones.
   useEffect(() => {
-    if (suggestions.length === 0) return;
+    const active = suggestions.filter((suggestion) => !resolved.has(suggestion.id));
+    if (active.length === 0) return;
     if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = window.setTimeout(() => {
-      void dismissVocabSuggestions();
-    }, TTL_MS);
+    const earliest = Math.min(...active.map((s) => s.expiresAtMs));
+    timerRef.current = window.setTimeout(
+      () => {
+        const expired = active.filter((s) => s.expiresAtMs <= Date.now());
+        setResolved((previous) => new Set([...previous, ...expired.map((s) => s.id)]));
+        for (const suggestion of active) {
+          if (suggestion.expiresAtMs <= Date.now()) {
+            void rejectPendingCorrection(suggestion.id).catch(() => {});
+          }
+        }
+      },
+      Math.max(0, earliest - Date.now()),
+    );
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [suggestions]);
+  }, [suggestions, resolved]);
 
   const visible = suggestions.filter((s) => !resolved.has(s.id));
   if (visible.length === 0) return null;

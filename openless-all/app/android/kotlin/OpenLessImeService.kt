@@ -4048,12 +4048,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      * whole last result).
      *
      * Remembering the corrected word/phrase in the global Dictionary
-     * (nativeAddVocabularyWord — the same store the desktop Dictionary UI
-     * reads/writes; corrections themselves are hand-maintained only, see
-     * native_bridge.rs's spawn_add_vocabulary_word()) is gated on
-     * addToDictionaryForEdit, opt-out via the edit panel's checkbox (every
-     * edit used to silently add one, which piled up entries for edits that
-     * were just rewording, not an actual new/misrecognized word).
+     * uses nativeAddLearnedVocabulary and the shared learned-source marker.
+     * addToDictionaryForEdit starts unchecked and records the user's explicit choice.
      */
     private fun finishEditWithSpokenReplacement(text: String) {
         recording = false
@@ -4076,7 +4072,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }
         if (shouldAddToDictionary && text != original) {
             runNativeAction("加入词典") {
-                OpenLessNative.nativeAddVocabularyWord(text)
+                check(OpenLessNative.nativeAddLearnedVocabulary(text)) { "词典保存失败，请在历史中重试" }
             }
         }
         // A sub-span correction leaves the surrounding text's exact new

@@ -467,6 +467,36 @@ assert.match(
   'the QA adapter must expose the narrow opaque-target host seam',
 );
 
+const invokeHandlers = await read('src-tauri/src/lib.rs');
+const accessibilityVocabulary = await read('android/kotlin/OpenLessAccessibilityService.kt');
+const vocabularyReceiver = await read('android/kotlin/OpenLessVocabularyReceiver.kt');
+const androidManifestGenerator = await read('scripts/merge-android-overlay-manifest.mjs');
+assert.doesNotMatch(
+  accessibilityVocabulary,
+  /OpenLessNative\.native(?:Vocabulary|ObserveVocabulary|PendingVocabulary|ResolveVocabulary)/,
+  'the isolated accessibility process must never access main-process Core singletons',
+);
+assert.match(
+  vocabularyReceiver,
+  /OpenLessNative\.nativeObserveVocabularyText/,
+  'observation callbacks must reach the main-process Core receiver',
+);
+assert.match(
+  androidManifestGenerator,
+  /android:name="\.OpenLessVocabularyReceiver"\s+android:exported="false"/,
+  'vocabulary IPC must be private and run in the default main process',
+);
+for (const platform of ['desktop', 'mobile']) {
+  const macro = invokeHandlers
+    .split(`macro_rules! app_invoke_handler_${platform}`)[1]
+    ?.split('\n}')[0];
+  assert.match(
+    macro ?? '',
+    /commands::add_learned_vocab\s*,/,
+    `${platform} history must expose explicit vocabulary learning`,
+  );
+}
+
 for (const method of [
   'accept_pending_correction',
   'reject_pending_correction',

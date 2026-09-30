@@ -265,6 +265,8 @@ pub use crate::types::{CorrectionRule, RuleSource};
 #[serde(rename_all = "camelCase")]
 pub struct PendingCorrection {
     pub id: String,
+    /// Absolute deadline shared by native and web confirmation surfaces.
+    pub expires_at_ms: i64,
     /// The (wrong) pre-correction spelling. Only shown on the card so the
     /// user sees what changed; never persisted.
     pub pattern: String,
@@ -316,6 +318,35 @@ pub const INSERT_FALLBACK_REASON_INSERT_FAILED: &str = "insertFailed";
 /// again the next time the user corrects the same word is the trade-off for
 /// having no reject list.
 pub const VOCAB_SUGGESTION_TTL_MS: u64 = 10_000;
+
+/// Local-only tuning. Consent and sensitive-field protections remain separate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct VocabularyLearningSettings {
+    pub observation_seconds: u32,
+    pub suggestion_seconds: u32,
+    pub max_phrase_chars: u32,
+}
+
+impl Default for VocabularyLearningSettings {
+    fn default() -> Self {
+        Self {
+            observation_seconds: 60,
+            suggestion_seconds: 10,
+            max_phrase_chars: 12,
+        }
+    }
+}
+
+impl VocabularyLearningSettings {
+    pub fn normalized(self) -> Self {
+        Self {
+            observation_seconds: self.observation_seconds.clamp(10, 60),
+            suggestion_seconds: self.suggestion_seconds.clamp(5, 60),
+            max_phrase_chars: self.max_phrase_chars.clamp(2, 32),
+        }
+    }
+}
 
 pub use crate::types::{VocabPreset, VocabPresetStore};
 
@@ -733,6 +764,11 @@ pub struct UserPreferences {
     /// hard-blocked regardless of this switch.
     #[serde(default)]
     pub cursor_context_enabled: bool,
+    /// Observe corrections locally after insertion; independent of LLM context.
+    #[serde(default)]
+    pub vocabulary_learning_enabled: bool,
+    #[serde(default)]
+    pub vocabulary_learning_settings: VocabularyLearningSettings,
     /// Whether the Overview shows the "yearly activity" heatmap card.
     /// Default true; turning it off only hides the card — activity keeps
     /// being recorded (persistence/activity.rs), so the full year's data is
@@ -1050,6 +1086,9 @@ struct UserPreferencesWire {
     streaming_insert_save_clipboard: bool,
     #[serde(default)]
     cursor_context_enabled: bool,
+    #[serde(default)]
+    vocabulary_learning_enabled: bool,
+    vocabulary_learning_settings: VocabularyLearningSettings,
     #[serde(default = "default_true")]
     show_overview_activity_heatmap: bool,
     #[serde(default)]
@@ -1226,6 +1265,8 @@ impl Default for UserPreferencesWire {
             streaming_insert_default_migrated: prefs.streaming_insert_default_migrated,
             streaming_insert_save_clipboard: prefs.streaming_insert_save_clipboard,
             cursor_context_enabled: prefs.cursor_context_enabled,
+            vocabulary_learning_enabled: prefs.vocabulary_learning_enabled,
+            vocabulary_learning_settings: prefs.vocabulary_learning_settings,
             show_overview_activity_heatmap: prefs.show_overview_activity_heatmap,
             stacked_row_layout: prefs.stacked_row_layout,
             conservative_layout: prefs.conservative_layout,
@@ -1434,6 +1475,8 @@ impl<'de> Deserialize<'de> for UserPreferences {
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: wire.streaming_insert_save_clipboard,
             cursor_context_enabled: wire.cursor_context_enabled,
+            vocabulary_learning_enabled: wire.vocabulary_learning_enabled,
+            vocabulary_learning_settings: wire.vocabulary_learning_settings.normalized(),
             show_overview_activity_heatmap: wire.show_overview_activity_heatmap,
             stacked_row_layout: wire.stacked_row_layout,
             conservative_layout: wire.conservative_layout,
@@ -1790,6 +1833,8 @@ impl Default for UserPreferences {
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: true,
             cursor_context_enabled: false,
+            vocabulary_learning_enabled: false,
+            vocabulary_learning_settings: VocabularyLearningSettings::default(),
             show_overview_activity_heatmap: true,
             stacked_row_layout: false,
             conservative_layout: false,

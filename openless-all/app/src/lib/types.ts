@@ -123,6 +123,7 @@ export interface HostDocumentReadResult {
 /** A correction suggestion awaiting user confirmation (Tier2). The backend keeps it only in memory
  *  and it is lost on restart — suggestions are ephemeral; repeating the same mistake regenerates one. */
 export interface PendingCorrection {
+  expiresAtMs: number;
   id: string;
   pattern: string;
   replacement: string;
@@ -510,6 +511,12 @@ export interface UserPreferences {
    *  Default false — when on, every dictation reads the foreground app's body text and sends part of it to the LLM provider.
    *  macOS only; password fields / Secure Input / password managers / terminals are always hard-blocked. */
   cursorContextEnabled: boolean;
+  vocabularyLearningEnabled: boolean;
+  vocabularyLearningSettings: {
+    observationSeconds: number;
+    suggestionSeconds: number;
+    maxPhraseChars: number;
+  };
   /** Whether Overview shows the yearly activity heatmap card. Default true; turning it off only hides the card, activity counting continues. */
   showOverviewActivityHeatmap: boolean;
   /** Readable layout: wraps same-row controls on small screens or large fonts to avoid horizontal overflow. Default false. */

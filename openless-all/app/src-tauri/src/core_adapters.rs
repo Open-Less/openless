@@ -244,7 +244,7 @@ pub(crate) fn backend_dependencies(
         ));
     dependencies.qa_runtime = Some(Arc::new(crate::qa_adapter::TauriQaRuntimeAdapter::new(
         Arc::clone(&app),
-        backend,
+        Arc::clone(&backend),
         Arc::clone(&credential_store),
         Arc::clone(&qa_host_context),
     )));
@@ -267,7 +267,7 @@ pub(crate) fn backend_dependencies(
             Some(Arc::new(TauriSelectionRuntime::new(Arc::clone(&app))));
         dependencies.selection_polisher = Some(polisher);
     }
-    dependencies.text_inserter = Arc::new(TauriTextInserter::new(Arc::clone(&app)));
+    dependencies.text_inserter = Arc::new(TauriTextInserter::new(Arc::clone(&app), backend));
     dependencies.host_actions = Arc::new(TauriHostActions::new(app, qa_host_context));
     dependencies.dictation_engine = dictation;
     dependencies.credential_store = credential_store;
@@ -2762,6 +2762,7 @@ fn map_recorder_error(error: RecorderError) -> BackendError {
 #[derive(Clone)]
 pub(crate) struct TauriTextInserter {
     app: AppHandleSlot,
+    backend: BackendSlot,
     insertion_target: Option<crate::selection::SelectionInsertionTarget>,
     #[cfg(target_os = "windows")]
     windows_ime: Arc<crate::windows_ime_session::WindowsImeSessionController>,
@@ -2778,8 +2779,11 @@ impl EditObservationAdapter for TauriEditObservationAdapter {
         typed_text: String,
         sink: Arc<dyn EditObservationSink>,
     ) -> Result<(), BackendError> {
-        *self.watcher.lock() =
-            crate::host_document::watch_for_edits(typed_text, move |edit| sink.publish(edit));
+        *self.watcher.lock() = crate::host_document::watch_for_edits(
+            typed_text,
+            sink.observation_duration(),
+            move |edit| sink.publish(edit),
+        );
         Ok(())
     }
 
@@ -2789,9 +2793,10 @@ impl EditObservationAdapter for TauriEditObservationAdapter {
 }
 
 impl TauriTextInserter {
-    fn new(app: AppHandleSlot) -> Self {
+    fn new(app: AppHandleSlot, backend: BackendSlot) -> Self {
         Self {
             app,
+            backend,
             insertion_target: None,
             #[cfg(target_os = "windows")]
             windows_ime: Arc::new(crate::windows_ime_session::WindowsImeSessionController::new()),
@@ -2962,6 +2967,7 @@ impl CoreTextInserter for TauriTextInserter {
         context: Arc<DictationContext>,
     ) -> BoxFuture<'static, Result<Arc<dyn TextInsertionSession>, BackendError>> {
         let app = Arc::clone(&self.app);
+        let backend = Arc::clone(&self.backend);
         let insertion_target = self.insertion_target.clone();
         #[cfg(target_os = "windows")]
         let windows_ime = Arc::clone(&self.windows_ime);
@@ -3046,6 +3052,7 @@ impl CoreTextInserter for TauriTextInserter {
             let _ = app;
             Ok(Arc::new(TauriTextInsertionSession {
                 session_id,
+                backend,
                 context,
                 insertion_target,
                 finished: Arc::new(AtomicBool::new(false)),
@@ -3073,6 +3080,7 @@ impl CoreTextInserter for TauriTextInserter {
 #[derive(Clone)]
 struct TauriTextInsertionSession {
     session_id: SessionId,
+    backend: BackendSlot,
     context: Arc<DictationContext>,
     insertion_target: crate::selection::SelectionInsertionTarget,
     finished: Arc<AtomicBool>,
@@ -3222,11 +3230,33 @@ impl TauriTextInsertionSession {
                     windows_unicode_fallback(&self.context, &text)
                 }
                 openless_core::shared_types::WindowsInsertionMode::Paste => {
-                    crate::insertion::TextInserter::new().insert(
-                        &text,
-                        self.context.insertion.restore_clipboard_after_paste,
-                        self.context.insertion.paste_shortcut,
-                    )
+                    let backend = Arc::clone(&self.backend);
+                    let observe = self.context.insertion.observe_edits;
+                    let restore = self.context.insertion.restore_clipboard_after_paste;
+                    let shortcut = self.context.insertion.paste_shortcut;
+                    tauri::async_runtime::spawn_blocking(move || {
+                        crate::host_document::insert_with_delivery_check(
+                            &text,
+                            || {
+                                observe
+                                    && backend
+                                        .lock()
+                                        .as_ref()
+                                        .and_then(|b| b.upgrade())
+                                        .is_some_and(|b| {
+                                            b.get_preferences().vocabulary_learning_enabled
+                                        })
+                            },
+                            || {
+                                crate::insertion::TextInserter::new()
+                                    .insert(&text, restore, shortcut)
+                            },
+                        )
+                    })
+                    .await
+                    .map_err(|error| {
+                        BackendError::new(BackendErrorCode::Internal, error.to_string())
+                    })?
                 }
             };
             return map_insert_status(status);

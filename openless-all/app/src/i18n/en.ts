@@ -833,6 +833,13 @@ export const en: typeof zhCN = {
       clear: 'Clear results',
     },
   },
+  vocabLearning: {
+    open: 'Remember a word',
+    label: 'Enter the correct word to remember',
+    confirm: 'Confirm and add to dictionary',
+    saved: 'Saved. Manage this word in Dictionary.',
+    failed: 'Could not save: {{error}}',
+  },
   vocabCard: {
     title: 'Remember this word?',
     accept: 'Remember',
@@ -870,7 +877,7 @@ export const en: typeof zhCN = {
     editTitle: 'Edit Word',
     editSave: 'Save',
     editEmpty: 'Word cannot be empty.',
-    filter: { all: 'All', auto: 'Auto-Added', manual: 'Manually Added' },
+    filter: { all: 'All', auto: 'Confirmed', manual: 'Manually Added' },
     searchPlaceholder: 'Search',
     searchEmpty: 'No matching words.',
     newWord: 'New Word',
@@ -880,7 +887,7 @@ export const en: typeof zhCN = {
     newWordTemplates: 'Preset Templates',
     newWordTemplateCount: '{{count}} words',
     newWordAddSelected: 'Add Selected',
-    learnedSection: 'Auto-collected ({{count}})',
+    learnedSection: 'Confirmed ({{count}})',
     removeAllLearned: 'Remove all',
     corrections: {
       title: 'Correction rules',
@@ -1243,12 +1250,33 @@ export const en: typeof zhCN = {
       useSystemProxyDesc:
         'When on, requests follow the system proxy. When off, all requests connect directly (usually lower latency for domestic services), but overseas services such as GitHub sign-in and updates may fail. Realtime voice streams and Less Computer are unaffected.',
     },
+    vocabularyLearning: {
+      title: 'Learn from corrections',
+      enabled: 'Enable learning from corrections',
+      observationSeconds: 'Observation duration',
+      observationSecondsHint:
+        'Maximum time to observe the current field after dictation: 10–60 seconds.',
+      suggestionSeconds: 'Suggestion duration',
+      suggestionSecondsHint:
+        'Unconfirmed suggestions expire after 5–60 seconds without being added to the vocabulary.',
+      maxPhraseChars: 'Maximum phrase length',
+      maxPhraseCharsHint:
+        'Limit both original and replacement phrases in automatic suggestions to 2–32 characters. Manual additions are unaffected.',
+      seconds: '{{count}} s',
+      characters: '{{count}} characters',
+      changeHint:
+        'Changing parameters stops the current observation and clears pending suggestions. New values apply to the next dictation. Resetting parameters does not change the enable switch.',
+      reset: 'Reset parameters',
+      saveError: 'Could not save. Please try again.',
+      description:
+        'After insertion, observe edits locally for up to 60 seconds and ask before saving a word. Observation text is not sent to a model. Password fields and known sensitive apps are excluded. Windows and Android support depends on the editor; Android requires accessibility. Turning this off stops observation.',
+    },
     dataStorage: {
       title: 'Data storage',
       desc: 'Conversation history and context kept on this device.',
       cursorContextLabel: 'Cursor context (experimental)',
       cursorContextDesc:
-        'While polishing, read the text around your cursor in the document you are writing, so the model can tell homophones, proper nouns and pronouns apart. When on, that text is sent to your configured LLM provider with the request; when off, nothing is read at all. Password fields, Secure Input, password managers and terminals are never read. macOS only.',
+        'Send nearby document text with polish requests (macOS only). This switch is separate from local vocabulary learning. Password fields and known sensitive apps are excluded.',
     },
     codingConsole: {
       title: 'Claude Console',
@@ -1444,7 +1472,8 @@ export const en: typeof zhCN = {
       comboClear: 'Clear',
       comboConflict: 'This shortcut combination is not available',
       shortcutSaveFailed: 'Failed to save shortcut',
-      mouseSideHint: 'Mouse4 / Mouse5 side buttons are supported as global dictation hotkeys on Windows',
+      mouseSideHint:
+        'Mouse4 / Mouse5 side buttons are supported as global dictation hotkeys on Windows',
       allowNonTsfFallbackLabel: 'Allow non-TSF fallback',
       allowNonTsfFallbackDesc:
         'Windows: when TSF insertion fails, use paced Unicode SendInput; if that still fails, copy the text to the clipboard.',
@@ -2278,6 +2307,8 @@ export const en: typeof zhCN = {
     autoSaveHint: 'Changes save automatically',
     backToAdvanced: 'Back to Experiments & extensions',
     advancedPages: {
+      vocabularyLearning:
+        'Learn from manual corrections after dictation; configure observation, confirmation time and phrase length.',
       lessComputer: 'Choose an agent and configure its model, permissions, and working directory.',
       claudeConsole: 'Detect Claude Code and view output from test tasks.',
       multimodal: 'Manage the experimental multimodal recognition switch.',
@@ -2303,7 +2334,7 @@ export const en: typeof zhCN = {
         'ASR LLM API channel model cloud local offline network proxy marketplace multimodal pipeline Omni',
       appearance: 'theme dark light language font text size layout heatmap',
       privacy: 'permission microphone accessibility history recording storage privacy export',
-      advanced: 'Less Computer Claude Agent debug logs experiment',
+      advanced: 'Less Computer Claude Agent debug logs experiment vocabulary learning',
       about: 'version Beta stable update upgrade',
     },
 

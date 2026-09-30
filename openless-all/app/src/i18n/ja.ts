@@ -823,6 +823,13 @@ export const ja: typeof zhCN = {
       clear: '結果を消去',
     },
   },
+  vocabLearning: {
+    open: '単語を覚える',
+    label: '覚えたい正しい単語を入力',
+    confirm: '確認して辞書に追加',
+    saved: '保存しました。辞書で管理できます。',
+    failed: '保存できませんでした：{{error}}',
+  },
   vocabCard: {
     title: 'この語を覚えますか？',
     accept: '覚える',
@@ -861,7 +868,7 @@ export const ja: typeof zhCN = {
     editTitle: '単語を編集',
     editSave: '保存',
     editEmpty: '単語を入力してください。',
-    filter: { all: 'すべて', auto: '自動追加', manual: '手動追加' },
+    filter: { all: 'すべて', auto: '確認して追加', manual: '手動追加' },
     searchPlaceholder: '検索',
     searchEmpty: '一致する単語がありません。',
     newWord: '新語',
@@ -871,7 +878,7 @@ export const ja: typeof zhCN = {
     newWordTemplates: 'プリセットテンプレート',
     newWordTemplateCount: '{{count}} 語',
     newWordAddSelected: '選択を追加',
-    learnedSection: '自動収集（{{count}}）',
+    learnedSection: '確認して追加（{{count}}）',
     removeAllLearned: 'すべて削除',
     corrections: {
       title: '補正ルール',
@@ -1231,12 +1238,31 @@ export const ja: typeof zhCN = {
       useSystemProxyDesc:
         'オンにするとリクエストはシステムプロキシを経由します。オフにするとすべて直接接続します（国内サービスの遅延が低くなる傾向）。GitHub ログインやアップデートなど海外サービスには接続できない場合があります。リアルタイム音声ストリームと Less Computer は影響を受けません。',
     },
+    vocabularyLearning: {
+      title: '修正から単語を学習',
+      enabled: '修正からの学習を有効にする',
+      observationSeconds: '監視時間',
+      observationSecondsHint: '音声入力後、現在の入力欄を監視する最大時間（10～60 秒）。',
+      suggestionSeconds: '候補の表示時間',
+      suggestionSecondsHint: '未確認の候補は 5～60 秒後に消え、辞書には追加されません。',
+      maxPhraseChars: '最大文字数',
+      maxPhraseCharsHint:
+        '自動候補の元の語と置換後の語を 2～32 文字に制限します。手動追加には影響しません。',
+      seconds: '{{count}} 秒',
+      characters: '{{count}} 文字',
+      changeHint:
+        '設定を変更すると現在の監視を終了し、未確認の候補を消去します。次の音声入力から適用されます。リセットしても有効化スイッチは変わりません。',
+      reset: '設定値をリセット',
+      saveError: '保存できませんでした。再試行してください。',
+      description:
+        '挿入後、入力欄の修正を端末内で最大60秒間検出し、確認後に辞書へ追加します。検出した文章はモデルに送信しません。パスワード欄と既知の機密アプリは除外します。Windows・Androidではエディターによって対応が異なり、Androidはユーザー補助が必要です。オフにすると検出を停止します。',
+    },
     dataStorage: {
       title: 'データ保存',
       desc: 'この端末に保存される会話履歴とコンテキスト。',
       cursorContextLabel: 'カーソル文脈（実験的）',
       cursorContextDesc:
-        '推敲時に、いま書いている文書のカーソル周辺の原文を読み取り、同音語・固有名詞・代名詞の書き分けをモデルが判断できるようにします。オンにすると、そのテキストがリクエストとともに設定中の LLM プロバイダへ送信されます。オフのときは一文字も読み取りません。パスワード入力欄、Secure Input、パスワード管理アプリ、ターミナルは常に読み取りません。macOS のみ。',
+        '推敲時にカーソル付近の文章をモデルへ送信します（macOSのみ）。端末内の単語学習とは独立した設定です。パスワード欄と既知の機密アプリは除外します。',
     },
     codingConsole: {
       title: 'Claude コンソール',
@@ -1434,7 +1460,8 @@ export const ja: typeof zhCN = {
       comboClear: 'クリア',
       comboConflict: 'このショートカットの組み合わせは使用できません',
       shortcutSaveFailed: 'ショートカットの保存に失敗しました',
-      mouseSideHint: 'マウスサイドボタン Mouse4 / Mouse5 は Windows でグローバルなディクテーションホットキーとして使えます',
+      mouseSideHint:
+        'マウスサイドボタン Mouse4 / Mouse5 は Windows でグローバルなディクテーションホットキーとして使えます',
       allowNonTsfFallbackLabel: '非 TSF フォールバックを許可',
       allowNonTsfFallbackDesc:
         'Windows：TSF 入力が失敗した時は分割した Unicode SendInput を使い、それも失敗した場合はクリップボードへコピーします。',
@@ -2249,6 +2276,8 @@ export const ja: typeof zhCN = {
     autoSaveHint: '変更は自動保存されます',
     backToAdvanced: '実験と拡張に戻る',
     advancedPages: {
+      vocabularyLearning:
+        '音声入力後の手動修正から学習し、監視時間・確認時間・文字数を設定します。',
       lessComputer: 'Agent を選び、モデル・権限・作業ディレクトリを設定します。',
       claudeConsole: 'Claude Code を検出し、テストタスクの実行出力を確認します。',
       multimodal: '実験的なマルチモーダル認識の有効・無効を設定します。',
@@ -2272,7 +2301,8 @@ export const ja: typeof zhCN = {
         'ASR LLM API チャンネル モデル クラウド ローカル ネットワーク プロキシ マーケット マルチモーダル 認識パイプライン Omni',
       appearance: 'テーマ ダーク ライト 言語 フォント 文字 サイズ レイアウト ヒートマップ',
       privacy: '権限 マイク アクセシビリティ 履歴 録音 保存 プライバシー エクスポート',
-      advanced: 'Less Computer Claude Agent デバッグ ログ 実験',
+      advanced:
+        'Less Computer Claude Agent マルチモーダル Omni デバッグ ログ 実験 修正から単語を学習 vocabulary learning',
       about: 'バージョン Beta 安定 更新 アップデート',
     },
 
