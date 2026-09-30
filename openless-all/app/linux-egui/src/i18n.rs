@@ -1635,14 +1635,14 @@ pub const CATALOG: &[Msg] = &[
         key: "vocab.kicker",
         text: row("词典", "VOCABULARY", "DICTIONARY", "辞書", "사전"),
     },
-    Msg {
+        Msg {
         key: "vocab.learned_section",
         text: row(
-            "自动收集（{}）",
-            "自動收集（{}）",
-            "Auto-collected ({})",
-            "自動収集（{}）",
-            "자동 수집 ({})",
+            "确认收集（{}）",
+            "確認收集（{}）",
+            "Confirmed ({})",
+            "確認して追加（{}）",
+            "확인 후 수집 ({})",
         ),
     },
         Msg {
@@ -2263,12 +2263,12 @@ pub const CATALOG: &[Msg] = &[
             "단축키 및 선택",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.hint",
         text: row(
-            "选中文字后按同一快捷键：关闭语音编辑时直接润色；开启后口述指令，说完再选择「提问」或「编辑选区」。",
+            "有选区时按同一快捷键：关闭语音编辑则润色；开启后口述指令，可提问或编辑选区。无选区但光标在文本框时：可「帮我写」成稿或提问。",
             "選中文字後按同一快捷鍵：關閉語音編輯時直接潤色；開啟後口述指令，說完再選擇「提問」或「編輯選區」。",
-            "Select text, then use one shortcut: polish when voice edit is off; hold and speak when voice edit is on, then choose Ask or Edit.",
+            "With a selection, one shortcut polishes (voice edit off) or takes a spoken instruction to ask or edit. With no selection but focus in a text field, speak to Help me write a draft or ask a question.",
             "テキスト選択後、同じショートカットで：音声編集オフ時は推敲、オン時は押しながら話してから「質問」か「編集」を選択。",
             "텍스트 선택 후 같은 단축키: 음성 편집 끄면 바로 다듬기, 켜면 누른 채 말한 뒤 「질문」 또는 「편집」 선택.",
         ),
@@ -2359,9 +2359,9 @@ pub const CATALOG: &[Msg] = &[
         key: "vocab.filter_all",
         text: row("所有", "所有", "All", "すべて", "전체"),
     },
-    Msg {
+        Msg {
         key: "vocab.filter_auto",
-        text: row("自动添加", "自動新增", "Auto-Added", "自動追加", "자동 추가"),
+        text: row("确认收集", "確認收集", "Confirmed", "確認して追加", "확인 후 수집"),
     },
     Msg {
         key: "vocab.filter_manual",
@@ -3986,14 +3986,14 @@ pub const CATALOG: &[Msg] = &[
             "현재 버전, 업데이트 채널 및 자동 업데이트 설정을 확인합니다.",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.descriptions.advanced",
         text: row(
-            "按需配置 Less Computer、多模态与调试功能。",
-            "按需設定 Less Computer、多模態與除錯功能。",
-            "Configure Less Computer, multimodal processing and debugging as needed.",
-            "必要に応じて Less Computer、マルチモーダル処理、デバッグを設定します。",
-            "필요에 따라 Less Computer, 멀티모달 처리 및 디버깅을 설정합니다.",
+            "按需配置 Less Computer 与调试功能。",
+            "按需設定 Less Computer 與除錯功能。",
+            "Configure Less Computer and debugging as needed.",
+            "必要に応じて Less Computer とデバッグを設定します。",
+            "필요에 따라 Less Computer와 디버깅을 설정합니다.",
         ),
     },
     Msg {
