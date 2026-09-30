@@ -12,9 +12,7 @@ test.afterEach(async ({ page }) => {
   expect(errors.get(page)).toEqual([]);
 });
 
-test('settings entrance paints its starting pose and progresses across frames', async ({
-  page,
-}) => {
+test('settings entrance paints its starting pose and progresses over time', async ({ page }) => {
   await page.evaluate(() => {
     const probe = window as Window & {
       settingsEntranceFrames: { opacity: number; y: number; scale: number }[];
@@ -32,7 +30,8 @@ test('settings entrance paints its starting pose and progresses across frames', 
           y: transform.m42,
           scale: transform.m11,
         });
-        if (probe.settingsEntranceFrames.length < 8) requestAnimationFrame(sample);
+        // Observe the natural clock after the first paint without requiring a fixed frame rate.
+        if (probe.settingsEntranceFrames.length < 8) window.setTimeout(sample, 16);
       };
       requestAnimationFrame(sample);
     });
