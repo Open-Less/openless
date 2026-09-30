@@ -12,6 +12,62 @@ test.afterEach(async ({ page }) => {
   expect(errors.get(page)).toEqual([]);
 });
 
+test('settings entrance paints its starting pose and progresses across frames', async ({
+  page,
+}) => {
+  await page.evaluate(() => {
+    const probe = window as Window & {
+      settingsEntranceFrames: { opacity: number; y: number; scale: number }[];
+    };
+    probe.settingsEntranceFrames = [];
+    const observer = new MutationObserver(() => {
+      const panel = document.querySelector<HTMLElement>('.ol-settings-surface');
+      if (!panel) return;
+      observer.disconnect();
+      const sample = () => {
+        const style = getComputedStyle(panel);
+        const transform = new DOMMatrixReadOnly(style.transform);
+        probe.settingsEntranceFrames.push({
+          opacity: Number(style.opacity),
+          y: transform.m42,
+          scale: transform.m11,
+        });
+        if (probe.settingsEntranceFrames.length < 8) requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    });
+    observer.observe(document.body, { subtree: true, childList: true });
+  });
+  await page.getByRole('button', { name: '设置', exact: true }).press('Enter');
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as Window & { settingsEntranceFrames: unknown[] }).settingsEntranceFrames.length,
+      ),
+    )
+    .toBe(8);
+  const frames = await page.evaluate(
+    () =>
+      (
+        window as Window & {
+          settingsEntranceFrames: { opacity: number; y: number; scale: number }[];
+        }
+      ).settingsEntranceFrames,
+  );
+  expect(frames[0].opacity).toBeLessThan(0.1);
+  expect(frames[0].y).toBeGreaterThan(16);
+  expect(frames[0].scale).toBeLessThan(0.97);
+  expect(frames.some((frame) => frame.opacity > 0.1 && frame.opacity < 0.9)).toBe(true);
+  expect(new Set(frames.map((frame) => frame.opacity)).size).toBeGreaterThan(3);
+  await expect(dialog).toHaveCSS('opacity', '1');
+  await expect(dialog).toHaveCSS('transform', 'none');
+  await expect
+    .poll(() => dialog.evaluate((element) => (element as HTMLElement).style.willChange))
+    .toBe('');
+});
+
 test('rapid return to the current page cannot leave it transparent or inert', async ({ page }) => {
   for (let attempt = 0; attempt < 3; attempt++) {
     await page.getByRole('button', { name: '历史', exact: true }).press('Enter');
@@ -36,10 +92,14 @@ test('closing during entry preserves the painted opacity and releases the dialog
     const observer = new MutationObserver(() => {
       const panel = document.querySelector<HTMLElement>('.ol-settings-surface');
       const animation = panel?.getAnimations().find((entry) => entry.id === 'ol-surface-enter');
-      if (panel && animation && !panel.dataset.testEntryOpacity) {
-        animation.pause();
-        animation.currentTime = 72;
-        panel.dataset.testEntryOpacity = getComputedStyle(panel).opacity;
+      if (panel && animation && !panel.dataset.testEntryPending) {
+        panel.dataset.testEntryPending = 'true';
+        // Pin after the dialog's first-frame startup callback has resumed the entrance.
+        requestAnimationFrame(() => {
+          animation.pause();
+          animation.currentTime = 72;
+          panel.dataset.testEntryOpacity = getComputedStyle(panel).opacity;
+        });
       }
       const exit = panel?.getAnimations().find((entry) => entry.id === 'ol-surface-exit');
       if (exit) {

@@ -2,6 +2,8 @@ import { useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject
 
 export const OVERLAY_EXIT_MS = 180;
 const ENTER_MS = 240;
+const SETTINGS_ENTER_MS = 360;
+const SETTINGS_BACKDROP_MS = 220;
 const CONTENT_MS = 160;
 const PAGE_EXIT_MS = 90;
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
@@ -35,9 +37,16 @@ function currentFrame(element: HTMLElement): Frame {
   return { opacity: style.opacity, transform: style.transform };
 }
 
-function animate(element: HTMLElement, from: Frame, to: Frame, duration: number, exiting: boolean) {
+function animate(
+  element: HTMLElement,
+  from: Frame,
+  to: Frame,
+  duration: number,
+  exiting: boolean,
+  easingToken = exiting ? '--ol-motion-exit' : '--ol-motion-spring',
+) {
   const style = getComputedStyle(element);
-  const easing = style.getPropertyValue(exiting ? '--ol-motion-exit' : '--ol-motion-spring').trim();
+  const easing = style.getPropertyValue(easingToken).trim();
   const previousWillChange = element.style.willChange;
   element.style.willChange = 'opacity, transform';
   const animation = element.animate([from, to], {
@@ -68,6 +77,7 @@ export function useOverlayMotion(
   closing: boolean,
   variant: 'card' | 'backdrop' | 'sheet' | 'drawer' = 'card',
   enabled = true,
+  entrance: 'default' | 'settings' = 'default',
 ) {
   const reduced = useReducedMotion();
   const interrupted = useRef<{ element: HTMLElement; frame: Frame } | null>(null);
@@ -77,6 +87,7 @@ export function useOverlayMotion(
       interrupted.current = null;
       return;
     }
+    const settingsEntrance = entrance === 'settings';
     const hidden =
       variant === 'backdrop'
         ? FADED
@@ -87,7 +98,9 @@ export function useOverlayMotion(
                 ? 'translate3d(12px, 0, 0)'
                 : variant === 'sheet'
                   ? 'translate3d(0, 16px, 0)'
-                  : 'translate3d(0, 8px, 0) scale(0.985)',
+                  : settingsEntrance
+                    ? 'translate3d(0, 20px, 0) scale(0.96)'
+                    : 'translate3d(0, 8px, 0) scale(0.985)',
           };
     const from =
       interrupted.current?.element === element
@@ -100,10 +113,28 @@ export function useOverlayMotion(
       element,
       from,
       closing ? hidden : VISIBLE,
-      closing ? OVERLAY_EXIT_MS : variant === 'backdrop' ? CONTENT_MS : ENTER_MS,
+      closing
+        ? OVERLAY_EXIT_MS
+        : settingsEntrance
+          ? variant === 'backdrop'
+            ? SETTINGS_BACKDROP_MS
+            : SETTINGS_ENTER_MS
+          : variant === 'backdrop'
+            ? CONTENT_MS
+            : ENTER_MS,
       closing,
+      closing ? '--ol-motion-exit' : settingsEntrance ? '--ol-motion-soft' : '--ol-motion-spring',
     );
     let cancelled = false;
+    let entryFrame: number | undefined;
+    if (settingsEntrance && !closing) {
+      // Paint the mounted dialog at its starting pose before advancing the entrance clock.
+      motion.animation.pause();
+      motion.animation.currentTime = 0;
+      entryFrame = window.requestAnimationFrame(() => {
+        if (!cancelled) motion.animation.play();
+      });
+    }
     void motion.animation.finished
       .then(() => {
         if (cancelled) return;
@@ -113,10 +144,11 @@ export function useOverlayMotion(
       .catch(() => {});
     return () => {
       cancelled = true;
+      if (entryFrame !== undefined) window.cancelAnimationFrame(entryFrame);
       interrupted.current = { element, frame: currentFrame(element) };
       motion.cancel();
     };
-  }, [ref, closing, variant, enabled, reduced]);
+  }, [ref, closing, variant, enabled, entrance, reduced]);
 }
 
 /** Reveal replaced content once; a dialog's first content shares its parent's entrance. */

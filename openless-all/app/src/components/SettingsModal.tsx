@@ -70,8 +70,8 @@ export function SettingsModal({
   const savedToast = useSavedToastListener();
   const surfaceRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
-  useOverlayMotion(overlayRef, closing, 'backdrop', !mobile);
-  useOverlayMotion(surfaceRef, closing, mobile ? 'sheet' : 'card');
+  useOverlayMotion(overlayRef, closing, 'backdrop', !mobile, 'settings');
+  useOverlayMotion(surfaceRef, closing, mobile ? 'sheet' : 'card', true, 'settings');
   const scrollRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
