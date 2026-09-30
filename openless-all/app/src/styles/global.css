@@ -808,7 +808,18 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 }
 
 .ol-service-pipeline-mode {
-  padding: 4px 0 12px;
+  padding: 4px 0;
+}
+
+.ol-services-page {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.ol-service-pipeline-row {
+  padding-top: 4px !important;
+  padding-bottom: 4px !important;
 }
 
 .ol-service-pipeline-hint {
@@ -852,26 +863,30 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   top: 0;
   z-index: 2;
   background: var(--ol-settings-content-bg);
-  display: flex;
-  gap: 6px;
+  display: grid;
+  gap: 4px;
   flex-shrink: 0;
-  overflow-x: auto;
+  min-width: 0;
   border-bottom: 1px solid var(--ol-line);
   margin-bottom: 4px;
 }
 
 .ol-service-views > button {
-  flex-shrink: 0;
-  display: inline-flex;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 12px 14px;
+  justify-content: flex-start;
+  gap: 5px;
+  padding: 10px 4px;
+  min-height: 62px;
   border: 0;
   border-bottom: 2px solid transparent;
   background: transparent;
   font: inherit;
   font-size: 13px;
   font-weight: 500;
+  line-height: 1.35;
   color: var(--ol-ink-3);
   cursor: pointer;
   transition:
@@ -879,7 +894,16 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
     border-color 140ms var(--ol-motion-quick);
 }
 
-/* 必配服务（语言模型/语音识别）tab 上的状态点：未启用红、已有启用渠道绿。 */
+.ol-service-view-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Active required services show whether an enabled channel is configured. */
 .ol-service-status-dot {
   width: 7px;
   height: 7px;
@@ -916,11 +940,12 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 .ol-service-inactive-tag {
   color: var(--ol-warn);
   background: var(--ol-warn-soft);
-  padding: 2px 6px;
+  padding: 2px 4px;
   border-radius: 4px;
   font-size: 10px;
   font-weight: 500;
-  white-space: nowrap;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .ol-service-content {
@@ -934,6 +959,60 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   font-size: 12px;
   line-height: 1.6;
   color: var(--ol-ink-3);
+}
+
+.ol-omni-primary-fields,
+.ol-omni-advanced-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 20px;
+}
+.ol-omni-primary-fields .ol-channel-form-row,
+.ol-omni-advanced-fields .ol-channel-form-row {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+}
+.ol-omni-primary-fields .ol-channel-form-row > label,
+.ol-omni-advanced-fields .ol-channel-form-row > label {
+  padding-top: 0;
+}
+.ol-omni-settings .ol-channel-form-row {
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+.ol-omni-tools {
+  border-top: 1px solid var(--ol-line);
+  margin-top: 10px;
+  padding-top: 10px;
+}
+.ol-omni-tools-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ol-omni-tools-hint {
+  margin: 8px 0 0;
+  color: var(--ol-ink-3);
+  font-size: 11px;
+  line-height: 1.5;
+}
+@media (max-width: 720px) {
+  .ol-service-views {
+    gap: 2px;
+  }
+  .ol-service-views > button {
+    font-size: 11px;
+    padding-inline: 2px;
+  }
+  .ol-service-inactive-tag {
+    font-size: 8px;
+  }
+  .ol-omni-primary-fields,
+  .ol-omni-advanced-fields {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
 }
 
 .ol-settings-surface[data-ol-mobile='true'] {

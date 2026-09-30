@@ -33,6 +33,20 @@ use anyhow::{Context, Result};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+#[cfg(any(target_os = "macos", test))]
+mod macos_vault;
+
+#[cfg(target_os = "macos")]
+mod macos_keychain;
+
+#[cfg(target_os = "macos")]
+static MACOS_SINGLE_ITEM_VAULT: OnceLock<Mutex<macos_vault::SingleItemVault>> = OnceLock::new();
+
+#[cfg(target_os = "macos")]
+fn macos_single_item_vault() -> &'static Mutex<macos_vault::SingleItemVault> {
+    MACOS_SINGLE_ITEM_VAULT.get_or_init(|| Mutex::new(Default::default()))
+}
+
 pub use openless_core::{ChannelKind, ChannelSummary, ChannelTestSummary};
 
 // `anyhow!` is only invoked from the keyring (non-Android) code paths; gating the
@@ -235,7 +249,7 @@ fn validate_sync_key(value: &openless_core::SecretValue) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "macos")))]
 fn read_sync_secret_raw(
     account: &openless_core::credentials::SyncSecretAccount,
 ) -> Result<Option<openless_core::SecretValue>> {
@@ -248,7 +262,7 @@ fn read_sync_secret_raw(
         .transpose()
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "macos")))]
 fn write_sync_secret_raw(
     account: &openless_core::credentials::SyncSecretAccount,
     value: &openless_core::SecretValue,
@@ -256,12 +270,80 @@ fn write_sync_secret_raw(
     set_keyring_password(account.as_str(), value.expose_secret())
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "macos")))]
 fn remove_sync_secret_raw(account: &openless_core::credentials::SyncSecretAccount) -> Result<()> {
+    remove_sync_secret_native(account)
+}
+
+#[cfg(not(target_os = "android"))]
+fn remove_sync_secret_native(
+    account: &openless_core::credentials::SyncSecretAccount,
+) -> Result<()> {
     match keyring_entry_for(account.as_str())?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(_) => anyhow::bail!("could not remove encrypted sync key from system credential store"),
     }
+}
+
+#[cfg(target_os = "macos")]
+fn read_sync_secret_raw(
+    account: &openless_core::credentials::SyncSecretAccount,
+) -> Result<Option<openless_core::SecretValue>> {
+    macos_single_item_vault().lock().read_sync_secret(
+        account,
+        &mut get_keyring_password_native,
+        &mut set_keyring_password_native,
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn write_sync_secret_raw(
+    account: &openless_core::credentials::SyncSecretAccount,
+    value: &openless_core::SecretValue,
+) -> Result<()> {
+    macos_single_item_vault().lock().write_sync_secret(
+        account,
+        value,
+        bootstrap_macos_credentials,
+        &mut get_keyring_password_native,
+        &mut set_keyring_password_native,
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn remove_sync_secret_raw(account: &openless_core::credentials::SyncSecretAccount) -> Result<()> {
+    macos_single_item_vault().lock().remove_sync_secret(
+        account,
+        &mut get_keyring_password_native,
+        &mut set_keyring_password_native,
+        |_| remove_sync_secret_native(account),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn bootstrap_macos_credentials() -> Result<String> {
+    // A first local-key write must preserve complete legacy credentials and never
+    // publish an empty v2 item over an unreadable older source. No channel backfill.
+    let root = load_desktop_credentials_readonly_with(
+        get_keyring_password_native,
+        || {
+            let path = credentials_path()?;
+            match std::fs::read(path) {
+                Ok(bytes) => {
+                    let bytes = zeroize::Zeroizing::new(bytes);
+                    decode_single_credentials(
+                        std::str::from_utf8(&bytes)
+                            .context("invalid legacy credential encoding")?,
+                    )
+                    .map(Some)
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(_) => anyhow::bail!("could not read legacy credential source"),
+            }
+        },
+        false,
+    )?;
+    serde_json::to_string(&root).context("encode macOS credential envelope")
 }
 
 #[cfg(any(target_os = "android", test))]
@@ -1898,6 +1980,34 @@ const KEYRING_READ_RETRY_BACKOFF_MS: u64 = 60;
 
 #[cfg(not(target_os = "android"))]
 fn get_keyring_password(account: &str) -> Result<Option<String>> {
+    #[cfg(target_os = "macos")]
+    if account == KEYRING_SINGLE_CREDENTIALS_ACCOUNT {
+        return macos_single_item_vault()
+            .lock()
+            .read_credentials(&mut get_keyring_password_native);
+    }
+    get_keyring_password_native(account)
+}
+
+#[cfg(not(target_os = "android"))]
+fn get_keyring_password_native(account: &str) -> Result<Option<String>> {
+    #[cfg(target_os = "macos")]
+    log::info!(
+        "[vault-access] macOS native read kind={}",
+        if account == KEYRING_SINGLE_CREDENTIALS_ACCOUNT {
+            "credentials"
+        } else if account.starts_with("cloud-sync.e2ee.local.") {
+            "legacy-local-sync-key"
+        } else if account.starts_with("cloud-sync.e2ee.key.") {
+            "legacy-remembered-sync-key"
+        } else {
+            "legacy-credentials"
+        }
+    );
+    #[cfg(target_os = "macos")]
+    if account == KEYRING_SINGLE_CREDENTIALS_ACCOUNT {
+        return macos_keychain::read_primary();
+    }
     #[cfg(target_os = "windows")]
     {
         let mut attempt = 0usize;
@@ -1977,6 +2087,23 @@ fn log_vault_source_once(source: &str) {
 
 #[cfg(not(target_os = "android"))]
 fn set_keyring_password(account: &str, value: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    if account == KEYRING_SINGLE_CREDENTIALS_ACCOUNT {
+        return macos_single_item_vault().lock().write_credentials(
+            value,
+            &mut get_keyring_password_native,
+            &mut set_keyring_password_native,
+        );
+    }
+    set_keyring_password_native(account, value)
+}
+
+#[cfg(not(target_os = "android"))]
+fn set_keyring_password_native(account: &str, value: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    if account == KEYRING_SINGLE_CREDENTIALS_ACCOUNT {
+        return macos_keychain::write_primary(value);
+    }
     keyring_entry_for(account)?
         .set_password(value)
         .with_context(|| format!("write system credential vault {account}"))

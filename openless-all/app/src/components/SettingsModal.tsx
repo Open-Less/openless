@@ -616,7 +616,9 @@ export function SettingsModal({
                       overflow: 'auto',
                       padding: mobile
                         ? '0 16px calc(20px + env(safe-area-inset-bottom, 0px))'
-                        : '0 28px 28px',
+                        : section === 'services'
+                          ? '0 28px 6px'
+                          : '0 28px 28px',
                     }}
                   >
                     {searching && (

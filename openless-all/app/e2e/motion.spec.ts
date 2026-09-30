@@ -160,3 +160,48 @@ test('changing reduced motion stops the decorative WebGL loop', async ({ page })
     before,
   );
 });
+
+test('multimodal settings fit one desktop page and keep inactive notices below labels', async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  await dialog.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
+  await dialog.getByRole('button', { name: '多模态模式', exact: true }).click();
+  const card = dialog.locator('.ol-omni-settings');
+  await expect(card.getByLabel('额外 Headers', { exact: true })).toBeVisible();
+  for (const viewport of [
+    { width: 1300, height: 835 },
+    { width: 1280, height: 720 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const bounds = await card.evaluate((element) => {
+      const scroll = element.closest('.ol-thinscroll')!;
+      const navigation = document.querySelector('.ol-service-views')!;
+      return {
+        verticalOverflow: scroll.scrollHeight - scroll.clientHeight,
+        horizontalOverflow: navigation.scrollWidth - navigation.clientWidth,
+        entries: navigation.children.length,
+        badgesBelowLabels: [...navigation.querySelectorAll('.ol-service-inactive-tag')].every(
+          (badge) =>
+            badge.getBoundingClientRect().top >=
+            badge.previousElementSibling!.getBoundingClientRect().bottom,
+        ),
+      };
+    });
+    expect(bounds.verticalOverflow).toBeLessThanOrEqual(1);
+    expect(bounds.horizontalOverflow).toBeLessThanOrEqual(1);
+    expect(bounds.entries).toBe(5);
+    expect(bounds.badgesBelowLabels).toBe(true);
+    await expect(card.getByRole('button', { name: '验证', exact: true })).toBeInViewport({
+      ratio: 1,
+    });
+  }
+  await dialog.getByRole('combobox', { name: '供应商', exact: true }).click();
+  await page.getByRole('option', { name: '阿里云百炼 Omni', exact: true }).click();
+  await expect(card.getByLabel('额外 Headers', { exact: true })).toHaveCount(0);
+  await expect(card.getByRole('button', { name: '验证', exact: true })).toBeInViewport({
+    ratio: 1,
+  });
+});

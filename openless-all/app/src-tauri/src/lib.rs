@@ -631,6 +631,8 @@ macro_rules! app_invoke_handler_mobile {
 
 #[cfg(not(mobile))]
 fn run_desktop() {
+    // Credential authorization can precede Tauri setup. Keep its diagnostics visible.
+    init_file_logger();
     let foundry_local_runtime = Arc::new(asr::local::FoundryLocalRuntime::new());
     let sherpa_onnx_runtime = Arc::new(asr::local::SherpaOnnxRuntime::new());
     #[cfg(target_os = "windows")]
@@ -706,7 +708,6 @@ fn run_desktop() {
         .manage(commands::TrayMicrophoneMenuState::new(Vec::new()))
         .manage(TrayMicrophoneDeviceCache(parking_lot::Mutex::new(Vec::new())))
         .setup(move |app| {
-            init_file_logger();
             log::info!("=== OpenLess 启动 ===");
 
             // Position the capsule at the bottom-center of the screen and hide it at

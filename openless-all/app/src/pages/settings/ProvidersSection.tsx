@@ -1314,6 +1314,7 @@ function ProviderTools({
   modelsUrl,
   showFetchModels = true,
   disabled = false,
+  compact = false,
 }: {
   kind: 'llm' | 'asr' | 'omni';
   modelAccount: string;
@@ -1324,6 +1325,7 @@ function ProviderTools({
   modelsUrl?: string;
   showFetchModels?: boolean;
   disabled?: boolean;
+  compact?: boolean;
 }) {
   const { t } = useTranslation();
   const mounted = useRef(true);
@@ -1459,6 +1461,56 @@ function ProviderTools({
       <span>{message}</span>
     </div>
   );
+
+  if (compact) {
+    return (
+      <section className="ol-omni-tools" aria-label={t('settings.channels.validationTitle')}>
+        <div className="ol-omni-tools-actions">
+          {showFetchModels && (
+            <button
+              className="ol-channel-fetch-models"
+              type="button"
+              onClick={modelsUrl ? () => void openExternal(modelsUrl) : loadModels}
+              style={miniBtnStyle}
+              disabled={disabled || status === 'loading'}
+            >
+              <Icon name={modelsUrl ? 'external' : 'refresh'} size={14} />
+              {modelsUrl
+                ? t('settings.providers.viewModels')
+                : status === 'loading' && operation === 'models'
+                  ? t('settings.providers.loadingModels')
+                  : t('settings.providers.fetchModels')}
+            </button>
+          )}
+          {!modelsUrl && models.length > 0 && (
+            <SelectLite
+              value={selectedModel}
+              onChange={applyModel}
+              disabled={disabled || status === 'loading'}
+              options={models.map((model) => ({ value: model, label: model }))}
+              placeholder={t('settings.providers.selectModel')}
+              ariaLabel={t('settings.providers.selectModel')}
+              style={{ flex: 1, minWidth: 140, maxWidth: '100%', height: 34 }}
+            />
+          )}
+          <button
+            className="ol-channel-verify"
+            type="button"
+            onClick={validate}
+            style={{ ...miniBtnStyle, color: 'var(--ol-blue)', borderColor: 'var(--ol-blue)' }}
+            disabled={disabled || status === 'loading'}
+          >
+            <Icon name="play" size={13} />
+            {status === 'loading' && operation === 'validate'
+              ? t('settings.channels.verifying')
+              : t('settings.channels.verify')}
+          </button>
+        </div>
+        <p className="ol-omni-tools-hint">{t('settings.channels.validationHintOmni')}</p>
+        {resultMessage}
+      </section>
+    );
+  }
 
   return (
     <>
@@ -2015,12 +2067,9 @@ const iconBtnStyle: CSSProperties = {
     'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), transform 0.12s var(--ol-motion-quick)',
 };
 
-/** Shows the independent Omni configuration, including while the traditional mode is active. */
+/** Compact configuration for the active multimodal pipeline. */
 export function OmniChannelSection() {
   const { t } = useTranslation();
-  const baseLayoutStack = useLayoutStack();
-  const conservative = useConservativeLayout();
-  const layoutStack = conservative || baseLayoutStack;
   const { prefs, updatePrefs } = useHotkeySettings();
   const [descriptors, setDescriptors] = useState<ProviderDescriptor[]>([]);
   const [omniProvider, setOmniProvider] = useState('custom');
@@ -2101,22 +2150,31 @@ export function OmniChannelSection() {
   const omniPreset = omniPresets.find((p) => p.id === committedOmniProvider);
 
   return (
-    <Card>
-      <div style={{ marginBottom: 10 }}>
+    <Card className="ol-omni-settings" padding={16}>
+      <div style={{ marginBottom: 4 }}>
         <SectionTitle>{t('settings.providers.omniTitle')}</SectionTitle>
       </div>
-      <SettingRow label={t('settings.providers.providerLabel')}>
-        <SelectLite
-          value={omniProvider}
-          onChange={(next) => onOmniProviderChange(next)}
-          options={omniPresets.map((p) => ({
-            value: p.id,
-            label: t(`settings.providers.presets.${p.nameKey}`),
-          }))}
-          ariaLabel={t('settings.providers.providerLabel')}
-          style={{ ...inputStyle, width: '100%', maxWidth: layoutStack ? '100%' : 200 }}
+      <div className="ol-omni-primary-fields">
+        <ChannelFormRow label={t('settings.providers.providerLabel')}>
+          <SelectLite
+            value={omniProvider}
+            onChange={(next) => onOmniProviderChange(next)}
+            options={omniPresets.map((p) => ({
+              value: p.id,
+              label: t(`settings.providers.presets.${p.nameKey}`),
+            }))}
+            ariaLabel={t('settings.providers.providerLabel')}
+            style={{ ...inputStyle, width: '100%', maxWidth: '100%', height: 38 }}
+          />
+        </ChannelFormRow>
+        <CredentialField
+          key={`${committedOmniProvider}:model:${omniModelRevision}`}
+          label={t('settings.providers.modelLabel')}
+          account="omni.model"
+          placeholder={omniPreset?.modelPlaceholder || 'model-name'}
+          mono
         />
-      </SettingRow>
+      </div>
       <CredentialField
         key={`${committedOmniProvider}:api_key`}
         label={t('settings.providers.apiKeyLabel')}
@@ -2131,7 +2189,7 @@ export function OmniChannelSection() {
         placeholder={omniPreset?.baseUrl || 'https://your-endpoint/v1'}
       />
       {committedOmniProvider === 'custom' && (
-        <>
+        <div className="ol-omni-advanced-fields">
           <CredentialField
             key="omni:temperature"
             label={t('settings.providers.temperatureLabel')}
@@ -2147,20 +2205,14 @@ export function OmniChannelSection() {
             mono
             mask
           />
-        </>
+        </div>
       )}
-      <CredentialField
-        key={`${committedOmniProvider}:model:${omniModelRevision}`}
-        label={t('settings.providers.modelLabel')}
-        account="omni.model"
-        placeholder={omniPreset?.modelPlaceholder || 'model-name'}
-        mono
-      />
       <ProviderTools
         key={`omni:${committedOmniProvider}`}
         kind="omni"
         modelAccount="omni.model"
         onModelSelected={() => setOmniModelRevision((v) => v + 1)}
+        compact
       />
     </Card>
   );

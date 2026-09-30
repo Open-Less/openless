@@ -1,6 +1,6 @@
 [package]
 name = "openless"
-version = "2.0.0-Beta.4+build.20260929"
+version = "2.0.0-Beta.4+build.20260930"
 license = "AGPL-3.0-only"
 description = "OpenLess — local voice input that types where your cursor is"
 authors = ["OpenLess"]
@@ -124,6 +124,7 @@ ndk-context = "0.1"
 tao = "0.35"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "=3.7.0"
 block2 = "0.5"
 core-foundation = "0.10"
 tokenizers = "0.21"

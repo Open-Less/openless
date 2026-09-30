@@ -92,10 +92,11 @@ interface SettingRowProps {
   desc?: string;
   children: ReactNode;
   controlWidth?: number | string;
+  className?: string;
 }
 
 // A setting's purpose and consequences read directly; touch and keyboard users don't depend on hover.
-export function SettingRow({ label, desc, children, controlWidth }: SettingRowProps) {
+export function SettingRow({ label, desc, children, controlWidth, className }: SettingRowProps) {
   const mobile = useMobileLayout();
   const readable = useReadableLayout();
   const conservative = useConservativeLayout();
@@ -108,6 +109,7 @@ export function SettingRow({ label, desc, children, controlWidth }: SettingRowPr
   };
   return (
     <div
+      className={className}
       style={{
         display: 'grid',
         gridTemplateColumns: stackLayout ? 'minmax(0, 1fr)' : 'minmax(0, 200px) minmax(0, 1fr)',

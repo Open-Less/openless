@@ -168,112 +168,118 @@ export function ServicesTab() {
 
   return (
     <>
-      <div className="ol-service-pipeline-mode">
-        <SettingRow
-          label={t('settings.providers.pipelineModeLabel')}
-          desc={t('settings.providers.pipelineModeHint')}
-        >
-          <div
-            role="group"
-            aria-label={t('settings.providers.pipelineModeLabel')}
-            style={segmentedTrackStyle}
+      <div className="ol-services-page">
+        <div className="ol-service-pipeline-mode">
+          <SettingRow
+            className="ol-service-pipeline-row"
+            label={t('settings.providers.pipelineModeLabel')}
+            desc={t('settings.providers.pipelineModeHint')}
           >
-            {(['traditional', 'multimodal'] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                disabled={!prefs}
-                aria-pressed={(multimodal ? 'multimodal' : 'traditional') === mode}
-                onClick={() => setPipelineMode(mode)}
-                className="ol-service-pipeline-option"
-              >
-                {t(
-                  `settings.providers.pipelineMode${mode === 'traditional' ? 'Traditional' : 'Multimodal'}`,
-                )}
-              </button>
-            ))}
-          </div>
-        </SettingRow>
-        <p className="ol-service-pipeline-hint">
-          {t('settings.providers.pipelineIsolationNotice')}
-        </p>
-      </div>
-      <div
-        role="group"
-        aria-label={t('modal.serviceViews.label')}
-        className="ol-service-views ol-thinscroll"
-      >
-        {views.map((id) => {
-          const inactive = isServiceViewInactive(id, multimodal);
-          const required = !inactive && (id === 'llm' || id === 'asr');
-          const configured =
-            id === 'llm' ? requiredConfigured.llm : id === 'asr' ? requiredConfigured.asr : false;
-          const label = t(`modal.serviceViews.${id}`);
-          const inactiveLabel = t('modal.serviceViews.inactive');
-          return (
-            <button
-              key={id}
-              type="button"
-              disabled={inactive}
-              aria-pressed={selectedView === id}
-              onClick={() => setView(id)}
-              aria-label={
-                inactive
-                  ? `${label}。${inactiveLabel}`
-                  : required
-                    ? `${label}。${t(
-                        configured
-                          ? 'modal.serviceViews.statusConfigured'
-                          : 'modal.serviceViews.statusMissing',
-                      )}`
-                    : label
-              }
-              title={
-                inactive
-                  ? inactiveLabel
-                  : required
-                    ? t(
-                        configured
-                          ? 'modal.serviceViews.statusConfigured'
-                          : 'modal.serviceViews.statusMissing',
-                      )
-                    : undefined
-              }
+            <div
+              role="group"
+              aria-label={t('settings.providers.pipelineModeLabel')}
+              style={segmentedTrackStyle}
             >
-              {required && (
-                <span
-                  aria-hidden
-                  className="ol-service-status-dot"
-                  data-state={configured ? 'ok' : 'missing'}
-                />
-              )}
-              {label}
-              {inactive && <span className="ol-service-inactive-tag">{inactiveLabel}</span>}
-            </button>
-          );
-        })}
-      </div>
-      <div key={selectedView} ref={contentRef} className="ol-service-content">
-        {/* The LocalModelPicker inside the channel editor jumps to this view through this context. */}
-        <LocalModelsNavContext.Provider
-          value={showLocalModel && !multimodal ? () => setView('models') : null}
-        >
-          {selectedView === 'llm' && <ProvidersSection kind="llm" />}
-          {selectedView === 'asr' && <ProvidersSection kind="asr" />}
-          {selectedView === 'omni' && <OmniChannelSection />}
-          {selectedView === 'models' && <LocalModelsSection />}
-          {selectedView === 'connections' && (
-            <>
-              <NetworkSection />
-              <MarketplaceSection />
-            </>
-          )}
-        </LocalModelsNavContext.Provider>
-        {(selectedView === 'llm' || selectedView === 'asr') && (
-          <p className="ol-service-storage-note">
-            {t('settings.providers.credentialStorageNotice')}
+              {(['traditional', 'multimodal'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  disabled={!prefs}
+                  aria-pressed={(multimodal ? 'multimodal' : 'traditional') === mode}
+                  onClick={() => setPipelineMode(mode)}
+                  className="ol-service-pipeline-option"
+                >
+                  {t(
+                    `settings.providers.pipelineMode${mode === 'traditional' ? 'Traditional' : 'Multimodal'}`,
+                  )}
+                </button>
+              ))}
+            </div>
+          </SettingRow>
+          <p className="ol-service-pipeline-hint">
+            {t('settings.providers.pipelineIsolationNotice')}
           </p>
-        )}
+        </div>
+        <div
+          role="group"
+          aria-label={t('modal.serviceViews.label')}
+          className="ol-service-views"
+          style={{ gridTemplateColumns: `repeat(${views.length}, minmax(0, 1fr))` }}
+        >
+          {views.map((id) => {
+            const inactive = isServiceViewInactive(id, multimodal);
+            const required = !inactive && (id === 'llm' || id === 'asr');
+            const configured =
+              id === 'llm' ? requiredConfigured.llm : id === 'asr' ? requiredConfigured.asr : false;
+            const label = t(`modal.serviceViews.${id}`);
+            const inactiveLabel = t('modal.serviceViews.inactive');
+            return (
+              <button
+                key={id}
+                type="button"
+                disabled={inactive}
+                aria-pressed={selectedView === id}
+                onClick={() => setView(id)}
+                aria-label={
+                  inactive
+                    ? `${label}。${inactiveLabel}`
+                    : required
+                      ? `${label}。${t(
+                          configured
+                            ? 'modal.serviceViews.statusConfigured'
+                            : 'modal.serviceViews.statusMissing',
+                        )}`
+                      : label
+                }
+                title={
+                  inactive
+                    ? inactiveLabel
+                    : required
+                      ? t(
+                          configured
+                            ? 'modal.serviceViews.statusConfigured'
+                            : 'modal.serviceViews.statusMissing',
+                        )
+                      : undefined
+                }
+              >
+                <span className="ol-service-view-label">
+                  {required && (
+                    <span
+                      aria-hidden
+                      className="ol-service-status-dot"
+                      data-state={configured ? 'ok' : 'missing'}
+                    />
+                  )}
+                  <span>{label}</span>
+                </span>
+                {inactive && <span className="ol-service-inactive-tag">{inactiveLabel}</span>}
+              </button>
+            );
+          })}
+        </div>
+        <div key={selectedView} ref={contentRef} className="ol-service-content">
+          {/* The LocalModelPicker inside the channel editor jumps to this view through this context. */}
+          <LocalModelsNavContext.Provider
+            value={showLocalModel && !multimodal ? () => setView('models') : null}
+          >
+            {selectedView === 'llm' && <ProvidersSection kind="llm" />}
+            {selectedView === 'asr' && <ProvidersSection kind="asr" />}
+            {selectedView === 'omni' && <OmniChannelSection />}
+            {selectedView === 'models' && <LocalModelsSection />}
+            {selectedView === 'connections' && (
+              <>
+                <NetworkSection />
+                <MarketplaceSection />
+              </>
+            )}
+          </LocalModelsNavContext.Provider>
+          {(selectedView === 'llm' || selectedView === 'asr') && (
+            <p className="ol-service-storage-note">
+              {t('settings.providers.credentialStorageNotice')}
+            </p>
+          )}
+        </div>
       </div>
     </>
   );
