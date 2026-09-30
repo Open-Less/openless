@@ -900,6 +900,124 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 常驻内存（Linux）。用来把「现场 21 小时 5.8 GB」变成一条能自己复现的断言：
+    /// 只断言语义（槽位里只有一份）是不够的，得看真实 RSS。
+    fn rss_bytes() -> usize {
+        let statm = std::fs::read_to_string("/proc/self/statm").expect("read statm");
+        let pages: usize = statm
+            .split_whitespace()
+            .nth(1)
+            .expect("resident field")
+            .parse()
+            .expect("resident pages");
+        pages * 4096
+    }
+
+    #[test]
+    fn an_undrained_window_survives_hours_of_keepalive_snapshots() {
+        // 现场（21 小时 5.8 GB）：窗口被遮挡时 eframe 完全跳过 egui pass
+        // （`if !show_ui`），`ui()` 一次都不跑，也就没有任何东西排空队列；而宿主每 2
+        // 秒发一份保活快照。旧代码把快照放进无界通道 —— 21 小时≈3.7 万份全堆在内存里，
+        // 窗口恢复可见后还要逐份消化，表现为卡死。
+        //
+        // 这里用**裸 socket 当宿主**，绕过宿主侧的合并槽（那是修复的另一半），单独验证
+        // 客户端这一半：连发 1000 份 32 KiB 快照、一份都不取，断言 RSS 不跟着份数涨。
+        // 旧代码在这条测试里会先撞上 8 MiB 的线。
+        const SNAPSHOTS: u64 = 1000;
+        const PAYLOAD_BYTES: usize = 32 * 1024;
+        const GROWTH_LIMIT: usize = 8 * 1024 * 1024;
+        let dir = temp_dir("keepalive-pressure");
+        let path = ui_socket_path(&dir);
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let mut client = UiBridgeClient::connect(&path).unwrap();
+        let (mut stream, _) = listener.accept().unwrap();
+        write_frame(
+            &mut stream,
+            &HostToWindow::Ready {
+                version: UI_BRIDGE_VERSION,
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            wait_for(|| client.try_recv().ok()),
+            HostToWindow::Ready { .. }
+        ));
+        let template = FrontendViewModel {
+            active_page: Page::History,
+            history_query: "x".repeat(PAYLOAD_BYTES),
+            ..Default::default()
+        };
+        // 先发一份热的，再取基线。
+        write_frame(
+            &mut stream,
+            &HostToWindow::Snapshot {
+                sequence: 1,
+                view_model: Box::new(template.clone()),
+            },
+        )
+        .unwrap();
+        // 不等 `take_snapshot`：旧代码里快照根本不进槽位，先等它只会以超时失败，
+        // 把真正的内存堆积掩盖过去。
+        std::thread::sleep(Duration::from_millis(150));
+        let baseline = rss_bytes();
+        let snapshot = |stream: &mut std::os::unix::net::UnixStream, sequence: u64| {
+            write_frame(
+                stream,
+                &HostToWindow::Snapshot {
+                    sequence,
+                    view_model: Box::new(template.clone()),
+                },
+            )
+            .unwrap();
+        };
+        for sequence in 2..=SNAPSHOTS {
+            snapshot(&mut stream, sequence);
+            if sequence % 100 == 0 {
+                let growth = rss_bytes().saturating_sub(baseline);
+                assert!(
+                    growth < GROWTH_LIMIT,
+                    "undrained snapshots must not pile up: {sequence} sent, RSS grew {} MiB",
+                    growth / (1024 * 1024)
+                );
+            }
+        }
+        // 不排空任何队列，只等最新那份可用；等待期间继续量内存。
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let sequence = loop {
+            if let Some((sequence, _)) = client.take_snapshot() {
+                if sequence == SNAPSHOTS {
+                    break sequence;
+                }
+            }
+            let growth = rss_bytes().saturating_sub(baseline);
+            assert!(
+                growth < GROWTH_LIMIT,
+                "undrained snapshots must not pile up: RSS grew {} MiB before the newest arrived",
+                growth / (1024 * 1024)
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the newest snapshot never arrived"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(sequence, SNAPSHOTS);
+        let growth = rss_bytes().saturating_sub(baseline);
+        assert!(
+            growth < GROWTH_LIMIT,
+            "RSS grew {} MiB over {SNAPSHOTS} keepalive snapshots",
+            growth / (1024 * 1024)
+        );
+        assert!(client.take_snapshot().is_none());
+        assert!(
+            matches!(client.try_recv(), Err(TryRecvError::Empty)),
+            "snapshots must never queue in the unbounded channel"
+        );
+        drop(stream);
+        client.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_dead_bridge_socket_is_replaced_on_bind() {
         let dir = temp_dir("stale");
