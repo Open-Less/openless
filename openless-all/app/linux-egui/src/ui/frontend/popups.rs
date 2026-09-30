@@ -14,7 +14,7 @@
 
 use eframe::egui;
 
-use super::{icons, layout, siri_gl, theme};
+use super::{capsule_motion, icons, layout, siri_wgpu, theme};
 use openless_linux_egui::{
     fmt_l10n, tr_l10n, CapsulePopupState, Lang, LessComputerPopupState, PopupChatMessage,
     QaPolishState, QaPopupState,
@@ -62,6 +62,90 @@ pub enum CapsuleAction {
     Cancel,
     /// ✓ → the host stops the dictation and inserts.
     Confirm,
+    /// 「要记住这个词吗？」卡片上点了「记住」（Tauri `acceptPendingCorrection`）。
+    AcceptSuggestion(String),
+    /// 卡片上点了「不用」（Tauri `rejectPendingCorrection`）。
+    RejectSuggestion(String),
+}
+
+/// 「要记住这个词吗？」卡片的尺寸，与 Tauri `VocabSuggestionCard` 一致：
+/// 宽 320、标题区 72、每行 36（`VOCAB_CARD_*`）。
+const CARD_WIDTH: f32 = 320.0;
+const CARD_CHROME: f32 = 72.0;
+const CARD_ROW: f32 = 36.0;
+/// 卡片到窗口边缘的留白（Tauri `VOCAB_CARD_EDGE_MARGIN`）。
+const CARD_EDGE: f32 = 12.0;
+/// 行数多到装不下时标题区至少留这么高，剩下的分给行 —— Tauri 会改窗口大小，我们这个
+/// 舞台是固定的 460×180，所以宁可压行高，也不让最后一行露在窗外。
+const CARD_CHROME_MIN: f32 = 44.0;
+const CARD_BUTTON: f32 = 28.0;
+/// 标题占的高度（画的时候用固定值，几何才能是纯函数、测试才点得中按钮）。
+const CARD_TITLE_BLOCK: f32 = 24.0;
+
+/// 卡片几何：一列行 + 每行右侧「不用 / 记住」两颗圆钮。
+pub(crate) struct VocabCardLayout {
+    pub card: egui::Rect,
+    pub rows: Vec<VocabCardRow>,
+}
+
+pub(crate) struct VocabCardRow {
+    pub text: egui::Rect,
+    pub accept: egui::Rect,
+    pub reject: egui::Rect,
+}
+
+/// 按 Tauri `VocabSuggestionCard` 的尺寸算卡片几何。
+///
+/// 与 Tauri 的唯一差别：Tauri 会把窗口改成卡片大小（320 × 72+36n）并挪到屏幕右下角，
+/// 我们的胶囊舞台是固定的 460×180，所以行数多时压缩行高，并把卡片靠右放。
+pub(crate) fn vocab_card_layout(stage: egui::Rect, rows: usize) -> VocabCardLayout {
+    let count = rows.max(1) as f32;
+    let max_height = (stage.height() - 2.0 * CARD_EDGE).max(CARD_CHROME_MIN);
+    let mut row_height = CARD_ROW;
+    let mut height = CARD_CHROME + CARD_ROW * count;
+    if height > max_height {
+        row_height = ((max_height - CARD_CHROME_MIN) / count).max(18.0);
+        height = (CARD_CHROME_MIN + row_height * count).min(max_height);
+    }
+    let width = CARD_WIDTH.min(stage.width() - 2.0 * CARD_EDGE).max(1.0);
+    let card = egui::Rect::from_min_size(
+        egui::pos2(
+            stage.right() - CARD_EDGE - width,
+            stage.bottom() - CARD_EDGE - height,
+        ),
+        egui::vec2(width, height),
+    );
+    let inner = card.shrink(12.0);
+    let top = inner.top() + CARD_TITLE_BLOCK;
+    let row_height = row_height.min(((inner.bottom() - top) / count).max(1.0));
+    // 行被压缩时按钮必须跟着缩：Core 允许一张卡 5 条，硬塞 28px 圆钮会让相邻两行叠在一起。
+    let button = CARD_BUTTON.min((row_height - 2.0).max(14.0));
+    let rows = (0..rows)
+        .map(|index| {
+            let row = egui::Rect::from_min_size(
+                egui::pos2(inner.left(), top + row_height * index as f32),
+                egui::vec2(inner.width(), row_height),
+            );
+            // 两颗 28 宽圆钮 + 8 间距（Tauri 的 `CardButton` 就是胶囊确认/取消那一对）。
+            let accept = egui::Rect::from_center_size(
+                egui::pos2(row.right() - button / 2.0, row.center().y),
+                egui::vec2(button, button),
+            );
+            let reject = egui::Rect::from_center_size(
+                egui::pos2(accept.left() - 8.0 - button / 2.0, row.center().y),
+                egui::vec2(button, button),
+            );
+            VocabCardRow {
+                text: egui::Rect::from_min_max(
+                    row.min,
+                    egui::pos2(reject.left() - 8.0, row.bottom()),
+                ),
+                accept,
+                reject,
+            }
+        })
+        .collect();
+    VocabCardLayout { card, rows }
 }
 
 /// Tauri `selection-polish-preview` 面板的边距（`padding: 18`）。
@@ -78,10 +162,14 @@ const PILL_HEIGHT: f32 = 42.0;
 const ROUND_BUTTON: f32 = 28.0;
 /// Tauri `getCapsuleHostMetrics(.., 'classic').bottomInset`。
 const CAPSULE_BOTTOM_INSET: f32 = 16.0;
-/// Typeless 胶囊（Tauri `CapsuleStyles.css`：176×64、46×46 圆形按钮、11 根波形）。
-const TYPELESS_WIDTH: f32 = 176.0;
-const TYPELESS_HEIGHT: f32 = 64.0;
-const TYPELESS_BUTTON: f32 = 46.0;
+/// Linux egui 让 Typeless 复用 OpenLess 经典药丸的可见 footprint，避免录音、thinking、
+/// 完成和错误状态之间发生尺寸跳变；颜色、11 根波形和状态按钮仍保留 Typeless 风格。
+const TYPELESS_SCALE: f32 = 1.0;
+const TYPELESS_WIDTH: f32 = PILL_WIDTH;
+const TYPELESS_HEIGHT: f32 = PILL_HEIGHT;
+const TYPELESS_BUTTON: f32 = ROUND_BUTTON;
+const TYPELESS_STOP_BUTTON: f32 = 24.0;
+const TYPELESS_TEXT_SIZE: f32 = 16.0;
 /// `.ol-typeless-*` 调色板。
 const TYPELESS_BG: egui::Color32 = egui::Color32::from_rgb(0x18, 0x18, 0x1b);
 const TYPELESS_BORDER: egui::Color32 = egui::Color32::from_rgb(0x52, 0x52, 0x5b);
@@ -532,22 +620,22 @@ pub fn selection_ask(
                         } else {
                             color_to_f32(theme::INK)
                         };
-                        let drive = siri_gl::SiriDrive {
+                        let drive = siri_wgpu::SiriDrive {
                             level: 0.0,
                             resolved: if recording { 1.0 } else { 0.0 },
                             // 思考态转得更快，和 Tauri 的 state→speed 语义一致。
                             speed: if recording { 1.0 } else { 1.45 },
-                            warming: false,
+                            ..Default::default()
                         };
                         let dt = ui.input(|input| input.stable_dt);
-                        let clock = siri_gl::tick(ui.ctx(), "qa-composer-ring", drive, dt);
-                        let glow = siri_gl::SiriGlow::ring(
+                        let clock = siri_wgpu::tick(ui.ctx(), "qa-composer-ring", drive, dt);
+                        let effect = siri_wgpu::SiriEffect::ring(
                             clock.time,
                             12.0,
                             if recording { 2.0 } else { 1.6 },
                         )
                         .with_tint(tint);
-                        if !siri_gl::paint(ui, rect.expand(3.0), glow) {
+                        if !siri_wgpu::paint(ui, rect.expand(3.0), effect) {
                             spinner_ring(ui, rect, if recording { theme::ERR } else { theme::INK });
                         }
                     }
@@ -978,7 +1066,7 @@ fn rounded_rect_points(rect: egui::Rect, radius: f32, segments: usize) -> Vec<eg
 }
 
 /// egui color → the shader's `uTint` (linear 0..1, gamma-space value is fine
-/// here because the glow is additive on a translucent window).
+/// here because the effect is additive on a translucent window).
 fn color_to_f32(color: egui::Color32) -> [f32; 3] {
     [
         f32::from(color.r()) / 255.0,
@@ -1001,16 +1089,14 @@ fn hairline(ui: &mut egui::Ui, color: egui::Color32) {
 
 /// 药丸上方的「正在翻译」徽章（Tauri `ClassicCapsule` 的 `capsule.translating`）：
 /// 蓝点 + 蓝字、圆角胶囊、`--ol-capsule-badge-bg` 底、`--ol-capsule-badge-border` 边。
-fn translating_badge(ui: &mut egui::Ui, pill: egui::Rect, lang: Lang) {
+fn translating_badge(ui: &mut egui::Ui, pill: egui::Rect, lang: Lang, scale: f32) {
     let label = tr_l10n(lang, "capsule.translating");
-    let text_width = layout::text_width(ui, label, 10.5);
-    let width = text_width + 5.0 + 5.0 + 20.0;
-    let height = 19.0;
+    let text_width = layout::text_width(ui, label, 10.5 * scale);
+    let width = text_width + (5.0 + 5.0 + 20.0) * scale;
+    let height = 19.0 * scale;
+    let gap = CAPSULE_BADGE_GAP * scale;
     let rect = egui::Rect::from_center_size(
-        egui::pos2(
-            pill.center().x,
-            pill.top() - CAPSULE_BADGE_GAP - height / 2.0,
-        ),
+        egui::pos2(pill.center().x, pill.top() - gap - height / 2.0),
         egui::vec2(width, height),
     );
     let painter = ui.painter();
@@ -1025,25 +1111,38 @@ fn translating_badge(ui: &mut egui::Ui, pill: egui::Rect, lang: Lang) {
         egui::Stroke::new(0.5, theme::CAPSULE_BADGE_BORDER),
         egui::StrokeKind::Inside,
     );
-    let dot = egui::pos2(rect.left() + 10.0, rect.center().y);
-    painter.circle_filled(dot, 2.5, theme::BLUE);
+    let dot = egui::pos2(rect.left() + 10.0 * scale, rect.center().y);
+    painter.circle_filled(dot, 2.5 * scale, theme::BLUE);
     painter.text(
-        egui::pos2(dot.x + 5.0 + 2.5, rect.center().y),
+        egui::pos2(dot.x + (5.0 + 2.5) * scale, rect.center().y),
         egui::Align2::LEFT_CENTER,
         label,
-        egui::FontId::proportional(10.5),
+        egui::FontId::proportional(10.5 * scale),
         theme::BLUE,
     );
 }
 
 /// 录音胶囊：经典药丸（Tauri `ClassicPill`）—— 左 ✕、中间状态、右 ✓。
+///
+/// `warmup_ms` 是学出来的「预备 → 就绪」平均耗时，驱动光条的预测式展开（Tauri `warmupMs`
+/// prop；那边存在 localStorage，这边由宿主量、存在 UI 状态文档里）。
 pub fn dictation_capsule(
     root_ui: &mut egui::Ui,
     state: &CapsulePopupState,
     lang: Lang,
+    warmup_ms: f32,
 ) -> CapsuleAction {
     let mut action = CapsuleAction::None;
     let phase = state.phase.to_ascii_lowercase();
+    // 「要记住这个词吗？」卡片与录音胶囊共用一个窗口：有候选时整窗只画这张卡。
+    if !state.suggestions.is_empty() {
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE)
+            .show(root_ui, |ui| {
+                action = capsule_suggestion_card(ui, state, lang);
+            });
+        return action;
+    }
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
         .show(root_ui, |ui| {
@@ -1082,20 +1181,13 @@ pub fn dictation_capsule(
             );
             let _ = ui.allocate_rect(rect, egui::Sense::hover());
             if state.translation_active {
-                translating_badge(ui, rect, lang);
+                translating_badge(ui, rect, lang, if typeless { TYPELESS_SCALE } else { 1.0 });
             }
-            // Tauri 的经典药丸只有「1px 中性描边」+「随音量轻微放大」两件事
-            // （Capsule.tsx 的 ClassicPill：border 1px var(--ol-capsule-pill-border)、
-            // transform scale(1 + ambient * 0.018)），**没有**任何外圈扫光/描边颜色变化。
-            // 所以这里不再把录音相位画成红圈（那是本仓自己加的，用户报「有一个红边」）；
-            // 运动感只保留药丸中心的音量波形。
-            let ambient = if phase == "recording" {
-                state.audio_level.unwrap_or(0.0).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            let pill =
-                egui::Rect::from_center_size(rect.center(), rect.size() * (1.0 + ambient * 0.018));
+            // The capsule footprint is invariant across recording, thinking and
+            // terminal frames. The old volume scale made the pill visibly jump
+            // smaller when thinking ended, just before the hide deadline.
+            // Motion belongs to the centre effect, never to the host geometry.
+            let pill = rect;
             if !siri {
                 ui.painter().rect_filled(
                     pill,
@@ -1105,14 +1197,75 @@ pub fn dictation_capsule(
                 ui.painter().rect_stroke(
                     pill,
                     egui::CornerRadius::same((pill_height / 2.0) as u8),
-                    egui::Stroke::new(1.0, pill_border),
+                    egui::Stroke::new(if typeless { 0.5 } else { 1.0 }, pill_border),
                     egui::StrokeKind::Inside,
                 );
             }
-            // Siri is a clean, transparent listening indicator. The cancel /
-            // confirm affordances belong to the classic and Typeless capsules.
+            let processing = matches!(
+                phase.as_str(),
+                "starting" | "transcribing" | "polishing" | "inserting"
+            );
+            // 终态：光点做「六点合回一颗圆」的收尾，转速回落 1.0（Tauri `VoiceOrbStage`
+            // 的 `merging` / `speed`）。
+            let terminal = matches!(
+                phase.as_str(),
+                "completed" | "done" | "inserted" | "cancelled" | "failed" | "error"
+            );
+            // 相位时序（扫光周期、wave 淡出）与「新会话复位」：Tauri 那边靠 CSS / 组件
+            // 重新挂载，egui 没这两样，节奏都在 `capsule_motion` 里算并有单测。
+            let now = ui.input(|input| input.time);
+            let motion_id = egui::Id::new("openless-capsule-motion");
+            let mut motion = ui.ctx().data_mut(|data| {
+                data.get_temp::<capsule_motion::CapsuleMotion>(motion_id)
+                    .unwrap_or_default()
+            });
+            let new_session = motion.update(&phase, now);
+            let wave_opacity = motion.wave_opacity(now);
+            let shine_cycle = motion.shine_cycle_seconds(now);
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(motion_id, motion));
+            if new_session {
+                // 两个窗口进程都常驻：新会话必须显式复位，否则上一轮的光条是展开的、
+                // 圆点环也已经散开了，入场动画就没了（Tauri 每次重新挂载天然是新的）。
+                siri_wgpu::reset(ui.ctx(), "capsule-siri-wave");
+                siri_wgpu::reset(ui.ctx(), "capsule-siri-orb");
+            }
+            // Siri is a clean, transparent listening indicator. Classic keeps
+            // both actions visible; Typeless follows Tauri and shows the two
+            // large actions only while recording, then only its small stop
+            // action while processing.
             let center = if siri {
-                rect.shrink(3.0)
+                // Siri is a full 460×180 light stage, not a wave squeezed
+                // inside the classic 176×42 pill. All phases share this host.
+                available
+            } else if typeless && phase != "recording" {
+                if processing {
+                    let stop_rect = egui::Rect::from_center_size(
+                        egui::pos2(
+                            rect.right() - 7.0 - TYPELESS_STOP_BUTTON / 2.0,
+                            rect.center().y,
+                        ),
+                        egui::vec2(TYPELESS_STOP_BUTTON, TYPELESS_STOP_BUTTON),
+                    );
+                    let stop = ui.interact(
+                        stop_rect,
+                        ui.id().with("openless-typeless-stop"),
+                        egui::Sense::click(),
+                    );
+                    round_button(
+                        ui,
+                        stop_rect,
+                        icons::IconName::Close,
+                        stop.hovered(),
+                        TYPELESS_BUTTON_BG,
+                        TYPELESS_INK,
+                        (0.0, 13.0 * TYPELESS_SCALE),
+                    );
+                    if stop.clicked() {
+                        action = CapsuleAction::Cancel;
+                    }
+                }
+                rect.shrink(4.0)
             } else {
                 let inset = if typeless { 7.0 } else { 8.0 };
                 let cancel_rect = egui::Rect::from_center_size(
@@ -1136,6 +1289,14 @@ pub fn dictation_capsule(
                     cancel.hovered(),
                     cancel_fill,
                     pill_ink,
+                    (
+                        if typeless { 0.0 } else { 0.8 },
+                        if typeless {
+                            24.0 * TYPELESS_SCALE
+                        } else {
+                            13.0
+                        },
+                    ),
                 );
                 if cancel.clicked() {
                     action = CapsuleAction::Cancel;
@@ -1161,6 +1322,14 @@ pub fn dictation_capsule(
                     confirm.hovered(),
                     confirm_fill,
                     confirm_ink,
+                    (
+                        if typeless { 0.0 } else { 0.8 },
+                        if typeless {
+                            24.0 * TYPELESS_SCALE
+                        } else {
+                            13.0
+                        },
+                    ),
                 );
                 if confirm.clicked() {
                     action = CapsuleAction::Confirm;
@@ -1170,27 +1339,25 @@ pub fn dictation_capsule(
                     egui::pos2(confirm_rect.left() - 4.0, rect.bottom() - 4.0),
                 )
             };
-            let processing = matches!(
-                phase.as_str(),
-                "starting" | "transcribing" | "polishing" | "inserting"
-            );
             if phase == "recording" {
-                // Siri capsules are a transparent overlay. Draw the spectral
-                // ribbons with egui primitives so they work on the Vulkan path
-                // too (the legacy GL shader callback is unavailable there).
-                let drive = siri_gl::SiriDrive {
+                // Siri capsules are transparent overlays. Queue the spectral
+                // ribbon through the shared WGPU callback used by both eframe
+                // windows and the native layer-shell surface.
+                let drive = siri_wgpu::SiriDrive {
                     level: state.audio_level.unwrap_or_default(),
                     resolved: 1.0,
                     speed: 1.0,
                     warming: state.audio_level.is_none(),
+                    warmup_ms,
+                    merging: false,
                 };
                 let dt = ui.input(|input| input.stable_dt);
-                let clock = siri_gl::tick(ui.ctx(), "capsule-siri-wave", drive, dt);
+                let clock = siri_wgpu::tick(ui.ctx(), "capsule-siri-wave", drive, dt);
                 if siri {
-                    let _ = siri_gl::paint(
+                    let _ = siri_wgpu::paint(
                         ui,
                         center,
-                        siri_gl::SiriGlow::wave(clock.time, clock.level),
+                        siri_wgpu::SiriEffect::wave(clock.time, clock.level),
                     );
                     ui.ctx()
                         .request_repaint_after(std::time::Duration::from_millis(16));
@@ -1203,70 +1370,338 @@ pub fn dictation_capsule(
                         pill_ink,
                     );
                 }
-            } else if processing {
-                // 思考中：Siri 流体圆点（orb），从 wave 收拢的光点化开成环。
-                let drive = siri_gl::SiriDrive {
-                    level: 0.0,
-                    resolved: 0.0,
-                    speed: 1.3,
-                    warming: false,
-                };
-                let dt = ui.input(|input| input.stable_dt);
-                let clock = siri_gl::tick(ui.ctx(), "capsule-siri-orb", drive, dt);
-                // 0.3s 全聚圆心接住 wave 收拢的光点，再缓缓散开成环。
-                let gather = (1.0 - (clock.time / 0.9).clamp(0.0, 1.0)).clamp(0.0, 1.0);
-                let glow = siri_gl::SiriGlow::orb(clock.time, gather);
-                if !use_gpu || !siri_gl::paint(ui, center, glow) {
+            } else {
+                // 思考态 / 终态：Siri 舞台画光点（终态是「六点合回一颗圆」的收尾），
+                // 经典 / typeless 只画文案。
+                if siri {
+                    // wave → orb 的交叉淡出：切态后 0.55s 内保持可见，再用 0.6s 淡出，
+                    // 期间波形继续向圆心收拢（Tauri `opacity .6s ease-out .55s`）。
+                    if let Some(opacity) = wave_opacity {
+                        let fade_drive = siri_wgpu::SiriDrive {
+                            level: state.audio_level.unwrap_or_default(),
+                            resolved: 0.0,
+                            speed: 1.0,
+                            warming: false,
+                            warmup_ms,
+                            merging: false,
+                        };
+                        let dt = ui.input(|input| input.stable_dt);
+                        let clock = siri_wgpu::tick(ui.ctx(), "capsule-siri-wave", fade_drive, dt);
+                        let _ = siri_wgpu::paint(
+                            ui,
+                            center,
+                            siri_wgpu::SiriEffect::wave(clock.time, clock.level)
+                                .with_opacity(opacity),
+                        );
+                    }
+                    if processing || terminal {
+                        // 思考中 1.5 速转；终态回落到 1.0 并让六点合并成中央一颗圆
+                        //（Tauri `VoiceOrbStage` 的 speed / merging）。
+                        let drive = siri_wgpu::SiriDrive {
+                            level: 0.0,
+                            resolved: 0.0,
+                            speed: if processing { 1.5 } else { 1.0 },
+                            warming: false,
+                            warmup_ms,
+                            merging: terminal,
+                        };
+                        let dt = ui.input(|input| input.stable_dt);
+                        // 聚拢度 / 出场 hold 由时钟算（Tauri `GATHER_HOLD_S` + `merging`）。
+                        let clock = siri_wgpu::tick(ui.ctx(), "capsule-siri-orb", drive, dt);
+                        let effect = siri_wgpu::SiriEffect::orb(clock.time, clock.gather);
+                        let _ = siri_wgpu::paint(ui, center, effect);
+                    }
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(16));
+                    // Siri 舞台只有出错时给文字（Tauri `VoiceOrbStage` —— 没有「思考中」
+                    // 文案，也没有「已插入 N 字」，反馈全靠光效）。
+                    if matches!(phase.as_str(), "failed" | "error") {
+                        paint_siri_error(ui, center, state, lang);
+                    }
+                } else if processing {
+                    // 经典 / typeless 的「思考中」：文案 + 扫光（Tauri `cap-shine`）。
+                    paint_thinking_label(
+                        ui,
+                        center,
+                        tr_l10n(lang, "capsule.thinking"),
+                        egui::FontId::proportional(if typeless {
+                            TYPELESS_TEXT_SIZE
+                        } else {
+                            17.0
+                        }),
+                        if typeless { TYPELESS_INK } else { theme::INK },
+                        shine_cycle,
+                        now,
+                    );
+                } else if state.text.is_empty() {
+                    let label = if processing {
+                        tr_l10n(lang, "capsule.thinking")
+                    } else if phase == "cancelled" {
+                        tr_l10n(lang, "capsule.cancelled")
+                    } else if phase == "failed" {
+                        tr_l10n(lang, "capsule.error")
+                    } else {
+                        tr_l10n(lang, "capsule.thinking")
+                    };
+                    let size = if typeless {
+                        TYPELESS_TEXT_SIZE
+                    } else if processing || matches!(phase.as_str(), "completed" | "done" | "idle")
+                    {
+                        // A terminal snapshot can briefly have no result text. Keep
+                        // its thinking placeholder at the processing size until the
+                        // popup is actually dismissed; never render a tiny final
+                        // "thinking" frame.
+                        17.0
+                    } else {
+                        11.0
+                    };
                     ui.painter().text(
                         center.center(),
                         egui::Align2::CENTER_CENTER,
-                        tr_l10n(lang, "capsule.thinking"),
-                        egui::FontId::proportional(17.0),
-                        theme::INK,
+                        label,
+                        egui::FontId::proportional(size),
+                        if phase == "failed" {
+                            theme::ERR
+                        } else if typeless {
+                            TYPELESS_INK
+                        } else {
+                            theme::INK
+                        },
+                    );
+                } else {
+                    // 11px/500 单行居中，超长省略（Tauri `getCapsuleMessageLayout`）。
+                    let galley = layout::text_galley(
+                        ui,
+                        &state.text,
+                        pill_ink,
+                        if typeless { TYPELESS_TEXT_SIZE } else { 11.0 },
+                        center.width().min(84.0),
+                        1,
+                    );
+                    ui.painter().galley(
+                        egui::pos2(
+                            center.center().x - galley.rect.width() / 2.0,
+                            center.center().y - galley.rect.height() / 2.0,
+                        ),
+                        galley,
+                        pill_ink,
                     );
                 }
-            } else if state.text.is_empty() {
-                let label = if processing {
-                    tr_l10n(lang, "capsule.thinking")
-                } else if phase == "cancelled" {
-                    tr_l10n(lang, "capsule.cancelled")
-                } else if phase == "failed" {
-                    tr_l10n(lang, "capsule.error")
-                } else {
-                    tr_l10n(lang, "capsule.thinking")
-                };
-                let size = if processing { 17.0 } else { 11.0 };
-                ui.painter().text(
-                    center.center(),
-                    egui::Align2::CENTER_CENTER,
-                    label,
-                    egui::FontId::proportional(size),
-                    if phase == "failed" {
-                        theme::ERR
-                    } else if typeless {
-                        TYPELESS_INK
-                    } else {
-                        theme::INK
-                    },
-                );
-            } else {
-                // 11px/500 单行居中，超长省略（Tauri `getCapsuleMessageLayout`）。
-                let galley =
-                    layout::text_galley(ui, &state.text, pill_ink, 11.0, center.width(), 1);
-                ui.painter().galley(
-                    egui::pos2(
-                        center.center().x - galley.rect.width() / 2.0,
-                        center.center().y - galley.rect.height() / 2.0,
-                    ),
-                    galley,
-                    pill_ink,
-                );
             }
         });
     action
 }
 
-/// 28×28 圆形按钮（Tauri `CircleButton`）。
+/// Siri 舞台的错误提示（Tauri `VoiceOrbStage` 的 `errorGlowTextStyle`）：底部居中的
+/// 红字药丸；文案优先用宿主给的 `message`（例如选区润色的「未选中内容」），缺省才是
+/// 通用的「出现错误」。
+pub fn paint_siri_error(ui: &egui::Ui, center: egui::Rect, state: &CapsulePopupState, lang: Lang) {
+    let text = if state.text.trim().is_empty() {
+        tr_l10n(lang, "capsule.error").to_string()
+    } else {
+        state.text.clone()
+    };
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = center.width().clamp(1.0, 400.0);
+    job.wrap.max_rows = 2;
+    job.append(
+        &text,
+        0.0,
+        egui::text::TextFormat {
+            font_id: theme::medium_font(12.0),
+            color: theme::ERR,
+            ..Default::default()
+        },
+    );
+    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+    let rect = egui::Rect::from_center_size(
+        egui::pos2(
+            center.center().x,
+            center.bottom() - 24.0 - galley.rect.height() / 2.0,
+        ),
+        galley.rect.size() + egui::vec2(24.0, 12.0),
+    );
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(12), theme::SURFACE_2);
+    ui.painter().rect_stroke(
+        rect,
+        egui::CornerRadius::same(12),
+        egui::Stroke::new(1.0, theme::LINE),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().galley(
+        egui::pos2(
+            rect.center().x - galley.rect.width() / 2.0,
+            rect.center().y - galley.rect.height() / 2.0,
+        ),
+        galley,
+        theme::ERR,
+    );
+}
+
+/// 经典药丸「思考中」文案 + 扫光（Tauri `cap-shine`）：把同一段文字在一条移动的高光带内
+/// 用蓝色重绘一遍。带子由窄到宽分三层（越宽越淡），扫过字面 —— 等价于 Tauri 用
+/// `background-clip: text` 做的高光；进入流式的头 2 秒走快周期，之后回落稳态。
+fn paint_thinking_label(
+    ui: &egui::Ui,
+    center: egui::Rect,
+    text: &str,
+    font: egui::FontId,
+    ink: egui::Color32,
+    cycle_seconds: f64,
+    now: f64,
+) {
+    let painter = ui.painter();
+    let galley = painter.layout_no_wrap(text.to_string(), font.clone(), ink);
+    let rect = egui::Rect::from_center_size(center.center(), galley.size());
+    painter.galley(rect.min, galley, ink);
+
+    let cycle = cycle_seconds.max(0.05);
+    let progress = ((now % cycle) / cycle).clamp(0.0, 1.0) as f32;
+    let span = (rect.width() * 0.5).max(8.0);
+    let band_left = rect.left() - span + progress * (rect.width() + span);
+    for (width, alpha) in [(span * 0.35, 235_u8), (span * 0.7, 130), (span, 60)] {
+        let band = egui::Rect::from_min_max(
+            egui::pos2(rect.left(), rect.top() - 2.0),
+            egui::pos2(rect.left() + width, rect.bottom() + 2.0),
+        )
+        .translate(egui::vec2(band_left - rect.left(), 0.0));
+        let clip = band.intersect(rect);
+        if clip.width() <= 0.0 {
+            continue;
+        }
+        let shine = egui::Color32::from_rgba_unmultiplied(
+            theme::BLUE.r(),
+            theme::BLUE.g(),
+            theme::BLUE.b(),
+            alpha,
+        );
+        let shine_galley = painter.layout_no_wrap(text.to_string(), font.clone(), shine);
+        painter
+            .with_clip_rect(clip)
+            .galley(rect.min, shine_galley, shine);
+    }
+}
+
+/// 圆形按钮（classic 为 28×28；Typeless 按 Tauri 的 zoom 比例缩放）。
+/// 确认式词库学习的确认入口（Tauri `VocabSuggestionCard`）。
+///
+/// 用户手改一个词之后 Core 把它攒成候选（`pending_corrections`）：「自动收集」在真机
+/// 上大约五条错四条，所以每一条都要人过一眼 —— 接受写进词库（词库页的「确认收集」
+/// 分段），拒绝只是丢掉，不留黑名单。
+fn capsule_suggestion_card(
+    ui: &mut egui::Ui,
+    state: &CapsulePopupState,
+    lang: Lang,
+) -> CapsuleAction {
+    let mut action = CapsuleAction::None;
+    let stage = ui.max_rect();
+    let layout = vocab_card_layout(stage, state.suggestions.len());
+    let card = layout.card;
+    let painter = ui.painter().with_clip_rect(card.intersect(stage));
+    painter.rect_filled(card, egui::CornerRadius::same(16), theme::SURFACE);
+    painter.rect_stroke(
+        card,
+        egui::CornerRadius::same(16),
+        egui::Stroke::new(1.0, theme::LINE),
+        egui::StrokeKind::Inside,
+    );
+    let inner = card.shrink(12.0);
+    let title = layout::text_galley(
+        ui,
+        tr_l10n(lang, "vocabCard.title"),
+        theme::INK_3,
+        11.0,
+        inner.width(),
+        1,
+    );
+    painter.galley(inner.min, title, theme::INK_3);
+    for (index, suggestion) in state.suggestions.iter().enumerate() {
+        let Some(row) = layout.rows.get(index) else {
+            break;
+        };
+        let text_rect = row.text;
+        let (reject_rect, accept_rect) = (row.reject, row.accept);
+        let mut job = egui::text::LayoutJob::default();
+        job.wrap.max_width = text_rect.width();
+        job.wrap.max_rows = 1;
+        let mono = egui::FontId::new(12.5, egui::FontFamily::Monospace);
+        // 改前（暗）→ 改后（亮）：一眼能看出这次手改把什么改成了什么。
+        job.append(
+            &suggestion.pattern,
+            0.0,
+            egui::text::TextFormat {
+                font_id: mono.clone(),
+                color: theme::INK_4,
+                ..Default::default()
+            },
+        );
+        job.append(
+            " \u{2192} ",
+            0.0,
+            egui::text::TextFormat {
+                font_id: mono.clone(),
+                color: theme::INK_4,
+                ..Default::default()
+            },
+        );
+        job.append(
+            &suggestion.replacement,
+            0.0,
+            egui::text::TextFormat {
+                font_id: mono,
+                color: theme::INK,
+                ..Default::default()
+            },
+        );
+        let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+        painter.with_clip_rect(text_rect).galley(
+            egui::pos2(
+                text_rect.left(),
+                text_rect.center().y - galley.rect.height() / 2.0,
+            ),
+            galley,
+            theme::INK,
+        );
+        let reject = ui.interact(
+            reject_rect,
+            ui.id().with(("openless-vocab-reject", index)),
+            egui::Sense::click(),
+        );
+        let icon = (reject_rect.width() * 0.46).clamp(9.0, 13.0);
+        round_button(
+            ui,
+            reject_rect,
+            icons::IconName::Close,
+            reject.hovered(),
+            theme::SURFACE_2,
+            theme::INK_2,
+            (0.8, icon),
+        );
+        if reject.clicked() {
+            action = CapsuleAction::RejectSuggestion(suggestion.id.clone());
+        }
+        let accept = ui.interact(
+            accept_rect,
+            ui.id().with(("openless-vocab-accept", index)),
+            egui::Sense::click(),
+        );
+        round_button(
+            ui,
+            accept_rect,
+            icons::IconName::Check,
+            accept.hovered(),
+            theme::BLUE_SOFT,
+            theme::BLUE,
+            (0.8, icon),
+        );
+        if accept.clicked() {
+            action = CapsuleAction::AcceptSuggestion(suggestion.id.clone());
+        }
+    }
+    action
+}
+
 fn round_button(
     ui: &egui::Ui,
     rect: egui::Rect,
@@ -1274,7 +1709,9 @@ fn round_button(
     hovered: bool,
     fill: egui::Color32,
     ink: egui::Color32,
+    button_metrics: (f32, f32),
 ) {
+    let (stroke_width, icon_size) = button_metrics;
     ui.painter().circle_filled(
         rect.center(),
         rect.width() / 2.0,
@@ -1287,9 +1724,9 @@ fn round_button(
     ui.painter().circle_stroke(
         rect.center(),
         rect.width() / 2.0,
-        egui::Stroke::new(0.8, theme::LINE),
+        egui::Stroke::new(stroke_width, theme::LINE),
     );
-    icons::draw_icon(ui, rect.center(), icon, ink);
+    icons::draw_icon_sized(ui, rect.center(), icon, ink, icon_size);
 }
 
 /// 音量条：Tauri `AudioBars`（5 根 3px 竖条，包络 0.55/0.85/1/0.85/0.55，
@@ -1305,9 +1742,14 @@ fn audio_bars(ui: &egui::Ui, rect: egui::Rect, level: f32, bar_count: usize, ink
     } else {
         &CLASSIC_ENVELOPE
     };
-    const BASE: f32 = 2.0;
+    let scale = if bar_count > CLASSIC_ENVELOPE.len() {
+        TYPELESS_SCALE
+    } else {
+        1.0
+    };
+    let base = 2.0 * scale;
     let max = if bar_count > CLASSIC_ENVELOPE.len() {
-        26.0
+        28.0 * scale
     } else {
         24.0
     };
@@ -1315,12 +1757,12 @@ fn audio_bars(ui: &egui::Ui, rect: egui::Rect, level: f32, bar_count: usize, ink
     let gated = ((voice - 0.012) / (0.34 - 0.012)).clamp(0.0, 1.0);
     let eased = gated * gated * (3.0 - 2.0 * gated);
     let visual = eased.powf(0.42);
-    let bar_width = 3.0;
-    let gap = 3.0;
+    let bar_width = 3.0 * scale;
+    let gap = 3.0 * scale;
     let total = envelope.len() as f32 * bar_width + (envelope.len() - 1) as f32 * gap;
     let mut x = rect.center().x - total / 2.0;
     for envelope in envelope {
-        let height = BASE + (max - BASE) * visual * envelope;
+        let height = base + (max - base) * visual * envelope;
         ui.painter().rect_filled(
             egui::Rect::from_center_size(
                 egui::pos2(x + bar_width / 2.0, rect.center().y),
@@ -1911,7 +2353,7 @@ mod tests {
     /// return everything it painted.
     fn run(size: egui::Vec2, mut render: impl FnMut(&mut egui::Ui) -> String) -> String {
         // Every popup test renders the same frontend as the GPU-state tests, so
-        // they share the process-global glow flags and must not run in parallel.
+        // they share the process-global effect flags and must not run in parallel.
         let ctx = egui::Context::default();
         let mut painted = String::new();
         for _ in 0..2 {
@@ -1928,6 +2370,145 @@ mod tests {
             painted = painted_text(&output);
         }
         painted
+    }
+
+    /// 渲染胶囊并把结果动作交出来；`click` 给一个坐标时会合成一次点击（按下+抬起
+    /// 同一帧，和真实点击等价）。
+    fn run_capsule(
+        state: &CapsulePopupState,
+        size: egui::Vec2,
+        click: Option<egui::Pos2>,
+    ) -> (CapsuleAction, String) {
+        let ctx = egui::Context::default();
+        let mut action = CapsuleAction::None;
+        let mut painted = String::new();
+        for frame in 0..2 {
+            let mut events = Vec::new();
+            if frame == 1 {
+                if let Some(pos) = click {
+                    for pressed in [true, false] {
+                        events.push(egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        });
+                    }
+                }
+            }
+            let output = crate::ui::frontend::run_pass(
+                &ctx,
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    action = dictation_capsule(ui, state, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
+                },
+            );
+            painted = painted_text(&output);
+        }
+        (action, painted)
+    }
+
+    /// 「要记住这个词吗？」卡片：有候选时整窗只画卡片（没有药丸），点「记住」把候选 id
+    /// 发回宿主，点「不用」发拒绝 —— 这就是确认式词库学习的确认入口（Tauri
+    /// `VocabSuggestionCard` + `PendingCorrection`）。
+    #[test]
+    fn the_vocab_card_asks_before_remembering() {
+        let state = CapsulePopupState {
+            phase: String::new(),
+            suggestions: vec![
+                openless_linux_egui::CapsuleSuggestion {
+                    id: "first".to_string(),
+                    pattern: "banana".to_string(),
+                    replacement: "bananas".to_string(),
+                },
+                openless_linux_egui::CapsuleSuggestion {
+                    id: "second".to_string(),
+                    pattern: "teh".to_string(),
+                    replacement: "the".to_string(),
+                },
+            ],
+            ..Default::default()
+        };
+        let size = egui::vec2(460.0, 180.0);
+        let (action, painted) = run_capsule(&state, size, None);
+        assert!(
+            matches!(action, CapsuleAction::None),
+            "rendering alone must not resolve anything"
+        );
+        assert!(
+            painted.contains(tr_l10n(Lang::ZhCn, "vocabCard.title")),
+            "the card must ask the question: {painted}"
+        );
+        for text in ["banana", "bananas", "teh", "the"] {
+            assert!(painted.contains(text), "row text {text} missing: {painted}");
+        }
+        // 每行两颗圆钮都在（图标画的是 Check / Close）。
+        assert_eq!(
+            painted
+                .matches(tr_l10n(Lang::ZhCn, "vocabCard.title"))
+                .count(),
+            1,
+            "the title is painted once"
+        );
+        let layout = vocab_card_layout(
+            egui::Rect::from_min_size(egui::Pos2::ZERO, size),
+            state.suggestions.len(),
+        );
+        assert_eq!(layout.rows.len(), 2, "one row per suggestion");
+        // 两行不重叠：第二行在第一行下面。
+        assert!(
+            layout.rows[0].accept.bottom() <= layout.rows[1].accept.top(),
+            "rows must not overlap"
+        );
+        let (action, _) = run_capsule(&state, size, Some(layout.rows[0].accept.center()));
+        assert!(
+            matches!(&action, CapsuleAction::AcceptSuggestion(id) if id == "first"),
+            "accepting the first row must carry its id, got {action:?}"
+        );
+        let (action, _) = run_capsule(&state, size, Some(layout.rows[1].reject.center()));
+        assert!(
+            matches!(&action, CapsuleAction::RejectSuggestion(id) if id == "second"),
+            "rejecting the second row must carry its id, got {action:?}"
+        );
+    }
+
+    /// 行数拉满（Core 上限 5 条）时卡片仍然整张落在舞台里，不露在窗外。
+    #[test]
+    fn a_full_vocab_card_still_fits_the_capsule_stage() {
+        let stage = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(460.0, 180.0));
+        let layout = vocab_card_layout(stage, 5);
+        assert_eq!(layout.rows.len(), 5, "every candidate gets a row");
+        assert!(
+            stage.contains_rect(layout.card),
+            "the card must stay inside the stage: {:?}",
+            layout.card
+        );
+        for (index, row) in layout.rows.iter().enumerate() {
+            assert!(
+                layout.card.contains_rect(row.accept) && layout.card.contains_rect(row.reject),
+                "row {index} buttons must stay inside the card"
+            );
+            assert!(
+                row.text.right() <= row.reject.left(),
+                "row {index} text must not overlap the buttons"
+            );
+        }
+        assert!(
+            layout
+                .rows
+                .windows(2)
+                .all(|pair| pair[0].accept.bottom() <= pair[1].accept.top()),
+            "rows must not overlap at the cap"
+        );
+        // 压缩后按钮也不能叠上去。
+        assert!(
+            layout.rows.iter().all(|row| row.accept.height() >= 14.0),
+            "buttons must stay tappable when the rows are compressed"
+        );
     }
 
     /// 与 `run` 同款流程，但把最后一帧的 `FullOutput` 交出来（要按形状断言时用）。
@@ -2189,16 +2770,10 @@ mod tests {
         );
     }
 
-    /// 录音/思考的中心视觉现在由 CPU 画法承担（着色器路径已从渲染路径摘除，见
-    /// `siri_gl` 文件头）：这两种状态都不许再排 GPU 回调，但中心不能是空的；
-    /// 终态则一个光效都没有。
-    ///
-    /// 以前录音还会多排一个**外圈红扫光**、思考多一个黑扫光。Tauri 的经典药丸只有
-    /// 1px 中性描边（Capsule.tsx 的 `border: 1px var(--ol-capsule-pill-border)`），
-    /// 没有外圈扫光——用户报「语音输入弹窗有一个红边」就是它，所以这里继续锁死。
+    /// Recording and thinking each queue exactly one WGPU centre effect. Terminal
+    /// states must not leave a callback behind while the popup waits to dismiss.
     #[test]
-    fn capsule_keeps_the_centre_glow_off_the_gpu_path() {
-        // The GPU state is process-global; take the shared test guard.
+    fn capsule_queues_only_the_active_wgpu_centre_effect() {
         let frame = |state: CapsulePopupState| {
             let ctx = egui::Context::default();
             let output = crate::ui::frontend::run_pass(
@@ -2211,7 +2786,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    let _ = dictation_capsule(ui, &state, Lang::ZhCn);
+                    let _ = dictation_capsule(ui, &state, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
                 },
             );
             let callbacks = output
@@ -2219,15 +2794,11 @@ mod tests {
                 .iter()
                 .filter(|clipped| matches!(clipped.shape, egui::Shape::Callback(_)))
                 .count();
-            let mut glow = 0;
-            for clipped in &output.shapes {
-                count_centre_glow(&clipped.shape, &mut glow);
-            }
-            (callbacks, glow)
+            (callbacks,)
         };
         for (label, state, wants_centre) in [
             (
-                "recording = CPU wave only, no perimeter ring",
+                "recording = one WGPU wave, no perimeter ring",
                 CapsulePopupState {
                     phase: "recording".into(),
                     audio_level: Some(0.2),
@@ -2236,7 +2807,7 @@ mod tests {
                 true,
             ),
             (
-                "thinking = CPU orb only, no perimeter ring",
+                "thinking = one WGPU orb, no perimeter ring",
                 CapsulePopupState {
                     phase: "transcribing".into(),
                     ..Default::default()
@@ -2244,23 +2815,27 @@ mod tests {
                 true,
             ),
             (
-                "terminal capsule paints no glow",
+                "terminal Siri capsule keeps the orb for the merge-out",
                 CapsulePopupState {
                     phase: "inserted".into(),
                     text: "hello".into(),
                     ..Default::default()
                 },
+                true,
+            ),
+            (
+                "classic capsule never paints a WGPU effect",
+                CapsulePopupState {
+                    phase: "polishing".into(),
+                    style: "classic".into(),
+                    suggestions: Vec::new(),
+                    ..Default::default()
+                },
                 false,
             ),
         ] {
-            let (callbacks, glow) = frame(state);
-            assert_eq!(
-                callbacks, 0,
-                "{label}: the shader path is off, no GPU callback may be queued"
-            );
-            if wants_centre {
-                assert!(glow > 0, "{label}: the centre glow must still be painted");
-            }
+            let (callbacks,) = frame(state);
+            assert_eq!(callbacks, usize::from(wants_centre), "{label}");
         }
     }
 
@@ -2274,7 +2849,7 @@ mod tests {
             ..Default::default()
         };
         let painted = run(egui::vec2(200.0, 100.0), |ctx| {
-            dictation_capsule(ctx, &idle, Lang::ZhCn);
+            dictation_capsule(ctx, &idle, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
             String::new()
         });
         assert!(
@@ -2287,7 +2862,7 @@ mod tests {
             ..idle
         };
         let painted = run(egui::vec2(200.0, 100.0), |ctx| {
-            dictation_capsule(ctx, &translating, Lang::ZhCn);
+            dictation_capsule(ctx, &translating, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
             String::new()
         });
         assert!(has(&painted, badge), "{painted}");
@@ -2428,13 +3003,173 @@ mod tests {
         }
     }
 
+    /// 文本的声明颜色（扫光靠重绘另一份 galley 实现，所以要看 Text 的 section 颜色）。
+    fn painted_text_colors(shape: &egui::Shape, out: &mut Vec<egui::Color32>) {
+        match shape {
+            egui::Shape::Text(text) => {
+                for section in &text.galley.job.sections {
+                    out.push(section.format.color);
+                }
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    painted_text_colors(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 偏蓝 = 扫光那一遍（INK 是中性灰，TYPELESS 是白）。
+    fn is_bluish(color: egui::Color32) -> bool {
+        color.b() > color.r().saturating_add(24) && color.b() > color.g()
+    }
+
+    /// 经典药丸的「思考中」扫光（Tauri `cap-shine`）：高光带扫过字面时，文字会被蓝色
+    /// 重绘一遍；Siri 舞台没有这段文字，自然也不会有。
+    #[test]
+    fn the_classic_thinking_label_sweeps_a_shine_band() {
+        let collect = |time: f64, style: &str| {
+            let ctx = egui::Context::default();
+            let state = CapsulePopupState {
+                phase: "Polishing".into(),
+                style: style.into(),
+                suggestions: Vec::new(),
+                ..Default::default()
+            };
+            let mut colors = Vec::new();
+            // 两帧：第一帧确定相位起点，第二帧才是被测的那一帧。
+            for frame in [0.0, time] {
+                let output = crate::ui::frontend::run_pass(
+                    &ctx,
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(200.0, 60.0),
+                        )),
+                        time: Some(frame),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let _ =
+                            dictation_capsule(ui, &state, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
+                    },
+                );
+                colors.clear();
+                for clipped in &output.shapes {
+                    painted_text_colors(&clipped.shape, &mut colors);
+                }
+            }
+            colors
+        };
+        // 高速 burst 周期 0.9s：t=0.45 时高光带正扫到字面中部。
+        assert!(
+            collect(0.45, "classic").iter().copied().any(is_bluish),
+            "the sweep must repaint the label in blue"
+        );
+        // 慢速阶段（>2s）同样扫，只是周期变长。
+        assert!(
+            collect(2.7, "classic").iter().copied().any(is_bluish),
+            "the sweep must keep running after the initial burst"
+        );
+        // Siri 舞台没有这段文案。
+        assert!(
+            !collect(0.45, "siri").iter().copied().any(is_bluish),
+            "the Siri stage has no caption to sweep"
+        );
+    }
+
+    /// Siri 舞台出错时给的是宿主的具体文案（Tauri `message || t('capsule.error')`），
+    /// 不是笼统的「出现错误」。
+    #[test]
+    fn the_siri_stage_prefers_the_host_error_message() {
+        let message = tr_l10n(Lang::ZhCn, "capsule.selectionPolish.noSelection");
+        let failed = CapsulePopupState {
+            phase: "Failed".to_string(),
+            text: message.to_string(),
+            style: "siri".to_string(),
+            suggestions: Vec::new(),
+            ..Default::default()
+        };
+        let painted = run(egui::vec2(460.0, 180.0), |ctx| {
+            dictation_capsule(ctx, &failed, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
+            String::new()
+        });
+        assert!(has(&painted, message), "{painted}");
+        assert!(
+            !has(&painted, tr_l10n(Lang::ZhCn, "capsule.error")),
+            "the generic error text must not replace the host message: {painted}"
+        );
+        // 没有具体文案时才是通用文案。
+        let bare = CapsulePopupState {
+            text: String::new(),
+            ..failed.clone()
+        };
+        let painted = run(egui::vec2(460.0, 180.0), |ctx| {
+            dictation_capsule(ctx, &bare, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
+            String::new()
+        });
+        assert!(
+            has(&painted, tr_l10n(Lang::ZhCn, "capsule.error")),
+            "{painted}"
+        );
+    }
+
+    /// wave → orb 的交叉淡出（Tauri `opacity .6s ease-out .55s`）：刚切到思考态时波形
+    /// 还在（两个回调），淡出之后只剩圆点环。
+    #[test]
+    fn the_wave_cross_fades_into_the_orb_after_recording() {
+        let ctx = egui::Context::default();
+        let stage = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(460.0, 180.0));
+        let render = |time: f64, phase: &str| {
+            let state = CapsulePopupState {
+                phase: phase.into(),
+                audio_level: Some(0.4),
+                style: "siri".into(),
+                suggestions: Vec::new(),
+                ..Default::default()
+            };
+            let output = crate::ui::frontend::run_pass(
+                &ctx,
+                egui::RawInput {
+                    screen_rect: Some(stage),
+                    time: Some(time),
+                    ..Default::default()
+                },
+                |ui| {
+                    let _ = dictation_capsule(ui, &state, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
+                },
+            );
+            output
+                .shapes
+                .iter()
+                .filter(|clipped| matches!(clipped.shape, egui::Shape::Callback(_)))
+                .count()
+        };
+        assert_eq!(
+            render(0.0, "recording"),
+            1,
+            "recording paints the wave only"
+        );
+        assert_eq!(
+            render(0.2, "polishing"),
+            2,
+            "right after the switch the wave must still be fading over the orb"
+        );
+        assert_eq!(
+            render(2.0, "polishing"),
+            1,
+            "once the fade is over only the orb remains"
+        );
+    }
+
     /// Render one capsule frame and collect the colours, the GPU callback count
-    /// and the number of centre glow strokes (the CPU wave lines).
+    /// and the number of centre effect strokes (the CPU wave lines).
     fn capsule_frame(state: &CapsulePopupState) -> (Vec<egui::Color32>, usize, usize) {
         let ctx = egui::Context::default();
         let mut colors = Vec::new();
         let mut callbacks = 0;
-        let mut glow = 0;
+        let mut effect = 0;
         for _ in 0..2 {
             let output = crate::ui::frontend::run_pass(
                 &ctx,
@@ -2446,33 +3181,32 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    let _ = dictation_capsule(ui, state, Lang::ZhCn);
+                    let _ = dictation_capsule(ui, state, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
                 },
             );
             colors.clear();
             callbacks = 0;
-            glow = 0;
+            effect = 0;
             for clipped in &output.shapes {
                 painted_colors(&clipped.shape, &mut colors);
-                count_centre_glow(&clipped.shape, &mut glow);
+                count_centre_effect(&clipped.shape, &mut effect);
                 if matches!(clipped.shape, egui::Shape::Callback(_)) {
                     callbacks += 1;
                 }
             }
         }
-        (colors, callbacks, glow)
+        (colors, callbacks, effect)
     }
 
-    /// 录音相位的「中心运动感」现在由 CPU 画法承担（着色器路径已从渲染路径摘除，
-    /// 见 `siri_gl` 文件头）：波形是一串 49 点的折线，思考是流体圆点，两者都
-    /// 算中心光效（CPU 竖条走的是小圆角矩形，不在这里）。
-    fn count_centre_glow(shape: &egui::Shape, out: &mut usize) {
+    /// Classic fallback primitives still expose a centre visual for tests; Siri
+    /// states are represented by one WGPU callback instead.
+    fn count_centre_effect(shape: &egui::Shape, out: &mut usize) {
         match shape {
             egui::Shape::Path(path) if path.points.len() >= 8 => *out += 1,
             egui::Shape::Circle(_) => *out += 1,
             egui::Shape::Vec(shapes) => {
                 for shape in shapes {
-                    count_centre_glow(shape, out);
+                    count_centre_effect(shape, out);
                 }
             }
             _ => {}
@@ -2487,7 +3221,7 @@ mod tests {
     #[test]
     fn recording_capsule_paints_no_coloured_outline() {
         // Tauri 的经典药丸只有 1px 中性描边（Capsule.tsx：border 1px
-        // var(--ol-capsule-pill-border)），录音时只把药丸随音量放大 1.8%。
+        // var(--ol-capsule-pill-border)）；录音音量只驱动中心波形。
         // 外圈红/黑扫光是本仓自己加的，用户报「语音输入弹窗有一个红边」——
         // 这条测试锁死它不许回来。
         for phase in ["Recording", "Transcribing", "Polishing"] {
@@ -2497,6 +3231,7 @@ mod tests {
                 audio_level: Some(0.6),
                 translation_active: false,
                 style: "classic".to_string(),
+                suggestions: Vec::new(),
             };
             let (colors, _, _) = capsule_frame(&state);
             let reddish: Vec<_> = colors
@@ -2521,14 +3256,15 @@ mod tests {
             audio_level: Some(0.6),
             translation_active: false,
             style: "siri".to_string(),
+            suggestions: Vec::new(),
         };
-        let (colors, callbacks, glow) = capsule_frame(&state);
+        let (colors, callbacks, effect) = capsule_frame(&state);
         // 音量竖条是 3px 宽的小圆角矩形：数一下细长条形的填充个数。
         let fills = colors.iter().filter(|color| color.a() > 0).count();
         assert!(
-            callbacks > 0 || fills >= 6 || glow > 0,
+            callbacks > 0 || fills >= 6 || effect > 0,
             "recording capsule must keep the centre visual \
-             (callbacks={callbacks}, fills={fills}, glow={glow})"
+             (callbacks={callbacks}, fills={fills}, effect={effect})"
         );
     }
 
@@ -2553,6 +3289,7 @@ mod tests {
                 phase: "Recording".to_string(),
                 audio_level: Some(0.4),
                 style: "classic".to_string(),
+                suggestions: Vec::new(),
                 ..Default::default()
             };
             let mut action = CapsuleAction::None;
@@ -2580,7 +3317,8 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
-                        action = dictation_capsule(ui, &state, Lang::ZhCn);
+                        action =
+                            dictation_capsule(ui, &state, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
                     },
                 );
             }
@@ -2588,6 +3326,73 @@ mod tests {
                 action, expected,
                 "clicking {position:?} must report {expected:?}"
             );
+        }
+    }
+
+    /// 经典药丸的「思考中」文案必须本地化并在每一个处理相位都在；Siri 舞台反过来 ——
+    /// 它没有文案（Tauri `VoiceOrbStage` 只有 error 才给字），反馈全靠光效。
+    #[test]
+    fn classic_processing_caption_is_localized_and_siri_has_none() {
+        for lang in [Lang::ZhCn, Lang::En] {
+            for phase in ["starting", "transcribing", "polishing", "inserting"] {
+                let classic = CapsulePopupState {
+                    phase: phase.into(),
+                    style: "classic".into(),
+                    suggestions: Vec::new(),
+                    ..Default::default()
+                };
+                let painted = run(egui::vec2(200.0, 60.0), |ui| {
+                    dictation_capsule(ui, &classic, lang, siri_wgpu::DEFAULT_WARMUP_MS);
+                    String::new()
+                });
+                assert!(
+                    has(&painted, tr_l10n(lang, "capsule.thinking")),
+                    "{phase} must show the localized processing caption: {painted}"
+                );
+                let siri = CapsulePopupState {
+                    style: "siri".into(),
+                    suggestions: Vec::new(),
+                    ..classic.clone()
+                };
+                let painted = run(egui::vec2(460.0, 180.0), |ui| {
+                    dictation_capsule(ui, &siri, lang, siri_wgpu::DEFAULT_WARMUP_MS);
+                    String::new()
+                });
+                assert!(
+                    !has(&painted, tr_l10n(lang, "capsule.thinking")),
+                    "the Siri stage must not paint a caption (Tauri parity): {painted}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn siri_recording_and_thinking_use_the_full_stage() {
+        for phase in ["recording", "transcribing"] {
+            let ctx = egui::Context::default();
+            let stage = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(460.0, 180.0));
+            let state = CapsulePopupState {
+                phase: phase.into(),
+                style: "siri".into(),
+                suggestions: Vec::new(),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(stage),
+                    ..Default::default()
+                },
+                |ui| {
+                    dictation_capsule(ui, &state, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
+                },
+            );
+            assert!(
+                output.shapes.iter().any(|shape| matches!(
+                    &shape.shape, egui::Shape::Callback(callback) if callback.rect == stage
+                )),
+                "{phase} must not shrink the Siri callback into the classic pill"
+            );
+            output.textures_delta.clear();
         }
     }
 
@@ -2599,9 +3404,10 @@ mod tests {
             audio_level: Some(0.4),
             translation_active: false,
             style: "siri".to_string(),
+            suggestions: Vec::new(),
         };
         let painted = run(egui::vec2(200.0, 60.0), |ctx| {
-            dictation_capsule(ctx, &recording, Lang::ZhCn);
+            dictation_capsule(ctx, &recording, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
             String::new()
         });
         assert!(
@@ -2613,10 +3419,11 @@ mod tests {
         let transcribing = CapsulePopupState {
             phase: "Transcribing".to_string(),
             style: "classic".to_string(),
+            suggestions: Vec::new(),
             ..Default::default()
         };
         let painted = run(egui::vec2(200.0, 60.0), |ctx| {
-            dictation_capsule(ctx, &transcribing, Lang::ZhCn);
+            dictation_capsule(ctx, &transcribing, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
             String::new()
         });
         assert!(
@@ -2624,31 +3431,51 @@ mod tests {
             "{painted}"
         );
 
-        // siri 样式：中心交给 Siri 光效（现在由 CPU 画，见 `siri_gl` 文件头），
-        // 所以不再叠一行「思考中」文字——与 GPU 就绪后的终态一致。
+        // Siri 舞台没有文案：光点换乘「收尾合并」，字都交给光效（Tauri `VoiceOrbStage`）。
         let transcribing_siri = CapsulePopupState {
             phase: "Transcribing".to_string(),
             style: "siri".to_string(),
+            suggestions: Vec::new(),
             ..Default::default()
         };
         let painted = run(egui::vec2(200.0, 60.0), |ctx| {
-            dictation_capsule(ctx, &transcribing_siri, Lang::ZhCn);
+            dictation_capsule(
+                ctx,
+                &transcribing_siri,
+                Lang::ZhCn,
+                siri_wgpu::DEFAULT_WARMUP_MS,
+            );
             String::new()
         });
         assert!(
             !has(&painted, tr_l10n(Lang::ZhCn, "capsule.thinking")),
-            "siri transcribing paints the orb instead of the label: {painted}"
+            "siri transcribing must not paint a caption: {painted}"
         );
 
+        // 「已插入 N 字」是经典药丸的文案；Siri 舞台不画它。
         let done = CapsulePopupState {
             phase: "Completed".to_string(),
             text: inserted_message(Lang::ZhCn, 12),
             audio_level: None,
             translation_active: false,
             style: "siri".to_string(),
+            suggestions: Vec::new(),
         };
         let painted = run(egui::vec2(200.0, 60.0), |ctx| {
-            dictation_capsule(ctx, &done, Lang::ZhCn);
+            dictation_capsule(ctx, &done, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
+            String::new()
+        });
+        assert!(
+            !has(&painted, "12"),
+            "the Siri stage never paints the inserted-chars text: {painted}"
+        );
+        let done_classic = CapsulePopupState {
+            style: "classic".to_string(),
+            suggestions: Vec::new(),
+            ..done.clone()
+        };
+        let painted = run(egui::vec2(200.0, 60.0), |ctx| {
+            dictation_capsule(ctx, &done_classic, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
             String::new()
         });
         assert!(has(&painted, "12"), "{painted}");
@@ -2659,9 +3486,10 @@ mod tests {
             audio_level: None,
             translation_active: false,
             style: "siri".to_string(),
+            suggestions: Vec::new(),
         };
         let painted = run(egui::vec2(200.0, 60.0), |ctx| {
-            dictation_capsule(ctx, &failed, Lang::ZhCn);
+            dictation_capsule(ctx, &failed, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
             String::new()
         });
         assert!(

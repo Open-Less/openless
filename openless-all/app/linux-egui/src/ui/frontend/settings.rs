@@ -135,31 +135,70 @@ pub fn settings_overlay(
                         // 搜索框，右侧内容区顶端才是标题 + 自动保存提示 + 关闭按钮。
                         let body_height = size.y.max(120.0);
                         ui.horizontal(|ui| {
+                            // Tauri `.ol-settings-surface aside` 是 flex 子项：底色与右侧
+                            // 0.5px 分隔线都通到弹窗上下边缘，内边距 16/12，选项因此正好
+                            // 铺满 214−24=190 的净宽。以前底色画在「内容高度」的 Frame 上、
+                            // 内容宽度又少了 4px：左栏下方露出内容区底色，选项和分割线也
+                            // 缩进了一圈。
                             ui.allocate_ui_with_layout(
                                 egui::vec2(RAIL_WIDTH, body_height),
                                 egui::Layout::top_down(egui::Align::Min),
                                 |ui| {
-                                    ui.set_min_height(body_height);
-                                    ui.set_max_height(body_height);
-                                    egui::ScrollArea::vertical()
-                                        .id_salt("openless-settings-rail")
-                                        .auto_shrink([false, false])
-                                        .show(ui, |ui| {
-                                            ui.set_width(RAIL_WIDTH - 20.0);
-                                            rail(ui, vm, actions);
-                                        });
+                                    ui.set_min_size(egui::vec2(RAIL_WIDTH, body_height));
+                                    ui.set_max_size(egui::vec2(RAIL_WIDTH, body_height));
+                                    let column = ui.max_rect();
+                                    ui.painter().rect_filled(
+                                        column,
+                                        egui::CornerRadius {
+                                            nw: 14,
+                                            sw: 14,
+                                            ne: 0,
+                                            se: 0,
+                                        },
+                                        theme::RAIL_BG,
+                                    );
+                                    ui.painter().rect_filled(
+                                        egui::Rect::from_min_max(
+                                            egui::pos2(column.right() - 0.5, column.top()),
+                                            column.right_bottom(),
+                                        ),
+                                        egui::CornerRadius::ZERO,
+                                        theme::LINE_SOFT,
+                                    );
+                                    let inner = column.shrink2(egui::vec2(12.0, 16.0));
+                                    ui.scope_builder(
+                                        egui::UiBuilder::new().max_rect(inner),
+                                        |ui| {
+                                            egui::ScrollArea::vertical()
+                                                .id_salt("openless-settings-rail")
+                                                .auto_shrink([false, false])
+                                                .show(ui, |ui| {
+                                                    ui.set_width(inner.width());
+                                                    rail(ui, vm, actions);
+                                                });
+                                        },
+                                    );
                                 },
                             );
-                            ui.separator();
-                            // 两列之间 egui 还会插入 item_spacing，分隔线自身也占宽：不减掉它们
-                            // 内容就比 size 宽十几像素，卡片会被撑宽、`fixed_pos` 居中就偏（实测 11px）。
-                            let gutters = ui.spacing().item_spacing.x * 3.0;
+                            // 分隔线已经画在左栏底色上（Tauri 的 `borderRight`），不再用
+                            // `ui.separator()`：它自己的宽度会让右栏再窄一截。
+                            let gutters = ui.spacing().item_spacing.x;
                             ui.allocate_ui_with_layout(
                                 egui::vec2((size.x - RAIL_WIDTH - gutters).max(0.0), body_height),
                                 egui::Layout::top_down(egui::Align::Min),
                                 |ui| {
                                     ui.set_min_height(body_height);
-                                    panel(ui, vm, actions);
+                                    // Tauri 桌面端把渠道编辑器 portal 进「AI 服务与模型」
+                                    // 这一页的右栏并 `inset: 0` 盖住整栏，不是全窗口遮罩。
+                                    // 覆盖范围必须跟着分区走：否则别页也会被编辑器盖住，
+                                    // 用户会觉得「打开设置只有模型编辑器、别的都改不了」。
+                                    let editor_here = vm.provider_editor.is_some()
+                                        && vm.settings_section == SettingsSection::Services;
+                                    if editor_here {
+                                        channel_editor_panel(ui, vm, actions);
+                                    } else {
+                                        panel(ui, vm, actions);
+                                    }
                                 },
                             );
                         });
@@ -170,91 +209,82 @@ pub fn settings_overlay(
 
 fn rail(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
     let lang = vm.lang;
-    // Tauri `.ol-settings-surface aside`: 214px 宽的独立底色条带（左侧跟随弹窗圆角）。
-    egui::Frame::new()
-        .fill(theme::RAIL_BG)
-        .corner_radius(egui::CornerRadius {
-            nw: 14,
-            sw: 14,
-            ne: 0,
-            se: 0,
-        })
-        .inner_margin(egui::Margin::symmetric(12, 16))
-        .show(ui, |ui| {
-            // Section search, like the Tauri rail.
-            egui::Frame::new()
-                .fill(theme::SURFACE)
-                .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
-                .corner_radius(egui::CornerRadius::same(8))
-                .inner_margin(egui::Margin::symmetric(10, 5))
-                .show(ui, |ui| {
-                    ui.set_width(SIDEBAR_RAIL_INPUT);
-                    let width = ui.available_width().max(40.0);
-                    ui.add_sized(
-                        [width, 20.0],
-                        egui::TextEdit::singleline(&mut vm.settings_query)
-                            .id(egui::Id::new("openless-settings-search"))
-                            .hint_text(tr_l10n(lang, "modal.search_placeholder"))
-                            // 明确文字颜色：默认的控件前景色在浅底上过淡，
-                            // 看上去像「输入了但没有显示字符」。
-                            .text_color(theme::INK)
-                            .frame(egui::Frame::NONE)
-                            .vertical_align(egui::Align::Center),
-                    );
-                });
-            ui.add_space(10.0);
-
-            let query = vm.settings_query.trim().to_lowercase();
-            // Tauri's rail order.
-            for section in [
-                SettingsSection::General,
-                SettingsSection::Shortcuts,
-                SettingsSection::Services,
-                SettingsSection::Appearance,
-                SettingsSection::Privacy,
-                SettingsSection::Advanced,
-                SettingsSection::About,
-            ] {
-                if !rail_section_visible(section, vm.hotkeys_supported) {
-                    continue;
-                }
-                let label = section.label(lang);
-                if !query.is_empty() && !label.to_lowercase().contains(&query) {
-                    continue;
-                }
-                let response = rail_item(ui, label, section.icon(), vm.settings_section == section);
-                if response.clicked() {
-                    actions.push(FrontendAction::SettingsSection(section));
-                }
-            }
-            ui.add_space(14.0);
-            ui.separator();
-            ui.add_space(7.0);
-            for (label, icon) in [
-                (
-                    tr_l10n(lang, "modal.sections.help_center"),
-                    SettingsIcon::Help,
-                ),
-                (
-                    tr_l10n(lang, "modal.sections.release_notes"),
-                    SettingsIcon::Document,
-                ),
-            ] {
-                let response = rail_item(ui, label, icon, false);
-                let row = response.rect;
-                draw_rail_icon(
-                    ui,
-                    egui::pos2(row.right() - 14.0, row.center().y),
-                    SettingsIcon::External,
-                    theme::INK_4,
+    // 底色与右侧分隔线由调用方按整栏高度铺好（见 settings_sheet）。
+    ui.vertical(|ui| {
+        // Section search, like the Tauri rail.
+        egui::Frame::new()
+            .fill(theme::SURFACE)
+            .stroke(egui::Stroke::new(0.5, theme::LINE_STRONG))
+            .corner_radius(egui::CornerRadius::same(8))
+            .inner_margin(egui::Margin::symmetric(10, 5))
+            .show(ui, |ui| {
+                ui.set_width(SIDEBAR_RAIL_INPUT);
+                let width = ui.available_width().max(40.0);
+                ui.add_sized(
+                    [width, 20.0],
+                    egui::TextEdit::singleline(&mut vm.settings_query)
+                        .id(egui::Id::new("openless-settings-search"))
+                        .hint_text(tr_l10n(lang, "modal.search_placeholder"))
+                        // 明确文字颜色：默认的控件前景色在浅底上过淡，
+                        // 看上去像「输入了但没有显示字符」。
+                        .text_color(theme::INK)
+                        .frame(egui::Frame::NONE)
+                        .vertical_align(egui::Align::Center),
                 );
-                if response.clicked() {
-                    actions.push(FrontendAction::SettingsAction(
-                        SettingsActionField::OpenHelp,
-                    ));
-                }
+            });
+        ui.add_space(10.0);
+
+        let query = vm.settings_query.trim().to_lowercase();
+        // Tauri's rail order.
+        for section in [
+            SettingsSection::General,
+            SettingsSection::Shortcuts,
+            SettingsSection::Services,
+            SettingsSection::Appearance,
+            SettingsSection::Privacy,
+            SettingsSection::Advanced,
+            SettingsSection::About,
+        ] {
+            if !rail_section_visible(section, vm.hotkeys_supported) {
+                continue;
             }
-        });
+            let label = section.label(lang);
+            if !query.is_empty() && !label.to_lowercase().contains(&query) {
+                continue;
+            }
+            let response = rail_item(ui, label, section.icon(), vm.settings_section == section);
+            if response.clicked() {
+                actions.push(FrontendAction::SettingsSection(section));
+            }
+        }
+        ui.add_space(14.0);
+        ui.separator();
+        ui.add_space(7.0);
+        for (label, icon) in [
+            (
+                tr_l10n(lang, "modal.sections.help_center"),
+                SettingsIcon::Help,
+            ),
+            (
+                tr_l10n(lang, "modal.sections.release_notes"),
+                SettingsIcon::Document,
+            ),
+        ] {
+            let response = rail_item(ui, label, icon, false);
+            let row = response.rect;
+            draw_rail_icon(
+                ui,
+                egui::pos2(row.right() - 14.0, row.center().y),
+                SettingsIcon::External,
+                theme::INK_4,
+            );
+            if response.clicked() {
+                actions.push(FrontendAction::SettingsAction(
+                    SettingsActionField::OpenHelp,
+                ));
+            }
+        }
+    });
 }
 
 /// Tauri `visibleSettingsSections(supportsDesktopHotkey)`：没有桌面热键后端时
@@ -1918,6 +1948,36 @@ fn services(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                 };
                 let add = tr_l10n(lang, "settings.channels.add");
                 let mut add_clicked = false;
+                if !asr && vm.multimodal_view {
+                    // 识别管线（Tauri `ProvidersSection` 的 pipelineMode 行）：只有
+                    // 实验性开关 `multimodalPipelineEnabled` 打开后才出现，就是这里的
+                    // `multimodal_view`。切换只改偏好，两套凭据都留在凭据库里。
+                    segmented_row(
+                        ui,
+                        tr_l10n(lang, "settings.providers.pipeline_mode_label"),
+                        tr_l10n(lang, "settings.providers.pipeline_mode_hint"),
+                        &[
+                            tr_l10n(lang, "settings.providers.pipeline_mode_traditional"),
+                            tr_l10n(lang, "settings.providers.pipeline_mode_multimodal"),
+                        ],
+                        usize::from(vm.pipeline_multimodal),
+                        |index| {
+                            actions.push(FrontendAction::SettingsCombo(
+                                SettingsComboField::PipelineMode,
+                                index,
+                            ));
+                        },
+                    );
+                    ui.label(
+                        egui::RichText::new(tr_l10n(
+                            lang,
+                            "settings.providers.pipeline_isolation_notice",
+                        ))
+                        .size(11.0)
+                        .color(theme::INK_4),
+                    );
+                    ui.add_space(12.0);
+                }
                 // 卡片头：标题在左、＋添加渠道在右（Tauri 的 ProvidersSection），
                 // 标题下方一行说明，再下面是渠道行。
                 card_header(
@@ -1958,28 +2018,14 @@ fn services(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                             );
                         } else {
                             for (index, channel) in vm.channels.iter().enumerate() {
-                                channel_row(
-                                    ui,
-                                    channel,
-                                    index,
-                                    &vm.channel_providers,
-                                    lang,
-                                    actions,
-                                );
+                                channel_row(ui, channel, index, lang, actions);
                             }
-                        }
-                        if let Some(editor) = &vm.provider_editor {
-                            ui.add_space(8.0);
-                            provider_editor_panel(ui, editor, lang, actions);
-                        }
-                        if vm.channel_form_open {
-                            ui.add_space(8.0);
-                            add_channel_form(ui, vm, actions);
                         }
                     },
                 );
                 if add_clicked {
-                    actions.push(FrontendAction::SettingsChannelFormOpen(true));
+                    // Tauri `startCreate`：先建空渠道再开同一个弹窗（草稿模式）。
+                    actions.push(FrontendAction::SettingsChannelDraft);
                 }
             }
             ui.label(
@@ -2440,176 +2486,362 @@ fn about(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
     });
 }
 
-/// One credential channel row: name + current marker, provider/model, actions.
+/// 一个渠道卡片（Tauri `ChannelList` 的行）。
+///
+/// 结构照抄 Tauri：左侧拖拽手柄 → 名称 + 徽章 → `provider · model`（模型用等宽）
+/// → 「上次验证 …」状态块；右侧「重新验证 / 启用 / 编辑 ›」。
+/// 换顺序靠手柄拖动 —— Tauri 那边同样是拖动重排，没有上下箭头按钮，
+/// 渠道类型与删除都在编辑页里。
 fn channel_row(
     ui: &mut egui::Ui,
     channel: &super::view_model::SettingsChannel,
     index: usize,
-    providers: &[SettingsChannelProvider],
     lang: Lang,
     actions: &mut Vec<FrontendAction>,
 ) {
-    ui.horizontal(|ui| {
-        ui.vertical(|ui| {
+    // 拖动中的行号；只存在 egui 的临时数据里，不进视图模型（它不是宿主状态）。
+    let drag_id = egui::Id::new("openless-settings-channel-drag");
+    let dragging = ui.data(|data| data.get_temp::<usize>(drag_id));
+
+    let card = egui::Frame::new()
+        // 当前使用中的渠道：中性灰底 + 细描边。Tauri 特意不用蓝底竖条 ——
+        //「当前使用」徽章已经说明问题，整行染色太花哨。
+        .fill(if channel.is_active {
+            theme::SURFACE_2
+        } else {
+            egui::Color32::TRANSPARENT
+        })
+        .stroke(if channel.is_active {
+            egui::Stroke::new(0.5, theme::LINE)
+        } else {
+            egui::Stroke::NONE
+        })
+        .corner_radius(egui::CornerRadius::same(12))
+        .inner_margin(egui::Margin::symmetric(12, 14))
+        .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(&channel.name)
-                        .size(12.5)
-                        .strong()
-                        .color(theme::INK),
+                ui.spacing_mut().item_spacing.x = 10.0;
+
+                // ── 拖拽手柄（Tauri 的 `⠿`）
+                let (handle_rect, handle) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 24.0), egui::Sense::drag());
+                let lifted = dragging == Some(index);
+                icons::draw_icon_sized(
+                    ui,
+                    handle_rect.center(),
+                    IconName::Grip,
+                    if lifted || handle.hovered() {
+                        theme::INK
+                    } else {
+                        theme::INK_4
+                    },
+                    16.0,
                 );
-                if channel.is_active {
-                    egui::Frame::new()
-                        .fill(theme::BLUE_SOFT)
-                        .corner_radius(egui::CornerRadius::same(9))
-                        .inner_margin(egui::Margin::symmetric(7, 2))
-                        .show(ui, |ui| {
+                if handle.hovered() || lifted {
+                    handle
+                        .clone()
+                        .on_hover_text(tr_l10n(lang, "settings.channels.drag_hint"));
+                }
+                if handle.drag_started() {
+                    ui.data_mut(|data| data.insert_temp(drag_id, index));
+                }
+                if handle.drag_stopped() {
+                    ui.data_mut(|data| data.remove_temp::<usize>(drag_id));
+                }
+
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        // Tauri：`const label = channel.name.trim() || providerLabel`
+                        // —— 用户没给渠道起名时，标题就是供应商名。
+                        let title = if channel.name.trim().is_empty() {
+                            channel.provider.as_str()
+                        } else {
+                            channel.name.trim()
+                        };
+                        ui.label(
+                            egui::RichText::new(title)
+                                .size(14.0)
+                                .strong()
+                                .color(theme::INK),
+                        );
+                        if channel.is_active {
+                            egui::Frame::new()
+                                .fill(theme::BLUE_SOFT)
+                                .corner_radius(egui::CornerRadius::same(9))
+                                .inner_margin(egui::Margin::symmetric(7, 2))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(tr_l10n(
+                                            lang,
+                                            "settings.channels.current",
+                                        ))
+                                        .size(10.0)
+                                        .color(theme::BLUE),
+                                    );
+                                });
+                        }
+                        if !channel.enabled {
+                            egui::Frame::new()
+                                .stroke(egui::Stroke::new(0.5, theme::LINE))
+                                .corner_radius(egui::CornerRadius::same(9))
+                                .inner_margin(egui::Margin::symmetric(7, 2))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(tr_l10n(
+                                            lang,
+                                            "settings.channels.disabled",
+                                        ))
+                                        .size(10.0)
+                                        .color(theme::INK_4),
+                                    );
+                                });
+                        }
+                    });
+                    // 第二行：`provider · model`，模型用等宽（Tauri 的 ol-font-mono）。
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        // 第二行的供应商前缀只在标题用了自定义名字时才加，否则
+                        // 会和标题重复（Tauri 的 `{channel.name.trim() && …}`）。
+                        if !channel.name.trim().is_empty() {
                             ui.label(
-                                egui::RichText::new(tr_l10n(lang, "settings.channels.current"))
-                                    .size(10.0)
-                                    .color(theme::BLUE),
+                                egui::RichText::new(format!("{} ·", channel.provider))
+                                    .size(12.0)
+                                    .color(theme::INK_3),
                             );
-                        });
-                }
-                if !channel.enabled {
+                        }
+                        let model = if channel.model.trim().is_empty() {
+                            egui::RichText::new(tr_l10n(lang, "settings.channels.model_not_set"))
+                                .size(12.0)
+                                .color(theme::INK_3)
+                        } else {
+                            egui::RichText::new(channel.model.trim())
+                                .size(12.0)
+                                .monospace()
+                                .color(theme::INK_3)
+                        };
+                        ui.label(model);
+                    });
+                    channel_status_line(ui, channel, lang);
+                });
+
+                // ── 右侧动作：与 Tauri 同序（右到左压栈 → 屏幕顺序：验证、启用、编辑）
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    channel_edit_button(ui, lang, || {
+                        actions.push(FrontendAction::SettingsChannelSelect(index));
+                    });
+                    ui.add_space(8.0);
+                    let (switch, _) =
+                        ui.allocate_exact_size(egui::vec2(36.0, 20.0), egui::Sense::hover());
+                    if layout::toggle(ui, switch, channel.enabled, ("settings-channel", index))
+                        .clicked()
+                    {
+                        actions.push(FrontendAction::SettingsChannelToggle(index));
+                    }
                     ui.label(
-                        egui::RichText::new(tr_l10n(lang, "settings.channels.disabled"))
-                            .size(10.5)
-                            .color(theme::INK_4),
+                        egui::RichText::new(tr_l10n(lang, "settings.channels.enabled"))
+                            .size(11.0)
+                            .color(theme::INK_3),
                     );
-                }
-            });
-            let detail = if channel.model.trim().is_empty() {
-                channel.provider.clone()
-            } else {
-                format!("{} · {}", channel.provider, channel.model)
-            };
-            ui.label(egui::RichText::new(detail).size(11.0).color(theme::INK_3));
-            let last_check = channel
-                .last_check
-                .clone()
-                .unwrap_or_else(|| tr_l10n(lang, "settings.channels.not_verified").to_string());
-            ui.label(
-                egui::RichText::new(last_check)
-                    .size(10.5)
-                    .color(theme::INK_4),
-            );
-        });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // 编辑入口：选中渠道后由宿主向 Core 读回该渠道的描述符与凭据形态。
-            if ui
-                .add(
-                    egui::Button::new(egui::RichText::new(tr_l10n(lang, "btn.edit")).size(11.0))
-                        .fill(theme::SURFACE_2)
-                        .stroke(egui::Stroke::new(0.8, theme::LINE))
-                        .corner_radius(egui::CornerRadius::same(8))
-                        .min_size(egui::vec2(0.0, 24.0)),
-                )
-                .clicked()
-            {
-                actions.push(FrontendAction::SettingsChannelSelect(index));
-            }
-            for (label, delta) in [("↑", -1isize), ("↓", 1isize)] {
-                if ui
-                    .add(
-                        egui::Button::new(egui::RichText::new(label).size(11.0))
+                    ui.add_space(8.0);
+                    let testing = channel_testing(ui, channel);
+                    let verify = if testing {
+                        tr_l10n(lang, "settings.channels.verifying")
+                    } else if channel.last_ok.is_some() {
+                        tr_l10n(lang, "settings.channels.reverify")
+                    } else {
+                        tr_l10n(lang, "settings.channels.verify")
+                    };
+                    let response = ui.add_enabled(
+                        !testing,
+                        egui::Button::new(egui::RichText::new(verify).size(11.0))
                             .fill(theme::SURFACE_2)
                             .stroke(egui::Stroke::new(0.8, theme::LINE))
                             .corner_radius(egui::CornerRadius::same(8))
-                            .min_size(egui::vec2(22.0, 24.0)),
-                    )
-                    .clicked()
-                {
-                    actions.push(FrontendAction::SettingsChannelMove { index, delta });
-                }
+                            .min_size(egui::vec2(0.0, 24.0)),
+                    );
+                    if response.clicked() {
+                        mark_channel_testing(ui, channel);
+                        actions.push(FrontendAction::SettingsChannelValidate(index));
+                    }
+                });
+            });
+        })
+        .response;
+
+    // 拖动中越过邻居的中线就互换 —— Tauri 是实时重排，这里用「越线即交换 ±1」
+    // 得到同样的手感，而且不需要先知道邻居的高度。
+    if dragging == Some(index) {
+        if let Some(pointer) = ui.ctx().pointer_latest_pos() {
+            if pointer.y > card.rect.bottom() + 2.0 {
+                actions.push(FrontendAction::SettingsChannelMove { index, delta: 1 });
+            } else if pointer.y < card.rect.top() - 2.0 {
+                actions.push(FrontendAction::SettingsChannelMove { index, delta: -1 });
             }
-            // 渠道的 provider 类型就是 Core 的 `set_channel_provider_type`：
-            // 换类型等于换描述符，因此比编辑表单更早生效。
-            if !providers.is_empty() {
-                let selected = providers
-                    .iter()
-                    .position(|provider| provider.provider_type == channel.provider_type)
-                    .unwrap_or(0);
-                let mut picked = selected;
-                egui::ComboBox::from_id_salt(("settings-channel-provider", index))
-                    .selected_text(&channel.provider)
-                    .width(150.0)
-                    .show_ui(ui, |ui| {
-                        for (option_index, provider) in providers.iter().enumerate() {
-                            if ui
-                                .selectable_label(option_index == selected, &provider.label)
-                                .clicked()
-                            {
-                                picked = option_index;
-                                ui.close();
-                            }
-                        }
-                    });
-                if picked != selected {
-                    actions.push(FrontendAction::SettingsChannelProviderType {
-                        index,
-                        provider_type: providers[picked].provider_type.clone(),
-                    });
-                }
-            }
-            // 当前生效的渠道由 Core 记录：界面只读「哪个是当前」（is_active），
-            // 并通过 Core 切换，不自己判定谁该生效。
-            if !channel.is_active
-                && ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new(tr_l10n(lang, "btn.activate")).size(11.0),
-                        )
-                        .fill(theme::SURFACE_2)
-                        .stroke(egui::Stroke::new(0.8, theme::LINE))
-                        .corner_radius(egui::CornerRadius::same(8))
-                        .min_size(egui::vec2(0.0, 24.0)),
-                    )
-                    .clicked()
-            {
-                actions.push(FrontendAction::SettingsChannelActivate(index));
-            }
-            if ui
-                .add(
-                    egui::Button::new(
-                        egui::RichText::new(tr_l10n(lang, "settings.channels.delete")).size(11.0),
-                    )
-                    .fill(theme::SURFACE_2)
-                    .stroke(egui::Stroke::new(0.8, theme::LINE))
-                    .corner_radius(egui::CornerRadius::same(8))
-                    .min_size(egui::vec2(0.0, 24.0)),
-                )
-                .clicked()
-            {
-                actions.push(FrontendAction::SettingsChannelDelete(index));
-            }
-            let (switch, _) = ui.allocate_exact_size(egui::vec2(36.0, 20.0), egui::Sense::hover());
-            if layout::toggle(ui, switch, channel.enabled, ("settings-channel", index)).clicked() {
-                actions.push(FrontendAction::SettingsChannelToggle(index));
-            }
+        }
+    }
+}
+
+/// 验证请求在飞的那几秒：按钮变「正在验证…」并禁用。
+///
+/// Tauri 的 `testingIds` 同样是**界面本地**状态（promise 落地即清除），所以这里
+/// 也放在 egui 的临时数据里：结果回包（`last_check_age_seconds` 变新）或超时即恢复。
+fn channel_testing(ui: &egui::Ui, channel: &super::view_model::SettingsChannel) -> bool {
+    /// 快照里出现这么新的结果就算回包了。
+    const FRESH_RESULT_SECONDS: i64 = 30;
+
+    let id = egui::Id::new(("settings-channel-testing", &channel.id));
+    let Some(deadline) = ui.data(|data| data.get_temp::<f64>(id)) else {
+        return false;
+    };
+    let expired = ui.input(|input| input.time) >= deadline;
+    let answered = channel
+        .last_check_age_seconds
+        .is_some_and(|age| age <= FRESH_RESULT_SECONDS);
+    if expired || answered {
+        ui.data_mut(|data| data.remove_temp::<f64>(id));
+        return false;
+    }
+    true
+}
+
+fn mark_channel_testing(ui: &egui::Ui, channel: &super::view_model::SettingsChannel) {
+    /// 与 `channel_testing` 的上限一致。
+    const MAX_TESTING_SECONDS: f64 = 30.0;
+    let id = egui::Id::new(("settings-channel-testing", &channel.id));
+    let now = ui.input(|input| input.time);
+    ui.data_mut(|data| data.insert_temp(id, now + MAX_TESTING_SECONDS));
+}
+
+/// Tauri 的 `.ol-channel-edit-button`：铅笔 + 「编辑」+ 右尖括号。
+fn channel_edit_button(ui: &mut egui::Ui, lang: Lang, mut on_click: impl FnMut()) {
+    let label = tr_l10n(lang, "settings.channels.edit");
+    let width = 14.0 + 6.0 + layout::text_width(ui, label, 11.0) + 6.0 + 14.0 + 12.0;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::click());
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(8), theme::SURFACE_2);
+    }
+    let icon_size = 14.0;
+    let mut cursor = rect.left() + 6.0;
+    icons::draw_icon_sized(
+        ui,
+        egui::pos2(cursor + icon_size / 2.0, rect.center().y),
+        IconName::Pencil,
+        theme::INK_2,
+        icon_size,
+    );
+    cursor += icon_size + 6.0;
+    ui.painter().text(
+        egui::pos2(cursor, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(11.0),
+        theme::INK_2,
+    );
+    cursor += layout::text_width(ui, label, 11.0) + 6.0;
+    icons::draw_icon_sized(
+        ui,
+        egui::pos2(cursor + icon_size / 2.0, rect.center().y),
+        IconName::ChevronRight,
+        theme::INK_4,
+        icon_size,
+    );
+    if response.clicked() {
+        on_click();
+    }
+}
+
+/// 「上次验证 …」状态块（Tauri `ChannelList` 的 `ChannelTestStatus`）。
+///
+/// 结构：`上次验证` + 结果（通过 + 耗时，或失败 + 错误 + 「验证失败不会自动停用」
+/// 说明）+ 多久以前；结果超过 24 小时再加一条过期提示。
+fn channel_status_line(
+    ui: &mut egui::Ui,
+    channel: &super::view_model::SettingsChannel,
+    lang: Lang,
+) {
+    /// 与 Tauri `STALE_TEST_SECONDS` 一致：一天前的验证结果不可信。
+    const STALE_AFTER_SECONDS: i64 = 24 * 60 * 60;
+
+    ui.add_space(2.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.label(
+            egui::RichText::new(tr_l10n(lang, "settings.channels.last_check"))
+                .size(11.0)
+                .color(theme::INK_3),
+        );
+        let Some(passed) = channel.last_ok else {
             ui.label(
-                egui::RichText::new(tr_l10n(lang, "settings.channels.enabled"))
+                egui::RichText::new(tr_l10n(lang, "settings.channels.not_verified"))
                     .size(11.0)
                     .color(theme::INK_3),
             );
-            if ui
-                .add(
-                    egui::Button::new(
-                        egui::RichText::new(tr_l10n(lang, "settings.channels.verify")).size(11.0),
-                    )
-                    .fill(theme::SURFACE_2)
-                    .stroke(egui::Stroke::new(0.8, theme::LINE))
-                    .corner_radius(egui::CornerRadius::same(8))
-                    .min_size(egui::vec2(0.0, 24.0)),
-                )
-                .clicked()
-            {
-                actions.push(FrontendAction::SettingsChannelValidate(index));
+            return;
+        };
+        let stale = channel
+            .last_check_age_seconds
+            .is_some_and(|age| age > STALE_AFTER_SECONDS);
+        if passed {
+            ui.label(
+                egui::RichText::new(tr_l10n(lang, "settings.channels.passed"))
+                    .size(11.0)
+                    .color(if stale { theme::INK_2 } else { theme::OK }),
+            );
+            if let Some(ms) = channel.last_latency_ms {
+                ui.label(
+                    egui::RichText::new(fmt_l10n(lang, "settings.channels.elapsed", &[&ms]))
+                        .size(11.0)
+                        .color(theme::INK_3),
+                );
             }
-            ui.add_space(6.0);
-        });
+        } else {
+            let error = channel.last_error.as_deref().unwrap_or_default();
+            let text = if error.trim().is_empty() {
+                tr_l10n(lang, "settings.channels.failed_plain").to_string()
+            } else {
+                fmt_l10n(lang, "settings.channels.failed", &[&error])
+            };
+            ui.label(egui::RichText::new(text).size(11.0).color(theme::ERR));
+            ui.label(
+                egui::RichText::new(tr_l10n(lang, "settings.channels.failure_keeps_enabled"))
+                    .size(11.0)
+                    .color(theme::INK_2),
+            );
+        }
+        if let Some(age) = channel.last_check_age_seconds {
+            ui.label(
+                egui::RichText::new(relative_check_age(lang, age))
+                    .size(11.0)
+                    .color(theme::INK_3),
+            );
+            if stale {
+                ui.label(
+                    egui::RichText::new(tr_l10n(lang, "settings.channels.stale_result"))
+                        .size(11.0)
+                        .color(theme::INK_2),
+                );
+            }
+        }
     });
-    ui.separator();
+}
+
+/// 「刚刚 / N 分钟前 / N 小时前 / N 天前」，与 Tauri `relativeTime` 同规则。
+fn relative_check_age(lang: Lang, seconds: i64) -> String {
+    if seconds < 60 {
+        return tr_l10n(lang, "settings.channels.just_now").to_string();
+    }
+    let minutes = seconds / 60;
+    if minutes < 60 {
+        return fmt_l10n(lang, "settings.channels.minutes_ago", &[&minutes]);
+    }
+    let hours = minutes / 60;
+    if hours < 24 {
+        return fmt_l10n(lang, "settings.channels.hours_ago", &[&hours]);
+    }
+    fmt_l10n(lang, "settings.channels.days_ago", &[&(hours / 24)])
 }
 
 /// Provider + name form used by "add channel".
@@ -2648,12 +2880,7 @@ fn provider_model_block(
     ui.add_space(4.0);
 
     // 模型字段：预设下拉 ⇄ 自定义输入。
-    ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new(tr_l10n(lang, "settings.providers.modelLabel"))
-                .size(11.5)
-                .color(theme::INK_3),
-        );
+    modal_form_row(ui, tr_l10n(lang, "settings.providers.modelLabel"), |ui| {
         let show_presets = !editor.static_models.is_empty() && !editor.custom_model;
         if show_presets {
             // Tauri 会把当前值（不在清单里时）也塞进选项，否则下拉会显示空白。
@@ -2684,25 +2911,32 @@ fn provider_model_block(
                     }
                 });
             if pick != editor.model {
+                editor_mark_dirty(ui);
                 actions.push(FrontendAction::SettingsProviderField(
                     SettingsProviderField::Model,
                     pick,
                 ));
             }
         } else {
-            let mut draft = editor.model.clone();
-            let id = egui::Id::new("openless-settings-provider-model");
-            if layout::text_input(ui, &mut draft, id, "", 220.0, false).changed() {
-                actions.push(FrontendAction::SettingsProviderField(
-                    SettingsProviderField::Model,
-                    draft,
-                ));
-            }
-            if !editor.static_models.is_empty()
-                && provider_small_button(ui, lang, "settings.providers.presetListLabel", false)
-            {
-                actions.push(FrontendAction::SettingsProviderModelCustom(false));
-            }
+            // 手输框与「回到预设列表」是上下两行（Tauri 的模型工具都在字段下方），
+            // 同一行会让按钮被挤出右边界、根本画不出来。
+            ui.vertical(|ui| {
+                let mut draft = editor.model.clone();
+                let id = egui::Id::new("openless-settings-provider-model");
+                let width = ui.available_width().min(420.0);
+                if layout::text_input_sized(ui, &mut draft, id, "", width, 38.0, false).changed() {
+                    editor_mark_dirty(ui);
+                    actions.push(FrontendAction::SettingsProviderField(
+                        SettingsProviderField::Model,
+                        draft,
+                    ));
+                }
+                if !editor.static_models.is_empty()
+                    && provider_small_button(ui, lang, "settings.providers.presetListLabel", false)
+                {
+                    actions.push(FrontendAction::SettingsProviderModelCustom(false));
+                }
+            });
         }
         if editor.model.trim().is_empty()
             && !editor.default_model.is_empty()
@@ -2788,14 +3022,24 @@ fn provider_field(
     password: bool,
     actions: &mut Vec<FrontendAction>,
 ) {
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(label).size(11.5).color(theme::INK_3));
+    /// Tauri 渠道弹窗里的输入框：整列宽、38px 高。
+    const MODAL_INPUT_HEIGHT: f32 = 38.0;
+    let mut row = |ui: &mut egui::Ui| {
         let mut draft = value.to_string();
         let id = egui::Id::new(("openless-settings-provider-field", format!("{field:?}")));
-        if layout::text_input(ui, &mut draft, id, "", 220.0, password).changed() {
+        let width = ui.available_width().min(420.0);
+        if layout::text_input_sized(ui, &mut draft, id, "", width, MODAL_INPUT_HEIGHT, password)
+            .changed()
+        {
+            editor_mark_dirty(ui);
             actions.push(FrontendAction::SettingsProviderField(field, draft));
         }
-    });
+    };
+    if label.is_empty() {
+        row(ui);
+    } else {
+        modal_form_row(ui, label, row);
+    }
 }
 
 fn provider_small_button(ui: &mut egui::Ui, lang: Lang, key: &'static str, primary: bool) -> bool {
@@ -2818,267 +3062,680 @@ fn provider_small_button(ui: &mut egui::Ui, lang: Lang, key: &'static str, prima
     .clicked()
 }
 
-/// Channel editor. Core's `AuthRequirement` decides which inputs exist, and every
-/// write goes back through Core's provider/credential API: the UI never owns
-/// endpoints, defaults or credential semantics. Secret inputs are write-only —
-/// opening an editor never shows a stored key.
-fn provider_editor_panel(
-    ui: &mut egui::Ui,
-    editor: &SettingsProviderEditor,
-    lang: Lang,
-    actions: &mut Vec<FrontendAction>,
-) {
-    egui::Frame::new()
-        .fill(theme::SURFACE_2)
-        .corner_radius(egui::CornerRadius::same(10))
-        .inner_margin(egui::Margin::symmetric(12, 10))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(&editor.provider)
-                        .strong()
-                        .size(12.0)
-                        .color(theme::INK),
-                );
-                ui.label(
-                    egui::RichText::new(tr_l10n(lang, "providers.editing"))
-                        .size(10.5)
-                        .color(theme::INK_4),
-                );
-                if editor.busy {
-                    ui.label(
-                        egui::RichText::new(tr_l10n(lang, "common.loading"))
-                            .size(10.5)
-                            .color(theme::INK_4),
-                    );
-                }
-            });
-            provider_field(
-                ui,
-                tr_l10n(lang, "providers.name"),
-                &editor.name,
-                SettingsProviderField::Name,
-                false,
-                actions,
-            );
-            ui.label(
-                egui::RichText::new(tr_l10n(lang, "providers.credentials"))
-                    .size(11.0)
-                    .color(theme::INK_4),
-            );
-            match editor.auth {
-                SettingsProviderAuth::None => {
-                    ui.label(
-                        egui::RichText::new(tr_l10n(lang, "providers.no_cloud_note"))
-                            .size(11.0)
-                            .color(theme::INK_4),
-                    );
-                }
-                SettingsProviderAuth::OAuth => {
-                    ui.label(
-                        egui::RichText::new(tr_l10n(lang, "providers.oauth_note"))
-                            .size(11.0)
-                            .color(theme::INK_4),
-                    );
-                }
-                SettingsProviderAuth::Volcengine => {
-                    let mut mode = editor.auth_mode.clone();
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Auth").size(11.5).color(theme::INK_3));
-                        egui::ComboBox::from_id_salt("settings-provider-auth-mode")
-                            .selected_text(&mode)
-                            .show_ui(ui, |ui| {
-                                for option in ["app_id_token", "api_key"] {
-                                    if ui.selectable_label(mode == option, option).clicked() {
-                                        mode = option.to_string();
-                                        ui.close();
-                                    }
-                                }
-                            });
-                    });
-                    if mode != editor.auth_mode {
-                        actions.push(FrontendAction::SettingsProviderField(
-                            SettingsProviderField::AuthMode,
-                            mode.clone(),
-                        ));
-                    }
-                    if mode == "api_key" {
-                        provider_field(
-                            ui,
-                            "API Key",
-                            &editor.primary_secret,
-                            SettingsProviderField::PrimarySecret,
-                            true,
-                            actions,
-                        );
-                    } else {
-                        provider_field(
-                            ui,
-                            "APP ID",
-                            &editor.primary_secret,
-                            SettingsProviderField::PrimarySecret,
-                            true,
-                            actions,
-                        );
-                        provider_field(
-                            ui,
-                            "Access Token",
-                            &editor.secondary_secret,
-                            SettingsProviderField::SecondarySecret,
-                            true,
-                            actions,
-                        );
-                    }
-                    provider_field(
-                        ui,
-                        "Resource ID",
-                        &editor.resource_id,
-                        SettingsProviderField::ResourceId,
-                        false,
-                        actions,
-                    );
-                }
-                SettingsProviderAuth::Xfyun => {
-                    provider_field(
-                        ui,
-                        "AppID",
-                        &editor.primary_secret,
-                        SettingsProviderField::PrimarySecret,
-                        true,
-                        actions,
-                    );
-                    provider_field(
-                        ui,
-                        "API Key",
-                        &editor.secondary_secret,
-                        SettingsProviderField::SecondarySecret,
-                        true,
-                        actions,
-                    );
-                }
-                SettingsProviderAuth::Other => {
-                    ui.label(
-                        egui::RichText::new(tr_l10n(lang, "providers.core_note"))
-                            .size(11.0)
-                            .color(theme::INK_4),
-                    );
-                }
-                SettingsProviderAuth::ApiKey => {
-                    provider_field(
-                        ui,
-                        tr_l10n(lang, "providers.api_key_hint"),
-                        &editor.primary_secret,
-                        SettingsProviderField::PrimarySecret,
-                        true,
-                        actions,
-                    );
-                    provider_field(
-                        ui,
-                        "Endpoint",
-                        &editor.endpoint,
-                        SettingsProviderField::Endpoint,
-                        false,
-                        actions,
-                    );
-                }
-            }
-            provider_model_block(ui, editor, lang, actions);
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                if provider_small_button(ui, lang, "btn.save_fields", true) {
-                    actions.push(FrontendAction::SettingsProviderSave);
-                }
-                if provider_small_button(ui, lang, "btn.clear_secret", false) {
-                    actions.push(FrontendAction::SettingsProviderClearSecrets);
-                }
-                if provider_small_button(ui, lang, "btn.close", false) {
-                    actions.push(FrontendAction::SettingsProviderClose);
-                }
-            });
-        });
+/// 自动保存的临时状态：存在即「有未落盘的改动」，值是防抖截止时刻（egui 时间轴）。
+fn editor_autosave_id() -> egui::Id {
+    egui::Id::new("openless-channel-editor-autosave")
 }
 
-fn add_channel_form(
+/// 记一次改动并按 Tauri 的节奏安排落盘：输入停下 300ms（这里取 0.4s 留点余量）后保存。
+fn editor_mark_dirty(ui: &egui::Ui) {
+    const AUTO_SAVE_DELAY: f64 = 0.4;
+    let deadline = ui.input(|input| input.time) + AUTO_SAVE_DELAY;
+    ui.data_mut(|data| data.insert_temp(editor_autosave_id(), deadline));
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(400));
+}
+
+/// 到点就落盘。返回是否推了保存。
+fn editor_auto_save(ui: &egui::Ui, actions: &mut Vec<FrontendAction>) -> bool {
+    let Some(deadline) = ui.data(|data| data.get_temp::<f64>(editor_autosave_id())) else {
+        return false;
+    };
+    let now = ui.input(|input| input.time);
+    if now < deadline {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(
+                ((deadline - now) * 1000.0).clamp(16.0, 400.0) as u64,
+            ));
+        return false;
+    }
+    ui.data_mut(|data| data.remove_temp::<f64>(editor_autosave_id()));
+    actions.push(FrontendAction::SettingsProviderSave);
+    true
+}
+
+/// 关闭编辑器：先把还没落盘的改动冲掉（Tauri 的 flush-on-leave），再关。
+fn editor_close(ui: &egui::Ui, actions: &mut Vec<FrontendAction>) {
+    if ui
+        .data(|data| data.get_temp::<f64>(editor_autosave_id()))
+        .is_some()
+    {
+        ui.data_mut(|data| data.remove_temp::<f64>(editor_autosave_id()));
+        actions.push(FrontendAction::SettingsProviderSave);
+    }
+    actions.push(FrontendAction::SettingsProviderClose);
+}
+
+/// Tauri 的渠道编辑器在桌面端是 **embedded**：`ChannelModal` 被 portal 进右侧内容栏
+/// （`.ol-settings-content-pane`），靠 `.ol-channel-dialog-embedded { position: absolute;
+/// inset: 0; background: var(--ol-sidebar-bg) }` 整栏盖住——不是全窗口遮罩加居中卡片。
+///
+/// 所以这里是「在右栏里覆盖一层」：灰底（`--ol-sidebar-bg`）+ 头部（返回按钮 + 标题 +
+/// 渠道种类徽章 + 自动保存说明）+ 中部滚动区（白底圆角表单卡：服务连接 → 供应商 →
+/// 渠道名称 → 凭据 → 模型）+ 底部（删除渠道 / 完成）。
+fn channel_editor_panel(
     ui: &mut egui::Ui,
-    vm: &mut FrontendViewModel,
+    vm: &FrontendViewModel,
     actions: &mut Vec<FrontendAction>,
 ) {
+    /// Tauri `.ol-channel-dialog-embedded .ol-channel-dialog-header { padding: 18px 24px }`
+    /// + 标题行与说明行。
+    const HEADER_HEIGHT: f32 = 92.0;
+    /// Tauri `.ol-channel-dialog-embedded .ol-channel-dialog-footer { padding: 16px 24px }`
+    /// + 34px 按钮 + 1px 顶线。
+    const FOOTER_HEIGHT: f32 = 67.0;
+    /// 左右内边距（Tauri 的 `24px`）。
+    const SIDE_PADDING: f32 = 24.0;
+    /// `.ol-channel-dialog-embedded .ol-channel-form-sheet { padding: 18px }`。
+    const SHEET_PADDING: f32 = 18.0;
+
+    let Some(editor) = vm.provider_editor.as_ref() else {
+        return;
+    };
     let lang = vm.lang;
-    ui.horizontal(|ui| {
-        let options: Vec<String> = vm
-            .channel_providers
-            .iter()
-            .map(|provider| provider.label.clone())
-            .collect();
-        let selected = vm
-            .channel_provider_index
-            .min(options.len().saturating_sub(1));
-        let mut new_selection = selected;
-        egui::ComboBox::from_id_salt("settings-new-channel-provider")
-            .selected_text(options.get(selected).cloned().unwrap_or_default())
-            .show_ui(ui, |ui| {
-                for (index, option) in options.iter().enumerate() {
-                    if ui.selectable_label(index == selected, option).clicked() {
-                        new_selection = index;
-                        ui.close();
-                    }
-                }
+    // Tauri：字段修改后自动保存（300ms 防抖 + 失焦/离开前 flush）。这里到点就推一次
+    // `SettingsProviderSave`；没到点则请求下一帧再看。
+    editor_auto_save(ui, actions);
+    let edited = vm
+        .channels
+        .iter()
+        .position(|channel| channel.id == editor.channel_id);
+    let column = ui.max_rect();
+    ui.painter().rect_filled(
+        column,
+        egui::CornerRadius {
+            nw: 0,
+            sw: 0,
+            ne: 14,
+            se: 14,
+        },
+        theme::RAIL_BG,
+    );
+
+    // ── 头部：返回按钮 + 标题/徽章 + 说明 ────────────────────────────────────
+    let header = egui::Rect::from_min_size(
+        column.min,
+        egui::vec2(column.width(), HEADER_HEIGHT.min(column.height())),
+    );
+    ui.painter().rect_filled(
+        egui::Rect::from_min_max(
+            egui::pos2(header.left(), header.bottom() - 1.0),
+            header.right_bottom(),
+        ),
+        egui::CornerRadius::ZERO,
+        theme::LINE,
+    );
+    // Tauri `.ol-settings-back`：32×30、白底、0.5px 强描边、圆角 8。
+    let back = egui::Rect::from_min_size(
+        egui::pos2(column.left() + SIDE_PADDING, column.top() + 18.0),
+        egui::vec2(32.0, 30.0),
+    );
+    let back_response = ui.interact(
+        back,
+        egui::Id::new("openless-channel-editor-back"),
+        egui::Sense::click(),
+    );
+    ui.painter().rect_filled(
+        back,
+        egui::CornerRadius::same(8),
+        if back_response.hovered() {
+            theme::SURFACE_2
+        } else {
+            theme::SURFACE
+        },
+    );
+    ui.painter().rect_stroke(
+        back,
+        egui::CornerRadius::same(8),
+        egui::Stroke::new(0.8, theme::LINE_STRONG),
+        egui::StrokeKind::Inside,
+    );
+    icons::draw_icon_sized(
+        ui,
+        back.center(),
+        IconName::ChevronLeft,
+        if back_response.hovered() {
+            theme::INK
+        } else {
+            theme::INK_2
+        },
+        18.0,
+    );
+    if back_response.clicked() {
+        editor_close(ui, actions);
+    }
+    let heading_left = back.right() + 14.0;
+    let title_painter = ui.painter().clone();
+    let title_y = column.top() + 18.0;
+    let title_key = if editor.is_draft {
+        "settings.channels.create_title"
+    } else {
+        "settings.channels.edit_title"
+    };
+    title_painter.text(
+        egui::pos2(heading_left, title_y),
+        egui::Align2::LEFT_TOP,
+        tr_l10n(lang, title_key),
+        egui::FontId::proportional(21.0),
+        theme::INK,
+    );
+    let title_width = layout::text_width(ui, tr_l10n(lang, title_key), 21.0);
+    let kind_title = tr_l10n(
+        lang,
+        if editor.is_asr {
+            "settings.channels.asr_title"
+        } else {
+            "settings.channels.llm_title"
+        },
+    );
+    let badge_galley = title_painter.layout_no_wrap(
+        kind_title.to_owned(),
+        egui::FontId::proportional(10.5),
+        theme::INK_3,
+    );
+    let badge_padding = egui::vec2(7.0, 2.0);
+    let badge = egui::Rect::from_min_size(
+        egui::pos2(heading_left + title_width + 12.0, title_y + 6.0),
+        badge_galley.size() + badge_padding * 2.0,
+    );
+    title_painter.rect_stroke(
+        badge,
+        egui::CornerRadius::same(5),
+        egui::Stroke::new(1.0, theme::LINE),
+        egui::StrokeKind::Inside,
+    );
+    title_painter.galley(badge.min + badge_padding, badge_galley, theme::INK_3);
+    title_painter.text(
+        egui::pos2(heading_left, title_y + 32.0),
+        egui::Align2::LEFT_TOP,
+        tr_l10n(lang, "settings.channels.auto_save_hint"),
+        egui::FontId::proportional(12.0),
+        theme::INK_3,
+    );
+
+    // ── 底部：删除渠道（两步确认）+ 完成 ────────────────────────────────────
+    let footer = egui::Rect::from_min_size(
+        egui::pos2(
+            column.left(),
+            column.bottom() - FOOTER_HEIGHT.min(column.height()),
+        ),
+        egui::vec2(column.width(), FOOTER_HEIGHT.min(column.height())),
+    );
+    ui.painter()
+        .rect_filled(footer, egui::CornerRadius::ZERO, theme::RAIL_BG);
+    ui.painter().rect_filled(
+        egui::Rect::from_min_max(
+            footer.left_top(),
+            egui::pos2(footer.right(), footer.top() + 1.0),
+        ),
+        egui::CornerRadius::ZERO,
+        theme::LINE,
+    );
+
+    // ── 中部：滚动区里的白色表单卡 ─────────────────────────────────────────
+    let body = egui::Rect::from_min_max(
+        egui::pos2(column.left(), header.bottom()),
+        egui::pos2(column.right(), footer.top()),
+    );
+    ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt("openless-channel-editor-body")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.add_space(8.0);
+                let inner = egui::Rect::from_min_max(
+                    egui::pos2(body.left() + SIDE_PADDING, ui.cursor().top()),
+                    egui::pos2(
+                        body.right() - SIDE_PADDING,
+                        body.bottom().max(ui.cursor().top() + 40.0),
+                    ),
+                );
+                ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
+                    egui::Frame::new()
+                        .fill(theme::SURFACE)
+                        .stroke(egui::Stroke::new(1.0, theme::LINE))
+                        .corner_radius(egui::CornerRadius::same(14))
+                        .inner_margin(egui::Margin::same(SHEET_PADDING as i8))
+                        .show(ui, |ui| {
+                            ui.set_width((inner.width() - SHEET_PADDING * 2.0).max(80.0));
+                            provider_editor_body(
+                                ui,
+                                editor,
+                                &vm.channel_providers,
+                                edited,
+                                lang,
+                                actions,
+                            );
+                        });
+                });
+                ui.add_space(22.0);
             });
-        if new_selection != selected {
-            actions.push(FrontendAction::SettingsChannelProvider(new_selection));
-        }
-        // 推的是编辑后的值：推编辑前的拷贝会让宿主把旧值写回字段，每敲一个字
-        // 就被回灌一次（渠道名、下划线搜索框都踩过这个坑）。
-        let response = layout::text_input(
-            ui,
-            &mut vm.channel_form_name,
-            egui::Id::new("openless-settings-channel-name"),
-            tr_l10n(lang, "settings.channels.name_placeholder"),
-            200.0,
-            false,
-        );
-        if response.changed() {
-            actions.push(FrontendAction::SettingsChannelName(
-                vm.channel_form_name.clone(),
-            ));
-        }
-        if ui
-            .add(
-                egui::Button::new(
-                    egui::RichText::new(tr_l10n(lang, "settings.channels.create"))
-                        .color(theme::SURFACE)
-                        .size(11.5),
-                )
-                .fill(theme::INK)
-                .stroke(egui::Stroke::NONE)
-                .corner_radius(egui::CornerRadius::same(8))
-                .min_size(egui::vec2(0.0, 26.0)),
-            )
-            .clicked()
-        {
-            actions.push(FrontendAction::SettingsChannelCreate);
-        }
-        if ui
-            .add(
-                egui::Button::new(egui::RichText::new(tr_l10n(lang, "common.cancel")).size(11.5))
-                    .fill(theme::SURFACE_2)
-                    .stroke(egui::Stroke::new(0.8, theme::LINE))
-                    .corner_radius(egui::CornerRadius::same(8))
-                    .min_size(egui::vec2(0.0, 26.0)),
-            )
-            .clicked()
-        {
-            actions.push(FrontendAction::SettingsChannelFormOpen(false));
-        }
     });
-    ui.label(
-        egui::RichText::new(tr_l10n(lang, "settings.channels.name_hint"))
-            .size(11.0)
-            .color(theme::INK_4),
+
+    // ── 底部按钮 ───────────────────────────────────────────────────────────
+    let confirm_id = egui::Id::new(("settings-channel-delete", &editor.channel_id));
+    let confirming = ui.data(|data| data.get_temp::<bool>(confirm_id).unwrap_or(false));
+    let mut footer_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(footer.shrink2(egui::vec2(SIDE_PADDING, 16.0)))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    if let Some(index) = edited {
+        if confirming {
+            footer_ui.label(
+                egui::RichText::new(tr_l10n(lang, "settings.channels.delete_confirm"))
+                    .size(12.0)
+                    .color(theme::INK_2),
+            );
+            footer_ui.add_space(12.0);
+            if danger_button(
+                &mut footer_ui,
+                tr_l10n(lang, "settings.channels.confirm_delete"),
+                Some(IconName::Trash),
+            ) {
+                actions.push(FrontendAction::SettingsChannelDelete(index));
+                ui.data_mut(|data| data.remove_temp::<bool>(confirm_id));
+            }
+            footer_ui.add_space(8.0);
+            if provider_small_button(&mut footer_ui, lang, "common.cancel", false) {
+                footer_ui.data_mut(|data| data.remove_temp::<bool>(confirm_id));
+            }
+        } else if danger_button(
+            &mut footer_ui,
+            tr_l10n(lang, "settings.channels.delete"),
+            Some(IconName::Trash),
+        ) {
+            footer_ui.data_mut(|data| data.insert_temp(confirm_id, true));
+        }
+    }
+    if editor.busy {
+        footer_ui.add_space(10.0);
+        footer_ui.label(
+            egui::RichText::new(tr_l10n(lang, "common.loading"))
+                .size(11.5)
+                .color(theme::INK_4),
+        );
+    }
+    // 右侧组（Tauri `.ol-channel-dialog-footer-end`）：自动保存提示 + 保存/清除 + 完成。
+    let hint = footer_ui.painter().layout_no_wrap(
+        tr_l10n(lang, "modal.auto_save_hint").to_owned(),
+        egui::FontId::proportional(11.5),
+        theme::INK_3,
+    );
+    let done_width =
+        layout::text_width(&footer_ui, tr_l10n(lang, "settings.channels.done"), 12.0) + 30.0;
+    let clear_width =
+        layout::text_width(&footer_ui, tr_l10n(lang, "btn.clear_secret"), 11.5) + 22.0;
+    let mut cursor = footer.right() - SIDE_PADDING - done_width;
+    let done_rect = egui::Rect::from_min_size(
+        egui::pos2(cursor, footer.center().y - 17.0),
+        egui::vec2(done_width, 34.0),
+    );
+    cursor -= 16.0 + clear_width;
+    let clear_rect = egui::Rect::from_min_size(
+        egui::pos2(cursor, footer.center().y - 14.0),
+        egui::vec2(clear_width, 28.0),
+    );
+    cursor -= 16.0 + hint.size().x;
+    if cursor > footer.left() + SIDE_PADDING + 200.0 {
+        footer_ui.painter().galley(
+            egui::pos2(cursor, footer.center().y - hint.size().y / 2.0),
+            hint,
+            theme::INK_3,
+        );
+    }
+    let done = footer_ui.interact(
+        done_rect,
+        egui::Id::new("openless-channel-editor-done"),
+        egui::Sense::click(),
+    );
+    footer_ui.painter().rect_filled(
+        done_rect,
+        egui::CornerRadius::same(10),
+        if done.hovered() {
+            theme::BLUE_HOVER
+        } else {
+            theme::BLUE
+        },
+    );
+    footer_ui.painter().text(
+        done_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        tr_l10n(lang, "settings.channels.done"),
+        egui::FontId::proportional(12.0),
+        theme::SURFACE,
+    );
+    if done.clicked() {
+        editor_close(ui, actions);
+    }
+    let clear = footer_ui.interact(
+        clear_rect,
+        egui::Id::new("openless-channel-editor-clear"),
+        egui::Sense::click(),
+    );
+    paint_ghost_small_button(
+        &footer_ui,
+        clear_rect,
+        clear.hovered(),
+        tr_l10n(lang, "btn.clear_secret"),
+        11.5,
+    );
+    if clear.clicked() {
+        actions.push(FrontendAction::SettingsProviderClearSecrets);
+    }
+}
+
+/// 次要按钮（白底 + 0.8px 描边 + 圆角 8），用于弹窗底部的保存/清除。
+fn paint_ghost_small_button(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    hovered: bool,
+    label: &str,
+    size: f32,
+) {
+    ui.painter().rect_filled(
+        rect,
+        egui::CornerRadius::same(8),
+        if hovered {
+            theme::SURFACE_2
+        } else {
+            theme::SURFACE
+        },
+    );
+    ui.painter().rect_stroke(
+        rect,
+        egui::CornerRadius::same(8),
+        egui::Stroke::new(0.8, theme::LINE),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(size),
+        theme::INK_2,
     );
 }
 
-/// A row whose value is a button that opens a link / performs an action.
+/// 危险按钮（Tauri `.ol-channel-delete-button`：淡红底、红描边、红字 + 垃圾桶图标）。
+fn danger_button(ui: &mut egui::Ui, label: &str, icon: Option<IconName>) -> bool {
+    let text_width = layout::text_width(ui, label, 12.5);
+    let icon_space = if icon.is_some() { 21.0 } else { 0.0 };
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(text_width + icon_space + 24.0, 34.0),
+        egui::Sense::click(),
+    );
+    ui.painter().rect_filled(
+        rect,
+        egui::CornerRadius::same(8),
+        if response.hovered() {
+            theme::DANGER_FILL_HOVER
+        } else {
+            theme::DANGER_FILL
+        },
+    );
+    ui.painter().rect_stroke(
+        rect,
+        egui::CornerRadius::same(8),
+        egui::Stroke::new(1.0, theme::DANGER_BORDER),
+        egui::StrokeKind::Inside,
+    );
+    let mut text_left = rect.left() + 12.0;
+    if let Some(icon) = icon {
+        icons::draw_icon_sized(
+            ui,
+            egui::pos2(text_left + 7.5, rect.center().y),
+            icon,
+            theme::ERR,
+            15.0,
+        );
+        text_left += 21.0;
+    }
+    ui.painter().text(
+        egui::pos2(text_left, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(12.5),
+        theme::ERR,
+    );
+    response.clicked()
+}
+
+/// 弹窗正文：Tauri 的 `.ol-channel-form-sheet`——`服务连接` 分区 + 供应商 + 名称，
+/// 之后是 Core 决定形状的凭据字段与模型块。
+fn provider_editor_body(
+    ui: &mut egui::Ui,
+    editor: &SettingsProviderEditor,
+    providers: &[SettingsChannelProvider],
+    channel_index: Option<usize>,
+    lang: Lang,
+    actions: &mut Vec<FrontendAction>,
+) {
+    // 分区标题：云图标 + 「服务连接」（Tauri `ChannelSectionHeading`）。
+    ui.horizontal(|ui| {
+        icons::draw_icon_sized(
+            ui,
+            ui.cursor().min + egui::vec2(7.0, 8.0),
+            IconName::Cloud,
+            theme::INK_3,
+            14.0,
+        );
+        ui.add_space(22.0);
+        ui.label(
+            egui::RichText::new(tr_l10n(lang, "settings.channels.connection_title"))
+                .size(13.0)
+                .color(theme::INK)
+                .strong(),
+        );
+    });
+    ui.add_space(6.0);
+    if !providers.is_empty() {
+        modal_form_row(
+            ui,
+            tr_l10n(lang, "settings.channels.provider_label"),
+            |ui| {
+                let selected = providers
+                    .iter()
+                    .position(|provider| provider.provider_type == editor.provider_type)
+                    .unwrap_or(0);
+                let mut picked = selected;
+                egui::ComboBox::from_id_salt(("settings-editor-provider", &editor.channel_id))
+                    .selected_text(&editor.provider)
+                    .width(ui.available_width().min(420.0))
+                    .show_ui(ui, |ui| {
+                        for (option_index, provider) in providers.iter().enumerate() {
+                            if ui
+                                .selectable_label(option_index == selected, &provider.label)
+                                .clicked()
+                            {
+                                picked = option_index;
+                                ui.close();
+                            }
+                        }
+                    });
+                if picked != selected {
+                    if let Some(index) = channel_index {
+                        actions.push(FrontendAction::SettingsChannelProviderType {
+                            index,
+                            provider_type: providers[picked].provider_type.clone(),
+                        });
+                    }
+                }
+            },
+        );
+    }
+    modal_form_row(ui, tr_l10n(lang, "settings.channels.name_label"), |ui| {
+        provider_field(
+            ui,
+            "",
+            &editor.name,
+            SettingsProviderField::Name,
+            false,
+            actions,
+        );
+    });
+    ui.label(
+        egui::RichText::new(tr_l10n(lang, "settings.channels.name_hint"))
+            .size(11.5)
+            .color(theme::INK_3),
+    );
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new(tr_l10n(lang, "providers.credentials"))
+            .size(11.5)
+            .color(theme::INK_3),
+    );
+    match editor.auth {
+        SettingsProviderAuth::None => {
+            ui.label(
+                egui::RichText::new(tr_l10n(lang, "providers.no_cloud_note"))
+                    .size(11.5)
+                    .color(theme::INK_4),
+            );
+        }
+        SettingsProviderAuth::OAuth => {
+            ui.label(
+                egui::RichText::new(tr_l10n(lang, "providers.oauth_note"))
+                    .size(11.5)
+                    .color(theme::INK_4),
+            );
+        }
+        SettingsProviderAuth::Volcengine => {
+            let mut mode = editor.auth_mode.clone();
+            modal_form_row(ui, "Auth", |ui| {
+                egui::ComboBox::from_id_salt("settings-provider-auth-mode")
+                    .selected_text(&mode)
+                    .show_ui(ui, |ui| {
+                        for option in ["app_id_token", "api_key"] {
+                            if ui.selectable_label(mode == option, option).clicked() {
+                                mode = option.to_string();
+                                ui.close();
+                            }
+                        }
+                    });
+            });
+            if mode != editor.auth_mode {
+                editor_mark_dirty(ui);
+                actions.push(FrontendAction::SettingsProviderField(
+                    SettingsProviderField::AuthMode,
+                    mode.clone(),
+                ));
+            }
+            if mode == "api_key" {
+                provider_field(
+                    ui,
+                    "API Key",
+                    &editor.primary_secret,
+                    SettingsProviderField::PrimarySecret,
+                    true,
+                    actions,
+                );
+            } else {
+                provider_field(
+                    ui,
+                    "APP ID",
+                    &editor.primary_secret,
+                    SettingsProviderField::PrimarySecret,
+                    true,
+                    actions,
+                );
+                provider_field(
+                    ui,
+                    "Access Token",
+                    &editor.secondary_secret,
+                    SettingsProviderField::SecondarySecret,
+                    true,
+                    actions,
+                );
+            }
+            provider_field(
+                ui,
+                "Resource ID",
+                &editor.resource_id,
+                SettingsProviderField::ResourceId,
+                false,
+                actions,
+            );
+        }
+        SettingsProviderAuth::Xfyun => {
+            provider_field(
+                ui,
+                "AppID",
+                &editor.primary_secret,
+                SettingsProviderField::PrimarySecret,
+                true,
+                actions,
+            );
+            provider_field(
+                ui,
+                "API Key",
+                &editor.secondary_secret,
+                SettingsProviderField::SecondarySecret,
+                true,
+                actions,
+            );
+        }
+        SettingsProviderAuth::Other => {
+            ui.label(
+                egui::RichText::new(tr_l10n(lang, "providers.core_note"))
+                    .size(11.5)
+                    .color(theme::INK_4),
+            );
+        }
+        SettingsProviderAuth::ApiKey => {
+            provider_field(
+                ui,
+                tr_l10n(lang, "providers.api_key_hint"),
+                &editor.primary_secret,
+                SettingsProviderField::PrimarySecret,
+                true,
+                actions,
+            );
+            provider_field(
+                ui,
+                "Endpoint",
+                &editor.endpoint,
+                SettingsProviderField::Endpoint,
+                false,
+                actions,
+            );
+        }
+    }
+    ui.add_space(6.0);
+    provider_model_block(ui, editor, lang, actions);
+}
+
+/// Tauri `.ol-channel-form-row`：`grid-template-columns: 140px minmax(0, 1fr)`，
+/// 标签与控件同一行、标签顶部对齐（label `padding-top: 9px`）。
+fn modal_form_row<R>(
+    ui: &mut egui::Ui,
+    label: &str,
+    control: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    /// Tauri 的标签列宽。
+    const LABEL_WIDTH: f32 = 140.0;
+    /// Tauri `gap: 8px 20px`。
+    const COLUMN_GAP: f32 = 20.0;
+    /// Tauri 渠道弹窗里的控件高 38，标签用 `padding-top: 9px` 与它对齐；标签格就取
+    /// 同一行高，不要用 `available_height()`——在纵向布局里那可能是整屏高度，会把
+    /// 这一行撑开、后面的控件被挤出可见区。
+    const ROW_HEIGHT: f32 = 38.0;
+    ui.horizontal(|ui| {
+        let (label_rect, _) =
+            ui.allocate_exact_size(egui::vec2(LABEL_WIDTH, ROW_HEIGHT), egui::Sense::hover());
+        ui.painter().text(
+            egui::pos2(label_rect.left(), label_rect.top() + 9.0),
+            egui::Align2::LEFT_TOP,
+            label,
+            egui::FontId::proportional(13.0),
+            theme::INK_2,
+        );
+        ui.add_space(COLUMN_GAP);
+        control(ui)
+    })
+    .inner
+}
+
 fn link_row(
     ui: &mut egui::Ui,
     label: &str,
@@ -3553,12 +4210,35 @@ fn remote_mode_row(ui: &mut egui::Ui, lang: Lang, selected: usize, on_select: im
 fn capsule_style_preview(ui: &mut egui::Ui, style: usize) {
     ui.horizontal(|ui| {
         ui.add_space(216.0);
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(164.0, 42.0), egui::Sense::hover());
+        // Half-size Siri stage, matching Tauri's 230×90 preview. Keep its
+        // aspect ratio instead of squeezing the ribbons into a pill.
+        let size = if style == 0 {
+            egui::vec2(230.0, 90.0)
+        } else {
+            egui::vec2(164.0, 42.0)
+        };
+        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
         match style {
             0 => {
                 // Match the transparent, drifting spectral ribbons used by the
                 // live Siri capsule instead of showing unrelated loading dots.
-                let _ = super::siri_gl::paint(ui, rect, super::siri_gl::SiriGlow::wave(1.35, 0.52));
+                let dt = ui.input(|input| input.stable_dt);
+                let clock = super::siri_wgpu::tick(
+                    ui.ctx(),
+                    "settings-siri-preview",
+                    super::siri_wgpu::SiriDrive {
+                        level: 0.18,
+                        ..Default::default()
+                    },
+                    dt,
+                );
+                let _ = super::siri_wgpu::paint(
+                    ui,
+                    rect,
+                    super::siri_wgpu::SiriEffect::wave(clock.time, clock.level),
+                );
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(16));
             }
             1 => {
                 let pill = egui::Rect::from_center_size(rect.center(), egui::vec2(152.0, 34.0));
@@ -3754,6 +4434,109 @@ pub(crate) fn test_render_shortcuts(
 
 #[cfg(test)]
 mod tests {
+    /// 点「验证」后按钮要立刻变成「正在验证…」并禁用，直到结果回包或超时。
+    /// Tauri 用 `testingIds` 做同一件事（组件本地状态）。
+    #[test]
+    fn a_verify_click_marks_the_channel_as_testing_until_the_result_arrives() {
+        let ctx = eframe::egui::Context::default();
+        let channel = super::super::view_model::SettingsChannel {
+            id: "channel-1".into(),
+            name: "DeepSeek".into(),
+            model: "deepseek-v4-flash".into(),
+            provider: "DeepSeek".into(),
+            provider_type: "deepseek".into(),
+            is_active: true,
+            enabled: true,
+            last_ok: None,
+            last_error: None,
+            last_latency_ms: None,
+            last_check_age_seconds: None,
+        };
+        let mut states = Vec::new();
+        let mut output = ctx.run_ui(eframe::egui::RawInput::default(), |ui| {
+            states.push(super::channel_testing(ui, &channel));
+            super::mark_channel_testing(ui, &channel);
+            states.push(super::channel_testing(ui, &channel));
+        });
+        output.textures_delta.clear();
+        assert_eq!(
+            states,
+            vec![false, true],
+            "the button flips to the checking state right away"
+        );
+
+        // 快照里出现新结果（或超时）就不再自称「正在验证」。
+        let answered = super::super::view_model::SettingsChannel {
+            last_check_age_seconds: Some(3),
+            last_ok: Some(true),
+            ..channel.clone()
+        };
+        let mut cleared = Vec::new();
+        let mut output = ctx.run_ui(eframe::egui::RawInput::default(), |ui| {
+            cleared.push(super::channel_testing(ui, &answered));
+        });
+        output.textures_delta.clear();
+        assert_eq!(
+            cleared,
+            vec![false],
+            "a fresh result restores the normal button"
+        );
+    }
+
+    #[test]
+    fn siri_preview_advances_and_requests_animation_frames() {
+        let ctx = eframe::egui::Context::default();
+        let mut previous = 0.0;
+        for frame in 0..4 {
+            let mut output = ctx.run_ui(
+                eframe::egui::RawInput {
+                    screen_rect: Some(eframe::egui::Rect::from_min_size(
+                        eframe::egui::Pos2::ZERO,
+                        eframe::egui::vec2(800.0, 600.0),
+                    )),
+                    time: Some(frame as f64 / 60.0),
+                    ..Default::default()
+                },
+                |ui| super::capsule_style_preview(ui, 0),
+            );
+            let clock = ctx
+                .data(|data| {
+                    data.get_temp::<super::super::siri_wgpu::SiriClock>(eframe::egui::Id::new((
+                        "openless-siri-clock",
+                        "settings-siri-preview",
+                    )))
+                })
+                .expect("preview animation clock");
+            assert!(clock.time > previous);
+            previous = clock.time;
+            assert!(
+                output.viewport_output[&eframe::egui::ViewportId::ROOT].repaint_delay
+                    <= std::time::Duration::from_millis(16)
+            );
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn siri_preview_uses_half_of_the_full_stage() {
+        let ctx = eframe::egui::Context::default();
+        let mut output = ctx.run_ui(
+            eframe::egui::RawInput {
+                screen_rect: Some(eframe::egui::Rect::from_min_size(
+                    eframe::egui::Pos2::ZERO,
+                    eframe::egui::vec2(800.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| super::capsule_style_preview(ui, 0),
+        );
+        assert!(output.shapes.iter().any(|shape| matches!(
+            &shape.shape, eframe::egui::Shape::Callback(callback)
+                if callback.rect.size() == eframe::egui::vec2(230.0, 90.0)
+        )));
+        output.textures_delta.clear();
+    }
+
     use super::*;
 
     #[test]
@@ -3906,6 +4689,8 @@ mod tests {
         for auth in shapes {
             let editor = SettingsProviderEditor {
                 channel_id: "channel".to_string(),
+                is_asr: false,
+                is_draft: false,
                 provider: "volcengine".to_string(),
                 provider_type: "volcengine".to_string(),
                 name: "main".to_string(),
@@ -3927,7 +4712,7 @@ mod tests {
             let mut actions = Vec::new();
             let ctx = egui::Context::default();
             let _ = crate::ui::frontend::run_pass(&ctx, egui::RawInput::default(), |ui| {
-                provider_editor_panel(ui, &editor, Lang::ZhCn, &mut actions);
+                provider_editor_body(ui, &editor, &[], None, Lang::ZhCn, &mut actions);
             });
             assert!(
                 actions.is_empty(),
@@ -3943,6 +4728,8 @@ mod tests {
         let editor = |static_models: Vec<String>, has_models_url: bool, custom_model: bool| {
             SettingsProviderEditor {
                 channel_id: "channel".to_string(),
+                is_asr: false,
+                is_draft: false,
                 provider: "volcengine".to_string(),
                 provider_type: "volcengine".to_string(),
                 name: "main".to_string(),
@@ -3997,6 +4784,192 @@ mod tests {
         );
     }
 
+    /// Tauri 的自动保存：字段改动后防抖落盘；关闭前先把未落盘的改动冲掉。
+    #[test]
+    fn editor_auto_save_debounces_and_flushes_before_closing() {
+        let ctx = egui::Context::default();
+        let mut actions = Vec::new();
+        let raw = |time: f64| egui::RawInput {
+            time: Some(time),
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(700.0, 680.0),
+            )),
+            ..Default::default()
+        };
+
+        // 第一帧：标脏，未到防抖截止 → 不保存。
+        crate::ui::frontend::run_pass(&ctx, raw(10.0), |ui| {
+            editor_mark_dirty(ui);
+            assert!(
+                !editor_auto_save(ui, &mut actions),
+                "the debounce window must not save yet"
+            );
+        });
+        assert!(
+            actions.is_empty(),
+            "nothing may be saved during the debounce"
+        );
+
+        // 时间推进到截止之后 → 推一次保存，并且只推一次。
+        crate::ui::frontend::run_pass(&ctx, raw(11.0), |ui| {
+            assert!(
+                editor_auto_save(ui, &mut actions),
+                "the settled edit must be saved"
+            );
+            assert!(
+                !editor_auto_save(ui, &mut actions),
+                "an already saved edit must not save twice"
+            );
+        });
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], FrontendAction::SettingsProviderSave));
+
+        // 关闭时：脏则先保存再关；干净则只关。
+        actions.clear();
+        crate::ui::frontend::run_pass(&ctx, raw(12.0), |ui| {
+            editor_mark_dirty(ui);
+        });
+        crate::ui::frontend::run_pass(&ctx, raw(12.1), |ui| {
+            editor_close(ui, &mut actions);
+        });
+        assert_eq!(
+            actions.len(),
+            2,
+            "closing must flush the pending edit first"
+        );
+        assert!(matches!(actions[0], FrontendAction::SettingsProviderSave));
+        assert!(matches!(actions[1], FrontendAction::SettingsProviderClose));
+
+        actions.clear();
+        crate::ui::frontend::run_pass(&ctx, raw(13.0), |ui| {
+            editor_close(ui, &mut actions);
+        });
+        assert_eq!(actions.len(), 1, "a clean editor closes without saving");
+        assert!(matches!(actions[0], FrontendAction::SettingsProviderClose));
+    }
+
+    /// 渠道编辑器在桌面端是**右栏覆盖**（Tauri 的 embedded 形态）：整栏画灰底、
+    /// 头部是返回按钮而不是关闭按钮，正文是白底圆角表单卡，底部有删除与完成。
+    #[test]
+    fn the_channel_editor_covers_the_content_column_with_tauri_chrome() {
+        use super::super::view_model::{SettingsChannel, SettingsChannelProvider};
+
+        let ctx = egui::Context::default();
+        let vm = crate::ui::frontend::FrontendViewModel {
+            lang: Lang::ZhCn,
+            provider_editor: Some(SettingsProviderEditor {
+                channel_id: "channel".to_string(),
+                is_asr: false,
+                is_draft: false,
+                provider: "DeepSeek".to_string(),
+                provider_type: "deepseek".to_string(),
+                name: "DeepSeek".to_string(),
+                endpoint: "https://api.deepseek.com/v1".to_string(),
+                model: "deepseek-v4-flash".to_string(),
+                resource_id: String::new(),
+                auth_mode: "api_key".to_string(),
+                auth: SettingsProviderAuth::ApiKey,
+                primary_secret: String::new(),
+                secondary_secret: String::new(),
+                models: Vec::new(),
+                models_loading: false,
+                static_models: Vec::new(),
+                default_model: String::new(),
+                has_models_url: true,
+                custom_model: false,
+                busy: false,
+            }),
+            channel_providers: vec![SettingsChannelProvider {
+                provider_type: "deepseek".to_string(),
+                label: "DeepSeek".to_string(),
+            }],
+            channels: vec![SettingsChannel {
+                id: "channel".to_string(),
+                name: "DeepSeek".to_string(),
+                provider: "DeepSeek".to_string(),
+                provider_type: "deepseek".to_string(),
+                model: "deepseek-v4-flash".to_string(),
+                is_active: true,
+                enabled: true,
+                last_ok: None,
+                last_error: None,
+                last_latency_ms: None,
+                last_check_age_seconds: None,
+            }],
+            ..Default::default()
+        };
+        let mut actions = Vec::new();
+        let output = crate::ui::frontend::run_pass(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(700.0, 680.0),
+                )),
+                ..Default::default()
+            },
+            |ui| channel_editor_panel(ui, &vm, &mut actions),
+        );
+        let mut text = String::new();
+        for clipped in &output.shapes {
+            collect_shape_text(&clipped.shape, &mut text);
+        }
+        let painted = |needle: &str| text.contains(needle);
+        for key in [
+            "settings.channels.edit_title",
+            "settings.channels.llm_title",
+            "settings.channels.auto_save_hint",
+            "settings.channels.connection_title",
+            "settings.channels.provider_label",
+            "settings.channels.name_label",
+            "settings.channels.name_hint",
+            "settings.channels.delete",
+            "settings.channels.done",
+        ] {
+            let expected = tr_l10n(Lang::ZhCn, key);
+            assert!(
+                painted(expected),
+                "{key} must be painted inside the channel editor, got {text:?}"
+            );
+        }
+        // 右栏覆盖不该出现设置页自己的标题（编辑器整栏盖住内容区）。
+        let section_title = tr_l10n(Lang::ZhCn, "modal.service_views.llm");
+        assert!(
+            !painted(&format!("{section_title}服务")),
+            "the settings section body must not show through the editor"
+        );
+
+        // 草稿模式（Tauri `isDraft`）：标题换成「添加渠道」。
+        let mut draft_vm = vm;
+        if let Some(editor) = draft_vm.provider_editor.as_mut() {
+            editor.is_draft = true;
+        }
+        let output = crate::ui::frontend::run_pass(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(700.0, 680.0),
+                )),
+                ..Default::default()
+            },
+            |ui| channel_editor_panel(ui, &draft_vm, &mut actions),
+        );
+        let mut draft_text = String::new();
+        for clipped in &output.shapes {
+            collect_shape_text(&clipped.shape, &mut draft_text);
+        }
+        assert!(
+            draft_text.contains(tr_l10n(Lang::ZhCn, "settings.channels.create_title")),
+            "a draft editor is titled as a new channel, got {draft_text:?}"
+        );
+        assert!(
+            !draft_text.contains(tr_l10n(Lang::ZhCn, "settings.channels.edit_title")),
+            "a draft editor must not say it is editing an existing channel"
+        );
+    }
+
     fn painted_provider_editor(editor: &SettingsProviderEditor) -> String {
         let ctx = egui::Context::default();
         let mut actions = Vec::new();
@@ -4009,7 +4982,7 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ui| provider_editor_panel(ui, editor, Lang::ZhCn, &mut actions),
+            |ui| provider_editor_body(ui, editor, &[], None, Lang::ZhCn, &mut actions),
         );
         let mut text = String::new();
         for clipped in &output.shapes {

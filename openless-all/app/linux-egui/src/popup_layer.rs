@@ -18,8 +18,8 @@
 //!   compositor to respect reserved panel/taskbar space.
 //!
 //! Rendering reuses the popup's existing egui view ([`crate::ui::frontend::popups::dictation_capsule`]):
-//! the runner below owns the EGL context (glutin), the `egui_glow` painter and
-//! the wayland event loop, and asks the caller for one egui frame at a time.
+//! the runner below owns a Vulkan/WGPU surface and the Wayland event loop, and
+//! asks the caller for one egui frame at a time.
 //!
 //! Everything that can be decided without a compositor lives in pure functions
 //! ([`has_layer_shell`], [`choose_capsule_path`], [`capsule_geometry`],
@@ -27,9 +27,7 @@
 //! shell around them and reports failures as `Err`.
 
 use std::ffi::c_void;
-use std::num::NonZeroU32;
 use std::ptr::NonNull;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use wayland_client::protocol::{wl_compositor, wl_pointer, wl_registry, wl_seat, wl_surface};
@@ -468,108 +466,196 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for LayerState {
     }
 }
 
-// ── EGL + egui_glow plumbing ────────────────────────────────────────────────
+// ── Vulkan/WGPU plumbing ────────────────────────────────────────────────────
 
-struct GlSurface {
-    _display: glutin::display::Display,
-    surface: glutin::surface::Surface<glutin::surface::WindowSurface>,
-    context: glutin::context::PossiblyCurrentContext,
-    gl: Arc<glow::Context>,
+fn capsule_alpha_mode(
+    supported: &[eframe::egui_wgpu::wgpu::CompositeAlphaMode],
+) -> Result<eframe::egui_wgpu::wgpu::CompositeAlphaMode, String> {
+    use eframe::egui_wgpu::wgpu::CompositeAlphaMode;
+    if supported.contains(&CompositeAlphaMode::PreMultiplied) {
+        Ok(CompositeAlphaMode::PreMultiplied)
+    } else {
+        Err(format!(
+            "Vulkan capsule surface lacks premultiplied transparency: {supported:?}"
+        ))
+    }
 }
 
-impl GlSurface {
+struct WgpuSurface {
+    _instance: eframe::egui_wgpu::wgpu::Instance,
+    surface: eframe::egui_wgpu::wgpu::Surface<'static>,
+    device: eframe::egui_wgpu::wgpu::Device,
+    queue: eframe::egui_wgpu::wgpu::Queue,
+    config: eframe::egui_wgpu::wgpu::SurfaceConfiguration,
+    renderer: eframe::egui_wgpu::Renderer,
+}
+
+impl WgpuSurface {
     fn new(
         connection: &Connection,
         wl_surface: &wl_surface::WlSurface,
         size: (u32, u32),
     ) -> Result<Self, String> {
-        let size = (size.0.max(1), size.1.max(1));
-        use glutin::config::{Api, ConfigTemplateBuilder};
-        use glutin::context::{ContextApi, ContextAttributesBuilder};
-        use glutin::display::{Display, DisplayApiPreference, GlDisplay};
-        use glutin::prelude::*;
-        use glutin::surface::{SurfaceAttributesBuilder, WindowSurface};
+        use eframe::egui_wgpu::wgpu;
         use raw_window_handle::{
             RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
         };
 
         let display_ptr = connection.backend().display_ptr().cast::<c_void>();
-        // `ObjectId::as_ptr` hands back the underlying `wl_proxy`, which is the
-        // same C object as the `wl_surface` glutin wants.
         let surface_ptr = wl_surface.id().as_ptr().cast::<c_void>();
-
         let raw_display = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
             NonNull::new(display_ptr).ok_or("null wayland display")?,
         ));
         let raw_window = RawWindowHandle::Wayland(WaylandWindowHandle::new(
             NonNull::new(surface_ptr).ok_or("null wayland surface")?,
         ));
-
-        let display = unsafe { Display::new(raw_display, DisplayApiPreference::Egl) }
-            .map_err(|error| format!("egl display: {error}"))?;
-        let template = ConfigTemplateBuilder::new()
-            .with_alpha_size(8)
-            .with_transparency(true)
-            .with_api(Api::OPENGL | Api::GLES2)
-            .build();
-        let config = unsafe { display.find_configs(template) }
-            .map_err(|error| format!("egl configs: {error}"))?
-            .reduce(|best, candidate| {
-                let best_alpha = best.alpha_size();
-                let candidate_alpha = candidate.alpha_size();
-                if candidate_alpha > best_alpha {
-                    candidate
-                } else {
-                    best
-                }
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::VULKAN,
+            flags: wgpu::InstanceFlags::default(),
+            memory_budget_thresholds: Default::default(),
+            backend_options: Default::default(),
+            display: None,
+        });
+        // The Wayland connection and wl_surface are owned by run_layer_capsule
+        // and outlive this surface. RawHandle is therefore the correct unsafe
+        // constructor: no legacy graphics context is created or retained.
+        let surface = unsafe {
+            instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+                raw_display_handle: Some(raw_display),
+                raw_window_handle: raw_window,
             })
-            .ok_or("no suitable EGL config")?;
-        let attributes = SurfaceAttributesBuilder::<WindowSurface>::new().build(
-            raw_window,
-            NonZeroU32::new(size.0.max(1)).ok_or("zero width")?,
-            NonZeroU32::new(size.1.max(1)).ok_or("zero height")?,
+        }
+        .map_err(|error| format!("vulkan surface: {error}"))?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| format!("wgpu runtime: {error}"))?;
+        let adapter = runtime
+            .block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+                apply_limit_buckets: false,
+            }))
+            .map_err(|error| format!("vulkan adapter: {error}"))?;
+        let (device, queue) = runtime
+            .block_on(adapter.request_device(&crate::wgpu_device::device_descriptor()))
+            .map_err(|error| format!("vulkan device: {error}"))?;
+        let mut config = surface
+            .get_default_config(&adapter, size.0.max(1), size.1.max(1))
+            .ok_or("Wayland surface has no Vulkan format")?;
+        // Auto may select Opaque: clearing to transparent would then present
+        // a black rectangle. Both egui and Siri output premultiplied alpha.
+        config.alpha_mode = capsule_alpha_mode(&surface.get_capabilities(&adapter).alpha_modes)?;
+        surface.configure(&device, &config);
+        let format = config.format;
+        let mut renderer = eframe::egui_wgpu::Renderer::new(
+            &device,
+            format,
+            eframe::egui_wgpu::RendererOptions {
+                msaa_samples: 1,
+                ..Default::default()
+            },
         );
-        let surface = unsafe { display.create_window_surface(&config, &attributes) }
-            .map_err(|error| format!("egl window surface: {error}"))?;
-        let context_attributes = ContextAttributesBuilder::new()
-            .with_context_api(ContextApi::OpenGl(None))
-            .build(Some(raw_window));
-        let context = unsafe { display.create_context(&config, &context_attributes) }
-            .map_err(|error| format!("egl context: {error}"))?
-            .make_current(&surface)
-            .map_err(|error| format!("egl make current: {error}"))?;
-        let gl = unsafe {
-            glow::Context::from_loader_function(|symbol| {
-                let symbol = std::ffi::CString::new(symbol)
-                    .map_err(|_| ())
-                    .unwrap_or_default();
-                display.get_proc_address(symbol.as_c_str())
-            })
-        };
+        crate::siri_wgpu::install_renderer(&mut renderer, &device, format, 1);
         Ok(Self {
-            _display: display,
+            _instance: instance,
             surface,
-            context,
-            gl: Arc::new(gl),
+            device,
+            queue,
+            config,
+            renderer,
         })
     }
 
     fn paint(
-        &self,
-        painter: &mut egui_glow::Painter,
+        &mut self,
         size: (u32, u32),
         primitives: &[egui::ClippedPrimitive],
         textures_delta: &mut egui::TexturesDelta,
         scale: f32,
-    ) {
-        // The capsule is a transparent overlay: the painter clears the buffer
-        // itself, so no opaque clear colour is needed.
-        painter.paint_and_update_textures(
-            [size.0.max(1), size.1.max(1)],
-            scale,
-            primitives,
-            textures_delta,
+    ) -> Result<(), String> {
+        let width = size.0.max(1);
+        let height = size.1.max(1);
+        if self.config.width != width || self.config.height != height {
+            self.config.width = width;
+            self.config.height = height;
+            self.surface.configure(&self.device, &self.config);
+        }
+        // Texture deltas are incremental (not re-sent next frame). Upload them
+        // even if surface acquisition times out, so fonts/icons aren't lost.
+        for (id, deltas) in &textures_delta.set {
+            for delta in deltas {
+                self.renderer
+                    .update_texture(&self.device, &self.queue, *id, delta);
+            }
+        }
+        let output = match self.surface.get_current_texture() {
+            eframe::egui_wgpu::wgpu::CurrentSurfaceTexture::Success(texture)
+            | eframe::egui_wgpu::wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
+            eframe::egui_wgpu::wgpu::CurrentSurfaceTexture::Timeout
+            | eframe::egui_wgpu::wgpu::CurrentSurfaceTexture::Occluded => {
+                for id in &textures_delta.free {
+                    self.renderer.free_texture(id);
+                }
+                textures_delta.clear();
+                return Ok(());
+            }
+            other => return Err(format!("vulkan acquire: {other:?}")),
+        };
+        let view = output
+            .texture
+            .create_view(&eframe::egui_wgpu::wgpu::TextureViewDescriptor::default());
+        let screen = eframe::egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [width, height],
+            pixels_per_point: scale,
+        };
+        let mut encoder = self.device.create_command_encoder(
+            &eframe::egui_wgpu::wgpu::CommandEncoderDescriptor {
+                label: Some("openless-capsule-wgpu"),
+            },
         );
+        let callbacks = self.renderer.update_buffers(
+            &self.device,
+            &self.queue,
+            &mut encoder,
+            primitives,
+            &screen,
+        );
+        {
+            let mut pass = encoder
+                .begin_render_pass(&eframe::egui_wgpu::wgpu::RenderPassDescriptor {
+                    label: Some("openless-capsule"),
+                    color_attachments: &[Some(
+                        eframe::egui_wgpu::wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            resolve_target: None,
+                            ops: eframe::egui_wgpu::wgpu::Operations {
+                                load: eframe::egui_wgpu::wgpu::LoadOp::Clear(
+                                    eframe::egui_wgpu::wgpu::Color::TRANSPARENT,
+                                ),
+                                store: eframe::egui_wgpu::wgpu::StoreOp::Store,
+                            },
+                            depth_slice: None,
+                        },
+                    )],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                })
+                .forget_lifetime();
+            self.renderer.render(&mut pass, primitives, &screen);
+        }
+        self.queue.submit(callbacks);
+        self.queue.submit(std::iter::once(encoder.finish()));
+        // In wgpu 30 presentation belongs to the queue, not SurfaceTexture.
+        self.queue.present(output);
+        for id in &textures_delta.free {
+            self.renderer.free_texture(id);
+        }
+        textures_delta.clear();
+        Ok(())
     }
 }
 
@@ -579,8 +665,8 @@ impl GlSurface {
 /// the compositor closes it.
 ///
 /// Fails (with a human-readable reason) when there is no Wayland session, the
-/// compositor lacks the protocol, the configure never arrives, or EGL could not
-/// be initialised — the caller then uses the X11 overlay instead. The context is
+/// compositor lacks the protocol, the configure never arrives, or Vulkan/WGPU could not
+/// be initialised — the caller then uses the X11 overlay instead. The renderer is
 /// created here; the caller installs fonts/visuals on the first frame (egui's
 /// built-in fonts are enough for the pill, but a host font setup should run
 /// once).
@@ -683,13 +769,10 @@ where
          (layer=top, anchor=bottom, margin.bottom={}, keyboard-interactivity=none, exclusive-zone=0)",
         geometry.bottom_gap
     );
-    let gl = GlSurface::new(&connection, &wl_surface, geometry.buffer_size())?;
-    use glutin::surface::GlSurface as _;
-    let mut painter = egui_glow::Painter::new(gl.gl.clone(), "", None, false)
-        .map_err(|error| format!("egui_glow painter: {error}"))?;
-    eprintln!("OpenLess capsule: EGL ready on the layer surface");
+    let mut renderer = WgpuSurface::new(&connection, &wl_surface, geometry.buffer_size())?;
+    eprintln!("OpenLess capsule: Vulkan/WGPU ready on the layer surface");
     let context = egui::Context::default();
-    // This EGL layer surface is single-sample; feather egui geometry instead.
+    // This layer surface is single-sample; feather egui geometry instead.
     context.tessellation_options_mut(|options| {
         options.feathering = true;
         options.feathering_size_in_pixels = 1.0;
@@ -710,16 +793,12 @@ where
         let mut frame = frame(&context, input, first);
         first = false;
         let primitives = context.tessellate(frame.output.shapes.clone(), scale);
-        gl.paint(
-            &mut painter,
+        renderer.paint(
             (rect.width().max(1.0) as u32, rect.height().max(1.0) as u32),
             &primitives,
             &mut frame.output.textures_delta,
             scale,
-        );
-        gl.surface
-            .swap_buffers(&gl.context)
-            .map_err(|error| format!("egl swap: {error}"))?;
+        )?;
         if frame.exit {
             return Ok(());
         }
@@ -847,6 +926,23 @@ mod tests {
             assert_eq!(forced == Some(CapsulePath::LayerShell), layer_shell);
             // …and what the child derives from the same value.
             assert_eq!(forced, Some(path));
+        }
+    }
+
+    #[test]
+    fn capsule_requires_explicit_premultiplied_transparency() {
+        use eframe::egui_wgpu::wgpu::CompositeAlphaMode as Alpha;
+        assert_eq!(
+            capsule_alpha_mode(&[Alpha::Opaque, Alpha::PreMultiplied]).unwrap(),
+            Alpha::PreMultiplied,
+        );
+        for modes in [
+            vec![],
+            vec![Alpha::Opaque],
+            vec![Alpha::Auto],
+            vec![Alpha::PostMultiplied],
+        ] {
+            assert!(capsule_alpha_mode(&modes).is_err());
         }
     }
 

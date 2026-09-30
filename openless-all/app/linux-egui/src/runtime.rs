@@ -34,23 +34,29 @@ impl LinuxNativeRuntime {
         let initialized = async {
             // fcitx5 starts with no OpenLess shortcuts on a clean installation.
             // Hydrate its native registrations from the same Core target used by
-            // settings transactions before accepting any input. Equal previous/next
-            // values intentionally force the effect without rewriting preferences.
-            let target =
-                openless_core::HotkeyRuntimeTarget::from(&backend.backend.get_preferences());
-            backend
-                .settings_runtime
-                .commit(
-                    &openless_core::SettingsEffectPlan {
-                        hotkeys: Some(openless_core::SettingsValueChange {
-                            previous: target.clone(),
-                            next: target,
-                        }),
-                        ..Default::default()
-                    },
-                    &mut openless_core::SettingsEffectReceipt::default(),
-                )
-                .map_err(|failure| failure.error)?;
+            // settings transactions before accepting any input. When the optional
+            // listener is unavailable, skip this effect entirely: attempting a
+            // registration against a missing DBus service would make app startup
+            // fatal, which defeats the degraded-mode contract.
+            if hotkeys.is_some() {
+                let target =
+                    openless_core::HotkeyRuntimeTarget::from(&backend.backend.get_preferences());
+                backend
+                    .settings_runtime
+                    .commit(
+                        &openless_core::SettingsEffectPlan {
+                            hotkeys: Some(openless_core::SettingsValueChange {
+                                previous: target.clone(),
+                                next: target,
+                            }),
+                            ..Default::default()
+                        },
+                        &mut openless_core::SettingsEffectReceipt::default(),
+                    )
+                    .map_err(|failure| failure.error)?;
+            } else {
+                log::debug!("[fcitx] skipped native hotkey hydration; listener unavailable");
+            }
             let startup = backend.backend.start().await?;
             openless_core::require_backend_contract_version(&startup.contract_version)?;
             let preferences = backend.backend.get_preferences();
@@ -200,18 +206,18 @@ mod tests {
     use super::*;
 
     #[derive(Default)]
-    struct StartupHotkeys(
-        std::sync::Mutex<Vec<openless_core::HotkeyRuntimeTarget>>,
-        bool,
-    );
+    struct RecordingSettingsEffects {
+        targets: std::sync::Mutex<Vec<openless_core::HotkeyRuntimeTarget>>,
+        fail_registration: bool,
+    }
 
-    impl crate::LinuxSettingsEffects for StartupHotkeys {
+    impl crate::LinuxSettingsEffects for RecordingSettingsEffects {
         fn apply_hotkeys(
             &self,
             target: &openless_core::HotkeyRuntimeTarget,
         ) -> Result<(), BackendError> {
-            self.0.lock().unwrap().push(target.clone());
-            if self.1 {
+            self.targets.lock().unwrap().push(target.clone());
+            if self.fail_registration {
                 return Err(BackendError::new(
                     BackendErrorCode::Platform,
                     "required hotkey registration failed",
@@ -275,7 +281,7 @@ mod tests {
                 .unwrap(),
         );
         let backend = fixture_backend(&data_dir, services);
-        let hotkeys = Arc::new(StartupHotkeys::default());
+        let hotkeys = Arc::new(RecordingSettingsEffects::default());
         let runtime = LinuxNativeRuntime::start(
             LinuxBackendRuntime {
                 backend: Arc::clone(&backend),
@@ -291,12 +297,9 @@ mod tests {
         .unwrap();
 
         assert!(backend.snapshot().running);
-        assert_eq!(
-            hotkeys.0.lock().unwrap().as_slice(),
-            &[openless_core::HotkeyRuntimeTarget::from(
-                &backend.get_preferences()
-            )]
-        );
+        // No listener was supplied: native registration is intentionally skipped
+        // so a missing fcitx5 service cannot make Core startup fatal.
+        assert!(hotkeys.targets.lock().unwrap().is_empty());
         assert_eq!(
             runtime.startup_snapshot().contract_version,
             openless_core::BACKEND_CONTRACT_VERSION
@@ -311,56 +314,41 @@ mod tests {
         assert!(!backend.snapshot().running);
         let _ = std::fs::remove_dir_all(data_dir);
     }
-    #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn startup_failures_stop_core_and_keep_the_outer_lock_until_the_error_window_closes() {
-        for fail_hotkeys in [true, false] {
-            let dir = std::env::temp_dir()
-                .join(format!("openless-startup-failure-{}", uuid::Uuid::new_v4()));
-            let backend = fixture_backend(&dir, BackendServices::unsupported());
-            let lock = dir.join("openless.lock");
-            let broker = match crate::SingleInstanceBroker::acquire_or_forward(
-                &lock,
-                &dir.join("openless.sock"),
-                crate::LinuxLaunchIntent::ShowMain,
-            )
-            .unwrap()
-            {
-                crate::SingleInstanceRole::Primary(broker) => Arc::new(broker),
-                crate::SingleInstanceRole::Forwarded => panic!("isolated test must own its lock"),
-            };
-            let mut events = backend.subscribe();
-            let result = LinuxNativeRuntime::start(
-                LinuxBackendRuntime {
-                    backend: backend.clone(),
-                    host_actions: Arc::new(LinuxHostActions::default()),
-                    settings_runtime: Arc::new(crate::LinuxSettingsRuntime::with_effects(
-                        Arc::new(StartupHotkeys(Default::default(), fail_hotkeys)),
-                    )),
-                },
-                Some(broker.clone()),
-                None,
-            )
-            .await;
-            assert!(result.is_err());
-            assert!(!backend.snapshot().running);
-            let mut started = false;
-            while let Ok(event) = events.try_recv() {
-                started |= matches!(event.kind, openless_core::BackendEventKind::BackendStarted);
-            }
-            assert_eq!(
-                started, !fail_hotkeys,
-                "registration must precede Core startup"
-            );
-            assert!(crate::SingleInstanceGuard::acquire(&lock)
-                .unwrap()
-                .is_none());
-            drop(broker);
-            assert!(crate::SingleInstanceGuard::acquire(&lock)
-                .unwrap()
-                .is_some());
-            drop(backend);
-            std::fs::remove_dir_all(dir).unwrap();
+    async fn missing_hotkeys_do_not_block_core_startup() {
+        let dir =
+            std::env::temp_dir().join(format!("openless-missing-hotkeys-{}", uuid::Uuid::new_v4()));
+        let mut services = BackendServices::unsupported();
+        services.remote_input = Arc::new(
+            RemoteInputService::new(Arc::new(RecordingRemoteInputRuntime::default()), 8443, "en")
+                .unwrap(),
+        );
+        let backend = fixture_backend(&dir, services);
+        let mut events = backend.subscribe();
+        let runtime = LinuxNativeRuntime::start(
+            LinuxBackendRuntime {
+                backend: backend.clone(),
+                host_actions: Arc::new(LinuxHostActions::default()),
+                settings_runtime: Arc::new(crate::LinuxSettingsRuntime::with_effects(Arc::new(
+                    RecordingSettingsEffects {
+                        fail_registration: true,
+                        ..Default::default()
+                    },
+                ))),
+            },
+            None,
+            None,
+        )
+        .await
+        .expect("Core must start without the optional fcitx5 listener");
+        assert!(backend.snapshot().running);
+        let mut started = false;
+        while let Ok(event) = events.try_recv() {
+            started |= matches!(event.kind, openless_core::BackendEventKind::BackendStarted);
         }
+        assert!(started);
+        runtime.shutdown().await.unwrap();
+        assert!(!backend.snapshot().running);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

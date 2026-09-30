@@ -38,9 +38,6 @@ egui = "=0.36.2"
 # 「贴底居中 + 不抢键盘焦点」的 overlay surface；不支持时回退到 X11 叠加层。
 wayland-client = "0.31"
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
-glutin = { version = "0.32", default-features = false, features = ["egl", "wayland"] }
-egui_glow = "0.36.2"
-glow = "0.17"
 raw-window-handle = "0.6"
 eframe = { version = "=0.36.2", default-features = false, features = ["accesskit", "default_fonts", "wgpu_no_default_features", "wayland", "x11"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "vulkan", "wgsl"] }

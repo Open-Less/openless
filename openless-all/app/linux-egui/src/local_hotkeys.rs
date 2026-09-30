@@ -297,18 +297,18 @@ impl HotkeyDeduplicator {
     pub fn accept_local(&mut self, hotkey: &LocalHotkey, at: Instant) -> bool {
         let stamps = self.seen.entry(hotkey.clone()).or_default();
         stamps.local = Some(at);
-        !stamps
+        stamps
             .signal
-            .is_some_and(|signal| at.saturating_duration_since(signal) < HOTKEY_DEDUPE_WINDOW)
+            .is_none_or(|signal| at.saturating_duration_since(signal) >= HOTKEY_DEDUPE_WINDOW)
     }
 
     /// 采纳一条插件信号？本地刚命中过（同一窗口还是 XWayland 客户端）就丢弃。
     pub fn accept_signal(&mut self, hotkey: &LocalHotkey, at: Instant) -> bool {
         let stamps = self.seen.entry(hotkey.clone()).or_default();
         stamps.signal = Some(at);
-        !stamps
+        stamps
             .local
-            .is_some_and(|local| at.saturating_duration_since(local) < HOTKEY_DEDUPE_WINDOW)
+            .is_none_or(|local| at.saturating_duration_since(local) >= HOTKEY_DEDUPE_WINDOW)
     }
 }
 

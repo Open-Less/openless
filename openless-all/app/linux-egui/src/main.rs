@@ -135,6 +135,8 @@ mod linux_app {
         last_ok: Option<bool>,
         last_latency_ms: Option<u32>,
         last_error: Option<String>,
+        /// 最近一次验证的时间（epoch **秒**，与 Tauri `lastTest.at` 同一量纲）。
+        last_test_at: Option<i64>,
     }
 
     /// 追问编辑态：Core 只在变化时下发 `Some(..)`，所以逐字段合并。
@@ -397,6 +399,8 @@ mod linux_app {
     /// clobbers what the user is typing.
     struct ProviderEditorForm {
         channel_id: String,
+        /// 渠道种类（LLM / ASR）：弹窗副标题「文字处理渠道 / 语音识别渠道」用它。
+        kind: openless_core::ChannelKind,
         provider_type: String,
         label: String,
         auth: frontend::view_model::SettingsProviderAuth,
@@ -423,6 +427,7 @@ mod linux_app {
         fn from_editor(editor: &ProviderEditor, lang: Lang) -> Self {
             Self {
                 channel_id: editor.channel.id.clone(),
+                kind: editor.kind,
                 provider_type: editor.descriptor.provider_type.as_str().to_string(),
                 label: localized_provider_label(
                     lang,
@@ -547,7 +552,16 @@ mod linux_app {
         provider_kind: openless_core::ChannelKind,
         providers: ProvidersState,
         selected_channel_id: Option<String>,
+        /// 用户（或刚建好的草稿）要求打开渠道编辑器。面板加载时只有当它为真才打开：
+        /// 以前只要面板加载就会为「当前选中的渠道」把编辑器拉起来，改成整栏覆盖后就是
+        /// 「一进设置只见模型编辑器、别的设置都改不了」。
+        editor_requested: bool,
         provider_editor: ProviderEditorState,
+        /// 当前编辑器是「添加渠道」草稿（Tauri `isDraft`）：标题换成「添加渠道」，
+        /// 且完全没交互就关闭时要把这张空渠道回收掉。
+        editor_draft: bool,
+        /// 草稿是否被用户动过（任一字段/保存/供应商切换）。
+        draft_touched: bool,
         /// Draft mirrored into the view model while the editor is open.
         provider_editor_form: Option<ProviderEditorForm>,
         provider_models: Vec<String>,
@@ -569,6 +583,11 @@ mod linux_app {
         capsule_session: Option<String>,
         /// 已经为哪个会话排过收起计时，避免重复计时。
         capsule_dismissal_scheduled: Option<String>,
+        /// 「要记住这个词吗？」卡片当前内容（Core `pending_corrections`）。非空时
+        /// 胶囊窗只画这张卡；见 `refresh_vocab_suggestions`。
+        vocab_suggestions: Vec<openless_linux_egui::CapsuleSuggestion>,
+        /// 卡片上一轮的重算时刻，用来让过期的候选自己消失（Core 只按需清理）。
+        vocab_suggestions_checked: std::time::Instant,
         tray: Option<openless_linux_egui::LinuxTray>,
         exit_requested: bool,
         /// 上次打「泵心跳」日志的时间。
@@ -591,6 +610,9 @@ mod linux_app {
         quick_note_shortcut_hidden: bool,
         /// 本帧从 UI 收到、待回包的延迟探针序号。
         pending_ui_pongs: Vec<u64>,
+        /// `LoadMore` 触发的分页回包：动作处理阶段拿不到桥，先排队，
+        /// 由宿主循环在 `apply_frontend_actions` 之后发出（同 `pending_ui_pongs`）。
+        pending_collection_pages: Vec<HostToWindow>,
         /// Currently playing history recording (session id + player handle).
         history: HistoryCache,
         history_clip: Option<(String, openless_linux_egui::ClipPlayer)>,
@@ -618,6 +640,8 @@ mod linux_app {
         style_editor: Option<openless_core::StylePack>,
         status: String,
         startup_error: Option<String>,
+        /// Non-fatal startup/runtime warning shown in the UI overlay.
+        runtime_warning: Option<String>,
         locale_pref: LocalePref,
         lang: Lang,
         active_page: shell::Page,
@@ -717,7 +741,10 @@ mod linux_app {
                         provider_kind: openless_core::ChannelKind::Asr,
                         providers: ProvidersState::Loading,
                         selected_channel_id: None,
+                        editor_requested: false,
                         provider_editor: ProviderEditorState::Idle,
+                        editor_draft: false,
+                        draft_touched: false,
                         provider_editor_form: None,
                         provider_models: Vec::new(),
                         new_provider_type: String::new(),
@@ -733,6 +760,8 @@ mod linux_app {
                         popup_action_guard: PopupActionGuard::default(),
                         capsule_session: None,
                         capsule_dismissal_scheduled: None,
+                        vocab_suggestions: Vec::new(),
+                        vocab_suggestions_checked: std::time::Instant::now(),
                         tray,
                         exit_requested: false,
                         last_pump_heartbeat: std::time::Instant::now(),
@@ -744,6 +773,7 @@ mod linux_app {
                         popup_restarts: [PopupRestartBudget::default(); POPUP_KIND_COUNT],
                         hotkeys_sent: None,
                         pending_ui_pongs: Vec::new(),
+                        pending_collection_pages: Vec::new(),
                         history,
                         history_clip: None,
                         marketplace_items: Vec::new(),
@@ -760,6 +790,7 @@ mod linux_app {
                         style_editor: None,
                         status: tr_l10n(lang, "status.core_started").to_string(),
                         startup_error: None,
+                        runtime_warning: None,
                         locale_pref,
                         lang,
                         active_page: shell::Page::Overview,
@@ -813,7 +844,10 @@ mod linux_app {
                     provider_kind: openless_core::ChannelKind::Asr,
                     providers: ProvidersState::Loading,
                     selected_channel_id: None,
+                    editor_requested: false,
                     provider_editor: ProviderEditorState::Idle,
+                    editor_draft: false,
+                    draft_touched: false,
                     provider_editor_form: None,
                     provider_models: Vec::new(),
                     new_provider_type: String::new(),
@@ -829,6 +863,8 @@ mod linux_app {
                     popup_action_guard: PopupActionGuard::default(),
                     capsule_session: None,
                     capsule_dismissal_scheduled: None,
+                    vocab_suggestions: Vec::new(),
+                    vocab_suggestions_checked: std::time::Instant::now(),
                     tray,
                     exit_requested: false,
                     last_pump_heartbeat: std::time::Instant::now(),
@@ -840,6 +876,7 @@ mod linux_app {
                     popup_restarts: [PopupRestartBudget::default(); POPUP_KIND_COUNT],
                     hotkeys_sent: None,
                     pending_ui_pongs: Vec::new(),
+                    pending_collection_pages: Vec::new(),
                     history: HistoryCache::default(),
                     history_clip: None,
                     marketplace_items: Vec::new(),
@@ -856,6 +893,7 @@ mod linux_app {
                     style_editor: None,
                     status: tr_l10n(lang, "status.startup_failed").to_string(),
                     startup_error: Some(error),
+                    runtime_warning: None,
                     locale_pref,
                     lang,
                     active_page: shell::Page::Overview,
@@ -1274,6 +1312,108 @@ mod linux_app {
             .to_string()
         }
 
+        /// Core 的待确认纠正变了：没有会话时把卡片顶到胶囊窗上，有会话就丢掉候选。
+        ///
+        /// Tauri `show_vocab_suggestion_card` / `hide_vocab_suggestion_card`：卡片与
+        /// 录音胶囊**共用同一个窗口**，所以「会话在飞」时必须让路，否则卡片的尺寸/位置
+        /// 会把这次会话的胶囊顶掉。
+        fn refresh_vocab_suggestions(&mut self) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            self.vocab_suggestions_checked = std::time::Instant::now();
+            let pending = backend.pending_corrections();
+            let phase = self
+                .snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.dictation.phase);
+            if !openless_linux_egui::vocab_card_allowed(phase) {
+                if !pending.is_empty() {
+                    backend.dismiss_pending_corrections();
+                }
+                self.vocab_suggestions.clear();
+                self.hide_vocab_card();
+                return;
+            }
+            self.vocab_suggestions = pending
+                .iter()
+                .map(|item| openless_linux_egui::CapsuleSuggestion {
+                    id: item.id.clone(),
+                    pattern: item.pattern.clone(),
+                    replacement: item.replacement.clone(),
+                })
+                .collect();
+            if self.vocab_suggestions.is_empty() {
+                self.hide_vocab_card();
+            } else {
+                self.show_vocab_card();
+            }
+        }
+
+        /// 丢弃当前候选（新会话开始 / 胶囊开关关掉时）。
+        fn dismiss_vocab_suggestions(&mut self) {
+            if self.vocab_suggestions.is_empty() {
+                return;
+            }
+            if let Some(backend) = self.backend() {
+                backend.dismiss_pending_corrections();
+            }
+            self.vocab_suggestions.clear();
+        }
+
+        /// 把卡片画进胶囊窗。会话 id 留空：卡片与听写会话无关，因此**不能**走
+        /// `capsule_session`/兜底收起那条路（那会把卡片当成「会话消失了」收掉）。
+        fn show_vocab_card(&mut self) {
+            if !self.capsule_enabled() {
+                self.dismiss_vocab_suggestions();
+                return;
+            }
+            self.ensure_popup(PopupKind::Capsule);
+            self.send_popup(
+                PopupKind::Capsule,
+                HostToPopup::Capsule {
+                    version: POPUP_PROTOCOL_VERSION,
+                    session_id: String::new(),
+                    sequence: self.last_event_sequence.saturating_mul(2),
+                    phase: String::new(),
+                    text: String::new(),
+                    audio_level: None,
+                    translation_active: false,
+                    style: self.capsule_style_tag(),
+                    suggestions: self.vocab_suggestions.clone(),
+                },
+            );
+            // `send_popup` 会把胶囊会话记成空串，兜底收起会误判成「会话消失」。
+            self.capsule_session = None;
+        }
+
+        fn hide_vocab_card(&mut self) {
+            if self.vocab_suggestions.is_empty() && self.capsule_session.is_none() {
+                return;
+            }
+            self.send_popup(
+                PopupKind::Capsule,
+                HostToPopup::Hide {
+                    version: POPUP_PROTOCOL_VERSION,
+                    session_id: String::new(),
+                    sequence: 0,
+                },
+            );
+            self.capsule_session = None;
+        }
+
+        /// 卡片上有 Core 给的死线（`PendingCorrection::expires_at_ms`），Core 只按需
+        /// 清理过期项、不发事件；这里按秒重算，过期的行自己消失。
+        fn tick_vocab_suggestions(&mut self) {
+            if self.vocab_suggestions.is_empty() {
+                return;
+            }
+            if self.vocab_suggestions_checked.elapsed() < std::time::Duration::from_millis(500) {
+                return;
+            }
+            self.refresh_vocab_suggestions();
+        }
+
         fn show_capsule_popup(&mut self) {
             if !self.capsule_enabled() {
                 return;
@@ -1312,6 +1452,7 @@ mod linux_app {
                     audio_level: Some(snapshot.level),
                     translation_active: snapshot.translation_active,
                     style,
+                    suggestions: self.vocab_suggestions.clone(),
                 },
             );
             self.schedule_capsule_dismissal(&session_id.to_string(), snapshot.phase);
@@ -1339,6 +1480,7 @@ mod linux_app {
                     audio_level: None,
                     translation_active: false,
                     style: self.capsule_style_tag(),
+                    suggestions: self.vocab_suggestions.clone(),
                 },
             );
             self.schedule_capsule_dismissal(session_id, DictationPhase::Failed);
@@ -1600,6 +1742,28 @@ mod linux_app {
                         log::info!("[hotkey] local edge from the {kind:?} panel: {edge:?}");
                         self.pending_local_hotkeys
                             .push((std::time::Instant::now(), edge));
+                    }
+                    PopupSupervisorEvent::Message(PopupToHost::VocabSuggestion {
+                        id,
+                        accept,
+                        ..
+                    }) => {
+                        // 点一下就是一次词库写入（同步 IO），放到后台线程，别卡这一帧。
+                        if let Some(backend) = self.backend() {
+                            let result = if accept {
+                                backend
+                                    .accept_pending_correction(&id)
+                                    .map(|_| String::new())
+                                    .map_err(|error| error.to_string())
+                            } else {
+                                backend.reject_pending_correction(&id);
+                                Ok(String::new())
+                            };
+                            if let Err(error) = result {
+                                log::warn!("[vocab-card] resolve failed: {error}");
+                            }
+                            self.refresh_vocab_suggestions();
+                        }
                     }
                     PopupSupervisorEvent::Message(PopupToHost::DismissCapsule { .. }) => {
                         if let Some(snapshot) = self.snapshot.as_mut() {
@@ -1901,6 +2065,7 @@ mod linux_app {
                                 .last_test
                                 .as_ref()
                                 .and_then(|test| test.error.clone()),
+                            last_test_at: channel.last_test.as_ref().map(|test| test.at),
                         });
                     }
                     Ok::<_, BackendError>(rows)
@@ -2190,6 +2355,7 @@ mod linux_app {
         /// provider rules, so the UI never invents a field shape; without one
         /// the editor stays closed instead of guessing.
         fn open_provider_editor(&mut self, index: usize) {
+            self.editor_requested = true;
             let Some(channel_id) = self
                 .settings_channels
                 .get(index)
@@ -2212,10 +2378,37 @@ mod linux_app {
             self.load_provider_editor(kind, channel, descriptor);
         }
 
+        /// 关闭渠道编辑器；完全没交互过的草稿在这条路径上被回收
+        /// （Tauri `shouldRecycleDraft` + `deleteChannelIfBlank`）。
+        fn request_provider_editor_close(&mut self) {
+            let recycle = self.editor_draft && !self.draft_touched;
+            let channel_id = self
+                .provider_editor_form
+                .as_ref()
+                .map(|form| form.channel_id.clone());
+            if recycle {
+                if let (Some(backend), Some(channel_id)) = (self.backend(), channel_id) {
+                    let kind = self.settings_channel_kind;
+                    let lang = self.lang;
+                    self.spawn(async move {
+                        backend.delete_channel(kind, channel_id).await?;
+                        Ok(tr_l10n(lang, "status.channel_deleted").to_string())
+                    });
+                    self.load_settings_channels();
+                    self.load_service_configured();
+                    self.load_providers(kind);
+                }
+            }
+            self.close_provider_editor();
+        }
+
         fn close_provider_editor(&mut self) {
             self.provider_editor = ProviderEditorState::Idle;
             self.provider_editor_form = None;
             self.frontend_vm.provider_editor = None;
+            self.editor_draft = false;
+            self.draft_touched = false;
+            self.editor_requested = false;
         }
 
         /// Core owns the model catalog; the host only forwards the request.
@@ -2316,6 +2509,8 @@ mod linux_app {
                     let was_recording = self.recording_phase_active;
                     self.recording_phase_active = state.phase == DictationPhase::Recording;
                     if state.phase == DictationPhase::Recording && !was_recording {
+                        // 卡片与录音胶囊共用一个窗口：会话一起来就得让路。
+                        self.dismiss_vocab_suggestions();
                         self.play_record_cue(true);
                     } else if !self.recording_phase_active && was_recording {
                         self.play_record_cue(false);
@@ -2365,6 +2560,7 @@ mod linux_app {
                                 audio_level: Some(state.level),
                                 translation_active: state.translation_active,
                                 style,
+                                suggestions: self.vocab_suggestions.clone(),
                             },
                         );
                         // 终态：按 Tauri 时序安排自动收起，否则药丸会一直贴在屏幕上。
@@ -2524,6 +2720,11 @@ mod linux_app {
                         }
                     }
                 }
+                BackendEventKind::VocabularySuggestionsChanged(_) => {
+                    // Core 只负责攒候选；「要不要记住」的确认入口是胶囊窗上的卡片
+                    // （Tauri `VocabSuggestionCard`）。没有这张卡，自动学词永远落不了库。
+                    self.refresh_vocab_suggestions();
+                }
                 BackendEventKind::HistoryChanged(change) => {
                     self.history.observe(change.revision);
                     self.load_overview();
@@ -2671,6 +2872,7 @@ mod linux_app {
         /// 停了就说明热键消费与弹窗拉起也没在跑（这正是当初「关窗后热键失效」
         /// 的判据），用户/支持可以直接看日志确认。
         fn log_pump_heartbeat(&mut self, ctx: &egui::Context) {
+            self.tick_vocab_suggestions();
             if self.last_pump_heartbeat.elapsed() < std::time::Duration::from_secs(10) {
                 return;
             }
@@ -3348,6 +3550,10 @@ mod linux_app {
                         }
                         self.providers = ProvidersState::Loaded(panel.clone());
                         self.provider_models.clear();
+                        // 只把「面板刚加载好」当成一个时机，是否打开编辑器看用户意图：
+                        // 保存 / 验证 / 切换页面都会刷新面板，不能顺手把编辑器拉起来。
+                        let editor_wanted = self.editor_requested;
+                        self.editor_requested = false;
                         if let Some(channel_id) = selected {
                             // A refresh (enable toggle, save, validation) must not
                             // throw away the editor draft the user is editing: only
@@ -3357,7 +3563,7 @@ mod linux_app {
                                 ProviderEditorState::Loaded(editor)
                                     if editor.channel.id == channel_id
                             );
-                            if !already_loaded {
+                            if !already_loaded && editor_wanted {
                                 if let Some((channel, descriptor)) =
                                     provider_channel_descriptor(&panel, &channel_id)
                                 {
@@ -3609,8 +3815,12 @@ mod linux_app {
                         Ok(channel_id) => {
                             self.settings_channel_kind = kind;
                             self.provider_kind = kind;
-                            self.selected_channel_id = Some(channel_id);
+                            // 草稿：面板加载完就自动打开编辑器，未交互关闭时回收。
                             self.close_provider_editor();
+                            self.selected_channel_id = Some(channel_id);
+                            self.editor_draft = true;
+                            self.draft_touched = false;
+                            self.editor_requested = true;
                             self.load_settings_channels();
                             self.load_service_configured();
                             self.load_providers(kind);
@@ -3799,6 +4009,7 @@ mod linux_app {
             };
 
             vm.status = self.status.clone();
+            vm.runtime_warning = self.runtime_warning.clone();
             vm.quick_note_recording = backend.as_ref().is_some_and(|backend| {
                 backend.dictation_output_target()
                     == Some(openless_core::DictationOutputTarget::QuickNote)
@@ -4074,6 +4285,7 @@ mod linux_app {
                 .iter()
                 .enumerate()
                 .map(|(index, channel)| frontend::view_model::SettingsChannel {
+                    id: channel.id.clone(),
                     name: channel.name.clone(),
                     provider: localized_provider_label(
                         lang,
@@ -4084,26 +4296,16 @@ mod linux_app {
                     model: channel.model.clone(),
                     is_active: index == active_channel,
                     enabled: channel.enabled,
-                    last_check: match (
-                        channel.last_ok,
-                        channel.last_latency_ms,
-                        channel.last_error.as_deref(),
-                    ) {
-                        (Some(true), Some(ms), _) => Some(format!(
-                            "{} · {}",
-                            tr_l10n(lang, "settings.channels.passed"),
-                            fmt_l10n(lang, "settings.channels.elapsed", &[&ms]),
-                        )),
-                        (Some(true), None, _) => {
-                            Some(tr_l10n(lang, "settings.channels.passed").to_string())
-                        }
-                        (Some(false), _, error) => Some(fmt_l10n(
-                            lang,
-                            "settings.channels.failed",
-                            &[&error.unwrap_or_default()],
-                        )),
-                        _ => None,
-                    },
+                    last_ok: channel.last_ok,
+                    last_error: channel.last_error.clone(),
+                    last_latency_ms: channel.last_latency_ms,
+                    last_check_age_seconds: channel.last_test_at.map(|at| {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|elapsed| elapsed.as_secs() as i64)
+                            .unwrap_or(at);
+                        (now - at).max(0)
+                    }),
                 })
                 .collect();
 
@@ -4112,6 +4314,8 @@ mod linux_app {
             vm.provider_editor = self.provider_editor_form.as_ref().map(|form| {
                 frontend::view_model::SettingsProviderEditor {
                     channel_id: form.channel_id.clone(),
+                    is_asr: matches!(form.kind, openless_core::ChannelKind::Asr),
+                    is_draft: self.editor_draft,
                     provider: form.label.clone(),
                     provider_type: form.provider_type.clone(),
                     name: form.name.clone(),
@@ -4137,57 +4341,28 @@ mod linux_app {
                 .history_entries
                 .get(vm.history_selected)
                 .map(|entry| entry.id.clone());
-            let history = self.history.entries.clone();
-            vm.history_entries = history
-                .into_iter()
-                .map(|item| {
-                    let has_audio = item.has_audio_recording.unwrap_or(false);
-                    frontend::view_model::HistoryEntry {
-                        quick_note: item.source == openless_core::HistorySource::QuickNote,
-                        error_code: item.error_code,
-                        id: item.id,
-                        created_at: item.created_at,
-                        mode: overview_mode(item.mode),
-                        // History carries the exact style-pack id. Prefer the
-                        // catalog name so imported packs do not collapse into the
-                        // four base-mode labels; old records without an id still
-                        // use the mode fallback.
-                        style_label: item
-                            .style_pack_id
-                            .as_deref()
-                            .and_then(|id| self.style_packs.iter().find(|pack| pack.id == id))
-                            .map(|pack| {
-                                let builtin_default =
-                                    openless_core::builtin_style_pack_for_mode(pack.base_mode).name;
-                                if pack.kind == openless_core::StylePackKind::Builtin
-                                    && pack.id
-                                        == openless_core::builtin_style_pack_id(pack.base_mode)
-                                    && pack.name == builtin_default
-                                {
-                                    polish_mode_label(lang, pack.base_mode).to_string()
-                                } else {
-                                    pack.name.clone()
-                                }
-                            })
-                            .unwrap_or_else(|| polish_mode_label(lang, item.mode).to_string()),
-                        raw_transcript: item.raw_transcript,
-                        final_text: item.final_text,
-                        duration_ms: item.duration_ms,
-                        has_audio,
-                        asr_provider: item.asr_provider,
-                        asr_model: item.asr_model,
-                        asr_ms: item.asr_ms,
-                        llm_provider: item.llm_provider,
-                        app_name: item.app_name,
-                        dictionary_count: item.dictionary_entry_count,
-                    }
-                })
+            // 历史按页下发：快照只带第一页，其余由窗口的 `LoadMore` 拉取
+            // （见 `frontend::paging`），所以快照不会随历史增长而膨胀。
+            vm.history_list_total = self.history.entries.len();
+            vm.history_entries = self
+                .history
+                .entries
+                .iter()
+                .take(frontend::paging::page_limit())
+                .cloned()
+                .map(|item| history_entry_view(item, &self.style_packs, lang))
                 .collect();
             vm.history_loading = self.history.loading();
             vm.history_error = self.history.error.clone();
-            vm.history_selected = selected_id
+            // 分页之后宿主手里只有第一页：选中项在页内就按 id 重新定位；
+            // 不在页内（用户已经加载了更后面的页）就保持原下标不动 —— 那是窗口
+            // 自己那份列表的下标，宿主无权按页去改，否则会把选中项弄丢。
+            if let Some(index) = selected_id
+                .as_deref()
                 .and_then(|id| vm.history_entries.iter().position(|entry| entry.id == id))
-                .unwrap_or(0);
+            {
+                vm.history_selected = index;
+            }
 
             // In-app playback progress (dropped once the clip finishes).
             if self
@@ -4209,25 +4384,19 @@ mod linux_app {
             // Vocabulary + correction rules: the library path is always wired, so
             // an empty store is an empty list — never an "unsupported" page.
             vm.vocab_unsupported = false;
+            vm.vocab_total = self.vocabulary.len();
             vm.vocab_entries = self
                 .vocabulary
                 .iter()
-                .map(|entry| frontend::view_model::VocabEntry {
-                    phrase: entry.phrase.clone(),
-                    hits: entry.hits as usize,
-                    enabled: entry.enabled,
-                    learned: false,
-                })
+                .take(frontend::paging::page_limit())
+                .map(vocab_entry_view)
                 .collect();
+            vm.correction_rule_total = self.correction_rules.len();
             vm.vocab_rules = self
                 .correction_rules
                 .iter()
-                .map(|rule| frontend::view_model::CorrectionRule {
-                    pattern: rule.pattern.clone(),
-                    replacement: rule.replacement.clone(),
-                    enabled: rule.enabled,
-                    learned: false,
-                })
+                .take(frontend::paging::page_limit())
+                .map(correction_rule_view)
                 .collect();
             vm.vocab_saved_presets = self
                 .vocab_presets
@@ -4239,33 +4408,26 @@ mod linux_app {
                 .collect();
 
             // Style packs: wired too; an empty list is a valid state.
+            // 图标是 base64 data URL，最占体积，同样按页下发。
             vm.style_unsupported = false;
+            let selection_polish_style_pack_id = self
+                .preferences
+                .as_ref()
+                .map(|prefs| prefs.selection_polish_style_pack_id.as_str())
+                .filter(|id| !id.is_empty());
+            vm.style_pack_total = self.style_packs.len();
             vm.style_packs = self
                 .style_packs
                 .iter()
+                .take(frontend::paging::page_limit())
                 .enumerate()
-                .map(|(index, pack)| frontend::view_model::StylePack {
-                    id: pack.id.clone(),
-                    icon_path: pack.icon_path.clone(),
-                    icon_data_url: style_icon_urls.get(index).cloned().flatten(),
-                    base_mode: match pack.base_mode {
-                        openless_core::PolishMode::Raw => "raw",
-                        openless_core::PolishMode::Light => "light",
-                        openless_core::PolishMode::Structured => "structured",
-                        openless_core::PolishMode::Formal => "formal",
-                    }
-                    .to_string(),
-                    name: pack.name.clone(),
-                    description: pack.description.clone(),
-                    // Localized mode label (Core's display_name is zh-only).
-                    tags: vec![polish_mode_label(lang, pack.base_mode).to_string()],
-                    is_builtin: pack.kind == openless_core::StylePackKind::Builtin,
-                    enabled: pack.enabled,
-                    is_active: pack.active,
-                    selection_active: self
-                        .preferences
-                        .as_ref()
-                        .is_some_and(|prefs| prefs.selection_polish_style_pack_id == pack.id),
+                .map(|(index, pack)| {
+                    style_pack_view(
+                        pack,
+                        style_icon_urls.get(index).and_then(|url| url.as_deref()),
+                        selection_polish_style_pack_id,
+                        lang,
+                    )
                 })
                 .collect();
 
@@ -4279,21 +4441,13 @@ mod linux_app {
             vm.marketplace_loading = !self.marketplace_attempted;
             if !self.marketplace_items.is_empty() {
                 vm.marketplace_loading = false;
+                vm.marketplace_total = self.marketplace_items.len();
                 vm.marketplace_packs = self
                     .marketplace_items
                     .iter()
-                    .map(|item| frontend::view_model::MarketplacePack {
-                        id: item.id.clone(),
-                        name: item.name.clone(),
-                        version: item.version.clone(),
-                        description: item.description.clone(),
-                        mode: item.base_mode.clone(),
-                        author: item.author_login.clone(),
-                        origin_author_login: item.origin_author_login.clone(),
-                        tags: item.tags.clone(),
-                        likes: item.like_count as u32,
-                        downloads: item.download_count as u32,
-                        liked: self.marketplace_my_likes.contains(&item.id),
+                    .take(frontend::paging::page_limit())
+                    .map(|item| {
+                        marketplace_pack_view(item, self.marketplace_my_likes.contains(&item.id))
                     })
                     .collect();
             }
@@ -4334,6 +4488,84 @@ mod linux_app {
         }
 
         /// Dispatch frontend actions to existing Core / backend methods.
+        /// 切一页给窗口。顺序必须与快照第一页完全一致（都是宿主存储的前缀），
+        /// 否则窗口按 `offset` 拼接会把两段不同的数据接在一起。
+        fn collection_page(
+            &mut self,
+            collection: frontend::paging::Collection,
+            offset: usize,
+        ) -> (usize, frontend::paging::CollectionItems) {
+            use frontend::paging::{slice_page, Collection, CollectionItems};
+            let lang = self.lang;
+            let limit = frontend::paging::page_limit();
+            match collection {
+                Collection::History => {
+                    let items = slice_page(&self.history.entries, offset, limit)
+                        .into_iter()
+                        .map(|item| history_entry_view(item, &self.style_packs, lang))
+                        .collect();
+                    (self.history.entries.len(), CollectionItems::History(items))
+                }
+                Collection::Vocabulary => {
+                    let items = slice_page(&self.vocabulary, offset, limit)
+                        .iter()
+                        .map(vocab_entry_view)
+                        .collect();
+                    (self.vocabulary.len(), CollectionItems::Vocabulary(items))
+                }
+                Collection::CorrectionRules => {
+                    let items = slice_page(&self.correction_rules, offset, limit)
+                        .iter()
+                        .map(correction_rule_view)
+                        .collect();
+                    (
+                        self.correction_rules.len(),
+                        CollectionItems::CorrectionRules(items),
+                    )
+                }
+                Collection::Marketplace => {
+                    let items = slice_page(&self.marketplace_items, offset, limit)
+                        .iter()
+                        .map(|item| {
+                            marketplace_pack_view(
+                                item,
+                                self.marketplace_my_likes.contains(&item.id),
+                            )
+                        })
+                        .collect();
+                    (
+                        self.marketplace_items.len(),
+                        CollectionItems::Marketplace(items),
+                    )
+                }
+                Collection::StylePacks => {
+                    // 图标 data URL 由 `style_icon_urls` 缓存，按 index 取。
+                    let icons = self.style_icon_urls();
+                    let selection = self
+                        .preferences
+                        .as_ref()
+                        .map(|prefs| prefs.selection_polish_style_pack_id.clone())
+                        .filter(|id| !id.is_empty());
+                    let items = self
+                        .style_packs
+                        .iter()
+                        .enumerate()
+                        .skip(offset)
+                        .take(limit)
+                        .map(|(index, pack)| {
+                            style_pack_view(
+                                pack,
+                                icons.get(index).and_then(|url| url.as_deref()),
+                                selection.as_deref(),
+                                lang,
+                            )
+                        })
+                        .collect();
+                    (self.style_packs.len(), CollectionItems::StylePacks(items))
+                }
+            }
+        }
+
         fn apply_frontend_actions(
             &mut self,
             actions: Vec<frontend::view_model::FrontendAction>,
@@ -4381,6 +4613,9 @@ mod linux_app {
                     frontend::view_model::FrontendAction::CloseSettings => {
                         self.frontend_vm.settings_open = false;
                         self.frontend_vm.active_page = frontend::view_model::Page::Overview;
+                    }
+                    frontend::view_model::FrontendAction::DismissRuntimeWarning => {
+                        self.runtime_warning = None;
                     }
                     frontend::view_model::FrontendAction::SidebarToggleStyle => {
                         self.frontend_vm.style_open = !self.frontend_vm.style_open;
@@ -4742,6 +4977,19 @@ mod linux_app {
                         );
                         self.load_history();
                         self.frontend_vm.history_confirm = None;
+                    }
+                    frontend::view_model::FrontendAction::LoadMore { collection, offset } => {
+                        let (total, items) = self.collection_page(collection, offset);
+                        self.pending_collection_pages
+                            .push(HostToWindow::CollectionPage {
+                                // 回显请求偏移：同一偏移重复请求幂等；窗口据此
+                                // 丢掉晚到的旧回包（见 `apply_page`）。
+                                request_id: offset as u64,
+                                collection,
+                                offset,
+                                total,
+                                items: Box::new(items),
+                            });
                     }
                     frontend::view_model::FrontendAction::HistorySelect(index) => {
                         self.frontend_vm.history_selected = index;
@@ -5459,6 +5707,13 @@ mod linux_app {
                         self.apply_settings_action(field);
                     }
                     frontend::view_model::FrontendAction::SettingsSection(section) => {
+                        // 编辑器只属于「AI 服务与模型」这一页：切到别的分区就收起
+                        // （Tauri 的 modal 宿主挂在服务页里，切页即卸载）。
+                        if section != frontend::view_model::SettingsSection::Services
+                            && self.provider_editor_form.is_some()
+                        {
+                            self.request_provider_editor_close();
+                        }
                         self.frontend_vm.settings_section = section;
                     }
                     frontend::view_model::FrontendAction::SettingsServicesView(view) => {
@@ -5485,39 +5740,30 @@ mod linux_app {
                             self.load_providers(kind);
                         }
                     }
-                    frontend::view_model::FrontendAction::SettingsChannelFormOpen(open) => {
-                        self.frontend_vm.channel_form_open = open;
-                        if open {
-                            self.frontend_vm.channel_form_name.clear();
-                            self.frontend_vm.channel_provider_index = 0;
-                        }
-                    }
-                    frontend::view_model::FrontendAction::SettingsChannelProvider(index) => {
-                        self.frontend_vm.channel_provider_index = index;
-                    }
-                    frontend::view_model::FrontendAction::SettingsChannelName(name) => {
-                        self.frontend_vm.channel_form_name = name;
-                    }
-                    frontend::view_model::FrontendAction::SettingsChannelCreate => {
+                    // Tauri `startCreate`：点「添加渠道」先在后台建一张空渠道（名字留空），
+                    // 再打开同一个编辑器——草稿卡片只是为了让凭据有渠道 id 可落盘；
+                    // 用户完全没交互就关掉时会被回收（见 `SettingsProviderClose`）。
+                    frontend::view_model::FrontendAction::SettingsChannelDraft => {
                         let kind = self.settings_channel_kind;
+                        // 供应商面板还没加载完时也照 Tauri 的 `presets[0]?.id ?? ''` 建
+                        // 一张空供应商的草稿：弹窗里可以再选。
                         let provider_type = self
                             .frontend_vm
                             .channel_providers
-                            .get(self.frontend_vm.channel_provider_index)
-                            .map(|provider| provider.provider_type.clone());
-                        let name = self.frontend_vm.channel_form_name.trim().to_string();
-                        if let (Some(backend), Some(provider_type)) =
-                            (self.backend(), provider_type)
-                        {
+                            .first()
+                            .map(|provider| provider.provider_type.clone())
+                            .unwrap_or_default();
+                        if let Some(backend) = self.backend() {
+                            self.editor_draft = true;
+                            self.draft_touched = false;
                             let tx = self.tx.clone();
                             self.tokio.spawn(async move {
                                 let result = backend
-                                    .create_channel(kind, provider_type, name)
+                                    .create_channel(kind, provider_type, String::new())
                                     .await
                                     .map_err(|error| error.to_string());
                                 let _ = tx.send(UiResult::ChannelCreated { kind, result });
                             });
-                            self.frontend_vm.channel_form_open = false;
                         }
                     }
                     frontend::view_model::FrontendAction::ShortcutMenu(field) => {
@@ -5575,6 +5821,8 @@ mod linux_app {
                         self.apply_style_hotkey_repack(index, pack_index);
                     }
                     frontend::view_model::FrontendAction::SettingsChannelSelect(index) => {
+                        self.editor_draft = false;
+                        self.draft_touched = false;
                         self.open_provider_editor(index);
                     }
                     frontend::view_model::FrontendAction::SettingsChannelMove { index, delta } => {
@@ -5639,6 +5887,7 @@ mod linux_app {
                         }
                     }
                     frontend::view_model::FrontendAction::SettingsProviderField(field, value) => {
+                        self.draft_touched = true;
                         if let Some(form) = self.provider_editor_form.as_mut() {
                             match field {
                                 frontend::view_model::SettingsProviderField::Name => {
@@ -5666,6 +5915,7 @@ mod linux_app {
                         }
                     }
                     frontend::view_model::FrontendAction::SettingsProviderSave => {
+                        self.draft_touched = true;
                         if let Some(editor) = self.editor_from_form() {
                             if let Some(backend) = self.backend() {
                                 let lang = self.lang;
@@ -5755,7 +6005,7 @@ mod linux_app {
                         }
                     }
                     frontend::view_model::FrontendAction::SettingsProviderClose => {
-                        self.close_provider_editor();
+                        self.request_provider_editor_close();
                     }
                     frontend::view_model::FrontendAction::SettingsChannelToggle(index) => {
                         let kind = self.settings_channel_kind;
@@ -5895,6 +6145,122 @@ mod linux_app {
     }
 
     /// Core polish mode -> frontend display enum.
+    /// 历史记录 → 窗口展示条目。每帧只投影第一页，后续页按需投影
+    /// （见 `frontend::paging`）；两处共用这一份映射，字段与顺序不会走偏。
+    fn history_entry_view(
+        item: openless_core::DictationSession,
+        style_packs: &[openless_core::StylePack],
+        lang: Lang,
+    ) -> frontend::view_model::HistoryEntry {
+        let has_audio = item.has_audio_recording.unwrap_or(false);
+        frontend::view_model::HistoryEntry {
+            quick_note: item.source == openless_core::HistorySource::QuickNote,
+            error_code: item.error_code,
+            id: item.id,
+            created_at: item.created_at,
+            mode: overview_mode(item.mode),
+            // History carries the exact style-pack id. Prefer the catalog name so
+            // imported packs do not collapse into the four base-mode labels; old
+            // records without an id still use the mode fallback.
+            style_label: item
+                .style_pack_id
+                .as_deref()
+                .and_then(|id| style_packs.iter().find(|pack| pack.id == id))
+                .map(|pack| {
+                    let builtin_default =
+                        openless_core::builtin_style_pack_for_mode(pack.base_mode).name;
+                    if pack.kind == openless_core::StylePackKind::Builtin
+                        && pack.id == openless_core::builtin_style_pack_id(pack.base_mode)
+                        && pack.name == builtin_default
+                    {
+                        polish_mode_label(lang, pack.base_mode).to_string()
+                    } else {
+                        pack.name.clone()
+                    }
+                })
+                .unwrap_or_else(|| polish_mode_label(lang, item.mode).to_string()),
+            raw_transcript: item.raw_transcript,
+            final_text: item.final_text,
+            duration_ms: item.duration_ms,
+            has_audio,
+            asr_provider: item.asr_provider,
+            asr_model: item.asr_model,
+            asr_ms: item.asr_ms,
+            llm_provider: item.llm_provider,
+            app_name: item.app_name,
+            dictionary_count: item.dictionary_entry_count,
+        }
+    }
+
+    fn vocab_entry_view(
+        entry: &openless_core::DictionaryEntry,
+    ) -> frontend::view_model::VocabEntry {
+        frontend::view_model::VocabEntry {
+            phrase: entry.phrase.clone(),
+            hits: entry.hits as usize,
+            enabled: entry.enabled,
+            learned: false,
+        }
+    }
+
+    fn correction_rule_view(
+        rule: &openless_core::CorrectionRule,
+    ) -> frontend::view_model::CorrectionRule {
+        frontend::view_model::CorrectionRule {
+            pattern: rule.pattern.clone(),
+            replacement: rule.replacement.clone(),
+            enabled: rule.enabled,
+            learned: false,
+        }
+    }
+
+    fn style_pack_view(
+        pack: &openless_core::StylePack,
+        icon_data_url: Option<&str>,
+        selection_polish_style_pack_id: Option<&str>,
+        lang: Lang,
+    ) -> frontend::view_model::StylePack {
+        frontend::view_model::StylePack {
+            id: pack.id.clone(),
+            icon_path: pack.icon_path.clone(),
+            icon_data_url: icon_data_url.map(str::to_string),
+            base_mode: match pack.base_mode {
+                openless_core::PolishMode::Raw => "raw",
+                openless_core::PolishMode::Light => "light",
+                openless_core::PolishMode::Structured => "structured",
+                openless_core::PolishMode::Formal => "formal",
+            }
+            .to_string(),
+            name: pack.name.clone(),
+            description: pack.description.clone(),
+            // Localized mode label (Core's display_name is zh-only).
+            tags: vec![polish_mode_label(lang, pack.base_mode).to_string()],
+            is_builtin: pack.kind == openless_core::StylePackKind::Builtin,
+            enabled: pack.enabled,
+            is_active: pack.active,
+            selection_active: selection_polish_style_pack_id == Some(pack.id.as_str()),
+        }
+    }
+
+    fn marketplace_pack_view(
+        item: &openless_core::MarketplaceListItem,
+        liked: bool,
+    ) -> frontend::view_model::MarketplacePack {
+        frontend::view_model::MarketplacePack {
+            id: item.id.clone(),
+            name: item.name.clone(),
+            version: item.version.clone(),
+            description: item.description.clone(),
+            mode: item.base_mode.clone(),
+            author: item.author_login.clone(),
+            origin_author_login: item.origin_author_login.clone(),
+            tags: item.tags.clone(),
+            likes: item.like_count as u32,
+            downloads: item.download_count as u32,
+            liked,
+        }
+    }
+
     fn overview_mode(mode: openless_core::PolishMode) -> frontend::view_model::OverviewMode {
         match mode {
             openless_core::PolishMode::Raw => frontend::view_model::OverviewMode::Raw,
@@ -6529,8 +6895,8 @@ mod linux_app {
     mod popup_overlay {
         use super::*;
         use openless_linux_egui::{
-            place_overlay, popup_position, OverlayEnvironment, OverlayPlacement, OverlayX11,
-            X11Overlay,
+            place_overlay, place_panel, popup_position, OverlayEnvironment, OverlayPlacement,
+            OverlayX11, X11Overlay,
         };
 
         pub struct PopupOverlay {
@@ -6548,7 +6914,15 @@ mod linux_app {
 
         impl PopupOverlay {
             pub fn probe(kind: PopupKind) -> Option<Self> {
-                // 原生 Wayland 不做任何 X11 处理。
+                // XWayland may expose DISPLAY in a native Wayland session, but
+                // an xdg-toplevel is not an X11 window. Do not feed its
+                // coordinates to winit or pretend that X11 can place it.
+                if openless_linux_egui::wayland_display_available(
+                    std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
+                ) {
+                    log::debug!("popup x11: native Wayland session, keeping compositor placement");
+                    return None;
+                }
                 if !openless_linux_egui::x11_available(std::env::var("DISPLAY").ok().as_deref()) {
                     log::debug!("popup x11: no DISPLAY, keeping the compositor placement");
                     return None;
@@ -6637,10 +7011,42 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             }
 
             pub fn place(&mut self, ctx: &egui::Context, visible: bool) {
-                // 只有胶囊需要「永不聚焦 + 置顶 + 不进任务栏」；两个面板要键盘输入，
-                // 位置已经由 `with_position` 在创建时给过，X11 变更一概不做。
                 if self.kind != PopupKind::Capsule {
-                    self.placed = true;
+                    // Interactive panels keep normal focus/taskbar behaviour, but
+                    // winit's initial position is only a hint. Re-apply the
+                    // work-area position once after the X11 window is managed so
+                    // a panel cannot be placed over a reserved taskbar.
+                    if !self.placed {
+                        self.attempts = self.attempts.saturating_add(1);
+                        let placement = place_panel(
+                            &mut self.connection,
+                            std::process::id(),
+                            &self.environment,
+                            self.kind,
+                        );
+                        if placement.applied() {
+                            self.placed = true;
+                            log::info!(
+                                "popup x11 (panel-post-map): kind={:?} window={:?} matched={} moved_to={:?} warnings={:?}",
+                                self.kind,
+                                placement.window,
+                                placement
+                                    .matched
+                                    .map(openless_linux_egui::WindowMatch::as_str)
+                                    .unwrap_or("none"),
+                                placement.moved_to,
+                                placement.warnings
+                            );
+                        } else if self.attempts >= 100 {
+                            self.placed = true;
+                            log::warn!(
+                                "popup x11: panel window not found, keeping compositor placement kind={:?}",
+                                self.kind
+                            );
+                        } else {
+                            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                        }
+                    }
                     return;
                 }
                 if !self.placed {
@@ -6734,6 +7140,10 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         overlay: Option<PopupOverlay>,
         /// 面板有焦点时插件收不到按键，所以面板自己也要匹配本地热键。
         hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher,
+        /// 本次会话「预备态（麦克风还没吐第一帧 PCM）」的开始时刻：用来学习 warmupMs。
+        warming_started: Option<std::time::Instant>,
+        /// 学出来的「预备 → 就绪」平均耗时（ms），驱动光条的预测式展开。
+        warmup_ms: f32,
     }
 
     impl NativePopupApp {
@@ -6876,6 +7286,30 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             }
         }
 
+        /// 学习「预备态持续多久」= 麦克风就绪耗时，EMA 更新并落盘（Tauri 用
+        /// localStorage 的 `ol-capsule-warmup-ms`，公式一致；异常样本在
+        /// `learn_capsule_warmup_ms` 里被过滤）。
+        fn track_capsule_warmup(&mut self, warming: bool, phase: &str) {
+            let warming = warming
+                && matches!(
+                    phase.to_ascii_lowercase().as_str(),
+                    "starting" | "recording"
+                );
+            if warming {
+                if self.warming_started.is_none() {
+                    self.warming_started = Some(std::time::Instant::now());
+                }
+                return;
+            }
+            let Some(started) = self.warming_started.take() else {
+                return;
+            };
+            let observed_ms = started.elapsed().as_secs_f32() * 1000.0;
+            if let Some(next) = openless_linux_egui::learn_capsule_warmup_ms(observed_ms) {
+                self.warmup_ms = next;
+            }
+        }
+
         /// One capsule frame on a layer surface: same view, same protocol and
         /// same send / exit rules as the eframe window, minus viewport
         /// commands (a layer surface is sized by the compositor).
@@ -6898,10 +7332,34 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             let lang = self.lang;
             let mut action = frontend::popups::CapsuleAction::None;
             let output = ctx.run_ui(raw, |ui| {
-                action = frontend::popups::dictation_capsule(ui, &capsule, lang);
+                self.track_capsule_warmup(capsule.audio_level.is_none(), &capsule.phase);
+                action = frontend::popups::dictation_capsule(ui, &capsule, lang, self.warmup_ms);
             });
             match action {
                 frontend::popups::CapsuleAction::None => {}
+                frontend::popups::CapsuleAction::AcceptSuggestion(id) => {
+                    // 卡片与听写会话无关：id 才是要处理的候选。
+                    let sequence = self.next_sequence();
+                    let session_id = self.session_id().unwrap_or_default();
+                    self.send(PopupToHost::VocabSuggestion {
+                        version: POPUP_PROTOCOL_VERSION,
+                        session_id,
+                        sequence,
+                        id,
+                        accept: true,
+                    });
+                }
+                frontend::popups::CapsuleAction::RejectSuggestion(id) => {
+                    let sequence = self.next_sequence();
+                    let session_id = self.session_id().unwrap_or_default();
+                    self.send(PopupToHost::VocabSuggestion {
+                        version: POPUP_PROTOCOL_VERSION,
+                        session_id,
+                        sequence,
+                        id,
+                        accept: false,
+                    });
+                }
                 frontend::popups::CapsuleAction::Cancel
                 | frontend::popups::CapsuleAction::Confirm => {
                     if let Some(session_id) = self.session_id() {
@@ -6943,6 +7401,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         }
 
         fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+            openless_linux_egui::frame_stats::tick("popup");
             let ctx = ui.ctx().clone();
             // Overlay placement first: it must run before the window is shown so
             // the compositor never gives the capsule the keyboard.
@@ -7134,13 +7593,39 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                         capsule_phase.as_str(),
                         "starting" | "recording" | "transcribing" | "polishing" | "inserting"
                     );
-                    let action = frontend::popups::dictation_capsule(ui, &self.state.capsule, lang);
+                    let warming = self.state.capsule.audio_level.is_none();
+                    let warming_phase = self.state.capsule.phase.clone();
+                    self.track_capsule_warmup(warming, &warming_phase);
+                    let action = frontend::popups::dictation_capsule(
+                        ui,
+                        &self.state.capsule,
+                        lang,
+                        self.warmup_ms,
+                    );
                     let message = match action {
                         frontend::popups::CapsuleAction::Cancel => {
                             Some(PopupToHost::CancelDictation {
                                 version: POPUP_PROTOCOL_VERSION,
                                 session_id: String::new(),
                                 sequence: 0,
+                            })
+                        }
+                        frontend::popups::CapsuleAction::AcceptSuggestion(id) => {
+                            Some(PopupToHost::VocabSuggestion {
+                                version: POPUP_PROTOCOL_VERSION,
+                                session_id: String::new(),
+                                sequence: 0,
+                                id,
+                                accept: true,
+                            })
+                        }
+                        frontend::popups::CapsuleAction::RejectSuggestion(id) => {
+                            Some(PopupToHost::VocabSuggestion {
+                                version: POPUP_PROTOCOL_VERSION,
+                                session_id: String::new(),
+                                sequence: 0,
+                                id,
+                                accept: false,
                             })
                         }
                         frontend::popups::CapsuleAction::Confirm => {
@@ -7250,7 +7735,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
     }
 
     /// 胶囊在实现了 `zwlr_layer_shell_v1` 的合成器上跑原生 layer surface
-    /// （贴底居中、键盘焦点不可能、不占工作区）；协议缺失、EGL 起不来或
+    /// （贴底居中、键盘焦点不可能、不占工作区）；协议缺失、Vulkan 初始化失败或
     /// configure 超时都会返回 Err；不会回退到普通焦点窗口或 XWayland。
     fn run_capsule_layer_process() -> Result<(), LayerCapsuleFailure> {
         let geometry = openless_linux_egui::capsule_geometry(
@@ -7260,13 +7745,14 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         );
         // The host pipe is opened lazily, on the first frame the runner asks
         // for: the runner only calls back once the layer surface is configured
-        // and EGL is live, so a preflight failure leaves stdin untouched for the
+        // and Vulkan is live, so a preflight failure leaves stdin untouched for the
         // fallback window. `started` records that the pipe is in use, which
         // makes a late failure fatal instead of a (broken) second attempt.
         let mut app: Option<NativePopupApp> = None;
         let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let started_in_frame = Arc::clone(&started);
         let result = openless_linux_egui::run_layer_capsule(geometry, move |ctx, raw, first| {
+            openless_linux_egui::frame_stats::tick("capsule-layer");
             if app.is_none() {
                 match popup_stdio() {
                     Ok((incoming, outgoing)) => {
@@ -7280,6 +7766,8 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                             less_computer_input: String::new(),
                             outgoing_sequence: 0,
                             ready_sent: false,
+                            warming_started: None,
+                            warmup_ms: openless_linux_egui::load_capsule_warmup_ms(),
                             avatar: QaAvatar::default(),
                             lang: load_locale_pref().resolve(),
                             overlay: None,
@@ -7368,8 +7856,8 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 openless_linux_egui::LESS_COMPUTER_WINDOW_SIZE.0 as f32,
                 openless_linux_egui::LESS_COMPUTER_WINDOW_SIZE.1 as f32,
             ],
-            // 经典药丸 176×42 + 16px 下边距 + 8px 间距 + 「正在翻译」徽章
-            // （Tauri `getCapsuleHostMetrics(.., 'classic')` 的 100 高度）。
+            // Fixed 460×180 Siri stage; classic pills keep their own smaller
+            // painted bounds inside it. No phase-dependent host resizing.
             PopupKind::Capsule => [
                 openless_linux_egui::CAPSULE_WINDOW_SIZE.0 as f32,
                 openless_linux_egui::CAPSULE_WINDOW_SIZE.1 as f32,
@@ -7421,6 +7909,9 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             options,
             Box::new(move |cc| {
                 theme::install(&cc.egui_ctx);
+                if let Some(state) = cc.wgpu_render_state.as_ref() {
+                    crate::ui::frontend::siri_wgpu::install_wgpu(state, 4);
+                }
                 Ok(Box::new(NativePopupApp {
                     kind,
                     state: PopupState::default(),
@@ -7430,6 +7921,8 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                     less_computer_input: String::new(),
                     outgoing_sequence: 0,
                     ready_sent: false,
+                    warming_started: None,
+                    warmup_ms: openless_linux_egui::load_capsule_warmup_ms(),
                     avatar: QaAvatar::default(),
                     // The popup is a separate process, so it re-reads the
                     // persisted UI-locale preference rather than sharing state.
@@ -7466,6 +7959,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         native: LinuxNativeRuntime,
         tray: Option<openless_linux_egui::LinuxTray>,
         start_minimized: bool,
+        runtime_warning: Option<String>,
     ) -> Result<(), String> {
         let socket = bridge::ui_socket_path(runtime_dir);
         let tray_available = tray.is_some();
@@ -7473,6 +7967,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         let window_should_be_open = !start_minimized || !tray_available;
         let ctx = egui::Context::default();
         let mut app = OpenLessEguiApp::new(tokio, Ok(native), tray, window_should_be_open);
+        app.runtime_warning = runtime_warning;
         let mut ui_bridge = UiBridgeHost::bind(socket.clone())
             .map_err(|error| format!("UI bridge bind failed: {error}"))?;
         log::info!(
@@ -7501,6 +7996,10 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             }
             for sequence in std::mem::take(&mut app.pending_ui_pongs) {
                 ui_bridge.send(HostToWindow::Pong { sequence });
+            }
+            // 分页回包与请求同一个 tick 送出：列表不会因为等下一帧而闪一下。
+            for page in std::mem::take(&mut app.pending_collection_pages) {
+                ui_bridge.send(page);
             }
             app.sync_view_model();
             app.sync_hotkey_bindings(&mut ui_bridge);
@@ -7596,8 +8095,33 @@ Internal flags (set by OpenLess itself, not for regular use):
             if let Err(error) = openless_linux_egui::init_file_logger(&config.data_dir) {
                 eprintln!("OpenLess file logger unavailable: {error}");
             }
-            ensure_fcitx5_ready(&config)?;
-            let hotkeys = Some(Fcitx5HotkeyListener::start().map_err(|error| error.to_string())?);
+            // fcitx5 is an optional integration: a missing daemon, addon, or
+            // session bus must not prevent the Core/UI from starting.
+            let lang = load_locale_pref().resolve();
+            let mut input_method_error = match ensure_fcitx5_ready(&config) {
+                Ok(()) => None,
+                Err(error) => {
+                    log::warn!(
+                        "[fcitx] degraded startup (readiness check failed); global hotkeys disabled: {error}"
+                    );
+                    Some(error)
+                }
+            };
+            let hotkeys = if input_method_error.is_none() {
+                match Fcitx5HotkeyListener::start() {
+                    Ok(listener) => Some(listener),
+                    Err(error) => {
+                        let error = error.to_string();
+                        log::warn!(
+                            "[fcitx] degraded startup (listener failed); global hotkeys disabled: {error}"
+                        );
+                        input_method_error = Some(error);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             config.platform = LinuxCapabilitySnapshot::detect(tray_available).capabilities;
             let backend = {
                 // Construction captures the existing executor for cpal/native
@@ -7609,25 +8133,42 @@ Internal flags (set by OpenLess itself, not for regular use):
                     .build()
                     .map_err(|error| error.to_string())?
             };
-            tokio
+            let native = tokio
                 .block_on(LinuxNativeRuntime::start(
                     backend,
                     Some(Arc::clone(&broker)),
                     hotkeys,
                 ))
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string())?;
+            let runtime_warning = input_method_error
+                .map(|error| fmt_l10n(lang, "startup.input_method_unavailable", &[&error]));
+            Ok::<_, String>((native, runtime_warning))
         })();
         // 常驻宿主：本进程不再创建窗口，窗口交给独立的 UI 进程。
-        let native = match native {
+        let (native, runtime_warning) = match native {
             Ok(native) => native,
             Err(error) => {
                 drop(tray);
-                window::show_startup_error(&error, Arc::clone(&broker));
+                // Fatal startup errors are reported to stderr/journal only. Do
+                // not create a second egui window: recoverable integration
+                // failures (such as fcitx5) are rendered by the main UI's
+                // runtime-warning overlay instead.
+                log::error!("OpenLess startup failed: {error}");
                 return Err(error);
             }
         };
-        if let Err(error) = run_host(&runtime_dir, tokio, native, tray, start_minimized) {
-            window::show_startup_error(&error, Arc::clone(&broker));
+        if let Err(error) = run_host(
+            &runtime_dir,
+            tokio,
+            native,
+            tray,
+            start_minimized,
+            runtime_warning,
+        ) {
+            // The UI process owns all user-facing recoverable warnings. A
+            // fatal host/UI failure must not fall back to a standalone popup;
+            // that popup was a second, misleading application window.
+            log::error!("OpenLess host failed: {error}");
             return Err(error);
         }
         Ok(())
@@ -7698,6 +8239,17 @@ Internal flags (set by OpenLess itself, not for regular use):
             let b = br#"{"active_page":"History"}"#.to_vec();
             assert_eq!(snapshot_fingerprint(&a), snapshot_fingerprint(&a));
             assert_ne!(snapshot_fingerprint(&a), snapshot_fingerprint(&b));
+        }
+
+        #[test]
+        fn the_runtime_warning_can_be_dismissed_without_stopping_the_host() {
+            let mut app = fixture_app(true);
+            app.runtime_warning = Some("fixture warning".into());
+            app.apply_frontend_actions(
+                vec![frontend::view_model::FrontendAction::DismissRuntimeWarning],
+                &egui::Context::default(),
+            );
+            assert!(app.runtime_warning.is_none());
         }
 
         #[test]
@@ -7794,6 +8346,12 @@ Internal flags (set by OpenLess itself, not for regular use):
                 let (mut ready, mut hotkeys, mut snapshot, mut focus) =
                     (false, false, false, false);
                 while !(ready && hotkeys && snapshot && focus) {
+                    // 快照走单槽位，不从通道出。
+                    if let Some((sequence, _)) = client.take_snapshot() {
+                        assert!(ready && sequence > previous_sequence);
+                        previous_sequence = sequence;
+                        snapshot = true;
+                    }
                     match client.try_recv() {
                         Ok(HostToWindow::Ready { .. }) => ready = true,
                         Ok(HostToWindow::Hotkeys { .. }) => {
@@ -8118,6 +8676,8 @@ Internal flags (set by OpenLess itself, not for regular use):
                 less_computer_input: String::new(),
                 outgoing_sequence: 0,
                 ready_sent: false,
+                warming_started: None,
+                warmup_ms: openless_linux_egui::load_capsule_warmup_ms(),
                 avatar: QaAvatar::default(),
                 lang: Lang::ZhCn,
                 overlay: None,
@@ -8149,6 +8709,7 @@ Internal flags (set by OpenLess itself, not for regular use):
                 audio_level: Some(0.2),
                 translation_active: false,
                 style: "siri".into(),
+                suggestions: Vec::new(),
             })
             .expect("channel is open");
             assert!(!app.pump(None), "a progress frame must not exit");

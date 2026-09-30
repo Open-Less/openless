@@ -1120,16 +1120,43 @@ pub const CATALOG: &[Msg] = &[
         ),
     },
     Msg {
-        key: "startup.fcitx_help",
+        key: "startup.input_method_unavailable_title",
         text: row(
-            "请安装并启动 fcitx5，启用 OpenLess 插件，并确认当前桌面会话的 D-Bus 可用。必要时重新安装 OpenLess 软件包。修复后关闭此窗口并重新启动应用。",
-            "請安裝並啟動 fcitx5，啟用 OpenLess 插件，並確認目前桌面工作階段的 D-Bus 可用。必要時重新安裝 OpenLess 套件。修復後關閉此視窗並重新啟動應用程式。",
-            "Install and start fcitx5, enable the OpenLess addon, and check the current desktop session's D-Bus. Reinstall the OpenLess package if needed. Close this window and restart the application after fixing the environment.",
-            "fcitx5 を起動し、OpenLess アドオンとデスクトップセッションの D-Bus を有効にしてください。必要なら OpenLess を再インストールしてください。修正後、このウィンドウを閉じてアプリを再起動してください。",
-            "fcitx5를 설치하고 시작한 후 OpenLess 애드온과 현재 데스크톱 세션의 D-Bus를 활성화하세요. 필요하면 OpenLess를 다시 설치하세요. 환경을 수정한 후 이 창을 닫고 앱을 다시 시작하세요。",
+            "输入法服务不可用",
+            "輸入法服務無法使用",
+            "Input method unavailable",
+            "入力メソッドを利用できません",
+            "입력기 서비스를 사용할 수 없음",
         ),
     },
-    Msg { key: "common.saving", text: row("正在保存…", "正在儲存…", "Saving…", "保存中…", "저장 중…") },
+    Msg {
+        key: "startup.input_method_unavailable",
+        text: row(
+            "输入法服务当前不可用。应用仍会继续运行，但全局快捷键和划词功能暂不可用。请安装并启动 fcitx5、启用 OpenLess 插件，并确认当前桌面会话的 D-Bus 可用。详情：{}",
+            "輸入法服務目前無法使用。應用程式仍會繼續執行，但全域快捷鍵和選取文字功能暫時無法使用。請安裝並啟動 fcitx5、啟用 OpenLess 插件，並確認目前桌面工作階段的 D-Bus 可用。詳情：{}",
+            "The input method service is unavailable. The app will continue running, but global hotkeys and selection tools are temporarily unavailable. Install and start fcitx5, enable the OpenLess addon, and check the desktop session's D-Bus. Details: {}",
+            "入力メソッドサービスを利用できません。アプリは起動を続けますが、グローバルショートカットと選択ツールは一時的に利用できません。fcitx5 と OpenLess アドオンを有効にし、デスクトップセッションの D-Bus を確認してください。詳細：{}",
+            "입력기 서비스를 사용할 수 없습니다. 앱은 계속 실행되지만 전역 단축키와 선택 도구를 일시적으로 사용할 수 없습니다. fcitx5와 OpenLess 애드온을 설치·시작하고 데스크톱 세션의 D-Bus를 확인하세요. 세부 정보: {}",
+        ),
+    },
+    Msg {
+        key: "common.load_more",
+        text: row("加载更多", "載入更多", "Load more", "もっと読み込む", "더 불러오기"),
+    },
+    Msg {
+        key: "common.loaded_of_total",
+        text: row(
+            "已载入 {} / 共 {}",
+            "已載入 {} / 共 {}",
+            "Loaded {} of {}",
+            "{} / {} 件を読み込み済み",
+            "{} / {}개 불러옴",
+        ),
+    },
+        Msg {
+        key: "common.saving",
+        text: row("保存中", "儲存中", "Saving…", "保存中", "저장 중"),
+    },
     Msg { key: "startup.connecting", text: row("正在连接 OpenLess…", "正在連線 OpenLess…", "Connecting to OpenLess…", "OpenLess に接続中…", "OpenLess에 연결 중…") },
     // ---- Buttons (models / providers / vocab / styles / marketplace / history)
 
@@ -1608,14 +1635,32 @@ pub const CATALOG: &[Msg] = &[
         key: "vocab.kicker",
         text: row("词典", "VOCABULARY", "DICTIONARY", "辞書", "사전"),
     },
-    Msg {
+        Msg {
+        key: "vocabCard.title",
+        text: row(
+            "要记住这个词吗？",
+            "要記住這個詞嗎？",
+            "Remember this word?",
+            "この語を覚えますか？",
+            "이 단어를 기억할까요?",
+        ),
+    },
+        Msg {
+        key: "vocabCard.accept",
+        text: row("记住", "記住", "Remember", "覚える", "기억하기"),
+    },
+        Msg {
+        key: "vocabCard.reject",
+        text: row("不用", "不用", "Skip", "不要", "건너뛰기"),
+    },
+        Msg {
         key: "vocab.learned_section",
         text: row(
-            "自动收集（{}）",
-            "自動收集（{}）",
-            "Auto-collected ({})",
-            "自動収集（{}）",
-            "자동 수집 ({})",
+            "确认收集（{}）",
+            "確認收集（{}）",
+            "Confirmed ({})",
+            "確認して追加（{}）",
+            "확인 후 수집 ({})",
         ),
     },
         Msg {
@@ -2236,12 +2281,12 @@ pub const CATALOG: &[Msg] = &[
             "단축키 및 선택",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.hint",
         text: row(
-            "选中文字后按同一快捷键：关闭语音编辑时直接润色；开启后口述指令，说完再选择「提问」或「编辑选区」。",
+            "有选区时按同一快捷键：关闭语音编辑则润色；开启后口述指令，可提问或编辑选区。无选区但光标在文本框时：可「帮我写」成稿或提问。",
             "選中文字後按同一快捷鍵：關閉語音編輯時直接潤色；開啟後口述指令，說完再選擇「提問」或「編輯選區」。",
-            "Select text, then use one shortcut: polish when voice edit is off; hold and speak when voice edit is on, then choose Ask or Edit.",
+            "With a selection, one shortcut polishes (voice edit off) or takes a spoken instruction to ask or edit. With no selection but focus in a text field, speak to Help me write a draft or ask a question.",
             "テキスト選択後、同じショートカットで：音声編集オフ時は推敲、オン時は押しながら話してから「質問」か「編集」を選択。",
             "텍스트 선택 후 같은 단축키: 음성 편집 끄면 바로 다듬기, 켜면 누른 채 말한 뒤 「질문」 또는 「편집」 선택.",
         ),
@@ -2332,9 +2377,9 @@ pub const CATALOG: &[Msg] = &[
         key: "vocab.filter_all",
         text: row("所有", "所有", "All", "すべて", "전체"),
     },
-    Msg {
+        Msg {
         key: "vocab.filter_auto",
-        text: row("自动添加", "自動新增", "Auto-Added", "自動追加", "자동 추가"),
+        text: row("确认收集", "確認收集", "Confirmed", "確認して追加", "확인 후 수집"),
     },
     Msg {
         key: "vocab.filter_manual",
@@ -2690,6 +2735,60 @@ pub const CATALOG: &[Msg] = &[
         ),
     },
     Msg {
+        key: "settings.channels.connection_title",
+        text: row(
+            "服务连接",
+            "服務連線",
+            "Service connection",
+            "サービス接続",
+            "서비스 연결",
+        ),
+    },
+    Msg {
+        key: "settings.channels.edit_title",
+        text: row(
+            "编辑渠道",
+            "編輯渠道",
+            "Edit channel",
+            "チャネルを編集",
+            "채널 편집",
+        ),
+    },
+    Msg {
+        key: "settings.channels.create_title",
+        text: row(
+            "添加渠道",
+            "新增渠道",
+            "Add channel",
+            "チャネルを追加",
+            "채널 추가",
+        ),
+    },
+    Msg {
+        key: "settings.channels.auto_save_hint",
+        text: row(
+            "字段修改后自动保存；完成配置后，可手动验证连接。",
+            "修改欄位後會自動儲存；完成設定後，可手動驗證連線。",
+            "Changes save automatically. Once configured, you can check the connection manually.",
+            "変更は自動保存されます。設定が終わったら、手動で接続を確認できます。",
+            "변경 사항은 자동으로 저장됩니다. 설정을 마친 후 연결을 직접 확인할 수 있습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.channels.name_label",
+        text: row(
+            "渠道名称（可选）",
+            "名稱",
+            "Channel name (optional)",
+            "チャネル名（任意）",
+            "채널 이름 (선택)",
+        ),
+    },
+    Msg {
+        key: "settings.channels.done",
+        text: row("完成", "完成", "Done", "完了", "완료"),
+    },
+    Msg {
         key: "settings.channels.llm_title",
         text: row(
             "文字处理渠道",
@@ -2939,6 +3038,158 @@ pub const CATALOG: &[Msg] = &[
             "Credentials are stored in the OS credential vault.",
             "資格情報は OS の資格情報ストアに保存されます。",
             "자격 증명은 OS 자격 증명 저장소에 보관됩니다.",
+        ),
+    },
+    Msg {
+        key: "settings.channels.provider_label",
+        text: row("供应商", "供應商", "Provider", "プロバイダー", "공급자"),
+    },
+    Msg {
+        key: "settings.channels.drag_hint",
+        text: row(
+            "按住拖动可调整优先级",
+            "按住拖曳可調整優先順序",
+            "Drag to change priority",
+            "ドラッグで優先順位を変更",
+            "드래그해서 우선순위 변경",
+        ),
+    },
+    Msg {
+        key: "settings.channels.delete_confirm",
+        text: row(
+            "删除后该渠道保存的密钥也会一并清除。",
+            "刪除後該渠道儲存的金鑰也會一併清除。",
+            "Deleting also clears the keys stored for this channel.",
+            "削除するとこのチャネルに保存された鍵も消去されます。",
+            "삭제하면 이 채널에 저장된 키도 함께 지워집니다.",
+        ),
+    },
+    Msg {
+        key: "settings.channels.confirm_delete",
+        text: row("确认删除", "確認刪除", "Delete", "削除する", "삭제"),
+    },
+    Msg {
+        key: "settings.channels.last_check",
+        text: row(
+            "上次验证",
+            "上次驗證",
+            "Last check",
+            "前回の接続確認",
+            "마지막 확인",
+        ),
+    },
+    Msg {
+        key: "settings.channels.verifying",
+        text: row(
+            "正在验证…",
+            "正在驗證…",
+            "Checking…",
+            "確認中…",
+            "확인 중…",
+        ),
+    },
+    Msg {
+        key: "settings.channels.reverify",
+        text: row("重新验证", "重新驗證", "Check again", "再確認", "다시 확인"),
+    },
+    Msg {
+        key: "settings.channels.failed_plain",
+        text: row("验证失败", "驗證失敗", "Check failed", "確認に失敗", "확인 실패"),
+    },
+    Msg {
+        key: "settings.channels.failure_keeps_enabled",
+        text: row(
+            "验证失败不会自动停用。请求仍使用列表中第一个已启用的渠道，不会自动改用下一个。",
+            "驗證失敗不會自動停用。請求仍使用列表中第一個已啟用的渠道，不會自動改用下一個。",
+            "A failed check does not turn this service off. Requests still use the first enabled service and do not switch to the next one.",
+            "確認に失敗しても、このサービスは自動では停止しません。リクエストは有効な一覧の先頭を使い、次へは自動で切り替わりません。",
+            "확인에 실패해도 이 서비스는 자동으로 꺼지지 않습니다. 요청은 켜진 목록의 첫 항목을 쓰며, 다음 항목으로 자동 전환되지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.channels.stale_result",
+        text: row(
+            "结果已超过 24 小时",
+            "結果已超過 24 小時",
+            "Result is over 24 hours old",
+            "24 時間以上前の結果",
+            "24시간이 지난 결과",
+        ),
+    },
+    Msg {
+        key: "settings.channels.just_now",
+        text: row("刚刚", "剛剛", "just now", "たった今", "방금"),
+    },
+    Msg {
+        key: "settings.channels.minutes_ago",
+        text: row("{} 分钟前", "{} 分鐘前", "{}m ago", "{}分前", "{}분 전"),
+    },
+    Msg {
+        key: "settings.channels.hours_ago",
+        text: row("{} 小时前", "{} 小時前", "{}h ago", "{}時間前", "{}시간 전"),
+    },
+    Msg {
+        key: "settings.channels.days_ago",
+        text: row("{} 天前", "{} 天前", "{}d ago", "{}日前", "{}일 전"),
+    },
+    Msg {
+        key: "settings.channels.model_not_set",
+        text: row(
+            "模型未单独设置",
+            "未單獨設定模型",
+            "No model set explicitly",
+            "モデルの個別設定なし",
+            "모델을 별도로 설정하지 않음",
+        ),
+    },
+    Msg {
+        key: "settings.providers.pipeline_mode_label",
+        text: row(
+            "识别管线",
+            "識別管線",
+            "Pipeline mode",
+            "認識パイプライン",
+            "인식 파이프라인",
+        ),
+    },
+    Msg {
+        key: "settings.providers.pipeline_mode_hint",
+        text: row(
+            "传统 = ASR 转写 + LLM 润色两段式；多模态 = 单个多模态模型一次完成。",
+            "傳統 = ASR 轉寫 + LLM 潤色兩段式；多模態 = 單一多模態模型一次完成。",
+            "Traditional = ASR + LLM two-stage. Multimodal = a single audio-capable model in one pass.",
+            "従来 = ASR 文字起こし + LLM 整形の2段式。マルチモーダル = 音声対応モデルが1回で完了。",
+            "전통 = ASR 전사 + LLM 다듬기 2단계. 멀티모달 = 오디오 지원 모델이 한 번에 처리.",
+        ),
+    },
+    Msg {
+        key: "settings.providers.pipeline_mode_traditional",
+        text: row(
+            "传统模式",
+            "傳統模式",
+            "Traditional",
+            "従来モード",
+            "전통 모드",
+        ),
+    },
+    Msg {
+        key: "settings.providers.pipeline_mode_multimodal",
+        text: row(
+            "多模态模式",
+            "多模態模式",
+            "Multimodal",
+            "マルチモーダルモード",
+            "멀티모달 모드",
+        ),
+    },
+    Msg {
+        key: "settings.providers.pipeline_isolation_notice",
+        text: row(
+            "两种模式使用完全独立的凭据配置。切换模式不会删除另一套配置，只是暂时停用；切回即恢复。",
+            "兩種模式使用完全獨立的憑證設定。切換模式不會刪除另一套設定，只是暫時停用；切回即還原。",
+            "The two modes keep fully separate credentials. Switching modes keeps the other set stored but unused; switching back restores it.",
+            "2つのモードは完全に独立した認証情報を使用します。切り替えてももう一方の設定は削除されず、切り戻せば復元されます。",
+            "두 모드는 완전히 분리된 자격 증명을 사용합니다. 전환해도 다른 쪽 설정은 삭제되지 않으며, 다시 전환하면 복원됩니다.",
         ),
     },
     Msg {
@@ -3753,14 +4004,14 @@ pub const CATALOG: &[Msg] = &[
             "현재 버전, 업데이트 채널 및 자동 업데이트 설정을 확인합니다.",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.descriptions.advanced",
         text: row(
-            "按需配置 Less Computer、多模态与调试功能。",
-            "按需設定 Less Computer、多模態與除錯功能。",
-            "Configure Less Computer, multimodal processing and debugging as needed.",
-            "必要に応じて Less Computer、マルチモーダル処理、デバッグを設定します。",
-            "필요에 따라 Less Computer, 멀티모달 처리 및 디버깅을 설정합니다.",
+            "按需配置 Less Computer 与调试功能。",
+            "按需設定 Less Computer 與除錯功能。",
+            "Configure Less Computer and debugging as needed.",
+            "必要に応じて Less Computer とデバッグを設定します。",
+            "필요에 따라 Less Computer와 디버깅을 설정합니다.",
         ),
     },
     Msg {
@@ -5692,6 +5943,10 @@ pub const CATALOG: &[Msg] = &[
         text: row("书面润色", "書面潤色", "Written polish", "書面の推敲", "서면 다듬기"),
     },
 
+    Msg {
+        key: "settings.channels.edit",
+        text: row("编辑", "編輯", "Edit", "編集", "편집"),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

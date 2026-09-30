@@ -63,6 +63,14 @@ pub const CAPSULE_BADGE_BG: egui::Color32 = egui::Color32::from_rgb(250, 250, 25
 pub const CAPSULE_BADGE_BORDER: egui::Color32 =
     egui::Color32::from_rgba_premultiplied(9, 24, 58, 64);
 pub const ERR: egui::Color32 = egui::Color32::from_rgb(220, 38, 38);
+/// 蓝色主按钮的悬停色（Tauri 的 `.ol-btn-blue:hover` 略深）。
+pub const BLUE_HOVER: egui::Color32 = egui::Color32::from_rgb(29, 78, 216);
+/// Tauri `.ol-channel-delete-button`：`rgba(220,38,38,0.05)` 底 + `0.3` 红描边。
+pub const DANGER_FILL: egui::Color32 = egui::Color32::from_rgba_premultiplied(11, 2, 2, 13);
+/// 危险按钮悬停底色（比默认略深一档）。
+pub const DANGER_FILL_HOVER: egui::Color32 = egui::Color32::from_rgba_premultiplied(17, 3, 3, 26);
+/// Tauri `.ol-channel-delete-button` 的 `rgba(220,38,38,0.3)` 描边。
+pub const DANGER_BORDER: egui::Color32 = egui::Color32::from_rgba_premultiplied(66, 11, 11, 77);
 
 /// Font key of the registered Medium face (see [`medium_font`]).
 const MEDIUM_FACE: &str = "openless-medium";
@@ -250,7 +258,7 @@ pub fn install(ctx: &egui::Context) {
 }
 
 /// Feather shape edges in physical pixels on both the WGPU windows (which also
-/// use 4x MSAA) and the single-sample EGL layer surface.
+/// use 4x MSAA) and the single-sample Vulkan layer surface.
 pub fn enable_antialiasing(ctx: &egui::Context) {
     ctx.tessellation_options_mut(|options| {
         options.feathering = true;

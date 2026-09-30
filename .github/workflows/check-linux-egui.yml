@@ -1,4 +1,4 @@
-name: Linux egui build and backend checks
+name: Linux Core, egui and deb/rpm checks
 
 # CI and independent manual Linux builds share this deb/rpm verification path.
 # No standalone push trigger: a Linux PR must show one combined Linux check.

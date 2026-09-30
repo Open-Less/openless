@@ -18,6 +18,17 @@ pub(crate) const OBJECT_PATH: &str = "/openless";
 pub(crate) const INTERFACE: &str = "org.fcitx.Fcitx.OpenLess1";
 #[cfg(target_os = "linux")]
 const TIMEOUT: Duration = Duration::from_secs(3);
+/// Budget for the addon interface to answer once a reload was requested. Only a
+/// missing interface consumes it; a daemon that refuses to replace itself does
+/// not.
+#[cfg(target_os = "linux")]
+const READY_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a replaced daemon gets to hand the `org.fcitx.Fcitx5` name over
+/// before the host accepts the addon copy that is already serving.
+#[cfg(target_os = "linux")]
+const OWNER_CHANGE_GRACE: Duration = Duration::from_secs(3);
+#[cfg(target_os = "linux")]
+const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// fcitx5's own management interface. `Restart` makes the daemon replace
 /// itself in place: the call returns immediately and nothing of ours is
 /// inherited, unlike the `fcitx5 -r` command (see `reload_running_fcitx5`).
@@ -271,6 +282,10 @@ fn system_plugin_library() -> Option<PathBuf> {
 /// `/proc/<pid>/maps`. This is the authoritative answer to "what is live".
 pub(crate) fn parse_maps_plugin_path(maps: &str) -> Option<PathBuf> {
     maps.lines().find_map(|line| {
+        // The kernel appends " (deleted)" to a mapping whose inode was replaced
+        // underneath the daemon — the package-upgrade case this check exists
+        // for — so the suffix must not hide the copy fcitx5 actually loaded.
+        let line = line.strip_suffix(" (deleted)").unwrap_or(line);
         let path = line.split_whitespace().last()?;
         path.ends_with("/libopenless.so")
             .then(|| PathBuf::from(path))
@@ -1018,8 +1033,47 @@ pub fn available() -> bool {
         .is_ok()
 }
 
+/// What the barrier does with the daemon's `org.fcitx.Fcitx5` name while a
+/// reload is in flight. Extracted so the rule is testable without a live bus.
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReloadWait {
+    /// Keep waiting: the replacement may still be taking the name over.
+    Wait,
+    /// The replacement arrived; probe the addon interface.
+    Probe,
+    /// The daemon kept the addon copy it was started with.
+    KeptPreviousCopy,
+}
+
+/// Whether a requested reload still waits for the daemon to hand the name over.
+///
+/// fcitx5 started by a session launcher reports `CanRestart` = false and
+/// dispatches `Restart` without replacing itself, so an unchanged owner after
+/// the grace window means "the previous addon copy keeps serving the
+/// interface", not "the addon is missing". `current` is `None` while the name
+/// has no owner, which is the normal transient state during a replacement.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn reload_wait(
+    previous: &str,
+    current: Option<&str>,
+    grace_elapsed: bool,
+) -> ReloadWait {
+    match current {
+        Some(current) if current != previous => ReloadWait::Probe,
+        Some(_) if grace_elapsed => ReloadWait::KeptPreviousCopy,
+        Some(_) | None => ReloadWait::Wait,
+    }
+}
+
 /// Production startup barrier: install, request at most one reload, then wait
-/// for the new owner's addon interface before registering any shortcuts.
+/// for the addon interface before registering any shortcuts.
+///
+/// Readiness is the addon *interface*, not a replaced daemon: the running copy
+/// serves the interface the host registers hotkeys against, so a reload the
+/// daemon refuses to perform is a warning (`ReloadWait::KeptPreviousCopy`)
+/// rather than a startup failure. Only an interface that never answers within
+/// `READY_TIMEOUT` stops startup.
 #[cfg(target_os = "linux")]
 pub fn prepare_fcitx5(plan: &FcitxPluginInstallPlan, data_dir: &Path) -> Result<(), BackendError> {
     use dbus::blocking::BlockingSender;
@@ -1042,48 +1096,99 @@ pub fn prepare_fcitx5(plan: &FcitxPluginInstallPlan, data_dir: &Path) -> Result<
     };
     let previous_owner = owner(TIMEOUT)?;
     let reloaded = reload_fcitx5_if_plugin_updated(plan, data_dir);
-    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let interface_ready = |timeout: Duration| -> bool {
+        let Ok(message) = dbus::Message::new_method_call(
+            DESTINATION,
+            OBJECT_PATH,
+            "org.freedesktop.DBus.Introspectable",
+            "Introspect",
+        ) else {
+            return false;
+        };
+        connection
+            .send_with_reply_and_block(message, timeout)
+            .ok()
+            .and_then(|reply| reply.read1::<String>().ok())
+            .is_some_and(|xml| xml.contains(INTERFACE))
+    };
+    let deadline = std::time::Instant::now() + READY_TIMEOUT;
+    let owner_grace = std::time::Instant::now() + OWNER_CHANGE_GRACE;
+    let mut awaiting_replacement = reloaded;
     loop {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         if remaining.is_zero() {
-            return Err(BackendError::new(BackendErrorCode::Platform,
-                "fcitx5 OpenLess interface did not become ready within 15 seconds; enable the addon and restart fcitx5"));
+            return Err(BackendError::new(
+                BackendErrorCode::Platform,
+                format!(
+                    "fcitx5 OpenLess interface did not become ready within {} seconds; enable the \
+                     addon and restart fcitx5",
+                    READY_TIMEOUT.as_secs()
+                ),
+            ));
         }
-        let current_owner = owner(TIMEOUT.min(remaining));
-        if current_owner
-            .as_ref()
-            .is_ok_and(|current| !reloaded || *current != previous_owner)
-        {
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            if remaining.is_zero() {
-                continue;
-            }
-            let message = dbus::Message::new_method_call(
-                DESTINATION,
-                OBJECT_PATH,
-                "org.freedesktop.DBus.Introspectable",
-                "Introspect",
-            )
-            .map_err(dbus_error)?;
-            if connection
-                .send_with_reply_and_block(message, TIMEOUT.min(remaining))
-                .ok()
-                .and_then(|reply| reply.read1::<String>().ok())
-                .is_some_and(|xml| xml.contains(INTERFACE))
-            {
-                return Ok(());
+        if awaiting_replacement {
+            let current = owner(TIMEOUT.min(remaining)).ok();
+            match reload_wait(
+                &previous_owner,
+                current.as_deref(),
+                std::time::Instant::now() >= owner_grace,
+            ) {
+                ReloadWait::Probe => awaiting_replacement = false,
+                ReloadWait::KeptPreviousCopy => {
+                    log::warn!(
+                        "[fcitx] fcitx5 kept the addon copy it was started with (the daemon did \
+                         not replace itself); the running copy still serves the interface"
+                    );
+                    awaiting_replacement = false;
+                }
+                ReloadWait::Wait => {
+                    std::thread::sleep(POLL_INTERVAL.min(remaining));
+                    continue;
+                }
             }
         }
-        std::thread::sleep(
-            Duration::from_millis(100)
-                .min(deadline.saturating_duration_since(std::time::Instant::now())),
-        );
+        if interface_ready(TIMEOUT.min(remaining)) {
+            return Ok(());
+        }
+        std::thread::sleep(POLL_INTERVAL.min(remaining));
     }
 }
 
 #[cfg(not(target_os = "linux"))]
 pub fn available() -> bool {
     false
+}
+
+/// What the host does after a plugin update was detected.
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReloadPlan {
+    /// fcitx5 accepted `Restart` and replaces itself.
+    Replaced,
+    /// The session owns fcitx5 and it does not replace itself: the running addon
+    /// copy keeps serving until that daemon next starts.
+    KeepRunningCopy,
+    /// The controller refused the request; use the detached `fcitx5 -r`.
+    CliFallback,
+}
+
+/// Which reload path applies, given fcitx5's `CanRestart` (`None` when the method
+/// is missing) and whether `Restart` was accepted.
+///
+/// A daemon launched by the desktop session reports `CanRestart` = false and then
+/// dispatches `Restart` *without* replacing itself. Spanning a competing
+/// `fcitx5 -r` would fight the session manager for the addon, so that case keeps
+/// the running copy: the interface is what the host needs, and the installed
+/// copy loads when the session next starts the daemon.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn reload_plan(can_restart: Option<bool>, dispatched: bool) -> ReloadPlan {
+    if can_restart == Some(false) {
+        return ReloadPlan::KeepRunningCopy;
+    }
+    if dispatched {
+        return ReloadPlan::Replaced;
+    }
+    ReloadPlan::CliFallback
 }
 
 /// Ask a running fcitx5 daemon to reload so it loads a freshly written
@@ -1096,26 +1201,58 @@ pub fn available() -> bool {
 /// semantics are preserved). On an update the running instance is restarted so
 /// the new `.so` is actually loaded (restart semantics).
 ///
-/// Reload failures are logged; the production startup barrier still requires
-/// a ready addon and successful required hotkey registration. Returns true
-/// when a reload was issued against a live instance.
+/// Returns true only when the daemon is going to replace itself, because that is
+/// what makes the owner name change; the startup barrier accepts the running
+/// copy either way (see `prepare_fcitx5`).
 #[cfg(target_os = "linux")]
 pub fn reload_running_fcitx5() -> bool {
     if !fcitx5_name_has_owner() {
         return false;
     }
-    if restart_fcitx5_via_dbus() {
-        log::info!("[fcitx] reloaded fcitx5 after addon update");
-        return true;
+    let can_restart = fcitx5_can_restart();
+    let dispatched = can_restart != Some(false) && dispatch_fcitx5_restart();
+    match reload_plan(can_restart, dispatched) {
+        ReloadPlan::Replaced => {
+            log::info!("[fcitx] reloaded fcitx5 after addon update");
+            true
+        }
+        ReloadPlan::KeepRunningCopy => {
+            log::info!(
+                "[fcitx] the session owns fcitx5 and it does not replace itself; the running addon \
+                 copy keeps serving and the installed copy loads when the daemon next starts"
+            );
+            false
+        }
+        ReloadPlan::CliFallback => spawn_detached_fcitx5_restart(),
     }
-    spawn_detached_fcitx5_restart()
+}
+
+/// `CanRestart` on the fcitx5 controller. A missing method or an unreadable reply
+/// returns `None`, which keeps the previous behaviour and lets `Restart` decide.
+#[cfg(target_os = "linux")]
+fn fcitx5_can_restart() -> Option<bool> {
+    use dbus::blocking::BlockingSender;
+    let connection = dbus::blocking::Connection::new_session().ok()?;
+    let message = dbus::Message::new_method_call(
+        DESTINATION,
+        CONTROLLER_PATH,
+        CONTROLLER_INTERFACE,
+        "CanRestart",
+    )
+    .ok()?;
+    connection
+        .send_with_reply_and_block(message, CONTROLLER_TIMEOUT)
+        .ok()?
+        .read1::<bool>()
+        .ok()
 }
 
 /// `org.fcitx.Fcitx.Controller1.Restart` on `/controller`: the daemon replaces
 /// itself, the call returns as soon as the method is dispatched, and nothing of
-/// ours is inherited.
+/// ours is inherited. A dispatched call is still not proof of a replacement,
+/// which is why the caller also watches the owner name.
 #[cfg(target_os = "linux")]
-pub(crate) fn restart_fcitx5_via_dbus() -> bool {
+fn dispatch_fcitx5_restart() -> bool {
     use dbus::blocking::BlockingSender;
     let Ok(connection) = dbus::blocking::Connection::new_session() else {
         return false;
@@ -1297,6 +1434,69 @@ mod tests {
         );
         // Steady state: nothing mapped differently, fingerprint recorded.
         assert_eq!(reload_reason(Some("abc"), "abc", false, true), None);
+    }
+
+    #[test]
+    fn a_daemon_that_cannot_replace_itself_keeps_serving_the_installed_addon() {
+        // fcitx5 started by a session launcher reports CanRestart = false and
+        // dispatches `Restart` without replacing itself, so the owner name stays
+        // put. That is a warning — the running addon copy still answers — never
+        // the 15 second startup failure this barrier used to raise.
+        assert_eq!(
+            reload_wait(":1.27", Some(":1.27"), true),
+            ReloadWait::KeptPreviousCopy
+        );
+        // A replacement that is still in flight keeps waiting, even past the
+        // grace window: the name is briefly unowned while the daemon swaps.
+        assert_eq!(reload_wait(":1.27", None, true), ReloadWait::Wait);
+        assert_eq!(reload_wait(":1.27", Some(":1.27"), false), ReloadWait::Wait);
+        // A new owner means the replacement arrived and the interface may be
+        // probed.
+        assert_eq!(
+            reload_wait(":1.27", Some(":1.471"), true),
+            ReloadWait::Probe
+        );
+    }
+
+    #[test]
+    fn a_session_owned_daemon_is_not_replaced_by_a_competing_one() {
+        // A compositor-launched fcitx5 reports CanRestart = false: respect it
+        // instead of spawning a second daemon that would fight the session for
+        // the addon. The running copy keeps serving.
+        assert_eq!(reload_plan(Some(false), false), ReloadPlan::KeepRunningCopy);
+        assert_eq!(reload_plan(Some(false), true), ReloadPlan::KeepRunningCopy);
+        // A dispatched Restart replaces the daemon...
+        assert_eq!(reload_plan(Some(true), true), ReloadPlan::Replaced);
+        // ...while a refused controller request falls back to the CLI.
+        assert_eq!(reload_plan(Some(true), false), ReloadPlan::CliFallback);
+        // An older daemon without the method keeps the previous behaviour.
+        assert_eq!(reload_plan(None, true), ReloadPlan::Replaced);
+        assert_eq!(reload_plan(None, false), ReloadPlan::CliFallback);
+    }
+
+    #[test]
+    fn a_deleted_plugin_mapping_still_reports_the_copy_the_daemon_loaded() {
+        // The kernel marks a mapping whose inode a package upgrade replaced;
+        // that is the stale-copy case the reload check exists for, so it must
+        // not be misread as "fcitx5 is not running".
+        let replaced = "7f8e028d1000-7f8e028e1000 r--p 00000000 08:01 1056766 \
+             /usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so (deleted)\n";
+        assert_eq!(
+            parse_maps_plugin_path(replaced),
+            Some(PathBuf::from(
+                "/usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so"
+            ))
+        );
+        let live =
+            "7f8e028d1000-7f8e028e1000 r--p 00000000 08:01 1056766 /usr/lib/fcitx5/libopenless.so\n";
+        assert_eq!(
+            parse_maps_plugin_path(live),
+            Some(PathBuf::from("/usr/lib/fcitx5/libopenless.so"))
+        );
+        assert_eq!(
+            parse_maps_plugin_path("1-2 r--p 00000000 00:00 0 /usr/lib/libgtk.so\n"),
+            None
+        );
     }
 
     #[test]
