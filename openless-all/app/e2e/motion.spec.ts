@@ -16,12 +16,15 @@ test('settings entrance paints its starting pose and progresses over time', asyn
   await page.evaluate(() => {
     const probe = window as Window & {
       settingsEntranceFrames: { opacity: number; y: number; scale: number }[];
+      settingsEntranceComplete: boolean;
     };
     probe.settingsEntranceFrames = [];
+    probe.settingsEntranceComplete = false;
     const observer = new MutationObserver(() => {
       const panel = document.querySelector<HTMLElement>('.ol-settings-surface');
       if (!panel) return;
       observer.disconnect();
+      const deadline = performance.now() + 15_000;
       const sample = () => {
         const style = getComputedStyle(panel);
         const transform = new DOMMatrixReadOnly(style.transform);
@@ -30,8 +33,15 @@ test('settings entrance paints its starting pose and progresses over time', asyn
           y: transform.m42,
           scale: transform.m11,
         });
-        // Observe the natural clock after the first paint without requiring a fixed frame rate.
-        if (probe.settingsEntranceFrames.length < 8) window.setTimeout(sample, 16);
+        if (
+          Number(style.opacity) === 1 &&
+          !panel.getAnimations().some((animation) => animation.id === 'ol-surface-enter')
+        ) {
+          probe.settingsEntranceComplete = true;
+          return;
+        }
+        // Sample through the delayed start and completion without requiring a fixed frame rate.
+        if (performance.now() < deadline) window.setTimeout(sample, 16);
       };
       requestAnimationFrame(sample);
     });
@@ -40,13 +50,14 @@ test('settings entrance paints its starting pose and progresses over time', asyn
   await page.getByRole('button', { name: '设置', exact: true }).press('Enter');
   const dialog = page.getByRole('dialog', { name: '设置', exact: true });
   await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (window as Window & { settingsEntranceFrames: unknown[] }).settingsEntranceFrames.length,
-      ),
+    .poll(
+      () =>
+        page.evaluate(
+          () => (window as Window & { settingsEntranceComplete: boolean }).settingsEntranceComplete,
+        ),
+      { timeout: 15_000 },
     )
-    .toBe(8);
+    .toBe(true);
   const frames = await page.evaluate(
     () =>
       (
