@@ -140,16 +140,8 @@ impl TencentCloudStreamingASR {
     }
 
     pub async fn open_session(self: &Arc<Self>) -> Result<(), TencentCloudASRError> {
-        {
-            let mut input = self.input.lock();
-            if input.opened || self.shared.terminal.lock().is_some() {
-                return Err(TencentCloudASRError::ConnectionFailed);
-            }
-            input.opened = true;
-        }
         let (final_tx, final_rx) = oneshot::channel();
-        *self.final_rx.lock() = Some(final_rx);
-        *self.shared.final_tx.lock() = Some(final_tx);
+        let (connect_abort, connect_registration) = AbortHandle::new_pair();
         let session = Arc::new(TencentCloudSession::with_endpoint(
             self.credentials.clone(),
             self.task_spawner.clone(),
@@ -159,9 +151,30 @@ impl TencentCloudStreamingASR {
             shared: Arc::downgrade(&self.shared),
             prefix: String::new(),
         }));
-        *self.shared.active.lock() = Some(session.clone());
-        if let Err(error) = session.open_session().await {
+        {
+            // Install cancellation before starting either handshake. Keep the
+            // final receiver and active session atomic with respect to cancel.
+            let mut input = self.input.lock();
+            if input.opened || self.shared.terminal.lock().is_some() {
+                return Err(TencentCloudASRError::ConnectionFailed);
+            }
+            input.opened = true;
+            *self.final_rx.lock() = Some(final_rx);
+            *self.shared.final_tx.lock() = Some(final_tx);
+            *self.shared.active.lock() = Some(session.clone());
+            *self.worker.lock() = Some(connect_abort);
+        }
+        let connection = Abortable::new(session.open_session(), connect_registration).await;
+        let error = match connection {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => Some(error),
+            Err(_) => Some(self.shared.error()),
+        };
+        if let Some(error) = error {
             self.shared.complete(Err(error.clone()));
+            // cancel may already have removed shared.active before the socket
+            // was installed; the local session still needs explicit cleanup.
+            session.cancel();
             self.shared.stop_active();
             return Err(error);
         }
@@ -172,6 +185,7 @@ impl TencentCloudStreamingASR {
             // running or accept audio after the caller has discarded the session.
             let mut input = self.input.lock();
             if self.shared.terminal.lock().is_some() {
+                session.cancel();
                 self.shared.stop_active();
                 return Err(self.shared.error());
             }
@@ -600,6 +614,72 @@ mod tests {
         asr.open_session().await.unwrap();
         asr.consume_pcm_chunk(&vec![1; TARGET_AUDIO_CHUNK_BYTES * 2]);
         let _ = asr.send_last_frame().await;
+        assert!(asr.await_final_result().await.is_err());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancel_during_initial_websocket_handshake_unblocks_open_and_closes_socket() {
+        use tokio::io::AsyncReadExt;
+
+        let (listener, endpoint) = listener().await;
+        let (connected_tx, connected_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            connected_tx.send(()).unwrap();
+            // Withhold the WebSocket upgrade response. Cancellation should drop
+            // the connection instead of waiting for CONNECT_TIMEOUT.
+            let mut request = Vec::new();
+            tokio::time::timeout(Duration::from_secs(2), stream.read_to_end(&mut request))
+                .await
+                .unwrap()
+                .unwrap();
+        });
+        let asr = client(endpoint, SEGMENT_MAX_BYTES, DEFAULT_MODEL);
+        let opening = {
+            let asr = asr.clone();
+            tokio::spawn(async move { asr.open_session().await })
+        };
+        connected_rx.await.unwrap();
+        asr.cancel();
+        assert!(tokio::time::timeout(Duration::from_secs(1), opening)
+            .await
+            .expect("initial connection must be cancellable")
+            .unwrap()
+            .is_err());
+        assert!(asr.await_final_result().await.is_err());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancel_during_initial_application_handshake_unblocks_open_and_closes_socket() {
+        let (listener, endpoint) = listener().await;
+        let (connected_tx, connected_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            // Complete the WebSocket upgrade but withhold Tencent's code=0
+            // application handshake. Cancellation must close this socket too.
+            connected_tx.send(()).unwrap();
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(2), ws.next())
+                    .await
+                    .unwrap(),
+                Some(Ok(Message::Close(_))) | None | Some(Err(_))
+            ));
+        });
+        let asr = client(endpoint, SEGMENT_MAX_BYTES, DEFAULT_MODEL);
+        let opening = {
+            let asr = asr.clone();
+            tokio::spawn(async move { asr.open_session().await })
+        };
+        connected_rx.await.unwrap();
+        asr.cancel();
+        assert!(tokio::time::timeout(Duration::from_secs(1), opening)
+            .await
+            .expect("initial application handshake must be cancellable")
+            .unwrap()
+            .is_err());
         assert!(asr.await_final_result().await.is_err());
         server.await.unwrap();
     }
