@@ -32,6 +32,7 @@
 - `cargo test --locked -p openless-core`：核心单元测试、集成测试和文档测试。
 - `cargo test --locked -p openless-core asr::tencent_cloud`：腾讯协议和分段回归，包含 73 秒音频按真实发送节奏完成 50+23 秒切分、完整字节序列、总时长和尾段文字验证。
 - 覆盖停顿切段、录音仍开启时主动轮换、实时文字前缀、正常重复语句保留、恰好在边界停止、后续段拒绝、部分文字后断线，以及首次/后续握手和收尾期间取消。
+- `cargo clippy --locked -p openless-core --all-targets -- -D warnings`：与 Linux CI 相同的严格静态检查。
 - `rustfmt --check`（仅改动的两个 Rust 文件）和 `git diff --check`。
 
 本地模拟测试验证传输、会话切换和结果合并，不证明真实语音在切点附近的识别准确率。真实服务端到端验收仍需使用 59/61/73 秒及数分钟录音，覆盖长句、静音、背景噪声，并听校切分边界。此次未打包或替换桌面安装程序。

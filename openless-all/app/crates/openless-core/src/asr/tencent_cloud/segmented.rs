@@ -355,7 +355,9 @@ async fn run(
                 total_bytes += audio.len() as u64;
                 segment_bytes += audio.len();
                 if audio
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .all(|s| i16::from_le_bytes([s[0], s[1]]).unsigned_abs() <= SILENCE_PEAK)
                 {
                     quiet_bytes += audio.len();
@@ -440,21 +442,22 @@ mod tests {
                 .unwrap()
                 .unwrap();
             let mut voice_id = String::new();
-            let mut ws = tokio_tungstenite::accept_hdr_async(
-                stream,
-                |request: &Request, response: Response| {
-                    let url = url::Url::parse(&format!("ws://localhost{}", request.uri())).unwrap();
-                    voice_id = url
-                        .query_pairs()
-                        .find(|(name, _)| name == "voice_id")
-                        .unwrap()
-                        .1
-                        .into_owned();
-                    Ok(response)
-                },
-            )
-            .await
-            .unwrap();
+            // Tungstenite's Callback API requires an unboxed ErrorResponse;
+            // the mock cannot change that return type to satisfy this lint.
+            #[allow(clippy::result_large_err)]
+            let capture_voice_id = |request: &Request, response: Response| {
+                let url = url::Url::parse(&format!("ws://localhost{}", request.uri())).unwrap();
+                voice_id = url
+                    .query_pairs()
+                    .find(|(name, _)| name == "voice_id")
+                    .unwrap()
+                    .1
+                    .into_owned();
+                Ok(response)
+            };
+            let mut ws = tokio_tungstenite::accept_hdr_async(stream, capture_voice_id)
+                .await
+                .unwrap();
             assert!(
                 ids.insert(voice_id),
                 "each segment must have a fresh voice_id"
