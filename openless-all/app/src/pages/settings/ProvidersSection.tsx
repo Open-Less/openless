@@ -144,6 +144,7 @@ export const LLM_LABELS = [
   ['openrouterFree', 'openrouterFree'],
   ['requesty', 'requesty'],
   ['api-route', 'apiRoute'],
+  ['cheaperinference', 'cheaperinference'],
   ['orcarouter', 'orcarouter'],
   ['alibabaCoding', 'alibabaCoding'],
   ['codingPlanX', 'codingPlanX'],

@@ -1612,6 +1612,7 @@ export const ko: typeof zhCN = {
         openrouterFree: 'OpenRouter(무료 모델)',
         requesty: 'Requesty',
         apiRoute: 'API Route',
+        cheaperinference: 'Cheaper Inference',
         orcarouter: 'OrcaRouter',
         alibabaCoding: 'Alibaba Cloud Coding Plan',
         codingPlanX: 'CodingPlanX',
