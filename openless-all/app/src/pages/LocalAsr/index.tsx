@@ -189,7 +189,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   const { prefs, updatePrefs } = useHotkeySettings();
   // The selected channel owns routing. Preferences only remember local model
   // configuration and may still contain a legacy provider after switching away.
-  const [activeAsrProvider, setActiveAsrProvider] = useState<string | null>(null);
+  const [activeAsrProvider, setResolvedAsrProvider] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     let revision = 0;
@@ -199,10 +199,10 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
       try {
         const status = await getCredentials();
         if (!cancelled && requestedRevision === revision) {
-          setActiveAsrProvider(status.activeAsrProvider);
+          setResolvedAsrProvider(status.activeAsrProvider);
         }
       } catch {
-        if (!cancelled && requestedRevision === revision) setActiveAsrProvider(null);
+        if (!cancelled && requestedRevision === revision) setResolvedAsrProvider(null);
       }
     };
     void (async () => {
@@ -210,7 +210,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         const { listen } = await import('@tauri-apps/api/event');
         const off = await listen<CredentialsStatus>('credentials:changed', ({ payload }) => {
           revision += 1;
-          if (!cancelled) setActiveAsrProvider(payload.activeAsrProvider);
+          if (!cancelled) setResolvedAsrProvider(payload.activeAsrProvider);
         });
         if (cancelled) {
           off();
@@ -220,7 +220,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
       }
       await refreshActive();
     })().catch(() => {
-      if (!cancelled) setActiveAsrProvider(null);
+      if (!cancelled) setResolvedAsrProvider(null);
     });
     return () => {
       cancelled = true;
