@@ -80,6 +80,7 @@ pub const SHARED_CLOUD_LLM_PROVIDER_TYPES: &[&str] = &[
     "openrouterFree",
     "requesty",
     "api-route",
+    "cheaperinference",
     "orcarouter",
     "alibabaCoding",
     "codingPlanX",

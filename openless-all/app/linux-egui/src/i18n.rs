@@ -3345,6 +3345,7 @@ pub const CATALOG: &[Msg] = &[
     },
     Msg { key: "settings.providers.presets.orcarouter", text: row("OrcaRouter", "OrcaRouter", "OrcaRouter", "OrcaRouter", "OrcaRouter") },
     Msg { key: "settings.providers.presets.apiRoute", text: row("API Route", "API Route", "API Route", "API Route", "API Route") },
+    Msg { key: "settings.providers.presets.cheaperinference", text: row("Cheaper Inference", "Cheaper Inference", "Cheaper Inference", "Cheaper Inference", "Cheaper Inference") },
     Msg {
         key: "settings.providers.presets.alibabaCoding",
         text: row(
