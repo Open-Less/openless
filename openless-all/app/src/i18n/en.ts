@@ -1276,7 +1276,7 @@ export const en: typeof zhCN = {
       desc: 'Conversation history and context kept on this device.',
       cursorContextLabel: 'Cursor context (experimental)',
       cursorContextDesc:
-        'Send nearby document text with polish requests (macOS only). This switch is separate from local vocabulary learning. Password fields and known sensitive apps are excluded.',
+        'Send nearby document text with polish requests (macOS / Windows). This switch is separate from local vocabulary learning. Password fields, terminals and known sensitive apps are excluded.',
     },
     codingConsole: {
       title: 'Claude Console',

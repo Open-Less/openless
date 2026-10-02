@@ -1221,7 +1221,7 @@ export const zhCN = {
       desc: '本机保留的历史会话与对话上下文。',
       cursorContextLabel: '光标上下文（实验）',
       cursorContextDesc:
-        '润色时将光标附近文本发给模型（仅 macOS）。此开关与本地手改学词独立；排除密码框和已知敏感应用。',
+        '润色时将光标附近文本发给模型（macOS / Windows）。此开关与本地手改学词独立；排除密码框、终端及已知敏感应用。',
     },
     codingConsole: {
       title: 'Claude 控制台',

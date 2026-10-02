@@ -1254,7 +1254,7 @@ export const ko: typeof zhCN = {
       desc: '이 기기에 보관되는 대화 기록과 컨텍스트.',
       cursorContextLabel: '커서 문맥 (실험적)',
       cursorContextDesc:
-        '다듬기 요청 시 커서 주변 텍스트를 모델에 보냅니다(macOS 전용). 기기 내 단어 학습과 별도 설정입니다. 비밀번호 입력란과 알려진 민감한 앱은 제외됩니다.',
+        '다듬기 요청 시 커서 주변 텍스트를 모델에 보냅니다(macOS / Windows). 기기 내 단어 학습과 별도 설정입니다. 비밀번호 입력란, 터미널, 알려진 민감한 앱은 제외됩니다.',
     },
     codingConsole: {
       title: 'Claude 콘솔',

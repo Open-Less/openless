@@ -1313,7 +1313,7 @@ export const fr: typeof zhCN = {
       desc: 'Historique des conversations et contexte conservés sur cet appareil.',
       cursorContextLabel: 'Contexte du curseur (expérimental)',
       cursorContextDesc:
-        'Envoyer le texte autour du curseur au modèle pour la reformulation (macOS uniquement). Ce réglage est indépendant de l’apprentissage local. Les champs de mot de passe et les applications sensibles connues sont exclus.',
+        'Envoyer le texte autour du curseur au modèle pour la reformulation (macOS / Windows). Ce réglage est indépendant de l’apprentissage local. Les champs de mot de passe, les terminaux et les applications sensibles connues sont exclus.',
     },
     codingConsole: {
       title: 'Console Claude',

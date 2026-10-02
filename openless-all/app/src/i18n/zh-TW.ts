@@ -1221,7 +1221,7 @@ export const zhTW: typeof zhCN = {
       desc: '本機保留的歷史會話與對話上下文。',
       cursorContextLabel: '遊標上下文（實驗）',
       cursorContextDesc:
-        '潤色時將游標附近文字傳給模型（僅 macOS）。此開關與本機手改學詞獨立；排除密碼欄位和已知敏感應用程式。',
+        '潤色時將游標附近文字傳給模型（macOS / Windows）。此開關與本機手改學詞獨立；排除密碼欄位、終端機及已知敏感應用程式。',
     },
     codingConsole: {
       title: 'Claude 主控臺',

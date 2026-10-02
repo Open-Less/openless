@@ -433,6 +433,17 @@ mod windows_impl {
 
     const SENDINPUT_CHUNK_CHARS: usize = 16;
     const SENDINPUT_CHUNK_DELAY: Duration = Duration::from_millis(12);
+    /// Gap after every synthetic keystroke, not just at chunk boundaries.
+    ///
+    /// Mirrors macOS's `INTER_KEYSTROKE_DELAY` (see that module's comment: "Chromium /
+    /// Electron / Tauri themselves drop characters when keyDown/keyUp have no delay"). Windows
+    /// had no such gap — characters within a chunk were sent back-to-back with zero spacing,
+    /// only pausing every [`SENDINPUT_CHUNK_CHARS`]. Observed on hardware: dictating mixed
+    /// Chinese/English text ("我要把这个 open list...") dropped the leading character(s) of the
+    /// Latin-script word right after the CJK→ASCII transition (e.g. "open" arrived as "pen").
+    /// 1ms is inaudible/invisible to the user but gives the target app's message loop room to
+    /// process each keystroke before the next one lands.
+    const INTER_KEYSTROKE_DELAY: Duration = Duration::from_millis(1);
 
     /// Windows 上没有 input source 概念，token 留空。Send/Sync 自动派生。
     pub struct PreviousInputSource;
@@ -491,6 +502,9 @@ mod windows_impl {
             }
             typed_chars += 1;
             sent_in_chunk += 1;
+            if chars.peek().is_some() {
+                std::thread::sleep(INTER_KEYSTROKE_DELAY);
+            }
 
             if sent_in_chunk >= SENDINPUT_CHUNK_CHARS && chars.peek().is_some() {
                 std::thread::sleep(SENDINPUT_CHUNK_DELAY);

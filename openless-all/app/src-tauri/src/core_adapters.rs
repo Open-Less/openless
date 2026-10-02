@@ -3691,13 +3691,34 @@ impl openless_core::HostContextAdapter for TauriHostContextAdapter {
         Box::pin(async move {
             let front_app = crate::coordinator::capture_frontmost_app();
             let cursor_context = if include_cursor {
-                crate::host_document::read_around_cursor(crate::host_document::DEFAULT_BUDGET_CHARS)
-                    .await
-                    .map(|window| {
-                        let before = window.text.chars().take(window.cursor).collect::<String>();
-                        let after = window.text.chars().skip(window.cursor).collect::<String>();
-                        openless_core::prompts::cursor_context_input(&before, &after)
-                    })
+                let started = std::time::Instant::now();
+                let window = crate::host_document::read_around_cursor(
+                    crate::host_document::DEFAULT_BUDGET_CHARS,
+                )
+                .await;
+                // Metadata only — never the document body (design doc §18/§19). This is the
+                // same shape debug_read_cursor_context already logs; extending it to the real
+                // dictation path means "did this capture actually happen" is visible from the
+                // normal log file, with no devtools round-trip needed.
+                match &window {
+                    Some(window) => log::info!(
+                        "[cursor-context] status=ok chars_before={} chars_after={} elapsed_ms={} app={:?}",
+                        window.before().chars().count(),
+                        window.after().chars().count(),
+                        started.elapsed().as_millis(),
+                        front_app,
+                    ),
+                    None => log::info!(
+                        "[cursor-context] status=none elapsed_ms={} app={:?}",
+                        started.elapsed().as_millis(),
+                        front_app,
+                    ),
+                }
+                window.map(|window| {
+                    let before = window.text.chars().take(window.cursor).collect::<String>();
+                    let after = window.text.chars().skip(window.cursor).collect::<String>();
+                    openless_core::prompts::cursor_context_input(&before, &after)
+                })
             } else {
                 None
             };

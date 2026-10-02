@@ -1292,7 +1292,7 @@ export const es: typeof zhCN = {
       desc: 'Historial de conversaciones y contexto guardados en este dispositivo.',
       cursorContextLabel: 'Contexto del cursor (experimental)',
       cursorContextDesc:
-        'Envía el texto cercano al cursor al modelo para pulirlo (solo macOS). Es independiente del aprendizaje local. Se excluyen contraseñas y aplicaciones sensibles conocidas.',
+        'Envía el texto cercano al cursor al modelo para pulirlo (macOS / Windows). Es independiente del aprendizaje local. Se excluyen contraseñas, terminales y aplicaciones sensibles conocidas.',
     },
     codingConsole: {
       title: 'Consola de Claude',

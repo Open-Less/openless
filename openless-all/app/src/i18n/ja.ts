@@ -1262,7 +1262,7 @@ export const ja: typeof zhCN = {
       desc: 'この端末に保存される会話履歴とコンテキスト。',
       cursorContextLabel: 'カーソル文脈（実験的）',
       cursorContextDesc:
-        '推敲時にカーソル付近の文章をモデルへ送信します（macOSのみ）。端末内の単語学習とは独立した設定です。パスワード欄と既知の機密アプリは除外します。',
+        '推敲時にカーソル付近の文章をモデルへ送信します（macOS / Windows）。端末内の単語学習とは独立した設定です。パスワード欄、ターミナル、既知の機密アプリは除外します。',
     },
     codingConsole: {
       title: 'Claude コンソール',

@@ -6,9 +6,9 @@
 //!
 //! ## Boundary
 //!
-//! Cursor context is available on macOS. Edit learning has separate local consent:
-//! macOS AX, Windows UIA and Android accessibility provide bounded observation.
-//! Linux retains explicit vocabulary entry.
+//! Cursor context is available on macOS and Windows (UI Automation). Edit learning has
+//! separate local consent: macOS AX, Windows UIA and Android accessibility provide bounded
+//! observation. Linux retains explicit vocabulary entry.
 //!
 //! ## Three hard constraints (new code must not violate these, even though the old AX
 //! code in this repo does)
@@ -67,6 +67,12 @@ const AX_MESSAGING_TIMEOUT_SECS: f32 = 0.2;
 /// winds down on its own AX timeout.
 #[cfg(target_os = "macos")]
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1200);
+
+/// Outer timeout for one Windows UIA cursor-context read. UIA calls themselves are capped at
+/// 200ms each (`SetConnectionTimeout` / `SetTransactionTimeout` in `windows.rs`); this bounds
+/// the whole read (a handful of round-trips) per `windows_cursor_context开发方案.md` §11.
+#[cfg(target_os = "windows")]
+const WINDOWS_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1000);
 
 /// Outcome of one read. Every variant beyond `Ok` must explain why nothing was read —
 /// during installation verification this distinguishes "blocked" from "AX unsupported".
@@ -250,12 +256,16 @@ pub async fn probe_around_cursor(budget_chars: usize) -> HostDocumentReadResult 
     {
         macos_probe(budget_chars).await
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        windows_probe(budget_chars).await
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = budget_chars;
         HostDocumentReadResult::new(
             HostDocumentStatus::Unsupported,
-            Some("cursor context is macOS-only for now".to_string()),
+            Some("cursor context is unsupported on this platform".to_string()),
         )
     }
 }
@@ -314,6 +324,50 @@ fn blocked_result(reason: BlockReason) -> HostDocumentReadResult {
         HostDocumentStatus::Blocked,
         Some(reason.as_str().to_string()),
     )
+}
+
+/// Windows counterpart of [`macos_probe`]. UIA is a synchronous COM API, so the real read runs
+/// on `spawn_blocking`; the gate itself (password field, process blocklist) lives in
+/// `windows::read_around_cursor_blocking` because it needs the live focused element, unlike
+/// macOS where the bundle-id-only pre-check can run before leaving the async worker.
+#[cfg(target_os = "windows")]
+async fn windows_probe(budget_chars: usize) -> HostDocumentReadResult {
+    let started = std::time::Instant::now();
+    let (app_name, _) = crate::selection::current_front_app_parts();
+
+    let finish = |mut result: HostDocumentReadResult| {
+        result.app_name = app_name.clone();
+        result.elapsed_ms = started.elapsed().as_millis() as u64;
+        result
+    };
+
+    let handle = tokio::task::spawn_blocking(move || windows::read_around_cursor_blocking(budget_chars));
+
+    match tokio::time::timeout(WINDOWS_READ_TIMEOUT, handle).await {
+        Ok(Ok(ReadOutcome::Window(window))) => finish(HostDocumentReadResult {
+            window: Some(window),
+            ..HostDocumentReadResult::new(HostDocumentStatus::Ok, None)
+        }),
+        Ok(Ok(ReadOutcome::Blocked(reason))) => finish(HostDocumentReadResult::new(
+            HostDocumentStatus::Blocked,
+            Some(reason.as_str().to_string()),
+        )),
+        Ok(Ok(ReadOutcome::Unavailable(reason))) => finish(HostDocumentReadResult::new(
+            HostDocumentStatus::Unavailable,
+            Some(reason.to_string()),
+        )),
+        Ok(Err(join_error)) => finish(HostDocumentReadResult::new(
+            HostDocumentStatus::Unavailable,
+            Some(format!("blocking task failed: {join_error}")),
+        )),
+        Err(_) => finish(HostDocumentReadResult::new(
+            HostDocumentStatus::Timeout,
+            Some(format!(
+                "no response within {}ms",
+                WINDOWS_READ_TIMEOUT.as_millis()
+            )),
+        )),
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -570,10 +624,20 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(not(target_os = "macos"))]
-    async fn non_macos_reports_unsupported_without_touching_anything() {
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    async fn non_macos_non_windows_reports_unsupported_without_touching_anything() {
         let result = probe_around_cursor(DEFAULT_BUDGET_CHARS).await;
         assert_eq!(result.status, HostDocumentStatus::Unsupported);
         assert!(result.window.is_none());
+    }
+
+    /// On a CI/build machine with no focused editable control, Windows UIA should degrade to
+    /// `Unavailable` or `Blocked`, never panic or hang past the outer timeout — this is the
+    /// same contract `debug_read_cursor_context` relies on for install verification.
+    #[tokio::test]
+    #[cfg(target_os = "windows")]
+    async fn windows_probe_never_reports_unsupported() {
+        let result = probe_around_cursor(DEFAULT_BUDGET_CHARS).await;
+        assert_ne!(result.status, HostDocumentStatus::Unsupported);
     }
 }
