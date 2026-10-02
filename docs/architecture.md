@@ -1,6 +1,6 @@
 # OpenLess 2.0 架构
 
-状态：canonical，当前实现说明；更新：2026-09-30。平台范围见 [2.0 需求](2.0-requirements.md)，文件定位见 [目录结构](structure.md)。
+状态：canonical，当前实现说明；更新：2026-10-02。平台范围见 [2.0 需求](2.0-requirements.md)，文件定位见 [目录结构](structure.md)。
 
 ## 1. 分层与工作区
 
@@ -74,6 +74,10 @@ Tauri 在 `src-tauri/src/coordinator.rs` 构造 Core，`core_adapters.rs` 组装
 `src-tauri/tauri.conf.json` 声明 `main`、`capsule` 两个窗口。`src/main.tsx` 读取 `?window=`，`src/App.tsx` 按类型加载胶囊、`qa`（含复用它的「润色结果」模式）、`selection-voice-intent`、`less-computer` 和 `less-computer-glow`；未指定类型时进入主界面。各 WebView 共用前端入口，重页面按需加载；移动端再依据平台能力选择布局。Linux 单实例由 `linux-egui/src/single_instance.rs` 守护并转发启动意图。
 
 主窗口默认逻辑尺寸为 1300×835，允许用户调整；macOS 原生窗口按钮左侧和顶部均留出 16px，前端保留 44px 拖动区。桌面侧栏宽 226px，主内容从版本行下方开始，设置面板单独限制高度并在内部滚动。
+
+Linux 主窗口和 QA 面板由常驻宿主拉起的独立进程承载。QA 空态没有 Core 会话，宿主与面板统一使用空态标识校验操作；文字发送通过 `submit_text_in_context` 在 Core 中检查当前上下文并创建新轮次。早期调用失败回传到对应面板，迟到的失败不能覆盖新轮次。弹窗消息使用宿主递增的序号，不依赖 Core 是否发布了新事件；显式收起 QA 结束窗口进程，隐藏时的 QA 快照只更新宿主状态，下一次打开再创建窗口。没有托盘时，正常关闭主窗口仍会退出应用，托盘注册失败的原因写入启动日志。
+
+Linux 的 Siri 波形包络在分数次幂运算前限制为非负值，避免浮点端点误差生成 NaN。设置和胶囊绘制回归须经过 egui tessellation 并检查生成顶点的有限性，文字快照不能单独证明绘制成功。
 
 Siri、Classic、Typeless 三种胶囊共用 Core 的 `CapsuleStyle`，窗口尺寸与点击范围在保存偏好时同步。胶囊按显示器工作区底部定位，避开未自动隐藏的 Dock/任务栏；可见期间重新检查工作区。带正文的浮窗使用不透明底色，聊天面板另叠加细噪点纹理，圆角外部仍保留透明区域。
 

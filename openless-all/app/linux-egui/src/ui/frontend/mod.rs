@@ -618,6 +618,48 @@ mod tests {
     }
 
     #[test]
+    fn settings_modal_tessellates_after_opening_and_resizing() {
+        use super::view_model::SettingsSection;
+        for section in [
+            SettingsSection::General,
+            SettingsSection::Shortcuts,
+            SettingsSection::Services,
+            SettingsSection::Appearance,
+            SettingsSection::Privacy,
+            SettingsSection::Advanced,
+            SettingsSection::About,
+        ] {
+            let ctx = egui::Context::default();
+            let mut vm = FrontendViewModel {
+                lang: openless_linux_egui::Lang::En,
+                settings_open: true,
+                settings_section: section,
+                ..Default::default()
+            };
+            for size in [egui::vec2(1300.0, 835.0), egui::vec2(960.0, 640.0)] {
+                for _ in 0..3 {
+                    ctx.begin_pass(egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        ..Default::default()
+                    });
+                    render(&ctx, &mut vm, &mut Vec::new());
+                    let output = end_pass(&ctx);
+                    let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
+                    assert!(!primitives.is_empty(), "{section:?} must paint a frame");
+                    for primitive in primitives {
+                        if let egui::epaint::Primitive::Mesh(mesh) = primitive.primitive {
+                            assert!(
+                                mesh.vertices.iter().all(|vertex| vertex.pos.is_finite()),
+                                "{section:?} produced non-finite vertices at {size:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn settings_overlay_opens_from_every_page() {
         // Regression: Overview / Style / History returned early from `render`, so
         // the settings overlay at the end of the function never ran and the
