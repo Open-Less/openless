@@ -28,6 +28,6 @@ log = "0.4"
     (root / "src/lib.rs").write_text(
         "extern crate self as openless_core;\n"
         "pub trait AudioConsumer: Send + Sync { fn consume_pcm_chunk(&self, pcm: &[u8]); }\n"
-        + "#[path = " + json.dumps(str(recorder)) + "]\npub mod recorder;\n"
+        + "#[path = " + json.dumps(str(recorder), ensure_ascii=False) + "]\npub mod recorder;\n"
     )
     subprocess.run(["cargo", "test", "--manifest-path", str(root / "Cargo.toml"), *sys.argv[1:]], check=True)
