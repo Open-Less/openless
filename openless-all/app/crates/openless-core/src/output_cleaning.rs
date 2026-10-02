@@ -280,3 +280,126 @@ mod tests {
         );
     }
 }
+
+/// Normalize only ordinary Markdown ordered-list runs in the built-in structured
+/// style. Code, quotes, dates, versions and serialized Markdown stay literal.
+pub(crate) fn normalize_structured_numbering(text: &str) -> String {
+    let mut lines: Vec<String> = text.split('\n').map(str::to_owned).collect();
+    let mut groups: Vec<(usize, Vec<usize>)> = Vec::new();
+    let mut fence: Option<char> = None;
+    let mut completed = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        let marker = if trimmed.starts_with("```") {
+            Some('`')
+        } else if trimmed.starts_with("~~~") {
+            Some('~')
+        } else {
+            None
+        };
+        if let Some(marker) = marker {
+            if fence == Some(marker) {
+                fence = None;
+            } else if fence.is_none() {
+                fence = Some(marker);
+            }
+            completed.extend(groups.drain(..));
+            continue;
+        }
+        if fence.is_some() {
+            continue;
+        }
+        if let Some((indent, _, _, _)) = ordered_marker(line) {
+            // An indented code block outside a list is literal Markdown.
+            if indent >= 4 && groups.is_empty() {
+                continue;
+            }
+            while groups.last().is_some_and(|(level, _)| *level > indent) {
+                completed.push(groups.pop().unwrap());
+            }
+            if let Some((level, indices)) = groups.last_mut().filter(|(level, _)| *level == indent)
+            {
+                let _ = level;
+                indices.push(index);
+            } else {
+                groups.push((indent, vec![index]));
+            }
+        } else if !trimmed.is_empty() {
+            let indent = line.len() - trimmed.len();
+            while groups.last().is_some_and(|(level, _)| *level >= indent) {
+                completed.push(groups.pop().unwrap());
+            }
+        }
+    }
+    completed.extend(groups);
+    for (_, indices) in completed {
+        if indices.len() < 2 {
+            continue;
+        }
+        for (number, index) in indices.into_iter().enumerate() {
+            let line = &lines[index];
+            let (indent, old, delimiter, body) = ordered_marker(line).unwrap();
+            let mut body = &line[body..];
+            // Strip only a duplicated identical marker, not arbitrary nested text.
+            if let Some((0, repeated, repeat_delimiter, repeated_body)) = ordered_marker(body) {
+                if repeated == old && repeat_delimiter == delimiter {
+                    body = &body[repeated_body..];
+                }
+            }
+            lines[index] = format!("{}{}{delimiter} {body}", &line[..indent], number + 1);
+        }
+    }
+    lines.join("\n")
+}
+
+fn ordered_marker(line: &str) -> Option<(usize, usize, char, usize)> {
+    let indent = line.len() - line.trim_start_matches([' ', '\t']).len();
+    let bytes = line.as_bytes();
+    let mut end = indent;
+    while bytes.get(end).is_some_and(u8::is_ascii_digit) {
+        end += 1;
+    }
+    if end == indent || end - indent > 2 {
+        return None;
+    }
+    let number = line[indent..end].parse().ok()?;
+    let delimiter = char::from(*bytes.get(end)?);
+    if !matches!(delimiter, '.' | ')') || !bytes.get(end + 1)?.is_ascii_whitespace() {
+        return None;
+    }
+    let body =
+        end + 1 + line[end + 1..].len() - line[end + 1..].trim_start_matches([' ', '\t']).len();
+    Some((indent, number, delimiter, body))
+}
+
+#[cfg(test)]
+mod numbering_tests {
+    use super::*;
+    #[test]
+    fn duplicate_numbers_and_nested_runs_are_normalized() {
+        assert_eq!(
+            normalize_structured_numbering(
+                "1. A\n2. 2. B\n  1. child\n  1. child2\n2. C\n3. D\n3. E"
+            ),
+            "1. A\n2. B\n  1. child\n  2. child2\n3. C\n4. D\n5. E"
+        );
+    }
+    #[test]
+    fn separate_lists_and_parent_items_reset_children() {
+        assert_eq!(
+            normalize_structured_numbering(
+                "1. A\n  1. a\n  1. b\n2. B\n  1. c\n  1. d\n\nHeading\n1. E\n1. F"
+            ),
+            "1. A\n  1. a\n  2. b\n2. B\n  1. c\n  2. d\n\nHeading\n1. E\n2. F"
+        );
+    }
+    #[test]
+    fn code_versions_dates_quotes_entities_and_alphabetic_children_remain_literal() {
+        assert_eq!(
+            normalize_structured_numbering("    1. command\n    1. command"),
+            "    1. command\n    1. command"
+        );
+        let text = "2026. year\n2.1 version\n> 1. quote\n> 1. quote\n```\n1. code\n1. code\n```\n1. parent\n  (a) child\n2. parent\n2\\. escaped &#x20;\nhttps://example.com/1.2";
+        assert_eq!(normalize_structured_numbering(text), text);
+    }
+}

@@ -613,6 +613,21 @@ pub trait TextInserter: Send + Sync {
 }
 
 pub trait TextInsertionSession: Send + Sync {
+    /// Replaces only the range owned by this session. Adapters must verify focus,
+    /// caret and unchanged text, then confirm delivery. Unsupported by default.
+    fn supports_owned_replacement(&self) -> bool {
+        false
+    }
+
+    fn replace_owned(&self, _text: String) -> BoxFuture<'static, Result<(), BackendError>> {
+        Box::pin(async {
+            Err(BackendError::new(
+                BackendErrorCode::Unsupported,
+                "protected text replacement is unavailable",
+            ))
+        })
+    }
+
     /// Native preparation can decline streaming while retaining final paste
     /// support (for example when macOS cannot switch the keyboard input source).
     /// Core owns the fallback decision; adapters must never acknowledge chunks

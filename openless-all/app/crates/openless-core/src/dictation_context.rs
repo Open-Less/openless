@@ -37,8 +37,25 @@ pub enum DictationOutputTarget {
     Qa,
 }
 
+/// Delivery is captured per invocation; non-hotkey callers retain their settings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DictationDelivery {
+    #[default]
+    Preferences,
+    Complete,
+    Hold {
+        press_id: u64,
+        pressed_at: std::time::Instant,
+    },
+    Auto {
+        press_id: u64,
+        pressed_at: std::time::Instant,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DictationStartOptions {
+    pub delivery: DictationDelivery,
     pub translation_requested: bool,
     pub audio_source: DictationAudioSource,
     pub insert_text: bool,
@@ -51,6 +68,7 @@ pub struct DictationStartOptions {
 impl Default for DictationStartOptions {
     fn default() -> Self {
         Self {
+            delivery: DictationDelivery::Preferences,
             translation_requested: false,
             audio_source: DictationAudioSource::Microphone,
             insert_text: true,
@@ -147,6 +165,7 @@ pub struct PolishHistoryTurn {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DictationInsertionContext {
+    pub delivery: DictationDelivery,
     pub enabled: bool,
     pub observe_edits: bool,
     pub streaming: bool,
@@ -332,6 +351,7 @@ impl DictationContext {
                 prior_turns,
             },
             insertion: DictationInsertionContext {
+                delivery: options.delivery,
                 enabled: options.insert_text
                     && !matches!(
                         options.output_target,

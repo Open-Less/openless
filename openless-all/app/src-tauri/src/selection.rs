@@ -1529,3 +1529,15 @@ mod tests {
         ));
     }
 }
+
+/// Check identity without reactivating another app for live dictation.
+#[cfg(target_os = "macos")]
+pub(crate) fn live_insertion_app_matches(target: &SelectionInsertionTarget) -> bool {
+    let current = capture_selection_insertion_target();
+    match (&target.macos, &current.macos) {
+        (Some(expected), Some(current)) => {
+            expected.front_app_pid.is_some() && expected.front_app_pid == current.front_app_pid
+        }
+        _ => false,
+    }
+}

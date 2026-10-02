@@ -2151,6 +2151,30 @@ pub(super) async fn arm_translation_if_effective(inner: &Arc<Inner>) -> bool {
 }
 
 pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEvent>) {
+    let (ordered_tx, ordered_rx) = mpsc::channel();
+    let worker = Arc::clone(&inner);
+    let Ok(join) = std::thread::Builder::new()
+        .name("dictation-ordered-edges".into())
+        .spawn(move || hotkey_ordered_bridge_loop(worker, ordered_rx))
+    else {
+        log::error!("[coord] cannot start ordered dictation edge worker");
+        return;
+    };
+    while let Ok(evt) = rx.recv() {
+        if let HotkeyEvent::Released { press_id, at } = &evt {
+            inner
+                .backend
+                .observe_dictation_hotkey_release(*press_id, *at);
+        }
+        if ordered_tx.send(evt).is_err() {
+            break;
+        }
+    }
+    drop(ordered_tx);
+    let _ = join.join();
+}
+
+fn hotkey_ordered_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEvent>) {
     while let Ok(evt) = rx.recv() {
         if inner.shortcut_recording_active.load(Ordering::SeqCst) {
             // Recording mode: forward only the "record Fn" event to the

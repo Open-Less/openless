@@ -162,6 +162,16 @@ extern "C" {
         parameter: CFTypeRef,
         value: *mut CFTypeRef,
     ) -> AxError;
+    fn AXUIElementIsAttributeSettable(
+        element: AxUiElementRef,
+        attribute: CFStringRef,
+        settable: *mut u8,
+    ) -> AxError;
+    fn AXUIElementSetAttributeValue(
+        element: AxUiElementRef,
+        attribute: CFStringRef,
+        value: CFTypeRef,
+    ) -> AxError;
     fn AXValueGetValue(value: AxValueRef, value_type: i32, out: *mut c_void) -> u8;
     fn AXValueCreate(value_type: i32, value_ptr: *const c_void) -> AxValueRef;
 }
@@ -1454,5 +1464,252 @@ mod tests {
             "kCFNotFound：没有光标"
         );
         assert_eq!(caret_offset_from_location(isize::MIN), None);
+    }
+}
+
+/// A bounded, local baseline for one verified text field. Only selected-text
+/// writes are allowed; never set AXValue for the entire document.
+pub(crate) struct OwnedTextRange {
+    element: SendableElement,
+    baseline: String,
+    start: usize,
+    owned: String,
+    failed: bool,
+}
+
+impl OwnedTextRange {
+    /// Must run on a blocking thread, including the AX capability probe.
+    pub(crate) fn capture() -> Option<Self> {
+        unsafe {
+            let GatedElement::Ready(element) = focused_element_passing_the_gate(live_gate()) else {
+                return None;
+            };
+            let owned = SendableElement(element as usize);
+            if !matches!(
+                copy_string_attr(element, b"AXRole\0").as_deref(),
+                Some("AXTextField" | "AXTextArea")
+            ) {
+                return None;
+            }
+            let range = copy_selected_range(element)?;
+            if range.location < 0 || range.length != 0 {
+                return None;
+            }
+            if !matches!(
+                classify_document_length(
+                    copy_index_attr(element, b"AXNumberOfCharacters\0"),
+                    FULL_TEXT_MAX_UTF16
+                ),
+                DocumentLength::WithinLimit(_)
+            ) {
+                return None;
+            }
+            let baseline = copy_string_attr(element, b"AXValue\0")?;
+            if baseline.encode_utf16().count() > FULL_TEXT_MAX_UTF16 {
+                return None;
+            }
+            let start = range.location as usize;
+            if start > baseline.encode_utf16().count() {
+                return None;
+            }
+            for attr in [
+                b"AXSelectedTextRange\0".as_slice(),
+                b"AXSelectedText\0".as_slice(),
+            ] {
+                let name = cfstring_from_static(attr)?;
+                let mut settable = 0;
+                let error = AXUIElementIsAttributeSettable(element, name, &mut settable);
+                CFRelease(name);
+                if error != AX_ERROR_SUCCESS || settable == 0 {
+                    return None;
+                }
+            }
+            Some(Self {
+                element: owned,
+                baseline,
+                start,
+                owned: String::new(),
+                failed: false,
+            })
+        }
+    }
+
+    pub(crate) fn replace(
+        &mut self,
+        text: &str,
+        cancelled: &AtomicBool,
+    ) -> Result<(), &'static str> {
+        if self.failed || cancelled.load(Ordering::Acquire) {
+            return Err("live insertion is closed");
+        }
+        let result = unsafe { self.replace_checked(text, cancelled) };
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
+
+    unsafe fn replace_checked(
+        &mut self,
+        text: &str,
+        cancelled: &AtomicBool,
+    ) -> Result<(), &'static str> {
+        let GatedElement::Ready(focused) = focused_element_passing_the_gate(live_gate()) else {
+            return Err("target focus is unavailable");
+        };
+        let focused = SendableElement(focused as usize);
+        let element = self.element.as_ref();
+        if CFEqual(focused.as_ref() as CFTypeRef, element as CFTypeRef) == 0 {
+            return Err("target control changed");
+        }
+        let range = copy_selected_range(element).ok_or("target caret unavailable")?;
+        let expected_caret = self.start + self.owned.encode_utf16().count();
+        if range.location != expected_caret as isize || range.length != 0 {
+            return Err("user moved the caret");
+        }
+        if !live_baseline_matches(element, &self.baseline) {
+            return Err("user edited the document");
+        }
+        if text == self.owned {
+            return Ok(());
+        }
+        let next = replace_utf16_span(
+            &self.baseline,
+            self.start,
+            self.owned.encode_utf16().count(),
+            text,
+        )
+        .ok_or("invalid UTF-16 range")?;
+        if next.encode_utf16().count() > FULL_TEXT_MAX_UTF16 {
+            return Err("live text exceeds the document limit");
+        }
+        let selected = CFRange {
+            location: self.start as isize,
+            length: self.owned.encode_utf16().count() as isize,
+        };
+        let value = AXValueCreate(
+            K_AX_VALUE_CF_RANGE_TYPE,
+            &selected as *const _ as *const c_void,
+        );
+        if value.is_null() {
+            return Err("could not create selected range");
+        }
+        let selected_result = set_live_attr(element, b"AXSelectedTextRange\0", value);
+        CFRelease(value);
+        selected_result?;
+        // Recheck after selecting: never overwrite a concurrent document edit.
+        let actual = copy_selected_range(element).ok_or("selected range unavailable")?;
+        if actual.location != selected.location
+            || actual.length != selected.length
+            || !live_baseline_matches(element, &self.baseline)
+            || cancelled.load(Ordering::Acquire)
+        {
+            return Err("document changed while selecting the owned range");
+        }
+        let ctext = std::ffi::CString::new(text).map_err(|_| "text contains a NUL")?;
+        let value =
+            CFStringCreateWithCString(std::ptr::null(), ctext.as_ptr(), K_CF_STRING_ENCODING_UTF8);
+        if value.is_null() {
+            return Err("could not create replacement text");
+        }
+        let result = set_live_attr(element, b"AXSelectedText\0", value);
+        CFRelease(value);
+        result?;
+        if copy_string_attr(element, b"AXValue\0").as_deref() != Some(&next) {
+            return Err("replacement delivery is unconfirmed");
+        }
+        // Standard text fields collapse selection after AXSelectedText writes.
+        // If they do not, decline future updates instead of moving the user's caret.
+        let range = copy_selected_range(element).ok_or("replacement caret unavailable")?;
+        if range.location != (self.start + text.encode_utf16().count()) as isize
+            || range.length != 0
+        {
+            return Err("replacement caret is unconfirmed");
+        }
+        self.baseline = next;
+        self.owned = text.to_owned();
+        Ok(())
+    }
+}
+
+unsafe fn live_baseline_matches(element: AxUiElementRef, baseline: &str) -> bool {
+    matches!(
+        classify_document_length(
+            copy_index_attr(element, b"AXNumberOfCharacters\0"),
+            FULL_TEXT_MAX_UTF16
+        ),
+        DocumentLength::WithinLimit(_)
+    ) && copy_string_attr(element, b"AXValue\0").as_deref() == Some(baseline)
+}
+
+fn live_gate() -> GateInputs {
+    GateInputs {
+        secure_input: crate::unicode_keystroke::is_secure_input_enabled(),
+        bundle_id: crate::selection::current_front_app_parts().1,
+        ..GateInputs::default()
+    }
+}
+
+unsafe fn set_live_attr(
+    element: AxUiElementRef,
+    attr: &'static [u8],
+    value: CFTypeRef,
+) -> Result<(), &'static str> {
+    let name = cfstring_from_static(attr).ok_or("AX attribute unavailable")?;
+    let error = AXUIElementSetAttributeValue(element, name, value);
+    CFRelease(name);
+    if error == AX_ERROR_SUCCESS {
+        Ok(())
+    } else {
+        Err("AX selected-text update failed")
+    }
+}
+
+fn replace_utf16_span(
+    text: &str,
+    start: usize,
+    length: usize,
+    replacement: &str,
+) -> Option<String> {
+    let end = start.checked_add(length)?;
+    let mut units = 0;
+    let mut start_byte = None;
+    let mut end_byte = None;
+    for (byte, ch) in text
+        .char_indices()
+        .chain(std::iter::once((text.len(), '\0')))
+    {
+        if units == start {
+            start_byte = Some(byte);
+        }
+        if units == end {
+            end_byte = Some(byte);
+            break;
+        }
+        units += ch.len_utf16();
+    }
+    Some(format!(
+        "{}{}{}",
+        &text[..start_byte?],
+        replacement,
+        &text[end_byte?..]
+    ))
+}
+
+#[cfg(test)]
+mod live_range_tests {
+    use super::*;
+    #[test]
+    fn replacement_preserves_surroundings_and_rejects_split_surrogates() {
+        assert_eq!(
+            replace_utf16_span("前🙂原文\n后", 3, 2, "润色😀"),
+            Some("前🙂润色😀\n后".to_owned())
+        );
+        assert_eq!(replace_utf16_span("🙂后", 1, 0, "x"), None);
+        assert_eq!(replace_utf16_span("前🙂", 1, 1, "x"), None);
+        assert_eq!(
+            replace_utf16_span("前🙂", 3, 0, "尾"),
+            Some("前🙂尾".to_owned())
+        );
     }
 }
