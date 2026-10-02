@@ -2978,6 +2978,30 @@ impl CoreTextInserter for TauriTextInserter {
             // whichever application happens to be focused at the end.
             let insertion_target = insertion_target
                 .unwrap_or_else(crate::selection::capture_selection_insertion_target);
+            #[cfg(target_os = "macos")]
+            let owned_range = if matches!(
+                context.insertion.delivery,
+                openless_core::dictation_context::DictationDelivery::Hold { .. }
+                    | openless_core::dictation_context::DictationDelivery::Auto { .. }
+            ) {
+                let target = insertion_target.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    if !crate::selection::live_insertion_app_matches(&target) {
+                        return None;
+                    }
+                    crate::host_document::OwnedTextRange::capture()
+                        .map(|range| Arc::new(Mutex::new(range)))
+                })
+                .await
+                .map_err(|error| {
+                    BackendError::new(
+                        BackendErrorCode::Internal,
+                        format!("join live text capability probe: {error}"),
+                    )
+                })?
+            } else {
+                None
+            };
             #[cfg(target_os = "windows")]
             let prepared = if context.insertion.windows_insertion_mode
                 == openless_core::shared_types::WindowsInsertionMode::Tsf
@@ -3005,7 +3029,9 @@ impl CoreTextInserter for TauriTextInserter {
                     )
                 })?;
                 let (previous, streaming_ready) = prepare_streaming_input_source(
-                    context.uses_llm_polisher()
+                    context.insertion.delivery == openless_core::dictation_context::DictationDelivery::Preferences
+                        && context.polish.style_pack_id != "builtin.structured"
+                        && context.uses_llm_polisher()
                         && openless_core::streaming_insert::streaming_insert_eligible(
                         context.insertion.streaming,
                         context.polish.translation_active,
@@ -3069,6 +3095,8 @@ impl CoreTextInserter for TauriTextInserter {
                 #[cfg(target_os = "macos")]
                 streaming_worker,
                 #[cfg(target_os = "macos")]
+                owned_range,
+                #[cfg(target_os = "macos")]
                 cancel_requested,
                 #[cfg(target_os = "macos")]
                 terminal: Arc::new(MacInsertionTerminal::default()),
@@ -3079,6 +3107,8 @@ impl CoreTextInserter for TauriTextInserter {
 
 #[derive(Clone)]
 struct TauriTextInsertionSession {
+    #[cfg(target_os = "macos")]
+    owned_range: Option<Arc<Mutex<crate::host_document::OwnedTextRange>>>,
     session_id: SessionId,
     backend: BackendSlot,
     context: Arc<DictationContext>,
@@ -3370,6 +3400,61 @@ impl TauriTextInsertionSession {
 }
 
 impl TextInsertionSession for TauriTextInsertionSession {
+    fn supports_owned_replacement(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            self.owned_range.is_some()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
+
+    fn replace_owned(&self, text: String) -> BoxFuture<'static, Result<(), BackendError>> {
+        let session = self.clone();
+        Box::pin(async move {
+            #[cfg(target_os = "macos")]
+            {
+                let range = session.owned_range.clone().ok_or_else(|| {
+                    BackendError::new(
+                        BackendErrorCode::Unsupported,
+                        "protected text range unavailable",
+                    )
+                })?;
+                // Join the blocking effect even on cancellation; abandoning a timed
+                // out write would allow it to overwrite the next voice session.
+                tauri::async_runtime::spawn_blocking(move || {
+                    if session.finished.load(Ordering::Acquire) {
+                        return Err(BackendError::new(
+                            BackendErrorCode::Cancelled,
+                            "text insertion session closed",
+                        ));
+                    }
+                    range
+                        .lock()
+                        .replace(&text, &session.cancel_requested)
+                        .map_err(|error| BackendError::new(BackendErrorCode::Platform, error))
+                })
+                .await
+                .map_err(|error| {
+                    BackendError::new(
+                        BackendErrorCode::Internal,
+                        format!("join protected replacement: {error}"),
+                    )
+                })?
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = (session, text);
+                Err(BackendError::new(
+                    BackendErrorCode::Unsupported,
+                    "protected replacement unavailable",
+                ))
+            }
+        })
+    }
+
     fn supports_streaming(&self) -> bool {
         #[cfg(target_os = "macos")]
         {

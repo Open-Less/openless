@@ -1761,6 +1761,10 @@ type TextInsertionPreparation = futures_util::future::Shared<
 >;
 
 struct ActiveTextInsertion {
+    delivery: crate::dictation_context::DictationDelivery,
+    owned_replacement: bool,
+    physical_releases:
+        Mutex<Option<Arc<Mutex<std::collections::VecDeque<(u64, std::time::Instant)>>>>>,
     platform: Arc<dyn TextInsertionSession>,
     streaming: bool,
     script: crate::shared_types::ChineseScriptPreference,
@@ -1781,6 +1785,8 @@ struct ActiveTextInsertion {
 struct ActiveTextInsertionState {
     stream: crate::streaming_insert::StreamingInsertState,
     scheduled: bool,
+    live_snapshot: Option<String>,
+    live_touched: bool,
 }
 
 impl ActiveTextInsertion {
@@ -1794,9 +1800,20 @@ impl ActiveTextInsertion {
             && context.insertion.windows_insertion_mode
                 != crate::shared_types::WindowsInsertionMode::SendInput;
         let platform_streaming = platform.supports_streaming();
+        let delivery = context.insertion.delivery;
+        let owned_replacement = matches!(
+            delivery,
+            crate::dictation_context::DictationDelivery::Hold { .. }
+                | crate::dictation_context::DictationDelivery::Auto { .. }
+        ) && platform.supports_owned_replacement();
         Arc::new(Self {
+            delivery,
+            owned_replacement,
+            physical_releases: Mutex::new(None),
             platform,
-            streaming: context.uses_llm_polisher()
+            streaming: delivery == crate::dictation_context::DictationDelivery::Preferences
+                && context.polish.style_pack_id != "builtin.structured"
+                && context.uses_llm_polisher()
                 && platform_streaming
                 && crate::streaming_insert::streaming_insert_eligible(
                     context.insertion.streaming,
@@ -1814,6 +1831,119 @@ impl ActiveTextInsertion {
             cancel_result: std::sync::OnceLock::new(),
             terminal: AtomicU8::new(0),
         })
+    }
+
+    fn live_allowed(&self) -> bool {
+        use crate::dictation_context::DictationDelivery;
+        if !self.owned_replacement || self.terminal.load(Ordering::Acquire) != 0 {
+            return false;
+        }
+        let (press_id, pressed_at, threshold) = match self.delivery {
+            DictationDelivery::Hold {
+                press_id,
+                pressed_at,
+            } => (press_id, pressed_at, std::time::Duration::ZERO),
+            DictationDelivery::Auto {
+                press_id,
+                pressed_at,
+            } => (press_id, pressed_at, std::time::Duration::from_millis(350)),
+            _ => return false,
+        };
+        let ledger = self
+            .physical_releases
+            .lock()
+            .expect("release ledger lock poisoned");
+        // A later physical release also closes this held gesture. This fails
+        // closed when a startup backlog evicts its exact id from the ledger.
+        let released = ledger.as_ref().is_some_and(|ledger| {
+            ledger
+                .lock()
+                .expect("physical release lock poisoned")
+                .iter()
+                .any(|(id, at)| *id == press_id || *at >= pressed_at)
+        });
+        !released && pressed_at.elapsed() >= threshold
+    }
+
+    fn push_transcript(self: &Arc<Self>, snapshot: String) {
+        if !self.owned_replacement || self.terminal.load(Ordering::Acquire) != 0 {
+            return;
+        }
+        let should_spawn = {
+            let mut state = self.state.lock().expect("text insertion lock poisoned");
+            if state.stream.failed.is_some() {
+                return;
+            }
+            let snapshot =
+                crate::streaming_insert::apply_chinese_script_preference(&snapshot, self.script);
+            if state.live_snapshot.is_none() && state.stream.typed_text == snapshot {
+                return;
+            }
+            state.live_snapshot = Some(snapshot);
+            if state.scheduled {
+                false
+            } else {
+                state.scheduled = true;
+                true
+            }
+        };
+        if should_spawn {
+            let insertion = Arc::clone(self);
+            self.task_spawner
+                .spawn(Box::pin(async move { insertion.live_flush_loop().await }));
+        }
+    }
+
+    async fn live_flush_loop(self: Arc<Self>) {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let snapshot = {
+                let mut state = self.state.lock().expect("text insertion lock poisoned");
+                if state.stream.failed.is_some() || self.terminal.load(Ordering::Acquire) != 0 {
+                    state.scheduled = false;
+                    self.drained.notify_waiters();
+                    return;
+                }
+                if !self.live_allowed() {
+                    if let crate::dictation_context::DictationDelivery::Auto {
+                        pressed_at, ..
+                    } = self.delivery
+                    {
+                        if pressed_at.elapsed() < std::time::Duration::from_millis(350) {
+                            // Keep the first snapshot until classification; release
+                            // evidence is checked again before any native effect.
+                            continue;
+                        }
+                    }
+                    state.scheduled = false;
+                    self.drained.notify_waiters();
+                    return;
+                }
+                state.live_snapshot.take()
+            };
+            let Some(snapshot) = snapshot else {
+                self.state
+                    .lock()
+                    .expect("text insertion lock poisoned")
+                    .scheduled = false;
+                self.drained.notify_waiters();
+                return;
+            };
+            let result = self.platform.replace_owned(snapshot.clone()).await;
+            let mut state = self.state.lock().expect("text insertion lock poisoned");
+            // Any attempted native edit makes subsequent final paste unsafe,
+            // including delivery failures where the outcome may be unknown.
+            state.live_touched = true;
+            match result {
+                Ok(()) => state.stream.typed_text = snapshot,
+                Err(error) => state.stream.failed = Some(error.to_string()),
+            }
+            if state.live_snapshot.is_none() || state.stream.failed.is_some() {
+                state.scheduled = false;
+                self.drained.notify_waiters();
+                return;
+            }
+        }
     }
 
     fn push(self: &Arc<Self>, delta: &crate::types::PolishDelta) {
@@ -1941,6 +2071,27 @@ impl ActiveTextInsertion {
     }
 
     async fn finish_committed(&self, final_text: String) -> Result<InsertOutcome, BackendError> {
+        let (live_touched, failed) = {
+            let state = self.state.lock().expect("text insertion lock poisoned");
+            (state.live_touched, state.stream.failed.is_some())
+        };
+        if live_touched {
+            if failed
+                || self
+                    .platform
+                    .replace_owned(final_text.clone())
+                    .await
+                    .is_err()
+            {
+                return self.finish_with_fallback(final_text).await;
+            }
+            if self.save_streamed_text_to_clipboard {
+                if let Err(error) = self.platform.copy(final_text).await {
+                    log::warn!("failed to copy live result: {error}");
+                }
+            }
+            return self.platform.finish(String::new()).await;
+        }
         let reconciliation = self
             .state
             .lock()
@@ -1989,6 +2140,7 @@ impl ActiveTextInsertion {
         {
             let mut state = self.state.lock().expect("text insertion lock poisoned");
             state.stream.pending.clear();
+            state.live_snapshot = None;
             state.stream.failed = Some("text insertion session was cancelled".to_string());
         }
         if self
@@ -2176,7 +2328,30 @@ impl EngineProgressSink for BackendEngineProgress {
                     .entry(session_id)
                     .or_default()
                     .apply(&delta)?;
+                let snapshot = state
+                    .transcripts
+                    .get(&session_id)
+                    .expect("transcript applied")
+                    .text()
+                    .to_owned();
+                let recording = matches!(
+                    state.dictation.phase,
+                    DictationPhase::Starting | DictationPhase::Recording
+                );
                 drop(state);
+                if recording {
+                    if let Some(insertion) = self
+                        .text_insertions
+                        .lock()
+                        .expect("text insertion registry lock poisoned")
+                        .get(&session_id)
+                        .and_then(|preparation| preparation.peek())
+                        .and_then(|result| result.as_ref().ok())
+                        .cloned()
+                    {
+                        insertion.push_transcript(snapshot);
+                    }
+                }
                 self.events
                     .publish(Some(session_id), BackendEventKind::TranscriptDelta(delta));
             }
@@ -2219,6 +2394,7 @@ pub struct OpenLessBackend {
     phase_changed: Arc<tokio::sync::Notify>,
     hotkey: Mutex<crate::hotkey_interpreter::HotkeyInterpreter>,
     hotkey_dispatch_gate: tokio::sync::Mutex<()>,
+    physical_releases: Arc<Mutex<std::collections::VecDeque<(u64, std::time::Instant)>>>,
     less_computer_hotkey_press_at: Mutex<Option<std::time::Instant>>,
     vocabulary: Arc<DictionaryStore>,
     correction_rules: Arc<CorrectionRuleStore>,
@@ -2816,6 +2992,7 @@ impl OpenLessBackend {
             })),
             phase_changed: Arc::new(tokio::sync::Notify::new()),
             hotkey: Mutex::new(crate::hotkey_interpreter::HotkeyInterpreter::default()),
+            physical_releases: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             hotkey_dispatch_gate: tokio::sync::Mutex::new(()),
             less_computer_hotkey_press_at: Mutex::new(None),
             vocabulary: repositories.vocabulary,
@@ -4038,6 +4215,21 @@ impl OpenLessBackend {
         }
     }
 
+    /// Native bridges report releases before queueing their ordered async work.
+    /// This prevents a short tap during slow startup from enabling live input.
+    pub fn observe_dictation_hotkey_release(&self, press_id: u64, at: std::time::Instant) {
+        let mut releases = self
+            .physical_releases
+            .lock()
+            .expect("physical release lock poisoned");
+        if !releases.iter().any(|(id, _)| *id == press_id) {
+            releases.push_back((press_id, at));
+            if releases.len() > 64 {
+                releases.pop_front();
+            }
+        }
+    }
+
     /// Apply physical dictation-key edges using the shared hotkey-mode rules.
     ///
     /// Native listeners provide a stable physical-press id plus monotonic event
@@ -4086,6 +4278,9 @@ impl OpenLessBackend {
     ) -> Result<CliDispatchOutcome, BackendError> {
         use crate::hotkey_interpreter::HotkeyIntent;
 
+        if let DictationHotkeyEdge::Released { press_id, at } = edge {
+            self.observe_dictation_hotkey_release(press_id, at);
+        }
         // Pressed and Released stay FIFO even though start/finalize await native
         // work. Combined deliberately bypasses this gate: it has a dedicated
         // low-latency host bridge and must be able to cancel a start in flight.
@@ -4095,8 +4290,26 @@ impl OpenLessBackend {
         } else {
             Some(self.hotkey_dispatch_gate.lock().await)
         };
+        let mut options = options;
         let preferences = self.get_preferences();
         let mode = preferences.hotkey.mode;
+        if let DictationHotkeyEdge::Pressed { press_id, at } = edge {
+            options.start.delivery = match mode {
+                crate::shared_types::HotkeyMode::Hold => {
+                    crate::dictation_context::DictationDelivery::Hold {
+                        press_id,
+                        pressed_at: at,
+                    }
+                }
+                crate::shared_types::HotkeyMode::Auto => {
+                    crate::dictation_context::DictationDelivery::Auto {
+                        press_id,
+                        pressed_at: at,
+                    }
+                }
+                _ => crate::dictation_context::DictationDelivery::Complete,
+            };
+        }
         let modifier_only =
             crate::shortcut_types::is_modifier_chord_binding(&preferences.dictation_hotkey)
                 || crate::hotkey_interpreter::modifier_arbitration_required(
@@ -5686,6 +5899,7 @@ impl OpenLessBackend {
         }
         if context.insertion.enabled {
             let insertion_context = Arc::clone(&context);
+            let physical_releases = Arc::clone(&self.physical_releases);
             let task_spawner = Arc::clone(&self.deps.task_spawner);
             let resources = Arc::clone(&starting_resources);
             let preparing: futures_util::future::BoxFuture<
@@ -5695,12 +5909,13 @@ impl OpenLessBackend {
                 let platform = inserter
                     .begin(session_id, Arc::clone(&insertion_context))
                     .await?;
-                Ok(ActiveTextInsertion::new(
-                    platform,
-                    &insertion_context,
-                    task_spawner,
-                    resources,
-                ))
+                let insertion =
+                    ActiveTextInsertion::new(platform, &insertion_context, task_spawner, resources);
+                *insertion
+                    .physical_releases
+                    .lock()
+                    .expect("release ledger lock poisoned") = Some(physical_releases);
+                Ok(insertion)
             });
             let preparation = futures_util::FutureExt::shared(preparing);
             {
@@ -6120,6 +6335,19 @@ impl OpenLessBackend {
             return Err(error);
         }
 
+        if context.polish.style_pack_id == "builtin.structured"
+            && !context.polish.translation_active
+            && !engine_result.polish_failed
+        {
+            let cleaned = crate::output_cleaning::clean_polish_output(&engine_result.polished_text);
+            if cleaned != engine_result.polished_text.trim() {
+                engine_result.polished_text = cleaned;
+            }
+            engine_result.polished_text = crate::output_cleaning::normalize_structured_numbering(
+                &engine_result.polished_text,
+            );
+        }
+
         engine_result.polished_text = crate::streaming_insert::apply_chinese_script_preference(
             &engine_result.polished_text,
             context.polish.chinese_script_preference,
@@ -6140,7 +6368,7 @@ impl OpenLessBackend {
             .get(&session_id)
             .and_then(|preparation| preparation.peek())
             .and_then(|result| result.as_ref().ok())
-            .is_some_and(|insertion| insertion.has_written_text());
+            .is_some_and(|insertion| !insertion.owned_replacement && insertion.has_written_text());
         if !correction_rules.is_empty() && !streamed_text_is_visible {
             engine_result.polished_text =
                 apply_correction_rules(&engine_result.polished_text, &correction_rules);
@@ -12685,6 +12913,9 @@ mod tests {
         )
         .unwrap();
         let mut preferences = backend.get_preferences();
+        // This fixture verifies the legacy streaming contract; structured output
+        // is finalized as a whole so numbering can be validated first.
+        preferences.active_style_pack_id = "builtin.light".into();
         preferences.streaming_insert = true;
         preferences.streaming_insert_save_clipboard = false;
         preferences.windows_insertion_mode = crate::shared_types::WindowsInsertionMode::SendInput;
@@ -12855,6 +13086,9 @@ mod tests {
             .unwrap(),
         );
         let mut preferences = backend.get_preferences();
+        // This fixture verifies the legacy streaming contract; structured output
+        // is finalized as a whole so numbering can be validated first.
+        preferences.active_style_pack_id = "builtin.light".into();
         preferences.streaming_insert = streaming;
         preferences.windows_insertion_mode = crate::shared_types::WindowsInsertionMode::SendInput;
         preferences.translation_target_language = "English".into();
@@ -13039,6 +13273,9 @@ mod tests {
         )
         .unwrap();
         let mut preferences = backend.get_preferences();
+        // This fixture verifies the legacy streaming contract; structured output
+        // is finalized as a whole so numbering can be validated first.
+        preferences.active_style_pack_id = "builtin.light".into();
         preferences.streaming_insert = true;
         preferences.streaming_insert_save_clipboard = false;
         preferences.windows_insertion_mode = crate::shared_types::WindowsInsertionMode::SendInput;
@@ -14916,5 +15153,255 @@ mod tests {
             BackendErrorCode::Persistence
         );
         assert!(!data_dir.path().exists());
+    }
+    #[derive(Default)]
+    struct OwnedRangeFixture {
+        actions: Mutex<Vec<String>>,
+        edited: std::sync::atomic::AtomicBool,
+        entered: Option<Arc<tokio::sync::Semaphore>>,
+        release: Option<Arc<tokio::sync::Semaphore>>,
+    }
+    impl TextInsertionSession for OwnedRangeFixture {
+        fn supports_owned_replacement(&self) -> bool {
+            true
+        }
+        fn replace_owned(&self, text: String) -> BoxFuture<'static, Result<(), BackendError>> {
+            let valid = !self.edited.load(Ordering::Acquire);
+            self.actions.lock().unwrap().push(format!("replace:{text}"));
+            let entered = self.entered.clone();
+            let release = self.release.clone();
+            boxed(async move {
+                if let Some(entered) = entered {
+                    entered.add_permits(1);
+                }
+                if let Some(release) = release {
+                    release.acquire().await.unwrap().forget();
+                }
+                if valid {
+                    Ok(())
+                } else {
+                    Err(BackendError::new(BackendErrorCode::Platform, "user edit"))
+                }
+            })
+        }
+        fn write(&self, _: String) -> BoxFuture<'static, Result<InsertWriteResult, BackendError>> {
+            panic!("raw text must use owned replacement")
+        }
+        fn copy(&self, text: String) -> BoxFuture<'static, Result<(), BackendError>> {
+            self.actions.lock().unwrap().push(format!("copy:{text}"));
+            boxed(async { Ok(()) })
+        }
+        fn finish(&self, text: String) -> BoxFuture<'static, Result<InsertOutcome, BackendError>> {
+            self.actions.lock().unwrap().push(format!("finish:{text}"));
+            boxed(async { Ok(InsertOutcome::Inserted) })
+        }
+        fn cancel(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+            self.actions.lock().unwrap().push("cancel".into());
+            boxed(async { Ok(()) })
+        }
+    }
+    fn owned_insertion(
+        fixture: Arc<OwnedRangeFixture>,
+        delivery: crate::dictation_context::DictationDelivery,
+    ) -> Arc<ActiveTextInsertion> {
+        let gate = Arc::new(crate::voice_session::VoiceSessionGate::default());
+        let session = SessionId::new();
+        gate.acquire(session, crate::voice_session::VoiceSessionKind::Dictation)
+            .unwrap();
+        let mut context = DictationContext::default();
+        context.insertion.delivery = delivery;
+        context.insertion.save_streamed_text_to_clipboard = false;
+        ActiveTextInsertion::new(
+            fixture,
+            &context,
+            Arc::new(TokioTaskSpawner),
+            gate.hold_resources(session).unwrap(),
+        )
+    }
+    #[tokio::test]
+    async fn live_snapshots_revise_prefix_then_replace_with_polished_text() {
+        let fixture = Arc::new(OwnedRangeFixture::default());
+        let insertion = owned_insertion(
+            fixture.clone(),
+            crate::dictation_context::DictationDelivery::Hold {
+                press_id: 7,
+                pressed_at: std::time::Instant::now(),
+            },
+        );
+        insertion.push_transcript("你号".into());
+        insertion.wait_for_stream_drain().await;
+        insertion.push_transcript("你好世界🙂".into());
+        insertion.wait_for_stream_drain().await;
+        assert_eq!(
+            insertion.finish("你好，世界🙂！".into()).await.unwrap(),
+            InsertOutcome::Inserted
+        );
+        assert_eq!(
+            *fixture.actions.lock().unwrap(),
+            [
+                "replace:你号",
+                "replace:你好世界🙂",
+                "replace:你好，世界🙂！",
+                "finish:"
+            ]
+        );
+    }
+    #[tokio::test]
+    async fn live_user_edit_keeps_document_and_copies_final_result() {
+        let fixture = Arc::new(OwnedRangeFixture::default());
+        let insertion = owned_insertion(
+            fixture.clone(),
+            crate::dictation_context::DictationDelivery::Hold {
+                press_id: 7,
+                pressed_at: std::time::Instant::now(),
+            },
+        );
+        insertion.push_transcript("原文".into());
+        insertion.wait_for_stream_drain().await;
+        fixture.edited.store(true, Ordering::Release);
+        assert_eq!(
+            insertion.finish("润色".into()).await.unwrap(),
+            InsertOutcome::CopiedFallback
+        );
+        assert_eq!(
+            *fixture.actions.lock().unwrap(),
+            ["replace:原文", "replace:润色", "copy:润色", "finish:"]
+        );
+    }
+    #[tokio::test]
+    async fn live_auto_short_release_during_startup_never_writes_raw_text() {
+        let fixture = Arc::new(OwnedRangeFixture::default());
+        let pressed = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        let insertion = owned_insertion(
+            fixture.clone(),
+            crate::dictation_context::DictationDelivery::Auto {
+                press_id: 8,
+                pressed_at: pressed,
+            },
+        );
+        *insertion.physical_releases.lock().unwrap() =
+            Some(Arc::new(Mutex::new(std::collections::VecDeque::from([(
+                8,
+                pressed + std::time::Duration::from_millis(349),
+            )]))));
+        insertion.push_transcript("原文".into());
+        insertion.wait_for_stream_drain().await;
+        insertion.finish("完整结果".into()).await.unwrap();
+        assert_eq!(*fixture.actions.lock().unwrap(), ["finish:完整结果"]);
+    }
+    #[tokio::test]
+    async fn live_auto_holds_first_snapshot_until_threshold_and_ignores_polish_deltas() {
+        let fixture = Arc::new(OwnedRangeFixture::default());
+        let insertion = owned_insertion(
+            fixture.clone(),
+            crate::dictation_context::DictationDelivery::Auto {
+                press_id: 8,
+                pressed_at: std::time::Instant::now(),
+            },
+        );
+        insertion.push_transcript("原文".into());
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(fixture.actions.lock().unwrap().is_empty());
+        insertion.wait_for_stream_drain().await;
+        insertion.push(&crate::types::PolishDelta {
+            offset: 0,
+            text: "润色碎片".into(),
+            is_final: false,
+        });
+        insertion.finish("润色结果".into()).await.unwrap();
+        assert_eq!(
+            *fixture.actions.lock().unwrap(),
+            ["replace:原文", "replace:润色结果", "finish:"]
+        );
+    }
+    #[tokio::test]
+    async fn live_cancel_joins_native_replacement_and_discards_queued_snapshots() {
+        let entered = Arc::new(tokio::sync::Semaphore::new(0));
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let fixture = Arc::new(OwnedRangeFixture {
+            entered: Some(entered.clone()),
+            release: Some(release.clone()),
+            ..Default::default()
+        });
+        let insertion = owned_insertion(
+            fixture.clone(),
+            crate::dictation_context::DictationDelivery::Hold {
+                press_id: 7,
+                pressed_at: std::time::Instant::now(),
+            },
+        );
+        insertion.push_transcript("原文".into());
+        entered.acquire().await.unwrap().forget();
+        insertion.push_transcript("排队原文".into());
+        let cancelling = insertion.clone();
+        let task = tokio::spawn(async move { cancelling.cancel().await });
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished());
+        release.add_permits(1);
+        task.await.unwrap().unwrap();
+        insertion.push_transcript("过期原文".into());
+        assert_eq!(*fixture.actions.lock().unwrap(), ["replace:原文", "cancel"]);
+    }
+    #[tokio::test]
+    async fn complete_delivery_ignores_intermediate_raw_and_polish_text() {
+        let fixture = Arc::new(OwnedRangeFixture::default());
+        let insertion = owned_insertion(
+            fixture.clone(),
+            crate::dictation_context::DictationDelivery::Complete,
+        );
+        insertion.push_transcript("原文".into());
+        insertion.push(&crate::types::PolishDelta {
+            offset: 0,
+            text: "中间结果".into(),
+            is_final: false,
+        });
+        insertion.finish("完整结果".into()).await.unwrap();
+        assert_eq!(*fixture.actions.lock().unwrap(), ["finish:完整结果"]);
+    }
+    #[tokio::test]
+    async fn structured_numbering_is_validated_before_insertion_and_history() {
+        use crate::testing::{FixtureDictationEngine, FixtureInsertionAction, FixtureTextInserter};
+        let data_dir = TestDataDir::new("structured-final-numbering");
+        let inserter = FixtureTextInserter::with_outcome(InsertOutcome::Inserted);
+        let mut deps = BackendDependencies::unsupported();
+        deps.host_actions = Arc::new(FakeHost::default());
+        deps.credential_store = Arc::new(crate::credentials::InMemoryCredentialStore::default());
+        deps.text_inserter = Arc::new(inserter.clone());
+        deps.task_spawner = Arc::new(TokioTaskSpawner);
+        deps.dictation_engine = Arc::new(
+            FixtureDictationEngine::successful("raw", "1. A\n2. 2. B\n2. C").with_polish_deltas(
+                vec![crate::types::PolishDelta {
+                    text: "1. A\n2. 2. B".into(),
+                    offset: 0,
+                    is_final: false,
+                }],
+            ),
+        );
+        let backend = OpenLessBackend::new(
+            BackendConfig {
+                data_dir: data_dir.path().to_path_buf(),
+                ..BackendConfig::default()
+            },
+            deps,
+        )
+        .unwrap();
+        backend.start().await.unwrap();
+        let session_id = backend.start_dictation().await.unwrap();
+        let result = backend.stop_dictation().await.unwrap();
+        assert_eq!(result.polished_text, "1. A\n2. B\n3. C");
+        assert_eq!(
+            backend.list_history().unwrap()[0].final_text,
+            result.polished_text
+        );
+        assert_eq!(
+            inserter.actions(),
+            vec![
+                FixtureInsertionAction::Prepare(session_id),
+                FixtureInsertionAction::Insert {
+                    session_id,
+                    text: result.polished_text
+                }
+            ]
+        );
     }
 }

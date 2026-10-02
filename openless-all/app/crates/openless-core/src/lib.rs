@@ -243,7 +243,7 @@ pub use credentials::{
 };
 pub use dictation_context::{
     build_asr_prompt, eligible_polish_context_turns, DictationAudioSource, DictationContext,
-    DictationInsertionContext, DictationOutputTarget, DictationPolishContext,
+    DictationDelivery, DictationInsertionContext, DictationOutputTarget, DictationPolishContext,
     DictationStartOptions, DictationStopOptions, PolishHistoryTurn, ProviderInvocation,
     RecordingPlan, ASR_PROMPT_CHAR_BUDGET,
 };
