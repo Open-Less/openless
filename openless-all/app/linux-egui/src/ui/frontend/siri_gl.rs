@@ -192,7 +192,8 @@ pub fn paint(ui: &egui::Ui, rect: egui::Rect, glow: SiriGlow) -> bool {
                 let points = (0..=48)
                     .map(|step| {
                         let t = step as f32 / 48.0;
-                        let envelope = (std::f32::consts::PI * t).sin().powf(0.7);
+                        // Rounding at t == 1 can make sin(PI) slightly negative.
+                        let envelope = (std::f32::consts::PI * t).sin().max(0.0).powf(0.7);
                         let y = center_y
                             + (glow.time * 2.1 + t * 10.0 + phase).sin() * amplitude * envelope;
                         egui::pos2(rect.left() + rect.width() * t, y)
@@ -283,6 +284,12 @@ mod tests {
             !output.shapes.is_empty(),
             "the glow must still reach the frame as CPU shapes"
         );
+        let primitives = ctx.tessellate(output.shapes.clone(), output.pixels_per_point);
+        for primitive in primitives {
+            if let egui::epaint::Primitive::Mesh(mesh) = primitive.primitive {
+                assert!(mesh.vertices.iter().all(|vertex| vertex.pos.is_finite()));
+            }
+        }
         let callbacks = output
             .shapes
             .iter()

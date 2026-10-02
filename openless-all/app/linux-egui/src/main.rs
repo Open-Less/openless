@@ -48,6 +48,11 @@ mod linux_app {
 
     enum UiResult {
         Message(String),
+        QaAction {
+            generation: u64,
+            context: Option<String>,
+            result: Result<String, String>,
+        },
         HistoryLoaded {
             generation: u64,
             revision: u64,
@@ -496,6 +501,12 @@ mod linux_app {
         }
     }
 
+    #[derive(Default)]
+    struct QaPopupPresentation {
+        generation: u64,
+        session_id: Option<String>,
+    }
+
     pub struct OpenLessEguiApp {
         tokio: Arc<tokio::runtime::Runtime>,
         native: Option<LinuxNativeRuntime>,
@@ -585,6 +596,8 @@ mod linux_app {
         hotkey_dedupe: openless_linux_egui::HotkeyDeduplicator,
         /// 已在 60s 内重开过的面板次数（索引见 `popup_kind_index`）。
         popup_restarts: [PopupRestartBudget; POPUP_KIND_COUNT],
+        popup_sequences: [u64; POPUP_KIND_COUNT],
+        qa_popup_presentation: QaPopupPresentation,
         /// 最近一次下发给窗口/面板的热键配置；变了才重发。
         hotkeys_sent: Option<openless_core::HotkeyRuntimeTarget>,
         /// 速记页快捷键卡片是否被收起（持久化在 linux-ui-state.json）。
@@ -742,6 +755,8 @@ mod linux_app {
                         hotkey_dedupe: openless_linux_egui::HotkeyDeduplicator::default(),
                         quick_note_shortcut_hidden,
                         popup_restarts: [PopupRestartBudget::default(); POPUP_KIND_COUNT],
+                        popup_sequences: [0; POPUP_KIND_COUNT],
+                        qa_popup_presentation: QaPopupPresentation::default(),
                         hotkeys_sent: None,
                         pending_ui_pongs: Vec::new(),
                         history,
@@ -838,6 +853,8 @@ mod linux_app {
                     hotkey_dedupe: openless_linux_egui::HotkeyDeduplicator::default(),
                     quick_note_shortcut_hidden,
                     popup_restarts: [PopupRestartBudget::default(); POPUP_KIND_COUNT],
+                    popup_sequences: [0; POPUP_KIND_COUNT],
+                    qa_popup_presentation: QaPopupPresentation::default(),
                     hotkeys_sent: None,
                     pending_ui_pongs: Vec::new(),
                     history: HistoryCache::default(),
@@ -1017,6 +1034,11 @@ mod linux_app {
             }
             match std::env::current_exe() {
                 Ok(executable) => {
+                    if kind == PopupKind::Qa {
+                        self.qa_popup_presentation.generation =
+                            self.qa_popup_presentation.generation.saturating_add(1);
+                        self.qa_popup_presentation.session_id = None;
+                    }
                     self.popup_action_guard.reset(kind);
                     let supervisor = PopupSupervisor::spawn(self.tokio.handle(), executable, kind);
                     *self.popup_slot(kind) = Some(supervisor);
@@ -1025,8 +1047,17 @@ mod linux_app {
             }
         }
 
-        fn send_popup(&mut self, kind: PopupKind, message: HostToPopup) {
+        fn send_popup(&mut self, kind: PopupKind, mut message: HostToPopup) {
             let lang = self.lang;
+            let qa_session = match &message {
+                HostToPopup::QaSnapshot { session_id, .. }
+                | HostToPopup::PolishPreview { session_id, .. } => Some(session_id.clone()),
+                _ => None,
+            };
+            // Window actions and failures can occur without a new Core event.
+            let sequence = &mut self.popup_sequences[popup_kind_index(kind)];
+            *sequence = sequence.saturating_add(1);
+            message.set_sequence(*sequence);
             // 记录胶囊当前承载的会话：兜底收起要靠它判断「会话是否还在快照里」。
             if let HostToPopup::Capsule { session_id, .. } = &message {
                 self.capsule_session = Some(session_id.clone());
@@ -1044,13 +1075,45 @@ mod linux_app {
                                 "popup.recover_failed",
                                 &[&format!("{retry_error:?}")],
                             );
+                            return;
                         }
+                    } else {
+                        return;
                     }
+                }
+                if let Some(session_id) = qa_session {
+                    self.qa_popup_presentation.session_id = Some(session_id);
                 }
             }
         }
 
+        fn close_qa_popup(&mut self) {
+            self.qa_visible = false;
+            self.polish_result_visible = false;
+            self.qa_popup_presentation.session_id = None;
+            self.qa_popup_presentation.generation =
+                self.qa_popup_presentation.generation.saturating_add(1);
+            if let Some(supervisor) = self.qa_popup.take() {
+                let _ = supervisor.request_shutdown();
+            }
+        }
+
         fn hide_popup(&mut self, kind: PopupKind, session_id: String, sequence: u64) {
+            if kind == PopupKind::Qa {
+                if (self.qa_visible || self.polish_result_visible)
+                    && self
+                        .qa_popup_presentation
+                        .session_id
+                        .as_deref()
+                        .is_some_and(|current| current != session_id.as_str())
+                {
+                    return;
+                }
+                // End the native window on both X11 and Wayland. Core owns the
+                // conversation; the next show creates a fresh protocol state.
+                self.close_qa_popup();
+                return;
+            }
             self.send_popup(
                 kind,
                 HostToPopup::Hide {
@@ -1103,6 +1166,12 @@ mod linux_app {
 
         fn expected_popup_session(&self, kind: PopupKind) -> Option<String> {
             match kind {
+                PopupKind::Qa if !self.qa_visible && !self.polish_result_visible => None,
+                PopupKind::Qa if self.polish_result_visible => self
+                    .selection
+                    .as_ref()
+                    .and_then(|selection| selection.session_id)
+                    .map(|id| id.to_string()),
                 PopupKind::Qa => self
                     .qa_state
                     .as_ref()
@@ -1119,6 +1188,9 @@ mod linux_app {
         }
 
         fn show_qa_popup(&mut self) {
+            if !self.qa_visible || self.polish_result_visible {
+                return;
+            }
             self.ensure_popup(PopupKind::Qa);
             let Some(state) = self.qa_state.clone() else {
                 return;
@@ -1383,182 +1455,204 @@ mod linux_app {
         }
 
         fn poll_popup_supervisors(&mut self) {
-            let lang = self.lang;
             let mut events = Vec::new();
             for kind in [PopupKind::Qa, PopupKind::Capsule] {
+                let generation = self.qa_popup_presentation.generation;
                 if let Some(supervisor) = self.popup_slot(kind) {
                     while let Ok(event) = supervisor.try_recv() {
-                        events.push((kind, event));
+                        events.push((kind, generation, event));
                     }
                 }
             }
-            for (kind, event) in events {
-                if let PopupSupervisorEvent::Message(message) = &event {
-                    let Some(expected_session) = self.expected_popup_session(kind) else {
-                        self.status = tr_l10n(lang, "popup.ignore_no_session").to_string();
-                        continue;
-                    };
-                    if !self
-                        .popup_action_guard
-                        .accept(kind, message, &expected_session)
-                    {
-                        self.status = tr_l10n(lang, "popup.ignore_stale").to_string();
-                        continue;
+            for (kind, generation, event) in events {
+                self.apply_popup_event_in_generation(kind, generation, event);
+            }
+        }
+
+        fn apply_popup_event_in_generation(
+            &mut self,
+            kind: PopupKind,
+            generation: u64,
+            event: PopupSupervisorEvent,
+        ) {
+            // A handler may replace the process while draining a queued batch.
+            if kind == PopupKind::Qa && generation != self.qa_popup_presentation.generation {
+                return;
+            }
+            self.apply_popup_event(kind, event);
+        }
+
+        fn apply_popup_event(&mut self, kind: PopupKind, event: PopupSupervisorEvent) {
+            let lang = self.lang;
+            if let PopupSupervisorEvent::Message(message) = &event {
+                let Some(expected_session) = self.expected_popup_session(kind) else {
+                    self.status = tr_l10n(lang, "popup.ignore_no_session").to_string();
+                    return;
+                };
+                if !self
+                    .popup_action_guard
+                    .accept(kind, message, &expected_session)
+                {
+                    self.status = tr_l10n(lang, "popup.ignore_stale").to_string();
+                    return;
+                }
+            }
+            match event {
+                PopupSupervisorEvent::Message(PopupToHost::SubmitQa {
+                    session_id, text, ..
+                }) if self.expected_popup_session(PopupKind::Qa).as_deref()
+                    == Some(session_id.as_str()) =>
+                {
+                    if let Some(backend) = self.backend() {
+                        let context = self
+                            .qa_state
+                            .as_ref()
+                            .and_then(|state| state.session_id.clone());
+                        let expected = context
+                            .as_deref()
+                            .map(str::parse::<uuid::Uuid>)
+                            .transpose()
+                            .map(|id| id.map(openless_core::SessionId::from_uuid));
+                        self.spawn_qa_action(context, async move {
+                            let expected = expected.map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::InvalidState,
+                                    error.to_string(),
+                                )
+                            })?;
+                            backend
+                                .services()
+                                .qa
+                                .submit_text_in_context(text, expected)
+                                .await?;
+                            Ok(tr_l10n(lang, "qa.submitted").to_string())
+                        });
                     }
                 }
-                match event {
-                    PopupSupervisorEvent::Message(PopupToHost::SubmitQa {
-                        session_id,
-                        text,
-                        ..
-                    }) if self
-                        .qa_state
-                        .as_ref()
-                        .and_then(|state| state.session_id.as_deref())
-                        == Some(session_id.as_str()) =>
-                    {
-                        if let Some(backend) = self.backend() {
-                            self.spawn(async move {
-                                backend.services().qa.submit_text(text).await?;
-                                Ok(tr_l10n(lang, "qa.submitted").to_string())
-                            });
-                        }
+                PopupSupervisorEvent::Message(PopupToHost::ToggleQaRecording {
+                    session_id,
+                    ..
+                }) if self.expected_popup_session(PopupKind::Qa).as_deref()
+                    == Some(session_id.as_str()) =>
+                {
+                    if let Some(backend) = self.backend() {
+                        let context = self
+                            .qa_state
+                            .as_ref()
+                            .and_then(|state| state.session_id.clone());
+                        self.spawn_qa_action(context, async move {
+                            backend.services().qa.toggle_recording().await?;
+                            Ok(tr_l10n(lang, "qa.recording_updated").to_string())
+                        });
                     }
-                    PopupSupervisorEvent::Message(PopupToHost::ToggleQaRecording {
-                        session_id,
-                        ..
-                    }) if self
-                        .qa_state
-                        .as_ref()
-                        .and_then(|state| state.session_id.as_deref())
+                }
+                PopupSupervisorEvent::Message(PopupToHost::DismissQa { session_id, .. })
+                    if self.expected_popup_session(PopupKind::Qa).as_deref()
                         == Some(session_id.as_str()) =>
-                    {
-                        if let Some(backend) = self.backend() {
-                            self.spawn(async move {
-                                backend.services().qa.toggle_recording().await?;
-                                Ok(tr_l10n(lang, "qa.recording_updated").to_string())
-                            });
-                        }
+                {
+                    // 面板 ✕：立刻清掉宿主侧的可见标志，不等 Core 的 HideQa 回环
+                    // （那条被图钉门禁拦着，pinned 时不清 → 标志残留会让录音热键
+                    // 之后又把面板弹出来）。
+                    self.close_qa_popup();
+                    if let Some(backend) = self.backend() {
+                        self.spawn(async move {
+                            backend.services().qa.dismiss().await?;
+                            Ok(tr_l10n(lang, "qa.closed").to_string())
+                        });
                     }
-                    PopupSupervisorEvent::Message(PopupToHost::DismissQa {
-                        session_id, ..
-                    }) if self
-                        .qa_state
-                        .as_ref()
-                        .and_then(|state| state.session_id.as_deref())
-                        == Some(session_id.as_str()) =>
-                    {
-                        // 面板 ✕：立刻清掉宿主侧的可见标志，不等 Core 的 HideQa 回环
-                        // （那条被图钉门禁拦着，pinned 时不清 → 标志残留会让录音热键
-                        // 之后又把面板弹出来）。
-                        self.qa_visible = false;
-                        self.polish_result_visible = false;
-                        if let Some(backend) = self.backend() {
-                            self.spawn(async move {
-                                backend.services().qa.dismiss().await?;
-                                Ok(tr_l10n(lang, "qa.closed").to_string())
-                            });
-                        }
+                }
+                PopupSupervisorEvent::Message(PopupToHost::SetPinned {
+                    session_id,
+                    pinned,
+                    ..
+                }) if self.expected_popup_session(PopupKind::Qa).as_deref()
+                    == Some(session_id.as_str()) =>
+                {
+                    self.qa_pinned = pinned;
+                    self.show_qa_popup();
+                }
+                PopupSupervisorEvent::Message(PopupToHost::SetEditInstructionMode {
+                    session_id,
+                    enabled,
+                    ..
+                }) if self.expected_popup_session(PopupKind::Qa).as_deref()
+                    == Some(session_id.as_str()) =>
+                {
+                    if let Some(backend) = self.backend() {
+                        let context = self
+                            .qa_state
+                            .as_ref()
+                            .and_then(|state| state.session_id.clone());
+                        self.spawn_qa_action(context, async move {
+                            backend
+                                .services()
+                                .qa
+                                .set_edit_instruction_mode(enabled)
+                                .await?;
+                            Ok(String::new())
+                        });
                     }
-                    PopupSupervisorEvent::Message(PopupToHost::SetPinned {
-                        session_id,
-                        pinned,
-                        ..
-                    }) if self
+                }
+                PopupSupervisorEvent::Message(PopupToHost::RevertEdit { session_id, .. })
+                    if self
                         .qa_state
                         .as_ref()
                         .and_then(|state| state.session_id.as_deref())
                         == Some(session_id.as_str()) =>
-                    {
-                        self.qa_pinned = pinned;
-                        self.show_qa_popup();
-                    }
-                    PopupSupervisorEvent::Message(PopupToHost::SetEditInstructionMode {
-                        session_id,
-                        enabled,
-                        ..
-                    }) if self
-                        .qa_state
-                        .as_ref()
-                        .and_then(|state| state.session_id.as_deref())
-                        == Some(session_id.as_str()) =>
-                    {
+                {
+                    if let Ok(qa_session) = session_id.parse::<uuid::Uuid>() {
+                        let qa_session = openless_core::SessionId::from_uuid(qa_session);
                         if let Some(backend) = self.backend() {
+                            let lang = self.lang;
                             self.spawn(async move {
                                 backend
                                     .services()
                                     .qa
-                                    .set_edit_instruction_mode(enabled)
+                                    .revert_edit_preview(qa_session)
                                     .await?;
-                                Ok(String::new())
+                                Ok(tr_l10n(lang, "selection.reverted").to_string())
                             });
                         }
                     }
-                    PopupSupervisorEvent::Message(PopupToHost::RevertEdit {
-                        session_id, ..
-                    }) if self
+                }
+                PopupSupervisorEvent::Message(PopupToHost::ApplyEdit { session_id, .. })
+                    if self
                         .qa_state
                         .as_ref()
                         .and_then(|state| state.session_id.as_deref())
                         == Some(session_id.as_str()) =>
-                    {
-                        if let Ok(qa_session) = session_id.parse::<uuid::Uuid>() {
-                            let qa_session = openless_core::SessionId::from_uuid(qa_session);
-                            if let Some(backend) = self.backend() {
-                                let lang = self.lang;
-                                self.spawn(async move {
-                                    backend
-                                        .services()
-                                        .qa
-                                        .revert_edit_preview(qa_session)
-                                        .await?;
-                                    Ok(tr_l10n(lang, "selection.reverted").to_string())
-                                });
-                            }
+                {
+                    if let Ok(qa_session) = session_id.parse::<uuid::Uuid>() {
+                        let qa_session = openless_core::SessionId::from_uuid(qa_session);
+                        if let Some(backend) = self.backend() {
+                            self.spawn_qa_edit_apply(backend, qa_session);
                         }
                     }
-                    PopupSupervisorEvent::Message(PopupToHost::ApplyEdit {
-                        session_id, ..
-                    }) if self
-                        .qa_state
-                        .as_ref()
-                        .and_then(|state| state.session_id.as_deref())
-                        == Some(session_id.as_str()) =>
-                    {
-                        if let Ok(qa_session) = session_id.parse::<uuid::Uuid>() {
-                            let qa_session = openless_core::SessionId::from_uuid(qa_session);
-                            if let Some(backend) = self.backend() {
-                                self.spawn_qa_edit_apply(backend, qa_session);
-                            }
+                }
+                PopupSupervisorEvent::Message(PopupToHost::ConfirmPolish {
+                    session_id,
+                    text,
+                    ..
+                }) => match session_id.parse::<uuid::Uuid>() {
+                    Ok(session_id) => {
+                        // 润色结束：选区助手面板回到提问模式（同一个弹窗）。
+                        self.polish_result_visible = false;
+                        let session_id = openless_core::SessionId::from_uuid(session_id);
+                        if let Some(backend) = self.backend() {
+                            self.spawn(async move {
+                                backend
+                                    .services()
+                                    .selection
+                                    .confirm(session_id, Some(text))
+                                    .await?;
+                                Ok(tr_l10n(lang, "selection.replaced").to_string())
+                            });
                         }
                     }
-                    PopupSupervisorEvent::Message(PopupToHost::ConfirmPolish {
-                        session_id,
-                        text,
-                        ..
-                    }) => match session_id.parse::<uuid::Uuid>() {
-                        Ok(session_id) => {
-                            // 润色结束：选区助手面板回到提问模式（同一个弹窗）。
-                            self.polish_result_visible = false;
-                            let session_id = openless_core::SessionId::from_uuid(session_id);
-                            if let Some(backend) = self.backend() {
-                                self.spawn(async move {
-                                    backend
-                                        .services()
-                                        .selection
-                                        .confirm(session_id, Some(text))
-                                        .await?;
-                                    Ok(tr_l10n(lang, "selection.replaced").to_string())
-                                });
-                            }
-                        }
-                        Err(error) => {
-                            self.status = fmt_l10n(lang, "popup.session_invalid", &[&error])
-                        }
-                    },
-                    PopupSupervisorEvent::Message(PopupToHost::CancelPolish {
-                        session_id, ..
-                    }) => match session_id.parse::<uuid::Uuid>() {
+                    Err(error) => self.status = fmt_l10n(lang, "popup.session_invalid", &[&error]),
+                },
+                PopupSupervisorEvent::Message(PopupToHost::CancelPolish { session_id, .. }) => {
+                    match session_id.parse::<uuid::Uuid>() {
                         Ok(session_id) => {
                             // 取消润色：同样退出润色模式。
                             self.polish_result_visible = false;
@@ -1577,171 +1671,212 @@ mod linux_app {
                         Err(error) => {
                             self.status = fmt_l10n(lang, "popup.session_invalid", &[&error])
                         }
-                    },
-                    PopupSupervisorEvent::Message(PopupToHost::Ready { .. }) => match kind {
-                        PopupKind::Qa => {
-                            // 面板自己也要匹配本地热键（面板有焦点时插件收不到按键），
-                            // 所以先下发绑定，再送内容。
-                            self.send_popup_hotkeys(kind);
-                            // 选区助手面板既可能是提问模式，也可能是润色结果模式。
-                            if self.polish_result_visible {
-                                self.show_selection_popup();
-                            } else {
-                                self.show_qa_popup();
-                            }
-                        }
-                        PopupKind::Capsule => self.show_capsule_popup(),
-                        PopupKind::LessComputer => {
-                            self.send_popup_hotkeys(kind);
-                            self.show_less_computer_popup();
-                        }
-                    },
-                    PopupSupervisorEvent::Message(PopupToHost::Hotkey { edge, .. }) => {
-                        log::info!("[hotkey] local edge from the {kind:?} panel: {edge:?}");
-                        self.pending_local_hotkeys
-                            .push((std::time::Instant::now(), edge));
                     }
-                    PopupSupervisorEvent::Message(PopupToHost::DismissCapsule { .. }) => {
-                        if let Some(snapshot) = self.snapshot.as_mut() {
-                            snapshot.dictation.message = None;
+                }
+                PopupSupervisorEvent::Message(PopupToHost::Ready { .. }) => match kind {
+                    PopupKind::Qa => {
+                        // 面板自己也要匹配本地热键（面板有焦点时插件收不到按键），
+                        // 所以先下发绑定，再送内容。
+                        self.send_popup_hotkeys(kind);
+                        // 选区助手面板既可能是提问模式，也可能是润色结果模式。
+                        if self.polish_result_visible {
+                            self.show_selection_popup();
+                        } else {
+                            self.show_qa_popup();
                         }
                     }
-                    PopupSupervisorEvent::Message(PopupToHost::CancelDictation { .. }) => {
-                        // 胶囊 ✕：放弃这次听写。
-                        let session = self
-                            .snapshot
-                            .as_ref()
-                            .and_then(|snapshot| snapshot.dictation.session_id);
-                        if let (Some(backend), Some(session)) = (self.backend(), session) {
-                            self.spawn(async move {
-                                // 连点两次 ✕、会话已收尾之类的错误是预期内的，
-                                // 归一掉，不要再弹成失败。
-                                normalize_stop_result(
-                                    backend.cancel_dictation(Some(session)).await,
-                                )?;
-                                Ok(String::new())
-                            });
-                        }
+                    PopupKind::Capsule => self.show_capsule_popup(),
+                    PopupKind::LessComputer => {
+                        self.send_popup_hotkeys(kind);
+                        self.show_less_computer_popup();
                     }
-                    PopupSupervisorEvent::Message(PopupToHost::StopDictation { .. }) => {
-                        // 胶囊 ✓：结束录音并落字。
-                        let session = self
-                            .snapshot
-                            .as_ref()
-                            .and_then(|snapshot| snapshot.dictation.session_id);
-                        if let (Some(backend), Some(session)) = (self.backend(), session) {
-                            self.spawn(async move {
-                                // 没说话（空音频 → InvalidArgument）也是预期内的终态：
-                                // 胶囊会显示本地化文案并自动收起，这里不再报错误。
-                                normalize_stop_result(
-                                    backend.stop_dictation_session(session).await,
-                                )?;
-                                Ok(String::new())
-                            });
-                        }
+                },
+                PopupSupervisorEvent::Message(PopupToHost::Hotkey { edge, .. }) => {
+                    log::info!("[hotkey] local edge from the {kind:?} panel: {edge:?}");
+                    self.pending_local_hotkeys
+                        .push((std::time::Instant::now(), edge));
+                }
+                PopupSupervisorEvent::Message(PopupToHost::DismissCapsule { .. }) => {
+                    if let Some(snapshot) = self.snapshot.as_mut() {
+                        snapshot.dictation.message = None;
                     }
-                    PopupSupervisorEvent::Message(PopupToHost::SubmitLessComputer {
-                        session_id,
-                        text,
-                        ..
-                    }) if self
-                        .less_computer_session
-                        .map(|session| session.to_string())
-                        .as_deref()
-                        == Some(session_id.as_str()) =>
-                    {
-                        if let Some(backend) = self.backend() {
-                            // Core 自己解析 provider / 模型 / 权限 / workdir；
-                            // 宿主只负责把用户文本交给它（Tauri `lessComputerSubmitText`）。
-                            self.spawn(async move {
-                                backend.submit_less_computer(text).await?;
-                                Ok(String::new())
-                            });
-                        }
-                    }
-                    PopupSupervisorEvent::Message(PopupToHost::ApproveLessComputer {
-                        token,
-                        approved,
-                        ..
-                    }) => {
-                        let backend = self.backend();
+                }
+                PopupSupervisorEvent::Message(PopupToHost::CancelDictation { .. }) => {
+                    // 胶囊 ✕：放弃这次听写。
+                    let session = self
+                        .snapshot
+                        .as_ref()
+                        .and_then(|snapshot| snapshot.dictation.session_id);
+                    if let (Some(backend), Some(session)) = (self.backend(), session) {
                         self.spawn(async move {
-                            if let Some(backend) = backend {
-                                backend
-                                    .services()
-                                    .less_computer
-                                    .approve(token, approved)
-                                    .await?;
-                            }
+                            // 连点两次 ✕、会话已收尾之类的错误是预期内的，
+                            // 归一掉，不要再弹成失败。
+                            normalize_stop_result(backend.cancel_dictation(Some(session)).await)?;
                             Ok(String::new())
                         });
                     }
-                    PopupSupervisorEvent::Message(PopupToHost::CancelLessComputer { .. }) => {
-                        let session = self.less_computer_session;
-                        let backend = self.backend();
+                }
+                PopupSupervisorEvent::Message(PopupToHost::StopDictation { .. }) => {
+                    // 胶囊 ✓：结束录音并落字。
+                    let session = self
+                        .snapshot
+                        .as_ref()
+                        .and_then(|snapshot| snapshot.dictation.session_id);
+                    if let (Some(backend), Some(session)) = (self.backend(), session) {
                         self.spawn(async move {
-                            if let Some(backend) = backend {
-                                backend.cancel_less_computer(session).await?;
-                            }
+                            // 没说话（空音频 → InvalidArgument）也是预期内的终态：
+                            // 胶囊会显示本地化文案并自动收起，这里不再报错误。
+                            normalize_stop_result(backend.stop_dictation_session(session).await)?;
                             Ok(String::new())
                         });
                     }
-                    PopupSupervisorEvent::Message(PopupToHost::DismissLessComputer { .. }) => {
-                        // 只收起面板：已完成的一轮保留在宿主状态里，下次打开仍在。
-                        self.hide_less_computer_popup();
+                }
+                PopupSupervisorEvent::Message(PopupToHost::SubmitLessComputer {
+                    session_id,
+                    text,
+                    ..
+                }) if self
+                    .less_computer_session
+                    .map(|session| session.to_string())
+                    .as_deref()
+                    == Some(session_id.as_str()) =>
+                {
+                    if let Some(backend) = self.backend() {
+                        // Core 自己解析 provider / 模型 / 权限 / workdir；
+                        // 宿主只负责把用户文本交给它（Tauri `lessComputerSubmitText`）。
+                        self.spawn(async move {
+                            backend.submit_less_computer(text).await?;
+                            Ok(String::new())
+                        });
                     }
-                    PopupSupervisorEvent::Message(
-                        PopupToHost::SubmitQa { .. }
-                        | PopupToHost::ToggleQaRecording { .. }
-                        | PopupToHost::DismissQa { .. }
-                        | PopupToHost::SetPinned { .. }
-                        | PopupToHost::SetEditInstructionMode { .. }
-                        | PopupToHost::ApplyEdit { .. }
-                        | PopupToHost::RevertEdit { .. }
-                        | PopupToHost::SubmitLessComputer { .. },
-                    ) => {
-                        self.status = tr_l10n(lang, "popup.ignore_late_qa").to_string();
-                    }
-                    PopupSupervisorEvent::ProtocolError(error) => {
-                        self.status = fmt_l10n(lang, "popup.protocol_error", &[&error]);
-                    }
-                    PopupSupervisorEvent::SpawnFailed(error) => {
-                        self.status = fmt_l10n(lang, "popup.spawn_failed", &[&error]);
-                        *self.popup_slot(kind) = None;
-                    }
-                    PopupSupervisorEvent::Exited { code, crashed } => {
-                        if crashed {
-                            self.status = fmt_l10n(lang, "popup.exited", &[&format!("{code:?}")]);
+                }
+                PopupSupervisorEvent::Message(PopupToHost::ApproveLessComputer {
+                    token,
+                    approved,
+                    ..
+                }) => {
+                    let backend = self.backend();
+                    self.spawn(async move {
+                        if let Some(backend) = backend {
+                            backend
+                                .services()
+                                .less_computer
+                                .approve(token, approved)
+                                .await?;
                         }
-                        *self.popup_slot(kind) = None;
-                        if !crashed {
-                            // 面板进程正常退出（用户/合成器关掉窗口等）：宿主这边的
-                            // 可见标志必须跟着清，否则「录音热键」会被错当成
-                            // 「向选区助手提问」，把面板又弹出来。
+                        Ok(String::new())
+                    });
+                }
+                PopupSupervisorEvent::Message(PopupToHost::CancelLessComputer { .. }) => {
+                    let session = self.less_computer_session;
+                    let backend = self.backend();
+                    self.spawn(async move {
+                        if let Some(backend) = backend {
+                            backend.cancel_less_computer(session).await?;
+                        }
+                        Ok(String::new())
+                    });
+                }
+                PopupSupervisorEvent::Message(PopupToHost::DismissLessComputer { .. }) => {
+                    // 只收起面板：已完成的一轮保留在宿主状态里，下次打开仍在。
+                    self.hide_less_computer_popup();
+                }
+                PopupSupervisorEvent::Message(
+                    PopupToHost::SubmitQa { .. }
+                    | PopupToHost::ToggleQaRecording { .. }
+                    | PopupToHost::DismissQa { .. }
+                    | PopupToHost::SetPinned { .. }
+                    | PopupToHost::SetEditInstructionMode { .. }
+                    | PopupToHost::ApplyEdit { .. }
+                    | PopupToHost::RevertEdit { .. }
+                    | PopupToHost::SubmitLessComputer { .. },
+                ) => {
+                    self.status = tr_l10n(lang, "popup.ignore_late_qa").to_string();
+                }
+                PopupSupervisorEvent::ProtocolError(error) => {
+                    self.status = fmt_l10n(lang, "popup.protocol_error", &[&error]);
+                }
+                PopupSupervisorEvent::SpawnFailed(error) => {
+                    self.status = fmt_l10n(lang, "popup.spawn_failed", &[&error]);
+                    *self.popup_slot(kind) = None;
+                }
+                PopupSupervisorEvent::Exited { code, crashed } => {
+                    if crashed {
+                        self.status = fmt_l10n(lang, "popup.exited", &[&format!("{code:?}")]);
+                    }
+                    *self.popup_slot(kind) = None;
+                    if !crashed {
+                        // 面板进程正常退出（用户/合成器关掉窗口等）：宿主这边的
+                        // 可见标志必须跟着清，否则「录音热键」会被错当成
+                        // 「向选区助手提问」，把面板又弹出来。
+                        self.forget_qa_panel_visibility(kind);
+                    }
+                    if crashed {
+                        // 必崩的面板不做无限重开：预算内重开，超了就停手（否则
+                        // 用户看到的是“弹窗一直反复弹出”）。
+                        let restarts = &mut self.popup_restarts[popup_kind_index(kind)];
+                        if !restarts.allow(std::time::Instant::now()) {
+                            log::warn!(
+                                "[popup] {kind:?} crashed {POPUP_RESTART_LIMIT} times within {}s; not restarting",
+                                POPUP_RESTART_WINDOW.as_secs()
+                            );
                             self.forget_qa_panel_visibility(kind);
+                            return;
                         }
-                        if crashed {
-                            // 必崩的面板不做无限重开：预算内重开，超了就停手（否则
-                            // 用户看到的是“弹窗一直反复弹出”）。
-                            let restarts = &mut self.popup_restarts[popup_kind_index(kind)];
-                            if !restarts.allow(std::time::Instant::now()) {
-                                log::warn!(
-                                    "[popup] {kind:?} crashed {POPUP_RESTART_LIMIT} times within {}s; not restarting",
-                                    POPUP_RESTART_WINDOW.as_secs()
-                                );
-                                self.forget_qa_panel_visibility(kind);
-                                return;
+                        match kind {
+                            PopupKind::Qa if self.qa_visible => self.show_qa_popup(),
+                            PopupKind::Capsule
+                                if self.snapshot.as_ref().is_some_and(|snapshot| {
+                                    snapshot.dictation.phase != DictationPhase::Idle
+                                }) =>
+                            {
+                                self.show_capsule_popup();
                             }
-                            match kind {
-                                PopupKind::Qa if self.qa_visible => self.show_qa_popup(),
-                                PopupKind::Capsule
-                                    if self.snapshot.as_ref().is_some_and(|snapshot| {
-                                        snapshot.dictation.phase != DictationPhase::Idle
-                                    }) =>
-                                {
-                                    self.show_capsule_popup();
-                                }
-                                _ => {}
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        fn spawn_qa_action<F>(&self, context: Option<String>, future: F)
+        where
+            F: Future<Output = Result<String, BackendError>> + Send + 'static,
+        {
+            let tx = self.tx.clone();
+            let generation = self.qa_popup_presentation.generation;
+            self.tokio.spawn(async move {
+                let result = future.await.map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::QaAction {
+                    generation,
+                    context,
+                    result,
+                });
+            });
+        }
+
+        fn apply_qa_action_result(
+            &mut self,
+            generation: u64,
+            context: Option<String>,
+            result: Result<String, String>,
+        ) {
+            if generation != self.qa_popup_presentation.generation {
+                return;
+            }
+            match result {
+                Ok(message) => self.status = message,
+                Err(error) => {
+                    self.status = error.clone();
+                    if self.qa_visible {
+                        if let Some(state) = self
+                            .qa_state
+                            .as_mut()
+                            .filter(|state| state.session_id == context)
+                        {
+                            state.error = Some(error);
+                            if self.qa_popup.is_some() {
+                                self.show_qa_popup();
                             }
                         }
                     }
@@ -2574,36 +2709,8 @@ mod linux_app {
                     {
                         self.qa_state = Some(state);
                     }
-                    if let Some(state) = self.qa_state.clone() {
-                        let session_id =
-                            state.session_id.clone().unwrap_or_else(|| "qa".to_string());
-                        self.send_popup(
-                            PopupKind::Qa,
-                            HostToPopup::QaSnapshot {
-                                version: POPUP_PROTOCOL_VERSION,
-                                session_id,
-                                sequence: event_sequence.saturating_mul(2),
-                                phase: format!("{:?}", state.kind),
-                                messages: state
-                                    .messages
-                                    .unwrap_or_default()
-                                    .into_iter()
-                                    .map(|message| PopupChatMessage {
-                                        role: message.role,
-                                        content: message.content,
-                                        selection_text: message.selection_text,
-                                    })
-                                    .collect(),
-                                selection_preview: state.selection_preview,
-                                streaming_answer: state.chunk.unwrap_or_default(),
-                                error: state.error,
-                                edit_instruction_mode: self.qa_edit.instruction_mode,
-                                edit_apply_available: self.qa_edit.apply_available,
-                                edit_revert_available: self.qa_edit.revert_available,
-                                pinned: self.qa_pinned,
-                                viewer_login: self.marketplace_login(),
-                            },
-                        );
+                    if self.qa_visible {
+                        self.show_qa_popup();
                     }
                 }
                 BackendEventKind::SelectionStateChanged(snapshot) => {
@@ -2709,6 +2816,7 @@ mod linux_app {
                 // 图钉只管“失焦自动收起”那条路径。
                 log::info!("[hotkey] QA panel toggle: dismissing");
                 self.qa_visible = false;
+                self.polish_result_visible = false;
                 let session_id = self
                     .qa_state
                     .as_ref()
@@ -2853,6 +2961,9 @@ mod linux_app {
             }
             self.qa_visible = false;
             self.polish_result_visible = false;
+            self.qa_popup_presentation.session_id = None;
+            self.qa_popup_presentation.generation =
+                self.qa_popup_presentation.generation.saturating_add(1);
         }
 
         fn apply_local_hotkey_edges(
@@ -3183,6 +3294,9 @@ mod linux_app {
                         }
                         HostAction::ShowQa => {
                             log::info!("[hotkey] QA panel show requested by the host action");
+                            if self.polish_result_visible {
+                                self.close_qa_popup();
+                            }
                             self.qa_visible = true;
                             self.show_qa_popup();
                         }
@@ -3282,6 +3396,11 @@ mod linux_app {
                         }
                     }
                     UiResult::Message(message) => self.status = message,
+                    UiResult::QaAction {
+                        generation,
+                        context,
+                        result,
+                    } => self.apply_qa_action_result(generation, context, result),
                     UiResult::HistoryRepolish { id, result } => {
                         self.frontend_vm.history_repolish_running = false;
                         match result {
@@ -3812,35 +3931,37 @@ mod linux_app {
                 .map(|preferences| preferences.theme_mode)
                 .unwrap_or_default();
             if let Some(prefs) = &self.preferences {
-                vm.dictation_hotkey = prefs.dictation_hotkey.display_label();
+                vm.dictation_hotkey =
+                    openless_linux_egui::shortcut_display_label(&prefs.dictation_hotkey);
                 vm.qa_hotkey = prefs
                     .qa_hotkey
                     .as_ref()
-                    .map(|binding| binding.display_label())
+                    .map(openless_linux_egui::shortcut_display_label)
                     .unwrap_or_default();
                 vm.quick_note_hotkey = prefs
                     .quick_note_hotkey
                     .as_ref()
-                    .map(|binding| binding.display_label())
+                    .map(openless_linux_egui::shortcut_display_label)
                     .unwrap_or_default();
                 vm.quick_note_shortcut_hidden = self.quick_note_shortcut_hidden;
-                vm.translation_hotkey = prefs.translation_hotkey.display_label();
+                vm.translation_hotkey =
+                    openless_linux_egui::shortcut_display_label(&prefs.translation_hotkey);
                 // 这几行一直在界面上，但宿主以前只填了前四个：没填的行无论 Core 里
                 // 有没有绑定都显示成空键帽，看起来像「未设置」。一律从偏好取真值。
                 vm.switch_style_hotkey = prefs
                     .switch_style_hotkey
                     .as_ref()
-                    .map(|binding| binding.display_label())
+                    .map(openless_linux_egui::shortcut_display_label)
                     .unwrap_or_default();
                 vm.open_app_hotkey = prefs
                     .open_app_hotkey
                     .as_ref()
-                    .map(|binding| binding.display_label())
+                    .map(openless_linux_egui::shortcut_display_label)
                     .unwrap_or_default();
                 vm.coding_agent_hotkey = prefs
                     .coding_agent_voice_hotkey
                     .as_ref()
-                    .map(|binding| binding.display_label())
+                    .map(openless_linux_egui::shortcut_display_label)
                     .unwrap_or_default();
             }
 
@@ -4022,7 +4143,7 @@ mod linux_app {
                 vm.selection_polish_hotkey = prefs
                     .selection_polish_hotkey
                     .as_ref()
-                    .map(|binding| binding.display_label())
+                    .map(openless_linux_egui::shortcut_display_label)
                     .unwrap_or_default();
                 vm.qa_save_history = prefs.qa_save_history;
                 // 风格包直选：只展示已经录过的快捷键（录制器尚未实现）。
@@ -4039,7 +4160,7 @@ mod linux_app {
                             name: pack
                                 .map(|pack| pack.name.clone())
                                 .unwrap_or_else(|| entry.pack_id.clone()),
-                            hotkey: entry.binding.display_label(),
+                            hotkey: openless_linux_egui::shortcut_display_label(&entry.binding),
                         }
                     })
                     .collect();
@@ -7589,12 +7710,23 @@ Internal flags (set by OpenLess itself, not for regular use):
             BrokerAcquisition::Primary(broker) => Arc::new(broker),
             BrokerAcquisition::Forwarded => return Ok(()),
         };
-        let tray = openless_linux_egui::LinuxTray::start().ok();
+        let (tray, tray_error) = match openless_linux_egui::LinuxTray::start() {
+            Ok(tray) => (Some(tray), None),
+            Err(error) => {
+                eprintln!("OpenLess tray unavailable: {error}");
+                (None, Some(error.to_string()))
+            }
+        };
         let tray_available = tray.is_some();
         let native = (|| {
             let mut config = backend_config()?;
             if let Err(error) = openless_linux_egui::init_file_logger(&config.data_dir) {
                 eprintln!("OpenLess file logger unavailable: {error}");
+            }
+            if let Some(error) = tray_error {
+                log::warn!(
+                    "OpenLess tray unavailable: {error}; closing the main window will exit the app"
+                );
             }
             ensure_fcitx5_ready(&config)?;
             let hotkeys = Some(Fcitx5HotkeyListener::start().map_err(|error| error.to_string())?);
@@ -7636,6 +7768,309 @@ Internal flags (set by OpenLess itself, not for regular use):
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        struct FailingQaRuntime;
+
+        impl openless_core::QaRuntimeAdapter for FailingQaRuntime {
+            fn prepare_text(
+                &self,
+                _: openless_core::SessionId,
+                text: String,
+            ) -> futures_util::future::BoxFuture<
+                'static,
+                Result<openless_core::QaInput, BackendError>,
+            > {
+                Box::pin(async move {
+                    Ok(openless_core::QaInput {
+                        text,
+                        selection_text: None,
+                        selection_source_app: None,
+                    })
+                })
+            }
+            fn start_recording(
+                &self,
+                _: openless_core::SessionId,
+                _: Arc<dyn openless_core::QaProgressSink>,
+            ) -> futures_util::future::BoxFuture<'static, Result<(), BackendError>> {
+                panic!("text submission must not start recording")
+            }
+            fn finish_recording(
+                &self,
+                _: openless_core::SessionId,
+            ) -> futures_util::future::BoxFuture<
+                'static,
+                Result<openless_core::QaInput, BackendError>,
+            > {
+                panic!("text submission must not finish recording")
+            }
+            fn answer(
+                &self,
+                _: openless_core::QaTurnRequest,
+                _: Arc<dyn openless_core::QaProgressSink>,
+            ) -> futures_util::future::BoxFuture<
+                'static,
+                Result<openless_core::QaTurnResult, BackendError>,
+            > {
+                Box::pin(async {
+                    Err(BackendError::new(
+                        openless_core::BackendErrorCode::InvalidArgument,
+                        "fixture provider unavailable",
+                    ))
+                })
+            }
+            fn cancel(
+                &self,
+                _: openless_core::SessionId,
+            ) -> futures_util::future::BoxFuture<'static, Result<(), BackendError>> {
+                Box::pin(async { Ok(()) })
+            }
+        }
+
+        #[test]
+        fn an_idle_popup_submission_reaches_core_and_displays_failure() {
+            let data_dir = tempfile::tempdir().unwrap();
+            let tokio = Arc::new(tokio::runtime::Runtime::new().unwrap());
+            let host_actions = Arc::new(openless_linux_egui::LinuxHostActions::default());
+            let mut dependencies = openless_core::BackendDependencies::unsupported();
+            dependencies.host_actions = host_actions.clone();
+            dependencies.credential_store =
+                Arc::new(openless_core::InMemoryCredentialStore::default());
+            dependencies.qa_runtime = Some(Arc::new(FailingQaRuntime));
+            dependencies.services.remote_input = Arc::new(
+                openless_core::RemoteInputService::new(
+                    Arc::new(openless_core::testing::RecordingRemoteInputRuntime::default()),
+                    8443,
+                    "en",
+                )
+                .unwrap(),
+            );
+            let backend = Arc::new(
+                openless_core::OpenLessBackend::new(
+                    BackendConfig {
+                        data_dir: data_dir.path().to_path_buf(),
+                        ..Default::default()
+                    },
+                    dependencies,
+                )
+                .unwrap(),
+            );
+            let runtime = openless_linux_egui::LinuxBackendRuntime {
+                backend,
+                host_actions,
+                settings_runtime: Arc::new(openless_core::settings::NoopSettingsRuntime),
+            };
+            let backend = runtime.backend.clone();
+            let native = tokio
+                .block_on(LinuxNativeRuntime::start(runtime, None, None))
+                .unwrap();
+            let mut app = OpenLessEguiApp::new(tokio.clone(), Ok(native), None, true);
+            app.qa_visible = true;
+            app.qa_state = Some(QaStateEvent::simple(QaStateKind::Idle));
+            let submission = PopupToHost::SubmitQa {
+                version: POPUP_PROTOCOL_VERSION,
+                session_id: "qa".into(),
+                sequence: 1,
+                text: "probe hello".into(),
+            };
+            app.apply_popup_event(
+                PopupKind::Qa,
+                PopupSupervisorEvent::Message(submission.clone()),
+            );
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Ok(UiResult::QaAction {
+                    generation,
+                    context,
+                    result,
+                }) = app.rx.try_recv()
+                {
+                    assert!(result.is_err(), "the fixture rejects the provider request");
+                    app.apply_qa_action_result(generation, context, result);
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "idle submission was silently discarded"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let snapshot = tokio.block_on(backend.services().qa.snapshot()).unwrap();
+            assert!(
+                snapshot.session_id.is_some(),
+                "Core must have claimed a QA turn"
+            );
+            assert_eq!(snapshot.phase, openless_core::QaPhase::Failed);
+            assert!(app.qa_state.as_ref().unwrap().error.is_some());
+            app.apply_popup_event(PopupKind::Qa, PopupSupervisorEvent::Message(submission));
+            assert_eq!(app.status, tr_l10n(app.lang, "popup.ignore_stale"));
+            tokio.block_on(backend.shutdown()).unwrap();
+        }
+
+        #[test]
+        fn closing_qa_drops_its_window_and_late_idle_does_not_reopen_it() {
+            let mut app = fixture_app(true);
+            app.qa_visible = true;
+            app.qa_state = Some(QaStateEvent::simple(QaStateKind::Idle));
+            app.qa_popup = Some(PopupSupervisor::spawn_command(
+                app.tokio.handle(),
+                tokio::process::Command::new("/bin/cat"),
+            ));
+            app.toggle_qa_panel();
+            assert!(!app.qa_visible);
+            assert!(app.qa_popup.is_none());
+            app.apply_event(BackendEvent {
+                sequence: 1,
+                session_id: None,
+                kind: BackendEventKind::QaState(QaStateEvent::simple(QaStateKind::Idle)),
+            });
+            assert!(app.qa_popup.is_none());
+            assert!(app.expected_popup_session(PopupKind::Qa).is_none());
+        }
+
+        #[test]
+        fn late_qa_action_failures_do_not_overwrite_a_new_turn() {
+            let mut app = fixture_app(true);
+            let mut state = QaStateEvent::simple(QaStateKind::Thinking);
+            state.session_id = Some(openless_core::SessionId::new().to_string());
+            app.qa_state = Some(state);
+            app.qa_visible = true;
+            app.apply_qa_action_result(
+                app.qa_popup_presentation.generation,
+                None,
+                Err("old failure".into()),
+            );
+            assert!(app.qa_state.as_ref().unwrap().error.is_none());
+        }
+
+        #[test]
+        fn a_previous_preview_cannot_close_the_current_qa_window() {
+            let mut app = fixture_app(true);
+            let current = openless_core::SessionId::new().to_string();
+            app.qa_visible = true;
+            app.qa_popup_presentation.session_id = Some(current.clone());
+            app.qa_popup = Some(PopupSupervisor::spawn_command(
+                app.tokio.handle(),
+                tokio::process::Command::new("/bin/cat"),
+            ));
+            app.hide_popup(
+                PopupKind::Qa,
+                openless_core::SessionId::new().to_string(),
+                1,
+            );
+            assert!(app.qa_popup.is_some());
+            assert!(app.qa_visible);
+            assert_eq!(app.qa_popup_presentation.session_id, Some(current));
+        }
+
+        #[test]
+        fn a_previous_qa_turn_cannot_close_the_current_preview() {
+            let mut app = fixture_app(true);
+            let current = openless_core::SessionId::new();
+            app.polish_result_visible = true;
+            app.selection = Some(SelectionSnapshot {
+                session_id: Some(current),
+                phase: SelectionPhase::Preview,
+                ..Default::default()
+            });
+            app.qa_popup_presentation.session_id = Some(current.to_string());
+            app.qa_popup = Some(PopupSupervisor::spawn_command(
+                app.tokio.handle(),
+                tokio::process::Command::new("/bin/cat"),
+            ));
+            app.hide_popup(
+                PopupKind::Qa,
+                openless_core::SessionId::new().to_string(),
+                1,
+            );
+            assert!(app.qa_popup.is_some());
+            assert!(app.polish_result_visible);
+            assert_eq!(
+                app.expected_popup_session(PopupKind::Qa),
+                Some(current.to_string())
+            );
+        }
+
+        #[test]
+        fn closing_the_current_preview_also_clears_qa_visibility() {
+            let mut app = fixture_app(true);
+            let current = openless_core::SessionId::new().to_string();
+            app.qa_visible = true;
+            app.qa_popup_presentation.session_id = Some(current.clone());
+            app.qa_popup = Some(PopupSupervisor::spawn_command(
+                app.tokio.handle(),
+                tokio::process::Command::new("/bin/cat"),
+            ));
+            app.hide_popup(PopupKind::Qa, current, 1);
+            assert!(app.qa_popup.is_none());
+            assert!(!app.qa_visible);
+            assert!(!app.polish_result_visible);
+        }
+
+        #[test]
+        fn background_qa_updates_leave_the_current_preview_visible() {
+            let mut app = fixture_app(true);
+            let preview = openless_core::SessionId::new().to_string();
+            app.qa_visible = true;
+            app.polish_result_visible = true;
+            app.qa_state = Some(QaStateEvent::simple(QaStateKind::Idle));
+            app.qa_popup_presentation.session_id = Some(preview.clone());
+            app.qa_popup = Some(PopupSupervisor::spawn_command(
+                app.tokio.handle(),
+                tokio::process::Command::new("/bin/cat"),
+            ));
+            let generation = app.qa_popup_presentation.generation;
+            app.show_qa_popup();
+            assert!(app.qa_popup.is_some());
+            assert_eq!(app.qa_popup_presentation.session_id, Some(preview));
+            assert_eq!(app.qa_popup_presentation.generation, generation);
+        }
+
+        #[test]
+        fn an_old_process_exit_cannot_clear_a_reopened_qa_window() {
+            let mut app = fixture_app(true);
+            let old_generation = app.qa_popup_presentation.generation;
+            app.close_qa_popup();
+            app.qa_visible = true;
+            app.qa_popup = Some(PopupSupervisor::spawn_command(
+                app.tokio.handle(),
+                tokio::process::Command::new("/bin/cat"),
+            ));
+            app.apply_popup_event_in_generation(
+                PopupKind::Qa,
+                old_generation,
+                PopupSupervisorEvent::Exited {
+                    code: Some(0),
+                    crashed: false,
+                },
+            );
+            assert!(app.qa_popup.is_some());
+            assert!(app.qa_visible);
+        }
+
+        #[test]
+        fn an_old_idle_failure_cannot_appear_in_a_reopened_idle_panel() {
+            let mut app = fixture_app(true);
+            app.qa_visible = true;
+            app.qa_state = Some(QaStateEvent::simple(QaStateKind::Idle));
+            let old_generation = app.qa_popup_presentation.generation;
+            app.close_qa_popup();
+            app.qa_visible = true;
+            app.qa_state = Some(QaStateEvent::simple(QaStateKind::Idle));
+            let status = app.status.clone();
+            app.apply_qa_action_result(old_generation, None, Err("old failure".into()));
+            assert!(app.qa_state.as_ref().unwrap().error.is_none());
+            assert_eq!(app.status, status);
+            app.apply_qa_action_result(
+                app.qa_popup_presentation.generation,
+                None,
+                Err("current failure".into()),
+            );
+            assert_eq!(
+                app.qa_state.as_ref().unwrap().error.as_deref(),
+                Some("current failure")
+            );
+        }
 
         #[test]
         fn style_example_changes_mark_the_editor_dirty() {
@@ -8017,7 +8452,12 @@ Internal flags (set by OpenLess itself, not for regular use):
         #[test]
         fn shortcut_rows_show_the_bindings_core_holds() {
             let mut app = fixture_app(true);
+            app.lang = Lang::En;
             app.preferences = Some(UserPreferences {
+                dictation_hotkey: openless_core::shared_types::ShortcutBinding {
+                    primary: "RightOption".into(),
+                    modifiers: Vec::new(),
+                },
                 switch_style_hotkey: Some(openless_core::shared_types::ShortcutBinding {
                     primary: "1".into(),
                     modifiers: vec!["ctrl".into(), "shift".into()],
@@ -8034,6 +8474,7 @@ Internal flags (set by OpenLess itself, not for regular use):
             });
             app.sync_view_model();
             let vm = &app.frontend_vm;
+            assert_eq!(vm.dictation_hotkey, "Right Alt");
             for (label, value) in [
                 ("switch_style", &vm.switch_style_hotkey),
                 ("open_app", &vm.open_app_hotkey),
