@@ -3,6 +3,11 @@
 
 export const zhCN = {
   cloudSyncE2ee: {
+    customServerTitle: '自建同步服务器（高级）',
+    customServerOrigin: '服务器地址（https://...）',
+    customServerToken: '登录 Token',
+    customServerSave: '保存',
+    customServerHint: '留空则使用官方同步服务器。地址必须是 https:// 开头的根地址。',
     protocolTitle: '云同步协议与隐私提醒',
     protocolIntro:
       'OpenLess 及个人开发者尊重您的隐私，并致力于保护您的资料。请阅读以下说明，再决定是否继续。',
@@ -24,7 +29,7 @@ export const zhCN = {
     setupPromptLater: '暂不开启',
     setupPromptOpen: '了解加密同步',
     title: '加密云同步',
-    description: '在本机加密后，通过 GitHub 账号跨设备同步。',
+    description: '在本机加密后，通过 GitHub 账号或 Token 跨设备同步。',
     enable: '启用加密同步',
     setPassword: '设置同步密码',
     stepEnableTitle: '第 1 步，共 3 步：开启同步',
@@ -1221,7 +1226,7 @@ export const zhCN = {
       desc: '本机保留的历史会话与对话上下文。',
       cursorContextLabel: '光标上下文（实验）',
       cursorContextDesc:
-        '润色时将光标附近文本发给模型（仅 macOS）。此开关与本地手改学词独立；排除密码框和已知敏感应用。',
+        '润色时把光标附近的一小段文字发给模型作参考，用于专有词、同音词和指代的判断（macOS / Android）。听写、速记和云笔记都会参考，但上下文本身不会写入笔记、历史或日志；使用云端模型时会随本次润色请求发送给该模型服务。此开关与本地手改学词独立；排除密码框、终端及已知敏感应用。',
     },
     codingConsole: {
       title: 'Claude 控制台',

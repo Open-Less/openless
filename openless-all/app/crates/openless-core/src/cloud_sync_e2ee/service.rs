@@ -21,9 +21,10 @@ use crate::cloud_sync_e2ee_protocol::{
     transport::{Metadata, MetadataResult, OperationStatus, ProxyPolicy, SyncSession, Transport},
     types::*,
 };
+use crate::credentials::{CredentialKey, CredentialNamespace, CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT};
 use crate::events::{BackendEventKind, BackendEventPublisher};
 use crate::marketplace::MarketplaceService;
-use crate::{BackendError, SecretValue};
+use crate::{BackendError, CredentialStore, SecretValue};
 
 use super::{
     document_error,
@@ -51,6 +52,11 @@ pub(crate) trait SyncServiceData: Send + Sync {
     ) -> BoxFuture<'_, SyncResult<()>>;
     fn generation(&self) -> SyncResult<Revision>;
     fn device(&self) -> SourceDevice;
+    /// Live read of the user's self-hosted server preference. A Settings-page
+    /// save must take effect on the next connection attempt, never only after
+    /// a full process restart — this is the one thing `SyncServiceConfig.origin`
+    /// (a fixed snapshot from backend construction) cannot provide by itself.
+    fn custom_server_origin(&self) -> Option<String>;
     fn changes(
         &self,
     ) -> tokio::sync::watch::Receiver<crate::cloud_sync_e2ee_store::gate::SyncChange>;
@@ -61,10 +67,19 @@ pub(crate) struct SyncServiceConfig {
     pub github_client_id: String,
 }
 
+/// How the current `Connection` authenticated. Re-validated on every use so a
+/// credential change (GitHub sign-out, or the custom token being edited) is
+/// detected the same way `current_account` already detects a GitHub account
+/// switch — never trust a cached `Connection` past a credential mismatch.
+enum ConnectionCredential {
+    Github(SecretValue),
+    CustomToken(SecretValue),
+}
+
 struct Connection {
     transport: Transport,
     session: SyncSession,
-    github_token: SecretValue,
+    credential: ConnectionCredential,
     expires_at: Instant,
 }
 
@@ -117,6 +132,7 @@ struct Shared {
     marketplace: Arc<MarketplaceService>,
     data: Arc<dyn SyncServiceData>,
     local: LocalStorage,
+    credential_store: Arc<dyn CredentialStore>,
     events: BackendEventPublisher,
     runtime: tokio::sync::Mutex<Runtime>,
     status: Mutex<EncryptedSyncStatus>,
@@ -137,14 +153,20 @@ impl EncryptedSyncService {
         marketplace: Arc<MarketplaceService>,
         local: LocalStorage,
         data: Arc<dyn SyncServiceData>,
+        credential_store: Arc<dyn CredentialStore>,
         events: BackendEventPublisher,
     ) -> Self {
-        let status = EncryptedSyncStatus::initial(config.origin.clone());
+        let initial_origin = data
+            .custom_server_origin()
+            .filter(|origin| !origin.trim().is_empty())
+            .unwrap_or_else(|| config.origin.clone());
+        let status = EncryptedSyncStatus::initial(initial_origin);
         Self(Arc::new(Shared {
             config,
             marketplace,
             data,
             local,
+            credential_store,
             events,
             runtime: tokio::sync::Mutex::new(Runtime {
                 initialized: false,
@@ -167,6 +189,17 @@ impl EncryptedSyncService {
         }))
     }
 
+    /// Live origin for every new connection attempt. Never cache this past a
+    /// single call — a Settings-page save must take effect immediately, not
+    /// only after a process restart.
+    fn origin(&self) -> String {
+        self.0
+            .data
+            .custom_server_origin()
+            .filter(|origin| !origin.trim().is_empty())
+            .unwrap_or_else(|| self.0.config.origin.clone())
+    }
+
     pub(crate) fn status(&self) -> EncryptedSyncStatus {
         let mut value = self
             .0
@@ -175,6 +208,7 @@ impl EncryptedSyncService {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         value.sequence = self.0.sequence.load(Ordering::Acquire).to_string();
+        value.service_origin = self.origin();
         match self.0.data.generation() {
             Ok(generation) => value.local_generation = generation.as_str().into(),
             Err(_) => {
@@ -226,20 +260,40 @@ impl EncryptedSyncService {
         }
     }
 
+    fn custom_token_key() -> SyncResult<CredentialKey> {
+        CredentialKey::new(CredentialNamespace::Application, None, CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT)
+            .map_err(|_| error("service_unavailable"))
+    }
+
+    /// `None` means "no custom token configured" (use GitHub identity), not a
+    /// credential-store failure — a read error is folded into `None` so a
+    /// transient store hiccup falls back to the GitHub path rather than
+    /// wedging the whole connect flow.
+    async fn read_custom_token(&self) -> Option<SecretValue> {
+        let key = Self::custom_token_key().ok()?;
+        self.0.credential_store.read(key).await.ok().flatten()
+    }
+
     async fn current_account(&self, runtime: &Runtime) -> SyncResult<()> {
         self.check_cancelled()?;
         let connection = runtime
             .connection
             .as_ref()
             .ok_or_else(|| error("sign_in_required"))?;
-        if self
-            .0
-            .marketplace
-            .read_access_token()
-            .await
-            .map_err(|_| error("sign_in_required"))?
-            != connection.github_token
-        {
+        let unchanged = match &connection.credential {
+            ConnectionCredential::Github(token) => {
+                self.0
+                    .marketplace
+                    .read_access_token()
+                    .await
+                    .map_err(|_| error("sign_in_required"))?
+                    == *token
+            }
+            ConnectionCredential::CustomToken(token) => {
+                self.read_custom_token().await.as_ref() == Some(token)
+            }
+        };
+        if !unchanged {
             return Err(error("account_changed"));
         }
         self.check_cancelled()
@@ -372,8 +426,21 @@ impl EncryptedSyncService {
         }
         // Capture once after recovery has applied the current preferences. Both
         // cache validation and client construction use this exact policy.
-        let proxy_policy =
-            ProxyPolicy::for_origin(&self.0.config.origin, crate::net::use_system_proxy());
+        // The system-proxy preference exists specifically to route around
+        // GitHub connectivity issues for the official server; a self-hosted
+        // custom-token server is the user's own explicitly configured,
+        // directly reachable endpoint and must never be silently routed
+        // through a system/env proxy that may not even be running.
+        let use_system_proxy =
+            self.read_custom_token().await.is_none() && crate::net::use_system_proxy();
+        let proxy_policy = ProxyPolicy::for_origin(&self.origin(), use_system_proxy);
+        log::warn!(
+            "[e2ee-token] connect: use_system_proxy={use_system_proxy} proxy_policy={proxy_policy:?} env HTTPS_PROXY={:?} HTTP_PROXY={:?} ALL_PROXY={:?} NO_PROXY={:?}",
+            std::env::var("HTTPS_PROXY").ok(),
+            std::env::var("HTTP_PROXY").ok(),
+            std::env::var("ALL_PROXY").ok(),
+            std::env::var("NO_PROXY").ok(),
+        );
         self.connect_with_proxy_policy(runtime, proxy_policy).await
     }
 
@@ -382,11 +449,30 @@ impl EncryptedSyncService {
         runtime: &mut Runtime,
         proxy_policy: ProxyPolicy,
     ) -> SyncResult<()> {
+        // A configured custom token always takes priority over a GitHub sign-in:
+        // the user explicitly opted into self-hosted mode by setting it, and a
+        // session can only ever be bound to one credential at a time.
+        let custom_token = self.read_custom_token().await;
+        let origin = self.origin();
+        log::warn!(
+            "[e2ee-token] connect_with_proxy_policy: origin={} custom_token_present={} has_cached_connection={}",
+            origin,
+            custom_token.is_some(),
+            runtime.connection.is_some()
+        );
         let valid = if let Some(connection) = &runtime.connection {
+            let credential_unchanged = match (&connection.credential, &custom_token) {
+                (ConnectionCredential::CustomToken(existing), Some(current)) => existing == current,
+                (ConnectionCredential::Github(existing), None) => {
+                    self.0.marketplace.read_access_token().await.ok().as_ref() == Some(existing)
+                }
+                // Switching between GitHub and custom-token mode (token just
+                // added, or just cleared) always forces a fresh connect.
+                _ => false,
+            };
             connection.expires_at > Instant::now() + Duration::from_secs(30)
                 && connection.transport.proxy_policy() == proxy_policy
-                && self.0.marketplace.read_access_token().await.ok().as_ref()
-                    == Some(&connection.github_token)
+                && credential_unchanged
         } else {
             false
         };
@@ -394,59 +480,73 @@ impl EncryptedSyncService {
             return Ok(());
         }
         #[cfg(not(test))]
-        let transport = Transport::new(
-            &self.0.config.origin,
-            &self.0.config.github_client_id,
-            proxy_policy,
-        )
-        .await
-        .map_err(protocol_error)?;
-        #[cfg(test)]
-        let transport = if self.0.config.origin.starts_with("http://127.0.0.1:") {
-            Transport::for_test_with_proxy_policy(
-                &self.0.config.origin,
-                &self.0.config.github_client_id,
-                proxy_policy,
-            )
+        let transport = match Transport::new(&origin, &self.0.config.github_client_id, proxy_policy)
             .await
-            .map_err(protocol_error)?
-        } else {
-            Transport::new(
-                &self.0.config.origin,
-                &self.0.config.github_client_id,
-                proxy_policy,
-            )
-            .await
-            .map_err(protocol_error)?
+        {
+            Ok(transport) => transport,
+            Err(e) => {
+                log::warn!("[e2ee-token] Transport::new failed: {e:?}");
+                return Err(protocol_error(e));
+            }
         };
-        let (token, account) = self
-            .0
-            .marketplace
-            .sync_identity()
-            .await
-            .map_err(|_| error("sign_in_required"))?;
-        self.check_cancelled()?;
-        let session = transport
-            .exchange(token.expose_secret(), &account.github_id)
-            .await
-            .map_err(protocol_error)?;
-        if session.account().github_id != account.github_id
-            || transport.service_origin().trim_end_matches('/')
-                != self.0.config.origin.trim_end_matches('/')
-        {
-            return Err(error("account_changed"));
-        }
+        #[cfg(test)]
+        let transport = if origin.starts_with("http://127.0.0.1:") {
+            Transport::for_test_with_proxy_policy(&origin, &self.0.config.github_client_id, proxy_policy)
+                .await
+                .map_err(protocol_error)?
+        } else {
+            Transport::new(&origin, &self.0.config.github_client_id, proxy_policy)
+                .await
+                .map_err(protocol_error)?
+        };
+        let (session, credential, account) = if let Some(token) = custom_token {
+            self.check_cancelled()?;
+            log::warn!("[e2ee-token] calling exchange_with_token against {}", origin);
+            let session = match transport.exchange_with_token(token.expose_secret()).await {
+                Ok(session) => {
+                    log::warn!("[e2ee-token] exchange_with_token succeeded");
+                    session
+                }
+                Err(e) => {
+                    log::warn!("[e2ee-token] exchange_with_token failed: {e:?}");
+                    return Err(protocol_error(e));
+                }
+            };
+            if transport.service_origin().trim_end_matches('/') != origin.trim_end_matches('/') {
+                return Err(error("account_changed"));
+            }
+            let account = session.account().clone();
+            (session, ConnectionCredential::CustomToken(token), account)
+        } else {
+            let (token, account) = self
+                .0
+                .marketplace
+                .sync_identity()
+                .await
+                .map_err(|_| error("sign_in_required"))?;
+            self.check_cancelled()?;
+            let session = transport
+                .exchange(token.expose_secret(), &account.github_id)
+                .await
+                .map_err(protocol_error)?;
+            if session.account().github_id != account.github_id
+                || transport.service_origin().trim_end_matches('/') != origin.trim_end_matches('/')
+            {
+                return Err(error("account_changed"));
+            }
+            if self
+                .0
+                .marketplace
+                .read_access_token()
+                .await
+                .map_err(|_| error("sign_in_required"))?
+                != token
+            {
+                return Err(error("account_changed"));
+            }
+            (session, ConnectionCredential::Github(token), account)
+        };
         let backup_retention_days = transport.capabilities().max_backup_retention_days;
-        if self
-            .0
-            .marketplace
-            .read_access_token()
-            .await
-            .map_err(|_| error("sign_in_required"))?
-            != token
-        {
-            return Err(error("account_changed"));
-        }
         let owner = account.github_id.as_str().to_string();
         if runtime.settings.owner_id.as_deref() != Some(&owner) {
             if runtime.settings.owner_id.is_some() {
@@ -473,7 +573,7 @@ impl EncryptedSyncService {
         runtime.connection = Some(Connection {
             transport,
             session,
-            github_token: token,
+            credential,
             expires_at,
         });
         runtime.baseline = self.0.local.read(&owner, "baseline").await?;
@@ -499,7 +599,7 @@ impl EncryptedSyncService {
         let mut runtime = self.0.runtime.lock().await;
         self.initialize(&mut runtime).await?;
         self.check_cancelled()?;
-        let policy = ProxyPolicy::for_origin(&self.0.config.origin, use_system_proxy);
+        let policy = ProxyPolicy::for_origin(&self.origin(), use_system_proxy);
         self.connect_with_proxy_policy(&mut runtime, policy).await
     }
 
@@ -693,7 +793,7 @@ impl EncryptedSyncService {
         }
         let mut runtime = self.0.runtime.try_lock().map_err(|_| error("busy"))?;
         self.begin();
-        let result = async {
+        let result: SyncResult<EnableStep> = async {
             self.connect(&mut runtime).await?;
             self.refresh_metadata(&mut runtime).await?;
             runtime.settings.consent_version = Some(consent_version);
@@ -718,6 +818,14 @@ impl EncryptedSyncService {
             Ok(step)
         }
         .await;
+        match &result {
+            Ok(step) => log::warn!("[e2ee-token] prepare_enable: succeeded, next_step={step:?}"),
+            Err(e) => log::warn!(
+                "[e2ee-token] prepare_enable: failed code={:?} message={}",
+                e.code,
+                e.message
+            ),
+        }
         self.finish(&mut runtime, &result);
         result.map(|next_step| EnablePreparation {
             next_step,
@@ -797,6 +905,7 @@ impl EncryptedSyncService {
         if consent_version != CONSENT_VERSION {
             return Err(error("consent_required"));
         }
+        log::warn!("[e2ee-token] create: entered, observed_revision={observed_revision}");
         let observed = Revision::parse(&observed_revision).map_err(protocol_error)?;
         let mut runtime = self.0.runtime.try_lock().map_err(|_| error("busy"))?;
         self.0.auto_suspended.store(false, Ordering::Release);
@@ -806,7 +915,14 @@ impl EncryptedSyncService {
             self.reconcile_for_review(&mut runtime).await?;
             self.refresh_metadata(&mut runtime).await?;
             let metadata = self.metadata(&runtime)?.value();
+            log::warn!(
+                "[e2ee-token] create: server state={:?} server_revision={} observed={}",
+                metadata.state,
+                metadata.revision.as_str(),
+                observed.as_str()
+            );
             if metadata.state == VaultState::Active || metadata.revision != observed {
+                log::warn!("[e2ee-token] create: revision_conflict (state or revision mismatch)");
                 return Err(error("revision_conflict"));
             }
             if runtime.settings.consent_version.as_deref() != Some(CONSENT_VERSION) {
@@ -1189,7 +1305,7 @@ impl EncryptedSyncService {
 
     fn scope(&self, runtime: &Runtime, vault: &str, key: &str) -> SyncResult<SyncScope> {
         Ok(SyncScope {
-            service_origin: self.0.config.origin.clone(),
+            service_origin: self.origin(),
             owner_github_id: self.owner(runtime)?.into(),
             vault_id: vault.into(),
             key_id: key.into(),
@@ -1708,6 +1824,9 @@ impl EncryptedSyncService {
         self.0.cancelled.store(true, Ordering::Release);
         // Preserve the account API's existing fail-closed guarantee immediately,
         // even while an earlier sync task is draining its native I/O worker.
+        // Harmless to set even in custom-token mode: it only makes the
+        // marketplace's own `read_access_token` fail until the next real
+        // GitHub login, which self-heals and deletes nothing.
         self.0.marketplace.invalidate_authentication();
         let mut runtime = self.0.runtime.lock().await;
         runtime.key = None;
@@ -1715,14 +1834,32 @@ impl EncryptedSyncService {
         runtime.settings.enabled = false;
         runtime.settings.remember_key = false;
         let connection = runtime.connection.take();
-        // OAuth logout is independent of encrypted journal/key cleanup. Always
-        // attempt it; denied sync-key deletion cannot keep GitHub authorized.
-        let logout_result = self
-            .0
-            .marketplace
-            .logout()
+        // A custom-token session must never delete the marketplace's GitHub
+        // credential: that identity is unrelated to this sync server and may
+        // still be in active use by the unrelated plugin-marketplace feature.
+        let was_custom_token = matches!(
+            connection.as_ref().map(|c| &c.credential),
+            Some(ConnectionCredential::CustomToken(_))
+        );
+        let logout_result: SyncResult<()> = if was_custom_token {
+            async {
+                let key = Self::custom_token_key()?;
+                self.0
+                    .credential_store
+                    .remove(key)
+                    .await
+                    .map_err(|_| error("secure_storage_denied"))
+            }
             .await
-            .map_err(|_| error("secure_storage_denied"));
+        } else {
+            // OAuth logout is independent of encrypted journal/key cleanup. Always
+            // attempt it; denied sync-key deletion cannot keep GitHub authorized.
+            self.0
+                .marketplace
+                .logout()
+                .await
+                .map_err(|_| error("secure_storage_denied"))
+        };
         let cleanup_result = async {
             self.0.local.set_lockout(true).await?;
             self.initialize(&mut runtime).await?;
@@ -1740,11 +1877,11 @@ impl EncryptedSyncService {
         if let Some(Connection {
             transport,
             session,
-            github_token,
+            credential,
             ..
         }) = connection
         {
-            drop(github_token);
+            drop(credential);
             // Local sign-out remains possible offline; the discarded session
             // also has a short server-enforced expiry.
             let _ = tokio::time::timeout(Duration::from_secs(5), transport.revoke_session(session))
@@ -1765,6 +1902,42 @@ impl EncryptedSyncService {
             s.pending_operation_id = None;
         });
         let result = cleanup_result.and(logout_result);
+        self.finish(&mut runtime, &result);
+        result.map(|()| self.status())
+    }
+
+    /// Single-shot equivalent of the GitHub device-flow sign-in for a
+    /// self-hosted server: there is no polling loop because the token
+    /// exchange is one HTTP round trip, not an out-of-band user approval.
+    /// Requires a custom token to already be saved (see `CloudSyncSection`'s
+    /// save action) — this never falls back to a GitHub identity, so clicking
+    /// it without a saved token fails clearly instead of silently doing the
+    /// wrong thing.
+    pub(crate) async fn sign_in_with_custom_token(&self) -> SyncResult<EncryptedSyncStatus> {
+        log::warn!("[e2ee-token] sign_in_with_custom_token: entered");
+        if self.read_custom_token().await.is_none() {
+            log::warn!("[e2ee-token] sign_in_with_custom_token: no custom token found in credential store, aborting before any network call");
+            return Err(error("sign_in_required"));
+        }
+        log::warn!("[e2ee-token] sign_in_with_custom_token: token found, attempting to acquire runtime lock");
+        let mut runtime = match self.0.runtime.try_lock() {
+            Ok(runtime) => runtime,
+            Err(_) => {
+                log::warn!("[e2ee-token] sign_in_with_custom_token: runtime lock busy");
+                return Err(error("busy"));
+            }
+        };
+        self.begin();
+        log::warn!("[e2ee-token] sign_in_with_custom_token: calling connect()");
+        let result = self.connect(&mut runtime).await;
+        match &result {
+            Ok(()) => log::warn!("[e2ee-token] sign_in_with_custom_token: connect() succeeded"),
+            Err(e) => log::warn!(
+                "[e2ee-token] sign_in_with_custom_token: connect() failed: code={:?} message={}",
+                e.code,
+                e.message
+            ),
+        }
         self.finish(&mut runtime, &result);
         result.map(|()| self.status())
     }

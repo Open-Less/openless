@@ -634,6 +634,12 @@ struct CredsRoot {
     metadata_revision: u64,
     #[serde(default, skip_serializing_if = "CredsMarketplace::is_empty")]
     marketplace: CredsMarketplace,
+    /// Static bearer token for a self-hosted `cloud_sync_e2ee` server (an
+    /// alternative to GitHub OAuth). Isolated from `marketplace` on purpose:
+    /// it authenticates a different, optional server and must never be
+    /// confused with the GitHub identity used for account-change detection.
+    #[serde(default, skip_serializing_if = "CredsCloudSync::is_empty")]
+    cloud_sync: CredsCloudSync,
 }
 
 fn credsroot_default_version() -> u32 {
@@ -758,6 +764,29 @@ impl CredsMarketplace {
 struct MarketplaceGithubToken(String);
 
 impl std::fmt::Debug for MarketplaceGithubToken {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("[REDACTED]")
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[allow(non_snake_case)]
+struct CredsCloudSync {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    customToken: Option<CloudSyncCustomToken>,
+}
+
+impl CredsCloudSync {
+    fn is_empty(&self) -> bool {
+        self.customToken.is_none()
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(transparent)]
+struct CloudSyncCustomToken(String);
+
+impl std::fmt::Debug for CloudSyncCustomToken {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("[REDACTED]")
     }
@@ -1694,6 +1723,25 @@ fn write_marketplace_github_token(root: &mut CredsRoot, value: Option<String>) {
             None
         } else {
             Some(MarketplaceGithubToken(token))
+        }
+    });
+}
+
+fn lookup_cloud_sync_custom_token(root: &CredsRoot) -> Option<String> {
+    root.cloud_sync
+        .customToken
+        .as_ref()
+        .map(|token| token.0.as_str())
+        .filter(|token| !token.trim().is_empty())
+        .map(str::to_string)
+}
+
+fn write_cloud_sync_custom_token(root: &mut CredsRoot, value: Option<String>) {
+    root.cloud_sync.customToken = value.and_then(|token| {
+        if token.trim().is_empty() {
+            None
+        } else {
+            Some(CloudSyncCustomToken(token))
         }
     });
 }
@@ -3685,6 +3733,34 @@ impl CredentialsVault {
             load_credentials_for_update,
             save_credentials,
         )
+    }
+
+    /// Static bearer token for a self-hosted `cloud_sync_e2ee` server. Unlike
+    /// the GitHub token, this has no OAuth revocation/verification semantics
+    /// (no "rejected" tombstone) — it is a plain opaque secret, same tier as
+    /// an ASR/LLM API key.
+    pub fn get_cloud_sync_custom_token() -> Result<Option<String>> {
+        let _guard = credentials_lock().lock();
+        Ok(lookup_cloud_sync_custom_token(
+            &load_credentials_for_update()?,
+        ))
+    }
+
+    pub fn set_cloud_sync_custom_token(value: &str) -> Result<()> {
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            write_cloud_sync_custom_token(
+                root,
+                (!value.trim().is_empty()).then(|| value.to_string()),
+            );
+            Ok(true)
+        })
+    }
+
+    pub fn remove_cloud_sync_custom_token() -> Result<()> {
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            write_cloud_sync_custom_token(root, None);
+            Ok(true)
+        })
     }
 
     #[cfg(test)]

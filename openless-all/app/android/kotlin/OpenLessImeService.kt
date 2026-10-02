@@ -55,7 +55,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var pendingImeStop = false
     private var cloudNoteDestination: Pair<String, String>? = null
 
-    private fun sendImeCommand(action: String): Boolean = try {
+    private fun sendImeCommand(action: String, cursorContext: AndroidCursorContext? = null): Boolean = try {
         val request = org.json.JSONObject().apply {
             put("action", action)
             put("requestId", imeRequestId)
@@ -63,6 +63,12 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             put("raw", rawModeArmed)
             put("quickNote", quickNoteArmed)
             put("cloud", cloudNoteArmed)
+            // Core builds the prompt envelope; only the session's "start" carries the snapshot.
+            if (action == "start" && cursorContext != null) {
+                cursorContext.packageName?.let { put("frontApp", it) }
+                put("cursorBefore", cursorContext.before)
+                put("cursorAfter", cursorContext.after)
+            }
         }
         val response = org.json.JSONObject(OpenLessNative.nativeImeCommand(request.toString()))
         check(response.optBoolean("ok")) { response.optString("error", "IME command failed") }
@@ -72,6 +78,21 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         false
     }
 
+    /** Snapshot of the text around the caret for this recording; must run when recording starts, never at stop. Logs metadata only. */
+    private fun captureCursorContext(): AndroidCursorContext? {
+        if (!OpenLessAndroidPreferences.cursorContextEnabled(this)) return null
+        val started = android.os.SystemClock.elapsedRealtime()
+        val editor = currentInputEditorInfo
+        val connection = currentInputConnection
+        val captured = if (editor == null || connection == null) null else ImePrivacyPolicy.captureCursorContext(
+            enabled = true, inputType = editor.inputType, imeOptions = editor.imeOptions, packageName = editor.packageName,
+            readBefore = { connection.getTextBeforeCursor(it, 0) }, readAfter = { connection.getTextAfterCursor(it, 0) })
+        android.util.Log.i("OpenLessImeService", "cursor-context android status=${if (captured == null) "none" else "ok"} " +
+            "source=input_connection before_chars=${captured?.before?.length ?: 0} after_chars=${captured?.after?.length ?: 0} " +
+            "package=${editor?.packageName} elapsed_ms=${android.os.SystemClock.elapsedRealtime() - started}")
+        return captured
+    }
+
     private fun cancelImeSession() {
         if (imeRequestId != 0L) { lastCancelledImeRequest = imeRequestId; sendImeCommand("cancel") }
         imeRequestId = 0L
@@ -79,6 +100,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         pendingImeStop = false
         cloudNoteDestination = null
         pendingCloudArm = false
+        cloudNoteSubmitting = false
     }
 
     private fun stopImeSession() {
@@ -180,17 +202,30 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 cloudNoteDestination = (prefs.getString("key_cloud_note_webhook_url", "") ?: "").trim() to
                     (prefs.getString("key_cloud_note_webhook_token", "") ?: "").trim()
             }
-            voiceButton?.cloudNoteActive = value
+            voiceButton?.cloudNoteActive = value || cloudNoteSubmitting
             status?.setTextColor(recordingAccentColor())
         }
+    // The webhook POST that follows a Cloud notes dictation (see
+    // submitCloudNoteText()). cloudNoteArmed is already back to false by
+    // then — the Core session it mirrors has completed — so this is what
+    // keeps the red accent up until the submit itself finishes. Display
+    // only: unlike `processing`, it never blocks a new mic tap.
+    private var cloudNoteSubmitting = false
 
-    /** Status text color while a recording prompt is showing — orange for an armed Raw stop, green for an armed Quick notes stop, red for an armed Cloud notes submit, normal otherwise. Single source of truth for rawModeArmed/quickNoteArmed/cloudNoteArmed's setters and updateStatus() alike, so the three gestures can never disagree on which one currently owns the color. */
-    private fun recordingAccentColor(): Int = when {
-        state == "speaking" && rawModeArmed -> LINK_COLOR_RECORDING_RAW
-        state == "speaking" && quickNoteArmed -> LINK_COLOR_QUICK_NOTE
-        state == "speaking" && cloudNoteArmed -> LINK_COLOR_CLOUD_NOTE
-        else -> statusNormalColor
+    /** Accent of whichever gesture mode is armed — orange for Raw, green for Quick notes, red for Cloud notes (including its submit step) — or null for an ordinary dictation. Single source of truth for the status line, the hint row and the link indicator, so they can never disagree on which mode currently owns the color. */
+    private fun armedAccentColor(): Int? = when {
+        rawModeArmed -> LINK_COLOR_RECORDING_RAW
+        quickNoteArmed -> LINK_COLOR_QUICK_NOTE
+        cloudNoteArmed || cloudNoteSubmitting -> LINK_COLOR_CLOUD_NOTE
+        else -> null
     }
+
+    /** True from the start of a recording through the "thinking" step that follows it — the span an armed mode keeps its accent for. */
+    private fun dictationInProgress(): Boolean = state == "speaking" || state == "thinking"
+
+    /** Status text color while a recording or thinking prompt is showing — the armed mode's accent, normal otherwise. */
+    private fun recordingAccentColor(): Int =
+        if (dictationInProgress()) armedAccentColor() ?: statusNormalColor else statusNormalColor
     internal var inputMode = InputMode.VOICE
     private var englishLayer = EnglishLayer.LETTERS
     // Persisted across sessions the same way inputMode is (see
@@ -3537,7 +3572,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             cloudNoteArmed = initialCloud
             imeRequestId = nextImeRequest.incrementAndGet()
             pendingImeStop = false
-            if (!sendImeCommand("start")) { recording = false; processing = false }
+            if (!sendImeCommand("start", captureCursorContext())) { recording = false; processing = false }
         }
     }
 
@@ -3547,6 +3582,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         rawModeArmed = false
         quickNoteArmed = false
         cloudNoteArmed = false
+        cloudNoteSubmitting = false
         invalidateSession("已取消")
         cancelImeSession()
     }
@@ -3609,14 +3645,13 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      * what the user described as the link being "disconnected".
      */
     private fun updateBackendLinkIndicator() {
+        val armedAccent = armedAccentColor()
         val color = when {
-            // Matches VoiceButton's own waveform color for each armed
-            // gesture exactly (rawWaveformColor's when block) — the
-            // breathing dot and the waveform should never disagree about
-            // which mode a recording is currently armed for.
-            recording && rawModeArmed -> LINK_COLOR_RECORDING_RAW
-            recording && quickNoteArmed -> LINK_COLOR_QUICK_NOTE
-            recording && cloudNoteArmed -> LINK_COLOR_CLOUD_NOTE
+            // Matches VoiceButton's own waveform/dots color for each armed
+            // gesture exactly (armedModeColor()) — the breathing dot and
+            // the mic animation should never disagree about which mode a
+            // dictation is currently armed for, recording or thinking.
+            (recording || processing || cloudNoteSubmitting) && armedAccent != null -> armedAccent
             recording -> LINK_COLOR_RECORDING
             processing -> LINK_COLOR_PROCESSING
             !backendLinkHealthy -> LINK_COLOR_ISSUE
@@ -3785,7 +3820,15 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         voiceRawHint?.setTextColor(rawModeHintColor())
         voiceRawHint?.visibility = if (rawModeHintVisible()) View.VISIBLE else View.GONE
         voiceButton?.isRecording = recording
-        voiceButton?.isProcessing = processing
+        // The Cloud notes submit shows the same thinking dots as the step
+        // before it, even though `processing` itself is already false.
+        voiceButton?.isProcessing = processing || cloudNoteSubmitting
+        // Re-pushed here, not only from each field's own setter: a panel
+        // rebuild mid-dictation (see toggleDictation()'s edit-panel exit)
+        // hands us a fresh VoiceButton that never saw those setters fire.
+        voiceButton?.rawModeActive = rawModeArmed
+        voiceButton?.quickNoteActive = quickNoteArmed
+        voiceButton?.cloudNoteActive = cloudNoteArmed || cloudNoteSubmitting
         updateDictationResultControls()
         updateBackendLinkIndicator()
     }
@@ -3794,30 +3837,26 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      * Swipe-up-for-Raw / swipe-left-for-Quick-notes / swipe-right-for-
      * Cloud-notes discoverability hint while idle; once a recording is
      * actually armed into one of those three modes (live through both
-     * recording and the following "thinking"/整理 step for Raw and Cloud
-     * notes — quick note never reaches "thinking", see
-     * quickNoteDictation()), the row repurposes itself to confirm whichever
-     * one is armed instead. Recording-or-thinking with none armed (an
-     * ordinary dictation) never reaches this text at all — see
-     * rawModeHintVisible(), which hides the row entirely for that case.
+     * recording and the following "thinking" step — 整理 for Raw and Cloud
+     * notes, plus Cloud notes' own submit; saving for Quick notes), the
+     * row repurposes itself to confirm whichever one is armed instead.
+     * Recording-or-thinking with none armed (an ordinary dictation) never
+     * reaches this text at all — see rawModeHintVisible(), which hides the
+     * row entirely for that case.
      */
     private fun rawModeHintText(): String {
         return when {
-            (state == "speaking" || state == "thinking") && rawModeArmed -> ui("原样转写", "Raw Mode")
-            (state == "speaking" || state == "thinking") && cloudNoteArmed -> ui("云笔记", "Cloud notes")
-            state == "speaking" && quickNoteArmed -> ui("速记模式", "Quick notes")
+            dictationInProgress() && rawModeArmed -> ui("原样转写", "Raw Mode")
+            dictationInProgress() && quickNoteArmed -> ui("速记模式", "Quick notes")
+            dictationInProgress() && (cloudNoteArmed || cloudNoteSubmitting) -> ui("云笔记", "Cloud notes")
             else -> ui("上划RAW · 左划速记 · 右划云笔记", "Up: Raw · Left: Quick notes · Right: Cloud notes")
         }
     }
 
-    /** Same orange/green/red as the status line's own Raw/Quick-notes/Cloud-notes coloring and every other indicator for each mode (VoiceButton's armed pill/waveform) — muted gray otherwise. */
+    /** Same orange/green/red as the status line's own Raw/Quick-notes/Cloud-notes coloring and every other indicator for each mode (VoiceButton's armed pill/waveform/dots) — muted gray otherwise. */
     private fun rawModeHintColor(): Int {
-        return when {
-            (state == "speaking" || state == "thinking") && rawModeArmed -> LINK_COLOR_RECORDING_RAW
-            (state == "speaking" || state == "thinking") && cloudNoteArmed -> LINK_COLOR_CLOUD_NOTE
-            state == "speaking" && quickNoteArmed -> LINK_COLOR_QUICK_NOTE
-            else -> Color.argb((0.8f * 255).toInt(), 0xB0, 0xB0, 0xB0)
-        }
+        val armedAccent = if (dictationInProgress()) armedAccentColor() else null
+        return armedAccent ?: Color.argb((0.8f * 255).toInt(), 0xB0, 0xB0, 0xB0)
     }
 
     /**
@@ -3829,7 +3868,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      * is actually armed (confirms it).
      */
     private fun rawModeHintVisible(): Boolean {
-        return !((state == "speaking" || state == "thinking") && !rawModeArmed && !quickNoteArmed && !cloudNoteArmed)
+        return !(dictationInProgress() && armedAccentColor() == null)
     }
 
     /** The request owns its destination; delayed network callbacks cannot affect a later recording. */
@@ -3847,6 +3886,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             setState("error", "请先在设置中填写云笔记的地址/Token")
             return
         }
+        cloudNoteSubmitting = true
         setState("thinking", "正在提交云笔记")
         Thread {
             val mainHandler = android.os.Handler(Looper.getMainLooper())
@@ -4087,6 +4127,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     private fun setState(nextState: String, message: String, revertDelayMs: Long = DONE_TO_IDLE_DELAY_MS) {
         state = nextState
+        // The submit only ever shows as "thinking"; any other state means
+        // it finished, failed, or a new dictation took over.
+        if (nextState != "thinking") cloudNoteSubmitting = false
         updateStatus(message)
         // A completed commit/edit (see the various setState("done", "已
         // 上屏") call sites) used to just sit there until the next recording
@@ -5443,6 +5486,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 Color.rgb(100, 100, 100), Color.rgb(70, 70, 70),
             )
         }
+        // Per-dot alpha for the thinking ring when an armed mode tints it
+        // (see armedModeColor()) — the same strong/soft rhythm around the
+        // ring as processingDotColors' own grays, in one hue.
+        private val processingDotAlphas = intArrayOf(255, 205, 160, 240, 185, 220)
         var isRecording: Boolean = false
             set(value) {
                 field = value
@@ -5572,6 +5619,14 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             )
         }
 
+        /** Accent of the armed gesture mode, shared by the recording waveform and the thinking dots so the two never disagree — null for an ordinary dictation. */
+        private fun armedModeColor(): Int? = when {
+            rawModeActive -> LINK_COLOR_RECORDING_RAW
+            quickNoteActive -> LINK_COLOR_QUICK_NOTE
+            cloudNoteActive -> LINK_COLOR_CLOUD_NOTE
+            else -> null
+        }
+
         private var phase = 0f
         private val animator = object : Runnable {
             override fun run() {
@@ -5672,12 +5727,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 val envelopeCenter = (barCount - 1) / 2f
                 val gap = width * 0.86f / (barCount - 1)
                 val startX = centerX - gap * (barCount - 1) / 2f
-                val rawWaveformColor = when {
-                    rawModeActive -> LINK_COLOR_RECORDING_RAW
-                    quickNoteActive -> LINK_COLOR_QUICK_NOTE
-                    cloudNoteActive -> LINK_COLOR_CLOUD_NOTE
-                    else -> waveformColor
-                }
+                val rawWaveformColor = armedModeColor() ?: waveformColor
                 val currentWaveformColor = lerpColor(rawWaveformColor, cancelArmedWaveformColor, waveformCancelAmount)
                 for (index in 0 until barCount) {
                     val x = startX + index * gap
@@ -5693,11 +5743,14 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                     canvas.drawLine(x, centerY - halfHeight, x, centerY + halfHeight, paint)
                 }
             } else if (isProcessing) {
-                // Analysis state uses the same restrained monochrome palette;
+                // Analysis state uses the same restrained monochrome palette
+                // for an ordinary dictation, and the armed mode's own accent
+                // (the color its recording waveform just had) otherwise;
                 // the ring of dots keeps rotating exactly as before, and on
                 // top of that the whole ring's radius now breathes — growing
                 // then shrinking together as one — rather than each dot
                 // sizing itself independently off its own angle.
+                val accent = armedModeColor()
                 val colors = processingDotColors
                 val baseOrbit = minOf(width * 0.28f, height * 0.52f)
                 val baseDotRadius = minOf(width * 0.055f, height * 0.15f)
@@ -5708,7 +5761,11 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                     val angle = phase * 0.65f + index * (Math.PI.toFloat() / 3f)
                     val x = centerX + kotlin.math.cos(angle.toDouble()).toFloat() * orbit
                     val y = centerY + kotlin.math.sin(angle.toDouble()).toFloat() * orbit
-                    paint.color = color
+                    paint.color = if (accent == null) {
+                        color
+                    } else {
+                        Color.argb(processingDotAlphas[index], Color.red(accent), Color.green(accent), Color.blue(accent))
+                    }
                     canvas.drawCircle(x, y, dotRadius, paint)
                 }
             }

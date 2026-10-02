@@ -208,6 +208,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "device_bound",
     },
     PreferenceField {
+        rust_name: "sync_custom_server_origin",
+        key: "syncCustomServerOrigin",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::OptionalText,
+        reason: "local_consent_or_secret",
+    },
+    PreferenceField {
         rust_name: "restore_clipboard_after_paste",
         key: "restoreClipboardAfterPaste",
         class: PreferenceClass::DeviceProfile,

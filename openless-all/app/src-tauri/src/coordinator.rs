@@ -469,10 +469,15 @@ fn shared_backend_from_stores(
         hotkey_status,
         qa_context,
     );
+    let service_origin = prefs
+        .get()
+        .sync_custom_server_origin
+        .filter(|origin| !origin.trim().is_empty())
+        .unwrap_or_else(|| openless_core::cloud_sync_e2ee::DEFAULT_SYNC_SERVICE_ORIGIN.into());
     dependencies.marketplace_config = Some(
         openless_core::MarketplaceConfig::production().with_encrypted_sync(
             openless_core::cloud_sync_e2ee::EncryptedSyncConfig {
-                service_origin: openless_core::cloud_sync_e2ee::DEFAULT_SYNC_SERVICE_ORIGIN.into(),
+                service_origin,
                 app_version: env!("CARGO_PKG_VERSION").into(),
             },
         ),

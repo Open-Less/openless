@@ -153,6 +153,9 @@ pub const OMNI_ENDPOINT_ACCOUNT: &str = "omni.endpoint";
 pub const OMNI_MODEL_ACCOUNT: &str = "omni.model";
 pub const OMNI_EXTRA_HEADERS_ACCOUNT: &str = "omni.extra_headers";
 pub const OMNI_TEMPERATURE_ACCOUNT: &str = "omni.temperature";
+/// Static bearer token for a self-hosted `cloud_sync_e2ee` server, stored
+/// under `CredentialNamespace::Application` (an alternative to GitHub OAuth).
+pub const CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT: &str = "cloud_sync.custom_token";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]

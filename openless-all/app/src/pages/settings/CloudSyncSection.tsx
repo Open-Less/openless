@@ -6,7 +6,7 @@ import { Modal } from '../../components/ui/Modal';
 import { Btn, Card } from '../_atoms';
 import { Toggle } from './shared';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
-import { marketplaceAuthStatus } from '../../lib/ipc';
+import { marketplaceAuthStatus, readCredential, setCredential } from '../../lib/ipc';
 import { isTauri } from '../../lib/ipc/shared';
 import {
   CLOUD_SYNC_E2EE_CONSENT_VERSION as CONSENT_VERSION,
@@ -23,6 +23,7 @@ import {
   cloudSyncE2eeChangePassword,
   cloudSyncE2eeDeleteRemote,
   cloudSyncE2eeSignOut,
+  cloudSyncE2eeSignInWithToken,
   mirrorEncryptedSyncUiPreferences,
   encryptedSyncScope,
   encryptedSyncErrorKey,
@@ -37,6 +38,9 @@ import {
   type EncryptedSyncRestoreEvent,
   type SyncConflictChoice,
 } from '../../lib/ipc/cloud-sync-e2ee';
+
+// Must match CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT in src-tauri/src/commands/credentials.rs.
+const CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT = 'cloud_sync.custom_token';
 
 type Intent = 'enable' | 'unlock' | 'restore';
 type Dialog =
@@ -144,6 +148,27 @@ export function CloudSyncSection() {
   const actionSequence = useRef(0);
   const activeAction = useRef<number | null>(null);
   const loginHint = prefs?.marketplaceDevLogin?.trim() ?? '';
+  const [customServerOrigin, setCustomServerOrigin] = useState('');
+  const [customServerToken, setCustomServerToken] = useState('');
+  useEffect(() => {
+    setCustomServerOrigin(prefs?.syncCustomServerOrigin ?? '');
+  }, [prefs?.syncCustomServerOrigin]);
+  useEffect(() => {
+    // The token lives in the OS secure-credential store (same tier as the
+    // GitHub token), not in plain preferences — load it separately.
+    readCredential(CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT)
+      .then((value) => setCustomServerToken(value ?? ''))
+      .catch(() => setCustomServerToken(''));
+  }, []);
+  const customServerInputStyle = {
+    width: '100%',
+    boxSizing: 'border-box' as const,
+    border: '1px solid var(--ol-line-strong)',
+    borderRadius: 9,
+    background: 'var(--ol-control-solid)',
+    color: 'var(--ol-ink)',
+    padding: '10px 12px',
+  };
 
   const showError = (error: unknown) => {
     if (alive.current) setNotice({ key: `errors.${encryptedSyncErrorKey(error)}`, error: true });
@@ -560,13 +585,74 @@ export function CloudSyncSection() {
             {t('cloudSyncE2ee.signIn')}
           </Btn>
         )}
+        {!loading && !signedIn && (
+          <div
+            className="ol-cloud-sync-account"
+            style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}
+          >
+            <strong>{t('cloudSyncE2ee.customServerTitle')}</strong>
+            <label>
+              {t('cloudSyncE2ee.customServerOrigin')}
+              <input
+                type="text"
+                value={customServerOrigin}
+                onChange={(event) => setCustomServerOrigin(event.currentTarget.value)}
+                placeholder="https://sync.example.com/"
+                disabled={working}
+                style={customServerInputStyle}
+              />
+            </label>
+            <label>
+              {t('cloudSyncE2ee.customServerToken')}
+              <input
+                type="password"
+                value={customServerToken}
+                onChange={(event) => setCustomServerToken(event.currentTarget.value)}
+                autoComplete="off"
+                disabled={working}
+                style={customServerInputStyle}
+              />
+            </label>
+            <Btn
+              size="sm"
+              variant="blue"
+              disabled={working}
+              onClick={() => {
+                const token = customServerToken.trim();
+                setBusy(true);
+                void (async () => {
+                  await Promise.all([
+                    updatePrefs((value) => ({
+                      ...value,
+                      syncCustomServerOrigin: customServerOrigin.trim() || null,
+                    })),
+                    setCredential(CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT, token),
+                    refresh(),
+                  ]);
+                  if (token) {
+                    acceptStatus(await cloudSyncE2eeSignInWithToken());
+                  } else {
+                    await load();
+                  }
+                })()
+                  .catch(showError)
+                  .finally(() => setBusy(false));
+              }}
+            >
+              {t('cloudSyncE2ee.customServerSave')}
+            </Btn>
+            <p className="ol-cloud-sync-scope">{t('cloudSyncE2ee.customServerHint')}</p>
+          </div>
+        )}
         {signedIn && (
           <div className="ol-cloud-sync-account">
             <Icon name="user" size={16} />
             <span>{t('cloudSyncE2ee.account')}</span>
             <strong dir="auto">
               {status?.account?.login
-                ? `@${status.account.login}`
+                ? customServerOrigin.trim()
+                  ? `${status.account.login}@${customServerOrigin.trim().replace(/^[a-z]+:\/\//i, '').replace(/\/$/, '')}`
+                  : `@${status.account.login}`
                 : loginHint
                   ? `@${loginHint}`
                   : 'GitHub'}

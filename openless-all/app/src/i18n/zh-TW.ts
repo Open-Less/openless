@@ -3,6 +3,11 @@ import type { zhCN } from './zh-CN';
 // Traditional Chinese resources, sharing the same copy keys as the other seven locales.
 export const zhTW: typeof zhCN = {
   cloudSyncE2ee: {
+    customServerTitle: '自建同步伺服器（進階）',
+    customServerOrigin: '伺服器位址（https://...）',
+    customServerToken: '登入 Token',
+    customServerSave: '儲存',
+    customServerHint: '留空則使用官方同步伺服器。位址必須以 https:// 開頭的根位址。',
     protocolTitle: '雲端同步協議與隱私提醒',
     protocolIntro:
       'OpenLess 及個人開發者尊重您的隱私，並致力於保護您的資料。請閱讀以下說明，再決定是否繼續。',
@@ -24,7 +29,7 @@ export const zhTW: typeof zhCN = {
     setupPromptLater: '暫不開啟',
     setupPromptOpen: '了解加密同步',
     title: '加密雲端同步',
-    description: '在本機加密後，透過 GitHub 帳號跨裝置同步。',
+    description: '在本機加密後，透過 GitHub 帳號或 Token 跨裝置同步。',
     enable: '啟用加密同步',
     setPassword: '設定同步密碼',
     stepEnableTitle: '第 1 步，共 3 步：開啟同步',
@@ -1221,7 +1226,7 @@ export const zhTW: typeof zhCN = {
       desc: '本機保留的歷史會話與對話上下文。',
       cursorContextLabel: '遊標上下文（實驗）',
       cursorContextDesc:
-        '潤色時將游標附近文字傳給模型（僅 macOS）。此開關與本機手改學詞獨立；排除密碼欄位和已知敏感應用程式。',
+        '潤色時把游標附近的一小段文字傳給模型作參考，用於專有詞、同音詞和指代的判斷（macOS / Android）。聽寫、速記和雲筆記都會參考，但上下文本身不會寫入筆記、歷史或日誌；使用雲端模型時會隨本次潤色請求傳送給該模型服務。此開關與本機手改學詞獨立；排除密碼欄位、終端機及已知敏感應用程式。',
     },
     codingConsole: {
       title: 'Claude 主控臺',

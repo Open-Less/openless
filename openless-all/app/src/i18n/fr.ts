@@ -2,6 +2,12 @@ import type { zhCN } from './zh-CN';
 
 export const fr: typeof zhCN = {
   cloudSyncE2ee: {
+    customServerTitle: 'Serveur de synchronisation auto-hébergé (avancé)',
+    customServerOrigin: 'Adresse du serveur (https://...)',
+    customServerToken: 'Jeton de connexion',
+    customServerSave: 'Enregistrer',
+    customServerHint:
+      "Laissez vide pour utiliser le serveur de synchronisation officiel. L'adresse doit commencer par https:// et être une URL racine.",
     protocolTitle: 'Accord de synchronisation et confidentialité',
     protocolIntro:
       'OpenLess et ses développeurs indépendants respectent votre vie privée et protègent vos données. Lisez cette notice avant de continuer.',
@@ -1313,7 +1319,7 @@ export const fr: typeof zhCN = {
       desc: 'Historique des conversations et contexte conservés sur cet appareil.',
       cursorContextLabel: 'Contexte du curseur (expérimental)',
       cursorContextDesc:
-        'Envoyer le texte autour du curseur au modèle pour la reformulation (macOS uniquement). Ce réglage est indépendant de l’apprentissage local. Les champs de mot de passe et les applications sensibles connues sont exclus.',
+        'Envoyer un court extrait du texte autour du curseur au modèle comme référence pour les noms propres, les homophones et les pronoms lors de la reformulation (macOS / Android). La dictée, les notes rapides et les notes cloud l’utilisent, mais le contexte lui-même n’est jamais écrit dans les notes, l’historique ou les journaux ; avec un modèle cloud, il est envoyé à ce fournisseur avec la demande de reformulation. Ce réglage est indépendant de l’apprentissage local. Les champs de mot de passe, les terminaux et les applications sensibles connues sont exclus.',
     },
     codingConsole: {
       title: 'Console Claude',

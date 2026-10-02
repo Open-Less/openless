@@ -509,7 +509,8 @@ export interface UserPreferences {
   streamingInsertSaveClipboard: boolean;
   /** Whether to send the text near the cursor in the document the user is writing to LLM polish as context.
    *  Default false — when on, every dictation reads the foreground app's body text and sends part of it to the LLM provider.
-   *  macOS only; password fields / Secure Input / password managers / terminals are always hard-blocked. */
+   *  macOS and Android (IME) only; password fields / Secure Input (macOS) / password and
+   *  no-personalized-learning editors (Android) / password managers / terminals are always hard-blocked. */
   cursorContextEnabled: boolean;
   vocabularyLearningEnabled: boolean;
   vocabularyLearningSettings: {
@@ -567,6 +568,8 @@ export interface UserPreferences {
   /** Major-version generation marker of the splash PV (e.g. '2'). Empty = never played; advanced exclusively by
    *  the Rust-side take_splash_playback, preserved verbatim by the settings save path; the frontend is read-only. */
   splashSeenVersion?: string;
+  /** Self-hosted encrypted-sync server origin, overriding the built-in default. Empty/undefined = use the default. */
+  syncCustomServerOrigin?: string | null;
 }
 
 export interface MarketplaceListItem {

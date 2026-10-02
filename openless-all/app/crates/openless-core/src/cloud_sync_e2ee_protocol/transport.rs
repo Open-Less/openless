@@ -359,6 +359,22 @@ impl Transport {
         })
     }
 
+    /// Static-token equivalent of `exchange`, for a self-hosted server that
+    /// bypasses GitHub OAuth. There is no pre-known expected account to check
+    /// against: the server's response is itself the identity assertion.
+    pub(crate) async fn exchange_with_token(&self, static_token: &str) -> Result<SyncSession> {
+        let response = send(
+            self.request(Method::POST, "/v1/auth/token")
+                .header(AUTHORIZATION, bearer_header(static_token)?),
+        )
+        .await?;
+        let session: AuthSession = success_json(response, CONTROL_BODY_LIMIT).await?;
+        Ok(SyncSession {
+            origin: self.origin.clone(),
+            session,
+        })
+    }
+
     /// Consume the local credential even when remote logout fails. A validated
     /// 401 means the credential is already unusable and is treated as logged out.
     pub(crate) async fn revoke_session(&self, session: SyncSession) -> Result<()> {
@@ -811,7 +827,10 @@ fn bearer_header(token: &str) -> Result<HeaderValue> {
 }
 
 async fn send(request: RequestBuilder) -> Result<Response> {
-    let response = request.send().await.map_err(|_| Error::Transport)?;
+    let response = request.send().await.map_err(|e| {
+        log::warn!("[e2ee-token] raw reqwest send error: {e:?} (url={:?})", e.url());
+        Error::Transport
+    })?;
     if response.status().is_redirection() && response.status() != StatusCode::NOT_MODIFIED {
         return Err(Error::InvalidResponse("redirect refused"));
     }

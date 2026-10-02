@@ -11562,6 +11562,114 @@ mod tests {
         }
     }
 
+    /// Android IME contract: the caret snapshot taken at start informs polish for
+    /// ordinary dictation, quick notes and cloud notes alike, yet the result carries
+    /// only the polished text and nothing on disk ever holds the snapshot.
+    #[tokio::test]
+    async fn cursor_context_informs_polish_for_every_target_but_is_never_persisted() {
+        struct ContextRecordingPolisher(Arc<Mutex<Vec<Option<String>>>>);
+        impl crate::ports::TextPolisher for ContextRecordingPolisher {
+            fn polish(
+                &self,
+                _session_id: SessionId,
+                context: Arc<DictationContext>,
+                _raw_text: String,
+                _partials: Arc<dyn crate::ports::TextStreamSink>,
+            ) -> BoxFuture<'static, Result<crate::ports::PolishOutput, BackendError>> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(context.polish.cursor_context.clone());
+                Box::pin(async { Ok(crate::ports::PolishOutput::text("polished words")) })
+            }
+
+            fn cancel(&self, _session_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
+                Box::pin(async { Ok(()) })
+            }
+        }
+        fn files_containing(dir: &std::path::Path, needle: &str, found: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    files_containing(&path, needle, found);
+                } else if std::fs::read(&path)
+                    .map(|bytes| bytes.windows(needle.len()).any(|w| w == needle.as_bytes()))
+                    .unwrap_or(false)
+                {
+                    found.push(path);
+                }
+            }
+        }
+
+        const HOST_TEXT: &str = "host-document-text-7c1e";
+        for target in ["dictation", "quick_note", "cloud_note"] {
+            let data_dir = std::env::temp_dir()
+                .join(format!("openless-cursor-context-{}", uuid::Uuid::new_v4()));
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let engine = crate::PipelineDictationEngine::new(
+                Arc::new(crate::ExternalAudioRecorder::with_recordings_directory(
+                    data_dir.join("recordings"),
+                )),
+                Arc::new(crate::testing::FixtureTranscriptionEngine::successful(
+                    "spoken words",
+                    1000,
+                )),
+                Arc::new(ContextRecordingPolisher(seen.clone())),
+            );
+            let backend = backend_with_dictation_engine(data_dir.clone(), Arc::new(engine));
+            backend.start().await.unwrap();
+            let mut prefs = backend.get_preferences();
+            prefs.cursor_context_enabled = true;
+            prefs.record_audio_for_debug = true;
+            backend.set_preferences(prefs).unwrap();
+            let id = backend
+                .start_external_dictation_with_options(DictationStartOptions {
+                    insert_text: false,
+                    front_app: Some("com.example.notes".into()),
+                    cursor_context: Some(crate::prompts::cursor_context_input(HOST_TEXT, "")),
+                    ..DictationStartOptions::default()
+                })
+                .await
+                .unwrap();
+            backend.feed_external_pcm(id, &vec![1; 32000]).unwrap();
+            if target == "cloud_note" {
+                backend.set_dictation_cloud_note(id, true).unwrap();
+            }
+            let result = backend
+                .stop_dictation_session_with_options(
+                    Some(id),
+                    DictationStopOptions {
+                        quick_note: (target != "cloud_note").then_some(target == "quick_note"),
+                        ..DictationStopOptions::default()
+                    },
+                    None,
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.polished_text, "polished words", "{target}");
+            let seen = seen.lock().unwrap().clone();
+            assert_eq!(seen.len(), 1, "{target}");
+            assert!(
+                seen[0].as_deref().is_some_and(|context| context.contains(HOST_TEXT)),
+                "{target}: polish must still see the cursor context"
+            );
+            assert_eq!(
+                backend.list_history().unwrap().is_empty(),
+                target == "cloud_note",
+                "{target}"
+            );
+            backend.shutdown().await.unwrap();
+            let mut leaked = Vec::new();
+            files_containing(&data_dir, HOST_TEXT, &mut leaked);
+            assert!(leaked.is_empty(), "{target}: cursor context persisted in {leaked:?}");
+            // The scan is meaningful: what does get stored is readable the same way.
+            let mut stored = Vec::new();
+            files_containing(&data_dir, "polished words", &mut stored);
+            assert_eq!(stored.is_empty(), target == "cloud_note", "{target}");
+            std::fs::remove_dir_all(data_dir).unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn external_audio_saves_failed_recordings_for_history_retry_and_prunes_successful_audio()
     {

@@ -84,7 +84,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
         if (node == null) { stopVocabularyObservation(); return }
         val packageName = node.packageName?.toString()?.lowercase().orEmpty()
         if (!node.isEditable || node.isPassword || packageName.isEmpty() || packageName == this.packageName ||
-            listOf("keepass", "bitwarden", "1password", "lastpass", "dashlane", "termux", "password").any { packageName.contains(it) }) {
+            ImePrivacyPolicy.isSensitivePackage(packageName)) {
             node.recycle()
             stopVocabularyObservation()
             return

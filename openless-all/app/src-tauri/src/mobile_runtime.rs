@@ -41,6 +41,10 @@ pub fn run() {
             let core_backend = coordinator.backend();
             app.manage(Arc::clone(&core_backend));
             coordinator.tauri_host().bind(app.handle().clone());
+            // Mirrors run_desktop(): without this, cloud-sync restore's runtime_effects()
+            // stays unbound forever and every restore fails with `sync_documents_unsupported`
+            // before it ever inspects a document (NativeLease::preflight()).
+            coordinator.bind_restore_runtime_effects()?;
             let startup = tauri::async_runtime::block_on(core_backend.start())?;
             if !startup.backend.running {
                 return Err("OpenLess Core did not reach the running state".into());

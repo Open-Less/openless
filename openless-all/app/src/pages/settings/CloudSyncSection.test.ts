@@ -202,6 +202,10 @@ const dependencies: Record<string, any> = {
     calls.push(['enable', enabled]);
     return update({ enabled });
   },
+  readCredential: async (_account: string) => null,
+  setCredential: async (account: string, value: string) => {
+    calls.push(['setCredential', account, value]);
+  },
 };
 const jsx = (type: unknown, props: Record<string, unknown>) => ({ type, props });
 const components = factory(

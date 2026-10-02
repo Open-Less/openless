@@ -80,6 +80,7 @@ pub(crate) fn build(
         credentials.clone(),
     );
     log::error!("[e2ee-adapter] stage=store_new");
+    let credential_store_for_service = credentials.clone();
     let store = Arc::new(
         CoreSyncStore::new(
             repositories,
@@ -104,6 +105,7 @@ pub(crate) fn build(
         marketplace,
         local,
         store.clone(),
+        credential_store_for_service,
         events,
     );
     Ok((service, store))
@@ -317,6 +319,9 @@ impl SyncServiceData for CoreSyncStore {
     }
     fn device(&self) -> SourceDevice {
         CoreSyncStore::device(self)
+    }
+    fn custom_server_origin(&self) -> Option<String> {
+        CoreSyncStore::custom_server_origin(self)
     }
     fn changes(&self) -> tokio::sync::watch::Receiver<SyncChange> {
         CoreSyncStore::changes(self)
