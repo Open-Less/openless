@@ -1457,15 +1457,29 @@ mod linux_app {
         fn poll_popup_supervisors(&mut self) {
             let mut events = Vec::new();
             for kind in [PopupKind::Qa, PopupKind::Capsule] {
+                let generation = self.qa_popup_presentation.generation;
                 if let Some(supervisor) = self.popup_slot(kind) {
                     while let Ok(event) = supervisor.try_recv() {
-                        events.push((kind, event));
+                        events.push((kind, generation, event));
                     }
                 }
             }
-            for (kind, event) in events {
-                self.apply_popup_event(kind, event);
+            for (kind, generation, event) in events {
+                self.apply_popup_event_in_generation(kind, generation, event);
             }
+        }
+
+        fn apply_popup_event_in_generation(
+            &mut self,
+            kind: PopupKind,
+            generation: u64,
+            event: PopupSupervisorEvent,
+        ) {
+            // A handler may replace the process while draining a queued batch.
+            if kind == PopupKind::Qa && generation != self.qa_popup_presentation.generation {
+                return;
+            }
+            self.apply_popup_event(kind, event);
         }
 
         fn apply_popup_event(&mut self, kind: PopupKind, event: PopupSupervisorEvent) {
@@ -8010,6 +8024,28 @@ Internal flags (set by OpenLess itself, not for regular use):
             assert!(app.qa_popup.is_some());
             assert_eq!(app.qa_popup_presentation.session_id, Some(preview));
             assert_eq!(app.qa_popup_presentation.generation, generation);
+        }
+
+        #[test]
+        fn an_old_process_exit_cannot_clear_a_reopened_qa_window() {
+            let mut app = fixture_app(true);
+            let old_generation = app.qa_popup_presentation.generation;
+            app.close_qa_popup();
+            app.qa_visible = true;
+            app.qa_popup = Some(PopupSupervisor::spawn_command(
+                app.tokio.handle(),
+                tokio::process::Command::new("/bin/cat"),
+            ));
+            app.apply_popup_event_in_generation(
+                PopupKind::Qa,
+                old_generation,
+                PopupSupervisorEvent::Exited {
+                    code: Some(0),
+                    crashed: false,
+                },
+            );
+            assert!(app.qa_popup.is_some());
+            assert!(app.qa_visible);
         }
 
         #[test]
