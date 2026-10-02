@@ -603,3 +603,185 @@ fn collection_order_is_preserved_independently_of_stable_id_sorting() {
         1
     );
 }
+
+fn history_row(id: &str, created_at: &str, text: &str) -> SecretJson {
+    SecretJson::new(
+        json!({"id":id,"createdAt":created_at,"source":"quick_note","rawTranscript":text,"finalText":text,"mode":"raw","insertStatus":"notRequested","hasAudioRecording":false}),
+    )
+}
+
+/// Newest first, the way the history store keeps its list.
+fn history_set(rows: &[(&str, &str, &str)]) -> ValidatedSyncDocuments {
+    let mut data = snapshot();
+    data.history = rows
+        .iter()
+        .map(|(id, created_at, text)| history_row(id, created_at, text))
+        .collect();
+    export_snapshot(data).unwrap().documents
+}
+
+fn dictionary_set(rows: Vec<Value>) -> ValidatedSyncDocuments {
+    let mut data = snapshot();
+    data.dictionary = rows.into_iter().map(SecretJson::new).collect();
+    export_snapshot(data).unwrap().documents
+}
+
+fn ids_in_order(set: &ValidatedSyncDocuments, kind: DocumentKind) -> Vec<String> {
+    let mut rows: Vec<_> = set
+        .documents()
+        .documents
+        .iter()
+        .filter(|doc| doc.kind == kind)
+        .collect();
+    rows.sort_by_key(|doc| doc.value["sortIndex"].as_u64().unwrap());
+    rows.into_iter().map(|doc| doc.id.clone()).collect()
+}
+
+#[test]
+fn dictating_on_two_devices_between_syncs_is_not_a_conflict() {
+    let shared = [
+        ("old-2", "2026-09-26T09:00:00Z", "second"),
+        ("old-1", "2026-09-26T08:00:00Z", "first"),
+    ];
+    let base = history_set(&shared);
+    // Each new row lands at the front of its own device's list, pushing every shared row
+    // down by a different amount on the two devices.
+    let local = history_set(&[
+        ("a-2", "2026-09-27T12:00:00Z", "a later"),
+        ("a-1", "2026-09-27T10:00:00Z", "a earlier"),
+        shared[0],
+        shared[1],
+    ]);
+    let remote = history_set(&[("b-1", "2026-09-27T11:00:00Z", "b"), shared[0], shared[1]]);
+
+    let preview = diff_sync_documents(Some(&base), &local, &remote).unwrap();
+    assert!(preview.conflicts().is_empty());
+    let merged = preview.resolve(&[]).unwrap();
+    // Both devices' rows are kept, interleaved by when they were dictated.
+    assert_eq!(
+        ids_in_order(&merged, DocumentKind::History),
+        ["a-2", "b-1", "a-1", "old-2", "old-1"]
+    );
+
+    // The other device reaches the same result from its side.
+    let mirrored = diff_sync_documents(Some(&base), &remote, &local)
+        .unwrap()
+        .resolve(&[])
+        .unwrap();
+    assert_eq!(
+        ids_in_order(&mirrored, DocumentKind::History),
+        ids_in_order(&merged, DocumentKind::History)
+    );
+}
+
+#[test]
+fn records_that_differ_only_in_list_position_merge_without_a_baseline() {
+    let local = history_set(&[
+        ("only-local", "2026-09-27T10:00:00Z", "local"),
+        ("shared", "2026-09-26T08:00:00Z", "same text"),
+    ]);
+    let remote = history_set(&[("shared", "2026-09-26T08:00:00Z", "same text")]);
+    let preview = diff_sync_documents(None, &local, &remote).unwrap();
+    assert!(preview.conflicts().is_empty());
+}
+
+#[test]
+fn editing_the_same_record_on_both_devices_is_still_a_conflict() {
+    let base = history_set(&[("shared", "2026-09-26T08:00:00Z", "original")]);
+    let local = history_set(&[("shared", "2026-09-26T08:00:00Z", "edited here")]);
+    let remote = history_set(&[
+        ("new-remote", "2026-09-27T10:00:00Z", "unrelated"),
+        ("shared", "2026-09-26T08:00:00Z", "edited there"),
+    ]);
+    let preview = diff_sync_documents(Some(&base), &local, &remote).unwrap();
+    assert_eq!(preview.conflicts().len(), 1);
+    assert_eq!(preview.conflicts()[0].kind, DocumentKind::History);
+    assert_eq!(preview.conflicts()[0].reason, ConflictReason::BothModified);
+}
+
+#[test]
+fn dictionary_hits_keep_the_highest_count_instead_of_conflicting() {
+    let word = |hits: u64, phrase: &str| json!({"id":"w1","phrase":phrase,"note":null,"enabled":true,"hits":hits,"createdAt":"2026-09-26T00:00:00Z"});
+    let word_of = |set: &ValidatedSyncDocuments| {
+        set.documents()
+            .documents
+            .iter()
+            .find(|doc| doc.kind == DocumentKind::Dictionary)
+            .unwrap()
+            .value
+            .clone()
+    };
+    let base = dictionary_set(vec![word(1, "OpenLess")]);
+
+    // Used on both devices, edited on neither.
+    let preview = diff_sync_documents(
+        Some(&base),
+        &dictionary_set(vec![word(4, "OpenLess")]),
+        &dictionary_set(vec![word(6, "OpenLess")]),
+    )
+    .unwrap();
+    assert!(preview.conflicts().is_empty());
+    assert_eq!(word_of(&preview.resolve(&[]).unwrap())["hits"], 6);
+
+    // Renamed on the other device while this one kept using it: the rename wins, and
+    // this device's higher count is not thrown away with its old spelling.
+    let preview = diff_sync_documents(
+        Some(&base),
+        &dictionary_set(vec![word(9, "OpenLess")]),
+        &dictionary_set(vec![word(2, "OpenLess IME")]),
+    )
+    .unwrap();
+    assert!(preview.conflicts().is_empty());
+    let merged = word_of(&preview.resolve(&[]).unwrap());
+    assert_eq!(merged["phrase"], "OpenLess IME");
+    assert_eq!(merged["hits"], 9);
+
+    // Renamed differently on both devices is a real conflict; either choice keeps the
+    // highest count.
+    let local = dictionary_set(vec![word(9, "Open Less")]);
+    let remote = dictionary_set(vec![word(2, "OpenLess IME")]);
+    let preview = diff_sync_documents(Some(&base), &local, &remote).unwrap();
+    assert_eq!(preview.conflicts().len(), 1);
+    let choice = ConflictChoice {
+        conflict_id: preview.conflicts()[0].conflict_id.clone(),
+        side: ConflictSide::Remote,
+    };
+    let merged = word_of(&preview.resolve(&[choice]).unwrap());
+    assert_eq!(merged["phrase"], "OpenLess IME");
+    assert_eq!(merged["hits"], 9);
+}
+
+#[test]
+fn collection_order_follows_the_records_not_a_device_list_position() {
+    let learned = crate::shared_types::LEARNED_VOCAB_NOTE;
+    let entry = |id: &str, note: Option<&str>, created_at: &str| json!({"id":id,"phrase":id,"note":note,"enabled":true,"hits":0,"createdAt":created_at});
+    // Deliberately listed in the wrong order.
+    let set = dictionary_set(vec![
+        entry("learned-new", Some(learned), "2026-09-28T00:00:00Z"),
+        entry("manual-old", None, "2026-09-26T00:00:00Z"),
+        entry("undated", None, ""),
+        entry("learned-old", Some(learned), "2026-09-27T00:00:00Z"),
+        entry("manual-new", None, "2026-09-29T00:00:00+08:00"),
+    ]);
+    // Manual entries newest first, then learned entries oldest first — how the store adds
+    // them. Offsets are compared as instants, and undated rows close their group.
+    assert_eq!(
+        ids_in_order(&set, DocumentKind::Dictionary),
+        [
+            "manual-new",
+            "manual-old",
+            "undated",
+            "learned-old",
+            "learned-new"
+        ]
+    );
+
+    let history = history_set(&[
+        ("morning", "2026-09-27T08:00:00Z", "m"),
+        ("evening", "2026-09-27T20:00:00Z", "e"),
+    ]);
+    assert_eq!(
+        ids_in_order(&history, DocumentKind::History),
+        ["evening", "morning"]
+    );
+}

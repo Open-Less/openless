@@ -724,6 +724,31 @@ pub(crate) fn uuid_v4(value: &str) -> DocumentResult<()> {
     Ok(())
 }
 
+/// Where a record belongs in its collection, derived from what the record says instead of
+/// from one device's list position — a position shifts on every device with each new row,
+/// so two devices in ordinary use could never agree on it.
+///
+/// Mirrors how the stores themselves insert: history and corrections newest first; the
+/// dictionary keeps manual entries (newest first) ahead of learned ones (oldest first).
+/// Rows without a usable `createdAt` sort last in their group.
+fn collection_rank(kind: DocumentKind, value: &Value) -> (bool, bool, i64) {
+    let learned = kind == DocumentKind::Dictionary
+        && value.get("note").and_then(Value::as_str)
+            == Some(crate::shared_types::LEARNED_VOCAB_NOTE);
+    let created = value
+        .get("createdAt")
+        .and_then(Value::as_str)
+        .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
+        .map(|time| time.timestamp_micros());
+    match created {
+        Some(micros) if learned => (learned, false, micros),
+        Some(micros) => (learned, false, micros.saturating_neg()),
+        None => (learned, true, 0),
+    }
+}
+
+/// `sortIndex` stays on the wire as a dense index so older clients keep restoring in order,
+/// but it is rewritten here from [`collection_rank`]; the incoming value only breaks ties.
 fn normalize_collection_order(set: &mut DocumentSet) -> DocumentResult<()> {
     for kind in [
         DocumentKind::Dictionary,
@@ -746,24 +771,16 @@ fn normalize_collection_order(set: &mut DocumentSet) -> DocumentResult<()> {
                 return Err(DocumentError::InvalidDocument);
             }
         }
-        indices.sort_by(|left, right| {
-            let left = &set.documents[*left];
-            let right = &set.documents[*right];
+        indices.sort_by_cached_key(|index| {
+            let doc = &set.documents[*index];
             (
-                left.value
+                collection_rank(kind, &doc.value),
+                doc.value
                     .get("sortIndex")
                     .and_then(Value::as_u64)
                     .unwrap_or(u64::MAX),
-                &left.id,
+                doc.id.clone(),
             )
-                .cmp(&(
-                    right
-                        .value
-                        .get("sortIndex")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(u64::MAX),
-                    &right.id,
-                ))
         });
         for (order, index) in indices.into_iter().enumerate() {
             set.documents[index]

@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::cloud_sync_e2ee_protocol::types::{
@@ -96,10 +97,11 @@ impl MergePreview {
         }
         for (id, (key, local, remote)) in std::mem::take(&mut self.unresolved) {
             let chosen = match selected[&id] {
-                ConflictSide::Local => local,
-                ConflictSide::Remote => remote,
+                ConflictSide::Local => local.clone(),
+                ConflictSide::Remote => remote.clone(),
             };
-            if let Some(unit) = chosen {
+            if let Some(mut unit) = chosen {
+                keep_highest_hits(&mut unit, [local.as_ref(), remote.as_ref()]);
                 self.accepted.insert(key, unit);
             }
         }
@@ -204,7 +206,8 @@ pub fn diff_sync_documents(
             None
         };
         if let Some(chosen) = chosen {
-            if let Some(unit) = chosen {
+            if let Some(mut unit) = chosen {
+                keep_highest_hits(&mut unit, [local_unit, remote_unit]);
                 preview.accepted.insert(key, unit);
             }
             continue;
@@ -332,6 +335,63 @@ fn unit_key(key: &DocumentKey) -> DocumentKey {
     }
 }
 
+/// Fields that record how one device listed or used a record, not what the record says.
+/// They never make two copies differ: validation re-derives `sortIndex` from the record
+/// itself, and `keep_highest_hits` reconciles the dictionary hit counter. Comparing them
+/// would turn ordinary use on two devices into a conflict on every shared record.
+fn usage_fields(kind: DocumentKind) -> &'static [&'static str] {
+    match kind {
+        DocumentKind::Dictionary => &["sortIndex", "hits"],
+        DocumentKind::Corrections | DocumentKind::History => &["sortIndex"],
+        _ => &[],
+    }
+}
+
+fn same_content(left: &LogicalDocument, right: &LogicalDocument) -> bool {
+    let fields = usage_fields(left.kind);
+    if fields.is_empty() {
+        return left == right;
+    }
+    let content = |doc: &LogicalDocument| {
+        let mut value = doc.value.clone();
+        if let Some(object) = value.as_object_mut() {
+            for field in fields {
+                object.remove(*field);
+            }
+        }
+        value
+    };
+    left.id == right.id
+        && left.kind == right.kind
+        && left.schema_version == right.schema_version
+        && content(left) == content(right)
+}
+
+/// A hit counter only grows, on whichever device used the word, so the larger copy is the
+/// better record of use. Neither side's count is a change the user has to pick between.
+fn keep_highest_hits(unit: &mut Unit, sides: [Option<&Unit>; 2]) {
+    for (key, entry) in unit.iter_mut() {
+        let Entry::Live(doc) = entry else { continue };
+        if doc.kind != DocumentKind::Dictionary {
+            continue;
+        }
+        let hits = |doc: &LogicalDocument| doc.value.get("hits").and_then(Value::as_u64);
+        let highest = sides
+            .iter()
+            .flatten()
+            .filter_map(|side| match side.get(key) {
+                Some(Entry::Live(other)) => hits(other),
+                _ => None,
+            })
+            .max();
+        if let Some(highest) = highest.filter(|highest| hits(doc) < Some(*highest)) {
+            if let Some(object) = doc.value.as_object_mut() {
+                object.insert("hits".into(), Value::from(highest));
+            }
+        }
+    }
+}
+
 fn equivalent(left: Option<&Unit>, right: Option<&Unit>) -> bool {
     match (left, right) {
         (None, None) => true,
@@ -339,7 +399,7 @@ fn equivalent(left: Option<&Unit>, right: Option<&Unit>) -> bool {
             left.iter()
                 .all(|(key, value)| match (value, right.get(key)) {
                     (Entry::Deleted(_), Some(Entry::Deleted(_))) => true,
-                    (_, Some(other)) => value == other,
+                    (Entry::Live(doc), Some(Entry::Live(other))) => same_content(doc, other),
                     _ => false,
                 })
         }
