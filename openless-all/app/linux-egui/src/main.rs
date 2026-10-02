@@ -49,6 +49,7 @@ mod linux_app {
     enum UiResult {
         Message(String),
         QaAction {
+            generation: u64,
             context: Option<String>,
             result: Result<String, String>,
         },
@@ -500,6 +501,12 @@ mod linux_app {
         }
     }
 
+    #[derive(Default)]
+    struct QaPopupPresentation {
+        generation: u64,
+        session_id: Option<String>,
+    }
+
     pub struct OpenLessEguiApp {
         tokio: Arc<tokio::runtime::Runtime>,
         native: Option<LinuxNativeRuntime>,
@@ -590,6 +597,7 @@ mod linux_app {
         /// 已在 60s 内重开过的面板次数（索引见 `popup_kind_index`）。
         popup_restarts: [PopupRestartBudget; POPUP_KIND_COUNT],
         popup_sequences: [u64; POPUP_KIND_COUNT],
+        qa_popup_presentation: QaPopupPresentation,
         /// 最近一次下发给窗口/面板的热键配置；变了才重发。
         hotkeys_sent: Option<openless_core::HotkeyRuntimeTarget>,
         /// 速记页快捷键卡片是否被收起（持久化在 linux-ui-state.json）。
@@ -748,6 +756,7 @@ mod linux_app {
                         quick_note_shortcut_hidden,
                         popup_restarts: [PopupRestartBudget::default(); POPUP_KIND_COUNT],
                         popup_sequences: [0; POPUP_KIND_COUNT],
+                        qa_popup_presentation: QaPopupPresentation::default(),
                         hotkeys_sent: None,
                         pending_ui_pongs: Vec::new(),
                         history,
@@ -845,6 +854,7 @@ mod linux_app {
                     quick_note_shortcut_hidden,
                     popup_restarts: [PopupRestartBudget::default(); POPUP_KIND_COUNT],
                     popup_sequences: [0; POPUP_KIND_COUNT],
+                    qa_popup_presentation: QaPopupPresentation::default(),
                     hotkeys_sent: None,
                     pending_ui_pongs: Vec::new(),
                     history: HistoryCache::default(),
@@ -1024,6 +1034,11 @@ mod linux_app {
             }
             match std::env::current_exe() {
                 Ok(executable) => {
+                    if kind == PopupKind::Qa {
+                        self.qa_popup_presentation.generation =
+                            self.qa_popup_presentation.generation.saturating_add(1);
+                        self.qa_popup_presentation.session_id = None;
+                    }
                     self.popup_action_guard.reset(kind);
                     let supervisor = PopupSupervisor::spawn(self.tokio.handle(), executable, kind);
                     *self.popup_slot(kind) = Some(supervisor);
@@ -1034,6 +1049,11 @@ mod linux_app {
 
         fn send_popup(&mut self, kind: PopupKind, mut message: HostToPopup) {
             let lang = self.lang;
+            let qa_session = match &message {
+                HostToPopup::QaSnapshot { session_id, .. }
+                | HostToPopup::PolishPreview { session_id, .. } => Some(session_id.clone()),
+                _ => None,
+            };
             // Window actions and failures can occur without a new Core event.
             let sequence = &mut self.popup_sequences[popup_kind_index(kind)];
             *sequence = sequence.saturating_add(1);
@@ -1055,19 +1075,43 @@ mod linux_app {
                                 "popup.recover_failed",
                                 &[&format!("{retry_error:?}")],
                             );
+                            return;
                         }
+                    } else {
+                        return;
                     }
                 }
+                if let Some(session_id) = qa_session {
+                    self.qa_popup_presentation.session_id = Some(session_id);
+                }
+            }
+        }
+
+        fn close_qa_popup(&mut self) {
+            self.qa_visible = false;
+            self.polish_result_visible = false;
+            self.qa_popup_presentation.session_id = None;
+            self.qa_popup_presentation.generation =
+                self.qa_popup_presentation.generation.saturating_add(1);
+            if let Some(supervisor) = self.qa_popup.take() {
+                let _ = supervisor.request_shutdown();
             }
         }
 
         fn hide_popup(&mut self, kind: PopupKind, session_id: String, sequence: u64) {
             if kind == PopupKind::Qa {
+                if (self.qa_visible || self.polish_result_visible)
+                    && self
+                        .qa_popup_presentation
+                        .session_id
+                        .as_deref()
+                        .is_some_and(|current| current != session_id.as_str())
+                {
+                    return;
+                }
                 // End the native window on both X11 and Wayland. Core owns the
                 // conversation; the next show creates a fresh protocol state.
-                if let Some(supervisor) = self.popup_slot(kind).take() {
-                    let _ = supervisor.request_shutdown();
-                }
+                self.close_qa_popup();
                 return;
             }
             self.send_popup(
@@ -1123,6 +1167,11 @@ mod linux_app {
         fn expected_popup_session(&self, kind: PopupKind) -> Option<String> {
             match kind {
                 PopupKind::Qa if !self.qa_visible && !self.polish_result_visible => None,
+                PopupKind::Qa if self.polish_result_visible => self
+                    .selection
+                    .as_ref()
+                    .and_then(|selection| selection.session_id)
+                    .map(|id| id.to_string()),
                 PopupKind::Qa => self
                     .qa_state
                     .as_ref()
@@ -1139,7 +1188,7 @@ mod linux_app {
         }
 
         fn show_qa_popup(&mut self) {
-            if !self.qa_visible {
+            if !self.qa_visible || self.polish_result_visible {
                 return;
             }
             self.ensure_popup(PopupKind::Qa);
@@ -1490,8 +1539,7 @@ mod linux_app {
                     // 面板 ✕：立刻清掉宿主侧的可见标志，不等 Core 的 HideQa 回环
                     // （那条被图钉门禁拦着，pinned 时不清 → 标志残留会让录音热键
                     // 之后又把面板弹出来）。
-                    self.qa_visible = false;
-                    self.polish_result_visible = false;
+                    self.close_qa_popup();
                     if let Some(backend) = self.backend() {
                         self.spawn(async move {
                             backend.services().qa.dismiss().await?;
@@ -1782,17 +1830,26 @@ mod linux_app {
             F: Future<Output = Result<String, BackendError>> + Send + 'static,
         {
             let tx = self.tx.clone();
+            let generation = self.qa_popup_presentation.generation;
             self.tokio.spawn(async move {
                 let result = future.await.map_err(|error| error.to_string());
-                let _ = tx.send(UiResult::QaAction { context, result });
+                let _ = tx.send(UiResult::QaAction {
+                    generation,
+                    context,
+                    result,
+                });
             });
         }
 
         fn apply_qa_action_result(
             &mut self,
+            generation: u64,
             context: Option<String>,
             result: Result<String, String>,
         ) {
+            if generation != self.qa_popup_presentation.generation {
+                return;
+            }
             match result {
                 Ok(message) => self.status = message,
                 Err(error) => {
@@ -2745,6 +2802,7 @@ mod linux_app {
                 // 图钉只管“失焦自动收起”那条路径。
                 log::info!("[hotkey] QA panel toggle: dismissing");
                 self.qa_visible = false;
+                self.polish_result_visible = false;
                 let session_id = self
                     .qa_state
                     .as_ref()
@@ -2889,6 +2947,9 @@ mod linux_app {
             }
             self.qa_visible = false;
             self.polish_result_visible = false;
+            self.qa_popup_presentation.session_id = None;
+            self.qa_popup_presentation.generation =
+                self.qa_popup_presentation.generation.saturating_add(1);
         }
 
         fn apply_local_hotkey_edges(
@@ -3219,6 +3280,9 @@ mod linux_app {
                         }
                         HostAction::ShowQa => {
                             log::info!("[hotkey] QA panel show requested by the host action");
+                            if self.polish_result_visible {
+                                self.close_qa_popup();
+                            }
                             self.qa_visible = true;
                             self.show_qa_popup();
                         }
@@ -3318,9 +3382,11 @@ mod linux_app {
                         }
                     }
                     UiResult::Message(message) => self.status = message,
-                    UiResult::QaAction { context, result } => {
-                        self.apply_qa_action_result(context, result)
-                    }
+                    UiResult::QaAction {
+                        generation,
+                        context,
+                        result,
+                    } => self.apply_qa_action_result(generation, context, result),
                     UiResult::HistoryRepolish { id, result } => {
                         self.frontend_vm.history_repolish_running = false;
                         match result {
@@ -7799,9 +7865,14 @@ Internal flags (set by OpenLess itself, not for regular use):
             );
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
             loop {
-                if let Ok(UiResult::QaAction { context, result }) = app.rx.try_recv() {
+                if let Ok(UiResult::QaAction {
+                    generation,
+                    context,
+                    result,
+                }) = app.rx.try_recv()
+                {
                     assert!(result.is_err(), "the fixture rejects the provider request");
-                    app.apply_qa_action_result(context, result);
+                    app.apply_qa_action_result(generation, context, result);
                     break;
                 }
                 assert!(
@@ -7850,8 +7921,119 @@ Internal flags (set by OpenLess itself, not for regular use):
             state.session_id = Some(openless_core::SessionId::new().to_string());
             app.qa_state = Some(state);
             app.qa_visible = true;
-            app.apply_qa_action_result(None, Err("old failure".into()));
+            app.apply_qa_action_result(
+                app.qa_popup_presentation.generation,
+                None,
+                Err("old failure".into()),
+            );
             assert!(app.qa_state.as_ref().unwrap().error.is_none());
+        }
+
+        #[test]
+        fn a_previous_preview_cannot_close_the_current_qa_window() {
+            let mut app = fixture_app(true);
+            let current = openless_core::SessionId::new().to_string();
+            app.qa_visible = true;
+            app.qa_popup_presentation.session_id = Some(current.clone());
+            app.qa_popup = Some(PopupSupervisor::spawn_command(
+                app.tokio.handle(),
+                tokio::process::Command::new("/bin/cat"),
+            ));
+            app.hide_popup(
+                PopupKind::Qa,
+                openless_core::SessionId::new().to_string(),
+                1,
+            );
+            assert!(app.qa_popup.is_some());
+            assert!(app.qa_visible);
+            assert_eq!(app.qa_popup_presentation.session_id, Some(current));
+        }
+
+        #[test]
+        fn a_previous_qa_turn_cannot_close_the_current_preview() {
+            let mut app = fixture_app(true);
+            let current = openless_core::SessionId::new();
+            app.polish_result_visible = true;
+            app.selection = Some(SelectionSnapshot {
+                session_id: Some(current),
+                phase: SelectionPhase::Preview,
+                ..Default::default()
+            });
+            app.qa_popup_presentation.session_id = Some(current.to_string());
+            app.qa_popup = Some(PopupSupervisor::spawn_command(
+                app.tokio.handle(),
+                tokio::process::Command::new("/bin/cat"),
+            ));
+            app.hide_popup(
+                PopupKind::Qa,
+                openless_core::SessionId::new().to_string(),
+                1,
+            );
+            assert!(app.qa_popup.is_some());
+            assert!(app.polish_result_visible);
+            assert_eq!(
+                app.expected_popup_session(PopupKind::Qa),
+                Some(current.to_string())
+            );
+        }
+
+        #[test]
+        fn closing_the_current_preview_also_clears_qa_visibility() {
+            let mut app = fixture_app(true);
+            let current = openless_core::SessionId::new().to_string();
+            app.qa_visible = true;
+            app.qa_popup_presentation.session_id = Some(current.clone());
+            app.qa_popup = Some(PopupSupervisor::spawn_command(
+                app.tokio.handle(),
+                tokio::process::Command::new("/bin/cat"),
+            ));
+            app.hide_popup(PopupKind::Qa, current, 1);
+            assert!(app.qa_popup.is_none());
+            assert!(!app.qa_visible);
+            assert!(!app.polish_result_visible);
+        }
+
+        #[test]
+        fn background_qa_updates_leave_the_current_preview_visible() {
+            let mut app = fixture_app(true);
+            let preview = openless_core::SessionId::new().to_string();
+            app.qa_visible = true;
+            app.polish_result_visible = true;
+            app.qa_state = Some(QaStateEvent::simple(QaStateKind::Idle));
+            app.qa_popup_presentation.session_id = Some(preview.clone());
+            app.qa_popup = Some(PopupSupervisor::spawn_command(
+                app.tokio.handle(),
+                tokio::process::Command::new("/bin/cat"),
+            ));
+            let generation = app.qa_popup_presentation.generation;
+            app.show_qa_popup();
+            assert!(app.qa_popup.is_some());
+            assert_eq!(app.qa_popup_presentation.session_id, Some(preview));
+            assert_eq!(app.qa_popup_presentation.generation, generation);
+        }
+
+        #[test]
+        fn an_old_idle_failure_cannot_appear_in_a_reopened_idle_panel() {
+            let mut app = fixture_app(true);
+            app.qa_visible = true;
+            app.qa_state = Some(QaStateEvent::simple(QaStateKind::Idle));
+            let old_generation = app.qa_popup_presentation.generation;
+            app.close_qa_popup();
+            app.qa_visible = true;
+            app.qa_state = Some(QaStateEvent::simple(QaStateKind::Idle));
+            let status = app.status.clone();
+            app.apply_qa_action_result(old_generation, None, Err("old failure".into()));
+            assert!(app.qa_state.as_ref().unwrap().error.is_none());
+            assert_eq!(app.status, status);
+            app.apply_qa_action_result(
+                app.qa_popup_presentation.generation,
+                None,
+                Err("current failure".into()),
+            );
+            assert_eq!(
+                app.qa_state.as_ref().unwrap().error.as_deref(),
+                Some("current failure")
+            );
         }
 
         #[test]
