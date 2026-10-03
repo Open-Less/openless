@@ -4,27 +4,9 @@
 
 extern LONG g_object_count;
 
-OpenLessAsyncEditState::OpenLessAsyncEditState()
-    : event(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {
-  if (event == nullptr) {
-    create_error = GetLastError();
-  }
-}
-
-OpenLessAsyncEditState::~OpenLessAsyncEditState() {
-  if (event != nullptr) {
-    CloseHandle(event);
-    event = nullptr;
-  }
-}
-
-bool OpenLessAsyncEditState::IsValid() const { return event != nullptr; }
-
 OpenLessEditSession::OpenLessEditSession(ITfContext *context, std::wstring text,
-                                         std::shared_ptr<OpenLessAsyncEditState> async_state,
-                                         std::shared_ptr<std::atomic<bool>> cancellation)
-    : context_(context), text_(std::move(text)), async_state_(std::move(async_state)),
-      cancellation_(std::move(cancellation)) {
+                                         std::shared_ptr<OpenLessAsyncEditState> async_state)
+    : context_(context), text_(std::move(text)), async_state_(std::move(async_state)) {
   InterlockedIncrement(&g_object_count);
   if (context_ != nullptr) {
     context_->AddRef();
@@ -67,13 +49,11 @@ STDMETHODIMP_(ULONG) OpenLessEditSession::Release() {
 }
 
 STDMETHODIMP OpenLessEditSession::DoEditSession(TfEditCookie edit_cookie) {
-  const HRESULT hr = cancellation_ && cancellation_->load() ? HRESULT_FROM_WIN32(ERROR_CANCELLED)
-                                                            : InsertText(edit_cookie);
+  const HRESULT hr = async_state_ && async_state_->cancelled ? HRESULT_FROM_WIN32(ERROR_CANCELLED)
+                                                             : InsertText(edit_cookie);
   if (async_state_) {
     async_state_->result = hr;
-    if (async_state_->event != nullptr) {
-      SetEvent(async_state_->event);
-    }
+    async_state_->completed = true;
   }
   return hr;
 }
@@ -82,20 +62,12 @@ HRESULT OpenLessEditSession::InsertText(TfEditCookie edit_cookie) {
   if (context_ == nullptr) {
     return E_UNEXPECTED;
   }
-  if (cancellation_ && cancellation_->load()) {
-    return HRESULT_FROM_WIN32(ERROR_CANCELLED);
-  }
 
   ITfInsertAtSelection *insert_at_selection = nullptr;
   HRESULT hr = context_->QueryInterface(IID_ITfInsertAtSelection,
                                         reinterpret_cast<void **>(&insert_at_selection));
   if (FAILED(hr)) {
     return hr;
-  }
-
-  if (cancellation_ && cancellation_->load()) {
-    insert_at_selection->Release();
-    return HRESULT_FROM_WIN32(ERROR_CANCELLED);
   }
 
   // Commit in a single call. Some Chromium-backed text stores surface a

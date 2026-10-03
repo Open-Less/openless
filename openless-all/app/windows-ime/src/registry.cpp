@@ -150,6 +150,8 @@ HRESULT RegisterLanguageProfile() {
     return hr;
   }
 
+  manager->UnregisterProfile(CLSID_OpenLessTextService, kOpenLessLegacyKeyboardLangId,
+                             GUID_OpenLessProfile, 0);
   manager->UnregisterProfile(CLSID_OpenLessTextService, kOpenLessLangId, GUID_OpenLessProfile, 0);
   hr = manager->RegisterProfile(
       CLSID_OpenLessTextService, kOpenLessLangId, GUID_OpenLessProfile, kOpenLessImeName,
@@ -172,14 +174,18 @@ HRESULT RegisterKeyboardCategory() {
     return hr;
   }
 
+  // Drop the keyboard category older releases registered, so an upgrade moves
+  // the text service out of the keyboard list.
   category_mgr->UnregisterCategory(CLSID_OpenLessTextService, GUID_TFCAT_TIP_KEYBOARD,
+                                   CLSID_OpenLessTextService);
+  category_mgr->UnregisterCategory(CLSID_OpenLessTextService, GUID_TFCAT_TIP_SPEECH,
                                    CLSID_OpenLessTextService);
   category_mgr->UnregisterCategory(CLSID_OpenLessTextService, GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT,
                                    CLSID_OpenLessTextService);
   category_mgr->UnregisterCategory(CLSID_OpenLessTextService, GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
                                    CLSID_OpenLessTextService);
 
-  hr = category_mgr->RegisterCategory(CLSID_OpenLessTextService, GUID_TFCAT_TIP_KEYBOARD,
+  hr = category_mgr->RegisterCategory(CLSID_OpenLessTextService, GUID_TFCAT_TIP_SPEECH,
                                       CLSID_OpenLessTextService);
   if (SUCCEEDED(hr)) {
     hr = category_mgr->RegisterCategory(
@@ -209,6 +215,8 @@ HRESULT UnregisterLanguageProfile() {
   ITfInputProcessorProfileMgr *manager = nullptr;
   hr = CreateProfileManager(&manager);
   if (SUCCEEDED(hr)) {
+    manager->UnregisterProfile(CLSID_OpenLessTextService, kOpenLessLegacyKeyboardLangId,
+                               GUID_OpenLessProfile, 0);
     manager->UnregisterProfile(CLSID_OpenLessTextService, kOpenLessLangId, GUID_OpenLessProfile, 0);
     manager->Release();
   }
@@ -231,7 +239,9 @@ HRESULT UnregisterKeyboardCategory() {
     return hr;
   }
 
-  hr = category_mgr->UnregisterCategory(CLSID_OpenLessTextService, GUID_TFCAT_TIP_KEYBOARD,
+  category_mgr->UnregisterCategory(CLSID_OpenLessTextService, GUID_TFCAT_TIP_KEYBOARD,
+                                   CLSID_OpenLessTextService);
+  hr = category_mgr->UnregisterCategory(CLSID_OpenLessTextService, GUID_TFCAT_TIP_SPEECH,
                                         CLSID_OpenLessTextService);
   if (SUCCEEDED(hr)) {
     hr = category_mgr->UnregisterCategory(

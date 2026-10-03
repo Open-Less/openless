@@ -1968,7 +1968,7 @@ export const fr: typeof zhCN = {
       hotkeyFailed: 'Échec du détecteur',
       windowsImeLabel: 'Moteur de saisie Windows',
       windowsImeDesc:
-        'Passe temporairement à l’IME TSF d’OpenLess pendant les sessions vocales pour éviter les limites du presse-papiers.',
+        'Insère le texte dicté via le service de texte TSF d’OpenLess, qui reste actif à côté de votre méthode de saisie, pour éviter les limites du presse-papiers.',
       windowsImeInstalled: 'Installé',
       windowsImeUnavailable: 'Indisponible',
       androidImeLabel: 'Méthode de saisie (IME)',

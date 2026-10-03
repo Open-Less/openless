@@ -1891,7 +1891,7 @@ export const ja: typeof zhCN = {
       hotkeyFailed: '監視失敗',
       windowsImeLabel: 'Windows 入力メソッドバックエンド',
       windowsImeDesc:
-        '音声セッション中に OpenLess TSF IME へ一時的に切り替え、クリップボード入力の制限を回避します。',
+        '入力方式と併存する OpenLess TSF テキストサービス経由で文字を挿入し、IME を切り替えずにクリップボード入力の制限を回避します。',
       windowsImeInstalled: 'インストール済み',
       windowsImeUnavailable: '利用不可',
       androidImeLabel: '入力メソッド (IME)',

@@ -1877,7 +1877,7 @@ export const ko: typeof zhCN = {
       hotkeyFailed: '감지 실패',
       windowsImeLabel: 'Windows 입력기 백엔드',
       windowsImeDesc:
-        '음성 세션 동안 OpenLess TSF 입력기로 일시적으로 전환하여 클립보드 입력 제한을 회피하기 위해 사용.',
+        '입력기와 함께 동작하는 OpenLess TSF 텍스트 서비스로 텍스트를 삽입하여, 입력기를 전환하지 않고 클립보드 입력 제한을 회피합니다.',
       windowsImeInstalled: '설치됨',
       windowsImeUnavailable: '사용 불가',
       androidImeLabel: '입력기 (IME)',

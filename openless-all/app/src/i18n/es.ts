@@ -1939,7 +1939,7 @@ export const es: typeof zhCN = {
       hotkeyFailed: 'El detector falló',
       windowsImeLabel: 'Motor del método de entrada de Windows',
       windowsImeDesc:
-        'Cambia temporalmente al IME TSF de OpenLess durante las sesiones de voz para evitar las limitaciones del portapapeles.',
+        'Inserta el texto dictado mediante el servicio de texto TSF de OpenLess, que permanece activo junto a tu método de entrada, para evitar las limitaciones del portapapeles.',
       windowsImeInstalled: 'Instalado',
       windowsImeUnavailable: 'No disponible',
       androidImeLabel: 'Método de entrada (IME)',

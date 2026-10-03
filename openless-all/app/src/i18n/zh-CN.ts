@@ -1799,7 +1799,8 @@ export const zhCN = {
       hotkeyStarting: '安装中…',
       hotkeyFailed: '监听失败',
       windowsImeLabel: 'Windows 输入法后端',
-      windowsImeDesc: '语音输入时临时切到 OpenLess TSF，绕过剪贴板限制。',
+      windowsImeDesc:
+        '通过与输入法并存的 OpenLess TSF 文本服务插入文字，不切换输入法，绕过剪贴板限制。',
       windowsImeInstalled: '已安装',
       windowsImeUnavailable: '不可用',
       androidImeLabel: '输入法 (IME)',

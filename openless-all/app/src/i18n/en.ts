@@ -1907,7 +1907,7 @@ export const en: typeof zhCN = {
       hotkeyFailed: 'Listener failed',
       windowsImeLabel: 'Windows input method backend',
       windowsImeDesc:
-        'Temporarily switches to the OpenLess TSF IME during voice sessions to avoid clipboard insertion limits.',
+        'Inserts dictated text through the OpenLess TSF text service, which stays active alongside your input method, to avoid clipboard insertion limits.',
       windowsImeInstalled: 'Installed',
       windowsImeUnavailable: 'Unavailable',
       androidImeLabel: 'Input method (IME)',

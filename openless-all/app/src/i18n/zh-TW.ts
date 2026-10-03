@@ -1800,7 +1800,8 @@ export const zhTW: typeof zhCN = {
       hotkeyStarting: '安裝中…',
       hotkeyFailed: '監聽失敗',
       windowsImeLabel: 'Windows 輸入法後端',
-      windowsImeDesc: '用於在語音會話期間臨時切換到 OpenLess TSF 輸入法，避免剪貼簿插入限制。',
+      windowsImeDesc:
+        '透過與輸入法並存的 OpenLess TSF 文字服務插入文字，不切換輸入法，避免剪貼簿插入限制。',
       windowsImeInstalled: '已安裝',
       windowsImeUnavailable: '不可用',
       androidImeLabel: '輸入法 (IME)',

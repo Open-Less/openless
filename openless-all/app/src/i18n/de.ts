@@ -1948,7 +1948,7 @@ export const de: typeof zhCN = {
       hotkeyFailed: 'Kurzbefehlüberwachung fehlgeschlagen',
       windowsImeLabel: 'Windows-Eingabemethode',
       windowsImeDesc:
-        'Wechselt während Sprachsitzungen vorübergehend zur OpenLess-TSF-Eingabemethode, um Einschränkungen der Zwischenablage zu umgehen.',
+        'Fügt diktierten Text über den OpenLess-TSF-Textdienst ein, der neben Ihrer Eingabemethode aktiv bleibt, um Einschränkungen der Zwischenablage zu umgehen.',
       windowsImeInstalled: 'Installiert',
       windowsImeUnavailable: 'Nicht verfügbar',
       androidImeLabel: 'Eingabemethode (IME)',
