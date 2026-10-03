@@ -932,6 +932,7 @@ mod tests {
             shortcut_recording: Some(ShortcutField::CodingAgentVoice),
             ..Default::default()
         };
+        vm.settings.testing_features = true;
         let held = egui::Modifiers {
             ctrl: true,
             command: true,

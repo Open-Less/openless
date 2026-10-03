@@ -7912,6 +7912,7 @@ Internal flags (set by OpenLess itself, not for regular use):
                 settings_section: frontend::view_model::SettingsSection::Shortcuts,
                 ..Default::default()
             };
+            vm.settings.testing_features = true;
             let _ = render(&mut vm, Vec::new());
             let painted = render(&mut vm, Vec::new());
             for key in [
