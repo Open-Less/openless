@@ -1,5 +1,14 @@
 {
   "contractVersion": "2.0.0",
+  "testingFeatures": {
+    "preferenceField": "testingFeaturesEnabled",
+    "default": false,
+    "scope": "device_local",
+    "features": ["lessComputer", "claudeConsole"],
+    "disabledBehavior": ["hide_entries_and_windows", "unregister_less_computer_hotkeys", "reject_runtime_admission", "cancel_active_tasks", "preserve_feature_settings"],
+    "disabledErrorCode": "permission_denied",
+    "cloudSync": "excluded"
+  },
   "startupSnapshot": {
     "fields": ["contractVersion", "backend"],
     "sample": {

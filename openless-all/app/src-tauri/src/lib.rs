@@ -3059,12 +3059,25 @@ fn position_less_computer_window<R: tauri::Runtime>(
 /// as QA). `macos` build only.
 #[cfg(target_os = "macos")]
 pub(crate) fn show_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if app
+        .try_state::<Arc<openless_core::OpenLessBackend>>()
+        .is_none_or(|backend| backend.ensure_testing_features_enabled().is_err())
+    {
+        return;
+    }
     let Some(window) = ensure_less_computer_window(app) else {
         log::info!("[less-computer] show 跳过：窗口不存在");
         return;
     };
     let window_clone = window.clone();
+    let app_for_show = app.clone();
     let _ = app.run_on_main_thread(move || {
+        if app_for_show
+            .try_state::<Arc<openless_core::OpenLessBackend>>()
+            .is_none_or(|backend| backend.ensure_testing_features_enabled().is_err())
+        {
+            return;
+        }
         use objc2::msg_send;
         use objc2::runtime::AnyObject;
         // This helper is also called from the Tokio worker that executes a text or
@@ -3108,6 +3121,12 @@ pub(crate) fn show_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) {
 
 #[cfg(target_os = "windows")]
 pub(crate) fn show_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if app
+        .try_state::<Arc<openless_core::OpenLessBackend>>()
+        .is_none_or(|backend| backend.ensure_testing_features_enabled().is_err())
+    {
+        return;
+    }
     let Some(window) = ensure_less_computer_window(app) else {
         return;
     };

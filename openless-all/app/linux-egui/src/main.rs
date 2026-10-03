@@ -1086,6 +1086,12 @@ mod linux_app {
         }
 
         fn show_less_computer_popup(&mut self) {
+            if self
+                .backend()
+                .is_none_or(|backend| backend.ensure_testing_features_enabled().is_err())
+            {
+                return;
+            }
             self.ensure_popup(PopupKind::LessComputer);
             let message = self.less_computer_snapshot(self.lang);
             self.send_popup(PopupKind::LessComputer, message);
@@ -2408,6 +2414,12 @@ mod linux_app {
                     }
                 }
                 BackendEventKind::LessComputerEvent(event) => {
+                    if self
+                        .backend()
+                        .is_some_and(|backend| !backend.get_preferences().testing_features_enabled)
+                    {
+                        return;
+                    }
                     // Less Computer events may complete after a newer turn has
                     // already started. Session ownership, not arrival time,
                     // decides whether a delta/terminal may mutate this view.
@@ -2537,6 +2549,17 @@ mod linux_app {
                             self.history.request(backend.snapshot().history_revision);
                         }
                         self.preferences = Some(self.settings_save.rebase(&latest));
+                    }
+                    if self
+                        .backend()
+                        .is_some_and(|backend| !backend.get_preferences().testing_features_enabled)
+                    {
+                        // Dropping the supervisor closes a feature that is no longer opted in.
+                        self.less_computer_popup = None;
+                        self.less_computer_working = false;
+                        self.pending_approval = None;
+                        self.less_computer_session = None;
+                        self.less_computer_entries.clear();
                     }
                     self.load_remote_status();
                     self.load_library();
@@ -3969,6 +3992,7 @@ mod linux_app {
                 s.system_proxy = prefs.use_system_proxy;
                 s.multimodal = prefs.multimodal_pipeline_enabled;
                 s.less_computer = prefs.coding_agent_enabled;
+                s.testing_features = prefs.testing_features_enabled;
                 s.coding_agent_provider = match prefs.coding_agent_provider.as_str() {
                     "opencode-cli" => 1,
                     "codex-cli" => 2,

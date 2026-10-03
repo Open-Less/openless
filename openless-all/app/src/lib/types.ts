@@ -438,6 +438,8 @@ export interface UserPreferences {
   openAppHotkey: ShortcutBinding | null;
   /** Style pack direct hotkeys: pressing one activates the corresponding style pack. Default empty list (issue #759). */
   stylePackHotkeys: StylePackHotkey[];
+  /** Local opt-in for features under testing. Defaults to false. */
+  testingFeaturesEnabled: boolean;
   /** Less Computer: whether enabled. Off by default. */
   codingAgentEnabled: boolean;
   /** Agent backend: claude-code-cli (default) / opencode-cli / codex-cli / dsh-cli. */

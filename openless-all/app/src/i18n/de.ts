@@ -1221,6 +1221,13 @@ export const de: typeof zhCN = {
     cancelledTitle: 'Aufnahme abgebrochen',
   },
   settings: {
+    testingFeatures: {
+      title: 'Funktionen im Test',
+      enable: 'Funktionen im Test aktivieren',
+      description:
+        'Less Computer und die Claude-Konsole auf unterstützten Plattformen anzeigen, einrichten und verwenden. Das Ausschalten stoppt laufende Aufgaben und blendet die Einträge aus. Ihre Einstellungen bleiben erhalten. Gilt nur für dieses Gerät.',
+      unavailable: 'Auf dieser Plattform sind noch keine Testfunktionen verfügbar.',
+    },
     selectionWorkspace: {
       title: 'Assistent für Textauswahl',
       hint: 'Wähle Text aus und verwende einen Kurzbefehl: Ohne Sprachbearbeitung wird der Text direkt überarbeitet. Mit Sprachbearbeitung hältst du die Taste gedrückt und sprichst; danach wählst du „Fragen“ oder „Bearbeiten“.',
@@ -2368,7 +2375,9 @@ export const de: typeof zhCN = {
     noResults: 'Keine passenden Kategorien. Versuche „Mikrofon“, „Modelle“ oder „Design“.',
     autoSaveHint: 'Änderungen werden automatisch gespeichert',
     backToAdvanced: 'Zurück zu Experimente und Erweiterungen',
+    backToTestingFeatures: 'Zurück zu Funktionen im Test',
     advancedPages: {
+      testingFeatures: 'Funktionen, die noch getestet werden, bei Bedarf aktivieren.',
       vocabularyLearning:
         'Aus manuellen Korrekturen lernen; Beobachtung, Bestätigungszeit und Wortlänge einstellen.',
       lessComputer:
@@ -2386,7 +2395,7 @@ export const de: typeof zhCN = {
       appearance: 'Design, Seitenlayout und Sprache der Oberfläche für angenehmes Lesen anpassen.',
       privacy:
         'Systemberechtigungen und Verbindungen prüfen. Verlauf, Aufnahmen und lokale Daten verwalten.',
-      advanced: 'Less Computer und Diagnose nach Bedarf einrichten.',
+      advanced: 'Testfunktionen, Vokabellernen und Debugging-Werkzeuge konfigurieren.',
       about: 'Version, Updatekanal und automatische Updateeinstellungen anzeigen.',
     },
     searchKeywords: {

@@ -1153,6 +1153,13 @@ export const zhTW: typeof zhCN = {
     cancelledTitle: '已取消錄音',
   },
   settings: {
+    testingFeatures: {
+      title: '正在測試中的功能',
+      enable: '啟用正在測試中的功能',
+      description:
+        '開啟後顯示 Less Computer 和 Claude 控制台，可在支援的平台設定和使用。關閉會停止執行並隱藏入口，保留既有設定。僅在目前裝置生效。',
+      unavailable: '目前平台暫無可用的測試功能。',
+    },
     selectionWorkspace: {
       title: '選區助手',
       hint: '選中文字後按同一快捷鍵：關閉語音編輯時直接潤色；開啟後口述指令，說完再選擇「提問」或「編輯選區」。',
@@ -2175,7 +2182,9 @@ export const zhTW: typeof zhCN = {
     noResults: '找不到相關分類。試試「麥克風」「模型」或「主題」。',
     autoSaveHint: '修改後自動儲存',
     backToAdvanced: '返回實驗與擴充',
+    backToTestingFeatures: '返回正在測試中的功能',
     advancedPages: {
+      testingFeatures: '依需要開啟尚在測試中的功能。',
       vocabularyLearning: '從聽寫後的手動改詞中學習，設定觀察時長、確認時間和詞長。',
       lessComputer: '選擇 Agent，設定模型、權限與工作目錄。',
       claudeConsole: '偵測 Claude Code，並查看測試工作的執行輸出。',
@@ -2189,7 +2198,7 @@ export const zhTW: typeof zhCN = {
       services: '選擇語音辨識與文字處理服務，管理管道、本機模型和網路連線。',
       appearance: '調整主題、頁面排版和介面語言，讓閱讀更舒服。',
       privacy: '檢查系統權限與連線狀態，管理歷史、錄音和本機資料。',
-      advanced: '按需設定 Less Computer 與除錯功能。',
+      advanced: '設定測試功能、手改學詞與除錯工具。',
       about: '查看目前版本、更新管道與自動更新設定。',
     },
     searchKeywords: {

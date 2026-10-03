@@ -5,6 +5,20 @@ use crate::shared_types::{
     HotkeyMode, ShortcutBinding, StylePackHotkey, UserPreferences, WindowsInsertionMode,
 };
 
+pub(crate) fn ensure_testing_features_enabled(
+    preferences: &UserPreferences,
+) -> Result<(), BackendError> {
+    if preferences.testing_features_enabled {
+        Ok(())
+    } else {
+        Err(BackendError::new(
+            crate::BackendErrorCode::PermissionDenied,
+            "Enable features under testing in Advanced settings first",
+        )
+        .retryable(false))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SettingsCollisionPolicy {
@@ -71,7 +85,7 @@ impl From<&UserPreferences> for HotkeyRuntimeTarget {
             switch_style: preferences.switch_style_hotkey.clone(),
             open_app: preferences.open_app_hotkey.clone(),
             selection_polish: preferences.selection_polish_hotkey.clone(),
-            coding_agent_enabled: preferences.coding_agent_enabled,
+            coding_agent_enabled: preferences.less_computer_available(),
             coding_agent_voice: preferences.coding_agent_voice_hotkey.clone(),
             coding_agent_panel: preferences.coding_agent_panel_hotkey.clone(),
             coding_agent_quick: preferences.coding_agent_quick_hotkey.clone(),

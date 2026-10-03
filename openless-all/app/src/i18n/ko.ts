@@ -1182,6 +1182,13 @@ export const ko: typeof zhCN = {
     cancelledTitle: '녹음이 취소됨',
   },
   settings: {
+    testingFeatures: {
+      title: '테스트 중인 기능',
+      enable: '테스트 중인 기능 활성화',
+      description:
+        '지원되는 플랫폼에서 Less Computer와 Claude 콘솔을 표시하고 설정 및 사용할 수 있습니다. 끄면 실행 중인 작업을 중지하고 항목을 숨기지만 설정은 유지됩니다. 이 기기에만 적용됩니다.',
+      unavailable: '이 플랫폼에서는 아직 사용 가능한 테스트 기능이 없습니다.',
+    },
     selectionWorkspace: {
       title: '선택 영역 도우미',
       hint: '텍스트 선택 후 같은 단축키: 음성 편집 끄면 바로 다듬기, 켜면 누른 채 말한 뒤 「질문」 또는 「편집」 선택.',
@@ -2256,7 +2263,9 @@ export const ko: typeof zhCN = {
     noResults: '일치하는 카테고리가 없습니다. “마이크”, “모델” 또는 “테마”를 검색해 보세요.',
     autoSaveHint: '변경 사항이 자동 저장됩니다',
     backToAdvanced: '실험 및 확장으로 돌아가기',
+    backToTestingFeatures: '테스트 중인 기능으로 돌아가기',
     advancedPages: {
+      testingFeatures: '필요할 때 테스트 중인 기능을 활성화합니다.',
       vocabularyLearning:
         '음성 입력 후 수동 수정으로 학습하고 관찰 시간, 확인 시간, 글자 수를 설정합니다.',
       lessComputer: 'Agent를 선택하고 모델, 권한, 작업 디렉터리를 설정합니다.',
@@ -2271,7 +2280,7 @@ export const ko: typeof zhCN = {
       services: '음성 인식과 텍스트 처리 서비스, 채널, 로컬 모델 및 연결을 관리합니다.',
       appearance: '테마, 페이지 배치, 인터페이스 언어를 편하게 읽도록 조정합니다.',
       privacy: '시스템 권한과 연결을 확인하고 기록, 녹음 및 로컬 데이터를 관리합니다.',
-      advanced: '필요에 따라 Less Computer와 디버깅을 설정합니다.',
+      advanced: '테스트 기능, 어휘 학습 및 디버깅 도구를 설정합니다.',
       about: '현재 버전, 업데이트 채널 및 자동 업데이트 설정을 확인합니다.',
     },
     searchKeywords: {

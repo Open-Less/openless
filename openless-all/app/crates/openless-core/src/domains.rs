@@ -1468,6 +1468,13 @@ pub struct LessComputerRunResult {
 /// the typed event and return the user's decision; they must not maintain a
 /// second token registry or conversation flag.
 pub trait LessComputerApi: Send + Sync {
+    /// Bind admission to this backend's device-local settings transaction.
+    fn bind_testing_features(
+        &self,
+        _preferences: Arc<crate::PreferencesStore>,
+        _settings_write_gate: Arc<std::sync::Mutex<()>>,
+    ) {
+    }
     #[doc(hidden)]
     fn bind_event_publisher(&self, _publisher: crate::events::BackendEventPublisher) {}
     #[doc(hidden)]

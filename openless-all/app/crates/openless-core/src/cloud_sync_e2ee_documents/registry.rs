@@ -411,6 +411,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "device_bound",
     },
     PreferenceField {
+        rust_name: "testing_features_enabled",
+        key: "testingFeaturesEnabled",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Boolean,
+        reason: "local_consent_or_secret",
+    },
+    PreferenceField {
         rust_name: "coding_agent_enabled",
         key: "codingAgentEnabled",
         class: PreferenceClass::Excluded,
