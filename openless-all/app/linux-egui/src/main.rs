@@ -1093,6 +1093,13 @@ mod linux_app {
                 return;
             }
             self.ensure_popup(PopupKind::LessComputer);
+            if self
+                .backend()
+                .is_none_or(|backend| backend.ensure_testing_features_enabled().is_err())
+            {
+                self.less_computer_popup = None;
+                return;
+            }
             let message = self.less_computer_snapshot(self.lang);
             self.send_popup(PopupKind::LessComputer, message);
         }

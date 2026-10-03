@@ -528,8 +528,16 @@ fn map_dictation_state(
 fn emit_preferences(app: &AppHandle, backend: &OpenLessBackend) {
     let preferences = backend.get_preferences();
     if !preferences.testing_features_enabled {
-        crate::hide_less_computer_window(app);
-        crate::hide_less_computer_glow(app);
+        let app_for_hide = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if app_for_hide
+                .try_state::<Arc<OpenLessBackend>>()
+                .is_some_and(|backend| backend.ensure_testing_features_enabled().is_err())
+            {
+                crate::hide_less_computer_window(&app_for_hide);
+                crate::hide_less_computer_glow(&app_for_hide);
+            }
+        });
     }
     // Cloud restore also changes preferences directly through Core. Keep native
     // capsule geometry and hit testing current for every source of a preference change.
