@@ -360,9 +360,11 @@ export function AdvancedTab({
   const { t } = useTranslation();
   const { prefs, updatePrefs } = useHotkeySettings();
   const testing = prefs?.testingFeaturesEnabled === true;
+  const [savingTesting, setSavingTesting] = useState(false);
+  const testingReady = testing && !savingTesting;
   const entries = pages.filter((item) =>
     page === 'testingFeatures'
-      ? testing && isTestingFeaturePage(item.id)
+      ? testingReady && isTestingFeaturePage(item.id)
       : !isTestingFeaturePage(item.id),
   );
   const list = (
@@ -406,17 +408,22 @@ export function AdvancedTab({
           >
             <Toggle
               on={testing}
-              disabled={!prefs}
+              disabled={!prefs || savingTesting}
               label={t('settings.testingFeatures.enable')}
-              onToggle={(next) => {
-                void updatePrefs((current) => ({ ...current, testingFeaturesEnabled: next })).catch(
-                  () => emitSaved('failed', t('common.operationFailed')),
-                );
+              onToggle={async (next) => {
+                setSavingTesting(true);
+                try {
+                  await updatePrefs((current) => ({ ...current, testingFeaturesEnabled: next }));
+                } catch {
+                  emitSaved('failed', t('common.operationFailed'));
+                } finally {
+                  setSavingTesting(false);
+                }
               }}
             />
           </SettingRow>
-          {testing && list}
-          {testing && entries.length === 0 && (
+          {testingReady && list}
+          {testingReady && entries.length === 0 && (
             <p style={{ color: 'var(--ol-ink-3)', fontSize: 12 }}>
               {t('settings.testingFeatures.unavailable')}
             </p>
@@ -433,8 +440,8 @@ export function AdvancedTab({
             aria-label={t(item.titleKey)}
             data-ol-advanced-page={item.id}
           >
-            {testing && item.id === 'lessComputer' && <CodingAgentSection />}
-            {testing && item.id === 'claudeConsole' && <ClaudeConsoleSection />}
+            {testingReady && item.id === 'lessComputer' && <CodingAgentSection />}
+            {testingReady && item.id === 'claudeConsole' && <ClaudeConsoleSection />}
             {item.id === 'vocabularyLearning' && <VocabularyLearningSection />}
             {item.id === 'debug' && <DebugToolsSection />}
           </section>
