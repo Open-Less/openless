@@ -32,11 +32,12 @@ import { listChannels } from '../../lib/ipc';
 import type { PlatformCapabilities } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { emitSaved } from '../../lib/savedEvent';
-import { SettingRow, segmentedTrackStyle } from './shared';
+import { SettingRow, Toggle, ExperimentalSectionTitle, segmentedTrackStyle } from './shared';
 import { Card } from '../_atoms';
 import { useContentMotion, useSelectionMotion } from '../../lib/motion';
 import {
   availableServiceViews,
+  isTestingFeaturePage,
   isServiceViewInactive,
   resolveServiceView,
   type ServiceViewId,
@@ -357,46 +358,94 @@ export function AdvancedTab({
   onOpenPage: (page: AdvancedPageId) => void;
 }) {
   const { t } = useTranslation();
+  const { prefs, updatePrefs } = useHotkeySettings();
+  const testing = prefs?.testingFeaturesEnabled === true;
+  const [savingTesting, setSavingTesting] = useState(false);
+  const testingReady = testing && !savingTesting;
+  const entries = pages.filter((item) =>
+    page === 'testingFeatures'
+      ? testingReady && isTestingFeaturePage(item.id)
+      : !isTestingFeaturePage(item.id),
+  );
+  const list = (
+    <div className="ol-advanced-settings-list">
+      {entries.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          className="ol-advanced-settings-entry"
+          data-ol-advanced-entry={item.id}
+          onClick={() => onOpenPage(item.id)}
+        >
+          <span className="ol-advanced-entry-icon">
+            <Icon name={item.icon} size={19} />
+          </span>
+          <span className="ol-advanced-entry-copy">
+            <span className="ol-advanced-entry-title">{t(item.titleKey)}</span>
+            <span className="ol-advanced-entry-description">
+              {t(`modal.advancedPages.${item.id}`)}
+            </span>
+          </span>
+          {item.id === 'testingFeatures' && (
+            <span style={{ color: 'var(--ol-blue)', fontSize: 11, fontWeight: 600 }}>Beta</span>
+          )}
+          <Icon name="chevRight" size={17} className="ol-advanced-entry-arrow" />
+        </button>
+      ))}
+    </div>
+  );
   return (
     <>
-      <div hidden={page !== null}>
-        <div className="ol-advanced-settings-list">
-          {pages.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className="ol-advanced-settings-entry"
-              data-ol-advanced-entry={item.id}
-              onClick={() => onOpenPage(item.id)}
-            >
-              <span className="ol-advanced-entry-icon">
-                <Icon name={item.icon} size={19} />
-              </span>
-              <span className="ol-advanced-entry-copy">
-                <span className="ol-advanced-entry-title">{t(item.titleKey)}</span>
-                <span className="ol-advanced-entry-description">
-                  {t(`modal.advancedPages.${item.id}`)}
-                </span>
-              </span>
-              <Icon name="chevRight" size={17} className="ol-advanced-entry-arrow" />
-            </button>
-          ))}
-        </div>
-      </div>
-      {pages.map((item) => (
-        <section
-          key={item.id}
-          hidden={page !== item.id}
-          className="ol-advanced-settings-detail"
-          aria-label={t(item.titleKey)}
-          data-ol-advanced-page={item.id}
-        >
-          {item.id === 'lessComputer' && <CodingAgentSection />}
-          {item.id === 'claudeConsole' && <ClaudeConsoleSection />}
-          {item.id === 'vocabularyLearning' && <VocabularyLearningSection />}
-          {item.id === 'debug' && <DebugToolsSection />}
-        </section>
-      ))}
+      {page === null && list}
+      {page === 'testingFeatures' && (
+        <Card>
+          <ExperimentalSectionTitle badge="Beta">
+            {t('settings.testingFeatures.title')}
+          </ExperimentalSectionTitle>
+          <SettingRow
+            label={t('settings.testingFeatures.enable')}
+            desc={t('settings.testingFeatures.description')}
+          >
+            <Toggle
+              on={testing}
+              disabled={!prefs || savingTesting}
+              label={t('settings.testingFeatures.enable')}
+              onToggle={async (next) => {
+                setSavingTesting(true);
+                try {
+                  await updatePrefs((current) => ({ ...current, testingFeaturesEnabled: next }));
+                } catch {
+                  emitSaved('failed', t('common.operationFailed'));
+                } finally {
+                  setSavingTesting(false);
+                }
+              }}
+            />
+          </SettingRow>
+          {testingReady && list}
+          {testingReady && entries.length === 0 && (
+            <p style={{ color: 'var(--ol-ink-3)', fontSize: 12 }}>
+              {t('settings.testingFeatures.unavailable')}
+            </p>
+          )}
+        </Card>
+      )}
+      {pages
+        .filter((item) => item.id !== 'testingFeatures')
+        .map((item) => (
+          <section
+            key={item.id}
+            hidden={page !== item.id}
+            className="ol-advanced-settings-detail"
+            aria-label={t(item.titleKey)}
+            data-ol-advanced-page={item.id}
+          >
+            {testingReady && item.id === 'lessComputer' && <CodingAgentSection />}
+            {testingReady && item.id === 'claudeConsole' && <ClaudeConsoleSection />}
+            {item.id === 'vocabularyLearning' && <VocabularyLearningSection />}
+            {item.id === 'debug' && <DebugToolsSection />}
+          </section>
+        ))}
     </>
   );
 }

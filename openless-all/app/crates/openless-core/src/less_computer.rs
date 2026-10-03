@@ -23,6 +23,7 @@ const MAX_DSH_CONTINUATION_TURNS: usize = 2;
 pub(crate) const VOICE_CAPTURE_FAILED: &str = "Less Computer voice input failed. Please try again.";
 
 struct LessComputerState {
+    testing_gate: Mutex<Option<TestingFeaturesGate>>,
     conversation_active: AtomicBool,
     approvals: Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
     events: Mutex<Option<BackendEventPublisher>>,
@@ -31,6 +32,12 @@ struct LessComputerState {
     completed_turns: Mutex<VecDeque<CompletedTurn>>,
     approval_timeout: Duration,
     voice_sessions: Arc<crate::voice_session::VoiceSessionGate>,
+}
+
+#[derive(Clone)]
+struct TestingFeaturesGate {
+    preferences: Arc<crate::PreferencesStore>,
+    settings_write_gate: Arc<Mutex<()>>,
 }
 
 enum ActiveLease {
@@ -85,6 +92,7 @@ impl LessComputerService {
     ) -> Self {
         Self {
             state: Arc::new(LessComputerState {
+                testing_gate: Mutex::new(None),
                 conversation_active: AtomicBool::new(false),
                 approvals: Mutex::new(HashMap::new()),
                 events: Mutex::new(None),
@@ -134,6 +142,26 @@ impl LessComputerService {
     }
 
     fn begin_capture_inner(&self, session_id: SessionId) -> Result<(), BackendError> {
+        let gate = self
+            .state
+            .testing_gate
+            .lock()
+            .expect("testing feature gate lock poisoned")
+            .clone();
+        let _admission = gate.as_ref().map(|gate| {
+            gate.settings_write_gate
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        });
+        if gate
+            .as_ref()
+            .is_some_and(|gate| !gate.preferences.get().less_computer_available())
+        {
+            return Err(BackendError::new(
+                BackendErrorCode::PermissionDenied,
+                "Less Computer is disabled",
+            ));
+        }
         let mut active = self
             .state
             .active_lease
@@ -160,6 +188,26 @@ impl LessComputerService {
         &self,
         session_id: SessionId,
     ) -> Result<Arc<AtomicBool>, BackendError> {
+        let gate = self
+            .state
+            .testing_gate
+            .lock()
+            .expect("testing feature gate lock poisoned")
+            .clone();
+        let _admission = gate.as_ref().map(|gate| {
+            gate.settings_write_gate
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        });
+        if gate
+            .as_ref()
+            .is_some_and(|gate| !gate.preferences.get().less_computer_available())
+        {
+            return Err(BackendError::new(
+                BackendErrorCode::PermissionDenied,
+                "Less Computer is disabled",
+            ));
+        }
         let mut active = self
             .state
             .active_lease
@@ -382,6 +430,20 @@ impl Drop for ApprovalLease {
 }
 
 impl LessComputerApi for LessComputerService {
+    fn bind_testing_features(
+        &self,
+        preferences: Arc<crate::PreferencesStore>,
+        settings_write_gate: Arc<Mutex<()>>,
+    ) {
+        *self
+            .state
+            .testing_gate
+            .lock()
+            .expect("testing feature gate lock poisoned") = Some(TestingFeaturesGate {
+            preferences,
+            settings_write_gate,
+        });
+    }
     fn bind_event_publisher(&self, publisher: BackendEventPublisher) {
         *self
             .state

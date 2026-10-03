@@ -12,6 +12,7 @@ export type SettingsSectionId =
   | 'about';
 
 export const ADVANCED_PAGES = [
+  { id: 'testingFeatures', icon: 'sparkle', titleKey: 'settings.testingFeatures.title' },
   { id: 'lessComputer', icon: 'mac', titleKey: 'settings.codingAgent.title' },
   { id: 'claudeConsole', icon: 'chevLR', titleKey: 'settings.codingConsole.title' },
   { id: 'vocabularyLearning', icon: 'sparkle', titleKey: 'settings.vocabularyLearning.title' },
@@ -21,8 +22,17 @@ export const ADVANCED_PAGES = [
 export type AdvancedPage = (typeof ADVANCED_PAGES)[number];
 export type AdvancedPageId = AdvancedPage['id'];
 
-export function visibleAdvancedPages(platform: PlatformKind | undefined, os: OS): AdvancedPage[] {
+export function isTestingFeaturePage(page: AdvancedPageId | null): boolean {
+  return page === 'lessComputer' || page === 'claudeConsole';
+}
+
+export function visibleAdvancedPages(
+  platform: PlatformKind | undefined,
+  os: OS,
+  enabled = false,
+): AdvancedPage[] {
   return ADVANCED_PAGES.filter((page) => {
+    if (isTestingFeaturePage(page.id) && !enabled) return false;
     if (page.id === 'lessComputer') return platform === 'desktop' && (os === 'mac' || os === 'win');
     if (page.id === 'claudeConsole') return platform === 'desktop' && os === 'mac';
     if (page.id === 'vocabularyLearning')

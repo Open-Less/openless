@@ -789,6 +789,7 @@ mod tests {
                 ..Default::default()
             };
             vm.settings.less_computer = enabled;
+            vm.settings.testing_features = true;
             let mut painted = String::new();
             for _ in 0..2 {
                 ctx.begin_pass(egui::RawInput {
@@ -807,7 +808,35 @@ mod tests {
         }
     }
 
-    /// 渲染设置页并把这一帧画出的文字按行返回。
+    #[test]
+    fn testing_features_hide_root_entries_and_revoke_an_open_detail_page() {
+        use super::view_model::SettingsSection;
+        let mut vm = FrontendViewModel::default();
+        let root = painted_settings_lines(SettingsSection::Advanced, &mut vm);
+        let title = openless_linux_egui::tr_l10n(
+            openless_linux_egui::Lang::ZhCn,
+            "settings.testing_features.title",
+        );
+        assert!(root.iter().any(|line| line.contains(title)));
+        assert!(!root.iter().any(|line| line == "Less Computer"));
+        vm.advanced_open = 3;
+        let off = painted_settings_lines(SettingsSection::Advanced, &mut vm);
+        assert!(!off.iter().any(|line| line == "Less Computer"));
+        vm.settings.testing_features = true;
+        let on = painted_settings_lines(SettingsSection::Advanced, &mut vm);
+        assert!(on.iter().any(|line| line == "Less Computer"));
+        vm.advanced_open = 0;
+        vm.settings.less_computer = true;
+        vm.settings.testing_features = false;
+        let revoked = painted_settings_lines(SettingsSection::Advanced, &mut vm);
+        assert_eq!(vm.advanced_open, 3);
+        assert!(!revoked.iter().any(|line| line == "Less Computer"));
+        let shortcuts = painted_settings_lines(SettingsSection::Shortcuts, &mut vm);
+        let agent_voice = openless_linux_egui::tr_l10n(vm.lang, "settings.shortcuts.agent_voice");
+        assert!(!shortcuts.iter().any(|line| line == agent_voice));
+    }
+
+    /// Render two frames so layout and text are settled.
     fn painted_settings_lines(
         section: super::view_model::SettingsSection,
         vm: &mut FrontendViewModel,
@@ -907,6 +936,7 @@ mod tests {
             shortcut_recording: Some(ShortcutField::CodingAgentVoice),
             ..Default::default()
         };
+        vm.settings.testing_features = true;
         let held = egui::Modifiers {
             ctrl: true,
             command: true,

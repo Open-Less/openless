@@ -1214,6 +1214,13 @@ export const es: typeof zhCN = {
     cancelledTitle: 'Grabación cancelada',
   },
   settings: {
+    testingFeatures: {
+      title: 'Funciones en fase de pruebas',
+      enable: 'Activar funciones en fase de pruebas',
+      description:
+        'Mostrar Less Computer y la consola de Claude para configurarlos y usarlos en plataformas compatibles. Al desactivar esta opción, se detienen las tareas y se ocultan las entradas, pero se conservan los ajustes. Solo se aplica a este dispositivo.',
+      unavailable: 'Todavía no hay funciones de prueba disponibles en esta plataforma.',
+    },
     selectionWorkspace: {
       title: 'Asistente de selección',
       hint: 'Selecciona texto y usa un solo atajo: mejora el texto si la edición por voz está desactivada; si está activada, mantén pulsado y habla, y luego elige Preguntar o Editar.',
@@ -2350,7 +2357,9 @@ export const es: typeof zhCN = {
     noResults: 'No se encontraron categorías. Prueba «micrófono», «modelos» o «tema».',
     autoSaveHint: 'Los cambios se guardan automáticamente',
     backToAdvanced: 'Volver a Experimentos y extensiones',
+    backToTestingFeatures: 'Volver a funciones en fase de pruebas',
     advancedPages: {
+      testingFeatures: 'Activar opcionalmente las funciones que siguen en pruebas.',
       vocabularyLearning:
         'Aprender de correcciones manuales; configurar observación, confirmación y longitud.',
       lessComputer: 'Elige un agente y configura su modelo, permisos y directorio de trabajo.',
@@ -2368,7 +2377,8 @@ export const es: typeof zhCN = {
       appearance: 'Ajusta el tema, el diseño y el idioma de la interfaz para leer con comodidad.',
       privacy:
         'Comprueba los permisos y las conexiones. Administra el historial, las grabaciones y los datos locales.',
-      advanced: 'Configura Less Computer y la depuración según tus necesidades.',
+      advanced:
+        'Configurar funciones de prueba, aprendizaje de vocabulario y herramientas de depuración.',
       about: 'Consulta tu versión, el canal y los ajustes de actualización automática.',
     },
     searchKeywords: {

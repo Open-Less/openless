@@ -1188,6 +1188,13 @@ export const ja: typeof zhCN = {
     cancelledTitle: '録音をキャンセルしました',
   },
   settings: {
+    testingFeatures: {
+      title: 'テスト中の機能',
+      enable: 'テスト中の機能を有効にする',
+      description:
+        '対応するプラットフォームで Less Computer と Claude コンソールを表示し、設定・使用できます。オフにすると実行中のタスクを停止して項目を非表示にしますが、設定は保持されます。このデバイスのみに適用されます。',
+      unavailable: 'このプラットフォームでは、利用できるテスト機能はまだありません。',
+    },
     selectionWorkspace: {
       title: '選択範囲アシスタント',
       hint: 'テキスト選択後、同じショートカットで：音声編集オフ時は推敲、オン時は押しながら話してから「質問」か「編集」を選択。',
@@ -2275,7 +2282,9 @@ export const ja: typeof zhCN = {
     noResults: 'カテゴリが見つかりません。「マイク」「モデル」「テーマ」などをお試しください。',
     autoSaveHint: '変更は自動保存されます',
     backToAdvanced: '実験と拡張に戻る',
+    backToTestingFeatures: 'テスト中の機能に戻る',
     advancedPages: {
+      testingFeatures: 'テスト中の機能を必要に応じて有効にします。',
       vocabularyLearning:
         '音声入力後の手動修正から学習し、監視時間・確認時間・文字数を設定します。',
       lessComputer: 'Agent を選び、モデル・権限・作業ディレクトリを設定します。',
@@ -2290,7 +2299,7 @@ export const ja: typeof zhCN = {
       services: '音声認識と文章処理のサービス、チャンネル、ローカルモデル、接続を管理します。',
       appearance: 'テーマ、レイアウト、表示言語を読みやすく調整します。',
       privacy: 'システム権限と接続を確認し、履歴、録音、ローカルデータを管理します。',
-      advanced: '必要に応じて Less Computer とデバッグを設定します。',
+      advanced: 'テスト機能、語彙学習、デバッグツールを設定します。',
       about: '現在のバージョン、更新チャンネル、自動更新を確認します。',
     },
     searchKeywords: {

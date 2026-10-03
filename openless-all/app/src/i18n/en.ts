@@ -1199,6 +1199,13 @@ export const en: typeof zhCN = {
     cancelledTitle: 'Recording cancelled',
   },
   settings: {
+    testingFeatures: {
+      title: 'Features under testing',
+      enable: 'Enable features under testing',
+      description:
+        'Show Less Computer and the Claude console for setup and use on supported platforms. Turning this off stops active tasks and hides their entries while keeping your settings. Applies only to this device.',
+      unavailable: 'No testing features are available on this platform yet.',
+    },
     selectionWorkspace: {
       title: 'Selection Assistant',
       hint: 'With a selection, one shortcut polishes (voice edit off) or takes a spoken instruction to ask or edit. With no selection but focus in a text field, speak to Help me write a draft or ask a question.',
@@ -2306,7 +2313,9 @@ export const en: typeof zhCN = {
     noResults: 'No matching categories. Try “microphone”, “models” or “theme”.',
     autoSaveHint: 'Changes save automatically',
     backToAdvanced: 'Back to Experiments & extensions',
+    backToTestingFeatures: 'Back to features under testing',
     advancedPages: {
+      testingFeatures: 'Opt in to features that are still being tested.',
       vocabularyLearning:
         'Learn from manual corrections after dictation; configure observation, confirmation time and phrase length.',
       lessComputer: 'Choose an agent and configure its model, permissions, and working directory.',
@@ -2323,7 +2332,7 @@ export const en: typeof zhCN = {
       appearance: 'Adjust the theme, page layout and interface language for comfortable reading.',
       privacy:
         'Check system permissions and connections. Manage history, recordings and local data.',
-      advanced: 'Configure Less Computer and debugging as needed.',
+      advanced: 'Configure testing features, vocabulary learning, and debugging tools.',
       about: 'View your version, update channel and automatic update settings.',
     },
     searchKeywords: {

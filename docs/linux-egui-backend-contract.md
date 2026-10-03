@@ -1,6 +1,6 @@
 # Linux egui 后端接口契约（2.0.0）
 
-状态：canonical（2026-09-07 以源码为准重写）；更新：2026-09-27。范围以[2.0 需求](2.0-requirements.md)为准；本文是长接口与实现参考，交接材料以[交接目录](linux-egui-handoff/README.md)为准。
+状态：canonical（2026-09-07 以源码为准重写）；更新：2026-10-03。范围以[2.0 需求](2.0-requirements.md)为准；本文是长接口与实现参考，交接材料以[交接目录](linux-egui-handoff/README.md)为准。
 
 ## 1. 合同文件
 
@@ -10,6 +10,7 @@
 | --- | --- |
 | `startupSnapshot` | 启动快照结构与版本校验规则；UI 必须先消费快照再渲染 |
 | `backendEvent` | 语义事件清单、顺序与重放规则 |
+| `testingFeatures` | 本设备 Beta 总开关、默认关闭、运行门禁与取消合同 |
 | `lessComputerVoice` | Less Computer 语音事件面 |
 | `androidJni` | Android JNI 合同（src-tauri android 桥接共用） |
 | `linuxFacade` | Linux 专用 facade 面（`LinuxHost` 公开方法对应） |
@@ -32,6 +33,8 @@
 - provider 公开目录：Core `provider_rules::provider_descriptors` → 生成 `src/lib/ipc/provider-descriptors.generated.json`（`cargo run --locked -p openless-core --example export_provider_descriptors`）。
 
 ## 5. 行为约定（合同级）
+
+- `UserPreferences.testingFeaturesEnabled` 默认 `false`，设备独立选择，不进入云同步。实验与扩展中的 Less Computer 移到 Beta 测试功能子页，开启总开关后才显示，运行还须开启原有 `codingAgentEnabled`。Core 在会话预约、录音与文字提交时验证有效开关，关闭返回 `PermissionDenied`；关闭总开关取消当前任务、注销热键并关闭独立弹窗，保留功能配置。
 
 - fcitx5 为生产启动硬依赖：持有单实例锁后检查插件和会话 D-Bus，按需刷新并在 15 秒就绪预算内等待，再启动监听器、注册必需热键、启动 Core 和 Remote Input。失败清理已启动资源并显示错误窗口；关闭后以非零状态退出，外层锁覆盖完整生命周期。
 - 设置保存状态与动作处理位于 `linux_app/settings_save.rs`：按序列化字段生成补丁、串行提交、只重试明确 revision 冲突（最多三次），失败保留草稿并显式重试；Core 合同与持久化格式不变。

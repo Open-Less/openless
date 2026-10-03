@@ -3059,12 +3059,25 @@ fn position_less_computer_window<R: tauri::Runtime>(
 /// as QA). `macos` build only.
 #[cfg(target_os = "macos")]
 pub(crate) fn show_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if app
+        .try_state::<Arc<openless_core::OpenLessBackend>>()
+        .is_none_or(|backend| backend.ensure_testing_features_enabled().is_err())
+    {
+        return;
+    }
     let Some(window) = ensure_less_computer_window(app) else {
         log::info!("[less-computer] show 跳过：窗口不存在");
         return;
     };
     let window_clone = window.clone();
+    let app_for_show = app.clone();
     let _ = app.run_on_main_thread(move || {
+        if app_for_show
+            .try_state::<Arc<openless_core::OpenLessBackend>>()
+            .is_none_or(|backend| backend.ensure_testing_features_enabled().is_err())
+        {
+            return;
+        }
         use objc2::msg_send;
         use objc2::runtime::AnyObject;
         // This helper is also called from the Tokio worker that executes a text or
@@ -3100,23 +3113,38 @@ pub(crate) fn show_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) {
                 let _ = window_clone.show();
             }
         }
+        // Keep the entrance epoch ordered with preference-driven hides on the UI thread.
+        LESS_COMPUTER_PANEL_EPOCH.fetch_add(1, Ordering::SeqCst);
+        let _ = app_for_show.emit_to("less-computer", "chat-panel:shown", serde_json::json!({}));
     });
-    // Cancel the pending exit-hide (fast close-open) and replay the entrance animation.
-    LESS_COMPUTER_PANEL_EPOCH.fetch_add(1, Ordering::SeqCst);
-    let _ = app.emit_to("less-computer", "chat-panel:shown", serde_json::json!({}));
 }
 
 #[cfg(target_os = "windows")]
 pub(crate) fn show_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if app
+        .try_state::<Arc<openless_core::OpenLessBackend>>()
+        .is_none_or(|backend| backend.ensure_testing_features_enabled().is_err())
+    {
+        return;
+    }
     let Some(window) = ensure_less_computer_window(app) else {
         return;
     };
-    if let Err(error) = window.show() {
-        log::warn!("[less-computer] show failed: {error}");
-        return;
-    }
-    LESS_COMPUTER_PANEL_EPOCH.fetch_add(1, Ordering::SeqCst);
-    let _ = app.emit_to("less-computer", "chat-panel:shown", serde_json::json!({}));
+    let app_for_show = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if app_for_show
+            .try_state::<Arc<openless_core::OpenLessBackend>>()
+            .is_none_or(|backend| backend.ensure_testing_features_enabled().is_err())
+        {
+            return;
+        }
+        if let Err(error) = window.show() {
+            log::warn!("[less-computer] show failed: {error}");
+            return;
+        }
+        LESS_COMPUTER_PANEL_EPOCH.fetch_add(1, Ordering::SeqCst);
+        let _ = app_for_show.emit_to("less-computer", "chat-panel:shown", serde_json::json!({}));
+    });
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]

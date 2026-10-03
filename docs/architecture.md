@@ -1,6 +1,6 @@
 # OpenLess 2.0 架构
 
-状态：canonical，当前实现说明；更新：2026-09-30。平台范围见 [2.0 需求](2.0-requirements.md)，文件定位见 [目录结构](structure.md)。
+状态：canonical，当前实现说明；更新：2026-10-03。平台范围见 [2.0 需求](2.0-requirements.md)，文件定位见 [目录结构](structure.md)。
 
 ## 1. 分层与工作区
 
@@ -78,6 +78,8 @@ Tauri 在 `src-tauri/src/coordinator.rs` 构造 Core，`core_adapters.rs` 组装
 Siri、Classic、Typeless 三种胶囊共用 Core 的 `CapsuleStyle`，窗口尺寸与点击范围在保存偏好时同步。胶囊按显示器工作区底部定位，避开未自动隐藏的 Dock/任务栏；可见期间重新检查工作区。带正文的浮窗使用不透明底色，聊天面板另叠加细噪点纹理，圆角外部仍保留透明区域。
 
 思考动画覆盖转写、润色和原生文字写入，输入完成后才收尾。macOS 流式键盘输入由会话内串行 worker 维护原控件和累计 UTF-16 终点；每批发送后不再等待 AX 长确认，finish/cancel 在已接收写入之后等待最终屏障，再恢复输入源。AX 仅读选区范围，不读正文；采用 250 ms 无进展预算和 10 秒总预算。不可读、提交型 Return 或预算耗尽时明确降级到按键已发送语义，不重新粘贴已发送文字。目标应用的实际输入表现仍需设备验收。
+
+Less Computer 与 Claude 控制台收拢到「实验与扩展 → 正在测试中的功能（Beta）」。本设备的 `testingFeaturesEnabled` 默认关闭，旧版已开启 Less Computer 的配置也不会自动打开总开关。开启后按真实平台能力显示入口；React 的 Less Computer 仅 Windows/macOS、Claude 控制台仅 macOS，Linux egui 保留自己的 Less Computer 接入入口，Android 当前显示无可用测试功能。关闭总开关会隐藏入口、快捷键和独立窗口，Core 停止当前捕获与 Agent/控制台任务并拒绝新的运行请求；已有 Agent、模型、权限与路径配置保留。总开关不进入云同步，恢复保留接收设备的本机选择。
 
 Less Computer 面板将听写与直接语音提交分开：麦克风把转写填入草稿供编辑，语音模式和快捷键可直接提交给 Agent。Core 的 `voice_state` 事件携带会话 ID、模式、实时转写及收尾结果；波形使用实际音量采样。停止和取消均绑定指定会话，延迟请求不能结束下一段录音；开麦与文字发送互斥。工具过程默认折叠，运行状态只在真实活动步骤显示动效，右侧工作台汇总当前轮次；历史和多会话仍标为暂不可用。登录弹窗打开时，听写结果只更新草稿，不抢走弹窗或授权浏览器的焦点。
 

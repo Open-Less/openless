@@ -89,6 +89,8 @@ pub(super) fn canonicalize_native_documents(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct LocalRollbackState {
     schema_version: u32,
+    #[serde(default)]
+    testing_features_enabled: bool,
     coding_agent_enabled: bool,
     active_asr_provider: String,
     active_llm_provider: String,
@@ -126,6 +128,7 @@ impl CoreSyncStore {
         }
         SecretJson::from_serializable(&LocalRollbackState {
             schema_version: 1,
+            testing_features_enabled: prefs.testing_features_enabled,
             coding_agent_enabled: prefs.coding_agent_enabled,
             active_asr_provider: prefs.active_asr_provider,
             active_llm_provider: prefs.active_llm_provider,
@@ -177,6 +180,10 @@ impl CoreSyncStore {
         let object = current
             .as_object_mut()
             .ok_or(DocumentError::InvalidDocument)?;
+        object.insert(
+            "testingFeaturesEnabled".into(),
+            Value::Bool(local.testing_features_enabled),
+        );
         object.insert(
             "codingAgentEnabled".into(),
             Value::Bool(local.coding_agent_enabled),
