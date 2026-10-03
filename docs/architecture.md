@@ -1,6 +1,6 @@
 # OpenLess 2.0 架构
 
-状态：canonical，当前实现说明；更新：2026-09-30。平台范围见 [2.0 需求](2.0-requirements.md)，文件定位见 [目录结构](structure.md)。
+状态：canonical，当前实现说明；更新：2026-10-03。平台范围见 [2.0 需求](2.0-requirements.md)，文件定位见 [目录结构](structure.md)。
 
 ## 1. 分层与工作区
 
@@ -74,6 +74,8 @@ Tauri 在 `src-tauri/src/coordinator.rs` 构造 Core，`core_adapters.rs` 组装
 `src-tauri/tauri.conf.json` 声明 `main`、`capsule` 两个窗口。`src/main.tsx` 读取 `?window=`，`src/App.tsx` 按类型加载胶囊、`qa`（含复用它的「润色结果」模式）、`selection-voice-intent`、`less-computer` 和 `less-computer-glow`；未指定类型时进入主界面。各 WebView 共用前端入口，重页面按需加载；移动端再依据平台能力选择布局。Linux 单实例由 `linux-egui/src/single_instance.rs` 守护并转发启动意图。
 
 主窗口默认逻辑尺寸为 1300×835，允许用户调整；macOS 原生窗口按钮左侧和顶部均留出 16px，前端保留 44px 拖动区。桌面侧栏宽 226px，主内容从版本行下方开始，设置面板单独限制高度并在内部滚动。
+
+macOS 全局热键在后台 CGEventTap 线程读取按键与修饰键边沿。只有配置的 Fn 正处于按住状态时，监听器才解析系统功能键负载；`NSEvent eventWithCGEvent:` 的转换同步交给主线程，完成分类后再处理 Fn 松键。此转换会进入 HIToolbox 的输入源逻辑，不能在热键线程执行；普通 Caps Lock 中英文切换不需要该转换。Esc 与组合键取消仍由原有独立通道处理。
 
 Siri、Classic、Typeless 三种胶囊共用 Core 的 `CapsuleStyle`，窗口尺寸与点击范围在保存偏好时同步。胶囊按显示器工作区底部定位，避开未自动隐藏的 Dock/任务栏；可见期间重新检查工作区。带正文的浮窗使用不透明底色，聊天面板另叠加细噪点纹理，圆角外部仍保留透明区域。
 
