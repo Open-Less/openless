@@ -813,7 +813,11 @@ mod tests {
         use super::view_model::SettingsSection;
         let mut vm = FrontendViewModel::default();
         let root = painted_settings_lines(SettingsSection::Advanced, &mut vm);
-        assert!(root.iter().any(|line| line.contains("正在测试中的功能")));
+        let title = openless_linux_egui::tr_l10n(
+            openless_linux_egui::Lang::ZhCn,
+            "settings.testing_features.title",
+        );
+        assert!(root.iter().any(|line| line.contains(title)));
         assert!(!root.iter().any(|line| line == "Less Computer"));
         vm.advanced_open = 3;
         let off = painted_settings_lines(SettingsSection::Advanced, &mut vm);
