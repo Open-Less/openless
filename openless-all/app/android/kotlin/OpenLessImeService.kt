@@ -3844,7 +3844,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         recording = false
         processing = false
         if (url.isEmpty() || token.isEmpty()) {
-            setState("error", "请先在设置中填写云笔记的地址/Token")
+            reportCloudNoteFailure(requestId, text, CloudNoteFailure.MissingDestination)
             return
         }
         setState("thinking", "正在提交云笔记")
@@ -3867,20 +3867,58 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
                 val code = connection.responseCode
                 mainHandler.post {
-                    if (requestId != imeRequestId) return@post
                     if (code in 200..299) {
+                        if (requestId != imeRequestId) return@post
                         setState("done", "已提交云笔记", QUICK_NOTE_CONFIRMATION_DELAY_MS)
                     } else {
-                        setState("error", "云笔记提交失败（$code）")
+                        reportCloudNoteFailure(requestId, text, CloudNoteFailure.Http, code)
                     }
                 }
             } catch (error: Throwable) {
                 android.util.Log.w("OpenLessImeService", "cloud note webhook submit failed: ${error.javaClass.simpleName}")
                 mainHandler.post {
-                    if (requestId == imeRequestId) setState("error", "云笔记提交失败，请检查网络")
+                    reportCloudNoteFailure(requestId, text, CloudNoteFailure.Network)
                 }
             } finally { connection?.disconnect() }
         }.start()
+    }
+
+    /**
+     * Keeps a transcript the webhook did not accept. Core already removed the
+     * recording and history, so the completion text is the only remaining copy.
+     * A newer recording may own the status line; the clipboard entry still has
+     * to be written, and a toast reports it without touching that session.
+     */
+    private fun reportCloudNoteFailure(
+        requestId: Long,
+        text: String,
+        failure: CloudNoteFailure,
+        httpCode: Int = 0,
+    ) {
+        val retained = if (cloudNoteShouldRetain(text)) {
+            try {
+                OpenLessClipboardHistory.recordCopy(this, text)
+                true
+            } catch (error: Throwable) {
+                android.util.Log.w(
+                    "OpenLessImeService",
+                    "cloud note clipboard retain failed: ${error.javaClass.simpleName}",
+                )
+                false
+            }
+        } else {
+            false
+        }
+        val (messageZh, messageEn) = cloudNoteFailureMessage(
+            cloudNoteFailureDetail(failure, httpCode),
+            retained,
+        )
+        val message = ui(messageZh, messageEn)
+        if (requestId == imeRequestId) {
+            setState("error", message)
+        } else {
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun commitImeText(text: String) {
