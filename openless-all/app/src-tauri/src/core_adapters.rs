@@ -1028,6 +1028,15 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
                 "selectionPolishNoSelection",
             )
         })?;
+        // A head/tail stand-in must never become the source of a paste. The
+        // final validation also compares against the full live selection, but
+        // refusing here avoids sending the omitted middle's absence to the model.
+        if selection.omits_middle {
+            return Err(BackendError::new(
+                BackendErrorCode::InvalidArgument,
+                "selectionPolishSelectionTooLong",
+            ));
+        }
         if !crate::selection::selection_insertion_target_is_captured(&target) {
             return Err(BackendError::new(
                 BackendErrorCode::Platform,
@@ -1054,6 +1063,12 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
             return Err(BackendError::new(
                 BackendErrorCode::Platform,
                 "selectionPolishTargetUnavailable",
+            ));
+        }
+        if crate::selection::is_truncated_selection_stand_in(source_text) {
+            return Err(BackendError::new(
+                BackendErrorCode::InvalidArgument,
+                "selectionPolishSelectionTooLong",
             ));
         }
         let validation = crate::selection::validate_selection_insertion_target(target, source_text);

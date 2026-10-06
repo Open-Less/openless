@@ -488,6 +488,9 @@ fn handle_selection_workspace_hotkey_pressed(inner: &Arc<Inner>) {
                     "selectionPolishNoSelection" | "selected text must not be empty" => {
                         "未选中内容"
                     }
+                    "selectionPolishSelectionTooLong" => {
+                        "选区超过 4000 字，未替换，以免删掉中间没有读到的原文"
+                    }
                     "selectionPolishTargetUnavailable" => "目标输入框不可用，请重新选择",
                     "selectionPolishTargetChanged" | "selectionPolishSelectionChanged" => {
                         "选区已变化，未替换"
