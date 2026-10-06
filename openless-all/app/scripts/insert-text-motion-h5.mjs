@@ -6,9 +6,11 @@ import { basename, join, resolve } from 'node:path';
 import { createServer } from 'vite';
 
 const out = process.env.OPENLESS_MOTION_ARTIFACT_DIR || join(tmpdir(), 'openless-motion-h5');
+const serverPort = Number(process.env.OPENLESS_MOTION_H5_PORT || 1438);
+const chromePort = Number(process.env.OPENLESS_MOTION_CHROME_PORT || 9437);
 mkdirSync(out, { recursive: true });
 const server = await createServer({
-  server: { host: '127.0.0.1', port: 1438, strictPort: true, watch: null },
+  server: { host: '127.0.0.1', port: serverPort, strictPort: true, watch: null },
 });
 const fixture = resolve(`.insert-motion-h5-${process.pid}-${Date.now()}.html`);
 writeFileSync(
@@ -28,14 +30,14 @@ writeFileSync(
   </script></body></html>`,
 );
 await server.listen();
-const pageUrl = 'http://127.0.0.1:1438/' + basename(fixture);
+const pageUrl = `http://127.0.0.1:${serverPort}/` + basename(fixture);
 const chrome = spawn(
   process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe',
   [
     '--headless=new',
     '--no-first-run',
     '--no-default-browser-check',
-    '--remote-debugging-port=9437',
+    `--remote-debugging-port=${chromePort}`,
     '--window-size=900,500',
     '--user-data-dir=' + join(tmpdir(), 'openless-motion-' + Date.now()),
     pageUrl,
@@ -48,7 +50,7 @@ try {
   let target;
   for (let i = 0; i < 100; i++) {
     try {
-      target = (await (await fetch('http://127.0.0.1:9437/json/list')).json()).find(
+      target = (await (await fetch(`http://127.0.0.1:${chromePort}/json/list`)).json()).find(
         (t) => t.type === 'page' && t.url === pageUrl,
       );
     } catch {}
@@ -83,11 +85,14 @@ try {
       throw Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text);
     return r.result.value;
   };
-  for (let i = 0; i < 150; i++) {
-    if (await evaluate('Boolean(window.ready)')) break;
-    await sleep(100);
-  }
-  assert(await evaluate('Boolean(window.ready)'), 'React fixture ready');
+  const waitForFixture = async () => {
+    for (let i = 0; i < 150; i++) {
+      if (await evaluate("Boolean(window.ready && typeof window.show === 'function')")) return;
+      await sleep(100);
+    }
+    assert(false, 'React fixture ready');
+  };
+  await waitForFixture();
   await sleep(800);
   const samples = await evaluate(`new Promise(resolve=>{
     const frames=[]; const start=performance.now();window.show('帮我查找一下');
@@ -166,8 +171,9 @@ try {
   await send('Emulation.setEmulatedMedia', {
     features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
   });
+  await evaluate(`window.ready=false; window.show=undefined`);
   await send('Page.reload');
-  await sleep(1000);
+  await waitForFixture();
   await evaluate(`window.show('减少动态效果验证')`);
   await sleep(80);
   assert(
@@ -177,8 +183,9 @@ try {
     'reduced motion immediate',
   );
   await send('Emulation.setEmulatedMedia', { features: [] });
+  await evaluate(`window.ready=false; window.show=undefined`);
   await send('Page.reload');
-  await sleep(900);
+  await waitForFixture();
   await evaluate(`window.show('帮我查找一下十六号的天气')`);
   await sleep(1000);
   // Optional real browser filmstrip; timestamps preserve capture cadence.
@@ -220,8 +227,9 @@ try {
   }
   const shot = await send('Page.captureScreenshot', { format: 'png' });
   writeFileSync(join(out, 'settled.png'), Buffer.from(shot.data, 'base64'));
+  await evaluate(`window.ready=false; window.show=undefined`);
   await send('Page.navigate', { url: pageUrl });
-  await sleep(1200);
+  await waitForFixture();
   await evaluate(`window.show('10六号')`);
   await sleep(1000);
   const correction = await evaluate(`new Promise(resolve=>{
@@ -241,12 +249,19 @@ try {
     for (const enabled of [true, false]) {
       await send('Emulation.setDeviceMetricsOverride', {
         width: style === 'typeless' ? 206 : 460,
-        height: style === 'typeless' ? 57 : style === 'classic' ? 100 : 180,
+        height:
+          style === 'typeless'
+            ? enabled
+              ? 65
+              : 57
+            : style === 'classic'
+              ? 172
+              : 228,
         deviceScaleFactor: 1,
         mobile: false,
       });
       await send('Page.navigate', {
-        url: `http://127.0.0.1:1438/?window=capsule&os=win&style=${style}&insertDemo=1&transcript=${enabled ? 1 : 0}&fontSize=20`,
+        url: `http://127.0.0.1:${serverPort}/?window=capsule&os=win&style=${style}&insertDemo=1&transcript=${enabled ? 1 : 0}&translation=${style === 'typeless' && enabled ? 1 : 0}&fontSize=20`,
       });
       // Production demo simulates five recognition batches ending after 2440ms.
       for (let attempt = 0; attempt < 150; attempt += 1) {
@@ -261,7 +276,16 @@ try {
         const pills=[...document.querySelectorAll('.ol-live-transcript-pill')];
         const chars=[...document.querySelectorAll('.ol-live-transcript-char')];
         const rect=pills[0]?.getBoundingClientRect();
-        return {pills:pills.length,chars:chars.length,width:rect?.width,font:chars[0]?parseFloat(getComputedStyle(chars[0]).fontSize):0,buttons:document.querySelectorAll('button').length};
+        const rail=document.querySelector('.ol-capsule-transcript-rail');
+         const body=${JSON.stringify(style)}==='typeless'?document.querySelector('.ol-capsule-waveform'): ${JSON.stringify(style)}==='classic'?document.querySelector('.ol-capsule-pill'):document.querySelector('canvas');
+         const hint=document.querySelector('.ol-typeless-translation');
+         const hintRect=hint?.getBoundingClientRect();
+         const hintStyle=hint?getComputedStyle(hint):null;
+         const railRect=rail?.getBoundingClientRect();
+         const bodyRect=body?.getBoundingClientRect();
+         const translationHintVisible=Boolean(hint && hintStyle?.opacity !== '0' && hintRect && hintRect.width > 0 && hintRect.top >= -0.5 && hintRect.bottom <= innerHeight + 0.5);
+         const translationHintNonOverlapping=Boolean(!translationHintVisible || !hintRect || !bodyRect || (hintRect.bottom <= bodyRect.top + 0.5 && (!railRect || hintRect.top >= railRect.bottom - 0.5)));
+         return {pills:pills.length,chars:chars.length,width:rect?.width,font:chars[0]?parseFloat(getComputedStyle(chars[0]).fontSize):0,buttons:document.querySelectorAll('button').length,rail:Boolean(rail),body:Boolean(body),railOutsideBody:Boolean(rail && body && !body.contains(rail)),translationHintVisible,translationHintNonOverlapping};
       })()`);
       if (result.pills !== (enabled ? 1 : 0)) {
         writeFileSync(
@@ -272,7 +296,18 @@ try {
       assert.equal(result.pills, enabled ? 1 : 0, `${style} display preference`);
       if (enabled) {
         assert(result.chars > 0, `${style} original text`);
+        assert(result.chars <= 64, `${style} motion glyph count stays bounded`);
+         assert(
+           result.rail && result.body && result.railOutsideBody,
+           `${style} keeps the capsule body beside, not inside, the transcript rail`,
+         );
         assert(result.width <= (style === 'typeless' ? 206 : 460), `${style} bounded width`);
+        if (style === 'typeless') {
+          assert(result.translationHintVisible, 'typeless translation hint stays inside the native viewport');
+          if (enabled) {
+            assert(result.translationHintNonOverlapping, 'typeless translation hint has a dedicated non-overlapping row');
+          }
+        }
         assert(
           Math.abs(result.font * (style === 'typeless' ? 0.447 : 1) - 20) < 0.1,
           `${style} visible font size`,

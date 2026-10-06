@@ -195,6 +195,7 @@ fn emit_capsule_with_context_locked(
 ) -> u64 {
     let dictation = inner.backend.snapshot().dictation;
     let payload = CapsulePayload {
+        session_id: dictation.session_id.map(|session| session.to_string()),
         state,
         level,
         elapsed_ms,
@@ -212,7 +213,8 @@ fn emit_capsule_with_context_locked(
         selection_polish,
         capsule_style: inner.host.cached_capsule_style(),
     };
-    emit_capsule_payload_locked(inner, payload)
+    let captured_revision = inner.host.capsule_revision();
+    emit_capsule_payload_locked(inner, payload, captured_revision)
 }
 
 /// Core feedback enters the same native display outlet wholesale, including warming,
@@ -221,12 +223,13 @@ pub(super) fn emit_core_capsule(
     inner: &Arc<Inner>,
     payload: CapsulePayload,
     expected_epoch: Option<u64>,
+    captured_revision: u64,
 ) -> Option<u64> {
     emit_capsule_at_epoch(
         &inner.capsule_event_lock,
         &inner.capsule_event_epoch,
         expected_epoch,
-        || emit_capsule_payload_locked(inner, payload),
+        || emit_capsule_payload_locked(inner, payload, captured_revision),
     )
 }
 
@@ -252,7 +255,11 @@ pub(super) fn hide_core_capsule_if_current(inner: &Arc<Inner>, expected_epoch: u
     );
 }
 
-fn emit_capsule_payload_locked(inner: &Arc<Inner>, payload: CapsulePayload) -> u64 {
+fn emit_capsule_payload_locked(
+    inner: &Arc<Inner>,
+    payload: CapsulePayload,
+    captured_revision: u64,
+) -> u64 {
     let state = payload.state;
     let selection_polish = payload.selection_polish;
     // Advance the epoch on every payload. That way an old selection-polish terminal timer is
@@ -291,6 +298,16 @@ fn emit_capsule_payload_locked(inner: &Arc<Inner>, payload: CapsulePayload) -> u
     // Keep the latest full feedback during a fallback card, even before the window handle is
     // validated; a re-show must not regress to an old preparing state.
     defer_capsule_payload_if_fallback_active(inner, &payload);
+    // Commit the replay frame before queueing any native window work. The
+    // snapshot lock therefore has one revision for payload and transcript even
+    // when run_on_main_thread is delayed.
+    if !inner
+        .host
+        .commit_capsule_payload(&payload, captured_revision)
+    {
+        log::debug!("[capsule] skipped stale payload commit at revision {captured_revision}");
+        return event_epoch;
+    }
     let Some(capsule) = inner.host.capsule_window() else {
         return event_epoch;
     };
@@ -456,6 +473,7 @@ mod tests {
 
     fn payload(state: CapsuleState) -> CapsulePayload {
         CapsulePayload {
+            session_id: None,
             state,
             level: 0.0,
             elapsed_ms: 0,

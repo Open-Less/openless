@@ -213,6 +213,7 @@ macro_rules! app_invoke_handler_desktop {
     () => {
         tauri::generate_handler![
             commands::get_startup_snapshot,
+            commands::get_capsule_snapshot,
             commands::get_settings,
             commands::get_settings_snapshot,
             commands::update_setting_fields,
@@ -309,6 +310,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::start_dictation,
             commands::stop_dictation,
             commands::cancel_dictation,
+            commands::set_capsule_transcript_visible,
             coding_agent::commands::coding_agent_detect,
             coding_agent::commands::coding_agent_detect_opencode,
             coding_agent::commands::coding_agent_detect_cli,
@@ -3265,10 +3267,36 @@ pub(crate) fn position_capsule_bottom_center<R: tauri::Runtime>(
 /// following auto-hide settings.
 pub(crate) fn position_capsule_bottom_center_with_style<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
-    _translation_active: bool,
+    translation_active: bool,
     style: types::CapsuleStyle,
 ) -> tauri::Result<()> {
-    let bounds = capsule_window_bounds_for_style(style);
+    position_capsule_bottom_center_with_style_and_transcript(
+        window,
+        translation_active,
+        style,
+        true,
+    )
+}
+
+pub(crate) fn position_capsule_bottom_center_with_style_and_transcript<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    translation_active: bool,
+    style: types::CapsuleStyle,
+    transcript_visible: bool,
+) -> tauri::Result<()> {
+    // Windows renders the transcript in a separate click-through overlay HWND. The capsule
+    // window itself therefore reserves only the body height; keeping the rail in this window
+    // would make its transparent gutter part of the input region again.
+    let native_transcript_visible = if cfg!(target_os = "windows") {
+        false
+    } else {
+        transcript_visible
+    };
+    let bounds = capsule_window_bounds_for_style_with_transcript_and_translation(
+        style,
+        native_transcript_visible,
+        translation_active,
+    );
     const EDGE_GAP: f64 = 12.0;
     // Typeless hugs the work-area bottom edge (the work area already excludes Dock / taskbar).
     let bottom_gap = match style {
@@ -3371,6 +3399,25 @@ fn capsule_window_bounds(translation_active: bool) -> CapsuleWindowBounds {
 }
 
 fn capsule_window_bounds_for_style(style: types::CapsuleStyle) -> CapsuleWindowBounds {
+    capsule_window_bounds_for_style_with_transcript(style, true)
+}
+
+fn capsule_window_bounds_for_style_with_transcript(
+    style: types::CapsuleStyle,
+    transcript_visible: bool,
+) -> CapsuleWindowBounds {
+    capsule_window_bounds_for_style_with_transcript_and_translation(
+        style,
+        transcript_visible,
+        false,
+    )
+}
+
+fn capsule_window_bounds_for_style_with_transcript_and_translation(
+    style: types::CapsuleStyle,
+    transcript_visible: bool,
+    translation_active: bool,
+) -> CapsuleWindowBounds {
     CapsuleWindowBounds {
         // The typeless window area is 1/5 of the original size (460×128); the frontend
         // scales content in sync with CSS zoom — see CapsuleStyles.css and
@@ -3380,9 +3427,30 @@ fn capsule_window_bounds_for_style(style: types::CapsuleStyle) -> CapsuleWindowB
             types::CapsuleStyle::Siri | types::CapsuleStyle::Classic => 460.0,
         },
         height: match style {
-            types::CapsuleStyle::Siri => 180.0,
-            types::CapsuleStyle::Classic => 100.0,
-            types::CapsuleStyle::Typeless => 57.0,
+            // The rail sits above the 180px Siri stage: 40px rail + 8px gap.
+            types::CapsuleStyle::Siri => {
+                if transcript_visible {
+                    228.0
+                } else {
+                    180.0
+                }
+            }
+            // Classic keeps the 52px pill, 40px rail, 8px gap, 16px bottom inset,
+            // and enough headroom for the translating badge.
+            types::CapsuleStyle::Classic => {
+                if cfg!(target_os = "windows") || transcript_visible {
+                    172.0
+                } else {
+                    100.0
+                }
+            }
+            types::CapsuleStyle::Typeless => {
+                if translation_active {
+                    65.0
+                } else {
+                    57.0
+                }
+            }
         },
         bottom_inset: 0.0,
     }
@@ -3402,7 +3470,9 @@ fn capsule_height_for_qa() -> f64 {
 mod tests {
     use super::{
         bottom_center_position, capsule_height_for_qa, capsule_visual_height,
-        capsule_window_bounds, capsule_window_bounds_for_style, clamp_to_monitor,
+        capsule_window_bounds, capsule_window_bounds_for_style,
+        capsule_window_bounds_for_style_with_transcript,
+        capsule_window_bounds_for_style_with_transcript_and_translation, clamp_to_monitor,
         frame_contains_point, frame_distance_to_point_squared, logical_monitor_frame,
         parse_tray_style_pack_menu_id, resolve_tray_style_pack_id, rotate_log_if_too_large,
         tray_style_menu_enabled, tray_style_pack_menu_entries, tray_style_pack_menu_id,
@@ -3596,11 +3666,11 @@ mod tests {
     }
 
     #[test]
-    fn capsule_window_bounds_match_voice_orb_stage() {
+    fn capsule_window_bounds_reserve_the_transcript_rail() {
         let bounds = capsule_window_bounds(false);
         assert_eq!(
             (bounds.width, bounds.height, bounds.bottom_inset),
-            (460.0, 180.0, 0.0)
+            (460.0, 228.0, 0.0)
         );
     }
 
@@ -3636,7 +3706,7 @@ mod tests {
         let bounds = capsule_window_bounds(true);
         assert_eq!(
             (bounds.width, bounds.height, bounds.bottom_inset),
-            (460.0, 180.0, 0.0)
+            (460.0, 228.0, 0.0)
         );
     }
 
@@ -3644,6 +3714,32 @@ mod tests {
     fn typeless_capsule_window_is_one_fifth_of_the_old_area() {
         let bounds = capsule_window_bounds_for_style(CapsuleStyle::Typeless);
         assert_eq!((bounds.width, bounds.height), (206.0, 57.0));
+    }
+
+    #[test]
+    fn typeless_capsule_window_reserves_translation_badge_row() {
+        let bounds = capsule_window_bounds_for_style_with_transcript_and_translation(
+            CapsuleStyle::Typeless,
+            true,
+            true,
+        );
+        assert_eq!((bounds.width, bounds.height), (206.0, 65.0));
+    }
+
+    #[test]
+    fn classic_capsule_window_keeps_external_rail_host_height_on_windows() {
+        let bounds = capsule_window_bounds_for_style_with_transcript(CapsuleStyle::Classic, false);
+        assert_eq!(
+            (bounds.width, bounds.height),
+            (
+                460.0,
+                if cfg!(target_os = "windows") {
+                    172.0
+                } else {
+                    100.0
+                }
+            )
+        );
     }
 
     #[test]

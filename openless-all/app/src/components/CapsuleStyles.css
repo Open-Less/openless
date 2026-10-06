@@ -18,6 +18,93 @@
   background: #ffffff;
 }
 
+.ol-capsule-transcript-rail {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  pointer-events: none;
+  position: relative;
+  z-index: 2;
+}
+
+/* Windows owns this rail in a separate transparent WebView window. Its HWND is
+   always cursor-through, so the full transcript/gutter can never intercept a
+   click destined for another process. */
+.ol-capsule-transcript-overlay {
+  width: 460px;
+  height: 52px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.ol-capsule-transcript-overlay .ol-capsule-transcript-rail {
+  height: 52px;
+}
+
+.ol-capsule-transcript-overlay[data-style='siri'] {
+  height: 40px;
+}
+
+.ol-capsule-transcript-overlay[data-style='siri'] .ol-capsule-transcript-rail {
+  height: 40px;
+}
+
+.ol-capsule-transcript-overlay--typeless {
+  width: 460px;
+  height: 52px;
+  zoom: 0.447;
+}
+
+.ol-classic-capsule-stack,
+.ol-siri-capsule-stack,
+.ol-typeless-capsule-stack {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.ol-classic-capsule-stack,
+.ol-siri-capsule-stack,
+.ol-typeless-capsule-stack {
+  width: 460px;
+}
+
+.ol-siri-capsule-stack .ol-capsule-transcript-rail {
+  height: 40px;
+}
+
+.ol-classic-capsule-stack .ol-capsule-transcript-rail,
+.ol-typeless-capsule-stack .ol-capsule-transcript-rail {
+  height: 52px;
+}
+
+.ol-typeless-capsule-stack {
+  gap: 0;
+}
+
+.ol-typeless-translation-row {
+  display: flex;
+  flex: 0 0 20px;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 20px;
+  pointer-events: none;
+}
+
+.ol-typeless-capsule-stage {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+}
+
 .ol-typeless-capsule {
   position: relative;
   width: 176px;
@@ -34,7 +121,8 @@
   transition: width 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.ol-typeless-capsule[data-recording='true'] {
+.ol-typeless-capsule[data-recording='true'],
+.ol-typeless-capsule[data-processing='true'] {
   width: 232px;
 }
 .ol-typeless-capsule[data-error='true'] {
@@ -62,7 +150,13 @@
   transform: translateX(-50%);
 }
 .ol-typeless-capsule[data-recording='true'] .ol-typeless-recording,
-.ol-typeless-capsule:not([data-recording='true']) .ol-typeless-status {
+.ol-typeless-capsule[data-processing='true'] .ol-typeless-recording {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.ol-typeless-capsule:not([data-recording='true']):not([data-processing='true'])
+  .ol-typeless-status {
   opacity: 1;
   pointer-events: auto;
 }
@@ -156,11 +250,9 @@
   cursor: pointer;
 }
 .ol-typeless-translation {
-  position: absolute;
-  bottom: calc(100% + 7px);
-  left: 50%;
-  transform: translateX(-50%);
+  position: static;
   padding: 3px 10px;
+  box-sizing: border-box;
   white-space: nowrap;
   font-size: 10px;
   font-weight: 500;

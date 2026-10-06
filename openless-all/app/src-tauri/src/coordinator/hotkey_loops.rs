@@ -2816,6 +2816,7 @@ pub(crate) mod windows_less_computer_tests {
             fixture_coordinator(crate::types::HotkeyMode::Toggle, std::time::Duration::ZERO);
         coordinator.inner.host.begin_insert_fallback_card();
         let expected = CapsulePayload {
+            session_id: None,
             state: CapsuleState::Recording,
             level: 0.0,
             elapsed_ms: 0,

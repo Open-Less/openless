@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { Capsule } from './components/Capsule';
+import { CapsuleTranscriptOverlay } from './components/LiveTranscriptPill';
 import { CoreStartupScreen } from './components/CoreStartupScreen';
 import { GlobalDownloadProgress } from './components/GlobalDownloadProgress';
 import { detectOS, type OS } from './components/WindowChrome';
@@ -52,6 +53,7 @@ const LessComputerGlow = LESS_COMPUTER_BUNDLED
 
 interface AppProps {
   isCapsule: boolean;
+  isCapsuleRail: boolean;
   isQa: boolean;
   isSelectionVoiceIntent: boolean;
   isLessComputer: boolean;
@@ -96,12 +98,16 @@ export function App(props: AppProps) {
 
 function ReadyApp({
   isCapsule,
+  isCapsuleRail,
   isQa,
   isSelectionVoiceIntent,
   isLessComputer,
   isLessComputerGlow,
   forcedOs,
 }: AppProps) {
+  if (isCapsuleRail) {
+    return <CapsuleTranscriptOverlay />;
+  }
   if (isCapsule) {
     return <Capsule os={forcedOs} />;
   }

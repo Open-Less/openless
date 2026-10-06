@@ -96,6 +96,8 @@ export {
   startDictation,
   stopDictation,
   cancelDictation,
+  getCapsuleSnapshot,
+  setCapsuleTranscriptVisible,
   handleWindowHotkeyEvent,
 } from './dictation';
 
