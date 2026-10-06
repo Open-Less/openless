@@ -1,0 +1,8 @@
+{
+  "uuid": "openless-capsule@openless",
+  "name": "OpenLess Capsule",
+  "description": "语音输入悬浮胶囊：跟随 OpenLess 听写状态在屏幕底部渲染流光动效（GNOME Wayland 专用，点击穿透、不抢焦点）。",
+  "shell-version": ["49", "50"],
+  "url": "https://github.com/Open-Less/openless",
+  "session-modes": ["user", "unlock-dialog"]
+}
