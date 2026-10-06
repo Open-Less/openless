@@ -1810,6 +1810,9 @@ export const fr: typeof zhCN = {
       thinkingBudget: 'Budget fixe',
       maxTokensLabel: 'Nombre maximal de jetons en sortie',
       thinkingBudgetLabel: 'Budget de jetons de raisonnement',
+      serviceTierLabel: 'Inférence Ark à faible latence (fast)',
+      serviceTierHint:
+        'Seuls les modèles Ark compatibles peuvent utiliser cette option ; les autres peuvent renvoyer 400.',
       responsesThinkingHint:
         'Certains modèles permettent seulement de réduire le raisonnement, pas de le désactiver. Les requêtes de raisonnement omettent la température.',
       messagesThinkingHint:
@@ -1821,6 +1824,8 @@ export const fr: typeof zhCN = {
       llmTokenLimitInvalid: 'Les limites de jetons doivent être des entiers positifs.',
       llmThinkingBudgetInvalid:
         'Le budget de raisonnement doit être au moins de 1024 et, en mode fixe, inférieur à la limite de sortie.',
+      llmServiceTierInvalid:
+        'Option d’inférence à faible latence non valide. Sélectionnez-la à nouveau.',
       llmResponseIncomplete:
         'La réponse est incomplète ou a atteint la limite de sortie. Le texte déjà affiché est conservé.',
       llmProtocolHeaderConflict:

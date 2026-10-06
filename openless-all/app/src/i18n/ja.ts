@@ -1749,6 +1749,9 @@ export const ja: typeof zhCN = {
       thinkingBudget: '固定予算',
       maxTokensLabel: '最大出力トークン数',
       thinkingBudgetLabel: '思考トークン予算',
+      serviceTierLabel: 'Ark 低レイテンシ推論（fast）',
+      serviceTierHint:
+        '対応する Ark モデルでのみ利用できます。非対応モデルでは 400 が返る場合があります。',
       responsesThinkingHint:
         '一部のモデルでは思考を軽減できますが、完全には無効にできません。推論リクエストでは温度を送信しません。',
       messagesThinkingHint:
@@ -1757,6 +1760,7 @@ export const ja: typeof zhCN = {
       llmThinkingModeInvalid: '思考方式が無効です。選択し直してください。',
       llmTokenLimitInvalid: 'トークン上限は正の整数にしてください。',
       llmThinkingBudgetInvalid: '思考予算は1024以上、固定予算では最大出力未満にしてください。',
+      llmServiceTierInvalid: '低レイテンシ推論の設定が無効です。もう一度選択してください。',
       llmResponseIncomplete: '応答が未完了か出力上限に達しました。出力済みテキストは保持されます。',
       llmProtocolHeaderConflict:
         'Messages の認証とバージョンヘッダーは自動設定されます。追加ヘッダーから x-api-key と anthropic-version を削除してください。',

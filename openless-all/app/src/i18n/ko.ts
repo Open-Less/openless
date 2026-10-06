@@ -1736,6 +1736,9 @@ export const ko: typeof zhCN = {
       thinkingBudget: '고정 예산',
       maxTokensLabel: '최대 출력 토큰',
       thinkingBudgetLabel: '사고 토큰 예산',
+      serviceTierLabel: 'Ark 저지연 추론(fast)',
+      serviceTierHint:
+        '지원되는 Ark 모델에서만 사용할 수 있으며, 지원되지 않는 모델은 400을 반환할 수 있습니다.',
       responsesThinkingHint:
         '일부 모델은 사고를 줄일 수만 있으며 완전히 끌 수 없습니다. 추론 요청에는 온도를 보내지 않습니다.',
       messagesThinkingHint:
@@ -1745,6 +1748,7 @@ export const ko: typeof zhCN = {
       llmTokenLimitInvalid: '토큰 한도는 양의 정수여야 합니다.',
       llmThinkingBudgetInvalid:
         '사고 예산은 1024 이상이며 고정 예산 모드에서는 출력 한도보다 작아야 합니다.',
+      llmServiceTierInvalid: '저지연 추론 옵션이 잘못되었습니다. 다시 선택하세요.',
       llmResponseIncomplete:
         '응답이 완료되지 않았거나 출력 한도에 도달했습니다. 이미 출력된 텍스트는 유지됩니다.',
       llmProtocolHeaderConflict:

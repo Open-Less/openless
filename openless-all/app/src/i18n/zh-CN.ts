@@ -1674,6 +1674,8 @@ export const zhCN = {
       thinkingBudget: '固定预算',
       maxTokensLabel: '最大输出 tokens',
       thinkingBudgetLabel: '思考预算 tokens',
+      serviceTierLabel: '方舟低延迟推理（fast）',
+      serviceTierHint: '仅适用于支持低延迟的方舟模型；不支持的模型可能返回 400。',
       responsesThinkingHint: '部分模型只能降低思考，不能完全关闭。推理请求不发送温度参数。',
       messagesThinkingHint:
         '旧模型或兼容网关可能需要固定预算；思考预算必须小于最大输出。开启思考时不发送温度参数。',
@@ -1681,6 +1683,7 @@ export const zhCN = {
       llmThinkingModeInvalid: '思考方式无效，请重新选择。',
       llmTokenLimitInvalid: 'Token 上限必须为正整数。',
       llmThinkingBudgetInvalid: '思考预算至少为 1024，且固定预算必须小于最大输出。',
+      llmServiceTierInvalid: '低延迟推理选项无效，请重新选择。',
       llmResponseIncomplete: '响应未完整结束或达到输出上限；已输出正文会保留。',
       llmProtocolHeaderConflict:
         'Messages 已自动设置鉴权和版本请求头，请移除额外 Headers 中的 x-api-key 和 anthropic-version。',

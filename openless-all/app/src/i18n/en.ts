@@ -1762,6 +1762,9 @@ export const en: typeof zhCN = {
       thinkingBudget: 'Fixed budget',
       maxTokensLabel: 'Maximum output tokens',
       thinkingBudgetLabel: 'Thinking budget tokens',
+      serviceTierLabel: 'Ark low-latency inference (fast)',
+      serviceTierHint:
+        'Only supported Ark models can use this option; unsupported models may return 400.',
       responsesThinkingHint:
         'Some models can only reduce thinking, not turn it off. Reasoning requests omit temperature.',
       messagesThinkingHint:
@@ -1771,6 +1774,7 @@ export const en: typeof zhCN = {
       llmTokenLimitInvalid: 'Token limits must be positive integers.',
       llmThinkingBudgetInvalid:
         'Thinking budget must be at least 1024 and below the output limit in fixed-budget mode.',
+      llmServiceTierInvalid: 'Invalid low-latency inference option. Select it again.',
       llmResponseIncomplete:
         'The response was incomplete or reached its output limit. Already emitted text is retained.',
       llmProtocolHeaderConflict:

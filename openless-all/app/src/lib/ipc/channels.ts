@@ -132,7 +132,10 @@ export function setChannelProviderType(
     if (channel && channel.providerType !== providerType) {
       channel.providerType = providerType;
       channel.lastTest = null;
-      if (kind === 'llm') mockCredentialValues.delete(`${id}:ark.request_format`);
+      if (kind === 'llm') {
+        mockCredentialValues.delete(`${id}:ark.request_format`);
+        mockCredentialValues.delete(`${id}:ark.service_tier`);
+      }
     }
   });
 }

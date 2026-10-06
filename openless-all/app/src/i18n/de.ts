@@ -1794,6 +1794,9 @@ export const de: typeof zhCN = {
       thinkingBudget: 'Festes Budget',
       maxTokensLabel: 'Maximale Ausgabetokens',
       thinkingBudgetLabel: 'Tokenbudget für das Denken',
+      serviceTierLabel: 'Ark-Inferenz mit niedriger Latenz (fast)',
+      serviceTierHint:
+        'Nur unterstützte Ark-Modelle können diese Option verwenden; andere Modelle geben möglicherweise 400 zurück.',
       responsesThinkingHint:
         'Bei einigen Modellen lässt sich das Denken nur reduzieren, nicht abschalten. Anfragen mit Denken senden keinen Temperaturparameter.',
       messagesThinkingHint:
@@ -1803,6 +1806,8 @@ export const de: typeof zhCN = {
       llmTokenLimitInvalid: 'Tokenlimits müssen positive ganze Zahlen sein.',
       llmThinkingBudgetInvalid:
         'Das Denkbudget muss mindestens 1024 betragen und im festen Modus unter der Ausgabegrenze liegen.',
+      llmServiceTierInvalid:
+        'Ungültige Option für Inferenz mit niedriger Latenz. Wähle sie erneut.',
       llmResponseIncomplete:
         'Die Antwort ist unvollständig oder hat die Ausgabegrenze erreicht. Bereits ausgegebener Text bleibt erhalten.',
       llmProtocolHeaderConflict:

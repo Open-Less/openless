@@ -29,3 +29,4 @@
 - Agent Plan：`https://ark.cn-beijing.volces.com/api/plan/v3`；Coding Plan：`https://ark.cn-beijing.volces.com/api/coding/v3`。使用各自套餐的专属 API Key，按所选请求格式适配协议路径。
 - 选择套餐后，通过“查看支持的模型”打开对应的 [Agent Plan 控制台](https://console.volcengine.com/ark/subscription/agent-plan)或 [Coding Plan 控制台](https://console.volcengine.com/ark/subscription/coding-plan)，复制支持的文本模型 ID，手动填写后执行“验证”。该按钮不拉取在线模型列表，也不验证密钥。
 - 预设地址只读，已有自定义地址保持可编辑；新建自定义接口使用自定义供应商入口。普通火山方舟及其他供应商保留原有模型列表获取行为。
+- 方舟通道的协议设置提供“低延迟推理（fast）”开关；启用后请求会携带 `service_tier: "fast"`。该参数只对支持快速服务档位的模型有效，不支持的模型可能返回 400。

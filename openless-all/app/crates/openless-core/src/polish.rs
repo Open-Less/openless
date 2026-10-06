@@ -834,6 +834,9 @@ impl OpenAICompatibleLLMProvider {
             &self.config.model,
             self.config.thinking_enabled,
         );
+        self.config
+            .protocol
+            .apply_service_tier(&self.config.provider_id, &mut body);
         body
     }
 
@@ -3362,6 +3365,27 @@ mod tests {
             s.contains("当前") && s.contains("最新"),
             "需要明确：只输出当前最新一条"
         );
+    }
+
+    #[test]
+    fn ark_chat_body_includes_fast_service_tier() {
+        let provider = OpenAICompatibleLLMProvider::new(
+            OpenAICompatibleConfig::new(
+                "ark",
+                "Ark",
+                "https://ark.cn-beijing.volces.com/api/v3",
+                "k",
+                "doubao-seed-2-1-lite-260915",
+            )
+            .with_protocol(LlmProtocolConfig {
+                service_tier: crate::llm_protocol::LlmServiceTier::Fast,
+                ..Default::default()
+            }),
+        );
+
+        let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+        assert_eq!(body["service_tier"], "fast");
     }
 
     #[test]

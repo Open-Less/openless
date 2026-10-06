@@ -1783,6 +1783,9 @@ export const es: typeof zhCN = {
       thinkingBudget: 'Presupuesto fijo',
       maxTokensLabel: 'Máximo de tokens de salida',
       thinkingBudgetLabel: 'Presupuesto de tokens de razonamiento',
+      serviceTierLabel: 'Inferencia de baja latencia de Ark (fast)',
+      serviceTierHint:
+        'Solo los modelos Ark compatibles pueden usar esta opción; otros pueden devolver 400.',
       responsesThinkingHint:
         'Algunos modelos solo permiten reducir el razonamiento, no desactivarlo. Las solicitudes de razonamiento omiten la temperatura.',
       messagesThinkingHint:
@@ -1792,6 +1795,8 @@ export const es: typeof zhCN = {
       llmTokenLimitInvalid: 'Los límites de tokens deben ser números enteros positivos.',
       llmThinkingBudgetInvalid:
         'El presupuesto de razonamiento debe ser al menos 1024 y, en modo fijo, inferior al límite de salida.',
+      llmServiceTierInvalid:
+        'Opción de inferencia de baja latencia no válida. Selecciónala de nuevo.',
       llmResponseIncomplete:
         'La respuesta no se completó o alcanzó el límite de salida. Se conserva el texto ya mostrado.',
       llmProtocolHeaderConflict:
