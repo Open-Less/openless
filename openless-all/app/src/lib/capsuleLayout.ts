@@ -108,13 +108,20 @@ export function getClassicTranslationBadgeOffset(
   transcriptVisible: boolean,
   transcriptInSameWindow = true,
 ): number {
-  const geometry = getClassicCapsuleGeometry('win', transcriptVisible, true, transcriptInSameWindow);
+  const geometry = getClassicCapsuleGeometry(
+    'win',
+    transcriptVisible,
+    true,
+    transcriptInSameWindow,
+  );
   const baseBadgeBottomOffset =
     CLASSIC_CAPSULE_HOST_HEIGHT - geometry.bodyTop + CLASSIC_CAPSULE_BADGE_GAP;
   return geometry.badgeBottomOffset - baseBadgeBottomOffset;
 }
 
-export function getClassicProcessingLabel(operating: boolean): 'capsule.thinking' | 'capsule.using' {
+export function getClassicProcessingLabel(
+  operating: boolean,
+): 'capsule.thinking' | 'capsule.using' {
   return operating ? 'capsule.using' : 'capsule.thinking';
 }
 
@@ -142,7 +149,7 @@ export function getCapsuleTranscriptRailPosition(
   translationActive: boolean,
   transcriptVisible: boolean,
 ): CapsuleTranscriptRailPosition | null {
-  if (!transcriptVisible) return null;
+  if (!transcriptVisible && (!translationActive || style === 'siri')) return null;
   if (style === 'siri') {
     const bodyTop = 0;
     const railHeight = 40;
@@ -150,23 +157,32 @@ export function getCapsuleTranscriptRailPosition(
     return { width: 460, height: railHeight, topOffset: bodyTop - gap - railHeight, gap };
   }
   if (style === 'classic') {
-    const geometry = getClassicCapsuleGeometry('win', true, translationActive, false);
+    const geometry = getClassicCapsuleGeometry('win', transcriptVisible, translationActive, false);
     const gap = CLASSIC_CAPSULE_RAIL_GAP;
     return {
       width: 460,
-      height: geometry.railHeight,
-      topOffset: geometry.railTop ?? 0,
+      height:
+        (transcriptVisible ? geometry.railHeight : 0) +
+        (translationActive
+          ? CLASSIC_CAPSULE_BADGE_HEIGHT + (transcriptVisible ? CLASSIC_CAPSULE_BADGE_GAP : 0)
+          : 0),
+      topOffset: geometry.railTop ?? geometry.badgeTop,
       gap,
     };
   }
   const hostHeight = translationActive ? 65 : 57;
   const bodyBottom = hostHeight;
-  const bodyTop = bodyBottom - TYPELESS_CAPSULE_HEIGHT - (translationActive ? TYPELESS_TRANSLATION_ROW_HEIGHT : 0);
+  const bodyTop =
+    bodyBottom -
+    TYPELESS_CAPSULE_HEIGHT -
+    (translationActive ? TYPELESS_TRANSLATION_ROW_HEIGHT : 0);
   const gap = 0;
   return {
     width: 206,
-    height: TYPELESS_RAIL_HEIGHT,
-    topOffset: bodyTop - gap - TYPELESS_RAIL_HEIGHT,
+    height:
+      (transcriptVisible ? TYPELESS_RAIL_HEIGHT : 0) +
+      (translationActive ? TYPELESS_TRANSLATION_ROW_HEIGHT : 0),
+    topOffset: bodyTop - gap - (transcriptVisible ? TYPELESS_RAIL_HEIGHT : 0),
     gap,
   };
 }

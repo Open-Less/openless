@@ -2510,6 +2510,7 @@ mod tests {
             .into_iter()
             .flat_map(|format| {
                 [
+                    ("ark", "/api/v3"),
                     ("custom", "/gateway/v1"),
                     ("opencode", "/zen/v1"),
                     ("opencode", "/zen/go/v1"),
@@ -2537,6 +2538,11 @@ mod tests {
                     let split = request.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
                     let headers = String::from_utf8_lossy(&request[..split]).to_ascii_lowercase();
                     let body: Value = serde_json::from_slice(&request[split + 4..]).unwrap();
+                    if preset == "ark" {
+                        assert_eq!(body["service_tier"], "fast");
+                    } else {
+                        assert!(body.get("service_tier").is_none());
+                    }
                     if format == LlmRequestFormat::Responses {
                         assert!(body.get("temperature").is_none());
                     } else {
@@ -2629,6 +2635,7 @@ mod tests {
             .with_thinking_enabled(thinking_enabled)
             .with_protocol(LlmProtocolConfig {
                 format,
+                service_tier: crate::llm_protocol::LlmServiceTier::Fast,
                 ..Default::default()
             });
             let provider = OpenAICompatibleLLMProvider::new(config);

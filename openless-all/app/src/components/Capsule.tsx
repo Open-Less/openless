@@ -5,14 +5,10 @@ import { detectOS, type OS } from './WindowChrome';
 import { warmUpSiriShaders } from './SiriGL';
 import { VoiceOrbStage } from './VoiceOrbStage';
 import { TypelessCapsule } from './TypelessCapsule';
-import { CapsuleTranscriptRail } from './LiveTranscriptPill';
+import { CapsuleTranscriptRail, CapsuleTranslationBadge } from './LiveTranscriptPill';
 import { capsuleTranscriptFontSize, visibleCapsuleTranscript } from '../lib/capsuleTranscript';
 import { getSettings } from '../lib/ipc/settings';
-import {
-  cancelDictation,
-  setCapsuleTranscriptVisible,
-  stopDictation,
-} from '../lib/ipc/dictation';
+import { cancelDictation, setCapsuleTranscriptVisible, stopDictation } from '../lib/ipc/dictation';
 import {
   getCapsuleHostMetrics,
   getCapsuleMessageLayout,
@@ -539,7 +535,6 @@ function ClassicCapsule({
   operating,
   translation,
 }: ClassicCapsuleProps) {
-  const { t } = useTranslation();
   const hostMetrics = getCapsuleHostMetrics(os, false, 'classic');
   const onCancel = useCallback(() => {
     void cancelDictation();
@@ -562,45 +557,19 @@ function ClassicCapsule({
           (translateX(-50%)) with no animation; the inner layer only does vertical
           shift + fade. This avoids conflicting with translateX(-50%) and avoids
           keyframe vs inline transform overrides causing visual jumps. */}
-      <div
-        style={{
-          position: 'absolute',
-          left: '50%',
-          bottom: classicGeometry.badgeBottomOffset,
-          transform: 'translateX(-50%)',
-          pointerEvents: 'none',
-        }}
-      >
+      {transcriptInSameWindow && (
         <div
           style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 5,
-            padding: '3px 10px',
-            borderRadius: 999,
-            fontSize: 10.5,
-            fontWeight: 600,
-            color: 'var(--ol-blue)',
-            background: 'var(--ol-capsule-badge-bg)',
-            // issue #470: remove the useless backdrop-filter — the webview can't blur
-            // the desktop behind a transparent window (Tauri upstream limitation, same
-            // as the pill comment); pure wasted compositing, removing it changes nothing.
-            border: '0.5px solid var(--ol-capsule-badge-border)',
-            boxShadow: '0 4px 12px -4px rgba(37, 99, 235, 0.25), 0 0 0 0.5px rgba(0,0,0,0.04)',
-            letterSpacing: '0.02em',
-            whiteSpace: 'nowrap',
-            // Hidden: starts just below the pill's midline; shown: settles above the pill.
-            opacity: translation ? 1 : 0,
-            transform: translation ? 'translateY(0) scale(1)' : 'translateY(40px) scale(.88)',
-            transformOrigin: 'center bottom',
-            transition: 'opacity .24s ease-out, transform .34s cubic-bezier(.2,.9,.3,1.1)',
-            willChange: 'opacity, transform',
+            position: 'absolute',
+            left: '50%',
+            bottom: classicGeometry.badgeBottomOffset,
+            transform: 'translateX(-50%)',
+            pointerEvents: 'none',
           }}
         >
-          <span style={{ width: 5, height: 5, borderRadius: 999, background: 'var(--ol-blue)' }} />
-          {t('capsule.translating')}
+          <CapsuleTranslationBadge visible={translation} />
         </div>
-      </div>
+      )}
       <div className="ol-classic-capsule-stack">
         {liveText && (
           <CapsuleTranscriptRail
@@ -817,7 +786,12 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
           transcriptViewRef.current = beginTranscriptGeneration(transcriptViewRef.current);
           setLocalAsrText('');
         }
-        if (p.state === 'idle' || p.state === 'done' || p.state === 'cancelled' || p.state === 'error') {
+        if (
+          p.state === 'idle' ||
+          p.state === 'done' ||
+          p.state === 'cancelled' ||
+          p.state === 'error'
+        ) {
           // Terminal payloads must release the native transcript rail before the exit/card
           // branch can leave the capsule webview. Keeping the old text here would make the
           // enlarged native window stay interactive after the session has ended.
@@ -1095,6 +1069,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
             transcriptFontSize={transcriptFontSize}
             operating={operatingRef.current}
             translation={translation}
+            translationInSameWindow={!splitTranscriptRail}
             warming={!leaving && warming}
           />
         ) : (

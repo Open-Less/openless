@@ -12,7 +12,10 @@ use std::sync::Arc;
 #[cfg(target_os = "windows")]
 use std::sync::OnceLock;
 
-use openless_core::{BackendEvent, BackendEventKind, DictationPhase, SelectionVoicePhase};
+#[path = "capsule_snapshot.rs"]
+mod capsule_snapshot;
+use capsule_snapshot::CapsuleSnapshotState;
+use openless_core::BackendEvent;
 use parking_lot::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -43,7 +46,7 @@ fn capsule_transcript_rail_position(
     translation_active: bool,
     transcript_visible: bool,
 ) -> Option<CapsuleTranscriptRailPosition> {
-    if !transcript_visible {
+    if !transcript_visible && (!translation_active || style == CapsuleStyle::Siri) {
         return None;
     }
     match style {
@@ -67,13 +70,14 @@ fn capsule_transcript_rail_position(
             const BADGE_HEIGHT: f64 = 22.0;
             const BADGE_GAP: f64 = 8.0;
             let body_top = HOST_HEIGHT - BODY_BOTTOM_INSET - BODY_HEIGHT;
-            let height = 52.0;
             let gap = RAIL_GAP;
-            let external_badge_lane = translation_active;
-            let mut top_offset = body_top - RAIL_GAP - RAIL_HEIGHT;
-            if external_badge_lane {
-                top_offset -= BADGE_HEIGHT + BADGE_GAP;
-            }
+            let height = if transcript_visible { RAIL_HEIGHT } else { 0.0 }
+                + if translation_active {
+                    BADGE_HEIGHT + if transcript_visible { BADGE_GAP } else { 0.0 }
+                } else {
+                    0.0
+                };
+            let top_offset = body_top - RAIL_GAP - height;
             Some(CapsuleTranscriptRailPosition {
                 width: 460.0,
                 height,
@@ -87,12 +91,13 @@ fn capsule_transcript_rail_position(
             let body_bottom = host_height;
             let body_top =
                 body_bottom - (64.0 * ZOOM) - if translation_active { 20.0 * ZOOM } else { 0.0 };
-            let height = 52.0 * ZOOM;
+            let rail_height = if transcript_visible { 52.0 * ZOOM } else { 0.0 };
+            let height = rail_height + if translation_active { 20.0 * ZOOM } else { 0.0 };
             let gap = 0.0;
             Some(CapsuleTranscriptRailPosition {
                 width: 206.0,
                 height,
-                top_offset: body_top - gap - height,
+                top_offset: body_top - gap - rail_height,
                 gap,
             })
         }
@@ -146,9 +151,9 @@ fn capsule_control_hit_rect(
         logical_bottom_inset,
     ) = match style {
         // Classic transcript is hosted by the separate click-through rail HWND on
-        // Windows. The capsule HWND therefore owns only its 100px body, regardless
+        // Windows. The capsule HWND therefore owns only its 172px host, regardless
         // of whether the rail is visible.
-        CapsuleStyle::Classic => (460.0, 100.0, 196.0, 52.0, 16.0),
+        CapsuleStyle::Classic => (460.0, 172.0, 196.0, 52.0, 16.0),
         // Typeless content is scaled by zoom: 64px CSS × 0.447. The native window may be
         // 57px or 65px high when the dedicated translation row is present.
         CapsuleStyle::Typeless => (
@@ -672,17 +677,6 @@ struct CapsuleLayoutState {
     scale_bits: u64,
 }
 
-#[derive(Clone, Debug, Default)]
-struct CapsuleSnapshotState {
-    payload: Option<CapsulePayload>,
-    payload_revision: u64,
-    pending_payload_revision: Option<u64>,
-    session_id: Option<String>,
-    sequence: u64,
-    revision: u64,
-    text: String,
-}
-
 fn can_commit_capsule_payload(
     current_revision: u64,
     pending_revision: Option<u64>,
@@ -829,10 +823,6 @@ impl TauriCapsuleWindow {
         let Some(rail) = self.rail_window() else {
             return Ok(());
         };
-        if !visible {
-            rail.hide()?;
-            return Ok(());
-        }
         let Some(position) = capsule_transcript_rail_position(style, translation_active, visible)
         else {
             rail.hide()?;
@@ -1476,158 +1466,9 @@ impl TauriCoordinatorHost {
         true
     }
 
-    fn payload_matches_backend_event(payload: &CapsulePayload, event: &BackendEventKind) -> bool {
-        match event {
-            BackendEventKind::DictationStateChanged(dictation) => {
-                let expected = match dictation.phase {
-                    DictationPhase::Idle => CapsuleState::Idle,
-                    DictationPhase::Starting | DictationPhase::Recording => CapsuleState::Recording,
-                    DictationPhase::Transcribing => CapsuleState::Transcribing,
-                    DictationPhase::Polishing | DictationPhase::Inserting => {
-                        CapsuleState::Polishing
-                    }
-                    DictationPhase::Completed => CapsuleState::Done,
-                    DictationPhase::Cancelled => CapsuleState::Cancelled,
-                    DictationPhase::Failed => CapsuleState::Error,
-                };
-                payload.state == expected
-            }
-            BackendEventKind::DictationCompleted(_) => payload.state == CapsuleState::Done,
-            BackendEventKind::BackendStopping => payload.state == CapsuleState::Idle,
-            BackendEventKind::SelectionVoiceLevel(_) => payload.state == CapsuleState::Recording,
-            BackendEventKind::SelectionVoiceStateChanged(selection) => {
-                let expected = match selection.phase {
-                    SelectionVoicePhase::Idle
-                    | SelectionVoicePhase::Completed
-                    | SelectionVoicePhase::Cancelled
-                    | SelectionVoicePhase::Failed => CapsuleState::Idle,
-                    SelectionVoicePhase::Recording => CapsuleState::Recording,
-                    SelectionVoicePhase::Processing
-                    | SelectionVoicePhase::AwaitingIntent
-                    | SelectionVoicePhase::Preview
-                    | SelectionVoicePhase::Applying => CapsuleState::Polishing,
-                };
-                payload.state == expected
-            }
-            // QA projections do not own the transcript session. They still use
-            // the same revision path, but their detailed phase is resolved by
-            // the async QA snapshot before presentation.
-            BackendEventKind::QaLevel(_) | BackendEventKind::QaState(_) => true,
-            _ => false,
-        }
-    }
-
-    /// Keep a complete replay string for a rail that mounts after live events.
-    /// The animation layer remains bounded; this cache is intentionally the
-    /// authoritative text used only for native ready-handshake recovery.
+    /// Update replay state without waiting for the native window callback.
     pub(crate) fn record_backend_event(&self, event: &BackendEvent) {
-        let mut snapshot = self.capsule.snapshot.lock();
-        if event.sequence <= snapshot.sequence {
-            return;
-        }
-        let event_session = event.session_id.map(|session| session.to_string());
-        let payload_projection_pending = matches!(
-            &event.kind,
-            BackendEventKind::DictationStateChanged(_)
-                | BackendEventKind::TranscriptDelta(_)
-                | BackendEventKind::DictationCompleted(_)
-                | BackendEventKind::QaLevel(_)
-                | BackendEventKind::QaState(_)
-                | BackendEventKind::SelectionVoiceLevel(_)
-                | BackendEventKind::SelectionVoiceStateChanged(_)
-                | BackendEventKind::BackendStopping
-        );
-        match &event.kind {
-            BackendEventKind::DictationStateChanged(dictation)
-                if dictation.phase == DictationPhase::Starting =>
-            {
-                let session_id = dictation
-                    .session_id
-                    .map(|session| session.to_string())
-                    .or(event_session.clone());
-                if session_id.is_some() && snapshot.session_id != session_id {
-                    snapshot.session_id = session_id;
-                    snapshot.text.clear();
-                } else if snapshot.session_id.is_none() {
-                    snapshot.session_id = session_id;
-                }
-            }
-            BackendEventKind::DictationStateChanged(dictation)
-                if dictation.phase == DictationPhase::Recording =>
-            {
-                let session_id = dictation
-                    .session_id
-                    .map(|session| session.to_string())
-                    .or(event_session.clone());
-                if session_id.is_some() && snapshot.session_id != session_id {
-                    snapshot.session_id = session_id;
-                    snapshot.text.clear();
-                } else if snapshot.session_id.is_none() {
-                    snapshot.session_id = session_id;
-                }
-            }
-            BackendEventKind::SelectionVoiceStateChanged(selection)
-                if selection.phase == SelectionVoicePhase::Recording =>
-            {
-                let session_id = selection
-                    .session_id
-                    .map(|session| session.to_string())
-                    .or(event_session.clone());
-                if session_id.is_some() && snapshot.session_id != session_id {
-                    snapshot.session_id = session_id;
-                    snapshot.text.clear();
-                } else if snapshot.session_id.is_none() {
-                    snapshot.session_id = session_id;
-                }
-            }
-            BackendEventKind::SelectionVoiceStateChanged(selection) => {
-                let session_id = selection
-                    .session_id
-                    .map(|session| session.to_string())
-                    .or(event_session.clone());
-                if session_id.is_some() && snapshot.session_id != session_id {
-                    snapshot.session_id = session_id;
-                    snapshot.text.clear();
-                }
-            }
-            BackendEventKind::TranscriptDelta(delta)
-                if event_session.is_none() || snapshot.session_id == event_session =>
-            {
-                let offset = usize::try_from(delta.offset).ok();
-                if let Some(offset) = offset {
-                    let mut chars: Vec<char> = snapshot.text.chars().collect();
-                    if offset <= chars.len() {
-                        chars.truncate(offset);
-                        chars.extend(delta.text.chars());
-                        snapshot.text = chars.into_iter().collect();
-                        if event_session.is_some() {
-                            snapshot.session_id = event_session.clone();
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-        snapshot.sequence = event.sequence;
-        if payload_projection_pending {
-            snapshot.revision = event.sequence;
-            // Only an actual precommit carrying this exact event revision is
-            // coherent. In particular, an old Recording payload must not be
-            // promoted when the next Recording event is just a PCM update.
-            if snapshot.payload_revision == event.sequence
-                && snapshot.payload.as_ref().is_some_and(|payload| {
-                    Self::payload_matches_backend_event(payload, &event.kind)
-                })
-            {
-                snapshot.pending_payload_revision = None;
-            } else {
-                snapshot.pending_payload_revision = Some(event.sequence);
-            }
-        } else if snapshot.pending_payload_revision.is_none() {
-            // Transcript-only events keep the latest committed payload frame,
-            // but advance its observable revision with the text watermark.
-            snapshot.payload_revision = event.sequence;
-        }
+        self.capsule.snapshot.lock().record_backend_event(event);
     }
 
     pub(crate) fn cache_capsule_style(&self, style: CapsuleStyle) {
@@ -1979,7 +1820,7 @@ mod tests {
             capsule_transcript_rail_position(CapsuleStyle::Classic, true, true),
             Some(CapsuleTranscriptRailPosition {
                 width: 460.0,
-                height: 52.0,
+                height: 82.0,
                 top_offset: 14.0,
                 gap: 8.0,
             })
@@ -2008,29 +1849,42 @@ mod tests {
             CapsuleStyle::Typeless,
         ] {
             assert_eq!(capsule_transcript_rail_position(style, false, false), None);
-            assert_eq!(capsule_transcript_rail_position(style, true, false), None);
         }
+        let classic_badge =
+            capsule_transcript_rail_position(CapsuleStyle::Classic, true, false).unwrap();
+        assert_eq!(
+            (classic_badge.height, classic_badge.top_offset),
+            (22.0, 74.0)
+        );
+        let typeless_badge =
+            capsule_transcript_rail_position(CapsuleStyle::Typeless, true, false).unwrap();
+        assert!((typeless_badge.height - 20.0 * 0.447).abs() < 1e-12);
+        assert!((typeless_translation.height - 72.0 * 0.447).abs() < 1e-12);
+        assert_eq!(
+            capsule_transcript_rail_position(CapsuleStyle::Siri, true, false),
+            None
+        );
     }
 
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_hit_test_uses_x_and_y_and_translation_bounds() {
         assert_eq!(
-            capsule_control_hit_rect(CapsuleStyle::Classic, true, false, 460, 100),
+            capsule_control_hit_rect(CapsuleStyle::Classic, true, false, 460, 172),
             Some(CapsuleHitTestRect {
                 left: 132,
                 right: 328,
-                top: 32,
-                bottom: 84,
+                top: 104,
+                bottom: 156,
             })
         );
         assert_eq!(
-            capsule_control_hit_rect(CapsuleStyle::Classic, false, false, 460, 100),
+            capsule_control_hit_rect(CapsuleStyle::Classic, false, false, 460, 172),
             Some(CapsuleHitTestRect {
                 left: 132,
                 right: 328,
-                top: 32,
-                bottom: 84,
+                top: 104,
+                bottom: 156,
             })
         );
         let typeless = capsule_control_hit_rect(CapsuleStyle::Typeless, true, true, 206, 65)

@@ -118,8 +118,16 @@ for (const style of ['siri', 'classic', 'typeless'] as const) {
   assertEqual(parseCapsuleStyle(style), style, `${style} is accepted from preferences and events`);
 }
 assertEqual(getCapsuleTranscriptRailHeight('siri'), 40, 'Siri rail height matches native overlay');
-assertEqual(getCapsuleTranscriptRailHeight('classic'), 52, 'Classic rail height matches native overlay');
-assertEqual(getCapsuleTranscriptRailHeight('typeless'), 52, 'Typeless logical rail height matches CSS overlay');
+assertEqual(
+  getCapsuleTranscriptRailHeight('classic'),
+  52,
+  'Classic rail height matches native overlay',
+);
+assertEqual(
+  getCapsuleTranscriptRailHeight('typeless'),
+  52,
+  'Typeless logical rail height matches CSS overlay',
+);
 assertEqual(
   getClassicTranslationBadgeOffset(true),
   60,
@@ -137,22 +145,42 @@ assertEqual(
 );
 const classicExternalGeometry = getClassicCapsuleGeometry('win', true, true, false);
 assertEqual(classicExternalGeometry.hostHeight, 172, 'Classic external rail uses the 172px host');
-assertEqual(classicExternalGeometry.bodyTop, 104, 'Classic body is anchored at the bottom of the host');
-assertEqual(classicExternalGeometry.railTop, 14, 'Classic external rail clears the translation badge lane');
+assertEqual(
+  classicExternalGeometry.bodyTop,
+  104,
+  'Classic body is anchored at the bottom of the host',
+);
+assertEqual(
+  classicExternalGeometry.railTop,
+  14,
+  'Classic external rail clears the translation badge lane',
+);
 assertEqual(classicExternalGeometry.badgeTop, 74, 'Classic external badge sits above the pill');
-assertEqual(classicExternalGeometry.badgeBottom, 96, 'Classic external badge leaves an 8px body gap');
+assertEqual(
+  classicExternalGeometry.badgeBottom,
+  96,
+  'Classic external badge leaves an 8px body gap',
+);
 if (
-  classicExternalGeometry.railTop! + classicExternalGeometry.railHeight > classicExternalGeometry.badgeTop ||
+  classicExternalGeometry.railTop! + classicExternalGeometry.railHeight >
+    classicExternalGeometry.badgeTop ||
   classicExternalGeometry.badgeBottom > classicExternalGeometry.bodyTop
 ) {
   throw new Error('Classic external rail and translation badge must not overlap');
 }
 const classicSameWindowGeometry = getClassicCapsuleGeometry('win', true, true, true);
-assertEqual(classicSameWindowGeometry.railTop, 44, 'Classic same-window rail keeps the body rail anchor');
+assertEqual(
+  classicSameWindowGeometry.railTop,
+  44,
+  'Classic same-window rail keeps the body rail anchor',
+);
 assertEqual(classicSameWindowGeometry.badgeBottom, 36, 'Classic same-window badge clears the rail');
 for (const os of ['mac', 'win'] as const) {
   const external = getClassicCapsuleGeometry(os, true, true, false);
-  if (external.railTop! + external.railHeight > external.badgeTop || external.badgeBottom > external.bodyTop) {
+  if (
+    external.railTop! + external.railHeight > external.badgeTop ||
+    external.badgeBottom > external.bodyTop
+  ) {
     throw new Error(`${os}: external Classic rail and badge overlap`);
   }
 }
@@ -188,9 +216,34 @@ assertEqual(
 );
 const typelessCompactRail = getCapsuleTranscriptRailPosition('typeless', false, true);
 const typelessTranslationRail = getCapsuleTranscriptRailPosition('typeless', true, true);
-if (!typelessCompactRail || !typelessTranslationRail) throw new Error('typeless rail geometry missing');
+assertEqual(
+  getCapsuleTranscriptRailPosition('classic', true, false)?.height,
+  22,
+  'Classic translation remains in the click-through overlay with transcript disabled',
+);
+assertEqual(
+  getCapsuleTranscriptRailPosition('classic', true, true)?.height,
+  82,
+  'Classic overlay includes both the rail and the translation badge',
+);
+assertClose(
+  getCapsuleTranscriptRailPosition('typeless', true, false)?.height ?? 0,
+  20 * 0.447,
+  'Typeless translation remains outside the clipped button window',
+);
+assertClose(
+  typelessTranslationRail?.height ?? 0,
+  (52 + 20) * 0.447,
+  'Typeless overlay includes both text and its translation row',
+);
+if (!typelessCompactRail || !typelessTranslationRail)
+  throw new Error('typeless rail geometry missing');
 assertClose(typelessCompactRail.height, 52 * 0.447, 'Typeless rail uses the zoomed native height');
-assertClose(typelessCompactRail.topOffset, 57 - 64 * 0.447 - 52 * 0.447, 'Typeless compact body anchor');
+assertClose(
+  typelessCompactRail.topOffset,
+  57 - 64 * 0.447 - 52 * 0.447,
+  'Typeless compact body anchor',
+);
 assertClose(
   typelessTranslationRail.topOffset,
   65 - 20 * 0.447 - 64 * 0.447 - 52 * 0.447,

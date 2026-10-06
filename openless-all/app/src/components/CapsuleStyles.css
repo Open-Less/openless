@@ -33,10 +33,53 @@
    always cursor-through, so the full transcript/gutter can never intercept a
    click destined for another process. */
 .ol-capsule-transcript-overlay {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   width: 460px;
-  height: 52px;
   overflow: visible;
   pointer-events: none;
+}
+
+.ol-capsule-transcript-overlay[data-style='classic'] {
+  gap: 8px;
+}
+
+.ol-classic-translation {
+  display: inline-flex;
+  flex: 0 0 22px;
+  height: 22px;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 5px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--ol-blue);
+  background: var(--ol-capsule-badge-bg);
+  border: 0.5px solid var(--ol-capsule-badge-border);
+  box-shadow:
+    0 4px 12px -4px rgb(37 99 235 / 25%),
+    0 0 0 0.5px rgb(0 0 0 / 4%);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  transform-origin: center bottom;
+  transition:
+    opacity 0.24s ease-out,
+    transform 0.34s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+}
+
+.ol-classic-translation[data-visible='false'] {
+  opacity: 0;
+  transform: translateY(40px) scale(0.88);
+}
+
+.ol-classic-translation > span {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--ol-blue);
 }
 
 .ol-capsule-transcript-overlay .ol-capsule-transcript-rail {
@@ -53,7 +96,6 @@
 
 .ol-capsule-transcript-overlay--typeless {
   width: 460px;
-  height: 52px;
   zoom: 0.447;
 }
 
@@ -251,7 +293,10 @@
 }
 .ol-typeless-translation {
   position: static;
-  padding: 3px 10px;
+  display: flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 10px;
   box-sizing: border-box;
   white-space: nowrap;
   font-size: 10px;

@@ -1,5 +1,6 @@
 import { animate, motion, useMotionValue, useReducedMotion, useTransform } from 'framer-motion';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import './CapsuleStyles.css';
 import {
   INSERT_TEXT_MOTION,
@@ -40,6 +41,16 @@ import type {
 } from '../lib/types';
 
 export type LiveTranscriptTone = 'frost' | 'dark';
+
+export function CapsuleTranslationBadge({ visible = true }: { visible?: boolean }) {
+  const { t } = useTranslation();
+  return (
+    <div className="ol-classic-translation" data-visible={visible}>
+      <span />
+      {t('capsule.translating')}
+    </div>
+  );
+}
 
 export interface LiveTranscriptPillProps {
   text: string;
@@ -124,12 +135,14 @@ export function CapsuleTranscriptRail({
  * its controls while this rail never participates in cross-process hit testing.
  */
 export function CapsuleTranscriptOverlay() {
+  const { t } = useTranslation();
   const [state, setState] = useState<CapsuleState>('idle');
   const [style, setStyle] = useState<CapsuleStyle>('siri');
   const [text, setText] = useState('');
   const [enabled, setEnabled] = useState(true);
   const [fontSize, setFontSize] = useState(14);
   const [selectionPolish, setSelectionPolish] = useState(false);
+  const [translation, setTranslation] = useState(false);
   const transcriptRef = useRef<TranscriptViewState>(createTranscriptViewState());
   const stateRef = useRef<CapsuleState>('idle');
   const snapshotRetryDelays = [0, 16, 32, 64, 128, 256] as const;
@@ -144,16 +157,14 @@ export function CapsuleTranscriptOverlay() {
         const payload = event.payload;
         const previousState = stateRef.current;
         const previousTranscript = transcriptRef.current;
-        const sessionTranscript = applyTranscriptSessionId(
-          previousTranscript,
-          payload.sessionId,
-        );
+        const sessionTranscript = applyTranscriptSessionId(previousTranscript, payload.sessionId);
         const sessionChanged = sessionTranscript !== previousTranscript;
         transcriptRef.current = sessionTranscript;
         stateRef.current = payload.state;
         setState(payload.state);
         if (payload.capsuleStyle) setStyle(payload.capsuleStyle);
         setSelectionPolish(payload.selectionPolish === true);
+        setTranslation(payload.translation === true);
         if (payload.state === 'recording' && previousState !== 'recording' && !sessionChanged) {
           transcriptRef.current = beginTranscriptGeneration(transcriptRef.current);
           setText(transcriptRef.current.text);
@@ -193,6 +204,7 @@ export function CapsuleTranscriptOverlay() {
         setState(snapshot.state);
         setStyle(snapshot.capsuleStyle ?? fallbackStyle);
         setSelectionPolish(snapshot.selectionPolish === true);
+        setTranslation(snapshot.translation === true);
         if (snapshot.state === 'recording' && previousState !== 'recording' && !sessionChanged) {
           transcriptRef.current = beginTranscriptGeneration(transcriptRef.current);
           setText(transcriptRef.current.text);
@@ -246,7 +258,7 @@ export function CapsuleTranscriptOverlay() {
   const railHeight = getCapsuleTranscriptRailHeight(style);
   return (
     <div
-      className={`ol-capsule-transcript-overlay${typeless ? ' ol-capsule-transcript-overlay--typeless' : ''}`}
+      className={`ol-capsule-transcript-overlay${typeless ? ' ol-typeless-capsule-wrap ol-capsule-transcript-overlay--typeless' : ''}`}
       data-style={style}
       data-transcript-visible={liveText ? 'true' : 'false'}
     >
@@ -258,6 +270,12 @@ export function CapsuleTranscriptOverlay() {
         maxWidth={440}
         height={railHeight}
       />
+      {translation && !selectionPolish && style === 'classic' && <CapsuleTranslationBadge />}
+      {translation && !selectionPolish && typeless && (
+        <div className="ol-typeless-translation-row">
+          <span className="ol-typeless-translation">{t('capsule.translating')}</span>
+        </div>
+      )}
     </div>
   );
 }

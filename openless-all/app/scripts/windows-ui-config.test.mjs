@@ -18,7 +18,10 @@ const capsuleWindow = config.app.windows.find((window) => window.label === 'caps
 const capsuleRailWindow = config.app.windows.find((window) => window.label === 'capsule-rail');
 const mainWindow = config.app.windows.find((window) => window.label === 'main');
 const libRs = await readFile(new URL('../src-tauri/src/lib.rs', import.meta.url), 'utf-8');
-const dictationRs = await readFile(new URL('../src-tauri/src/commands/dictation.rs', import.meta.url), 'utf-8');
+const dictationRs = await readFile(
+  new URL('../src-tauri/src/commands/dictation.rs', import.meta.url),
+  'utf-8',
+);
 const sharedTypesRs = await readFile(
   new URL('../crates/openless-core/src/shared_types.rs', import.meta.url),
   'utf-8',
@@ -33,8 +36,13 @@ const coordinatorRs =
     'utf-8',
   )) +
   '\n' +
+  (await readFile(new URL('../src-tauri/src/capsule_snapshot.rs', import.meta.url), 'utf-8')) +
+  '\n' +
   (await readFile(new URL('../src-tauri/src/tauri_coordinator_host.rs', import.meta.url), 'utf-8'));
-const tauriEventsRs = await readFile(new URL('../src-tauri/src/tauri_events.rs', import.meta.url), 'utf-8');
+const tauriEventsRs = await readFile(
+  new URL('../src-tauri/src/tauri_events.rs', import.meta.url),
+  'utf-8',
+);
 const capsuleTsx = await readFile(
   new URL('../src/components/Capsule.tsx', import.meta.url),
   'utf-8',
@@ -154,7 +162,11 @@ assertEqual(mainWindow.trafficLightPosition.x, 16, 'traffic lights should have a
 // In tao's inset_traffic_lights, y only scales the title-bar container (slope 1), so the
 // visual top inset ≈ y-14; with left=16 the measured left inset is 21.5px, and y=26 makes
 // the top inset equal (x==y does not).
-assertEqual(mainWindow.trafficLightPosition.y, 26, 'traffic lights should have an equal visual top inset');
+assertEqual(
+  mainWindow.trafficLightPosition.y,
+  26,
+  'traffic lights should have an equal visual top inset',
+);
 assertEqual(mainWindow.width, 1300, 'main window should use the reviewed default width');
 assertEqual(mainWindow.height, 835, 'main window should use the reviewed default height');
 assertEqual(mainWindow.resizable, true, 'users should still be able to resize the main window');
@@ -298,13 +310,19 @@ assertMatch(
 );
 
 const conditionalReturn = capsuleTsx.indexOf('if (insertFallback)');
-const transcriptVisibilityHook = capsuleTsx.indexOf('setCapsuleTranscriptVisible(transcriptVisible)');
-if (conditionalReturn < 0 || transcriptVisibilityHook < 0 || transcriptVisibilityHook > conditionalReturn) {
+const transcriptVisibilityHook = capsuleTsx.indexOf(
+  'setCapsuleTranscriptVisible(transcriptVisible)',
+);
+if (
+  conditionalReturn < 0 ||
+  transcriptVisibilityHook < 0 ||
+  transcriptVisibilityHook > conditionalReturn
+) {
   throw new Error('transcript visibility hook must run before every conditional return');
 }
 assertMatch(
   capsuleTsx,
-  /p\.state === 'idle' \|\| p\.state === 'done' \|\| p\.state === 'cancelled' \|\| p\.state === 'error'[\s\S]*?setLocalAsrText\(''\)/,
+  /p\.state === 'idle'\s*\|\|\s*p\.state === 'done'\s*\|\|\s*p\.state === 'cancelled'\s*\|\|\s*p\.state === 'error'[\s\S]*?setLocalAsrText\(''\)/,
   'terminal capsule states should clear the transcript visibility source',
 );
 if (capsuleTsx.slice(conditionalReturn).includes('useEffect(')) {
@@ -338,10 +356,26 @@ assertMatch(
   /control_left:[\s\S]*?control_right:[\s\S]*?control_top:[\s\S]*?control_bottom:/,
   'capsule hit-test state should store both X and Y bounds',
 );
-assertMatch(coordinatorRs, /CreateRoundRectRgn[\s\S]*?SetWindowRgn/, 'capsule input region should be native');
-assertMatch(coordinatorRs, /WM_NCDESTROY[\s\S]*?remove\([\s\S]*?SetWindowLongPtrW/, 'subclass teardown should restore the old WndProc and remove its table entry');
-assertMatch(coordinatorRs, /SetLastError[\s\S]*?GetLastError/, 'WndProc installation should detect SetWindowLongPtrW failure');
-assertMatch(coordinatorRs, /DeleteObject[\s\S]*?SetWindowRgn failed/, 'failed regions should release their HRGN');
+assertMatch(
+  coordinatorRs,
+  /CreateRoundRectRgn[\s\S]*?SetWindowRgn/,
+  'capsule input region should be native',
+);
+assertMatch(
+  coordinatorRs,
+  /WM_NCDESTROY[\s\S]*?remove\([\s\S]*?SetWindowLongPtrW/,
+  'subclass teardown should restore the old WndProc and remove its table entry',
+);
+assertMatch(
+  coordinatorRs,
+  /SetLastError[\s\S]*?GetLastError/,
+  'WndProc installation should detect SetWindowLongPtrW failure',
+);
+assertMatch(
+  coordinatorRs,
+  /DeleteObject[\s\S]*?SetWindowRgn failed/,
+  'failed regions should release their HRGN',
+);
 assertMatch(
   coordinatorRs,
   /windows_hit_test_uses_x_and_y_and_translation_bounds/,
@@ -352,12 +386,22 @@ assertMatch(
   /HIT_TEST_MODE_CARD[\s\S]*?set_card_hit_test_mode[\s\S]*?restore_capsule_hit_test_mode/,
   'cards should own and restore the shared window hit-test mode',
 );
-assertMatch(coordinatorRs, /set_card_hit_test_mode[\s\S]*?configure_card_hit_test/, 'card mode configures full client area');
+assertMatch(
+  coordinatorRs,
+  /set_card_hit_test_mode[\s\S]*?configure_card_hit_test/,
+  'card mode configures full client area',
+);
 assertMatch(coordinatorRs, /refresh_card_hit_test/, 'card resize refreshes native hit area');
-assertMatch(coordinatorRs, /restore_capsule_geometry/, 'card dismissal restores style-aware capsule geometry');
-if (/capsule_window_bounds\(false\)|position_capsule_bottom_center\(false\)/.test(
-  await readFile(new URL('../src-tauri/src/coordinator.rs', import.meta.url), 'utf-8'),
-)) {
+assertMatch(
+  coordinatorRs,
+  /restore_capsule_geometry/,
+  'card dismissal restores style-aware capsule geometry',
+);
+if (
+  /capsule_window_bounds\(false\)|position_capsule_bottom_center\(false\)/.test(
+    await readFile(new URL('../src-tauri/src/coordinator.rs', import.meta.url), 'utf-8'),
+  )
+) {
   throw new Error('card dismissal must not restore a hard-coded capsule geometry');
 }
 assertMatch(
@@ -375,8 +419,16 @@ assertMatch(
   /get_webview_window\("capsule-rail"\)[\s\S]*?emit\("capsule:state"/,
   'direct dictation state events should reach the dedicated transcript rail',
 );
-assertMatch(mainTsx, /const isCapsuleRail = windowKind === 'capsule-rail'/, 'rail route should be selected');
-assertMatch(appTsx, /isCapsuleRail[\s\S]*?CapsuleTranscriptOverlay/, 'rail route should render the overlay');
+assertMatch(
+  mainTsx,
+  /const isCapsuleRail = windowKind === 'capsule-rail'/,
+  'rail route should be selected',
+);
+assertMatch(
+  appTsx,
+  /isCapsuleRail[\s\S]*?CapsuleTranscriptOverlay/,
+  'rail route should render the overlay',
+);
 assertMatch(
   liveTranscriptTsx,
   /export function CapsuleTranscriptOverlay[\s\S]*?listen<CapsulePayload>\('capsule:state'[\s\S]*?listen<BackendEvent>\('backend:event'[\s\S]*?prefs:changed/,
@@ -392,7 +444,11 @@ assertMatch(
   /snapshotRetryDelays = \[0, 16, 32, 64, 128, 256\][\s\S]*?if \(!snapshot\) continue/,
   'rail replay should retry transient empty snapshots for a bounded interval',
 );
-assertMatch(liveTranscriptTsx, /visibleCapsuleTranscript\(text, enabled, state, selectionPolish\)/, 'rail should apply the same selection-polish visibility predicate');
+assertMatch(
+  liveTranscriptTsx,
+  /visibleCapsuleTranscript\(text, enabled, state, selectionPolish\)/,
+  'rail should apply the same selection-polish visibility predicate',
+);
 assertMatch(
   coordinatorRs,
   /set_ignore_cursor_events\(true\)[\s\S]*?set_size\([\s\S]*?set_position\([\s\S]*?show_capsule_window_for_recording\(&self\.app, &rail, false\)/,
@@ -408,7 +464,11 @@ assertMatch(
   /capsule_transcript_rail_position\(\s*style,\s*translation_active,\s*visible,?\s*\)[\s\S]*?position\.top_offset/,
   'rail native positioning should use body-relative top offset and translation state',
 );
-assertMatch(coordinatorRs, /SW_SHOWNOACTIVATE[\s\S]*?SWP_NOACTIVATE/, 'rail show should use the no-activate path');
+assertMatch(
+  coordinatorRs,
+  /SW_SHOWNOACTIVATE[\s\S]*?SWP_NOACTIVATE/,
+  'rail show should use the no-activate path',
+);
 assertMatch(
   coordinatorRs,
   /no_activate failed: Win32 handle is null/,

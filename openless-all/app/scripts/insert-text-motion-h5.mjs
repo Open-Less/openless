@@ -22,10 +22,28 @@ writeFileSync(
   import React from 'react';
   import {createRoot} from 'react-dom/client';
   import {flushSync} from 'react-dom';
-  import {LiveTranscriptPill} from '/src/components/LiveTranscriptPill.tsx';
+  import {mockIPC, mockWindows} from '@tauri-apps/api/mocks';
+  let railSnapshot = null;
+  if (location.search.includes('native=1')) {
+    mockWindows('capsule-rail');
+    mockIPC((cmd) => {
+      if (cmd === 'get_startup_snapshot') return {contractVersion:'2.0.0',backend:{running:true}};
+      if (cmd === 'get_capsule_snapshot') return railSnapshot;
+      if (cmd === 'get_settings') return {capsuleStyle:railSnapshot.capsuleStyle,capsuleTranscriptEnabled:true,capsuleTranscriptFontSize:14};
+    }, {shouldMockEvents:true});
+  }
+  const {LiveTranscriptPill, CapsuleTranscriptOverlay}=await import('/src/components/LiveTranscriptPill.tsx');
+  const {getCapsuleTranscriptRailPosition}=await import('/src/lib/capsuleLayout.ts');
+  const {i18nReady}=await import('/src/i18n');
+  await i18nReady;
   const root=createRoot(document.getElementById('root'));
   window.show=(text, controls=false, tone='frost')=>flushSync(()=>root.render(React.createElement(LiveTranscriptPill,{text,stageWidth:460,maxWidth:440,minWidth:72,tone,...(controls?{onCancel:()=>{},onConfirm:()=>{}}:{})})));
   window.show('帮我');
+  window.showRail=(style,text)=>{
+    railSnapshot={state:'recording',capsuleStyle:style,translation:true,selectionPolish:false,transcript:text,sessionId:'test',sequence:1,revision:1,payloadRevision:1};
+    root.render(React.createElement(CapsuleTranscriptOverlay,{key:style+text}));
+    return getCapsuleTranscriptRailPosition(style,true,Boolean(text));
+  };
   window.ready=true;
   </script></body></html>`,
 );
@@ -249,14 +267,7 @@ try {
     for (const enabled of [true, false]) {
       await send('Emulation.setDeviceMetricsOverride', {
         width: style === 'typeless' ? 206 : 460,
-        height:
-          style === 'typeless'
-            ? enabled
-              ? 65
-              : 57
-            : style === 'classic'
-              ? 172
-              : 228,
+        height: style === 'typeless' ? (enabled ? 65 : 57) : style === 'classic' ? 172 : 228,
         deviceScaleFactor: 1,
         mobile: false,
       });
@@ -297,15 +308,21 @@ try {
       if (enabled) {
         assert(result.chars > 0, `${style} original text`);
         assert(result.chars <= 64, `${style} motion glyph count stays bounded`);
-         assert(
-           result.rail && result.body && result.railOutsideBody,
-           `${style} keeps the capsule body beside, not inside, the transcript rail`,
-         );
+        assert(
+          result.rail && result.body && result.railOutsideBody,
+          `${style} keeps the capsule body beside, not inside, the transcript rail`,
+        );
         assert(result.width <= (style === 'typeless' ? 206 : 460), `${style} bounded width`);
         if (style === 'typeless') {
-          assert(result.translationHintVisible, 'typeless translation hint stays inside the native viewport');
+          assert(
+            result.translationHintVisible,
+            'typeless translation hint stays inside the native viewport',
+          );
           if (enabled) {
-            assert(result.translationHintNonOverlapping, 'typeless translation hint has a dedicated non-overlapping row');
+            assert(
+              result.translationHintNonOverlapping,
+              'typeless translation hint has a dedicated non-overlapping row',
+            );
           }
         }
         assert(
@@ -319,6 +336,38 @@ try {
         join(out, `${style}-${enabled ? 'text' : 'wave'}.png`),
         Buffer.from(shot.data, 'base64'),
       );
+    }
+  }
+  // Exercise the actual Windows overlay component; the browser capsule preview
+  // does not render this separate, click-through native window.
+  await send('Page.navigate', { url: pageUrl + '?native=1' });
+  await waitForFixture();
+  await evaluate("document.body.style.display='block'");
+  for (const style of ['classic', 'typeless']) {
+    for (const text of ['', '需要翻译的原文']) {
+      const geometry = await evaluate(
+        `window.showRail(${JSON.stringify(style)},${JSON.stringify(text)})`,
+      );
+      assert(geometry, `${style} translation has an overlay even without transcript`);
+      await send('Emulation.setDeviceMetricsOverride', {
+        width: Math.ceil(geometry.width),
+        height: Math.ceil(geometry.height),
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+      await sleep(400);
+      const layout = await evaluate(`(() => {
+        const badge = document.querySelector('.ol-classic-translation, .ol-typeless-translation');
+        const rail = document.querySelector('.ol-capsule-transcript-rail');
+        const box = badge?.getBoundingClientRect();
+        return {badgeTop:box?.top,badgeBottom:box?.bottom,railBottom:rail?.getBoundingClientRect().bottom};
+      })()`);
+      assert(
+        layout.badgeTop >= -0.5 && layout.badgeBottom <= geometry.height + 0.5,
+        `${style} translation fits its native overlay: ${JSON.stringify(layout)}`,
+      );
+      if (text)
+        assert(layout.railBottom <= layout.badgeTop + 0.5, `${style} rail clears translation`);
     }
   }
   console.log(

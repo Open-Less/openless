@@ -16,6 +16,7 @@ interface TypelessCapsuleProps {
   insertedChars?: number;
   operating?: boolean;
   translation?: boolean;
+  translationInSameWindow?: boolean;
   warming?: boolean;
   preview?: boolean;
 }
@@ -44,6 +45,7 @@ export function TypelessCapsule({
   insertedChars = 0,
   operating = false,
   translation = false,
+  translationInSameWindow = true,
   warming = false,
   preview = false,
 }: TypelessCapsuleProps) {
@@ -78,7 +80,7 @@ export function TypelessCapsule({
             height={52}
           />
         )}
-        {translation && (
+        {translation && translationInSameWindow && (
           <div className="ol-typeless-translation-row">
             <span className="ol-typeless-translation">{t('capsule.translating')}</span>
           </div>
