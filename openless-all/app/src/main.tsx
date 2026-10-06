@@ -19,6 +19,8 @@ const isLessComputerGlow = windowKind === "less-computer-glow";
 const osQuery = params.get("os") as OS | null;
 const os = osQuery ?? detectOS();
 document.documentElement.dataset.olPlatform = os;
+// 标记窗口类型：Linux 的不透明回退背景需要排除胶囊窗（胶囊必须透明才能露出光效）。
+if (windowKind) document.documentElement.dataset.olWindow = windowKind;
 initThemeMode();
 
 const root = ReactDOM.createRoot(document.getElementById("root")!);

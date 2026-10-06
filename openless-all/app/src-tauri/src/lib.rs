@@ -17,6 +17,8 @@
 mod android;
 #[cfg(test)]
 mod build_target;
+#[cfg(target_os = "linux")]
+mod capsule_bridge;
 mod asr;
 mod audio_mute;
 mod cli;
@@ -103,6 +105,8 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(target_os = "linux")]
+use gtk::prelude::GtkWindowExt;
 #[cfg(target_os = "linux")]
 use gtk::prelude::WidgetExt;
 
@@ -600,6 +604,16 @@ fn run_desktop() {
                 let cursor_passthrough_ready = match capsule.gtk_window() {
                     Ok(gtk_window) => {
                         gtk_window.realize();
+                        // X11 会话具备 keep-above + 不抢焦点的完整能力：胶囊走与 macOS
+                        // nonactivating NSPanel 同效的悬浮路径。GTK 提示属性在窗口显示前
+                        // 设一次即可持久生效；Wayland 下这些调用无效果（胶囊也不会显示）。
+                        if linux_capsule_x11() {
+                            gtk_window.set_keep_above(true);
+                            gtk_window.set_accept_focus(false);
+                            gtk_window.set_focus_on_map(false);
+                            gtk_window.set_skip_taskbar_hint(true);
+                            gtk_window.set_skip_pager_hint(true);
+                        }
                         true
                     }
                     Err(e) => {
@@ -2943,6 +2957,13 @@ pub(crate) fn foreground_window_monitor() -> Option<ForegroundMonitor> {
             scale: (dpi_x as f64 / 96.0).max(0.1),
         })
     }
+}
+
+/// 胶囊悬浮窗只在 X11 会话启用：GNOME Wayland 不提供「第三方窗口置顶且不抢焦点」
+/// 的能力（无 layer-shell / always-on-top 协议），该场景下状态仍由 fcitx 辅助区
+/// 承载；X11 会话则复用与 macOS 相同的胶囊窗口与 webview 动效。
+pub(crate) fn linux_capsule_x11() -> bool {
+    matches!(std::env::var("XDG_SESSION_TYPE").as_deref(), Ok("x11"))
 }
 
 /// 把 capsule 窗口移到屏幕底部居中，与 Swift `CapsuleWindowController.repositionToBottomCenter` 同效。

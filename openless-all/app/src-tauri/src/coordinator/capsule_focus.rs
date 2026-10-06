@@ -7,6 +7,11 @@
 
 use super::*;
 
+/// 辅助区最后写入插件的状态文字（set/clear 与桥抑制两个路径共享此记录）：
+/// 状态桥客户端连上后据此补发清除，消除启动竞态窗口发出的残影。
+#[cfg(target_os = "linux")]
+static LAST_AUX: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
 /// 与 capture_focus_target 类似，但前台窗口属于本进程（即用户停在 QA / capsule / main
 /// 等自家窗口）时返回 None，让 caller 区分"用户没切到别处" vs "用户切到了另一个真正的
 /// 外部 app"。issue #466 多轮场景下用来刷新 qa_focus_target。
@@ -470,22 +475,13 @@ pub(super) fn apply_capsule_window_payload<R: tauri::Runtime>(
         Ordering::Relaxed,
     );
 
-    // Linux 通过 fcitx 辅助区显示状态，不操作胶囊窗口。
+    // Linux：Wayland 会话无「置顶且不抢焦点」能力，状态走 fcitx 辅助区（见下方 aux
+    // 分支）；X11 会话具备该能力，走与 macOS/Windows 相同的胶囊窗口路径。
     #[cfg(target_os = "linux")]
-    {
-        let _ = (
-            app,
-            window,
-            payload,
-            fallback_card_active,
-            reassert_spaces,
-            show_capsule,
-            classic_style,
-        );
+    if !crate::linux_capsule_x11() {
         return;
     }
 
-    #[cfg(not(target_os = "linux"))]
     {
         let action = capsule_window_action(fallback_card_active, show_capsule, payload.state);
         if action == CapsuleWindowAction::PreserveFallbackCard {
@@ -612,6 +608,11 @@ fn emit_capsule_with_context_locked(
     };
     defer_capsule_payload_if_fallback_active(inner, &payload);
 
+    // 状态桥：把这一帧广播给本机 GUI 客户端（GNOME Shell 扩展悬浮胶囊）。
+    // 非阻塞、失败静默——纯增值通道，绝不影响听写主链路。
+    #[cfg(target_os = "linux")]
+    crate::capsule_bridge::capsule_bridge_send(capsule_state_log_name(state), payload.level);
+
     #[cfg(target_os = "android")]
     crate::android::notify_capsule_state(&payload);
 
@@ -622,17 +623,18 @@ fn emit_capsule_with_context_locked(
     // 入场帧：胶囊从不可见第一次变可见。按平时的「同步 emit + 异步 show」，前端会在窗口
     // 还隐藏时就起播 capsule-in，等窗口真 show 出来动画早已播完 → 用户看到胶囊「凭空出
     // 现」而非「滑入」。修法：入场帧把发给 capsule 窗口的事件推迟到主线程闭包里、
-    // window.show 之后再 emit，保证前端起播入场动画时窗口已可见、动画完整可见。Linux 不
-    // 走胶囊窗口（文字经 fcitx5 直接 commit），保持原同步 emit 不变。
+    // window.show 之后再 emit，保证前端起播入场动画时窗口已可见、动画完整可见。Linux
+    // Wayland 不走胶囊窗口（文字经 fcitx5 直接 commit），保持原同步 emit 不变；X11
+    // 会话走胶囊窗口，与桌面平台一致采用「先 show 后 emit」的入场帧时序。
     let was_visible = matches!(prev_state, Some(s) if !matches!(s, CapsuleState::Idle));
-    let defer_capsule_emit = visible && !was_visible && cfg!(not(target_os = "linux"));
+    let defer_capsule_emit =
+        visible && !was_visible && (cfg!(not(target_os = "linux")) || crate::linux_capsule_x11());
 
-    // Linux: 通过 fcitx5 插件在候选词列表下方显示听写状态，不干扰输入法预编辑。
+    // Linux(Wayland): 通过 fcitx5 插件在候选词列表下方显示听写状态，不干扰输入法预编辑。
     // 只在文本变化时调用 DBus，避免录音中 ~30Hz 的音频电平回调重复调用。
+    // 若状态桥已有 GUI 客户端（Shell 扩展）接管显示，则跳过辅助区文字避免双重指示。
     #[cfg(target_os = "linux")]
-    {
-        use std::sync::Mutex;
-        static LAST_AUX: Mutex<Option<String>> = Mutex::new(None);
+    if !crate::linux_capsule_x11() && !crate::capsule_bridge::has_clients() {
 
         let aux = match state {
             CapsuleState::Idle => None,
@@ -713,6 +715,21 @@ fn emit_capsule_with_context_locked(
                     });
                 }
             }
+        }
+    }
+
+    // 状态桥已有 GUI 客户端（Shell 扩展）接管显示：跳过辅助区文字避免双重指示。
+    // 若客户端连接前（启动竞态窗口）已把文字发进插件，这里补发一次清除——
+    // 否则插件端 lastAuxText_ 的焦点重放机制会把残影永久顶在屏幕上。
+    #[cfg(target_os = "linux")]
+    if !crate::linux_capsule_x11() && crate::capsule_bridge::has_clients() {
+        if LAST_AUX.lock().unwrap().take().is_some() {
+            log::info!("[capsule] bridge client present, clearing residual aux text");
+            std::thread::spawn(|| {
+                if let Err(e) = crate::linux_fcitx::clear_aux_down() {
+                    log::warn!("[capsule] residual clear_aux_down failed: {e}");
+                }
+            });
         }
     }
 

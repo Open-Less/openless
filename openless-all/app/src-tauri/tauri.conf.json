@@ -5,7 +5,7 @@
   "identifier": "com.openless.app",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run check:macos-metal-toolchain && npm run build",
+    "beforeBuildCommand": "npm run build",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../dist"
   },
@@ -26,7 +26,10 @@
         "shadow": true,
         "hiddenTitle": true,
         "titleBarStyle": "Overlay",
-        "trafficLightPosition": { "x": 14, "y": 20 },
+        "trafficLightPosition": {
+          "x": 14,
+          "y": 20
+        },
         "visible": false,
         "acceptFirstMouse": true
       },

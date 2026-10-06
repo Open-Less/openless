@@ -7,9 +7,11 @@ html, body, #root {
   overflow: hidden;
 }
 
-html[data-ol-platform="linux"],
-html[data-ol-platform="linux"] body,
-html[data-ol-platform="linux"] #root {
+/* Linux 主窗口无系统级毛玻璃，保留不透明底；胶囊窗排除在外 —— 它依赖
+   透明窗口渲染 Siri 光效，X11 会话下透明可用（Wayland 不显示胶囊窗）。 */
+html[data-ol-platform="linux"]:not([data-ol-window="capsule"]),
+html[data-ol-platform="linux"]:not([data-ol-window="capsule"]) body,
+html[data-ol-platform="linux"]:not([data-ol-window="capsule"]) #root {
   background: var(--ol-surface);
 }
 
@@ -188,11 +190,11 @@ a { color: inherit; text-decoration: none; }
   pointer-events: none;
 }
 
-html[data-ol-platform="linux"] .ol-frost {
+html[data-ol-platform="linux"]:not([data-ol-window="capsule"]) .ol-frost {
   background: var(--ol-surface);
 }
 
-html[data-ol-platform="linux"] .ol-frost::before {
+html[data-ol-platform="linux"]:not([data-ol-window="capsule"]) .ol-frost::before {
   content: none;
 }
 

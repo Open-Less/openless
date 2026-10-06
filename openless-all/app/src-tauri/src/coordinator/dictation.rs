@@ -2747,6 +2747,61 @@ pub(super) async fn start_recorder_for_starting(
     // 配合 CSS 短 transition 让每次 emit 完整可见。
     let last_emit_at = Arc::new(Mutex::new(None::<Instant>));
     const LEVEL_EMIT_MIN_INTERVAL_MS: u64 = 33;
+
+    /// UI 电平动态处理：只影响胶囊 payload，静音检测已消费原始 level。
+    /// 麦克风链路常带系统 AGC，原始 RMS×4 后底噪 0.3~0.5、说话顶格 1.0，
+    /// 动态被压扁。链路：噪声门（自适应基线）→ 基线归一化 → 扩张 → 快攻慢放包络。
+    struct LevelDynamics {
+        noise_floor: f32,
+        envelope: f32,
+        last_update: Instant,
+        seeded: bool,
+    }
+    impl LevelDynamics {
+        fn new() -> Self {
+            Self {
+                noise_floor: 0.0,
+                envelope: 0.0,
+                last_update: Instant::now(),
+                seeded: false,
+            }
+        }
+        fn process(&mut self, raw: f32) -> f32 {
+            let now = Instant::now();
+            let dt = now
+                .duration_since(self.last_update)
+                .as_secs_f32()
+                .clamp(0.0005, 0.2);
+            self.last_update = now;
+            if !self.seeded {
+                self.noise_floor = raw * 0.8; // 保守种子：基线略低于首帧
+                self.seeded = true;
+            }
+            // 基线追踪：下方快速贴到底噪；上方极慢上爬（τ25s，长讲话也不显著抬基线）
+            if raw < self.noise_floor {
+                let k = 1.0 - (-dt / 0.35f32).exp();
+                self.noise_floor += (raw - self.noise_floor) * k;
+            } else {
+                let k = 1.0 - (-dt / 25.0f32).exp();
+                self.noise_floor += (raw - self.noise_floor) * k;
+            }
+            self.noise_floor = self.noise_floor.clamp(0.0, 0.6);
+            // 门限+归一化+扩张
+            let above = (raw - self.noise_floor * 1.35 - 0.015).max(0.0);
+            let span = (0.95 - self.noise_floor * 1.35).clamp(0.15, 0.9);
+            let expanded = (above / span).clamp(0.0, 1.0).powf(1.35);
+            // 快攻慢放包络
+            let k = if expanded > self.envelope {
+                1.0 - (-dt / 0.045f32).exp() // 攻击 45ms：跟手
+            } else {
+                1.0 - (-dt / 0.25f32).exp() // 释放 250ms：余韵
+            };
+            self.envelope += (expanded - self.envelope) * k;
+            self.envelope.clamp(0.0, 1.0)
+        }
+    }
+    let ui_level_dyn = Arc::new(Mutex::new(LevelDynamics::new()));
+
     let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
         let phase = inner_for_level.state.lock().phase;
         if phase != SessionPhase::Listening && phase != SessionPhase::Starting {
@@ -2762,6 +2817,8 @@ pub(super) async fn start_recorder_for_starting(
                 let _ = tx.try_send(decision);
             }
         }
+        // UI 电平动态化（在节流之前处理，包络按 185Hz 原始节奏平滑）
+        let level = ui_level_dyn.lock().process(level);
         let now = Instant::now();
         {
             let mut last = last_emit_at.lock();
@@ -4121,9 +4178,11 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         ) {
             log::error!("[coord] history append failed: {e}");
         }
+        // 空转写不是用户的错（多为服务端抖动/真的没说话）——走中性灰 ✗ 而非红色
+        // 错误球，避免把服务端故障窗口误呈现成「你出错了」。
         emit_capsule(
             inner,
-            CapsuleState::Error,
+            CapsuleState::Cancelled,
             0.0,
             elapsed,
             Some("没有识别到语音".to_string()),

@@ -597,6 +597,14 @@ fn process_callback(
         return;
     }
 
+    // 首个回调块是设备启动瞬间的削波垃圾（实测 inRMS≈0.999、peak 1.0），
+    // 会被当作 deferred bytes 首包上行并归档进 WAV——直接丢弃（约 20ms，无感知）。
+    let count = state.callback_count.fetch_add(1, Ordering::Relaxed) + 1;
+    if count == 1 {
+        *state.last_callback_time.lock() = Some(std::time::Instant::now());
+        return;
+    }
+
     let mono = downmix_to_mono(interleaved, channels);
     let input_rms = rms(&mono);
 
@@ -618,7 +626,6 @@ fn process_callback(
     *state.last_callback_time.lock() = Some(std::time::Instant::now());
 
     // 诊断：峰值 + 周期性日志。
-    let count = state.callback_count.fetch_add(1, Ordering::Relaxed) + 1;
     update_peak(&state.peak_input_rms_milli, input_rms);
     update_peak(&state.peak_output_rms_milli, output_rms);
     if count == 1 || count % LOG_EVERY_N_CALLBACKS == 0 {

@@ -5,7 +5,7 @@
 //! quirks are preserved verbatim — see comments tagged with `[asr]` for the
 //! original learnings (especially the "definite=true is NOT stream end" bug).
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -183,6 +183,10 @@ pub struct VolcengineStreamingASR {
     /// 而把后续 chunk 当成「stream 已结束」之后的多余数据丢弃 → 尾句丢失。
     pending_sends: Arc<AtomicUsize>,
     send_done: Arc<Notify>,
+    /// 会话代数：open_session 每开一局 +1。audio worker 持有自己的代数快照，
+    /// 发送前比对——上一局遗留的 worker 在新连接建立后必须自行退出，
+    /// 否则旧序号的帧会泄漏进新连接（服务端报 autoAssignedSequence mismatch）。
+    session_gen: Arc<AtomicU64>,
 }
 
 impl VolcengineStreamingASR {
@@ -196,6 +200,7 @@ impl VolcengineStreamingASR {
             audio_tx: ParkingMutex::new(None),
             pending_sends: Arc::new(AtomicUsize::new(0)),
             send_done: Arc::new(Notify::new()),
+            session_gen: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -239,8 +244,16 @@ impl VolcengineStreamingASR {
         let writer_for_worker = Arc::clone(&self.writer);
         let pending_for_worker = Arc::clone(&self.pending_sends);
         let notify_for_worker = Arc::clone(&self.send_done);
+        // 本 worker 只服务这一局会话：新 open_session 会推进代数，旧 worker 见到
+        // 代数变化即退出（writer 槽位已被新会话接管，旧帧绝不能发上去）。
+        let gen_for_worker = self.session_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        let gen_slot = Arc::clone(&self.session_gen);
         tokio::spawn(async move {
             while let Some((seq, chunk)) = audio_rx.recv().await {
+                if gen_for_worker != gen_slot.load(Ordering::SeqCst) {
+                    log::info!("[asr] audio worker 会话代数已更替，退出（seq={seq} 未发送）");
+                    break;
+                }
                 let frame = frame::build(
                     MessageType::AudioOnlyRequest,
                     Flags::PositiveSequence,
@@ -249,7 +262,10 @@ impl VolcengineStreamingASR {
                     Some(seq),
                 );
                 if let Err(e) = send_binary(&writer_for_worker, frame).await {
-                    log::error!("[asr] audio frame seq={} send 失败: {}", seq, e);
+                    // 连接已死：本会话发送终止，防止对同一槽位（可能已被新会话接管）
+                    // 继续推帧造成 45000000 序列号错位与日志刷屏。
+                    log::error!("[asr] audio frame seq={seq} send 失败，终止本会话发送: {e}");
+                    break;
                 }
                 if pending_for_worker.fetch_sub(1, Ordering::SeqCst) == 1 {
                     notify_for_worker.notify_waiters();
