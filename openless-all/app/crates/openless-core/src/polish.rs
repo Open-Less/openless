@@ -834,6 +834,9 @@ impl OpenAICompatibleLLMProvider {
             &self.config.model,
             self.config.thinking_enabled,
         );
+        self.config
+            .protocol
+            .apply_service_tier(&self.config.provider_id, &mut body);
         body
     }
 
@@ -2507,6 +2510,7 @@ mod tests {
             .into_iter()
             .flat_map(|format| {
                 [
+                    ("ark", "/api/v3"),
                     ("custom", "/gateway/v1"),
                     ("opencode", "/zen/v1"),
                     ("opencode", "/zen/go/v1"),
@@ -2534,6 +2538,11 @@ mod tests {
                     let split = request.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
                     let headers = String::from_utf8_lossy(&request[..split]).to_ascii_lowercase();
                     let body: Value = serde_json::from_slice(&request[split + 4..]).unwrap();
+                    if preset == "ark" {
+                        assert_eq!(body["service_tier"], "fast");
+                    } else {
+                        assert!(body.get("service_tier").is_none());
+                    }
                     if format == LlmRequestFormat::Responses {
                         assert!(body.get("temperature").is_none());
                     } else {
@@ -2626,6 +2635,7 @@ mod tests {
             .with_thinking_enabled(thinking_enabled)
             .with_protocol(LlmProtocolConfig {
                 format,
+                service_tier: crate::llm_protocol::LlmServiceTier::Fast,
                 ..Default::default()
             });
             let provider = OpenAICompatibleLLMProvider::new(config);
@@ -3362,6 +3372,27 @@ mod tests {
             s.contains("当前") && s.contains("最新"),
             "需要明确：只输出当前最新一条"
         );
+    }
+
+    #[test]
+    fn ark_chat_body_includes_fast_service_tier() {
+        let provider = OpenAICompatibleLLMProvider::new(
+            OpenAICompatibleConfig::new(
+                "ark",
+                "Ark",
+                "https://ark.cn-beijing.volces.com/api/v3",
+                "k",
+                "doubao-seed-2-1-lite-260915",
+            )
+            .with_protocol(LlmProtocolConfig {
+                service_tier: crate::llm_protocol::LlmServiceTier::Fast,
+                ..Default::default()
+            }),
+        );
+
+        let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+        assert_eq!(body["service_tier"], "fast");
     }
 
     #[test]

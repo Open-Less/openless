@@ -18,4 +18,9 @@ inline constexpr GUID GUID_OpenLessProfile = {
 };
 
 inline constexpr wchar_t kOpenLessImeName[] = L"OpenLess Voice Input";
-inline constexpr LANGID kOpenLessLangId = 0x0804;
+// Registered for every language (like the system speech text service) under the
+// speech category, so TSF keeps it active next to the user's keyboard IME and
+// dictation never has to switch the keyboard IME away and back.
+inline constexpr LANGID kOpenLessLangId = 0xFFFF;
+// Releases up to 2.0.0-Beta.4 registered a zh-CN keyboard profile instead.
+inline constexpr LANGID kOpenLessLegacyKeyboardLangId = 0x0804;

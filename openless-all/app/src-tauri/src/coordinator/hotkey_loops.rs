@@ -488,6 +488,9 @@ fn handle_selection_workspace_hotkey_pressed(inner: &Arc<Inner>) {
                     "selectionPolishNoSelection" | "selected text must not be empty" => {
                         "未选中内容"
                     }
+                    "selectionPolishSelectionTooLong" => {
+                        "选区超过 4000 字，未替换，以免删掉中间没有读到的原文"
+                    }
                     "selectionPolishTargetUnavailable" => "目标输入框不可用，请重新选择",
                     "selectionPolishTargetChanged" | "selectionPolishSelectionChanged" => {
                         "选区已变化，未替换"
@@ -2816,6 +2819,7 @@ pub(crate) mod windows_less_computer_tests {
             fixture_coordinator(crate::types::HotkeyMode::Toggle, std::time::Duration::ZERO);
         coordinator.inner.host.begin_insert_fallback_card();
         let expected = CapsulePayload {
+            session_id: None,
             state: CapsuleState::Recording,
             level: 0.0,
             elapsed_ms: 0,

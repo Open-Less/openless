@@ -121,6 +121,9 @@ fn selection_voice_user_message(error: &str) -> String {
     match error {
         "dictationActive" => "正在听写，请先结束录音".into(),
         "selectionVoiceNoSelection" => "请先选中文字，或将光标放在可输入的文本框中".into(),
+        "selectionVoiceSelectionTooLong" => {
+            "选区超过 4000 字，已停止，以免用截断结果覆盖并删掉中间原文".into()
+        }
         "selectionVoiceTargetUnavailable" => "无法定位输入目标，请先点击文本框后再试".into(),
         "selectionVoiceBusy" => "选区语音会话进行中".into(),
         other => other.into(),
@@ -377,9 +380,20 @@ async fn begin_selection_voice_session(inner: &Arc<Inner>) -> Result<(), String>
             crate::selection::SelectionContext {
                 text: String::new(),
                 source_app: capture_diag.front_app.clone(),
+                omits_middle: false,
             }
         }
     };
+    // The stored text is only a head/tail stand-in. Continuing would paste a
+    // rewrite of that stand-in over the whole live selection and delete the middle.
+    if selection.omits_middle {
+        log::warn!(
+            "[selection-voice] begin refused: selection longer than the replacement limit ({})",
+            capture_diag.summary()
+        );
+        release_selection_voice_capsule_claim(inner);
+        return Err("selectionVoiceSelectionTooLong".into());
+    }
 
     let session_id = match inner
         .backend
@@ -777,6 +791,9 @@ impl Coordinator {
         let insertion_target = target_for_session(&self.inner, ticket.session_id)?;
         if !crate::selection::reactivate_selection_insertion_target(&insertion_target) {
             return Err("selectionVoiceTargetUnavailable".to_string());
+        }
+        if crate::selection::is_truncated_selection_stand_in(&ticket.source_text) {
+            return Err("selectionVoiceSelectionTooLong".to_string());
         }
         // Empty source_text = caret insert (Help me write). Skip Ctrl+C content
         // re-validation that assumes a non-empty selection (#1014).

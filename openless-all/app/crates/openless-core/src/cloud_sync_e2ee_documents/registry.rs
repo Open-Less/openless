@@ -912,6 +912,7 @@ pub const LLM_ACCOUNTS: &[&str] = &[
     "ark.messages_thinking",
     "ark.max_tokens",
     "ark.thinking_budget",
+    "ark.service_tier",
 ];
 pub const OMNI_ACCOUNTS: &[&str] = &[
     "omni.api_key",

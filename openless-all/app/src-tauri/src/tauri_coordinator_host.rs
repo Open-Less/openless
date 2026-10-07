@@ -4,10 +4,18 @@
 //! [`tauri::AppHandle`] and keeps window, main-thread and managed-state access
 //! out of the coordinator's business paths.
 
+#[cfg(target_os = "windows")]
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
+#[cfg(target_os = "windows")]
+use std::sync::OnceLock;
 
+#[path = "capsule_snapshot.rs"]
+mod capsule_snapshot;
+use capsule_snapshot::CapsuleSnapshotState;
+use openless_core::BackendEvent;
 use parking_lot::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -17,6 +25,420 @@ static CAPSULE_SUPPRESSED_BY_TOGGLE_LOGGED: AtomicBool = AtomicBool::new(false);
 static CAPSULE_FIRST_SHOW_LOGGED: AtomicBool = AtomicBool::new(false);
 static CAPSULE_NO_ACTIVATE_FALLBACK_WARNED: AtomicBool = AtomicBool::new(false);
 static CAPSULE_WINDOW_MISSING_LOGGED: AtomicBool = AtomicBool::new(false);
+
+const HIT_TEST_MODE_CAPSULE: u8 = 0;
+const HIT_TEST_MODE_CARD: u8 = 1;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CapsuleTranscriptRailPosition {
+    width: f64,
+    height: f64,
+    /// Rail top relative to the capsule body HWND top, in logical/native pixels.
+    top_offset: f64,
+    gap: f64,
+}
+
+/// Keep the standalone rail attached to the actual capsule body content. The
+/// capsule HWND contains transparent headroom for each style, so subtracting
+/// rail height from the HWND top puts Classic and Typeless rails too high.
+fn capsule_transcript_rail_position(
+    style: CapsuleStyle,
+    translation_active: bool,
+    transcript_visible: bool,
+) -> Option<CapsuleTranscriptRailPosition> {
+    if !transcript_visible && (!translation_active || style == CapsuleStyle::Siri) {
+        return None;
+    }
+    match style {
+        CapsuleStyle::Siri => {
+            let body_top = 0.0;
+            let height = 40.0;
+            let gap = 8.0;
+            Some(CapsuleTranscriptRailPosition {
+                width: 460.0,
+                height,
+                top_offset: body_top - gap - height,
+                gap,
+            })
+        }
+        CapsuleStyle::Classic => {
+            const HOST_HEIGHT: f64 = 172.0;
+            const BODY_BOTTOM_INSET: f64 = 16.0;
+            const BODY_HEIGHT: f64 = 52.0;
+            const RAIL_HEIGHT: f64 = 52.0;
+            const RAIL_GAP: f64 = 8.0;
+            const BADGE_HEIGHT: f64 = 22.0;
+            const BADGE_GAP: f64 = 8.0;
+            let body_top = HOST_HEIGHT - BODY_BOTTOM_INSET - BODY_HEIGHT;
+            let gap = RAIL_GAP;
+            let height = if transcript_visible { RAIL_HEIGHT } else { 0.0 }
+                + if translation_active {
+                    BADGE_HEIGHT + if transcript_visible { BADGE_GAP } else { 0.0 }
+                } else {
+                    0.0
+                };
+            let top_offset = body_top - RAIL_GAP - height;
+            Some(CapsuleTranscriptRailPosition {
+                width: 460.0,
+                height,
+                top_offset,
+                gap,
+            })
+        }
+        CapsuleStyle::Typeless => {
+            const ZOOM: f64 = 0.447;
+            let host_height = if translation_active { 65.0 } else { 57.0 };
+            let body_bottom = host_height;
+            let body_top =
+                body_bottom - (64.0 * ZOOM) - if translation_active { 20.0 * ZOOM } else { 0.0 };
+            let rail_height = if transcript_visible { 52.0 * ZOOM } else { 0.0 };
+            let height = rail_height + if translation_active { 20.0 * ZOOM } else { 0.0 };
+            let gap = 0.0;
+            Some(CapsuleTranscriptRailPosition {
+                width: 206.0,
+                height,
+                top_offset: body_top - gap - rail_height,
+                gap,
+            })
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy)]
+struct CapsuleHitTestEntry {
+    previous_proc: isize,
+    control_left: i32,
+    control_right: i32,
+    control_top: i32,
+    control_bottom: i32,
+}
+
+#[cfg(target_os = "windows")]
+static CAPSULE_HIT_TEST_ENTRIES: OnceLock<Mutex<HashMap<isize, CapsuleHitTestEntry>>> =
+    OnceLock::new();
+
+#[cfg(target_os = "windows")]
+fn capsule_hit_test_entries() -> &'static Mutex<HashMap<isize, CapsuleHitTestEntry>> {
+    CAPSULE_HIT_TEST_ENTRIES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CapsuleHitTestRect {
+    left: i32,
+    right: i32,
+    top: i32,
+    bottom: i32,
+}
+
+#[cfg(target_os = "windows")]
+fn capsule_control_hit_rect(
+    style: CapsuleStyle,
+    transcript_visible: bool,
+    translation_active: bool,
+    window_width: i32,
+    window_height: i32,
+) -> Option<CapsuleHitTestRect> {
+    if style == CapsuleStyle::Siri || window_width <= 0 || window_height <= 0 {
+        return None;
+    }
+    let (
+        logical_host_width,
+        logical_host_height,
+        logical_body_width,
+        logical_body_height,
+        logical_bottom_inset,
+    ) = match style {
+        // Classic transcript is hosted by the separate click-through rail HWND on
+        // Windows. The capsule HWND therefore owns only its 172px host, regardless
+        // of whether the rail is visible.
+        CapsuleStyle::Classic => (460.0, 172.0, 196.0, 52.0, 16.0),
+        // Typeless content is scaled by zoom: 64px CSS × 0.447. The native window may be
+        // 57px or 65px high when the dedicated translation row is present.
+        CapsuleStyle::Typeless => (
+            206.0,
+            if translation_active { 65.0 } else { 57.0 },
+            232.0 * 0.447,
+            64.0 * 0.447,
+            0.0,
+        ),
+        CapsuleStyle::Siri => unreachable!(),
+    };
+    let _ = transcript_visible;
+    let scale =
+        (window_width as f64 / logical_host_width).min(window_height as f64 / logical_host_height);
+    let body_width = (logical_body_width * scale).round() as i32;
+    let body_height = (logical_body_height * scale).round() as i32;
+    let bottom_inset = (logical_bottom_inset * scale).round() as i32;
+    let control_left = ((window_width as f64 - body_width as f64) / 2.0).round() as i32;
+    let control_bottom = window_height - bottom_inset;
+    Some(CapsuleHitTestRect {
+        left: control_left.max(0),
+        right: (control_left + body_width).min(window_width),
+        top: (control_bottom - body_height).max(0),
+        bottom: control_bottom.max(0),
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn capsule_card_hit_rect(window_width: i32, window_height: i32) -> CapsuleHitTestRect {
+    CapsuleHitTestRect {
+        left: 0,
+        right: window_width.max(0),
+        top: 0,
+        bottom: window_height.max(0),
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn capsule_hit_test_window_proc(
+    hwnd: windows::Win32::Foundation::HWND,
+    msg: u32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CallWindowProcW, DefWindowProcW, GetWindowRect, SetWindowLongPtrW, GWLP_WNDPROC,
+        HTTRANSPARENT, WM_NCDESTROY, WM_NCHITTEST,
+    };
+
+    if msg == WM_NCDESTROY {
+        let previous_proc = capsule_hit_test_entries()
+            .lock()
+            .remove(&(hwnd.0 as isize))
+            .map(|entry| entry.previous_proc)
+            .unwrap_or_default();
+        if previous_proc != 0 {
+            let previous: windows::Win32::UI::WindowsAndMessaging::WNDPROC =
+                std::mem::transmute(previous_proc);
+            let _ = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, previous_proc);
+            return CallWindowProcW(previous, hwnd, msg, wparam, lparam);
+        }
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
+    }
+
+    if msg == WM_NCHITTEST {
+        let key = hwnd.0 as isize;
+        let entry = capsule_hit_test_entries().lock().get(&key).copied();
+        if let Some(entry) = entry {
+            let screen_x = (lparam.0 as i32 & 0xffff) as u16 as i16 as i32;
+            let screen_y = ((lparam.0 >> 16) & 0xffff) as u16 as i16 as i32;
+            let mut rect = RECT::default();
+            if GetWindowRect(hwnd, &mut rect).is_ok() {
+                let client_x = screen_x - rect.left;
+                let client_y = screen_y - rect.top;
+                if client_x < entry.control_left
+                    || client_x >= entry.control_right
+                    || client_y < entry.control_top
+                    || client_y >= entry.control_bottom
+                {
+                    return windows::Win32::Foundation::LRESULT(HTTRANSPARENT as isize);
+                }
+            }
+        }
+    }
+
+    let previous_proc = capsule_hit_test_entries()
+        .lock()
+        .get(&(hwnd.0 as isize))
+        .map(|entry| entry.previous_proc)
+        .unwrap_or_default();
+    if previous_proc != 0 {
+        let previous: windows::Win32::UI::WindowsAndMessaging::WNDPROC =
+            std::mem::transmute(previous_proc);
+        CallWindowProcW(previous, hwnd, msg, wparam, lparam)
+    } else {
+        DefWindowProcW(hwnd, msg, wparam, lparam)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn install_capsule_hit_test_proc(
+    hwnd: windows::Win32::Foundation::HWND,
+    rect: CapsuleHitTestRect,
+) -> tauri::Result<()> {
+    use windows::Win32::Foundation::{GetLastError, SetLastError, ERROR_SUCCESS};
+    use windows::Win32::UI::WindowsAndMessaging::{SetWindowLongPtrW, GWLP_WNDPROC};
+
+    if hwnd.0.is_null() {
+        return Err(tauri::Error::Anyhow(anyhow::anyhow!(
+            "cannot install hit-test proc for a null HWND"
+        )));
+    }
+
+    let key = hwnd.0 as isize;
+    let mut entries = capsule_hit_test_entries().lock();
+    if let Some(entry) = entries.get_mut(&key) {
+        entry.control_left = rect.left;
+        entry.control_right = rect.right;
+        entry.control_top = rect.top;
+        entry.control_bottom = rect.bottom;
+        return Ok(());
+    }
+    unsafe { SetLastError(ERROR_SUCCESS) };
+    let previous = unsafe {
+        SetWindowLongPtrW(
+            hwnd,
+            GWLP_WNDPROC,
+            capsule_hit_test_window_proc as usize as isize,
+        )
+    };
+    if previous == 0 && unsafe { GetLastError() } != ERROR_SUCCESS {
+        return Err(tauri::Error::Anyhow(anyhow::anyhow!(
+            "SetWindowLongPtrW(GWLP_WNDPROC) failed"
+        )));
+    }
+    entries.insert(
+        key,
+        CapsuleHitTestEntry {
+            previous_proc: previous,
+            control_left: rect.left,
+            control_right: rect.right,
+            control_top: rect.top,
+            control_bottom: rect.bottom,
+        },
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn set_capsule_input_region(
+    hwnd: windows::Win32::Foundation::HWND,
+    rect: CapsuleHitTestRect,
+) -> tauri::Result<()> {
+    use windows::Win32::Foundation::BOOL;
+    use windows::Win32::Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn, HGDIOBJ};
+
+    if hwnd.0.is_null() {
+        return Err(tauri::Error::Anyhow(anyhow::anyhow!(
+            "cannot set input region for a null HWND"
+        )));
+    }
+
+    let radius = ((rect.bottom - rect.top) / 2).max(1);
+    let region =
+        unsafe { CreateRoundRectRgn(rect.left, rect.top, rect.right, rect.bottom, radius, radius) };
+    if region.0.is_null() {
+        return Err(tauri::Error::Anyhow(anyhow::anyhow!(
+            "CreateRoundRectRgn returned a null region"
+        )));
+    }
+    let result = unsafe { SetWindowRgn(hwnd, region, BOOL(1)) };
+    if result == 0 {
+        unsafe {
+            let _ = DeleteObject(HGDIOBJ(region.0));
+        }
+        return Err(tauri::Error::Anyhow(anyhow::anyhow!("SetWindowRgn failed")));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn clear_capsule_input_region(hwnd: windows::Win32::Foundation::HWND) {
+    use windows::Win32::Foundation::BOOL;
+    use windows::Win32::Graphics::Gdi::{SetWindowRgn, HRGN};
+
+    if hwnd.0.is_null() {
+        return;
+    }
+    unsafe {
+        let _ = SetWindowRgn(hwnd, HRGN::default(), BOOL(1));
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn configure_capsule_hit_test<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    style: CapsuleStyle,
+    transcript_visible: bool,
+    translation_active: bool,
+) -> tauri::Result<()> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
+
+    let Ok(handle) = window.window_handle() else {
+        return Ok(());
+    };
+    let RawWindowHandle::Win32(raw) = handle.as_raw() else {
+        return Ok(());
+    };
+    let hwnd = windows::Win32::Foundation::HWND(raw.hwnd.get() as *mut _);
+    if hwnd.0.is_null() {
+        return Err(tauri::Error::Anyhow(anyhow::anyhow!(
+            "capsule window returned a null HWND"
+        )));
+    }
+    let mut client = RECT::default();
+    unsafe {
+        GetClientRect(hwnd, &mut client).map_err(|error| tauri::Error::Anyhow(error.into()))?;
+    }
+    let Some(rect) = capsule_control_hit_rect(
+        style,
+        transcript_visible,
+        translation_active,
+        client.right - client.left,
+        client.bottom - client.top,
+    ) else {
+        return Ok(());
+    };
+    set_capsule_input_region(hwnd, rect)?;
+    if let Err(error) = install_capsule_hit_test_proc(hwnd, rect) {
+        clear_capsule_input_region(hwnd);
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn configure_card_hit_test<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+) -> tauri::Result<()> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
+
+    let Ok(handle) = window.window_handle() else {
+        return Ok(());
+    };
+    let RawWindowHandle::Win32(raw) = handle.as_raw() else {
+        return Ok(());
+    };
+    let hwnd = windows::Win32::Foundation::HWND(raw.hwnd.get() as *mut _);
+    if hwnd.0.is_null() {
+        return Err(tauri::Error::Anyhow(anyhow::anyhow!(
+            "card window returned a null HWND"
+        )));
+    }
+    let mut client = RECT::default();
+    unsafe {
+        GetClientRect(hwnd, &mut client).map_err(|error| tauri::Error::Anyhow(error.into()))?;
+    }
+    let rect = capsule_card_hit_rect(client.right - client.left, client.bottom - client.top);
+    clear_capsule_input_region(hwnd);
+    install_capsule_hit_test_proc(hwnd, rect)
+}
+
+#[cfg(target_os = "windows")]
+fn clear_capsule_input_region_for_window<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+) -> tauri::Result<()> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let Ok(handle) = window.window_handle() else {
+        return Ok(());
+    };
+    let RawWindowHandle::Win32(raw) = handle.as_raw() else {
+        return Ok(());
+    };
+    let hwnd = windows::Win32::Foundation::HWND(raw.hwnd.get() as *mut _);
+    if !hwnd.0.is_null() {
+        clear_capsule_input_region(hwnd);
+    }
+    Ok(())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CapsuleShowStrategy {
@@ -91,9 +513,13 @@ fn show_capsule_window_no_activate<R: tauri::Runtime>(
         return false;
     };
     let hwnd = HWND(raw.hwnd.get() as *mut _);
+    if hwnd.0.is_null() {
+        log::warn!("[capsule] no_activate failed: Win32 handle is null");
+        return false;
+    }
 
     let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
-    let _ = unsafe {
+    if let Err(error) = unsafe {
         SetWindowPos(
             hwnd,
             HWND_TOPMOST,
@@ -103,7 +529,10 @@ fn show_capsule_window_no_activate<R: tauri::Runtime>(
             0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
         )
-    };
+    } {
+        log::warn!("[capsule] no_activate failed: SetWindowPos returned {error}");
+        return false;
+    }
     true
 }
 
@@ -235,6 +664,7 @@ fn capsule_window_action(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CapsuleLayoutState {
     translation_active: bool,
+    transcript_visible: bool,
     style: CapsuleStyle,
     monitor_x: i32,
     monitor_y: i32,
@@ -247,14 +677,28 @@ struct CapsuleLayoutState {
     scale_bits: u64,
 }
 
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CapsuleSnapshot {
+    #[serde(flatten)]
+    pub(crate) payload: CapsulePayload,
+    pub(crate) transcript: String,
+    pub(crate) sequence: u64,
+    pub(crate) revision: u64,
+    pub(crate) payload_revision: u64,
+}
+
 struct CapsuleWindowState {
     layout: Mutex<Option<CapsuleLayoutState>>,
+    capsule_visible: AtomicBool,
     cursor_passthrough: AtomicBool,
+    hit_test_mode: AtomicU8,
+    transcript_visible: AtomicBool,
     style: AtomicU8,
     fallback_card_visible: AtomicBool,
     fallback_presentation_id: AtomicU64,
     deferred_payload: Mutex<Option<CapsulePayload>>,
-    last_payload: Mutex<Option<CapsulePayload>>,
+    snapshot: Mutex<CapsuleSnapshotState>,
     layout_watch_active: AtomicBool,
     layout_watch_epoch: AtomicU64,
 }
@@ -263,12 +707,15 @@ impl Default for CapsuleWindowState {
     fn default() -> Self {
         Self {
             layout: Mutex::new(None),
+            capsule_visible: AtomicBool::new(false),
             cursor_passthrough: AtomicBool::new(true),
+            hit_test_mode: AtomicU8::new(HIT_TEST_MODE_CAPSULE),
+            transcript_visible: AtomicBool::new(false),
             style: AtomicU8::new(0),
             fallback_card_visible: AtomicBool::new(false),
             fallback_presentation_id: AtomicU64::new(0),
             deferred_payload: Mutex::new(None),
-            last_payload: Mutex::new(None),
+            snapshot: Mutex::new(CapsuleSnapshotState::default()),
             layout_watch_active: AtomicBool::new(false),
             layout_watch_epoch: AtomicU64::new(0),
         }
@@ -346,6 +793,46 @@ impl TauriCapsuleWindow {
         self.app.get_webview_window("capsule")
     }
 
+    fn rail_window(&self) -> Option<tauri::WebviewWindow> {
+        self.app.get_webview_window("capsule-rail")
+    }
+
+    fn hide_transcript_overlay(&self) {
+        if let Some(window) = self.rail_window() {
+            let _ = window.hide();
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn position_transcript_overlay(
+        &self,
+        capsule: &tauri::WebviewWindow,
+        style: CapsuleStyle,
+        translation_active: bool,
+        visible: bool,
+    ) -> tauri::Result<()> {
+        let Some(rail) = self.rail_window() else {
+            return Ok(());
+        };
+        let Some(position) = capsule_transcript_rail_position(style, translation_active, visible)
+        else {
+            rail.hide()?;
+            return Ok(());
+        };
+        let scale = capsule.scale_factor().unwrap_or(1.0);
+        let main_position = capsule.outer_position()?;
+        rail.set_ignore_cursor_events(true)?;
+        rail.set_size(tauri::LogicalSize::new(position.width, position.height))?;
+        rail.set_position(tauri::PhysicalPosition::new(
+            main_position.x,
+            main_position.y + (position.top_offset * scale).round() as i32,
+        ))?;
+        // The rail is a sibling overlay and must never steal focus from the
+        // application under the capsule, just like the main capsule HWND.
+        show_capsule_window_for_recording(&self.app, &rail, false);
+        Ok(())
+    }
+
     pub(crate) fn is_available_for(&self, state: CapsuleState) -> bool {
         let available = self.window().is_some();
         if !available && !CAPSULE_WINDOW_MISSING_LOGGED.swap(true, Ordering::SeqCst) {
@@ -379,10 +866,85 @@ impl TauriCapsuleWindow {
     #[cfg(not(mobile))]
     pub(crate) fn set_cursor_passthrough(&self, passthrough: bool) -> tauri::Result<()> {
         if let Some(window) = self.window() {
+            #[cfg(target_os = "windows")]
+            if passthrough {
+                clear_capsule_input_region_for_window(&window)?;
+            } else if self.state.hit_test_mode.load(Ordering::SeqCst) == HIT_TEST_MODE_CARD {
+                configure_card_hit_test(&window)?;
+            } else {
+                let translation_active = self
+                    .state
+                    .snapshot
+                    .lock()
+                    .payload
+                    .as_ref()
+                    .is_some_and(|payload| payload.translation);
+                configure_capsule_hit_test(
+                    &window,
+                    self.state.cached_style(),
+                    self.state.transcript_visible.load(Ordering::SeqCst),
+                    translation_active,
+                )?;
+            }
             window.set_ignore_cursor_events(passthrough)?;
             self.state
                 .cursor_passthrough
                 .store(passthrough, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+
+    /// Rebuild the real client hit region after a card resize. The card owns the
+    /// shared HWND, so its whole current client area must be interactive; using
+    /// the previous capsule region would make Copy/Dismiss intermittently miss.
+    pub(crate) fn refresh_card_hit_test(&self) -> tauri::Result<()> {
+        if self.state.hit_test_mode.load(Ordering::SeqCst) != HIT_TEST_MODE_CARD {
+            return Ok(());
+        }
+        #[cfg(target_os = "windows")]
+        if let Some(window) = self.window() {
+            configure_card_hit_test(&window)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) fn set_card_hit_test_mode(&self) -> tauri::Result<()> {
+        self.state
+            .hit_test_mode
+            .store(HIT_TEST_MODE_CARD, Ordering::SeqCst);
+        self.hide_transcript_overlay();
+        if let Some(window) = self.window() {
+            window.set_ignore_cursor_events(false)?;
+            self.state.cursor_passthrough.store(false, Ordering::SeqCst);
+            #[cfg(target_os = "windows")]
+            configure_card_hit_test(&window)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) fn restore_capsule_hit_test_mode(&self) -> tauri::Result<()> {
+        self.state
+            .hit_test_mode
+            .store(HIT_TEST_MODE_CAPSULE, Ordering::SeqCst);
+        self.set_cursor_passthrough(true)?;
+        // Restoring a card must also restore the capsule geometry/rail state that
+        // was current before the card took ownership of the window.
+        self.invalidate_layout();
+        if let Some(window) = self.window() {
+            let translation = self
+                .state
+                .snapshot
+                .lock()
+                .payload
+                .as_ref()
+                .is_some_and(|payload| payload.translation);
+            self.maybe_position_capsule_bottom_center(
+                &window,
+                translation,
+                self.state.cached_style(),
+            );
         }
         Ok(())
     }
@@ -392,7 +954,9 @@ impl TauriCapsuleWindow {
     }
 
     pub(crate) fn hide(&self) -> tauri::Result<()> {
+        self.state.capsule_visible.store(false, Ordering::SeqCst);
         self.stop_layout_watch();
+        self.hide_transcript_overlay();
         if let Some(window) = self.window() {
             window.hide()?;
         }
@@ -446,11 +1010,77 @@ impl TauriCapsuleWindow {
 
     pub(crate) fn position_capsule_bottom_center(&self, translation: bool) -> tauri::Result<()> {
         if let Some(window) = self.window() {
-            crate::position_capsule_bottom_center_with_style(
+            crate::position_capsule_bottom_center_with_style_and_transcript(
                 &window,
                 translation,
                 self.state.cached_style(),
+                self.state.transcript_visible.load(Ordering::SeqCst),
             )?;
+        }
+        Ok(())
+    }
+
+    /// Restore the capsule window from the cached style and latest payload.
+    /// Card dismissal must not guess Siri geometry or discard the rail state.
+    pub(crate) fn restore_capsule_geometry(&self) -> tauri::Result<()> {
+        self.invalidate_layout();
+        if let Some(window) = self.window() {
+            let translation = self
+                .state
+                .snapshot
+                .lock()
+                .payload
+                .as_ref()
+                .is_some_and(|payload| payload.translation);
+            self.maybe_position_capsule_bottom_center(
+                &window,
+                translation,
+                self.state.cached_style(),
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) fn set_transcript_visible(&self, visible: bool) -> tauri::Result<()> {
+        if !self.state.capsule_visible.load(Ordering::SeqCst) {
+            self.state.transcript_visible.store(false, Ordering::SeqCst);
+            self.hide_transcript_overlay();
+            return Ok(());
+        }
+        self.state
+            .transcript_visible
+            .store(visible, Ordering::SeqCst);
+        if self.state.hit_test_mode.load(Ordering::SeqCst) == HIT_TEST_MODE_CARD {
+            // Card geometry owns this shared window until dismissal. The card webview may
+            // report transcriptVisible=false, but that must not restore capsule bounds.
+            self.hide_transcript_overlay();
+            return Ok(());
+        }
+        self.state.layout.lock().take();
+        if let Some(window) = self.window() {
+            let translation = self
+                .state
+                .snapshot
+                .lock()
+                .payload
+                .as_ref()
+                .is_some_and(|payload| payload.translation);
+            self.maybe_position_capsule_bottom_center(
+                &window,
+                translation,
+                self.state.cached_style(),
+            );
+            #[cfg(target_os = "windows")]
+            if self.state.hit_test_mode.load(Ordering::SeqCst) != HIT_TEST_MODE_CARD
+                && !self.state.cursor_passthrough.load(Ordering::SeqCst)
+            {
+                configure_capsule_hit_test(
+                    &window,
+                    self.state.cached_style(),
+                    visible,
+                    translation,
+                )?;
+            }
         }
         Ok(())
     }
@@ -466,6 +1096,7 @@ impl TauriCapsuleWindow {
             if let Some(mon) = crate::foreground_window_monitor() {
                 return Some(CapsuleLayoutState {
                     translation_active,
+                    transcript_visible: self.state.transcript_visible.load(Ordering::SeqCst),
                     style,
                     monitor_x: mon.left,
                     monitor_y: mon.top,
@@ -484,6 +1115,7 @@ impl TauriCapsuleWindow {
             if let Some(mon) = crate::capsule_target_monitor(window) {
                 return Some(CapsuleLayoutState {
                     translation_active,
+                    transcript_visible: self.state.transcript_visible.load(Ordering::SeqCst),
                     style,
                     monitor_x: mon.physical_x,
                     monitor_y: mon.physical_y,
@@ -500,6 +1132,7 @@ impl TauriCapsuleWindow {
         let monitor = window.current_monitor().ok().flatten()?;
         Some(CapsuleLayoutState {
             translation_active,
+            transcript_visible: self.state.transcript_visible.load(Ordering::SeqCst),
             style,
             monitor_x: monitor.position().x,
             monitor_y: monitor.position().y,
@@ -522,17 +1155,49 @@ impl TauriCapsuleWindow {
         let Some(next) = self.layout_snapshot(window, translation_active, style) else {
             return;
         };
-        if self.state.layout.lock().as_ref() == Some(&next) {
-            return;
-        }
-        if crate::position_capsule_bottom_center_with_style(window, translation_active, style)
+        let layout_changed = self.state.layout.lock().as_ref() != Some(&next);
+        if layout_changed
+            && crate::position_capsule_bottom_center_with_style_and_transcript(
+                window,
+                translation_active,
+                style,
+                self.state.transcript_visible.load(Ordering::SeqCst),
+            )
             .is_ok()
         {
             *self.state.layout.lock() = Some(next);
         }
+        #[cfg(target_os = "windows")]
+        if self.state.capsule_visible.load(Ordering::SeqCst) {
+            if let Err(error) = self.position_transcript_overlay(
+                window,
+                style,
+                translation_active,
+                self.state.transcript_visible.load(Ordering::SeqCst),
+            ) {
+                log::warn!("[capsule] transcript overlay positioning failed: {error}");
+            }
+        } else {
+            self.hide_transcript_overlay();
+        }
+        #[cfg(target_os = "windows")]
+        if layout_changed
+            && self.state.hit_test_mode.load(Ordering::SeqCst) != HIT_TEST_MODE_CARD
+            && !self.state.cursor_passthrough.load(Ordering::SeqCst)
+        {
+            if let Err(error) = configure_capsule_hit_test(
+                window,
+                style,
+                self.state.transcript_visible.load(Ordering::SeqCst),
+                translation_active,
+            ) {
+                log::warn!("[capsule] configure client-band hit testing failed: {error}");
+            }
+        }
     }
 
     pub(crate) fn show_for_recording(&self, reassert_spaces: bool) {
+        self.state.capsule_visible.store(true, Ordering::SeqCst);
         if let Some(window) = self.window() {
             show_capsule_window_for_recording(&self.app, &window, reassert_spaces);
         }
@@ -574,7 +1239,7 @@ impl TauriCapsuleWindow {
                         capsule.stop_layout_watch();
                         return;
                     }
-                    let payload = capsule.state.last_payload.lock().clone();
+                    let payload = capsule.state.snapshot.lock().payload.clone();
                     if let Some(payload) = payload {
                         capsule.maybe_position_capsule_bottom_center(
                             &window,
@@ -615,7 +1280,7 @@ impl TauriCapsuleWindow {
         {
             return;
         }
-        let payload = self.state.last_payload.lock().clone();
+        let payload = self.state.snapshot.lock().payload.clone();
         if let Some(payload) = payload {
             let style = self.state.cached_style();
             self.maybe_position_capsule_bottom_center(&window, payload.translation, style);
@@ -631,7 +1296,6 @@ impl TauriCapsuleWindow {
         reassert_spaces: bool,
     ) {
         self.state.cache_style(style);
-        *self.state.last_payload.lock() = Some(payload.clone());
         let Some(window) = self.window() else {
             return;
         };
@@ -644,6 +1308,17 @@ impl TauriCapsuleWindow {
                     "[capsule] native window update deferred: insert fallback card owns the window"
                 );
                 return;
+            }
+
+            match action {
+                CapsuleWindowAction::ShowCapsule => {
+                    self.state.capsule_visible.store(true, Ordering::SeqCst);
+                }
+                CapsuleWindowAction::HideCapsule => {
+                    self.state.capsule_visible.store(false, Ordering::SeqCst);
+                    self.hide_transcript_overlay();
+                }
+                CapsuleWindowAction::PreserveFallbackCard => unreachable!(),
             }
 
             self.maybe_position_capsule_bottom_center(&window, payload.translation, style);
@@ -675,7 +1350,7 @@ impl TauriCapsuleWindow {
                         );
                     }
                     hide_capsule_window_if_present();
-                    let _ = window.hide();
+                    let _ = self.hide();
                 }
             }
         }
@@ -722,6 +1397,49 @@ impl TauriCoordinatorHost {
 
     pub(crate) fn cached_capsule_style(&self) -> CapsuleStyle {
         self.capsule.cached_style()
+    }
+
+    pub(crate) fn capsule_snapshot(&self) -> Option<CapsuleSnapshot> {
+        let snapshot = self.capsule.snapshot.lock().clone();
+        if snapshot.pending_payload_revision.is_some()
+            || snapshot.payload_revision != snapshot.revision
+        {
+            // A rail ready replay must never observe a payload from one
+            // revision together with transcript/session data from another.
+            return None;
+        }
+        let mut payload = snapshot.payload?;
+        payload.session_id = snapshot.session_id.clone();
+        Some(CapsuleSnapshot {
+            payload,
+            transcript: snapshot.text,
+            sequence: snapshot.sequence,
+            revision: snapshot.revision,
+            payload_revision: snapshot.payload_revision,
+        })
+    }
+
+    /// Commit the replay frame before the webview/main-thread work is queued.
+    /// The rail snapshot is an IPC replay source, so it must not wait for a
+    /// window callback to become internally consistent.
+    pub(crate) fn capsule_revision(&self) -> u64 {
+        self.capsule.snapshot.lock().revision
+    }
+
+    pub(crate) fn commit_capsule_payload(
+        &self,
+        payload: &CapsulePayload,
+        captured_revision: u64,
+    ) -> bool {
+        self.capsule
+            .snapshot
+            .lock()
+            .commit_capsule_payload(payload, captured_revision)
+    }
+
+    /// Update replay state without waiting for the native window callback.
+    pub(crate) fn record_backend_event(&self, event: &BackendEvent) {
+        self.capsule.snapshot.lock().record_backend_event(event);
     }
 
     pub(crate) fn cache_capsule_style(&self, style: CapsuleStyle) {
@@ -871,6 +1589,7 @@ impl TauriCoordinatorHost {
     pub(crate) fn emit_capsule_state_to_capsule(&self, payload: &crate::types::CapsulePayload) {
         if let Some(app) = self.app() {
             let _ = app.emit_to("capsule", "capsule:state", payload);
+            let _ = app.emit_to("capsule-rail", "capsule:state", payload);
         }
     }
 
@@ -963,6 +1682,7 @@ mod tests {
     fn capsule_layout_cache_notices_work_area_and_style_changes() {
         let initial = CapsuleLayoutState {
             translation_active: false,
+            transcript_visible: false,
             style: CapsuleStyle::Classic,
             monitor_x: 0,
             monitor_y: 0,
@@ -1033,6 +1753,124 @@ mod tests {
         assert_eq!(
             capsule_window_action(false, false, CapsuleState::Recording),
             CapsuleWindowAction::HideCapsule
+        );
+    }
+
+    #[test]
+    fn capsule_transcript_rail_position_uses_body_content_for_all_styles() {
+        let siri = capsule_transcript_rail_position(CapsuleStyle::Siri, false, true).unwrap();
+        assert_eq!(
+            (siri.width, siri.height, siri.top_offset, siri.gap),
+            (460.0, 40.0, -48.0, 8.0)
+        );
+        assert_eq!(
+            capsule_transcript_rail_position(CapsuleStyle::Siri, true, true),
+            Some(siri)
+        );
+
+        let classic = capsule_transcript_rail_position(CapsuleStyle::Classic, false, true).unwrap();
+        assert_eq!(
+            (
+                classic.width,
+                classic.height,
+                classic.top_offset,
+                classic.gap
+            ),
+            (460.0, 52.0, 44.0, 8.0)
+        );
+        assert_eq!(
+            capsule_transcript_rail_position(CapsuleStyle::Classic, true, true),
+            Some(CapsuleTranscriptRailPosition {
+                width: 460.0,
+                height: 82.0,
+                top_offset: 14.0,
+                gap: 8.0,
+            })
+        );
+
+        let typeless =
+            capsule_transcript_rail_position(CapsuleStyle::Typeless, false, true).unwrap();
+        assert_eq!(typeless.width, 206.0);
+        assert_eq!(typeless.gap, 0.0);
+        assert!((typeless.height - 52.0 * 0.447).abs() < f64::EPSILON);
+        assert!((typeless.top_offset - (57.0 - 64.0 * 0.447 - 52.0 * 0.447)).abs() < f64::EPSILON);
+
+        let typeless_translation =
+            capsule_transcript_rail_position(CapsuleStyle::Typeless, true, true).unwrap();
+        assert!(
+            (typeless_translation.top_offset - (65.0 - 20.0 * 0.447 - 64.0 * 0.447 - 52.0 * 0.447))
+                .abs()
+                < 1e-12,
+            "unexpected typeless translation rail offset: {}",
+            typeless_translation.top_offset
+        );
+
+        for style in [
+            CapsuleStyle::Siri,
+            CapsuleStyle::Classic,
+            CapsuleStyle::Typeless,
+        ] {
+            assert_eq!(capsule_transcript_rail_position(style, false, false), None);
+        }
+        let classic_badge =
+            capsule_transcript_rail_position(CapsuleStyle::Classic, true, false).unwrap();
+        assert_eq!(
+            (classic_badge.height, classic_badge.top_offset),
+            (22.0, 74.0)
+        );
+        let typeless_badge =
+            capsule_transcript_rail_position(CapsuleStyle::Typeless, true, false).unwrap();
+        assert!((typeless_badge.height - 20.0 * 0.447).abs() < 1e-12);
+        assert!((typeless_translation.height - 72.0 * 0.447).abs() < 1e-12);
+        assert_eq!(
+            capsule_transcript_rail_position(CapsuleStyle::Siri, true, false),
+            None
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_hit_test_uses_x_and_y_and_translation_bounds() {
+        assert_eq!(
+            capsule_control_hit_rect(CapsuleStyle::Classic, true, false, 460, 172),
+            Some(CapsuleHitTestRect {
+                left: 132,
+                right: 328,
+                top: 104,
+                bottom: 156,
+            })
+        );
+        assert_eq!(
+            capsule_control_hit_rect(CapsuleStyle::Classic, false, false, 460, 172),
+            Some(CapsuleHitTestRect {
+                left: 132,
+                right: 328,
+                top: 104,
+                bottom: 156,
+            })
+        );
+        let typeless = capsule_control_hit_rect(CapsuleStyle::Typeless, true, true, 206, 65)
+            .expect("translation typeless hit rect");
+        assert_eq!((typeless.left, typeless.right), (51, 155));
+        assert_eq!((typeless.top, typeless.bottom), (36, 65));
+        assert!(typeless.left > 0 && typeless.right < 206);
+        assert!(typeless.top > 0 && typeless.bottom <= 65);
+        let typeless_compact =
+            capsule_control_hit_rect(CapsuleStyle::Typeless, false, false, 206, 57)
+                .expect("compact typeless hit rect");
+        assert_eq!((typeless_compact.top, typeless_compact.bottom), (28, 57));
+        assert_eq!(
+            capsule_control_hit_rect(CapsuleStyle::Siri, false, false, 460, 180),
+            None
+        );
+        assert_eq!(
+            capsule_card_hit_rect(320, 140),
+            CapsuleHitTestRect {
+                left: 0,
+                right: 320,
+                top: 0,
+                bottom: 140,
+            }
         );
     }
 }

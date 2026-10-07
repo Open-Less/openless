@@ -35,6 +35,8 @@ export interface InsertUnit {
   key: string;
   text: string;
   born: boolean;
+  /** UTF-16 offset in the canonical transcript, when this unit came from a bounded window. */
+  sourceOffset?: number;
 }
 
 let insertUnitSeq = 0;
@@ -104,6 +106,203 @@ export function diffInsertUnits(prev: InsertUnit[], nextText: string): InsertUni
     }
   }
   return units;
+}
+
+export const INSERT_TEXT_RENDER_WINDOW = {
+  maxUnits: 64,
+  overflowBufferUnits: 3,
+} as const;
+
+export interface InsertTextWindowOptions {
+  maxUnits?: number;
+  overflowBufferUnits?: number;
+}
+
+function normalizedInsertTextWindowLimit(
+  options: InsertTextWindowOptions = {},
+): { maxUnits: number; targetUnits: number } {
+  const maxUnits = Math.max(1, Math.floor(options.maxUnits ?? INSERT_TEXT_RENDER_WINDOW.maxUnits));
+  const overflowBufferUnits = Math.max(
+    0,
+    Math.floor(options.overflowBufferUnits ?? INSERT_TEXT_RENDER_WINDOW.overflowBufferUnits),
+  );
+  return { maxUnits, targetUnits: maxUnits + overflowBufferUnits };
+}
+
+/**
+ * Return only the suffix needed to seed the bounded animation list.
+ *
+ * The probe starts near the end of the string and expands only when a grapheme is unusually
+ * large. This keeps the ordinary streaming path independent of the already-scrolled transcript;
+ * the full string remains available to the caller for recognition corrections and accessibility.
+ */
+export function selectInsertTextWindow(
+  text: string,
+  options: InsertTextWindowOptions = {},
+): string {
+  return selectInsertTextWindowSlice(text, options).text;
+}
+
+interface InsertTextWindowGlyph {
+  text: string;
+  sourceOffset: number;
+}
+
+interface InsertTextWindowSlice {
+  text: string;
+  glyphs: InsertTextWindowGlyph[];
+}
+
+function selectInsertTextWindowSlice(
+  text: string,
+  options: InsertTextWindowOptions = {},
+): InsertTextWindowSlice {
+  if (!text) return { text: '', glyphs: [] };
+  const { targetUnits } = normalizedInsertTextWindowLimit(options);
+  let probeLength = Math.min(text.length, Math.max(32, targetUnits * 4));
+
+  while (true) {
+    const start = text.length - probeLength;
+    const segmented = segmentInsertUnits(text.slice(start));
+    // A bounded slice can start in the middle of a grapheme. Drop that guard segment; when the
+    // slice starts at zero there is no preceding context and the first segment is trustworthy.
+    const safeSegments = start === 0 ? segmented : segmented.slice(1);
+    if (safeSegments.length >= targetUnits || start === 0) {
+      const windowSegments = safeSegments.slice(-targetUnits);
+      const safeStartOffset = start + (start === 0 ? 0 : segmented[0]?.length ?? 0);
+      const discardedUnits = safeSegments.length - windowSegments.length;
+      let windowStartOffset = safeStartOffset;
+      for (let i = 0; i < discardedUnits; i += 1) {
+        windowStartOffset += safeSegments[i].length;
+      }
+      const glyphs: InsertTextWindowGlyph[] = [];
+      let sourceOffset = windowStartOffset;
+      for (const glyph of windowSegments) {
+        glyphs.push({ text: glyph, sourceOffset });
+        sourceOffset += glyph.length;
+      }
+      return { text: windowSegments.join(''), glyphs };
+    }
+    const nextProbeLength = Math.min(text.length, Math.max(probeLength + 32, probeLength * 2));
+    if (nextProbeLength === probeLength) {
+      const windowSegments = safeSegments.slice(-targetUnits);
+      const safeStartOffset = start + (start === 0 ? 0 : segmented[0]?.length ?? 0);
+      const discardedUnits = safeSegments.length - windowSegments.length;
+      let windowStartOffset = safeStartOffset;
+      for (let i = 0; i < discardedUnits; i += 1) {
+        windowStartOffset += safeSegments[i].length;
+      }
+      const glyphs: InsertTextWindowGlyph[] = [];
+      let sourceOffset = windowStartOffset;
+      for (const glyph of windowSegments) {
+        glyphs.push({ text: glyph, sourceOffset });
+        sourceOffset += glyph.length;
+      }
+      return { text: windowSegments.join(''), glyphs };
+    }
+    probeLength = nextProbeLength;
+  }
+}
+
+/**
+ * Diff only the bounded suffix used by the motion track. The caller may keep the full nextText,
+ * but no complete-history InsertUnit array is created or compared here.
+ */
+export function diffInsertWindowUnits(
+  prev: InsertUnit[],
+  nextText: string,
+  options: InsertTextWindowOptions = {},
+): InsertUnit[] {
+  const nextWindow = selectInsertTextWindowSlice(nextText, options);
+  if (nextWindow.glyphs.length === 0) return [];
+
+  // The suffix text is not a stable identity: once the window rolls, every glyph changes index
+  // even though all but the newest glyph are still on screen. Match the bounded overlap by its
+  // absolute UTF-16 offset first, so a scrolling deque reuses the old keys instead of replaying
+  // the born animation for the whole window.
+  const previousByOffset = new Map<number, InsertUnit>();
+  for (const unit of prev) {
+    if (unit.sourceOffset != null) previousByOffset.set(unit.sourceOffset, unit);
+  }
+  let exactOverlap = 0;
+  for (const glyph of nextWindow.glyphs) {
+    const previous = previousByOffset.get(glyph.sourceOffset);
+    if (previous?.text === glyph.text) exactOverlap += 1;
+  }
+
+  if (exactOverlap > 0 || prev.length === 0) {
+    return nextWindow.glyphs.map((glyph) => {
+      const previous = previousByOffset.get(glyph.sourceOffset);
+      if (previous?.text === glyph.text) {
+        return { ...previous, sourceOffset: glyph.sourceOffset, born: false };
+      }
+      return {
+        key: allocInsertKey(),
+        text: glyph.text,
+        sourceOffset: glyph.sourceOffset,
+        born: true,
+      };
+    });
+  }
+
+  // A recognition correction can change the UTF-16 length before the bounded suffix. In that
+  // case absolute offsets move together; the bounded local diff still preserves its common
+  // prefix/suffix without ever inspecting the discarded transcript history.
+  return diffInsertUnits(prev, nextWindow.text).map((unit, index) => ({
+    ...unit,
+    sourceOffset: nextWindow.glyphs[index]?.sourceOffset,
+  }));
+}
+
+export interface InsertRenderWindow {
+  units: InsertUnit[];
+  widths: number[];
+}
+
+/**
+ * Select only the rightmost glyphs needed by the visual track.
+ *
+ * The input list is already a bounded animation history. A few extra units form a small left-side
+ * buffer for the mask/spring without allowing DOM growth.
+ */
+export function selectInsertRenderWindow(
+  units: InsertUnit[],
+  measureWidth: (text: string) => number,
+  maxWidth: number,
+  padX: number = INSERT_TEXT_MOTION.padX,
+  options: {
+    maxUnits?: number;
+    overflowBufferUnits?: number;
+  } = {},
+): InsertRenderWindow {
+  if (units.length === 0) return { units: [], widths: [] };
+
+  const innerWidth = Math.max(0, maxWidth - padX * 2);
+  const maxUnits = Math.max(1, Math.floor(options.maxUnits ?? INSERT_TEXT_RENDER_WINDOW.maxUnits));
+  const overflowBufferUnits = Math.max(
+    0,
+    Math.floor(options.overflowBufferUnits ?? INSERT_TEXT_RENDER_WINDOW.overflowBufferUnits),
+  );
+  const selectedWidths: number[] = [];
+  let start = units.length;
+  let contentWidth = 0;
+  let bufferUnits = 0;
+
+  for (let index = units.length - 1; index >= 0 && units.length - index <= maxUnits; index -= 1) {
+    const measured = measureWidth(units[index].text);
+    const width = Number.isFinite(measured) && measured > 0 ? measured : 1;
+    const stillVisible = contentWidth < innerWidth;
+    if (!stillVisible && bufferUnits >= overflowBufferUnits) break;
+    start = index;
+    selectedWidths.unshift(width);
+    contentWidth += width;
+    if (contentWidth >= innerWidth) bufferUnits += 1;
+  }
+
+  return {
+    units: units.slice(start),
+    widths: selectedWidths,
+  };
 }
 
 export function firstBornIndex(units: InsertUnit[]): number {

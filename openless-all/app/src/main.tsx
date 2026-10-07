@@ -16,6 +16,7 @@ import type { OS } from './components/WindowChrome';
 const params = new URLSearchParams(window.location.search);
 const windowKind = params.get('window');
 const isCapsule = windowKind === 'capsule';
+const isCapsuleRail = windowKind === 'capsule-rail';
 const isQa = windowKind === 'qa';
 const isSelectionVoiceIntent = windowKind === 'selection-voice-intent';
 const isLessComputer = windowKind === 'less-computer';
@@ -37,6 +38,7 @@ const renderApp = () => {
       {isMainWindow && <SplashVideo />}
       <App
         isCapsule={isCapsule}
+        isCapsuleRail={isCapsuleRail}
         isQa={isQa}
         isSelectionVoiceIntent={isSelectionVoiceIntent}
         isLessComputer={isLessComputer}

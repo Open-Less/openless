@@ -4390,13 +4390,34 @@ impl OpenLessBackend {
             Some(id.clone()),
             crate::llm_protocol::REQUEST_FORMAT_ACCOUNT,
         )?;
+        let service_tier_key = CredentialKey::new(
+            crate::CredentialNamespace::Llm,
+            Some(id.clone()),
+            crate::llm_protocol::SERVICE_TIER_ACCOUNT,
+        )?;
         let reset = kind == ChannelKind::Llm && previous.provider_type != provider_type;
-        let old_format = if reset {
-            let value = self.deps.credential_store.read(key.clone()).await?;
+        let (old_format, old_service_tier) = if reset {
+            let old_format = self.deps.credential_store.read(key.clone()).await?;
+            let old_service_tier = self
+                .deps
+                .credential_store
+                .read(service_tier_key.clone())
+                .await?;
             self.deps.credential_store.remove(key.clone()).await?;
-            value
+            if let Err(error) = self
+                .deps
+                .credential_store
+                .remove(service_tier_key.clone())
+                .await
+            {
+                if let Some(value) = old_format.clone() {
+                    self.deps.credential_store.write(key.clone(), value).await?;
+                }
+                return Err(error);
+            }
+            (old_format, old_service_tier)
         } else {
-            None
+            (None, None)
         };
         let result = self
             .deps
@@ -4411,6 +4432,12 @@ impl OpenLessBackend {
         if result.is_err() {
             if let Some(value) = old_format {
                 self.deps.credential_store.write(key, value).await?;
+            }
+            if let Some(value) = old_service_tier {
+                self.deps
+                    .credential_store
+                    .write(service_tier_key, value)
+                    .await?;
             }
         }
         result?;
@@ -10298,7 +10325,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn llm_protocol_mutations_reset_only_the_format_and_invalidate_tests() {
+    async fn llm_protocol_mutations_reset_protocol_overrides_and_invalidate_tests() {
         use crate::credentials::{CredentialNamespace, InMemoryCredentialStore, SecretValue};
         use crate::llm_protocol::*;
         let backend = OpenLessBackend::new(
@@ -10333,6 +10360,19 @@ mod tests {
             .set_credential(key(REQUEST_FORMAT_ACCOUNT), SecretValue::new("messages"))
             .await
             .unwrap();
+        backend
+            .set_credential(key(SERVICE_TIER_ACCOUNT), SecretValue::new("fast"))
+            .await
+            .unwrap();
+        assert_eq!(
+            backend
+                .read_credential(key(SERVICE_TIER_ACCOUNT))
+                .await
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            "fast"
+        );
         backend
             .set_credential(
                 key(crate::credentials::LLM_API_KEY_ACCOUNT),
@@ -10376,6 +10416,11 @@ mod tests {
             .unwrap();
         assert!(backend
             .read_credential(key(REQUEST_FORMAT_ACCOUNT))
+            .await
+            .unwrap()
+            .is_none());
+        assert!(backend
+            .read_credential(key(SERVICE_TIER_ACCOUNT))
             .await
             .unwrap()
             .is_none());

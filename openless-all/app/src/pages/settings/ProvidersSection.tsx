@@ -319,6 +319,7 @@ export function ChannelCredentialFields({
         {!!descriptor.supportedRequestFormats?.length && descriptor.defaultRequestFormat && (
           <LlmProtocolFields
             channelId={channelId}
+            providerType={providerType}
             defaultFormat={descriptor.defaultRequestFormat}
             formats={descriptor.supportedRequestFormats}
             onUserMutation={onLlmMutation}
@@ -1630,6 +1631,7 @@ function providerErrorMessage(error: unknown, t: ReturnType<typeof useTranslatio
     'llmThinkingModeInvalid',
     'llmTokenLimitInvalid',
     'llmThinkingBudgetInvalid',
+    'llmServiceTierInvalid',
     'llmResponseIncomplete',
     'llmStreamError',
     'llmProtocolHeaderConflict',

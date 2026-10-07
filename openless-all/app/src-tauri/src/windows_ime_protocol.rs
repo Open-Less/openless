@@ -1,76 +1,26 @@
 #![allow(dead_code, unused_imports, unused_variables)]
+//! Wire format shared with `windows-ime/src/text_service.cpp`.
+//!
+//! OpenLess sends `WM_COPYDATA` to the message-only window the IME creates on
+//! the host's TSF thread. A submit carries a token plus the text and is only
+//! acknowledged; the commit result is then polled with query messages carrying
+//! the same token. Replies travel back as the message result.
 use serde::{Deserialize, Serialize};
 
-pub const OPENLESS_IME_PROTOCOL_VERSION: u32 = 1;
-pub const OPENLESS_IME_PIPE_NAME_PREFIX: &str = r"\\.\pipe\OpenLessImeSubmit";
+pub const OPENLESS_IME_MESSAGE_WINDOW_CLASS: &str = "OpenLessImeMessageWindow";
 
-pub fn ime_pipe_name_for_target(process_id: u32, thread_id: u32) -> String {
-    format!("{OPENLESS_IME_PIPE_NAME_PREFIX}-{process_id}-{thread_id}")
-}
+/// `COPYDATASTRUCT::dwData` tags: "OLS1" (token + UTF-16LE text) and "OLQ1" (token).
+pub const IME_COPYDATA_SUBMIT: usize = 0x4F4C_5331;
+pub const IME_COPYDATA_QUERY: usize = 0x4F4C_5131;
+pub const IME_MAX_SUBMIT_BYTES: usize = 1024 * 1024;
 
-pub fn ime_pipe_candidate_names_for_target<I>(
-    process_id: u32,
-    thread_id: u32,
-    available_pipe_names: I,
-) -> Vec<String>
-where
-    I: IntoIterator<Item = String>,
-{
-    let exact_pipe_name = ime_pipe_name_for_target(process_id, thread_id);
-    let process_pipe_prefix = format!("{OPENLESS_IME_PIPE_NAME_PREFIX}-{process_id}-");
-    let mut candidates = vec![exact_pipe_name.clone()];
-    let mut same_process_pipe_names = available_pipe_names
-        .into_iter()
-        .filter(|pipe_name| pipe_name != &exact_pipe_name)
-        .filter(|pipe_name| {
-            pipe_name
-                .strip_prefix(&process_pipe_prefix)
-                .is_some_and(|thread_suffix| {
-                    !thread_suffix.is_empty()
-                        && thread_suffix.bytes().all(|byte| byte.is_ascii_digit())
-                })
-        })
-        .collect::<Vec<_>>();
-
-    same_process_pipe_names.sort();
-    same_process_pipe_names.dedup();
-    candidates.extend(same_process_pipe_names);
-    candidates
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum ImePipeMessage {
-    ClientReady {
-        protocol_version: u32,
-        client_id: String,
-        process_id: u32,
-        thread_id: u32,
-    },
-    SubmitText {
-        protocol_version: u32,
-        session_id: String,
-        text: String,
-        created_at: String,
-    },
-    SubmitResult {
-        protocol_version: u32,
-        session_id: String,
-        status: ImeSubmitStatus,
-        error_code: Option<String>,
-    },
-    CancelSession {
-        protocol_version: u32,
-        session_id: String,
-    },
-    Ping {
-        protocol_version: u32,
-    },
-}
+/// Replies are nonzero so they differ from an unhandled message (0). A failed
+/// commit is reported as its HRESULT, which always has the high bit set.
+pub const IME_STATUS_ACCEPTED: u32 = 0x4F4C_0001;
+pub const IME_STATUS_PENDING: u32 = 0x4F4C_0002;
+pub const IME_STATUS_COMMITTED: u32 = 0x4F4C_0003;
+pub const IME_STATUS_UNKNOWN_TOKEN: u32 = 0x4F4C_0004;
+pub const IME_STATUS_BAD_REQUEST: u32 = 0x4F4C_0005;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -80,27 +30,21 @@ pub enum ImeSubmitStatus {
     Failed,
 }
 
-pub fn encode_message(message: &ImePipeMessage) -> Result<String, serde_json::Error> {
-    let mut line = serde_json::to_string(message)?;
-    line.push('\n');
-    Ok(line)
+pub fn is_failed_hresult(reply: u32) -> bool {
+    reply & 0x8000_0000 != 0
 }
 
-pub fn decode_message(line: &str) -> Result<ImePipeMessage, serde_json::Error> {
-    serde_json::from_str(line)
-}
-
-pub fn is_result_for_pending_session(
-    message: &ImePipeMessage,
-    pending_session_id: &str,
-) -> Result<(), &'static str> {
-    match message {
-        ImePipeMessage::SubmitResult { session_id, .. } if session_id == pending_session_id => {
-            Ok(())
-        }
-        ImePipeMessage::SubmitResult { .. } => Err("submit result belongs to a different session"),
-        _ => Err("message is not a submit result"),
+pub fn encode_submit_payload(token: u32, text: &str) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(4 + text.len() * 2);
+    payload.extend_from_slice(&token.to_le_bytes());
+    for unit in text.encode_utf16() {
+        payload.extend_from_slice(&unit.to_le_bytes());
     }
+    payload
+}
+
+pub fn encode_query_payload(token: u32) -> [u8; 4] {
+    token.to_le_bytes()
 }
 
 #[cfg(test)]
@@ -108,67 +52,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn submit_text_roundtrips_as_camel_case_json() {
-        let message = ImePipeMessage::SubmitText {
-            protocol_version: OPENLESS_IME_PROTOCOL_VERSION,
-            session_id: "session-1".to_string(),
-            text: "\u{4f60}\u{597d} OpenLess".to_string(),
-            created_at: "2026-05-01T12:00:00Z".to_string(),
-        };
-
-        let json = encode_message(&message).expect("encode");
-        assert!(json.contains("\"submitText\""));
-        assert!(json.contains("\"sessionId\""));
-        assert!(json.contains("\"createdAt\""));
-        assert!(!json.contains("\"session_id\""));
-        assert!(!json.contains("\"created_at\""));
-        assert!(json.ends_with('\n'));
-
-        let decoded = decode_message(json.trim_end()).expect("decode");
-        assert_eq!(decoded, message);
-    }
-
-    #[test]
-    fn ime_pipe_name_includes_target_process_and_thread() {
+    fn submit_payload_is_token_followed_by_utf16le_text() {
         assert_eq!(
-            ime_pipe_name_for_target(1234, 5678),
-            r"\\.\pipe\OpenLessImeSubmit-1234-5678"
+            encode_submit_payload(0x0403_0201, "A\u{4f60}"),
+            vec![0x01, 0x02, 0x03, 0x04, 0x41, 0x00, 0x60, 0x4f]
         );
     }
 
     #[test]
-    fn ime_pipe_candidates_include_same_process_clients_after_exact_target() {
-        let available = vec![
-            r"\\.\pipe\OtherPipe".to_string(),
-            r"\\.\pipe\OpenLessImeSubmit-4321-1111".to_string(),
-            r"\\.\pipe\OpenLessImeSubmit-1234-9999".to_string(),
-            r"\\.\pipe\OpenLessImeSubmit-1234-5678".to_string(),
-            r"\\.\pipe\OpenLessImeSubmit-1234-bad".to_string(),
-        ];
-
-        assert_eq!(
-            ime_pipe_candidate_names_for_target(1234, 5678, available),
-            vec![
-                r"\\.\pipe\OpenLessImeSubmit-1234-5678".to_string(),
-                r"\\.\pipe\OpenLessImeSubmit-1234-9999".to_string(),
-            ]
-        );
+    fn submit_payload_keeps_surrogate_pairs() {
+        let payload = encode_submit_payload(1, "\u{1F600}");
+        assert_eq!(payload.len(), 4 + 4);
+        assert_eq!(&payload[4..], &[0x3D, 0xD8, 0x00, 0xDE]);
     }
 
     #[test]
-    fn stale_submit_result_is_rejected() {
-        let result = ImePipeMessage::SubmitResult {
-            protocol_version: OPENLESS_IME_PROTOCOL_VERSION,
-            session_id: "old-session".to_string(),
-            status: ImeSubmitStatus::Committed,
-            error_code: Some("ime-busy".to_string()),
-        };
+    fn empty_text_still_carries_the_token() {
+        assert_eq!(encode_submit_payload(7, ""), vec![7, 0, 0, 0]);
+        assert_eq!(encode_query_payload(7), [7, 0, 0, 0]);
+    }
 
-        let json = encode_message(&result).expect("encode");
-        assert!(json.contains("\"errorCode\""));
-        assert!(!json.contains("\"error_code\""));
-
-        assert!(is_result_for_pending_session(&result, "current-session").is_err());
-        assert!(is_result_for_pending_session(&result, "old-session").is_ok());
+    #[test]
+    fn status_codes_never_look_like_failed_hresults() {
+        for status in [
+            IME_STATUS_ACCEPTED,
+            IME_STATUS_PENDING,
+            IME_STATUS_COMMITTED,
+            IME_STATUS_UNKNOWN_TOKEN,
+            IME_STATUS_BAD_REQUEST,
+        ] {
+            assert_ne!(status, 0);
+            assert!(!is_failed_hresult(status));
+        }
+        assert!(is_failed_hresult(0x8000_4005));
     }
 }

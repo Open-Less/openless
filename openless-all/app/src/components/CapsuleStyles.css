@@ -18,6 +18,135 @@
   background: #ffffff;
 }
 
+.ol-capsule-transcript-rail {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  pointer-events: none;
+  position: relative;
+  z-index: 2;
+}
+
+/* Windows owns this rail in a separate transparent WebView window. Its HWND is
+   always cursor-through, so the full transcript/gutter can never intercept a
+   click destined for another process. */
+.ol-capsule-transcript-overlay {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 460px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.ol-capsule-transcript-overlay[data-style='classic'] {
+  gap: 8px;
+}
+
+.ol-classic-translation {
+  display: inline-flex;
+  flex: 0 0 22px;
+  height: 22px;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 5px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--ol-blue);
+  background: var(--ol-capsule-badge-bg);
+  border: 0.5px solid var(--ol-capsule-badge-border);
+  box-shadow:
+    0 4px 12px -4px rgb(37 99 235 / 25%),
+    0 0 0 0.5px rgb(0 0 0 / 4%);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  transform-origin: center bottom;
+  transition:
+    opacity 0.24s ease-out,
+    transform 0.34s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+}
+
+.ol-classic-translation[data-visible='false'] {
+  opacity: 0;
+  transform: translateY(40px) scale(0.88);
+}
+
+.ol-classic-translation > span {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--ol-blue);
+}
+
+.ol-capsule-transcript-overlay .ol-capsule-transcript-rail {
+  height: 52px;
+}
+
+.ol-capsule-transcript-overlay[data-style='siri'] {
+  height: 40px;
+}
+
+.ol-capsule-transcript-overlay[data-style='siri'] .ol-capsule-transcript-rail {
+  height: 40px;
+}
+
+.ol-capsule-transcript-overlay--typeless {
+  width: 460px;
+  zoom: 0.447;
+}
+
+.ol-classic-capsule-stack,
+.ol-siri-capsule-stack,
+.ol-typeless-capsule-stack {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.ol-classic-capsule-stack,
+.ol-siri-capsule-stack,
+.ol-typeless-capsule-stack {
+  width: 460px;
+}
+
+.ol-siri-capsule-stack .ol-capsule-transcript-rail {
+  height: 40px;
+}
+
+.ol-classic-capsule-stack .ol-capsule-transcript-rail,
+.ol-typeless-capsule-stack .ol-capsule-transcript-rail {
+  height: 52px;
+}
+
+.ol-typeless-capsule-stack {
+  gap: 0;
+}
+
+.ol-typeless-translation-row {
+  display: flex;
+  flex: 0 0 20px;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 20px;
+  pointer-events: none;
+}
+
+.ol-typeless-capsule-stage {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+}
+
 .ol-typeless-capsule {
   position: relative;
   width: 176px;
@@ -34,7 +163,8 @@
   transition: width 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.ol-typeless-capsule[data-recording='true'] {
+.ol-typeless-capsule[data-recording='true'],
+.ol-typeless-capsule[data-processing='true'] {
   width: 232px;
 }
 .ol-typeless-capsule[data-error='true'] {
@@ -62,7 +192,13 @@
   transform: translateX(-50%);
 }
 .ol-typeless-capsule[data-recording='true'] .ol-typeless-recording,
-.ol-typeless-capsule:not([data-recording='true']) .ol-typeless-status {
+.ol-typeless-capsule[data-processing='true'] .ol-typeless-recording {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.ol-typeless-capsule:not([data-recording='true']):not([data-processing='true'])
+  .ol-typeless-status {
   opacity: 1;
   pointer-events: auto;
 }
@@ -156,11 +292,12 @@
   cursor: pointer;
 }
 .ol-typeless-translation {
-  position: absolute;
-  bottom: calc(100% + 7px);
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 3px 10px;
+  position: static;
+  display: flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 10px;
+  box-sizing: border-box;
   white-space: nowrap;
   font-size: 10px;
   font-weight: 500;

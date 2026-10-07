@@ -2558,6 +2558,11 @@ pub enum CapsuleStyle {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CapsulePayload {
+    /// Session generation that owns this capsule frame. Keeping this on the
+    /// payload lets a Recording -> Recording transition reset the transcript
+    /// without depending on the order of backend:event and capsule:state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     pub state: CapsuleState,
     pub level: f32, // 0..1 RMS
     pub elapsed_ms: u64,

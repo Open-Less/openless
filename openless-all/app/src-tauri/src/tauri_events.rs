@@ -34,11 +34,20 @@ pub fn start(app: AppHandle, backend: Arc<OpenLessBackend>) {
             match events.recv().await {
                 Ok(event) => {
                     let _ = app.emit("backend:event", &event);
+                    if let Some(coordinator) =
+                        app.try_state::<Arc<crate::coordinator::Coordinator>>()
+                    {
+                        // Advance the transcript watermark before legacy
+                        // capsule presentation. present_core_capsule then
+                        // commits the matching payload under the same native
+                        // snapshot lock before queueing the HWND work.
+                        coordinator.tauri_host().record_backend_event(&event);
+                    }
                     forward_legacy_event(
                         &app,
                         &backend_for_events,
                         event.session_id,
-                        event.kind,
+                        event.kind.clone(),
                         &mut capsule_owners,
                     )
                     .await;
@@ -193,6 +202,7 @@ async fn forward_legacy_event(
                     openless_core::DictationInsertStatus::NotRequested => "处理完成",
                 };
                 coordinator.present_core_capsule(CapsulePayload {
+                    session_id: Some(result.session_id.to_string()),
                     state: CapsuleState::Done,
                     level: 0.0,
                     elapsed_ms: result.duration_ms,
@@ -274,6 +284,7 @@ async fn forward_legacy_event(
                             LessComputerVoicePhase::Idle => CapsuleState::Idle,
                         };
                         coordinator.present_core_capsule(CapsulePayload {
+                            session_id: Some(session_id.to_string()),
                             state,
                             level: *level,
                             elapsed_ms: *elapsed_ms,
@@ -342,6 +353,7 @@ async fn forward_legacy_event(
             if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
                 if coordinator.selection_voice_accepts_level(&level.session_id) {
                     coordinator.present_core_capsule(CapsulePayload {
+                        session_id: Some(level.session_id.clone()),
                         state: CapsuleState::Recording,
                         level: level.level,
                         elapsed_ms: level.elapsed_ms,
@@ -462,6 +474,9 @@ fn emit_dictation_state(
     if let Some(capsule) = app.get_webview_window("capsule") {
         let _ = capsule.emit("capsule:state", &payload);
     }
+    if let Some(rail) = app.get_webview_window("capsule-rail") {
+        let _ = rail.emit("capsule:state", &payload);
+    }
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.emit("capsule:state", &payload);
     }
@@ -509,6 +524,7 @@ fn map_dictation_state(
         _ => snapshot.message,
     };
     CapsulePayload {
+        session_id: snapshot.session_id.map(|session| session.to_string()),
         state,
         level: snapshot.level,
         elapsed_ms: snapshot.elapsed_ms,
@@ -577,6 +593,7 @@ fn transcription_notice_payload(
         (0, false)
     };
     Some(CapsulePayload {
+        session_id: Some(session_id.to_string()),
         state: CapsuleState::Transcribing,
         level: 0.0,
         elapsed_ms,
@@ -682,6 +699,7 @@ fn qa_capsule_payload(
         finish_qa_transcription_notice(&mut owners.transcription_notice, session_id, kind);
     }
     Some(CapsulePayload {
+        session_id: session_id.map(|session| session.to_string()),
         state,
         level: if level.is_finite() {
             level.clamp(0.0, 1.0)

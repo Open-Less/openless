@@ -1762,6 +1762,9 @@ export const en: typeof zhCN = {
       thinkingBudget: 'Fixed budget',
       maxTokensLabel: 'Maximum output tokens',
       thinkingBudgetLabel: 'Thinking budget tokens',
+      serviceTierLabel: 'Ark low-latency inference (fast)',
+      serviceTierHint:
+        'Only supported Ark models can use this option; unsupported models may return 400.',
       responsesThinkingHint:
         'Some models can only reduce thinking, not turn it off. Reasoning requests omit temperature.',
       messagesThinkingHint:
@@ -1771,6 +1774,7 @@ export const en: typeof zhCN = {
       llmTokenLimitInvalid: 'Token limits must be positive integers.',
       llmThinkingBudgetInvalid:
         'Thinking budget must be at least 1024 and below the output limit in fixed-budget mode.',
+      llmServiceTierInvalid: 'Invalid low-latency inference option. Select it again.',
       llmResponseIncomplete:
         'The response was incomplete or reached its output limit. Already emitted text is retained.',
       llmProtocolHeaderConflict:
@@ -1907,7 +1911,7 @@ export const en: typeof zhCN = {
       hotkeyFailed: 'Listener failed',
       windowsImeLabel: 'Windows input method backend',
       windowsImeDesc:
-        'Temporarily switches to the OpenLess TSF IME during voice sessions to avoid clipboard insertion limits.',
+        'Inserts dictated text through the OpenLess TSF text service, which stays active alongside your input method, to avoid clipboard insertion limits.',
       windowsImeInstalled: 'Installed',
       windowsImeUnavailable: 'Unavailable',
       androidImeLabel: 'Input method (IME)',
