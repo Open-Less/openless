@@ -124,6 +124,15 @@ pub fn capsule_needs_fallback_dismissal(
     Some(capsule_session.to_string())
 }
 
+/// 「要记住这个词吗？」卡片能不能弹。
+///
+/// Tauri `show_vocab_suggestion_card` 的最后一道闸：卡片与录音胶囊**共用同一个
+/// 窗口**，会话在飞时弹出来会把这次会话的胶囊顶掉（尺寸、位置、输入区都不同），
+/// 所以只允许在没有会话（Idle）时显示。
+pub fn vocab_card_allowed(phase: Option<DictationPhase>) -> bool {
+    matches!(phase, None | Some(DictationPhase::Idle))
+}
+
 /// 这个相位是否需要胶囊在屏幕上：只有进行中的相位才该按需拉起弹窗。
 ///
 /// 终态不再拉起——否则一个迟到的终态事件会把刚刚自动收起的药丸又喊回来；
@@ -163,6 +172,31 @@ pub fn normalize_stop_result<T>(
         Ok(value) => Ok(Some(value)),
         Err(error) if is_expected_stop_error(error.code) => Ok(None),
         Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod vocab_card_tests {
+    use super::vocab_card_allowed;
+    use openless_core::DictationPhase;
+
+    /// 卡片只在没有会话时出现：卡片与录音胶囊共用一个窗口。
+    #[test]
+    fn the_vocab_card_only_shows_without_a_dictation_session() {
+        assert!(vocab_card_allowed(None));
+        assert!(vocab_card_allowed(Some(DictationPhase::Idle)));
+        for phase in [
+            DictationPhase::Starting,
+            DictationPhase::Recording,
+            DictationPhase::Transcribing,
+            DictationPhase::Polishing,
+            DictationPhase::Inserting,
+        ] {
+            assert!(
+                !vocab_card_allowed(Some(phase)),
+                "{phase:?} is a live session and must keep the capsule"
+            );
+        }
     }
 }
 

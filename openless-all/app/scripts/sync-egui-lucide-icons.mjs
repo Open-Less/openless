@@ -19,9 +19,10 @@ export const icons = {
   Download: 'Download', Upload: 'Upload', Plus: 'Plus', Play: 'Play',
   Stop: 'Square', Close: 'X', Check: 'Check', Send: 'ArrowUp', Pin: 'Pin',
   Chat: 'MessageSquare', More: 'Ellipsis', ChevronRight: 'ChevronRight',
+  ChevronLeft: 'ChevronLeft',
   Feather: 'Feather', Layout: 'PanelLeft', Doc: 'FileText', Pencil: 'Pencil',
   Cloud: 'Cloud', Shield: 'ShieldCheck', Info: 'Info', Help: 'CircleHelp',
-  External: 'ExternalLink', Monitor: 'Monitor',
+  External: 'ExternalLink', Monitor: 'Monitor', Grip: 'GripVertical',
 };
 const version = JSON.parse(readFileSync(resolve(root, 'node_modules/lucide-react/package.json'), 'utf8')).version;
 const check = process.argv.includes('--check');

@@ -129,6 +129,11 @@ pub enum HostToPopup {
         /// 胶囊样式：`siri` / `classic` / `typeless`（Tauri `capsuleStyle`）。
         #[serde(default)]
         style: String,
+        /// 「要记住这个词吗？」卡片：非空时胶囊窗改画确认卡（Tauri
+        /// `VocabSuggestionCard`）。音频会话已经结束时也会发（phase 为空），
+        /// 因为这张卡只在**没有**会话时出现。
+        #[serde(default)]
+        suggestions: Vec<CapsuleSuggestion>,
     },
     Hide {
         version: u16,
@@ -244,6 +249,15 @@ pub enum PopupToHost {
         sequence: u64,
         text: String,
     },
+    /// 卡片上的一次「记住 / 不用」（Tauri `acceptPendingCorrection` /
+    /// `rejectPendingCorrection`）。`id` 是 Core 给的候选 id。
+    VocabSuggestion {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+        id: String,
+        accept: bool,
+    },
     /// 取消本次润色（由选区助手面板发出）。
     CancelPolish {
         version: u16,
@@ -349,6 +363,7 @@ impl PopupToHost {
             | Self::ToggleQaRecording { version, .. }
             | Self::DismissQa { version, .. }
             | Self::DismissCapsule { version, .. }
+            | Self::VocabSuggestion { version, .. }
             | Self::CancelDictation { version, .. }
             | Self::StopDictation { version, .. }
             | Self::SetPinned { version, .. }
@@ -372,6 +387,7 @@ impl PopupToHost {
             | Self::ToggleQaRecording { session_id, .. }
             | Self::DismissQa { session_id, .. }
             | Self::DismissCapsule { session_id, .. }
+            | Self::VocabSuggestion { session_id, .. }
             | Self::CancelDictation { session_id, .. }
             | Self::StopDictation { session_id, .. }
             | Self::SetPinned { session_id, .. }
@@ -395,6 +411,7 @@ impl PopupToHost {
             | Self::ToggleQaRecording { sequence, .. }
             | Self::DismissQa { sequence, .. }
             | Self::DismissCapsule { sequence, .. }
+            | Self::VocabSuggestion { sequence, .. }
             | Self::CancelDictation { sequence, .. }
             | Self::StopDictation { sequence, .. }
             | Self::SetPinned { sequence, .. }
@@ -423,6 +440,7 @@ impl PopupToHost {
             | Self::ApplyEdit { .. }
             | Self::RevertEdit { .. } => PopupKind::Qa,
             Self::DismissCapsule { .. }
+            | Self::VocabSuggestion { .. }
             | Self::CancelDictation { .. }
             | Self::StopDictation { .. } => PopupKind::Capsule,
             Self::SubmitLessComputer { .. }
@@ -673,6 +691,20 @@ pub struct CapsulePopupState {
     pub translation_active: bool,
     /// 胶囊样式（`siri` / `classic` / `typeless`）。
     pub style: String,
+    /// 「要记住这个词吗？」卡片的内容（Tauri `PendingCorrection`）。非空时整窗只画
+    /// 这张卡 —— 它就是「确认式词库学习」的确认入口，没有它自动学词永远不会落库。
+    pub suggestions: Vec<CapsuleSuggestion>,
+}
+
+/// 卡片上的一行：用户手改出来的「错误写法 → 想要的写法」（Core
+/// `PendingCorrection`，只在这里展示，不落库；接受才写进词库）。
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CapsuleSuggestion {
+    pub id: String,
+    /// 手改前的写法，只用于让用户看清改了什么。
+    pub pattern: String,
+    /// 用户最终想要的写法 —— 点「记住」后进词库的是它。
+    pub replacement: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -781,6 +813,7 @@ impl PopupState {
                 audio_level,
                 translation_active,
                 style,
+                suggestions,
                 ..
             } => {
                 self.capsule = CapsulePopupState {
@@ -789,6 +822,7 @@ impl PopupState {
                     audio_level,
                     translation_active,
                     style,
+                    suggestions,
                 };
                 self.visible = true;
             }
@@ -1444,6 +1478,51 @@ mod tests {
     }
 
     #[test]
+    fn capsule_carries_the_vocab_suggestion_card() {
+        let message = HostToPopup::Capsule {
+            version: POPUP_PROTOCOL_VERSION,
+            session_id: String::new(),
+            sequence: 5,
+            phase: String::new(),
+            text: String::new(),
+            audio_level: None,
+            translation_active: false,
+            style: "siri".to_owned(),
+            suggestions: vec![CapsuleSuggestion {
+                id: "c1".to_owned(),
+                pattern: "banana".to_owned(),
+                replacement: "bananas".to_owned(),
+            }],
+        };
+        let mut state = PopupState::default();
+        assert_eq!(state.apply(message), ApplyOutcome::Applied);
+        assert_eq!(state.capsule.suggestions.len(), 1);
+        assert_eq!(state.capsule.suggestions[0].replacement, "bananas");
+        // 卡片与听写会话无关：消息不带会话 id 也要能落地。
+        assert!(state.capsule.phase.is_empty());
+        // 决策消息归胶囊窗，宿主按它回写词库。
+        let decision = PopupToHost::VocabSuggestion {
+            version: POPUP_PROTOCOL_VERSION,
+            session_id: String::new(),
+            sequence: 0,
+            id: "c1".to_owned(),
+            accept: true,
+        };
+        assert_eq!(decision.kind(), PopupKind::Capsule);
+        assert_eq!(decision.version(), POPUP_PROTOCOL_VERSION);
+    }
+
+    /// 老宿主（协议 v2）不带 `suggestions` 时按空卡片解析，不能报错。
+    #[test]
+    fn a_capsule_without_suggestions_still_parses() {
+        let legacy = r#"{"type":"capsule","version":3,"session_id":"s","sequence":1,"phase":"Recording"}"#;
+        let message: HostToPopup = serde_json::from_str(legacy).expect("legacy capsule");
+        let mut state = PopupState::default();
+        assert_eq!(state.apply(message), ApplyOutcome::Applied);
+        assert!(state.capsule.suggestions.is_empty());
+    }
+
+    #[test]
     fn capsule_carries_translation_active_and_style() {
         let message = HostToPopup::Capsule {
             version: POPUP_PROTOCOL_VERSION,
@@ -1454,6 +1533,7 @@ mod tests {
             audio_level: Some(0.5),
             translation_active: true,
             style: "typeless".to_owned(),
+            suggestions: Vec::new(),
         };
         let mut state = PopupState::default();
         assert_eq!(state.apply(message), ApplyOutcome::Applied);

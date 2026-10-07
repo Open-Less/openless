@@ -141,6 +141,47 @@ pub fn save_quick_note_shortcut_hidden(hidden: bool) -> Result<(), UiStateError>
     )
 }
 
+/// 胶囊「预备 → 就绪」的平均耗时（ms）：Tauri 存在 localStorage
+/// (`ol-capsule-warmup-ms`)，Linux 这边落在同一份 UI 状态文档里（`capsule_warmup_ms`）。
+/// 缺失 / 越界一律回落到默认值，学习值也不可能把动画带飞。
+pub fn load_capsule_warmup_ms() -> f32 {
+    let stored = read_state_object()
+        .get("capsule_warmup_ms")
+        .and_then(serde_json::Value::as_f64);
+    match stored {
+        Some(value) if value.is_finite() => (value as f32).clamp(
+            crate::siri_wgpu::MIN_WARMUP_MS,
+            crate::siri_wgpu::MAX_WARMUP_MS,
+        ),
+        _ => crate::siri_wgpu::DEFAULT_WARMUP_MS,
+    }
+}
+
+/// 用一次实测的「预备 → 就绪」耗时更新学习值，并把新值落盘、返回给调用方。
+///
+/// 异常样本直接丢弃（返回 `None`）：<20ms 多半不是真入场，>3s 多半是首次设备授权或
+/// 系统卡顿，都不代表常态。公式与 Tauri `Capsule.tsx` 完全一致：
+/// `clamp(prev * 0.7 + observed * 0.3, 60, 600)`。
+pub fn learn_capsule_warmup_ms(observed_ms: f32) -> Option<f32> {
+    if !observed_ms.is_finite() || !(20.0..=3000.0).contains(&observed_ms) {
+        return None;
+    }
+    let previous = load_capsule_warmup_ms();
+    let next = (previous * 0.7 + observed_ms * 0.3).clamp(
+        crate::siri_wgpu::MIN_WARMUP_MS,
+        crate::siri_wgpu::MAX_WARMUP_MS,
+    );
+    let _ = save_capsule_warmup_ms(next);
+    Some(next)
+}
+
+pub fn save_capsule_warmup_ms(warmup_ms: f32) -> Result<(), UiStateError> {
+    write_state_value(
+        "capsule_warmup_ms",
+        serde_json::Value::from(f64::from(warmup_ms)),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,6 +262,44 @@ mod tests {
             // A later valid write repairs the state.
             save_locale_pref(LocalePref::Lang(Lang::Ja)).unwrap();
             assert_eq!(load_locale_pref(), LocalePref::Lang(Lang::Ja));
+        });
+    }
+
+    #[test]
+    fn capsule_warmup_defaults_and_learns_a_bounded_average() {
+        with_tmp_state(|_dir| {
+            // 缺省 = Tauri 的 150ms；损坏 / 越界值也回落默认。
+            assert_eq!(
+                load_capsule_warmup_ms(),
+                crate::siri_wgpu::DEFAULT_WARMUP_MS
+            );
+            save_capsule_warmup_ms(9_999.0).unwrap();
+            assert_eq!(load_capsule_warmup_ms(), crate::siri_wgpu::MAX_WARMUP_MS);
+            save_capsule_warmup_ms(1.0).unwrap();
+            assert_eq!(load_capsule_warmup_ms(), crate::siri_wgpu::MIN_WARMUP_MS);
+        });
+    }
+
+    #[test]
+    fn capsule_warmup_learning_moves_towards_the_observation() {
+        with_tmp_state(|_dir| {
+            // 异常样本（太快 / 太慢 / 非数）一律丢弃。
+            assert_eq!(learn_capsule_warmup_ms(5.0), None);
+            assert_eq!(learn_capsule_warmup_ms(9_000.0), None);
+            assert_eq!(learn_capsule_warmup_ms(f32::NAN), None);
+            // 正常样本：EMA 向观测值靠（150*0.7 + 500*0.3 = 255）。
+            let learned = learn_capsule_warmup_ms(500.0).expect("sample is plausible");
+            assert!((learned - 255.0).abs() < 0.01, "{learned}");
+            assert!((load_capsule_warmup_ms() - 255.0).abs() < 0.01);
+            // 连续更快就绪会把估计拉下来（但不会越出下限）。
+            let mut value = learned;
+            for _ in 0..40 {
+                value = learn_capsule_warmup_ms(25.0).expect("sample is plausible");
+            }
+            assert!(
+                (value - crate::siri_wgpu::MIN_WARMUP_MS).abs() < 0.01,
+                "{value}"
+            );
         });
     }
 }

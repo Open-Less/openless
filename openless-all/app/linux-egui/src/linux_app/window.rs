@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashSet;
 
 pub(super) struct WindowState {
     pub(super) should_be_open: bool,
@@ -46,6 +47,34 @@ pub(super) const MAIN_MSAA_SAMPLES: u16 = 4;
 /// 主窗口的初始尺寸。基准 = macOS（Tauri 的 main 窗口 1300×835）；
 /// 旧的 Linux 专用窗口配置不作为依据。
 pub(super) const MAIN_WINDOW_INNER_SIZE: [f32; 2] = [1300.0, 835.0];
+
+/// 快照的软上限：到这个体积就先裁历史，仍留出余量给桥层的硬上限（[`crate::ui::bridge`] 的帧上限）。
+/// 视图模型里唯一会随使用无限膨胀的就是历史列表，所以超限时只裁它。
+pub(super) const SNAPSHOT_SOFT_LIMIT: usize = 12 * 1024 * 1024;
+
+/// 软上限的实际取值。`OPENLESS_UI_SNAPSHOT_LIMIT=<字节>` 可以压低它，用来在设备上
+/// 演练「历史过大」的降级路径（否则要攒到 12 MiB 历史才能看到横幅）。
+fn snapshot_soft_limit() -> usize {
+    std::env::var("OPENLESS_UI_SNAPSHOT_LIMIT")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(SNAPSHOT_SOFT_LIMIT)
+}
+
+/// 第一页的降档阶梯：正常情况下快照只带每个集合的第一页（很小），
+/// 只有病态数据（单条超大的转写、巨大的图标 data URL）才会走到这里。
+/// 一档不够就再降一档，直到载荷落回软上限；`*_total` 不动，条目仍可被加载回来。
+pub(super) const FIRST_PAGE_LADDER: [usize; 5] = [200, 100, 40, 10, 0];
+
+/// 把某个集合的第一页缩到 `keep` 条。返回是否真的裁了。
+fn trim_page<T>(list: &mut Vec<T>, keep: usize) -> bool {
+    if list.len() <= keep {
+        return false;
+    }
+    list.truncate(keep);
+    true
+}
 
 /// 视图模型载荷指纹（FNV-1a 64）。够快，用来判断「要不要重发快照」：
 /// 内容没变就不发，UI 慢的时候也不会被无意义的帧糊住。
@@ -206,12 +235,13 @@ impl OpenLessEguiApp {
             self.window.last_snapshot_fingerprint = None;
             return;
         }
-        let payload = match serde_json::to_vec(&self.frontend_vm) {
-            Ok(payload) => payload,
-            Err(error) => {
-                log::warn!("[ui-host] view model serialization failed: {error}");
-                return;
-            }
+        let Some(payload) = encode_view_model(
+            &mut self.frontend_vm,
+            snapshot_soft_limit(),
+            &FIRST_PAGE_LADDER,
+        ) else {
+            log::warn!("[ui-host] view model serialization failed");
+            return;
         };
         let fingerprint = snapshot_fingerprint(&payload);
         let keepalive = self.window.last_snapshot_at.elapsed() >= Duration::from_secs(2);
@@ -224,6 +254,48 @@ impl OpenLessEguiApp {
     }
 }
 
+/// 序列化视图模型，必要时把五个可增长集合的第一页一起降档，让快照回到
+/// `soft_limit` 以内。
+///
+/// 裁的是宿主持有的这份 VM，下一 tick 的 [`OpenLessEguiApp::sync_view_model`] 会从
+/// 真实缓存重新填满第一页，所以裁掉的内容只是「这一帧不发」；总数仍在，窗口可用
+/// `LoadMore` 按需取回，不是永久丢弃。`ladder` 的最后一项应当能裁到空列表。
+///
+/// 返回 `None` 只表示序列化本身失败；裁完仍然超过软上限时会照常返回载荷，由调用方
+/// 交给桥层按硬上限处理（丢帧，但不断连）。
+fn encode_view_model(
+    view_model: &mut FrontendViewModel,
+    soft_limit: usize,
+    ladder: &[usize],
+) -> Option<Vec<u8>> {
+    let mut payload = serde_json::to_vec(view_model).ok()?;
+    if payload.len() <= soft_limit {
+        return Some(payload);
+    }
+    for keep in ladder.iter().copied() {
+        let mut trimmed = trim_page(&mut view_model.history_entries, keep);
+        trimmed |= trim_page(&mut view_model.vocab_entries, keep);
+        trimmed |= trim_page(&mut view_model.vocab_rules, keep);
+        trimmed |= trim_page(&mut view_model.marketplace_packs, keep);
+        trimmed |= trim_page(&mut view_model.style_packs, keep);
+        if !trimmed {
+            break;
+        }
+        if view_model.history_selected >= view_model.history_entries.len() {
+            // 选中的那条这一帧没发出去：回到最新一条，别让详情栏空着。
+            view_model.history_selected = 0;
+        }
+        log::warn!(
+            "[ui-host] snapshot is over {soft_limit} bytes; first pages cut to {keep} entries"
+        );
+        payload = serde_json::to_vec(view_model).ok()?;
+        if payload.len() <= soft_limit {
+            return Some(payload);
+        }
+    }
+    Some(payload)
+}
+
 /// UI 窗口进程入口：只渲染。
 ///
 /// 它不构造 Core 后端、不打开数据目录、不抢单实例锁、不注册托盘与热键 ——
@@ -231,6 +303,10 @@ impl OpenLessEguiApp {
 pub(super) fn vulkan_options(mut options: eframe::NativeOptions) -> eframe::NativeOptions {
     if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup {
         setup.instance_descriptor.backends = eframe::egui_wgpu::wgpu::Backends::VULKAN;
+        // 显存优先的设备描述，与原生 layer-shell 胶囊同源（见 `wgpu_device`）：
+        // wgpu 默认的 `Performance` hints 会让每个渲染进程预占约 180 MiB。
+        setup.device_descriptor =
+            std::sync::Arc::new(|_adapter| openless_linux_egui::wgpu_device::device_descriptor());
     }
     options
 }
@@ -267,6 +343,9 @@ pub(super) fn run_ui_client(socket: std::path::PathBuf) -> Result<(), String> {
         options,
         Box::new(move |cc| {
             theme::install(&cc.egui_ctx);
+            if let Some(state) = cc.wgpu_render_state.as_ref() {
+                crate::ui::frontend::siri_wgpu::install_wgpu(state, MAIN_MSAA_SAMPLES.into());
+            }
             Ok(Box::new(UiClientApp::new(
                 client,
                 cc.wgpu_render_state.as_ref(),
@@ -344,6 +423,8 @@ pub(super) struct UiClientApp {
     hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher,
     /// 本地热键边沿的发送序号（与动作序号分开，便于日志区分）。
     hotkey_sequence: u64,
+    /// 自动加载时去重尚未回来的页请求，避免一帧一个重复 action。
+    pending_collection_pages: HashSet<(frontend::paging::Collection, usize)>,
     /// 设置页模糊背板；只有拿到 wgpu 渲染状态（正常 GUI 进程）时存在。
     backdrop: Option<crate::ui::backdrop::BackdropBlur>,
 }
@@ -353,6 +434,11 @@ impl UiClientApp {
         client: UiBridgeClient,
         render_state: Option<&eframe::egui_wgpu::RenderState>,
     ) -> Self {
+        let mut view_model = FrontendViewModel::default();
+        // QA：OPENLESS_FPS_SETTINGS=1 时开机就打开设置面板，直接测最重的渲染路径
+        // （磨砂背板 + 离屏 4×MSAA 重绘 + 动画预览）。见 `frame_stats` 模块文档。
+        // 真正的置位在每帧采纳快照之后（见 `ui()`）：宿主快照会把这里覆盖掉。
+        view_model.settings_open |= openless_linux_egui::frame_stats::settings_open_on_start();
         Self {
             client,
             connecting_since: std::time::Instant::now(),
@@ -361,7 +447,7 @@ impl UiClientApp {
             backdrop: render_state.map(|state| {
                 crate::ui::backdrop::BackdropBlur::new(state, MAIN_MSAA_SAMPLES.into())
             }),
-            view_model: FrontendViewModel::default(),
+            view_model,
             last_sequence: 0,
             last_adopted: None,
             action_sequence: 0,
@@ -373,6 +459,21 @@ impl UiClientApp {
             hotkeys: None,
             hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher::default(),
             hotkey_sequence: 0,
+            pending_collection_pages: HashSet::new(),
+        }
+    }
+
+    /// 把单槽位里最新的快照搬进视图模型。
+    ///
+    /// 正常情况下一帧只有一份；`while` 是为了把极端情况下「取的过程中又来了
+    /// 一份」也收干净（旧的那份会被 `snapshot_supersedes` 丢掉）。
+    fn adopt_latest_snapshot(&mut self) {
+        while let Some((sequence, view_model)) = self.client.take_snapshot() {
+            if snapshot_supersedes(self.last_sequence, sequence) {
+                self.adopt_snapshot(sequence, *view_model);
+            } else {
+                log::debug!("[ui-client] dropped stale snapshot #{sequence}");
+            }
         }
     }
 
@@ -396,7 +497,12 @@ impl UiClientApp {
 
     /// 收宿主的帧。快照按序号采纳；`Shutdown` 与断连都表示「宿主走了」，
     /// 此时 UI 必须自己退出（没有宿主就没有数据可渲染）。
+    ///
+    /// 快照不在通道里（见 `UiBridgeClient` 的快照单槽位），所以本函数只在
+    /// egui pass 真正跑的时候被调用 —— 窗口被遮挡时宿主发多少保活快照都不会
+    /// 堆内存。
     pub(super) fn drain_host(&mut self, ctx: &egui::Context) {
+        self.adopt_latest_snapshot();
         loop {
             match self.client.try_recv() {
                 Ok(HostToWindow::Ready { version }) => {
@@ -415,14 +521,33 @@ impl UiClientApp {
                     log::info!("[ui-client] local hotkey bindings received");
                     self.hotkeys = Some(*bindings);
                 }
+                Ok(HostToWindow::CollectionPage {
+                    collection,
+                    offset,
+                    total,
+                    items,
+                    ..
+                }) => {
+                    self.pending_collection_pages.remove(&(collection, offset));
+                    if self
+                        .view_model
+                        .apply_page(collection, offset, total, *items)
+                    {
+                        log::debug!(
+                            "[ui-client] {} page at {offset} applied ({} loaded)",
+                            collection.tag(),
+                            collection.loaded(&self.view_model)
+                        );
+                    }
+                }
+                // 快照正常不进通道（见 `UiBridgeClient` 的快照单槽位）；这里兜底：
+                // 万一哪条路径真把它推进来了，也不能丢状态。
                 Ok(HostToWindow::Snapshot {
                     sequence,
                     view_model,
                 }) => {
                     if snapshot_supersedes(self.last_sequence, sequence) {
                         self.adopt_snapshot(sequence, *view_model);
-                    } else {
-                        log::debug!("[ui-client] dropped stale snapshot #{sequence}");
                     }
                 }
                 Ok(HostToWindow::Pong { sequence }) => {
@@ -525,6 +650,13 @@ impl UiClientApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
                 }
                 other => {
+                    if let frontend::view_model::FrontendAction::LoadMore { collection, offset } =
+                        &other
+                    {
+                        if !self.pending_collection_pages.insert((*collection, *offset)) {
+                            continue;
+                        }
+                    }
                     self.action_sequence += 1;
                     if let Err(error) = self.client.send(WindowToHost::Action {
                         sequence: self.action_sequence,
@@ -560,9 +692,15 @@ impl eframe::App for UiClientApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        openless_linux_egui::frame_stats::tick("ui-client");
         let ctx = ui.ctx().clone();
         if self.connection_error.is_none() {
             self.drain_host(&ctx);
+        }
+        // QA 开关要在**采纳快照之后**再压一次：宿主每帧/每次保活都会重发 view model，
+        // 只在初始化时置位会被随后到达的快照覆盖掉（这个开关以前就是这么失效的）。
+        if openless_linux_egui::frame_stats::settings_open_on_start() {
+            self.view_model.settings_open = true;
         }
         if !self.client.is_ready() || self.connection_error.is_some() {
             if self.connection_error.is_none()
@@ -653,59 +791,99 @@ impl eframe::App for UiClientApp {
     }
 }
 
-struct StartupErrorApp {
-    error: String,
-    lang: Lang,
-    broker: Arc<SingleInstanceBroker>,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::frontend::view_model::{FrontendViewModel, HistoryEntry, VocabEntry};
 
-impl eframe::App for StartupErrorApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let mut focus = false;
-        self.broker.drain(|_| focus = true);
-        if focus {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+    /// 一条体量接近真实长转写的假历史（列表最新在前，id 递增 = 越来越旧）。
+    fn fake_entry(index: usize) -> HistoryEntry {
+        HistoryEntry {
+            id: format!("entry-{index}"),
+            raw_transcript: "transcript ".repeat(300),
+            final_text: "polished draft ".repeat(300),
+            ..Default::default()
         }
-        ui.heading(tr_l10n(self.lang, "status.startup_failed"));
-        ui.add_space(12.0);
-        ui.label(&self.error);
-        ui.add_space(12.0);
-        ui.label(tr_l10n(self.lang, "startup.fcitx_help"));
-        if ui.button(tr_l10n(self.lang, "common.close")).clicked() {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-        }
-        ui.ctx().request_repaint_after(Duration::from_millis(100));
     }
-}
 
-pub(super) fn show_startup_error(error: &str, broker: Arc<SingleInstanceBroker>) {
-    eprintln!("OpenLess startup failed: {error}");
-    if ["DISPLAY", "WAYLAND_DISPLAY"]
-        .iter()
-        .all(|name| std::env::var(name).unwrap_or_default().is_empty())
-    {
-        return;
+    fn view_model_with(entries: usize) -> FrontendViewModel {
+        FrontendViewModel {
+            history_entries: (0..entries).map(fake_entry).collect(),
+            ..Default::default()
+        }
     }
-    let lang = load_locale_pref().resolve();
-    let error = error.to_string();
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(tr_l10n(lang, "status.startup_failed"))
-            .with_inner_size([560.0, 300.0]),
-        ..Default::default()
-    };
-    if let Err(failure) = eframe::run_native(
-        "OpenLess",
-        options,
-        Box::new(move |cc| {
-            theme::install(&cc.egui_ctx);
-            Ok(Box::new(StartupErrorApp {
-                error,
-                lang,
-                broker,
-            }))
-        }),
-    ) {
-        eprintln!("OpenLess startup error window failed: {failure}");
+
+    #[test]
+    fn a_snapshot_that_fits_is_sent_whole() {
+        let mut view_model = view_model_with(4);
+        let payload = encode_view_model(&mut view_model, usize::MAX, &FIRST_PAGE_LADDER).unwrap();
+        assert_eq!(
+            view_model.history_entries.len(),
+            4,
+            "nothing may be dropped"
+        );
+        assert!(!payload.is_empty());
+    }
+
+    #[test]
+    fn an_oversized_snapshot_cuts_the_first_pages_but_keeps_the_totals() {
+        // 软上限只装得下 8 条左右：第一档 25 太大，第二档 5 刚好。
+        let empty = serde_json::to_vec(&FrontendViewModel::default())
+            .unwrap()
+            .len();
+        let one_entry = serde_json::to_vec(&fake_entry(0)).unwrap().len();
+        let soft_limit = empty + one_entry * 8;
+        let mut view_model = view_model_with(30);
+        view_model.history_list_total = 30;
+        view_model.history_selected = 29;
+
+        let payload = encode_view_model(&mut view_model, soft_limit, &[25, 5, 0]).unwrap();
+
+        assert!(
+            payload.len() <= soft_limit,
+            "a cut snapshot must fit the soft limit"
+        );
+        assert_eq!(
+            view_model.history_entries.len(),
+            5,
+            "the first ladder step that fits wins"
+        );
+        // 总数不动：切掉的条目仍然能通过「加载更多」拉回来。
+        assert_eq!(view_model.history_list_total, 30);
+        // 列表最新在前：切掉的是尾部（最旧），最新的 5 条必须留下。
+        assert_eq!(view_model.history_entries[0].id, "entry-0");
+        assert_eq!(view_model.history_entries[4].id, "entry-4");
+        // 选中的那条这一帧没发出去：回到最新一条。
+        assert_eq!(view_model.history_selected, 0);
+    }
+
+    #[test]
+    fn every_collection_shares_the_same_ladder_step() {
+        // 病态数据可能出在任何一个集合上，降档必须一起切。
+        let mut view_model = view_model_with(30);
+        view_model.vocab_entries = (0..30)
+            .map(|index| VocabEntry {
+                phrase: "x".repeat(2_000),
+                hits: index,
+                enabled: true,
+                learned: false,
+            })
+            .collect();
+        view_model.vocab_total = 30;
+        let empty = serde_json::to_vec(&FrontendViewModel::default())
+            .unwrap()
+            .len();
+        // 只装得下 5 条左右：第一档 25 还是太大，第二档 5 刚好 —— 两个集合
+        // 必须落在同一个档位上，不能一个切到 5、另一个还留着 25。
+        let soft_limit = empty + 80_000;
+
+        let payload = encode_view_model(&mut view_model, soft_limit, &[25, 5, 0]).unwrap();
+
+        assert!(payload.len() <= soft_limit);
+        assert_eq!(view_model.history_entries.len(), 5);
+        assert_eq!(view_model.vocab_entries.len(), 5);
+        // 总数不动：切掉的条目仍能通过「加载更多」拉回来。
+        assert_eq!(view_model.history_list_total, 0);
+        assert_eq!(view_model.vocab_total, 30);
     }
 }

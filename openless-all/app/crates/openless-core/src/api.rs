@@ -2522,6 +2522,10 @@ impl OpenLessBackend {
             ));
         }
         let events = Arc::new(EventBus::new(256));
+        // 保留裁剪与「最近 N 分钟」必须跟着注入的时钟走：同一个后端里
+        // `created_at` 已经用 `clock` 生成，裁剪却偷读系统时钟的话，测试/
+        // 回放的固定时钟下刚写入的条目会在写入瞬间被判超期。
+        repositories.history.attach_clock(Arc::clone(&clock));
         let preferences_revision = Arc::new(AtomicU64::new(0));
         let style_pack_revision = Arc::new(AtomicU64::new(0));
         let history_revision = Arc::new(AtomicU64::new(0));

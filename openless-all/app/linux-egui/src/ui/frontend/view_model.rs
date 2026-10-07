@@ -68,6 +68,12 @@ pub enum FrontendAction {
     MarketplaceToggleLike(usize),
     MarketplaceCloseMine,
     /// Select a history entry (index into `history_entries`).
+    /// 拉取某个集合的下一页；宿主按同样的顺序切片回发（见 [`super::paging`]）。
+    /// `offset` 用窗口当前的已载入条数，因为宿主只知道完整集合、不知道窗口手上有多少。
+    LoadMore {
+        collection: super::paging::Collection,
+        offset: usize,
+    },
     HistorySelect(usize),
     /// Re-read the history list from Core.
     HistoryRefresh,
@@ -185,13 +191,11 @@ pub enum FrontendAction {
     /// Delete a channel (index into `settings.channels`).
     SettingsChannelDelete(usize),
     /// Open/close the "add channel" form.
-    SettingsChannelFormOpen(bool),
+    /// 「添加渠道」：宿主先建一张空渠道，再打开同一个编辑器（草稿模式）。
+    SettingsChannelDraft,
     /// Provider picked in the add-channel form.
-    SettingsChannelProvider(usize),
     /// Channel name typed in the add-channel form.
-    SettingsChannelName(String),
     /// Create the channel described by the form.
-    SettingsChannelCreate,
     /// Select a channel and open its provider editor (index into `channels`).
     SettingsChannelSelect(usize),
     /// Move a channel up/down; Core's `reorder_channels` owns the order.
@@ -243,6 +247,8 @@ pub enum FrontendAction {
     OverviewPeriod(usize),
     /// Overview: metric toggle (0 = count, 1 = chars, 2 = duration).
     OverviewMetric(usize),
+    /// Dismiss a non-fatal runtime warning overlay.
+    DismissRuntimeWarning,
     /// Window close requested.
     WindowClose,
     /// Window maximize/minimize toggle.
@@ -351,6 +357,8 @@ pub enum ShortcutField {
 /// One credential channel shown in the AI-services settings tab.
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug, Default)]
 pub struct SettingsChannel {
+    /// 渠道 id。宿主用它定位编辑目标（Tauri 的 `Channel.id` 同义）。
+    pub id: String,
     pub name: String,
     /// Model / endpoint summary shown under the channel name.
     pub model: String,
@@ -361,8 +369,14 @@ pub struct SettingsChannel {
     /// True for the channel currently serving requests.
     pub is_active: bool,
     pub enabled: bool,
-    /// Human-readable result of the last validation, if any.
-    pub last_check: Option<String>,
+    /// 最近一次验证是否通过；`None` = 从未验证（Tauri 的 `lastTest`）。
+    pub last_ok: Option<bool>,
+    /// 失败时的错误文本，Core 原样回显，不在这里二次解释。
+    pub last_error: Option<String>,
+    /// 通过时的往返耗时（毫秒）。
+    pub last_latency_ms: Option<u32>,
+    /// 距最近一次验证过了多少秒。宿主用 epoch 秒算好，窗口只负责本地化。
+    pub last_check_age_seconds: Option<i64>,
 }
 
 /// A field of the provider editor. Secret fields are write-only: opening an
@@ -402,6 +416,10 @@ pub enum SettingsProviderAuth {
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct SettingsProviderEditor {
     pub channel_id: String,
+    /// 渠道种类：弹窗副标题在「文字处理渠道 / 语音识别渠道」之间切换。
+    pub is_asr: bool,
+    /// 草稿（刚从「添加渠道」建出来）：标题是「添加渠道」，且未交互就关闭时要回收。
+    pub is_draft: bool,
     /// Localized provider label (read-only).
     pub provider: String,
     pub provider_type: String,
@@ -487,6 +505,9 @@ pub enum SettingsComboField {
     RemoteDefaultMode,
     /// 选区润色交付方式：0 = 直接替换，1 = 预览确认。
     SelectionPolishDelivery,
+    /// 识别管线模式：0 = 传统（ASR + LLM 两段），1 = 多模态（单模型一步）。
+    /// 与 Tauri 的 `pipelineMode` 同义：切换只改偏好，不动另一套凭据。
+    PipelineMode,
     /// Less Computer 的 Agent 后端（0 = Claude Code, 1 = OpenCode, 2 = Codex, 3 = dsh）。
     CodingAgentProvider,
     /// Less Computer 权限模式（0 = 放行, 1 = 只读/计划, 2 = 默认, 3 = 完全放行）。
@@ -680,6 +701,9 @@ pub struct FrontendViewModel {
     pub tools_open: bool,
     pub settings_open: bool,
 
+    /// Localized non-fatal runtime warning (for example, unavailable fcitx5).
+    pub runtime_warning: Option<String>,
+
     /// Resolved UI language, injected by the host each frame so the pure
     /// renderer can look up localized strings without touching global state.
     #[serde(with = "lang_tag")]
@@ -699,6 +723,11 @@ pub struct FrontendViewModel {
     pub history_query: String,
     pub history_selected: usize,
     pub history_entries: Vec<HistoryEntry>,
+    /// 列表里的历史总条数（概览页的 `history_total` 是「累计听写」统计口径，
+    /// 两者不是一回事）。历史按页下发（见 [`super::paging`]），`history_entries`
+    /// 只是已载入的前缀；`history_list_total > history_entries.len()` 时窗口显示
+    /// 「已载入 X / 共 Y」并可继续加载。
+    pub history_list_total: usize,
     pub quick_note_recording: bool,
     /// Whether the dismissible shortcut card on the Quick Note page is hidden.
     pub quick_note_shortcut_hidden: bool,
@@ -715,7 +744,11 @@ pub struct FrontendViewModel {
 
     // Vocab
     pub vocab_entries: Vec<VocabEntry>,
+    /// 词库总条数（`vocab_entries` 只是已载入的前缀）。
+    pub vocab_total: usize,
     pub vocab_rules: Vec<CorrectionRule>,
+    /// 纠错规则总条数（`vocab_rules` 只是已载入的前缀）。
+    pub correction_rule_total: usize,
     /// 纠正规则页的「只看自动收集」筛选（Tauri 的 `onlyLearnedRules`）。
     pub vocab_rules_only_learned: bool,
     /// 0 = all, 1 = auto-collected, 2 = manual.
@@ -734,6 +767,8 @@ pub struct FrontendViewModel {
 
     // Style
     pub style_packs: Vec<StylePack>,
+    /// 风格包总条数（`style_packs` 只是已载入的前缀；图标 data URL 很占体积）。
+    pub style_pack_total: usize,
     pub style_selected: usize,
     pub style_selection_workflow: bool,
     pub style_editor_open: bool,
@@ -769,6 +804,8 @@ pub struct FrontendViewModel {
     pub marketplace_query: String,
     pub marketplace_sort: MarketplaceSort,
     pub marketplace_packs: Vec<MarketplacePack>,
+    /// 市场列表总条数（`marketplace_packs` 只是已载入的前缀）。
+    pub marketplace_total: usize,
     pub marketplace_selected: Option<usize>,
     pub marketplace_detail_prompt: Option<String>,
     pub marketplace_mine_open: bool,
@@ -838,9 +875,6 @@ pub struct FrontendViewModel {
     /// Provider kinds offered by the add-channel form.
     pub channel_providers: Vec<SettingsChannelProvider>,
     pub channels_loading: bool,
-    pub channel_form_open: bool,
-    pub channel_form_name: String,
-    pub channel_provider_index: usize,
     /// Open provider editor, or `None` when the channel list is the whole view.
     pub provider_editor: Option<SettingsProviderEditor>,
     /// Rail search query in the settings modal.
@@ -896,6 +930,7 @@ impl Default for FrontendViewModel {
             style_open: true,
             tools_open: true,
             settings_open: false,
+            runtime_warning: None,
             overview_loading: true,
             overview_error: None,
             overview: None,
@@ -904,6 +939,7 @@ impl Default for FrontendViewModel {
             history_query: String::new(),
             history_selected: 0,
             history_entries: Vec::new(),
+            history_list_total: 0,
             quick_note_recording: false,
             quick_note_shortcut_hidden: false,
             history_loading: true,
@@ -915,7 +951,9 @@ impl Default for FrontendViewModel {
             history_repolish_result: None,
             history_repolish_error: None,
             vocab_entries: Vec::new(),
+            vocab_total: 0,
             vocab_rules: Vec::new(),
+            correction_rule_total: 0,
             vocab_rules_only_learned: false,
             vocab_filter: 0,
             vocab_query: String::new(),
@@ -930,6 +968,7 @@ impl Default for FrontendViewModel {
             vocab_error: None,
             vocab_unsupported: true,
             style_packs: Vec::new(),
+            style_pack_total: 0,
             style_selected: 0,
             style_selection_workflow: false,
             style_editor_open: false,
@@ -959,6 +998,7 @@ impl Default for FrontendViewModel {
             marketplace_query: String::new(),
             marketplace_sort: MarketplaceSort::Popular,
             marketplace_packs: Vec::new(),
+            marketplace_total: 0,
             marketplace_selected: None,
             marketplace_detail_prompt: None,
             marketplace_mine_open: false,
@@ -987,9 +1027,6 @@ impl Default for FrontendViewModel {
             channels: Vec::new(),
             channel_providers: Vec::new(),
             channels_loading: false,
-            channel_form_open: false,
-            channel_form_name: String::new(),
-            channel_provider_index: 0,
             provider_editor: None,
             settings_query: String::new(),
             shortcut_pending_modifier: None,
