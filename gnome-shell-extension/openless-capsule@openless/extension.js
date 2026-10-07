@@ -140,7 +140,6 @@ class SiriShaderEffect extends Clutter.ShaderEffect {
     _init(host) {
         super._init({shader_type: 1});   // FRAGMENT=1；mutter 50 从 GI 移除了 ShaderType 枚举
         this._host = host;
-        this.set_shader_source(SHADER_DECLS + SHADER_BODY);
     }
 
     vfunc_paint_target(...args) {
@@ -358,6 +357,8 @@ export default class OpenLessCapsuleExtension extends Extension {
 
         // 60fps 驱动：包络 + uniform 上传（仅在可见时渲染）
         this._animSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, REPAINT_MS, () => {
+            if (!this._area)
+                return GLib.SOURCE_REMOVE;
             const now = GLib.get_monotonic_time() / 1e6;
             const st = this._area.visibleState;
             if (st === 'idle')
@@ -556,25 +557,18 @@ export default class OpenLessCapsuleExtension extends Extension {
                 const body = new TextDecoder().decode(bytes);
                 if (body !== this._fragBody && body.includes('void main')) {
                     this._fragBody = body;
-                    // 关键：必须新建 effect 实例——在旧实例上 set_shader_source 不会
-                    // 触发 Cogl 重编译（管线缓存），必须新对象才拿得到新着色器。
-                    if (this._effect) {
-                        try { this._area.remove_effect_by_name('siri-orb'); } catch (e) { /* */ }
-                        this._effect = null;
-                    }
-                    try {
-                        this._effect = new SiriShaderEffect(this);
+                    if (this._effect && this._shaderAttached) {
+                        // 已挂载（正在显示）：同对象换源 + 摘/挂强制重编译（已验证路径）
+                        this._area.remove_effect_by_name('siri-orb');
                         this._effect.set_shader_source(SHADER_DECLS + body);
                         this._area.add_effect_with_name('siri-orb', this._effect);
-                        this._shaderAttached = this._shaderWanted;
-                        this._area.shaderActive = this._shaderWanted &&
-                            (this._area.visibleState === 'recording' ||
-                             this._area.visibleState === 'transcribing' ||
-                             this._area.visibleState === 'polishing');
-                        console.log('[openless-capsule] shader hot-swapped from frag file');
-                    } catch (e) {
-                        console.warn('[openless-capsule] frag swap failed:', e);
+                    } else if (this._effect) {
+                        // 未挂载（空闲）：新建实例并单次设源，避免同对象双设源的边界行为
+                        try { this._area.remove_effect_by_name('siri-orb'); } catch (e) { /* 未挂载 */ }
+                        this._effect = new SiriShaderEffect(this);
+                        this._effect.set_shader_source(SHADER_DECLS + body);
                     }
+                    console.log('[openless-capsule] shader hot-swapped from frag file');
                 }
             } catch (e) { /* 读失败忽略 */ }
             return GLib.SOURCE_CONTINUE;
