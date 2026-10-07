@@ -3,7 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
-import { getActivityStats, getCredentials, listHistory } from '../lib/ipc';
+import {
+  getActivityStats,
+  getCredentials,
+  listHistory,
+  listProviderDescriptors,
+  readCredential,
+} from '../lib/ipc';
 import { Heatmap } from '../components/Heatmap';
 import { useMobileLayout } from '../lib/useMobileLayout';
 import { countCodePoints } from '../lib/unicode';
@@ -15,6 +21,7 @@ import {
 } from '../lib/localeFormat';
 import { isDesktop } from '../lib/platform';
 import { getOverviewSetup, type OverviewSettingsSection } from '../lib/overviewSetup';
+import { loadOverviewServiceDetails, type OverviewServiceDetails } from '../lib/overviewServices';
 import {
   ACTIVITY_METRICS,
   ACTIVITY_PERIODS,
@@ -71,6 +78,13 @@ const LLM_NAME_KEY_BY_ID: Record<string, string> = {
   custom: 'custom',
 };
 
+const OMNI_NAME_KEY_BY_ID: Record<string, string> = {
+  openai: 'omniOpenai',
+  gemini: 'omniGemini',
+  'dashscope-omni': 'omniDashscope',
+  custom: 'custom',
+};
+
 export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language;
@@ -82,6 +96,11 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
   const [credsLoading, setCredsLoading] = useState(true);
   const [creds, setCreds] = useState<CredentialsStatus | null>(null);
   const { prefs, capability } = useHotkeySettings();
+  const preferencesRef = useRef(prefs);
+  preferencesRef.current = prefs;
+  const [serviceDetails, setServiceDetails] = useState<
+    Partial<Record<'asr' | 'llm' | 'omni', OverviewServiceDetails>>
+  >({});
   // A narrow desktop window still uses desktop shortcuts.
   const desktop = isDesktop();
   const credentialsRequestSeq = useRef(0);
@@ -137,11 +156,17 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
     credentialsRequestSeq.current = requestSeq;
     setCredsError(false);
     setCredsLoading(true);
+    setServiceDetails({});
     getCredentials()
-      .then((status) => {
+      .then(async (status) => {
         if (requestSeq !== credentialsRequestSeq.current) return;
         setCreds(status);
         setCredsError(false);
+        const details = await loadOverviewServiceDetails(status, preferencesRef.current, {
+          listProviderDescriptors,
+          readCredential,
+        });
+        if (requestSeq === credentialsRequestSeq.current) setServiceDetails(details);
       })
       .catch((error) => {
         if (requestSeq !== credentialsRequestSeq.current) return;
@@ -165,7 +190,16 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
     prefs?.activeAsrProvider,
     prefs?.pipelineMode,
     prefs?.activeOmniProvider,
+    prefs?.localAsrActiveModel,
+    prefs?.localWhisperActiveModel,
+    prefs?.foundryLocalAsrModel,
+    prefs?.sherpaOnnxModel,
   ]);
+
+  useEffect(() => {
+    window.addEventListener('ol-channels-changed', refreshCredentials);
+    return () => window.removeEventListener('ol-channels-changed', refreshCredentials);
+  }, [refreshCredentials]);
 
   // ⌘R / Ctrl+R refetches this page's three data sets (history, activity, credentials), same key and semantics as the history page.
   // preventDefault blocks the webview's default full-page reload, which would remount the whole frontend.
@@ -248,11 +282,20 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
     hasShortcut: Boolean(prefs?.dictationHotkey.primary.trim()),
   });
   const openSettings = (section: OverviewSettingsSection) => onOpenSettings?.(section);
-  // Configured provider cards no longer stay resident (no informational value); only still-pending cards
-  // show as reminders. Once everything is configured the whole "current voice services" group hides. While
-  // credentials are loading / the fetch failed (providers empty), keep placeholder cards to avoid a blank flash.
-  const pendingProviders = setup.providers.filter((p) => !p.configured);
+  const pendingProviders = setup.providers.filter((provider) => !provider.configured);
   const showProvidersSection = setup.providers.length === 0 || pendingProviders.length > 0;
+  const providerName = (provider: (typeof setup.providers)[number]) => {
+    const nameKey =
+      provider.id &&
+      (provider.kind === 'asr'
+        ? ASR_NAME_KEY_BY_ID
+        : provider.kind === 'omni'
+          ? OMNI_NAME_KEY_BY_ID
+          : LLM_NAME_KEY_BY_ID)[provider.id];
+    return nameKey
+      ? t(`settings.providers.presets.${nameKey}`)
+      : provider.id || t(provider.kind === 'omni' ? 'overview.omniName' : 'overview.statusUnknown');
+  };
 
   return (
     // Single-screen fixed page: no scrolling, fills the height given by the shell, dashboards share
@@ -271,6 +314,47 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
       <PageHeader
         compact
         title={t('overview.title')}
+        titleRight={
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, minWidth: 0, maxWidth: '100%' }}>
+            {setup.providers.map((provider) => {
+              const details = serviceDetails[provider.kind];
+              const label = `${t(`overview.${provider.kind}Kind`)} · ${providerName(provider)}`;
+              const modelLabel = details?.error
+                ? t('settings.providers.readFailed')
+                : details?.model
+                  ? `${t('settings.providers.modelLabel')}: ${details.model}`
+                  : null;
+              return (
+                <Btn
+                  key={provider.kind}
+                  size="sm"
+                  variant="soft"
+                  icon={provider.kind === 'asr' ? 'mic' : 'sparkle'}
+                  ariaLabel={[t('overview.manageProvider'), label, modelLabel]
+                    .filter(Boolean)
+                    .join(' · ')}
+                  title={[label, modelLabel].filter(Boolean).join('\n')}
+                  disabled={!onOpenSettings}
+                  onClick={() => openSettings('services')}
+                  style={{ maxWidth: '100%', minWidth: 0, textAlign: 'left' }}
+                >
+                  <span
+                    style={{ display: 'flex', flexDirection: 'column', minWidth: 0, maxWidth: 240 }}
+                  >
+                    <span style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {label}
+                    </span>
+                    {modelLabel && (
+                      <span style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {modelLabel}
+                      </span>
+                    )}
+                  </span>
+                </Btn>
+              );
+            })}
+          </div>
+        }
         right={
           <Btn size="sm" icon="refresh" onClick={refreshAll}>
             {t('overview.refresh')}
@@ -312,13 +396,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
             }}
           >
             {pendingProviders.map((provider) => {
-              const nameKey =
-                provider.id &&
-                (provider.kind === 'asr' ? ASR_NAME_KEY_BY_ID : LLM_NAME_KEY_BY_ID)[provider.id];
-              const name = nameKey
-                ? t(`settings.providers.presets.${nameKey}`)
-                : provider.id ||
-                  t(provider.kind === 'omni' ? 'overview.omniName' : 'overview.statusUnknown');
+              const name = providerName(provider);
               return (
                 <ProviderCard
                   key={provider.kind}
