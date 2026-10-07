@@ -2275,26 +2275,34 @@ impl EditObservationSink for CoreEditObservationSink {
         if self.generation.load(Ordering::Acquire) != self.expected_generation {
             return false;
         }
-        if !crate::host_document::edit_is_within_typed_text(&edit, &self.typed_text) {
-            return false;
-        }
-        let Some(rule) = crate::host_document::learned_rule_with_max_chars(
+        let rules = crate::host_document::learned_rules_with_max_chars(
             &edit,
             self.settings.max_phrase_chars as usize,
-        ) else {
-            return false;
-        };
-        if let Err(error) = queue_pending_correction_state(
-            &self.pending,
-            &self.events,
-            rule.pattern,
-            rule.replacement,
-            Some((&self.generation, self.expected_generation)),
-            self.settings.suggestion_seconds,
-        ) {
-            log::warn!("failed to queue observed correction: {error}");
+        );
+        let mut published = false;
+        for rule in rules {
+            // Validate the recovered word, not a lone changed character (or
+            // an empty spelling insertion). Reject words absent from this insertion.
+            if !self.typed_text.contains(&rule.pattern) {
+                log::debug!("observed vocabulary candidate outside inserted text");
+                continue;
+            }
+            match queue_pending_correction_state(
+                &self.pending,
+                &self.events,
+                rule.pattern,
+                rule.replacement,
+                Some((&self.generation, self.expected_generation)),
+                self.settings.suggestion_seconds,
+            ) {
+                Ok(_) => published = true,
+                Err(error) => log::warn!("failed to queue observed correction: {error}"),
+            }
         }
-        true
+        if !published {
+            log::debug!("observed edit produced no eligible vocabulary candidate");
+        }
+        published
     }
 }
 
@@ -7099,6 +7107,41 @@ mod tests {
         assert!(!sink.publish(edit));
         assert!(backend.pending_corrections().is_empty());
         assert!(backend.get_preferences().vocabulary_learning_enabled);
+    }
+
+    #[test]
+    fn observed_spelling_correction_saves_only_the_complete_confirmed_word() {
+        let (backend, _) = backend();
+        let sink = CoreEditObservationSink {
+            settings: backend.get_preferences().vocabulary_learning_settings,
+            expected_generation: backend.edit_observation_generation.load(Ordering::Acquire),
+            generation: Arc::clone(&backend.edit_observation_generation),
+            typed_text: "你好，ZIP和codx".into(),
+            pending: Arc::clone(&backend.pending_corrections),
+            events: Arc::clone(&backend.events),
+        };
+        assert!(sink.publish(
+            crate::host_document::minimal_edit("你好，ZIP和codx", "你好，VIP和codex。").unwrap()
+        ));
+        let suggestions = backend.pending_corrections();
+        assert_eq!(suggestions.len(), 2);
+        assert_eq!(suggestions[0].pattern, "ZIP");
+        assert_eq!(suggestions[0].replacement, "VIP");
+        assert_eq!(suggestions[1].pattern, "codx");
+        assert_eq!(suggestions[1].replacement, "codex");
+        assert!(backend.list_vocabulary().unwrap().is_empty());
+        backend
+            .accept_pending_correction(&suggestions[0].id)
+            .unwrap();
+        let vocabulary = backend.list_vocabulary().unwrap();
+        assert_eq!(vocabulary.len(), 1);
+        assert_eq!(vocabulary[0].phrase, "VIP");
+        assert!(backend.list_correction_rules().unwrap().is_empty());
+
+        // A matching changed letter is insufficient when the recovered word
+        // came from outside this insertion.
+        assert!(!sink.publish(crate::host_document::minimal_edit("Zebra", "Vebra").unwrap()));
+        assert_eq!(backend.pending_corrections().len(), 1);
     }
 
     #[test]
