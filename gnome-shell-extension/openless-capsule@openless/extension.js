@@ -87,55 +87,50 @@ vec3 orbColor(float x, float t){
 `;
 
 const SHADER_BODY = `
+// ===== Waveform Ring —— 移植自 VoiceOrbs waveform-ring (MIT, © Alexis Munoz)
+// 极坐标波形环：合成谐波（官方回退式）+ 整流偏置；level 驱动振幅/线宽/中心辉光
 void main() {
     vec2 uv = cogl_tex_coord_in[0].xy;
-    vec2 p = (uv - 0.5) * vec2(u_w, u_h);
-    vec2 q = p / u_h;
+    vec2 p = (uv - 0.5) * 2.0 * vec2(u_w / u_h, 1.0);
     float t = u_time;
     float vol = clamp(u_volume, 0.0, 1.0);
     float pk = clamp(u_peak, 0.0, 1.0);
 
-    // 圆形暗衬底（v3：半径减半，衰减加强）
-    float rCenter = length(q);
-    float backing = exp(-dot(q, q) * 18.0) * (1.0 - smoothstep(0.20, 0.26, rCenter));
-    vec4 base = vec4(0.06, 0.06, 0.09, 1.0) * backing * 0.30;
+    float ang = atan(p.y, p.x);
+    float r = length(p);
 
-    // 流体光球（v3：振幅主通道——半径/涨落响应音量，亮度增益压到 +40% 内）
-    vec2 qs = q * 2.0;
-    float volSoft = 0.20 + 0.05 * sin(t * 1.1) + 0.60 * vol;   // 静音慢呼吸 + 音量
-    float pkSoft = pk * 0.6;
-    float d0 = orbField(qs, t, volSoft, pkSoft);
-    float ab = 0.010 + 0.012 * pk;
-    float fR = orbField(qs + vec2(ab, 0.0), t, volSoft, pkSoft);
-    float fB = orbField(qs - vec2(ab, 0.0), t, volSoft, pkSoft);
-    float x  = clamp(-d0*2.6, 0.0, 1.0);
-    vec3 col  = orbColor(x, t);
-    vec3 colR = orbColor(clamp(-fR*2.6, 0.0, 1.0), t + 0.06);
-    vec3 colB = orbColor(clamp(-fB*2.6, 0.0, 1.0), t - 0.06);
-    float glow = exp(-max(d0, 0.0)*5.5) * (0.22 + 0.20*vol + 0.06*pk);
-    vec3 orb = (colR*0.85 + colB*0.85 + col*1.30) * glow;
-    orb += col * smoothstep(0.0, -0.045, d0) * (0.22 + 0.20*vol);
-    if (u_busy > 0.5) orb *= 0.55;
+    // 合成波形（VoiceOrbs listening 回退式）+ 说话时高频细节档
+    float shape = 0.62 * sin(6.0 * ang + 7.2 * t)
+                + 0.38 * sin(11.0 * ang - 9.6 * t);
+    shape = mix(shape, abs(shape), 0.85);              // 整流：只往外凸
+    shape += (0.30 + 0.7 * vol) * 0.42 * sin(17.0 * ang + 4.4 * t);
 
-    if (u_busy > 0.5) {
-        float r = 0.15 + 0.006*sin(t*3.0);
-        float ring = abs(length(qs) - r) - 0.006;
-        float a = atan(qs.y, qs.x) / TAU + 0.5;
-        float seg = smoothstep(0.02, 0.0, ring) *
-                    step(fract(a - t*0.25), 0.35);
-        orb += vec3(0.45, 0.75, 1.0) * seg * 0.7;
-    }
+    // 振幅主通道：level 驱动起伏，静音时收敛为纯净圆环
+    float amp = 0.22 * (0.35 + 0.65 * vol) + 0.07 * pk;
+    float R0 = 0.32;
+    float rr = R0 * (1.0 + amp * shape + 0.05 * vol);
 
-    vec3 outc = base.rgb + orb;
-    float lum = max(max(orb.r, orb.g), orb.b);
-    float outa = clamp(base.a + lum, 0.0, 1.0);
+    // 双层描边：宽辉光 + 细主线（线宽随音量）
+    float d = abs(r - rr);
+    float lineWidth = 0.012 + 0.010 * vol;
+    float core = exp(-(d * d) / (lineWidth * lineWidth));
+    float glow = exp(-d / (lineWidth * 3.2)) * 0.6;
 
-    // 全局圆形范围遮罩（v3：直径减半）+ 画布边缘保险
-    float rangeMask = 1.0 - smoothstep(0.20, 0.25, rCenter);
-    vec2 e = abs(uv - 0.5) * 2.0;
-    float edgeFade = 1.0 - smoothstep(0.60, 0.95, max(e.x, e.y));
-    float fadeMask = rangeMask * edgeFade;
-    cogl_color_out = vec4(outc * fadeMask, outa * fadeMask);
+    // 颜色：沿角度蓝→紫→青流转
+    vec3 cA = vec3(0.506, 0.549, 0.973);
+    vec3 cB = vec3(0.655, 0.545, 0.980);
+    vec3 cC = vec3(0.133, 0.827, 0.933);
+    float cm = 0.5 + 0.5 * sin(ang * 2.0 + t * 0.7);
+    vec3 col = mix(cA, cB, cm);
+    col = mix(col, cC, 0.25 + 0.25 * vol);
+
+    vec3 outc = col * (core * 1.1 + glow * 0.8);
+    outc += col * exp(-r * r * 24.0) * (0.10 + 0.25 * vol);   // 中心辉光
+
+    // 范围保险 + 输出
+    float alpha = clamp(max(max(outc.r, outc.g), outc.b), 0.0, 1.0);
+    alpha *= 1.0 - smoothstep(0.46, 0.52, r);
+    cogl_color_out = vec4(outc, alpha);
 }
 `;
 
