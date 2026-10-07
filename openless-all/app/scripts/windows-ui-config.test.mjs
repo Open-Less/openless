@@ -14,8 +14,13 @@ function assertMatch(source, pattern, name) {
 
 const raw = await readFile(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf-8');
 const config = JSON.parse(raw);
-const capsuleWindow = config.app.windows.find((window) => window.label === 'capsule');
-const capsuleRailWindow = config.app.windows.find((window) => window.label === 'capsule-rail');
+const windowsConfig = JSON.parse(
+  await readFile(new URL('../src-tauri/tauri.windows.conf.json', import.meta.url), 'utf-8'),
+);
+// Tauri's JSON Merge Patch replaces arrays instead of merging windows by label.
+const windows = windowsConfig.app?.windows ?? config.app.windows;
+const capsuleWindow = windows.find((window) => window.label === 'capsule');
+const capsuleRailWindow = windows.find((window) => window.label === 'capsule-rail');
 const mainWindow = config.app.windows.find((window) => window.label === 'main');
 const libRs = await readFile(new URL('../src-tauri/src/lib.rs', import.meta.url), 'utf-8');
 const dictationRs = await readFile(
@@ -102,6 +107,27 @@ assertEqual(capsuleRailWindow.visible, false, 'capsule rail should start hidden'
 assertEqual(capsuleRailWindow.focus, false, 'capsule rail should never take focus');
 assertEqual(capsuleRailWindow.skipTaskbar, true, 'capsule rail should stay out of the taskbar');
 assertEqual(capsuleRailWindow.url, 'index.html?window=capsule-rail&os=win', 'capsule rail route');
+assertEqual(
+  config.app.windows.some((window) => window.label === 'capsule-rail'),
+  false,
+  'the Windows-only rail should not create unused webviews on other platforms',
+);
+const railCapability = JSON.parse(
+  await readFile(new URL('../src-tauri/capabilities/capsule-rail.json', import.meta.url), 'utf-8'),
+);
+assertEqual(
+  railCapability.platforms.includes('windows'),
+  true,
+  'rail capability applies on Windows',
+);
+assertEqual(
+  railCapability.windows.includes(capsuleRailWindow.label),
+  true,
+  'rail capability matches the effective window',
+);
+for (const permission of ['core:event:allow-listen', 'core:event:allow-unlisten']) {
+  assertEqual(railCapability.permissions.includes(permission), true, `rail requires ${permission}`);
+}
 assertEqual(mainWindow.decorations, true, 'windows main window should keep native decorations');
 assertEqual(
   mainWindow.visible,

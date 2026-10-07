@@ -677,15 +677,6 @@ struct CapsuleLayoutState {
     scale_bits: u64,
 }
 
-fn can_commit_capsule_payload(
-    current_revision: u64,
-    pending_revision: Option<u64>,
-    captured_revision: u64,
-) -> bool {
-    captured_revision == current_revision
-        && pending_revision.map_or(true, |pending| pending == current_revision)
-}
-
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CapsuleSnapshot {
@@ -1440,30 +1431,10 @@ impl TauriCoordinatorHost {
         payload: &CapsulePayload,
         captured_revision: u64,
     ) -> bool {
-        let mut snapshot = self.capsule.snapshot.lock();
-        let current_revision = snapshot.revision;
-        if !can_commit_capsule_payload(
-            current_revision,
-            snapshot.pending_payload_revision,
-            captured_revision,
-        ) {
-            return false;
-        }
-        let mut committed = payload.clone();
-        if let Some(session_id) = snapshot.session_id.as_ref() {
-            if committed
-                .session_id
-                .as_ref()
-                .is_some_and(|payload_session| payload_session != session_id)
-            {
-                return false;
-            }
-            committed.session_id = Some(session_id.clone());
-        }
-        snapshot.payload = Some(committed);
-        snapshot.payload_revision = current_revision;
-        snapshot.pending_payload_revision = None;
-        true
+        self.capsule
+            .snapshot
+            .lock()
+            .commit_capsule_payload(payload, captured_revision)
     }
 
     /// Update replay state without waiting for the native window callback.
@@ -1692,15 +1663,6 @@ impl TauriCoordinatorHost {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn capsule_payload_commit_requires_the_current_pending_revision() {
-        assert!(can_commit_capsule_payload(7, None, 7));
-        assert!(can_commit_capsule_payload(7, Some(7), 7));
-        assert!(!can_commit_capsule_payload(7, Some(6), 7));
-        assert!(!can_commit_capsule_payload(7, Some(7), 6));
-        assert!(!can_commit_capsule_payload(7, None, 8));
-    }
 
     #[test]
     fn capsule_style_cache_preserves_every_wire_variant() {
