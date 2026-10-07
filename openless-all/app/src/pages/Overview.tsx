@@ -282,8 +282,6 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
     hasShortcut: Boolean(prefs?.dictationHotkey.primary.trim()),
   });
   const openSettings = (section: OverviewSettingsSection) => onOpenSettings?.(section);
-  const pendingProviders = setup.providers.filter((provider) => !provider.configured);
-  const showProvidersSection = setup.providers.length === 0 || pendingProviders.length > 0;
   const providerName = (provider: (typeof setup.providers)[number]) => {
     const nameKey =
       provider.id &&
@@ -314,47 +312,6 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
       <PageHeader
         compact
         title={t('overview.title')}
-        titleRight={
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, minWidth: 0, maxWidth: '100%' }}>
-            {setup.providers.map((provider) => {
-              const details = serviceDetails[provider.kind];
-              const label = `${t(`overview.${provider.kind}Kind`)} · ${providerName(provider)}`;
-              const modelLabel = details?.error
-                ? t('settings.providers.readFailed')
-                : details?.model
-                  ? `${t('settings.providers.modelLabel')}: ${details.model}`
-                  : null;
-              return (
-                <Btn
-                  key={provider.kind}
-                  size="sm"
-                  variant="soft"
-                  icon={provider.kind === 'asr' ? 'mic' : 'sparkle'}
-                  ariaLabel={[t('overview.manageProvider'), label, modelLabel]
-                    .filter(Boolean)
-                    .join(' · ')}
-                  title={[label, modelLabel].filter(Boolean).join('\n')}
-                  disabled={!onOpenSettings}
-                  onClick={() => openSettings('services')}
-                  style={{ maxWidth: '100%', minWidth: 0, textAlign: 'left' }}
-                >
-                  <span
-                    style={{ display: 'flex', flexDirection: 'column', minWidth: 0, maxWidth: 240 }}
-                  >
-                    <span style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {label}
-                    </span>
-                    {modelLabel && (
-                      <span style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {modelLabel}
-                      </span>
-                    )}
-                  </span>
-                </Btn>
-              );
-            })}
-          </div>
-        }
         right={
           <Btn size="sm" icon="refresh" onClick={refreshAll}>
             {t('overview.refresh')}
@@ -362,61 +319,34 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
         }
       />
 
-      {showProvidersSection && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'baseline',
-              justifyContent: 'space-between',
-              flexWrap: 'wrap',
-              gap: 8,
-            }}
-          >
-            <h2 style={{ fontSize: 13, fontWeight: 600, color: 'var(--ol-ink-2)', margin: 0 }}>
-              {t('overview.servicesTitle')}
-            </h2>
-            <Btn
-              size="sm"
-              variant="soft"
-              disabled={!onOpenSettings}
-              onClick={() => openSettings('services')}
-            >
-              {t('overview.actions.services')}
-            </Btn>
-          </div>
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns:
-                mobile || pendingProviders.length < 2
-                  ? 'minmax(0, 1fr)'
-                  : 'repeat(2, minmax(0, 1fr))',
-              gap: 12,
-            }}
-          >
-            {pendingProviders.map((provider) => {
-              const name = providerName(provider);
-              return (
-                <ProviderCard
-                  key={provider.kind}
-                  kind={provider.kind}
-                  name={name}
-                  status="notConfigured"
-                  onConfigure={onOpenSettings ? () => openSettings('services') : undefined}
-                />
-              );
-            })}
-            {setup.providers.length === 0 && (
-              <Card padding={16}>
-                <div role="status" style={{ fontSize: 13, color: 'var(--ol-ink-3)' }}>
-                  {t(credsLoading ? 'overview.statusLoading' : 'overview.credentialsLoadError')}
-                </div>
-              </Card>
-            )}
-          </div>
-        </div>
-      )}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns:
+            mobile || setup.providers.length < 2 ? 'minmax(0, 1fr)' : 'repeat(2, minmax(0, 1fr))',
+          gap: 12,
+          flexShrink: 0,
+        }}
+      >
+        {setup.providers.map((provider) => (
+          <ProviderCard
+            key={provider.kind}
+            kind={provider.kind}
+            name={providerName(provider)}
+            providerId={provider.id}
+            details={serviceDetails[provider.kind]}
+            status={provider.configured ? 'configured' : 'notConfigured'}
+            onConfigure={onOpenSettings ? () => openSettings('services') : undefined}
+          />
+        ))}
+        {setup.providers.length === 0 && (
+          <Card padding={16}>
+            <div role="status" style={{ fontSize: 13, color: 'var(--ol-ink-3)' }}>
+              {t(credsLoading ? 'overview.statusLoading' : 'overview.credentialsLoadError')}
+            </div>
+          </Card>
+        )}
+      </div>
 
       {/* Usage records: title + four metric cards as one group. */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
@@ -561,12 +491,21 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
 interface ProviderCardProps {
   kind: 'asr' | 'llm' | 'omni';
   name: string;
+  providerId: string | null;
+  details?: OverviewServiceDetails;
   status: 'configured' | 'notConfigured';
   onConfigure?: () => void;
 }
 
-function ProviderCard({ kind, name, status, onConfigure }: ProviderCardProps) {
+function ProviderCard({ kind, name, providerId, details, status, onConfigure }: ProviderCardProps) {
   const { t } = useTranslation();
+  const mobile = useMobileLayout();
+  const modelLabel = details?.error
+    ? t('settings.providers.readFailed')
+    : details?.model
+      ? `${t('settings.providers.modelLabel')}: ${details.model}`
+      : null;
+  const secondaryLabel = [providerId, modelLabel].filter(Boolean).join(' · ');
   return (
     <Card padding={16} style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -613,35 +552,68 @@ function ProviderCard({ kind, name, status, onConfigure }: ProviderCardProps) {
             )}
           </div>
           <div
+            title={name}
             style={{
               fontSize: 15,
               fontWeight: 600,
               color: 'var(--ol-ink)',
-              overflowWrap: 'anywhere',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
             }}
           >
             {name}
           </div>
+          {secondaryLabel && (
+            <div
+              title={secondaryLabel}
+              style={{
+                fontSize: 12,
+                fontFamily: 'var(--ol-font-mono)',
+                color: 'var(--ol-ink-3)',
+                marginTop: 3,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {secondaryLabel}
+            </div>
+          )}
         </div>
+        {status === 'configured' && (
+          <Btn
+            size="sm"
+            icon="chevRight"
+            ariaLabel={`${t('overview.manageProvider')} · ${name}`}
+            title={t('overview.manageProvider')}
+            disabled={!onConfigure}
+            onClick={onConfigure}
+          >
+            {!mobile && t('overview.manageProvider')}
+          </Btn>
+        )}
       </div>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: 8,
-        }}
-      >
-        <span
-          style={{ flex: '1 1 160px', fontSize: 13, color: 'var(--ol-ink-3)', lineHeight: 1.5 }}
+      {status === 'notConfigured' && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 8,
+          }}
         >
-          {t(`overview.providerHelp.${kind}`)}
-        </span>
-        <Btn size="sm" icon="chevRight" disabled={!onConfigure} onClick={onConfigure}>
-          {t(status === 'configured' ? 'overview.manageProvider' : 'overview.configureProvider')}
-        </Btn>
-      </div>
+          <span
+            style={{ flex: '1 1 160px', fontSize: 13, color: 'var(--ol-ink-3)', lineHeight: 1.5 }}
+          >
+            {t(`overview.providerHelp.${kind}`)}
+          </span>
+          <Btn size="sm" icon="chevRight" disabled={!onConfigure} onClick={onConfigure}>
+            {t('overview.configureProvider')}
+          </Btn>
+        </div>
+      )}
     </Card>
   );
 }
