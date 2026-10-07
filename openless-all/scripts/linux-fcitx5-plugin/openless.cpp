@@ -262,13 +262,16 @@ public:
     // 返回 void 而非 std::tuple<>，以匹配 FCITX_OBJECT_VTABLE_METHOD 的 RET("")
 
     void commitText(const std::string &text) {
-        // 优先使用快捷键按下时保存的输入上下文（savedIc_），
-        // 此时用户在目标 app 中，此后胶囊窗口抢焦点不影响提交。
-        // 若 savedIc_ 为空则兜底用 foreachFocused。
-        auto *ic = savedIc_;
-        if (!ic) {
-            FCITX_LOGC(openless, Warn)
-                << "CommitText: savedIc_ is null, trying foreachFocused";
+        // 优先用**当前焦点 IC**（实时），savedIc_ 仅作焦点缺失时的兜底。
+        //
+        // 原实现优先 savedIc_（快捷键按下时快照），前提是快捷键事件经由 fcitx5
+        // 流过、能顺带刷新快照。但 GNOME Wayland 下全局热键（Mutter 抓取）不会
+        // 到达 fcitx5，savedIc_ 停留在「上一次某个 app 走过 fcitx 按键」的时刻
+        // —— CommitText 会把文字提交到那个陈旧窗口，造成「说话在 A 窗口、
+        // 文字落在 B 窗口」。Linux 无胶囊窗口抢焦点的问题，实时焦点即用户
+        // 意图目标；焦点暂时拿不到时退回 savedIc_。
+        auto *ic = static_cast<InputContext *>(nullptr);
+        {
             auto &mgr = instance_->inputContextManager();
             mgr.foreachFocused([&](InputContext *focusedIc) {
                 ic = focusedIc;
@@ -277,10 +280,17 @@ public:
         }
         if (!ic) {
             FCITX_LOGC(openless, Warn)
+                << "CommitText: no focused IC, falling back to savedIc_";
+            ic = savedIc_;
+        }
+        if (!ic) {
+            FCITX_LOGC(openless, Warn)
                 << "CommitText: no input context available";
             throw std::runtime_error("no focused input context");
         }
-        FCITX_LOGC(openless, Debug) << "CommitText: " << text;
+        FCITX_LOGC(openless, Info)
+            << "CommitText: " << text.size() << " bytes, program=["
+            << ic->program() << "] display=[" << ic->display() << "]";
         ic->commitString(text);
     }
 
