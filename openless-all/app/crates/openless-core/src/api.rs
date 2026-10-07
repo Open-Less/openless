@@ -8458,6 +8458,8 @@ mod tests {
             )
             .await
             .unwrap();
+        // Valid quiet PCM reaches ASR; an empty transcript is distinct from a missing microphone input.
+        silent.feed_pcm(&[1, 0]).unwrap();
         assert_eq!(
             silent.finish().await.unwrap(),
             LessComputerVoiceFinish::Dictated {
@@ -8508,6 +8510,40 @@ mod tests {
         ));
         assert!(runtime.request.lock().unwrap().is_none());
         assert_eq!(backend.less_computer_active_session(), None);
+    }
+
+    #[tokio::test]
+    async fn less_computer_missing_audio_fails_without_chat_errors_and_releases_capture() {
+        use crate::events::{LessComputerEventKind, LessComputerVoiceOutcome};
+        let (_data_dir, backend, _transcription, _runtime) =
+            dictation_backend("less-computer-dictation-missing-audio", "must not commit");
+        let mut events = backend.subscribe();
+        for pcm in [Vec::new(), vec![0; 640]] {
+            let capture = backend
+                .start_less_computer_voice_with(
+                    SessionId::new(),
+                    Arc::new(FakeRecordingControl::default()),
+                    DICTATE,
+                )
+                .await
+                .unwrap();
+            if !pcm.is_empty() {
+                capture.feed_pcm(&pcm).unwrap();
+            }
+            let error = capture.finish().await.unwrap_err();
+            assert_eq!(error.code, BackendErrorCode::InvalidArgument);
+            assert!(!error.retryable);
+            let kinds = less_computer_event_kinds(&mut events);
+            assert!(!kinds
+                .iter()
+                .any(|kind| matches!(kind, LessComputerEventKind::Error { .. })));
+            assert!(
+                matches!(last_voice_state(&kinds), LessComputerEventKind::VoiceState {
+                outcome: Some(LessComputerVoiceOutcome::Failed), transcript, ..
+            } if transcript.is_empty())
+            );
+            assert_eq!(backend.less_computer_active_session(), None);
+        }
     }
 
     #[tokio::test]
@@ -12267,7 +12303,10 @@ mod tests {
     async fn raw_style_runs_through_the_real_pipeline_without_a_polishing_stage() {
         let data_dir = TestDataDir::new("raw-real-pipeline");
         let polisher = crate::testing::FixtureTextPolisher::successful("must not run");
-        let recorder = Arc::new(crate::testing::FixtureAudioRecorder::default());
+        let recorder = Arc::new(crate::testing::FixtureAudioRecorder::new(
+            vec![vec![1, 0]],
+            Vec::new(),
+        ));
         let engine = Arc::new(crate::PipelineDictationEngine::new(
             recorder.clone(),
             Arc::new(crate::testing::FixtureTranscriptionEngine::successful(
@@ -12325,7 +12364,10 @@ mod tests {
         let backend = backend_with_dictation_engine(
             data_dir.path().to_path_buf(),
             Arc::new(crate::PipelineDictationEngine::new(
-                Arc::new(crate::testing::FixtureAudioRecorder::default()),
+                Arc::new(crate::testing::FixtureAudioRecorder::new(
+                    vec![vec![1, 0]],
+                    Vec::new(),
+                )),
                 Arc::new(crate::testing::FixtureTranscriptionEngine::successful(
                     "raw words",
                     80,

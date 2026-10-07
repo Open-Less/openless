@@ -117,10 +117,11 @@ impl AudioRecorder for Recorder {
         &self,
         _: SessionId,
         _: Arc<DictationContext>,
-        _: Arc<dyn AudioConsumer>,
+        consumer: Arc<dyn AudioConsumer>,
         _: Arc<dyn RecordingProgressSink>,
     ) -> BoxFuture<'static, Result<Box<dyn ActiveRecording>, BackendError>> {
         self.starts.fetch_add(1, Ordering::SeqCst);
+        consumer.consume_pcm_chunk(&[1, 0]);
         let recording = Recording {
             stopped: self.stopped.clone(),
             gate: self.stop_gate.clone(),
@@ -351,7 +352,7 @@ async fn qa_and_selection_voice_never_request_disk_archives() {
         "less",
     ] {
         let plans = Arc::new(Mutex::new(Vec::new()));
-        let recorder = testing::FixtureAudioRecorder::new(vec![vec![0; 320]], Vec::new());
+        let recorder = testing::FixtureAudioRecorder::new(vec![vec![1; 320]], Vec::new());
         let (backend, path) = backend(
             Arc::new(ArchivePolicyRecorder {
                 inner: recorder.clone(),
@@ -491,7 +492,7 @@ async fn stable_mode_is_shared_by_dictation_qa_selection_and_less_computer() {
         let starts = Arc::new(AtomicUsize::new(0));
         let (backend, path) = backend(
             Arc::new(testing::FixtureAudioRecorder::new(
-                vec![vec![0; 320]],
+                vec![vec![1; 320]],
                 Vec::new(),
             )),
             Arc::new(CountingAsr {
@@ -1536,7 +1537,10 @@ async fn less_voice_finish_errors_publish_one_safe_error_but_cancellation_does_n
         let recorder: Arc<dyn AudioRecorder> = if stop_fails {
             Arc::new(StopFailure)
         } else {
-            Arc::new(testing::FixtureAudioRecorder::default())
+            Arc::new(testing::FixtureAudioRecorder::new(
+                vec![vec![1, 0]],
+                Vec::new(),
+            ))
         };
         let (backend, path) = backend(recorder, Arc::new(asr), Arc::new(QaRuntime::default()));
         let mut events = backend.subscribe();

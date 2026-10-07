@@ -2423,7 +2423,11 @@ pub(crate) mod less_computer_test_support {
         };
         let data_dir =
             std::env::temp_dir().join(format!("openless-less-host-{}", uuid::Uuid::new_v4()));
-        let recorder = Arc::new(FixtureAudioRecorder::default());
+        // Successful capture fixtures must provide real PCM, including at very low volume.
+        let recorder = Arc::new(FixtureAudioRecorder::new(
+            vec![1i16.to_le_bytes().repeat(1920)],
+            Vec::new(),
+        ));
         let backend = Arc::new(
             openless_core::OpenLessBackend::new(
                 openless_core::BackendConfig {
