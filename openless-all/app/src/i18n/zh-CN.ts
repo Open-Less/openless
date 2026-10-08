@@ -1152,6 +1152,13 @@ export const zhCN = {
     cancelledTitle: '已取消录音',
   },
   settings: {
+    testingFeatures: {
+      title: '正在测试中的功能',
+      enable: '启用正在测试中的功能',
+      description:
+        '开启后显示 Less Computer 和 Claude 控制台，可在支持的平台配置和使用。关闭会停止运行并隐藏入口，保留已有配置。仅在当前设备生效。',
+      unavailable: '当前平台暂无可用的测试功能。',
+    },
     selectionWorkspace: {
       title: '选区助手',
       hint: '有选区时按同一快捷键：关闭语音编辑则润色；开启后口述指令，可提问或编辑选区。无选区但光标在文本框时：可「帮我写」成稿或提问。',
@@ -2179,7 +2186,9 @@ export const zhCN = {
     noResults: '没有找到相关分类。试试“麦克风”“模型”或“主题”。',
     autoSaveHint: '修改后自动保存',
     backToAdvanced: '返回实验与扩展',
+    backToTestingFeatures: '返回正在测试中的功能',
     advancedPages: {
+      testingFeatures: '按需开启尚在测试中的功能。',
       vocabularyLearning: '从听写后的手动改词中学习，配置观察时长、确认时间和词长。',
       lessComputer: '选择 Agent，配置模型、权限与工作目录。',
       claudeConsole: '检测 Claude Code，并查看测试任务的运行输出。',
@@ -2193,7 +2202,7 @@ export const zhCN = {
       services: '选择语音识别与文字处理服务，管理渠道、本地模型和网络连接。',
       appearance: '调整主题、页面排版和界面语言，让阅读更舒服。',
       privacy: '检查系统权限与连接状态，管理历史、录音和本地数据。',
-      advanced: '按需配置 Less Computer 与调试功能。',
+      advanced: '配置测试功能、手改学词与调试工具。',
       about: '查看当前版本、更新渠道与自动更新设置。',
     },
     searchKeywords: {

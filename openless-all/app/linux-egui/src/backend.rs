@@ -609,20 +609,37 @@ mod tests {
         .unwrap()
         .build()
         .unwrap();
+        let request = CodingAgentTestRequest {
+            provider: CodingAgentProvider::ClaudeCodeCli,
+            executable: Some("openless-command-that-does-not-exist".into()),
+            prompt: "test".into(),
+            permission_mode: openless_core::CodingAgentPermissionMode::Plan,
+            workdir: None,
+            model: None,
+            max_budget_usd: Some(0.5),
+            timeout_secs: 5,
+        };
+        let denied = runtime
+            .backend
+            .services()
+            .coding_agent
+            .run_test(request.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(denied.code, BackendErrorCode::PermissionDenied);
+        let mut preferences = runtime.backend.get_preferences();
+        preferences.testing_features_enabled = true;
+        runtime
+            .backend
+            .repositories()
+            .preferences
+            .set(preferences)
+            .unwrap();
         let error = runtime
             .backend
             .services()
             .coding_agent
-            .run_test(CodingAgentTestRequest {
-                provider: CodingAgentProvider::ClaudeCodeCli,
-                executable: Some("openless-command-that-does-not-exist".into()),
-                prompt: "test".into(),
-                permission_mode: openless_core::CodingAgentPermissionMode::Plan,
-                workdir: None,
-                model: None,
-                max_budget_usd: Some(0.5),
-                timeout_secs: 5,
-            })
+            .run_test(request)
             .await
             .expect_err("missing coding agent executable must be explicit");
         assert_eq!(error.code, BackendErrorCode::Unsupported);

@@ -338,6 +338,9 @@ fn panel(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
             }
             // 实验与扩展的下钻页把标题换成子页标题，并在左侧给出返回箭头
             // （Tauri 的 `activeAdvancedPage` 顶栏）。
+            if vm.advanced_open == 0 && !vm.settings.testing_features {
+                vm.advanced_open = 3;
+            }
             let detail = if vm.settings_section == SettingsSection::Advanced {
                 advanced_page_title(vm, lang)
             } else {
@@ -371,7 +374,7 @@ fn panel(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
                         stroke,
                     );
                     if response.clicked() {
-                        vm.advanced_open = usize::MAX;
+                        vm.advanced_open = if vm.advanced_open == 0 { 3 } else { usize::MAX };
                     }
                     ui.label(
                         egui::RichText::new(title)
@@ -468,6 +471,10 @@ fn advanced_page_title(vm: &FrontendViewModel, lang: Lang) -> Option<(&'static s
         2 => Some((
             tr_l10n(lang, "settings.debug.title"),
             tr_l10n(lang, "modal.advanced_pages.debug"),
+        )),
+        3 => Some((
+            tr_l10n(lang, "settings.testing_features.title"),
+            tr_l10n(lang, "modal.advanced_pages.testing_features"),
         )),
         _ => None,
     }
@@ -927,6 +934,9 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
             // 风格直达快捷键：Tauri 把它放在「切换到上一个风格」之后、打开 App 之前。
             style_pack_hotkey_block(ui, vm, actions);
             for row in &rows[5..] {
+                if row.field == ShortcutField::CodingAgentVoice && !vm.settings.testing_features {
+                    continue;
+                }
                 shortcut_row(ui, vm, actions, row);
             }
             // 取消本次录音：Tauri 只展示 Esc，不可编辑（Windows/Linux 胶囊无确认键）。
@@ -2125,7 +2135,31 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
             tr_l10n(lang, "settings.debug.title"),
             tr_l10n(lang, "modal.advanced_pages.debug"),
         ),
+        (
+            SettingsIcon::Sparkle,
+            tr_l10n(lang, "settings.testing_features.title"),
+            tr_l10n(lang, "modal.advanced_pages.testing_features"),
+        ),
     ];
+    if vm.advanced_open == 3 {
+        experimental_card(ui, rows[3].1, "Beta", "", |ui| {
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.testing_features.enable"),
+                tr_l10n(lang, "settings.testing_features.description"),
+                vm.settings.testing_features,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::TestingFeatures,
+                    ))
+                },
+            );
+            if vm.settings.testing_features && drill_row(ui, rows[0].0, rows[0].1, rows[0].2) {
+                vm.advanced_open = 0;
+            }
+        });
+        return;
+    }
     if vm.advanced_open < rows.len() {
         let (icon, title, _) = rows[vm.advanced_open];
         let _ = icon;
@@ -2283,8 +2317,14 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
         return;
     }
     card(ui, "", "", |ui| {
-        for (index, (icon, title, description)) in rows.iter().enumerate() {
-            if drill_row(ui, *icon, title, description) {
+        for index in [3, 1, 2] {
+            let (icon, title, description) = rows[index];
+            let title = if index == 3 {
+                format!("{title} · Beta")
+            } else {
+                title.to_string()
+            };
+            if drill_row(ui, icon, &title, description) {
                 vm.advanced_open = index;
             }
         }

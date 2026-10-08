@@ -177,6 +177,9 @@ impl OpenLessEguiApp {
             frontend::view_model::SettingsField::LessComputer => {
                 preferences.coding_agent_enabled = !preferences.coding_agent_enabled;
             }
+            frontend::view_model::SettingsField::TestingFeatures => {
+                preferences.testing_features_enabled = !preferences.testing_features_enabled;
+            }
             frontend::view_model::SettingsField::SilenceAutoStop => {
                 preferences.silence_auto_stop_enabled = !preferences.silence_auto_stop_enabled;
             }

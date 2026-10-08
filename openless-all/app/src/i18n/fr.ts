@@ -1235,6 +1235,13 @@ export const fr: typeof zhCN = {
     cancelledTitle: 'Enregistrement annulé',
   },
   settings: {
+    testingFeatures: {
+      title: 'Fonctionnalités en cours de test',
+      enable: 'Activer les fonctionnalités en cours de test',
+      description:
+        'Afficher Less Computer et la console Claude pour les configurer et les utiliser sur les plateformes compatibles. La désactivation arrête les tâches en cours et masque les entrées tout en conservant vos réglages. Ce choix ne concerne que cet appareil.',
+      unavailable: 'Aucune fonctionnalité de test n’est encore disponible sur cette plateforme.',
+    },
     selectionWorkspace: {
       title: 'Assistant de sélection',
       hint: 'Sélectionnez du texte, puis utilisez un seul raccourci : amélioration directe sans édition vocale ; sinon, maintenez et parlez, puis choisissez Question ou Modification.',
@@ -2388,7 +2395,9 @@ export const fr: typeof zhCN = {
     noResults: 'Aucune catégorie correspondante. Essayez « microphone », « modèles » ou « thème ».',
     autoSaveHint: 'Les modifications sont enregistrées automatiquement',
     backToAdvanced: 'Retour à Expériences et extensions',
+    backToTestingFeatures: 'Retour aux fonctionnalités en cours de test',
     advancedPages: {
+      testingFeatures: 'Activer à la demande les fonctionnalités encore en test.',
       vocabularyLearning:
         'Apprendre des corrections manuelles ; régler l’observation, la confirmation et la longueur.',
       lessComputer:
@@ -2409,7 +2418,8 @@ export const fr: typeof zhCN = {
         'Réglez le thème, la disposition et la langue de l’interface pour une lecture confortable.',
       privacy:
         'Vérifiez les autorisations et les connexions. Gérez l’historique, les enregistrements et les données locales.',
-      advanced: 'Configurez Less Computer et le débogage selon vos besoins.',
+      advanced:
+        'Configurer les fonctions de test, l’apprentissage du vocabulaire et les outils de débogage.',
       about: 'Consultez votre version, le canal et les réglages de mise à jour automatique.',
     },
     searchKeywords: {

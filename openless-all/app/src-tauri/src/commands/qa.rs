@@ -279,6 +279,10 @@ pub fn less_computer_window_open(
     if window.label() != "main" {
         return Err("Less Computer can only be opened from the main window".to_string());
     }
+    coord
+        .backend()
+        .ensure_testing_features_enabled()
+        .map_err(|error| error.message)?;
     coord.tauri_host().show_less_computer();
     Ok(())
 }
