@@ -360,6 +360,54 @@ async fn recording_fault_fails_only_the_current_selection_voice_session_and_rele
 }
 
 #[tokio::test]
+async fn oversized_voice_edit_does_not_apply_a_plan_from_a_truncated_draft() {
+    let preferences = UserPreferences {
+        selection_voice_intent_mode: SelectionVoiceIntentMode::Manual,
+        selection_voice_manual_intent: SelectionVoiceManualIntent::Edit,
+        selection_polish_output_mode: SelectionPolishOutputMode::DirectReplace,
+        ..UserPreferences::default()
+    };
+    let polisher = Arc::new(ScriptedPolisher::successful([
+        "<edit_plan><full_rewrite><text>short rewrite</text></full_rewrite></edit_plan>",
+    ]));
+    let (backend, data_dir) = backend_with_model(preferences, Arc::clone(&polisher));
+    let voice = &backend.services().selection_voice;
+    let oversized = "字".repeat(openless_core::prompts::MAX_XML_ENVELOPE_CHARS + 1);
+
+    let error = voice
+        .edit_preview(SelectionVoiceEditRequest {
+            owner_session_id: SessionId::new(),
+            capture: SelectionCapture {
+                text: oversized.clone(),
+                source_app: Some("Fixture Editor".to_string()),
+            },
+            instruction: "润色全文".to_string(),
+        })
+        .await
+        .expect_err("voice edit must not rewrite a draft the model cannot see");
+
+    assert_eq!(error.code, BackendErrorCode::InvalidArgument);
+    assert!(polisher.calls().is_empty());
+    assert!(voice.preview(None).await.unwrap().is_none());
+
+    let translated = voice
+        .edit_preview(SelectionVoiceEditRequest {
+            owner_session_id: SessionId::new(),
+            capture: SelectionCapture {
+                text: oversized,
+                source_app: None,
+            },
+            instruction: "翻译成英文".to_string(),
+        })
+        .await
+        .expect_err("translation rewrite must not replace the unseen tail");
+    assert_eq!(translated.code, BackendErrorCode::InvalidArgument);
+    assert!(polisher.calls().is_empty());
+
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
 async fn translation_edit_uses_the_core_translation_path_and_target() {
     let preferences = UserPreferences {
         selection_voice_intent_mode: SelectionVoiceIntentMode::Manual,

@@ -501,6 +501,15 @@ impl SelectionVoiceWorkflow {
         draft: &str,
         instruction: &str,
     ) -> Result<EditPlan, BackendError> {
+        // Edit plans and translation rewrites are applied to the full draft, but
+        // the prompt envelope only shows the first MAX_XML_ENVELOPE_CHARS. A
+        // FullRewrite of that prefix would erase the rest in DirectReplace.
+        if crate::prompts::exceeds_xml_envelope_cap(draft) {
+            return Err(BackendError::new(
+                BackendErrorCode::InvalidArgument,
+                crate::prompts::truncated_selection_replacement_message(),
+            ));
+        }
         let preferences = self.preferences.get();
         if selection_voice_instruction_looks_like_translation(instruction) {
             let target = infer_selection_voice_translation_target(instruction, &preferences);
