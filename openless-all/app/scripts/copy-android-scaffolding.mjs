@@ -75,6 +75,7 @@ const KOTLIN_FILES = [
   'OpenLessRuntimeService.kt',
   'OpenLessBackendWarmupActivity.kt',
   'OpenLessClipboardHistory.kt',
+  'CloudNoteDelivery.kt',
   'OpenLessKeyboardSettingsActivity.kt',
   'OpenLessProcessRestartStats.kt',
   'OpenLessBuildInfo.kt',
@@ -82,6 +83,7 @@ const KOTLIN_FILES = [
 
 const KOTLIN_TEST_FILES = [
   'ImeLearningPolicyTest.kt',
+  'CloudNoteDeliveryTest.kt',
   'OpenLessContentReaderTest.kt',
   'OpenLessCredentialCipherTest.kt',
   'OpenLessShizukuBridgeTest.kt',
