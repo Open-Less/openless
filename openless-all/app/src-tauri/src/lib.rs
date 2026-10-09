@@ -114,7 +114,6 @@ mod windows_ime_ipc;
 mod windows_ime_profile;
 #[cfg(target_os = "windows")]
 mod windows_ime_protocol;
-mod windows_ime_restore;
 #[cfg(target_os = "windows")]
 mod windows_ime_session;
 #[cfg(target_os = "windows")]
@@ -159,6 +158,7 @@ static LESS_COMPUTER_WINDOW_POSITIONED: AtomicBool = AtomicBool::new(false);
 static QA_PANEL_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static LESS_COMPUTER_PANEL_EPOCH: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
+static VOICE_EDIT_PANEL_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 #[cfg(not(mobile))]
 static TRAY_MICROPHONE_WATCHER_STOPPING: AtomicBool = AtomicBool::new(false);
 #[cfg(not(mobile))]
@@ -213,6 +213,7 @@ macro_rules! app_invoke_handler_desktop {
     () => {
         tauri::generate_handler![
             commands::get_startup_snapshot,
+            commands::get_capsule_snapshot,
             commands::get_settings,
             commands::get_settings_snapshot,
             commands::update_setting_fields,
@@ -309,6 +310,18 @@ macro_rules! app_invoke_handler_desktop {
             commands::start_dictation,
             commands::stop_dictation,
             commands::cancel_dictation,
+            commands::start_voice_edit_session,
+            commands::finalize_voice_edit_dictation,
+            commands::start_voice_edit_instruction,
+            commands::finalize_voice_edit_instruction,
+            commands::stop_voice_edit_instruction,
+            commands::commit_voice_edit_session,
+            commands::commit_voice_edit,
+            commands::cancel_voice_edit_session,
+            commands::get_voice_edit_state,
+            commands::voice_edit_window_open,
+            commands::voice_edit_window_close,
+            commands::set_capsule_transcript_visible,
             coding_agent::commands::coding_agent_detect,
             coding_agent::commands::coding_agent_detect_opencode,
             coding_agent::commands::coding_agent_detect_cli,
@@ -589,6 +602,17 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::start_dictation,
             $crate::commands::stop_dictation,
             $crate::commands::cancel_dictation,
+            $crate::commands::start_voice_edit_session,
+            $crate::commands::finalize_voice_edit_dictation,
+            $crate::commands::start_voice_edit_instruction,
+            $crate::commands::finalize_voice_edit_instruction,
+            $crate::commands::stop_voice_edit_instruction,
+            $crate::commands::commit_voice_edit_session,
+            $crate::commands::commit_voice_edit,
+            $crate::commands::cancel_voice_edit_session,
+            $crate::commands::get_voice_edit_state,
+            $crate::commands::voice_edit_window_open,
+            $crate::commands::voice_edit_window_close,
             $crate::commands::qa_window_dismiss,
             $crate::commands::qa_window_set_expanded,
             $crate::commands::qa_get_snapshot,
@@ -2826,9 +2850,9 @@ fn ensure_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<tauri::Webv
 #[cfg(target_os = "macos")]
 fn ensure_less_computer_window<R: tauri::Runtime>(
     app: &AppHandle<R>,
-) -> Option<tauri::WebviewWindow<R>> {
+) -> Result<tauri::WebviewWindow<R>, String> {
     if let Some(w) = app.get_webview_window("less-computer") {
-        return Some(w);
+        return Ok(w);
     }
     match WebviewWindowBuilder::new(
         app,
@@ -2854,16 +2878,20 @@ fn ensure_less_computer_window<R: tauri::Runtime>(
             // app) + drag fix (movableByWindowBackground; must be on the main thread, see
             // make_chat_window_draggable_macos).
             let w_clone = w.clone();
-            let _ = app.run_on_main_thread(move || {
+            app.run_on_main_thread(move || {
                 make_chat_window_panel_macos(&w_clone, "less-computer");
                 make_chat_window_draggable_macos(&w_clone, "less-computer");
                 LESS_COMPUTER_WINDOW_POSITIONED.store(false, Ordering::Relaxed);
-            });
-            Some(w)
+            })
+            .map_err(|error| {
+                log::warn!("[less-computer] panel setup dispatch failed: {error}");
+                format!("Less Computer panel setup dispatch failed: {error}")
+            })?;
+            Ok(w)
         }
         Err(e) => {
             log::warn!("[less-computer] lazy window create failed: {e}");
-            None
+            Err(format!("Less Computer window creation failed: {e}"))
         }
     }
 }
@@ -2871,9 +2899,9 @@ fn ensure_less_computer_window<R: tauri::Runtime>(
 #[cfg(target_os = "windows")]
 fn ensure_less_computer_window<R: tauri::Runtime>(
     app: &AppHandle<R>,
-) -> Option<tauri::WebviewWindow<R>> {
+) -> Result<tauri::WebviewWindow<R>, String> {
     if let Some(window) = app.get_webview_window("less-computer") {
-        return Some(window);
+        return Ok(window);
     }
     WebviewWindowBuilder::new(
         app,
@@ -2892,10 +2920,9 @@ fn ensure_less_computer_window<R: tauri::Runtime>(
     .focused(false)
     .visible(false)
     .build()
-    .map(Some)
-    .unwrap_or_else(|error| {
+    .map_err(|error| {
         log::warn!("[less-computer] lazy window create failed: {error}");
-        None
+        format!("Less Computer window creation failed: {error}")
     })
 }
 
@@ -2960,6 +2987,128 @@ pub(crate) fn hide_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R
     let _ = app;
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let _ = app.emit_to("qa", SELECTION_POLISH_PREVIEW_HIDE, ());
+}
+
+const VOICE_EDIT_WINDOW_WIDTH: f64 = 480.0;
+const VOICE_EDIT_WINDOW_HEIGHT: f64 = 620.0;
+
+/// Voice Edit uses a non-activating desktop panel so starting the first
+/// recording can still capture the editor that was frontmost before the panel
+/// appeared. Android embeds the same React panel in the main WebView instead.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn ensure_voice_edit_window<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Option<tauri::WebviewWindow<R>> {
+    if let Some(window) = app.get_webview_window("voice-edit") {
+        return Some(window);
+    }
+    match WebviewWindowBuilder::new(
+        app,
+        "voice-edit",
+        WebviewUrl::App("index.html?window=voice-edit".into()),
+    )
+    .title("OpenLess 语音编辑")
+    .inner_size(VOICE_EDIT_WINDOW_WIDTH, VOICE_EDIT_WINDOW_HEIGHT)
+    .min_inner_size(380.0, 420.0)
+    .decorations(false)
+    .transparent(true)
+    .shadow(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .resizable(true)
+    .focused(false)
+    .visible(false)
+    .accept_first_mouse(true)
+    .build()
+    {
+        Ok(window) => {
+            #[cfg(target_os = "macos")]
+            {
+                let window_clone = window.clone();
+                let _ = app.run_on_main_thread(move || {
+                    make_chat_window_panel_macos(&window_clone, "voice-edit");
+                    make_chat_window_draggable_macos(&window_clone, "voice-edit");
+                });
+            }
+            Some(window)
+        }
+        Err(error) => {
+            log::warn!("[voice-edit] create panel failed: {error}");
+            None
+        }
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn ensure_voice_edit_window<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Option<tauri::WebviewWindow<R>> {
+    app.get_webview_window("voice-edit")
+}
+
+pub(crate) fn show_voice_edit_window<R: tauri::Runtime>(app: &AppHandle<R>) {
+    #[cfg(target_os = "android")]
+    if let Err(error) = crate::android::jni::android::with_android_env(|env, context| {
+        crate::android::jni::android::open_qa_host(env, context)
+    }) {
+        log::warn!("[voice-edit] failed to foreground WarmupActivity: {error}");
+    }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = app.emit_to("main", "voice-edit:show", serde_json::json!({}));
+        return;
+    }
+
+    let Some(window) = ensure_voice_edit_window(app) else {
+        return;
+    };
+    #[cfg(target_os = "macos")]
+    {
+        let window_clone = window.clone();
+        let _ = app.run_on_main_thread(move || {
+            use objc2::msg_send;
+            use objc2::runtime::AnyObject;
+            match window_clone.ns_window() {
+                Ok(handle) if !handle.is_null() => unsafe {
+                    let ns = handle as *mut AnyObject;
+                    let _: () = msg_send![ns, orderFrontRegardless];
+                },
+                _ => {
+                    let _ = window_clone.show();
+                }
+            }
+        });
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // Preserve the external editor until capture; QA's helper deliberately focuses its WebView.
+        let _ = window.set_focusable(false);
+        let _ = window.show();
+    }
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let _ = window.show();
+    VOICE_EDIT_PANEL_EPOCH.fetch_add(1, Ordering::SeqCst);
+    let _ = app.emit_to("voice-edit", "voice-edit:shown", serde_json::json!({}));
+}
+
+pub(crate) fn set_voice_edit_interactive<R: tauri::Runtime>(app: &AppHandle<R>, interactive: bool) {
+    #[cfg(target_os = "windows")]
+    if let Some(window) = app.get_webview_window("voice-edit") {
+        let _ = window.set_focusable(interactive);
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = (app, interactive);
+}
+
+pub(crate) fn hide_voice_edit_window<R: tauri::Runtime>(app: &AppHandle<R>) {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = app.emit_to("main", "voice-edit:dismiss", serde_json::json!({}));
+        return;
+    }
+    if let Some(window) = app.get_webview_window("voice-edit") {
+        let _ = window.hide();
+    }
 }
 
 /// Selection voice: after speaking, the user chooses to ask a question or edit.
@@ -3058,13 +3207,12 @@ fn position_less_computer_window<R: tauri::Runtime>(
 /// Shows the Less Computer window (no focus steal from the frontmost app, same technique
 /// as QA). `macos` build only.
 #[cfg(target_os = "macos")]
-pub(crate) fn show_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) {
-    let Some(window) = ensure_less_computer_window(app) else {
-        log::info!("[less-computer] show 跳过：窗口不存在");
-        return;
-    };
+pub(crate) fn show_less_computer_window<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Result<(), String> {
+    let window = ensure_less_computer_window(app)?;
     let window_clone = window.clone();
-    let _ = app.run_on_main_thread(move || {
+    app.run_on_main_thread(move || {
         use objc2::msg_send;
         use objc2::runtime::AnyObject;
         // This helper is also called from the Tokio worker that executes a text or
@@ -3100,27 +3248,37 @@ pub(crate) fn show_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) {
                 let _ = window_clone.show();
             }
         }
-    });
+    })
+    .map_err(|error| {
+        log::warn!("[less-computer] show dispatch failed: {error}");
+        format!("Less Computer window show dispatch failed: {error}")
+    })?;
     // Cancel the pending exit-hide (fast close-open) and replay the entrance animation.
     LESS_COMPUTER_PANEL_EPOCH.fetch_add(1, Ordering::SeqCst);
     let _ = app.emit_to("less-computer", "chat-panel:shown", serde_json::json!({}));
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn show_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) {
-    let Some(window) = ensure_less_computer_window(app) else {
-        return;
-    };
-    if let Err(error) = window.show() {
+pub(crate) fn show_less_computer_window<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Result<(), String> {
+    let window = ensure_less_computer_window(app)?;
+    window.show().map_err(|error| {
         log::warn!("[less-computer] show failed: {error}");
-        return;
-    }
+        format!("Less Computer window show failed: {error}")
+    })?;
     LESS_COMPUTER_PANEL_EPOCH.fetch_add(1, Ordering::SeqCst);
     let _ = app.emit_to("less-computer", "chat-panel:shown", serde_json::json!({}));
+    Ok(())
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub(crate) fn show_less_computer_window<R: tauri::Runtime>(_app: &AppHandle<R>) {}
+pub(crate) fn show_less_computer_window<R: tauri::Runtime>(
+    _app: &AppHandle<R>,
+) -> Result<(), String> {
+    Err("Less Computer window is not supported on this platform".to_string())
+}
 
 /// Hides the Less Computer window. Shared by the dismiss command / session teardown.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -3265,10 +3423,36 @@ pub(crate) fn position_capsule_bottom_center<R: tauri::Runtime>(
 /// following auto-hide settings.
 pub(crate) fn position_capsule_bottom_center_with_style<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
-    _translation_active: bool,
+    translation_active: bool,
     style: types::CapsuleStyle,
 ) -> tauri::Result<()> {
-    let bounds = capsule_window_bounds_for_style(style);
+    position_capsule_bottom_center_with_style_and_transcript(
+        window,
+        translation_active,
+        style,
+        true,
+    )
+}
+
+pub(crate) fn position_capsule_bottom_center_with_style_and_transcript<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    translation_active: bool,
+    style: types::CapsuleStyle,
+    transcript_visible: bool,
+) -> tauri::Result<()> {
+    // Windows renders the transcript in a separate click-through overlay HWND. The capsule
+    // window itself therefore reserves only the body height; keeping the rail in this window
+    // would make its transparent gutter part of the input region again.
+    let native_transcript_visible = if cfg!(target_os = "windows") {
+        false
+    } else {
+        transcript_visible
+    };
+    let bounds = capsule_window_bounds_for_style_with_transcript_and_translation(
+        style,
+        native_transcript_visible,
+        translation_active,
+    );
     const EDGE_GAP: f64 = 12.0;
     // Typeless hugs the work-area bottom edge (the work area already excludes Dock / taskbar).
     let bottom_gap = match style {
@@ -3371,6 +3555,25 @@ fn capsule_window_bounds(translation_active: bool) -> CapsuleWindowBounds {
 }
 
 fn capsule_window_bounds_for_style(style: types::CapsuleStyle) -> CapsuleWindowBounds {
+    capsule_window_bounds_for_style_with_transcript(style, true)
+}
+
+fn capsule_window_bounds_for_style_with_transcript(
+    style: types::CapsuleStyle,
+    transcript_visible: bool,
+) -> CapsuleWindowBounds {
+    capsule_window_bounds_for_style_with_transcript_and_translation(
+        style,
+        transcript_visible,
+        false,
+    )
+}
+
+fn capsule_window_bounds_for_style_with_transcript_and_translation(
+    style: types::CapsuleStyle,
+    transcript_visible: bool,
+    translation_active: bool,
+) -> CapsuleWindowBounds {
     CapsuleWindowBounds {
         // The typeless window area is 1/5 of the original size (460×128); the frontend
         // scales content in sync with CSS zoom — see CapsuleStyles.css and
@@ -3380,9 +3583,30 @@ fn capsule_window_bounds_for_style(style: types::CapsuleStyle) -> CapsuleWindowB
             types::CapsuleStyle::Siri | types::CapsuleStyle::Classic => 460.0,
         },
         height: match style {
-            types::CapsuleStyle::Siri => 180.0,
-            types::CapsuleStyle::Classic => 100.0,
-            types::CapsuleStyle::Typeless => 57.0,
+            // The rail sits above the 180px Siri stage: 40px rail + 8px gap.
+            types::CapsuleStyle::Siri => {
+                if transcript_visible {
+                    228.0
+                } else {
+                    180.0
+                }
+            }
+            // Classic keeps the 52px pill, 40px rail, 8px gap, 16px bottom inset,
+            // and enough headroom for the translating badge.
+            types::CapsuleStyle::Classic => {
+                if cfg!(target_os = "windows") || transcript_visible {
+                    172.0
+                } else {
+                    100.0
+                }
+            }
+            types::CapsuleStyle::Typeless => {
+                if translation_active {
+                    65.0
+                } else {
+                    57.0
+                }
+            }
         },
         bottom_inset: 0.0,
     }
@@ -3402,7 +3626,9 @@ fn capsule_height_for_qa() -> f64 {
 mod tests {
     use super::{
         bottom_center_position, capsule_height_for_qa, capsule_visual_height,
-        capsule_window_bounds, capsule_window_bounds_for_style, clamp_to_monitor,
+        capsule_window_bounds, capsule_window_bounds_for_style,
+        capsule_window_bounds_for_style_with_transcript,
+        capsule_window_bounds_for_style_with_transcript_and_translation, clamp_to_monitor,
         frame_contains_point, frame_distance_to_point_squared, logical_monitor_frame,
         parse_tray_style_pack_menu_id, resolve_tray_style_pack_id, rotate_log_if_too_large,
         tray_style_menu_enabled, tray_style_pack_menu_entries, tray_style_pack_menu_id,
@@ -3596,11 +3822,11 @@ mod tests {
     }
 
     #[test]
-    fn capsule_window_bounds_match_voice_orb_stage() {
+    fn capsule_window_bounds_reserve_the_transcript_rail() {
         let bounds = capsule_window_bounds(false);
         assert_eq!(
             (bounds.width, bounds.height, bounds.bottom_inset),
-            (460.0, 180.0, 0.0)
+            (460.0, 228.0, 0.0)
         );
     }
 
@@ -3636,7 +3862,7 @@ mod tests {
         let bounds = capsule_window_bounds(true);
         assert_eq!(
             (bounds.width, bounds.height, bounds.bottom_inset),
-            (460.0, 180.0, 0.0)
+            (460.0, 228.0, 0.0)
         );
     }
 
@@ -3644,6 +3870,32 @@ mod tests {
     fn typeless_capsule_window_is_one_fifth_of_the_old_area() {
         let bounds = capsule_window_bounds_for_style(CapsuleStyle::Typeless);
         assert_eq!((bounds.width, bounds.height), (206.0, 57.0));
+    }
+
+    #[test]
+    fn typeless_capsule_window_reserves_translation_badge_row() {
+        let bounds = capsule_window_bounds_for_style_with_transcript_and_translation(
+            CapsuleStyle::Typeless,
+            true,
+            true,
+        );
+        assert_eq!((bounds.width, bounds.height), (206.0, 65.0));
+    }
+
+    #[test]
+    fn classic_capsule_window_keeps_external_rail_host_height_on_windows() {
+        let bounds = capsule_window_bounds_for_style_with_transcript(CapsuleStyle::Classic, false);
+        assert_eq!(
+            (bounds.width, bounds.height),
+            (
+                460.0,
+                if cfg!(target_os = "windows") {
+                    172.0
+                } else {
+                    100.0
+                }
+            )
+        );
     }
 
     #[test]

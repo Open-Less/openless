@@ -38,6 +38,23 @@
         "visible": false,
         "center": false,
         "acceptFirstMouse": true
+      },
+      {
+        "label": "capsule-rail",
+        "url": "index.html?window=capsule-rail&os=win",
+        "title": "OpenLess Transcript Rail",
+        "width": 460,
+        "height": 52,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "focus": false,
+        "visible": false,
+        "center": false,
+        "acceptFirstMouse": false
       }
     ]
   }

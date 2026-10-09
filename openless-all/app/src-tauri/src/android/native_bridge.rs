@@ -932,6 +932,41 @@ fn spawn_finalize_qa_from_overlay() {
     });
 }
 
+fn spawn_finalize_voice_edit_from_overlay() {
+    let Some(coordinator) = COORDINATOR.get().cloned() else {
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = coordinator.finalize_voice_edit_from_overlay().await {
+            log::warn!("[android-native] finalize voice edit failed: {error}");
+            // A failed capture leaves the original recording available for retry/cancel.
+            let recording = CORE_BACKEND.get().is_some_and(|backend| {
+                matches!(
+                    backend.snapshot().dictation.phase,
+                    openless_core::DictationPhase::Starting
+                        | openless_core::DictationPhase::Recording
+                )
+            });
+            #[cfg(target_os = "android")]
+            let _ = crate::android::jni::android::with_android_env(|env, context| {
+                crate::android::jni::android::notify_overlay_bridge(
+                    env,
+                    context,
+                    if recording { "recording" } else { "error" },
+                    recording.then_some("无法启动语音编辑，请确认已启用该功能并聚焦外部输入框"),
+                    0.0,
+                )?;
+                crate::android::jni::android::show_overlay_toast(
+                    env,
+                    context,
+                    "无法启动语音编辑，请确认已启用该功能并聚焦外部输入框",
+                )
+            });
+            let _ = recording;
+        }
+    });
+}
+
 fn capsule_state_name(state: CapsuleState) -> &'static str {
     match state {
         CapsuleState::Idle => "idle",
@@ -1232,6 +1267,14 @@ mod jni_exports {
         _class: JClass,
     ) {
         spawn_finalize_qa_from_overlay();
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeFinalizeVoiceEditFromOverlay(
+        _env: jni::JNIEnv,
+        _class: jni::objects::JClass,
+    ) {
+        spawn_finalize_voice_edit_from_overlay();
     }
 
     // Registered from OpenLessRuntimeService.onCreate()/onDestroy() (a

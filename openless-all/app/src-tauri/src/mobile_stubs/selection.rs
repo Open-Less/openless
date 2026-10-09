@@ -9,6 +9,8 @@ const SELECTION_TRUNCATED_MARKER: &str = "\n[…truncated…]\n";
 pub struct SelectionContext {
     pub text: String,
     pub source_app: Option<String>,
+    /// True when `text` dropped the middle of a selection longer than 4000 chars.
+    pub omits_middle: bool,
 }
 
 pub struct SelectionCaptureOutcome {
@@ -70,9 +72,11 @@ pub fn capture_selection() -> Option<SelectionContext> {
         "[selection] Android accessibility read OK ({} chars)",
         trimmed.chars().count()
     );
+    let omits_middle = trimmed.chars().count() > SELECTION_MAX_CHARS;
     Some(SelectionContext {
         text: truncate_selection(trimmed),
         source_app: Some("Android accessibility".to_string()),
+        omits_middle,
     })
 }
 
@@ -86,6 +90,12 @@ pub fn capture_selection() -> Option<SelectionContext> {
 /// can keep one cross-platform implementation instead of a second platform branch.
 pub(crate) fn current_front_app_parts() -> (Option<String>, Option<String>) {
     (None, None)
+}
+
+pub(crate) fn is_truncated_selection_stand_in(text: &str) -> bool {
+    let marker_len = SELECTION_TRUNCATED_MARKER.chars().count();
+    text.contains(SELECTION_TRUNCATED_MARKER)
+        && text.chars().count() == SELECTION_TRUNCATE_HEAD + marker_len + SELECTION_TRUNCATE_TAIL
 }
 
 fn truncate_selection(text: &str) -> String {

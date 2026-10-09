@@ -16,9 +16,9 @@ pub mod updater_logic;
 pub use crate::types::android_types as types;
 
 pub use accessibility::{
-    get_android_accessibility_status, is_accessibility_enabled, paste_via_accessibility,
-    paste_via_accessibility_with_result, request_android_accessibility_permission,
-    AndroidAccessibilityPermissionResult,
+    capture_voice_edit_target, get_android_accessibility_status, is_accessibility_enabled,
+    paste_via_accessibility, paste_via_accessibility_with_result, replace_voice_edit_target,
+    request_android_accessibility_permission, AndroidAccessibilityPermissionResult,
 };
 #[cfg(target_os = "android")]
 pub use insert::android_insert_with_strategy;

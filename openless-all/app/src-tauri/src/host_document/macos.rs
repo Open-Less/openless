@@ -105,7 +105,7 @@ type AxValueRef = *const c_void;
 
 /// CoreFoundation's `CFRange` (`CFIndex` = `isize`).
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct CFRange {
     location: isize,
     length: isize,
@@ -155,6 +155,11 @@ extern "C" {
         element: AxUiElementRef,
         attribute: CFStringRef,
         value: *mut CFTypeRef,
+    ) -> AxError;
+    fn AXUIElementSetAttributeValue(
+        element: AxUiElementRef,
+        attribute: CFStringRef,
+        value: CFTypeRef,
     ) -> AxError;
     fn AXUIElementCopyParameterizedAttributeValue(
         element: AxUiElementRef,
@@ -369,6 +374,170 @@ unsafe fn copy_selected_range(focused: AxUiElementRef) -> Option<CFRange> {
     );
     CFRelease(value);
     (ok != 0).then_some(range)
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct VoiceEditTarget {
+    element: SendableElement,
+    text: String,
+    selection_utf16: CFRange,
+}
+
+fn voice_edit_gate() -> GateInputs {
+    GateInputs {
+        secure_input: crate::unicode_keystroke::is_secure_input_enabled(),
+        bundle_id: crate::selection::current_front_app_parts().1,
+        ..GateInputs::default()
+    }
+}
+
+unsafe fn voice_edit_text(element: AxUiElementRef) -> Option<String> {
+    // A context window or the selection module's 4000-char summary cannot be an edit baseline.
+    let total = copy_index_attr(element, b"AXNumberOfCharacters\0")?;
+    if total > FULL_TEXT_MAX_UTF16 {
+        return None;
+    }
+    let text = copy_string_attr(element, b"AXValue\0")
+        .or_else(|| copy_string_for_range(element, 0, total))?;
+    (text.encode_utf16().count() == total).then_some(text)
+}
+
+pub(super) fn capture_voice_edit_target() -> Result<
+    (
+        String,
+        Option<openless_core::TextSelection>,
+        VoiceEditTarget,
+    ),
+    String,
+> {
+    unsafe {
+        let GatedElement::Ready(element) = focused_element_passing_the_gate(voice_edit_gate())
+        else {
+            return Err("voiceEditTargetUnavailable".into());
+        };
+        let retained = SendableElement::retained(element);
+        CFRelease(element as CFTypeRef);
+        let text = voice_edit_text(retained.as_ref())
+            .ok_or_else(|| "voiceEditTargetUnavailable".to_string())?;
+        let range = copy_selected_range(retained.as_ref())
+            .filter(|range| {
+                range.location >= 0
+                    && range.length >= 0
+                    && (range.location as usize)
+                        .checked_add(range.length as usize)
+                        .is_some_and(|end| end <= text.encode_utf16().count())
+            })
+            .ok_or_else(|| "voiceEditTargetUnavailable".to_string())?;
+        let GatedElement::Ready(current) = focused_element_passing_the_gate(voice_edit_gate())
+        else {
+            return Err("voiceEditTargetChanged".into());
+        };
+        let same = CFEqual(current as CFTypeRef, retained.as_ref() as CFTypeRef) != 0;
+        CFRelease(current as CFTypeRef);
+        if !same {
+            return Err("voiceEditTargetChanged".into());
+        }
+        let selection = (range.length > 0).then(|| openless_core::TextSelection {
+            start: utf16_offset_to_char_offset(&text, range.location as usize) as u32,
+            end: utf16_offset_to_char_offset(&text, (range.location + range.length) as usize)
+                as u32,
+        });
+        Ok((
+            text.clone(),
+            selection,
+            VoiceEditTarget {
+                element: retained,
+                text,
+                selection_utf16: range,
+            },
+        ))
+    }
+}
+
+unsafe fn set_voice_edit_selection(element: AxUiElementRef, range: CFRange) -> Result<(), String> {
+    let attribute = cfstring_from_static(b"AXSelectedTextRange\0")
+        .ok_or_else(|| "voiceEditTargetUnavailable".to_string())?;
+    let value = AXValueCreate(
+        K_AX_VALUE_CF_RANGE_TYPE,
+        &range as *const _ as *const c_void,
+    );
+    if value.is_null() {
+        CFRelease(attribute);
+        return Err("voiceEditTargetUnavailable".into());
+    }
+    let selected = AXUIElementSetAttributeValue(element, attribute, value) == AX_ERROR_SUCCESS;
+    CFRelease(attribute);
+    CFRelease(value);
+    if !selected || copy_selected_range(element) != Some(range) {
+        return Err("voiceEditTargetUnavailable".into());
+    }
+    Ok(())
+}
+
+pub(super) fn apply_voice_edit_target(
+    target: &VoiceEditTarget,
+    text: &str,
+    insert: impl FnOnce(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    unsafe {
+        let GatedElement::Ready(element) = focused_element_passing_the_gate(voice_edit_gate())
+        else {
+            return Err("voiceEditTargetUnavailable".into());
+        };
+        let retained = SendableElement::retained(element);
+        CFRelease(element as CFTypeRef);
+        let element = retained.as_ref();
+        if CFEqual(element as CFTypeRef, target.element.as_ref() as CFTypeRef) == 0 {
+            return Err("voiceEditTargetChanged".into());
+        }
+        if voice_edit_text(element).as_deref() != Some(target.text.as_str())
+            || copy_selected_range(element) != Some(target.selection_utf16)
+        {
+            return Err("voiceEditFieldChanged".into());
+        }
+        let range = if target.selection_utf16.length > 0 {
+            target.selection_utf16
+        } else {
+            CFRange {
+                location: 0,
+                length: target.text.encode_utf16().count() as isize,
+            }
+        };
+        super::write_with_selection_recovery(
+            || {
+                set_voice_edit_selection(element, range)?;
+                let GatedElement::Ready(current) =
+                    focused_element_passing_the_gate(voice_edit_gate())
+                else {
+                    return Err("voiceEditTargetChanged".into());
+                };
+                let same = CFEqual(current as CFTypeRef, element as CFTypeRef) != 0;
+                CFRelease(current as CFTypeRef);
+                if !same {
+                    return Err("voiceEditTargetChanged".into());
+                }
+                if voice_edit_text(element).as_deref() != Some(target.text.as_str()) {
+                    return Err("voiceEditFieldChanged".into());
+                }
+                insert(text)
+            },
+            || {
+                let GatedElement::Ready(current) =
+                    focused_element_passing_the_gate(voice_edit_gate())
+                else {
+                    return;
+                };
+                let same = CFEqual(current as CFTypeRef, element as CFTypeRef) != 0;
+                CFRelease(current as CFTypeRef);
+                if same
+                    && voice_edit_text(element).as_deref() == Some(target.text.as_str())
+                    && copy_selected_range(element) == Some(range)
+                {
+                    let _ = set_voice_edit_selection(element, target.selection_utf16);
+                }
+            },
+        )
+    }
 }
 
 /// Confirms all posted keyboard input against the original text control's caret.
@@ -871,8 +1040,15 @@ unsafe fn cfstring_to_rust(s: CFStringRef) -> Option<String> {
 /// read `AXFocusedUIElement` itself: arming happens right after insertion
 /// lands, while focus is still on the target control; a new thread reading a
 /// few ms later may find focus already moved elsewhere.
+#[derive(Debug)]
 struct SendableElement(usize);
 unsafe impl Send for SendableElement {}
+
+impl Clone for SendableElement {
+    fn clone(&self) -> Self {
+        unsafe { Self::retained(self.as_ref()) }
+    }
+}
 
 impl SendableElement {
     /// # Safety

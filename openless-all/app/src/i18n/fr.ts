@@ -1,6 +1,43 @@
 import type { zhCN } from './zh-CN';
 
 export const fr: typeof zhCN = {
+  voiceEdit: {
+    title: 'Session de modification vocale',
+    description:
+      'Dictez un brouillon ou chargez le texte cible, modifiez-le par instructions vocales, puis confirmez son insertion.',
+    targetHint: 'Placez le curseur dans le champ cible ou sélectionnez le texte à modifier.',
+    androidTargetHint: "Attribuez l’édition vocale à un geste de la superposition. Enregistrez dans l’application cible, puis balayez pour ouvrir l’aperçu. La confirmation met à jour le champ d’origine.",
+    startDraft: 'Dicter un brouillon',
+    status: 'État : {{phase}}',
+    turns: 'Instructions : {{count}}',
+    draft: 'Brouillon',
+    preview: 'Aperçu actuel',
+    history: 'Historique des instructions',
+    turn: 'Instruction {{count}}',
+    polishedInstruction: 'Reformulation : {{text}}',
+    turnPreview: 'Aperçu : {{text}}',
+    finishDraft: 'Terminer le brouillon',
+    nextInstruction: 'Enregistrer la prochaine instruction',
+    finishInstruction: 'Terminer l’instruction',
+    commit: 'Confirmer et insérer',
+    restart: 'Recommencer',
+    openPanel: 'Ouvrir le panneau',
+    errors: {
+      voiceEditFieldChanged: 'Le texte du champ d’origine a changé. Recommencez la modification.',
+      voiceEditTargetUnavailable:
+        'Le champ cible ou son texte complet est inaccessible. Sélectionnez à nouveau la cible.',
+    },
+    phase: {
+      dictating: 'Dictée du brouillon',
+      draft_ready: 'Brouillon prêt',
+      editing: 'Enregistrement de l’instruction',
+      applying: 'Application du plan de modification',
+      preview: 'En attente de confirmation',
+      committing: 'Insertion dans le champ',
+      completed: 'Inséré',
+      cancelled: 'Annulé',
+    },
+  },
   cloudSyncE2ee: {
     protocolTitle: 'Accord de synchronisation et confidentialité',
     protocolIntro:
@@ -1810,6 +1847,9 @@ export const fr: typeof zhCN = {
       thinkingBudget: 'Budget fixe',
       maxTokensLabel: 'Nombre maximal de jetons en sortie',
       thinkingBudgetLabel: 'Budget de jetons de raisonnement',
+      serviceTierLabel: 'Inférence Ark à faible latence (fast)',
+      serviceTierHint:
+        'Seuls les modèles Ark compatibles peuvent utiliser cette option ; les autres peuvent renvoyer 400.',
       responsesThinkingHint:
         'Certains modèles permettent seulement de réduire le raisonnement, pas de le désactiver. Les requêtes de raisonnement omettent la température.',
       messagesThinkingHint:
@@ -1821,6 +1861,8 @@ export const fr: typeof zhCN = {
       llmTokenLimitInvalid: 'Les limites de jetons doivent être des entiers positifs.',
       llmThinkingBudgetInvalid:
         'Le budget de raisonnement doit être au moins de 1024 et, en mode fixe, inférieur à la limite de sortie.',
+      llmServiceTierInvalid:
+        'Option d’inférence à faible latence non valide. Sélectionnez-la à nouveau.',
       llmResponseIncomplete:
         'La réponse est incomplète ou a atteint la limite de sortie. Le texte déjà affiché est conservé.',
       llmProtocolHeaderConflict:
@@ -1968,7 +2010,7 @@ export const fr: typeof zhCN = {
       hotkeyFailed: 'Échec du détecteur',
       windowsImeLabel: 'Moteur de saisie Windows',
       windowsImeDesc:
-        'Passe temporairement à l’IME TSF d’OpenLess pendant les sessions vocales pour éviter les limites du presse-papiers.',
+        'Insère le texte dicté via le service de texte TSF d’OpenLess, qui reste actif à côté de votre méthode de saisie, pour éviter les limites du presse-papiers.',
       windowsImeInstalled: 'Installé',
       windowsImeUnavailable: 'Indisponible',
       androidImeLabel: 'Méthode de saisie (IME)',
@@ -2131,6 +2173,7 @@ export const fr: typeof zhCN = {
         right: 'Droite',
       },
       androidOverlayGestureAction: {
+        voice_edit: 'Édition vocale',
         none: 'Aucune action',
         quick_note: 'Note rapide',
         translation: 'Traduction',

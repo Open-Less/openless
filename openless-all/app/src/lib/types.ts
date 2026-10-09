@@ -35,7 +35,12 @@ export type PipelineMode = 'traditional' | 'multimodal';
 
 export type InsertStatus = 'inserted' | 'pasteSent' | 'copiedFallback' | 'failed' | 'notRequested';
 
-export type HistorySource = 'voice' | 'quick_note' | 'selection_polish' | 'selection_voice_edit';
+export type HistorySource =
+  | 'voice'
+  | 'quick_note'
+  | 'selection_polish'
+  | 'selection_voice_edit'
+  | 'voice_edit';
 
 /** Per-day count for the Overview yearly activity heatmap (date = local date YYYY-MM-DD). */
 export interface ActivityDay {
@@ -416,6 +421,8 @@ export interface UserPreferences {
   selectionPolishOutputMode: SelectionPolishOutputMode;
   /** Selection voice edit (issue #987 Windows MVP). Off by default. */
   selectionVoiceEnabled: boolean;
+  /** Standalone Voice Edit Session (issue #900). Off by default. */
+  voiceEditEnabled: boolean;
   /** Selection voice intent routing: auto / manual / keyword heuristic. */
   selectionVoiceIntentMode: SelectionVoiceIntentMode;
   /** Fixed intent in manual mode. */
@@ -715,6 +722,8 @@ export type CapsuleState =
 export type CapsuleStyle = 'siri' | 'classic' | 'typeless';
 
 export interface CapsulePayload {
+  /** Session generation that owns this capsule frame. */
+  sessionId?: string | null;
   state: CapsuleState;
   level: number; // 0..1 RMS
   elapsedMs: number;
@@ -741,6 +750,23 @@ export interface CapsulePayload {
    * the original voice/QA capsule behavior is kept, for compatibility with older backend payloads.
    */
   selectionPolish?: boolean;
+}
+
+/**
+ * Native replay frame used when the standalone Windows transcript rail mounts
+ * after the capsule has already started. The payload fields are deliberately
+ * flattened so the rail can restore presentation state and transcript state
+ * from one revisioned snapshot.
+ */
+export interface CapsuleSnapshot extends CapsulePayload {
+  transcript: string;
+  sessionId: string | null;
+  /** Backend event watermark for rejecting delayed events from an old session. */
+  sequence: number;
+  /** Monotonic native snapshot revision; currently aligned with the event watermark. */
+  revision: number;
+  /** Revision at which the flattened payload was committed. Torn frames are rejected. */
+  payloadRevision: number;
 }
 
 export interface CredentialsStatus {
@@ -781,4 +807,5 @@ export interface PlatformCapabilities {
   supportsLocalQwen3Mlx: boolean;
   supportsInAppDictation: boolean;
   supportsAutoUpdate: boolean;
+  supportsVoiceEdit: boolean;
 }

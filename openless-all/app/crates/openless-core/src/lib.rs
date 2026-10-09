@@ -73,6 +73,7 @@ pub mod style_packs;
 pub mod testing;
 pub mod types;
 pub mod vocabulary;
+pub mod voice_edit_session;
 mod voice_session;
 
 mod local_asr_catalog;
@@ -135,7 +136,7 @@ pub mod contract {
         SelectionVoiceDisposition, SelectionVoiceEditAction, SelectionVoiceEditPreviewResult,
         SelectionVoiceEditRequest, SelectionVoiceInstructionRequest, SelectionVoiceIntentPrompt,
         SelectionVoicePhase, SelectionVoicePreview, SelectionVoicePreviewUpdate,
-        SelectionVoiceSnapshot,
+        SelectionVoiceSnapshot, VoiceEditPlanRequest, VoiceEditPlanResult,
     };
     pub use crate::host_document::{
         edit_is_within_typed_text, is_vocab_worthy, learned_rule, minimal_edit, plan_window,
@@ -368,6 +369,10 @@ pub use types::{
 pub use vocabulary::{
     builtin_vocab_presets, list_vocab_presets, resolve_vocab_presets, save_vocab_presets,
     DictionaryStore,
+};
+pub use voice_edit_session::{
+    TextSelection, VoiceEditCommit, VoiceEditContext, VoiceEditError, VoiceEditPhase,
+    VoiceEditSession, VoiceEditSnapshot, VoiceEditTarget, VoiceEditTurn,
 };
 
 pub mod preference_patch;

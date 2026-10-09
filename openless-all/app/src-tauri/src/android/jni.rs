@@ -842,7 +842,7 @@ pub mod android {
     }
 
     /// Bring the single tracked Tauri host (WarmupActivity) to the front for
-    /// the embedded mobile QA panel. Never starts bare MainActivity.
+    /// embedded mobile panels. Never starts bare MainActivity.
     pub fn open_qa_host<'local>(
         env: &mut JNIEnv<'local>,
         context: &JObject<'local>,
@@ -853,6 +853,20 @@ pub mod android {
             "com.openless.app.OpenLessBackendWarmupActivity",
             "openForQa",
             "(Landroid/content/Context;)V",
+            &[JValue::Object(context)],
+        )
+    }
+
+    pub fn background_voice_edit_host<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+    ) -> Result<bool, String> {
+        call_static_bool_with_context_class(
+            env,
+            context,
+            "com.openless.app.OpenLessBackendWarmupActivity",
+            "backgroundForVoiceEdit",
+            "(Landroid/content/Context;)Z",
             &[JValue::Object(context)],
         )
     }
@@ -910,6 +924,45 @@ pub mod android {
         } else {
             Ok(Some(text))
         }
+    }
+
+    pub fn accessibility_selection_target<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+    ) -> Result<Option<String>, String> {
+        let class = load_context_class(
+            env,
+            context,
+            "com.openless.app.OpenLessAccessibilityService",
+        )?;
+        let value = env
+            .call_static_method(class, "captureSelectionTarget", "()Ljava/lang/String;", &[])
+            .and_then(|value| value.l())
+            .map_err(|error| {
+                format!(
+                    "call com.openless.app.OpenLessAccessibilityService.captureSelectionTarget: {error}"
+                )
+            })?;
+        jstring_object_to_option(env, value)
+    }
+
+    pub fn accessibility_replace_captured_selection<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+        generation: i64,
+        replacement: &str,
+    ) -> Result<String, String> {
+        let replacement_obj = env
+            .new_string(replacement)
+            .map_err(|error| format!("create selection replacement jstring: {error}"))?;
+        call_static_string_with_context_class(
+            env,
+            context,
+            "com.openless.app.OpenLessAccessibilityService",
+            "replaceCapturedSelection",
+            "(JLjava/lang/String;)Ljava/lang/String;",
+            &[JValue::Long(generation), JValue::Object(&replacement_obj)],
+        )
     }
 
     const ACCESSIBILITY_SERVICE_CLASS: &str = "com.openless.app.OpenLessAccessibilityService";

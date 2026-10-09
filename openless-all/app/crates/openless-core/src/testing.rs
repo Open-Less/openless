@@ -987,6 +987,7 @@ impl LinuxCapabilityFixture {
                 supports_local_qwen3_mlx: false,
                 supports_in_app_dictation: false,
                 supports_auto_update: true,
+                supports_voice_edit: true,
             },
             permissions: PermissionSnapshot {
                 microphone: PermissionState::Granted,
@@ -1009,6 +1010,7 @@ impl LinuxCapabilityFixture {
                 supports_local_qwen3_mlx: false,
                 supports_in_app_dictation: false,
                 supports_auto_update: false,
+                supports_voice_edit: false,
             },
             permissions: PermissionSnapshot {
                 microphone: PermissionState::Denied,

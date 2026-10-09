@@ -6,6 +6,43 @@ import { en } from './en';
 // (keys not updated fall back to English via ...en).
 export const ja: typeof zhCN = {
   ...en,
+  voiceEdit: {
+    title: '音声編集セッション',
+    description:
+      '下書きを音声入力するか対象のテキストを読み込み、音声指示で編集してから確認して入力欄に反映します。',
+    targetHint: '対象の入力欄にカーソルを置くか、編集するテキストを選択してください。',
+    androidTargetHint: 'オーバーレイのスワイプ操作に「音声編集」を設定してください。対象アプリで録音後にスワイプしてプレビューを開き、確認すると元の入力欄へ書き戻します。',
+    startDraft: '下書きの音声入力を開始',
+    status: '状態：{{phase}}',
+    turns: '指示回数：{{count}}',
+    draft: '下書き',
+    preview: '現在のプレビュー',
+    history: '指示履歴',
+    turn: '{{count}} 回目',
+    polishedInstruction: '整形後：{{text}}',
+    turnPreview: 'プレビュー：{{text}}',
+    finishDraft: '下書きを完了',
+    nextInstruction: '次の音声指示を録音',
+    finishInstruction: '音声指示を完了',
+    commit: '確認して反映',
+    restart: 'もう一度開始',
+    openPanel: 'パネルを開く',
+    errors: {
+      voiceEditFieldChanged: '元の入力欄の内容が変更されました。編集をやり直してください。',
+      voiceEditTargetUnavailable:
+        '対象の入力欄または全文を取得できませんでした。対象を選び直してください。',
+    },
+    phase: {
+      dictating: '下書きを音声入力中',
+      draft_ready: '下書き準備完了',
+      editing: '指示を録音中',
+      applying: '編集計画を適用中',
+      preview: '確認待ち',
+      committing: '入力欄に反映中',
+      completed: '反映済み',
+      cancelled: 'キャンセル済み',
+    },
+  },
   cloudSyncE2ee: {
     protocolTitle: 'クラウド同期の同意事項とプライバシー',
     protocolIntro:
@@ -1749,6 +1786,9 @@ export const ja: typeof zhCN = {
       thinkingBudget: '固定予算',
       maxTokensLabel: '最大出力トークン数',
       thinkingBudgetLabel: '思考トークン予算',
+      serviceTierLabel: 'Ark 低レイテンシ推論（fast）',
+      serviceTierHint:
+        '対応する Ark モデルでのみ利用できます。非対応モデルでは 400 が返る場合があります。',
       responsesThinkingHint:
         '一部のモデルでは思考を軽減できますが、完全には無効にできません。推論リクエストでは温度を送信しません。',
       messagesThinkingHint:
@@ -1757,6 +1797,7 @@ export const ja: typeof zhCN = {
       llmThinkingModeInvalid: '思考方式が無効です。選択し直してください。',
       llmTokenLimitInvalid: 'トークン上限は正の整数にしてください。',
       llmThinkingBudgetInvalid: '思考予算は1024以上、固定予算では最大出力未満にしてください。',
+      llmServiceTierInvalid: '低レイテンシ推論の設定が無効です。もう一度選択してください。',
       llmResponseIncomplete: '応答が未完了か出力上限に達しました。出力済みテキストは保持されます。',
       llmProtocolHeaderConflict:
         'Messages の認証とバージョンヘッダーは自動設定されます。追加ヘッダーから x-api-key と anthropic-version を削除してください。',
@@ -1891,7 +1932,7 @@ export const ja: typeof zhCN = {
       hotkeyFailed: '監視失敗',
       windowsImeLabel: 'Windows 入力メソッドバックエンド',
       windowsImeDesc:
-        '音声セッション中に OpenLess TSF IME へ一時的に切り替え、クリップボード入力の制限を回避します。',
+        '入力方式と併存する OpenLess TSF テキストサービス経由で文字を挿入し、IME を切り替えずにクリップボード入力の制限を回避します。',
       windowsImeInstalled: 'インストール済み',
       windowsImeUnavailable: '利用不可',
       androidImeLabel: '入力メソッド (IME)',
@@ -2033,6 +2074,7 @@ export const ja: typeof zhCN = {
         right: '右',
       },
       androidOverlayGestureAction: {
+        voice_edit: '音声編集',
         none: '操作なし',
         quick_note: '速記',
         translation: '翻訳',

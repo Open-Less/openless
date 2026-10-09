@@ -744,6 +744,7 @@ async fn auto_sync_local_retry_releases_runtime_and_respects_pause() {
     .unwrap();
     *fixture.data.capture_gate.lock().unwrap() = Some(gate.clone());
     let local_only = gate.begin_mutation().unwrap();
+    let runtime_releases_before = fixture.service.runtime_release_count_for_test();
     fixture.data.edit("pause before a delayed local retry");
     wait_for_auto_sync(|| {
         fixture
@@ -752,6 +753,7 @@ async fn auto_sync_local_retry_releases_runtime_and_respects_pause() {
             .last_error
             .as_ref()
             .is_some_and(|failure| failure.code == "sync_documents_source_changed")
+            && fixture.service.runtime_release_count_for_test() > runtime_releases_before
     })
     .await;
     tokio::time::timeout(

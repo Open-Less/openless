@@ -1123,6 +1123,7 @@ struct BufferedTranscriptionInner {
     partials: Arc<dyn TextStreamSink>,
     progress: Arc<dyn RecordingProgressSink>,
     limit_notified: AtomicBool,
+    has_nonzero_pcm: AtomicBool,
     limit_threshold_bytes: usize,
     state: Mutex<BufferedTranscriptionState>,
 }
@@ -1164,6 +1165,7 @@ impl BufferedTranscriptionSession {
                 partials,
                 progress,
                 limit_notified: AtomicBool::new(false),
+                has_nonzero_pcm: AtomicBool::new(false),
                 limit_threshold_bytes,
                 state: Mutex::new(BufferedTranscriptionState::Buffering(Vec::new())),
             }),
@@ -1353,6 +1355,10 @@ impl Drop for NotifyOnDrop {
 
 impl AudioConsumer for BufferedTranscriptionSession {
     fn consume_pcm_chunk(&self, pcm: &[u8]) {
+        if !self.inner.has_nonzero_pcm.load(Ordering::Relaxed) && pcm.iter().any(|byte| *byte != 0)
+        {
+            self.inner.has_nonzero_pcm.store(true, Ordering::Release);
+        }
         let (downstream, buffer_limit_reached) = {
             let mut state = self
                 .inner
@@ -1407,6 +1413,24 @@ impl TranscriptionSession for BufferedTranscriptionSession {
     }
 
     fn finish(&self) -> BoxFuture<'static, Result<crate::ports::TranscriptOutput, BackendError>> {
+        // Inspect after the caller stops capture. Cancellation remains independent
+        // of audio validity, and quiet non-zero samples do not trip a speech threshold.
+        let terminal = matches!(
+            &*self
+                .inner
+                .state
+                .lock()
+                .expect("buffered transcription lock poisoned"),
+            BufferedTranscriptionState::Failed(_) | BufferedTranscriptionState::Cancelled
+        );
+        if !terminal && !self.inner.has_nonzero_pcm.load(Ordering::Acquire) {
+            return Box::pin(async {
+                Err(BackendError::new(
+                    BackendErrorCode::InvalidArgument,
+                    "未收到有效音频，请检查麦克风输入设备后重试",
+                ))
+            });
+        }
         let attaching = self.attach();
         Box::pin(async move {
             let downstream = attaching.await?;
@@ -2195,6 +2219,78 @@ mod tests {
         assert_eq!(output.text, "raw text");
         assert_eq!(fixture.transcription_starts.load(Ordering::Acquire), 1);
         assert_eq!(&*fixture.pcm.lock().unwrap(), &[1, 0, 2, 0]);
+    }
+
+    #[tokio::test]
+    async fn empty_or_zero_pcm_never_finalizes_asr_and_can_still_be_cancelled() {
+        for (chunk, attached) in [
+            (Vec::new(), false),
+            (vec![0; 640], false),
+            (Vec::new(), true),
+            (vec![0; 640], true),
+        ] {
+            let pcm = Arc::new(Mutex::new(Vec::new()));
+            let starts = Arc::new(AtomicUsize::new(0));
+            let cancels = Arc::new(AtomicUsize::new(0));
+            let transcriber = Arc::new(FixtureTranscriber {
+                session: Arc::new(FixtureTranscriptionSession {
+                    pcm: pcm.clone(),
+                    cancels: cancels.clone(),
+                    finish_entered: None,
+                    finish_release: None,
+                }),
+                starts: starts.clone(),
+            });
+            let prepared = transcriber
+                .prepare(SessionId::new(), raw_dictation_context())
+                .await
+                .unwrap();
+            let buffered = BufferedTranscriptionSession::new(
+                prepared,
+                Arc::new(DiscardTextStream),
+                Arc::new(LimitRecordingProgress::default()),
+            );
+            if attached {
+                buffered.attach().await.unwrap();
+            }
+            buffered.consume_pcm_chunk(&chunk);
+            let error = buffered.finish().await.unwrap_err();
+            assert_eq!(error.code, BackendErrorCode::InvalidArgument);
+            assert_eq!(starts.load(Ordering::Acquire), usize::from(attached));
+            buffered.cancel().await.unwrap();
+            assert_eq!(cancels.load(Ordering::Acquire), usize::from(attached));
+            assert_eq!(
+                buffered.finish().await.unwrap_err().code,
+                BackendErrorCode::Cancelled
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn quiet_nonzero_pcm_is_not_rejected_as_silence() {
+        let pcm = Arc::new(Mutex::new(Vec::new()));
+        let starts = Arc::new(AtomicUsize::new(0));
+        let transcriber = Arc::new(FixtureTranscriber {
+            session: Arc::new(FixtureTranscriptionSession {
+                pcm: pcm.clone(),
+                cancels: Arc::new(AtomicUsize::new(0)),
+                finish_entered: None,
+                finish_release: None,
+            }),
+            starts: starts.clone(),
+        });
+        let prepared = transcriber
+            .prepare(SessionId::new(), raw_dictation_context())
+            .await
+            .unwrap();
+        let buffered = BufferedTranscriptionSession::new(
+            prepared,
+            Arc::new(DiscardTextStream),
+            Arc::new(LimitRecordingProgress::default()),
+        );
+        buffered.consume_pcm_chunk(&[1, 0]);
+        assert_eq!(buffered.finish().await.unwrap().text, "raw text");
+        assert_eq!(starts.load(Ordering::Acquire), 1);
     }
 
     #[tokio::test]

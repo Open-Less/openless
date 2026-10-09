@@ -35,6 +35,8 @@ pub enum DictationOutputTarget {
     Undecided,
     /// Finish the current recording as a question without dictation insertion or polish.
     Qa,
+    /// Keep a polished draft for explicit Voice Edit confirmation, without insertion or history.
+    VoiceEdit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -335,7 +337,9 @@ impl DictationContext {
                 enabled: options.insert_text
                     && !matches!(
                         options.output_target,
-                        DictationOutputTarget::QuickNote | DictationOutputTarget::Qa
+                        DictationOutputTarget::QuickNote
+                            | DictationOutputTarget::Qa
+                            | DictationOutputTarget::VoiceEdit
                     ),
                 observe_edits: preferences.vocabulary_learning_enabled,
                 // An undecided Android capture must not stream text into the
@@ -345,6 +349,7 @@ impl DictationContext {
                     DictationOutputTarget::Undecided
                         | DictationOutputTarget::QuickNote
                         | DictationOutputTarget::Qa
+                        | DictationOutputTarget::VoiceEdit
                 ) && preferences.streaming_insert,
                 save_streamed_text_to_clipboard: preferences.streaming_insert_save_clipboard,
                 restore_clipboard_after_paste: preferences.restore_clipboard_after_paste,
@@ -373,6 +378,13 @@ impl DictationContext {
             }
             DictationOutputTarget::Qa => {
                 next.polish.translation_active = false;
+                next.insertion.enabled = false;
+                next.insertion.streaming = false;
+                next.recording.archive_successful_recording =
+                    self.normal_archive_successful_recording;
+                next.recording.archive_required = false;
+            }
+            DictationOutputTarget::VoiceEdit => {
                 next.insertion.enabled = false;
                 next.insertion.streaming = false;
                 next.recording.archive_successful_recording =

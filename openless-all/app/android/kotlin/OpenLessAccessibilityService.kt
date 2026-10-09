@@ -24,6 +24,9 @@ class OpenLessAccessibilityService : AccessibilityService() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val keyboardRefreshRunnable = Runnable { updateKeyboardOverlayState() }
     private var lastEditableFocus: AccessibilityNodeInfo? = null
+    private var selectionGeneration = 0L
+    private var capturedSelection: OpenLessAccessibilitySelection? = null
+    private var capturedSelectionNode: AccessibilityNodeInfo? = null
     private var vocabularyGeneration = 0L
     private var vocabularyNode: AccessibilityNodeInfo? = null
     private var vocabularyDeadline = 0L
@@ -254,12 +257,16 @@ class OpenLessAccessibilityService : AccessibilityService() {
         }
     }
 
-    override fun onInterrupt() { invalidateVocabularyLifecycle() }
+    override fun onInterrupt() {
+        invalidateVocabularyLifecycle()
+        invalidateSelectionTarget()
+    }
 
     override fun onDestroy() {
         invalidateVocabularyLifecycle()
         mainHandler.removeCallbacks(keyboardRefreshRunnable)
         invalidateEditableCache()
+        invalidateSelectionTarget()
         if (instance === this) {
             instance = null
         }
@@ -318,6 +325,120 @@ class OpenLessAccessibilityService : AccessibilityService() {
 
     private fun canDrawOverlays(): Boolean {
         return OpenLessPermissionBridge.canDrawOverlaysSafely(this)
+    }
+
+    private fun performSelectionReplaceInternal(
+        generation: Long,
+        replacementText: String,
+    ): AccessibilityPasteResult {
+        if (replacementText.isEmpty()) return AccessibilityPasteResult.PASTE_REJECTED
+        val captured = capturedSelection
+        if (captured == null || generation == 0L || generation != selectionGeneration) {
+            return AccessibilityPasteResult.TARGET_CHANGED
+        }
+        val capturedNode = capturedSelectionNode
+        val root = rootInActiveWindow ?: return AccessibilityPasteResult.NO_FOCUSED_EDITOR
+        val target = try {
+            // The main panel temporarily owns focus until its task moves to the background.
+            if (root.packageName?.toString() == this.packageName) {
+                return AccessibilityPasteResult.NO_FOCUSED_EDITOR
+            }
+            root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                ?: root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+        } finally {
+            root.recycle()
+        } ?: run {
+            invalidateSelectionTarget()
+            return AccessibilityPasteResult.TARGET_CHANGED
+        }
+        return try {
+            if (capturedNode == null || !capturedNode.refresh()) {
+                invalidateSelectionTarget()
+                return AccessibilityPasteResult.TARGET_CHANGED
+            }
+            val currentText = nodeText(target)
+            val start = target.textSelectionStart
+            val end = target.textSelectionEnd
+            val packageName = target.packageName?.toString()
+            if (target.isPassword ||
+                packageName == this.packageName ||
+                !OpenLessAccessibilityTarget.isPasteTarget(target) ||
+                !target.isFocused ||
+                !OpenLessAccessibilityTarget.isFieldTargetValid(currentText, start, end) ||
+                !captured.matches(target == capturedNode, packageName, target.windowId, currentText, start, end)
+            ) {
+                invalidateSelectionTarget()
+                AccessibilityPasteResult.TARGET_CHANGED
+            } else {
+                val replaced = captured.replaceTarget(currentText, replacementText)
+                    ?: return AccessibilityPasteResult.TARGET_CHANGED
+                val args = Bundle().apply {
+                    putCharSequence(
+                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                        replaced,
+                    )
+                }
+                if (!target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+                    AccessibilityPasteResult.PASTE_REJECTED
+                } else {
+                    sleepQuietly(PASTE_VERIFY_DELAY_MS)
+                    if (target.refresh() && nodeText(target) == replaced) {
+                        invalidateSelectionTarget()
+                        AccessibilityPasteResult.SUCCESS
+                    } else {
+                        AccessibilityPasteResult.PASTE_REJECTED
+                    }
+                }
+            }
+        } finally {
+            target.recycle()
+        }
+    }
+
+    private fun invalidateSelectionTarget() {
+        capturedSelectionNode?.recycle()
+        capturedSelectionNode = null
+        capturedSelection = null
+    }
+
+    private fun captureSelectionTargetInternal(): String {
+        invalidateSelectionTarget()
+        val root = rootInActiveWindow ?: return ""
+        val target = try {
+            root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                ?: root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+        } finally {
+            root.recycle()
+        } ?: return ""
+        return try {
+            val text = nodeText(target)
+            val start = target.textSelectionStart
+            val end = target.textSelectionEnd
+            val packageName = target.packageName?.toString().orEmpty()
+            if (target.isPassword ||
+                packageName == this.packageName ||
+                !OpenLessAccessibilityTarget.isPasteTarget(target) ||
+                !target.isFocused ||
+                !OpenLessAccessibilityTarget.isFieldTargetValid(text, start, end)
+            ) {
+                capturedSelection = null
+                ""
+            } else {
+                val nextGeneration = selectionGeneration + 1L
+                selectionGeneration = if (nextGeneration == 0L) 1L else nextGeneration
+                capturedSelectionNode = AccessibilityNodeInfo.obtain(target)
+                capturedSelection = OpenLessAccessibilitySelection(
+                    packageName = packageName,
+                    windowId = target.windowId,
+                    selectionStart = start,
+                    selectionEnd = end,
+                    sourceText = text,
+                )
+                "${selectionGeneration}|$packageName|${target.windowId}|$start|$end|$text"
+            }
+        } finally {
+            target.recycle()
+        }
     }
 
     private fun performPasteToFocusedFieldInternal(
@@ -686,6 +807,88 @@ class OpenLessAccessibilityService : AccessibilityService() {
             return captureSelectedTextFromAccessibilityProcess()
         }
 
+        /** Captures a versioned target fingerprint for a later selection replace. */
+        @JvmStatic
+        @Keep
+        fun captureSelectionTarget(): String {
+            instance?.let {
+                return it.captureSelectionTargetInternal()
+            }
+            val context = OpenLessAppContext.context ?: return ""
+            val latch = CountDownLatch(1)
+            val target = AtomicReference("")
+            val receiver = object : ResultReceiver(null) {
+                override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                    if (resultCode == AccessibilityPasteResult.SUCCESS.code) {
+                        target.set(
+                            resultData?.getString(
+                                OpenLessAccessibilityCommandReceiver.EXTRA_SELECTION_TARGET,
+                            ).orEmpty(),
+                        )
+                    }
+                    latch.countDown()
+                }
+            }
+            return try {
+                val intent = Intent(
+                    context,
+                    OpenLessAccessibilityCommandReceiver::class.java,
+                ).apply {
+                    action = OpenLessAccessibilityCommandReceiver.ACTION_CAPTURE_SELECTION_TARGET
+                    putExtra(OpenLessAccessibilityCommandReceiver.EXTRA_RESULT_RECEIVER, receiver)
+                }
+                context.sendBroadcast(intent)
+                if (latch.await(SELECTION_COMMAND_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                    target.get()
+                } else {
+                    Log.w(TAG, "accessibility selection target command timed out")
+                    ""
+                }
+            } catch (error: Throwable) {
+                Log.w(TAG, "send accessibility selection target command failed", error)
+                ""
+            }
+        }
+
+        /** Replaces the captured range or complete captured field; no append/paste fallback. */
+        @JvmStatic
+        @Keep
+        fun replaceCapturedSelection(generation: Long, replacementText: String): String {
+            if (generation == 0L || replacementText.isEmpty()) {
+                return AccessibilityPasteResult.PASTE_REJECTED.reason
+            }
+            instance?.let {
+                return it.performSelectionReplaceInternal(generation, replacementText).reason
+            }
+            val context = OpenLessAppContext.context ?: return AccessibilityPasteResult.SERVICE_NOT_CONNECTED.reason
+            val result = AtomicReference(AccessibilityPasteResult.TIMEOUT)
+            val latch = CountDownLatch(1)
+            val receiver = object : ResultReceiver(null) {
+                override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                    result.set(AccessibilityPasteResult.fromCode(resultCode))
+                    latch.countDown()
+                }
+            }
+            return try {
+                val intent = Intent(context, OpenLessAccessibilityCommandReceiver::class.java).apply {
+                    action = OpenLessAccessibilityCommandReceiver.ACTION_REPLACE_CAPTURED_SELECTION
+                    putExtra(OpenLessAccessibilityCommandReceiver.EXTRA_RESULT_RECEIVER, receiver)
+                    putExtra(OpenLessAccessibilityCommandReceiver.EXTRA_SELECTION_GENERATION, generation)
+                    putExtra(OpenLessAccessibilityCommandReceiver.EXTRA_SELECTION_REPLACEMENT, replacementText)
+                }
+                context.sendBroadcast(intent)
+                if (latch.await(SELECTION_COMMAND_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                    result.get().reason
+                } else {
+                    Log.w(TAG, "accessibility selection replace command timed out")
+                    AccessibilityPasteResult.TIMEOUT.reason
+                }
+            } catch (error: Throwable) {
+                Log.w(TAG, "send accessibility selection replace command failed", error)
+                AccessibilityPasteResult.IPC_PROTOCOL_ERROR.reason
+            }
+        }
+
         @JvmStatic
         @Keep
         fun isEnabled(context: Context): Boolean {
@@ -731,6 +934,18 @@ class OpenLessAccessibilityService : AccessibilityService() {
 
         internal fun captureSelectedTextFromCommand(): String? {
             return instance?.captureSelectedTextFromFocusedNode()
+        }
+
+        internal fun captureSelectionTargetFromCommand(): String? {
+            return instance?.captureSelectionTargetInternal()
+        }
+
+        internal fun replaceCapturedSelectionFromCommand(
+            generation: Long,
+            replacementText: String,
+        ): AccessibilityPasteResult {
+            return instance?.performSelectionReplaceInternal(generation, replacementText)
+                ?: AccessibilityPasteResult.SERVICE_NOT_CONNECTED
         }
 
         private fun pasteToFocusedFieldWithResult(pasteText: String): AccessibilityPasteResult {

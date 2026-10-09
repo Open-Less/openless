@@ -2,6 +2,41 @@
 // The eight locale files share one structure; add/remove keys in all of them together.
 
 export const zhCN = {
+  voiceEdit: {
+    title: '语音编辑会话',
+    description: '口述草稿或读取目标文本，再用多轮语音指令修改，确认后写回输入框。',
+    targetHint: '请先把光标放入目标输入框，或选中需要编辑的文本。',
+    androidTargetHint: '请将一个悬浮窗滑动动作设为「语音编辑」。在目标应用录音后滑动进入预览，确认后写回原输入框。',
+    startDraft: '开始口述草稿',
+    status: '状态：{{phase}}',
+    turns: '回合：{{count}}',
+    draft: '草稿',
+    preview: '当前预览',
+    history: '指令历史',
+    turn: '第 {{count}} 轮',
+    polishedInstruction: '润色后：{{text}}',
+    turnPreview: '预览：{{text}}',
+    finishDraft: '完成草稿',
+    nextInstruction: '录下一条语音指令',
+    finishInstruction: '完成语音指令',
+    commit: '确认并写回',
+    restart: '再来一次',
+    openPanel: '打开面板',
+    errors: {
+      voiceEditFieldChanged: '原输入框内容已改变，请重新开始编辑。',
+      voiceEditTargetUnavailable: '无法读取目标输入框或完整文本，请重新选择目标。',
+    },
+    phase: {
+      dictating: '口述草稿',
+      draft_ready: '草稿就绪',
+      editing: '录制指令',
+      applying: '应用编辑计划',
+      preview: '等待确认',
+      committing: '写回输入框',
+      completed: '已写回',
+      cancelled: '已取消',
+    },
+  },
   cloudSyncE2ee: {
     protocolTitle: '云同步协议与隐私提醒',
     protocolIntro:
@@ -1674,6 +1709,8 @@ export const zhCN = {
       thinkingBudget: '固定预算',
       maxTokensLabel: '最大输出 tokens',
       thinkingBudgetLabel: '思考预算 tokens',
+      serviceTierLabel: '方舟低延迟推理（fast）',
+      serviceTierHint: '仅适用于支持低延迟的方舟模型；不支持的模型可能返回 400。',
       responsesThinkingHint: '部分模型只能降低思考，不能完全关闭。推理请求不发送温度参数。',
       messagesThinkingHint:
         '旧模型或兼容网关可能需要固定预算；思考预算必须小于最大输出。开启思考时不发送温度参数。',
@@ -1681,6 +1718,7 @@ export const zhCN = {
       llmThinkingModeInvalid: '思考方式无效，请重新选择。',
       llmTokenLimitInvalid: 'Token 上限必须为正整数。',
       llmThinkingBudgetInvalid: '思考预算至少为 1024，且固定预算必须小于最大输出。',
+      llmServiceTierInvalid: '低延迟推理选项无效，请重新选择。',
       llmResponseIncomplete: '响应未完整结束或达到输出上限；已输出正文会保留。',
       llmProtocolHeaderConflict:
         'Messages 已自动设置鉴权和版本请求头，请移除额外 Headers 中的 x-api-key 和 anthropic-version。',
@@ -1799,7 +1837,8 @@ export const zhCN = {
       hotkeyStarting: '安装中…',
       hotkeyFailed: '监听失败',
       windowsImeLabel: 'Windows 输入法后端',
-      windowsImeDesc: '语音输入时临时切到 OpenLess TSF，绕过剪贴板限制。',
+      windowsImeDesc:
+        '通过与输入法并存的 OpenLess TSF 文本服务插入文字，不切换输入法，绕过剪贴板限制。',
       windowsImeInstalled: '已安装',
       windowsImeUnavailable: '不可用',
       androidImeLabel: '输入法 (IME)',
@@ -1947,6 +1986,7 @@ export const zhCN = {
         right: '右',
       },
       androidOverlayGestureAction: {
+        voice_edit: '语音编辑',
         none: '无动作',
         quick_note: '速记',
         translation: '翻译',

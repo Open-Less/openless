@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "capsule-rail",
+  "description": "Receive capsule state, transcript and preference events in the Windows rail",
+  "platforms": ["windows"],
+  "windows": ["capsule-rail"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+}

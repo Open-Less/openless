@@ -4,7 +4,7 @@ import { cancelDictation, stopDictation } from '../lib/ipc/dictation';
 import type { CapsuleState, CapsuleStyle } from '../lib/types';
 import { Icon } from './Icon';
 import { VoiceOrbStage } from './VoiceOrbStage';
-import { LiveTranscriptPill } from './LiveTranscriptPill';
+import { CapsuleTranscriptRail } from './LiveTranscriptPill';
 import './CapsuleStyles.css';
 
 interface TypelessCapsuleProps {
@@ -16,6 +16,7 @@ interface TypelessCapsuleProps {
   insertedChars?: number;
   operating?: boolean;
   translation?: boolean;
+  translationInSameWindow?: boolean;
   warming?: boolean;
   preview?: boolean;
 }
@@ -44,6 +45,7 @@ export function TypelessCapsule({
   insertedChars = 0,
   operating = false,
   translation = false,
+  translationInSameWindow = true,
   warming = false,
   preview = false,
 }: TypelessCapsuleProps) {
@@ -61,74 +63,62 @@ export function TypelessCapsule({
   const cancel = useCallback(() => void cancelDictation(), []);
   const confirm = useCallback(() => void stopDictation(), []);
 
-  if (liveText) {
-    return (
-      <div className="ol-typeless-capsule-wrap" data-preview={preview} style={{ width: 460 }}>
-        {translation && <span className="ol-typeless-translation">{t('capsule.translating')}</span>}
-        <LiveTranscriptPill
-          text={liveText}
-          fontSize={transcriptFontSize / 0.447}
-          tone="dark"
-          stageWidth={460}
-          maxWidth={440}
-          minWidth={232}
-          height={64}
-          controlSize={46}
-          onCancel={cancel}
-          onConfirm={confirm}
-          cancelEnabled={!preview && (recording || processing)}
-          confirmEnabled={!preview && recording}
-          cancelLabel={t('common.cancel')}
-          confirmLabel={t('settings.shortcuts.confirm')}
-        />
-      </div>
-    );
-  }
-
   return (
-    <div className="ol-typeless-capsule-wrap" data-preview={preview}>
-      {translation && <span className="ol-typeless-translation">{t('capsule.translating')}</span>}
-      <div
-        className="ol-typeless-capsule"
-        data-recording={recording}
-        data-error={state === 'error'}
-        data-processing={processing}
-      >
-        <div className="ol-typeless-recording" aria-hidden={!recording}>
-          <button
-            className="ol-typeless-action"
-            aria-label={t('common.cancel')}
-            disabled={!recording || preview}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={cancel}
+    <div
+      className="ol-typeless-capsule-wrap"
+      data-preview={preview}
+      style={liveText ? { width: 460 } : undefined}
+    >
+      <div className="ol-typeless-capsule-stack">
+        {liveText && (
+          <CapsuleTranscriptRail
+            text={liveText}
+            fontSize={transcriptFontSize / 0.447}
+            tone="dark"
+            stageWidth={460}
+            maxWidth={440}
+            height={52}
+          />
+        )}
+        {translation && translationInSameWindow && (
+          <div className="ol-typeless-translation-row">
+            <span className="ol-typeless-translation">{t('capsule.translating')}</span>
+          </div>
+        )}
+        <div className="ol-typeless-capsule-stage">
+          <div
+            className="ol-typeless-capsule"
+            data-recording={recording}
+            data-error={state === 'error'}
+            data-processing={processing}
           >
-            <Icon name="close" size={24} strokeWidth={2} />
-          </button>
-          <CapsuleWaveform level={level} warming={warming} />
-          <button
-            className="ol-typeless-action ol-typeless-confirm"
-            aria-label={t('settings.shortcuts.confirm')}
-            disabled={!recording || preview}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={confirm}
-          >
-            <Icon name="check" size={25} strokeWidth={2.1} />
-          </button>
-        </div>
-        <div className="ol-typeless-status" aria-hidden={recording}>
-          <span role="status" title={label}>
-            {label}
-          </span>
-          {processing && !preview && (
-            <button
-              className="ol-typeless-stop"
-              aria-label={t('common.cancel')}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={cancel}
-            >
-              <Icon name="close" size={13} />
-            </button>
-          )}
+            <div className="ol-typeless-recording" aria-hidden={!recording && !processing}>
+              <button
+                className="ol-typeless-action"
+                aria-label={t('common.cancel')}
+                disabled={(!recording && !processing) || preview}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={cancel}
+              >
+                <Icon name="close" size={24} strokeWidth={2} />
+              </button>
+              <CapsuleWaveform level={level} warming={warming} />
+              <button
+                className="ol-typeless-action ol-typeless-confirm"
+                aria-label={t('settings.shortcuts.confirm')}
+                disabled={!recording || preview}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={confirm}
+              >
+                <Icon name="check" size={25} strokeWidth={2.1} />
+              </button>
+            </div>
+            <div className="ol-typeless-status" aria-hidden={recording || processing}>
+              <span role="status" title={label}>
+                {label}
+              </span>
+            </div>
+          </div>
         </div>
       </div>
     </div>

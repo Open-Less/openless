@@ -1,0 +1,75 @@
+.ol-voice-edit-window {
+  min-width: 360px;
+  max-width: 560px;
+}
+
+.ol-voice-edit-content {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 20px 22px;
+}
+
+.ol-voice-edit-empty {
+  display: grid;
+  gap: 14px;
+  color: var(--ol-text-secondary, #6b7280);
+}
+
+.ol-voice-edit-status {
+  display: flex;
+  justify-content: space-between;
+  color: var(--ol-text-secondary, #6b7280);
+  font-size: 13px;
+}
+
+.ol-voice-edit-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--ol-border, #e5e7eb);
+  border-radius: 12px;
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+
+.ol-voice-edit-card.is-preview {
+  border-color: var(--ol-accent, #6d5dfc);
+  background: color-mix(in srgb, var(--ol-accent, #6d5dfc) 8%, transparent);
+}
+
+.ol-voice-edit-label {
+  color: var(--ol-text-secondary, #6b7280);
+  font-size: 12px;
+}
+
+.ol-voice-edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ol-voice-edit-history {
+  display: grid;
+  gap: 8px;
+}
+
+.ol-voice-edit-turn {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--ol-line, #e5e7eb);
+  background: color-mix(in srgb, var(--ol-line, #e5e7eb) 18%, transparent);
+  white-space: pre-wrap;
+  line-height: 1.45;
+  font-size: 13px;
+}
+
+.ol-voice-edit-turn-polished,
+.ol-voice-edit-turn-preview {
+  color: var(--ol-text-secondary, #6b7280);
+}
+
+.ol-voice-edit-cancel {
+  margin-left: auto;
+}

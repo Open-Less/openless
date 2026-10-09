@@ -61,7 +61,6 @@ jobs:
     needs: [changes]
     if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.tauri != 'false'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
     defaults:
       run:
         working-directory: openless-all/app

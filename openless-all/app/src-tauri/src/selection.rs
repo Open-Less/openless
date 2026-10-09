@@ -8,7 +8,9 @@
 //!    后读出新内容 → 还原原剪贴板。
 //!
 //! Truncation policy: selections over 4000 chars keep head 2000 + tail 2000 + the
-//! `[…truncated…]` marker, avoiding an overly long LLM context.
+//! `[…truncated…]` marker for QA context only. `omits_middle` is set so selection
+//! polish and selection voice refuse to paste a rewrite of that stand-in over the
+//! real selection (the omitted middle would otherwise be deleted).
 //!
 //! 模块依赖：`arboard`（跨平台剪贴板）+ libc + 平台 native 框架。
 //! Linux 桌面已改由 egui 前端（`openless-all/app/linux-egui`）承担，Tauri 版不再提供
@@ -24,12 +26,16 @@ const SELECTION_TRUNCATE_TAIL: usize = 2000;
 const SELECTION_TRUNCATED_MARKER: &str = "\n[…truncated…]\n";
 
 /// Selection context read from the foreground app.
-/// `text` is already truncated; `source_app` is a human-readable label for the foreground app
-/// (optional).
+/// `text` may be a head/tail stand-in when `omits_middle` is set. Replacement
+/// flows must refuse those captures; QA may still use the stand-in as context.
+/// `source_app` is a human-readable label for the foreground app (optional).
 #[derive(Debug, Clone)]
 pub struct SelectionContext {
     pub text: String,
     pub source_app: Option<String>,
+    /// True when `text` dropped the middle of a selection longer than
+    /// [`SELECTION_MAX_CHARS`]. Pasting a rewrite of `text` would delete that middle.
+    pub omits_middle: bool,
 }
 
 /// The target that was active when Selection Polish began.  This deliberately
@@ -440,21 +446,22 @@ pub(crate) fn validate_selection_insertion_target(
     }
 }
 
-/// macOS only: re-read the current selection in the same form as at capture time (trim +
-/// truncate) for validate to compare against expected_selection. Degrades to simulated
-/// Cmd+C + clipboard snapshot when AX is unauthorized or the direct read fails (same fallback as
-/// `capture_selection_with_status`).
+/// macOS only: re-read the full current selection (trimmed, not head/tail truncated)
+/// for validate to compare against expected_selection. A truncated stand-in must not
+/// compare equal to the live selection, or paste would delete the omitted middle.
+/// Degrades to simulated Cmd+C + clipboard snapshot when AX is unauthorized or the
+/// direct read fails (same fallback as `capture_selection_with_status`).
 #[cfg(target_os = "macos")]
 fn read_selection_for_validation() -> Option<String> {
     if let Some(text) = macos_ax::read_selected_text() {
         let trimmed = text.trim();
         if !trimmed.is_empty() {
-            return Some(truncate_selection(trimmed));
+            return Some(trimmed.to_string());
         }
     }
     let text = simulate_copy_and_read()?;
     let trimmed = text.trim();
-    (!trimmed.is_empty()).then(|| truncate_selection(trimmed))
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 /// Return focus to the original selection target after the preview is confirmed. The preview
@@ -594,11 +601,13 @@ fn capture_selection_with_status_diag() -> (SelectionCaptureOutcome, SelectionCa
                     .map(|a| format!(" front_app={a}"))
                     .unwrap_or_default()
             );
+            let (text, omits_middle) = stored_selection_text(trimmed);
             return (
                 SelectionCaptureOutcome {
                     selection: Some(SelectionContext {
-                        text: truncate_selection(trimmed),
+                        text,
                         source_app,
+                        omits_middle,
                     }),
                 },
                 SelectionCaptureMissReason::Ok,
@@ -628,11 +637,13 @@ fn capture_selection_with_status_diag() -> (SelectionCaptureOutcome, SelectionCa
                             .map(|a| format!(" front_app={a}"))
                             .unwrap_or_default()
                     );
+                    let (text, omits_middle) = stored_selection_text(trimmed);
                     return (
                         SelectionCaptureOutcome {
                             selection: Some(SelectionContext {
-                                text: truncate_selection(trimmed),
+                                text,
                                 source_app,
+                                omits_middle,
                             }),
                         },
                         SelectionCaptureMissReason::Ok,
@@ -669,6 +680,25 @@ fn capture_selection_with_status_diag() -> (SelectionCaptureOutcome, SelectionCa
         SelectionCaptureOutcome { selection: None },
         SelectionCaptureMissReason::NoCapturePath,
     )
+}
+
+/// True when `text` is the head/tail stand-in produced for an over-long selection.
+/// The stand-in length is fixed, so ordinary text that merely mentions the marker
+/// is not treated as a truncated capture.
+pub(crate) fn is_truncated_selection_stand_in(text: &str) -> bool {
+    let marker_len = SELECTION_TRUNCATED_MARKER.chars().count();
+    text.contains(SELECTION_TRUNCATED_MARKER)
+        && text.chars().count() == SELECTION_TRUNCATE_HEAD + marker_len + SELECTION_TRUNCATE_TAIL
+}
+
+/// Store a trimmed selection. Over-long text keeps a head/tail stand-in for QA
+/// context and sets `omits_middle` so replacement flows can refuse to paste it.
+fn stored_selection_text(trimmed: &str) -> (String, bool) {
+    if trimmed.chars().count() > SELECTION_MAX_CHARS {
+        (truncate_selection(trimmed), true)
+    } else {
+        (trimmed.to_string(), false)
+    }
 }
 
 /// Truncate lengthwise to head + tail + marker.
@@ -782,14 +812,15 @@ fn classify_simulated_copy_result(
     Ok(captured)
 }
 
-/// Read the current selection in the same normalized/truncated form stored by
-/// [`SelectionContext`].  This is used only by the Windows final safety check;
-/// the clipboard helper snapshots and restores the user's clipboard.
+/// Read the full current selection (trimmed, not head/tail truncated). This is
+/// used only by the Windows final safety check; the clipboard helper snapshots
+/// and restores the user's clipboard. Comparing against the untruncated text
+/// stops a head/tail stand-in from authorizing a paste over the omitted middle.
 #[cfg(target_os = "windows")]
 fn selected_text_for_validation() -> Option<String> {
     let text = simulate_copy_and_read()?;
     let trimmed = text.trim();
-    (!trimmed.is_empty()).then(|| truncate_selection(trimmed))
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
@@ -1402,6 +1433,35 @@ mod tests {
         assert!(out.ends_with(&"c".repeat(50)));
         // The middle "b" run must be cut
         assert!(!out.contains(&"b".repeat(20)));
+    }
+
+    #[test]
+    fn overlong_selection_is_flagged_and_does_not_match_the_live_text() {
+        let head: String = "a".repeat(SELECTION_TRUNCATE_HEAD);
+        let middle: String = "b".repeat(2_000);
+        let tail: String = "c".repeat(SELECTION_TRUNCATE_TAIL);
+        let live = format!("{head}{middle}{tail}");
+        let (stored, omits_middle) = stored_selection_text(&live);
+        assert!(omits_middle);
+        assert!(stored.contains("[…truncated…]"));
+        assert!(!stored.contains(&"b".repeat(20)));
+        // Final paste validation compares the stored stand-in with the full
+        // live selection. They must not match, or the paste deletes `middle`.
+        assert!(!selection_text_matches(&stored, Some(&live)));
+        assert!(is_truncated_selection_stand_in(&stored));
+        assert!(!is_truncated_selection_stand_in(&live));
+        assert!(!is_truncated_selection_stand_in(
+            "keep this\n[…truncated…]\nnote"
+        ));
+    }
+
+    #[test]
+    fn selection_at_the_replacement_limit_is_kept_whole() {
+        let live = "字".repeat(SELECTION_MAX_CHARS);
+        let (stored, omits_middle) = stored_selection_text(&live);
+        assert!(!omits_middle);
+        assert_eq!(stored, live);
+        assert!(selection_text_matches(&stored, Some(&live)));
     }
 
     #[test]

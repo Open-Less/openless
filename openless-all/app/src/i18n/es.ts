@@ -1,6 +1,44 @@
 import type { zhCN } from './zh-CN';
 
 export const es: typeof zhCN = {
+  voiceEdit: {
+    title: 'Sesión de edición por voz',
+    description:
+      'Dicte un borrador o cargue el texto de destino, edítelo con instrucciones de voz y confirme para insertarlo.',
+    targetHint: 'Coloque el cursor en el campo de destino o seleccione el texto que desea editar.',
+    androidTargetHint: 'Asigna la edición por voz a un gesto de la superposición. Graba en la aplicación de destino y desliza para ver la vista previa. Al confirmar, se actualiza el campo original.',
+    startDraft: 'Dictar un borrador',
+    status: 'Estado: {{phase}}',
+    turns: 'Instrucciones: {{count}}',
+    draft: 'Borrador',
+    preview: 'Vista previa actual',
+    history: 'Historial de instrucciones',
+    turn: 'Instrucción {{count}}',
+    polishedInstruction: 'Reformulación: {{text}}',
+    turnPreview: 'Vista previa: {{text}}',
+    finishDraft: 'Terminar borrador',
+    nextInstruction: 'Grabar la siguiente instrucción',
+    finishInstruction: 'Terminar instrucción',
+    commit: 'Confirmar e insertar',
+    restart: 'Volver a empezar',
+    openPanel: 'Abrir panel',
+    errors: {
+      voiceEditFieldChanged:
+        'El texto del campo original ha cambiado. Inicie una nueva sesión de edición.',
+      voiceEditTargetUnavailable:
+        'No se pudo leer el campo de destino o su texto completo. Seleccione de nuevo el destino.',
+    },
+    phase: {
+      dictating: 'Dictando borrador',
+      draft_ready: 'Borrador listo',
+      editing: 'Grabando instrucción',
+      applying: 'Aplicando el plan de edición',
+      preview: 'Esperando confirmación',
+      committing: 'Insertando en el campo',
+      completed: 'Insertado',
+      cancelled: 'Cancelado',
+    },
+  },
   cloudSyncE2ee: {
     protocolTitle: 'Acuerdo de sincronización y privacidad',
     protocolIntro:
@@ -1783,6 +1821,9 @@ export const es: typeof zhCN = {
       thinkingBudget: 'Presupuesto fijo',
       maxTokensLabel: 'Máximo de tokens de salida',
       thinkingBudgetLabel: 'Presupuesto de tokens de razonamiento',
+      serviceTierLabel: 'Inferencia de baja latencia de Ark (fast)',
+      serviceTierHint:
+        'Solo los modelos Ark compatibles pueden usar esta opción; otros pueden devolver 400.',
       responsesThinkingHint:
         'Algunos modelos solo permiten reducir el razonamiento, no desactivarlo. Las solicitudes de razonamiento omiten la temperatura.',
       messagesThinkingHint:
@@ -1792,6 +1833,8 @@ export const es: typeof zhCN = {
       llmTokenLimitInvalid: 'Los límites de tokens deben ser números enteros positivos.',
       llmThinkingBudgetInvalid:
         'El presupuesto de razonamiento debe ser al menos 1024 y, en modo fijo, inferior al límite de salida.',
+      llmServiceTierInvalid:
+        'Opción de inferencia de baja latencia no válida. Selecciónala de nuevo.',
       llmResponseIncomplete:
         'La respuesta no se completó o alcanzó el límite de salida. Se conserva el texto ya mostrado.',
       llmProtocolHeaderConflict:
@@ -1939,7 +1982,7 @@ export const es: typeof zhCN = {
       hotkeyFailed: 'El detector falló',
       windowsImeLabel: 'Motor del método de entrada de Windows',
       windowsImeDesc:
-        'Cambia temporalmente al IME TSF de OpenLess durante las sesiones de voz para evitar las limitaciones del portapapeles.',
+        'Inserta el texto dictado mediante el servicio de texto TSF de OpenLess, que permanece activo junto a tu método de entrada, para evitar las limitaciones del portapapeles.',
       windowsImeInstalled: 'Instalado',
       windowsImeUnavailable: 'No disponible',
       androidImeLabel: 'Método de entrada (IME)',
@@ -2102,6 +2145,7 @@ export const es: typeof zhCN = {
         right: 'Derecha',
       },
       androidOverlayGestureAction: {
+        voice_edit: 'Edición por voz',
         none: 'Sin acción',
         quick_note: 'Nota rápida',
         translation: 'Traducción',

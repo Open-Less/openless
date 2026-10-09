@@ -109,6 +109,7 @@ struct LegacyEntry {
     messages_thinking: Option<String>,
     max_tokens: Option<String>,
     thinking_budget: Option<String>,
+    service_tier: Option<String>,
 }
 
 impl Default for LegacyEntry {
@@ -141,6 +142,7 @@ impl Default for LegacyEntry {
             messages_thinking: None,
             max_tokens: None,
             thinking_budget: None,
+            service_tier: None,
         }
     }
 }
@@ -169,6 +171,7 @@ impl LegacyEntry {
             &self.messages_thinking,
             &self.max_tokens,
             &self.thinking_budget,
+            &self.service_tier,
         ]
         .into_iter()
         .any(|value| value.as_deref().is_some_and(|value| !value.is_empty()))
@@ -378,6 +381,7 @@ fn decode_entry(
             (MESSAGES_THINKING_ACCOUNT, entry.messages_thinking),
             (MAX_TOKENS_ACCOUNT, entry.max_tokens),
             (THINKING_BUDGET_ACCOUNT, entry.thinking_budget),
+            (SERVICE_TIER_ACCOUNT, entry.service_tier),
         ]);
     }
     if namespace == CredentialNamespace::Asr {

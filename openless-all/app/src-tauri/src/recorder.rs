@@ -241,6 +241,7 @@ impl Recorder {
             }
         };
         if let Err(error) = startup_result {
+            let _ = join_handle.join();
             if let Some(archive) = archive_writer.as_ref() {
                 archive.finish();
             }
@@ -332,15 +333,7 @@ fn run_audio_thread(
         }
     };
 
-    if let Err(err) = stream.play() {
-        let _ = startup_tx.send(Err(RecorderError::EngineFailed(format!("play: {err}"))));
-        return;
-    }
-
-    // Startup succeeded.
-    let _ = startup_tx.send(Ok(()));
-
-    // Startup succeeded.
+    // build_input_stream returns only after native playback starts successfully.
     let _ = startup_tx.send(Ok(()));
 
     // Start the liveness watchdog: detect the capture callback silently stopping.
@@ -467,7 +460,7 @@ fn run_audio_thread(
     }
 }
 
-/// Select default input device + default config + build the Stream.
+/// Try the selected microphone's native format before other advertised formats/devices.
 fn build_input_stream(
     microphone_device_name: Option<String>,
     consumer: Arc<dyn AudioConsumer>,
@@ -476,78 +469,162 @@ fn build_input_stream(
     runtime_error_tx: Sender<RecorderError>,
 ) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
     let host = cpal::default_host();
-    let device = select_input_device(&host, microphone_device_name.as_deref())?;
+    let selected = select_input_device(&host, microphone_device_name.as_deref())?;
+    let selected_name = selected.name().ok();
+    let start = |device: &cpal::Device| {
+        start_device_stream(
+            device,
+            &consumer,
+            &level_handler,
+            archiver.clone(),
+            &runtime_error_tx,
+        )
+    };
+    let initial_error = match start(&selected) {
+        Ok(stream) => return Ok(stream),
+        Err(RecorderError::PermissionDenied) => return Err(RecorderError::PermissionDenied),
+        Err(error) => error,
+    };
+    log::warn!("[recorder] selected microphone failed: {initial_error}; trying other inputs");
+    let default = host.default_input_device();
+    let default_name = default.as_ref().and_then(|device| device.name().ok());
+    let mut candidates = Vec::new();
+    if let Some(default) = default {
+        if default_name != selected_name {
+            candidates.push(default);
+        }
+    }
+    if let Ok(devices) = host.input_devices() {
+        candidates.extend(devices.filter(|device| {
+            let name = device.name().ok();
+            name.is_none() || (name != selected_name && name != default_name)
+        }));
+    }
+    try_input_candidates(candidates, initial_error, |device| start(&device))
+}
 
-    let supported = device
-        .default_input_config()
-        .map_err(|e| classify_default_config_err(e.to_string()))?;
+fn try_input_candidates<T, U>(
+    candidates: impl IntoIterator<Item = T>,
+    mut last_error: RecorderError,
+    mut start: impl FnMut(T) -> Result<U, RecorderError>,
+) -> Result<U, RecorderError> {
+    for candidate in candidates {
+        match start(candidate) {
+            Ok(stream) => return Ok(stream),
+            Err(RecorderError::PermissionDenied) => return Err(RecorderError::PermissionDenied),
+            Err(error) => last_error = error,
+        }
+    }
+    Err(last_error)
+}
 
-    let sample_format = supported.sample_format();
-    let default_config: StreamConfig = supported.config();
-    let config = stable_input_config_for_platform(&default_config);
-    let input_sr = config.sample_rate.0;
-    let channels = config.channels as usize;
+fn start_device_stream(
+    device: &cpal::Device,
+    consumer: &Arc<dyn AudioConsumer>,
+    level_handler: &Arc<dyn Fn(f32) + Send + Sync>,
+    archiver: Option<Arc<WavArchiveWriter>>,
+    runtime_error_tx: &Sender<RecorderError>,
+) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
+    let mut default = None;
+    let initial_error = match device.default_input_config() {
+        Ok(config) => {
+            default = Some(config.clone());
+            match start_native_config(
+                device,
+                config,
+                consumer,
+                level_handler,
+                archiver.clone(),
+                runtime_error_tx,
+            ) {
+                Ok(stream) => return Ok(stream),
+                Err(RecorderError::PermissionDenied) => {
+                    return Err(RecorderError::PermissionDenied)
+                }
+                Err(error) => error,
+            }
+        }
+        Err(error) => classify_default_config_err(error.to_string()),
+    };
+    if matches!(initial_error, RecorderError::PermissionDenied) {
+        return Err(initial_error);
+    }
+    // Query alternatives only after failure; never force mono or an ASR rate on hardware.
+    let ranges = match device.supported_input_configs() {
+        Ok(ranges) => ranges,
+        Err(_) => return Err(initial_error),
+    };
+    let configs = native_input_alternatives(default.as_ref(), ranges);
+    try_input_candidates(configs, initial_error, |config| {
+        start_native_config(
+            device,
+            config,
+            consumer,
+            level_handler,
+            archiver.clone(),
+            runtime_error_tx,
+        )
+    })
+}
 
+fn native_input_alternatives(
+    default: Option<&cpal::SupportedStreamConfig>,
+    ranges: impl IntoIterator<Item = cpal::SupportedStreamConfigRange>,
+) -> Vec<cpal::SupportedStreamConfig> {
+    let native_rate = default.map(|config| config.sample_rate().0);
+    let mut candidates = Vec::new();
+    for range in ranges {
+        let min = range.min_sample_rate().0;
+        let max = range.max_sample_rate().0;
+        for rate in [native_rate.unwrap_or(max).clamp(min, max), min, max] {
+            let candidate = range.with_sample_rate(cpal::SampleRate(rate));
+            let same = |other: &cpal::SupportedStreamConfig| {
+                other.config() == candidate.config()
+                    && other.sample_format() == candidate.sample_format()
+            };
+            if !default.is_some_and(same) && !candidates.iter().any(same) {
+                candidates.push(candidate);
+            }
+        }
+    }
+    candidates
+}
+
+fn start_native_config(
+    device: &cpal::Device,
+    supported: cpal::SupportedStreamConfig,
+    consumer: &Arc<dyn AudioConsumer>,
+    level_handler: &Arc<dyn Fn(f32) + Send + Sync>,
+    archiver: Option<Arc<WavArchiveWriter>>,
+    runtime_error_tx: &Sender<RecorderError>,
+) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
+    let config = supported.config();
+    let state = Arc::new(StreamState::new());
+    state.accepting_audio.store(false, Ordering::Release);
+    let stream = build_stream_for_format(
+        device,
+        &config,
+        supported.sample_format(),
+        Arc::clone(consumer),
+        Arc::clone(level_handler),
+        archiver,
+        Arc::clone(&state),
+        config.sample_rate.0,
+        config.channels as usize,
+        runtime_error_tx.clone(),
+    )?;
+    stream
+        .play()
+        .map_err(|error| classify_default_config_err(format!("play: {error}")))?;
+    state.accepting_audio.store(true, Ordering::Release);
     log::info!(
         "[recorder] inputDevice={} inputFormat sampleRate={} channels={} fmt={:?}",
         device.name().unwrap_or_else(|_| "<unknown>".into()),
-        input_sr,
-        channels,
-        sample_format
+        config.sample_rate.0,
+        config.channels,
+        supported.sample_format()
     );
-
-    let state = Arc::new(StreamState::new());
-    let stream = match build_stream_for_format(
-        &device,
-        &config,
-        sample_format,
-        Arc::clone(&consumer),
-        Arc::clone(&level_handler),
-        archiver.clone(),
-        Arc::clone(&state),
-        input_sr,
-        channels,
-        runtime_error_tx.clone(),
-    ) {
-        Ok(stream) => stream,
-        Err(err) if config != default_config => {
-            log::warn!(
-                "[recorder] stable input config failed; falling back to default config: {err}"
-            );
-            build_stream_for_format(
-                &device,
-                &default_config,
-                sample_format,
-                consumer,
-                level_handler,
-                archiver,
-                Arc::clone(&state),
-                default_config.sample_rate.0,
-                default_config.channels as usize,
-                runtime_error_tx,
-            )?
-        }
-        Err(err) => return Err(err),
-    };
     Ok((stream, state))
-}
-
-#[cfg(target_os = "android")]
-fn stable_input_config_for_platform(default_config: &StreamConfig) -> StreamConfig {
-    let mut config = default_config.clone();
-    if config.channels > 1 {
-        log::info!(
-            "[recorder] android forcing mono input channels: {} -> 1",
-            config.channels
-        );
-        config.channels = 1;
-    }
-    config
-}
-
-#[cfg(not(target_os = "android"))]
-fn stable_input_config_for_platform(default_config: &StreamConfig) -> StreamConfig {
-    default_config.clone()
 }
 
 fn select_input_device(
@@ -571,7 +648,12 @@ fn select_input_device(
         );
     }
 
-    host.default_input_device()
+    if let Some(device) = host.default_input_device() {
+        return Ok(device);
+    }
+    host.input_devices()
+        .map_err(|error| RecorderError::EngineFailed(format!("input_devices: {error}")))?
+        .next()
         .ok_or(RecorderError::NoInputDevice)
 }
 
@@ -645,7 +727,11 @@ fn build_stream_for_format(
             let archiver = archiver.clone();
             let state = Arc::clone(&state);
             let runtime_error_tx = runtime_error_tx.clone();
+            let error_state = Arc::clone(&state);
             let err_cb = move |err| {
+                if !error_state.accepting_audio.load(Ordering::Acquire) {
+                    return;
+                }
                 log::error!("[recorder] stream error: {err}");
                 let _ =
                     runtime_error_tx.send(RecorderError::EngineFailed(format!("stream: {err}")));
@@ -677,6 +763,12 @@ fn build_stream_for_format(
 
     match sample_format {
         SampleFormat::F32 => make_stream!(f32, |s: f32| s),
+        SampleFormat::F64 => make_stream!(f64, |s: f64| s as f32),
+        SampleFormat::I64 => make_stream!(i64, |s: i64| (s as f64 / i64::MAX as f64) as f32),
+        SampleFormat::U64 => make_stream!(u64, |s: u64| ((s as f64 / u64::MAX as f64) * 2.0 - 1.0)
+            as f32),
+        SampleFormat::U32 => make_stream!(u32, |s: u32| (s as f64 / u32::MAX as f64 * 2.0 - 1.0)
+            as f32),
         SampleFormat::I16 => make_stream!(i16, |s: i16| s as f32 / i16::MAX as f32),
         SampleFormat::U16 => {
             make_stream!(u16, |s: u16| (s as f32 - 32768.0) / 32768.0)
@@ -703,6 +795,7 @@ struct StreamState {
     /// next callback.
     last_sample: Mutex<f32>,
     callback_count: AtomicUsize,
+    accepting_audio: AtomicBool,
     peak_input_rms_milli: AtomicUsize,
     peak_output_rms_milli: AtomicUsize,
     /// Timestamp of the last successful consumer call (for liveness detection)
@@ -715,6 +808,7 @@ impl StreamState {
             resample_phase: Mutex::new(0.0),
             last_sample: Mutex::new(0.0),
             callback_count: AtomicUsize::new(0),
+            accepting_audio: AtomicBool::new(true),
             peak_input_rms_milli: AtomicUsize::new(0),
             peak_output_rms_milli: AtomicUsize::new(0),
             // Start as None: timing begins only after the first callback, avoiding false
@@ -734,7 +828,7 @@ fn process_callback(
     archiver: Option<&WavArchiveWriter>,
     state: &StreamState,
 ) {
-    if interleaved.is_empty() || channels == 0 {
+    if !state.accepting_audio.load(Ordering::Acquire) || interleaved.is_empty() || channels == 0 {
         return;
     }
 
@@ -1004,6 +1098,73 @@ mod tests {
             .chunks_exact(2)
             .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
             .collect()
+    }
+
+    #[test]
+    fn native_alternatives_preserve_channels_format_and_advertised_rates() {
+        let range = cpal::SupportedStreamConfigRange::new(
+            2,
+            cpal::SampleRate(44_100),
+            cpal::SampleRate(48_000),
+            cpal::SupportedBufferSize::Unknown,
+            SampleFormat::F32,
+        );
+        let native = range.with_sample_rate(cpal::SampleRate(48_000));
+        let alternatives = native_input_alternatives(Some(&native), [range, range]);
+        assert_eq!(alternatives.len(), 1);
+        assert_eq!(alternatives[0].channels(), 2);
+        assert_eq!(alternatives[0].sample_format(), SampleFormat::F32);
+        assert_eq!(alternatives[0].sample_rate().0, 44_100);
+    }
+
+    #[test]
+    fn unstarted_candidate_cannot_feed_asr_or_mark_audio_valid() {
+        let state = StreamState::new();
+        state.accepting_audio.store(false, Ordering::Release);
+        let consumer = RecordingConsumer::default();
+        process_callback(
+            &[0.5; 320],
+            1,
+            TARGET_SAMPLE_RATE,
+            &consumer,
+            &|_| {},
+            None,
+            &state,
+        );
+        assert!(consumer.chunks.lock().unwrap().is_empty());
+        assert!(state.last_callback_time.lock().is_none());
+    }
+
+    #[test]
+    fn startup_uses_candidates_in_order_and_stops_after_success() {
+        let mut attempted = Vec::new();
+        let result = try_input_candidates(
+            ["native", "alternative", "other device"],
+            RecorderError::NoInputDevice,
+            |candidate| {
+                attempted.push(candidate);
+                if candidate == "alternative" {
+                    Ok(candidate)
+                } else {
+                    Err(RecorderError::EngineFailed(candidate.into()))
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(result, "alternative");
+        assert_eq!(attempted, ["native", "alternative"]);
+    }
+
+    #[test]
+    fn permission_failure_never_probes_more_devices() {
+        let mut attempts = 0;
+        let result: Result<(), _> =
+            try_input_candidates([1, 2], RecorderError::NoInputDevice, |_| {
+                attempts += 1;
+                Err(RecorderError::PermissionDenied)
+            });
+        assert!(matches!(result, Err(RecorderError::PermissionDenied)));
+        assert_eq!(attempts, 1);
     }
 
     #[test]

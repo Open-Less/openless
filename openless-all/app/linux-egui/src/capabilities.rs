@@ -57,6 +57,9 @@ impl LinuxCapabilitySnapshot {
                 // so the host can never replace its own package. Always false —
                 // the UI gates every update control on it.
                 supports_auto_update: false,
+                // Linux uses the separate egui/fcitx host; the Tauri Voice
+                // Edit coordinator and panel are not available in that host.
+                supports_voice_edit: false,
             },
             permissions: PermissionSnapshot {
                 microphone: if desktop {

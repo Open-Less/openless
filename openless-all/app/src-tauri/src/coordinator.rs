@@ -35,6 +35,7 @@ mod qa;
 mod restore_runtime;
 #[cfg(all(not(mobile), target_os = "windows"))]
 pub(crate) mod selection_voice_session;
+pub(crate) mod voice_edit_session;
 use capsule_focus::*;
 pub(crate) use capsule_focus::{
     capture_external_focus_target, capture_focus_target, capture_frontmost_app,
@@ -117,12 +118,13 @@ fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
             return;
         }
         inner.vocab_card_visible.store(true, Ordering::SeqCst);
-        // The card must be clickable, so cursor passthrough must be disabled.
+        // The card owns the shared HWND: its full client area is interactive,
+        // while the capsule rail is hidden until the card is dismissed.
         // Android has no capsule window and tauri's set_ignore_cursor_events
         // does not exist there (same handling as capsule_focus.rs).
         #[cfg(not(mobile))]
-        if let Err(e) = capsule.set_cursor_passthrough(false) {
-            log::warn!("[vocab-card] set_ignore_cursor_events(false) failed: {e}");
+        if let Err(e) = capsule.set_card_hit_test_mode() {
+            log::warn!("[vocab-card] enabling card hit testing failed: {e}");
         }
         if let Err(e) = capsule.set_size(VOCAB_CARD_WIDTH, height) {
             log::warn!("[vocab-card] resize failed: {e}");
@@ -131,6 +133,9 @@ fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
             capsule.position_vocab_card(VOCAB_CARD_WIDTH, height, VOCAB_CARD_EDGE_MARGIN)
         {
             log::warn!("[vocab-card] position failed: {e}");
+        }
+        if let Err(e) = capsule.refresh_card_hit_test() {
+            log::warn!("[vocab-card] refreshing card hit testing failed: {e}");
         }
         // Positioning ditto: the dedup cache in `maybe_position_capsule_bottom_center`
         // only tracks "monitor + translation state" and knows nothing about
@@ -170,28 +175,14 @@ fn hide_vocab_suggestion_card(inner: &Arc<Inner>) {
         // Passthrough must be restored, or the capsule keeps blocking that
         // area at the bottom of the screen.
         #[cfg(not(mobile))]
-        if let Err(e) = capsule.set_cursor_passthrough(true) {
-            log::warn!("[vocab-card] restoring cursor passthrough failed: {e}");
+        if let Err(e) = capsule.restore_capsule_hit_test_mode() {
+            log::warn!("[vocab-card] restoring capsule hit testing failed: {e}");
         }
-        // Size must be restored too — the card shrank the window to its own
-        // size, and without this the next capsule would be squeezed into a
-        // 320×108 window, effectively invisible.
-        let bounds = crate::capsule_window_bounds(false);
-        if let Err(e) = capsule.set_size(bounds.width, bounds.height) {
-            log::warn!("[vocab-card] restoring capsule size failed: {e}");
-        }
-        // Position must be restored too — the card moved the window to the
-        // bottom-right while the capsule sits bottom-center. Restoring size
-        // alone would put the next recording capsule in the bottom-right
-        // corner.
-        //
-        // Both cache invalidation and this repositioning are needed:
-        // invalidation guarantees the next emit_capsule recomputes even if this
-        // repositioning fails; repositioning guarantees the window is already
-        // in the right place even if some path shows it without emit_capsule.
-        capsule.invalidate_layout();
-        if let Err(e) = capsule.position_capsule_bottom_center(false) {
-            log::warn!("[vocab-card] restoring capsule position failed: {e}");
+        // On mobile there is no native hit-test mode to restore, but the capsule
+        // still needs the cached style/rail geometry after the card resized it.
+        #[cfg(mobile)]
+        if let Err(e) = capsule.restore_capsule_geometry() {
+            log::warn!("[vocab-card] restoring capsule geometry failed: {e}");
         }
     });
 }
@@ -264,8 +255,8 @@ fn show_insert_fallback_card(inner: &Arc<Inner>, text: String, reason: &'static 
             presentation_id,
         };
         #[cfg(not(mobile))]
-        if let Err(e) = capsule.set_cursor_passthrough(false) {
-            log::warn!("[fallback-card] set_ignore_cursor_events(false) failed: {e}");
+        if let Err(e) = capsule.set_card_hit_test_mode() {
+            log::warn!("[fallback-card] enabling card hit testing failed: {e}");
         }
         if let Err(e) = capsule.set_size(FALLBACK_CARD_WIDTH, FALLBACK_CARD_INITIAL_HEIGHT) {
             log::warn!("[fallback-card] resize failed: {e}");
@@ -274,6 +265,9 @@ fn show_insert_fallback_card(inner: &Arc<Inner>, text: String, reason: &'static 
             capsule.position_fallback_card(FALLBACK_CARD_WIDTH, FALLBACK_CARD_INITIAL_HEIGHT)
         {
             log::warn!("[fallback-card] position failed: {e}");
+        }
+        if let Err(e) = capsule.refresh_card_hit_test() {
+            log::warn!("[fallback-card] refreshing card hit testing failed: {e}");
         }
         // Positioning ditto: the dedup cache in `maybe_position_capsule_bottom_center`
         // only tracks "monitor + translation state" and knows nothing about
@@ -320,6 +314,9 @@ fn report_insert_fallback_card_height(
         if let Err(e) = capsule.position_fallback_card(FALLBACK_CARD_WIDTH, height) {
             log::warn!("[fallback-card] measured position failed: {e}");
         }
+        if let Err(e) = capsule.refresh_card_hit_test() {
+            log::warn!("[fallback-card] refreshing measured card hit testing failed: {e}");
+        }
     })
 }
 
@@ -348,24 +345,14 @@ fn hide_insert_fallback_card(inner: &Arc<Inner>) {
         // Passthrough must be restored, or the capsule keeps blocking that
         // screen area.
         #[cfg(not(mobile))]
-        if let Err(e) = capsule.set_cursor_passthrough(true) {
-            log::warn!("[fallback-card] restoring cursor passthrough failed: {e}");
+        if let Err(e) = capsule.restore_capsule_hit_test_mode() {
+            log::warn!("[fallback-card] restoring capsule hit testing failed: {e}");
         }
-        // Size must be restored too — the card shrank the window to its own
-        // size, and without this the next capsule would be squeezed into a
-        // card-sized window, effectively invisible.
-        let bounds = crate::capsule_window_bounds(false);
-        if let Err(e) = capsule.set_size(bounds.width, bounds.height) {
-            log::warn!("[fallback-card] restoring capsule size failed: {e}");
-        }
-        // Position must be restored too — the card moved the window to the
-        // bottom-right while the capsule sits bottom-center. Restoring size
-        // alone would put the next recording capsule in the bottom-right
-        // corner. Both cache invalidation and this repositioning are needed;
-        // see `hide_vocab_suggestion_card` for rationale.
-        capsule.invalidate_layout();
-        if let Err(e) = capsule.position_capsule_bottom_center(false) {
-            log::warn!("[fallback-card] restoring capsule position failed: {e}");
+        // On mobile there is no native hit-test mode to restore, but the capsule
+        // still needs the cached style/rail geometry after the card resized it.
+        #[cfg(mobile)]
+        if let Err(e) = capsule.restore_capsule_geometry() {
+            log::warn!("[fallback-card] restoring capsule geometry failed: {e}");
         }
         if let Some(payload) = deferred_capsule {
             // During the card, QA / Selection Polish still advance capsule
@@ -578,6 +565,10 @@ struct Inner {
     selection_voice_host: Arc<Mutex<selection_voice_session::SelectionVoiceHostState>>,
     #[cfg(all(not(mobile), target_os = "windows"))]
     selection_voice_capture: Mutex<Option<Arc<openless_core::VoiceTranscriptionSession>>>,
+    /// Host-owned lifecycle handles for Issue #900. The session model and
+    /// EditPlan remain in openless-core; this lock only pairs dictation IDs
+    /// with the platform target captured before the first await.
+    voice_edit_host: Arc<Mutex<voice_edit_session::VoiceEditHostState>>,
     /// Selection voice QA (issue #118): global shortcut listener parallel to
     /// the dictation hotkey (global-hotkey crate). `None` means the feature is
     /// off or installation has not succeeded yet.
@@ -740,6 +731,9 @@ impl Coordinator {
                 )),
                 #[cfg(all(not(mobile), target_os = "windows"))]
                 selection_voice_capture: Mutex::new(None),
+                voice_edit_host: Arc::new(Mutex::new(
+                    voice_edit_session::VoiceEditHostState::default(),
+                )),
                 qa_hotkey: Mutex::new(None),
                 coding_agent_modifier_hotkey: Mutex::new(None),
                 coding_agent_combo_hotkey: Mutex::new(None),
@@ -868,6 +862,9 @@ impl Coordinator {
             selection_voice_host: Arc::clone(&selection_voice_host),
             #[cfg(all(not(mobile), target_os = "windows"))]
             selection_voice_capture: Mutex::new(None),
+            voice_edit_host: Arc::new(
+                Mutex::new(voice_edit_session::VoiceEditHostState::default()),
+            ),
             qa_hotkey: Mutex::new(None),
             coding_agent_modifier_hotkey: Mutex::new(None),
             coding_agent_combo_hotkey: Mutex::new(None),
@@ -890,6 +887,57 @@ impl Coordinator {
         Arc::clone(&self.inner.backend)
     }
 
+    pub(crate) async fn start_voice_edit_session(
+        &self,
+    ) -> Result<openless_core::VoiceEditSnapshot, String> {
+        voice_edit_session::start(&self.inner).await
+    }
+    pub(crate) async fn finalize_voice_edit_from_overlay(&self) -> Result<(), String> {
+        voice_edit_session::from_overlay(&self.inner).await?;
+        self.inner.host.show_voice_edit();
+        Ok(())
+    }
+    pub(crate) async fn finish_voice_edit_dictation(
+        &self,
+        id: openless_core::SessionId,
+    ) -> Result<openless_core::VoiceEditSnapshot, String> {
+        voice_edit_session::finish_dictation(&self.inner, id).await
+    }
+    pub(crate) async fn start_voice_edit_instruction(
+        &self,
+        id: openless_core::SessionId,
+    ) -> Result<openless_core::VoiceEditSnapshot, String> {
+        voice_edit_session::start_instruction(&self.inner, id).await
+    }
+    pub(crate) async fn finish_voice_edit_instruction(
+        &self,
+        id: openless_core::SessionId,
+    ) -> Result<openless_core::VoiceEditSnapshot, String> {
+        voice_edit_session::finish_instruction(&self.inner, id).await
+    }
+    pub(crate) async fn commit_voice_edit_session(
+        &self,
+        id: openless_core::SessionId,
+    ) -> Result<openless_core::VoiceEditSnapshot, String> {
+        voice_edit_session::commit(&self.inner, id).await
+    }
+    pub(crate) async fn cancel_voice_edit_session(
+        &self,
+        id: Option<openless_core::SessionId>,
+    ) -> Result<Option<openless_core::VoiceEditSnapshot>, String> {
+        voice_edit_session::cancel(&self.inner, id).await
+    }
+    pub(crate) fn voice_edit_session_can_close(
+        &self,
+        id: Option<openless_core::SessionId>,
+    ) -> Result<(), String> {
+        voice_edit_session::can_close(&self.inner, id)
+    }
+
+    pub(crate) fn voice_edit_session_snapshot(&self) -> Option<openless_core::VoiceEditSnapshot> {
+        voice_edit_session::snapshot(&self.inner)
+    }
+
     pub fn show_core_insert_fallback(&self, text: String, reason: &str) {
         let reason = match reason {
             "partial_stream" => crate::types::INSERT_FALLBACK_REASON_PARTIAL_STREAM,
@@ -899,7 +947,8 @@ impl Coordinator {
     }
 
     pub fn present_core_capsule(&self, payload: CapsulePayload) {
-        let _ = self.present_core_capsule_if_current(payload, None);
+        let captured_revision = self.inner.host.capsule_revision();
+        let _ = self.present_core_capsule_at_revision(payload, None, captured_revision);
     }
 
     /// Selection-voice claims the shared capsule from hotkey Start through
@@ -932,11 +981,21 @@ impl Coordinator {
         payload: CapsulePayload,
         expected_epoch: Option<u64>,
     ) -> Option<u64> {
+        let captured_revision = self.inner.host.capsule_revision();
+        self.present_core_capsule_at_revision(payload, expected_epoch, captured_revision)
+    }
+
+    fn present_core_capsule_at_revision(
+        &self,
+        payload: CapsulePayload,
+        expected_epoch: Option<u64>,
+        captured_revision: u64,
+    ) -> Option<u64> {
         let state = payload.state;
         // Core already owns this frame's translation, readiness, and session
         // ownership; the window layer must not rebuild it from stale late
         // state, or cold starts and fast switches lose real feedback.
-        let epoch = emit_core_capsule(&self.inner, payload, expected_epoch)?;
+        let epoch = emit_core_capsule(&self.inner, payload, expected_epoch, captured_revision)?;
         if let Some(delay_ms) = core_capsule_hide_delay(state) {
             let inner = Arc::clone(&self.inner);
             self.inner.host.spawn(async move {

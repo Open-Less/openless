@@ -1,6 +1,45 @@
 import type { zhCN } from './zh-CN';
 
 export const de: typeof zhCN = {
+  voiceEdit: {
+    title: 'Sprachbearbeitung',
+    description:
+      'Diktieren Sie einen Entwurf oder laden Sie den Zieltext, bearbeiten Sie ihn per Sprache und bestätigen Sie die Übernahme.',
+    targetHint:
+      'Setzen Sie den Cursor in das Zielfeld oder markieren Sie den zu bearbeitenden Text.',
+    androidTargetHint: 'Weisen Sie einer Overlay-Wischgeste die Sprachbearbeitung zu. Nehmen Sie in der Ziel-App auf und wischen Sie zur Vorschau. Nach der Bestätigung wird das ursprüngliche Feld aktualisiert.',
+    startDraft: 'Entwurf diktieren',
+    status: 'Status: {{phase}}',
+    turns: 'Anweisungen: {{count}}',
+    draft: 'Entwurf',
+    preview: 'Aktuelle Vorschau',
+    history: 'Anweisungsverlauf',
+    turn: 'Anweisung {{count}}',
+    polishedInstruction: 'Überarbeitet: {{text}}',
+    turnPreview: 'Vorschau: {{text}}',
+    finishDraft: 'Entwurf abschließen',
+    nextInstruction: 'Nächste Anweisung aufnehmen',
+    finishInstruction: 'Anweisung abschließen',
+    commit: 'Bestätigen und übernehmen',
+    restart: 'Erneut starten',
+    openPanel: 'Panel öffnen',
+    errors: {
+      voiceEditFieldChanged:
+        'Der ursprüngliche Feldinhalt hat sich geändert. Starten Sie die Bearbeitung erneut.',
+      voiceEditTargetUnavailable:
+        'Das Zielfeld oder sein vollständiger Text konnte nicht gelesen werden. Wählen Sie das Ziel erneut.',
+    },
+    phase: {
+      dictating: 'Entwurf wird diktiert',
+      draft_ready: 'Entwurf bereit',
+      editing: 'Anweisung wird aufgenommen',
+      applying: 'Bearbeitungsplan wird angewendet',
+      preview: 'Bestätigung ausstehend',
+      committing: 'Text wird übernommen',
+      completed: 'Übernommen',
+      cancelled: 'Abgebrochen',
+    },
+  },
   cloudSyncE2ee: {
     protocolTitle: 'Cloud-Sync: Vereinbarung und Datenschutz',
     protocolIntro:
@@ -1794,6 +1833,9 @@ export const de: typeof zhCN = {
       thinkingBudget: 'Festes Budget',
       maxTokensLabel: 'Maximale Ausgabetokens',
       thinkingBudgetLabel: 'Tokenbudget für das Denken',
+      serviceTierLabel: 'Ark-Inferenz mit niedriger Latenz (fast)',
+      serviceTierHint:
+        'Nur unterstützte Ark-Modelle können diese Option verwenden; andere Modelle geben möglicherweise 400 zurück.',
       responsesThinkingHint:
         'Bei einigen Modellen lässt sich das Denken nur reduzieren, nicht abschalten. Anfragen mit Denken senden keinen Temperaturparameter.',
       messagesThinkingHint:
@@ -1803,6 +1845,8 @@ export const de: typeof zhCN = {
       llmTokenLimitInvalid: 'Tokenlimits müssen positive ganze Zahlen sein.',
       llmThinkingBudgetInvalid:
         'Das Denkbudget muss mindestens 1024 betragen und im festen Modus unter der Ausgabegrenze liegen.',
+      llmServiceTierInvalid:
+        'Ungültige Option für Inferenz mit niedriger Latenz. Wähle sie erneut.',
       llmResponseIncomplete:
         'Die Antwort ist unvollständig oder hat die Ausgabegrenze erreicht. Bereits ausgegebener Text bleibt erhalten.',
       llmProtocolHeaderConflict:
@@ -1948,7 +1992,7 @@ export const de: typeof zhCN = {
       hotkeyFailed: 'Kurzbefehlüberwachung fehlgeschlagen',
       windowsImeLabel: 'Windows-Eingabemethode',
       windowsImeDesc:
-        'Wechselt während Sprachsitzungen vorübergehend zur OpenLess-TSF-Eingabemethode, um Einschränkungen der Zwischenablage zu umgehen.',
+        'Fügt diktierten Text über den OpenLess-TSF-Textdienst ein, der neben Ihrer Eingabemethode aktiv bleibt, um Einschränkungen der Zwischenablage zu umgehen.',
       windowsImeInstalled: 'Installiert',
       windowsImeUnavailable: 'Nicht verfügbar',
       androidImeLabel: 'Eingabemethode (IME)',
@@ -2117,6 +2161,7 @@ export const de: typeof zhCN = {
         right: 'Nach rechts',
       },
       androidOverlayGestureAction: {
+        voice_edit: 'Sprachbearbeitung',
         none: 'Keine Aktion',
         quick_note: 'Schnellnotiz',
         translation: 'Übersetzung',

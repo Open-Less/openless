@@ -4394,13 +4394,34 @@ impl OpenLessBackend {
             Some(id.clone()),
             crate::llm_protocol::REQUEST_FORMAT_ACCOUNT,
         )?;
+        let service_tier_key = CredentialKey::new(
+            crate::CredentialNamespace::Llm,
+            Some(id.clone()),
+            crate::llm_protocol::SERVICE_TIER_ACCOUNT,
+        )?;
         let reset = kind == ChannelKind::Llm && previous.provider_type != provider_type;
-        let old_format = if reset {
-            let value = self.deps.credential_store.read(key.clone()).await?;
+        let (old_format, old_service_tier) = if reset {
+            let old_format = self.deps.credential_store.read(key.clone()).await?;
+            let old_service_tier = self
+                .deps
+                .credential_store
+                .read(service_tier_key.clone())
+                .await?;
             self.deps.credential_store.remove(key.clone()).await?;
-            value
+            if let Err(error) = self
+                .deps
+                .credential_store
+                .remove(service_tier_key.clone())
+                .await
+            {
+                if let Some(value) = old_format.clone() {
+                    self.deps.credential_store.write(key.clone(), value).await?;
+                }
+                return Err(error);
+            }
+            (old_format, old_service_tier)
         } else {
-            None
+            (None, None)
         };
         let result = self
             .deps
@@ -4415,6 +4436,12 @@ impl OpenLessBackend {
         if result.is_err() {
             if let Some(value) = old_format {
                 self.deps.credential_store.write(key, value).await?;
+            }
+            if let Some(value) = old_service_tier {
+                self.deps
+                    .credential_store
+                    .write(service_tier_key, value)
+                    .await?;
             }
         }
         result?;
@@ -6409,6 +6436,7 @@ impl OpenLessBackend {
         engine_result: &crate::ports::EngineResult,
     ) {
         if context.output_target == DictationOutputTarget::Qa
+            || context.output_target == DictationOutputTarget::VoiceEdit
             || context.output_target == DictationOutputTarget::CloudNote
             || self.is_cloud_note(result.session_id)
         {
@@ -8435,6 +8463,8 @@ mod tests {
             )
             .await
             .unwrap();
+        // Valid quiet PCM reaches ASR; an empty transcript is distinct from a missing microphone input.
+        silent.feed_pcm(&[1, 0]).unwrap();
         assert_eq!(
             silent.finish().await.unwrap(),
             LessComputerVoiceFinish::Dictated {
@@ -8485,6 +8515,40 @@ mod tests {
         ));
         assert!(runtime.request.lock().unwrap().is_none());
         assert_eq!(backend.less_computer_active_session(), None);
+    }
+
+    #[tokio::test]
+    async fn less_computer_missing_audio_fails_without_chat_errors_and_releases_capture() {
+        use crate::events::{LessComputerEventKind, LessComputerVoiceOutcome};
+        let (_data_dir, backend, _transcription, _runtime) =
+            dictation_backend("less-computer-dictation-missing-audio", "must not commit");
+        let mut events = backend.subscribe();
+        for pcm in [Vec::new(), vec![0; 640]] {
+            let capture = backend
+                .start_less_computer_voice_with(
+                    SessionId::new(),
+                    Arc::new(FakeRecordingControl::default()),
+                    DICTATE,
+                )
+                .await
+                .unwrap();
+            if !pcm.is_empty() {
+                capture.feed_pcm(&pcm).unwrap();
+            }
+            let error = capture.finish().await.unwrap_err();
+            assert_eq!(error.code, BackendErrorCode::InvalidArgument);
+            assert!(!error.retryable);
+            let kinds = less_computer_event_kinds(&mut events);
+            assert!(!kinds
+                .iter()
+                .any(|kind| matches!(kind, LessComputerEventKind::Error { .. })));
+            assert!(
+                matches!(last_voice_state(&kinds), LessComputerEventKind::VoiceState {
+                outcome: Some(LessComputerVoiceOutcome::Failed), transcript, ..
+            } if transcript.is_empty())
+            );
+            assert_eq!(backend.less_computer_active_session(), None);
+        }
     }
 
     #[tokio::test]
@@ -10302,7 +10366,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn llm_protocol_mutations_reset_only_the_format_and_invalidate_tests() {
+    async fn llm_protocol_mutations_reset_protocol_overrides_and_invalidate_tests() {
         use crate::credentials::{CredentialNamespace, InMemoryCredentialStore, SecretValue};
         use crate::llm_protocol::*;
         let backend = OpenLessBackend::new(
@@ -10337,6 +10401,19 @@ mod tests {
             .set_credential(key(REQUEST_FORMAT_ACCOUNT), SecretValue::new("messages"))
             .await
             .unwrap();
+        backend
+            .set_credential(key(SERVICE_TIER_ACCOUNT), SecretValue::new("fast"))
+            .await
+            .unwrap();
+        assert_eq!(
+            backend
+                .read_credential(key(SERVICE_TIER_ACCOUNT))
+                .await
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            "fast"
+        );
         backend
             .set_credential(
                 key(crate::credentials::LLM_API_KEY_ACCOUNT),
@@ -10380,6 +10457,11 @@ mod tests {
             .unwrap();
         assert!(backend
             .read_credential(key(REQUEST_FORMAT_ACCOUNT))
+            .await
+            .unwrap()
+            .is_none());
+        assert!(backend
+            .read_credential(key(SERVICE_TIER_ACCOUNT))
             .await
             .unwrap()
             .is_none());
@@ -11009,6 +11091,65 @@ mod tests {
         assert_eq!(context.output_target, DictationOutputTarget::Qa);
         assert!(!context.insertion.enabled);
         assert!(!context.uses_llm_polisher());
+        backend.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn voice_edit_handoff_keeps_polish_without_inserting_or_recording_intermediate_history() {
+        let data_dir = TestDataDir::new("voice-edit-dictation-handoff");
+        let engine =
+            crate::testing::FixtureDictationEngine::successful("raw draft", "polished draft");
+        let backend =
+            backend_with_dictation_engine(data_dir.path().to_path_buf(), Arc::new(engine.clone()));
+        let mut preferences = backend.get_preferences();
+        preferences.streaming_insert = true;
+        backend.set_preferences(preferences).unwrap();
+        backend.start().await.unwrap();
+        let session = backend
+            .start_dictation_with_options(DictationStartOptions {
+                output_target: DictationOutputTarget::Undecided,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let result = backend
+            .stop_dictation_session_with_options(
+                Some(session),
+                DictationStopOptions::default(),
+                Some(DictationOutputTarget::VoiceEdit),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.raw_text, "raw draft");
+        assert_eq!(result.polished_text, "polished draft");
+        assert_eq!(result.inserted, crate::types::InsertStatus::NotRequested);
+        assert!(backend.list_history().unwrap().is_empty());
+        let contexts = engine.contexts();
+        let context = contexts.last().unwrap();
+        assert_eq!(context.output_target, DictationOutputTarget::VoiceEdit);
+        assert!(!context.insertion.enabled);
+        assert!(!context.insertion.streaming);
+        assert!(context.uses_llm_polisher());
+        // Later instructions use the same output contract without another foreground handoff.
+        let instruction = backend
+            .start_dictation_with_options(DictationStartOptions {
+                insert_text: false,
+                output_target: DictationOutputTarget::VoiceEdit,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            backend
+                .stop_dictation_session(instruction)
+                .await
+                .unwrap()
+                .inserted,
+            crate::types::InsertStatus::NotRequested
+        );
+        let contexts = engine.contexts();
+        assert!(!contexts.last().unwrap().insertion.streaming);
+        assert!(backend.list_history().unwrap().is_empty());
         backend.shutdown().await.unwrap();
     }
 
@@ -12226,7 +12367,10 @@ mod tests {
     async fn raw_style_runs_through_the_real_pipeline_without_a_polishing_stage() {
         let data_dir = TestDataDir::new("raw-real-pipeline");
         let polisher = crate::testing::FixtureTextPolisher::successful("must not run");
-        let recorder = Arc::new(crate::testing::FixtureAudioRecorder::default());
+        let recorder = Arc::new(crate::testing::FixtureAudioRecorder::new(
+            vec![vec![1, 0]],
+            Vec::new(),
+        ));
         let engine = Arc::new(crate::PipelineDictationEngine::new(
             recorder.clone(),
             Arc::new(crate::testing::FixtureTranscriptionEngine::successful(
@@ -12284,7 +12428,10 @@ mod tests {
         let backend = backend_with_dictation_engine(
             data_dir.path().to_path_buf(),
             Arc::new(crate::PipelineDictationEngine::new(
-                Arc::new(crate::testing::FixtureAudioRecorder::default()),
+                Arc::new(crate::testing::FixtureAudioRecorder::new(
+                    vec![vec![1, 0]],
+                    Vec::new(),
+                )),
                 Arc::new(crate::testing::FixtureTranscriptionEngine::successful(
                     "raw words",
                     80,

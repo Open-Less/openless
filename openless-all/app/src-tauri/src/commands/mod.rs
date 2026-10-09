@@ -78,6 +78,7 @@ mod settings;
 #[cfg(not(mobile))]
 mod sherpa_asr;
 mod style_packs;
+mod voice_edit;
 
 pub use channels::*;
 pub use cloud_sync::*;
@@ -112,6 +113,7 @@ pub use settings::*;
 #[allow(unused_imports)]
 pub use sherpa_asr::*;
 pub use style_packs::*;
+pub use voice_edit::*;
 
 pub(crate) type CoordinatorState<'a> = State<'a, Arc<Coordinator>>;
 pub(crate) type CoreState<'a> = State<'a, Arc<openless_core::OpenLessBackend>>;

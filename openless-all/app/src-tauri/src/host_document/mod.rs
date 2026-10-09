@@ -55,6 +55,87 @@ use serde::Serialize;
 /// significantly inflating the prompt.
 pub const DEFAULT_BUDGET_CHARS: usize = 600;
 
+/// The original control and its complete text, captured before the edit panel takes focus.
+#[derive(Debug, Clone)]
+pub(crate) struct NativeVoiceEditTarget {
+    insertion_target: crate::selection::SelectionInsertionTarget,
+    #[cfg(target_os = "windows")]
+    native: windows::VoiceEditTarget,
+    #[cfg(target_os = "macos")]
+    native: macos::VoiceEditTarget,
+}
+
+pub(crate) fn capture_voice_edit_target() -> Result<
+    (
+        String,
+        Option<openless_core::TextSelection>,
+        NativeVoiceEditTarget,
+    ),
+    String,
+> {
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    {
+        let insertion_target = crate::selection::capture_selection_insertion_target();
+        if !crate::selection::selection_insertion_target_is_captured(&insertion_target) {
+            return Err("voiceEditTargetUnavailable".into());
+        }
+        #[cfg(target_os = "windows")]
+        let (text, selection, native) = windows::capture_voice_edit_target()?;
+        #[cfg(target_os = "macos")]
+        let (text, selection, native) = macos::capture_voice_edit_target()?;
+        Ok((
+            text,
+            selection,
+            NativeVoiceEditTarget {
+                insertion_target,
+                native,
+            },
+        ))
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        Err("voiceEditTargetUnavailable".into())
+    }
+}
+
+/// Restore the original app, compare the exact control, full text and selection, then write.
+/// Call only on the blocking native insertion thread.
+pub(crate) fn apply_voice_edit_target(
+    target: &NativeVoiceEditTarget,
+    text: &str,
+    insert: impl FnOnce(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    {
+        if !crate::selection::reactivate_selection_insertion_target(&target.insertion_target) {
+            return Err("voiceEditTargetChanged".into());
+        }
+        #[cfg(target_os = "windows")]
+        return windows::apply_voice_edit_target(&target.native, text, insert);
+        #[cfg(target_os = "macos")]
+        return macos::apply_voice_edit_target(&target.native, text, insert);
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = (target, text, insert);
+        Err("voiceEditTargetUnavailable".into())
+    }
+}
+
+/// Restore only the selection we changed when a native write fails. Platform
+/// callbacks must revalidate the original control and unchanged text first.
+#[cfg(any(test, target_os = "windows", target_os = "macos"))]
+fn write_with_selection_recovery(
+    write: impl FnOnce() -> Result<(), String>,
+    recover: impl FnOnce(),
+) -> Result<(), String> {
+    let result = write();
+    if result.is_err() {
+        recover();
+    }
+    result
+}
+
 /// Timeout for a single AX message. 200ms is far above a normal AX round-trip (single-digit
 /// ms); it only catches hung apps.
 #[cfg(target_os = "macos")]
@@ -429,6 +510,26 @@ mod tests {
             bundle_id: bundle.map(str::to_string),
             role: role.map(str::to_string),
             subrole: subrole.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn failed_native_write_restores_selection_before_retry() {
+        let caret = std::cell::Cell::new((3, 3));
+        for result in [Err("clipboard unavailable".to_string()), Ok(())] {
+            let original = caret.get();
+            let outcome = write_with_selection_recovery(
+                || {
+                    caret.set((0, 6));
+                    result.clone()
+                },
+                || caret.set(original),
+            );
+            assert_eq!(outcome, result);
+            assert_eq!(
+                caret.get(),
+                if outcome.is_err() { original } else { (0, 6) }
+            );
         }
     }
 

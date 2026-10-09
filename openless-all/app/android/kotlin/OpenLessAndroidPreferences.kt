@@ -25,7 +25,7 @@ object OpenLessAndroidPreferences {
     private val VALID_OVERLAY_LEFT_SWIPE_ACTIONS = setOf("translation", "style_pack")
     private val VALID_OVERLAY_CANCEL_SWIPE_DIRECTIONS = setOf("up", "down")
     private val VALID_OVERLAY_GESTURE_ACTIONS =
-        setOf("none", "quick_note", "translation", "style_pack", "cancel", "qa")
+        setOf("none", "quick_note", "translation", "style_pack", "cancel", "qa", "voice_edit")
 
     fun overlayTriggerMode(context: Context): String? {
         val value = readPreferenceString(context, KEY_OVERLAY_TRIGGER) ?: return null
