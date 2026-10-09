@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::cloud_sync_e2ee_protocol::types::{
@@ -11,7 +12,7 @@ use crate::cloud_sync_e2ee_protocol::types::{
 };
 
 use super::types::*;
-use super::validate::{timestamp, validate_sync_documents};
+use super::validate::{normalize_merged_collection_order, timestamp, validate_sync_documents};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -62,6 +63,7 @@ pub struct MergePreview {
     conflicts: Vec<RedactedConflict>,
     active_choices: BTreeMap<SyncNamespace, Option<String>>,
     active_conflicts: BTreeMap<String, (SyncNamespace, Option<String>, Option<String>)>,
+    agreed_tie_order: BTreeMap<DocumentKind, Option<BTreeMap<String, usize>>>,
 }
 
 impl fmt::Debug for MergePreview {
@@ -96,10 +98,11 @@ impl MergePreview {
         }
         for (id, (key, local, remote)) in std::mem::take(&mut self.unresolved) {
             let chosen = match selected[&id] {
-                ConflictSide::Local => local,
-                ConflictSide::Remote => remote,
+                ConflictSide::Local => local.clone(),
+                ConflictSide::Remote => remote.clone(),
             };
-            if let Some(unit) = chosen {
+            if let Some(mut unit) = chosen {
+                keep_highest_hits(&mut unit, [local.as_ref(), remote.as_ref()]);
                 self.accepted.insert(key, unit);
             }
         }
@@ -146,6 +149,7 @@ impl MergePreview {
                 return Err(DocumentError::ConflictChoiceRequired);
             }
         }
+        normalize_merged_collection_order(&mut self.source, &self.agreed_tie_order)?;
         validate_sync_documents(self.source, self.revision)
     }
 }
@@ -159,6 +163,14 @@ pub fn diff_sync_documents(
     let base = baseline.map(|set| units(&set.set));
     let left = units(&local.set);
     let right = units(&remote.set);
+    let agreed_tie_order = [
+        DocumentKind::Dictionary,
+        DocumentKind::Corrections,
+        DocumentKind::History,
+    ]
+    .into_iter()
+    .map(|kind| (kind, agreed_collection_order(&local.set, &remote.set, kind)))
+    .collect();
     let keys: BTreeSet<_> = base
         .iter()
         .flat_map(|map| map.keys())
@@ -174,6 +186,7 @@ pub fn diff_sync_documents(
         conflicts: Vec::new(),
         active_choices: BTreeMap::new(),
         active_conflicts: BTreeMap::new(),
+        agreed_tie_order,
     };
     for key in keys {
         let ancestor = base.as_ref().and_then(|map| map.get(&key));
@@ -204,7 +217,8 @@ pub fn diff_sync_documents(
             None
         };
         if let Some(chosen) = chosen {
-            if let Some(unit) = chosen {
+            if let Some(mut unit) = chosen {
+                keep_highest_hits(&mut unit, [local_unit, remote_unit]);
                 preview.accepted.insert(key, unit);
             }
             continue;
@@ -321,6 +335,63 @@ fn units(set: &DocumentSet) -> UnitMap {
     result
 }
 
+fn collection_order(set: &DocumentSet, kind: DocumentKind) -> Vec<String> {
+    let mut documents: Vec<_> = set
+        .documents
+        .iter()
+        .filter(|doc| doc.kind == kind)
+        .collect();
+    documents.sort_by_key(|doc| {
+        doc.value
+            .get("sortIndex")
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::MAX)
+    });
+    documents.into_iter().map(|doc| doc.id.clone()).collect()
+}
+
+fn agreed_collection_order(
+    local: &DocumentSet,
+    remote: &DocumentSet,
+    kind: DocumentKind,
+) -> Option<BTreeMap<String, usize>> {
+    let local_order = collection_order(local, kind);
+    let remote_order = collection_order(remote, kind);
+    let remote_ids: BTreeSet<_> = remote_order.iter().collect();
+    let local_common: Vec<_> = local_order
+        .iter()
+        .filter(|id| remote_ids.contains(id))
+        .cloned()
+        .collect();
+    let local_ids: BTreeSet<_> = local_order.iter().collect();
+    let remote_common: Vec<_> = remote_order
+        .iter()
+        .filter(|id| local_ids.contains(id))
+        .cloned()
+        .collect();
+    let order = if local_common.is_empty() {
+        if local_order <= remote_order {
+            local_order.into_iter().chain(remote_order).collect()
+        } else {
+            remote_order.into_iter().chain(local_order).collect()
+        }
+    } else if local_common == remote_common {
+        local_common
+    } else {
+        return None;
+    };
+    if order.is_empty() {
+        return None;
+    }
+    Some(
+        order
+            .into_iter()
+            .enumerate()
+            .map(|(index, id)| (id, index))
+            .collect(),
+    )
+}
+
 fn unit_key(key: &DocumentKey) -> DocumentKey {
     DocumentKey {
         kind: if key.kind == DocumentKind::ProviderCredentials {
@@ -332,6 +403,63 @@ fn unit_key(key: &DocumentKey) -> DocumentKey {
     }
 }
 
+/// Fields that record how one device listed or used a record, not what the record says.
+/// They never make two copies differ: validation re-derives `sortIndex` from the record
+/// itself, and `keep_highest_hits` reconciles the dictionary hit counter. Comparing them
+/// would turn ordinary use on two devices into a conflict on every shared record.
+fn usage_fields(kind: DocumentKind) -> &'static [&'static str] {
+    match kind {
+        DocumentKind::Dictionary => &["sortIndex", "hits"],
+        DocumentKind::Corrections | DocumentKind::History => &["sortIndex"],
+        _ => &[],
+    }
+}
+
+fn same_content(left: &LogicalDocument, right: &LogicalDocument) -> bool {
+    let fields = usage_fields(left.kind);
+    if fields.is_empty() {
+        return left == right;
+    }
+    let content = |doc: &LogicalDocument| {
+        let mut value = doc.value.clone();
+        if let Some(object) = value.as_object_mut() {
+            for field in fields {
+                object.remove(*field);
+            }
+        }
+        value
+    };
+    left.id == right.id
+        && left.kind == right.kind
+        && left.schema_version == right.schema_version
+        && content(left) == content(right)
+}
+
+/// A hit counter only grows, on whichever device used the word, so the larger copy is the
+/// better record of use. Neither side's count is a change the user has to pick between.
+fn keep_highest_hits(unit: &mut Unit, sides: [Option<&Unit>; 2]) {
+    for (key, entry) in unit.iter_mut() {
+        let Entry::Live(doc) = entry else { continue };
+        if doc.kind != DocumentKind::Dictionary {
+            continue;
+        }
+        let hits = |doc: &LogicalDocument| doc.value.get("hits").and_then(Value::as_u64);
+        let highest = sides
+            .iter()
+            .flatten()
+            .filter_map(|side| match side.get(key) {
+                Some(Entry::Live(other)) => hits(other),
+                _ => None,
+            })
+            .max();
+        if let Some(highest) = highest.filter(|highest| hits(doc) < Some(*highest)) {
+            if let Some(object) = doc.value.as_object_mut() {
+                object.insert("hits".into(), Value::from(highest));
+            }
+        }
+    }
+}
+
 fn equivalent(left: Option<&Unit>, right: Option<&Unit>) -> bool {
     match (left, right) {
         (None, None) => true,
@@ -339,7 +467,7 @@ fn equivalent(left: Option<&Unit>, right: Option<&Unit>) -> bool {
             left.iter()
                 .all(|(key, value)| match (value, right.get(key)) {
                     (Entry::Deleted(_), Some(Entry::Deleted(_))) => true,
-                    (_, Some(other)) => value == other,
+                    (Entry::Live(doc), Some(Entry::Live(other))) => same_content(doc, other),
                     _ => false,
                 })
         }

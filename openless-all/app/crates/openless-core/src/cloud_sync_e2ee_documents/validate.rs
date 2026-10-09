@@ -724,7 +724,51 @@ pub(crate) fn uuid_v4(value: &str) -> DocumentResult<()> {
     Ok(())
 }
 
+/// Where a record belongs in its collection, derived from what the record says instead of
+/// from one device's list position — a position shifts on every device with each new row,
+/// so two devices in ordinary use could never agree on it.
+///
+/// Mirrors how the stores themselves insert: history and corrections newest first; the
+/// dictionary keeps manual entries (newest first) ahead of learned ones (oldest first).
+/// Rows without a usable `createdAt` sort last in their group.
+fn collection_rank(kind: DocumentKind, value: &Value) -> (bool, bool, i64) {
+    let learned = kind == DocumentKind::Dictionary
+        && value.get("note").and_then(Value::as_str)
+            == Some(crate::shared_types::LEARNED_VOCAB_NOTE);
+    let created = value
+        .get("createdAt")
+        .and_then(Value::as_str)
+        .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
+        .map(|time| time.timestamp_micros());
+    match created {
+        Some(micros) if learned => (learned, false, micros),
+        Some(micros) => (learned, false, micros.saturating_neg()),
+        None => (learned, true, 0),
+    }
+}
+
+/// `sortIndex` stays on the wire as a dense index so older clients and the local stores keep
+/// their existing order. Merge results opt into [`collection_rank`] separately.
 fn normalize_collection_order(set: &mut DocumentSet) -> DocumentResult<()> {
+    let merge_tie_order = BTreeMap::new();
+    normalize_collection_order_with_ties(set, &merge_tie_order, false)
+}
+
+/// Normalize merged records with a device-independent tie-breaker for records whose relative
+/// order was not agreed by both inputs. Shared records with an agreed order retain that order;
+/// records present on only one side sort after them by ID when their collection rank ties.
+pub(crate) fn normalize_merged_collection_order(
+    set: &mut DocumentSet,
+    merge_tie_order: &BTreeMap<DocumentKind, Option<BTreeMap<String, usize>>>,
+) -> DocumentResult<()> {
+    normalize_collection_order_with_ties(set, merge_tie_order, true)
+}
+
+fn normalize_collection_order_with_ties(
+    set: &mut DocumentSet,
+    merge_tie_order: &BTreeMap<DocumentKind, Option<BTreeMap<String, usize>>>,
+    use_collection_rank: bool,
+) -> DocumentResult<()> {
     for kind in [
         DocumentKind::Dictionary,
         DocumentKind::Corrections,
@@ -746,24 +790,34 @@ fn normalize_collection_order(set: &mut DocumentSet) -> DocumentResult<()> {
                 return Err(DocumentError::InvalidDocument);
             }
         }
-        indices.sort_by(|left, right| {
-            let left = &set.documents[*left];
-            let right = &set.documents[*right];
-            (
-                left.value
-                    .get("sortIndex")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(u64::MAX),
-                &left.id,
-            )
-                .cmp(&(
-                    right
-                        .value
+        indices.sort_by_cached_key(|index| {
+            let doc = &set.documents[*index];
+            let tie_order = merge_tie_order.get(&kind);
+            let (tie_group, tie_index, tie_id) = match tie_order {
+                Some(Some(order)) => match order.get(&doc.id) {
+                    Some(index) => (
+                        0u8,
+                        u64::try_from(*index).unwrap_or(u64::MAX),
+                        String::new(),
+                    ),
+                    None => (1u8, 0, doc.id.clone()),
+                },
+                Some(None) => (0u8, 0, doc.id.clone()),
+                None => (
+                    0u8,
+                    doc.value
                         .get("sortIndex")
                         .and_then(Value::as_u64)
                         .unwrap_or(u64::MAX),
-                    &right.id,
-                ))
+                    doc.id.clone(),
+                ),
+            };
+            let rank = if use_collection_rank {
+                collection_rank(kind, &doc.value)
+            } else {
+                (false, false, 0)
+            };
+            (rank, tie_group, tie_index, tie_id)
         });
         for (order, index) in indices.into_iter().enumerate() {
             set.documents[index]
