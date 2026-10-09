@@ -192,9 +192,21 @@ pub mod android {
 
     /// Returns the app-private files directory supplied by Android's Context.
     pub(crate) fn app_files_dir() -> Result<String, String> {
-        // Persistence initializes before mobile_runtime::setup initializes
-        // ndk-context, so use Tao's non-panicking activity registry here.
-        with_tao_android_env(|env, context| {
+        // The directory is fixed for the life of the process, so resolve it once.
+        // Tao only keeps an Activity registered while it is in the foreground:
+        // without this cache and the fallback below, every lookup failed while
+        // the IME ran with no Activity visible. That made the credential vault
+        // unreadable in the middle of a sync restore, which then stayed pending
+        // and left the write gate rejecting every later write.
+        static FILES_DIR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        if let Some(path) = FILES_DIR.get() {
+            return Ok(path.clone());
+        }
+
+        fn files_dir<'local>(
+            env: &mut JNIEnv<'local>,
+            context: &JObject<'local>,
+        ) -> Result<String, String> {
             let directory = env
                 .call_method(context, "getFilesDir", "()Ljava/io/File;", &[])
                 .and_then(|value| value.l())
@@ -218,7 +230,18 @@ pub mod android {
                 return Err("Context files directory is empty".to_string());
             }
             Ok(path)
-        })
+        }
+
+        // Persistence initializes before mobile_runtime::setup initializes
+        // ndk-context, so use Tao's non-panicking activity registry first. The
+        // Context registered by the Application / runtime service returns the
+        // same directory and stays valid with no Activity in the foreground.
+        let path = with_tao_android_env(files_dir).or_else(|tao_error| {
+            with_android_env(files_dir).map_err(|fallback_error| {
+                format!("{tao_error}; registered Android Context fallback failed: {fallback_error}")
+            })
+        })?;
+        Ok(FILES_DIR.get_or_init(|| path).clone())
     }
 
     /// Returns the app-private cache directory supplied by Android's Context.
