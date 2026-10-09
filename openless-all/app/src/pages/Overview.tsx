@@ -3,7 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
-import { getActivityStats, getCredentials, listHistory } from '../lib/ipc';
+import {
+  getActivityStats,
+  getCredentials,
+  listHistory,
+  listProviderDescriptors,
+  readCredential,
+} from '../lib/ipc';
 import { Heatmap } from '../components/Heatmap';
 import { useMobileLayout } from '../lib/useMobileLayout';
 import { countCodePoints } from '../lib/unicode';
@@ -15,6 +21,7 @@ import {
 } from '../lib/localeFormat';
 import { isDesktop } from '../lib/platform';
 import { getOverviewSetup, type OverviewSettingsSection } from '../lib/overviewSetup';
+import { loadOverviewServiceDetails, type OverviewServiceDetails } from '../lib/overviewServices';
 import {
   ACTIVITY_METRICS,
   ACTIVITY_PERIODS,
@@ -71,6 +78,13 @@ const LLM_NAME_KEY_BY_ID: Record<string, string> = {
   custom: 'custom',
 };
 
+const OMNI_NAME_KEY_BY_ID: Record<string, string> = {
+  openai: 'omniOpenai',
+  gemini: 'omniGemini',
+  'dashscope-omni': 'omniDashscope',
+  custom: 'custom',
+};
+
 export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language;
@@ -82,6 +96,11 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
   const [credsLoading, setCredsLoading] = useState(true);
   const [creds, setCreds] = useState<CredentialsStatus | null>(null);
   const { prefs, capability } = useHotkeySettings();
+  const preferencesRef = useRef(prefs);
+  preferencesRef.current = prefs;
+  const [serviceDetails, setServiceDetails] = useState<
+    Partial<Record<'asr' | 'llm' | 'omni', OverviewServiceDetails>>
+  >({});
   // A narrow desktop window still uses desktop shortcuts.
   const desktop = isDesktop();
   const credentialsRequestSeq = useRef(0);
@@ -137,11 +156,17 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
     credentialsRequestSeq.current = requestSeq;
     setCredsError(false);
     setCredsLoading(true);
+    setServiceDetails({});
     getCredentials()
-      .then((status) => {
+      .then(async (status) => {
         if (requestSeq !== credentialsRequestSeq.current) return;
         setCreds(status);
         setCredsError(false);
+        const details = await loadOverviewServiceDetails(status, preferencesRef.current, {
+          listProviderDescriptors,
+          readCredential,
+        });
+        if (requestSeq === credentialsRequestSeq.current) setServiceDetails(details);
       })
       .catch((error) => {
         if (requestSeq !== credentialsRequestSeq.current) return;
@@ -165,7 +190,16 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
     prefs?.activeAsrProvider,
     prefs?.pipelineMode,
     prefs?.activeOmniProvider,
+    prefs?.localAsrActiveModel,
+    prefs?.localWhisperActiveModel,
+    prefs?.foundryLocalAsrModel,
+    prefs?.sherpaOnnxModel,
   ]);
+
+  useEffect(() => {
+    window.addEventListener('ol-channels-changed', refreshCredentials);
+    return () => window.removeEventListener('ol-channels-changed', refreshCredentials);
+  }, [refreshCredentials]);
 
   // ⌘R / Ctrl+R refetches this page's three data sets (history, activity, credentials), same key and semantics as the history page.
   // preventDefault blocks the webview's default full-page reload, which would remount the whole frontend.
@@ -248,11 +282,18 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
     hasShortcut: Boolean(prefs?.dictationHotkey.primary.trim()),
   });
   const openSettings = (section: OverviewSettingsSection) => onOpenSettings?.(section);
-  // Configured provider cards no longer stay resident (no informational value); only still-pending cards
-  // show as reminders. Once everything is configured the whole "current voice services" group hides. While
-  // credentials are loading / the fetch failed (providers empty), keep placeholder cards to avoid a blank flash.
-  const pendingProviders = setup.providers.filter((p) => !p.configured);
-  const showProvidersSection = setup.providers.length === 0 || pendingProviders.length > 0;
+  const providerName = (provider: (typeof setup.providers)[number]) => {
+    const nameKey =
+      provider.id &&
+      (provider.kind === 'asr'
+        ? ASR_NAME_KEY_BY_ID
+        : provider.kind === 'omni'
+          ? OMNI_NAME_KEY_BY_ID
+          : LLM_NAME_KEY_BY_ID)[provider.id];
+    return nameKey
+      ? t(`settings.providers.presets.${nameKey}`)
+      : provider.id || t(provider.kind === 'omni' ? 'overview.omniName' : 'overview.statusUnknown');
+  };
 
   return (
     // Single-screen fixed page: no scrolling, fills the height given by the shell, dashboards share
@@ -278,67 +319,34 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
         }
       />
 
-      {showProvidersSection && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'baseline',
-              justifyContent: 'space-between',
-              flexWrap: 'wrap',
-              gap: 8,
-            }}
-          >
-            <h2 style={{ fontSize: 13, fontWeight: 600, color: 'var(--ol-ink-2)', margin: 0 }}>
-              {t('overview.servicesTitle')}
-            </h2>
-            <Btn
-              size="sm"
-              variant="soft"
-              disabled={!onOpenSettings}
-              onClick={() => openSettings('services')}
-            >
-              {t('overview.actions.services')}
-            </Btn>
-          </div>
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns:
-                mobile || pendingProviders.length < 2
-                  ? 'minmax(0, 1fr)'
-                  : 'repeat(2, minmax(0, 1fr))',
-              gap: 12,
-            }}
-          >
-            {pendingProviders.map((provider) => {
-              const nameKey =
-                provider.id &&
-                (provider.kind === 'asr' ? ASR_NAME_KEY_BY_ID : LLM_NAME_KEY_BY_ID)[provider.id];
-              const name = nameKey
-                ? t(`settings.providers.presets.${nameKey}`)
-                : provider.id ||
-                  t(provider.kind === 'omni' ? 'overview.omniName' : 'overview.statusUnknown');
-              return (
-                <ProviderCard
-                  key={provider.kind}
-                  kind={provider.kind}
-                  name={name}
-                  status="notConfigured"
-                  onConfigure={onOpenSettings ? () => openSettings('services') : undefined}
-                />
-              );
-            })}
-            {setup.providers.length === 0 && (
-              <Card padding={16}>
-                <div role="status" style={{ fontSize: 13, color: 'var(--ol-ink-3)' }}>
-                  {t(credsLoading ? 'overview.statusLoading' : 'overview.credentialsLoadError')}
-                </div>
-              </Card>
-            )}
-          </div>
-        </div>
-      )}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns:
+            mobile || setup.providers.length < 2 ? 'minmax(0, 1fr)' : 'repeat(2, minmax(0, 1fr))',
+          gap: 12,
+          flexShrink: 0,
+        }}
+      >
+        {setup.providers.map((provider) => (
+          <ProviderCard
+            key={provider.kind}
+            kind={provider.kind}
+            name={providerName(provider)}
+            providerId={provider.id}
+            details={serviceDetails[provider.kind]}
+            status={provider.configured ? 'configured' : 'notConfigured'}
+            onConfigure={onOpenSettings ? () => openSettings('services') : undefined}
+          />
+        ))}
+        {setup.providers.length === 0 && (
+          <Card padding={16}>
+            <div role="status" style={{ fontSize: 13, color: 'var(--ol-ink-3)' }}>
+              {t(credsLoading ? 'overview.statusLoading' : 'overview.credentialsLoadError')}
+            </div>
+          </Card>
+        )}
+      </div>
 
       {/* Usage records: title + four metric cards as one group. */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
@@ -483,12 +491,21 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
 interface ProviderCardProps {
   kind: 'asr' | 'llm' | 'omni';
   name: string;
+  providerId: string | null;
+  details?: OverviewServiceDetails;
   status: 'configured' | 'notConfigured';
   onConfigure?: () => void;
 }
 
-function ProviderCard({ kind, name, status, onConfigure }: ProviderCardProps) {
+function ProviderCard({ kind, name, providerId, details, status, onConfigure }: ProviderCardProps) {
   const { t } = useTranslation();
+  const mobile = useMobileLayout();
+  const modelLabel = details?.error
+    ? t('settings.providers.readFailed')
+    : details?.model
+      ? `${t('settings.providers.modelLabel')}: ${details.model}`
+      : null;
+  const secondaryLabel = [providerId, modelLabel].filter(Boolean).join(' · ');
   return (
     <Card padding={16} style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -535,35 +552,68 @@ function ProviderCard({ kind, name, status, onConfigure }: ProviderCardProps) {
             )}
           </div>
           <div
+            title={name}
             style={{
               fontSize: 15,
               fontWeight: 600,
               color: 'var(--ol-ink)',
-              overflowWrap: 'anywhere',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
             }}
           >
             {name}
           </div>
+          {secondaryLabel && (
+            <div
+              title={secondaryLabel}
+              style={{
+                fontSize: 12,
+                fontFamily: 'var(--ol-font-mono)',
+                color: 'var(--ol-ink-3)',
+                marginTop: 3,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {secondaryLabel}
+            </div>
+          )}
         </div>
+        {status === 'configured' && (
+          <Btn
+            size="sm"
+            icon="chevRight"
+            ariaLabel={`${t('overview.manageProvider')} · ${name}`}
+            title={t('overview.manageProvider')}
+            disabled={!onConfigure}
+            onClick={onConfigure}
+          >
+            {!mobile && t('overview.manageProvider')}
+          </Btn>
+        )}
       </div>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: 8,
-        }}
-      >
-        <span
-          style={{ flex: '1 1 160px', fontSize: 13, color: 'var(--ol-ink-3)', lineHeight: 1.5 }}
+      {status === 'notConfigured' && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 8,
+          }}
         >
-          {t(`overview.providerHelp.${kind}`)}
-        </span>
-        <Btn size="sm" icon="chevRight" disabled={!onConfigure} onClick={onConfigure}>
-          {t(status === 'configured' ? 'overview.manageProvider' : 'overview.configureProvider')}
-        </Btn>
-      </div>
+          <span
+            style={{ flex: '1 1 160px', fontSize: 13, color: 'var(--ol-ink-3)', lineHeight: 1.5 }}
+          >
+            {t(`overview.providerHelp.${kind}`)}
+          </span>
+          <Btn size="sm" icon="chevRight" disabled={!onConfigure} onClick={onConfigure}>
+            {t('overview.configureProvider')}
+          </Btn>
+        </div>
+      )}
     </Card>
   );
 }
