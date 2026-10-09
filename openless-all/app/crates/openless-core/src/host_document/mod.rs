@@ -9,7 +9,7 @@ mod window;
 
 pub use diff::{
     edit_is_within_typed_text, is_vocab_worthy, learned_rule, learned_rule_with_max_chars,
-    minimal_edit, EditPair, LearnedRule,
+    learned_rules_with_max_chars, minimal_edit, EditPair, LearnedRule,
 };
 pub use observation::ObservedInsertion;
 pub use window::{plan_window, utf16_offset_to_char_offset, window_around_cursor, WindowSpan};
