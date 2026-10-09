@@ -894,7 +894,12 @@ impl Coordinator {
     }
     pub(crate) async fn finalize_voice_edit_from_overlay(&self) -> Result<(), String> {
         voice_edit_session::from_overlay(&self.inner).await?;
-        self.inner.host.show_voice_edit();
+        // The recording is already owned by the session. A panel show failure
+        // must not be reported as a failed capture, or Android offers a retry
+        // that the consumed recording can no longer satisfy.
+        if let Err(error) = self.inner.host.show_voice_edit() {
+            log::warn!("[voice-edit] overlay panel show failed: {error}");
+        }
         Ok(())
     }
     pub(crate) async fn finish_voice_edit_dictation(

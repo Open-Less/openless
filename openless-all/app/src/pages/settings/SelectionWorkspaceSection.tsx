@@ -36,6 +36,21 @@ export function SelectionWorkspaceSection() {
   const { t } = useTranslation();
   const { prefs, capability, refresh, updatePrefs } = useHotkeySettings();
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
+  const [openPanelBusy, setOpenPanelBusy] = useState(false);
+  const [openPanelError, setOpenPanelError] = useState('');
+
+  const openPanel = async () => {
+    if (openPanelBusy) return;
+    setOpenPanelBusy(true);
+    setOpenPanelError('');
+    try {
+      await openVoiceEditWindow();
+    } catch (error) {
+      setOpenPanelError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setOpenPanelBusy(false);
+    }
+  };
 
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
@@ -69,30 +84,38 @@ export function SelectionWorkspaceSection() {
 
       {showVoice && (
         <SettingRow label={t('voiceEdit.title')} desc={t('voiceEdit.description')}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Toggle
-              on={prefs.voiceEditEnabled}
-              onToggle={(next) =>
-                void updatePrefs((current) => ({ ...current, voiceEditEnabled: next }))
-              }
-            />
-            <button
-              type="button"
-              disabled={!prefs.voiceEditEnabled}
-              onClick={() => void openVoiceEditWindow()}
-              style={{
-                ...chipSelectedStyle(false),
-                border: '0.5px solid var(--ol-line)',
-                borderRadius: 6,
-                padding: '6px 10px',
-                fontFamily: 'inherit',
-                fontSize: 12,
-                cursor: prefs.voiceEditEnabled ? 'pointer' : 'not-allowed',
-                opacity: prefs.voiceEditEnabled ? 1 : 0.5,
-              }}
-            >
-              {t('voiceEdit.openPanel')}
-            </button>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Toggle
+                on={prefs.voiceEditEnabled}
+                onToggle={(next) =>
+                  void updatePrefs((current) => ({ ...current, voiceEditEnabled: next }))
+                }
+              />
+              <button
+                type="button"
+                disabled={!prefs.voiceEditEnabled || openPanelBusy}
+                aria-busy={openPanelBusy}
+                onClick={() => void openPanel()}
+                style={{
+                  ...chipSelectedStyle(false),
+                  border: '0.5px solid var(--ol-line)',
+                  borderRadius: 6,
+                  padding: '6px 10px',
+                  fontFamily: 'inherit',
+                  fontSize: 12,
+                  cursor: prefs.voiceEditEnabled && !openPanelBusy ? 'pointer' : 'not-allowed',
+                  opacity: prefs.voiceEditEnabled ? 1 : 0.5,
+                }}
+              >
+                {openPanelBusy ? t('common.loading') : t('voiceEdit.openPanel')}
+              </button>
+            </div>
+            {openPanelError ? (
+              <div role="alert" style={{ fontSize: 11, color: 'var(--ol-err)', marginTop: 4 }}>
+                {t('common.operationFailed')}: {openPanelError}
+              </div>
+            ) : null}
           </div>
         </SettingRow>
       )}

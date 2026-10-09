@@ -376,7 +376,7 @@ pub(super) async fn commit(inner: &Arc<Inner>, id: SessionId) -> Result<VoiceEdi
     if let Err(error) = outcome {
         let _ = session.recover_commit();
         #[cfg(target_os = "android")]
-        inner.host.show_voice_edit();
+        let _ = inner.host.show_voice_edit();
         return Err(error);
     }
     session.complete_commit().map_err(|e| e.to_string())?;

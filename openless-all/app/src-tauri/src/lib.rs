@@ -2998,9 +2998,9 @@ const VOICE_EDIT_WINDOW_HEIGHT: f64 = 620.0;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn ensure_voice_edit_window<R: tauri::Runtime>(
     app: &AppHandle<R>,
-) -> Option<tauri::WebviewWindow<R>> {
+) -> Result<tauri::WebviewWindow<R>, String> {
     if let Some(window) = app.get_webview_window("voice-edit") {
-        return Some(window);
+        return Ok(window);
     }
     match WebviewWindowBuilder::new(
         app,
@@ -3025,28 +3025,25 @@ fn ensure_voice_edit_window<R: tauri::Runtime>(
             #[cfg(target_os = "macos")]
             {
                 let window_clone = window.clone();
-                let _ = app.run_on_main_thread(move || {
+                app.run_on_main_thread(move || {
                     make_chat_window_panel_macos(&window_clone, "voice-edit");
                     make_chat_window_draggable_macos(&window_clone, "voice-edit");
-                });
+                })
+                .map_err(|error| {
+                    log::warn!("[voice-edit] panel setup dispatch failed: {error}");
+                    format!("Voice Edit panel setup dispatch failed: {error}")
+                })?;
             }
-            Some(window)
+            Ok(window)
         }
         Err(error) => {
             log::warn!("[voice-edit] create panel failed: {error}");
-            None
+            Err(format!("Voice Edit window creation failed: {error}"))
         }
     }
 }
 
-#[cfg(any(target_os = "android", target_os = "ios"))]
-fn ensure_voice_edit_window<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-) -> Option<tauri::WebviewWindow<R>> {
-    app.get_webview_window("voice-edit")
-}
-
-pub(crate) fn show_voice_edit_window<R: tauri::Runtime>(app: &AppHandle<R>) {
+pub(crate) fn show_voice_edit_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     #[cfg(target_os = "android")]
     if let Err(error) = crate::android::jni::android::with_android_env(|env, context| {
         crate::android::jni::android::open_qa_host(env, context)
@@ -3056,39 +3053,53 @@ pub(crate) fn show_voice_edit_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         let _ = app.emit_to("main", "voice-edit:show", serde_json::json!({}));
-        return;
+        return Ok(());
     }
 
-    let Some(window) = ensure_voice_edit_window(app) else {
-        return;
-    };
-    #[cfg(target_os = "macos")]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
-        let window_clone = window.clone();
-        let _ = app.run_on_main_thread(move || {
-            use objc2::msg_send;
-            use objc2::runtime::AnyObject;
-            match window_clone.ns_window() {
-                Ok(handle) if !handle.is_null() => unsafe {
-                    let ns = handle as *mut AnyObject;
-                    let _: () = msg_send![ns, orderFrontRegardless];
-                },
-                _ => {
-                    let _ = window_clone.show();
+        let window = ensure_voice_edit_window(app)?;
+        #[cfg(target_os = "macos")]
+        {
+            let window_clone = window.clone();
+            app.run_on_main_thread(move || {
+                use objc2::msg_send;
+                use objc2::runtime::AnyObject;
+                match window_clone.ns_window() {
+                    Ok(handle) if !handle.is_null() => unsafe {
+                        let ns = handle as *mut AnyObject;
+                        let _: () = msg_send![ns, orderFrontRegardless];
+                    },
+                    _ => {
+                        let _ = window_clone.show();
+                    }
                 }
+            })
+            .map_err(|error| {
+                log::warn!("[voice-edit] show dispatch failed: {error}");
+                format!("Voice Edit window show dispatch failed: {error}")
+            })?;
+        }
+        #[cfg(target_os = "windows")]
+        {
+            // Preserve the external editor until capture; QA's helper deliberately focuses its WebView.
+            if let Err(error) = window.set_focusable(false) {
+                log::warn!("[voice-edit] set_focusable failed: {error}");
             }
-        });
+            window.show().map_err(|error| {
+                log::warn!("[voice-edit] show failed: {error}");
+                format!("Voice Edit window show failed: {error}")
+            })?;
+        }
+        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+        window.show().map_err(|error| {
+            log::warn!("[voice-edit] show failed: {error}");
+            format!("Voice Edit window show failed: {error}")
+        })?;
+        VOICE_EDIT_PANEL_EPOCH.fetch_add(1, Ordering::SeqCst);
+        let _ = app.emit_to("voice-edit", "voice-edit:shown", serde_json::json!({}));
+        Ok(())
     }
-    #[cfg(target_os = "windows")]
-    {
-        // Preserve the external editor until capture; QA's helper deliberately focuses its WebView.
-        let _ = window.set_focusable(false);
-        let _ = window.show();
-    }
-    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    let _ = window.show();
-    VOICE_EDIT_PANEL_EPOCH.fetch_add(1, Ordering::SeqCst);
-    let _ = app.emit_to("voice-edit", "voice-edit:shown", serde_json::json!({}));
 }
 
 pub(crate) fn set_voice_edit_interactive<R: tauri::Runtime>(app: &AppHandle<R>, interactive: bool) {

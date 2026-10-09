@@ -47,6 +47,10 @@ impl FakeHost {
     fn set_voice_edit_interactive(&self, interactive: bool) {
         self.0.store(interactive, Ordering::SeqCst);
     }
+    #[cfg(target_os = "android")]
+    fn show_voice_edit(&self) -> Result<(), String> {
+        Ok(())
+    }
 }
 struct FakeInserter;
 impl FakeInserter {
