@@ -2850,9 +2850,9 @@ fn ensure_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<tauri::Webv
 #[cfg(target_os = "macos")]
 fn ensure_less_computer_window<R: tauri::Runtime>(
     app: &AppHandle<R>,
-) -> Option<tauri::WebviewWindow<R>> {
+) -> Result<tauri::WebviewWindow<R>, String> {
     if let Some(w) = app.get_webview_window("less-computer") {
-        return Some(w);
+        return Ok(w);
     }
     match WebviewWindowBuilder::new(
         app,
@@ -2878,16 +2878,20 @@ fn ensure_less_computer_window<R: tauri::Runtime>(
             // app) + drag fix (movableByWindowBackground; must be on the main thread, see
             // make_chat_window_draggable_macos).
             let w_clone = w.clone();
-            let _ = app.run_on_main_thread(move || {
+            app.run_on_main_thread(move || {
                 make_chat_window_panel_macos(&w_clone, "less-computer");
                 make_chat_window_draggable_macos(&w_clone, "less-computer");
                 LESS_COMPUTER_WINDOW_POSITIONED.store(false, Ordering::Relaxed);
-            });
-            Some(w)
+            })
+            .map_err(|error| {
+                log::warn!("[less-computer] panel setup dispatch failed: {error}");
+                format!("Less Computer panel setup dispatch failed: {error}")
+            })?;
+            Ok(w)
         }
         Err(e) => {
             log::warn!("[less-computer] lazy window create failed: {e}");
-            None
+            Err(format!("Less Computer window creation failed: {e}"))
         }
     }
 }
@@ -2895,9 +2899,9 @@ fn ensure_less_computer_window<R: tauri::Runtime>(
 #[cfg(target_os = "windows")]
 fn ensure_less_computer_window<R: tauri::Runtime>(
     app: &AppHandle<R>,
-) -> Option<tauri::WebviewWindow<R>> {
+) -> Result<tauri::WebviewWindow<R>, String> {
     if let Some(window) = app.get_webview_window("less-computer") {
-        return Some(window);
+        return Ok(window);
     }
     WebviewWindowBuilder::new(
         app,
@@ -2916,10 +2920,9 @@ fn ensure_less_computer_window<R: tauri::Runtime>(
     .focused(false)
     .visible(false)
     .build()
-    .map(Some)
-    .unwrap_or_else(|error| {
+    .map_err(|error| {
         log::warn!("[less-computer] lazy window create failed: {error}");
-        None
+        format!("Less Computer window creation failed: {error}")
     })
 }
 
@@ -3204,13 +3207,12 @@ fn position_less_computer_window<R: tauri::Runtime>(
 /// Shows the Less Computer window (no focus steal from the frontmost app, same technique
 /// as QA). `macos` build only.
 #[cfg(target_os = "macos")]
-pub(crate) fn show_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) {
-    let Some(window) = ensure_less_computer_window(app) else {
-        log::info!("[less-computer] show 跳过：窗口不存在");
-        return;
-    };
+pub(crate) fn show_less_computer_window<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Result<(), String> {
+    let window = ensure_less_computer_window(app)?;
     let window_clone = window.clone();
-    let _ = app.run_on_main_thread(move || {
+    app.run_on_main_thread(move || {
         use objc2::msg_send;
         use objc2::runtime::AnyObject;
         // This helper is also called from the Tokio worker that executes a text or
@@ -3246,27 +3248,37 @@ pub(crate) fn show_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) {
                 let _ = window_clone.show();
             }
         }
-    });
+    })
+    .map_err(|error| {
+        log::warn!("[less-computer] show dispatch failed: {error}");
+        format!("Less Computer window show dispatch failed: {error}")
+    })?;
     // Cancel the pending exit-hide (fast close-open) and replay the entrance animation.
     LESS_COMPUTER_PANEL_EPOCH.fetch_add(1, Ordering::SeqCst);
     let _ = app.emit_to("less-computer", "chat-panel:shown", serde_json::json!({}));
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn show_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) {
-    let Some(window) = ensure_less_computer_window(app) else {
-        return;
-    };
-    if let Err(error) = window.show() {
+pub(crate) fn show_less_computer_window<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Result<(), String> {
+    let window = ensure_less_computer_window(app)?;
+    window.show().map_err(|error| {
         log::warn!("[less-computer] show failed: {error}");
-        return;
-    }
+        format!("Less Computer window show failed: {error}")
+    })?;
     LESS_COMPUTER_PANEL_EPOCH.fetch_add(1, Ordering::SeqCst);
     let _ = app.emit_to("less-computer", "chat-panel:shown", serde_json::json!({}));
+    Ok(())
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub(crate) fn show_less_computer_window<R: tauri::Runtime>(_app: &AppHandle<R>) {}
+pub(crate) fn show_less_computer_window<R: tauri::Runtime>(
+    _app: &AppHandle<R>,
+) -> Result<(), String> {
+    Err("Less Computer window is not supported on this platform".to_string())
+}
 
 /// Hides the Less Computer window. Shared by the dismiss command / session teardown.
 #[cfg(any(target_os = "macos", target_os = "windows"))]

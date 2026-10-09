@@ -3729,7 +3729,9 @@ impl HostActions for TauriHostActions {
                 self.qa_context.clear();
                 crate::hide_qa_window(&app);
             }
-            HostAction::ShowLessComputer => crate::show_less_computer_window(&app),
+            HostAction::ShowLessComputer => {
+                crate::show_less_computer_window(&app).map_err(map_tauri_error)?;
+            }
             HostAction::OpenExternalUrl(url) => {
                 use tauri_plugin_shell::ShellExt;
                 app.shell().open(url, None).map_err(map_tauri_error)?;
