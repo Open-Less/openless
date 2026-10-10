@@ -169,6 +169,18 @@ pub enum HostToPopup {
 }
 
 impl HostToPopup {
+    pub fn set_sequence(&mut self, value: u64) {
+        match self {
+            Self::PolishPreview { sequence, .. }
+            | Self::QaSnapshot { sequence, .. }
+            | Self::Capsule { sequence, .. }
+            | Self::LessComputer { sequence, .. }
+            | Self::Hotkeys { sequence, .. }
+            | Self::Hide { sequence, .. }
+            | Self::Shutdown { sequence, .. } => *sequence = value,
+        }
+    }
+
     pub fn version(&self) -> u16 {
         match self {
             Self::PolishPreview { version, .. }
